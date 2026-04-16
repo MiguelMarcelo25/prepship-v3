@@ -28,10 +28,10 @@ export class PgShipmentRepository implements ShipmentRepository {
 
   async listSyncAccounts(): Promise<ShipmentSyncAccountRecord[]> {
     const rows = await this.sql`
-      SELECT clientId, ss_api_key, ss_api_secret, ss_api_key_v2
+      SELECT "clientId", ss_api_key, ss_api_secret, ss_api_key_v2
       FROM clients
       WHERE active = 1
-      ORDER BY clientId
+      ORDER BY "clientId"
     ` as Array<{
       clientId: number;
       ss_api_key: string | null;
@@ -51,19 +51,19 @@ export class PgShipmentRepository implements ShipmentRepository {
   }
 
   async resolveOrderIdByOrderNumber(orderNumber: string): Promise<number | null> {
-    const rows = await this.sql`SELECT orderId FROM orders WHERE "orderNumber" = ${orderNumber} LIMIT 1`;
+    const rows = await this.sql`SELECT "orderId" FROM orders WHERE "orderNumber" = ${orderNumber} LIMIT 1`;
     const row = rows[0] as { orderId: number } | undefined;
     return row?.orderId ?? null;
   }
 
   async orderExists(orderId: number): Promise<boolean> {
-    const rows = await this.sql`SELECT 1 AS present FROM orders WHERE orderId = ${orderId} LIMIT 1`;
+    const rows = await this.sql`SELECT 1 AS present FROM orders WHERE "orderId" = ${orderId} LIMIT 1`;
     const row = rows[0] as { present: number } | undefined;
     return Boolean(row?.present);
   }
 
   async getOrderClientId(orderId: number): Promise<number | null> {
-    const rows = await this.sql`SELECT clientId FROM orders WHERE orderId = ${orderId} LIMIT 1`;
+    const rows = await this.sql`SELECT "clientId" FROM orders WHERE "orderId" = ${orderId} LIMIT 1`;
     const row = rows[0] as { clientId: number | null } | undefined;
     return row?.clientId ?? null;
   }
@@ -72,8 +72,8 @@ export class PgShipmentRepository implements ShipmentRepository {
     for (const shipment of shipments) {
       await this.sql`
         INSERT INTO shipments (
-          "shipmentId", orderId, "orderNumber", "carrierCode", "serviceCode", "trackingNumber",
-          "shipDate", "shipmentCost", "otherCost", voided, "updatedAt", clientId, source,
+          "shipmentId", "orderId", "orderNumber", "carrierCode", "serviceCode", "trackingNumber",
+          "shipDate", "shipmentCost", "otherCost", voided, "updatedAt", "clientId", source,
           "createDate", "providerAccountId", weight_oz, dims_l, dims_w, dims_h
         ) VALUES (
           ${shipment.shipmentId}, ${shipment.orderId}, ${shipment.orderNumber},
@@ -84,7 +84,7 @@ export class PgShipmentRepository implements ShipmentRepository {
           ${shipment.weightOz}, ${shipment.dimsLength}, ${shipment.dimsWidth}, ${shipment.dimsHeight}
         )
         ON CONFLICT ("shipmentId") DO UPDATE SET
-          orderId = EXCLUDED.orderId,
+          "orderId" = EXCLUDED."orderId",
           "orderNumber" = EXCLUDED."orderNumber",
           "carrierCode" = EXCLUDED."carrierCode",
           "serviceCode" = EXCLUDED."serviceCode",
@@ -94,7 +94,7 @@ export class PgShipmentRepository implements ShipmentRepository {
           "otherCost" = EXCLUDED."otherCost",
           voided = EXCLUDED.voided,
           "updatedAt" = EXCLUDED."updatedAt",
-          clientId = EXCLUDED.clientId,
+          "clientId" = EXCLUDED."clientId",
           source = EXCLUDED.source,
           "createDate" = COALESCE(EXCLUDED."createDate", shipments."createDate"),
           "providerAccountId" = COALESCE(EXCLUDED."providerAccountId", shipments."providerAccountId"),
@@ -111,9 +111,9 @@ export class PgShipmentRepository implements ShipmentRepository {
     for (const shipment of shipments) {
       if (!shipment.voided && shipment.trackingNumber) {
         await this.sql`
-          INSERT INTO order_local (orderId, tracking_number, shipping_account, "updatedAt")
+          INSERT INTO order_local ("orderId", tracking_number, shipping_account, "updatedAt")
           VALUES (${shipment.orderId}, ${shipment.trackingNumber}, ${shipment.providerAccountId}, ${now})
-          ON CONFLICT (orderId) DO UPDATE SET
+          ON CONFLICT ("orderId") DO UPDATE SET
             tracking_number = CASE WHEN order_local.tracking_number IS NULL THEN EXCLUDED.tracking_number ELSE order_local.tracking_number END,
             shipping_account = CASE WHEN order_local.shipping_account IS NULL THEN EXCLUDED.shipping_account ELSE order_local.shipping_account END,
             "updatedAt" = EXCLUDED."updatedAt"

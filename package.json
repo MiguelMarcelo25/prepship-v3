@@ -8,13 +8,13 @@
     "packages/*"
   ],
   "scripts": {
-    "dev:api": "node --experimental-strip-types apps/api/src/main.ts",
+    "dev:api": "tsx apps/api/src/main.ts",
     "dev:react": "npm run dev --workspace apps/react",
-    "dev:web": "node --experimental-strip-types apps/web/src/main.ts",
-    "dev:worker": "node --experimental-strip-types apps/worker/src/main.ts",
+    "dev:web": "tsx apps/web/src/main.ts",
+    "dev:worker": "tsx apps/worker/src/main.ts",
     "build:react": "npm run build --workspace apps/react",
     "db:migrate": "node scripts/migrate-postgres.mjs",
-    "test": "node --experimental-strip-types --test apps/api/test/*.test.ts apps/web/test/*.test.ts apps/react/test/*.test.ts"
+    "test": "tsx --test apps/api/test/*.test.ts apps/web/test/*.test.ts apps/react/test/*.test.ts"
   },
   "dependencies": {
     "express": "^5.2.1",
@@ -22,6 +22,7 @@
     "postgres": "^3.4.9"
   },
   "devDependencies": {
-    "@playwright/test": "^1.58.2"
+    "@playwright/test": "^1.58.2",
+    "tsx": "^4.21.0"
   }
 }

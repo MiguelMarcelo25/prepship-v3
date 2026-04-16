@@ -13,7 +13,7 @@ export class PgProductRepository implements ProductRepository {
     if (skus.length === 0) return {};
 
     const rows = await this.sql`
-      SELECT sku, weightOz, length, width, height, defaultPackageCode
+      SELECT sku, "weightOz", length, width, height, "defaultPackageCode"
       FROM products
       WHERE sku = ANY(${skus})
     ` as ProductBulkItemDto[];
@@ -35,9 +35,9 @@ export class PgProductRepository implements ProductRepository {
     const missing = skus.filter((sku) => !map[sku]);
     if (missing.length > 0) {
       const fallbackRows = await this.sql`
-        SELECT sku, weightOz, length, width, height
+        SELECT sku, "weightOz", length, width, height
         FROM inventory_skus
-        WHERE sku = ANY(${missing}) AND (COALESCE(weightOz, 0) > 0 OR COALESCE(length, 0) > 0)
+        WHERE sku = ANY(${missing}) AND (COALESCE("weightOz", 0) > 0 OR COALESCE(length, 0) > 0)
       ` as Array<{ sku: string; weightOz: number; length: number; width: number; height: number }>;
 
       for (const row of fallbackRows) {
@@ -59,10 +59,10 @@ export class PgProductRepository implements ProductRepository {
 
   async getBySku(sku: string): Promise<ProductDefaultsRecord | null> {
     const productRows = await this.sql`
-      SELECT sku, weightOz, length, width, height, defaultPackageCode
+      SELECT sku, "weightOz", length, width, height, "defaultPackageCode"
       FROM products
       WHERE sku = ${sku}
-      ORDER BY COALESCE(modifyDate, updatedAt, createdAt, '0') DESC
+      ORDER BY COALESCE("modifyDate", "updatedAt", "createdAt", '0') DESC
       LIMIT 1
     `;
     const row = productRows[0] as ProductDefaultsRecord | undefined;
@@ -70,7 +70,7 @@ export class PgProductRepository implements ProductRepository {
     let defaults: { sku: string; weightOz: number; length: number; width: number; height: number; packageCode?: string | null } | undefined;
     if (await this.hasTable("sku_defaults")) {
       const defaultRows = await this.sql`
-        SELECT sku, weightOz, length, width, height, packageCode
+        SELECT sku, "weightOz", length, width, height, "packageCode"
         FROM sku_defaults
         WHERE sku = ${sku}
       `;
@@ -127,7 +127,7 @@ export class PgProductRepository implements ProductRepository {
 
     if (!packageCode && length > 0 && width > 0 && height > 0) {
       const existingRows = await this.sql`
-        SELECT packageId, name, length, width, height, source
+        SELECT "packageId", name, length, width, height, source
         FROM packages
         WHERE ABS(COALESCE(length, 0) - ${length}) <= 0.1
           AND ABS(COALESCE(width, 0) - ${width}) <= 0.1
@@ -143,9 +143,9 @@ export class PgProductRepository implements ProductRepository {
         const packageName = `${length}x${width}x${height}`;
         const now = Date.now();
         const [newPkg] = await this.sql`
-          INSERT INTO packages (name, type, length, width, height, source, isDefault, createdAt, updatedAt)
+          INSERT INTO packages (name, type, length, width, height, source, "isDefault", "createdAt", "updatedAt")
           VALUES (${packageName}, 'box', ${length}, ${width}, ${height}, 'custom', 0, ${now}, ${now})
-          RETURNING packageId
+          RETURNING "packageId"
         `;
         resolvedPackageId = Number((newPkg as { packageId: number }).packageId);
         newPackageCreated = true;
@@ -158,18 +158,18 @@ export class PgProductRepository implements ProductRepository {
     let productRow: { productId: number; sku: string } | undefined;
     if (input.productId != null) {
       const rows = await this.sql`
-        SELECT productId, sku
+        SELECT "productId", sku
         FROM products
-        WHERE productId = ${input.productId}
+        WHERE "productId" = ${input.productId}
         LIMIT 1
       `;
       productRow = rows[0] as { productId: number; sku: string } | undefined;
     } else if (input.sku) {
       const rows = await this.sql`
-        SELECT productId, sku
+        SELECT "productId", sku
         FROM products
         WHERE sku = ${input.sku}
-        ORDER BY COALESCE(modifyDate, updatedAt, createdAt, '0') DESC
+        ORDER BY COALESCE("modifyDate", "updatedAt", "createdAt", '0') DESC
         LIMIT 1
       `;
       productRow = rows[0] as { productId: number; sku: string } | undefined;
@@ -184,14 +184,14 @@ export class PgProductRepository implements ProductRepository {
       }
 
       const existingDefaultsRows = await this.sql`
-        SELECT weightOz, length, width, height, packageCode
+        SELECT "weightOz", length, width, height, "packageCode"
         FROM sku_defaults
         WHERE sku = ${input.sku}
       `;
       const existingDefaults = existingDefaultsRows[0] as { weightOz?: number; length?: number; width?: number; height?: number; packageCode?: string | null } | undefined;
 
       await this.sql`
-        INSERT INTO sku_defaults (sku, weightOz, length, width, height, packageCode, updatedAt)
+        INSERT INTO sku_defaults (sku, "weightOz", length, width, height, "packageCode", "updatedAt")
         VALUES (
           ${input.sku},
           ${weightOz || Number(existingDefaults?.weightOz ?? 0)},
@@ -202,12 +202,12 @@ export class PgProductRepository implements ProductRepository {
           ${Date.now()}
         )
         ON CONFLICT (sku) DO UPDATE SET
-          weightOz = EXCLUDED.weightOz,
+          "weightOz" = EXCLUDED."weightOz",
           length = EXCLUDED.length,
           width = EXCLUDED.width,
           height = EXCLUDED.height,
-          packageCode = EXCLUDED.packageCode,
-          updatedAt = EXCLUDED.updatedAt
+          "packageCode" = EXCLUDED."packageCode",
+          "updatedAt" = EXCLUDED."updatedAt"
       `;
 
       return {
@@ -231,13 +231,13 @@ export class PgProductRepository implements ProductRepository {
 
     await this.sql`
       UPDATE products
-      SET weightOz = COALESCE(${(saved.weightOz as number) ?? null}, weightOz),
+      SET "weightOz" = COALESCE(${(saved.weightOz as number) ?? null}, "weightOz"),
           length = COALESCE(${(saved.length as number) ?? null}, length),
           width = COALESCE(${(saved.width as number) ?? null}, width),
           height = COALESCE(${(saved.height as number) ?? null}, height),
-          defaultPackageCode = COALESCE(${(saved.defaultPackageCode as string) ?? null}, defaultPackageCode),
-          updatedAt = ${Date.now()}
-      WHERE productId = ${productRow.productId}
+          "defaultPackageCode" = COALESCE(${(saved.defaultPackageCode as string) ?? null}, "defaultPackageCode"),
+          "updatedAt" = ${Date.now()}
+      WHERE "productId" = ${productRow.productId}
     `;
 
     return {
@@ -253,9 +253,9 @@ export class PgProductRepository implements ProductRepository {
 
   private async getPackageData(packageId: number) {
     const rows = await this.sql`
-      SELECT packageId, name, length, width, height, source
+      SELECT "packageId", name, length, width, height, source
       FROM packages
-      WHERE packageId = ${packageId}
+      WHERE "packageId" = ${packageId}
     `;
     return (rows[0] as { packageId: number; name: string; length: number | null; width: number | null; height: number | null; source: string | null }) ?? null;
   }

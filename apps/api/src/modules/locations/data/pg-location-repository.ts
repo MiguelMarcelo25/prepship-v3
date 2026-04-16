@@ -8,7 +8,7 @@ export class PgLocationRepository implements LocationRepository {
 
   async list(): Promise<LocationRecord[]> {
     const rows = await this.sql`
-      SELECT * FROM locations ORDER BY isDefault DESC, name ASC
+      SELECT * FROM locations ORDER BY "isDefault" DESC, name ASC
     `;
     return rows as LocationRecord[];
   }
@@ -16,8 +16,8 @@ export class PgLocationRepository implements LocationRepository {
   async getDefault(): Promise<LocationRecord | null> {
     const rows = await this.sql`
       SELECT * FROM locations
-      WHERE isDefault = 1 AND active = 1
-      ORDER BY locationId
+      WHERE "isDefault" = 1 AND active = 1
+      ORDER BY "locationId"
       LIMIT 1
     `;
     return (rows[0] as LocationRecord) ?? null;
@@ -26,7 +26,7 @@ export class PgLocationRepository implements LocationRepository {
   async create(input: SaveLocationInput): Promise<number> {
     const now = Date.now();
     const [row] = await this.sql`
-      INSERT INTO locations (name, company, street1, street2, city, state, postalCode, country, phone, isDefault, active, createdAt, updatedAt)
+      INSERT INTO locations (name, company, street1, street2, city, state, "postalCode", country, phone, "isDefault", active, "createdAt", "updatedAt")
       VALUES (
         ${input.name},
         ${input.company ?? ""},
@@ -42,7 +42,7 @@ export class PgLocationRepository implements LocationRepository {
         ${now},
         ${now}
       )
-      RETURNING locationId
+      RETURNING "locationId"
     `;
     return Number((row as { locationId: number }).locationId);
   }
@@ -56,27 +56,27 @@ export class PgLocationRepository implements LocationRepository {
           street2 = ${input.street2 ?? ""},
           city = ${input.city ?? ""},
           state = ${input.state ?? ""},
-          postalCode = ${input.postalCode ?? ""},
+          "postalCode" = ${input.postalCode ?? ""},
           country = ${input.country ?? "US"},
           phone = ${input.phone ?? ""},
-          isDefault = ${input.isDefault ? 1 : 0},
-          updatedAt = ${Date.now()}
-      WHERE locationId = ${locationId}
+          "isDefault" = ${input.isDefault ? 1 : 0},
+          "updatedAt" = ${Date.now()}
+      WHERE "locationId" = ${locationId}
     `;
   }
 
   async delete(locationId: number): Promise<void> {
-    await this.sql`DELETE FROM locations WHERE locationId = ${locationId}`;
+    await this.sql`DELETE FROM locations WHERE "locationId" = ${locationId}`;
   }
 
   async clearDefault(): Promise<void> {
-    await this.sql`UPDATE locations SET isDefault = 0`;
+    await this.sql`UPDATE locations SET "isDefault" = 0`;
   }
 
   async setDefault(locationId: number): Promise<void> {
     await this.sql`
-      UPDATE locations SET isDefault = 1, updatedAt = ${Date.now()}
-      WHERE locationId = ${locationId}
+      UPDATE locations SET "isDefault" = 1, "updatedAt" = ${Date.now()}
+      WHERE "locationId" = ${locationId}
     `;
   }
 }

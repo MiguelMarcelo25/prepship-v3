@@ -17,7 +17,7 @@ export class PgClientRepository implements ClientRepository {
   async create(input: CreateClientInput): Promise<number> {
     const now = Date.now();
     const [row] = await this.sql`
-      INSERT INTO clients (name, storeIds, contactName, email, phone, active, createdAt, updatedAt)
+      INSERT INTO clients (name, "storeIds", "contactName", email, phone, active, "createdAt", "updatedAt")
       VALUES (
         ${input.name},
         ${JSON.stringify(input.storeIds ?? [])},
@@ -28,7 +28,7 @@ export class PgClientRepository implements ClientRepository {
         ${now},
         ${now}
       )
-      RETURNING clientId
+      RETURNING "clientId"
     `;
     return Number((row as { clientId: number }).clientId);
   }
@@ -37,23 +37,23 @@ export class PgClientRepository implements ClientRepository {
     await this.sql`
       UPDATE clients
       SET name = ${input.name},
-          storeIds = ${JSON.stringify(input.storeIds ?? [])},
-          contactName = ${input.contactName ?? ""},
+          "storeIds" = ${JSON.stringify(input.storeIds ?? [])},
+          "contactName" = ${input.contactName ?? ""},
           email = ${input.email ?? ""},
           phone = ${input.phone ?? ""},
           ss_api_key = ${input.ss_api_key ?? null},
           ss_api_secret = ${input.ss_api_secret ?? null},
           ss_api_key_v2 = ${input.ss_api_key_v2 ?? null},
           rate_source_client_id = ${input.rate_source_client_id ?? null},
-          updatedAt = ${Date.now()}
-      WHERE clientId = ${clientId}
+          "updatedAt" = ${Date.now()}
+      WHERE "clientId" = ${clientId}
     `;
   }
 
   async softDelete(clientId: number): Promise<void> {
     await this.sql`
-      UPDATE clients SET active = 0, updatedAt = ${Date.now()}
-      WHERE clientId = ${clientId}
+      UPDATE clients SET active = 0, "updatedAt" = ${Date.now()}
+      WHERE "clientId" = ${clientId}
     `;
   }
 
@@ -66,7 +66,7 @@ export class PgClientRepository implements ClientRepository {
 
       // Try to find existing client
       const existingRows = await this.sql`
-        SELECT clientId, storeIds
+        SELECT "clientId", "storeIds"
         FROM clients
         WHERE name = ${name}
         LIMIT 1
@@ -76,7 +76,7 @@ export class PgClientRepository implements ClientRepository {
       if (!existing) {
         // Insert new client, skip if name conflict
         await this.sql`
-          INSERT INTO clients (name, storeIds, contactName, email, phone, active, createdAt, updatedAt)
+          INSERT INTO clients (name, "storeIds", "contactName", email, phone, active, "createdAt", "updatedAt")
           VALUES (${name}, ${JSON.stringify([store.storeId])}, '', '', '', 1, ${now}, ${now})
           ON CONFLICT (name) DO NOTHING
         `;
@@ -88,8 +88,8 @@ export class PgClientRepository implements ClientRepository {
         storeIds.push(store.storeId);
         await this.sql`
           UPDATE clients
-          SET storeIds = ${JSON.stringify(storeIds)}, updatedAt = ${now}
-          WHERE clientId = ${existing.clientId}
+          SET "storeIds" = ${JSON.stringify(storeIds)}, "updatedAt" = ${now}
+          WHERE "clientId" = ${existing.clientId}
         `;
       }
     }

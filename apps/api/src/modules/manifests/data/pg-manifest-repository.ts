@@ -10,59 +10,59 @@ export class PgManifestRepository implements ManifestRepository {
     // Build the query dynamically based on optional filters
     if (input.carrierId && input.clientId != null) {
       const rows = await this.sql`
-        SELECT s.shipmentId, o.orderNumber, s.trackingNumber, s.carrierCode, s.serviceCode,
-          s.shipmentCost, s.otherCost, s.shipDate,
-          COALESCE(s.weight_oz, o.weightValue, 0) AS "weightOz",
-          CASE WHEN s.shipmentId IS NOT NULL THEN 'Shipped' ELSE 'Pending' END AS status
+        SELECT s."shipmentId", o."orderNumber", s."trackingNumber", s."carrierCode", s."serviceCode",
+          s."shipmentCost", s."otherCost", s."shipDate",
+          COALESCE(s.weight_oz, o."weightValue", 0) AS "weightOz",
+          CASE WHEN s."shipmentId" IS NOT NULL THEN 'Shipped' ELSE 'Pending' END AS status
         FROM shipments s
-        JOIN orders o ON o.orderId = s.orderId
-        WHERE s.shipDate >= ${input.startDate} AND s.shipDate <= ${input.endDate}
+        JOIN orders o ON o."orderId" = s."orderId"
+        WHERE s."shipDate" >= ${input.startDate} AND s."shipDate" <= ${input.endDate}
           AND s.source = ${input.carrierId}
-          AND s.clientId = ${input.clientId}
-        ORDER BY s.shipDate DESC, s.shipmentId DESC
+          AND s."clientId" = ${input.clientId}
+        ORDER BY s."shipDate" DESC, s."shipmentId" DESC
       `;
       return rows as ManifestShipmentRecord[];
     }
 
     if (input.carrierId) {
       const rows = await this.sql`
-        SELECT s.shipmentId, o.orderNumber, s.trackingNumber, s.carrierCode, s.serviceCode,
-          s.shipmentCost, s.otherCost, s.shipDate,
-          COALESCE(s.weight_oz, o.weightValue, 0) AS "weightOz",
-          CASE WHEN s.shipmentId IS NOT NULL THEN 'Shipped' ELSE 'Pending' END AS status
+        SELECT s."shipmentId", o."orderNumber", s."trackingNumber", s."carrierCode", s."serviceCode",
+          s."shipmentCost", s."otherCost", s."shipDate",
+          COALESCE(s.weight_oz, o."weightValue", 0) AS "weightOz",
+          CASE WHEN s."shipmentId" IS NOT NULL THEN 'Shipped' ELSE 'Pending' END AS status
         FROM shipments s
-        JOIN orders o ON o.orderId = s.orderId
-        WHERE s.shipDate >= ${input.startDate} AND s.shipDate <= ${input.endDate}
+        JOIN orders o ON o."orderId" = s."orderId"
+        WHERE s."shipDate" >= ${input.startDate} AND s."shipDate" <= ${input.endDate}
           AND s.source = ${input.carrierId}
-        ORDER BY s.shipDate DESC, s.shipmentId DESC
+        ORDER BY s."shipDate" DESC, s."shipmentId" DESC
       `;
       return rows as ManifestShipmentRecord[];
     }
 
     if (input.clientId != null) {
       const rows = await this.sql`
-        SELECT s.shipmentId, o.orderNumber, s.trackingNumber, s.carrierCode, s.serviceCode,
-          s.shipmentCost, s.otherCost, s.shipDate,
-          COALESCE(s.weight_oz, o.weightValue, 0) AS "weightOz",
-          CASE WHEN s.shipmentId IS NOT NULL THEN 'Shipped' ELSE 'Pending' END AS status
+        SELECT s."shipmentId", o."orderNumber", s."trackingNumber", s."carrierCode", s."serviceCode",
+          s."shipmentCost", s."otherCost", s."shipDate",
+          COALESCE(s.weight_oz, o."weightValue", 0) AS "weightOz",
+          CASE WHEN s."shipmentId" IS NOT NULL THEN 'Shipped' ELSE 'Pending' END AS status
         FROM shipments s
-        JOIN orders o ON o.orderId = s.orderId
-        WHERE s.shipDate >= ${input.startDate} AND s.shipDate <= ${input.endDate}
-          AND s.clientId = ${input.clientId}
-        ORDER BY s.shipDate DESC, s.shipmentId DESC
+        JOIN orders o ON o."orderId" = s."orderId"
+        WHERE s."shipDate" >= ${input.startDate} AND s."shipDate" <= ${input.endDate}
+          AND s."clientId" = ${input.clientId}
+        ORDER BY s."shipDate" DESC, s."shipmentId" DESC
       `;
       return rows as ManifestShipmentRecord[];
     }
 
     const rows = await this.sql`
-      SELECT s.shipmentId, o.orderNumber, s.trackingNumber, s.carrierCode, s.serviceCode,
-        s.shipmentCost, s.otherCost, s.shipDate,
-        COALESCE(s.weight_oz, o.weightValue, 0) AS "weightOz",
-        CASE WHEN s.shipmentId IS NOT NULL THEN 'Shipped' ELSE 'Pending' END AS status
+      SELECT s."shipmentId", o."orderNumber", s."trackingNumber", s."carrierCode", s."serviceCode",
+        s."shipmentCost", s."otherCost", s."shipDate",
+        COALESCE(s.weight_oz, o."weightValue", 0) AS "weightOz",
+        CASE WHEN s."shipmentId" IS NOT NULL THEN 'Shipped' ELSE 'Pending' END AS status
       FROM shipments s
-      JOIN orders o ON o.orderId = s.orderId
-      WHERE s.shipDate >= ${input.startDate} AND s.shipDate <= ${input.endDate}
-      ORDER BY s.shipDate DESC, s.shipmentId DESC
+      JOIN orders o ON o."orderId" = s."orderId"
+      WHERE s."shipDate" >= ${input.startDate} AND s."shipDate" <= ${input.endDate}
+      ORDER BY s."shipDate" DESC, s."shipmentId" DESC
     `;
     return rows as ManifestShipmentRecord[];
   }
