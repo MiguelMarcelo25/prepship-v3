@@ -66,7 +66,7 @@ export class SqliteQueueRepository implements QueueRepository {
     // Fetch the actual row (might have different id if conflict updated existing)
     const row = this.db.prepare(
       `SELECT * FROM print_queue_orders WHERE order_id = ? AND client_id = ? LIMIT 1`
-    ).get(input.orderId, input.clientId) as PrintQueueRow;
+    ).get(input.orderId, input.clientId) as unknown as PrintQueueRow;
 
     return this.mapRow(row);
   }
@@ -75,10 +75,10 @@ export class SqliteQueueRepository implements QueueRepository {
     const rows = status
       ? this.db.prepare(
           `SELECT * FROM print_queue_orders WHERE client_id = ? AND status = ? ORDER BY queued_at ASC`
-        ).all(clientId, status) as PrintQueueRow[]
+        ).all(clientId, status) as unknown as PrintQueueRow[]
       : this.db.prepare(
           `SELECT * FROM print_queue_orders WHERE client_id = ? ORDER BY queued_at ASC`
-        ).all(clientId) as PrintQueueRow[];
+        ).all(clientId) as unknown as PrintQueueRow[];
 
     return rows.map(r => this.mapRow(r));
   }
@@ -86,14 +86,14 @@ export class SqliteQueueRepository implements QueueRepository {
   async findById(id: string): Promise<PrintQueueEntry | null> {
     const row = this.db.prepare(
       `SELECT * FROM print_queue_orders WHERE id = ? LIMIT 1`
-    ).get(id) as PrintQueueRow | undefined;
+    ).get(id) as unknown as PrintQueueRow | undefined;
     return row ? this.mapRow(row) : null;
   }
 
   async findByOrderId(orderId: string, clientId: number): Promise<PrintQueueEntry | null> {
     const row = this.db.prepare(
       `SELECT * FROM print_queue_orders WHERE order_id = ? AND client_id = ? LIMIT 1`
-    ).get(orderId, clientId) as PrintQueueRow | undefined;
+    ).get(orderId, clientId) as unknown as PrintQueueRow | undefined;
     return row ? this.mapRow(row) : null;
   }
 
