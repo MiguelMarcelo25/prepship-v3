@@ -9,7 +9,7 @@ export async function buildDataStore(config: AppConfig, memorySeed?: MemoryDataS
   }
 
   if (config.dbProvider === "postgres") {
-    const { createPgDataStore } = await import("./pg-datastore.ts");
+    const { createPgDataStore } = await import("./pg-datastore.js");
     return createPgDataStore(config.databaseUrl as string, EXCLUDED_STORE_IDS, config.secrets.shipstation?.api_key_v2 ?? null);
   }
 
