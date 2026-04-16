@@ -6,10 +6,11 @@
     { "source": "/api/:path*", "destination": "/api" },
     { "source": "/(.*)", "destination": "/index.html" }
   ],
+  "regions": ["hnd1"],
   "functions": {
     "api/index.ts": {
       "includeFiles": "apps/api/src/**/*.ts,packages/**/*.ts",
-      "maxDuration": 30
+      "maxDuration": 60
     }
   }
 }
