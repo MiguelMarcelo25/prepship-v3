@@ -8,8 +8,8 @@ import {
   getLocationActionLabels,
   getLocationFormTitle,
   getLocationsContentState,
-} from '.js'
-import type { LocationDto } from '.js'
+} from '../src/components/Views/locations-parity.ts'
+import type { LocationDto } from '../src/types/api.ts'
 
 function makeLocation(overrides: Partial<LocationDto> = {}): LocationDto {
   return {

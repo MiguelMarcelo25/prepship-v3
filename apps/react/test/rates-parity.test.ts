@@ -10,7 +10,7 @@ import {
   getAvailableRates,
   getRatesValidationState,
   type RatesFormState,
-} from '.js'
+} from '../src/components/Views/rates-parity.ts'
 
 function makeForm(overrides: Partial<RatesFormState> = {}): RatesFormState {
   return {

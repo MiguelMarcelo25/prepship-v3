@@ -12,8 +12,8 @@ import {
   getInventoryDateRangePreset,
   getReceiveRowHints,
   groupInventoryRowsByClient,
-} from '.js'
-import type { InventoryItemDto } from '.js'
+} from '../src/components/Views/inventory-parity.ts'
+import type { InventoryItemDto } from '../src/types/api.ts'
 
 function makeItem(overrides: Partial<InventoryItemDto> = {}): InventoryItemDto {
   return {

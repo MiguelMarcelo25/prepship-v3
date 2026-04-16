@@ -13,7 +13,7 @@ import {
   getChartSelectionRange,
   getInitialAnalysisFilters,
   sortAnalysisRows,
-} from '.js'
+} from '../src/components/Views/analysis-parity.ts'
 
 function makeRow(overrides: Partial<AnalysisSkuDto> = {}): AnalysisSkuDto {
   return {

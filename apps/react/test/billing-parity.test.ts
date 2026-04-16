@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import type { BillingConfigDto, BillingDetailDto, BillingSummaryDto, PackageDto } from '.js'
+import type { BillingConfigDto, BillingDetailDto, BillingSummaryDto, PackageDto } from '../src/types/api.ts'
 import {
   buildBackfillRefRatesToast,
   buildBillingConfigInput,
@@ -18,7 +18,7 @@ import {
   getBillingPresetRange,
   readBillingDetailColumnIds,
   toggleBillingDetailColumnIds,
-} from '.js'
+} from '../src/components/Views/billing-parity.ts'
 
 function makeConfig(overrides: Partial<BillingConfigDto> = {}): BillingConfigDto {
   return {

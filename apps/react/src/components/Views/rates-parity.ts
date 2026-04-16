@@ -1,6 +1,6 @@
 import type { LiveRatesRequestDto, RateDto } from '@prepshipv2/contracts/rates/contracts'
-import type { Rate } from '.js'
-import { isBlockedRate } from '.js'
+import type { Rate } from '../../types/orders.ts'
+import { isBlockedRate } from '../../utils/markups.ts'
 
 export interface RatesFormState {
   weightOz: string
