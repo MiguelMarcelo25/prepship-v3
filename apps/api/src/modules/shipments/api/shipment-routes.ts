@@ -9,7 +9,10 @@ export function createShipmentRoutes(handler: ShipmentsHttpHandler): RouteDef[] 
     jsonRoute("GET", "/api/sync/status", () => handler.handleLegacySyncStatus()),
     route("POST", "/api/sync/trigger", async ({ request, url, readJson }) => {
       try {
-        const body = request.headers.get("content-type")?.includes("application/json") ? await readJson() as { full?: boolean } : {};
+        const contentType = typeof request.headers?.get === "function"
+          ? request.headers.get("content-type")
+          : (request.headers as Record<string, string>)?.["content-type"];
+        const body = contentType?.includes("application/json") ? await readJson() as { full?: boolean } : {};
         const full = url.searchParams.get("full") === "1" || body.full === true;
         return jsonResponse(200, handler.handleLegacySyncTrigger(full));
       } catch (error) {

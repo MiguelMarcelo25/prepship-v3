@@ -2,6 +2,18 @@ import { jsonResponse } from "../common/http/json.js";
 
 export type AppHandler = (request: Request) => Promise<Response>;
 
+/** Safely read a header whether headers is a Headers instance or a plain object. */
+function getHeader(headers: unknown, name: string): string | null {
+  if (headers && typeof (headers as Headers).get === "function") {
+    return (headers as Headers).get(name);
+  }
+  // Vercel serverless may pass headers as a plain object
+  const obj = headers as Record<string, string | string[] | undefined>;
+  const val = obj[name] ?? obj[name.toLowerCase()];
+  if (Array.isArray(val)) return val[0] ?? null;
+  return val ?? null;
+}
+
 /**
  * Wraps an app handler with auth middleware.
  * - All /api/* routes require X-App-Token header (except /api/auth/token)
@@ -31,7 +43,7 @@ export function createAuthMiddleware(handler: AppHandler, sessionToken: string):
       }
 
       // Require X-App-Token for ALL /api/* routes — no IP-based exceptions
-      const token = request.headers.get("x-app-token");
+      const token = getHeader(request.headers, "x-app-token");
       if (!token || token !== sessionToken) {
         return jsonResponse(401, { error: "Unauthorized" });
       }
@@ -41,3 +53,5 @@ export function createAuthMiddleware(handler: AppHandler, sessionToken: string):
     return handler(request);
   };
 }
+
+export { getHeader };
