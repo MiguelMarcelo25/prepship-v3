@@ -99,7 +99,10 @@ async function loadAccounts(sql: Sql, mainApiKey: string, mainApiSecret: string)
       const ids = typeof row.storeIds === "string" ? JSON.parse(row.storeIds) : (row.storeIds ?? []);
       storeIds = ids as number[];
     } catch { /* ignore */ }
-    accounts.push({ clientId: row.clientId, accountName: row.name, apiKey: row.ss_api_key, apiSecret: row.ss_api_secret, v2ApiKey: row.ss_api_key_v2, storeIds });
+    const apiKey = (row as Record<string, string>).ssApiKey ?? (row as Record<string, string>).ss_api_key;
+    const apiSecret = (row as Record<string, string>).ssApiSecret ?? (row as Record<string, string>).ss_api_secret;
+    const v2Key = (row as Record<string, string>).ssApiKeyV2 ?? (row as Record<string, string>).ss_api_key_v2;
+    accounts.push({ clientId: row.clientId, accountName: row.name, apiKey, apiSecret, v2ApiKey: v2Key, storeIds });
   }
 
   return accounts;
