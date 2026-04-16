@@ -16,7 +16,7 @@ export type AppHandler = (request: Request) => Promise<Response>;
  */
 export function createAuthMiddleware(handler: AppHandler, sessionToken: string): AppHandler {
   return async (request: Request): Promise<Response> => {
-    const url = new URL(request.url);
+    const url = new URL(request.url, "http://localhost");
 
     // Allow /api/auth/token to be accessed without auth (it serves the token)
     if (url.pathname === "/api/auth/token") {

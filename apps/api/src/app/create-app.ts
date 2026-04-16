@@ -71,7 +71,7 @@ export function createApp(dependencies: AppDependencies) {
   ]);
 
   return async function handle(request: Request): Promise<Response> {
-    const url = new URL(request.url);
+    const url = new URL(request.url, "http://localhost");
     const readJson = async (): Promise<Record<string, unknown>> => {
       const text = await request.text();
       if (!text) return {};
