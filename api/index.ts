@@ -37,6 +37,16 @@ function getHandler() {
 }
 
 export default async function handler(request: Request): Promise<Response> {
+  const url = new URL(request.url, "http://localhost");
+
+  // Quick health check — no bootstrap needed
+  if (url.pathname === "/api/health") {
+    return new Response(JSON.stringify({ ok: true, env: process.env.DB_PROVIDER, ts: Date.now() }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
   try {
     const app = await getHandler();
     return app(request);
