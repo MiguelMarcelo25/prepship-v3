@@ -41,6 +41,11 @@ export function loadTransitionalSecrets(secretsPath: string): TransitionalSecret
       api_secret: process.env.SHIPSTATION_API_SECRET ?? fileSecrets.shipstation?.api_secret,
       api_key_v2: process.env.SHIPSTATION_API_KEY_V2 ?? fileSecrets.shipstation?.api_key_v2,
     },
+    shipstationKfg: {
+      apiKey: process.env.SHIPSTATION_KFG_API_KEY,
+      apiSecret: process.env.SHIPSTATION_KFG_API_SECRET,
+      apiKeyV2: process.env.SHIPSTATION_KFG_API_KEY_V2,
+    },
     portal: {
       setupToken: process.env.PORTAL_SETUP_TOKEN ?? fileSecrets.portal?.setupToken,
     }
