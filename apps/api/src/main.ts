@@ -1,9 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { bootstrapApi } from "./app/bootstrap.js";
 import { startHttpServer } from "./app/server.js";
-import { OrderStatusSyncWorker } from "./modules/sync/order-status-sync.js";
 
 // Load .env file if it exists (from project root).
 // IMPORTANT: plist/environment values win — .env only fills in MISSING vars.
@@ -27,7 +25,7 @@ try {
 
 const { config, app } = await bootstrapApi(process.env, {});
 
-startHttpServer(app, config.port).then(() => {
+startHttpServer(app, config.port).then(async () => {
   console.log(`PrepshipV2 API listening on http://127.0.0.1:${config.port}`);
   console.log(`[Note] Authentication delegated to Cloudflare Access`);
 
@@ -36,9 +34,19 @@ startHttpServer(app, config.port).then(() => {
     const apiKey = config.secrets.shipstation?.api_key ?? "";
     const apiSecret = config.secrets.shipstation?.api_secret ?? "";
     if (apiKey && apiSecret) {
-      const db = new DatabaseSync(config.sqliteDbPath as string);
-      const syncWorker = new OrderStatusSyncWorker(db, apiKey, apiSecret);
-      syncWorker.start();
+      if (config.dbProvider === "postgres" && config.databaseUrl) {
+        const { PgOrderStatusSyncWorker } = await import("./modules/sync/pg-order-status-sync.js");
+        const { createPgClient } = await import("../../../packages/shared/src/postgres/database.js");
+        const pgSql = createPgClient(config.databaseUrl);
+        const syncWorker = new PgOrderStatusSyncWorker(pgSql, apiKey, apiSecret);
+        syncWorker.start();
+      } else if (config.dbProvider === "sqlite" && config.sqliteDbPath) {
+        const { DatabaseSync } = await import("node:sqlite");
+        const { OrderStatusSyncWorker } = await import("./modules/sync/order-status-sync.js");
+        const db = new DatabaseSync(config.sqliteDbPath);
+        const syncWorker = new OrderStatusSyncWorker(db, apiKey, apiSecret);
+        syncWorker.start();
+      }
       console.log("[sync] Order status sync worker enabled");
     } else {
       console.warn("[sync] WORKER_SYNC_ENABLED=true but ShipStation credentials missing");
