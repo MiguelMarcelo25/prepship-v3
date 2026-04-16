@@ -9,7 +9,6 @@
   "regions": ["hnd1"],
   "functions": {
     "api/index.ts": {
-      "includeFiles": "apps/api/src/**/*.ts,packages/**/*.ts",
       "maxDuration": 60
     }
   }
