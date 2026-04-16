@@ -24,12 +24,27 @@ let handlerPromise: Promise<(request: Request) => Promise<Response>> | null = nu
 
 function getHandler() {
   if (!handlerPromise) {
-    handlerPromise = bootstrapApi(process.env, {}).then(({ app }) => app);
+    console.log("[vercel] bootstrapping...", { DB_PROVIDER: process.env.DB_PROVIDER, hasDbUrl: !!process.env.DATABASE_URL });
+    handlerPromise = bootstrapApi(process.env, {}).then(({ app }) => {
+      console.log("[vercel] bootstrap complete");
+      return app;
+    }).catch((err) => {
+      console.error("[vercel] bootstrap FAILED:", err);
+      throw err;
+    });
   }
   return handlerPromise;
 }
 
 export default async function handler(request: Request): Promise<Response> {
-  const app = await getHandler();
-  return app(request);
+  try {
+    const app = await getHandler();
+    return app(request);
+  } catch (err) {
+    console.error("[vercel] handler error:", err);
+    return new Response(JSON.stringify({ error: "Internal server error", detail: String(err) }), {
+      status: 500,
+      headers: { "content-type": "application/json" },
+    });
+  }
 }
