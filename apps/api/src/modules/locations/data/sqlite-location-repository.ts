@@ -10,18 +10,18 @@ export class SqliteLocationRepository implements LocationRepository {
     this.db = db;
   }
 
-  list(): LocationRecord[] {
+  async list(): Promise<LocationRecord[]> {
     return this.db.prepare("SELECT * FROM locations ORDER BY isDefault DESC, name ASC").all() as LocationRecord[];
   }
 
-  getDefault(): LocationRecord | null {
+  async getDefault(): Promise<LocationRecord | null> {
     const row = this.db.prepare(
       "SELECT * FROM locations WHERE isDefault = 1 AND active = 1 ORDER BY locationId LIMIT 1"
     ).get() as LocationRecord | undefined;
     return row ?? null;
   }
 
-  create(input: SaveLocationInput): number {
+  async create(input: SaveLocationInput): Promise<number> {
     const now = Date.now();
     const result = this.db.prepare(`
       INSERT INTO locations (name, company, street1, street2, city, state, postalCode, country, phone, isDefault, active, createdAt, updatedAt)
@@ -43,7 +43,7 @@ export class SqliteLocationRepository implements LocationRepository {
     return Number(result.lastInsertRowid);
   }
 
-  update(locationId: number, input: SaveLocationInput): void {
+  async update(locationId: number, input: SaveLocationInput): Promise<void> {
     this.db.prepare(`
       UPDATE locations
       SET name = ?, company = ?, street1 = ?, street2 = ?, city = ?, state = ?,
@@ -65,15 +65,15 @@ export class SqliteLocationRepository implements LocationRepository {
     );
   }
 
-  delete(locationId: number): void {
+  async delete(locationId: number): Promise<void> {
     this.db.prepare("DELETE FROM locations WHERE locationId = ?").run(locationId);
   }
 
-  clearDefault(): void {
+  async clearDefault(): Promise<void> {
     this.db.prepare("UPDATE locations SET isDefault = 0").run();
   }
 
-  setDefault(locationId: number): void {
+  async setDefault(locationId: number): Promise<void> {
     this.db.prepare("UPDATE locations SET isDefault = 1, updatedAt = ? WHERE locationId = ?").run(Date.now(), locationId);
   }
 }

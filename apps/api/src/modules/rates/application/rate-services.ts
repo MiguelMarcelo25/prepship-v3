@@ -60,16 +60,16 @@ export class RateServices {
     this.shopper = shopper;
   }
 
-  getCached(query: GetCachedRatesQuery): CachedRatesResponseDto {
+  async getCached(query: GetCachedRatesQuery): Promise<CachedRatesResponseDto> {
     const zip = query.zip.replace(/\D/g, "").slice(0, 5);
     if (!query.wt || !zip || zip.length < 5) {
       return { cached: false, rates: [], best: null };
     }
 
-    const clientId = query.storeId ? this.repository.getClientIdForStoreId(query.storeId) : null;
+    const clientId = query.storeId ? await this.repository.getClientIdForStoreId(query.storeId) : null;
     const signature = query.signature && query.signature.trim() ? query.signature : "none";
     const cacheKey = makeCacheKey(query.wt, zip, query.dims, query.residential, clientId, signature);
-    const cached = this.readValidCache(cacheKey);
+    const cached = await this.readValidCache(cacheKey);
     if (!cached) {
       return { cached: false, rates: [], best: null };
     }
@@ -82,7 +82,7 @@ export class RateServices {
     };
   }
 
-  getCachedBulk(items: BulkCachedRatesRequestItem[]): BulkCachedRatesResponseDto {
+  async getCachedBulk(items: BulkCachedRatesRequestItem[]): Promise<BulkCachedRatesResponseDto> {
     const results: BulkCachedRatesResponseDto["results"] = {};
     const missing: string[] = [];
 
@@ -90,10 +90,10 @@ export class RateServices {
       const zip = String(item.zip ?? "").replace(/\D/g, "").slice(0, 5);
       const residential = item.residential !== false;
       const storeId = item.storeId != null ? Number(item.storeId) : null;
-      const clientId = storeId ? this.repository.getClientIdForStoreId(storeId) : null;
+      const clientId = storeId ? await this.repository.getClientIdForStoreId(storeId) : null;
       const signature = item.signature && item.signature.trim() ? item.signature : "none";
       const cacheKey = makeCacheKey(item.wt, zip, item.dims ?? null, residential, clientId, signature);
-      const cached = this.readValidCache(cacheKey);
+      const cached = await this.readValidCache(cacheKey);
 
       if (!cached) {
         results[item.key] = { cached: false, best: null };
@@ -111,9 +111,9 @@ export class RateServices {
     return { results, missing };
   }
 
-  listCarriersForStore(storeId: number | null) {
-    const clientId = storeId ? this.repository.getClientIdForStoreId(storeId) : null;
-    return this.repository.listCarriersForClient(clientId);
+  async listCarriersForStore(storeId: number | null) {
+    const clientId = storeId ? await this.repository.getClientIdForStoreId(storeId) : null;
+    return await this.repository.listCarriersForClient(clientId);
   }
 
   async getLiveRates(input: LiveRatesRequestDto): Promise<RateDto[]> {
@@ -122,24 +122,24 @@ export class RateServices {
     const dims = this.normalizeDims(input.dimensions ?? null);
     const residential = input.residential !== false;
     const storeId = input.storeId != null ? Number(input.storeId) : null;
-    const clientId = storeId ? this.repository.getClientIdForStoreId(storeId) : null;
+    const clientId = storeId ? await this.repository.getClientIdForStoreId(storeId) : null;
 
     if (!zip || zip.length < 5) {
       return [];
     }
 
     const cacheKey = makeCacheKey(weightOz, zip, dims, residential, clientId);
-    const cached = this.readValidCache(cacheKey);
+    const cached = await this.readValidCache(cacheKey);
     if (cached) {
       if (input.orderIds?.length) {
-        this.repository.saveReferenceRates(input.orderIds, cached.rates, weightOz, dims, storeId);
+        await this.repository.saveReferenceRates(input.orderIds, cached.rates, weightOz, dims, storeId);
       } else if (input.orderId != null) {
-        this.repository.saveReferenceRates([input.orderId], cached.rates, weightOz, dims, storeId);
+        await this.repository.saveReferenceRates([input.orderId], cached.rates, weightOz, dims, storeId);
       }
       return normalizeRateResponse(cached.rates);
     }
 
-    const source = this.repository.getRateSourceConfig(clientId);
+    const source = await this.repository.getRateSourceConfig(clientId);
     const rates = normalizeRateResponse(await this.shopper.fetchRates({
       weightOz,
       toZip: zip,
@@ -151,11 +151,11 @@ export class RateServices {
 
     if (rates.length > 0) {
       const best = rates[0] ?? null;
-      this.repository.saveCachedRate(cacheKey, weightOz, zip, rates, best, this.repository.getCurrentWeightVersion());
+      await this.repository.saveCachedRate(cacheKey, weightOz, zip, rates, best, await this.repository.getCurrentWeightVersion());
       if (input.orderIds?.length) {
-        this.repository.saveReferenceRates(input.orderIds, rates, weightOz, dims, storeId);
+        await this.repository.saveReferenceRates(input.orderIds, rates, weightOz, dims, storeId);
       } else if (input.orderId != null) {
-        this.repository.saveReferenceRates([input.orderId], rates, weightOz, dims, storeId);
+        await this.repository.saveReferenceRates([input.orderId], rates, weightOz, dims, storeId);
       }
     }
 
@@ -172,23 +172,29 @@ export class RateServices {
     const dims = this.normalizeDims(input.dimensions ?? null);
     const residential = input.residential !== false;
     const storeId = input.storeId != null ? Number(input.storeId) : null;
-    const clientId = storeId ? this.repository.getClientIdForStoreId(storeId) : null;
+    const clientId = storeId ? await this.repository.getClientIdForStoreId(storeId) : null;
     const signature = input.signatureOption && input.signatureOption.trim() ? input.signatureOption : "none";
 
     const cacheKey = makeCacheKey(weightOz, zip, dims, residential, clientId, signature);
-    const cached = this.readValidCache(cacheKey);
-    const allRates = cached?.rates ?? normalizeRateResponse(await this.shopper.fetchRates({
-      weightOz,
-      toZip: zip,
-      dims,
-      residential,
-      sourceClientId: this.repository.getRateSourceConfig(clientId).sourceClientId,
-      apiKeyV2: this.repository.getRateSourceConfig(clientId).apiKeyV2,
-      signature,
-    }));
+    const cached = await this.readValidCache(cacheKey);
+    let allRates: RateDto[];
+    if (cached) {
+      allRates = cached.rates;
+    } else {
+      const source = await this.repository.getRateSourceConfig(clientId);
+      allRates = normalizeRateResponse(await this.shopper.fetchRates({
+        weightOz,
+        toZip: zip,
+        dims,
+        residential,
+        sourceClientId: source.sourceClientId,
+        apiKeyV2: source.apiKeyV2,
+        signature,
+      }));
+    }
 
     if (!cached && allRates.length > 0) {
-      this.repository.saveCachedRate(cacheKey, weightOz, zip, allRates, allRates[0] ?? null, this.repository.getCurrentWeightVersion());
+      await this.repository.saveCachedRate(cacheKey, weightOz, zip, allRates, allRates[0] ?? null, await this.repository.getCurrentWeightVersion());
     }
 
     return {
@@ -196,9 +202,9 @@ export class RateServices {
     };
   }
 
-  clearAndRefetch(): { ok: true; message: string; ordersQueued: number } {
-    this.repository.clearCaches();
-    const orders = this.repository.listOrdersForRateRefetch(1000);
+  async clearAndRefetch(): Promise<{ ok: true; message: string; ordersQueued: number }> {
+    await this.repository.clearCaches();
+    const orders = await this.repository.listOrdersForRateRefetch(1000);
 
     for (const order of orders) {
       void this.prefetchOrderRates(order);
@@ -221,11 +227,11 @@ export class RateServices {
     return { length, width, height };
   }
 
-  private readValidCache(cacheKey: string): { rates: RateDto[]; bestRate: RateDto | null } | null {
-    const cached = this.repository.getCachedRate(cacheKey);
+  private async readValidCache(cacheKey: string): Promise<{ rates: RateDto[]; bestRate: RateDto | null } | null> {
+    const cached = await this.repository.getCachedRate(cacheKey);
     if (!cached) return null;
 
-    const currentWeightVersion = this.repository.getCurrentWeightVersion();
+    const currentWeightVersion = await this.repository.getCurrentWeightVersion();
     if ((cached.weightVersion ?? 0) !== currentWeightVersion) {
       return null;
     }

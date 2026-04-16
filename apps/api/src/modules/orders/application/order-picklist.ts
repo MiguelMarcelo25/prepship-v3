@@ -11,9 +11,9 @@ export class OrderPicklistService {
     this.repository = repository;
   }
 
-  execute(query: GetOrderPicklistQuery): GetOrderPicklistResponse {
+  async execute(query: GetOrderPicklistQuery): Promise<GetOrderPicklistResponse> {
     return {
-      skus: this.repository.getPicklist(query),
+      skus: await this.repository.getPicklist(query),
       orderStatus: query.orderStatus,
     };
   }

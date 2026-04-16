@@ -17,12 +17,12 @@ export class OrderDetailsService {
     this.rateServices = rateServices ?? null;
   }
 
-  getRecord(orderId: number) {
-    return this.repository.getById(orderId);
+  async getRecord(orderId: number) {
+    return await this.repository.getById(orderId);
   }
 
-  execute(orderId: number): OrderSummaryDto | null {
-    const record = this.repository.getById(orderId);
+  async execute(orderId: number): Promise<OrderSummaryDto | null> {
+    const record = await this.repository.getById(orderId);
 
     if (!record) {
       return null;
@@ -64,7 +64,7 @@ export class OrderDetailsService {
     if (uniqueSkus.length === 1) {
       const sku = uniqueSkus[0] as string;
       const qty = activeItems.filter((i) => i.sku === sku).reduce((s, i) => s + (i.quantity ?? 1), 0);
-      const dims = this.repository.getSkuQtyDims(sku, qty);
+      const dims = await this.repository.getSkuQtyDims(sku, qty);
       if (dims) {
         // Validate saved dimensions against order weight.
         // A heavy order (>= 16 oz) packed into a tiny box (< 1000 cubic inches)
@@ -108,7 +108,7 @@ export class OrderDetailsService {
         ? normalizeOrderBestRateDto(parseOrderRateJson(record.bestRateJson, `order ${record.orderId} bestRateJson`))
         : null;
       if (!bestRate && this.rateServices && weight && record.shipToPostalCode && rateDims) {
-        const cached = this.rateServices.getCached({
+        const cached = await this.rateServices.getCached({
           wt: weight.value,
           zip: record.shipToPostalCode,
           dims: rateDims,

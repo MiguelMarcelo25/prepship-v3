@@ -187,6 +187,260 @@ db.exec(`
     value TEXT,
     updatedAt INTEGER
   );
+
+  -- ─── Tables added for full API compatibility ──────────────────────────────
+
+  CREATE TABLE IF NOT EXISTS locations (
+    locationId INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    company TEXT,
+    street1 TEXT,
+    street2 TEXT,
+    city TEXT,
+    state TEXT,
+    postalCode TEXT,
+    country TEXT DEFAULT 'US',
+    phone TEXT,
+    isDefault INTEGER DEFAULT 0,
+    active INTEGER DEFAULT 1,
+    createdAt INTEGER,
+    updatedAt INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS billing_config (
+    clientId INTEGER PRIMARY KEY,
+    pickPackFee REAL,
+    additionalUnitFee REAL,
+    packageCostMarkup REAL,
+    shippingMarkupPct REAL,
+    shippingMarkupFlat REAL,
+    billing_mode TEXT,
+    storageFeePerCuFt REAL,
+    storageFeeMode TEXT,
+    palletPricingPerMonth REAL,
+    palletCuFt REAL,
+    active INTEGER DEFAULT 1,
+    createdAt INTEGER,
+    updatedAt INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS billing_line_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    clientId INTEGER NOT NULL,
+    orderId INTEGER NOT NULL,
+    orderNumber TEXT NOT NULL,
+    shipDate TEXT NOT NULL,
+    lineType TEXT NOT NULL,
+    description TEXT NOT NULL,
+    qty REAL NOT NULL,
+    unitCost REAL NOT NULL,
+    totalCost REAL NOT NULL,
+    invoiced INTEGER DEFAULT 0,
+    createdAt INTEGER,
+    UNIQUE(orderId, lineType, description)
+  );
+
+  CREATE TABLE IF NOT EXISTS billing_ref_rates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    wt INTEGER,
+    zipTo TEXT,
+    carrier TEXT,
+    service TEXT,
+    cost REAL,
+    source TEXT,
+    fetchedAt INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS carrier_cache (
+    apiKeyHash TEXT PRIMARY KEY,
+    carriers TEXT,
+    fetched_at INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS client_package_prices (
+    clientId INTEGER NOT NULL,
+    packageId INTEGER NOT NULL,
+    price REAL NOT NULL,
+    is_custom INTEGER DEFAULT 0,
+    updatedAt INTEGER,
+    PRIMARY KEY (clientId, packageId)
+  );
+
+  CREATE TABLE IF NOT EXISTS inventory (
+    invSkuId INTEGER PRIMARY KEY AUTOINCREMENT,
+    clientId INTEGER,
+    sku TEXT,
+    name TEXT,
+    stockQty INTEGER DEFAULT 0,
+    reorderLevel INTEGER DEFAULT 0,
+    imageUrl TEXT,
+    weight_oz REAL,
+    length REAL,
+    width REAL,
+    height REAL,
+    active INTEGER DEFAULT 1,
+    createdAt INTEGER,
+    updatedAt INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS inventory_ledger (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    invSkuId INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    qty INTEGER NOT NULL,
+    orderId INTEGER,
+    note TEXT,
+    createdBy TEXT,
+    createdAt INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS inventory_parent_skus (
+    parentId INTEGER PRIMARY KEY AUTOINCREMENT,
+    clientId INTEGER,
+    name TEXT,
+    createdAt INTEGER,
+    updatedAt INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS inventory_sku_parents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    invSkuId INTEGER,
+    parentId INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS inventory_skus (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    clientId INTEGER NOT NULL,
+    sku TEXT NOT NULL,
+    name TEXT DEFAULT '',
+    minStock INTEGER DEFAULT 0,
+    active INTEGER DEFAULT 1,
+    weightOz REAL DEFAULT 0,
+    parentSkuId INTEGER,
+    baseUnitQty INTEGER DEFAULT 1,
+    length REAL DEFAULT 0,
+    width REAL DEFAULT 0,
+    height REAL DEFAULT 0,
+    productLength REAL DEFAULT 0,
+    productWidth REAL DEFAULT 0,
+    productHeight REAL DEFAULT 0,
+    packageId INTEGER,
+    units_per_pack INTEGER DEFAULT 1,
+    cuFtOverride REAL,
+    createdAt INTEGER,
+    updatedAt INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS order_shipments_return (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    shipmentId INTEGER,
+    returnShipmentId INTEGER,
+    returnTrackingNumber TEXT,
+    reason TEXT,
+    createdAt INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS package_ledger (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    packageId INTEGER NOT NULL,
+    delta INTEGER NOT NULL,
+    reason TEXT,
+    unitCost REAL,
+    createdAt INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS packages (
+    packageId INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    type TEXT DEFAULT 'box',
+    length REAL DEFAULT 0,
+    width REAL DEFAULT 0,
+    height REAL DEFAULT 0,
+    tareWeightOz REAL DEFAULT 0,
+    source TEXT DEFAULT 'custom',
+    carrierCode TEXT,
+    packageCode TEXT,
+    domestic INTEGER,
+    international INTEGER,
+    stockQty INTEGER DEFAULT 0,
+    reorderLevel INTEGER DEFAULT 10,
+    unitCost REAL,
+    isDefault INTEGER DEFAULT 0,
+    createdAt INTEGER,
+    updatedAt INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS parent_skus (
+    parentSkuId INTEGER PRIMARY KEY AUTOINCREMENT,
+    clientId INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    sku TEXT,
+    baseUnitQty INTEGER DEFAULT 1,
+    createdAt INTEGER,
+    updatedAt INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS product_defaults (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sku TEXT,
+    productId INTEGER,
+    serviceCode TEXT,
+    packageCode TEXT,
+    shippingProviderId INTEGER,
+    weightOz REAL,
+    length REAL,
+    width REAL,
+    height REAL,
+    updatedAt INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS products (
+    productId INTEGER PRIMARY KEY AUTOINCREMENT,
+    sku TEXT UNIQUE,
+    name TEXT,
+    imageUrl TEXT,
+    weightOz REAL DEFAULT 0,
+    length REAL DEFAULT 0,
+    width REAL DEFAULT 0,
+    height REAL DEFAULT 0,
+    defaultPackageCode TEXT,
+    modifyDate INTEGER,
+    updatedAt INTEGER,
+    createdAt INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS rate_cache (
+    cache_key TEXT PRIMARY KEY,
+    weight_oz REAL,
+    to_zip TEXT,
+    rates TEXT NOT NULL,
+    best_rate TEXT,
+    fetched_at INTEGER,
+    weight_version INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS return_labels (
+    shipmentId INTEGER PRIMARY KEY,
+    returnShipmentId INTEGER,
+    returnTrackingNumber TEXT,
+    reason TEXT,
+    createdAt INTEGER
+  );
+
+  CREATE TABLE IF NOT EXISTS sku_defaults (
+    sku TEXT PRIMARY KEY,
+    weightOz REAL DEFAULT 0,
+    length REAL DEFAULT 0,
+    width REAL DEFAULT 0,
+    height REAL DEFAULT 0,
+    packageCode TEXT,
+    updatedAt INTEGER
+  );
 `);
 
 if (clear) {

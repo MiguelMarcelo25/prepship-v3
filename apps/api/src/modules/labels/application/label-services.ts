@@ -238,21 +238,21 @@ export class LabelServices {
     if (!body.orderId || !body.serviceCode) throw new Error("orderId and serviceCode required");
     if (!body.shippingProviderId) throw new Error("shippingProviderId required for v2 label creation");
 
-    const order = this.repository.getOrder(body.orderId);
+    const order = await this.repository.getOrder(body.orderId);
     if (!order) throw new Error("Order not found");
     if (order.orderStatus === "shipped" || order.orderStatus === "cancelled") {
       throw new Error(`Cannot create label for ${order.orderStatus} order`);
     }
 
     // Resolve shipping account context for this order's store
-    const context = this.repository.getShippingAccountContext(order.storeId);
+    const context = await this.repository.getShippingAccountContext(order.storeId);
 
     // Resolve client and check rate limit before continuing
     const clientId = context.clientId ?? order.clientId;
     if (!clientId) throw new Error(`Cannot resolve clientId for storeId ${order.storeId}`);
     checkLabelRateLimit(clientId);
 
-    const existing = this.repository.findActiveLabelForOrder(order.orderId);
+    const existing = await this.repository.findActiveLabelForOrder(order.orderId);
     if (existing) {
       const error = new Error("Label already exists for this order") as Error & { details?: Record<string, unknown> };
       error.details = {
@@ -266,7 +266,7 @@ export class LabelServices {
     const effectiveWeightOz = Number(body.weightOz ?? order.weightValue ?? 0);
     if (!effectiveWeightOz) throw new Error("Order weight required to create label");
 
-    const dims = this.repository.resolvePackageDimensions(order.orderId);
+    const dims = await this.repository.resolvePackageDimensions(order.orderId);
     const length = Number(body.length ?? dims?.length ?? 0) || null;
     const width = Number(body.width ?? dims?.width ?? 0) || null;
     const height = Number(body.height ?? dims?.height ?? 0) || null;
@@ -284,7 +284,7 @@ export class LabelServices {
       const shipDate = new Date().toISOString().slice(0, 10);
       const mockLabelUrl = `/api/labels/mock/${fakeShipmentId}`;
 
-      this.repository.saveShipment({
+      await this.repository.saveShipment({
         shipmentId: fakeShipmentId,
         orderId: order.orderId,
         orderNumber: order.orderNumber,
@@ -311,8 +311,8 @@ export class LabelServices {
         selectedRateJson: null,
       });
 
-      this.repository.backfillOrderLocalTracking(order.orderId, fakeTracking, null, Math.floor(Date.now() / 1000));
-      this.repository.markOrderShipped(order.orderId, Date.now());
+      await this.repository.backfillOrderLocalTracking(order.orderId, fakeTracking, null, Math.floor(Date.now() / 1000));
+      await this.repository.markOrderShipped(order.orderId, Date.now());
 
       // Generate mock label as real PDF (await so it's ready before response)
       const mockData = {
@@ -331,7 +331,7 @@ export class LabelServices {
       } catch (pdfErr) {
         console.error("[mock-label] PDF generation failed:", pdfErr instanceof Error ? pdfErr.message : pdfErr);
       }
-      this.repository.saveMockLabelData(fakeShipmentId, { ...mockData, pdfBase64 });
+      await this.repository.saveMockLabelData(fakeShipmentId, { ...mockData, pdfBase64 });
 
       return {
         shipmentId: fakeShipmentId,
@@ -385,7 +385,7 @@ export class LabelServices {
 
     if (!body.testLabel) {
       // Persist V2 data immediately — otherCost/createDate will be enriched in the background.
-      this.repository.saveShipment({
+      await this.repository.saveShipment({
         shipmentId: created.shipmentId,
         orderId: order.orderId,
         orderNumber: order.orderNumber,
@@ -413,9 +413,9 @@ export class LabelServices {
       });
 
       if (finalTracking) {
-        this.repository.backfillOrderLocalTracking(order.orderId, finalTracking, created.providerAccountId, Math.floor(Date.now() / 1000));
+        await this.repository.backfillOrderLocalTracking(order.orderId, finalTracking, created.providerAccountId, Math.floor(Date.now() / 1000));
       }
-      this.repository.markOrderShipped(order.orderId, Date.now());
+      await this.repository.markOrderShipped(order.orderId, Date.now());
 
       // Kick off V1 enrichment in the background — user is NOT blocked by this.
       void this.runV1EnrichmentBackground(credentials, created, order, effectiveWeightOz, clientId);
@@ -465,7 +465,7 @@ export class LabelServices {
       // 2. Fetch V1 shipment details for enrichment fields.
       const enriched = await this.gateway.getShipment(credentials, created.shipmentId);
       if (enriched) {
-        this.repository.enrichShipment({
+        await this.repository.enrichShipment({
           shipmentId: created.shipmentId,
           otherCost: enriched.otherCost ?? 0,
           createDate: enriched.createDate ?? null,
@@ -483,7 +483,7 @@ export class LabelServices {
       // 3. Sync all V1 shipments for this order.
       const syncedShipments = await this.gateway.listOrderShipments(credentials, order.orderId);
       for (const shipment of syncedShipments) {
-        this.repository.saveShipment(normalizeSyncedShipment(shipment, clientId));
+        await this.repository.saveShipment(normalizeSyncedShipment(shipment, clientId));
       }
       console.log(`${tag} synced ${syncedShipments.length} V1 shipment(s)`);
     } catch (err) {
@@ -537,17 +537,17 @@ export class LabelServices {
   }
 
   async void(shipmentId: number): Promise<VoidLabelResponseDto> {
-    const shipment = this.repository.getShipmentForVoidOrReturn(shipmentId);
+    const shipment = await this.repository.getShipmentForVoidOrReturn(shipmentId);
     if (!shipment) throw new Error("Shipment not found");
     if (shipment.voided) throw new Error("Label already voided");
 
-    const context = this.repository.getShippingAccountContext(shipment.storeId);
+    const context = await this.repository.getShippingAccountContext(shipment.storeId);
     const apiKeyV2 = context.v2ApiKey ?? this.secrets.shipstation?.api_key_v2;
     if (!apiKeyV2) throw new Error("No v2 API key configured for this account");
 
     await this.gateway.voidShipment(apiKeyV2, shipmentId);
     const now = Date.now();
-    this.repository.markShipmentVoided(shipmentId, shipment.orderId, now);
+    await this.repository.markShipmentVoided(shipmentId, shipment.orderId, now);
 
     return {
       success: true,
@@ -564,17 +564,17 @@ export class LabelServices {
   }
 
   async createReturn(shipmentId: number, body: ReturnLabelRequestDto): Promise<ReturnLabelResponseDto> {
-    const shipment = this.repository.getShipmentForVoidOrReturn(shipmentId);
+    const shipment = await this.repository.getShipmentForVoidOrReturn(shipmentId);
     if (!shipment) throw new Error("Shipment not found");
 
-    const context = this.repository.getShippingAccountContext(shipment.storeId);
+    const context = await this.repository.getShippingAccountContext(shipment.storeId);
     const apiKeyV2 = context.v2ApiKey ?? this.secrets.shipstation?.api_key_v2;
     if (!apiKeyV2) throw new Error("No v2 API key configured for this account");
 
     const reason = body.reason || "Customer Return";
     const result = await this.gateway.createReturnLabel(apiKeyV2, shipmentId, reason);
     const createdAt = Date.now();
-    this.repository.saveReturnLabel({
+    await this.repository.saveReturnLabel({
       shipmentId,
       returnShipmentId: result.returnShipmentId,
       returnTrackingNumber: result.returnTrackingNumber,
@@ -594,19 +594,19 @@ export class LabelServices {
     };
   }
 
-  getMockLabelData(shipmentId: number) {
-    return this.repository.getMockLabelData(shipmentId);
+  async getMockLabelData(shipmentId: number) {
+    return await this.repository.getMockLabelData(shipmentId);
   }
 
   async retrieve(orderLookup: number | string, fresh: boolean): Promise<RetrieveLabelResponseDto> {
-    const shipment = this.repository.getLatestShipmentForOrderLookup(orderLookup);
+    const shipment = await this.repository.getLatestShipmentForOrderLookup(orderLookup);
     if (!shipment) throw new Error("No active label found for this order");
 
     let labelUrl = shipment.labelUrl;
     if (fresh || !labelUrl) {
       labelUrl = await this.findFreshLabelUrl(shipment);
       if (labelUrl && labelUrl !== shipment.labelUrl) {
-        this.repository.updateShipmentLabelUrl(shipment.shipmentId, labelUrl);
+        await this.repository.updateShipmentLabelUrl(shipment.shipmentId, labelUrl);
       }
     }
 
@@ -631,7 +631,7 @@ export class LabelServices {
   }
 
   private async findFreshLabelUrl(shipment: LabelShipmentRecord): Promise<string | null> {
-    const context = this.repository.getShippingAccountContext(shipment.storeId);
+    const context = await this.repository.getShippingAccountContext(shipment.storeId);
     const apiKeyV2 = context.v2ApiKey ?? this.secrets.shipstation?.api_key_v2;
     if (apiKeyV2) {
       const labels = await this.gateway.listRecentLabels(apiKeyV2);

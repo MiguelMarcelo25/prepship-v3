@@ -11,19 +11,19 @@ import type {
 import type { MockLabelData } from "./mock-label-generator.ts";
 
 export interface LabelRepository {
-  getOrder(orderId: number): LabelOrderRecord | null;
-  findActiveLabelForOrder(orderId: number): ExistingLabelRecord | null;
-  resolvePackageDimensions(orderId: number): ResolvedPackageDimensions | null;
-  getShippingAccountContext(storeId: number | null): ShippingAccountContext;
-  saveShipment(input: PersistedShipmentInput): void;
-  markOrderShipped(orderId: number, updatedAt: number): void;
-  markShipmentVoided(shipmentId: number, orderId: number, updatedAt: number): void;
-  saveReturnLabel(record: ReturnLabelRecord): void;
-  getShipmentForVoidOrReturn(shipmentId: number): LabelShipmentRecord | null;
-  getLatestShipmentForOrderLookup(orderLookup: number | string): LabelShipmentRecord | null;
-  updateShipmentLabelUrl(shipmentId: number, labelUrl: string): void;
-  backfillOrderLocalTracking(orderId: number, trackingNumber: string, providerAccountId: number | null, updatedAtSeconds: number): void;
-  enrichShipment(input: ShipmentEnrichmentInput): void;
-  saveMockLabelData(shipmentId: number, data: MockLabelData): void;
-  getMockLabelData(shipmentId: number): MockLabelData | null;
+  getOrder(orderId: number): Promise<LabelOrderRecord | null>;
+  findActiveLabelForOrder(orderId: number): Promise<ExistingLabelRecord | null>;
+  resolvePackageDimensions(orderId: number): Promise<ResolvedPackageDimensions | null>;
+  getShippingAccountContext(storeId: number | null): Promise<ShippingAccountContext>;
+  saveShipment(input: PersistedShipmentInput): Promise<void>;
+  markOrderShipped(orderId: number, updatedAt: number): Promise<void>;
+  markShipmentVoided(shipmentId: number, orderId: number, updatedAt: number): Promise<void>;
+  saveReturnLabel(record: ReturnLabelRecord): Promise<void>;
+  getShipmentForVoidOrReturn(shipmentId: number): Promise<LabelShipmentRecord | null>;
+  getLatestShipmentForOrderLookup(orderLookup: number | string): Promise<LabelShipmentRecord | null>;
+  updateShipmentLabelUrl(shipmentId: number, labelUrl: string): Promise<void>;
+  backfillOrderLocalTracking(orderId: number, trackingNumber: string, providerAccountId: number | null, updatedAtSeconds: number): Promise<void>;
+  enrichShipment(input: ShipmentEnrichmentInput): Promise<void>;
+  saveMockLabelData(shipmentId: number, data: MockLabelData): Promise<void>;
+  getMockLabelData(shipmentId: number): Promise<MockLabelData | null>;
 }

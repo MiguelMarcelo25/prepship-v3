@@ -4,7 +4,7 @@ import type {
 } from "../../../../../../../packages/contracts/src/init/contracts.ts";
 
 export interface InitRepository {
-  listLocalClientStores(): InitStoreDto[];
-  getCounts(): InitCountsDto;
-  getRateBrowserMarkups(): Record<string, unknown>;
+  listLocalClientStores(): Promise<InitStoreDto[]>;
+  getCounts(): Promise<InitCountsDto>;
+  getRateBrowserMarkups(): Promise<Record<string, unknown>>;
 }

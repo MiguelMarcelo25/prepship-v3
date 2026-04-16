@@ -13,7 +13,7 @@ export class SqliteProductRepository implements ProductRepository {
     this.db = db;
   }
 
-  getBulk(skus: string[]): Record<string, ProductBulkItemDto> {
+  async getBulk(skus: string[]): Promise<Record<string, ProductBulkItemDto>> {
     if (skus.length === 0) return {};
 
     const placeholders = skus.map(() => "?").join(", ");
@@ -63,7 +63,7 @@ export class SqliteProductRepository implements ProductRepository {
     return map;
   }
 
-  getBySku(sku: string): ProductDefaultsRecord | null {
+  async getBySku(sku: string): Promise<ProductDefaultsRecord | null> {
     const row = this.db.prepare(`
       SELECT sku, weightOz, length, width, height, defaultPackageCode
       FROM products
@@ -115,7 +115,7 @@ export class SqliteProductRepository implements ProductRepository {
     };
   }
 
-  saveDefaults(input: SaveProductDefaultsInput): SaveProductDefaultsRecordResult {
+  async saveDefaults(input: SaveProductDefaultsInput): Promise<SaveProductDefaultsRecordResult> {
     const weightOz = this.positive(input.weightOz ?? input.weight);
     const length = this.positive(input.length);
     const width = this.positive(input.width);

@@ -12,52 +12,52 @@ export class PackagesHttpHandler {
     this.services = services;
   }
 
-  handleList(source?: string) {
-    return this.services.list(source);
+  async handleList(source?: string) {
+    return await this.services.list(source);
   }
 
-  handleCreate(body: SavePackageInput) {
-    return this.services.create(body);
+  async handleCreate(body: SavePackageInput) {
+    return await this.services.create(body);
   }
 
-  handleLowStock() {
-    return this.services.lowStock();
+  async handleLowStock() {
+    return await this.services.lowStock();
   }
 
-  handleFindByDims(length: number, width: number, height: number) {
-    return this.services.findByDims(length, width, height);
+  async handleFindByDims(length: number, width: number, height: number) {
+    return await this.services.findByDims(length, width, height);
   }
 
-  handleAutoCreate(body: AutoCreatePackageInput) {
-    return this.services.autoCreate(body);
+  async handleAutoCreate(body: AutoCreatePackageInput) {
+    return await this.services.autoCreate(body);
   }
 
-  handleGetById(packageId: number) {
-    return this.services.getById(packageId);
+  async handleGetById(packageId: number) {
+    return await this.services.getById(packageId);
   }
 
-  handleUpdate(packageId: number, body: SavePackageInput) {
-    return this.services.update(packageId, body);
+  async handleUpdate(packageId: number, body: SavePackageInput) {
+    return await this.services.update(packageId, body);
   }
 
-  handleDelete(packageId: number) {
-    return this.services.delete(packageId);
+  async handleDelete(packageId: number) {
+    return await this.services.delete(packageId);
   }
 
-  handleReceive(packageId: number, body: PackageAdjustmentInput) {
-    return this.services.receive(packageId, body);
+  async handleReceive(packageId: number, body: PackageAdjustmentInput) {
+    return await this.services.receive(packageId, body);
   }
 
-  handleAdjust(packageId: number, body: PackageAdjustmentInput) {
-    return this.services.adjust(packageId, body);
+  async handleAdjust(packageId: number, body: PackageAdjustmentInput) {
+    return await this.services.adjust(packageId, body);
   }
 
-  handleSetReorderLevel(packageId: number, reorderLevel: number) {
-    return this.services.setReorderLevel(packageId, reorderLevel);
+  async handleSetReorderLevel(packageId: number, reorderLevel: number) {
+    return await this.services.setReorderLevel(packageId, reorderLevel);
   }
 
-  handleLedger(packageId: number) {
-    return this.services.ledger(packageId);
+  async handleLedger(packageId: number) {
+    return await this.services.ledger(packageId);
   }
 
   handleSync() {

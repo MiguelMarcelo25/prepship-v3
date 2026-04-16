@@ -9,12 +9,12 @@ export class SqliteSettingsRepository implements SettingsRepository {
     this.db = db;
   }
 
-  get(key: AllowedSettingKey): string | null {
+  async get(key: AllowedSettingKey): Promise<string | null> {
     const row = this.db.prepare("SELECT value FROM sync_meta WHERE key = ?").get(`setting:${key}`) as { value: string } | undefined;
     return row?.value ?? null;
   }
 
-  set(key: AllowedSettingKey, value: string): void {
+  async set(key: AllowedSettingKey, value: string): Promise<void> {
     this.db.prepare("INSERT OR REPLACE INTO sync_meta (key, value) VALUES (?, ?)").run(`setting:${key}`, value);
   }
 }

@@ -11,16 +11,16 @@ export class ShipmentsHttpHandler {
     return this.services.triggerSync();
   }
 
-  handleStatus() {
-    return this.services.getStatus();
+  async handleStatus() {
+    return await this.services.getStatus();
   }
 
   handleLegacySyncTrigger(full: boolean) {
     return this.services.triggerLegacySync(full);
   }
 
-  handleLegacySyncStatus() {
-    return this.services.getLegacyStatus();
+  async handleLegacySyncStatus() {
+    return await this.services.getLegacyStatus();
   }
 
   handleList(url: URL) {

@@ -13,55 +13,55 @@ export class BillingHttpHandler {
     this.services = services;
   }
 
-  handleConfig() {
-    return this.services.getConfig();
+  async handleConfig() {
+    return await this.services.getConfig();
   }
 
-  handleSummary(url: URL) {
-    return this.services.getSummary(parseBillingSummaryQuery(url));
+  async handleSummary(url: URL) {
+    return await this.services.getSummary(parseBillingSummaryQuery(url));
   }
 
-  handleDetails(url: URL) {
-    return this.services.getDetails(parseBillingDetailsQuery(url));
+  async handleDetails(url: URL) {
+    return await this.services.getDetails(parseBillingDetailsQuery(url));
   }
 
-  handlePackagePrices(url: URL) {
-    return this.services.getPackagePrices(parseBillingPackagePricesQuery(url).clientId);
+  async handlePackagePrices(url: URL) {
+    return await this.services.getPackagePrices(parseBillingPackagePricesQuery(url).clientId);
   }
 
-  handleUpdateConfig(clientId: number, body: unknown) {
-    return this.services.updateConfig(clientId, body as Record<string, unknown>);
+  async handleUpdateConfig(clientId: number, body: unknown) {
+    return await this.services.updateConfig(clientId, body as Record<string, unknown>);
   }
 
-  handleGenerate(body: unknown) {
-    return this.services.generate(body as Record<string, unknown>);
+  async handleGenerate(body: unknown) {
+    return await this.services.generate(body as Record<string, unknown>);
   }
 
-  handleUpdatePackagePrices(body: unknown) {
-    return this.services.savePackagePrices(body as Record<string, unknown>);
+  async handleUpdatePackagePrices(body: unknown) {
+    return await this.services.savePackagePrices(body as Record<string, unknown>);
   }
 
-  handleSetDefaultPackagePrices(body: unknown) {
-    return this.services.setDefaultPackagePrice(body as Record<string, unknown>);
+  async handleSetDefaultPackagePrices(body: unknown) {
+    return await this.services.setDefaultPackagePrice(body as Record<string, unknown>);
   }
 
-  handleInvoice(url: URL) {
+  async handleInvoice(url: URL) {
     const clientId = parseOptionalIntegerParam(url.searchParams.get("clientId"), "clientId");
     if (clientId == null) {
       throw new InputValidationError("clientId required");
     }
-    return this.services.getInvoice(clientId, url.searchParams.get("from") ?? "", url.searchParams.get("to") ?? "");
+    return await this.services.getInvoice(clientId, url.searchParams.get("from") ?? "", url.searchParams.get("to") ?? "");
   }
 
-  handleFetchRefRates() {
-    return this.services.fetchReferenceRates();
+  async handleFetchRefRates() {
+    return await this.services.fetchReferenceRates();
   }
 
   handleFetchRefRatesStatus() {
     return this.services.getRefRateFetchStatus();
   }
 
-  handleBackfillRefRates(body: unknown) {
-    return this.services.backfillReferenceRates(body as Record<string, unknown>);
+  async handleBackfillRefRates(body: unknown) {
+    return await this.services.backfillReferenceRates(body as Record<string, unknown>);
   }
 }

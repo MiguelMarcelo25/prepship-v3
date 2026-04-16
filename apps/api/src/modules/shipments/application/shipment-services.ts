@@ -50,10 +50,10 @@ export class ShipmentServices {
     return { queued: true, mode: full ? "full" : "incremental" };
   }
 
-  getLegacyStatus(): LegacySyncStatusDto {
+  async getLegacyStatus(): Promise<LegacySyncStatusDto> {
     return {
       ...this.legacySyncStatus,
-      lastSync: this.repository.getLastShipmentSync() ?? this.legacySyncStatus.lastSync,
+      lastSync: await this.repository.getLastShipmentSync() ?? this.legacySyncStatus.lastSync,
     };
   }
 
@@ -73,10 +73,10 @@ export class ShipmentServices {
     }
   }
 
-  getStatus(): ShipmentSyncStatusDto {
+  async getStatus(): Promise<ShipmentSyncStatusDto> {
     return {
-      count: this.repository.countActiveShipments(),
-      lastSync: this.repository.getLastShipmentSync(),
+      count: await this.repository.countActiveShipments(),
+      lastSync: await this.repository.getLastShipmentSync(),
       running: this.running,
     };
   }
@@ -87,7 +87,7 @@ export class ShipmentServices {
     return result.raw;
   }
 
-  private buildSyncAccounts(): ShipmentSyncAccountRecord[] {
+  private async buildSyncAccounts(): Promise<ShipmentSyncAccountRecord[]> {
     const accounts: ShipmentSyncAccountRecord[] = [];
     const mainApiKey = this.secrets.shipstation?.api_key ?? null;
     const mainApiSecret = this.secrets.shipstation?.api_secret ?? null;
@@ -106,15 +106,15 @@ export class ShipmentServices {
     }
 
     return accounts.concat(
-      this.repository
-        .listSyncAccounts()
+      (await this.repository
+        .listSyncAccounts())
         .filter((account) => Boolean(account.v1ApiKey && account.v1ApiSecret)),
     );
   }
 
   private async runSync(mode: "incremental" | "full"): Promise<void> {
-    const accounts = this.buildSyncAccounts();
-    const lastSync = this.repository.getLastShipmentSync();
+    const accounts = await this.buildSyncAccounts();
+    const lastSync = await this.repository.getLastShipmentSync();
     const createdAtStart = lastSync ? new Date(lastSync - 60_000).toISOString() : undefined;
     const updatedAt = Date.now();
     let totalProcessed = 0;
@@ -155,14 +155,15 @@ export class ShipmentServices {
           const result = await this.gateway.listShipments(credentials, params);
           if (result.shipments.length === 0) break;
 
-          const normalized = result.shipments.flatMap((shipment) => {
+          const normalized = [];
+          for (const shipment of result.shipments) {
             let orderId = shipment.orderId;
             if (shipment.orderNumber) {
-              const resolved = this.repository.resolveOrderIdByOrderNumber(shipment.orderNumber);
+              const resolved = await this.repository.resolveOrderIdByOrderNumber(shipment.orderNumber);
               if (resolved) orderId = resolved;
             }
-            if (!this.repository.orderExists(orderId)) return [];
-            return [{
+            if (!(await this.repository.orderExists(orderId))) continue;
+            normalized.push({
               shipmentId: shipment.shipmentId,
               orderId,
               orderNumber: shipment.orderNumber,
@@ -180,14 +181,14 @@ export class ShipmentServices {
               dimsWidth: shipment.dimsWidth,
               dimsHeight: shipment.dimsHeight,
               updatedAt,
-              clientId: this.repository.getOrderClientId(orderId) ?? account.clientId,
+              clientId: await this.repository.getOrderClientId(orderId) ?? account.clientId,
               source: "shipstation",
-            }];
-          });
+            });
+          }
 
           if (normalized.length > 0) {
-            this.repository.upsertShipmentBatch(normalized);
-            this.repository.backfillOrderLocalFromShipments(normalized);
+            await this.repository.upsertShipmentBatch(normalized);
+            await this.repository.backfillOrderLocalFromShipments(normalized);
             totalProcessed += normalized.length;
             this.legacySyncStatus = {
               ...this.legacySyncStatus,
@@ -203,7 +204,7 @@ export class ShipmentServices {
       }
 
       const completedAt = Date.now();
-      this.repository.setLastShipmentSync(completedAt);
+      await this.repository.setLastShipmentSync(completedAt);
       this.legacySyncStatus = {
         ...this.legacySyncStatus,
         status: "done",

@@ -142,14 +142,14 @@ class MemoryAnalysisRepository implements AnalysisRepository {
     this.seed = seed;
   }
 
-  listOrderRows(query: { clientId?: number }): AnalysisOrderRow[] {
+  async listOrderRows(query: { clientId?: number }): AnalysisOrderRow[] {
     const rows = clone(this.seed?.orderRows ?? []);
     if (!query.clientId) return rows;
-    const allowed = new Set(this.getClientStoreIds(query.clientId));
+    const allowed = new Set(await this.getClientStoreIds(query.clientId));
     return rows.filter((row) => row.storeId != null && allowed.has(row.storeId));
   }
 
-  listDailySalesRows(query: { clientId?: number }, since: string, until: string): AnalysisDailySalesRow[] {
+  async listDailySalesRows(query: { clientId?: number }, since: string, until: string): AnalysisDailySalesRow[] {
     const rows = clone(this.seed?.dailySalesRows ?? []);
     void since;
     void until;
@@ -157,15 +157,15 @@ class MemoryAnalysisRepository implements AnalysisRepository {
     return rows;
   }
 
-  getStoreClientNameMap(): Record<number, string> {
+  async getStoreClientNameMap(): Record<number, string> {
     return { ...(this.seed?.storeClientNameMap ?? {}) };
   }
 
-  getInventorySkuMap(): Map<string, number> {
+  async getInventorySkuMap(): Map<string, number> {
     return new Map((this.seed?.inventorySkuMap ?? []).map((entry) => [entry.sku, entry.invSkuId]));
   }
 
-  getClientStoreIds(clientId: number): number[] {
+  async getClientStoreIds(clientId: number): number[] {
     return [...(this.seed?.clientStoreIds?.[clientId] ?? [])];
   }
 }
@@ -194,19 +194,19 @@ class MemoryBillingRepository implements BillingRepository {
     this.cachedReferenceRates = {};
   }
 
-  listBillableClients(): BillingClientRecord[] {
+  async listBillableClients(): BillingClientRecord[] {
     return clone(this.clients);
   }
 
-  listConfigRecords(): BillingConfigRecord[] {
+  async listConfigRecords(): BillingConfigRecord[] {
     return clone(this.configs);
   }
 
-  listReferenceRateStoreIds(): number[] {
+  async listReferenceRateStoreIds(): number[] {
     return clone(this.referenceRateStoreIds);
   }
 
-  upsertConfig(clientId: number, input: UpdateBillingConfigInput): void {
+  async upsertConfig(clientId: number, input: UpdateBillingConfigInput): void {
     const existing = this.configs.find((row) => row.clientId === clientId);
     const next: BillingConfigRecord = {
       clientId,
@@ -228,31 +228,31 @@ class MemoryBillingRepository implements BillingRepository {
     }
   }
 
-  generate(input: Required<Pick<GenerateBillingInput, "from" | "to">> & Pick<GenerateBillingInput, "clientId">): GenerateBillingResult {
+  async generate(input: Required<Pick<GenerateBillingInput, "from" | "to">> & Pick<GenerateBillingInput, "clientId">): GenerateBillingResult {
     void input;
     return { ok: true, generated: 0, total: 0 };
   }
 
-  listSummary(query: BillingSummaryQuery): BillingSummaryRecord[] {
+  async listSummary(query: BillingSummaryQuery): BillingSummaryRecord[] {
     const rows = clone(this.summary);
     if (!query.clientId) return rows;
     return rows.filter((row) => row.clientId === query.clientId);
   }
 
-  listDetails(query: Required<BillingDetailsQuery>): BillingDetailRecord[] {
+  async listDetails(query: Required<BillingDetailsQuery>): BillingDetailRecord[] {
     return clone(this.details).filter((row) =>
       row.shipDate >= query.from && row.shipDate <= query.to
     );
   }
 
-  listPackagePrices(clientId: number): BillingPackagePriceRecord[] {
+  async listPackagePrices(clientId: number): BillingPackagePriceRecord[] {
     return clone(this.packagePrices[clientId] ?? []);
   }
 
-  getInvoice(clientId: number, from: string, to: string): BillingInvoiceRecord | null {
+  async getInvoice(clientId: number, from: string, to: string): BillingInvoiceRecord | null {
     const client = this.clients.find((entry) => entry.clientId === clientId);
     if (!client) return null;
-    const summaryRows = this.listSummary({ clientId, from, to });
+    const summaryRows = await this.listSummary({ clientId, from, to });
     const summary = summaryRows[0] ?? {
       clientId,
       clientName: client.name,
@@ -264,7 +264,7 @@ class MemoryBillingRepository implements BillingRepository {
       orderCount: 0,
       grandTotal: 0,
     };
-    const details = this.listDetails({ clientId, from, to }).map((row) => ({
+    const details = (await this.listDetails({ clientId, from, to })).map((row) => ({
       orderId: row.orderId,
       orderNumber: row.orderNumber,
       shipDate: row.shipDate,
@@ -287,7 +287,7 @@ class MemoryBillingRepository implements BillingRepository {
     };
   }
 
-  savePackagePrices(input: { clientId: number; prices: SaveBillingPackagePriceInput[] | undefined }): void {
+  async savePackagePrices(input: { clientId: number; prices: SaveBillingPackagePriceInput[] | undefined }): void {
     if (!this.packagePrices[input.clientId]) this.packagePrices[input.clientId] = [];
     for (const price of input.prices ?? []) {
       const existing = this.packagePrices[input.clientId].find((entry) => entry.packageId === price.packageId);
@@ -308,7 +308,7 @@ class MemoryBillingRepository implements BillingRepository {
     }
   }
 
-  setDefaultPackagePrice(packageId: number, price: number): SetDefaultBillingPackagePriceResult {
+  async setDefaultPackagePrice(packageId: number, price: number): SetDefaultBillingPackagePriceResult {
     let updated = 0;
     for (const client of this.clients.filter((entry) => ![3, 4].includes(entry.clientId))) {
       if (!this.packagePrices[client.clientId]) this.packagePrices[client.clientId] = [];
@@ -335,19 +335,19 @@ class MemoryBillingRepository implements BillingRepository {
     return { ok: true, updated, skipped: eligible - updated };
   }
 
-  listOrdersMissingReferenceRatesForFetch(_storeIds: number[]): BillingFetchReferenceRateOrderRecord[] {
+  async listOrdersMissingReferenceRatesForFetch(_storeIds: number[]): BillingFetchReferenceRateOrderRecord[] {
     return clone(this.fetchOrders);
   }
 
-  listOrdersMissingReferenceRatesForBackfill(_input: BackfillBillingReferenceRatesInput): BillingBackfillReferenceRateOrderRecord[] {
+  async listOrdersMissingReferenceRatesForBackfill(_input: BackfillBillingReferenceRatesInput): BillingBackfillReferenceRateOrderRecord[] {
     return clone(this.backfillOrders);
   }
 
-  findCachedReferenceRateCandidates(weightOz: number, zip5: string): RateDto[] | null {
+  async findCachedReferenceRateCandidates(weightOz: number, zip5: string): RateDto[] | null {
     return clone(this.cachedReferenceRates[`${weightOz}|${zip5}`] ?? null);
   }
 
-  saveBackfilledReferenceRates(orderId: number, refUspsRate: number | null, refUpsRate: number | null): void {
+  async saveBackfilledReferenceRates(orderId: number, refUspsRate: number | null, refUpsRate: number | null): void {
     this.backfilledReferenceRates.set(orderId, { refUspsRate, refUpsRate });
   }
 }
@@ -359,11 +359,11 @@ class MemoryClientRepository implements ClientRepository {
     this.records = records;
   }
 
-  listActive(): ClientRecord[] {
+  async listActive(): ClientRecord[] {
     return this.records.filter((record) => record.active === 1).map(clone);
   }
 
-  create(input: { name: string; storeIds?: number[]; contactName?: string; email?: string; phone?: string }): number {
+  async create(input: { name: string; storeIds?: number[]; contactName?: string; email?: string; phone?: string }): number {
     const clientId = this.records.reduce((max, record) => Math.max(max, record.clientId), 0) + 1;
     this.records.push({
       clientId,
@@ -381,7 +381,7 @@ class MemoryClientRepository implements ClientRepository {
     return clientId;
   }
 
-  update(clientId: number, input: { name: string; storeIds?: number[]; contactName?: string; email?: string; phone?: string; ss_api_key?: string | null; ss_api_secret?: string | null; ss_api_key_v2?: string | null; rate_source_client_id?: number | null }): void {
+  async update(clientId: number, input: { name: string; storeIds?: number[]; contactName?: string; email?: string; phone?: string; ss_api_key?: string | null; ss_api_secret?: string | null; ss_api_key_v2?: string | null; rate_source_client_id?: number | null }): void {
     const record = this.records.find((entry) => entry.clientId === clientId);
     if (!record) return;
     record.name = input.name;
@@ -395,12 +395,12 @@ class MemoryClientRepository implements ClientRepository {
     record.rate_source_client_id = input.rate_source_client_id ?? null;
   }
 
-  softDelete(clientId: number): void {
+  async softDelete(clientId: number): void {
     const record = this.records.find((entry) => entry.clientId === clientId);
     if (record) record.active = 0;
   }
 
-  syncFromStores(stores: Array<{ storeId: number; storeName: string }>): void {
+  async syncFromStores(stores: Array<{ storeId: number; storeName: string }>): void {
     for (const store of stores) {
       const name = store.storeName?.trim();
       if (!name || store.storeId == null) continue;
@@ -444,7 +444,7 @@ class MemoryInitRepository implements InitRepository {
     this.seed = seed;
   }
 
-  listLocalClientStores(): InitStoreDto[] {
+  async listLocalClientStores(): InitStoreDto[] {
     if (this.seed?.localStores) return clone(this.seed.localStores);
     const stores: InitStoreDto[] = [];
     for (const client of this.clients.filter((entry) => entry.active === 1)) {
@@ -475,11 +475,11 @@ class MemoryInitRepository implements InitRepository {
     return stores;
   }
 
-  getCounts(): InitCountsDto {
+  async getCounts(): InitCountsDto {
     return clone(this.seed?.counts ?? { byStatus: [], byStatusStore: [] });
   }
 
-  getRateBrowserMarkups(): Record<string, unknown> {
+  async getRateBrowserMarkups(): Record<string, unknown> {
     return clone(this.seed?.markups ?? {});
   }
 }
@@ -504,7 +504,7 @@ class MemoryInventoryRepository implements InventoryRepository {
     this.nextLedgerId = this.ledger.reduce((max, entry) => Math.max(max, Number(entry.id ?? 0)), 0) + 1;
   }
 
-  list(query: ListInventoryQuery): InventoryRecord[] {
+  async list(query: ListInventoryQuery): InventoryRecord[] {
     return this.records.filter((record) => {
       if (query.clientId && record.clientId !== query.clientId) return false;
       if (query.sku && !record.sku.toLowerCase().includes(query.sku.toLowerCase())) return false;
@@ -512,7 +512,7 @@ class MemoryInventoryRepository implements InventoryRepository {
     }).map(clone);
   }
 
-  receive(input: ReceiveInventoryInput): ReceiveInventoryResultDto[] {
+  async receive(input: ReceiveInventoryInput): ReceiveInventoryResultDto[] {
     const received: ReceiveInventoryResultDto[] = [];
     for (const item of input.items) {
       let record = this.records.find((entry) => entry.clientId === input.clientId && entry.sku === item.sku);
@@ -577,7 +577,7 @@ class MemoryInventoryRepository implements InventoryRepository {
     return received;
   }
 
-  adjust(input: AdjustInventoryInput): number {
+  async adjust(input: AdjustInventoryInput): number {
     const record = this.records.find((entry) => entry.id === input.invSkuId);
     if (!record) return 0;
     record.currentStock += input.qty;
@@ -599,7 +599,7 @@ class MemoryInventoryRepository implements InventoryRepository {
     return record.currentStock;
   }
 
-  update(inventoryId: number, input: UpdateInventoryItemInput): void {
+  async update(inventoryId: number, input: UpdateInventoryItemInput): void {
     const record = this.records.find((entry) => entry.id === inventoryId);
     if (!record) return;
     Object.assign(record, {
@@ -618,7 +618,7 @@ class MemoryInventoryRepository implements InventoryRepository {
     });
   }
 
-  listLedger(query: ListInventoryLedgerQuery): Record<string, unknown>[] {
+  async listLedger(query: ListInventoryLedgerQuery): Record<string, unknown>[] {
     return this.ledger.filter((entry) => {
       if (query.clientId && Number(entry.clientId) !== query.clientId) return false;
       if (query.type && entry.type !== query.type) return false;
@@ -628,11 +628,11 @@ class MemoryInventoryRepository implements InventoryRepository {
     }).slice(0, query.limit).map(clone);
   }
 
-  getLedgerByInventoryId(inventoryId: number): Record<string, unknown>[] {
+  async getLedgerByInventoryId(inventoryId: number): Record<string, unknown>[] {
     return this.ledger.filter((entry) => Number(entry.invSkuId) === inventoryId).map(clone);
   }
 
-  listAlerts(clientId: number): InventoryAlertRecord[] {
+  async listAlerts(clientId: number): InventoryAlertRecord[] {
     return this.records
       .filter((record) => record.clientId === clientId && record.currentStock <= record.minStock)
       .map((record) => ({
@@ -646,15 +646,15 @@ class MemoryInventoryRepository implements InventoryRepository {
       }));
   }
 
-  populate(): { ok: true; skusRegistered: number; shippedProcessed: number } {
+  async populate(): { ok: true; skusRegistered: number; shippedProcessed: number } {
     return { ok: true, skusRegistered: 0, shippedProcessed: 0 };
   }
 
-  importProductDimensions(): { ok: true; updated: number; skipped: number; noMatch: number; total: number } {
+  async importProductDimensions(): { ok: true; updated: number; skipped: number; noMatch: number; total: number } {
     return { ok: true, updated: 0, skipped: this.records.length, noMatch: 0, total: this.records.length };
   }
 
-  bulkUpdateDimensions(input: BulkUpdateInventoryDimensionsInput): { ok: true; updated: number } {
+  async bulkUpdateDimensions(input: BulkUpdateInventoryDimensionsInput): { ok: true; updated: number } {
     for (const change of input.updates) {
       const record = this.records.find((entry) => entry.id === change.invSkuId);
       if (!record) continue;
@@ -666,7 +666,7 @@ class MemoryInventoryRepository implements InventoryRepository {
     return { ok: true, updated: input.updates.length };
   }
 
-  listParentSkus(clientId: number): ParentSkuDto[] {
+  async listParentSkus(clientId: number): ParentSkuDto[] {
     return this.parents.filter((entry) => entry.clientId === clientId).map((parent) => ({
       ...clone(parent),
       childCount: this.records.filter((record) => record.parentSkuId === parent.parentSkuId && record.active).length,
@@ -676,7 +676,7 @@ class MemoryInventoryRepository implements InventoryRepository {
     }));
   }
 
-  getParentSku(parentSkuId: number): ParentSkuDetailDto | null {
+  async getParentSku(parentSkuId: number): ParentSkuDetailDto | null {
     const parent = this.parents.find((entry) => entry.parentSkuId === parentSkuId);
     if (!parent) return null;
     const children = this.records
@@ -700,7 +700,7 @@ class MemoryInventoryRepository implements InventoryRepository {
     };
   }
 
-  createParentSku(input: SaveParentSkuInput): { ok: true; parentSkuId: number; sku?: string; baseUnitQty: number } {
+  async createParentSku(input: SaveParentSkuInput): { ok: true; parentSkuId: number; sku?: string; baseUnitQty: number } {
     const parentSkuId = this.parents.reduce((max, parent) => Math.max(max, parent.parentSkuId), 0) + 1;
     const baseUnitQty = Math.max(1, Number.parseInt(String(input.baseUnitQty ?? 1), 10) || 1);
     this.parents.push({
@@ -715,7 +715,7 @@ class MemoryInventoryRepository implements InventoryRepository {
     return { ok: true, parentSkuId, sku: input.sku ?? "", baseUnitQty };
   }
 
-  setParent(inventoryId: number, input: SetInventoryParentInput): { ok: true } {
+  async setParent(inventoryId: number, input: SetInventoryParentInput): { ok: true } {
     const record = this.records.find((entry) => entry.id === inventoryId);
     if (!record) return { ok: true };
     if (input.parentSkuId === null) {
@@ -732,7 +732,7 @@ class MemoryInventoryRepository implements InventoryRepository {
     return { ok: true };
   }
 
-  deleteParent(parentSkuId: number): { ok: true } {
+  async deleteParent(parentSkuId: number): { ok: true } {
     const childCount = this.records.filter((record) => record.parentSkuId === parentSkuId).length;
     if (childCount > 0) {
       throw new Error(`Cannot delete parent with ${childCount} child SKU(s). Unlink children first.`);
@@ -742,7 +742,7 @@ class MemoryInventoryRepository implements InventoryRepository {
     return { ok: true };
   }
 
-  getSkuOrders(inventoryId: number): Record<string, unknown> | null {
+  async getSkuOrders(inventoryId: number): Record<string, unknown> | null {
     const record = this.records.find((entry) => entry.id === inventoryId);
     if (!record) return null;
     return {
@@ -763,16 +763,16 @@ class MemoryLocationRepository implements LocationRepository {
     this.records = records;
   }
 
-  list(): LocationRecord[] {
+  async list(): LocationRecord[] {
     return this.records.filter((record) => record.active === 1).map(clone);
   }
 
-  getDefault(): LocationRecord | null {
+  async getDefault(): LocationRecord | null {
     const record = this.records.find((entry) => entry.active === 1 && entry.isDefault === 1);
     return record ? clone(record) : null;
   }
 
-  create(input: SaveLocationInput): number {
+  async create(input: SaveLocationInput): number {
     const locationId = this.records.reduce((max, record) => Math.max(max, record.locationId), 0) + 1;
     this.records.push({
       locationId,
@@ -791,7 +791,7 @@ class MemoryLocationRepository implements LocationRepository {
     return locationId;
   }
 
-  update(locationId: number, input: SaveLocationInput): void {
+  async update(locationId: number, input: SaveLocationInput): void {
     const record = this.records.find((entry) => entry.locationId === locationId);
     if (!record) return;
     record.name = input.name;
@@ -806,16 +806,16 @@ class MemoryLocationRepository implements LocationRepository {
     record.isDefault = input.isDefault ? 1 : 0;
   }
 
-  delete(locationId: number): void {
+  async delete(locationId: number): void {
     const record = this.records.find((entry) => entry.locationId === locationId);
     if (record) record.active = 0;
   }
 
-  clearDefault(): void {
+  async clearDefault(): void {
     for (const record of this.records) record.isDefault = 0;
   }
 
-  setDefault(locationId: number): void {
+  async setDefault(locationId: number): void {
     const record = this.records.find((entry) => entry.locationId === locationId);
     if (record) record.isDefault = 1;
   }
@@ -828,7 +828,7 @@ class MemoryOrderRepository implements OrderRepository {
     this.entries = entries;
   }
 
-  list(query: ListOrdersQuery): OrderListResult {
+  async list(query: ListOrdersQuery): OrderListResult {
     const filtered = this.filterOrders(query);
     const page = Math.max(1, query.page);
     const pageSize = Math.max(1, query.pageSize);
@@ -839,12 +839,12 @@ class MemoryOrderRepository implements OrderRepository {
     };
   }
 
-  getById(orderId: number): OrderRecord | null {
+  async getById(orderId: number): OrderRecord | null {
     const entry = this.entries.find((item) => item.record.orderId === orderId);
     return entry ? clone(entry.record) : null;
   }
 
-  findIdsBySku(query: GetOrderIdsQuery): number[] {
+  async findIdsBySku(query: GetOrderIdsQuery): number[] {
     return this.filterOrders({ page: 1, pageSize: Number.MAX_SAFE_INTEGER, orderStatus: query.orderStatus, storeId: query.storeId })
       .filter((entry) => {
         const matches = entry.items.filter((item) => {
@@ -860,7 +860,7 @@ class MemoryOrderRepository implements OrderRepository {
       .map((entry) => entry.record.orderId);
   }
 
-  getPicklist(query: GetOrderPicklistQuery): OrderPicklistItemDto[] {
+  async getPicklist(query: GetOrderPicklistQuery): OrderPicklistItemDto[] {
     const filtered = this.filterOrders({ page: 1, pageSize: Number.MAX_SAFE_INTEGER, orderStatus: query.orderStatus, storeId: query.storeId, dateStart: query.dateStart, dateEnd: query.dateEnd });
     const map = new Map<string, OrderPicklistItemDto>();
     for (const entry of filtered) {
@@ -888,22 +888,22 @@ class MemoryOrderRepository implements OrderRepository {
     return Array.from(map.values()).sort((left, right) => right.totalQty - left.totalQty);
   }
 
-  getFullById(orderId: number): OrderFullDto | null {
+  async getFullById(orderId: number): OrderFullDto | null {
     const entry = this.entries.find((item) => item.record.orderId === orderId);
     return entry?.full ? clone(entry.full) : null;
   }
 
-  updateExternalShipped(orderId: number, externalShipped: boolean): void {
+  async updateExternalShipped(orderId: number, externalShipped: boolean): void {
     const entry = this.entries.find((item) => item.record.orderId === orderId);
     if (entry) entry.record.externalShipped = externalShipped;
   }
 
-  updateResidential(orderId: number, residential: boolean | null): void {
+  async updateResidential(orderId: number, residential: boolean | null): void {
     const entry = this.entries.find((item) => item.record.orderId === orderId);
     if (entry) entry.record.residential = residential;
   }
 
-  updateSelectedPid(orderId: number, selectedPid: number | null): void {
+  async updateSelectedPid(orderId: number, selectedPid: number | null): void {
     const entry = this.entries.find((item) => item.record.orderId === orderId);
     if (!entry) return;
     const selectedRate = entry.record.selectedRateJson ? JSON.parse(entry.record.selectedRateJson) as Record<string, unknown> : {};
@@ -912,12 +912,12 @@ class MemoryOrderRepository implements OrderRepository {
     entry.record.selectedRateJson = JSON.stringify(selectedRate);
   }
 
-  updateBestRate(orderId: number, bestRate: OrderBestRateDto): void {
+  async updateBestRate(orderId: number, bestRate: OrderBestRateDto): void {
     const entry = this.entries.find((item) => item.record.orderId === orderId);
     if (entry) entry.record.bestRateJson = JSON.stringify(bestRate);
   }
 
-  updateOrderRateDims(orderId: number, length: number, width: number, height: number): void {
+  async updateOrderRateDims(orderId: number, length: number, width: number, height: number): void {
     const entry = this.entries.find((item) => item.record.orderId === orderId);
     if (entry) {
       entry.record.rateDimsL = length;
@@ -926,15 +926,15 @@ class MemoryOrderRepository implements OrderRepository {
     }
   }
 
-  getSkuQtyDims(_sku: string, _qty: number): { length: number; width: number; height: number } | null {
+  async getSkuQtyDims(_sku: string, _qty: number): { length: number; width: number; height: number } | null {
     return null; // In-memory store doesn't persist sku_qty_dims
   }
 
-  saveSkuQtyDims(_sku: string, _qty: number, _length: number, _width: number, _height: number): void {
+  async saveSkuQtyDims(_sku: string, _qty: number, _length: number, _width: number, _height: number): void {
     // In-memory store: no-op
   }
 
-  getDailyStats(): OrdersDailyStatsDto {
+  async getDailyStats(): OrdersDailyStatsDto {
     return {
       window: {
         from: "2026-03-09T12:00:00",
@@ -948,7 +948,7 @@ class MemoryOrderRepository implements OrderRepository {
     };
   }
 
-  exportOrders(_query: OrderExportQuery): OrderExportRow[] {
+  async exportOrders(_query: OrderExportQuery): OrderExportRow[] {
     // Memory store: return empty — only used in tests that don't exercise export
     return [];
   }
@@ -981,25 +981,25 @@ class MemoryPackageRepository implements PackageRepository {
     this.nextId = nextId;
   }
 
-  list(source?: string): PackageRecord[] {
+  async list(source?: string): PackageRecord[] {
     return this.records.filter((record) => !source || record.source === source).map(clone);
   }
 
-  listLowStock(): PackageRecord[] {
+  async listLowStock(): PackageRecord[] {
     return this.records.filter((record) => (record.stockQty ?? 0) <= (record.reorderLevel ?? 0)).map(clone);
   }
 
-  findByDims(length: number, width: number, height: number): PackageRecord | null {
+  async findByDims(length: number, width: number, height: number): PackageRecord | null {
     const record = this.records.find((entry) => entry.length === length && entry.width === width && entry.height === height);
     return record ? clone(record) : null;
   }
 
-  getById(packageId: number): PackageRecord | null {
+  async getById(packageId: number): PackageRecord | null {
     const record = this.records.find((entry) => entry.packageId === packageId);
     return record ? clone(record) : null;
   }
 
-  create(input: SavePackageInput): number {
+  async create(input: SavePackageInput): number {
     const packageId = this.nextId++;
     this.records.push({
       packageId,
@@ -1018,7 +1018,7 @@ class MemoryPackageRepository implements PackageRepository {
     return packageId;
   }
 
-  update(packageId: number, input: SavePackageInput): void {
+  async update(packageId: number, input: SavePackageInput): void {
     const record = this.records.find((entry) => entry.packageId === packageId);
     if (!record) return;
     record.name = input.name;
@@ -1031,12 +1031,12 @@ class MemoryPackageRepository implements PackageRepository {
     record.unitCost = input.unitCost ?? record.unitCost;
   }
 
-  delete(packageId: number): void {
+  async delete(packageId: number): void {
     const index = this.records.findIndex((entry) => entry.packageId === packageId);
     if (index >= 0) this.records.splice(index, 1);
   }
 
-  receive(packageId: number, input: PackageAdjustmentInput): PackageRecord | null {
+  async receive(packageId: number, input: PackageAdjustmentInput): PackageRecord | null {
     const record = this.records.find((entry) => entry.packageId === packageId);
     if (!record) return null;
     record.stockQty = (record.stockQty ?? 0) + input.qty;
@@ -1044,7 +1044,7 @@ class MemoryPackageRepository implements PackageRepository {
     return clone(record);
   }
 
-  adjust(packageId: number, input: PackageAdjustmentInput): PackageRecord | null {
+  async adjust(packageId: number, input: PackageAdjustmentInput): PackageRecord | null {
     const record = this.records.find((entry) => entry.packageId === packageId);
     if (!record) return null;
     record.stockQty = (record.stockQty ?? 0) + input.qty;
@@ -1052,19 +1052,19 @@ class MemoryPackageRepository implements PackageRepository {
     return clone(record);
   }
 
-  setReorderLevel(packageId: number, reorderLevel: number): void {
+  async setReorderLevel(packageId: number, reorderLevel: number): void {
     const record = this.records.find((entry) => entry.packageId === packageId);
     if (record) record.reorderLevel = reorderLevel;
   }
 
-  getLedger(packageId: number): Record<string, unknown>[] {
+  async getLedger(packageId: number): Record<string, unknown>[] {
     return clone(this.ledger[packageId] ?? []);
   }
 
-  autoCreate(input: AutoCreatePackageInput): { package: PackageRecord; isNew: boolean } {
+  async autoCreate(input: AutoCreatePackageInput): { package: PackageRecord; isNew: boolean } {
     const existing = this.records.find((entry) => entry.length === input.length && entry.width === input.width && entry.height === input.height);
     if (existing) return { package: clone(existing), isNew: false };
-    const packageId = this.create({
+    const packageId = await this.create({
       name: `${input.length}x${input.width}x${input.height}`,
       type: "box",
       length: input.length,
@@ -1074,7 +1074,7 @@ class MemoryPackageRepository implements PackageRepository {
     return { package: clone(this.records.find((entry) => entry.packageId === packageId) as PackageRecord), isNew: true };
   }
 
-  syncCarrierPackages(carrierCode: string, packages: Array<{ code: string; name: string; type?: string; length?: number; width?: number; height?: number; tareWeightOz?: number }>): void {
+  async syncCarrierPackages(carrierCode: string, packages: Array<{ code: string; name: string; type?: string; length?: number; width?: number; height?: number; tareWeightOz?: number }>): void {
     for (const pkg of packages) {
       const existing = this.records.find((entry) => entry.source === "carrier" && entry.carrierCode === carrierCode && entry.name === pkg.name);
       if (existing) {
@@ -1123,7 +1123,7 @@ class MemoryProductRepository implements ProductRepository {
     this.packages = packages;
   }
 
-  getBulk(skus: string[]) {
+  async getBulk(skus: string[]) {
     const map: Record<string, ProductDefaultsRecord> = {};
     for (const sku of skus) {
       if (this.products[sku]) map[sku] = clone(this.products[sku]);
@@ -1131,11 +1131,11 @@ class MemoryProductRepository implements ProductRepository {
     return map;
   }
 
-  getBySku(sku: string): ProductDefaultsRecord | null {
+  async getBySku(sku: string): ProductDefaultsRecord | null {
     return this.products[sku] ? clone(this.products[sku]) : null;
   }
 
-  saveDefaults(input: SaveProductDefaultsInput): SaveProductDefaultsRecordResult {
+  async saveDefaults(input: SaveProductDefaultsInput): SaveProductDefaultsRecordResult {
     const sku = input.sku ?? `product-${input.productId}`;
     const current = this.products[sku] ?? {
       sku,
@@ -1218,19 +1218,19 @@ class MemoryRateRepository implements RateRepository {
     this.cache = clone(seed?.cache ?? {});
   }
 
-  getClientIdForStoreId(storeId: number): number | null {
+  async getClientIdForStoreId(storeId: number): number | null {
     return this.seed?.storeClientMap?.[storeId] ?? null;
   }
 
-  getCurrentWeightVersion(): number {
+  async getCurrentWeightVersion(): number {
     return this.seed?.weightVersion ?? 0;
   }
 
-  getCachedRate(cacheKey: string): CachedRateRecord | null {
+  async getCachedRate(cacheKey: string): CachedRateRecord | null {
     return clone(this.cache[cacheKey] ?? null);
   }
 
-  listCarriersForClient(clientId: number | null): CarrierAccountDto[] {
+  async listCarriersForClient(clientId: number | null): CarrierAccountDto[] {
     const carriers = this.seed?.carriers ?? CARRIER_ACCOUNTS_V2;
     const carrierGroupClientId = clientId != null &&
       carriers.some((carrier) => carrier.clientId === clientId)
@@ -1243,24 +1243,24 @@ class MemoryRateRepository implements RateRepository {
     ).map(clone);
   }
 
-  getRateSourceConfig(clientId: number | null): RateSourceConfig {
+  async getRateSourceConfig(clientId: number | null): RateSourceConfig {
     return {
       apiKeyV2: clientId != null ? `memory-key-${clientId}` : "memory-main-key",
       sourceClientId: clientId,
     };
   }
 
-  clearCaches(): void {
+  async clearCaches(): void {
     for (const key of Object.keys(this.cache)) {
       delete this.cache[key];
     }
   }
 
-  listOrdersForRateRefetch(limit: number): RefetchRateOrderRecord[] {
+  async listOrdersForRateRefetch(limit: number): RefetchRateOrderRecord[] {
     return clone(this.seed?.refetchOrders ?? []).slice(0, limit);
   }
 
-  saveCachedRate(
+  async saveCachedRate(
     cacheKey: string,
     weightOz: number,
     toZip: string,
@@ -1277,7 +1277,7 @@ class MemoryRateRepository implements RateRepository {
     };
   }
 
-  saveReferenceRates(orderIds: number[], rates: RateDto[], weightOz: number, dims: RateDimsDto | null, storeId: number | null): void {
+  async saveReferenceRates(orderIds: number[], rates: RateDto[], weightOz: number, dims: RateDimsDto | null, storeId: number | null): void {
     void orderIds;
     void rates;
     void weightOz;
@@ -1293,7 +1293,7 @@ class MemoryManifestRepository implements ManifestRepository {
     this.shipments = shipments;
   }
 
-  listShipments() {
+  async listShipments() {
     return this.shipments.map(clone);
   }
 }
@@ -1308,7 +1308,7 @@ class MemoryLabelRepository implements LabelRepository {
     this.shipments = shipments;
   }
 
-  getOrder(orderId: number): LabelOrderRecord | null {
+  async getOrder(orderId: number): LabelOrderRecord | null {
     const match = this.orders.find((entry) => entry.record.orderId === orderId);
     if (!match) return null;
     return {
@@ -1323,20 +1323,20 @@ class MemoryLabelRepository implements LabelRepository {
     };
   }
 
-  findActiveLabelForOrder(orderId: number): ExistingLabelRecord | null {
+  async findActiveLabelForOrder(orderId: number): ExistingLabelRecord | null {
     const shipment = this.shipments.find((entry) => entry.orderId === orderId && !entry.voided);
     return shipment ? { shipmentId: shipment.shipmentId, trackingNumber: shipment.trackingNumber, labelUrl: shipment.labelUrl } : null;
   }
 
-  resolvePackageDimensions(_orderId: number): ResolvedPackageDimensions | null {
+  async resolvePackageDimensions(_orderId: number): ResolvedPackageDimensions | null {
     return null;
   }
 
-  getShippingAccountContext(storeId: number | null): ShippingAccountContext {
+  async getShippingAccountContext(storeId: number | null): ShippingAccountContext {
     return { clientId: 1, storeId, v1ApiKey: null, v1ApiSecret: null, v2ApiKey: null, rateSourceClientId: null };
   }
 
-  saveShipment(input: PersistedShipmentInput): void {
+  async saveShipment(input: PersistedShipmentInput): void {
     const existing = this.shipments.find((entry) => entry.shipmentId === input.shipmentId);
     const next: LabelShipmentRecord = {
       shipmentId: input.shipmentId,
@@ -1356,40 +1356,40 @@ class MemoryLabelRepository implements LabelRepository {
     else this.shipments.push(next);
   }
 
-  markOrderShipped(orderId: number): void {
+  async markOrderShipped(orderId: number): void {
     const order = this.orders.find((entry) => entry.record.orderId === orderId);
     if (order) order.record.orderStatus = "shipped";
   }
 
-  markShipmentVoided(shipmentId: number, orderId: number): void {
+  async markShipmentVoided(shipmentId: number, orderId: number): void {
     const shipment = this.shipments.find((entry) => entry.shipmentId === shipmentId);
     if (shipment) shipment.voided = true;
     const order = this.orders.find((entry) => entry.record.orderId === orderId);
     if (order) order.record.orderStatus = "awaiting_shipment";
   }
 
-  saveReturnLabel(_record: ReturnLabelRecord): void {}
+  async saveReturnLabel(_record: ReturnLabelRecord): void {}
 
-  getShipmentForVoidOrReturn(shipmentId: number): LabelShipmentRecord | null {
+  async getShipmentForVoidOrReturn(shipmentId: number): LabelShipmentRecord | null {
     return clone(this.shipments.find((entry) => entry.shipmentId === shipmentId) ?? null);
   }
 
-  getLatestShipmentForOrderLookup(orderLookup: number | string): LabelShipmentRecord | null {
+  async getLatestShipmentForOrderLookup(orderLookup: number | string): LabelShipmentRecord | null {
     const shipment = typeof orderLookup === "number"
       ? this.shipments.find((entry) => entry.orderId === orderLookup && !entry.voided)
       : this.shipments.find((entry) => entry.orderNumber === orderLookup && !entry.voided);
     return clone(shipment ?? null);
   }
 
-  updateShipmentLabelUrl(shipmentId: number, labelUrl: string): void {
+  async updateShipmentLabelUrl(shipmentId: number, labelUrl: string): void {
     const shipment = this.shipments.find((entry) => entry.shipmentId === shipmentId);
     if (shipment) shipment.labelUrl = labelUrl;
   }
 
-  backfillOrderLocalTracking(_orderId: number, _trackingNumber: string, _providerAccountId: number | null, _updatedAtSeconds: number): void {}
-  enrichShipment(_input: import("../../modules/labels/domain/label.ts").ShipmentEnrichmentInput): void {}
-  saveMockLabelData(_shipmentId: number, _data: import("../../modules/labels/application/mock-label-generator.ts").MockLabelData): void {}
-  getMockLabelData(_shipmentId: number): import("../../modules/labels/application/mock-label-generator.ts").MockLabelData | null { return null; }
+  async backfillOrderLocalTracking(_orderId: number, _trackingNumber: string, _providerAccountId: number | null, _updatedAtSeconds: number): void {}
+  async enrichShipment(_input: import("../../modules/labels/domain/label.ts").ShipmentEnrichmentInput): void {}
+  async saveMockLabelData(_shipmentId: number, _data: import("../../modules/labels/application/mock-label-generator.ts").MockLabelData): void {}
+  async getMockLabelData(_shipmentId: number): import("../../modules/labels/application/mock-label-generator.ts").MockLabelData | null { return null; }
 }
 
 class MemoryShipmentRepository implements ShipmentRepository {
@@ -1402,35 +1402,35 @@ class MemoryShipmentRepository implements ShipmentRepository {
     this.shipments = shipments;
   }
 
-  countActiveShipments(): number {
+  async countActiveShipments(): number {
     return this.shipments.filter((entry) => !entry.voided).length;
   }
 
-  getLastShipmentSync(): number | null {
+  async getLastShipmentSync(): number | null {
     return this.lastSync;
   }
 
-  setLastShipmentSync(timestamp: number): void {
+  async setLastShipmentSync(timestamp: number): void {
     this.lastSync = timestamp;
   }
 
-  listSyncAccounts(): ShipmentSyncAccountRecord[] {
+  async listSyncAccounts(): ShipmentSyncAccountRecord[] {
     return [{ clientId: 1, accountName: "main", v1ApiKey: null, v1ApiSecret: null, v2ApiKey: null }];
   }
 
-  resolveOrderIdByOrderNumber(orderNumber: string): number | null {
+  async resolveOrderIdByOrderNumber(orderNumber: string): number | null {
     return this.orders.find((entry) => entry.record.orderNumber === orderNumber)?.record.orderId ?? null;
   }
 
-  orderExists(orderId: number): boolean {
+  async orderExists(orderId: number): boolean {
     return this.orders.some((entry) => entry.record.orderId === orderId);
   }
 
-  getOrderClientId(orderId: number): number | null {
+  async getOrderClientId(orderId: number): number | null {
     return this.orders.find((entry) => entry.record.orderId === orderId)?.record.clientId ?? null;
   }
 
-  upsertShipmentBatch(shipments: ShipmentSyncRecord[]): void {
+  async upsertShipmentBatch(shipments: ShipmentSyncRecord[]): void {
     for (const shipment of shipments) {
       const existing = this.shipments.find((entry) => entry.shipmentId === shipment.shipmentId);
       const next: LabelShipmentRecord = {
@@ -1452,7 +1452,7 @@ class MemoryShipmentRepository implements ShipmentRepository {
     }
   }
 
-  backfillOrderLocalFromShipments(_shipments: ShipmentSyncRecord[]): void {}
+  async backfillOrderLocalFromShipments(_shipments: ShipmentSyncRecord[]): void {}
 }
 
 class MemorySettingsRepository implements SettingsRepository {
@@ -1462,11 +1462,11 @@ class MemorySettingsRepository implements SettingsRepository {
     this.settings = settings;
   }
 
-  get(key: string): string | null {
+  async get(key: string): string | null {
     return this.settings.get(key) ?? null;
   }
 
-  set(key: string, value: string): void {
+  async set(key: string, value: string): void {
     this.settings.set(key, value);
   }
 }
@@ -1474,7 +1474,7 @@ class MemorySettingsRepository implements SettingsRepository {
 class MemoryQueueRepository implements QueueRepository {
   private readonly entries: Map<string, PrintQueueEntry> = new Map();
 
-  add(input: AddToQueueInput): PrintQueueEntry {
+  async add(input: AddToQueueInput): PrintQueueEntry {
     const now = Math.floor(Date.now() / 1000);
     // Check for existing by orderId+clientId
     for (const e of this.entries.values()) {
@@ -1505,33 +1505,33 @@ class MemoryQueueRepository implements QueueRepository {
     return entry;
   }
 
-  getByClient(clientId: number, status?: 'queued' | 'printed'): PrintQueueEntry[] {
+  async getByClient(clientId: number, status?: 'queued' | 'printed'): PrintQueueEntry[] {
     return [...this.entries.values()].filter(e => e.clientId === clientId && (!status || e.status === status));
   }
 
-  findById(id: string): PrintQueueEntry | null {
+  async findById(id: string): PrintQueueEntry | null {
     return this.entries.get(id) ?? null;
   }
 
-  findByOrderId(orderId: string, clientId: number): PrintQueueEntry | null {
+  async findByOrderId(orderId: string, clientId: number): PrintQueueEntry | null {
     for (const e of this.entries.values()) {
       if (e.orderId === orderId && e.clientId === clientId) return e;
     }
     return null;
   }
 
-  markPrinted(ids: string[], printedAt: number): void {
+  async markPrinted(ids: string[], printedAt: number): void {
     for (const id of ids) {
       const e = this.entries.get(id);
       if (e) this.entries.set(id, { ...e, status: 'printed', printCount: e.printCount + 1, lastPrintedAt: printedAt });
     }
   }
 
-  remove(id: string): void {
+  async remove(id: string): void {
     this.entries.delete(id);
   }
 
-  clearByClient(clientId: number): number {
+  async clearByClient(clientId: number): number {
     let count = 0;
     for (const [id, e] of this.entries.entries()) {
       if (e.clientId === clientId && e.status === 'queued') { this.entries.delete(id); count++; }

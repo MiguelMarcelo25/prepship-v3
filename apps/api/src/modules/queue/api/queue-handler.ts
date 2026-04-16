@@ -8,31 +8,31 @@ export class QueueHttpHandler {
     this.services = services;
   }
 
-  handleGet(url: URL) {
+  async handleGet(url: URL) {
     const clientIdRaw = url.searchParams.get('client_id');
     if (!clientIdRaw) throw new InputValidationError("client_id is required");
     const includePrinted = url.searchParams.get('include_printed') === '1' || url.searchParams.get('include_printed') === 'true';
-    return this.services.getQueueForClient(Number(clientIdRaw), includePrinted);
+    return await this.services.getQueueForClient(Number(clientIdRaw), includePrinted);
   }
 
-  handleAdd(body: unknown) {
-    return this.services.addToQueue(body);
+  async handleAdd(body: unknown) {
+    return await this.services.addToQueue(body);
   }
 
-  handleRemove(entryId: string, body: unknown) {
+  async handleRemove(entryId: string, body: unknown) {
     const raw = body as Record<string, unknown>;
     if (!raw.client_id) throw new InputValidationError("client_id is required");
-    return this.services.removeFromQueue(entryId, Number(raw.client_id));
+    return await this.services.removeFromQueue(entryId, Number(raw.client_id));
   }
 
-  handleClear(body: unknown) {
+  async handleClear(body: unknown) {
     const raw = body as Record<string, unknown>;
     if (!raw.client_id) throw new InputValidationError("client_id is required");
-    return this.services.clearQueue(Number(raw.client_id));
+    return await this.services.clearQueue(Number(raw.client_id));
   }
 
-  handleStartPrint(body: unknown) {
-    return this.services.startPrintJob(body);
+  async handleStartPrint(body: unknown) {
+    return await this.services.startPrintJob(body);
   }
 
   handleJobStatus(jobId: string) {

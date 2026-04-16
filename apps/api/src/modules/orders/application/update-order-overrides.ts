@@ -8,42 +8,42 @@ export class UpdateOrderOverridesService {
     this.repository = repository;
   }
 
-  setExternalShipped(orderId: number, externalShipped: boolean, source: string | null = null) {
+  async setExternalShipped(orderId: number, externalShipped: boolean, source: string | null = null) {
     // NOTE: This flag marks an order as fulfilled externally (Amazon, eBay, Shopify, etc.)
     // It is a LOCAL-ONLY flag in PrepShip's database.
     // NO notification is sent to the customer or original marketplace.
     // This is for internal tracking only when orders are manually fulfilled outside PrepShip.
-    this.repository.updateExternalShipped(orderId, externalShipped, source);
+    await this.repository.updateExternalShipped(orderId, externalShipped, source);
     return { ok: true, orderId, orderStatus: externalShipped ? 'shipped' : 'awaiting_shipment', external_shipped: externalShipped ? 1 : 0, source };
   }
 
-  setResidential(orderId: number, residential: boolean | null) {
-    this.repository.updateResidential(orderId, residential);
+  async setResidential(orderId: number, residential: boolean | null) {
+    await this.repository.updateResidential(orderId, residential);
     return { ok: true, orderId, residential: residential == null ? null : residential ? 1 : 0 };
   }
 
-  setSelectedPid(orderId: number, selectedPid: number | null) {
-    this.repository.updateSelectedPid(orderId, selectedPid);
+  async setSelectedPid(orderId: number, selectedPid: number | null) {
+    await this.repository.updateSelectedPid(orderId, selectedPid);
     return { ok: true, orderId, selectedPid };
   }
 
-  setBestRate(input: OrderOverrideInput) {
+  async setBestRate(input: OrderOverrideInput) {
     if (input.bestRate == null) {
       throw new Error("best + orderId required");
     }
-    this.repository.updateBestRate(input.orderId, input.bestRate, input.bestRateDims ?? null);
+    await this.repository.updateBestRate(input.orderId, input.bestRate, input.bestRateDims ?? null);
     return { ok: true };
   }
 
-  saveDims(orderId: number, sku: string | null, qty: number | null, length: number, width: number, height: number) {
+  async saveDims(orderId: number, sku: string | null, qty: number | null, length: number, width: number, height: number) {
     if (length <= 0 || width <= 0 || height <= 0) {
       throw new Error("length, width, height must all be > 0");
     }
     // Always save to per-order dims
-    this.repository.updateOrderRateDims(orderId, length, width, height);
+    await this.repository.updateOrderRateDims(orderId, length, width, height);
     // Save to sku_qty_dims if SKU and qty provided (single-SKU orders)
     if (sku && qty != null && qty > 0) {
-      this.repository.saveSkuQtyDims(sku, qty, length, width, height);
+      await this.repository.saveSkuQtyDims(sku, qty, length, width, height);
     }
     return { ok: true, orderId, sku, qty, length, width, height };
   }

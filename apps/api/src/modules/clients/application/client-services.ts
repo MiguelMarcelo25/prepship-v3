@@ -35,33 +35,34 @@ export class ClientServices {
     this.initMetadataProvider = initMetadataProvider;
   }
 
-  list(): ClientDto[] {
-    return this.repository.listActive().map(mapClient);
+  async list(): Promise<ClientDto[]> {
+    const records = await this.repository.listActive();
+    return records.map(mapClient);
   }
 
-  create(input: CreateClientInput) {
+  async create(input: CreateClientInput) {
     if (!input.name) {
       throw new Error("name is required");
     }
-    return { ok: true, clientId: this.repository.create(input) };
+    return { ok: true, clientId: await this.repository.create(input) };
   }
 
-  update(clientId: number, input: UpdateClientInput) {
-    this.repository.update(clientId, input);
+  async update(clientId: number, input: UpdateClientInput) {
+    await this.repository.update(clientId, input);
     return { ok: true };
   }
 
-  remove(clientId: number) {
-    this.repository.softDelete(clientId);
+  async remove(clientId: number) {
+    await this.repository.softDelete(clientId);
     return { ok: true };
   }
 
   async syncStores() {
     const stores = await this.initMetadataProvider.listStores();
-    this.repository.syncFromStores(stores);
+    await this.repository.syncFromStores(stores);
     return {
       ok: true,
-      clients: this.list(),
+      clients: await this.list(),
     };
   }
 }

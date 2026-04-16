@@ -34,10 +34,10 @@ export class AnalysisServices {
     this.repository = repository;
   }
 
-  getSkuAnalysis(query: AnalysisSkuQuery): AnalysisSkusResponse {
-    const rows = this.repository.listOrderRows(query);
-    const clientMap = this.repository.getStoreClientNameMap();
-    const invSkuMap = this.repository.getInventorySkuMap();
+  async getSkuAnalysis(query: AnalysisSkuQuery): Promise<AnalysisSkusResponse> {
+    const rows = await this.repository.listOrderRows(query);
+    const clientMap = await this.repository.getStoreClientNameMap();
+    const invSkuMap = await this.repository.getInventorySkuMap();
     const skuMap = new Map<string, MutableSkuStats>();
 
     for (const row of rows) {
@@ -139,13 +139,13 @@ export class AnalysisServices {
     return { skus, orderCount: rows.length };
   }
 
-  getDailySales(query: AnalysisDailySalesQuery): AnalysisDailySalesResponse {
+  async getDailySales(query: AnalysisDailySalesQuery): Promise<AnalysisDailySalesResponse> {
     const since = query.from ?? new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
     const until = query.to ? `${query.to}T23:59:59` : new Date().toISOString();
     const startMs = new Date(since).getTime();
     const endMs = new Date(until.slice(0, 10)).getTime();
     const days = Math.max(1, Math.round((endMs - startMs) / 86400000) + 1);
-    const rows = this.repository.listDailySalesRows(query, since, until);
+    const rows = await this.repository.listDailySalesRows(query, since, until);
 
     const totals: Record<string, number> = {};
     const names: Record<string, string> = {};

@@ -8,7 +8,7 @@ function inputErrorStatusWithMessages(messages: string[]) {
     error instanceof InputValidationError || (error instanceof Error && messages.includes(error.message)) ? 400 : 500;
 }
 
-function buildManifestResponse(manifest: ReturnType<ManifestsHttpHandler["handleGenerate"]>) {
+function buildManifestResponse(manifest: Awaited<ReturnType<ManifestsHttpHandler["handleGenerate"]>>) {
   return new Response(manifest.body, {
     status: 200,
     headers: {
@@ -24,20 +24,20 @@ export function createManifestRoutes(handler: ManifestsHttpHandler): RouteDef[] 
   return [
     route("POST", "/api/manifests/generate", async ({ readJson }) => {
       try {
-        return buildManifestResponse(handler.handleGenerate(await readJson() as never));
+        return buildManifestResponse(await handler.handleGenerate(await readJson() as never));
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";
         return jsonResponse(getErrorStatus(error), { error: message });
       }
     }),
-    route("GET", "/api/manifests/generate", ({ url }) => {
+    route("GET", "/api/manifests/generate", async ({ url }) => {
       try {
         const startDate = url.searchParams.get("startDate") ?? "";
         const endDate = url.searchParams.get("endDate") ?? "";
         const carrierId = url.searchParams.get("carrierId") ?? null;
         const clientIdRaw = url.searchParams.get("clientId");
         const clientId = clientIdRaw ? Number.parseInt(clientIdRaw, 10) : null;
-        return buildManifestResponse(handler.handleGenerate({ startDate, endDate, carrierId, clientId }));
+        return buildManifestResponse(await handler.handleGenerate({ startDate, endDate, carrierId, clientId }));
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";
         return jsonResponse(getErrorStatus(error), { error: message });

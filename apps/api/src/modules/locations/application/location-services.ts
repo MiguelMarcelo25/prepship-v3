@@ -44,54 +44,55 @@ export class LocationServices {
     this.refreshDefault();
   }
 
-  list(): LocationDto[] {
-    return this.repository.list().map(mapLocation);
+  async list(): Promise<LocationDto[]> {
+    const records = await this.repository.list();
+    return records.map(mapLocation);
   }
 
-  create(input: SaveLocationInput) {
+  async create(input: SaveLocationInput) {
     if (!input.name) {
       throw new Error("name is required");
     }
     if (input.isDefault) {
-      this.repository.clearDefault();
+      await this.repository.clearDefault();
     }
-    const locationId = this.repository.create(input);
+    const locationId = await this.repository.create(input);
     if (input.isDefault) {
-      this.refreshDefault();
+      await this.refreshDefault();
     }
     return { ok: true, locationId };
   }
 
-  update(locationId: number, input: SaveLocationInput) {
+  async update(locationId: number, input: SaveLocationInput) {
     if (input.isDefault) {
-      this.repository.clearDefault();
+      await this.repository.clearDefault();
     }
-    this.repository.update(locationId, input);
-    this.refreshDefault();
+    await this.repository.update(locationId, input);
+    await this.refreshDefault();
     return { ok: true };
   }
 
-  delete(locationId: number) {
-    const defaultBefore = this.repository.getDefault();
-    this.repository.delete(locationId);
+  async delete(locationId: number) {
+    const defaultBefore = await this.repository.getDefault();
+    await this.repository.delete(locationId);
     if (defaultBefore?.locationId === locationId) {
-      this.refreshDefault();
+      await this.refreshDefault();
     }
     return { ok: true };
   }
 
-  setDefault(locationId: number) {
-    this.repository.clearDefault();
-    this.repository.setDefault(locationId);
-    this.refreshDefault();
+  async setDefault(locationId: number) {
+    await this.repository.clearDefault();
+    await this.repository.setDefault(locationId);
+    await this.refreshDefault();
     return {
       ok: true,
       shipFrom: this.shipFromState.current,
     };
   }
 
-  private refreshDefault() {
-    const current = this.repository.getDefault();
+  private async refreshDefault() {
+    const current = await this.repository.getDefault();
     this.shipFromState.current = current ? toShipFrom(current) : null;
   }
 }

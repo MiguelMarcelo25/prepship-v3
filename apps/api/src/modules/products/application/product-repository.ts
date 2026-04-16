@@ -5,7 +5,7 @@ import type {
 import type { ProductDefaultsRecord, SaveProductDefaultsRecordResult } from "../domain/product.ts";
 
 export interface ProductRepository {
-  getBulk(skus: string[]): Record<string, ProductBulkItemDto>;
-  getBySku(sku: string): ProductDefaultsRecord | null;
-  saveDefaults(input: SaveProductDefaultsInput): SaveProductDefaultsRecordResult;
+  getBulk(skus: string[]): Promise<Record<string, ProductBulkItemDto>>;
+  getBySku(sku: string): Promise<ProductDefaultsRecord | null>;
+  saveDefaults(input: SaveProductDefaultsInput): Promise<SaveProductDefaultsRecordResult>;
 }

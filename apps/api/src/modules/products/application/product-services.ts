@@ -10,18 +10,18 @@ export class ProductServices {
     this.repository = repository;
   }
 
-  getBulk(skus: string[]) {
-    return this.repository.getBulk(skus);
+  async getBulk(skus: string[]) {
+    return await this.repository.getBulk(skus);
   }
 
-  getBySku(sku: string) {
-    return this.repository.getBySku(sku);
+  async getBySku(sku: string) {
+    return await this.repository.getBySku(sku);
   }
 
-  saveDefaults(input: SaveProductDefaultsInput) {
+  async saveDefaults(input: SaveProductDefaultsInput) {
     if (!input.productId && !input.sku) {
       throw new Error("productId or sku required");
     }
-    return this.repository.saveDefaults(input);
+    return await this.repository.saveDefaults(input);
   }
 }

@@ -21,7 +21,7 @@ export class SqliteInitRepository implements InitRepository {
     this.excludedStoreIds = excludedStoreIds;
   }
 
-  listLocalClientStores(): InitStoreDto[] {
+  async listLocalClientStores(): Promise<InitStoreDto[]> {
     const rows = this.db.prepare(`
       SELECT DISTINCT name, storeIds
       FROM clients
@@ -60,7 +60,7 @@ export class SqliteInitRepository implements InitRepository {
     return stores;
   }
 
-  getCounts(): InitCountsDto {
+  async getCounts(): Promise<InitCountsDto> {
     const placeholders = this.excludedStoreIds.map(() => "?").join(", ");
     const excludeClause = this.excludedStoreIds.length > 0
       ? `AND o.storeId NOT IN (${placeholders})`
@@ -105,7 +105,7 @@ export class SqliteInitRepository implements InitRepository {
     return { byStatus, byStatusStore };
   }
 
-  getRateBrowserMarkups(): Record<string, unknown> {
+  async getRateBrowserMarkups(): Promise<Record<string, unknown>> {
     const row = this.db.prepare(`
       SELECT value
       FROM sync_meta

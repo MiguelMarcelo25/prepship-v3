@@ -26,15 +26,15 @@ export class SettingsServices {
     this.repository = repository;
   }
 
-  get(key: string): unknown {
+  async get(key: string): Promise<unknown> {
     assertAllowedKey(key);
-    return parseStoredValue(this.repository.get(key));
+    return parseStoredValue(await this.repository.get(key));
   }
 
-  set(key: string, value: unknown) {
+  async set(key: string, value: unknown) {
     assertAllowedKey(key);
     const serialized = typeof value === "string" ? value : JSON.stringify(value);
-    this.repository.set(key, serialized);
+    await this.repository.set(key, serialized);
     return { ok: true };
   }
 }

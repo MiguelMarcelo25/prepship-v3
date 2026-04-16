@@ -23,10 +23,10 @@ function parseRawJson(value: string | null): unknown | null {
   }
 }
 
-function toOrderDto(
+async function toOrderDto(
   record: ReturnType<OrderRepository["list"]>["orders"][number],
   rateServices: RateServices | null,
-): OrderSummaryDto {
+): Promise<OrderSummaryDto> {
   let rawData = parseRawJson(record.raw) as any;
   
   // Enrich raw data with database-level externallyFulfilled flag
@@ -67,7 +67,7 @@ function toOrderDto(
   if (record.orderStatus === "awaiting_shipment") {
     bestRate = normalizeOrderBestRateDto(parseOrderRateJson(record.bestRateJson, `order ${record.orderId} bestRateJson`));
     if (!bestRate && rateServices && weight && record.shipToPostalCode) {
-      const cached = rateServices.getCached({
+      const cached = await rateServices.getCached({
         wt: weight.value,
         zip: record.shipToPostalCode,
         dims: null,
@@ -179,7 +179,7 @@ export class ListOrdersService {
   }
 
   async execute(query: ListOrdersQuery): Promise<ListOrdersResponse> {
-    const result = this.repository.list(query);
+    const result = await this.repository.list(query);
 
     // Enrich orders with ShipStation residential status BEFORE mapping to DTO
     // This ensures rates are fetched with the correct residential flag
@@ -210,7 +210,7 @@ export class ListOrdersService {
     const pages = Math.max(1, Math.ceil(result.total / query.pageSize));
 
     return {
-      orders: result.orders.map((record) => toOrderDto(record, this.rateServices)),
+      orders: await Promise.all(result.orders.map((record) => toOrderDto(record, this.rateServices))),
       page: query.page,
       pages,
       total: result.total,

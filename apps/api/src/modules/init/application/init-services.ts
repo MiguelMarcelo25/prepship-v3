@@ -35,21 +35,21 @@ export class InitServices {
     }
 
     return {
-      stores: this.mergeStores(remoteStores),
+      stores: await this.mergeStores(remoteStores),
       carriers: this.metadataProvider.listCarrierAccounts(),
-      counts: this.repository.getCounts(),
-      markups: this.repository.getRateBrowserMarkups(),
+      counts: await this.repository.getCounts(),
+      markups: await this.repository.getRateBrowserMarkups(),
       clients: await this.clientServices.list(),
     };
   }
 
-  getCounts(): InitCountsDto {
-    return this.repository.getCounts();
+  async getCounts(): Promise<InitCountsDto> {
+    return await this.repository.getCounts();
   }
 
   async getStores(): Promise<InitStoreDto[]> {
     const remoteStores = await this.metadataProvider.listStores();
-    return this.mergeStores(remoteStores);
+    return await this.mergeStores(remoteStores);
   }
 
   async getCarriers(): Promise<unknown[]> {
@@ -70,11 +70,11 @@ export class InitServices {
     };
   }
 
-  private mergeStores(remoteStores: InitStoreDto[]): InitStoreDto[] {
+  private async mergeStores(remoteStores: InitStoreDto[]): Promise<InitStoreDto[]> {
     const filteredRemoteStores = remoteStores.filter((store) => !this.excludedStoreIds.includes(store.storeId));
     const stores = [...filteredRemoteStores];
 
-    for (const localStore of this.repository.listLocalClientStores()) {
+    for (const localStore of await this.repository.listLocalClientStores()) {
       if (this.excludedStoreIds.includes(localStore.storeId)) continue;
       if (stores.some((store) => store.storeId === localStore.storeId)) continue;
       stores.push(localStore);

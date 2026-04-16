@@ -47,7 +47,7 @@ export class SqliteBillingRepository implements BillingRepository {
     this.db = db;
   }
 
-  listBillableClients(): BillingClientRecord[] {
+  async listBillableClients(): Promise<BillingClientRecord[]> {
     return this.db.prepare(`
       SELECT clientId, name
       FROM clients
@@ -57,7 +57,7 @@ export class SqliteBillingRepository implements BillingRepository {
     `).all() as BillingClientRecord[];
   }
 
-  listConfigRecords(): BillingConfigRecord[] {
+  async listConfigRecords(): Promise<BillingConfigRecord[]> {
     return this.db.prepare(`
       SELECT
         clientId,
@@ -75,7 +75,7 @@ export class SqliteBillingRepository implements BillingRepository {
     `).all() as BillingConfigRecord[];
   }
 
-  listReferenceRateStoreIds(): number[] {
+  async listReferenceRateStoreIds(): Promise<number[]> {
     const rows = this.db.prepare(`
       SELECT c.storeIds
       FROM billing_config bc
@@ -95,7 +95,7 @@ export class SqliteBillingRepository implements BillingRepository {
     return [...storeIds];
   }
 
-  upsertConfig(clientId: number, input: UpdateBillingConfigInput): void {
+  async upsertConfig(clientId: number, input: UpdateBillingConfigInput): Promise<void> {
     const now = Date.now();
     this.db.prepare(`
       INSERT INTO billing_config (
@@ -131,7 +131,7 @@ export class SqliteBillingRepository implements BillingRepository {
     );
   }
 
-  generate(input: Required<Pick<GenerateBillingInput, "from" | "to">> & Pick<GenerateBillingInput, "clientId">): GenerateBillingResult {
+  async generate(input: Required<Pick<GenerateBillingInput, "from" | "to">> & Pick<GenerateBillingInput, "clientId">): Promise<GenerateBillingResult> {
     const storeToClient = this.getStoreToClientMap();
     const allConfigs = new Map(this.listConfigRecords().map((record) => [record.clientId, record]));
     const refRatesMap = new Map(this.listReferenceRates(input.from, input.to).map((record) => [record.orderId, record]));
@@ -371,7 +371,7 @@ export class SqliteBillingRepository implements BillingRepository {
     return { ok: true, generated, total: Number(total.toFixed(2)) };
   }
 
-  listSummary(query: BillingSummaryQuery): BillingSummaryRecord[] {
+  async listSummary(query: BillingSummaryQuery): Promise<BillingSummaryRecord[]> {
     let sql = `
       SELECT c.clientId,
              c.name AS clientName,
@@ -399,7 +399,7 @@ export class SqliteBillingRepository implements BillingRepository {
     return this.db.prepare(sql).all(...params) as BillingSummaryRecord[];
   }
 
-  listDetails(query: Required<BillingDetailsQuery>): BillingDetailRecord[] {
+  async listDetails(query: Required<BillingDetailsQuery>): Promise<BillingDetailRecord[]> {
     return this.db.prepare(`
       SELECT
         b.orderId,
@@ -455,7 +455,7 @@ export class SqliteBillingRepository implements BillingRepository {
     `).all(query.clientId, query.from, query.to) as BillingDetailRecord[];
   }
 
-  getInvoice(clientId: number, from: string, to: string): BillingInvoiceRecord | null {
+  async getInvoice(clientId: number, from: string, to: string): Promise<BillingInvoiceRecord | null> {
     const client = this.db.prepare(`
       SELECT clientId, name
       FROM clients
@@ -528,7 +528,7 @@ export class SqliteBillingRepository implements BillingRepository {
     };
   }
 
-  listPackagePrices(clientId: number): BillingPackagePriceRecord[] {
+  async listPackagePrices(clientId: number): Promise<BillingPackagePriceRecord[]> {
     return this.db.prepare(`
       SELECT cpp.packageId, cpp.price, cpp.is_custom, p.name, p.length, p.width, p.height
       FROM client_package_prices cpp
@@ -538,7 +538,7 @@ export class SqliteBillingRepository implements BillingRepository {
     `).all(clientId) as BillingPackagePriceRecord[];
   }
 
-  savePackagePrices(input: { clientId: number; prices: SaveBillingPackagePriceInput[] | undefined }): void {
+  async savePackagePrices(input: { clientId: number; prices: SaveBillingPackagePriceInput[] | undefined }): Promise<void> {
     const now = Date.now();
     const upsert = this.db.prepare(`
       INSERT INTO client_package_prices (clientId, packageId, price, is_custom, updatedAt)
@@ -557,7 +557,7 @@ export class SqliteBillingRepository implements BillingRepository {
     }
   }
 
-  setDefaultPackagePrice(packageId: number, price: number): SetDefaultBillingPackagePriceResult {
+  async setDefaultPackagePrice(packageId: number, price: number): Promise<SetDefaultBillingPackagePriceResult> {
     const clientIds = (this.db.prepare("SELECT clientId FROM clients").all() as Array<{ clientId: number }>)
       .map((record) => record.clientId)
       .filter((clientId) => !HOUSE_ACCOUNT_IDS.has(clientId));
@@ -595,7 +595,7 @@ export class SqliteBillingRepository implements BillingRepository {
     };
   }
 
-  listOrdersMissingReferenceRatesForFetch(storeIds: number[]): BillingFetchReferenceRateOrderRecord[] {
+  async listOrdersMissingReferenceRatesForFetch(storeIds: number[]): Promise<BillingFetchReferenceRateOrderRecord[]> {
     if (storeIds.length === 0) {
       return [];
     }
@@ -622,7 +622,7 @@ export class SqliteBillingRepository implements BillingRepository {
     `).all(...storeIds) as BillingFetchReferenceRateOrderRecord[];
   }
 
-  listOrdersMissingReferenceRatesForBackfill(input: BackfillBillingReferenceRatesInput): BillingBackfillReferenceRateOrderRecord[] {
+  async listOrdersMissingReferenceRatesForBackfill(input: BackfillBillingReferenceRatesInput): Promise<BillingBackfillReferenceRateOrderRecord[]> {
     const conditions = [
       "s.voided = 0",
       "bc.billing_mode = 'reference_rate'",
@@ -657,7 +657,7 @@ export class SqliteBillingRepository implements BillingRepository {
     `).all(...params) as BillingBackfillReferenceRateOrderRecord[];
   }
 
-  findCachedReferenceRateCandidates(weightOz: number, zip5: string): RateDto[] | null {
+  async findCachedReferenceRateCandidates(weightOz: number, zip5: string): Promise<RateDto[] | null> {
     const row = this.db.prepare(`
       SELECT rates
       FROM rate_cache
@@ -676,7 +676,7 @@ export class SqliteBillingRepository implements BillingRepository {
     }
   }
 
-  saveBackfilledReferenceRates(orderId: number, refUspsRate: number | null, refUpsRate: number | null): void {
+  async saveBackfilledReferenceRates(orderId: number, refUspsRate: number | null, refUpsRate: number | null): Promise<void> {
     this.db.prepare(`
       INSERT INTO order_local (orderId, ref_usps_rate, ref_ups_rate, updatedAt)
       VALUES (?, ?, ?, ?)

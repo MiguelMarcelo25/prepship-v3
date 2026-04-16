@@ -10,15 +10,15 @@ export class SettingsHttpHandler {
     this.rateServices = rateServices;
   }
 
-  handleGet(key: string) {
-    return this.services.get(key);
+  async handleGet(key: string) {
+    return await this.services.get(key);
   }
 
-  handlePut(key: string, body: unknown) {
-    return this.services.set(key, body);
+  async handlePut(key: string, body: unknown) {
+    return await this.services.set(key, body);
   }
 
-  handleClearAndRefetch() {
-    return this.rateServices.clearAndRefetch();
+  async handleClearAndRefetch() {
+    return await this.rateServices.clearAndRefetch();
   }
 }

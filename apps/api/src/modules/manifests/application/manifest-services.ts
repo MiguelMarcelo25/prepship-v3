@@ -25,12 +25,12 @@ export class ManifestServices {
     this.repository = repository;
   }
 
-  generate(input: GenerateManifestInput) {
+  async generate(input: GenerateManifestInput) {
     if (!input.startDate || !input.endDate) {
       throw new Error("startDate and endDate required (YYYY-MM-DD format)");
     }
 
-    const shipments = this.repository.listShipments(input);
+    const shipments = await this.repository.listShipments(input);
     if (shipments.length === 0) {
       return {
         filename: `manifest_${input.startDate}_${input.endDate}.csv`,

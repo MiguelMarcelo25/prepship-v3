@@ -35,15 +35,15 @@ export class QueueServices {
   }
 
   // ── CRITICAL #1: GET /api/queue — hydrate from DB ────────────────────────
-  getQueueForClient(clientId: number, includePrinted = false): { ok: true; queuedOrders: object[]; totalOrders: number; totalQty: number } {
+  async getQueueForClient(clientId: number, includePrinted = false): Promise<{ ok: true; queuedOrders: object[]; totalOrders: number; totalQty: number }> {
     if (!clientId || !Number.isFinite(clientId)) {
       throw new InputValidationError("client_id is required");
     }
 
     // Return queued + optionally printed (for history view)
     const allEntries = includePrinted
-      ? this.repo.getByClient(clientId)
-      : this.repo.getByClient(clientId, 'queued');
+      ? await this.repo.getByClient(clientId)
+      : await this.repo.getByClient(clientId, 'queued');
     const entries = allEntries;
     const totalQty = entries.reduce((sum, e) => sum + (e.orderQty ?? 1), 0);
 
@@ -71,7 +71,7 @@ export class QueueServices {
   }
 
   // ── CRITICAL #2: Atomic add-to-queue ─────────────────────────────────────
-  addToQueue(body: unknown): { ok: true; queue_entry_id: string; queued_at: string; already_queued: boolean } {
+  async addToQueue(body: unknown): Promise<{ ok: true; queue_entry_id: string; queued_at: string; already_queued: boolean }> {
     const raw = body as Record<string, unknown>;
 
     if (!raw.order_id || typeof raw.order_id !== 'string') {
@@ -91,7 +91,7 @@ export class QueueServices {
     const orderId = raw.order_id;
 
     // Check if already queued (for already_queued flag in response)
-    const existing = this.repo.findByOrderId(orderId, clientId);
+    const existing = await this.repo.findByOrderId(orderId, clientId);
     const alreadyQueued = existing !== null && existing.status === 'queued';
 
     // Always upsert — this ensures label_url is updated if re-queued with fresh URL
@@ -108,7 +108,7 @@ export class QueueServices {
       multiSkuData: Array.isArray(raw.multi_sku_data) ? raw.multi_sku_data as never : undefined,
     };
 
-    const entry = this.repo.add(input);
+    const entry = await this.repo.add(input);
 
     return {
       ok: true,
@@ -118,24 +118,24 @@ export class QueueServices {
     };
   }
 
-  removeFromQueue(entryId: string, clientId: number): { ok: true; removed_entry: string } {
-    const entry = this.repo.findById(entryId);
+  async removeFromQueue(entryId: string, clientId: number): Promise<{ ok: true; removed_entry: string }> {
+    const entry = await this.repo.findById(entryId);
     if (!entry) throw new Error(`Queue entry not found: ${entryId}`);
     if (entry.clientId !== clientId) throw new Error("Unauthorized");
-    this.repo.remove(entryId);
+    await this.repo.remove(entryId);
     return { ok: true, removed_entry: entryId };
   }
 
-  clearQueue(clientId: number): { ok: true; cleared_count: number } {
+  async clearQueue(clientId: number): Promise<{ ok: true; cleared_count: number }> {
     if (!clientId || !Number.isFinite(clientId)) {
       throw new InputValidationError("client_id is required");
     }
-    const count = this.repo.clearByClient(clientId);
+    const count = await this.repo.clearByClient(clientId);
     return { ok: true, cleared_count: count };
   }
 
   // ── CRITICAL #5: Async PDF merge — start job, return jobId ───────────────
-  startPrintJob(body: unknown): { ok: true; job_id: string; total: number } {
+  async startPrintJob(body: unknown): Promise<{ ok: true; job_id: string; total: number }> {
     const raw = body as Record<string, unknown>;
     if (!raw.client_id) throw new InputValidationError("client_id is required");
     if (!Array.isArray(raw.queue_entry_ids) || raw.queue_entry_ids.length === 0) {
@@ -149,7 +149,7 @@ export class QueueServices {
     // Fetch all entries to validate
     const entries: PrintQueueEntry[] = [];
     for (const id of entryIds) {
-      const entry = this.repo.findById(id);
+      const entry = await this.repo.findById(id);
       if (!entry) throw new Error(`Queue entry not found: ${id}`);
       if (entry.clientId !== clientId) throw new Error(`Unauthorized entry: ${id}`);
       entries.push(entry);
@@ -305,7 +305,7 @@ export class QueueServices {
 
       // Mark entries as printed
       const printedAt = Math.floor(Date.now() / 1000);
-      this.repo.markPrinted(entries.map(e => e.id), printedAt);
+      await this.repo.markPrinted(entries.map(e => e.id), printedAt);
 
       const failedCount = ((job as any).labelErrors ?? []).length;
       const successCount = entries.length - failedCount;

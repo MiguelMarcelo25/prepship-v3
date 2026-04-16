@@ -62,9 +62,9 @@ export interface BootstrapApiOverrides {
   packageSyncGateway?: PackageSyncGateway;
 }
 
-export function bootstrapApi(env = process.env, overrides: BootstrapApiOverrides = {}) {
+export async function bootstrapApi(env = process.env, overrides: BootstrapApiOverrides = {}) {
   const config = loadAppConfig(env);
-  const dataStore = overrides.dataStore ?? buildDataStore(config, overrides.memorySeed);
+  const dataStore = overrides.dataStore ?? await buildDataStore(config, overrides.memorySeed);
   const rateShopper = overrides.rateShopper ?? new ShipstationRateShopper();
   const billingServices = new BillingServices(
     dataStore.billingRepository,

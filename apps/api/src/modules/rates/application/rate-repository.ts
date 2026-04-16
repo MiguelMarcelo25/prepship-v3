@@ -22,13 +22,13 @@ export interface RefetchRateOrderRecord {
 }
 
 export interface RateRepository {
-  getClientIdForStoreId(storeId: number): number | null;
-  getCurrentWeightVersion(): number;
-  getCachedRate(cacheKey: string): CachedRateRecord | null;
-  listCarriersForClient(clientId: number | null): CarrierAccountDto[];
-  getRateSourceConfig(clientId: number | null): RateSourceConfig;
-  clearCaches(): void;
-  listOrdersForRateRefetch(limit: number): RefetchRateOrderRecord[];
+  getClientIdForStoreId(storeId: number): Promise<number | null>;
+  getCurrentWeightVersion(): Promise<number>;
+  getCachedRate(cacheKey: string): Promise<CachedRateRecord | null>;
+  listCarriersForClient(clientId: number | null): Promise<CarrierAccountDto[]>;
+  getRateSourceConfig(clientId: number | null): Promise<RateSourceConfig>;
+  clearCaches(): Promise<void>;
+  listOrdersForRateRefetch(limit: number): Promise<RefetchRateOrderRecord[]>;
   saveCachedRate(
     cacheKey: string,
     weightOz: number,
@@ -36,6 +36,6 @@ export interface RateRepository {
     rates: RateDto[],
     bestRate: RateDto | null,
     weightVersion: number,
-  ): void;
-  saveReferenceRates(orderIds: number[], rates: RateDto[], weightOz: number, dims: RateDimsDto | null, storeId: number | null): void;
+  ): Promise<void>;
+  saveReferenceRates(orderIds: number[], rates: RateDto[], weightOz: number, dims: RateDimsDto | null, storeId: number | null): Promise<void>;
 }

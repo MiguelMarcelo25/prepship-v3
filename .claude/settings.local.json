@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install *)",
+      "Bash(node -e \"console.log\\(require\\('crypto'\\).randomBytes\\(32\\).toString\\('hex'\\)\\)\")",
+      "Bash(grep -n '^\\\\s\\\\+[a-z][a-zA-Z]*\\(.*\\):' apps/api/src/modules/*/data/sqlite-*-repository.ts apps/api/src/modules/*/data/sqlite-*-repository.ts)",
+      "Bash(grep -v '^\\\\s*//')",
+      "Bash(node --experimental-strip-types -e \"import\\('./apps/api/src/app/bootstrap.ts'\\)\")",
+      "Bash(npx kill-port *)",
+      "Bash(timeout 5 npm run dev:api)",
+      "Bash(timeout 5 npm run dev:web)",
+      "Bash(wait)"
+    ]
+  }
+}

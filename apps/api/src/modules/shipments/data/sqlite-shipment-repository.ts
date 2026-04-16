@@ -9,18 +9,18 @@ export class SqliteShipmentRepository implements ShipmentRepository {
     this.db = db;
   }
 
-  countActiveShipments(): number {
+  async countActiveShipments(): Promise<number> {
     const row = this.db.prepare(`SELECT COUNT(*) AS count FROM shipments WHERE voided = 0`).get() as { count: number } | undefined;
     return row?.count ?? 0;
   }
 
-  getLastShipmentSync(): number | null {
+  async getLastShipmentSync(): Promise<number | null> {
     const row = this.db.prepare(`SELECT value FROM sync_meta WHERE key = 'lastShipmentSync' LIMIT 1`).get() as { value: string | null } | undefined;
     const value = row?.value ? Number.parseInt(row.value, 10) : NaN;
     return Number.isFinite(value) ? value : null;
   }
 
-  setLastShipmentSync(timestamp: number): void {
+  async setLastShipmentSync(timestamp: number): Promise<void> {
     this.db.prepare(`
       INSERT INTO sync_meta (key, value)
       VALUES ('lastShipmentSync', ?)
@@ -28,7 +28,7 @@ export class SqliteShipmentRepository implements ShipmentRepository {
     `).run(String(timestamp));
   }
 
-  listSyncAccounts(): ShipmentSyncAccountRecord[] {
+  async listSyncAccounts(): Promise<ShipmentSyncAccountRecord[]> {
     const rows = this.db.prepare(`
       SELECT clientId, ss_api_key, ss_api_secret, ss_api_key_v2
       FROM clients
@@ -52,22 +52,22 @@ export class SqliteShipmentRepository implements ShipmentRepository {
       }));
   }
 
-  resolveOrderIdByOrderNumber(orderNumber: string): number | null {
+  async resolveOrderIdByOrderNumber(orderNumber: string): Promise<number | null> {
     const row = this.db.prepare(`SELECT orderId FROM orders WHERE orderNumber = ? LIMIT 1`).get(orderNumber) as { orderId: number } | undefined;
     return row?.orderId ?? null;
   }
 
-  orderExists(orderId: number): boolean {
+  async orderExists(orderId: number): Promise<boolean> {
     const row = this.db.prepare(`SELECT 1 AS present FROM orders WHERE orderId = ? LIMIT 1`).get(orderId) as { present: number } | undefined;
     return Boolean(row?.present);
   }
 
-  getOrderClientId(orderId: number): number | null {
+  async getOrderClientId(orderId: number): Promise<number | null> {
     const row = this.db.prepare(`SELECT clientId FROM orders WHERE orderId = ? LIMIT 1`).get(orderId) as { clientId: number | null } | undefined;
     return row?.clientId ?? null;
   }
 
-  upsertShipmentBatch(shipments: ShipmentSyncRecord[]): void {
+  async upsertShipmentBatch(shipments: ShipmentSyncRecord[]): Promise<void> {
     const stmt = this.db.prepare(`
       INSERT INTO shipments (
         shipmentId, orderId, orderNumber, carrierCode, serviceCode, trackingNumber,
@@ -120,7 +120,7 @@ export class SqliteShipmentRepository implements ShipmentRepository {
     }
   }
 
-  backfillOrderLocalFromShipments(shipments: ShipmentSyncRecord[]): void {
+  async backfillOrderLocalFromShipments(shipments: ShipmentSyncRecord[]): Promise<void> {
     const stmt = this.db.prepare(`
       INSERT INTO order_local (orderId, tracking_number, shipping_account, updatedAt)
       VALUES (?, ?, ?, ?)

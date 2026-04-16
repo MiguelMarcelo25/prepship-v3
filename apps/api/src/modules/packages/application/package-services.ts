@@ -82,30 +82,30 @@ export class PackageServices {
     this.syncGateway = syncGateway;
   }
 
-  list(source?: string): PackageDto[] {
-    return this.repository.list(source).map(mapPackage);
+  async list(source?: string): Promise<PackageDto[]> {
+    return (await this.repository.list(source)).map(mapPackage);
   }
 
-  create(input: SavePackageInput) {
+  async create(input: SavePackageInput) {
     if (!input.name) throw new Error("name is required");
-    return { ok: true, packageId: this.repository.create(input) };
+    return { ok: true, packageId: await this.repository.create(input) };
   }
 
-  lowStock(): PackageDto[] {
-    return this.repository.listLowStock().map(mapPackage);
+  async lowStock(): Promise<PackageDto[]> {
+    return (await this.repository.listLowStock()).map(mapPackage);
   }
 
-  findByDims(length: number, width: number, height: number): PackageDto | null {
+  async findByDims(length: number, width: number, height: number): Promise<PackageDto | null> {
     if (!length || !width || !height) return null;
-    const record = this.repository.findByDims(length, width, height);
+    const record = await this.repository.findByDims(length, width, height);
     return record ? mapPackage(record) : null;
   }
 
-  autoCreate(input: AutoCreatePackageInput) {
+  async autoCreate(input: AutoCreatePackageInput) {
     if (!input.length || !input.width || !input.height) {
       throw new Error("length, width, height are required");
     }
-    const result = this.repository.autoCreate(input);
+    const result = await this.repository.autoCreate(input);
     return {
       ok: true,
       package: mapPackage(result.package),
@@ -113,39 +113,39 @@ export class PackageServices {
     };
   }
 
-  getById(packageId: number) {
-    const record = this.repository.getById(packageId);
+  async getById(packageId: number) {
+    const record = await this.repository.getById(packageId);
     return record ? mapPackage(record) : null;
   }
 
-  update(packageId: number, input: SavePackageInput) {
-    this.repository.update(packageId, input);
+  async update(packageId: number, input: SavePackageInput) {
+    await this.repository.update(packageId, input);
     return { ok: true };
   }
 
-  delete(packageId: number) {
-    this.repository.delete(packageId);
+  async delete(packageId: number) {
+    await this.repository.delete(packageId);
     return { ok: true };
   }
 
-  receive(packageId: number, input: PackageAdjustmentInput) {
+  async receive(packageId: number, input: PackageAdjustmentInput) {
     if (!input.qty || input.qty <= 0) throw new Error("qty must be > 0");
-    return { ok: true, package: this.repository.receive(packageId, input) };
+    return { ok: true, package: await this.repository.receive(packageId, input) };
   }
 
-  adjust(packageId: number, input: PackageAdjustmentInput) {
+  async adjust(packageId: number, input: PackageAdjustmentInput) {
     if (input.qty == null) throw new Error("qty is required");
-    return { ok: true, package: this.repository.adjust(packageId, input) };
+    return { ok: true, package: await this.repository.adjust(packageId, input) };
   }
 
-  setReorderLevel(packageId: number, reorderLevel: number) {
+  async setReorderLevel(packageId: number, reorderLevel: number) {
     if (!Number.isFinite(reorderLevel)) throw new Error("reorderLevel must be a number");
-    this.repository.setReorderLevel(packageId, reorderLevel);
+    await this.repository.setReorderLevel(packageId, reorderLevel);
     return { ok: true };
   }
 
-  ledger(packageId: number) {
-    return this.repository.getLedger(packageId);
+  async ledger(packageId: number) {
+    return await this.repository.getLedger(packageId);
   }
 
   sync() {
@@ -162,7 +162,7 @@ export class PackageServices {
     for (const carrierCode of ["stamps_com", "ups", "fedex"]) {
       const packages = await this.syncGateway.listCarrierPackages(carrierCode);
       const carrierLabel = CARRIER_DISPLAY[carrierCode] || carrierCode.toUpperCase();
-      this.repository.syncCarrierPackages(carrierCode, packages.map((entry) => {
+      await this.repository.syncCarrierPackages(carrierCode, packages.map((entry) => {
         const dims = KNOWN_PKG_DIMS[`${carrierCode}|${entry.code}`] || { l: 0, w: 0, h: 0, type: "box", tare: 0 };
         return {
           ...entry,

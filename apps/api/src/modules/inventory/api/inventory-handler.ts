@@ -17,74 +17,74 @@ export class InventoryHttpHandler {
     this.services = services;
   }
 
-  handleList(url: URL) {
-    return this.services.list(parseListInventoryQuery(url));
+  async handleList(url: URL) {
+    return await this.services.list(parseListInventoryQuery(url));
   }
 
-  handleReceive(body: ReceiveInventoryInput) {
-    return this.services.receive(body);
+  async handleReceive(body: ReceiveInventoryInput) {
+    return await this.services.receive(body);
   }
 
-  handleAdjust(body: AdjustInventoryInput) {
-    return this.services.adjust(body);
+  async handleAdjust(body: AdjustInventoryInput) {
+    return await this.services.adjust(body);
   }
 
-  handleUpdate(inventoryId: number, body: UpdateInventoryItemInput) {
-    return this.services.update(inventoryId, body);
+  async handleUpdate(inventoryId: number, body: UpdateInventoryItemInput) {
+    return await this.services.update(inventoryId, body);
   }
 
-  handleLedger(url: URL) {
-    return this.services.listLedger(parseListInventoryLedgerQuery(url));
+  async handleLedger(url: URL) {
+    return await this.services.listLedger(parseListInventoryLedgerQuery(url));
   }
 
-  handleInventoryLedger(inventoryId: number) {
-    return this.services.getLedger(inventoryId);
+  async handleInventoryLedger(inventoryId: number) {
+    return await this.services.getLedger(inventoryId);
   }
 
-  handleAlerts(clientId: number) {
-    return this.services.listAlerts(clientId);
+  async handleAlerts(clientId: number) {
+    return await this.services.listAlerts(clientId);
   }
 
-  handlePopulate() {
-    return this.services.populate();
+  async handlePopulate() {
+    return await this.services.populate();
   }
 
-  handleImportDimensions(url: URL) {
+  async handleImportDimensions(url: URL) {
     const clientId = parseOptionalIntegerParam(url.searchParams.get("clientId"), "clientId");
-    return this.services.importProductDimensions(clientId, url.searchParams.get("overwrite") === "1");
+    return await this.services.importProductDimensions(clientId, url.searchParams.get("overwrite") === "1");
   }
 
-  handleBulkUpdateDimensions(body: BulkUpdateInventoryDimensionsInput) {
-    return this.services.bulkUpdateDimensions(body);
+  async handleBulkUpdateDimensions(body: BulkUpdateInventoryDimensionsInput) {
+    return await this.services.bulkUpdateDimensions(body);
   }
 
-  handleListParentSkus(url: URL) {
+  async handleListParentSkus(url: URL) {
     const rawId = url.searchParams.get("id");
     if (rawId) {
       const parentSkuId = parseOptionalIntegerParam(rawId, "id");
       if (parentSkuId == null) {
         throw new InputValidationError("id required");
       }
-      return this.services.getParentSku(parentSkuId);
+      return await this.services.getParentSku(parentSkuId);
     }
     const clientId = parseOptionalIntegerParam(url.searchParams.get("clientId"), "clientId");
-    return this.services.listParentSkus(clientId ?? 0);
+    return await this.services.listParentSkus(clientId ?? 0);
   }
 
-  handleCreateParentSku(body: SaveParentSkuInput) {
-    return this.services.createParentSku(body);
+  async handleCreateParentSku(body: SaveParentSkuInput) {
+    return await this.services.createParentSku(body);
   }
 
-  handleSetParent(inventoryId: number, body: SetInventoryParentInput) {
-    return this.services.setParent(inventoryId, body);
+  async handleSetParent(inventoryId: number, body: SetInventoryParentInput) {
+    return await this.services.setParent(inventoryId, body);
   }
 
-  handleDeleteParent(parentSkuId: number) {
-    return this.services.deleteParent(parentSkuId);
+  async handleDeleteParent(parentSkuId: number) {
+    return await this.services.deleteParent(parentSkuId);
   }
 
-  handleSkuOrders(inventoryId: number, url: URL) {
+  async handleSkuOrders(inventoryId: number, url: URL) {
     const days = parseOptionalIntegerParam(url.searchParams.get("days"), "days");
-    return this.services.getSkuOrders(inventoryId, days);
+    return await this.services.getSkuOrders(inventoryId, days);
   }
 }

@@ -22,7 +22,7 @@ export class SqliteOrderRepository implements OrderRepository {
     this.excludedStoreIds = excludedStoreIds;
   }
 
-  list(query: ListOrdersQuery): OrderListResult {
+  async list(query: ListOrdersQuery): Promise<OrderListResult> {
     const page = Math.max(1, query.page);
     const pageSize = Math.max(1, Math.min(500, query.pageSize));
     const offset = (page - 1) * pageSize;
@@ -179,7 +179,7 @@ export class SqliteOrderRepository implements OrderRepository {
     return { orders, total };
   }
 
-  getById(orderId: number): OrderRecord | null {
+  async getById(orderId: number): Promise<OrderRecord | null> {
     const statement = this.db.prepare(`
       SELECT
         o.orderId,
@@ -273,7 +273,7 @@ export class SqliteOrderRepository implements OrderRepository {
     return row ? this.mapRow(row) : null;
   }
 
-  findIdsBySku(query: GetOrderIdsQuery): number[] {
+  async findIdsBySku(query: GetOrderIdsQuery): Promise<number[]> {
     const clauses: string[] = [];
     const params: Array<string | number> = [];
 
@@ -327,7 +327,7 @@ export class SqliteOrderRepository implements OrderRepository {
     return (statement.all(...params) as Array<{ orderId: number }>).map((row) => Number(row.orderId));
   }
 
-  getPicklist(query: GetOrderPicklistQuery): OrderPicklistItemDto[] {
+  async getPicklist(query: GetOrderPicklistQuery): Promise<OrderPicklistItemDto[]> {
     const clauses: string[] = [];
     const params: Array<string | number> = [];
 
@@ -396,7 +396,7 @@ export class SqliteOrderRepository implements OrderRepository {
     }));
   }
 
-  getFullById(orderId: number): OrderFullDto | null {
+  async getFullById(orderId: number): Promise<OrderFullDto | null> {
     const orderRow = this.db.prepare("SELECT raw FROM orders WHERE orderId = ?").get(orderId) as { raw: string } | undefined;
     if (!orderRow) return null;
 
@@ -416,7 +416,7 @@ export class SqliteOrderRepository implements OrderRepository {
     };
   }
 
-  updateExternalShipped(orderId: number, externalShipped: boolean, source: string | null = null): void {
+  async updateExternalShipped(orderId: number, externalShipped: boolean, source: string | null = null): Promise<void> {
     const now = Date.now();
     this.db.prepare(`
       INSERT INTO order_local (orderId, external_shipped, external_shipped_source, updatedAt)
@@ -431,7 +431,7 @@ export class SqliteOrderRepository implements OrderRepository {
     }
   }
 
-  updateResidential(orderId: number, residential: boolean | null): void {
+  async updateResidential(orderId: number, residential: boolean | null): Promise<void> {
     const now = Date.now();
     const value = residential == null ? null : residential ? 1 : 0;
     this.db.prepare(`
@@ -441,7 +441,7 @@ export class SqliteOrderRepository implements OrderRepository {
     `).run(orderId, value, now, value, now);
   }
 
-  updateSelectedPid(orderId: number, selectedPid: number | null): void {
+  async updateSelectedPid(orderId: number, selectedPid: number | null): Promise<void> {
     const now = Date.now();
     this.db.prepare(`
       INSERT INTO order_local (orderId, selected_pid, updatedAt)
@@ -450,7 +450,7 @@ export class SqliteOrderRepository implements OrderRepository {
     `).run(orderId, selectedPid, now, selectedPid, now);
   }
 
-  updateBestRate(orderId: number, bestRate: OrderBestRateDto, bestRateDims: string | null): void {
+  async updateBestRate(orderId: number, bestRate: OrderBestRateDto, bestRateDims: string | null): Promise<void> {
     const now = Date.now();
     this.db.prepare(`
       INSERT INTO order_local (orderId, best_rate_json, best_rate_at, best_rate_dims, updatedAt)
@@ -463,7 +463,7 @@ export class SqliteOrderRepository implements OrderRepository {
     `).run(orderId, JSON.stringify(bestRate), now, bestRateDims, now);
   }
 
-  updateOrderRateDims(orderId: number, length: number, width: number, height: number): void {
+  async updateOrderRateDims(orderId: number, length: number, width: number, height: number): Promise<void> {
     const now = Date.now();
     this.db.prepare(`
       INSERT INTO order_local (orderId, rate_dims_l, rate_dims_w, rate_dims_h, updatedAt)
@@ -476,7 +476,7 @@ export class SqliteOrderRepository implements OrderRepository {
     `).run(orderId, length, width, height, now);
   }
 
-  getSkuQtyDims(sku: string, qty: number): { length: number; width: number; height: number } | null {
+  async getSkuQtyDims(sku: string, qty: number): Promise<{ length: number; width: number; height: number } | null> {
     if (!this.hasTable("sku_qty_dims")) return null;
     const row = this.db.prepare(`
       SELECT length, width, height FROM sku_qty_dims WHERE sku = ? AND qty = ?
@@ -485,7 +485,7 @@ export class SqliteOrderRepository implements OrderRepository {
     return { length: Number(row.length), width: Number(row.width), height: Number(row.height) };
   }
 
-  saveSkuQtyDims(sku: string, qty: number, length: number, width: number, height: number): void {
+  async saveSkuQtyDims(sku: string, qty: number, length: number, width: number, height: number): Promise<void> {
     const now = Date.now();
     if (!this.hasTable("sku_qty_dims")) {
       this.db.prepare(`
@@ -518,7 +518,7 @@ export class SqliteOrderRepository implements OrderRepository {
     return row?.name === name;
   }
 
-  getDailyStats(): OrdersDailyStatsDto {
+  async getDailyStats(): Promise<OrdersDailyStatsDto> {
     const now = new Date();
     const todayNoon = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0);
     const today6pm = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 18, 0, 0);
@@ -603,7 +603,7 @@ export class SqliteOrderRepository implements OrderRepository {
     };
   }
 
-  exportOrders(query: OrderExportQuery): OrderExportRow[] {
+  async exportOrders(query: OrderExportQuery): Promise<OrderExportRow[]> {
     const clauses: string[] = ["o.raw IS NOT NULL"];
     const params: Array<string | number> = [];
 

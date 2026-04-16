@@ -46,7 +46,7 @@ export class SqliteLabelRepository implements LabelRepository {
     this.mainApiKeyV2 = mainApiKeyV2;
   }
 
-  getOrder(orderId: number): LabelOrderRecord | null {
+  async getOrder(orderId: number): Promise<LabelOrderRecord | null> {
     const row = this.db.prepare(`
       SELECT orderId, orderNumber, orderStatus, storeId, clientId, weightValue, shipToName, raw
       FROM orders
@@ -56,7 +56,7 @@ export class SqliteLabelRepository implements LabelRepository {
     return row ?? null;
   }
 
-  findActiveLabelForOrder(orderId: number): ExistingLabelRecord | null {
+  async findActiveLabelForOrder(orderId: number): Promise<ExistingLabelRecord | null> {
     const row = this.db.prepare(`
       SELECT shipmentId, trackingNumber, labelUrl
       FROM shipments
@@ -67,7 +67,7 @@ export class SqliteLabelRepository implements LabelRepository {
     return row ?? null;
   }
 
-  resolvePackageDimensions(orderId: number): ResolvedPackageDimensions | null {
+  async resolvePackageDimensions(orderId: number): Promise<ResolvedPackageDimensions | null> {
     const row = this.db.prepare(`
       SELECT ol.selected_pid AS packageId, inv.length, inv.width, inv.height
       FROM order_local ol
@@ -78,7 +78,7 @@ export class SqliteLabelRepository implements LabelRepository {
     return row ?? null;
   }
 
-  getShippingAccountContext(storeId: number | null): ShippingAccountContext {
+  async getShippingAccountContext(storeId: number | null): Promise<ShippingAccountContext> {
     if (storeId == null) {
       return { clientId: null, storeId: null, v1ApiKey: null, v1ApiSecret: null, v2ApiKey: this.mainApiKeyV2, rateSourceClientId: null };
     }
@@ -119,7 +119,7 @@ export class SqliteLabelRepository implements LabelRepository {
     };
   }
 
-  saveShipment(input: PersistedShipmentInput): void {
+  async saveShipment(input: PersistedShipmentInput): Promise<void> {
     this.db.prepare(`
       INSERT INTO shipments (
         shipmentId, orderId, orderNumber, carrierCode, serviceCode,
@@ -179,7 +179,7 @@ export class SqliteLabelRepository implements LabelRepository {
     );
   }
 
-  markOrderShipped(orderId: number, updatedAt: number): void {
+  async markOrderShipped(orderId: number, updatedAt: number): Promise<void> {
     this.db.prepare(`
       UPDATE orders
       SET orderStatus = 'shipped', updatedAt = ?
@@ -187,7 +187,7 @@ export class SqliteLabelRepository implements LabelRepository {
     `).run(updatedAt, orderId);
   }
 
-  markShipmentVoided(shipmentId: number, orderId: number, updatedAt: number): void {
+  async markShipmentVoided(shipmentId: number, orderId: number, updatedAt: number): Promise<void> {
     this.db.prepare(`
       UPDATE shipments
       SET voided = 1, updatedAt = ?
@@ -201,7 +201,7 @@ export class SqliteLabelRepository implements LabelRepository {
     `).run(updatedAt, orderId);
   }
 
-  saveReturnLabel(record: ReturnLabelRecord): void {
+  async saveReturnLabel(record: ReturnLabelRecord): Promise<void> {
     this.db.prepare(`
       INSERT INTO return_labels (shipmentId, returnShipmentId, returnTrackingNumber, reason, createdAt)
       VALUES (?, ?, ?, ?, ?)
@@ -213,7 +213,7 @@ export class SqliteLabelRepository implements LabelRepository {
     `).run(record.shipmentId, record.returnShipmentId, record.returnTrackingNumber, record.reason, record.createdAt);
   }
 
-  getShipmentForVoidOrReturn(shipmentId: number): LabelShipmentRecord | null {
+  async getShipmentForVoidOrReturn(shipmentId: number): Promise<LabelShipmentRecord | null> {
     const row = this.db.prepare(`
       SELECT s.shipmentId, s.orderId, s.orderNumber, s.trackingNumber, s.labelUrl,
              s.carrierCode, s.serviceCode, s.shipmentCost, s.label_created_at,
@@ -226,7 +226,7 @@ export class SqliteLabelRepository implements LabelRepository {
     return row ? this.mapShipment(row) : null;
   }
 
-  getLatestShipmentForOrderLookup(orderLookup: number | string): LabelShipmentRecord | null {
+  async getLatestShipmentForOrderLookup(orderLookup: number | string): Promise<LabelShipmentRecord | null> {
     let row: ShipmentLookupRow | undefined;
     if (typeof orderLookup === "number") {
       row = this.db.prepare(`
@@ -254,11 +254,11 @@ export class SqliteLabelRepository implements LabelRepository {
     return row ? this.mapShipment(row) : null;
   }
 
-  updateShipmentLabelUrl(shipmentId: number, labelUrl: string): void {
+  async updateShipmentLabelUrl(shipmentId: number, labelUrl: string): Promise<void> {
     this.db.prepare(`UPDATE shipments SET labelUrl = ? WHERE shipmentId = ?`).run(labelUrl, shipmentId);
   }
 
-  enrichShipment(input: ShipmentEnrichmentInput): void {
+  async enrichShipment(input: ShipmentEnrichmentInput): Promise<void> {
     this.db.prepare(`
       UPDATE shipments SET
         otherCost = ?,
@@ -281,7 +281,7 @@ export class SqliteLabelRepository implements LabelRepository {
     );
   }
 
-  backfillOrderLocalTracking(orderId: number, trackingNumber: string, providerAccountId: number | null, updatedAtSeconds: number): void {
+  async backfillOrderLocalTracking(orderId: number, trackingNumber: string, providerAccountId: number | null, updatedAtSeconds: number): Promise<void> {
     this.db.prepare(`
       INSERT INTO order_local (orderId, tracking_number, shipping_account, updatedAt)
       VALUES (?, ?, ?, ?)
@@ -292,7 +292,7 @@ export class SqliteLabelRepository implements LabelRepository {
     `).run(orderId, trackingNumber, providerAccountId, updatedAtSeconds);
   }
 
-  saveMockLabelData(shipmentId: number, data: MockLabelData): void {
+  async saveMockLabelData(shipmentId: number, data: MockLabelData): Promise<void> {
     // Persist to DB so mock labels survive server restarts
     this.db.prepare(`
       INSERT OR REPLACE INTO mock_labels
@@ -313,7 +313,7 @@ export class SqliteLabelRepository implements LabelRepository {
     this.mockLabelStore.set(shipmentId, data);
   }
 
-  getMockLabelData(shipmentId: number): MockLabelData | null {
+  async getMockLabelData(shipmentId: number): Promise<MockLabelData | null> {
     // Check memory first
     const cached = this.mockLabelStore.get(shipmentId);
     if (cached) return cached;

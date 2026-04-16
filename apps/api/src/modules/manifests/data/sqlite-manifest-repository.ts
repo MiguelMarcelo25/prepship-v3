@@ -10,7 +10,7 @@ export class SqliteManifestRepository implements ManifestRepository {
     this.db = db;
   }
 
-  listShipments(input: GenerateManifestInput): ManifestShipmentRecord[] {
+  async listShipments(input: GenerateManifestInput): Promise<ManifestShipmentRecord[]> {
     const query = [
       "SELECT s.shipmentId, o.orderNumber, s.trackingNumber, s.carrierCode, s.serviceCode,",
       "s.shipmentCost, s.otherCost, s.shipDate,",

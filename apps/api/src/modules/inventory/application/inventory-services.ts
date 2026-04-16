@@ -31,8 +31,8 @@ export class InventoryServices {
     this.repository = repository;
   }
 
-  list(query: ListInventoryQuery): InventoryItemDto[] {
-    return this.repository.list(query).map((record) => {
+  async list(query: ListInventoryQuery): Promise<InventoryItemDto[]> {
+    return (await this.repository.list(query)).map((record) => {
       const baseUnits = record.currentStock * (record.baseUnitQty || 1);
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       const { unitsPerPack, ...rest } = record;
@@ -49,18 +49,18 @@ export class InventoryServices {
     });
   }
 
-  receive(input: ReceiveInventoryInput) {
+  async receive(input: ReceiveInventoryInput) {
     if (!input.clientId) throw new Error("clientId required");
     if (!Array.isArray(input.items) || input.items.length === 0) throw new Error("items array required");
-    return { ok: true, received: this.repository.receive(input) };
+    return { ok: true, received: await this.repository.receive(input) };
   }
 
-  adjust(input: AdjustInventoryInput) {
+  async adjust(input: AdjustInventoryInput) {
     if (!input.invSkuId || input.qty == null) throw new Error("invSkuId and qty required");
-    return { ok: true, newStock: this.repository.adjust(input) };
+    return { ok: true, newStock: await this.repository.adjust(input) };
   }
 
-  update(inventoryId: number, input: UpdateInventoryItemInput) {
+  async update(inventoryId: number, input: UpdateInventoryItemInput) {
     const packageDims = [
       normalizePositive(input.length),
       normalizePositive(input.width),
@@ -74,7 +74,7 @@ export class InventoryServices {
     validateDimensionTriplet("Package", packageDims);
     validateDimensionTriplet("Product", productDims);
 
-    this.repository.update(inventoryId, {
+    await this.repository.update(inventoryId, {
       ...input,
       length: packageDims[0],
       width: packageDims[1],
@@ -88,44 +88,44 @@ export class InventoryServices {
     return { ok: true };
   }
 
-  listLedger(query: ListInventoryLedgerQuery) {
-    return this.repository.listLedger(query);
+  async listLedger(query: ListInventoryLedgerQuery) {
+    return await this.repository.listLedger(query);
   }
 
-  getLedger(inventoryId: number) {
-    return this.repository.getLedgerByInventoryId(inventoryId);
+  async getLedger(inventoryId: number) {
+    return await this.repository.getLedgerByInventoryId(inventoryId);
   }
 
-  listAlerts(clientId: number): InventoryAlertDto[] {
+  async listAlerts(clientId: number): Promise<InventoryAlertDto[]> {
     if (!clientId) throw new Error("clientId required");
-    return this.repository.listAlerts(clientId).map((alert) => ({
+    return (await this.repository.listAlerts(clientId)).map((alert) => ({
       ...alert,
       status: alert.stock <= 0 ? "out" : "low",
     }));
   }
 
-  populate() {
-    return this.repository.populate();
+  async populate() {
+    return await this.repository.populate();
   }
 
-  importProductDimensions(clientId?: number, overwrite = false) {
-    return this.repository.importProductDimensions(clientId, overwrite);
+  async importProductDimensions(clientId?: number, overwrite = false) {
+    return await this.repository.importProductDimensions(clientId, overwrite);
   }
 
-  bulkUpdateDimensions(input: BulkUpdateInventoryDimensionsInput) {
+  async bulkUpdateDimensions(input: BulkUpdateInventoryDimensionsInput) {
     if (!Array.isArray(input.updates) || input.updates.length === 0) {
       throw new Error("updates array required");
     }
-    return this.repository.bulkUpdateDimensions(input);
+    return await this.repository.bulkUpdateDimensions(input);
   }
 
-  listParentSkus(clientId: number) {
+  async listParentSkus(clientId: number) {
     if (!clientId) throw new Error("clientId required");
-    return this.repository.listParentSkus(clientId);
+    return await this.repository.listParentSkus(clientId);
   }
 
-  getParentSku(parentSkuId: number) {
-    const result = this.repository.getParentSku(parentSkuId);
+  async getParentSku(parentSkuId: number) {
+    const result = await this.repository.getParentSku(parentSkuId);
     if (!result) {
       throw new Error("Parent SKU not found");
     }
@@ -143,23 +143,23 @@ export class InventoryServices {
     };
   }
 
-  createParentSku(input: SaveParentSkuInput) {
+  async createParentSku(input: SaveParentSkuInput) {
     if (!input.clientId || !input.name) {
       throw new Error("clientId and name required");
     }
-    return this.repository.createParentSku(input);
+    return await this.repository.createParentSku(input);
   }
 
-  setParent(inventoryId: number, input: SetInventoryParentInput) {
-    return this.repository.setParent(inventoryId, input);
+  async setParent(inventoryId: number, input: SetInventoryParentInput) {
+    return await this.repository.setParent(inventoryId, input);
   }
 
-  deleteParent(parentSkuId: number) {
-    return this.repository.deleteParent(parentSkuId);
+  async deleteParent(parentSkuId: number) {
+    return await this.repository.deleteParent(parentSkuId);
   }
 
-  getSkuOrders(inventoryId: number, days?: number) {
-    const result = this.repository.getSkuOrders(inventoryId, days);
+  async getSkuOrders(inventoryId: number, days?: number) {
+    const result = await this.repository.getSkuOrders(inventoryId, days);
     if (!result) {
       throw new Error("SKU not found");
     }

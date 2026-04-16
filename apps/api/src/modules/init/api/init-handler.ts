@@ -7,27 +7,27 @@ export class InitHttpHandler {
     this.services = services;
   }
 
-  handleInitData() {
-    return this.services.getInitData();
+  async handleInitData() {
+    return await this.services.getInitData();
   }
 
-  handleCounts() {
-    return this.services.getCounts();
+  async handleCounts() {
+    return await this.services.getCounts();
   }
 
-  handleStores() {
-    return this.services.getStores();
+  async handleStores() {
+    return await this.services.getStores();
   }
 
-  handleCarriers() {
-    return this.services.getCarriers();
+  async handleCarriers() {
+    return await this.services.getCarriers();
   }
 
   handleCarrierAccounts() {
     return this.services.getCarrierAccounts();
   }
 
-  handleRefreshCarriers() {
-    return this.services.refreshCarriers();
+  async handleRefreshCarriers() {
+    return await this.services.refreshCarriers();
   }
 }

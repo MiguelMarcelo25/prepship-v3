@@ -8,24 +8,24 @@ export class ProductsHttpHandler {
     this.services = services;
   }
 
-  handleBulk(url: URL) {
+  async handleBulk(url: URL) {
     const skus = (url.searchParams.get("skus") ?? "")
       .split(",")
       .map((sku) => sku.trim())
       .filter(Boolean);
-    return this.services.getBulk(skus);
+    return await this.services.getBulk(skus);
   }
 
-  handleBySku(sku: string) {
-    return this.services.getBySku(sku);
+  async handleBySku(sku: string) {
+    return await this.services.getBySku(sku);
   }
 
-  handleSaveDefaults(body: SaveProductDefaultsInput) {
-    return this.services.saveDefaults(body);
+  async handleSaveDefaults(body: SaveProductDefaultsInput) {
+    return await this.services.saveDefaults(body);
   }
 
-  handleSaveSkuDefaults(sku: string, body: Record<string, unknown>) {
-    return this.services.saveDefaults({
+  async handleSaveSkuDefaults(sku: string, body: Record<string, unknown>) {
+    return await this.services.saveDefaults({
       sku,
       weightOz: body.weight != null ? Number(body.weight) : body.weightOz != null ? Number(body.weightOz) : undefined,
       length: body.length != null ? Number(body.length) : undefined,

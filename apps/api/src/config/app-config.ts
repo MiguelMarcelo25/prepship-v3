@@ -1,11 +1,12 @@
 import { defaultSecretsPath, loadTransitionalSecrets, type TransitionalSecrets } from "../../../../packages/shared/src/config/secrets-adapter.ts";
 
-export type DbProvider = "sqlite" | "memory";
+export type DbProvider = "sqlite" | "memory" | "postgres";
 
 export interface AppConfig {
   port: number;
   dbProvider: DbProvider;
   sqliteDbPath: string | null;
+  databaseUrl: string | null;
   secretsPath: string;
   workerSyncEnabled: boolean;
   secrets: TransitionalSecrets;
@@ -20,13 +21,18 @@ function parseBooleanFlag(value: string | undefined, fallback: boolean): boolean
 export function loadAppConfig(env = process.env): AppConfig {
   const dbProvider = (env.DB_PROVIDER ?? "sqlite") as DbProvider;
   const sqliteDbPath = env.SQLITE_DB_PATH;
+  const databaseUrl = env.DATABASE_URL ?? null;
 
-  if (dbProvider !== "sqlite" && dbProvider !== "memory") {
+  if (dbProvider !== "sqlite" && dbProvider !== "memory" && dbProvider !== "postgres") {
     throw new Error(`Unsupported DB_PROVIDER: ${dbProvider}`);
   }
 
   if (dbProvider === "sqlite" && !sqliteDbPath) {
     throw new Error("SQLITE_DB_PATH is required when DB_PROVIDER=sqlite");
+  }
+
+  if (dbProvider === "postgres" && !databaseUrl) {
+    throw new Error("DATABASE_URL is required when DB_PROVIDER=postgres");
   }
 
   const secretsPath = env.PREPSHIP_SECRETS_PATH ?? defaultSecretsPath(env);
@@ -46,6 +52,7 @@ export function loadAppConfig(env = process.env): AppConfig {
     port: Number.parseInt(env.API_PORT ?? "4010", 10),
     dbProvider,
     sqliteDbPath: sqliteDbPath ?? null,
+    databaseUrl,
     secretsPath,
     workerSyncEnabled: parseBooleanFlag(env.WORKER_SYNC_ENABLED, false),
     secrets: loadTransitionalSecrets(secretsPath),

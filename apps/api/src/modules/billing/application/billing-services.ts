@@ -55,10 +55,10 @@ export class BillingServices {
     this.referenceRateFetcher = referenceRateFetcher;
   }
 
-  getConfig(): BillingConfigDto[] {
-    const configs = new Map(this.repository.listConfigRecords().map((record) => [record.clientId, record]));
+  async getConfig(): Promise<BillingConfigDto[]> {
+    const configs = new Map((await this.repository.listConfigRecords()).map((record) => [record.clientId, record]));
 
-    return this.repository.listBillableClients().map((client) => {
+    return (await this.repository.listBillableClients()).map((client) => {
       const config = configs.get(client.clientId);
       return {
         clientId: client.clientId,
@@ -77,45 +77,45 @@ export class BillingServices {
     });
   }
 
-  getSummary(query: BillingSummaryQuery): BillingSummaryDto[] {
+  async getSummary(query: BillingSummaryQuery): Promise<BillingSummaryDto[]> {
     if (!query.from || !query.to) {
       throw new Error("from and to required");
     }
     if (!isIsoDateOnly(query.from) || !isIsoDateOnly(query.to)) {
       throw new Error("from and to must be YYYY-MM-DD");
     }
-    return this.repository.listSummary(query);
+    return await this.repository.listSummary(query);
   }
 
-  getDetails(query: BillingDetailsQuery) {
+  async getDetails(query: BillingDetailsQuery) {
     if (!query.from || !query.to || !query.clientId) {
       throw new Error("from, to, clientId required");
     }
     if (!isIsoDateOnly(query.from) || !isIsoDateOnly(query.to)) {
       throw new Error("from and to must be YYYY-MM-DD");
     }
-    return this.repository.listDetails({
+    return await this.repository.listDetails({
       from: query.from,
       to: query.to,
       clientId: query.clientId,
     });
   }
 
-  getPackagePrices(clientId?: number): BillingPackagePriceDto[] {
+  async getPackagePrices(clientId?: number): Promise<BillingPackagePriceDto[]> {
     if (!clientId) {
       throw new Error("clientId required");
     }
-    return this.repository.listPackagePrices(clientId);
+    return await this.repository.listPackagePrices(clientId);
   }
 
-  getInvoice(clientId: number, from: string, to: string) {
+  async getInvoice(clientId: number, from: string, to: string) {
     if (!clientId || !from || !to) {
       throw new Error("from, to, clientId required");
     }
     if (!isIsoDateOnly(from) || !isIsoDateOnly(to)) {
       throw new Error("from and to must be YYYY-MM-DD");
     }
-    return this.repository.getInvoice(clientId, from, to);
+    return await this.repository.getInvoice(clientId, from, to);
   }
 
   getRefRateFetchStatus(): BillingReferenceRateFetchStatusDto {
@@ -131,12 +131,12 @@ export class BillingServices {
       };
     }
 
-    const storeIds = this.repository.listReferenceRateStoreIds();
+    const storeIds = await this.repository.listReferenceRateStoreIds();
     if (storeIds.length === 0) {
       return { ok: false, message: "No reference_rate clients configured" };
     }
 
-    const orders = this.repository.listOrdersMissingReferenceRatesForFetch(storeIds);
+    const orders = await this.repository.listOrdersMissingReferenceRatesForFetch(storeIds);
     if (orders.length === 0) {
       return { ok: true, message: "All orders already have ref rates", total: 0 };
     }
@@ -185,10 +185,10 @@ export class BillingServices {
     };
   }
 
-  backfillReferenceRates(input: BackfillBillingReferenceRatesInput): BackfillBillingReferenceRatesResult {
-    const orders = this.repository.listOrdersMissingReferenceRatesForBackfill(input);
+  async backfillReferenceRates(input: BackfillBillingReferenceRatesInput): Promise<BackfillBillingReferenceRatesResult> {
+    const orders = await this.repository.listOrdersMissingReferenceRatesForBackfill(input);
     if (orders.length === 0) {
-      const storeIds = this.repository.listReferenceRateStoreIds();
+      const storeIds = await this.repository.listReferenceRateStoreIds();
       if (storeIds.length === 0) {
         return { ok: true, filled: 0, missing: 0, message: "No reference_rate clients configured" };
       }
@@ -206,7 +206,7 @@ export class BillingServices {
         continue;
       }
 
-      const rates = this.repository.findCachedReferenceRateCandidates(weightOz, zip5);
+      const rates = await this.repository.findCachedReferenceRateCandidates(weightOz, zip5);
       if (!rates || rates.length === 0) {
         missing += 1;
         continue;
@@ -219,44 +219,44 @@ export class BillingServices {
         continue;
       }
 
-      this.repository.saveBackfilledReferenceRates(order.orderId, refUsps, refUps);
+      await this.repository.saveBackfilledReferenceRates(order.orderId, refUsps, refUps);
       filled += 1;
     }
 
     return { ok: true, filled, missing, total: orders.length };
   }
 
-  updateConfig(clientId: number, input: UpdateBillingConfigInput) {
-    this.repository.upsertConfig(clientId, input);
+  async updateConfig(clientId: number, input: UpdateBillingConfigInput) {
+    await this.repository.upsertConfig(clientId, input);
     return { ok: true };
   }
 
-  generate(input: GenerateBillingInput): GenerateBillingResult {
+  async generate(input: GenerateBillingInput): Promise<GenerateBillingResult> {
     if (!input.from || !input.to) {
       throw new Error("from and to required");
     }
     if (!isIsoDateOnly(input.from) || !isIsoDateOnly(input.to)) {
       throw new Error("from and to must be YYYY-MM-DD");
     }
-    return this.repository.generate(input);
+    return await this.repository.generate(input);
   }
 
-  savePackagePrices(input: SaveBillingPackagePricesInput) {
+  async savePackagePrices(input: SaveBillingPackagePricesInput) {
     if (!input.clientId || !Array.isArray(input.prices)) {
       throw new Error("clientId and prices[] required");
     }
-    this.repository.savePackagePrices({
+    await this.repository.savePackagePrices({
       clientId: input.clientId,
       prices: input.prices,
     });
     return { ok: true };
   }
 
-  setDefaultPackagePrice(input: SetDefaultBillingPackagePriceInput): SetDefaultBillingPackagePriceResult {
+  async setDefaultPackagePrice(input: SetDefaultBillingPackagePriceInput): Promise<SetDefaultBillingPackagePriceResult> {
     if (!input.packageId || input.price == null) {
       throw new Error("packageId and price required");
     }
-    return this.repository.setDefaultPackagePrice(input.packageId, input.price);
+    return await this.repository.setDefaultPackagePrice(input.packageId, input.price);
   }
 
   private pickReferenceRate(rates: Array<{ shippingProviderId?: number | null; shipmentCost?: number; otherCost?: number; serviceCode?: string; packageType?: string | null; serviceName?: string }>, shippingProviderId: number): number | null {

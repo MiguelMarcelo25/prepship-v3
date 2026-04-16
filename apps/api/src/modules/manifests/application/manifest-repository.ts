@@ -2,5 +2,5 @@ import type { GenerateManifestInput } from "../../../../../../../packages/contra
 import type { ManifestShipmentRecord } from "../domain/manifest.ts";
 
 export interface ManifestRepository {
-  listShipments(input: GenerateManifestInput): ManifestShipmentRecord[];
+  listShipments(input: GenerateManifestInput): Promise<ManifestShipmentRecord[]>;
 }

@@ -11,9 +11,9 @@ export class GetOrderIdsService {
     this.repository = repository;
   }
 
-  execute(query: GetOrderIdsQuery): GetOrderIdsResponse {
+  async execute(query: GetOrderIdsQuery): Promise<GetOrderIdsResponse> {
     return {
-      ids: this.repository.findIdsBySku(query),
+      ids: await this.repository.findIdsBySku(query),
     };
   }
 }

@@ -9,9 +9,9 @@ function inputErrorStatus(error: unknown): number {
 
 export function createQueueRoutes(handler: QueueHttpHandler): RouteDef[] {
   return [
-    route("GET", "/api/queue", ({ url }) => {
+    route("GET", "/api/queue", async ({ url }) => {
       try {
-        return jsonResponse(200, handler.handleGet(url));
+        return jsonResponse(200, await handler.handleGet(url));
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";
         return jsonResponse(inputErrorStatus(error), { error: message });
@@ -19,7 +19,7 @@ export function createQueueRoutes(handler: QueueHttpHandler): RouteDef[] {
     }),
     route("POST", "/api/queue/add", async ({ readJson }) => {
       try {
-        return jsonResponse(200, handler.handleAdd(await readJson()));
+        return jsonResponse(200, await handler.handleAdd(await readJson()));
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";
         return jsonResponse(inputErrorStatus(error), { error: message });
@@ -27,7 +27,7 @@ export function createQueueRoutes(handler: QueueHttpHandler): RouteDef[] {
     }),
     route("POST", "/api/queue/clear", async ({ readJson }) => {
       try {
-        return jsonResponse(200, handler.handleClear(await readJson()));
+        return jsonResponse(200, await handler.handleClear(await readJson()));
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";
         return jsonResponse(inputErrorStatus(error), { error: message });
@@ -35,7 +35,7 @@ export function createQueueRoutes(handler: QueueHttpHandler): RouteDef[] {
     }),
     route("POST", "/api/queue/print", async ({ readJson }) => {
       try {
-        return jsonResponse(200, handler.handleStartPrint(await readJson()));
+        return jsonResponse(200, await handler.handleStartPrint(await readJson()));
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";
         return jsonResponse(inputErrorStatus(error), { error: message });
@@ -64,7 +64,7 @@ export function createQueueRoutes(handler: QueueHttpHandler): RouteDef[] {
         const body = await readJson();
         const clientIdFromQuery = url.searchParams.get("client_id");
         if (!body.client_id && clientIdFromQuery) body.client_id = Number(clientIdFromQuery);
-        return jsonResponse(200, handler.handleRemove(params.entryId ?? "", body));
+        return jsonResponse(200, await handler.handleRemove(params.entryId ?? "", body));
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";
         const status = message.includes("not found") ? 404 : inputErrorStatus(error);

@@ -28,7 +28,7 @@ export class SqliteQueueRepository implements QueueRepository {
     this.db = db;
   }
 
-  add(input: AddToQueueInput): PrintQueueEntry {
+  async add(input: AddToQueueInput): Promise<PrintQueueEntry> {
     const now = Math.floor(Date.now() / 1000);
     const id = randomUUID();
 
@@ -71,7 +71,7 @@ export class SqliteQueueRepository implements QueueRepository {
     return this.mapRow(row);
   }
 
-  getByClient(clientId: number, status?: 'queued' | 'printed'): PrintQueueEntry[] {
+  async getByClient(clientId: number, status?: 'queued' | 'printed'): Promise<PrintQueueEntry[]> {
     const rows = status
       ? this.db.prepare(
           `SELECT * FROM print_queue_orders WHERE client_id = ? AND status = ? ORDER BY queued_at ASC`
@@ -83,21 +83,21 @@ export class SqliteQueueRepository implements QueueRepository {
     return rows.map(r => this.mapRow(r));
   }
 
-  findById(id: string): PrintQueueEntry | null {
+  async findById(id: string): Promise<PrintQueueEntry | null> {
     const row = this.db.prepare(
       `SELECT * FROM print_queue_orders WHERE id = ? LIMIT 1`
     ).get(id) as PrintQueueRow | undefined;
     return row ? this.mapRow(row) : null;
   }
 
-  findByOrderId(orderId: string, clientId: number): PrintQueueEntry | null {
+  async findByOrderId(orderId: string, clientId: number): Promise<PrintQueueEntry | null> {
     const row = this.db.prepare(
       `SELECT * FROM print_queue_orders WHERE order_id = ? AND client_id = ? LIMIT 1`
     ).get(orderId, clientId) as PrintQueueRow | undefined;
     return row ? this.mapRow(row) : null;
   }
 
-  markPrinted(ids: string[], printedAt: number): void {
+  async markPrinted(ids: string[], printedAt: number): Promise<void> {
     const placeholders = ids.map(() => '?').join(',');
     this.db.prepare(
       `UPDATE print_queue_orders
@@ -106,11 +106,11 @@ export class SqliteQueueRepository implements QueueRepository {
     ).run(printedAt, ...ids);
   }
 
-  remove(id: string): void {
+  async remove(id: string): Promise<void> {
     this.db.prepare(`DELETE FROM print_queue_orders WHERE id = ?`).run(id);
   }
 
-  clearByClient(clientId: number): number {
+  async clearByClient(clientId: number): Promise<number> {
     const result = this.db.prepare(
       `DELETE FROM print_queue_orders WHERE client_id = ? AND status = 'queued'`
     ).run(clientId);

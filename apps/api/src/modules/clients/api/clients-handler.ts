@@ -8,23 +8,23 @@ export class ClientsHttpHandler {
     this.services = services;
   }
 
-  handleList() {
-    return this.services.list();
+  async handleList() {
+    return await this.services.list();
   }
 
-  handleCreate(body: CreateClientInput) {
-    return this.services.create(body);
+  async handleCreate(body: CreateClientInput) {
+    return await this.services.create(body);
   }
 
-  handleUpdate(clientId: number, body: UpdateClientInput) {
-    return this.services.update(clientId, body);
+  async handleUpdate(clientId: number, body: UpdateClientInput) {
+    return await this.services.update(clientId, body);
   }
 
-  handleDelete(clientId: number) {
-    return this.services.remove(clientId);
+  async handleDelete(clientId: number) {
+    return await this.services.remove(clientId);
   }
 
-  handleSyncStores() {
-    return this.services.syncStores();
+  async handleSyncStores() {
+    return await this.services.syncStores();
   }
 }

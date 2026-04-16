@@ -26,7 +26,7 @@ export class SqliteInventoryRepository implements InventoryRepository {
     this.db = db;
   }
 
-  list(query: ListInventoryQuery): InventoryRecord[] {
+  async list(query: ListInventoryQuery): Promise<InventoryRecord[]> {
     const where = ["s.active = 1"];
     const params: Array<string | number> = [];
     if (query.clientId != null) {
@@ -71,7 +71,7 @@ export class SqliteInventoryRepository implements InventoryRepository {
     return rows;
   }
 
-  receive(input: ReceiveInventoryInput): ReceiveInventoryResultDto[] {
+  async receive(input: ReceiveInventoryInput): Promise<ReceiveInventoryResultDto[]> {
     const receivedAt = this.parseTimestamp(input.receivedAt);
     const results: ReceiveInventoryResultDto[] = [];
     try {
@@ -103,7 +103,7 @@ export class SqliteInventoryRepository implements InventoryRepository {
     return results;
   }
 
-  adjust(input: AdjustInventoryInput): number {
+  async adjust(input: AdjustInventoryInput): Promise<number> {
     const validTypes = new Set(["adjust", "receive", "return", "damage"]);
     const type = validTypes.has(String(input.type ?? "adjust")) ? String(input.type ?? "adjust") : "adjust";
     const note = input.note || (Number(input.qty) > 0 ? `Manual ${type}` : "Manual remove");
@@ -114,7 +114,7 @@ export class SqliteInventoryRepository implements InventoryRepository {
     return this.getCurrentStock(input.invSkuId);
   }
 
-  update(inventoryId: number, input: UpdateInventoryItemInput): void {
+  async update(inventoryId: number, input: UpdateInventoryItemInput): Promise<void> {
     this.db.prepare(`
       UPDATE inventory_skus
       SET name = ?, minStock = ?, weightOz = ?,
@@ -140,7 +140,7 @@ export class SqliteInventoryRepository implements InventoryRepository {
     );
   }
 
-  listLedger(query: ListInventoryLedgerQuery): Record<string, unknown>[] {
+  async listLedger(query: ListInventoryLedgerQuery): Promise<Record<string, unknown>[]> {
     const where: string[] = [];
     const params: Array<string | number> = [];
     if (query.clientId != null) {
@@ -174,7 +174,7 @@ export class SqliteInventoryRepository implements InventoryRepository {
     `).all(...params, query.limit) as Record<string, unknown>[];
   }
 
-  getLedgerByInventoryId(inventoryId: number): Record<string, unknown>[] {
+  async getLedgerByInventoryId(inventoryId: number): Promise<Record<string, unknown>[]> {
     return this.db.prepare(`
       SELECT
         l.id, l.invSkuId, l.type, l.qty, l.orderId, l.note, l.createdBy, l.createdAt,
@@ -189,7 +189,7 @@ export class SqliteInventoryRepository implements InventoryRepository {
     `).all(inventoryId) as Record<string, unknown>[];
   }
 
-  listAlerts(clientId: number): InventoryAlertRecord[] {
+  async listAlerts(clientId: number): Promise<InventoryAlertRecord[]> {
     const alerts: InventoryAlertRecord[] = [];
     const skuAlerts = this.db.prepare(`
       SELECT
@@ -243,7 +243,7 @@ export class SqliteInventoryRepository implements InventoryRepository {
     return alerts;
   }
 
-  populate(): { ok: true; skusRegistered: number; shippedProcessed: number } {
+  async populate(): Promise<{ ok: true; skusRegistered: number; shippedProcessed: number }> {
     const orders = this.db.prepare(`
       SELECT raw
       FROM orders
@@ -292,7 +292,7 @@ export class SqliteInventoryRepository implements InventoryRepository {
     return { ok: true, skusRegistered, shippedProcessed };
   }
 
-  importProductDimensions(clientId?: number, overwrite = false): { ok: true; updated: number; skipped: number; noMatch: number; total: number } {
+  async importProductDimensions(clientId?: number, overwrite = false): Promise<{ ok: true; updated: number; skipped: number; noMatch: number; total: number }> {
     const where = ["active = 1"];
     const params: Array<number> = [];
     if (clientId != null) {
@@ -355,7 +355,7 @@ export class SqliteInventoryRepository implements InventoryRepository {
     return { ok: true, updated, skipped, noMatch, total: rows.length };
   }
 
-  bulkUpdateDimensions(input: BulkUpdateInventoryDimensionsInput): { ok: true; updated: number } {
+  async bulkUpdateDimensions(input: BulkUpdateInventoryDimensionsInput): Promise<{ ok: true; updated: number }> {
     let updated = 0;
     for (const change of input.updates) {
       this.db.prepare(`
@@ -379,7 +379,7 @@ export class SqliteInventoryRepository implements InventoryRepository {
     return { ok: true, updated };
   }
 
-  listParentSkus(clientId: number): ParentSkuDto[] {
+  async listParentSkus(clientId: number): Promise<ParentSkuDto[]> {
     return this.db.prepare(`
       SELECT
         p.parentSkuId,
@@ -399,7 +399,7 @@ export class SqliteInventoryRepository implements InventoryRepository {
     `).all(clientId) as ParentSkuDto[];
   }
 
-  getParentSku(parentSkuId: number): ParentSkuDetailDto | null {
+  async getParentSku(parentSkuId: number): Promise<ParentSkuDetailDto | null> {
     const parent = this.db.prepare(`
       SELECT parentSkuId, clientId, name, sku, COALESCE(baseUnitQty, 1) AS baseUnitQty, createdAt, updatedAt
       FROM parent_skus
@@ -434,7 +434,7 @@ export class SqliteInventoryRepository implements InventoryRepository {
     };
   }
 
-  createParentSku(input: SaveParentSkuInput): { ok: true; parentSkuId: number; sku?: string; baseUnitQty: number } {
+  async createParentSku(input: SaveParentSkuInput): Promise<{ ok: true; parentSkuId: number; sku?: string; baseUnitQty: number }> {
     const baseUnitQty = Math.max(1, Number.parseInt(String(input.baseUnitQty ?? 1), 10) || 1);
     const now = Date.now();
     const result = this.db.prepare(`
@@ -444,7 +444,7 @@ export class SqliteInventoryRepository implements InventoryRepository {
     return { ok: true, parentSkuId: Number(result.lastInsertRowid), sku: input.sku ?? "", baseUnitQty };
   }
 
-  setParent(inventoryId: number, input: SetInventoryParentInput): { ok: true } {
+  async setParent(inventoryId: number, input: SetInventoryParentInput): Promise<{ ok: true }> {
     if (input.parentSkuId === null) {
       this.db.prepare(`
         UPDATE inventory_skus
@@ -471,7 +471,7 @@ export class SqliteInventoryRepository implements InventoryRepository {
     return { ok: true };
   }
 
-  deleteParent(parentSkuId: number): { ok: true } {
+  async deleteParent(parentSkuId: number): Promise<{ ok: true }> {
     const row = this.db.prepare(`
       SELECT COUNT(*) AS cnt
       FROM inventory_skus
@@ -488,7 +488,7 @@ export class SqliteInventoryRepository implements InventoryRepository {
     return { ok: true };
   }
 
-  getSkuOrders(inventoryId: number, days = 30): Record<string, unknown> | null {
+  async getSkuOrders(inventoryId: number, days = 30): Promise<Record<string, unknown> | null> {
     const skuRow = this.db.prepare(`
       SELECT sku, name, clientId
       FROM inventory_skus

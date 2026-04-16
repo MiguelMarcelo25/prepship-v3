@@ -23,6 +23,26 @@ export function defaultSecretsPath(env = process.env): string {
 }
 
 export function loadTransitionalSecrets(secretsPath: string): TransitionalSecrets {
-  const raw = readFileSync(secretsPath, "utf8");
-  return JSON.parse(raw) as TransitionalSecrets;
+  let fileSecrets: TransitionalSecrets = {};
+  
+  if (existsSync(secretsPath)) {
+    try {
+      const raw = readFileSync(secretsPath, "utf8");
+      fileSecrets = JSON.parse(raw) as TransitionalSecrets;
+    } catch (e) {
+      console.warn(`Failed to parse secrets file at ${secretsPath}:`, e);
+    }
+  }
+
+  return {
+    ...fileSecrets,
+    shipstation: {
+      api_key: process.env.SHIPSTATION_API_KEY ?? fileSecrets.shipstation?.api_key,
+      api_secret: process.env.SHIPSTATION_API_SECRET ?? fileSecrets.shipstation?.api_secret,
+      api_key_v2: process.env.SHIPSTATION_API_KEY_V2 ?? fileSecrets.shipstation?.api_key_v2,
+    },
+    portal: {
+      setupToken: process.env.PORTAL_SETUP_TOKEN ?? fileSecrets.portal?.setupToken,
+    }
+  };
 }

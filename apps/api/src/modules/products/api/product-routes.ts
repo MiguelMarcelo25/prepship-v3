@@ -11,9 +11,9 @@ function inputErrorStatusWithMessages(messages: string[]) {
 export function createProductRoutes(handler: ProductsHttpHandler): RouteDef[] {
   return [
     jsonRoute("GET", "/api/products/bulk", ({ url }) => handler.handleBulk(url)),
-    route("GET", "/api/products/by-sku/:sku", ({ params }) => {
+    route("GET", "/api/products/by-sku/:sku", async ({ params }) => {
       try {
-        const payload = handler.handleBySku(params.sku ?? "");
+        const payload = await handler.handleBySku(params.sku ?? "");
         if (!payload) return jsonResponse(404, { error: "Not found" });
         return jsonResponse(200, payload);
       } catch (error) {

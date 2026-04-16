@@ -8,7 +8,7 @@ export class ManifestsHttpHandler {
     this.services = services;
   }
 
-  handleGenerate(body: GenerateManifestInput) {
-    return this.services.generate(body);
+  async handleGenerate(body: GenerateManifestInput) {
+    return await this.services.generate(body);
   }
 }

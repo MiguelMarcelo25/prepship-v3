@@ -11,11 +11,11 @@ export class SqliteClientRepository implements ClientRepository {
     this.db = db;
   }
 
-  listActive(): ClientRecord[] {
+  async listActive(): Promise<ClientRecord[]> {
     return this.db.prepare("SELECT * FROM clients WHERE active = 1 ORDER BY name ASC").all() as ClientRecord[];
   }
 
-  create(input: CreateClientInput): number {
+  async create(input: CreateClientInput): Promise<number> {
     const now = Date.now();
     const result = this.db.prepare(`
       INSERT INTO clients (name, storeIds, contactName, email, phone, active, createdAt, updatedAt)
@@ -33,7 +33,7 @@ export class SqliteClientRepository implements ClientRepository {
     return Number(result.lastInsertRowid);
   }
 
-  update(clientId: number, input: UpdateClientInput): void {
+  async update(clientId: number, input: UpdateClientInput): Promise<void> {
     this.db.prepare(`
       UPDATE clients
       SET name = ?, storeIds = ?, contactName = ?, email = ?, phone = ?,
@@ -54,11 +54,11 @@ export class SqliteClientRepository implements ClientRepository {
     );
   }
 
-  softDelete(clientId: number): void {
+  async softDelete(clientId: number): Promise<void> {
     this.db.prepare("UPDATE clients SET active = 0, updatedAt = ? WHERE clientId = ?").run(Date.now(), clientId);
   }
 
-  syncFromStores(stores: InitStoreDto[]): void {
+  async syncFromStores(stores: InitStoreDto[]): Promise<void> {
     const insertClient = this.db.prepare(`
       INSERT INTO clients (name, storeIds, contactName, email, phone, active, createdAt, updatedAt)
       VALUES (?, ?, '', '', '', 1, ?, ?)

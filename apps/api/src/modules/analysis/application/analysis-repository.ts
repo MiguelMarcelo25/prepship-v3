@@ -5,9 +5,9 @@ import type {
 import type { AnalysisDailySalesRow, AnalysisOrderRow } from "../domain/analysis.ts";
 
 export interface AnalysisRepository {
-  listOrderRows(query: AnalysisSkuQuery): AnalysisOrderRow[];
-  listDailySalesRows(query: AnalysisDailySalesQuery, since: string, until: string): AnalysisDailySalesRow[];
-  getStoreClientNameMap(): Record<number, string>;
-  getInventorySkuMap(): Map<string, number>;
-  getClientStoreIds(clientId: number): number[];
+  listOrderRows(query: AnalysisSkuQuery): Promise<AnalysisOrderRow[]>;
+  listDailySalesRows(query: AnalysisDailySalesQuery, since: string, until: string): Promise<AnalysisDailySalesRow[]>;
+  getStoreClientNameMap(): Promise<Record<number, string>>;
+  getInventorySkuMap(): Promise<Map<string, number>>;
+  getClientStoreIds(clientId: number): Promise<number[]>;
 }

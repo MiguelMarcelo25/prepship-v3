@@ -14,7 +14,7 @@ export class SqliteAnalysisRepository implements AnalysisRepository {
     this.db = db;
   }
 
-  listOrderRows(query: AnalysisSkuQuery): AnalysisOrderRow[] {
+  async listOrderRows(query: AnalysisSkuQuery): Promise<AnalysisOrderRow[]> {
     const where = ["o.orderStatus NOT IN ('cancelled')"];
     const params: Array<string | number> = [];
     if (query.from) {
@@ -47,7 +47,7 @@ export class SqliteAnalysisRepository implements AnalysisRepository {
     `).all(...params) as AnalysisOrderRow[];
   }
 
-  listDailySalesRows(query: AnalysisDailySalesQuery, since: string, until: string): AnalysisDailySalesRow[] {
+  async listDailySalesRows(query: AnalysisDailySalesQuery, since: string, until: string): Promise<AnalysisDailySalesRow[]> {
     const where: string[] = [];
     const params: Array<string | number> = [];
     if (EXCLUDED_STORE_IDS.length > 0) {
@@ -82,7 +82,7 @@ export class SqliteAnalysisRepository implements AnalysisRepository {
     `).all(since, until, ...params) as AnalysisDailySalesRow[];
   }
 
-  getStoreClientNameMap(): Record<number, string> {
+  async getStoreClientNameMap(): Promise<Record<number, string>> {
     const map: Record<number, string> = {};
     const rows = this.db.prepare("SELECT clientId, name, storeIds FROM clients WHERE active = 1").all() as Array<{ name: string; storeIds: string | null }>;
     for (const row of rows) {
@@ -97,7 +97,7 @@ export class SqliteAnalysisRepository implements AnalysisRepository {
     return map;
   }
 
-  getInventorySkuMap(): Map<string, number> {
+  async getInventorySkuMap(): Promise<Map<string, number>> {
     const map = new Map<string, number>();
     const rows = this.db.prepare("SELECT sku, id FROM inventory_skus").all() as Array<{ sku: string | null; id: number }>;
     for (const row of rows) {
@@ -108,7 +108,7 @@ export class SqliteAnalysisRepository implements AnalysisRepository {
     return map;
   }
 
-  getClientStoreIds(clientId: number): number[] {
+  async getClientStoreIds(clientId: number): Promise<number[]> {
     const row = this.db.prepare("SELECT storeIds FROM clients WHERE clientId = ?").get(clientId) as { storeIds?: string | null } | undefined;
     if (!row?.storeIds) return [];
     try {

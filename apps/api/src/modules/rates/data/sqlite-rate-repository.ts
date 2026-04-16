@@ -49,7 +49,7 @@ export class SqliteRateRepository implements RateRepository {
     this.mainApiKeyV2 = mainApiKeyV2;
   }
 
-  getClientIdForStoreId(storeId: number): number | null {
+  async getClientIdForStoreId(storeId: number): Promise<number | null> {
     const row = this.db.prepare(`
       SELECT clientId
       FROM clients
@@ -64,7 +64,7 @@ export class SqliteRateRepository implements RateRepository {
     return row?.clientId ?? null;
   }
 
-  getCurrentWeightVersion(): number {
+  async getCurrentWeightVersion(): Promise<number> {
     const row = this.db.prepare(`
       SELECT value
       FROM sync_meta
@@ -74,7 +74,7 @@ export class SqliteRateRepository implements RateRepository {
     return Number.parseInt(row?.value ?? "0", 10) || 0;
   }
 
-  getCachedRate(cacheKey: string): CachedRateRecord | null {
+  async getCachedRate(cacheKey: string): Promise<CachedRateRecord | null> {
     const row = this.db.prepare(`
       SELECT rates, best_rate, weight_version
       FROM rate_cache
@@ -90,7 +90,7 @@ export class SqliteRateRepository implements RateRepository {
     };
   }
 
-  listCarriersForClient(clientId: number | null): CarrierAccountDto[] {
+  async listCarriersForClient(clientId: number | null): Promise<CarrierAccountDto[]> {
     const rateSourceConfig = this.getRateSourceConfig(clientId);
     const sourceClientId = rateSourceConfig.sourceClientId;
     const carrierGroupClientId = sourceClientId != null &&
@@ -112,7 +112,7 @@ export class SqliteRateRepository implements RateRepository {
     );
   }
 
-  getRateSourceConfig(clientId: number | null): RateSourceConfig {
+  async getRateSourceConfig(clientId: number | null): Promise<RateSourceConfig> {
     if (clientId == null) {
       return {
         apiKeyV2: this.mainApiKeyV2,
@@ -155,7 +155,7 @@ export class SqliteRateRepository implements RateRepository {
     };
   }
 
-  clearCaches(): void {
+  async clearCaches(): Promise<void> {
     this.db.prepare(`DELETE FROM rate_cache`).run();
     try {
       this.db.prepare(`DELETE FROM carrier_cache`).run();
@@ -164,7 +164,7 @@ export class SqliteRateRepository implements RateRepository {
     }
   }
 
-  listOrdersForRateRefetch(limit: number): RefetchRateOrderRecord[] {
+  async listOrdersForRateRefetch(limit: number): Promise<RefetchRateOrderRecord[]> {
     const rows = this.db.prepare(`
       SELECT o.orderId, o.storeId, o.shipToPostalCode, o.weightValue,
              ol.residential, ol.rate_dims_l, ol.rate_dims_w, ol.rate_dims_h
@@ -193,14 +193,14 @@ export class SqliteRateRepository implements RateRepository {
     }));
   }
 
-  saveCachedRate(
+  async saveCachedRate(
     cacheKey: string,
     weightOz: number,
     toZip: string,
     rates: RateDto[],
     bestRate: RateDto | null,
     weightVersion: number,
-  ): void {
+  ): Promise<void> {
     this.db.prepare(`
       INSERT INTO rate_cache (cache_key, weight_oz, to_zip, rates, best_rate, fetched_at, weight_version)
       VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -222,7 +222,7 @@ export class SqliteRateRepository implements RateRepository {
     );
   }
 
-  saveReferenceRates(orderIds: number[], rates: RateDto[], weightOz: number, dims: RateDimsDto | null, storeId: number | null): void {
+  async saveReferenceRates(orderIds: number[], rates: RateDto[], weightOz: number, dims: RateDimsDto | null, storeId: number | null): Promise<void> {
     if (orderIds.length === 0 || rates.length === 0) {
       return;
     }

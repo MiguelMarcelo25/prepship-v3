@@ -8,8 +8,8 @@ export class OrderFullService {
     this.repository = repository;
   }
 
-  execute(orderId: number): OrderFullDto | null {
-    const payload = this.repository.getFullById(orderId);
+  async execute(orderId: number): Promise<OrderFullDto | null> {
+    const payload = await this.repository.getFullById(orderId);
     if (!payload) return null;
 
     return {

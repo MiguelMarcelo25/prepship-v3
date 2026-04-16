@@ -57,8 +57,8 @@ export class OrderExportService {
     this.repository = repository;
   }
 
-  execute(query: OrderExportQuery): { filename: string; contentType: string; body: string } {
-    const rows = this.repository.exportOrders(query);
+  async execute(query: OrderExportQuery): Promise<{ filename: string; contentType: string; body: string }> {
+    const rows = await this.repository.exportOrders(query);
     const lines: string[] = [CSV_HEADERS.map(escapeCsv).join(",")];
 
     for (const row of rows) {

@@ -5,9 +5,9 @@ import type { SettingsHttpHandler } from "./settings-handler.ts";
 
 export function createSettingsRoutes(handler: SettingsHttpHandler): RouteDef[] {
   return [
-    route("GET", "/api/settings/:key", ({ params }) => {
+    route("GET", "/api/settings/:key", async ({ params }) => {
       try {
-        return jsonResponse(200, handler.handleGet(params.key ?? ""));
+        return jsonResponse(200, await handler.handleGet(params.key ?? ""));
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";
         const status = error instanceof InputValidationError ? 400 : message === "Unknown setting" ? 404 : 500;
@@ -16,16 +16,16 @@ export function createSettingsRoutes(handler: SettingsHttpHandler): RouteDef[] {
     }),
     route("PUT", "/api/settings/:key", async ({ params, readJson }) => {
       try {
-        return jsonResponse(200, handler.handlePut(params.key ?? "", await readJson()));
+        return jsonResponse(200, await handler.handlePut(params.key ?? "", await readJson()));
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";
         const status = message === "Unknown setting" ? 404 : 500;
         return jsonResponse(status, { error: message });
       }
     }),
-    route("POST", "/api/cache/clear-and-refetch", () => {
+    route("POST", "/api/cache/clear-and-refetch", async () => {
       try {
-        return jsonResponse(200, handler.handleClearAndRefetch());
+        return jsonResponse(200, await handler.handleClearAndRefetch());
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";
         return jsonResponse(500, { error: message });

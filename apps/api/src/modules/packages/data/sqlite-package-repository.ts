@@ -45,7 +45,7 @@ export class SqlitePackageRepository implements PackageRepository {
     this.packageColumns = new Set((this.db.prepare(`PRAGMA table_info(packages)`).all() as Array<{ name: string }>).map((row) => row.name));
   }
 
-  list(source?: string): PackageRecord[] {
+  async list(source?: string): Promise<PackageRecord[]> {
     const sql = source && source !== "all"
       ? "SELECT * FROM packages WHERE source = ? ORDER BY source ASC, carrierCode ASC, name ASC"
       : "SELECT * FROM packages ORDER BY source ASC, carrierCode ASC, name ASC";
@@ -55,7 +55,7 @@ export class SqlitePackageRepository implements PackageRepository {
     return (rows as Array<Record<string, unknown>>).map((row) => mapPackage(row) as PackageRecord);
   }
 
-  listLowStock(): PackageRecord[] {
+  async listLowStock(): Promise<PackageRecord[]> {
     const rows = this.db.prepare(`
       SELECT * FROM packages
       WHERE source = 'custom' AND COALESCE(stockQty, 0) <= COALESCE(reorderLevel, 10)
@@ -64,7 +64,7 @@ export class SqlitePackageRepository implements PackageRepository {
     return (rows as Array<Record<string, unknown>>).map((row) => mapPackage(row) as PackageRecord);
   }
 
-  findByDims(length: number, width: number, height: number): PackageRecord | null {
+  async findByDims(length: number, width: number, height: number): Promise<PackageRecord | null> {
     const row = this.db.prepare(`
       SELECT * FROM packages
       WHERE source = 'custom' AND length = ? AND width = ? AND height = ?
@@ -74,12 +74,12 @@ export class SqlitePackageRepository implements PackageRepository {
     return mapPackage(row);
   }
 
-  getById(packageId: number): PackageRecord | null {
+  async getById(packageId: number): Promise<PackageRecord | null> {
     const row = this.db.prepare("SELECT * FROM packages WHERE packageId = ?").get(packageId) as Record<string, unknown> | undefined;
     return mapPackage(row);
   }
 
-  create(input: SavePackageInput): number {
+  async create(input: SavePackageInput): Promise<number> {
     const now = Date.now();
     const result = this.db.prepare(`
       INSERT INTO packages (name, type, length, width, height, tareWeightOz, unitCost, createdAt, updatedAt)
@@ -98,7 +98,7 @@ export class SqlitePackageRepository implements PackageRepository {
     return Number(result.lastInsertRowid);
   }
 
-  update(packageId: number, input: SavePackageInput): void {
+  async update(packageId: number, input: SavePackageInput): Promise<void> {
     this.db.prepare(`
       UPDATE packages
       SET name = ?, type = ?, length = ?, width = ?, height = ?, tareWeightOz = ?, reorderLevel = ?, unitCost = ?, updatedAt = ?
@@ -117,11 +117,11 @@ export class SqlitePackageRepository implements PackageRepository {
     );
   }
 
-  delete(packageId: number): void {
+  async delete(packageId: number): Promise<void> {
     this.db.prepare("DELETE FROM packages WHERE packageId = ?").run(packageId);
   }
 
-  receive(packageId: number, input: PackageAdjustmentInput): PackageRecord | null {
+  async receive(packageId: number, input: PackageAdjustmentInput): Promise<PackageRecord | null> {
     const now = Date.now();
     if (input.costPerUnit != null && input.costPerUnit >= 0) {
       this.db.prepare(`
@@ -138,7 +138,7 @@ export class SqlitePackageRepository implements PackageRepository {
     return this.getById(packageId);
   }
 
-  adjust(packageId: number, input: PackageAdjustmentInput): PackageRecord | null {
+  async adjust(packageId: number, input: PackageAdjustmentInput): Promise<PackageRecord | null> {
     const now = Date.now();
     this.db.prepare(`
       UPDATE packages SET stockQty = COALESCE(stockQty, 0) + ?, updatedAt = ? WHERE packageId = ?
@@ -149,17 +149,17 @@ export class SqlitePackageRepository implements PackageRepository {
     return this.getById(packageId);
   }
 
-  setReorderLevel(packageId: number, reorderLevel: number): void {
+  async setReorderLevel(packageId: number, reorderLevel: number): Promise<void> {
     this.db.prepare("UPDATE packages SET reorderLevel = ?, updatedAt = ? WHERE packageId = ?").run(reorderLevel, Date.now(), packageId);
   }
 
-  getLedger(packageId: number): Record<string, unknown>[] {
+  async getLedger(packageId: number): Promise<Record<string, unknown>[]> {
     return this.db.prepare(`
       SELECT * FROM package_ledger WHERE packageId = ? ORDER BY createdAt DESC LIMIT 20
     `).all(packageId) as Record<string, unknown>[];
   }
 
-  autoCreate(input: AutoCreatePackageInput): { package: PackageRecord; isNew: boolean } {
+  async autoCreate(input: AutoCreatePackageInput): Promise<{ package: PackageRecord; isNew: boolean }> {
     const [length, width, height] = sortDimsLargestFirst(input.length, input.width, input.height);
     const l2 = normalizeDimension(length);
     const w2 = normalizeDimension(width);
@@ -197,7 +197,7 @@ export class SqlitePackageRepository implements PackageRepository {
     return { package: created, isNew: true };
   }
 
-  syncCarrierPackages(carrierCode: string, packages: ExternalCarrierPackageRecord[]): void {
+  async syncCarrierPackages(carrierCode: string, packages: ExternalCarrierPackageRecord[]): Promise<void> {
     const now = Date.now();
     const hasPackageCode = this.packageColumns.has("packageCode");
     const hasDomestic = this.packageColumns.has("domestic");

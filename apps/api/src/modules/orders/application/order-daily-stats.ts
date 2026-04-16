@@ -7,7 +7,7 @@ export class OrderDailyStatsService {
     this.repository = repository;
   }
 
-  execute() {
-    return this.repository.getDailyStats();
+  async execute() {
+    return await this.repository.getDailyStats();
   }
 }
