@@ -67,7 +67,7 @@ export class PgQueueRepository implements QueueRepository {
           SELECT * FROM print_queue_orders WHERE client_id = ${clientId} ORDER BY queued_at ASC
         `;
 
-    return (rows as PrintQueueRow[]).map(r => this.mapRow(r));
+    return (rows as unknown as PrintQueueRow[]).map(r => this.mapRow(r));
   }
 
   async findById(id: string): Promise<PrintQueueEntry | null> {

@@ -125,12 +125,12 @@ class CircuitBreaker {
 // ─── In-flight deduplication ─────────────────────────────────────────────────
 
 class InFlightTracker {
-  private readonly inFlight = new Map<string, Promise<Response>>();
+  private readonly inFlight = new Map<string, Promise<any>>();
 
   /** If an identical request is already in-flight, return the same promise. */
-  track(key: string, factory: () => Promise<Response>): Promise<Response> {
+  track<T>(key: string, factory: () => Promise<T>): Promise<T> {
     const existing = this.inFlight.get(key);
-    if (existing) return existing;
+    if (existing) return existing as Promise<T>;
 
     const promise = factory().finally(() => {
       this.inFlight.delete(key);

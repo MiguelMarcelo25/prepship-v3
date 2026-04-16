@@ -8,8 +8,16 @@ export interface TransitionalSecrets {
     api_secret?: string;
     api_key_v2?: string;
   };
+  shipstationKfg?: {
+    apiKey?: string;
+    apiSecret?: string;
+    apiKeyV2?: string;
+  };
   portal?: {
     setupToken?: string;
+  };
+  session?: {
+    secret?: string;
   };
 }
 
@@ -48,6 +56,9 @@ export function loadTransitionalSecrets(secretsPath: string): TransitionalSecret
     },
     portal: {
       setupToken: process.env.PORTAL_SETUP_TOKEN ?? fileSecrets.portal?.setupToken,
+    },
+    session: {
+      secret: process.env.SESSION_TOKEN ?? fileSecrets.session?.secret,
     }
   };
 }
