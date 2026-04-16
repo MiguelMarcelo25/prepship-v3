@@ -2,9 +2,9 @@ import type { DatabaseSync } from "node:sqlite";
 import type {
   ProductBulkItemDto,
   SaveProductDefaultsInput,
-} from "../../../../../../packages/contracts/src/products/contracts.ts";
-import type { ProductRepository } from "../application/product-repository.ts";
-import type { ProductDefaultsRecord, SaveProductDefaultsRecordResult } from "../domain/product.ts";
+} from "../../../../../../packages/contracts/src/products/contracts.js";
+import type { ProductRepository } from "../application/product-repository.js";
+import type { ProductDefaultsRecord, SaveProductDefaultsRecordResult } from "../domain/product.js";
 
 export class SqliteProductRepository implements ProductRepository {
   private readonly db: DatabaseSync;

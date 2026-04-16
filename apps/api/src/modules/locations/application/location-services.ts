@@ -1,7 +1,7 @@
-import type { LocationDto, SaveLocationInput } from "../../../../../../packages/contracts/src/locations/contracts.ts";
-import type { LocationRepository } from "./location-repository.ts";
-import type { ShipFromState } from "./ship-from-state.ts";
-import type { LocationRecord } from "../domain/location.ts";
+import type { LocationDto, SaveLocationInput } from "../../../../../../packages/contracts/src/locations/contracts.js";
+import type { LocationRepository } from "./location-repository.js";
+import type { ShipFromState } from "./ship-from-state.js";
+import type { LocationRecord } from "../domain/location.js";
 
 function mapLocation(record: LocationRecord): LocationDto {
   return {

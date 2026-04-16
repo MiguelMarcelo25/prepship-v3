@@ -1,12 +1,12 @@
-import type { PgClient } from "../../../../../../packages/shared/src/postgres/database.ts";
+import type { PgClient } from "../../../../../../packages/shared/src/postgres/database.js";
 import type {
   AutoCreatePackageInput,
   PackageAdjustmentInput,
   SavePackageInput,
-} from "../../../../../../packages/contracts/src/packages/contracts.ts";
-import type { ExternalCarrierPackageRecord } from "../application/package-sync-gateway.ts";
-import type { PackageRepository } from "../application/package-repository.ts";
-import type { PackageRecord } from "../domain/package.ts";
+} from "../../../../../../packages/contracts/src/packages/contracts.js";
+import type { ExternalCarrierPackageRecord } from "../application/package-sync-gateway.js";
+import type { PackageRepository } from "../application/package-repository.js";
+import type { PackageRecord } from "../domain/package.js";
 
 function sortDimsLargestFirst(length: number, width: number, height: number): [number, number, number] {
   const dims = [length, width, height].filter((value) => value && value > 0).sort((a, b) => b - a);

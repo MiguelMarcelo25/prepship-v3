@@ -2,10 +2,10 @@ import type { DatabaseSync } from "node:sqlite";
 import type {
   AnalysisDailySalesQuery,
   AnalysisSkuQuery,
-} from "../../../../../../packages/contracts/src/analysis/contracts.ts";
-import { EXCLUDED_STORE_IDS } from "../../../common/prepship-config.ts";
-import type { AnalysisRepository } from "../application/analysis-repository.ts";
-import type { AnalysisDailySalesRow, AnalysisOrderRow } from "../domain/analysis.ts";
+} from "../../../../../../packages/contracts/src/analysis/contracts.js";
+import { EXCLUDED_STORE_IDS } from "../../../common/prepship-config.js";
+import type { AnalysisRepository } from "../application/analysis-repository.js";
+import type { AnalysisDailySalesRow, AnalysisOrderRow } from "../domain/analysis.js";
 
 export class SqliteAnalysisRepository implements AnalysisRepository {
   private readonly db: DatabaseSync;

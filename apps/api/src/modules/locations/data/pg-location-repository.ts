@@ -1,7 +1,7 @@
-import type { PgClient } from "../../../../../../packages/shared/src/postgres/database.ts";
-import type { SaveLocationInput } from "../../../../../../packages/contracts/src/locations/contracts.ts";
-import type { LocationRepository } from "../application/location-repository.ts";
-import type { LocationRecord } from "../domain/location.ts";
+import type { PgClient } from "../../../../../../packages/shared/src/postgres/database.js";
+import type { SaveLocationInput } from "../../../../../../packages/contracts/src/locations/contracts.js";
+import type { LocationRepository } from "../application/location-repository.js";
+import type { LocationRecord } from "../domain/location.js";
 
 export class PgLocationRepository implements LocationRepository {
   constructor(private readonly sql: PgClient) {}

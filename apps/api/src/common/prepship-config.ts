@@ -1,5 +1,5 @@
-import type { CarrierAccountDto } from "../../../../../packages/contracts/src/init/contracts.ts";
-import type { RateDto } from "../../../../../packages/contracts/src/rates/contracts.ts";
+import type { CarrierAccountDto } from "../../../../../packages/contracts/src/init/contracts.js";
+import type { RateDto } from "../../../../../packages/contracts/src/rates/contracts.js";
 
 export const EXCLUDED_STORE_IDS = [376720, 272465, 309763, 376827];
 export const BLOCKED_CARRIER_IDS = new Set([442017, 566344, 593739]);

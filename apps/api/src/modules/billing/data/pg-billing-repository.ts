@@ -1,4 +1,4 @@
-import type { PgClient } from "../../../../../../../packages/shared/src/postgres/database.ts";
+import type { PgClient } from "../../../../../../../packages/shared/src/postgres/database.js";
 import type {
   BackfillBillingReferenceRatesInput,
   BillingDetailsQuery,
@@ -8,9 +8,9 @@ import type {
   BillingSummaryQuery,
   SetDefaultBillingPackagePriceResult,
   UpdateBillingConfigInput,
-} from "../../../../../../../packages/contracts/src/billing/contracts.ts";
-import { SS_BASELINE_CARRIER_CODES } from "../../../common/prepship-config.ts";
-import type { BillingRepository } from "../application/billing-repository.ts";
+} from "../../../../../../../packages/contracts/src/billing/contracts.js";
+import { SS_BASELINE_CARRIER_CODES } from "../../../common/prepship-config.js";
+import type { BillingRepository } from "../application/billing-repository.js";
 import type {
   BillingClientPackagePriceRecord,
   BillingClientRecord,
@@ -31,8 +31,8 @@ import type {
   BillingStorageSkuRecord,
   BillingStoreClientRecord,
   BillingSummaryRecord,
-} from "../domain/billing.ts";
-import type { RateDto } from "../../../../../../../packages/contracts/src/rates/contracts.ts";
+} from "../domain/billing.js";
+import type { RateDto } from "../../../../../../../packages/contracts/src/rates/contracts.js";
 
 const HOUSE_ACCOUNT_IDS = new Set([3, 4]);
 

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { formatQueuedItemsSummary, formatQueuedOrderToast, formatQueuedOrdersToast } from '../src/components/Views/orders-queue.ts'
+import { formatQueuedItemsSummary, formatQueuedOrderToast, formatQueuedOrdersToast } from '.js'
 
 test('formatQueuedItemsSummary merges repeated items and prefers sku labels', () => {
   const summary = formatQueuedItemsSummary([

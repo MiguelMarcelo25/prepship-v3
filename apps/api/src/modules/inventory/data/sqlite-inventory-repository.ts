@@ -11,9 +11,9 @@ import type {
   SaveParentSkuInput,
   SetInventoryParentInput,
   UpdateInventoryItemInput,
-} from "../../../../../../packages/contracts/src/inventory/contracts.ts";
-import type { InventoryRepository } from "../application/inventory-repository.ts";
-import type { InventoryAlertRecord, InventoryRecord } from "../domain/inventory.ts";
+} from "../../../../../../packages/contracts/src/inventory/contracts.js";
+import type { InventoryRepository } from "../application/inventory-repository.js";
+import type { InventoryAlertRecord, InventoryRecord } from "../domain/inventory.js";
 
 interface InventoryIdRow {
   id: number;

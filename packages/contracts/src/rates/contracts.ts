@@ -1,4 +1,4 @@
-import type { CarrierAccountDto } from "../init/contracts.ts";
+import type { CarrierAccountDto } from "../init/contracts.js";
 
 export interface RateDimsDto {
   length: number;

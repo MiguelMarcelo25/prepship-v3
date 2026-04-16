@@ -1,8 +1,8 @@
-import type { CarrierAccountDto } from "../../../../../../../packages/contracts/src/init/contracts.ts";
-import type { RateDto } from "../../../../../../../packages/contracts/src/rates/contracts.ts";
-import { BLOCKED_CARRIER_IDS, CARRIER_ACCOUNTS_V2 } from "../../../common/prepship-config.ts";
-import type { LiveRateShopRequest, RateShopper } from "../application/rate-shopper.ts";
-import { getShipStationClient } from "../../../common/shipstation/client.ts";
+import type { CarrierAccountDto } from "../../../../../../../packages/contracts/src/init/contracts.js";
+import type { RateDto } from "../../../../../../../packages/contracts/src/rates/contracts.js";
+import { BLOCKED_CARRIER_IDS, CARRIER_ACCOUNTS_V2 } from "../../../common/prepship-config.js";
+import type { LiveRateShopRequest, RateShopper } from "../application/rate-shopper.js";
+import { getShipStationClient } from "../../../common/shipstation/client.js";
 
 const FROM_ZIP = "90248";
 

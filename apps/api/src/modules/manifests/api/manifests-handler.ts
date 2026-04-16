@@ -1,5 +1,5 @@
-import type { GenerateManifestInput } from "../../../../../../../packages/contracts/src/manifests/contracts.ts";
-import type { ManifestServices } from "../application/manifest-services.ts";
+import type { GenerateManifestInput } from "../../../../../../../packages/contracts/src/manifests/contracts.js";
+import type { ManifestServices } from "../application/manifest-services.js";
 
 export class ManifestsHttpHandler {
   private readonly services: ManifestServices;

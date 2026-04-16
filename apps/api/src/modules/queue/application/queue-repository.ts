@@ -1,4 +1,4 @@
-import type { AddToQueueInput, PrintQueueEntry } from "../domain/queue.ts";
+import type { AddToQueueInput, PrintQueueEntry } from "../domain/queue.js";
 
 export interface QueueRepository {
   add(input: AddToQueueInput): Promise<PrintQueueEntry>;

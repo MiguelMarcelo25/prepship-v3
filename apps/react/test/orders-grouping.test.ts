@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { groupOrdersBySku } from '../src/components/Views/orders-grouping.ts'
+import { groupOrdersBySku } from '.js'
 
 test('groupOrdersBySku groups same-SKU orders across clients and reports counts', () => {
   const grouped = groupOrdersBySku([

@@ -7,8 +7,8 @@ import type {
   ReturnLabelRecord,
   ShipmentEnrichmentInput,
   ShippingAccountContext,
-} from "../domain/label.ts";
-import type { MockLabelData } from "./mock-label-generator.ts";
+} from "../domain/label.js";
+import type { MockLabelData } from "./mock-label-generator.js";
 
 export interface LabelRepository {
   getOrder(orderId: number): Promise<LabelOrderRecord | null>;

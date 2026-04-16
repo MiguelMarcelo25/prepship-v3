@@ -13,7 +13,7 @@
  * To add/change carrier accounts: update CARRIER_ACCOUNTS_V2 in prepship-config.ts only.
  */
 
-import { CARRIER_ACCOUNTS_V2 } from "../../../common/prepship-config.ts";
+import { CARRIER_ACCOUNTS_V2 } from "../../../common/prepship-config.js";
 
 const CARRIER_DISPLAY_NAMES: Record<string, string> = {
   stamps_com: "USPS",

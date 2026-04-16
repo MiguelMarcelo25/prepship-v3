@@ -1,5 +1,5 @@
-import type { CarrierAccountDto } from "../../../../../../../packages/contracts/src/init/contracts.ts";
-import type { RateDimsDto, RateDto } from "../../../../../../../packages/contracts/src/rates/contracts.ts";
+import type { CarrierAccountDto } from "../../../../../../../packages/contracts/src/init/contracts.js";
+import type { RateDimsDto, RateDto } from "../../../../../../../packages/contracts/src/rates/contracts.js";
 
 export interface CachedRateRecord {
   ratesJson: string;

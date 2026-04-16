@@ -1,4 +1,4 @@
-import { resolveCarrierNickname } from "../../orders/application/carrier-resolver.ts";
+import { resolveCarrierNickname } from "../../orders/application/carrier-resolver.js";
 import type {
   BatchLabelResultItem,
   CreateBatchLabelRequestDto,
@@ -9,24 +9,24 @@ import type {
   ReturnLabelRequestDto,
   ReturnLabelResponseDto,
   VoidLabelResponseDto,
-} from "../../../../../../../packages/contracts/src/labels/contracts.ts";
-import type { OrderSelectedRateDto } from "../../../../../../../packages/contracts/src/orders/contracts.ts";
-import type { TransitionalSecrets } from "../../../../../../../packages/shared/src/config/secrets-adapter.ts";
-import type { LabelRepository } from "./label-repository.ts";
+} from "../../../../../../../packages/contracts/src/labels/contracts.js";
+import type { OrderSelectedRateDto } from "../../../../../../../packages/contracts/src/orders/contracts.js";
+import type { TransitionalSecrets } from "../../../../../../../packages/shared/src/config/secrets-adapter.js";
+import type { LabelRepository } from "./label-repository.js";
 import type {
   CreatedExternalLabel,
   ExternalOrderShipmentRecord,
   ShipstationV1Credentials,
   ShippingGateway,
-} from "./shipping-gateway.ts";
-import { CARRIER_ACCOUNTS_V2 } from "../../../common/prepship-config.ts";
-import type { AddressRecord, LabelOrderRecord, LabelShipmentRecord } from "../domain/label.ts";
+} from "./shipping-gateway.js";
+import { CARRIER_ACCOUNTS_V2 } from "../../../common/prepship-config.js";
+import type { AddressRecord, LabelOrderRecord, LabelShipmentRecord } from "../domain/label.js";
 import {
   generateFakeShipmentId,
   generateFakeTrackingNumber,
   generateMockLabelPdf,
   serviceCodeToLabel,
-} from "./mock-label-generator.ts";
+} from "./mock-label-generator.js";
 
 // Rate limiting configuration
 const LABEL_RATE_LIMIT = 10; // max 10 labels per minute per client

@@ -1,13 +1,13 @@
-import type { TransitionalSecrets } from "../../../../../../../packages/shared/src/config/secrets-adapter.ts";
+import type { TransitionalSecrets } from "../../../../../../../packages/shared/src/config/secrets-adapter.js";
 import type {
   LegacySyncStatusDto,
   LegacySyncTriggerResponseDto,
   ShipmentSyncResponseDto,
   ShipmentSyncStatusDto,
-} from "../../../../../../../packages/contracts/src/shipments/contracts.ts";
-import type { ShipmentRepository } from "./shipment-repository.ts";
-import type { ShipmentSyncAccountRecord } from "../domain/shipment.ts";
-import type { ShipstationV1Credentials, ShippingGateway } from "../../labels/application/shipping-gateway.ts";
+} from "../../../../../../../packages/contracts/src/shipments/contracts.js";
+import type { ShipmentRepository } from "./shipment-repository.js";
+import type { ShipmentSyncAccountRecord } from "../domain/shipment.js";
+import type { ShipstationV1Credentials, ShippingGateway } from "../../labels/application/shipping-gateway.js";
 
 function credentialsOrThrow(apiKey: string | null | undefined, apiSecret: string | null | undefined, secrets: TransitionalSecrets): ShipstationV1Credentials {
   const key = apiKey ?? secrets.shipstation?.api_key;

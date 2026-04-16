@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import type { CarrierAccountDto, ClearAndRefetchResultDto } from '../src/types/api.ts'
-import type { MarkupsMap } from '../src/types/markups.ts'
+import type { CarrierAccountDto, ClearAndRefetchResultDto } from '.js'
+import type { MarkupsMap } from '.js'
 import {
   buildSettingsMarkupRows,
   buildSettingsRefetchStatus,
@@ -11,7 +11,7 @@ import {
   getSettingsMarkupEmptyMessage,
   getSettingsMarkupSavedToastMessage,
   parseSettingsMarkupInput,
-} from '../src/components/Views/settings-parity.ts'
+} from '.js'
 
 function makeAccount(overrides: Partial<CarrierAccountDto> = {}): CarrierAccountDto {
   return {

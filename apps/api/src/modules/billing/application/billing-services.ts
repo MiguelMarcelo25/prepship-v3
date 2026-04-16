@@ -14,10 +14,10 @@ import type {
   SetDefaultBillingPackagePriceInput,
   SetDefaultBillingPackagePriceResult,
   UpdateBillingConfigInput,
-} from "../../../../../../../packages/contracts/src/billing/contracts.ts";
-import type { BillingRepository } from "./billing-repository.ts";
-import type { BillingReferenceRateFetcher } from "./billing-reference-rate-fetcher.ts";
-import { isBlockedRate } from "../../../common/prepship-config.ts";
+} from "../../../../../../../packages/contracts/src/billing/contracts.js";
+import type { BillingRepository } from "./billing-repository.js";
+import type { BillingReferenceRateFetcher } from "./billing-reference-rate-fetcher.js";
+import { isBlockedRate } from "../../../common/prepship-config.js";
 
 const DEFAULT_BILLING_CONFIG = {
   pickPackFee: 3,

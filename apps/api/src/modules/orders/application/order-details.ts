@@ -1,12 +1,12 @@
-import type { OrderSummaryDto } from "../../../../../../packages/contracts/src/orders/contracts.ts";
-import type { OrderRepository } from "./order-repository.ts";
-import type { RateServices } from "../../rates/application/rate-services.ts";
+import type { OrderSummaryDto } from "../../../../../../packages/contracts/src/orders/contracts.js";
+import type { OrderRepository } from "./order-repository.js";
+import type { RateServices } from "../../rates/application/rate-services.js";
 import {
   normalizeOrderBestRateDto,
   normalizeOrderSelectedRateDto,
   parseOrderRateJson,
-} from "./order-rate-dto.ts";
-import { resolveCarrierNickname } from "./carrier-resolver.ts";
+} from "./order-rate-dto.js";
+import { resolveCarrierNickname } from "./carrier-resolver.js";
 
 export class OrderDetailsService {
   private readonly repository: OrderRepository;

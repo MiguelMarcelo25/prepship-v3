@@ -1,6 +1,6 @@
-import { type PageMeta } from "../common/pagination.ts";
-import { parseOptionalIntegerParam } from "../common/input-validation.ts";
-import type { RateDto } from "../rates/contracts.ts";
+import { type PageMeta } from "../common/pagination.js";
+import { parseOptionalIntegerParam } from "../common/input-validation.js";
+import type { RateDto } from "../rates/contracts.js";
 
 export interface ListOrdersQuery {
   page: number;

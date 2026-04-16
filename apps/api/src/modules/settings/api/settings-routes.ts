@@ -1,7 +1,7 @@
-import { InputValidationError } from "../../../../../../packages/contracts/src/common/input-validation.ts";
-import { jsonResponse } from "../../../common/http/json.ts";
-import { route, type RouteDef } from "../../../app/router.ts";
-import type { SettingsHttpHandler } from "./settings-handler.ts";
+import { InputValidationError } from "../../../../../../packages/contracts/src/common/input-validation.js";
+import { jsonResponse } from "../../../common/http/json.js";
+import { route, type RouteDef } from "../../../app/router.js";
+import type { SettingsHttpHandler } from "./settings-handler.js";
 
 export function createSettingsRoutes(handler: SettingsHttpHandler): RouteDef[] {
   return [

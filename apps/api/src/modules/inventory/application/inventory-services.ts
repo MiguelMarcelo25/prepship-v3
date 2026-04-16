@@ -9,8 +9,8 @@ import type {
   SetInventoryParentInput,
   ReceiveInventoryInput,
   UpdateInventoryItemInput,
-} from "../../../../../../packages/contracts/src/inventory/contracts.ts";
-import type { InventoryRepository } from "./inventory-repository.ts";
+} from "../../../../../../packages/contracts/src/inventory/contracts.js";
+import type { InventoryRepository } from "./inventory-repository.js";
 
 function validateDimensionTriplet(label: string, values: number[]) {
   const count = values.filter((value) => value > 0).length;

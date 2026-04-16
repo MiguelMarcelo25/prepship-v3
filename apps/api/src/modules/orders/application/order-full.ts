@@ -1,5 +1,5 @@
-import type { OrderFullDto } from "../../../../../../packages/contracts/src/orders/contracts.ts";
-import type { OrderRepository } from "./order-repository.ts";
+import type { OrderFullDto } from "../../../../../../packages/contracts/src/orders/contracts.js";
+import type { OrderRepository } from "./order-repository.js";
 
 export class OrderFullService {
   private readonly repository: OrderRepository;

@@ -5,9 +5,9 @@ import type {
   AnalysisSkuQuery,
   AnalysisSkusResponse,
   TopSkuDto,
-} from "../../../../../../packages/contracts/src/analysis/contracts.ts";
-import { EXPEDITED_SERVICES } from "../../../common/prepship-config.ts";
-import type { AnalysisRepository } from "./analysis-repository.ts";
+} from "../../../../../../packages/contracts/src/analysis/contracts.js";
+import { EXPEDITED_SERVICES } from "../../../common/prepship-config.js";
+import type { AnalysisRepository } from "./analysis-repository.js";
 
 interface MutableSkuStats {
   sku: string;

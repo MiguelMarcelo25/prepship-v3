@@ -1,7 +1,7 @@
-import { InputValidationError } from "../../../../../../packages/contracts/src/common/input-validation.ts";
-import { jsonResponse } from "../../../common/http/json.ts";
-import { jsonRoute, route, type RouteDef } from "../../../app/router.ts";
-import type { LocationsHttpHandler } from "./locations-handler.ts";
+import { InputValidationError } from "../../../../../../packages/contracts/src/common/input-validation.js";
+import { jsonResponse } from "../../../common/http/json.js";
+import { jsonRoute, route, type RouteDef } from "../../../app/router.js";
+import type { LocationsHttpHandler } from "./locations-handler.js";
 
 function parseLocationId(rawLocationId: string): number {
   return Number.parseInt(rawLocationId, 10);

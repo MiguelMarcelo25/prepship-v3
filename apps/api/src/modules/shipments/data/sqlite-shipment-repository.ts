@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { ShipmentRepository } from "../application/shipment-repository.ts";
-import type { ShipmentSyncAccountRecord, ShipmentSyncRecord } from "../domain/shipment.ts";
+import type { ShipmentRepository } from "../application/shipment-repository.js";
+import type { ShipmentSyncAccountRecord, ShipmentSyncRecord } from "../domain/shipment.js";
 
 export class SqliteShipmentRepository implements ShipmentRepository {
   private readonly db: DatabaseSync;

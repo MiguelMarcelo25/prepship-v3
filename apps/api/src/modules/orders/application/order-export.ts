@@ -1,5 +1,5 @@
-import type { OrderExportQuery, OrderExportRow } from "../../../../../../packages/contracts/src/orders/contracts.ts";
-import type { OrderRepository } from "./order-repository.ts";
+import type { OrderExportQuery, OrderExportRow } from "../../../../../../packages/contracts/src/orders/contracts.js";
+import type { OrderRepository } from "./order-repository.js";
 
 function escapeCsv(value: unknown): string {
   if (value === null || value === undefined || value === "") return "";

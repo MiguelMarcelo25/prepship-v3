@@ -1,6 +1,6 @@
-import { InputValidationError } from "../../../../../../packages/contracts/src/common/input-validation.ts";
-import { jsonRoute, type RouteDef } from "../../../app/router.ts";
-import type { AnalysisHttpHandler } from "./analysis-handler.ts";
+import { InputValidationError } from "../../../../../../packages/contracts/src/common/input-validation.js";
+import { jsonRoute, type RouteDef } from "../../../app/router.js";
+import type { AnalysisHttpHandler } from "./analysis-handler.js";
 
 function getErrorStatus(error: unknown): number {
   return error instanceof InputValidationError ? 400 : 500;

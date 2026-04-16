@@ -8,8 +8,8 @@ import type {
   OrdersDailyStatsDto,
   OrderPicklistItemDto,
   ListOrdersQuery,
-} from "../../../../../../packages/contracts/src/orders/contracts.ts";
-import type { OrderRecord } from "../domain/order.ts";
+} from "../../../../../../packages/contracts/src/orders/contracts.js";
+import type { OrderRecord } from "../domain/order.js";
 
 export interface OrderListResult {
   orders: OrderRecord[];

@@ -2,9 +2,9 @@ import {
   parseBillingDetailsQuery,
   parseBillingPackagePricesQuery,
   parseBillingSummaryQuery,
-} from "../../../../../../packages/contracts/src/billing/contracts.ts";
-import { InputValidationError, parseOptionalIntegerParam } from "../../../../../../packages/contracts/src/common/input-validation.ts";
-import type { BillingServices } from "../application/billing-services.ts";
+} from "../../../../../../packages/contracts/src/billing/contracts.js";
+import { InputValidationError, parseOptionalIntegerParam } from "../../../../../../packages/contracts/src/common/input-validation.js";
+import type { BillingServices } from "../application/billing-services.js";
 
 export class BillingHttpHandler {
   private readonly services: BillingServices;

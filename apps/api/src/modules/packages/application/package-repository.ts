@@ -3,9 +3,9 @@ import type {
   PackageDto,
   PackageAdjustmentInput,
   SavePackageInput,
-} from "../../../../../../packages/contracts/src/packages/contracts.ts";
-import type { PackageRecord } from "../domain/package.ts";
-import type { ExternalCarrierPackageRecord } from "./package-sync-gateway.ts";
+} from "../../../../../../packages/contracts/src/packages/contracts.js";
+import type { PackageRecord } from "../domain/package.js";
+import type { ExternalCarrierPackageRecord } from "./package-sync-gateway.js";
 
 export interface PackageRepository {
   list(source?: string): Promise<PackageRecord[]>;

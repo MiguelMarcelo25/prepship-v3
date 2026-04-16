@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { GenerateManifestInput } from "../../../../../../../packages/contracts/src/manifests/contracts.ts";
-import type { ManifestRepository } from "../application/manifest-repository.ts";
-import type { ManifestShipmentRecord } from "../domain/manifest.ts";
+import type { GenerateManifestInput } from "../../../../../../../packages/contracts/src/manifests/contracts.js";
+import type { ManifestRepository } from "../application/manifest-repository.js";
+import type { ManifestShipmentRecord } from "../domain/manifest.js";
 
 export class SqliteManifestRepository implements ManifestRepository {
   private readonly db: DatabaseSync;

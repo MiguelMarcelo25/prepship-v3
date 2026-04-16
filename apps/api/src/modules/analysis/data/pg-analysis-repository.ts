@@ -1,11 +1,11 @@
-import type { PgClient } from "../../../../../../packages/shared/src/postgres/database.ts";
+import type { PgClient } from "../../../../../../packages/shared/src/postgres/database.js";
 import type {
   AnalysisDailySalesQuery,
   AnalysisSkuQuery,
-} from "../../../../../../packages/contracts/src/analysis/contracts.ts";
-import { EXCLUDED_STORE_IDS } from "../../../common/prepship-config.ts";
-import type { AnalysisRepository } from "../application/analysis-repository.ts";
-import type { AnalysisDailySalesRow, AnalysisOrderRow } from "../domain/analysis.ts";
+} from "../../../../../../packages/contracts/src/analysis/contracts.js";
+import { EXCLUDED_STORE_IDS } from "../../../common/prepship-config.js";
+import type { AnalysisRepository } from "../application/analysis-repository.js";
+import type { AnalysisDailySalesRow, AnalysisOrderRow } from "../domain/analysis.js";
 
 export class PgAnalysisRepository implements AnalysisRepository {
   constructor(private readonly sql: PgClient) {}

@@ -1,5 +1,5 @@
-import { ALLOWED_SETTINGS, type AllowedSettingKey } from "../../../../../../packages/contracts/src/settings/contracts.ts";
-import type { SettingsRepository } from "./settings-repository.ts";
+import { ALLOWED_SETTINGS, type AllowedSettingKey } from "../../../../../../packages/contracts/src/settings/contracts.js";
+import type { SettingsRepository } from "./settings-repository.js";
 
 const ALLOWED = new Set<string>(ALLOWED_SETTINGS);
 

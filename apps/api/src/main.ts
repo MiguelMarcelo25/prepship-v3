@@ -1,9 +1,9 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { bootstrapApi } from "./app/bootstrap.ts";
-import { startHttpServer } from "./app/server.ts";
-import { OrderStatusSyncWorker } from "./modules/sync/order-status-sync.ts";
+import { bootstrapApi } from "./app/bootstrap.js";
+import { startHttpServer } from "./app/server.js";
+import { OrderStatusSyncWorker } from "./modules/sync/order-status-sync.js";
 
 // Load .env file if it exists (from project root).
 // IMPORTANT: plist/environment values win — .env only fills in MISSING vars.

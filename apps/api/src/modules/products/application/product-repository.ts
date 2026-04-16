@@ -1,8 +1,8 @@
 import type {
   ProductBulkItemDto,
   SaveProductDefaultsInput,
-} from "../../../../../../packages/contracts/src/products/contracts.ts";
-import type { ProductDefaultsRecord, SaveProductDefaultsRecordResult } from "../domain/product.ts";
+} from "../../../../../../packages/contracts/src/products/contracts.js";
+import type { ProductDefaultsRecord, SaveProductDefaultsRecordResult } from "../domain/product.js";
 
 export interface ProductRepository {
   getBulk(skus: string[]): Promise<Record<string, ProductBulkItemDto>>;

@@ -1,4 +1,4 @@
-import { parseOptionalIntegerParam } from "../common/input-validation.ts";
+import { parseOptionalIntegerParam } from "../common/input-validation.js";
 
 export interface AnalysisSkuQuery {
   from?: string;

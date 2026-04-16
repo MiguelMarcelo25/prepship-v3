@@ -1,8 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { CreateClientInput, UpdateClientInput } from "../../../../../../packages/contracts/src/clients/contracts.ts";
-import type { InitStoreDto } from "../../../../../../packages/contracts/src/init/contracts.ts";
-import type { ClientRepository } from "../application/client-repository.ts";
-import type { ClientRecord } from "../domain/client.ts";
+import type { CreateClientInput, UpdateClientInput } from "../../../../../../packages/contracts/src/clients/contracts.js";
+import type { InitStoreDto } from "../../../../../../packages/contracts/src/init/contracts.js";
+import type { ClientRepository } from "../application/client-repository.js";
+import type { ClientRecord } from "../domain/client.js";
 
 export class SqliteClientRepository implements ClientRepository {
   private readonly db: DatabaseSync;

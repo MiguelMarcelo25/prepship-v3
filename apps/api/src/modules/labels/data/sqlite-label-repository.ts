@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { LabelRepository } from "../application/label-repository.ts";
-import type { MockLabelData } from "../application/mock-label-generator.ts";
+import type { LabelRepository } from "../application/label-repository.js";
+import type { MockLabelData } from "../application/mock-label-generator.js";
 import type {
   ExistingLabelRecord,
   LabelOrderRecord,
@@ -10,7 +10,7 @@ import type {
   ReturnLabelRecord,
   ShipmentEnrichmentInput,
   ShippingAccountContext,
-} from "../domain/label.ts";
+} from "../domain/label.js";
 
 interface ShippingContextRow {
   clientId: number | null;

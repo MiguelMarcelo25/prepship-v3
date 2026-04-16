@@ -1,7 +1,7 @@
 import type {
   SaveProductDefaultsInput,
-} from "../../../../../../packages/contracts/src/products/contracts.ts";
-import type { ProductRepository } from "./product-repository.ts";
+} from "../../../../../../packages/contracts/src/products/contracts.js";
+import type { ProductRepository } from "./product-repository.js";
 
 export class ProductServices {
   private readonly repository: ProductRepository;

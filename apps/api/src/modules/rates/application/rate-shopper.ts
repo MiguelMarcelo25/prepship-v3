@@ -1,4 +1,4 @@
-import type { RateDimsDto, RateDto } from "../../../../../../../packages/contracts/src/rates/contracts.ts";
+import type { RateDimsDto, RateDto } from "../../../../../../../packages/contracts/src/rates/contracts.js";
 
 export interface LiveRateShopRequest {
   weightOz: number;

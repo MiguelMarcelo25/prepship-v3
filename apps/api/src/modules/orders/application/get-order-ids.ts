@@ -1,8 +1,8 @@
 import type {
   GetOrderIdsQuery,
   GetOrderIdsResponse,
-} from "../../../../../../packages/contracts/src/orders/contracts.ts";
-import type { OrderRepository } from "./order-repository.ts";
+} from "../../../../../../packages/contracts/src/orders/contracts.js";
+import type { OrderRepository } from "./order-repository.js";
 
 export class GetOrderIdsService {
   private readonly repository: OrderRepository;

@@ -1,6 +1,6 @@
-import { jsonResponse } from "../../../common/http/json.ts";
-import { jsonRoute, route, type RouteDef } from "../../../app/router.ts";
-import type { ShipmentsHttpHandler } from "./shipments-handler.ts";
+import { jsonResponse } from "../../../common/http/json.js";
+import { jsonRoute, route, type RouteDef } from "../../../app/router.js";
+import type { ShipmentsHttpHandler } from "./shipments-handler.js";
 
 export function createShipmentRoutes(handler: ShipmentsHttpHandler): RouteDef[] {
   return [

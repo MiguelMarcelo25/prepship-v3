@@ -1,5 +1,5 @@
-import type { SettingsServices } from "../application/settings-services.ts";
-import type { RateServices } from "../../rates/application/rate-services.ts";
+import type { SettingsServices } from "../application/settings-services.js";
+import type { RateServices } from "../../rates/application/rate-services.js";
 
 export class SettingsHttpHandler {
   private readonly services: SettingsServices;

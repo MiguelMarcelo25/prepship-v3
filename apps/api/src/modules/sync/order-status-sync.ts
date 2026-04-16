@@ -26,8 +26,8 @@
  */
 
 import type { DatabaseSync } from "node:sqlite";
-import { resolveCarrierNickname } from "../orders/application/carrier-resolver.ts";
-import { getShipStationClient, type ShipStationClient } from "../../common/shipstation/client.ts";
+import { resolveCarrierNickname } from "../orders/application/carrier-resolver.js";
+import { getShipStationClient, type ShipStationClient } from "../../common/shipstation/client.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 

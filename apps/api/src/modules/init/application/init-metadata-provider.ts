@@ -1,4 +1,4 @@
-import type { CarrierAccountDto, InitStoreDto } from "../../../../../../../packages/contracts/src/init/contracts.ts";
+import type { CarrierAccountDto, InitStoreDto } from "../../../../../../../packages/contracts/src/init/contracts.js";
 
 export interface InitMetadataProvider {
   listStores(): Promise<InitStoreDto[]>;

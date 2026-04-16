@@ -1,4 +1,4 @@
-import { defaultSecretsPath, loadTransitionalSecrets, type TransitionalSecrets } from "../../../../packages/shared/src/config/secrets-adapter.ts";
+import { defaultSecretsPath, loadTransitionalSecrets, type TransitionalSecrets } from "../../../../packages/shared/src/config/secrets-adapter.js";
 
 export type DbProvider = "sqlite" | "memory" | "postgres";
 

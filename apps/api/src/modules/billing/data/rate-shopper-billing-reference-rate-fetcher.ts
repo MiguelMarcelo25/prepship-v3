@@ -1,7 +1,7 @@
-import type { RateDimsDto } from "../../../../../../../packages/contracts/src/rates/contracts.ts";
-import type { BillingReferenceRateFetcher, FetchBillingReferenceRateGroupInput } from "../application/billing-reference-rate-fetcher.ts";
-import type { RateShopper } from "../../rates/application/rate-shopper.ts";
-import type { RateRepository } from "../../rates/application/rate-repository.ts";
+import type { RateDimsDto } from "../../../../../../../packages/contracts/src/rates/contracts.js";
+import type { BillingReferenceRateFetcher, FetchBillingReferenceRateGroupInput } from "../application/billing-reference-rate-fetcher.js";
+import type { RateShopper } from "../../rates/application/rate-shopper.js";
+import type { RateRepository } from "../../rates/application/rate-repository.js";
 
 export class RateShopperBillingReferenceRateFetcher implements BillingReferenceRateFetcher {
   private readonly rateRepository: RateRepository;

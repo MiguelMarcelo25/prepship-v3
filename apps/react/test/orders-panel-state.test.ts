@@ -10,8 +10,8 @@ import {
   getPanelRequestedService,
   getPanelWarehouseId,
   getProductDefaultPackageId,
-} from '../src/components/Views/orders-panel-state.ts'
-import type { OrderFullDto, OrderSummaryDto, PackageDto, ProductDefaultsDto } from '../src/types/api.ts'
+} from '.js'
+import type { OrderFullDto, OrderSummaryDto, PackageDto, ProductDefaultsDto } from '.js'
 
 function makeOrder(overrides: Partial<OrderSummaryDto> = {}): OrderSummaryDto {
   return {

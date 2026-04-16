@@ -1,7 +1,7 @@
-import { InputValidationError, parseOptionalIntegerParam } from "../../../../../../packages/contracts/src/common/input-validation.ts";
-import { jsonResponse } from "../../../common/http/json.ts";
-import { jsonRoute, route, type RouteDef } from "../../../app/router.ts";
-import type { RatesHttpHandler } from "./rates-handler.ts";
+import { InputValidationError, parseOptionalIntegerParam } from "../../../../../../packages/contracts/src/common/input-validation.js";
+import { jsonResponse } from "../../../common/http/json.js";
+import { jsonRoute, route, type RouteDef } from "../../../app/router.js";
+import type { RatesHttpHandler } from "./rates-handler.js";
 
 function parseOptionalNumberQuery(value: string | null, name: string): number | undefined {
   if (value == null || value.trim() === "") return undefined;

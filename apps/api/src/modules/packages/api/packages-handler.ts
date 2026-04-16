@@ -2,8 +2,8 @@ import type {
   AutoCreatePackageInput,
   PackageAdjustmentInput,
   SavePackageInput,
-} from "../../../../../../packages/contracts/src/packages/contracts.ts";
-import type { PackageServices } from "../application/package-services.ts";
+} from "../../../../../../packages/contracts/src/packages/contracts.js";
+import type { PackageServices } from "../application/package-services.js";
 
 export class PackagesHttpHandler {
   private readonly services: PackageServices;

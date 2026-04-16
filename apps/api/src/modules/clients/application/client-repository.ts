@@ -1,6 +1,6 @@
-import type { CreateClientInput, UpdateClientInput } from "../../../../../../packages/contracts/src/clients/contracts.ts";
-import type { ClientRecord } from "../domain/client.ts";
-import type { InitStoreDto } from "../../../../../../packages/contracts/src/init/contracts.ts";
+import type { CreateClientInput, UpdateClientInput } from "../../../../../../packages/contracts/src/clients/contracts.js";
+import type { ClientRecord } from "../domain/client.js";
+import type { InitStoreDto } from "../../../../../../packages/contracts/src/init/contracts.js";
 
 export interface ClientRepository {
   listActive(): Promise<ClientRecord[]>;

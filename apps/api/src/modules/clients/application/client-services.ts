@@ -2,10 +2,10 @@ import type {
   ClientDto,
   CreateClientInput,
   UpdateClientInput,
-} from "../../../../../../packages/contracts/src/clients/contracts.ts";
-import type { ClientRepository } from "./client-repository.ts";
-import type { ClientRecord } from "../domain/client.ts";
-import type { InitMetadataProvider } from "../../init/application/init-metadata-provider.ts";
+} from "../../../../../../packages/contracts/src/clients/contracts.js";
+import type { ClientRepository } from "./client-repository.js";
+import type { ClientRecord } from "../domain/client.js";
+import type { InitMetadataProvider } from "../../init/application/init-metadata-provider.js";
 
 function rateSourceName(rateSourceClientId: number | null): string {
   return rateSourceClientId === 10 ? "KFG" : "DR PREPPER";

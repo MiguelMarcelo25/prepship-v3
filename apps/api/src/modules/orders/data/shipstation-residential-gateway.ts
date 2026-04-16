@@ -1,4 +1,4 @@
-import type { TransitionalSecrets } from "../../../../../../../packages/shared/src/config/secrets-adapter.ts";
+import type { TransitionalSecrets } from "../../../../../../../packages/shared/src/config/secrets-adapter.js";
 
 export interface ResidentialLookupResult {
   orderId: number;

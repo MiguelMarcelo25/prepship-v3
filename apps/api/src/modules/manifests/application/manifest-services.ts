@@ -1,5 +1,5 @@
-import type { GenerateManifestInput } from "../../../../../../../packages/contracts/src/manifests/contracts.ts";
-import type { ManifestRepository } from "./manifest-repository.ts";
+import type { GenerateManifestInput } from "../../../../../../../packages/contracts/src/manifests/contracts.js";
+import type { ManifestRepository } from "./manifest-repository.js";
 
 function escapeCsv(value: unknown): string {
   const text = String(value ?? "");

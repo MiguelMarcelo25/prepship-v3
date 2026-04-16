@@ -9,9 +9,9 @@ import type {
   OrderFullDto,
   OrdersDailyStatsDto,
   OrderPicklistItemDto,
-} from "../../../../../../packages/contracts/src/orders/contracts.ts";
-import type { OrderRepository, OrderListResult } from "../application/order-repository.ts";
-import type { OrderRecord } from "../domain/order.ts";
+} from "../../../../../../packages/contracts/src/orders/contracts.js";
+import type { OrderRepository, OrderListResult } from "../application/order-repository.js";
+import type { OrderRecord } from "../domain/order.js";
 
 export class SqliteOrderRepository implements OrderRepository {
   private readonly db: DatabaseSync;

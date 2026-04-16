@@ -7,7 +7,7 @@ import type {
   SetDefaultBillingPackagePriceResult,
   BillingSummaryQuery,
   UpdateBillingConfigInput,
-} from "../../../../../../../packages/contracts/src/billing/contracts.ts";
+} from "../../../../../../../packages/contracts/src/billing/contracts.js";
 import type {
   BillingClientRecord,
   BillingBackfillReferenceRateOrderRecord,
@@ -17,8 +17,8 @@ import type {
   BillingInvoiceRecord,
   BillingPackagePriceRecord,
   BillingSummaryRecord,
-} from "../domain/billing.ts";
-import type { RateDto } from "../../../../../../../packages/contracts/src/rates/contracts.ts";
+} from "../domain/billing.js";
+import type { RateDto } from "../../../../../../../packages/contracts/src/rates/contracts.js";
 
 export interface BillingRepository {
   listBillableClients(): Promise<BillingClientRecord[]>;

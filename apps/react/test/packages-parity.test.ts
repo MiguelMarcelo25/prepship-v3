@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import type { PackageDto } from '../src/types/api.ts'
+import type { PackageDto } from '.js'
 import {
   buildLowStockBannerText,
   buildPackageAdjustInput,
@@ -14,7 +14,7 @@ import {
   getPackageStockColor,
   getPackagesContentState,
   splitPackagesBySource,
-} from '../src/components/Views/packages-parity.ts'
+} from '.js'
 
 function makePackage(overrides: Partial<PackageDto> = {}): PackageDto {
   return {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { ApiError, apiClient } from '../src/api/client.ts'
+import { ApiError, apiClient } from '.js'
 import {
   buildManifestFilename,
   buildManifestPayload,
@@ -9,7 +9,7 @@ import {
   getManifestGenerateButtonLabel,
   getManifestStatusText,
   validateManifestForm,
-} from '../src/components/Views/manifests-parity.ts'
+} from '.js'
 
 test('manifest defaults mirror the web last-30-days modal reset behavior', () => {
   assert.deepEqual(

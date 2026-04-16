@@ -1,6 +1,6 @@
-import type { TransitionalSecrets } from "../../../../../../../packages/shared/src/config/secrets-adapter.ts";
-import type { ExternalCarrierPackageRecord, PackageSyncGateway } from "../application/package-sync-gateway.ts";
-import { getShipStationClient } from "../../../common/shipstation/client.ts";
+import type { TransitionalSecrets } from "../../../../../../../packages/shared/src/config/secrets-adapter.js";
+import type { ExternalCarrierPackageRecord, PackageSyncGateway } from "../application/package-sync-gateway.js";
+import { getShipStationClient } from "../../../common/shipstation/client.js";
 
 export class ShipstationPackageSyncGateway implements PackageSyncGateway {
   private readonly apiKey: string;

@@ -1,7 +1,7 @@
-import { InputValidationError } from "../../../../../../packages/contracts/src/common/input-validation.ts";
-import { jsonResponse } from "../../../common/http/json.ts";
-import { route, type RouteDef } from "../../../app/router.ts";
-import type { QueueHttpHandler } from "./queue-handler.ts";
+import { InputValidationError } from "../../../../../../packages/contracts/src/common/input-validation.js";
+import { jsonResponse } from "../../../common/http/json.js";
+import { route, type RouteDef } from "../../../app/router.js";
+import type { QueueHttpHandler } from "./queue-handler.js";
 
 function inputErrorStatus(error: unknown): number {
   return error instanceof InputValidationError ? 400 : 500;

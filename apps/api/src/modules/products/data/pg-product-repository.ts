@@ -1,10 +1,10 @@
-import type { PgClient } from "../../../../../../packages/shared/src/postgres/database.ts";
+import type { PgClient } from "../../../../../../packages/shared/src/postgres/database.js";
 import type {
   ProductBulkItemDto,
   SaveProductDefaultsInput,
-} from "../../../../../../packages/contracts/src/products/contracts.ts";
-import type { ProductRepository } from "../application/product-repository.ts";
-import type { ProductDefaultsRecord, SaveProductDefaultsRecordResult } from "../domain/product.ts";
+} from "../../../../../../packages/contracts/src/products/contracts.js";
+import type { ProductRepository } from "../application/product-repository.js";
+import type { ProductDefaultsRecord, SaveProductDefaultsRecordResult } from "../domain/product.js";
 
 export class PgProductRepository implements ProductRepository {
   constructor(private readonly sql: PgClient) {}

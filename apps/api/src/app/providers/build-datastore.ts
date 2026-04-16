@@ -1,8 +1,8 @@
-import type { AppConfig } from "../../config/app-config.ts";
-import { EXCLUDED_STORE_IDS } from "../../common/prepship-config.ts";
-import type { ApiDataStore } from "../datastore.ts";
-import { createMemoryDataStore, type MemoryDataStoreSeed } from "./memory-datastore.ts";
-import { createSqliteDataStore } from "./sqlite-datastore.ts";
+import type { AppConfig } from "../../config/app-config.js";
+import { EXCLUDED_STORE_IDS } from "../../common/prepship-config.js";
+import type { ApiDataStore } from "../datastore.js";
+import { createMemoryDataStore, type MemoryDataStoreSeed } from "./memory-datastore.js";
+import { createSqliteDataStore } from "./sqlite-datastore.js";
 
 export async function buildDataStore(config: AppConfig, memorySeed?: MemoryDataStoreSeed): Promise<ApiDataStore> {
   if (config.dbProvider === "memory") {

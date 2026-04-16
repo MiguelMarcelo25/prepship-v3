@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { AllowedSettingKey } from "../../../../../../packages/contracts/src/settings/contracts.ts";
-import type { SettingsRepository } from "../application/settings-repository.ts";
+import type { AllowedSettingKey } from "../../../../../../packages/contracts/src/settings/contracts.js";
+import type { SettingsRepository } from "../application/settings-repository.js";
 
 export class SqliteSettingsRepository implements SettingsRepository {
   private readonly db: DatabaseSync;

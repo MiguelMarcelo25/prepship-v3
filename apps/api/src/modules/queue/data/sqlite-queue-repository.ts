@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { QueueRepository } from "../application/queue-repository.ts";
-import type { AddToQueueInput, MultiSkuItem, PrintQueueEntry } from "../domain/queue.ts";
+import type { QueueRepository } from "../application/queue-repository.js";
+import type { AddToQueueInput, MultiSkuItem, PrintQueueEntry } from "../domain/queue.js";
 import { randomUUID } from "node:crypto";
 
 interface PrintQueueRow {

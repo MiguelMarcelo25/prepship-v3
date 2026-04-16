@@ -1,4 +1,4 @@
-import type { RateDimsDto } from "../../../../../../../packages/contracts/src/rates/contracts.ts";
+import type { RateDimsDto } from "../../../../../../../packages/contracts/src/rates/contracts.js";
 
 export interface FetchBillingReferenceRateGroupInput {
   orderIds: number[];

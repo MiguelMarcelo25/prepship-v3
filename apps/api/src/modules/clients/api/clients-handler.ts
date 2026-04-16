@@ -1,5 +1,5 @@
-import type { CreateClientInput, UpdateClientInput } from "../../../../../../packages/contracts/src/clients/contracts.ts";
-import type { ClientServices } from "../application/client-services.ts";
+import type { CreateClientInput, UpdateClientInput } from "../../../../../../packages/contracts/src/clients/contracts.js";
+import type { ClientServices } from "../application/client-services.js";
 
 export class ClientsHttpHandler {
   private readonly services: ClientServices;

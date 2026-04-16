@@ -1,5 +1,5 @@
-import type { SaveProductDefaultsInput } from "../../../../../../packages/contracts/src/products/contracts.ts";
-import type { ProductServices } from "../application/product-services.ts";
+import type { SaveProductDefaultsInput } from "../../../../../../packages/contracts/src/products/contracts.js";
+import type { ProductServices } from "../application/product-services.js";
 
 export class ProductsHttpHandler {
   private readonly services: ProductServices;

@@ -2,10 +2,10 @@ import type {
   InitCountsDto,
   InitDataDto,
   InitStoreDto,
-} from "../../../../../../../packages/contracts/src/init/contracts.ts";
-import type { InitMetadataProvider } from "./init-metadata-provider.ts";
-import type { InitRepository } from "./init-repository.ts";
-import type { ClientServices } from "../../../modules/clients/application/client-services.ts";
+} from "../../../../../../../packages/contracts/src/init/contracts.js";
+import type { InitMetadataProvider } from "./init-metadata-provider.js";
+import type { InitRepository } from "./init-repository.js";
+import type { ClientServices } from "../../../modules/clients/application/client-services.js";
 
 export class InitServices {
   private readonly repository: InitRepository;

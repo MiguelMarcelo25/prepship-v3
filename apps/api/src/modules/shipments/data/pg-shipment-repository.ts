@@ -1,6 +1,6 @@
-import type { PgClient } from "../../../../../../packages/shared/src/postgres/database.ts";
-import type { ShipmentRepository } from "../application/shipment-repository.ts";
-import type { ShipmentSyncAccountRecord, ShipmentSyncRecord } from "../domain/shipment.ts";
+import type { PgClient } from "../../../../../../packages/shared/src/postgres/database.js";
+import type { ShipmentRepository } from "../application/shipment-repository.js";
+import type { ShipmentSyncAccountRecord, ShipmentSyncRecord } from "../domain/shipment.js";
 
 export class PgShipmentRepository implements ShipmentRepository {
   constructor(private readonly sql: PgClient) {}

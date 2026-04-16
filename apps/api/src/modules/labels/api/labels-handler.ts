@@ -2,10 +2,10 @@ import type {
   CreateBatchLabelRequestDto,
   CreateLabelRequestDto,
   ReturnLabelRequestDto,
-} from "../../../../../../../packages/contracts/src/labels/contracts.ts";
-import { InputValidationError } from "../../../../../../packages/contracts/src/common/input-validation.ts";
-import type { LabelServices } from "../application/label-services.ts";
-import { generateMockLabelHtml } from "../application/mock-label-generator.ts";
+} from "../../../../../../../packages/contracts/src/labels/contracts.js";
+import { InputValidationError } from "../../../../../../packages/contracts/src/common/input-validation.js";
+import type { LabelServices } from "../application/label-services.js";
+import { generateMockLabelHtml } from "../application/mock-label-generator.js";
 
 export class LabelsHttpHandler {
   private readonly services: LabelServices;

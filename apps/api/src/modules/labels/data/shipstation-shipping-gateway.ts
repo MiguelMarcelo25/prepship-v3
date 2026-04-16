@@ -1,4 +1,4 @@
-import type { TransitionalSecrets } from "../../../../../../../packages/shared/src/config/secrets-adapter.ts";
+import type { TransitionalSecrets } from "../../../../../../../packages/shared/src/config/secrets-adapter.js";
 import type {
   CreateExternalLabelInput,
   CreatedExternalLabel,
@@ -10,8 +10,8 @@ import type {
   ShipstationLabelRecord,
   ShipstationShipmentDetails,
   ShipstationV1Credentials,
-} from "../application/shipping-gateway.ts";
-import { getShipStationClient } from "../../../common/shipstation/client.ts";
+} from "../application/shipping-gateway.js";
+import { getShipStationClient } from "../../../common/shipstation/client.js";
 
 function parseNumber(value: unknown): number | null {
   const parsed = Number(value);

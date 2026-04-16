@@ -1,6 +1,6 @@
-import type { PgClient } from "../../../../../../packages/shared/src/postgres/database.ts";
-import type { LabelRepository } from "../application/label-repository.ts";
-import type { MockLabelData } from "../application/mock-label-generator.ts";
+import type { PgClient } from "../../../../../../packages/shared/src/postgres/database.js";
+import type { LabelRepository } from "../application/label-repository.js";
+import type { MockLabelData } from "../application/mock-label-generator.js";
 import type {
   ExistingLabelRecord,
   LabelOrderRecord,
@@ -10,7 +10,7 @@ import type {
   ReturnLabelRecord,
   ShipmentEnrichmentInput,
   ShippingAccountContext,
-} from "../domain/label.ts";
+} from "../domain/label.js";
 
 interface ShipmentLookupRow {
   shipmentId: number;

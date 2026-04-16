@@ -1,4 +1,4 @@
-import { jsonResponse } from "../common/http/json.ts";
+import { jsonResponse } from "../common/http/json.js";
 
 export interface RouteContext {
   request: Request;

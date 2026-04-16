@@ -1,5 +1,5 @@
-import type { SaveLocationInput } from "../../../../../../packages/contracts/src/locations/contracts.ts";
-import type { LocationRecord } from "../domain/location.ts";
+import type { SaveLocationInput } from "../../../../../../packages/contracts/src/locations/contracts.js";
+import type { LocationRecord } from "../domain/location.js";
 
 export interface LocationRepository {
   list(): Promise<LocationRecord[]>;

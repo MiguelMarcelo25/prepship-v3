@@ -8,8 +8,8 @@ import {
   formatSyncPill,
   groupPrintQueueEntries,
   resolveColumnPrefs,
-} from '../src/components/Views/orders-parity.ts'
-import type { OrderSummaryDto } from '../src/types/api.ts'
+} from '.js'
+import type { OrderSummaryDto } from '.js'
 
 const baseColumns = [
   { key: 'select', label: '', width: 34 },

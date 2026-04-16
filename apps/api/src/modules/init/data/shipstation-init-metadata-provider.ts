@@ -1,7 +1,7 @@
-import type { TransitionalSecrets } from "../../../../../../../packages/shared/src/config/secrets-adapter.ts";
-import type { CarrierAccountDto, InitStoreDto } from "../../../../../../../packages/contracts/src/init/contracts.ts";
-import type { InitMetadataProvider } from "../application/init-metadata-provider.ts";
-import { getShipStationClient } from "../../../common/shipstation/client.ts";
+import type { TransitionalSecrets } from "../../../../../../../packages/shared/src/config/secrets-adapter.js";
+import type { CarrierAccountDto, InitStoreDto } from "../../../../../../../packages/contracts/src/init/contracts.js";
+import type { InitMetadataProvider } from "../application/init-metadata-provider.js";
+import { getShipStationClient } from "../../../common/shipstation/client.js";
 
 interface CacheEntry<T> {
   data: T | null;

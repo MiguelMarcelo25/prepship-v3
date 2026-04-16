@@ -1,4 +1,4 @@
-import type { ShipmentServices } from "../application/shipment-services.ts";
+import type { ShipmentServices } from "../application/shipment-services.js";
 
 export class ShipmentsHttpHandler {
   private readonly services: ShipmentServices;

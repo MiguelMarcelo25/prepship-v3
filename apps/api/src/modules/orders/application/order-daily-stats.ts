@@ -1,4 +1,4 @@
-import type { OrderRepository } from "./order-repository.ts";
+import type { OrderRepository } from "./order-repository.js";
 
 export class OrderDailyStatsService {
   private readonly repository: OrderRepository;

@@ -1,8 +1,8 @@
 import {
   parseAnalysisDailySalesQuery,
   parseAnalysisSkuQuery,
-} from "../../../../../../packages/contracts/src/analysis/contracts.ts";
-import type { AnalysisServices } from "../application/analysis-services.ts";
+} from "../../../../../../packages/contracts/src/analysis/contracts.js";
+import type { AnalysisServices } from "../application/analysis-services.js";
 
 export class AnalysisHttpHandler {
   private readonly services: AnalysisServices;

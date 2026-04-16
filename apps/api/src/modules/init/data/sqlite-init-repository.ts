@@ -4,8 +4,8 @@ import type {
   InitStoreDto,
   OrdersByStatusDto,
   OrdersByStatusStoreDto,
-} from "../../../../../../../packages/contracts/src/init/contracts.ts";
-import type { InitRepository } from "../application/init-repository.ts";
+} from "../../../../../../../packages/contracts/src/init/contracts.js";
+import type { InitRepository } from "../application/init-repository.js";
 
 interface ClientStoreRow {
   name: string;

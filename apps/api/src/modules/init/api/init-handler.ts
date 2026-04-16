@@ -1,4 +1,4 @@
-import type { InitServices } from "../application/init-services.ts";
+import type { InitServices } from "../application/init-services.js";
 
 export class InitHttpHandler {
   private readonly services: InitServices;

@@ -1,7 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { SaveLocationInput } from "../../../../../../packages/contracts/src/locations/contracts.ts";
-import type { LocationRepository } from "../application/location-repository.ts";
-import type { LocationRecord } from "../domain/location.ts";
+import type { SaveLocationInput } from "../../../../../../packages/contracts/src/locations/contracts.js";
+import type { LocationRepository } from "../application/location-repository.js";
+import type { LocationRecord } from "../domain/location.js";
 
 export class SqliteLocationRepository implements LocationRepository {
   private readonly db: DatabaseSync;

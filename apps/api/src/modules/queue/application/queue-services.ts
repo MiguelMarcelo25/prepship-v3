@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import type { QueueRepository } from "./queue-repository.ts";
-import type { AddToQueueInput, PrintQueueEntry, PrintQueueSummary } from "../domain/queue.ts";
-import { InputValidationError } from "../../../../../../packages/contracts/src/common/input-validation.ts";
+import type { QueueRepository } from "./queue-repository.js";
+import type { AddToQueueInput, PrintQueueEntry, PrintQueueSummary } from "../domain/queue.js";
+import { InputValidationError } from "../../../../../../packages/contracts/src/common/input-validation.js";
 
 // ─── In-memory PDF merge job tracker ─────────────────────────────────────────
 export interface MergeJob {

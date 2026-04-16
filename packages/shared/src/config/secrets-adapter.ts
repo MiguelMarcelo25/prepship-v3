@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { repoRootFromModule, resolveV1RepoRoot } from "./repo-paths.ts";
+import { repoRootFromModule, resolveV1RepoRoot } from "./repo-paths.js";
 
 export interface TransitionalSecrets {
   shipstation?: {

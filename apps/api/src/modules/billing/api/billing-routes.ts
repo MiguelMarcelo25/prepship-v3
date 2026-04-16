@@ -1,7 +1,7 @@
-import { InputValidationError } from "../../../../../../packages/contracts/src/common/input-validation.ts";
-import { jsonResponse } from "../../../common/http/json.ts";
-import { getErrorMessage, jsonRoute, route, type RouteDef } from "../../../app/router.ts";
-import type { BillingHttpHandler } from "./billing-handler.ts";
+import { InputValidationError } from "../../../../../../packages/contracts/src/common/input-validation.js";
+import { jsonResponse } from "../../../common/http/json.js";
+import { getErrorMessage, jsonRoute, route, type RouteDef } from "../../../app/router.js";
+import type { BillingHttpHandler } from "./billing-handler.js";
 
 function parseClientId(rawClientId: string): number {
   return Number.parseInt(rawClientId, 10);

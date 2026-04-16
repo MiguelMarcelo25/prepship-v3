@@ -1,8 +1,8 @@
-import { InputValidationError } from "../../../../../../packages/contracts/src/common/input-validation.ts";
+import { InputValidationError } from "../../../../../../packages/contracts/src/common/input-validation.js";
 import type {
   OrderBestRateDto,
   OrderSelectedRateDto,
-} from "../../../../../../packages/contracts/src/orders/contracts.ts";
+} from "../../../../../../packages/contracts/src/orders/contracts.js";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);

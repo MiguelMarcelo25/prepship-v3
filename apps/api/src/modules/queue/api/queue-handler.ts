@@ -1,5 +1,5 @@
-import type { QueueServices } from "../application/queue-services.ts";
-import { InputValidationError } from "../../../../../../packages/contracts/src/common/input-validation.ts";
+import type { QueueServices } from "../application/queue-services.js";
+import { InputValidationError } from "../../../../../../packages/contracts/src/common/input-validation.js";
 
 export class QueueHttpHandler {
   private readonly services: QueueServices;

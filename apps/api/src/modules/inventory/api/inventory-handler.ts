@@ -5,10 +5,10 @@ import type {
   SaveParentSkuInput,
   SetInventoryParentInput,
   UpdateInventoryItemInput,
-} from "../../../../../../packages/contracts/src/inventory/contracts.ts";
-import { InputValidationError, parseOptionalIntegerParam } from "../../../../../../packages/contracts/src/common/input-validation.ts";
-import { parseListInventoryLedgerQuery, parseListInventoryQuery } from "../../../../../../packages/contracts/src/inventory/contracts.ts";
-import type { InventoryServices } from "../application/inventory-services.ts";
+} from "../../../../../../packages/contracts/src/inventory/contracts.js";
+import { InputValidationError, parseOptionalIntegerParam } from "../../../../../../packages/contracts/src/common/input-validation.js";
+import { parseListInventoryLedgerQuery, parseListInventoryQuery } from "../../../../../../packages/contracts/src/inventory/contracts.js";
+import type { InventoryServices } from "../application/inventory-services.js";
 
 export class InventoryHttpHandler {
   private readonly services: InventoryServices;

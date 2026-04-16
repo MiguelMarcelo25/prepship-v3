@@ -1,4 +1,4 @@
-import type { PgClient } from "../../../../../../packages/shared/src/postgres/database.ts";
+import type { PgClient } from "../../../../../../packages/shared/src/postgres/database.js";
 import type {
   AdjustInventoryInput,
   BulkUpdateInventoryDimensionsInput,
@@ -11,9 +11,9 @@ import type {
   SaveParentSkuInput,
   SetInventoryParentInput,
   UpdateInventoryItemInput,
-} from "../../../../../../packages/contracts/src/inventory/contracts.ts";
-import type { InventoryRepository } from "../application/inventory-repository.ts";
-import type { InventoryAlertRecord, InventoryRecord } from "../domain/inventory.ts";
+} from "../../../../../../packages/contracts/src/inventory/contracts.js";
+import type { InventoryRepository } from "../application/inventory-repository.js";
+import type { InventoryAlertRecord, InventoryRecord } from "../domain/inventory.js";
 
 export class PgInventoryRepository implements InventoryRepository {
   constructor(private readonly sql: PgClient) {}

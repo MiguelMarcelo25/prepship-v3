@@ -1,5 +1,5 @@
-import type { AddressRecord } from "../domain/label.ts";
-import type { OrderSelectedRateDto } from "../../../../../../packages/contracts/src/orders/contracts.ts";
+import type { AddressRecord } from "../domain/label.js";
+import type { OrderSelectedRateDto } from "../../../../../../packages/contracts/src/orders/contracts.js";
 
 export interface ShipstationV1Credentials {
   apiKey: string;

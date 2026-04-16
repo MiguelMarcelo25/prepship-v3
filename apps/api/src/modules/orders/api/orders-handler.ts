@@ -1,14 +1,14 @@
-import { parseGetOrderIdsQuery, parseListOrdersQuery, parseOrderExportQuery, parseOrderPicklistQuery } from "../../../../../../packages/contracts/src/orders/contracts.ts";
-import { InputValidationError } from "../../../../../../packages/contracts/src/common/input-validation.ts";
-import type { OrderFullService } from "../application/order-full.ts";
-import type { OrderDetailsService } from "../application/order-details.ts";
-import type { OrderDailyStatsService } from "../application/order-daily-stats.ts";
-import type { OrderExportService } from "../application/order-export.ts";
-import type { GetOrderIdsService } from "../application/get-order-ids.ts";
-import type { ListOrdersService } from "../application/list-orders.ts";
-import type { OrderPicklistService } from "../application/order-picklist.ts";
-import type { UpdateOrderOverridesService } from "../application/update-order-overrides.ts";
-import { assertPersistedOrderBestRateDto } from "../application/order-rate-dto.ts";
+import { parseGetOrderIdsQuery, parseListOrdersQuery, parseOrderExportQuery, parseOrderPicklistQuery } from "../../../../../../packages/contracts/src/orders/contracts.js";
+import { InputValidationError } from "../../../../../../packages/contracts/src/common/input-validation.js";
+import type { OrderFullService } from "../application/order-full.js";
+import type { OrderDetailsService } from "../application/order-details.js";
+import type { OrderDailyStatsService } from "../application/order-daily-stats.js";
+import type { OrderExportService } from "../application/order-export.js";
+import type { GetOrderIdsService } from "../application/get-order-ids.js";
+import type { ListOrdersService } from "../application/list-orders.js";
+import type { OrderPicklistService } from "../application/order-picklist.js";
+import type { UpdateOrderOverridesService } from "../application/update-order-overrides.js";
+import { assertPersistedOrderBestRateDto } from "../application/order-rate-dto.js";
 
 export class OrdersHttpHandler {
   private readonly listOrdersService: ListOrdersService;

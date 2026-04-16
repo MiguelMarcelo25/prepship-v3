@@ -3,8 +3,8 @@ import type {
   CarrierLookupResponseDto,
   GetCachedRatesQuery,
   LiveRatesRequestDto,
-} from "../../../../../../../packages/contracts/src/rates/contracts.ts";
-import type { RateServices } from "../application/rate-services.ts";
+} from "../../../../../../../packages/contracts/src/rates/contracts.js";
+import type { RateServices } from "../application/rate-services.js";
 
 export class RatesHttpHandler {
   private readonly services: RateServices;

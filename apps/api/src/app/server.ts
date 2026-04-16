@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import { rateLimiter } from "./rate-limit.ts";
+import { rateLimiter } from "./rate-limit.js";
 
 export function startHttpServer(handler: (request: Request) => Promise<Response>, port: number): Promise<Server> {
   const server = createServer(async (req, res) => {

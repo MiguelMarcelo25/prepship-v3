@@ -1,6 +1,6 @@
-import { InputValidationError, parseOptionalIntegerParam } from "../../../../../../packages/contracts/src/common/input-validation.ts";
-import { jsonRoute, type RouteDef } from "../../../app/router.ts";
-import type { InventoryHttpHandler } from "./inventory-handler.ts";
+import { InputValidationError, parseOptionalIntegerParam } from "../../../../../../packages/contracts/src/common/input-validation.js";
+import { jsonRoute, type RouteDef } from "../../../app/router.js";
+import type { InventoryHttpHandler } from "./inventory-handler.js";
 
 function parseInventoryId(rawInventoryId: string): number {
   return Number.parseInt(rawInventoryId, 10);

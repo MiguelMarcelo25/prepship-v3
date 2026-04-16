@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import type { CarrierAccountDto } from "../../../../../../../packages/contracts/src/init/contracts.ts";
-import type { RateDimsDto, RateDto } from "../../../../../../../packages/contracts/src/rates/contracts.ts";
-import { BLOCKED_CARRIER_IDS, CARRIER_ACCOUNTS_V2 } from "../../../common/prepship-config.ts";
-import type { CachedRateRecord, RateRepository, RateSourceConfig, RefetchRateOrderRecord } from "../application/rate-repository.ts";
+import type { CarrierAccountDto } from "../../../../../../../packages/contracts/src/init/contracts.js";
+import type { RateDimsDto, RateDto } from "../../../../../../../packages/contracts/src/rates/contracts.js";
+import { BLOCKED_CARRIER_IDS, CARRIER_ACCOUNTS_V2 } from "../../../common/prepship-config.js";
+import type { CachedRateRecord, RateRepository, RateSourceConfig, RefetchRateOrderRecord } from "../application/rate-repository.js";
 
 interface StoreClientRow {
   clientId: number;

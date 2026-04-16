@@ -1,4 +1,4 @@
-import type { ShipmentSyncAccountRecord, ShipmentSyncRecord } from "../domain/shipment.ts";
+import type { ShipmentSyncAccountRecord, ShipmentSyncRecord } from "../domain/shipment.js";
 
 export interface ShipmentRepository {
   countActiveShipments(): Promise<number>;

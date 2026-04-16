@@ -1,7 +1,7 @@
 import type {
   InitCountsDto,
   InitStoreDto,
-} from "../../../../../../../packages/contracts/src/init/contracts.ts";
+} from "../../../../../../../packages/contracts/src/init/contracts.js";
 
 export interface InitRepository {
   listLocalClientStores(): Promise<InitStoreDto[]>;

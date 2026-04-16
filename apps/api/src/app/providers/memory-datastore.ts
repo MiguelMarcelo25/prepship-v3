@@ -7,24 +7,24 @@ import type {
   BillingSummaryQuery,
   SetDefaultBillingPackagePriceResult,
   UpdateBillingConfigInput,
-} from "../../../../../../packages/contracts/src/billing/contracts.ts";
-import type { CarrierAccountDto, InitCountsDto, InitStoreDto } from "../../../../../../packages/contracts/src/init/contracts.ts";
-import type { AdjustInventoryInput, ListInventoryLedgerQuery, ListInventoryQuery, ReceiveInventoryInput, ReceiveInventoryResultDto, UpdateInventoryItemInput } from "../../../../../../packages/contracts/src/inventory/contracts.ts";
-import type { BulkUpdateInventoryDimensionsInput, ParentSkuDetailDto, ParentSkuDto, SaveParentSkuInput, SetInventoryParentInput } from "../../../../../../packages/contracts/src/inventory/contracts.ts";
-import type { ExistingLabelRecord, LabelOrderRecord, LabelShipmentRecord, PersistedShipmentInput, ResolvedPackageDimensions, ReturnLabelRecord, ShippingAccountContext } from "../../modules/labels/domain/label.ts";
-import type { LabelRepository } from "../../modules/labels/application/label-repository.ts";
-import type { SaveLocationInput } from "../../../../../../packages/contracts/src/locations/contracts.ts";
-import type { GetOrderIdsQuery, GetOrderPicklistQuery, ListOrdersQuery, OrderBestRateDto, OrderExportQuery, OrderExportRow, OrderFullDto, OrderPicklistItemDto, OrdersDailyStatsDto } from "../../../../../../packages/contracts/src/orders/contracts.ts";
-import type { AutoCreatePackageInput, PackageAdjustmentInput, SavePackageInput } from "../../../../../../packages/contracts/src/packages/contracts.ts";
-import type { SaveProductDefaultsInput } from "../../../../../../packages/contracts/src/products/contracts.ts";
-import type { RateDimsDto, RateDto } from "../../../../../../packages/contracts/src/rates/contracts.ts";
-import type { ShipmentRepository } from "../../modules/shipments/application/shipment-repository.ts";
-import type { ShipmentSyncAccountRecord, ShipmentSyncRecord } from "../../modules/shipments/domain/shipment.ts";
-import { BLOCKED_CARRIER_IDS, CARRIER_ACCOUNTS_V2 } from "../../common/prepship-config.ts";
-import type { ApiDataStore } from "../datastore.ts";
-import type { AnalysisRepository } from "../../modules/analysis/application/analysis-repository.ts";
-import type { AnalysisDailySalesRow, AnalysisOrderRow } from "../../modules/analysis/domain/analysis.ts";
-import type { BillingRepository } from "../../modules/billing/application/billing-repository.ts";
+} from "../../../../../../packages/contracts/src/billing/contracts.js";
+import type { CarrierAccountDto, InitCountsDto, InitStoreDto } from "../../../../../../packages/contracts/src/init/contracts.js";
+import type { AdjustInventoryInput, ListInventoryLedgerQuery, ListInventoryQuery, ReceiveInventoryInput, ReceiveInventoryResultDto, UpdateInventoryItemInput } from "../../../../../../packages/contracts/src/inventory/contracts.js";
+import type { BulkUpdateInventoryDimensionsInput, ParentSkuDetailDto, ParentSkuDto, SaveParentSkuInput, SetInventoryParentInput } from "../../../../../../packages/contracts/src/inventory/contracts.js";
+import type { ExistingLabelRecord, LabelOrderRecord, LabelShipmentRecord, PersistedShipmentInput, ResolvedPackageDimensions, ReturnLabelRecord, ShippingAccountContext } from "../../modules/labels/domain/label.js";
+import type { LabelRepository } from "../../modules/labels/application/label-repository.js";
+import type { SaveLocationInput } from "../../../../../../packages/contracts/src/locations/contracts.js";
+import type { GetOrderIdsQuery, GetOrderPicklistQuery, ListOrdersQuery, OrderBestRateDto, OrderExportQuery, OrderExportRow, OrderFullDto, OrderPicklistItemDto, OrdersDailyStatsDto } from "../../../../../../packages/contracts/src/orders/contracts.js";
+import type { AutoCreatePackageInput, PackageAdjustmentInput, SavePackageInput } from "../../../../../../packages/contracts/src/packages/contracts.js";
+import type { SaveProductDefaultsInput } from "../../../../../../packages/contracts/src/products/contracts.js";
+import type { RateDimsDto, RateDto } from "../../../../../../packages/contracts/src/rates/contracts.js";
+import type { ShipmentRepository } from "../../modules/shipments/application/shipment-repository.js";
+import type { ShipmentSyncAccountRecord, ShipmentSyncRecord } from "../../modules/shipments/domain/shipment.js";
+import { BLOCKED_CARRIER_IDS, CARRIER_ACCOUNTS_V2 } from "../../common/prepship-config.js";
+import type { ApiDataStore } from "../datastore.js";
+import type { AnalysisRepository } from "../../modules/analysis/application/analysis-repository.js";
+import type { AnalysisDailySalesRow, AnalysisOrderRow } from "../../modules/analysis/domain/analysis.js";
+import type { BillingRepository } from "../../modules/billing/application/billing-repository.js";
 import type {
   BillingBackfillReferenceRateOrderRecord,
   BillingClientRecord,
@@ -33,28 +33,28 @@ import type {
   BillingFetchReferenceRateOrderRecord,
   BillingPackagePriceRecord,
   BillingSummaryRecord,
-} from "../../modules/billing/domain/billing.ts";
-import type { BillingInvoiceRecord } from "../../modules/billing/domain/billing.ts";
-import type { ClientRepository } from "../../modules/clients/application/client-repository.ts";
-import type { ClientRecord } from "../../modules/clients/domain/client.ts";
-import type { InitRepository } from "../../modules/init/application/init-repository.ts";
-import type { InventoryRepository } from "../../modules/inventory/application/inventory-repository.ts";
-import type { InventoryAlertRecord, InventoryRecord } from "../../modules/inventory/domain/inventory.ts";
-import { InMemoryShipFromState, type ShipFromState } from "../../modules/locations/application/ship-from-state.ts";
-import type { LocationRepository } from "../../modules/locations/application/location-repository.ts";
-import type { LocationRecord } from "../../modules/locations/domain/location.ts";
-import type { ManifestRepository } from "../../modules/manifests/application/manifest-repository.ts";
-import type { ManifestShipmentRecord } from "../../modules/manifests/domain/manifest.ts";
-import type { OrderListResult, OrderRepository } from "../../modules/orders/application/order-repository.ts";
-import type { OrderRecord } from "../../modules/orders/domain/order.ts";
-import type { PackageRepository } from "../../modules/packages/application/package-repository.ts";
-import type { PackageRecord } from "../../modules/packages/domain/package.ts";
-import type { ProductRepository } from "../../modules/products/application/product-repository.ts";
-import type { ProductDefaultsRecord, SaveProductDefaultsRecordResult } from "../../modules/products/domain/product.ts";
-import type { CachedRateRecord, RateRepository, RateSourceConfig, RefetchRateOrderRecord } from "../../modules/rates/application/rate-repository.ts";
-import type { SettingsRepository } from "../../modules/settings/application/settings-repository.ts";
-import type { QueueRepository } from "../../modules/queue/application/queue-repository.ts";
-import type { AddToQueueInput, PrintQueueEntry } from "../../modules/queue/domain/queue.ts";
+} from "../../modules/billing/domain/billing.js";
+import type { BillingInvoiceRecord } from "../../modules/billing/domain/billing.js";
+import type { ClientRepository } from "../../modules/clients/application/client-repository.js";
+import type { ClientRecord } from "../../modules/clients/domain/client.js";
+import type { InitRepository } from "../../modules/init/application/init-repository.js";
+import type { InventoryRepository } from "../../modules/inventory/application/inventory-repository.js";
+import type { InventoryAlertRecord, InventoryRecord } from "../../modules/inventory/domain/inventory.js";
+import { InMemoryShipFromState, type ShipFromState } from "../../modules/locations/application/ship-from-state.js";
+import type { LocationRepository } from "../../modules/locations/application/location-repository.js";
+import type { LocationRecord } from "../../modules/locations/domain/location.js";
+import type { ManifestRepository } from "../../modules/manifests/application/manifest-repository.js";
+import type { ManifestShipmentRecord } from "../../modules/manifests/domain/manifest.js";
+import type { OrderListResult, OrderRepository } from "../../modules/orders/application/order-repository.js";
+import type { OrderRecord } from "../../modules/orders/domain/order.js";
+import type { PackageRepository } from "../../modules/packages/application/package-repository.js";
+import type { PackageRecord } from "../../modules/packages/domain/package.js";
+import type { ProductRepository } from "../../modules/products/application/product-repository.js";
+import type { ProductDefaultsRecord, SaveProductDefaultsRecordResult } from "../../modules/products/domain/product.js";
+import type { CachedRateRecord, RateRepository, RateSourceConfig, RefetchRateOrderRecord } from "../../modules/rates/application/rate-repository.js";
+import type { SettingsRepository } from "../../modules/settings/application/settings-repository.js";
+import type { QueueRepository } from "../../modules/queue/application/queue-repository.js";
+import type { AddToQueueInput, PrintQueueEntry } from "../../modules/queue/domain/queue.js";
 import { randomUUID } from "node:crypto";
 
 interface MemoryOrderEntry {

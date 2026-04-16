@@ -3,10 +3,10 @@ import type {
   PackageAdjustmentInput,
   PackageDto,
   SavePackageInput,
-} from "../../../../../../packages/contracts/src/packages/contracts.ts";
-import type { PackageRepository } from "./package-repository.ts";
-import type { PackageSyncGateway } from "./package-sync-gateway.ts";
-import type { PackageRecord } from "../domain/package.ts";
+} from "../../../../../../packages/contracts/src/packages/contracts.js";
+import type { PackageRepository } from "./package-repository.js";
+import type { PackageSyncGateway } from "./package-sync-gateway.js";
+import type { PackageRecord } from "../domain/package.js";
 
 function mapPackage(record: PackageRecord): PackageDto {
   return {

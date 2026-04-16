@@ -1,5 +1,5 @@
-import type { SaveLocationInput } from "../../../../../../packages/contracts/src/locations/contracts.ts";
-import type { LocationServices } from "../application/location-services.ts";
+import type { SaveLocationInput } from "../../../../../../packages/contracts/src/locations/contracts.js";
+import type { LocationServices } from "../application/location-services.js";
 
 export class LocationsHttpHandler {
   private readonly services: LocationServices;

@@ -7,9 +7,9 @@ import type {
   LiveRatesRequestDto,
   RateDimsDto,
   RateDto,
-} from "../../../../../../../packages/contracts/src/rates/contracts.ts";
-import type { RateRepository, RefetchRateOrderRecord } from "./rate-repository.ts";
-import type { RateShopper } from "./rate-shopper.ts";
+} from "../../../../../../../packages/contracts/src/rates/contracts.js";
+import type { RateRepository, RefetchRateOrderRecord } from "./rate-repository.js";
+import type { RateShopper } from "./rate-shopper.js";
 
 const CACHE_VERSION = "v9";
 

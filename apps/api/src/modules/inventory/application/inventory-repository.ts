@@ -10,8 +10,8 @@ import type {
   SaveParentSkuInput,
   SetInventoryParentInput,
   UpdateInventoryItemInput,
-} from "../../../../../../packages/contracts/src/inventory/contracts.ts";
-import type { InventoryAlertRecord, InventoryRecord } from "../domain/inventory.ts";
+} from "../../../../../../packages/contracts/src/inventory/contracts.js";
+import type { InventoryAlertRecord, InventoryRecord } from "../domain/inventory.js";
 
 export interface InventoryRepository {
   list(query: ListInventoryQuery): Promise<InventoryRecord[]>;

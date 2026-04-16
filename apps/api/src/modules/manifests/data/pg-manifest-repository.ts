@@ -1,7 +1,7 @@
-import type { PgClient } from "../../../../../../packages/shared/src/postgres/database.ts";
-import type { GenerateManifestInput } from "../../../../../../../packages/contracts/src/manifests/contracts.ts";
-import type { ManifestRepository } from "../application/manifest-repository.ts";
-import type { ManifestShipmentRecord } from "../domain/manifest.ts";
+import type { PgClient } from "../../../../../../packages/shared/src/postgres/database.js";
+import type { GenerateManifestInput } from "../../../../../../../packages/contracts/src/manifests/contracts.js";
+import type { ManifestRepository } from "../application/manifest-repository.js";
+import type { ManifestShipmentRecord } from "../domain/manifest.js";
 
 export class PgManifestRepository implements ManifestRepository {
   constructor(private readonly sql: PgClient) {}
