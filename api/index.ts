@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { bootstrapApi } from "../apps/api/src/app/bootstrap";
+import { bootstrapApi } from "../apps/api/src/app/bootstrap.js";
 
 // Load .env if present (for local `vercel dev`)
 const envPath = resolve(process.cwd(), ".env");

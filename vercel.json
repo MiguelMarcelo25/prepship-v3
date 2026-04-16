@@ -8,7 +8,7 @@
   ],
   "functions": {
     "api/index.ts": {
-      "includeFiles": "apps/api/src/**"
+      "includeFiles": "apps/api/src/**/*.ts"
     }
   }
 }
