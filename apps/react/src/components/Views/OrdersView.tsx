@@ -1425,9 +1425,14 @@ export default function OrdersView({
       const length = dims.length || payload.dims?.length || getDimensions(panelOrder, panelDetail)?.length || 0
       const width = dims.width || payload.dims?.width || getDimensions(panelOrder, panelDetail)?.width || 0
       const height = dims.height || payload.dims?.height || getDimensions(panelOrder, panelDetail)?.height || 0
-      const liveRates = await fetch('/api/rates', {
+      const API_BASE = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '')
+      const SESSION_TOKEN = import.meta.env.VITE_SESSION_TOKEN || ''
+      const liveRates = await fetch(`${API_BASE}/api/rates`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(SESSION_TOKEN ? { 'X-App-Token': SESSION_TOKEN } : {}),
+        },
         body: JSON.stringify({
           toPostalCode: getShipTo(panelOrder, panelDetail).postalCode ?? '',
           toCountry: getShipTo(panelOrder, panelDetail).country ?? 'US',

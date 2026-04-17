@@ -1,5 +1,8 @@
 import { useState, useCallback } from "react";
 
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
+const SESSION_TOKEN = import.meta.env.VITE_SESSION_TOKEN || "";
+
 export interface RateDims {
   length: number;
   width: number;
@@ -78,9 +81,12 @@ export function useRates(): UseRatesResult {
           };
         }
 
-        const response = await fetch("/api/rates", {
+        const response = await fetch(`${API_BASE}/api/rates`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            ...(SESSION_TOKEN ? { "X-App-Token": SESSION_TOKEN } : {}),
+          },
           body: JSON.stringify(payload),
         });
 
