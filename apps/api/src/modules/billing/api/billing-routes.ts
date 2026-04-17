@@ -16,7 +16,7 @@ function inputErrorStatusWithMessages(messages: string[]) {
     error instanceof InputValidationError || (error instanceof Error && messages.includes(error.message)) ? 400 : 500;
 }
 
-function renderBillingInvoiceHtml(invoice: NonNullable<ReturnType<BillingHttpHandler["handleInvoice"]>>) {
+function renderBillingInvoiceHtml(invoice: NonNullable<Awaited<ReturnType<BillingHttpHandler["handleInvoice"]>>>) {
   const fmt = (value: number) => `$${(Number(value) || 0).toFixed(2)}`;
   const generated = new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
   const rows = invoice.details.map((detail) => `
@@ -163,11 +163,11 @@ export function createBillingRoutes(handler: BillingHttpHandler): RouteDef[] {
       async ({ readJson }) => handler.handleSetDefaultPackagePrices(await readJson()),
       { getErrorStatus: getSetDefaultPackagePricesErrorStatus },
     ),
-    route("GET", "/api/billing/invoice", ({ url }) => {
+    route("GET", "/api/billing/invoice", async ({ url }) => {
       const getInvoiceErrorStatus = inputErrorStatusWithMessages(["from, to, clientId required", "from and to must be YYYY-MM-DD"]);
 
       try {
-        const invoice = handler.handleInvoice(url);
+        const invoice = await handler.handleInvoice(url);
         if (!invoice) {
           return new Response("<p>Client not found</p>", { status: 404, headers: { "content-type": "text/html; charset=utf-8" } });
         }

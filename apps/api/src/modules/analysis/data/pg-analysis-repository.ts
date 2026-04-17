@@ -173,13 +173,13 @@ export class PgAnalysisRepository implements AnalysisRepository {
             NULLIF(j.value->>'sku', ''),
             '_name_:' || lower(trim(COALESCE(j.value->>'name', '')))
           ) AS sku,
-          j.value->>'name' AS name,
+          MAX(j.value->>'name') AS name,
           SUM(CAST(COALESCE(j.value->>'quantity', '1') AS INTEGER)) AS qty
         FROM orders o, jsonb_array_elements(normalize_jsonb(o.items)) j(value)
         WHERE o."orderStatus" NOT IN ('cancelled')
           AND o."orderDate" >= ${since}
           AND o."orderDate" <= ${until}
-          AND COALESCE((j.value->>'adjustment')::int, 0) = 0
+          AND COALESCE(j.value->>'adjustment', 'false') IN ('false', '0', '')
           AND o."storeId" != ALL(${EXCLUDED_STORE_IDS}::int[])
           AND o."storeId" = ANY(${storeIds}::int[])
         GROUP BY day, COALESCE(NULLIF(j.value->>'sku', ''), '_name_:' || lower(trim(COALESCE(j.value->>'name', ''))))
@@ -195,13 +195,13 @@ export class PgAnalysisRepository implements AnalysisRepository {
             NULLIF(j.value->>'sku', ''),
             '_name_:' || lower(trim(COALESCE(j.value->>'name', '')))
           ) AS sku,
-          j.value->>'name' AS name,
+          MAX(j.value->>'name') AS name,
           SUM(CAST(COALESCE(j.value->>'quantity', '1') AS INTEGER)) AS qty
         FROM orders o, jsonb_array_elements(normalize_jsonb(o.items)) j(value)
         WHERE o."orderStatus" NOT IN ('cancelled')
           AND o."orderDate" >= ${since}
           AND o."orderDate" <= ${until}
-          AND COALESCE((j.value->>'adjustment')::int, 0) = 0
+          AND COALESCE(j.value->>'adjustment', 'false') IN ('false', '0', '')
           AND o."storeId" != ALL(${EXCLUDED_STORE_IDS}::int[])
         GROUP BY day, COALESCE(NULLIF(j.value->>'sku', ''), '_name_:' || lower(trim(COALESCE(j.value->>'name', ''))))
         ORDER BY day ASC
@@ -216,13 +216,13 @@ export class PgAnalysisRepository implements AnalysisRepository {
             NULLIF(j.value->>'sku', ''),
             '_name_:' || lower(trim(COALESCE(j.value->>'name', '')))
           ) AS sku,
-          j.value->>'name' AS name,
+          MAX(j.value->>'name') AS name,
           SUM(CAST(COALESCE(j.value->>'quantity', '1') AS INTEGER)) AS qty
         FROM orders o, jsonb_array_elements(normalize_jsonb(o.items)) j(value)
         WHERE o."orderStatus" NOT IN ('cancelled')
           AND o."orderDate" >= ${since}
           AND o."orderDate" <= ${until}
-          AND COALESCE((j.value->>'adjustment')::int, 0) = 0
+          AND COALESCE(j.value->>'adjustment', 'false') IN ('false', '0', '')
           AND o."storeId" = ANY(${storeIds}::int[])
         GROUP BY day, COALESCE(NULLIF(j.value->>'sku', ''), '_name_:' || lower(trim(COALESCE(j.value->>'name', ''))))
         ORDER BY day ASC
@@ -236,13 +236,13 @@ export class PgAnalysisRepository implements AnalysisRepository {
           NULLIF(j.value->>'sku', ''),
           '_name_:' || lower(trim(COALESCE(j.value->>'name', '')))
         ) AS sku,
-        j.value->>'name' AS name,
+        MAX(j.value->>'name') AS name,
         SUM(CAST(COALESCE(j.value->>'quantity', '1') AS INTEGER)) AS qty
       FROM orders o, jsonb_array_elements(normalize_jsonb(o.items)) j(value)
       WHERE o."orderStatus" NOT IN ('cancelled')
         AND o."orderDate" >= ${since}
         AND o."orderDate" <= ${until}
-        AND COALESCE((j.value->>'adjustment')::int, 0) = 0
+        AND COALESCE(j.value->>'adjustment', 'false') IN ('false', '0', '')
       GROUP BY day, COALESCE(NULLIF(j.value->>'sku', ''), '_name_:' || lower(trim(COALESCE(j.value->>'name', ''))))
       ORDER BY day ASC
     ` as AnalysisDailySalesRow[];
