@@ -18,7 +18,7 @@ function inputErrorStatusWithMessages(messages: string[]) {
 
 export function createLocationRoutes(handler: LocationsHttpHandler): RouteDef[] {
   return [
-    route("GET", "/api/locations", () => jsonResponse(200, handler.handleList())),
+    route("GET", "/api/locations", async () => jsonResponse(200, await handler.handleList())),
     jsonRoute("POST", "/api/locations", async ({ readJson }) => handler.handleCreate(await readJson() as never), {
       getErrorStatus: inputErrorStatusWithMessages(["name is required"]),
     }),
@@ -31,9 +31,9 @@ export function createLocationRoutes(handler: LocationsHttpHandler): RouteDef[] 
     jsonRoute("DELETE", "/api/locations/:locationId(int)", ({ params }) => handler.handleDelete(parseLocationId(params.locationId ?? "0")), {
       getErrorStatus: inputErrorStatus,
     }),
-    route("POST", "/api/locations/:locationId(int)/setDefault", ({ params }) => {
+    route("POST", "/api/locations/:locationId(int)/setDefault", async ({ params }) => {
       try {
-        return jsonResponse(200, handler.handleSetDefault(parseLocationId(params.locationId ?? "0")));
+        return jsonResponse(200, await handler.handleSetDefault(parseLocationId(params.locationId ?? "0")));
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error";
         return jsonResponse(500, { error: message });
