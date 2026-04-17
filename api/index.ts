@@ -18,17 +18,9 @@ function getHandler() {
 
 export default async function handler(request: Request): Promise<Response> {
   const url = new URL(request.url, "http://localhost");
-  console.log("[vercel] handler invoked, pathname:", url.pathname, "raw url:", request.url);
 
   if (url.pathname === "/api/health" || url.pathname === "/api") {
-    return new Response(JSON.stringify({ ok: true, pathname: url.pathname, rawUrl: request.url, env: process.env.DB_PROVIDER, ts: Date.now() }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
-  }
-
-  if (url.pathname === "/api/_probe") {
-    return new Response(JSON.stringify({ probe: "ok", now: Date.now() }), {
+    return new Response(JSON.stringify({ ok: true, env: process.env.DB_PROVIDER, ts: Date.now() }), {
       status: 200,
       headers: { "content-type": "application/json" },
     });
@@ -36,9 +28,7 @@ export default async function handler(request: Request): Promise<Response> {
 
   try {
     const app = await getHandler();
-    const response = await app(request);
-    console.log("[vercel] app returned response, status:", response.status);
-    return response;
+    return await app(request);
   } catch (err) {
     console.error("[vercel] handler error:", err);
     return new Response(JSON.stringify({ error: "Internal server error", detail: String(err) }), {
