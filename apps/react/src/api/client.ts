@@ -1100,7 +1100,10 @@ class ApiClient {
 /**
  * Singleton instance
  */
-export const apiClient = new ApiClient();
+const API_BASE = import.meta.env.VITE_API_BASE_URL
+  ? `${import.meta.env.VITE_API_BASE_URL}/api`
+  : "/api";
+export const apiClient = new ApiClient(API_BASE);
 
 /**
  * Export for testing/overrides
