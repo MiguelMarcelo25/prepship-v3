@@ -55,7 +55,7 @@ export class PgRateRepository implements RateRepository {
       FROM clients
       WHERE EXISTS (
         SELECT 1
-        FROM jsonb_array_elements("storeIds"::jsonb) AS elem
+        FROM jsonb_array_elements(normalize_jsonb("storeIds")) AS elem
         WHERE CAST(elem::text AS INTEGER) = ${storeId}
       )
       LIMIT 1

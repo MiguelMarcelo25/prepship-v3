@@ -708,6 +708,20 @@ export class SqliteOrderRepository implements OrderRepository {
     };
   }
 
+  async getStoreCounts(orderStatus: string, dateStart?: string, dateEnd?: string): Promise<Array<{ storeId: number; count: number }>> {
+    const clauses: string[] = ["orderStatus = ?"];
+    const params: Array<string | number> = [orderStatus];
+    if (dateStart) { clauses.push("orderDate >= ?"); params.push(dateStart); }
+    if (dateEnd) { clauses.push("orderDate <= ?"); params.push(dateEnd); }
+    if (this.excludedStoreIds.length > 0) {
+      clauses.push(`storeId NOT IN (${this.excludedStoreIds.map(() => "?").join(", ")})`);
+      params.push(...this.excludedStoreIds);
+    }
+    const stmt = this.db.prepare(`SELECT storeId, COUNT(*) AS count FROM orders WHERE ${clauses.join(" AND ")} GROUP BY storeId`);
+    const rows = stmt.all(...params) as Array<{ storeId: number; count: number }>;
+    return rows.map((r) => ({ storeId: Number(r.storeId), count: Number(r.count) }));
+  }
+
   private localIso(value: Date): string {
     const pad = (part: number) => String(part).padStart(2, "0");
     return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}T${pad(value.getHours())}:${pad(value.getMinutes())}:${pad(value.getSeconds())}`;

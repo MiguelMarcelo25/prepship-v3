@@ -175,7 +175,7 @@ export class PgAnalysisRepository implements AnalysisRepository {
           ) AS sku,
           j.value->>'name' AS name,
           SUM(CAST(COALESCE(j.value->>'quantity', '1') AS INTEGER)) AS qty
-        FROM orders o, jsonb_array_elements(o.items::jsonb) j(value)
+        FROM orders o, jsonb_array_elements(normalize_jsonb(o.items)) j(value)
         WHERE o."orderStatus" NOT IN ('cancelled')
           AND o."orderDate" >= ${since}
           AND o."orderDate" <= ${until}
@@ -197,7 +197,7 @@ export class PgAnalysisRepository implements AnalysisRepository {
           ) AS sku,
           j.value->>'name' AS name,
           SUM(CAST(COALESCE(j.value->>'quantity', '1') AS INTEGER)) AS qty
-        FROM orders o, jsonb_array_elements(o.items::jsonb) j(value)
+        FROM orders o, jsonb_array_elements(normalize_jsonb(o.items)) j(value)
         WHERE o."orderStatus" NOT IN ('cancelled')
           AND o."orderDate" >= ${since}
           AND o."orderDate" <= ${until}
@@ -218,7 +218,7 @@ export class PgAnalysisRepository implements AnalysisRepository {
           ) AS sku,
           j.value->>'name' AS name,
           SUM(CAST(COALESCE(j.value->>'quantity', '1') AS INTEGER)) AS qty
-        FROM orders o, jsonb_array_elements(o.items::jsonb) j(value)
+        FROM orders o, jsonb_array_elements(normalize_jsonb(o.items)) j(value)
         WHERE o."orderStatus" NOT IN ('cancelled')
           AND o."orderDate" >= ${since}
           AND o."orderDate" <= ${until}
@@ -238,7 +238,7 @@ export class PgAnalysisRepository implements AnalysisRepository {
         ) AS sku,
         j.value->>'name' AS name,
         SUM(CAST(COALESCE(j.value->>'quantity', '1') AS INTEGER)) AS qty
-      FROM orders o, jsonb_array_elements(o.items::jsonb) j(value)
+      FROM orders o, jsonb_array_elements(normalize_jsonb(o.items)) j(value)
       WHERE o."orderStatus" NOT IN ('cancelled')
         AND o."orderDate" >= ${since}
         AND o."orderDate" <= ${until}

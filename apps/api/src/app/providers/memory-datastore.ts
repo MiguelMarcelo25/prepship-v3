@@ -953,6 +953,18 @@ class MemoryOrderRepository implements OrderRepository {
     return [];
   }
 
+  async getStoreCounts(orderStatus: string, dateStart?: string, dateEnd?: string): Array<{ storeId: number; count: number }> {
+    const byStore = new Map<number, number>();
+    for (const entry of this.entries) {
+      if (entry.record.orderStatus !== orderStatus) continue;
+      if (dateStart && (entry.record.orderDate ?? "") < dateStart) continue;
+      if (dateEnd && (entry.record.orderDate ?? "") > dateEnd) continue;
+      if (entry.record.storeId == null) continue;
+      byStore.set(entry.record.storeId, (byStore.get(entry.record.storeId) ?? 0) + 1);
+    }
+    return [...byStore.entries()].map(([storeId, count]) => ({ storeId, count }));
+  }
+
   private filterOrders(query: Partial<ListOrdersQuery>): MemoryOrderEntry[] {
     return this.entries
       .filter((entry) => {

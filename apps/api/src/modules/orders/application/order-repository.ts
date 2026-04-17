@@ -31,4 +31,5 @@ export interface OrderRepository {
   saveSkuQtyDims(sku: string, qty: number, length: number, width: number, height: number): Promise<void>;
   getDailyStats(): Promise<OrdersDailyStatsDto>;
   exportOrders(query: OrderExportQuery): Promise<OrderExportRow[]>;
+  getStoreCounts(orderStatus: string, dateStart?: string, dateEnd?: string): Promise<Array<{ storeId: number; count: number }>>;
 }

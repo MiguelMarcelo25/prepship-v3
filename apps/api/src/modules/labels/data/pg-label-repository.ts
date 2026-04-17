@@ -79,7 +79,7 @@ export class PgLabelRepository implements LabelRepository {
       FROM clients
       WHERE EXISTS (
         SELECT 1
-        FROM jsonb_array_elements("storeIds"::jsonb) AS elem
+        FROM jsonb_array_elements(normalize_jsonb("storeIds")) AS elem
         WHERE elem::text::integer = ${storeId}
       )
       LIMIT 1

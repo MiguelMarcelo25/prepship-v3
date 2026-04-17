@@ -375,7 +375,7 @@ export class PgBillingRepository implements BillingRepository {
         ol.ref_ups_rate,
         COALESCE(
           (SELECT p.name FROM orders o2
-           , jsonb_array_elements(o2.items::jsonb) AS je(value)
+           , jsonb_array_elements(normalize_jsonb(o2.items)) AS je(value)
            JOIN inventory_skus isk ON isk.sku = je.value->>'sku'
            JOIN packages p ON p."packageId" = isk."packageId"
            WHERE o2."orderId" = b."orderId" AND isk."packageId" IS NOT NULL LIMIT 1),
@@ -394,11 +394,11 @@ export class PgBillingRepository implements BillingRepository {
            LIMIT 1)
         ) AS "packageName",
         (SELECT STRING_AGG(je.value->>'name', ' | ')
-         FROM orders o2, jsonb_array_elements(o2.items::jsonb) AS je(value)
+         FROM orders o2, jsonb_array_elements(normalize_jsonb(o2.items)) AS je(value)
          WHERE o2."orderId" = b."orderId"
            AND COALESCE((je.value->>'adjustment')::text, '0') = '0') AS "itemNames",
         (SELECT STRING_AGG(COALESCE(je.value->>'sku', ''), ' | ')
-         FROM orders o2, jsonb_array_elements(o2.items::jsonb) AS je(value)
+         FROM orders o2, jsonb_array_elements(normalize_jsonb(o2.items)) AS je(value)
          WHERE o2."orderId" = b."orderId"
            AND COALESCE((je.value->>'adjustment')::text, '0') = '0') AS "itemSkus"
       FROM billing_line_items b
@@ -448,7 +448,7 @@ export class PgBillingRepository implements BillingRepository {
         SUM(b."totalCost") AS "rowTotal",
         (
           SELECT STRING_AGG(je.value->>'sku', ', ')
-          FROM orders o2, jsonb_array_elements(o2.items::jsonb) AS je(value)
+          FROM orders o2, jsonb_array_elements(normalize_jsonb(o2.items)) AS je(value)
           WHERE o2."orderId" = b."orderId"
             AND COALESCE((je.value->>'adjustment')::text, '0') = '0'
         ) AS skus
@@ -547,7 +547,7 @@ export class PgBillingRepository implements BillingRepository {
       return [];
     }
 
-    const storeIdsJson = JSON.stringify(storeIds);
+    const storeIdsJson = this.sql.json(storeIds);
     const rows = await this.sql`
       SELECT
         s."orderId",
@@ -555,15 +555,15 @@ export class PgBillingRepository implements BillingRepository {
         s.dims_l,
         s.dims_w,
         s.dims_h,
-        SUBSTR(COALESCE((o.raw::jsonb)->'shipTo'->>'postalCode', o."shipToPostalCode"), 1, 5) AS zip5
+        SUBSTR(COALESCE((normalize_jsonb(o.raw))->'shipTo'->>'postalCode', o."shipToPostalCode"), 1, 5) AS zip5
       FROM shipments s
       JOIN orders o ON o."orderId" = s."orderId"
       LEFT JOIN order_local ol ON ol."orderId" = s."orderId"
       WHERE COALESCE(
-              ((o.raw::jsonb)->'advancedOptions'->>'storeId')::int,
-              ((o.raw::jsonb)->>'storeId')::int,
+              ((normalize_jsonb(o.raw))->'advancedOptions'->>'storeId')::int,
+              ((normalize_jsonb(o.raw))->>'storeId')::int,
               o."storeId"
-            )::text IN (SELECT jsonb_array_elements_text(${storeIdsJson}::jsonb))
+            )::text IN (SELECT jsonb_array_elements_text(${storeIdsJson}))
         AND s.voided = 0
         AND s.weight_oz IS NOT NULL
         AND s.dims_l IS NOT NULL
@@ -580,15 +580,15 @@ export class PgBillingRepository implements BillingRepository {
         o."orderId",
         o."orderNumber",
         CAST(COALESCE(o."weightValue", s.weight_oz, 1) AS INTEGER) AS "weightOz",
-        SUBSTR(COALESCE(o."shipToPostalCode", (o.raw::jsonb)->'shipTo'->>'postalCode'), 1, 5) AS zip5
+        SUBSTR(COALESCE(o."shipToPostalCode", (normalize_jsonb(o.raw))->'shipTo'->>'postalCode'), 1, 5) AS zip5
       FROM orders o
       JOIN shipments s ON s."orderId" = o."orderId"
       JOIN clients c ON EXISTS (
-        SELECT 1 FROM jsonb_array_elements(c."storeIds"::jsonb) si
+        SELECT 1 FROM jsonb_array_elements(normalize_jsonb(c."storeIds")) si
         WHERE si::text::integer = COALESCE(
           o."storeId",
-          ((o.raw::jsonb)->'advancedOptions'->>'storeId')::int,
-          ((o.raw::jsonb)->>'storeId')::int
+          ((normalize_jsonb(o.raw))->'advancedOptions'->>'storeId')::int,
+          ((normalize_jsonb(o.raw))->>'storeId')::int
         )
       )
       JOIN billing_config bc ON bc."clientId" = c."clientId"

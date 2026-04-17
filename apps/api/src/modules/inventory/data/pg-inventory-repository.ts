@@ -52,7 +52,7 @@ export class PgInventoryRepository implements InventoryRepository {
         (SELECT MAX("createdAt") FROM inventory_ledger WHERE "invSkuId" = s.id) AS "lastMovement",
         (
           SELECT je.value->>'imageUrl'
-          FROM orders ord, jsonb_array_elements(ord.items::jsonb) AS je(value)
+          FROM orders ord, jsonb_array_elements(normalize_jsonb(ord.items)) AS je(value)
           WHERE je.value->>'sku' = s.sku
             AND je.value->>'imageUrl' IS NOT NULL
             AND je.value->>'imageUrl' != ''
@@ -476,7 +476,7 @@ export class PgInventoryRepository implements InventoryRepository {
       SELECT
         date(o."orderDate"::timestamp) AS day,
         SUM(CAST(je.value->>'quantity' AS INTEGER)) AS units
-      FROM orders o, jsonb_array_elements(o.items::jsonb) AS je(value)
+      FROM orders o, jsonb_array_elements(normalize_jsonb(o.items)) AS je(value)
       WHERE je.value->>'sku' = ${skuRow.sku}
         AND date(o."orderDate"::timestamp) >= ${cutoff}::date
         AND COALESCE(o."orderStatus", '') != 'cancelled'
@@ -504,7 +504,7 @@ export class PgInventoryRepository implements InventoryRepository {
         CAST(je.value->>'quantity' AS INTEGER) AS qty,
         CAST(je.value->>'unitPrice' AS REAL) AS "unitPrice",
         je.value->>'name' AS "itemName"
-      FROM orders o, jsonb_array_elements(o.items::jsonb) AS je(value)
+      FROM orders o, jsonb_array_elements(normalize_jsonb(o.items)) AS je(value)
       WHERE je.value->>'sku' = ${skuRow.sku}
         AND COALESCE(o."orderStatus", '') != 'cancelled'
       ORDER BY o."orderDate" DESC

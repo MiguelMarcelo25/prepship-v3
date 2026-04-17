@@ -32,7 +32,7 @@ export class PgOrderRepository implements OrderRepository {
     // For excluded store IDs we need to filter them. Since tagged templates
     // don't support dynamic IN lists easily, we pass them as a JSON array
     // and use a subquery.
-    const excludedJson = this.excludedStoreIds.length > 0 ? JSON.stringify(this.excludedStoreIds) : null;
+    const excludedJson = this.sql.json(this.excludedStoreIds);
 
     const shipmentJoin = `
       LEFT JOIN (
@@ -75,7 +75,7 @@ export class PgOrderRepository implements OrderRepository {
         AND (${query.clientId ?? null}::int IS NULL OR o."clientId" = ${query.clientId ?? null})
         AND (${query.dateStart ?? null}::text IS NULL OR o."orderDate" >= ${query.dateStart ?? null})
         AND (${query.dateEnd ?? null}::text IS NULL OR o."orderDate" <= ${query.dateEnd ?? null})
-        AND (${excludedJson}::jsonb IS NULL OR o."storeId"::text NOT IN (SELECT jsonb_array_elements_text(${excludedJson}::jsonb)))
+        AND (o."storeId"::text NOT IN (SELECT jsonb_array_elements_text(${excludedJson})))
         AND (${searchTerm}::text IS NULL OR (
           o."orderNumber" LIKE ${searchTerm} OR
           o."customerEmail" LIKE ${searchTerm} OR
@@ -83,7 +83,7 @@ export class PgOrderRepository implements OrderRepository {
         ))
         AND (NOT ${isAwaitingShipment} OR (
           COALESCE(ol.external_shipped, 0) = 0
-          AND COALESCE((o.raw::jsonb)->>'externallyFulfilled', '0') != '1'
+          AND COALESCE((normalize_jsonb(o.raw))->>'externallyFulfilled', '0') != '1'
           AND ship.label_cost IS NULL
         ))
         AND (NOT ${isShipped} OR (
@@ -118,9 +118,9 @@ export class PgOrderRepository implements OrderRepository {
           ELSE 0
         END AS residential,
         CASE
-          WHEN (o.raw::jsonb)->'shipTo'->>'residential' IS NULL THEN NULL
-          WHEN (o.raw::jsonb)->'shipTo'->>'residential' = '1' THEN 1
-          WHEN (o.raw::jsonb)->'shipTo'->'residential' = 'true'::jsonb THEN 1
+          WHEN (normalize_jsonb(o.raw))->'shipTo'->>'residential' IS NULL THEN NULL
+          WHEN (normalize_jsonb(o.raw))->'shipTo'->>'residential' = '1' THEN 1
+          WHEN (normalize_jsonb(o.raw))->'shipTo'->'residential' = 'true'::jsonb THEN 1
           ELSE 0
         END AS source_residential,
         COALESCE(ol.external_shipped, 0) AS external_shipped,
@@ -168,7 +168,7 @@ export class PgOrderRepository implements OrderRepository {
         AND (${query.clientId ?? null}::int IS NULL OR o."clientId" = ${query.clientId ?? null})
         AND (${query.dateStart ?? null}::text IS NULL OR o."orderDate" >= ${query.dateStart ?? null})
         AND (${query.dateEnd ?? null}::text IS NULL OR o."orderDate" <= ${query.dateEnd ?? null})
-        AND (${excludedJson}::jsonb IS NULL OR o."storeId"::text NOT IN (SELECT jsonb_array_elements_text(${excludedJson}::jsonb)))
+        AND (o."storeId"::text NOT IN (SELECT jsonb_array_elements_text(${excludedJson})))
         AND (${searchTerm}::text IS NULL OR (
           o."orderNumber" LIKE ${searchTerm} OR
           o."customerEmail" LIKE ${searchTerm} OR
@@ -176,7 +176,7 @@ export class PgOrderRepository implements OrderRepository {
         ))
         AND (NOT ${isAwaitingShipment} OR (
           COALESCE(ol.external_shipped, 0) = 0
-          AND COALESCE((o.raw::jsonb)->>'externallyFulfilled', '0') != '1'
+          AND COALESCE((normalize_jsonb(o.raw))->>'externallyFulfilled', '0') != '1'
           AND ship.label_cost IS NULL
         ))
         AND (NOT ${isShipped} OR (
@@ -198,7 +198,7 @@ export class PgOrderRepository implements OrderRepository {
         COALESCE(c.name, NULL) AS "clientName",
         o."orderNumber",
         CASE
-          WHEN (o.raw::jsonb)->>'externallyFulfilled' = '1' THEN 'shipped'
+          WHEN (normalize_jsonb(o.raw))->>'externallyFulfilled' = '1' THEN 'shipped'
           WHEN ship.label_shipmentId IS NOT NULL THEN 'shipped'
           ELSE o."orderStatus"
         END AS "orderStatus",
@@ -220,9 +220,9 @@ export class PgOrderRepository implements OrderRepository {
           ELSE 0
         END AS residential,
         CASE
-          WHEN (o.raw::jsonb)->'shipTo'->>'residential' IS NULL THEN NULL
-          WHEN (o.raw::jsonb)->'shipTo'->>'residential' = '1' THEN 1
-          WHEN (o.raw::jsonb)->'shipTo'->'residential' = 'true'::jsonb THEN 1
+          WHEN (normalize_jsonb(o.raw))->'shipTo'->>'residential' IS NULL THEN NULL
+          WHEN (normalize_jsonb(o.raw))->'shipTo'->>'residential' = '1' THEN 1
+          WHEN (normalize_jsonb(o.raw))->'shipTo'->'residential' = 'true'::jsonb THEN 1
           ELSE 0
         END AS source_residential,
         COALESCE(ol.external_shipped, 0) AS external_shipped,
@@ -281,7 +281,7 @@ export class PgOrderRepository implements OrderRepository {
   }
 
   async findIdsBySku(query: GetOrderIdsQuery): Promise<number[]> {
-    const excludedJson = this.excludedStoreIds.length > 0 ? JSON.stringify(this.excludedStoreIds) : null;
+    const excludedJson = this.sql.json(this.excludedStoreIds);
 
     const rows = await this.sql`
       SELECT o."orderId"
@@ -289,10 +289,10 @@ export class PgOrderRepository implements OrderRepository {
       WHERE
         (${query.orderStatus ?? null}::text IS NULL OR o."orderStatus" = ${query.orderStatus ?? null})
         AND (${query.storeId ?? null}::int IS NULL OR o."storeId" = ${query.storeId ?? null})
-        AND (${excludedJson}::jsonb IS NULL OR o."storeId"::text NOT IN (SELECT jsonb_array_elements_text(${excludedJson}::jsonb)))
+        AND (o."storeId"::text NOT IN (SELECT jsonb_array_elements_text(${excludedJson})))
         AND EXISTS (
           SELECT 1
-          FROM jsonb_array_elements(o.items::jsonb) AS je(value)
+          FROM jsonb_array_elements(normalize_jsonb(o.items)) AS je(value)
           WHERE (je.value->>'adjustment')::text != '1'
             AND (
               LOWER(COALESCE(je.value->>'sku', '')) = LOWER(${query.sku})
@@ -301,7 +301,7 @@ export class PgOrderRepository implements OrderRepository {
         )
         AND (${query.qty ?? null}::int IS NULL OR (
           SELECT COALESCE(SUM(COALESCE((je2.value->>'quantity')::int, 1)), 0)
-          FROM jsonb_array_elements(o.items::jsonb) AS je2(value)
+          FROM jsonb_array_elements(normalize_jsonb(o.items)) AS je2(value)
           WHERE (je2.value->>'adjustment')::text != '1'
         ) = ${query.qty ?? null})
       ORDER BY o."orderDate" DESC
@@ -312,7 +312,7 @@ export class PgOrderRepository implements OrderRepository {
 
   async getPicklist(query: GetOrderPicklistQuery): Promise<OrderPicklistItemDto[]> {
     const isAwaitingShipment = query.orderStatus === "awaiting_shipment";
-    const excludedJson = this.excludedStoreIds.length > 0 ? JSON.stringify(this.excludedStoreIds) : null;
+    const excludedJson = this.sql.json(this.excludedStoreIds);
 
     const rows = await this.sql`
       SELECT
@@ -326,18 +326,18 @@ export class PgOrderRepository implements OrderRepository {
       FROM orders o
       LEFT JOIN order_local ol ON o."orderId" = ol."orderId"
       LEFT JOIN clients c ON EXISTS (
-        SELECT 1 FROM jsonb_array_elements(c."storeIds"::jsonb) si WHERE si::text::integer = o."storeId"
+        SELECT 1 FROM jsonb_array_elements(normalize_jsonb(c."storeIds")) si WHERE si::text::integer = o."storeId"
       )
-      , jsonb_array_elements(o.items::jsonb) AS je(value)
+      , jsonb_array_elements(normalize_jsonb(o.items)) AS je(value)
       WHERE
         (${query.orderStatus ?? null}::text IS NULL OR o."orderStatus" = ${query.orderStatus ?? null})
         AND (${query.storeId ?? null}::int IS NULL OR o."storeId" = ${query.storeId ?? null})
         AND (${query.dateStart ?? null}::text IS NULL OR o."orderDate" >= ${query.dateStart ?? null})
         AND (${query.dateEnd ?? null}::text IS NULL OR o."orderDate" <= ${query.dateEnd ?? null})
-        AND (${excludedJson}::jsonb IS NULL OR o."storeId"::text NOT IN (SELECT jsonb_array_elements_text(${excludedJson}::jsonb)))
+        AND (o."storeId"::text NOT IN (SELECT jsonb_array_elements_text(${excludedJson})))
         AND (NOT ${isAwaitingShipment} OR (
           COALESCE(ol.external_shipped, 0) = 0
-          AND COALESCE((o.raw::jsonb)->>'externallyFulfilled', '0') != '1'
+          AND COALESCE((normalize_jsonb(o.raw))->>'externallyFulfilled', '0') != '1'
         ))
         AND (je.value->>'adjustment')::text = '0'
         AND je.value->>'sku' IS NOT NULL
@@ -509,14 +509,14 @@ export class PgOrderRepository implements OrderRepository {
 
     const fromStr = this.localIso(windowStart);
     const toStr = this.localIso(windowEnd);
-    const excludedJson = this.excludedStoreIds.length > 0 ? JSON.stringify(this.excludedStoreIds) : null;
+    const excludedJson = this.sql.json(this.excludedStoreIds);
 
     const totalOrdersRows = await this.sql`
       SELECT COUNT(*) AS cnt
       FROM orders
       WHERE "orderDate" >= ${fromStr} AND "orderDate" <= ${toStr}
         AND "orderStatus" NOT IN ('cancelled')
-        AND (${excludedJson}::jsonb IS NULL OR "storeId"::text NOT IN (SELECT jsonb_array_elements_text(${excludedJson}::jsonb)))
+        AND ("storeId"::text NOT IN (SELECT jsonb_array_elements_text(${excludedJson})))
     `;
 
     const needToShipRows = await this.sql`
@@ -524,7 +524,7 @@ export class PgOrderRepository implements OrderRepository {
       FROM orders
       WHERE "orderDate" >= ${fromStr} AND "orderDate" <= ${toStr}
         AND "orderStatus" = 'awaiting_shipment'
-        AND (${excludedJson}::jsonb IS NULL OR "storeId"::text NOT IN (SELECT jsonb_array_elements_text(${excludedJson}::jsonb)))
+        AND ("storeId"::text NOT IN (SELECT jsonb_array_elements_text(${excludedJson})))
     `;
 
     const upcomingOrdersRows = await this.sql`
@@ -532,7 +532,7 @@ export class PgOrderRepository implements OrderRepository {
       FROM orders
       WHERE "orderDate" > ${toStr}
         AND "orderStatus" NOT IN ('cancelled')
-        AND (${excludedJson}::jsonb IS NULL OR "storeId"::text NOT IN (SELECT jsonb_array_elements_text(${excludedJson}::jsonb)))
+        AND ("storeId"::text NOT IN (SELECT jsonb_array_elements_text(${excludedJson})))
     `;
 
     return {
@@ -549,7 +549,7 @@ export class PgOrderRepository implements OrderRepository {
   }
 
   async exportOrders(query: OrderExportQuery): Promise<OrderExportRow[]> {
-    const excludedJson = this.excludedStoreIds.length > 0 ? JSON.stringify(this.excludedStoreIds) : null;
+    const excludedJson = this.sql.json(this.excludedStoreIds);
     const isAwaitingShipment = query.orderStatus === "awaiting_shipment";
 
     const rows = await this.sql`
@@ -580,13 +580,13 @@ export class PgOrderRepository implements OrderRepository {
         ORDER BY s2."orderId", s2."shipmentId" DESC
       ) ship ON ship."orderId" = o."orderId"
       WHERE o.raw IS NOT NULL
-        AND (${excludedJson}::jsonb IS NULL OR o."storeId"::text NOT IN (SELECT jsonb_array_elements_text(${excludedJson}::jsonb)))
+        AND (o."storeId"::text NOT IN (SELECT jsonb_array_elements_text(${excludedJson})))
         AND (${isAwaitingShipment} OR (
           o."orderStatus" = 'shipped' OR (o."orderStatus" = 'awaiting_shipment' AND ship.label_cost IS NOT NULL)
         ))
         AND (NOT ${isAwaitingShipment} OR (
           COALESCE(ol.external_shipped, 0) = 0
-          AND COALESCE((o.raw::jsonb)->>'externallyFulfilled', '0') != '1'
+          AND COALESCE((normalize_jsonb(o.raw))->>'externallyFulfilled', '0') != '1'
           AND ship.label_cost IS NULL
         ))
       ORDER BY o."orderDate" DESC
@@ -594,6 +594,23 @@ export class PgOrderRepository implements OrderRepository {
     `;
 
     return rows as OrderExportRow[];
+  }
+
+  async getStoreCounts(orderStatus: string, dateStart?: string, dateEnd?: string): Promise<Array<{ storeId: number; count: number }>> {
+    const excludedJson = this.sql.json(this.excludedStoreIds);
+    const rows = await this.sql`
+      SELECT o."storeId" AS "storeId", COUNT(*)::int AS count
+      FROM orders o
+      WHERE o."orderStatus" = ${orderStatus}
+        AND (${dateStart ?? null}::text IS NULL OR o."orderDate" >= ${dateStart ?? null})
+        AND (${dateEnd ?? null}::text IS NULL OR o."orderDate" <= ${dateEnd ?? null})
+        AND (o."storeId"::text NOT IN (SELECT jsonb_array_elements_text(${excludedJson})))
+      GROUP BY o."storeId"
+    `;
+    return (rows as unknown as Array<{ storeId: number | string; count: number | string }>).map((r) => ({
+      storeId: Number(r.storeId),
+      count: Number(r.count),
+    }));
   }
 
   private mapRow(row: Record<string, unknown>): OrderRecord {

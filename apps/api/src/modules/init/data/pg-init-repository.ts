@@ -75,7 +75,7 @@ export class PgInitRepository implements InitRepository {
         FROM orders o
         LEFT JOIN order_local ol ON o."orderId" = ol."orderId"
         WHERE NOT (o."orderStatus" = 'awaiting_shipment' AND COALESCE(ol.external_shipped, 0) = 1)
-          AND NOT (o."orderStatus" = 'awaiting_shipment' AND COALESCE((o.raw::jsonb->>'externallyFulfilled')::int, 0) = 1)
+          AND NOT (o."orderStatus" = 'awaiting_shipment' AND (normalize_jsonb(o.raw)->>'externallyFulfilled') IN ('1', 'true'))
           AND NOT (
             o."orderStatus" = 'awaiting_shipment'
             AND EXISTS (
@@ -92,7 +92,7 @@ export class PgInitRepository implements InitRepository {
         FROM orders o
         LEFT JOIN order_local ol ON o."orderId" = ol."orderId"
         WHERE NOT (o."orderStatus" = 'awaiting_shipment' AND COALESCE(ol.external_shipped, 0) = 1)
-          AND NOT (o."orderStatus" = 'awaiting_shipment' AND COALESCE((o.raw::jsonb->>'externallyFulfilled')::int, 0) = 1)
+          AND NOT (o."orderStatus" = 'awaiting_shipment' AND (normalize_jsonb(o.raw)->>'externallyFulfilled') IN ('1', 'true'))
           AND NOT (
             o."orderStatus" = 'awaiting_shipment'
             AND EXISTS (
@@ -110,7 +110,7 @@ export class PgInitRepository implements InitRepository {
         FROM orders o
         LEFT JOIN order_local ol ON o."orderId" = ol."orderId"
         WHERE NOT (o."orderStatus" = 'awaiting_shipment' AND COALESCE(ol.external_shipped, 0) = 1)
-          AND NOT (o."orderStatus" = 'awaiting_shipment' AND COALESCE((o.raw::jsonb->>'externallyFulfilled')::int, 0) = 1)
+          AND NOT (o."orderStatus" = 'awaiting_shipment' AND (normalize_jsonb(o.raw)->>'externallyFulfilled') IN ('1', 'true'))
           AND NOT (
             o."orderStatus" = 'awaiting_shipment'
             AND EXISTS (
@@ -126,7 +126,7 @@ export class PgInitRepository implements InitRepository {
         FROM orders o
         LEFT JOIN order_local ol ON o."orderId" = ol."orderId"
         WHERE NOT (o."orderStatus" = 'awaiting_shipment' AND COALESCE(ol.external_shipped, 0) = 1)
-          AND NOT (o."orderStatus" = 'awaiting_shipment' AND COALESCE((o.raw::jsonb->>'externallyFulfilled')::int, 0) = 1)
+          AND NOT (o."orderStatus" = 'awaiting_shipment' AND (normalize_jsonb(o.raw)->>'externallyFulfilled') IN ('1', 'true'))
           AND NOT (
             o."orderStatus" = 'awaiting_shipment'
             AND EXISTS (
