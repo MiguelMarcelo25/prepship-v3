@@ -28,6 +28,19 @@ function getHeader(headers: unknown, name: string): string | null {
  */
 export function createAuthMiddleware(handler: AppHandler, sessionToken: string): AppHandler {
   return async (request: Request): Promise<Response> => {
+    // CORS preflight — browsers send OPTIONS without auth headers
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, X-App-Token, Authorization",
+          "Access-Control-Max-Age": "86400",
+        },
+      });
+    }
+
     const url = new URL(request.url, "http://localhost");
 
     // Allow /api/auth/token to be accessed without auth (it serves the token)
