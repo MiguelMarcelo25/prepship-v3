@@ -5,3 +5,4 @@ export * from './packages';
 export * from './products';
 export * from './rates';
 export * from './settings';
+export * from './inventory';

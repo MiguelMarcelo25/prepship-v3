@@ -12,6 +12,7 @@ import clientsRoute from './routes/clients';
 import ratesRoute from './routes/rates';
 import labelsRoute from './routes/labels';
 import syncRoute from './routes/sync';
+import inventoryRoute from './routes/inventory';
 
 const app = new Hono();
 
@@ -32,6 +33,7 @@ app.use('/clients/*', requireAuth);
 app.use('/rates/*', requireAuth);
 app.use('/labels/*', requireAuth);
 app.use('/sync/*', requireAuth);
+app.use('/inventory/*', requireAuth);
 
 app.route('/orders', ordersRoute);
 app.route('/shipments', shipmentsRoute);
@@ -40,6 +42,7 @@ app.route('/clients', clientsRoute);
 app.route('/rates', ratesRoute);
 app.route('/labels', labelsRoute);
 app.route('/sync', syncRoute);
+app.route('/inventory', inventoryRoute);
 
 app.notFound((c) => c.json({ error: 'Not found' }, 404));
 

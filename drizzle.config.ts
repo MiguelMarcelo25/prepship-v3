@@ -10,6 +10,7 @@ export default defineConfig({
     './src/db/schema/products.ts',
     './src/db/schema/rates.ts',
     './src/db/schema/settings.ts',
+    './src/db/schema/inventory.ts',
   ],
   out: './drizzle',
   dialect: 'postgresql',
