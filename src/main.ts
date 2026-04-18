@@ -1,3 +1,4 @@
+import { serve } from '@hono/node-server';
 import { Hono } from 'hono';
 import { logger } from 'hono/logger';
 import { cors } from 'hono/cors';
@@ -16,12 +17,12 @@ app.notFound((c) => c.json({ error: 'Not found' }, 404));
 app.onError((err, c) => {
   console.error(err);
   const status = (err as { status?: number }).status ?? 500;
-  return c.json({ error: err.message || 'Internal server error' }, status as 400);
+  return c.json(
+    { error: err.message || 'Internal server error' },
+    status as 500
+  );
 });
 
-export default {
-  port: env.PORT,
-  fetch: app.fetch,
-};
-
-console.log(`API listening on http://localhost:${env.PORT}`);
+serve({ fetch: app.fetch, port: env.PORT }, (info) => {
+  console.log(`API listening on http://localhost:${info.port}`);
+});
