@@ -10,6 +10,7 @@ const Inventory = lazy(() => import('./pages/Inventory'));
 const Locations = lazy(() => import('./pages/Locations'));
 const RateShop = lazy(() => import('./pages/RateShop'));
 const SettingsPage = lazy(() => import('./pages/Settings'));
+const Billing = lazy(() => import('./pages/Billing'));
 const ComingSoon = lazy(() => import('./pages/ComingSoon'));
 
 function PageFallback() {
@@ -46,7 +47,7 @@ export default function App() {
           <Route path="/rates" element={<RateShop />} />
           <Route path="/analysis" element={<ComingSoon title="Analysis" icon="📊" />} />
           <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/billing" element={<ComingSoon title="Billing" icon="🧾" />} />
+          <Route path="/billing" element={<Billing />} />
           <Route path="/manifest" element={<ComingSoon title="Manifest" icon="📋" />} />
         </Route>
       </Routes>
