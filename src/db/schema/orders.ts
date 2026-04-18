@@ -16,6 +16,7 @@ export const orders = pgTable(
   'orders',
   {
     id: serial().primaryKey(),
+    externalOrderId: text().unique(),
     clientId: integer().references(() => clients.id),
     orderNumber: text().notNull(),
     orderStatus: text().notNull().default('awaiting_shipment'),
