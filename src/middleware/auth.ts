@@ -1,8 +1,5 @@
 import { createMiddleware } from 'hono/factory';
-import { jwtVerify } from 'jose';
-import { env } from '../lib/env';
-
-const jwtSecret = new TextEncoder().encode(env.SUPABASE_JWT_SECRET);
+import { supabaseAdmin } from '../lib/supabase';
 
 export type AuthVars = {
   userId: string;
@@ -17,15 +14,13 @@ export const requireAuth = createMiddleware<{ Variables: AuthVars }>(
       return c.json({ error: 'Missing bearer token' }, 401);
     }
     const token = auth.slice(7).trim();
-    try {
-      const { payload } = await jwtVerify(token, jwtSecret);
-      if (!payload.sub) return c.json({ error: 'Invalid token' }, 401);
-      c.set('userId', payload.sub);
-      c.set('email', payload.email as string | undefined);
-      c.set('role', payload.role as string | undefined);
-      await next();
-    } catch {
+    const { data, error } = await supabaseAdmin.auth.getUser(token);
+    if (error || !data.user) {
       return c.json({ error: 'Invalid token' }, 401);
     }
+    c.set('userId', data.user.id);
+    c.set('email', data.user.email ?? undefined);
+    c.set('role', (data.user.app_metadata?.role as string | undefined) ?? undefined);
+    await next();
   }
 );
