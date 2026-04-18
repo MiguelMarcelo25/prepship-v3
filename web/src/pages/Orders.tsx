@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Download, Search as SearchIcon } from 'lucide-react';
 import Topbar from '../components/Topbar';
+import OrderDrawer from '../components/OrderDrawer';
 import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 import { StatusBadge } from '../components/ui/Badge';
@@ -45,10 +46,12 @@ function formatDate(v: string | null) {
 }
 
 export default function Orders() {
-  const { status = 'awaiting_shipment' } = useParams();
+  const { status = 'awaiting_shipment', orderId } = useParams();
+  const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const pageSize = 50;
+  const openId = orderId ? Number(orderId) : null;
 
   const title = statusLabels[status] ?? 'Orders';
 
@@ -140,9 +143,10 @@ export default function Orders() {
             {rows.map((o, i) => (
               <tr
                 key={o.id}
+                onClick={() => navigate(`/orders/${status}/${o.id}`)}
                 className={`cursor-pointer border-b border-line transition-colors ${
                   i % 2 === 1 ? 'bg-surface-2' : 'bg-white'
-                } hover:!bg-brand-bg`}
+                } ${openId === o.id ? '!bg-brand-bg' : ''} hover:!bg-brand-bg`}
               >
                 <Td className="font-bold text-brand">{o.orderNumber}</Td>
                 <Td className="text-ink-2">{formatDate(o.orderDate)}</Td>
@@ -189,6 +193,8 @@ export default function Orders() {
           Next
         </Button>
       </div>
+
+      {openId !== null && <OrderDrawer />}
     </>
   );
 }

@@ -17,37 +17,17 @@ export default function App() {
           element={<Navigate to="/orders/awaiting_shipment" replace />}
         />
         <Route path="/orders/:status" element={<Orders />} />
+        <Route path="/orders/:status/:orderId" element={<Orders />} />
 
         <Route path="/packages" element={<Packages />} />
 
-        <Route
-          path="/inventory"
-          element={<ComingSoon title="Inventory" icon="📦" />}
-        />
-        <Route
-          path="/locations"
-          element={<ComingSoon title="Locations" icon="📍" />}
-        />
-        <Route
-          path="/rates"
-          element={<ComingSoon title="Rate Shop" icon="💰" />}
-        />
-        <Route
-          path="/analysis"
-          element={<ComingSoon title="Analysis" icon="📊" />}
-        />
-        <Route
-          path="/settings"
-          element={<ComingSoon title="Settings" icon="⚙️" />}
-        />
-        <Route
-          path="/billing"
-          element={<ComingSoon title="Billing" icon="🧾" />}
-        />
-        <Route
-          path="/manifest"
-          element={<ComingSoon title="Manifest" icon="📋" />}
-        />
+        <Route path="/inventory" element={<ComingSoon title="Inventory" icon="📦" />} />
+        <Route path="/locations" element={<ComingSoon title="Locations" icon="📍" />} />
+        <Route path="/rates" element={<ComingSoon title="Rate Shop" icon="💰" />} />
+        <Route path="/analysis" element={<ComingSoon title="Analysis" icon="📊" />} />
+        <Route path="/settings" element={<ComingSoon title="Settings" icon="⚙️" />} />
+        <Route path="/billing" element={<ComingSoon title="Billing" icon="🧾" />} />
+        <Route path="/manifest" element={<ComingSoon title="Manifest" icon="📋" />} />
       </Route>
     </Routes>
   );
