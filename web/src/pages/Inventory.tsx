@@ -8,6 +8,7 @@ import { Button } from '../components/ui/Button';
 import { api, qs, type Paginated } from '../lib/api';
 
 const InventoryDrawer = lazy(() => import('../components/InventoryDrawer'));
+const NewInventoryModal = lazy(() => import('../components/NewInventoryModal'));
 
 type Item = {
   id: number;
@@ -40,6 +41,7 @@ export default function Inventory() {
   const [search, setSearch] = useState('');
   const [lowStock, setLowStock] = useState(false);
   const [page, setPage] = useState(1);
+  const [creating, setCreating] = useState(false);
   const pageSize = 50;
   const openId = id ? Number(id) : null;
 
@@ -73,7 +75,11 @@ export default function Inventory() {
       <Topbar
         title="Inventory"
         right={
-          <Button variant="primary" size="sm">
+          <Button
+            variant="primary"
+            size="sm"
+            onClick={() => setCreating(true)}
+          >
             <Plus size={12} />
             New item
           </Button>
@@ -210,6 +216,12 @@ export default function Inventory() {
       {openId !== null && (
         <Suspense fallback={null}>
           <InventoryDrawer />
+        </Suspense>
+      )}
+
+      {creating && (
+        <Suspense fallback={null}>
+          <NewInventoryModal onClose={() => setCreating(false)} />
         </Suspense>
       )}
     </>
