@@ -13,6 +13,17 @@ export default defineConfig({
   build: {
     outDir: path.resolve(__dirname, 'web/dist'),
     emptyOutDir: true,
+    chunkSizeWarningLimit: 600,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          react: ['react', 'react-dom', 'react-router-dom'],
+          query: ['@tanstack/react-query'],
+          supabase: ['@supabase/supabase-js'],
+          icons: ['lucide-react'],
+        },
+      },
+    },
   },
   resolve: {
     alias: {

@@ -1,13 +1,14 @@
-import { useMemo, useState } from 'react';
+import { lazy, Suspense, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Download, Search as SearchIcon } from 'lucide-react';
 import Topbar from '../components/Topbar';
-import OrderDrawer from '../components/OrderDrawer';
 import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 import { StatusBadge } from '../components/ui/Badge';
 import { api, qs, type Paginated } from '../lib/api';
+
+const OrderDrawer = lazy(() => import('../components/OrderDrawer'));
 
 type Order = {
   id: number;
@@ -194,7 +195,11 @@ export default function Orders() {
         </Button>
       </div>
 
-      {openId !== null && <OrderDrawer />}
+      {openId !== null && (
+        <Suspense fallback={null}>
+          <OrderDrawer />
+        </Suspense>
+      )}
     </>
   );
 }
