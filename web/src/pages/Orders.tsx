@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react';
+import { useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Download, Search as SearchIcon } from 'lucide-react';
 import Topbar from '../components/Topbar';
 import { Input } from '../components/ui/Input';
-import { Select } from '../components/ui/Select';
 import { Button } from '../components/ui/Button';
 import { StatusBadge } from '../components/ui/Badge';
 import { api, qs, type Paginated } from '../lib/api';
@@ -25,6 +25,14 @@ type Order = {
   serviceCode: string | null;
 };
 
+const statusLabels: Record<string, string> = {
+  awaiting_shipment: 'Awaiting Shipment',
+  shipped: 'Shipped',
+  cancelled: 'Cancelled',
+  on_hold: 'On Hold',
+  awaiting_payment: 'Awaiting Payment',
+};
+
 function formatDate(v: string | null) {
   if (!v) return '—';
   const d = new Date(v);
@@ -37,17 +45,19 @@ function formatDate(v: string | null) {
 }
 
 export default function Orders() {
-  const [status, setStatus] = useState<string>('');
+  const { status = 'awaiting_shipment' } = useParams();
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const pageSize = 50;
+
+  const title = statusLabels[status] ?? 'Orders';
 
   const queryString = useMemo(
     () =>
       qs({
         page,
         pageSize,
-        status: status || undefined,
+        status,
         search: search || undefined,
       }),
     [page, status, search]
@@ -64,11 +74,11 @@ export default function Orders() {
 
   return (
     <>
-      <Topbar title="Orders" />
+      <Topbar title={title} />
 
       {/* Filter bar */}
       <div className="flex items-center flex-wrap gap-2 px-4 py-2 bg-white border-b border-line">
-        <div className="w-[240px]">
+        <div className="w-[260px]">
           <Input
             leading={<SearchIcon size={13} />}
             value={search}
@@ -79,19 +89,6 @@ export default function Orders() {
             placeholder="Search order #, recipient, email…"
           />
         </div>
-        <Select
-          value={status}
-          onChange={(e) => {
-            setPage(1);
-            setStatus(e.target.value);
-          }}
-        >
-          <option value="">All statuses</option>
-          <option value="awaiting_shipment">Awaiting shipment</option>
-          <option value="shipped">Shipped</option>
-          <option value="on_hold">On hold</option>
-          <option value="cancelled">Cancelled</option>
-        </Select>
         <div className="flex-1" />
         <Button variant="outline" size="sm">
           <Download size={12} />
@@ -133,9 +130,9 @@ export default function Orders() {
               <tr>
                 <td colSpan={8} className="p-16 text-center text-ink-3">
                   <div className="text-4xl mb-2">📦</div>
-                  <div className="font-semibold text-ink-2">No orders yet</div>
+                  <div className="font-semibold text-ink-2">No orders here</div>
                   <div className="text-xs mt-1">
-                    Sync from ShipStation once the connector is wired up.
+                    Once ShipStation sync is wired up, orders will land here.
                   </div>
                 </td>
               </tr>
@@ -149,7 +146,9 @@ export default function Orders() {
               >
                 <Td className="font-bold text-brand">{o.orderNumber}</Td>
                 <Td className="text-ink-2">{formatDate(o.orderDate)}</Td>
-                <Td><StatusBadge status={o.orderStatus} /></Td>
+                <Td>
+                  <StatusBadge status={o.orderStatus} />
+                </Td>
                 <Td>{o.shipToName ?? '—'}</Td>
                 <Td className="text-ink-2">
                   {[o.shipToCity, o.shipToState].filter(Boolean).join(', ') || '—'}
