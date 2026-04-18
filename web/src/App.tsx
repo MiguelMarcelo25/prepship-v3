@@ -7,6 +7,7 @@ const Login = lazy(() => import('./pages/Login'));
 const Orders = lazy(() => import('./pages/Orders'));
 const Packages = lazy(() => import('./pages/Packages'));
 const Inventory = lazy(() => import('./pages/Inventory'));
+const Locations = lazy(() => import('./pages/Locations'));
 const ComingSoon = lazy(() => import('./pages/ComingSoon'));
 
 function PageFallback() {
@@ -39,7 +40,7 @@ export default function App() {
 
           <Route path="/inventory" element={<Inventory />} />
           <Route path="/inventory/:id" element={<Inventory />} />
-          <Route path="/locations" element={<ComingSoon title="Locations" icon="📍" />} />
+          <Route path="/locations" element={<Locations />} />
           <Route path="/rates" element={<ComingSoon title="Rate Shop" icon="💰" />} />
           <Route path="/analysis" element={<ComingSoon title="Analysis" icon="📊" />} />
           <Route path="/settings" element={<ComingSoon title="Settings" icon="⚙️" />} />

@@ -71,7 +71,7 @@ export async function createLabelFromRate(input: CreateFromRateInput) {
 }
 
 export async function createLabelFromShipment(input: CreateFromShipmentInput) {
-  const shipFrom = input.shipFrom ?? getDefaultShipFrom();
+  const shipFrom = input.shipFrom ?? (await getDefaultShipFrom());
   const parcel: Parcel = {
     weight: { value: input.weightOz, unit: 'ounce' },
   };

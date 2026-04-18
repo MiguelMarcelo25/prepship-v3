@@ -115,7 +115,7 @@ function buildPackages(input: RateInput): Parcel[] {
 }
 
 export async function fetchLiveRates(input: RateInput): Promise<Rate[]> {
-  const shipFrom = input.shipFrom ?? getDefaultShipFrom();
+  const shipFrom = input.shipFrom ?? (await getDefaultShipFrom());
   const carrierIds = input.carrierIds?.length
     ? input.carrierIds
     : await getAllCarrierIds();

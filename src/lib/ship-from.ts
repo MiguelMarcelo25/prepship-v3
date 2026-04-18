@@ -1,7 +1,8 @@
 import { env } from './env';
 import type { Address } from './shipstation/types';
+import { getDefaultLocation } from '../services/locations';
 
-export function getDefaultShipFrom(): Address {
+function fromEnv(): Address {
   const e = env;
   const missing: string[] = [];
   if (!e.SHIP_FROM_NAME) missing.push('SHIP_FROM_NAME');
@@ -12,10 +13,9 @@ export function getDefaultShipFrom(): Address {
   if (!e.SHIP_FROM_PHONE) missing.push('SHIP_FROM_PHONE');
   if (missing.length) {
     throw new Error(
-      `Default ship-from address is not configured. Missing env vars: ${missing.join(', ')}`
+      `Default ship-from address is not configured. Set a default Location in the UI, or set env vars: ${missing.join(', ')}`
     );
   }
-
   return {
     name: e.SHIP_FROM_NAME!,
     company_name: e.SHIP_FROM_COMPANY || undefined,
@@ -27,4 +27,40 @@ export function getDefaultShipFrom(): Address {
     postal_code: e.SHIP_FROM_POSTAL_CODE!,
     country_code: e.SHIP_FROM_COUNTRY,
   };
+}
+
+export async function getDefaultShipFrom(): Promise<Address> {
+  try {
+    const loc = await getDefaultLocation();
+    if (loc) {
+      const missing: string[] = [];
+      if (!loc.street1) missing.push('street1');
+      if (!loc.city) missing.push('city');
+      if (!loc.state) missing.push('state');
+      if (!loc.postalCode) missing.push('postalCode');
+      if (!loc.phone) missing.push('phone');
+      if (missing.length) {
+        throw new Error(
+          `Default location "${loc.name}" is missing required fields: ${missing.join(', ')}`
+        );
+      }
+      return {
+        name: loc.name,
+        company_name: loc.company ?? undefined,
+        phone: loc.phone!,
+        address_line1: loc.street1!,
+        address_line2: loc.street2 ?? undefined,
+        city_locality: loc.city!,
+        state_province: loc.state!,
+        postal_code: loc.postalCode!,
+        country_code: loc.country,
+      };
+    }
+  } catch (err) {
+    if (err instanceof Error && err.message.startsWith('Default location')) {
+      throw err;
+    }
+    // DB fetch failed — fall through to env fallback
+  }
+  return fromEnv();
 }
