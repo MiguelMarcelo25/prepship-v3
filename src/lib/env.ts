@@ -9,6 +9,7 @@ const schema = z.object({
   SUPABASE_JWT_SECRET: z.string().min(1),
   PORT: z.coerce.number().default(3000),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+  WEB_ORIGIN: z.string().optional(),
   SHIPSTATION_API_KEY: z.string().optional(),
   SHIPSTATION_API_SECRET: z.string().optional(),
   SHIPSTATION_API_KEY_V2: z.string().optional(),

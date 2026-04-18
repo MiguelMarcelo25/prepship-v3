@@ -15,8 +15,12 @@ import syncRoute from './routes/sync';
 
 const app = new Hono();
 
+const corsOrigins: string | string[] = env.WEB_ORIGIN
+  ? env.WEB_ORIGIN.split(',').map((s) => s.trim()).filter(Boolean)
+  : '*';
+
 app.use('*', logger());
-app.use('*', cors());
+app.use('*', cors({ origin: corsOrigins }));
 
 app.route('/health', health);
 
