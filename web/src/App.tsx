@@ -1,5 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import Layout from './components/Layout';
+import ProtectedRoute from './components/ProtectedRoute';
+import Login from './pages/Login';
 import Orders from './pages/Orders';
 import Packages from './pages/Packages';
 import ComingSoon from './pages/ComingSoon';
@@ -7,7 +9,15 @@ import ComingSoon from './pages/ComingSoon';
 export default function App() {
   return (
     <Routes>
-      <Route element={<Layout />}>
+      <Route path="/login" element={<Login />} />
+
+      <Route
+        element={
+          <ProtectedRoute>
+            <Layout />
+          </ProtectedRoute>
+        }
+      >
         <Route
           path="/"
           element={<Navigate to="/orders/awaiting_shipment" replace />}

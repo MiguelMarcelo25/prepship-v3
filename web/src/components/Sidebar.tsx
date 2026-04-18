@@ -10,8 +10,10 @@ import {
   Receipt,
   ClipboardList,
   Search,
+  LogOut,
 } from 'lucide-react';
 import { api, qs, type Paginated } from '../lib/api';
+import { useAuth } from '../lib/auth';
 
 const statusItems: { status: string; label: string }[] = [
   { status: 'awaiting_shipment', label: 'Awaiting Shipment' },
@@ -96,6 +98,7 @@ function ToolRow({
 }
 
 export default function Sidebar() {
+  const { user, signOut } = useAuth();
   return (
     <aside className="w-sidebar shrink-0 bg-white border-r border-line flex flex-col h-full">
       {/* Logo */}
@@ -136,9 +139,29 @@ export default function Sidebar() {
       </nav>
 
       {/* Bottom */}
-      <div className="px-3 py-2.5 border-t border-line flex items-center gap-2 text-[10.5px] text-ink-3">
-        <span className="w-1.5 h-1.5 rounded-full bg-ok" />
-        <span>API connected</span>
+      <div className="px-3 py-2.5 border-t border-line flex items-center gap-2">
+        <div className="flex-1 min-w-0">
+          {user && (
+            <div className="text-[11px] font-semibold text-ink-2 truncate">
+              {user.email}
+            </div>
+          )}
+          <div className="flex items-center gap-1.5 text-[10.5px] text-ink-3 mt-0.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-ok" />
+            <span>API connected</span>
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            void signOut();
+          }}
+          className="text-ink-3 hover:text-ink transition-colors"
+          title="Sign out"
+          aria-label="Sign out"
+        >
+          <LogOut size={13} />
+        </button>
       </div>
     </aside>
   );

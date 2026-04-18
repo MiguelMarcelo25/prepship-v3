@@ -1,3 +1,5 @@
+import { supabase } from './supabase';
+
 const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
 
 export type Pagination = {
@@ -16,14 +18,28 @@ type Init = Omit<RequestInit, 'body'> & { body?: unknown };
 
 async function request<T>(path: string, init: Init = {}): Promise<T> {
   const { body, headers, ...rest } = init;
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+
+  const finalHeaders: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(headers as Record<string, string> | undefined),
+  };
+  if (session?.access_token) {
+    finalHeaders['Authorization'] = `Bearer ${session.access_token}`;
+  }
+
   const res = await fetch(`${BASE}${path}`, {
     ...rest,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(headers ?? {}),
-    },
+    headers: finalHeaders,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+
+  if (res.status === 401) {
+    throw new Error('Not authenticated');
+  }
+
   if (!res.ok) {
     let msg = `${res.status} ${res.statusText}`;
     try {
@@ -34,6 +50,7 @@ async function request<T>(path: string, init: Init = {}): Promise<T> {
     }
     throw new Error(msg);
   }
+
   return res.json() as Promise<T>;
 }
 

@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { logger } from 'hono/logger';
 import { cors } from 'hono/cors';
 import { env } from './lib/env';
+import { requireAuth } from './middleware/auth';
 import health from './routes/health';
 import ordersRoute from './routes/orders';
 import shipmentsRoute from './routes/shipments';
@@ -18,6 +19,16 @@ app.use('*', logger());
 app.use('*', cors());
 
 app.route('/health', health);
+
+// Everything below requires a valid Supabase JWT.
+app.use('/orders/*', requireAuth);
+app.use('/shipments/*', requireAuth);
+app.use('/packages/*', requireAuth);
+app.use('/clients/*', requireAuth);
+app.use('/rates/*', requireAuth);
+app.use('/labels/*', requireAuth);
+app.use('/sync/*', requireAuth);
+
 app.route('/orders', ordersRoute);
 app.route('/shipments', shipmentsRoute);
 app.route('/packages', packagesRoute);
