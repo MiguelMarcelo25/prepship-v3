@@ -11,6 +11,7 @@ import {
   ClipboardList,
   Search,
   LogOut,
+  Users,
 } from 'lucide-react';
 import { api, qs, type Paginated } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -26,6 +27,7 @@ const toolItems: { to: string; label: string; icon: typeof Package }[] = [
   { to: '/inventory', label: 'Inventory', icon: Package },
   { to: '/locations', label: 'Locations', icon: MapPin },
   { to: '/packages', label: 'Packages', icon: Boxes },
+  { to: '/clients', label: 'Clients', icon: Users },
   { to: '/rates', label: 'Rate Shop', icon: DollarSign },
   { to: '/analysis', label: 'Analysis', icon: BarChart3 },
   { to: '/settings', label: 'Settings', icon: SettingsIcon },
