@@ -2,11 +2,11 @@ export type Address = {
   name?: string;
   company_name?: string;
   phone?: string;
-  address_line1: string;
+  address_line1?: string;
   address_line2?: string;
   address_line3?: string;
-  city_locality: string;
-  state_province: string;
+  city_locality?: string;
+  state_province?: string;
   postal_code: string;
   country_code: string;
   address_residential_indicator?: 'yes' | 'no' | 'unknown';

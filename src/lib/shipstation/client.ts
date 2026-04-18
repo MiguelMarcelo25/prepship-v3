@@ -68,9 +68,10 @@ export async function ssRequest<T>(path: string, opts: RequestOpts = {}): Promis
           } catch {
             body = await res.text();
           }
+          const detail = extractShipStationMessage(body);
           throw new ShipStationError(
             res.status,
-            `ShipStation ${res.status}: ${res.statusText}`,
+            `ShipStation ${res.status}: ${detail ?? res.statusText}`,
             body
           );
         }
@@ -87,6 +88,19 @@ export async function ssRequest<T>(path: string, opts: RequestOpts = {}): Promis
   const p = execute().finally(() => inflight.delete(opts.dedupeKey!));
   inflight.set(opts.dedupeKey, p);
   return p;
+}
+
+function extractShipStationMessage(body: unknown): string | null {
+  if (!body || typeof body !== 'object') return null;
+  const b = body as { errors?: Array<{ message?: string }>; message?: string };
+  if (Array.isArray(b.errors) && b.errors.length) {
+    return b.errors
+      .map((e) => e?.message)
+      .filter(Boolean)
+      .join('; ');
+  }
+  if (typeof b.message === 'string') return b.message;
+  return null;
 }
 
 export const shipstationStatus = () => ({

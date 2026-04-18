@@ -53,16 +53,21 @@ function pickBestRate(rates: Rate[]): Rate | null {
 }
 
 function buildShipTo(input: RateInput): Address {
-  return {
-    name: input.toName ?? 'Recipient',
-    address_line1: input.toAddress ?? 'Unknown',
-    city_locality: input.toCity ?? 'Unknown',
-    state_province: input.toState ?? 'XX',
+  const addr: Address = {
     postal_code: input.toZip,
     country_code: (input.toCountry ?? 'US').toUpperCase(),
     address_residential_indicator:
-      input.residential === true ? 'yes' : input.residential === false ? 'no' : 'unknown',
+      input.residential === true
+        ? 'yes'
+        : input.residential === false
+          ? 'no'
+          : 'unknown',
   };
+  if (input.toName) addr.name = input.toName;
+  if (input.toAddress) addr.address_line1 = input.toAddress;
+  if (input.toCity) addr.city_locality = input.toCity;
+  if (input.toState) addr.state_province = input.toState;
+  return addr;
 }
 
 function buildPackages(input: RateInput): Parcel[] {
