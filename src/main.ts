@@ -14,6 +14,7 @@ import labelsRoute from './routes/labels';
 import syncRoute from './routes/sync';
 import inventoryRoute from './routes/inventory';
 import locationsRoute from './routes/locations';
+import settingsRoute from './routes/settings';
 
 const app = new Hono();
 
@@ -36,6 +37,7 @@ app.use('/labels/*', requireAuth);
 app.use('/sync/*', requireAuth);
 app.use('/inventory/*', requireAuth);
 app.use('/locations/*', requireAuth);
+app.use('/settings/*', requireAuth);
 
 app.route('/orders', ordersRoute);
 app.route('/shipments', shipmentsRoute);
@@ -46,6 +48,7 @@ app.route('/labels', labelsRoute);
 app.route('/sync', syncRoute);
 app.route('/inventory', inventoryRoute);
 app.route('/locations', locationsRoute);
+app.route('/settings', settingsRoute);
 
 app.notFound((c) => c.json({ error: 'Not found' }, 404));
 
