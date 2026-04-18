@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { api, qs, type Paginated } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import SyncOrdersButton from './SyncOrdersButton';
 
 const statusItems: { status: string; label: string }[] = [
   { status: 'awaiting_shipment', label: 'Awaiting Shipment' },
@@ -125,6 +126,11 @@ export default function Sidebar() {
             className="w-full rounded-btn border border-line-2 bg-white pl-7 pr-2.5 py-[7px] text-[12px] text-ink placeholder:text-ink-3 focus:border-brand focus:ring-2 focus:ring-brand/15 outline-none"
           />
         </div>
+      </div>
+
+      {/* Sync action */}
+      <div className="px-2.5 pb-1.5">
+        <SyncOrdersButton />
       </div>
 
       {/* Nav */}
