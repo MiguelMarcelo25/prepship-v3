@@ -1,6 +1,6 @@
 import { createMiddleware } from 'hono/factory';
 import { jwtVerify } from 'jose';
-import { env } from '../lib/env.js';
+import { env } from '../lib/env';
 
 const jwtSecret = new TextEncoder().encode(env.SUPABASE_JWT_SECRET);
 

@@ -1,0 +1,65 @@
+import {
+  boolean,
+  index,
+  integer,
+  jsonb,
+  numeric,
+  pgTable,
+  real,
+  serial,
+  text,
+  timestamp,
+} from 'drizzle-orm/pg-core';
+import { clients } from './clients';
+import { orders } from './orders';
+
+export const shipments = pgTable(
+  'shipments',
+  {
+    id: serial().primaryKey(),
+    orderId: integer().references(() => orders.id),
+    clientId: integer().references(() => clients.id),
+    orderNumber: text(),
+    carrierCode: text(),
+    serviceCode: text(),
+    trackingNumber: text(),
+    shipDate: timestamp({ withTimezone: true }),
+    createDate: timestamp({ withTimezone: true }),
+    weightOz: real(),
+    dimsL: real(),
+    dimsW: real(),
+    dimsH: real(),
+    cost: numeric({ precision: 10, scale: 2 }),
+    otherCost: numeric({ precision: 10, scale: 2 }).default('0').notNull(),
+    labelUrl: text(),
+    labelCreatedAt: timestamp({ withTimezone: true }),
+    labelFormat: text(),
+    labelCarrier: text(),
+    labelService: text(),
+    labelTracking: text(),
+    labelCost: numeric({ precision: 10, scale: 2 }),
+    labelShipDate: timestamp({ withTimezone: true }),
+    labelProvider: integer(),
+    labelShipmentId: integer(),
+    selectedRateJson: jsonb(),
+    selectedPid: integer(),
+    selectedPackageId: text(),
+    providerAccountId: integer(),
+    providerAccountNickname: text(),
+    voided: boolean().default(false).notNull(),
+    source: text(),
+    isReturn: boolean().default(false).notNull(),
+    returnForShipmentId: integer(),
+    returnReason: text(),
+    createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index('shipments_order_idx').on(t.orderId),
+    index('shipments_client_idx').on(t.clientId),
+    index('shipments_date_idx').on(t.shipDate),
+  ]
+);
+
+export type Shipment = typeof shipments.$inferSelect;
+export type NewShipment = typeof shipments.$inferInsert;

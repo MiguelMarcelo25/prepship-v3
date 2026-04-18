@@ -1,0 +1,76 @@
+import {
+  boolean,
+  index,
+  integer,
+  jsonb,
+  numeric,
+  pgTable,
+  real,
+  serial,
+  text,
+  timestamp,
+} from 'drizzle-orm/pg-core';
+import { clients } from './clients';
+
+export const orders = pgTable(
+  'orders',
+  {
+    id: serial().primaryKey(),
+    clientId: integer().references(() => clients.id),
+    orderNumber: text().notNull(),
+    orderStatus: text().notNull().default('awaiting_shipment'),
+    orderDate: timestamp({ withTimezone: true }),
+    storeId: integer(),
+    customerEmail: text(),
+    shipToName: text(),
+    shipToCity: text(),
+    shipToState: text(),
+    shipToPostalCode: text(),
+    carrierCode: text(),
+    serviceCode: text(),
+    weightOz: real(),
+    orderTotal: numeric({ precision: 10, scale: 2 }).default('0').notNull(),
+    shippingAmount: numeric({ precision: 10, scale: 2 }).default('0').notNull(),
+    items: jsonb().$type<unknown[]>().default([]).notNull(),
+    raw: jsonb().$type<Record<string, unknown>>().default({}).notNull(),
+    externallyShipped: boolean().default(false).notNull(),
+    externallyFulfilledVerified: boolean().default(false).notNull(),
+    createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
+    updatedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index('orders_status_idx').on(t.orderStatus),
+    index('orders_client_idx').on(t.clientId),
+    index('orders_store_idx').on(t.storeId),
+    index('orders_date_idx').on(t.orderDate),
+  ]
+);
+
+export const orderOverrides = pgTable('order_overrides', {
+  orderId: integer()
+    .primaryKey()
+    .references(() => orders.id, { onDelete: 'cascade' }),
+  residential: boolean(),
+  trackingNumber: text(),
+  notes: text().default(''),
+  tags: jsonb().$type<string[]>().default([]).notNull(),
+  refUspsRate: text(),
+  refUpsRate: text(),
+  rateWeightOz: real(),
+  rateDimsL: real(),
+  rateDimsW: real(),
+  rateDimsH: real(),
+  selectedPid: integer(),
+  selectedPackageId: text(),
+  bestRateJson: jsonb(),
+  bestRateAt: timestamp({ withTimezone: true }),
+  bestRateDims: text(),
+  shippingAccount: text(),
+  externallyShippedSource: text(),
+  updatedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
+});
+
+export type Order = typeof orders.$inferSelect;
+export type NewOrder = typeof orders.$inferInsert;
+export type OrderOverrides = typeof orderOverrides.$inferSelect;
+export type NewOrderOverrides = typeof orderOverrides.$inferInsert;
