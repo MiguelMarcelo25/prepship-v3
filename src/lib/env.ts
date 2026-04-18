@@ -12,6 +12,15 @@ const schema = z.object({
   SHIPSTATION_API_KEY: z.string().optional(),
   SHIPSTATION_API_SECRET: z.string().optional(),
   SHIPSTATION_API_KEY_V2: z.string().optional(),
+  SHIP_FROM_NAME: z.string().optional(),
+  SHIP_FROM_COMPANY: z.string().optional(),
+  SHIP_FROM_STREET1: z.string().optional(),
+  SHIP_FROM_STREET2: z.string().optional(),
+  SHIP_FROM_CITY: z.string().optional(),
+  SHIP_FROM_STATE: z.string().optional(),
+  SHIP_FROM_POSTAL_CODE: z.string().optional(),
+  SHIP_FROM_COUNTRY: z.string().default('US'),
+  SHIP_FROM_PHONE: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);

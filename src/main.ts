@@ -8,6 +8,8 @@ import ordersRoute from './routes/orders';
 import shipmentsRoute from './routes/shipments';
 import packagesRoute from './routes/packages';
 import clientsRoute from './routes/clients';
+import ratesRoute from './routes/rates';
+import labelsRoute from './routes/labels';
 
 const app = new Hono();
 
@@ -19,6 +21,8 @@ app.route('/orders', ordersRoute);
 app.route('/shipments', shipmentsRoute);
 app.route('/packages', packagesRoute);
 app.route('/clients', clientsRoute);
+app.route('/rates', ratesRoute);
+app.route('/labels', labelsRoute);
 
 app.notFound((c) => c.json({ error: 'Not found' }, 404));
 
