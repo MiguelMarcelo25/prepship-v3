@@ -8,9 +8,38 @@ import {
   type Address,
   type Parcel,
 } from '../lib/shipstation';
+import type { CarriersResponse } from '../lib/shipstation/types';
 import { getDefaultShipFrom } from '../lib/ship-from';
 
 const CACHE_TTL_MS = 1000 * 60 * 60 * 6; // 6 hours
+const CARRIER_CACHE_MS = 1000 * 60 * 15; // 15 min
+
+let cachedCarrierIds: string[] | null = null;
+let carriersFetchedAt = 0;
+
+async function getAllCarrierIds(): Promise<string[]> {
+  if (
+    cachedCarrierIds &&
+    cachedCarrierIds.length &&
+    Date.now() - carriersFetchedAt < CARRIER_CACHE_MS
+  ) {
+    return cachedCarrierIds;
+  }
+  const res = await ssRequest<CarriersResponse>('/v2/carriers', {
+    dedupeKey: 'carriers:list',
+  });
+  const ids = res.carriers
+    .filter((c) => !c.disabled_by_billing_plan)
+    .map((c) => c.carrier_id);
+  if (!ids.length) {
+    throw new Error(
+      'No ShipStation carriers available — connect a carrier account in ShipStation first.'
+    );
+  }
+  cachedCarrierIds = ids;
+  carriersFetchedAt = Date.now();
+  return ids;
+}
 
 export type RateInput = {
   weightOz: number;
@@ -87,13 +116,15 @@ function buildPackages(input: RateInput): Parcel[] {
 
 export async function fetchLiveRates(input: RateInput): Promise<Rate[]> {
   const shipFrom = input.shipFrom ?? getDefaultShipFrom();
+  const carrierIds = input.carrierIds?.length
+    ? input.carrierIds
+    : await getAllCarrierIds();
+
   const res = await ssRequest<RatesResponse>('/v2/rates', {
     method: 'POST',
     dedupeKey: `rates:${rateCacheKey(input)}`,
     body: {
-      rate_options: input.carrierIds?.length
-        ? { carrier_ids: input.carrierIds }
-        : undefined,
+      rate_options: { carrier_ids: carrierIds },
       shipment: {
         validate_address: 'no_validation',
         ship_to: buildShipTo(input),
