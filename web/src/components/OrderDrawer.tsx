@@ -1,7 +1,13 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, X, Package as PackageIcon } from 'lucide-react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  ArrowLeft,
+  X,
+  Package as PackageIcon,
+  RefreshCw,
+  Check,
+} from 'lucide-react';
 import { api } from '../lib/api';
 import { Button } from './ui/Button';
 import { Card, Field } from './ui/Card';
@@ -74,6 +80,37 @@ type OrderDetail = {
   shipments: Shipment[];
 };
 
+type Rate = {
+  rate_id: string;
+  carrier_code: string;
+  carrier_nickname?: string;
+  service_type: string;
+  service_code: string;
+  shipping_amount: { amount: number; currency: string };
+  delivery_days?: number | null;
+  estimated_delivery_date?: string | null;
+};
+
+type RatesResult = {
+  rates: Rate[];
+  bestRate: Rate | null;
+  cached: boolean;
+  cacheKey: string;
+  fetchedAt: string;
+};
+
+type RatesInput = {
+  weightOz: number;
+  toZip: string;
+  toCountry?: string;
+  toState?: string;
+  toCity?: string;
+  toAddress?: string;
+  toName?: string;
+  residential?: boolean;
+  forceRefresh?: boolean;
+};
+
 function formatDate(v: string | null) {
   if (!v) return '—';
   const d = new Date(v);
@@ -87,10 +124,29 @@ function formatDate(v: string | null) {
   });
 }
 
+function buildRatesInput(data: OrderDetail): RatesInput | { error: string } {
+  if (!data.weightOz) return { error: 'Order weight is not set.' };
+  if (!data.shipToPostalCode && !data.raw?.shipTo?.postalCode)
+    return { error: 'Recipient postal code is missing.' };
+
+  return {
+    weightOz: data.weightOz,
+    toZip: (data.shipToPostalCode ?? data.raw?.shipTo?.postalCode)!,
+    toCountry: data.raw?.shipTo?.country,
+    toState: data.shipToState ?? data.raw?.shipTo?.state,
+    toCity: data.shipToCity ?? data.raw?.shipTo?.city,
+    toAddress: data.raw?.shipTo?.street1,
+    toName: data.shipToName ?? data.raw?.shipTo?.name,
+    residential: data.overrides?.residential ?? undefined,
+  };
+}
+
 export default function OrderDrawer() {
   const { status, orderId } = useParams();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const id = Number(orderId);
+  const [selectedRateId, setSelectedRateId] = useState<string | null>(null);
 
   const close = () => navigate(`/orders/${status ?? 'awaiting_shipment'}`);
 
@@ -103,18 +159,54 @@ export default function OrderDrawer() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const { data, isLoading, isError, error } = useQuery({
+  const {
+    data,
+    isLoading,
+    isError,
+    error,
+  } = useQuery({
     queryKey: ['order', id],
     queryFn: () => api.get<OrderDetail>(`/orders/${id}`),
     enabled: Number.isFinite(id) && id > 0,
   });
 
+  const ratesMutation = useMutation({
+    mutationFn: (input: RatesInput) => api.post<RatesResult>('/rates', input),
+  });
+
+  const purchaseMutation = useMutation({
+    mutationFn: (rateId: string) =>
+      api.post<Shipment>('/labels', {
+        mode: 'from_rate',
+        rateId,
+        orderId: id,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['order', id] });
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+      queryClient.invalidateQueries({ queryKey: ['orders-count'] });
+      setSelectedRateId(null);
+      ratesMutation.reset();
+    },
+  });
+
+  const canBuyLabel =
+    data && data.orderStatus === 'awaiting_shipment' && data.shipments.length === 0;
+
+  const onFetchRates = (forceRefresh = false) => {
+    if (!data) return;
+    const input = buildRatesInput(data);
+    if ('error' in input) return;
+    ratesMutation.mutate({ ...input, forceRefresh });
+  };
+
+  const sortedRates = (ratesMutation.data?.rates ?? [])
+    .slice()
+    .sort((a, b) => a.shipping_amount.amount - b.shipping_amount.amount);
+  const selectedRate = sortedRates.find((r) => r.rate_id === selectedRateId) ?? null;
+
   return (
-    <div
-      className="fixed inset-0 z-50 flex"
-      role="dialog"
-      aria-modal="true"
-    >
+    <div className="fixed inset-0 z-50 flex" role="dialog" aria-modal="true">
       <div
         className="flex-1 bg-black/35"
         onClick={close}
@@ -160,21 +252,13 @@ export default function OrderDrawer() {
               <Card title="Summary">
                 <div className="grid grid-cols-2 gap-3">
                   <Field label="Order date" value={formatDate(data.orderDate)} />
-                  <Field
-                    label="Total"
-                    value={`$${data.orderTotal}`}
-                    mono
-                  />
+                  <Field label="Total" value={`$${data.orderTotal}`} mono />
                   <Field
                     label="Weight"
                     value={data.weightOz ? `${data.weightOz.toFixed(1)} oz` : null}
                     mono
                   />
-                  <Field
-                    label="Shipping"
-                    value={`$${data.shippingAmount}`}
-                    mono
-                  />
+                  <Field label="Shipping" value={`$${data.shippingAmount}`} mono />
                   <Field
                     label="Carrier (requested)"
                     value={data.carrierCode?.toUpperCase() ?? null}
@@ -208,7 +292,10 @@ export default function OrderDrawer() {
                           )}
                         </div>
                         <div className="flex-1 min-w-0">
-                          <div className="text-sm2 text-ink truncate" title={it.name ?? ''}>
+                          <div
+                            className="text-sm2 text-ink truncate"
+                            title={it.name ?? ''}
+                          >
                             {it.name ?? 'Unnamed item'}
                           </div>
                           <div className="flex items-center gap-2 text-tiny text-ink-3 mt-0.5">
@@ -262,15 +349,150 @@ export default function OrderDrawer() {
                     <div className="text-ink-2">{data.raw?.shipTo?.country}</div>
                   )}
                   {data.customerEmail && (
-                    <div className="text-ink-2 font-mono pt-1">
-                      {data.customerEmail}
-                    </div>
+                    <div className="text-ink-2 font-mono pt-1">{data.customerEmail}</div>
                   )}
                   {data.raw?.shipTo?.phone && (
                     <div className="text-ink-2 font-mono">{data.raw.shipTo.phone}</div>
                   )}
                 </div>
               </Card>
+
+              {/* Rates (only while order is still awaitable) */}
+              {canBuyLabel && (
+                <Card
+                  title="Shipping rates"
+                  actions={
+                    ratesMutation.data && (
+                      <button
+                        type="button"
+                        onClick={() => onFetchRates(true)}
+                        disabled={ratesMutation.isPending}
+                        className="text-ink-3 hover:text-ink disabled:opacity-50"
+                        title="Refresh rates"
+                      >
+                        <RefreshCw
+                          size={12}
+                          className={ratesMutation.isPending ? 'animate-spin' : ''}
+                        />
+                      </button>
+                    )
+                  }
+                  bodyClassName={ratesMutation.data ? '' : 'p-3.5'}
+                >
+                  {!ratesMutation.data && !ratesMutation.isPending && (
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="text-sm2 text-ink-2">
+                        Live quote from ShipStation carriers.
+                      </div>
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        onClick={() => onFetchRates()}
+                      >
+                        Fetch rates
+                      </Button>
+                    </div>
+                  )}
+
+                  {ratesMutation.isPending && !ratesMutation.data && (
+                    <div className="text-center text-ink-3 text-sm2 py-4">
+                      Fetching live rates…
+                    </div>
+                  )}
+
+                  {ratesMutation.isError && (
+                    <div className="text-danger text-sm2 py-1">
+                      {(ratesMutation.error as Error).message}
+                    </div>
+                  )}
+
+                  {ratesMutation.data && (
+                    <>
+                      <div className="divide-y divide-line">
+                        {sortedRates.map((rate) => {
+                          const isSelected = selectedRateId === rate.rate_id;
+                          return (
+                            <button
+                              key={rate.rate_id}
+                              type="button"
+                              onClick={() => setSelectedRateId(rate.rate_id)}
+                              className={`w-full text-left px-3.5 py-2.5 border-l-[3px] transition-colors ${
+                                isSelected
+                                  ? 'bg-brand-bg border-brand'
+                                  : 'border-transparent hover:bg-surface-2'
+                              }`}
+                            >
+                              <div className="flex items-center gap-2">
+                                <div
+                                  className={`w-4 h-4 rounded-full border-2 shrink-0 flex items-center justify-center ${
+                                    isSelected
+                                      ? 'bg-brand border-brand'
+                                      : 'border-line-2'
+                                  }`}
+                                >
+                                  {isSelected && (
+                                    <Check size={10} className="text-white" />
+                                  )}
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <div className="text-sm2 font-semibold text-ink">
+                                    {rate.carrier_code.toUpperCase()} —{' '}
+                                    {rate.service_type}
+                                  </div>
+                                  <div className="text-tiny text-ink-3 mt-0.5">
+                                    {rate.delivery_days
+                                      ? `~${rate.delivery_days} transit day${rate.delivery_days === 1 ? '' : 's'}`
+                                      : 'Transit time varies'}
+                                  </div>
+                                </div>
+                                <div className="text-sm2 font-bold font-mono shrink-0">
+                                  ${rate.shipping_amount.amount.toFixed(2)}
+                                </div>
+                              </div>
+                            </button>
+                          );
+                        })}
+                        {sortedRates.length === 0 && (
+                          <div className="px-3.5 py-4 text-ink-3 text-sm2 text-center">
+                            No rates returned for this shipment.
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="px-3.5 py-2.5 border-t border-line bg-surface-2 flex items-center gap-2">
+                        <div className="text-tiny text-ink-3 flex-1">
+                          {ratesMutation.data.cached ? 'From cache' : 'Live'} ·{' '}
+                          {sortedRates.length} rate
+                          {sortedRates.length === 1 ? '' : 's'}
+                        </div>
+                        <Button
+                          variant="green"
+                          size="sm"
+                          disabled={
+                            !selectedRateId || purchaseMutation.isPending
+                          }
+                          onClick={() => {
+                            if (!selectedRateId) return;
+                            purchaseMutation.mutate(selectedRateId);
+                          }}
+                        >
+                          {purchaseMutation.isPending
+                            ? 'Purchasing…'
+                            : selectedRate
+                              ? `Buy label — $${selectedRate.shipping_amount.amount.toFixed(2)}`
+                              : 'Select a rate'}
+                        </Button>
+                      </div>
+
+                      {purchaseMutation.isError && (
+                        <div className="px-3.5 py-2 text-danger text-sm2 border-t border-line">
+                          {(purchaseMutation.error as Error).message}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </Card>
+              )}
 
               {/* Shipments */}
               <Card title={`Shipments (${data.shipments.length})`}>
@@ -320,19 +542,6 @@ export default function OrderDrawer() {
               </Card>
             </>
           )}
-        </div>
-
-        {/* Footer action (placeholder — Create Label flow lands next) */}
-        <div className="px-3.5 py-3 border-t border-line bg-white">
-          <Button
-            variant="green"
-            size="md"
-            className="w-full"
-            disabled
-            title="Create Label flow lands in the next step"
-          >
-            Create Label
-          </Button>
         </div>
       </aside>
     </div>
