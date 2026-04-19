@@ -1,9 +1,10 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { eq } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { clients } from '../db/schema/clients';
+import { orders } from '../db/schema/orders';
 
 const app = new Hono();
 
@@ -58,6 +59,65 @@ app.delete('/:id{[0-9]+}', async (c) => {
   const [row] = await db.delete(clients).where(eq(clients.id, id)).returning();
   if (!row) return c.json({ error: 'Client not found' }, 404);
   return c.json({ deleted: true });
+});
+
+// Backfill: assign this client to every order whose storeId is in the
+// client's storeIds array and currently has no client (or a different one,
+// when ?overwrite=true).
+const backfillQuery = z.object({
+  overwrite: z
+    .union([z.boolean(), z.enum(['true', 'false'])])
+    .optional()
+    .transform((v) => v === true || v === 'true'),
+});
+
+app.post(
+  '/:id{[0-9]+}/backfill-orders',
+  zValidator('query', backfillQuery),
+  async (c) => {
+    const id = Number(c.req.param('id'));
+    const { overwrite } = c.req.valid('query');
+    const [client] = await db
+      .select()
+      .from(clients)
+      .where(eq(clients.id, id))
+      .limit(1);
+    if (!client) return c.json({ error: 'Client not found' }, 404);
+    const storeIds = client.storeIds ?? [];
+    if (!storeIds.length) {
+      return c.json({ updated: 0, message: 'Client has no storeIds configured' });
+    }
+
+    const where = overwrite
+      ? inArray(orders.storeId, storeIds)
+      : and(inArray(orders.storeId, storeIds), isNull(orders.clientId));
+
+    const result = await db
+      .update(orders)
+      .set({ clientId: id, updatedAt: new Date() })
+      .where(where)
+      .returning({ id: orders.id });
+
+    return c.json({
+      updated: result.length,
+      message: `Assigned ${result.length} orders to ${client.name}`,
+    });
+  }
+);
+
+// Orphan report: orders with a storeId not owned by any client
+app.get('/unassigned-orphans', async (c) => {
+  const rows = await db.execute<{ store_id: number; count: number }>(sql`
+    select o.store_id, count(*)::int as count
+    from orders o
+    left join clients c on o.store_id = any(c.store_ids)
+    where o.client_id is null
+      and o.store_id is not null
+      and c.id is null
+    group by o.store_id
+    order by count desc
+  `);
+  return c.json({ data: rows });
 });
 
 export default app;

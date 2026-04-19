@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orders } from '../db/schema/orders';
+import { clients } from '../db/schema/clients';
 import { ssV1Request } from '../lib/shipstation/v1-client';
 import { getSettingNumber, setSetting } from './settings';
 
@@ -67,13 +68,30 @@ function toNumericString(n?: number | null): string {
   return Number.isFinite(n as number) ? (n as number).toFixed(2) : '0';
 }
 
-async function upsertOrder(o: SSOrder) {
+async function buildStoreToClientMap(): Promise<Map<number, number>> {
+  const rows = await db
+    .select({ id: clients.id, storeIds: clients.storeIds })
+    .from(clients);
+  const map = new Map<number, number>();
+  for (const c of rows) {
+    for (const sid of c.storeIds ?? []) map.set(sid, c.id);
+  }
+  return map;
+}
+
+async function upsertOrder(
+  o: SSOrder,
+  storeToClient: Map<number, number>
+) {
+  const storeId = o.advancedOptions?.storeId ?? null;
+  const clientId = storeId !== null ? storeToClient.get(storeId) ?? null : null;
   const values = {
     externalOrderId: String(o.orderId),
     orderNumber: o.orderNumber,
     orderStatus: o.orderStatus,
     orderDate: o.orderDate ? new Date(o.orderDate) : null,
-    storeId: o.advancedOptions?.storeId ?? null,
+    clientId,
+    storeId,
     customerEmail: o.customerEmail ?? null,
     shipToName: o.shipTo?.name ?? null,
     shipToCity: o.shipTo?.city ?? null,
@@ -98,6 +116,7 @@ async function upsertOrder(o: SSOrder) {
         orderNumber: values.orderNumber,
         orderStatus: values.orderStatus,
         orderDate: values.orderDate,
+        clientId: values.clientId,
         storeId: values.storeId,
         customerEmail: values.customerEmail,
         shipToName: values.shipToName,
@@ -136,6 +155,7 @@ export async function syncOrders(opts: {
   const runStartMs = Date.now();
   const sinceIso = new Date(lastSync).toISOString();
   const sinceParam = formatSSDate(lastSync);
+  const storeToClient = await buildStoreToClientMap();
 
   let page = 1;
   let pages = 1;
@@ -157,7 +177,7 @@ export async function syncOrders(opts: {
     pages = res.pages;
 
     for (const o of res.orders) {
-      await upsertOrder(o);
+      await upsertOrder(o, storeToClient);
       total += 1;
     }
 

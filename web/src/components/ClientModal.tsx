@@ -12,6 +12,7 @@ type Client = {
   email: string | null;
   phone: string | null;
   active: boolean;
+  storeIds: number[];
 };
 
 type Body = {
@@ -20,7 +21,17 @@ type Body = {
   email?: string | null;
   phone?: string | null;
   active?: boolean;
+  storeIds?: number[];
 };
+
+function parseStoreIds(input: string): number[] {
+  return input
+    .split(/[,\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => Number(s))
+    .filter((n) => Number.isFinite(n) && n > 0);
+}
 
 export default function ClientModal({
   onClose,
@@ -37,6 +48,9 @@ export default function ClientModal({
   const [email, setEmail] = useState(existing?.email ?? '');
   const [phone, setPhone] = useState(existing?.phone ?? '');
   const [active, setActive] = useState(existing?.active ?? true);
+  const [storeIds, setStoreIds] = useState(
+    (existing?.storeIds ?? []).join(', ')
+  );
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -66,6 +80,7 @@ export default function ClientModal({
       email: email.trim() || null,
       phone: phone.trim() || null,
       active,
+      storeIds: parseStoreIds(storeIds),
     });
   };
 
@@ -77,7 +92,7 @@ export default function ClientModal({
       aria-modal="true"
     >
       <div
-        className="w-[440px] max-w-full bg-white rounded-modal shadow-lg overflow-hidden"
+        className="w-[460px] max-w-full bg-white rounded-modal shadow-lg overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 px-5 py-3 border-b border-line">
@@ -128,6 +143,22 @@ export default function ClientModal({
             <div>
               <label className="section-label block mb-1">Phone</label>
               <Input value={phone} onChange={(e) => setPhone(e.target.value)} />
+            </div>
+          </div>
+
+          <div>
+            <label className="section-label block mb-1">
+              ShipStation store IDs
+            </label>
+            <Input
+              value={storeIds}
+              onChange={(e) => setStoreIds(e.target.value)}
+              placeholder="12345, 67890"
+            />
+            <div className="text-tiny text-ink-3 mt-1 leading-relaxed">
+              Comma-separated. Orders synced from these stores get auto-assigned
+              to this client. Use the <strong>Backfill</strong> button on the
+              client card after saving to re-assign existing orders.
             </div>
           </div>
 

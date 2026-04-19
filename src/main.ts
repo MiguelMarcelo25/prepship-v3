@@ -18,6 +18,7 @@ import settingsRoute from './routes/settings';
 import billingRoute from './routes/billing';
 import manifestsRoute from './routes/manifests';
 import analysisRoute from './routes/analysis';
+import cronRoute from './routes/cron';
 
 const app = new Hono();
 
@@ -29,6 +30,7 @@ app.use('*', logger());
 app.use('*', cors({ origin: corsOrigins }));
 
 app.route('/health', health);
+app.route('/cron', cronRoute);
 
 // Everything below requires a valid Supabase JWT.
 app.use('/orders/*', requireAuth);

@@ -1,6 +1,6 @@
 import { lazy, Suspense, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Pencil, Trash2 } from 'lucide-react';
+import { Plus, Pencil, Trash2, Wand2 } from 'lucide-react';
 import Topbar from '../components/Topbar';
 import { Button } from '../components/ui/Button';
 import { api } from '../lib/api';
@@ -17,6 +17,8 @@ type Client = {
   storeIds: number[];
 };
 
+type BackfillResult = { updated: number; message?: string };
+
 export default function Clients() {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState<Client | null>(null);
@@ -30,6 +32,18 @@ export default function Clients() {
   const remove = useMutation({
     mutationFn: (id: number) => api.delete(`/clients/${id}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['clients'] }),
+  });
+
+  const backfill = useMutation({
+    mutationFn: (args: { id: number; overwrite: boolean }) =>
+      api.post<BackfillResult>(
+        `/clients/${args.id}/backfill-orders${args.overwrite ? '?overwrite=true' : ''}`,
+        {}
+      ),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+      queryClient.invalidateQueries({ queryKey: ['orders-count'] });
+    },
   });
 
   const rows = data ?? [];
@@ -88,12 +102,25 @@ export default function Clients() {
                   {c.phone && <div>{c.phone}</div>}
                 </div>
 
-                <div className="text-tiny text-ink-3">
-                  {c.storeIds.length} linked store
-                  {c.storeIds.length === 1 ? '' : 's'}
+                <div className="flex items-center gap-1 flex-wrap">
+                  <span className="text-tiny text-ink-3">Stores:</span>
+                  {c.storeIds.length ? (
+                    c.storeIds.map((sid) => (
+                      <span
+                        key={sid}
+                        className="text-tiny font-mono px-1.5 py-0.5 rounded bg-surface-3 text-ink-2"
+                      >
+                        {sid}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-tiny text-ink-3 italic">
+                      none linked
+                    </span>
+                  )}
                 </div>
 
-                <div className="flex items-center gap-1 pt-1 border-t border-line">
+                <div className="flex items-center gap-1 pt-1 border-t border-line flex-wrap">
                   <Button
                     variant="ghost"
                     size="xs"
@@ -101,6 +128,30 @@ export default function Clients() {
                   >
                     <Pencil size={11} />
                     Edit
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    disabled={!c.storeIds.length || backfill.isPending}
+                    title={
+                      !c.storeIds.length
+                        ? 'Add at least one storeId first'
+                        : 'Assign matching unassigned orders to this client'
+                    }
+                    onClick={() => {
+                      backfill.mutate(
+                        { id: c.id, overwrite: false },
+                        {
+                          onSuccess: (res) =>
+                            alert(res.message ?? `Assigned ${res.updated} orders`),
+                          onError: (err) =>
+                            alert(`Backfill failed: ${(err as Error).message}`),
+                        }
+                      );
+                    }}
+                  >
+                    <Wand2 size={11} />
+                    Backfill
                   </Button>
                   <div className="flex-1" />
                   <Button
