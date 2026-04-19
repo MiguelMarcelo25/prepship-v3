@@ -5,6 +5,7 @@ import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { clients } from '../db/schema/clients';
 import { orders } from '../db/schema/orders';
+import { ssV1Request } from '../lib/shipstation/v1-client';
 
 const app = new Hono();
 
@@ -104,6 +105,63 @@ app.post(
     });
   }
 );
+
+// Pull stores from ShipStation v1 and upsert into clients (one client per
+// store). Existing clients matched by storeIds containing the store_id are
+// updated with name/email/phone; otherwise a new client is created with
+// storeIds: [storeId].
+app.post('/sync-stores', async (c) => {
+  type SSStore = {
+    storeId: number;
+    storeName: string;
+    marketplaceName?: string;
+    accountName?: string | null;
+    email?: string | null;
+    phone?: string | null;
+    companyName?: string | null;
+    active?: boolean;
+  };
+
+  const stores = await ssV1Request<SSStore[]>('/stores', {
+    dedupeKey: 'stores:list',
+  });
+
+  let inserted = 0;
+  let updated = 0;
+
+  const all = await db.select().from(clients);
+  const byStoreId = new Map<number, (typeof all)[number]>();
+  for (const c of all) {
+    for (const sid of c.storeIds ?? []) byStoreId.set(sid, c);
+  }
+
+  for (const s of stores) {
+    const existing = byStoreId.get(s.storeId);
+    const fields = {
+      name: s.storeName || s.companyName || `Store ${s.storeId}`,
+      contactName: s.accountName ?? null,
+      email: s.email ?? null,
+      phone: s.phone ?? null,
+      active: s.active ?? true,
+    };
+    if (existing) {
+      await db
+        .update(clients)
+        .set({ ...fields, updatedAt: new Date() })
+        .where(eq(clients.id, existing.id));
+      updated += 1;
+    } else {
+      await db.insert(clients).values({ ...fields, storeIds: [s.storeId] });
+      inserted += 1;
+    }
+  }
+
+  return c.json({
+    inserted,
+    updated,
+    message: `Synced ${inserted + updated} stores (${inserted} new, ${updated} updated)`,
+  });
+});
 
 // Orphan report: orders with a storeId not owned by any client
 app.get('/unassigned-orphans', async (c) => {

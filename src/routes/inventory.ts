@@ -1,11 +1,12 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, desc, eq, ilike, lte, or, sql } from 'drizzle-orm';
+import { and, desc, eq, ilike, isNull, lte, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { inventory, inventoryLedger } from '../db/schema/inventory';
 import { offsetOf, paginated, paginationSchema } from '../lib/pagination';
 import { applyMovement, inventoryStats } from '../services/inventory';
+import { ssV1Request } from '../lib/shipstation/v1-client';
 
 const app = new Hono();
 
@@ -148,5 +149,84 @@ app.post(
     return c.json(result);
   }
 );
+
+// Pull product catalog from ShipStation v1 and upsert as inventory rows.
+// stockQty stays 0 (ShipStation doesn't expose inventory levels in the
+// standard API). Match by (clientId IS NULL, sku) since we don't know
+// which store a product belongs to.
+app.post('/sync-products', async (c) => {
+  type SSProduct = {
+    productId: number;
+    sku: string | null;
+    name: string | null;
+    weightOz?: number | null;
+    length?: number | null;
+    width?: number | null;
+    height?: number | null;
+    active?: boolean;
+  };
+  type SSProductsList = {
+    products: SSProduct[];
+    total: number;
+    page: number;
+    pages: number;
+  };
+
+  let page = 1;
+  let inserted = 0;
+  let updated = 0;
+  let skipped = 0;
+
+  while (true) {
+    const res = await ssV1Request<SSProductsList>(
+      `/products?pageSize=500&page=${page}`,
+      { dedupeKey: `products:list:${page}` }
+    );
+
+    for (const p of res.products) {
+      const sku = (p.sku ?? '').trim();
+      if (!sku) {
+        skipped += 1;
+        continue;
+      }
+
+      const [existing] = await db
+        .select({ id: inventory.id })
+        .from(inventory)
+        .where(and(eq(inventory.sku, sku), isNull(inventory.clientId)))
+        .limit(1);
+
+      const fields = {
+        name: p.name ?? null,
+        weightOz: p.weightOz ?? 0,
+        length: p.length ?? null,
+        width: p.width ?? null,
+        height: p.height ?? null,
+        active: p.active ?? true,
+      };
+
+      if (existing) {
+        await db
+          .update(inventory)
+          .set({ ...fields, updatedAt: new Date() })
+          .where(eq(inventory.id, existing.id));
+        updated += 1;
+      } else {
+        await db.insert(inventory).values({ sku, ...fields });
+        inserted += 1;
+      }
+    }
+
+    if (page >= res.pages || !res.products.length) break;
+    page += 1;
+  }
+
+  return c.json({
+    inserted,
+    updated,
+    skipped,
+    message: `Synced ${inserted + updated} products (${inserted} new, ${updated} updated, ${skipped} without SKU)`,
+  });
+});
 
 export default app;

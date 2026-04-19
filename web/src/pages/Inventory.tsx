@@ -1,7 +1,7 @@
 import { lazy, Suspense, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { Plus, Search as SearchIcon } from 'lucide-react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Plus, RefreshCw, Search as SearchIcon } from 'lucide-react';
 import Topbar from '../components/Topbar';
 import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
@@ -39,6 +39,7 @@ function stockTone(stockQty: number, reorderLevel: number) {
 export default function Inventory() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [lowStock, setLowStock] = useState(false);
   const [page, setPage] = useState(1);
@@ -67,6 +68,22 @@ export default function Inventory() {
     queryFn: () => api.get<Stats>('/inventory/stats'),
   });
 
+  const sync = useMutation({
+    mutationFn: () =>
+      api.post<{
+        inserted: number;
+        updated: number;
+        skipped: number;
+        message: string;
+      }>('/inventory/sync-products', {}),
+    onSuccess: (r) => {
+      queryClient.invalidateQueries({ queryKey: ['inventory'] });
+      queryClient.invalidateQueries({ queryKey: ['inventory-stats'] });
+      alert(r.message);
+    },
+    onError: (err) => alert(`Sync failed: ${(err as Error).message}`),
+  });
+
   const rows = data?.data ?? [];
   const total = data?.pagination.total ?? 0;
   const totalPages = data?.pagination.totalPages ?? 1;
@@ -76,14 +93,29 @@ export default function Inventory() {
       <Topbar
         title="Inventory"
         right={
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => setCreating(true)}
-          >
-            <Plus size={12} />
-            New item
-          </Button>
+          <>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={sync.isPending}
+              onClick={() => sync.mutate()}
+              title="Pull product catalog from ShipStation"
+            >
+              <RefreshCw
+                size={12}
+                className={sync.isPending ? 'animate-spin' : ''}
+              />
+              {sync.isPending ? 'Syncing…' : 'Sync products'}
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => setCreating(true)}
+            >
+              <Plus size={12} />
+              New item
+            </Button>
+          </>
         }
       />
 

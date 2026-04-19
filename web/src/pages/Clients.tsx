@@ -1,6 +1,6 @@
 import { lazy, Suspense, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Pencil, Trash2, Wand2 } from 'lucide-react';
+import { Plus, Pencil, Trash2, Wand2, RefreshCw } from 'lucide-react';
 import Topbar from '../components/Topbar';
 import { Button } from '../components/ui/Button';
 import { api } from '../lib/api';
@@ -34,6 +34,19 @@ export default function Clients() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['clients'] }),
   });
 
+  const sync = useMutation({
+    mutationFn: () =>
+      api.post<{ inserted: number; updated: number; message: string }>(
+        '/clients/sync-stores',
+        {}
+      ),
+    onSuccess: (r) => {
+      queryClient.invalidateQueries({ queryKey: ['clients'] });
+      alert(r.message);
+    },
+    onError: (err) => alert(`Sync failed: ${(err as Error).message}`),
+  });
+
   const backfill = useMutation({
     mutationFn: (args: { id: number; overwrite: boolean }) =>
       api.post<BackfillResult>(
@@ -53,14 +66,29 @@ export default function Clients() {
       <Topbar
         title="Clients"
         right={
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => setCreating(true)}
-          >
-            <Plus size={12} />
-            New client
-          </Button>
+          <>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={sync.isPending}
+              onClick={() => sync.mutate()}
+              title="Pull stores from ShipStation as clients"
+            >
+              <RefreshCw
+                size={12}
+                className={sync.isPending ? 'animate-spin' : ''}
+              />
+              {sync.isPending ? 'Syncing…' : 'Sync stores'}
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => setCreating(true)}
+            >
+              <Plus size={12} />
+              New client
+            </Button>
+          </>
         }
       />
 

@@ -1,6 +1,6 @@
 import { lazy, Suspense, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Star, Pencil, Trash2 } from 'lucide-react';
+import { Plus, Star, Pencil, Trash2, RefreshCw } from 'lucide-react';
 import Topbar from '../components/Topbar';
 import { Button } from '../components/ui/Button';
 import { api } from '../lib/api';
@@ -42,6 +42,19 @@ export default function Locations() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['locations'] }),
   });
 
+  const sync = useMutation({
+    mutationFn: () =>
+      api.post<{ inserted: number; updated: number; message: string }>(
+        '/locations/sync',
+        {}
+      ),
+    onSuccess: (r) => {
+      queryClient.invalidateQueries({ queryKey: ['locations'] });
+      alert(r.message);
+    },
+    onError: (err) => alert(`Sync failed: ${(err as Error).message}`),
+  });
+
   const rows = data ?? [];
 
   return (
@@ -49,14 +62,29 @@ export default function Locations() {
       <Topbar
         title="Locations"
         right={
-          <Button
-            variant="primary"
-            size="sm"
-            onClick={() => setCreating(true)}
-          >
-            <Plus size={12} />
-            New location
-          </Button>
+          <>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={sync.isPending}
+              onClick={() => sync.mutate()}
+              title="Pull warehouses from ShipStation"
+            >
+              <RefreshCw
+                size={12}
+                className={sync.isPending ? 'animate-spin' : ''}
+              />
+              {sync.isPending ? 'Syncing…' : 'Sync from ShipStation'}
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => setCreating(true)}
+            >
+              <Plus size={12} />
+              New location
+            </Button>
+          </>
         }
       />
 
