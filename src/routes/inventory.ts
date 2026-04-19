@@ -150,6 +150,66 @@ app.post(
   }
 );
 
+// Scan orders.items JSONB and seed inventory rows for any SKU we don't
+// have yet (clientId set from the order's clientId, or null if order is
+// unassigned). Useful as a quick way to populate inventory from the
+// orders that already synced from ShipStation.
+app.post('/import-from-orders', async (c) => {
+  const rows = await db.execute<{
+    sku: string;
+    name: string | null;
+    image_url: string | null;
+    client_id: number | null;
+  }>(sql`
+    select distinct on (item->>'sku', o.client_id)
+      item->>'sku'                               as sku,
+      coalesce(item->>'name', '')                as name,
+      nullif(item->>'imageUrl', '')              as image_url,
+      o.client_id                                as client_id
+    from orders o,
+         jsonb_array_elements(o.items) item
+    where item ? 'sku'
+      and item->>'sku' is not null
+      and item->>'sku' <> ''
+  `);
+
+  let inserted = 0;
+  let skipped = 0;
+
+  for (const r of rows) {
+    const [existing] = await db
+      .select({ id: inventory.id })
+      .from(inventory)
+      .where(
+        and(
+          eq(inventory.sku, r.sku),
+          r.client_id !== null
+            ? eq(inventory.clientId, r.client_id)
+            : isNull(inventory.clientId)
+        )
+      )
+      .limit(1);
+
+    if (existing) {
+      skipped += 1;
+      continue;
+    }
+    await db.insert(inventory).values({
+      sku: r.sku,
+      name: r.name || null,
+      imageUrl: r.image_url,
+      clientId: r.client_id,
+    });
+    inserted += 1;
+  }
+
+  return c.json({
+    inserted,
+    skipped,
+    message: `Imported ${inserted} new SKUs from orders (${skipped} already existed)`,
+  });
+});
+
 // Pull product catalog from ShipStation v1 and upsert as inventory rows.
 // stockQty stays 0 (ShipStation doesn't expose inventory levels in the
 // standard API). Match by (clientId IS NULL, sku) since we don't know
