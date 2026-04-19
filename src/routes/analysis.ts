@@ -107,12 +107,17 @@ app.get('/sku-daily', zValidator('query', skuDailyQuery), async (c) => {
     return c.json({ topSkus: [], days: [] });
   }
 
+  const skuList = sql.join(
+    skus.map((s) => sql`${s}`),
+    sql`, `
+  );
+
   const daily = await db.execute<{ day: string; sku: string; qty: number }>(sql`
     select to_char(date_trunc('day', o.order_date), 'YYYY-MM-DD') as day,
            item->>'sku' as sku,
            sum(coalesce((item->>'quantity')::int, 1))::int as qty
     from orders o, jsonb_array_elements(o.items) item
-    where item ? 'sku' and item->>'sku' = any(${skus})
+    where item ? 'sku' and item->>'sku' in (${skuList})
       and o.order_date >= ${new Date(q.dateFrom)}
       and o.order_date <= ${new Date(q.dateTo)}
       ${q.clientId !== undefined ? sql`and o.client_id = ${q.clientId}` : sql``}
