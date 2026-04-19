@@ -1,6 +1,6 @@
 import { useMemo, useState, type FormEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Calculator, RefreshCw } from 'lucide-react';
+import { Calculator, FileText, RefreshCw } from 'lucide-react';
 import Topbar from '../components/Topbar';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
@@ -201,6 +201,16 @@ export default function Billing() {
                         {clientById.get(c.clientId)?.name ??
                           `Client #${c.clientId}`}
                       </span>
+                      <a
+                        href={`/invoice?clientId=${c.clientId}&dateFrom=${dateFrom}&dateTo=${dateTo}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="ml-2 inline-flex items-center gap-0.5 text-tiny text-brand hover:underline"
+                        title="Print invoice"
+                      >
+                        <FileText size={10} />
+                        invoice
+                      </a>
                     </Td>
                     <Td className="text-right font-mono text-ink-2">
                       {c.count}

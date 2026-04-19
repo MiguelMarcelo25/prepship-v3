@@ -16,6 +16,7 @@ const Manifest = lazy(() => import('./pages/Manifest'));
 const Analysis = lazy(() => import('./pages/Analysis'));
 const Picklist = lazy(() => import('./pages/Picklist'));
 const Products = lazy(() => import('./pages/Products'));
+const Invoice = lazy(() => import('./pages/Invoice'));
 
 function PageFallback() {
   return (
@@ -56,6 +57,7 @@ export default function App() {
           <Route path="/clients" element={<Clients />} />
           <Route path="/manifest" element={<Manifest />} />
           <Route path="/products" element={<Products />} />
+          <Route path="/invoice" element={<Invoice />} />
         </Route>
       </Routes>
     </Suspense>

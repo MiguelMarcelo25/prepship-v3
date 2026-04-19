@@ -57,3 +57,39 @@ export const billingLineItems = pgTable(
 export type BillingConfig = typeof billingConfig.$inferSelect;
 export type NewBillingConfig = typeof billingConfig.$inferInsert;
 export type BillingLineItem = typeof billingLineItems.$inferSelect;
+
+export const clientPackagePrices = pgTable(
+  'client_package_prices',
+  {
+    clientId: integer()
+      .notNull()
+      .references(() => clients.id, { onDelete: 'cascade' }),
+    packageId: integer().notNull(),
+    price: numeric({ precision: 10, scale: 2 }).notNull(),
+    isCustom: boolean().default(false).notNull(),
+    updatedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index('client_package_prices_pk_idx').on(t.clientId, t.packageId),
+  ]
+);
+
+export const billingRefRates = pgTable(
+  'billing_ref_rates',
+  {
+    id: serial().primaryKey(),
+    weightOz: integer(),
+    zipTo: text(),
+    carrier: text(),
+    service: text(),
+    cost: numeric({ precision: 10, scale: 2 }),
+    source: text(),
+    fetchedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    index('billing_ref_rates_lookup_idx').on(t.weightOz, t.zipTo, t.carrier),
+  ]
+);
+
+export type ClientPackagePrice = typeof clientPackagePrices.$inferSelect;
+export type BillingRefRate = typeof billingRefRates.$inferSelect;

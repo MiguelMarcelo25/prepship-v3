@@ -1,0 +1,304 @@
+import { useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { ArrowLeft, Printer } from 'lucide-react';
+import { Button } from '../components/ui/Button';
+import { Input } from '../components/ui/Input';
+import { Select } from '../components/ui/Select';
+import { api, qs } from '../lib/api';
+
+type LineItem = {
+  id: number;
+  clientId: number;
+  orderId: number | null;
+  orderNumber: string | null;
+  shipmentId: number | null;
+  shipDate: string | null;
+  lineType: string;
+  description: string;
+  qty: string;
+  unitCost: string;
+  totalCost: string;
+};
+
+type Client = {
+  id: number;
+  name: string;
+  email: string | null;
+  phone: string | null;
+};
+
+function fmtMoney(s: string | number) {
+  const n = Number(s);
+  return Number.isFinite(n) ? `$${n.toFixed(2)}` : '—';
+}
+
+function startOfMonthIso(d = new Date()) {
+  return new Date(d.getFullYear(), d.getMonth(), 1).toISOString();
+}
+function endOfMonthIso(d = new Date()) {
+  return new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59).toISOString();
+}
+function toDateInput(iso: string) {
+  return iso.slice(0, 10);
+}
+function fromDateInputStart(ymd: string) {
+  return new Date(ymd + 'T00:00:00').toISOString();
+}
+function fromDateInputEnd(ymd: string) {
+  return new Date(ymd + 'T23:59:59').toISOString();
+}
+
+export default function Invoice() {
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const clientId = Number(searchParams.get('clientId') ?? '');
+  const dateFrom =
+    searchParams.get('dateFrom') ?? toDateInput(startOfMonthIso());
+  const dateTo = searchParams.get('dateTo') ?? toDateInput(endOfMonthIso());
+
+  const [issuedAt] = useState(() => new Date());
+
+  const update = (k: string, v: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (v) next.set(k, v);
+    else next.delete(k);
+    setSearchParams(next);
+  };
+
+  const clients = useQuery({
+    queryKey: ['clients'],
+    queryFn: () => api.get<Client[]>('/clients'),
+    staleTime: 60_000,
+  });
+  const client = clients.data?.find((c) => c.id === clientId) ?? null;
+
+  const detailsQs = useMemo(
+    () =>
+      qs({
+        clientId: Number.isFinite(clientId) ? clientId : undefined,
+        dateFrom: fromDateInputStart(dateFrom),
+        dateTo: fromDateInputEnd(dateTo),
+        limit: 2000,
+      }),
+    [clientId, dateFrom, dateTo]
+  );
+
+  const details = useQuery({
+    queryKey: ['billing-details-invoice', detailsQs],
+    queryFn: () => api.get<{ data: LineItem[] }>(`/billing/details${detailsQs}`),
+    enabled: Number.isFinite(clientId) && clientId > 0,
+  });
+
+  const lines = details.data?.data ?? [];
+  const grand = lines.reduce((s, l) => s + Number(l.totalCost), 0);
+  const byType = lines.reduce<Record<string, number>>((acc, l) => {
+    acc[l.lineType] = (acc[l.lineType] ?? 0) + Number(l.totalCost);
+    return acc;
+  }, {});
+
+  return (
+    <div className="h-full w-full flex flex-col bg-white">
+      {/* Toolbar — hidden on print */}
+      <div className="flex items-center gap-2 px-4 py-2.5 border-b border-line bg-surface-2 print:hidden">
+        <Button variant="ghost" size="sm" onClick={() => navigate(-1)}>
+          <ArrowLeft size={12} />
+          Back
+        </Button>
+        <div className="font-bold text-ink">Invoice</div>
+        <div className="flex-1" />
+        <Select
+          value={clientId || ''}
+          onChange={(e) => update('clientId', e.target.value)}
+        >
+          <option value="">Pick client…</option>
+          {(clients.data ?? []).map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+        </Select>
+        <Input
+          type="date"
+          value={dateFrom}
+          onChange={(e) => update('dateFrom', e.target.value)}
+          className="!w-[140px]"
+        />
+        <span className="text-ink-3">—</span>
+        <Input
+          type="date"
+          value={dateTo}
+          onChange={(e) => update('dateTo', e.target.value)}
+          className="!w-[140px]"
+        />
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={() => window.print()}
+          disabled={!client}
+        >
+          <Printer size={12} />
+          Print
+        </Button>
+      </div>
+
+      {/* Print-friendly body */}
+      <div className="flex-1 min-h-0 overflow-auto p-8 print:p-0">
+        <div className="max-w-[900px] mx-auto">
+          {!Number.isFinite(clientId) || clientId === 0 ? (
+            <div className="text-center text-ink-3 py-16">
+              Pick a client above to render an invoice.
+            </div>
+          ) : (
+            <>
+              {/* Header */}
+              <div className="flex items-start justify-between mb-8 print:mb-6">
+                <div>
+                  <div className="flex items-baseline text-[24px] font-extrabold tracking-[-0.5px]">
+                    <span className="text-ink">PREP</span>
+                    <span className="text-brand">SHIP</span>
+                  </div>
+                  <div className="text-[10px] uppercase tracking-[0.4px] text-ink-3 mt-1">
+                    Dr Prepper Fulfillment
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-[24px] font-extrabold text-ink">INVOICE</div>
+                  <div className="text-tiny text-ink-3 mt-1">
+                    Issued {issuedAt.toLocaleDateString()}
+                  </div>
+                </div>
+              </div>
+
+              {/* Bill to + period */}
+              <div className="grid grid-cols-2 gap-6 mb-6">
+                <div>
+                  <div className="section-label mb-1">Bill to</div>
+                  <div className="font-bold text-ink">
+                    {client?.name ?? `Client #${clientId}`}
+                  </div>
+                  {client?.email && (
+                    <div className="text-tiny font-mono text-ink-2">
+                      {client.email}
+                    </div>
+                  )}
+                  {client?.phone && (
+                    <div className="text-tiny text-ink-2">{client.phone}</div>
+                  )}
+                </div>
+                <div className="text-right">
+                  <div className="section-label mb-1">Period</div>
+                  <div className="text-ink font-semibold">
+                    {dateFrom} → {dateTo}
+                  </div>
+                  <div className="text-tiny text-ink-3 mt-2">
+                    {lines.length} line item{lines.length === 1 ? '' : 's'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Summary by type */}
+              {Object.keys(byType).length > 0 && (
+                <table className="w-full text-sm2 border-collapse mb-4">
+                  <thead>
+                    <tr className="border-b border-ink">
+                      <th className="text-left py-1.5 text-tiny font-bold uppercase tracking-wide text-ink-3">
+                        Category
+                      </th>
+                      <th className="text-right py-1.5 text-tiny font-bold uppercase tracking-wide text-ink-3">
+                        Amount
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {Object.entries(byType).map(([type, amt]) => (
+                      <tr key={type} className="border-b border-line">
+                        <td className="py-1.5 capitalize">
+                          {type.replace(/_/g, ' ')}
+                        </td>
+                        <td className="py-1.5 text-right font-mono">
+                          {fmtMoney(amt)}
+                        </td>
+                      </tr>
+                    ))}
+                    <tr className="border-t-2 border-ink">
+                      <td className="py-2 font-bold">Total</td>
+                      <td className="py-2 text-right font-mono font-bold text-[16px]">
+                        {fmtMoney(grand)}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              )}
+
+              {/* Detail */}
+              <div className="section-label mt-6 mb-1">Line items</div>
+              <table className="w-full text-tiny border-collapse">
+                <thead className="border-b border-ink">
+                  <tr>
+                    <th className="text-left py-1.5 font-bold uppercase tracking-wide text-ink-3">
+                      Date
+                    </th>
+                    <th className="text-left py-1.5 font-bold uppercase tracking-wide text-ink-3">
+                      Order
+                    </th>
+                    <th className="text-left py-1.5 font-bold uppercase tracking-wide text-ink-3">
+                      Type
+                    </th>
+                    <th className="text-left py-1.5 font-bold uppercase tracking-wide text-ink-3">
+                      Description
+                    </th>
+                    <th className="text-right py-1.5 font-bold uppercase tracking-wide text-ink-3">
+                      Qty
+                    </th>
+                    <th className="text-right py-1.5 font-bold uppercase tracking-wide text-ink-3">
+                      Unit
+                    </th>
+                    <th className="text-right py-1.5 font-bold uppercase tracking-wide text-ink-3">
+                      Total
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {lines.length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="text-center py-6 text-ink-3">
+                        No line items in this period. Generate them in the
+                        Billing page first.
+                      </td>
+                    </tr>
+                  )}
+                  {lines.map((l) => (
+                    <tr key={l.id} className="border-b border-line">
+                      <td className="py-1 text-ink-2 whitespace-nowrap">
+                        {l.shipDate
+                          ? new Date(l.shipDate).toLocaleDateString()
+                          : '—'}
+                      </td>
+                      <td className="py-1 font-mono text-brand">
+                        {l.orderNumber ?? l.orderId ?? '—'}
+                      </td>
+                      <td className="py-1 text-ink-2 capitalize">
+                        {l.lineType.replace(/_/g, ' ')}
+                      </td>
+                      <td className="py-1 text-ink truncate max-w-[300px]">
+                        {l.description}
+                      </td>
+                      <td className="py-1 text-right font-mono">{l.qty}</td>
+                      <td className="py-1 text-right font-mono">
+                        {fmtMoney(l.unitCost)}
+                      </td>
+                      <td className="py-1 text-right font-mono font-semibold">
+                        {fmtMoney(l.totalCost)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
