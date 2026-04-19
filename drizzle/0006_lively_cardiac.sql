@@ -1,0 +1,1 @@
+ALTER TABLE "inventory" ADD COLUMN "parent_sku_id" integer;

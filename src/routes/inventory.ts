@@ -132,6 +132,25 @@ app.post(
   }
 );
 
+app.put(
+  '/:id{[0-9]+}/set-parent',
+  zValidator(
+    'json',
+    z.object({ parentSkuId: z.number().int().positive().nullable() })
+  ),
+  async (c) => {
+    const id = Number(c.req.param('id'));
+    const { parentSkuId } = c.req.valid('json');
+    const [row] = await db
+      .update(inventory)
+      .set({ parentSkuId, updatedAt: new Date() })
+      .where(eq(inventory.id, id))
+      .returning();
+    if (!row) return c.json({ error: 'Inventory item not found' }, 404);
+    return c.json(row);
+  }
+);
+
 app.post(
   '/:id{[0-9]+}/adjust',
   zValidator('json', movementBody.refine((v) => v.qty !== 0, 'Adjust qty cannot be 0')),

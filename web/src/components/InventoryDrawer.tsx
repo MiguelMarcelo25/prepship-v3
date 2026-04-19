@@ -19,9 +19,18 @@ type Item = {
   length: number | null;
   width: number | null;
   height: number | null;
+  parentSkuId: number | null;
   active: boolean;
   createdAt: string;
   updatedAt: string;
+};
+
+type ParentSku = {
+  id: number;
+  clientId: number;
+  name: string;
+  sku: string | null;
+  baseUnitQty: number;
 };
 
 type LedgerRow = {
@@ -139,6 +148,10 @@ export default function InventoryDrawer() {
             <>
               <SummaryCard item={item.data} onSave={updateItem.mutate} updating={updateItem.isPending} />
 
+              {item.data.clientId !== null && (
+                <ParentSkuCard item={item.data} onChanged={invalidate} />
+              )}
+
               <MovementCard
                 title="Receive stock"
                 hint="Record inbound units — increases stock."
@@ -205,6 +218,161 @@ export default function InventoryDrawer() {
         </div>
       </aside>
     </div>
+  );
+}
+
+function ParentSkuCard({
+  item,
+  onChanged,
+}: {
+  item: Item;
+  onChanged: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState('');
+  const [newSku, setNewSku] = useState('');
+  const [newBase, setNewBase] = useState('1');
+
+  const parents = useQuery({
+    queryKey: ['parent-skus', item.clientId],
+    queryFn: () =>
+      api.get<{ data: ParentSku[] }>(
+        `/parent-skus?clientId=${item.clientId}`
+      ),
+    enabled: item.clientId !== null,
+  });
+
+  const setParent = useMutation({
+    mutationFn: (parentSkuId: number | null) =>
+      api.put(`/inventory/${item.id}/set-parent`, { parentSkuId }),
+    onSuccess: onChanged,
+  });
+
+  const create = useMutation({
+    mutationFn: (body: { name: string; sku: string | null; baseUnitQty: number }) =>
+      api.post<ParentSku>('/parent-skus', {
+        clientId: item.clientId,
+        ...body,
+      }),
+    onSuccess: (parent) => {
+      queryClient.invalidateQueries({
+        queryKey: ['parent-skus', item.clientId],
+      });
+      setParent.mutate(parent.id);
+      setCreating(false);
+      setNewName('');
+      setNewSku('');
+      setNewBase('1');
+    },
+  });
+
+  const current = (parents.data?.data ?? []).find(
+    (p) => p.id === item.parentSkuId
+  );
+
+  return (
+    <Card title="Parent SKU">
+      <div className="text-tiny text-ink-3 mb-2">
+        Group variants under one parent SKU for combined picking/billing.
+      </div>
+
+      {!creating ? (
+        <div className="space-y-2">
+          <select
+            value={item.parentSkuId ?? ''}
+            onChange={(e) => {
+              const v = e.target.value;
+              setParent.mutate(v === '' ? null : Number(v));
+            }}
+            disabled={setParent.isPending}
+            className="block w-full rounded-btn border border-line-2 bg-white px-2.5 py-[6px] text-sm2 text-ink"
+          >
+            <option value="">— No parent —</option>
+            {(parents.data?.data ?? []).map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+                {p.sku ? ` (${p.sku})` : ''} · base qty {p.baseUnitQty}
+              </option>
+            ))}
+          </select>
+          {current && (
+            <div className="text-tiny text-ink-2">
+              Currently: <strong>{current.name}</strong>
+              {current.sku && (
+                <span className="font-mono text-ink-3"> · {current.sku}</span>
+              )}
+            </div>
+          )}
+          <Button
+            type="button"
+            variant="ghost"
+            size="xs"
+            onClick={() => setCreating(true)}
+          >
+            + New parent SKU
+          </Button>
+        </div>
+      ) : (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!newName.trim()) return;
+            create.mutate({
+              name: newName.trim(),
+              sku: newSku.trim() || null,
+              baseUnitQty: Number(newBase) || 1,
+            });
+          }}
+          className="space-y-2"
+        >
+          <Input
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            placeholder="Parent name (required)"
+            autoFocus
+            required
+          />
+          <div className="grid grid-cols-2 gap-2">
+            <Input
+              value={newSku}
+              onChange={(e) => setNewSku(e.target.value)}
+              placeholder="Parent SKU (optional)"
+            />
+            <Input
+              type="number"
+              min={1}
+              value={newBase}
+              onChange={(e) => setNewBase(e.target.value)}
+              placeholder="Base unit qty"
+            />
+          </div>
+          {create.isError && (
+            <div className="text-danger text-tiny">
+              {(create.error as Error).message}
+            </div>
+          )}
+          <div className="flex gap-2">
+            <Button
+              type="submit"
+              variant="primary"
+              size="sm"
+              disabled={create.isPending || !newName.trim()}
+            >
+              {create.isPending ? 'Creating…' : 'Create + assign'}
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setCreating(false)}
+            >
+              Cancel
+            </Button>
+          </div>
+        </form>
+      )}
+    </Card>
   );
 }
 

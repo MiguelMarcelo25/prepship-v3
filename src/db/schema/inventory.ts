@@ -26,6 +26,7 @@ export const inventory = pgTable(
     length: real(),
     width: real(),
     height: real(),
+    parentSkuId: integer(),
     active: boolean().default(true).notNull(),
     createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),

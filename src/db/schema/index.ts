@@ -9,3 +9,4 @@ export * from './inventory';
 export * from './locations';
 export * from './billing';
 export * from './print-queue';
+export * from './parent-skus';
