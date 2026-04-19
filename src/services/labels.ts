@@ -152,9 +152,19 @@ export async function createLabelFromOrderId(args: {
   const city = shipToRaw.city ?? order.shipToCity ?? '';
   const state = shipToRaw.state ?? order.shipToState ?? '';
   const postal = shipToRaw.postalCode ?? order.shipToPostalCode ?? '';
-  if (!street1 || !city || !state || !postal) {
+  const missing: string[] = [];
+  if (!street1) missing.push('street');
+  if (!city) missing.push('city');
+  if (!state) missing.push('state');
+  if (!postal) missing.push('postal code');
+  if (missing.length) {
+    const hasAnyShipTo = Object.keys(shipToRaw).length > 0;
     throw new Error(
-      `Order ${order.orderNumber} ship-to is missing street/city/state/postal`
+      `Order ${order.orderNumber}: ship-to ${
+        hasAnyShipTo
+          ? `missing ${missing.join(', ')}`
+          : 'is empty (likely an auto-generated order with no recipient address)'
+      }`
     );
   }
 
