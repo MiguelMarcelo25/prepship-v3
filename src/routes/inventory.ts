@@ -224,6 +224,8 @@ app.post('/sync-products', async (c) => {
     width?: number | null;
     height?: number | null;
     active?: boolean;
+    thumbnailUrl?: string | null;
+    imageUrl?: string | null;
   };
   type SSProductsList = {
     products: SSProduct[];
@@ -263,6 +265,7 @@ app.post('/sync-products', async (c) => {
         width: p.width ?? null,
         height: p.height ?? null,
         active: p.active ?? true,
+        imageUrl: p.thumbnailUrl ?? p.imageUrl ?? null,
       };
 
       if (existing) {
