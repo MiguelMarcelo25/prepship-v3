@@ -53,6 +53,8 @@ const rangeQuery = z.object({
 
 app.get('/daily-shipments', zValidator('query', rangeQuery), async (c) => {
   const q = c.req.valid('query');
+  const fromIso = new Date(q.dateFrom).toISOString();
+  const toIso = new Date(q.dateTo).toISOString();
   const rows = await db.execute<{
     day: string;
     count: number;
@@ -64,8 +66,8 @@ app.get('/daily-shipments', zValidator('query', rangeQuery), async (c) => {
       coalesce(sum(label_cost), 0)::text as total_cost
     from shipments
     where voided = false
-      and ship_date >= ${new Date(q.dateFrom)}
-      and ship_date <= ${new Date(q.dateTo)}
+      and ship_date >= ${fromIso}::timestamptz
+      and ship_date <= ${toIso}::timestamptz
     group by date_trunc('day', ship_date)
     order by date_trunc('day', ship_date) desc
   `);
@@ -76,11 +78,6 @@ const topSkusQuery = rangeQuery.extend({
   limit: z.coerce.number().int().positive().max(200).optional().default(50),
 });
 
-const skuBreakdownQuery = rangeQuery.extend({
-  clientId: z.coerce.number().int().optional(),
-  limit: z.coerce.number().int().positive().max(2000).optional().default(500),
-});
-
 const skuDailyQuery = rangeQuery.extend({
   clientId: z.coerce.number().int().optional(),
   topN: z.coerce.number().int().positive().max(15).optional().default(5),
@@ -88,15 +85,19 @@ const skuDailyQuery = rangeQuery.extend({
 
 app.get('/sku-daily', zValidator('query', skuDailyQuery), async (c) => {
   const q = c.req.valid('query');
+  const fromIso = new Date(q.dateFrom).toISOString();
+  const toIso = new Date(q.dateTo).toISOString();
+  const cid: number | null = q.clientId ?? null;
+
   const top = await db.execute<{ sku: string; name: string | null; total_qty: number }>(sql`
     select item->>'sku' as sku,
            max(item->>'name') as name,
            sum(coalesce((item->>'quantity')::int, 1))::int as total_qty
     from orders o, jsonb_array_elements(o.items) item
     where item ? 'sku' and item->>'sku' is not null and item->>'sku' <> ''
-      and o.order_date >= ${new Date(q.dateFrom)}
-      and o.order_date <= ${new Date(q.dateTo)}
-      ${q.clientId !== undefined ? sql`and o.client_id = ${q.clientId}` : sql``}
+      and o.order_date >= ${fromIso}::timestamptz
+      and o.order_date <= ${toIso}::timestamptz
+      and (${cid}::int is null or o.client_id = ${cid}::int)
     group by item->>'sku'
     order by total_qty desc
     limit ${q.topN}
@@ -118,21 +119,19 @@ app.get('/sku-daily', zValidator('query', skuDailyQuery), async (c) => {
            sum(coalesce((item->>'quantity')::int, 1))::int as qty
     from orders o, jsonb_array_elements(o.items) item
     where item ? 'sku' and item->>'sku' in (${skuList})
-      and o.order_date >= ${new Date(q.dateFrom)}
-      and o.order_date <= ${new Date(q.dateTo)}
-      ${q.clientId !== undefined ? sql`and o.client_id = ${q.clientId}` : sql``}
+      and o.order_date >= ${fromIso}::timestamptz
+      and o.order_date <= ${toIso}::timestamptz
+      and (${cid}::int is null or o.client_id = ${cid}::int)
     group by date_trunc('day', o.order_date), item->>'sku'
     order by date_trunc('day', o.order_date) asc
   `);
 
-  // Pivot rows into per-day buckets keyed by sku
   const byDay = new Map<string, Record<string, number | string>>();
   for (const row of daily) {
     const bucket = byDay.get(row.day) ?? { day: row.day };
     bucket[row.sku] = row.qty;
     byDay.set(row.day, bucket);
   }
-  // Fill zeros so lines don't dip-then-leap
   const sortedDays = [...byDay.keys()].sort();
   const days = sortedDays.map((d) => {
     const b = byDay.get(d)!;
@@ -143,8 +142,17 @@ app.get('/sku-daily', zValidator('query', skuDailyQuery), async (c) => {
   return c.json({ topSkus: top, days });
 });
 
+const skuBreakdownQuery = rangeQuery.extend({
+  clientId: z.coerce.number().int().optional(),
+  limit: z.coerce.number().int().positive().max(2000).optional().default(500),
+});
+
 app.get('/sku-breakdown', zValidator('query', skuBreakdownQuery), async (c) => {
   const q = c.req.valid('query');
+  const fromIso = new Date(q.dateFrom).toISOString();
+  const toIso = new Date(q.dateTo).toISOString();
+  const cid: number | null = q.clientId ?? null;
+
   const rows = await db.execute<{
     sku: string;
     name: string | null;
@@ -177,9 +185,9 @@ app.get('/sku-breakdown', zValidator('query', skuBreakdownQuery), async (c) => {
       where item ? 'sku'
         and item->>'sku' is not null
         and item->>'sku' <> ''
-        and o.order_date >= ${new Date(q.dateFrom)}
-        and o.order_date <= ${new Date(q.dateTo)}
-        ${q.clientId !== undefined ? sql`and o.client_id = ${q.clientId}` : sql``}
+        and o.order_date >= ${fromIso}::timestamptz
+        and o.order_date <= ${toIso}::timestamptz
+        and (${cid}::int is null or o.client_id = ${cid}::int)
     ),
     classified as (
       select *,
@@ -214,9 +222,9 @@ app.get('/sku-breakdown', zValidator('query', skuBreakdownQuery), async (c) => {
 
   const totalOrders = await db.execute<{ count: number }>(sql`
     select count(*)::int as count from orders
-    where order_date >= ${new Date(q.dateFrom)}
-      and order_date <= ${new Date(q.dateTo)}
-      ${q.clientId !== undefined ? sql`and client_id = ${q.clientId}` : sql``}
+    where order_date >= ${fromIso}::timestamptz
+      and order_date <= ${toIso}::timestamptz
+      and (${cid}::int is null or client_id = ${cid}::int)
   `);
 
   return c.json({
@@ -228,6 +236,8 @@ app.get('/sku-breakdown', zValidator('query', skuBreakdownQuery), async (c) => {
 
 app.get('/top-skus', zValidator('query', topSkusQuery), async (c) => {
   const q = c.req.valid('query');
+  const fromIso = new Date(q.dateFrom).toISOString();
+  const toIso = new Date(q.dateTo).toISOString();
   const rows = await db.execute<{
     sku: string;
     total_qty: number;
@@ -239,8 +249,8 @@ app.get('/top-skus', zValidator('query', topSkusQuery), async (c) => {
       count(distinct o.id)::int as order_count
     from orders o,
          jsonb_array_elements(o.items) item
-    where o.order_date >= ${new Date(q.dateFrom)}
-      and o.order_date <= ${new Date(q.dateTo)}
+    where o.order_date >= ${fromIso}::timestamptz
+      and o.order_date <= ${toIso}::timestamptz
       and item ? 'sku'
       and item->>'sku' is not null
       and item->>'sku' <> ''
