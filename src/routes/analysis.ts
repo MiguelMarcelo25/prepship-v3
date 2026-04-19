@@ -76,6 +76,94 @@ const topSkusQuery = rangeQuery.extend({
   limit: z.coerce.number().int().positive().max(200).optional().default(50),
 });
 
+const skuBreakdownQuery = rangeQuery.extend({
+  clientId: z.coerce.number().int().optional(),
+  limit: z.coerce.number().int().positive().max(2000).optional().default(500),
+});
+
+app.get('/sku-breakdown', zValidator('query', skuBreakdownQuery), async (c) => {
+  const q = c.req.valid('query');
+  const rows = await db.execute<{
+    sku: string;
+    name: string | null;
+    image_url: string | null;
+    client_id: number | null;
+    orders: number;
+    pending: number;
+    ext_shipped: number;
+    std_orders: number;
+    std_total: string;
+    exp_orders: number;
+    exp_total: string;
+    total_qty: number;
+    total_shipping: string;
+  }>(sql`
+    with sku_orders as (
+      select
+        item->>'sku'                                              as sku,
+        item->>'name'                                             as name,
+        nullif(item->>'imageUrl', '')                             as image_url,
+        o.client_id                                               as client_id,
+        o.id                                                      as order_id,
+        o.order_status                                            as order_status,
+        o.externally_shipped                                      as ext_shipped,
+        o.service_code                                            as service_code,
+        coalesce(o.shipping_amount, 0)                            as shipping_amount,
+        coalesce((item->>'quantity')::int, 1)                     as qty
+      from orders o,
+           jsonb_array_elements(o.items) item
+      where item ? 'sku'
+        and item->>'sku' is not null
+        and item->>'sku' <> ''
+        and o.order_date >= ${new Date(q.dateFrom)}
+        and o.order_date <= ${new Date(q.dateTo)}
+        ${q.clientId !== undefined ? sql`and o.client_id = ${q.clientId}` : sql``}
+    ),
+    classified as (
+      select *,
+        case
+          when lower(coalesce(service_code, '')) ~ '(priority|express|overnight|expedited|next_day|2day|2_day)'
+            then 'exp'
+          else 'std'
+        end as ship_class
+      from sku_orders
+    )
+    select
+      sku,
+      max(name)                                                       as name,
+      max(image_url)                                                  as image_url,
+      client_id,
+      count(distinct order_id)::int                                   as orders,
+      count(distinct order_id)
+        filter (where order_status = 'awaiting_shipment')::int        as pending,
+      count(distinct order_id)
+        filter (where ext_shipped = true)::int                        as ext_shipped,
+      count(distinct order_id) filter (where ship_class = 'std')::int as std_orders,
+      coalesce(sum(shipping_amount) filter (where ship_class = 'std'), 0)::text as std_total,
+      count(distinct order_id) filter (where ship_class = 'exp')::int as exp_orders,
+      coalesce(sum(shipping_amount) filter (where ship_class = 'exp'), 0)::text as exp_total,
+      sum(qty)::int                                                   as total_qty,
+      coalesce(sum(shipping_amount), 0)::text                         as total_shipping
+    from classified
+    group by sku, client_id
+    order by total_qty desc
+    limit ${q.limit}
+  `);
+
+  const totalOrders = await db.execute<{ count: number }>(sql`
+    select count(*)::int as count from orders
+    where order_date >= ${new Date(q.dateFrom)}
+      and order_date <= ${new Date(q.dateTo)}
+      ${q.clientId !== undefined ? sql`and client_id = ${q.clientId}` : sql``}
+  `);
+
+  return c.json({
+    data: rows,
+    totalSkus: rows.length,
+    totalOrders: totalOrders[0]?.count ?? 0,
+  });
+});
+
 app.get('/top-skus', zValidator('query', topSkusQuery), async (c) => {
   const q = c.req.valid('query');
   const rows = await db.execute<{

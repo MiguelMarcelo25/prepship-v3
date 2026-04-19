@@ -1,8 +1,11 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { Search as SearchIcon } from 'lucide-react';
 import Topbar from '../components/Topbar';
 import { Input } from '../components/ui/Input';
+import { Select } from '../components/ui/Select';
 import { Card } from '../components/ui/Card';
+import { ClientBadge } from '../components/ui/Badge';
 import { api, qs } from '../lib/api';
 
 type Overview = {
@@ -15,16 +18,40 @@ type Overview = {
   shippingCostMonth: string;
 };
 
-type DailyRow = { day: string; count: number; total_cost: string };
-type SkuRow = { sku: string; total_qty: number; order_count: number };
+type SkuRow = {
+  sku: string;
+  name: string | null;
+  image_url: string | null;
+  client_id: number | null;
+  orders: number;
+  pending: number;
+  ext_shipped: number;
+  std_orders: number;
+  std_total: string;
+  exp_orders: number;
+  exp_total: string;
+  total_qty: number;
+  total_shipping: string;
+};
 
-function startOfMonthIso(d = new Date()) {
-  return new Date(d.getFullYear(), d.getMonth(), 1).toISOString();
+type SkuBreakdown = {
+  data: SkuRow[];
+  totalSkus: number;
+  totalOrders: number;
+};
+
+type Client = { id: number; name: string };
+
+function isoStartOf(daysAgo: number) {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - daysAgo);
+  return d.toISOString();
 }
-function endOfTodayIso() {
-  const e = new Date();
-  e.setHours(23, 59, 59, 0);
-  return e.toISOString();
+function isoEndOfToday() {
+  const d = new Date();
+  d.setHours(23, 59, 59, 0);
+  return d.toISOString();
 }
 function toDateInput(iso: string) {
   return iso.slice(0, 10);
@@ -40,17 +67,36 @@ function fmtMoney(s: string | number) {
   return Number.isFinite(n) ? `$${n.toFixed(2)}` : '—';
 }
 
+const RANGES = [
+  { id: '30d', label: '30d', days: 30 },
+  { id: '90d', label: '90d', days: 90 },
+  { id: '180d', label: '180d', days: 180 },
+  { id: '1yr', label: '1yr', days: 365 },
+  { id: 'all', label: 'All', days: 3650 },
+] as const;
+
 export default function Analysis() {
-  const [dateFrom, setDateFrom] = useState(toDateInput(startOfMonthIso()));
-  const [dateTo, setDateTo] = useState(toDateInput(endOfTodayIso()));
+  const [activeRange, setActiveRange] = useState<typeof RANGES[number]['id']>('30d');
+  const [dateFrom, setDateFrom] = useState(toDateInput(isoStartOf(30)));
+  const [dateTo, setDateTo] = useState(toDateInput(isoEndOfToday()));
+  const [search, setSearch] = useState('');
+  const [clientFilter, setClientFilter] = useState<string>('');
+
+  const setRange = (id: typeof RANGES[number]['id']) => {
+    setActiveRange(id);
+    const r = RANGES.find((x) => x.id === id)!;
+    setDateFrom(toDateInput(isoStartOf(r.days)));
+    setDateTo(toDateInput(isoEndOfToday()));
+  };
 
   const rangeQs = useMemo(
     () =>
       qs({
         dateFrom: fromDateInputStart(dateFrom),
         dateTo: fromDateInputEnd(dateTo),
+        clientId: clientFilter || undefined,
       }),
-    [dateFrom, dateTo]
+    [dateFrom, dateTo, clientFilter]
   );
 
   const overview = useQuery({
@@ -58,147 +104,239 @@ export default function Analysis() {
     queryFn: () => api.get<Overview>('/analysis/overview'),
   });
 
-  const daily = useQuery({
-    queryKey: ['analysis-daily', rangeQs],
-    queryFn: () => api.get<{ data: DailyRow[] }>(`/analysis/daily-shipments${rangeQs}`),
+  const breakdown = useQuery({
+    queryKey: ['analysis-sku-breakdown', rangeQs],
+    queryFn: () => api.get<SkuBreakdown>(`/analysis/sku-breakdown${rangeQs}`),
   });
 
-  const skus = useQuery({
-    queryKey: ['analysis-skus', rangeQs],
-    queryFn: () =>
-      api.get<{ data: SkuRow[] }>(`/analysis/top-skus${rangeQs}&limit=25`),
+  const clients = useQuery({
+    queryKey: ['clients'],
+    queryFn: () => api.get<Client[]>('/clients'),
+    staleTime: 60_000,
   });
+  const clientsById = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const c of clients.data ?? []) m.set(c.id, c.name);
+    return m;
+  }, [clients.data]);
 
-  const maxDaily = Math.max(1, ...(daily.data?.data ?? []).map((d) => d.count));
-  const maxSku = Math.max(1, ...(skus.data?.data ?? []).map((s) => s.total_qty));
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return breakdown.data?.data ?? [];
+    return (breakdown.data?.data ?? []).filter(
+      (r) =>
+        r.sku.toLowerCase().includes(q) ||
+        (r.name ?? '').toLowerCase().includes(q)
+    );
+  }, [breakdown.data, search]);
+
+  const maxQty = Math.max(1, ...filtered.map((r) => r.total_qty));
 
   return (
     <>
       <Topbar title="Analysis" />
       <div className="flex-1 min-h-0 overflow-auto p-4 space-y-3">
-        <Card title="Overview">
-          {overview.isLoading ? (
-            <div className="text-center text-ink-3 py-2">Loading…</div>
-          ) : overview.data ? (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <StatBlock label="Orders today" value={overview.data.ordersToday} />
-              <StatBlock label="Orders this week" value={overview.data.ordersWeek} />
-              <StatBlock label="Orders this month" value={overview.data.ordersMonth} />
-              <StatBlock label="Shipping cost (month)" value={fmtMoney(overview.data.shippingCostMonth)} />
-              <StatBlock label="Shipped today" value={overview.data.shippedToday} />
-              <StatBlock label="Shipped this week" value={overview.data.shippedWeek} />
-              <StatBlock label="Shipped this month" value={overview.data.shippedMonth} />
-            </div>
-          ) : null}
-        </Card>
+        {overview.data && (
+          <div className="flex items-center gap-6 px-4 py-2 bg-surface-2 border border-line rounded-card text-tiny">
+            <Stat label="Orders today" value={overview.data.ordersToday} />
+            <Stat label="Orders this week" value={overview.data.ordersWeek} />
+            <Stat label="Orders this month" value={overview.data.ordersMonth} />
+            <Stat label="Shipped this month" value={overview.data.shippedMonth} />
+            <Stat label="Shipping cost (month)" value={fmtMoney(overview.data.shippingCostMonth)} />
+          </div>
+        )}
 
         <Card
-          title="Daily shipments"
+          title="SKU Analysis"
           actions={
-            <div className="flex items-center gap-2">
-              <Input
-                type="date"
-                value={dateFrom}
-                onChange={(e) => setDateFrom(e.target.value)}
-                className="!py-1 !text-[11px]"
-              />
-              <span className="text-ink-3 text-tiny">→</span>
-              <Input
-                type="date"
-                value={dateTo}
-                onChange={(e) => setDateTo(e.target.value)}
-                className="!py-1 !text-[11px]"
-              />
-            </div>
+            <span className="text-tiny text-ink-3">
+              {breakdown.data
+                ? `${breakdown.data.totalSkus} SKUs · ${breakdown.data.totalOrders.toLocaleString()} orders`
+                : '—'}
+            </span>
           }
           bodyClassName=""
         >
-          {daily.isLoading ? (
-            <div className="p-6 text-center text-ink-3 text-sm2">Loading…</div>
-          ) : !daily.data?.data.length ? (
-            <div className="p-6 text-center text-ink-3 text-sm2">
-              No shipments in this range.
+          {/* Filter bar */}
+          <div className="flex items-center flex-wrap gap-2 px-3.5 py-2.5 border-b border-line">
+            <div className="flex items-center bg-white border border-line-2 rounded-btn overflow-hidden">
+              {RANGES.map((r) => (
+                <button
+                  key={r.id}
+                  type="button"
+                  onClick={() => setRange(r.id)}
+                  className={`px-2.5 py-1 text-[11px] font-semibold border-r border-line-2 last:border-r-0 transition-colors ${
+                    activeRange === r.id
+                      ? 'bg-brand text-white'
+                      : 'text-ink-2 hover:bg-surface-2'
+                  }`}
+                >
+                  {r.label}
+                </button>
+              ))}
             </div>
-          ) : (
-            <table className="w-full text-sm2 border-collapse">
-              <thead className="bg-surface-2">
-                <tr>
-                  <Th className="w-[140px]">Day</Th>
-                  <Th className="text-right w-[100px]">Shipments</Th>
-                  <Th>Volume</Th>
-                  <Th className="text-right w-[140px]">Total cost</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {daily.data.data.map((d, i) => (
-                  <tr
-                    key={d.day}
-                    className={`border-b border-line ${i % 2 === 1 ? 'bg-surface-2' : 'bg-white'}`}
-                  >
-                    <Td className="font-mono">{d.day}</Td>
-                    <Td className="text-right font-mono font-semibold">
-                      {d.count}
-                    </Td>
-                    <Td>
-                      <div className="h-2 rounded bg-surface-3 relative overflow-hidden">
-                        <div
-                          className="h-full bg-brand"
-                          style={{ width: `${(d.count / maxDaily) * 100}%` }}
-                        />
-                      </div>
-                    </Td>
-                    <Td className="text-right font-mono text-ink-2">
-                      {fmtMoney(d.total_cost)}
-                    </Td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </Card>
+            <Input
+              type="date"
+              value={dateFrom}
+              onChange={(e) => {
+                setActiveRange('all');
+                setDateFrom(e.target.value);
+              }}
+              className="!py-1 !text-[11px] !w-[130px]"
+            />
+            <span className="text-ink-3 text-tiny">—</span>
+            <Input
+              type="date"
+              value={dateTo}
+              onChange={(e) => {
+                setActiveRange('all');
+                setDateTo(e.target.value);
+              }}
+              className="!py-1 !text-[11px] !w-[130px]"
+            />
+            <div className="w-[220px]">
+              <Input
+                leading={<SearchIcon size={13} />}
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search SKU or item…"
+              />
+            </div>
+            <Select
+              value={clientFilter}
+              onChange={(e) => setClientFilter(e.target.value)}
+            >
+              <option value="">All Clients</option>
+              {(clients.data ?? []).map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </Select>
+          </div>
 
-        <Card title="Top 25 SKUs" bodyClassName="">
-          {skus.isLoading ? (
+          {breakdown.isLoading ? (
             <div className="p-6 text-center text-ink-3 text-sm2">Loading…</div>
-          ) : !skus.data?.data.length ? (
+          ) : filtered.length === 0 ? (
             <div className="p-6 text-center text-ink-3 text-sm2">
-              No SKU data in this range (orders may be missing line items).
+              No SKU data in this range.
             </div>
           ) : (
-            <table className="w-full text-sm2 border-collapse">
-              <thead className="bg-surface-2">
-                <tr>
-                  <Th>SKU</Th>
-                  <Th className="text-right w-[90px]">Qty</Th>
-                  <Th className="text-right w-[110px]">Orders</Th>
-                  <Th>Volume</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {skus.data.data.map((s, i) => (
-                  <tr
-                    key={s.sku}
-                    className={`border-b border-line ${i % 2 === 1 ? 'bg-surface-2' : 'bg-white'}`}
-                  >
-                    <Td className="font-mono font-semibold">{s.sku}</Td>
-                    <Td className="text-right font-mono font-bold">
-                      {s.total_qty}
-                    </Td>
-                    <Td className="text-right font-mono text-ink-2">
-                      {s.order_count}
-                    </Td>
-                    <Td>
-                      <div className="h-2 rounded bg-surface-3 relative overflow-hidden">
-                        <div
-                          className="h-full bg-ok"
-                          style={{ width: `${(s.total_qty / maxSku) * 100}%` }}
-                        />
-                      </div>
-                    </Td>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm2 border-collapse min-w-[1200px]">
+                <thead className="bg-surface-2">
+                  <tr>
+                    <Th>Item Name</Th>
+                    <Th className="w-[160px]">SKU</Th>
+                    <Th className="w-[150px]">Client</Th>
+                    <Th className="text-right w-[80px]">Orders</Th>
+                    <Th className="text-right w-[90px]">Pending</Th>
+                    <Th className="text-right w-[100px]">Ext. Shipped</Th>
+                    <Th className="text-right w-[160px]">Total Qty</Th>
+                    <Th className="text-right w-[120px]">Std Orders</Th>
+                    <Th className="text-right w-[120px]">Exp Orders</Th>
+                    <Th className="text-right w-[120px]">Total Shipping</Th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {filtered.map((r, i) => (
+                    <tr
+                      key={`${r.sku}-${r.client_id ?? 'none'}`}
+                      className={`border-b border-line ${i % 2 === 1 ? 'bg-surface-2' : 'bg-white'}`}
+                    >
+                      <Td>
+                        <div className="flex items-center gap-2 min-w-0">
+                          {r.image_url && (
+                            <img
+                              src={r.image_url}
+                              alt=""
+                              className="w-7 h-7 rounded border border-line object-cover shrink-0"
+                              loading="lazy"
+                            />
+                          )}
+                          <span className="truncate" title={r.name ?? ''}>
+                            {r.name ?? '—'}
+                          </span>
+                        </div>
+                      </Td>
+                      <Td className="font-mono text-tiny text-ink-2">{r.sku}</Td>
+                      <Td>
+                        {r.client_id !== null && clientsById.has(r.client_id) ? (
+                          <ClientBadge name={clientsById.get(r.client_id)!} />
+                        ) : (
+                          <span className="text-ink-3">—</span>
+                        )}
+                      </Td>
+                      <Td className="text-right font-mono font-bold text-warn">
+                        {r.orders.toLocaleString()}
+                      </Td>
+                      <Td className="text-right font-mono">
+                        {r.pending > 0 ? (
+                          <span className="text-warn">
+                            {r.pending}{' '}
+                            <span className="text-ink-3 text-tiny">pend</span>
+                          </span>
+                        ) : (
+                          <span className="text-ink-3">—</span>
+                        )}
+                      </Td>
+                      <Td className="text-right font-mono">
+                        {r.ext_shipped > 0 ? (
+                          <span className="text-ink-2">
+                            {r.ext_shipped}{' '}
+                            <span className="text-ink-3 text-tiny">ext</span>
+                          </span>
+                        ) : (
+                          <span className="text-ink-3">—</span>
+                        )}
+                      </Td>
+                      <Td className="text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          <div className="w-20 h-1.5 rounded bg-surface-3 overflow-hidden">
+                            <div
+                              className="h-full bg-brand"
+                              style={{
+                                width: `${(r.total_qty / maxQty) * 100}%`,
+                              }}
+                            />
+                          </div>
+                          <span className="font-mono font-semibold w-10 text-right">
+                            {r.total_qty}
+                          </span>
+                        </div>
+                      </Td>
+                      <Td className="text-right font-mono">
+                        {r.std_orders > 0 ? (
+                          <>
+                            {r.std_orders}{' '}
+                            <span className="text-ok-dark text-tiny">
+                              {fmtMoney(r.std_total)}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="text-ink-3">—</span>
+                        )}
+                      </Td>
+                      <Td className="text-right font-mono">
+                        {r.exp_orders > 0 ? (
+                          <>
+                            {r.exp_orders}{' '}
+                            <span className="text-brand text-tiny">
+                              {fmtMoney(r.exp_total)}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="text-ink-3">—</span>
+                        )}
+                      </Td>
+                      <Td className="text-right font-mono font-semibold">
+                        {fmtMoney(r.total_shipping)}
+                      </Td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </Card>
       </div>
@@ -206,13 +344,13 @@ export default function Analysis() {
   );
 }
 
-function StatBlock({ label, value }: { label: string; value: number | string }) {
+function Stat({ label, value }: { label: string; value: number | string }) {
   return (
     <div>
-      <div className="text-[20px] font-extrabold text-ink leading-tight">
+      <div className="text-[15px] font-extrabold text-ink leading-tight">
         {typeof value === 'number' ? value.toLocaleString() : value}
       </div>
-      <div className="text-[10px] font-semibold uppercase tracking-[0.5px] text-ink-3 mt-0.5">
+      <div className="text-[9.5px] font-semibold uppercase tracking-[0.5px] text-ink-3 mt-0.5">
         {label}
       </div>
     </div>
@@ -228,7 +366,7 @@ function Th({
 }) {
   return (
     <th
-      className={`text-left px-3 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap ${className}`}
+      className={`text-left px-2 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap ${className}`}
     >
       {children}
     </th>
@@ -242,5 +380,5 @@ function Td({
   children: React.ReactNode;
   className?: string;
 }) {
-  return <td className={`px-3 py-2 align-middle ${className}`}>{children}</td>;
+  return <td className={`px-2 py-2 align-middle ${className}`}>{children}</td>;
 }
