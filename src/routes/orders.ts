@@ -51,6 +51,69 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   return c.json(paginated(rows, countRows[0]?.count ?? 0, q));
 });
 
+// Picklist: aggregated SKU + qty + order count per client over a date
+// range and status filter. Used to print a warehouse pick list grouped
+// by client. Skipping clients table to keep the query simple — we
+// resolve client names client-side via the clients query.
+const picklistQuery = z.object({
+  status: z.string().optional().default('awaiting_shipment'),
+  clientId: z.coerce.number().int().optional(),
+  storeId: z.coerce.number().int().optional(),
+  dateFrom: z.string().datetime().optional(),
+  dateTo: z.string().datetime().optional(),
+});
+
+app.get('/picklist', zValidator('query', picklistQuery), async (c) => {
+  const q = c.req.valid('query');
+  const fromIso = q.dateFrom
+    ? new Date(q.dateFrom).toISOString()
+    : new Date(0).toISOString();
+  const toIso = q.dateTo
+    ? new Date(q.dateTo).toISOString()
+    : new Date(Date.now() + 86400000).toISOString();
+  const cid: number | null = q.clientId ?? null;
+  const sid: number | null = q.storeId ?? null;
+  const status = q.status;
+
+  const rows = await db.execute<{
+    client_id: number | null;
+    client_name: string | null;
+    sku: string;
+    name: string | null;
+    image_url: string | null;
+    total_qty: number;
+    order_count: number;
+  }>(sql`
+    select
+      o.client_id                                   as client_id,
+      coalesce(c.name, 'Unknown')                   as client_name,
+      item->>'sku'                                  as sku,
+      max(item->>'name')                            as name,
+      max(nullif(item->>'imageUrl', ''))            as image_url,
+      sum(coalesce((item->>'quantity')::int, 1))::int as total_qty,
+      count(distinct o.id)::int                     as order_count
+    from orders o
+    left join clients c on c.id = o.client_id,
+         jsonb_array_elements(o.items) item
+    where (${status}::text is null or o.order_status = ${status}::text)
+      and (${cid}::int is null or o.client_id = ${cid}::int)
+      and (${sid}::int is null or o.store_id = ${sid}::int)
+      and o.order_date >= ${fromIso}::timestamptz
+      and o.order_date <= ${toIso}::timestamptz
+      and item ? 'sku'
+      and item->>'sku' is not null
+      and item->>'sku' <> ''
+    group by o.client_id, c.name, item->>'sku'
+    order by client_name asc, total_qty desc
+  `);
+
+  return c.json({
+    skus: rows,
+    totalSkus: rows.length,
+    totalUnits: rows.reduce((s, r) => s + (r.total_qty ?? 0), 0),
+  });
+});
+
 app.get('/:id{[0-9]+}', async (c) => {
   const id = Number(c.req.param('id'));
   const [order] = await db.select().from(orders).where(eq(orders.id, id)).limit(1);

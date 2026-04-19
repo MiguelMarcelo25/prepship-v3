@@ -2,6 +2,7 @@ import { lazy, Suspense, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
+  ClipboardList,
   Download,
   Package as PackageIcon,
   Printer,
@@ -248,6 +249,19 @@ export default function Orders() {
           </>
         )}
         <div className="flex-1" />
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            const url = `/picklist?status=${status}${
+              clientIdFilter ? `&clientId=${clientIdFilter}` : ''
+            }`;
+            window.open(url, '_blank');
+          }}
+        >
+          <ClipboardList size={12} />
+          Picklist
+        </Button>
         <Button variant="outline" size="sm">
           <Download size={12} />
           Export CSV
