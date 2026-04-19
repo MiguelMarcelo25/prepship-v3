@@ -12,6 +12,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { api } from '../lib/api';
+import { supabase } from '../lib/supabase';
 import { Button } from './ui/Button';
 import { Select } from './ui/Select';
 
@@ -50,10 +51,35 @@ type JobStatus = {
 
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
 
+async function downloadAuthedPdf(jobId: string, fileName: string) {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session?.access_token) throw new Error('Not authenticated');
+  const res = await fetch(`${API_BASE}/print-queue/print/download/${jobId}`, {
+    headers: { Authorization: `Bearer ${session.access_token}` },
+  });
+  if (!res.ok) {
+    const msg = await res.text().catch(() => res.statusText);
+    throw new Error(`Download failed: ${msg}`);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = fileName;
+  a.target = '_blank';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
 export default function PrintQueueDrawer({ onClose }: { onClose: () => void }) {
   const queryClient = useQueryClient();
   const [clientId, setClientId] = useState<number | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [autoDownloaded, setAutoDownloaded] = useState<string | null>(null);
 
   const clients = useQuery({
     queryKey: ['clients'],
@@ -129,19 +155,23 @@ export default function PrintQueueDrawer({ onClose }: { onClose: () => void }) {
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
 
-  // When job finishes, refresh queue (entries marked printed = removed from view)
+  // When job finishes, refresh queue + auto-download the PDF.
   useEffect(() => {
-    if (job.data?.status === 'done') {
-      queryClient.invalidateQueries({ queryKey: ['print-queue', clientId] });
-    }
-  }, [job.data?.status, clientId, queryClient]);
+    if (job.data?.status !== 'done' || !activeJobId || !job.data.file_name) return;
+    queryClient.invalidateQueries({ queryKey: ['print-queue', clientId] });
+    if (autoDownloaded === activeJobId) return;
+    setAutoDownloaded(activeJobId);
+    downloadAuthedPdf(activeJobId, job.data.file_name).catch((err) => {
+      alert(`Auto-download failed: ${(err as Error).message}`);
+    });
+  }, [job.data, activeJobId, autoDownloaded, clientId, queryClient]);
 
   const entries = queue.data?.queuedOrders ?? [];
 
-  const downloadUrl = useMemo(() => {
-    if (job.data?.status !== 'done' || !activeJobId) return null;
-    return `${API_BASE}/print-queue/print/download/${activeJobId}`;
-  }, [job.data?.status, activeJobId]);
+  const canManualDownload = useMemo(
+    () => job.data?.status === 'done' && !!activeJobId && !!job.data.file_name,
+    [job.data, activeJobId]
+  );
 
   return (
     <div className="fixed inset-0 z-50 flex" role="dialog" aria-modal="true">
@@ -208,16 +238,21 @@ export default function PrintQueueDrawer({ onClose }: { onClose: () => void }) {
                 style={{ width: `${job.data.progress}%` }}
               />
             </div>
-            {job.data.status === 'done' && downloadUrl && (
-              <a
-                href={downloadUrl}
-                target="_blank"
-                rel="noreferrer"
+            {canManualDownload && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (activeJobId && job.data?.file_name) {
+                    downloadAuthedPdf(activeJobId, job.data.file_name).catch(
+                      (err) => alert(`Download failed: ${(err as Error).message}`)
+                    );
+                  }
+                }}
                 className="mt-2 inline-flex items-center gap-1 font-bold hover:underline"
               >
                 <Download size={11} />
-                Download {job.data.file_name}
-              </a>
+                Download {job.data?.file_name}
+              </button>
             )}
             {job.data.label_errors?.length > 0 && (
               <details className="mt-2 cursor-pointer">
