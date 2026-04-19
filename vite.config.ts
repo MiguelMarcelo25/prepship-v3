@@ -21,6 +21,7 @@ export default defineConfig({
           query: ['@tanstack/react-query'],
           supabase: ['@supabase/supabase-js'],
           icons: ['lucide-react'],
+          charts: ['recharts'],
         },
       },
     },

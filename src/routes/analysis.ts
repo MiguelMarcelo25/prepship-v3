@@ -81,6 +81,63 @@ const skuBreakdownQuery = rangeQuery.extend({
   limit: z.coerce.number().int().positive().max(2000).optional().default(500),
 });
 
+const skuDailyQuery = rangeQuery.extend({
+  clientId: z.coerce.number().int().optional(),
+  topN: z.coerce.number().int().positive().max(15).optional().default(5),
+});
+
+app.get('/sku-daily', zValidator('query', skuDailyQuery), async (c) => {
+  const q = c.req.valid('query');
+  const top = await db.execute<{ sku: string; name: string | null; total_qty: number }>(sql`
+    select item->>'sku' as sku,
+           max(item->>'name') as name,
+           sum(coalesce((item->>'quantity')::int, 1))::int as total_qty
+    from orders o, jsonb_array_elements(o.items) item
+    where item ? 'sku' and item->>'sku' is not null and item->>'sku' <> ''
+      and o.order_date >= ${new Date(q.dateFrom)}
+      and o.order_date <= ${new Date(q.dateTo)}
+      ${q.clientId !== undefined ? sql`and o.client_id = ${q.clientId}` : sql``}
+    group by item->>'sku'
+    order by total_qty desc
+    limit ${q.topN}
+  `);
+
+  const skus = top.map((t) => t.sku);
+  if (!skus.length) {
+    return c.json({ topSkus: [], days: [] });
+  }
+
+  const daily = await db.execute<{ day: string; sku: string; qty: number }>(sql`
+    select to_char(date_trunc('day', o.order_date), 'YYYY-MM-DD') as day,
+           item->>'sku' as sku,
+           sum(coalesce((item->>'quantity')::int, 1))::int as qty
+    from orders o, jsonb_array_elements(o.items) item
+    where item ? 'sku' and item->>'sku' = any(${skus})
+      and o.order_date >= ${new Date(q.dateFrom)}
+      and o.order_date <= ${new Date(q.dateTo)}
+      ${q.clientId !== undefined ? sql`and o.client_id = ${q.clientId}` : sql``}
+    group by date_trunc('day', o.order_date), item->>'sku'
+    order by date_trunc('day', o.order_date) asc
+  `);
+
+  // Pivot rows into per-day buckets keyed by sku
+  const byDay = new Map<string, Record<string, number | string>>();
+  for (const row of daily) {
+    const bucket = byDay.get(row.day) ?? { day: row.day };
+    bucket[row.sku] = row.qty;
+    byDay.set(row.day, bucket);
+  }
+  // Fill zeros so lines don't dip-then-leap
+  const sortedDays = [...byDay.keys()].sort();
+  const days = sortedDays.map((d) => {
+    const b = byDay.get(d)!;
+    for (const s of skus) if (b[s] === undefined) b[s] = 0;
+    return b;
+  });
+
+  return c.json({ topSkus: top, days });
+});
+
 app.get('/sku-breakdown', zValidator('query', skuBreakdownQuery), async (c) => {
   const q = c.req.valid('query');
   const rows = await db.execute<{

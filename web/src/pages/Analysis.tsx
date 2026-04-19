@@ -1,6 +1,16 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Search as SearchIcon } from 'lucide-react';
+import {
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 import Topbar from '../components/Topbar';
 import { Input } from '../components/ui/Input';
 import { Select } from '../components/ui/Select';
@@ -40,7 +50,23 @@ type SkuBreakdown = {
   totalOrders: number;
 };
 
+type SkuDailyResp = {
+  topSkus: { sku: string; name: string | null; total_qty: number }[];
+  days: Record<string, number | string>[];
+};
+
 type Client = { id: number; name: string };
+
+const LINE_COLORS = [
+  '#2a5bd7',
+  '#16a34a',
+  '#d97706',
+  '#dc2626',
+  '#7c3aed',
+  '#0891b2',
+  '#db2777',
+  '#65a30d',
+];
 
 function isoStartOf(daysAgo: number) {
   const d = new Date();
@@ -107,6 +133,11 @@ export default function Analysis() {
   const breakdown = useQuery({
     queryKey: ['analysis-sku-breakdown', rangeQs],
     queryFn: () => api.get<SkuBreakdown>(`/analysis/sku-breakdown${rangeQs}`),
+  });
+
+  const daily = useQuery({
+    queryKey: ['analysis-sku-daily', rangeQs],
+    queryFn: () => api.get<SkuDailyResp>(`/analysis/sku-daily${rangeQs}`),
   });
 
   const clients = useQuery({
@@ -214,6 +245,65 @@ export default function Analysis() {
               ))}
             </Select>
           </div>
+
+          {/* Daily units sold — top SKUs */}
+          {daily.data && daily.data.topSkus.length > 0 && (
+            <div className="px-3.5 pt-3 pb-2 border-b border-line">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="text-[11px] font-bold uppercase tracking-[0.4px] text-ink-3">
+                  Daily units sold — Top SKUs
+                </div>
+              </div>
+              <div className="h-[220px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart
+                    data={daily.data.days}
+                    margin={{ top: 5, right: 10, left: -10, bottom: 0 }}
+                  >
+                    <CartesianGrid stroke="#eef0f4" vertical={false} />
+                    <XAxis
+                      dataKey="day"
+                      tick={{ fontSize: 10, fill: '#8a95a3' }}
+                      tickFormatter={(d: string) => d.slice(5)}
+                      axisLine={{ stroke: '#e1e4e8' }}
+                      tickLine={false}
+                    />
+                    <YAxis
+                      tick={{ fontSize: 10, fill: '#8a95a3' }}
+                      axisLine={{ stroke: '#e1e4e8' }}
+                      tickLine={false}
+                      width={32}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        fontSize: 11,
+                        border: '1px solid #e1e4e8',
+                        borderRadius: 6,
+                        boxShadow: '0 4px 8px rgba(0,0,0,.08)',
+                      }}
+                      labelStyle={{ fontWeight: 700, color: '#1a1f2e' }}
+                    />
+                    <Legend
+                      wrapperStyle={{ fontSize: 10, paddingTop: 4 }}
+                      iconType="line"
+                    />
+                    {daily.data.topSkus.map((s, i) => (
+                      <Line
+                        key={s.sku}
+                        type="monotone"
+                        dataKey={s.sku}
+                        stroke={LINE_COLORS[i % LINE_COLORS.length]}
+                        strokeWidth={1.5}
+                        dot={false}
+                        activeDot={{ r: 3 }}
+                        name={s.name || s.sku}
+                      />
+                    ))}
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </div>
+          )}
 
           {breakdown.isLoading ? (
             <div className="p-6 text-center text-ink-3 text-sm2">Loading…</div>
