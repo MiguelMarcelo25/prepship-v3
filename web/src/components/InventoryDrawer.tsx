@@ -6,6 +6,7 @@ import { api } from '../lib/api';
 import { Button } from './ui/Button';
 import { Input } from './ui/Input';
 import { Card, Field } from './ui/Card';
+import { Skeleton } from './ui/Skeleton';
 
 type Item = {
   id: number;
@@ -122,7 +123,12 @@ export default function InventoryDrawer() {
 
         <div className="flex-1 min-h-0 overflow-y-auto p-3.5 bg-page space-y-3">
           {item.isLoading && (
-            <div className="text-center text-ink-3 py-10">Loading…</div>
+            <div className="space-y-3">
+              <Skeleton className="h-28 w-full" />
+              <Skeleton className="h-24 w-full" />
+              <Skeleton className="h-24 w-full" />
+              <Skeleton className="h-40 w-full" />
+            </div>
           )}
           {item.isError && (
             <div className="text-center text-danger py-10">

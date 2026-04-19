@@ -12,6 +12,7 @@ import { api } from '../lib/api';
 import { Button } from './ui/Button';
 import { Card, Field } from './ui/Card';
 import { StatusBadge } from './ui/Badge';
+import { Skeleton } from './ui/Skeleton';
 
 type ItemOption = { name?: string; value?: string };
 
@@ -240,7 +241,13 @@ export default function OrderDrawer() {
 
         {/* Body */}
         <div className="flex-1 min-h-0 overflow-y-auto p-3.5 bg-page space-y-3">
-          {isLoading && <div className="text-center text-ink-3 py-10">Loading…</div>}
+          {isLoading && (
+            <div className="space-y-3">
+              <Skeleton className="h-28 w-full" />
+              <Skeleton className="h-40 w-full" />
+              <Skeleton className="h-32 w-full" />
+            </div>
+          )}
           {isError && (
             <div className="text-center text-danger py-10">
               {(error as Error).message}

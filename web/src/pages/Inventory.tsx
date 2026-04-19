@@ -5,6 +5,7 @@ import { Plus, Search as SearchIcon } from 'lucide-react';
 import Topbar from '../components/Topbar';
 import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
+import { SkeletonRow } from '../components/ui/Skeleton';
 import { api, qs, type Paginated } from '../lib/api';
 
 const InventoryDrawer = lazy(() => import('../components/InventoryDrawer'));
@@ -141,13 +142,10 @@ export default function Inventory() {
             </tr>
           </thead>
           <tbody>
-            {isLoading && (
-              <tr>
-                <td colSpan={6} className="p-10 text-center text-ink-3">
-                  Loading…
-                </td>
-              </tr>
-            )}
+            {isLoading &&
+              Array.from({ length: 8 }).map((_, i) => (
+                <SkeletonRow key={`sk-${i}`} cols={6} />
+              ))}
             {!isLoading && rows.length === 0 && (
               <tr>
                 <td colSpan={6} className="p-16 text-center text-ink-3">

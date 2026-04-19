@@ -6,6 +6,7 @@ import Topbar from '../components/Topbar';
 import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 import { StatusBadge } from '../components/ui/Badge';
+import { SkeletonRow } from '../components/ui/Skeleton';
 import { api, qs, type Paginated } from '../lib/api';
 
 const OrderDrawer = lazy(() => import('../components/OrderDrawer'));
@@ -116,13 +117,10 @@ export default function Orders() {
             </tr>
           </thead>
           <tbody>
-            {isLoading && (
-              <tr>
-                <td colSpan={8} className="p-10 text-center text-ink-3">
-                  Loading…
-                </td>
-              </tr>
-            )}
+            {isLoading &&
+              Array.from({ length: 10 }).map((_, i) => (
+                <SkeletonRow key={`sk-${i}`} cols={8} />
+              ))}
             {isError && (
               <tr>
                 <td colSpan={8} className="p-10 text-center text-danger">
