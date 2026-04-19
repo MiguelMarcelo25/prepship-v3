@@ -86,7 +86,8 @@ export async function createLabelFromShipment(input: CreateFromShipmentInput) {
     };
   }
 
-  const shipment: SSShipment = {
+  const shipment: SSShipment & { service_code: string } = {
+    service_code: input.serviceCode,
     validate_address: 'no_validation',
     ship_to: {
       ...input.shipTo,
@@ -101,9 +102,10 @@ export async function createLabelFromShipment(input: CreateFromShipmentInput) {
     packages: [parcel],
   };
 
+  // ShipStation v2 expects service_code INSIDE shipment, not at root.
   const label = await ssRequest<Label>('/v2/labels', {
     method: 'POST',
-    body: { shipment, service_code: input.serviceCode },
+    body: { shipment },
   });
   return persistLabel(label, input.orderId, input.clientId);
 }
