@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   Download,
   Package as PackageIcon,
+  Printer,
   Search as SearchIcon,
   X,
 } from 'lucide-react';
@@ -16,6 +17,7 @@ import { SkeletonRow } from '../components/ui/Skeleton';
 import { api, qs, type Paginated } from '../lib/api';
 
 const OrderDrawer = lazy(() => import('../components/OrderDrawer'));
+const BatchLabelModal = lazy(() => import('../components/BatchLabelModal'));
 
 type OrderItem = {
   orderItemId?: number;
@@ -117,6 +119,7 @@ export default function Orders() {
   const [page, setPage] = useState(1);
   const [rangeId, setRangeId] = useState<typeof dateRanges[number]['id']>('30d');
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [batchOpen, setBatchOpen] = useState(false);
   const pageSize = 50;
   const openId = orderId ? Number(orderId) : null;
 
@@ -230,9 +233,19 @@ export default function Orders() {
           </button>
         )}
         {selected.size > 0 && (
-          <span className="text-tiny text-brand font-semibold px-2">
-            {selected.size} selected
-          </span>
+          <>
+            <span className="text-tiny text-brand font-semibold px-2">
+              {selected.size} selected
+            </span>
+            <Button
+              variant="green"
+              size="sm"
+              onClick={() => setBatchOpen(true)}
+            >
+              <Printer size={12} />
+              Buy {selected.size} labels
+            </Button>
+          </>
         )}
         <div className="flex-1" />
         <Button variant="outline" size="sm">
@@ -453,6 +466,18 @@ export default function Orders() {
       {openId !== null && (
         <Suspense fallback={null}>
           <OrderDrawer />
+        </Suspense>
+      )}
+
+      {batchOpen && (
+        <Suspense fallback={null}>
+          <BatchLabelModal
+            orderIds={Array.from(selected)}
+            onClose={() => {
+              setBatchOpen(false);
+              setSelected(new Set());
+            }}
+          />
         </Suspense>
       )}
     </>

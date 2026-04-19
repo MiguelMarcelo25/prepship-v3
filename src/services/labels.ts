@@ -1,6 +1,7 @@
-import { and, eq, or, desc } from 'drizzle-orm';
+import { eq, or, desc } from 'drizzle-orm';
 import { db } from '../db/client';
 import { shipments } from '../db/schema/shipments';
+import { orders } from '../db/schema/orders';
 import { ssRequest } from '../lib/shipstation';
 import type {
   Address,
@@ -58,6 +59,7 @@ async function persistLabel(
       isReturn: !!label.is_return_label,
     })
     .returning();
+  if (!row) throw new Error('Failed to persist shipment row');
   return row;
 }
 
@@ -124,6 +126,110 @@ export async function voidLabel(shipmentId: number) {
     .where(eq(shipments.id, shipmentId))
     .returning();
   return updated;
+}
+
+// Buy a label by orderId — pulls the order's weight + ship-to from the
+// DB (set during ShipStation sync) and posts to ShipStation v2 with the
+// caller-supplied service code.
+export async function createLabelFromOrderId(args: {
+  orderId: number;
+  serviceCode: string;
+  clientId?: number;
+}) {
+  const [order] = await db
+    .select()
+    .from(orders)
+    .where(eq(orders.id, args.orderId))
+    .limit(1);
+  if (!order) throw new Error(`Order ${args.orderId} not found`);
+  if (!order.weightOz || order.weightOz <= 0) {
+    throw new Error(`Order ${order.orderNumber} has no weight set`);
+  }
+
+  const raw = (order.raw as { shipTo?: { street1?: string; street2?: string | null; city?: string; state?: string; postalCode?: string; country?: string; phone?: string | null } } | null) ?? {};
+  const shipToRaw = raw.shipTo ?? {};
+  const street1 = shipToRaw.street1 ?? '';
+  const city = shipToRaw.city ?? order.shipToCity ?? '';
+  const state = shipToRaw.state ?? order.shipToState ?? '';
+  const postal = shipToRaw.postalCode ?? order.shipToPostalCode ?? '';
+  if (!street1 || !city || !state || !postal) {
+    throw new Error(
+      `Order ${order.orderNumber} ship-to is missing street/city/state/postal`
+    );
+  }
+
+  return createLabelFromShipment({
+    orderId: args.orderId,
+    clientId: args.clientId ?? order.clientId ?? undefined,
+    weightOz: order.weightOz,
+    serviceCode: args.serviceCode,
+    shipTo: {
+      name: order.shipToName ?? undefined,
+      address_line1: street1,
+      address_line2: shipToRaw.street2 ?? undefined,
+      city_locality: city,
+      state_province: state,
+      postal_code: postal,
+      country_code: shipToRaw.country ?? 'US',
+      phone: shipToRaw.phone ?? undefined,
+    },
+  });
+}
+
+export type BatchResultItem = {
+  orderId: number;
+  success: boolean;
+  shipmentId?: number;
+  trackingNumber?: string | null;
+  cost?: string | null;
+  error?: string;
+};
+
+export async function createLabelBatch(
+  orderIds: number[],
+  serviceCode: string
+): Promise<{
+  created: BatchResultItem[];
+  failed: BatchResultItem[];
+  summary: { total: number; created: number; failed: number };
+}> {
+  const created: BatchResultItem[] = [];
+  const failed: BatchResultItem[] = [];
+  const concurrency = 5;
+
+  for (let i = 0; i < orderIds.length; i += concurrency) {
+    const chunk = orderIds.slice(i, i + concurrency);
+    await Promise.all(
+      chunk.map(async (orderId) => {
+        try {
+          const shipment = await createLabelFromOrderId({ orderId, serviceCode });
+          created.push({
+            orderId,
+            success: true,
+            shipmentId: shipment.id,
+            trackingNumber: shipment.trackingNumber,
+            cost: shipment.labelCost,
+          });
+        } catch (err) {
+          failed.push({
+            orderId,
+            success: false,
+            error: (err as Error).message,
+          });
+        }
+      })
+    );
+  }
+
+  return {
+    created,
+    failed,
+    summary: {
+      total: orderIds.length,
+      created: created.length,
+      failed: failed.length,
+    },
+  };
 }
 
 export async function lookupLabel(lookup: string) {

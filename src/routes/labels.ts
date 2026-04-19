@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import {
+  createLabelBatch,
   createLabelFromRate,
   createLabelFromShipment,
   lookupLabel,
@@ -55,6 +56,17 @@ app.post('/', zValidator('json', createBody), async (c) => {
       ? await createLabelFromRate(body)
       : await createLabelFromShipment(body);
   return c.json(result, 201);
+});
+
+const batchBody = z.object({
+  orderIds: z.array(z.number().int().positive()).min(1).max(100),
+  serviceCode: z.string().min(1),
+});
+
+app.post('/create-batch', zValidator('json', batchBody), async (c) => {
+  const { orderIds, serviceCode } = c.req.valid('json');
+  const result = await createLabelBatch(orderIds, serviceCode);
+  return c.json(result);
 });
 
 app.get('/:lookup', async (c) => {
