@@ -1,6 +1,7 @@
-import { eq } from 'drizzle-orm';
+import { eq, like } from 'drizzle-orm';
 import { db } from '../db/client';
 import { rateCache } from '../db/schema/rates';
+import { settings } from '../db/schema/settings';
 import {
   ssRequest,
   type RatesResponse,
@@ -10,6 +11,53 @@ import {
 } from '../lib/shipstation';
 import type { CarriersResponse } from '../lib/shipstation/types';
 import { getDefaultShipFrom } from '../lib/ship-from';
+
+type Markup = { type: 'amount' | 'percent'; value: number };
+
+async function loadCarrierMarkups(): Promise<Map<string, Markup>> {
+  const rows = await db
+    .select()
+    .from(settings)
+    .where(like(settings.key, 'markup.%'));
+  const m = new Map<string, Markup>();
+  for (const row of rows) {
+    if (!row.value) continue;
+    const id = row.key.slice('markup.'.length);
+    try {
+      const p = JSON.parse(row.value);
+      if (
+        (p.type === 'amount' || p.type === 'percent') &&
+        typeof p.value === 'number' &&
+        p.value !== 0
+      ) {
+        m.set(id, p as Markup);
+      }
+    } catch {
+      // ignore unparseable values
+    }
+  }
+  return m;
+}
+
+function applyMarkups(rates: Rate[], markups: Map<string, Markup>): Rate[] {
+  if (!markups.size) return rates;
+  return rates.map((r) => {
+    const m = markups.get(r.carrier_id);
+    if (!m) return r;
+    const orig = r.shipping_amount.amount;
+    const newAmount =
+      m.type === 'percent' ? orig * (1 + m.value / 100) : orig + m.value;
+    return {
+      ...r,
+      shipping_amount: {
+        ...r.shipping_amount,
+        amount: Math.round(newAmount * 100) / 100,
+      },
+      original_amount: { ...r.shipping_amount },
+      markup: m,
+    };
+  });
+}
 
 const CACHE_TTL_MS = 1000 * 60 * 60 * 6; // 6 hours
 const CARRIER_CACHE_MS = 1000 * 60 * 15; // 15 min
@@ -151,6 +199,10 @@ export async function getRates(
 ): Promise<GetRatesResult> {
   const key = rateCacheKey(input);
 
+  // Markups apply at read time so config changes reflect instantly without
+  // having to bust the rate cache.
+  const markups = await loadCarrierMarkups();
+
   if (!opts.forceRefresh) {
     const [cached] = await db
       .select()
@@ -158,9 +210,11 @@ export async function getRates(
       .where(eq(rateCache.cacheKey, key))
       .limit(1);
     if (cached && Date.now() - cached.fetchedAt.getTime() < CACHE_TTL_MS) {
+      const cachedRaw = cached.rates as Rate[];
+      const cachedRates = applyMarkups(cachedRaw, markups);
       return {
-        rates: cached.rates as Rate[],
-        bestRate: (cached.bestRate as Rate | null) ?? null,
+        rates: cachedRates,
+        bestRate: pickBestRate(cachedRates),
         cached: true,
         cacheKey: key,
         fetchedAt: cached.fetchedAt.toISOString(),
@@ -168,33 +222,34 @@ export async function getRates(
     }
   }
 
-  const rates = await fetchLiveRates(input);
-  const bestRate = pickBestRate(rates);
+  const rawRates = await fetchLiveRates(input);
   const now = new Date();
 
+  // Cache the RAW rates so markup updates always show fresh prices.
   await db
     .insert(rateCache)
     .values({
       cacheKey: key,
       weightOz: input.weightOz,
       toZip: input.toZip,
-      rates: rates as unknown[],
-      bestRate,
+      rates: rawRates as unknown[],
+      bestRate: pickBestRate(rawRates),
       weightVersion: 1,
       fetchedAt: now,
     })
     .onConflictDoUpdate({
       target: rateCache.cacheKey,
       set: {
-        rates: rates as unknown[],
-        bestRate,
+        rates: rawRates as unknown[],
+        bestRate: pickBestRate(rawRates),
         fetchedAt: now,
       },
     });
 
+  const rates = applyMarkups(rawRates, markups);
   return {
     rates,
-    bestRate,
+    bestRate: pickBestRate(rates),
     cached: false,
     cacheKey: key,
     fetchedAt: now.toISOString(),

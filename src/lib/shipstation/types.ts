@@ -50,6 +50,11 @@ export type Rate = {
   warning_messages?: string[];
   error_messages?: string[];
   package_type?: string;
+  // Set by our backend when a per-carrier markup was applied.
+  // shipping_amount becomes the marked-up price; original_amount keeps
+  // the raw ShipStation price so the UI can show both.
+  original_amount?: { currency: string; amount: number };
+  markup?: { type: 'amount' | 'percent'; value: number };
 };
 
 export type RatesResponse = {
