@@ -20,6 +20,27 @@ type BatchResult = {
   summary: { total: number; created: number; failed: number };
 };
 
+type ShipmentRow = {
+  id: number;
+  orderId: number | null;
+  orderNumber: string | null;
+  clientId: number | null;
+  labelUrl: string | null;
+};
+
+type OrderItem = {
+  sku?: string | null;
+  name?: string | null;
+  quantity?: number | null;
+};
+
+type OrderDetail = {
+  id: number;
+  orderNumber: string;
+  clientId: number | null;
+  items: OrderItem[];
+};
+
 const COMMON_SERVICES = [
   { code: 'usps_ground_advantage', label: 'USPS Ground Advantage' },
   { code: 'usps_priority_mail', label: 'USPS Priority Mail' },
@@ -40,6 +61,8 @@ export default function BatchLabelModal({
   const queryClient = useQueryClient();
   const [serviceCode, setServiceCode] = useState(COMMON_SERVICES[0]!.code);
   const [customCode, setCustomCode] = useState('');
+  const [autoQueue, setAutoQueue] = useState(true);
+  const [queueStatus, setQueueStatus] = useState<string | null>(null);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -51,14 +74,46 @@ export default function BatchLabelModal({
   }, []);
 
   const batch = useMutation({
-    mutationFn: () =>
-      api.post<BatchResult>('/labels/create-batch', {
+    mutationFn: async () => {
+      const result = await api.post<BatchResult>('/labels/create-batch', {
         orderIds,
         serviceCode: customCode.trim() || serviceCode,
-      }),
+      });
+      if (autoQueue && result.created.length) {
+        setQueueStatus(`Queueing ${result.created.length} label${result.created.length === 1 ? '' : 's'}…`);
+        let queued = 0;
+        for (const created of result.created) {
+          try {
+            const shipments = await api.get<{ data: ShipmentRow[] }>(
+              `/shipments?orderId=${created.orderId}`
+            );
+            const shipment = shipments.data.find((s) => s.id === created.shipmentId);
+            if (!shipment?.labelUrl || !shipment.clientId) continue;
+            const order = await api.get<OrderDetail>(`/orders/${created.orderId}`);
+            const firstItem = order.items?.[0];
+            await api.post('/print-queue/add', {
+              client_id: shipment.clientId,
+              order_id: String(order.id),
+              order_number: order.orderNumber,
+              label_url: shipment.labelUrl,
+              sku_group_id: firstItem?.sku ?? `order-${order.id}`,
+              primary_sku: firstItem?.sku ?? null,
+              item_description: firstItem?.name ?? null,
+              order_qty: firstItem?.quantity ?? 1,
+            });
+            queued += 1;
+          } catch {
+            // Per-order queue failures are non-fatal — surfaced in summary.
+          }
+        }
+        setQueueStatus(`${queued} of ${result.created.length} sent to print queue`);
+      }
+      return result;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['orders'] });
       queryClient.invalidateQueries({ queryKey: ['orders-count'] });
+      queryClient.invalidateQueries({ queryKey: ['print-queue'] });
     },
   });
 
@@ -124,6 +179,16 @@ export default function BatchLabelModal({
               />
             </div>
 
+            <label className="flex items-center gap-2 text-sm2 text-ink-2 cursor-pointer select-none pt-1">
+              <input
+                type="checkbox"
+                checked={autoQueue}
+                onChange={(e) => setAutoQueue(e.target.checked)}
+                className="accent-brand"
+              />
+              Send labels to print queue when done
+            </label>
+
             <div className="text-tiny text-ink-3 pt-1 leading-relaxed">
               Each order's saved weight + ship-to address is used. Concurrency
               is capped at 5 to avoid hitting ShipStation rate limits. Failed
@@ -179,6 +244,12 @@ export default function BatchLabelModal({
                 tone="text-danger"
               />
             </div>
+
+            {queueStatus && (
+              <div className="text-tiny text-ok-dark font-semibold">
+                {queueStatus}
+              </div>
+            )}
 
             {batch.data.failed.length > 0 && (
               <div className="border border-danger-border bg-danger-bg rounded-btn p-3 max-h-[260px] overflow-y-auto">
