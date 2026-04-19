@@ -7,6 +7,7 @@ import {
   Package as PackageIcon,
   RefreshCw,
   Check,
+  Printer,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { Button } from './ui/Button';
@@ -189,6 +190,29 @@ export default function OrderDrawer() {
       setSelectedRateId(null);
       ratesMutation.reset();
     },
+  });
+
+  const sendToQueue = useMutation({
+    mutationFn: (shipment: Shipment) => {
+      const firstItem = data?.items?.[0];
+      return api.post<{ queue_entry_id: string; already_queued: boolean }>(
+        '/print-queue/add',
+        {
+          client_id: data?.clientId ?? 0,
+          order_id: String(data?.id ?? ''),
+          order_number: data?.orderNumber ?? null,
+          label_url: shipment.labelUrl,
+          sku_group_id: firstItem?.sku ?? `order-${data?.id}`,
+          primary_sku: firstItem?.sku ?? null,
+          item_description: firstItem?.name ?? null,
+          order_qty: firstItem?.quantity ?? 1,
+        }
+      );
+    },
+    onSuccess: (r) => {
+      alert(r.already_queued ? 'Already in queue' : 'Sent to print queue');
+    },
+    onError: (e) => alert(`Queue add failed: ${(e as Error).message}`),
   });
 
   const canBuyLabel =
@@ -531,14 +555,27 @@ export default function OrderDrawer() {
                           )}
                         </div>
                         {s.labelUrl && (
-                          <a
-                            href={s.labelUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="mt-1.5 inline-block text-brand text-tiny font-semibold hover:underline"
-                          >
-                            Download label →
-                          </a>
+                          <div className="mt-1.5 flex items-center gap-3 text-tiny font-semibold">
+                            <a
+                              href={s.labelUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-brand hover:underline"
+                            >
+                              Download label →
+                            </a>
+                            {!s.voided && data?.clientId && (
+                              <button
+                                type="button"
+                                onClick={() => sendToQueue.mutate(s)}
+                                disabled={sendToQueue.isPending}
+                                className="inline-flex items-center gap-1 text-ok-dark hover:underline disabled:opacity-50"
+                              >
+                                <Printer size={11} />
+                                Send to queue
+                              </button>
+                            )}
+                          </div>
                         )}
                       </div>
                     ))}

@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { lazy, Suspense, useMemo, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -13,10 +13,13 @@ import {
   Search,
   LogOut,
   Users,
+  Printer,
 } from 'lucide-react';
 import { api, qs, type Paginated } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import SyncOrdersButton from './SyncOrdersButton';
+
+const PrintQueueDrawer = lazy(() => import('./PrintQueueDrawer'));
 
 const statusItems: { status: string; label: string }[] = [
   { status: 'awaiting_shipment', label: 'Awaiting Shipment' },
@@ -180,6 +183,7 @@ function ToolRow({
 
 export default function Sidebar() {
   const { user, signOut } = useAuth();
+  const [queueOpen, setQueueOpen] = useState(false);
   return (
     <aside className="w-sidebar shrink-0 bg-white border-r border-line flex flex-col h-full">
       <div className="px-3.5 py-3 border-b border-line">
@@ -206,9 +210,23 @@ export default function Sidebar() {
         </div>
       </div>
 
-      <div className="px-2.5 pb-1.5">
+      <div className="px-2.5 pb-1.5 space-y-1">
         <SyncOrdersButton />
+        <button
+          type="button"
+          onClick={() => setQueueOpen(true)}
+          className="w-full flex items-center justify-center gap-1.5 px-2.5 py-[7px] rounded-btn border border-line-2 bg-white text-ink-2 hover:bg-surface-2 hover:text-ink text-[12px] font-semibold transition-colors"
+        >
+          <Printer size={12} />
+          <span>Print Queue</span>
+        </button>
       </div>
+
+      {queueOpen && (
+        <Suspense fallback={null}>
+          <PrintQueueDrawer onClose={() => setQueueOpen(false)} />
+        </Suspense>
+      )}
 
       <nav className="flex-1 overflow-y-auto py-1.5">
         {statusItems.map((i) => (

@@ -19,6 +19,7 @@ import billingRoute from './routes/billing';
 import manifestsRoute from './routes/manifests';
 import analysisRoute from './routes/analysis';
 import cronRoute from './routes/cron';
+import printQueueRoute from './routes/print-queue';
 
 const app = new Hono();
 
@@ -46,6 +47,7 @@ app.use('/settings/*', requireAuth);
 app.use('/billing/*', requireAuth);
 app.use('/manifests/*', requireAuth);
 app.use('/analysis/*', requireAuth);
+app.use('/print-queue/*', requireAuth);
 
 app.route('/orders', ordersRoute);
 app.route('/shipments', shipmentsRoute);
@@ -60,6 +62,7 @@ app.route('/settings', settingsRoute);
 app.route('/billing', billingRoute);
 app.route('/manifests', manifestsRoute);
 app.route('/analysis', analysisRoute);
+app.route('/print-queue', printQueueRoute);
 
 app.notFound((c) => c.json({ error: 'Not found' }, 404));
 

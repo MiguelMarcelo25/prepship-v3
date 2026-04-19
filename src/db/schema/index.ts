@@ -8,3 +8,4 @@ export * from './settings';
 export * from './inventory';
 export * from './locations';
 export * from './billing';
+export * from './print-queue';
