@@ -17,6 +17,16 @@ type Client = {
   storeIds: number[];
 };
 
+type ClientStats = {
+  clientId: number;
+  total: number;
+  awaiting: number;
+  shipped: number;
+  cancelled: number;
+  onHold: number;
+  other: number;
+};
+
 type BackfillResult = { updated: number; message?: string };
 
 export default function Clients() {
@@ -28,6 +38,14 @@ export default function Clients() {
     queryKey: ['clients'],
     queryFn: () => api.get<Client[]>('/clients'),
   });
+
+  const stats = useQuery({
+    queryKey: ['clients-order-stats'],
+    queryFn: () => api.get<{ data: ClientStats[] }>('/clients/order-stats'),
+  });
+  const statsByClient = new Map<number, ClientStats>(
+    (stats.data?.data ?? []).map((s) => [s.clientId, s])
+  );
 
   const remove = useMutation({
     mutationFn: (id: number) => api.delete(`/clients/${id}`),
@@ -148,6 +166,49 @@ export default function Clients() {
                   )}
                 </div>
 
+                {(() => {
+                  const s = statsByClient.get(c.id);
+                  if (!s)
+                    return (
+                      <div className="text-tiny text-ink-3 italic">
+                        No orders assigned
+                      </div>
+                    );
+                  return (
+                    <div className="flex items-center gap-1.5 flex-wrap text-tiny">
+                      <CountPill
+                        label="Awaiting"
+                        value={s.awaiting}
+                        bg="bg-warn-bg"
+                        text="text-[#92400e]"
+                      />
+                      <CountPill
+                        label="Shipped"
+                        value={s.shipped}
+                        bg="bg-ok-bg"
+                        text="text-ok-dark"
+                      />
+                      <CountPill
+                        label="Cancelled"
+                        value={s.cancelled}
+                        bg="bg-danger-bg"
+                        text="text-[#991b1b]"
+                      />
+                      {s.onHold > 0 && (
+                        <CountPill
+                          label="On hold"
+                          value={s.onHold}
+                          bg="bg-surface-3"
+                          text="text-ink-2"
+                        />
+                      )}
+                      <span className="text-ink-3 ml-auto">
+                        {s.total.toLocaleString()} total
+                      </span>
+                    </div>
+                  );
+                })()}
+
                 <div className="flex items-center gap-1 pt-1 border-t border-line flex-wrap">
                   <Button
                     variant="ghost"
@@ -218,5 +279,27 @@ export default function Clients() {
         </Suspense>
       )}
     </>
+  );
+}
+
+function CountPill({
+  label,
+  value,
+  bg,
+  text,
+}: {
+  label: string;
+  value: number;
+  bg: string;
+  text: string;
+}) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded ${bg} ${text} font-semibold`}
+      title={label}
+    >
+      <span className="font-mono">{value.toLocaleString()}</span>
+      <span className="opacity-70">{label.toLowerCase()}</span>
+    </span>
   );
 }

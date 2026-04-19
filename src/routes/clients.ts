@@ -163,6 +163,52 @@ app.post('/sync-stores', async (c) => {
   });
 });
 
+// Per-client order counts grouped by status (one row per client)
+app.get('/order-stats', async (c) => {
+  const rows = await db.execute<{
+    client_id: number;
+    order_status: string;
+    count: number;
+  }>(sql`
+    select client_id, order_status, count(*)::int as count
+    from orders
+    where client_id is not null
+    group by client_id, order_status
+  `);
+
+  const byClient = new Map<
+    number,
+    {
+      clientId: number;
+      total: number;
+      awaiting: number;
+      shipped: number;
+      cancelled: number;
+      onHold: number;
+      other: number;
+    }
+  >();
+  for (const r of rows) {
+    const cur = byClient.get(r.client_id) ?? {
+      clientId: r.client_id,
+      total: 0,
+      awaiting: 0,
+      shipped: 0,
+      cancelled: 0,
+      onHold: 0,
+      other: 0,
+    };
+    cur.total += r.count;
+    if (r.order_status === 'awaiting_shipment') cur.awaiting += r.count;
+    else if (r.order_status === 'shipped') cur.shipped += r.count;
+    else if (r.order_status === 'cancelled') cur.cancelled += r.count;
+    else if (r.order_status === 'on_hold') cur.onHold += r.count;
+    else cur.other += r.count;
+    byClient.set(r.client_id, cur);
+  }
+  return c.json({ data: [...byClient.values()] });
+});
+
 // Orphan report: orders with a storeId not owned by any client
 app.get('/unassigned-orphans', async (c) => {
   const rows = await db.execute<{ store_id: number; count: number }>(sql`
