@@ -5,7 +5,7 @@ import { Download, Search as SearchIcon, X } from 'lucide-react';
 import Topbar from '../components/Topbar';
 import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
-import { StatusBadge } from '../components/ui/Badge';
+import { StatusBadge, ClientBadge } from '../components/ui/Badge';
 import { SkeletonRow } from '../components/ui/Skeleton';
 import { api, qs, type Paginated } from '../lib/api';
 
@@ -79,6 +79,17 @@ export default function Orders() {
     [page, status, clientIdFilter, search]
   );
 
+  const clients = useQuery({
+    queryKey: ['clients'],
+    queryFn: () => api.get<{ id: number; name: string }[]>('/clients'),
+    staleTime: 60_000,
+  });
+  const clientsById = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const c of clients.data ?? []) m.set(c.id, c.name);
+    return m;
+  }, [clients.data]);
+
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['orders', queryString],
     queryFn: () => api.get<Paginated<Order>>(`/orders${queryString}`),
@@ -135,6 +146,7 @@ export default function Orders() {
           <thead className="sticky top-0 z-10 bg-surface-2">
             <tr>
               <Th>Order #</Th>
+              <Th>Client</Th>
               <Th>Date</Th>
               <Th>Status</Th>
               <Th>Recipient</Th>
@@ -147,18 +159,18 @@ export default function Orders() {
           <tbody>
             {isLoading &&
               Array.from({ length: 10 }).map((_, i) => (
-                <SkeletonRow key={`sk-${i}`} cols={8} />
+                <SkeletonRow key={`sk-${i}`} cols={9} />
               ))}
             {isError && (
               <tr>
-                <td colSpan={8} className="p-10 text-center text-danger">
+                <td colSpan={9} className="p-10 text-center text-danger">
                   {(error as Error).message}
                 </td>
               </tr>
             )}
             {!isLoading && !isError && rows.length === 0 && (
               <tr>
-                <td colSpan={8} className="p-16 text-center text-ink-3">
+                <td colSpan={9} className="p-16 text-center text-ink-3">
                   <div className="text-4xl mb-2">📦</div>
                   <div className="font-semibold text-ink-2">No orders here</div>
                   <div className="text-xs mt-1">
@@ -176,6 +188,13 @@ export default function Orders() {
                 } ${openId === o.id ? '!bg-brand-bg' : ''} hover:!bg-brand-bg`}
               >
                 <Td className="font-bold text-brand">{o.orderNumber}</Td>
+                <Td>
+                  {o.clientId !== null && clientsById.has(o.clientId) ? (
+                    <ClientBadge name={clientsById.get(o.clientId)!} />
+                  ) : (
+                    <span className="text-ink-3">—</span>
+                  )}
+                </Td>
                 <Td className="text-ink-2">{formatDate(o.orderDate)}</Td>
                 <Td>
                   <StatusBadge status={o.orderStatus} />
