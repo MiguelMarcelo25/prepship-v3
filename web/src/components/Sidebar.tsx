@@ -37,6 +37,7 @@ const toolItems: { to: string; label: string; icon: typeof Package }[] = [
   { to: '/settings', label: 'Settings', icon: SettingsIcon },
   { to: '/billing', label: 'Billing', icon: Receipt },
   { to: '/manifest', label: 'Manifest', icon: ClipboardList },
+  { to: '/products', label: 'Products', icon: Package },
 ];
 
 type Client = { id: number; name: string };
