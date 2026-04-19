@@ -1,9 +1,11 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { db } from '../db/client';
 import { packages } from '../db/schema/packages';
+import { ssRequest } from '../lib/shipstation';
+import type { CarriersResponse } from '../lib/shipstation/types';
 
 const app = new Hono();
 
@@ -60,6 +62,56 @@ app.delete('/:id{[0-9]+}', async (c) => {
   const [row] = await db.delete(packages).where(eq(packages.id, id)).returning();
   if (!row) return c.json({ error: 'Package not found' }, 404);
   return c.json({ deleted: true });
+});
+
+// Sync carrier-default packages from ShipStation. Pulls /v2/carriers and
+// upserts each carrier's package list into our packages table.
+// Dimensions stay 0 — ShipStation's API doesn't expose them; user fills in.
+app.post('/sync', async (c) => {
+  const res = await ssRequest<CarriersResponse>('/v2/carriers', {
+    dedupeKey: 'carriers:list',
+  });
+
+  let inserted = 0;
+  let skipped = 0;
+
+  for (const carrier of res.carriers) {
+    if (carrier.disabled_by_billing_plan) continue;
+    for (const pkg of carrier.packages ?? []) {
+      const [existing] = await db
+        .select({ id: packages.id })
+        .from(packages)
+        .where(
+          and(
+            eq(packages.carrierCode, carrier.carrier_code),
+            eq(packages.packageCode, pkg.package_code)
+          )
+        )
+        .limit(1);
+
+      if (existing) {
+        skipped += 1;
+        continue;
+      }
+
+      await db.insert(packages).values({
+        name: pkg.name,
+        type: 'box',
+        carrierCode: carrier.carrier_code,
+        packageCode: pkg.package_code,
+        source: 'shipstation',
+        domestic: true,
+        international: false,
+      });
+      inserted += 1;
+    }
+  }
+
+  return c.json({
+    inserted,
+    skipped,
+    message: `Synced ${inserted} new packages from ShipStation (${skipped} already existed)`,
+  });
 });
 
 export default app;

@@ -1,5 +1,5 @@
-import { useQuery } from '@tanstack/react-query';
-import { Plus } from 'lucide-react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Plus, RefreshCw } from 'lucide-react';
 import Topbar from '../components/Topbar';
 import { Button } from '../components/ui/Button';
 import { api } from '../lib/api';
@@ -18,21 +18,50 @@ type Pkg = {
 };
 
 export default function Packages() {
+  const queryClient = useQueryClient();
   const { data, isLoading } = useQuery({
     queryKey: ['packages'],
     queryFn: () => api.get<Pkg[]>('/packages'),
   });
   const rows = data ?? [];
 
+  const sync = useMutation({
+    mutationFn: () =>
+      api.post<{ inserted: number; skipped: number; message: string }>(
+        '/packages/sync',
+        {}
+      ),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['packages'] });
+      alert(result.message);
+    },
+    onError: (err) => alert(`Sync failed: ${(err as Error).message}`),
+  });
+
   return (
     <>
       <Topbar
         title="Packages"
         right={
-          <Button variant="primary" size="sm">
-            <Plus size={12} />
-            New package
-          </Button>
+          <>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={sync.isPending}
+              onClick={() => sync.mutate()}
+              title="Pull carrier-default packages from ShipStation"
+            >
+              <RefreshCw
+                size={12}
+                className={sync.isPending ? 'animate-spin' : ''}
+              />
+              {sync.isPending ? 'Syncing…' : 'Sync from ShipStation'}
+            </Button>
+            <Button variant="primary" size="sm">
+              <Plus size={12} />
+              New package
+            </Button>
+          </>
         }
       />
       <div className="flex-1 min-h-0 overflow-auto p-4">
