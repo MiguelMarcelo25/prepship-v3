@@ -169,6 +169,45 @@ app.post(
   }
 );
 
+// Bulk update of dimensions for many inventory rows in one call.
+const bulkDimsBody = z.object({
+  items: z
+    .array(
+      z.object({
+        id: z.number().int().positive(),
+        weightOz: z.number().nonnegative().optional(),
+        length: z.number().nonnegative().optional(),
+        width: z.number().nonnegative().optional(),
+        height: z.number().nonnegative().optional(),
+      })
+    )
+    .min(1)
+    .max(500),
+});
+
+app.post('/bulk-update-dims', zValidator('json', bulkDimsBody), async (c) => {
+  const { items } = c.req.valid('json');
+  let updated = 0;
+  for (const item of items) {
+    const patch: Record<string, unknown> = { updatedAt: new Date() };
+    if (item.weightOz !== undefined) patch.weightOz = item.weightOz;
+    if (item.length !== undefined) patch.length = item.length;
+    if (item.width !== undefined) patch.width = item.width;
+    if (item.height !== undefined) patch.height = item.height;
+    const [row] = await db
+      .update(inventory)
+      .set(patch)
+      .where(eq(inventory.id, item.id))
+      .returning({ id: inventory.id });
+    if (row) updated += 1;
+  }
+  return c.json({
+    updated,
+    skipped: items.length - updated,
+    message: `Updated ${updated} of ${items.length} items`,
+  });
+});
+
 // Scan orders.items JSONB and seed inventory rows for any SKU we don't
 // have yet (clientId set from the order's clientId, or null if order is
 // unassigned). Useful as a quick way to populate inventory from the

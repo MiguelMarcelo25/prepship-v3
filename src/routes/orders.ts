@@ -63,6 +63,87 @@ const picklistQuery = z.object({
   dateTo: z.string().datetime().optional(),
 });
 
+// Order IDs that contain a given SKU (warehouse pick lookup)
+app.get(
+  '/ids',
+  zValidator('query', z.object({ sku: z.string().min(1) })),
+  async (c) => {
+    const { sku } = c.req.valid('query');
+    const rows = await db.execute<{ id: number; order_number: string }>(sql`
+      select distinct o.id, o.order_number
+      from orders o, jsonb_array_elements(o.items) item
+      where item ? 'sku' and item->>'sku' = ${sku}
+      order by o.id desc
+      limit 500
+    `);
+    return c.json({ data: rows });
+  }
+);
+
+// Per-store order counts in a window — useful for store dashboards.
+app.get(
+  '/store-counts',
+  zValidator(
+    'query',
+    z.object({
+      dateFrom: z.string().datetime().optional(),
+      dateTo: z.string().datetime().optional(),
+      status: z.string().optional(),
+    })
+  ),
+  async (c) => {
+    const q = c.req.valid('query');
+    const fromIso = (q.dateFrom ? new Date(q.dateFrom) : new Date(0)).toISOString();
+    const toIso = (q.dateTo ? new Date(q.dateTo) : new Date(Date.now() + 86400000)).toISOString();
+    const status = q.status ?? null;
+    const rows = await db.execute<{
+      store_id: number | null;
+      count: number;
+    }>(sql`
+      select store_id, count(*)::int as count
+      from orders
+      where order_date >= ${fromIso}::timestamptz
+        and order_date <= ${toIso}::timestamptz
+        and (${status}::text is null or order_status = ${status}::text)
+      group by store_id
+      order by count desc
+    `);
+    return c.json({ data: rows });
+  }
+);
+
+// Daily stats in a window — orders per day, shipped per day.
+app.get(
+  '/daily-stats',
+  zValidator(
+    'query',
+    z.object({
+      dateFrom: z.string().datetime().optional(),
+      dateTo: z.string().datetime().optional(),
+    })
+  ),
+  async (c) => {
+    const q = c.req.valid('query');
+    const fromIso = (q.dateFrom ? new Date(q.dateFrom) : new Date(0)).toISOString();
+    const toIso = (q.dateTo ? new Date(q.dateTo) : new Date(Date.now() + 86400000)).toISOString();
+    const rows = await db.execute<{
+      day: string;
+      count: number;
+      shipped: number;
+    }>(sql`
+      select to_char(date_trunc('day', order_date), 'YYYY-MM-DD') as day,
+             count(*)::int as count,
+             count(*) filter (where order_status = 'shipped')::int as shipped
+      from orders
+      where order_date >= ${fromIso}::timestamptz
+        and order_date <= ${toIso}::timestamptz
+      group by date_trunc('day', order_date)
+      order by date_trunc('day', order_date) desc
+    `);
+    return c.json({ data: rows });
+  }
+);
+
 app.get('/picklist', zValidator('query', picklistQuery), async (c) => {
   const q = c.req.valid('query');
   const fromIso = q.dateFrom
@@ -129,6 +210,23 @@ app.get('/:id{[0-9]+}', async (c) => {
     db.select().from(shipments).where(eq(shipments.orderId, id)),
   ]);
 
+  return c.json({ ...order, overrides, shipments: shipmentRows });
+});
+
+// Alias of GET /orders/:id — old API exposed both shapes. Same payload.
+app.get('/:id{[0-9]+}/full', async (c) => {
+  const id = Number(c.req.param('id'));
+  const [order] = await db.select().from(orders).where(eq(orders.id, id)).limit(1);
+  if (!order) return c.json({ error: 'Order not found' }, 404);
+  const [overrides, shipmentRows] = await Promise.all([
+    db
+      .select()
+      .from(orderOverrides)
+      .where(eq(orderOverrides.orderId, id))
+      .limit(1)
+      .then((rows) => rows[0] ?? null),
+    db.select().from(shipments).where(eq(shipments.orderId, id)),
+  ]);
   return c.json({ ...order, overrides, shipments: shipmentRows });
 });
 

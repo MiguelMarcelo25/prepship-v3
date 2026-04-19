@@ -38,6 +38,34 @@ const cachedQuery = z.object({
   toZip: z.string().min(3),
 });
 
+// Bulk lookup of cached rates for many (weightOz, toZip) pairs in one call.
+const bulkBody = z.object({
+  items: z
+    .array(z.object({ weightOz: z.number(), toZip: z.string().min(3) }))
+    .min(1)
+    .max(200),
+});
+
+app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
+  const { items } = c.req.valid('json');
+  const results = await Promise.all(
+    items.map(async (it) => {
+      const rows = await db
+        .select()
+        .from(rateCache)
+        .where(
+          and(
+            eq(rateCache.weightOz, it.weightOz),
+            eq(rateCache.toZip, it.toZip.toUpperCase())
+          )
+        )
+        .limit(1);
+      return { weightOz: it.weightOz, toZip: it.toZip, hit: rows[0] ?? null };
+    })
+  );
+  return c.json({ data: results });
+});
+
 app.get('/cached', zValidator('query', cachedQuery), async (c) => {
   const q = c.req.valid('query');
   const rows = await db

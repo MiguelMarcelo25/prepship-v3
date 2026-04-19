@@ -22,6 +22,7 @@ import cronRoute from './routes/cron';
 import printQueueRoute from './routes/print-queue';
 import parentSkusRoute from './routes/parent-skus';
 import productsRoute from './routes/products';
+import initRoute from './routes/init';
 
 const app = new Hono();
 
@@ -52,6 +53,7 @@ app.use('/analysis/*', requireAuth);
 app.use('/print-queue/*', requireAuth);
 app.use('/parent-skus/*', requireAuth);
 app.use('/products/*', requireAuth);
+app.use('/init/*', requireAuth);
 
 app.route('/orders', ordersRoute);
 app.route('/shipments', shipmentsRoute);
@@ -69,6 +71,7 @@ app.route('/analysis', analysisRoute);
 app.route('/print-queue', printQueueRoute);
 app.route('/parent-skus', parentSkusRoute);
 app.route('/products', productsRoute);
+app.route('/init', initRoute);
 
 app.notFound((c) => c.json({ error: 'Not found' }, 404));
 
