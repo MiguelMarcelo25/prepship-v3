@@ -57,7 +57,6 @@ function useStatusTotal(status: string) {
 function StatusRow({ status, label }: { status: string; label: string }) {
   const total = useStatusTotal(status);
   const location = useLocation();
-  const isActive = location.pathname.startsWith(`/orders/${status}`);
 
   const clients = useQuery({
     queryKey: ['clients'],
@@ -118,7 +117,7 @@ function StatusRow({ status, label }: { status: string; label: string }) {
         )}
       </NavLink>
 
-      {isActive && perClient.length > 0 && (
+      {perClient.length > 0 && (
         <div className="pb-1">
           {perClient.map((row) => {
             const targetSearch = `?clientId=${row.clientId}`;
