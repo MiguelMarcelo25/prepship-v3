@@ -1,4 +1,5 @@
-import { NavLink } from 'react-router-dom';
+import { useMemo } from 'react';
+import { NavLink, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
   Package,
@@ -35,7 +36,15 @@ const toolItems: { to: string; label: string; icon: typeof Package }[] = [
   { to: '/manifest', label: 'Manifest', icon: ClipboardList },
 ];
 
-function useStatusCount(status: string) {
+type Client = { id: number; name: string };
+type ClientStats = {
+  clientId: number;
+  awaiting: number;
+  shipped: number;
+  cancelled: number;
+};
+
+function useStatusTotal(status: string) {
   const { data } = useQuery({
     queryKey: ['orders-count', status],
     queryFn: () =>
@@ -46,31 +55,101 @@ function useStatusCount(status: string) {
 }
 
 function StatusRow({ status, label }: { status: string; label: string }) {
-  const count = useStatusCount(status);
+  const total = useStatusTotal(status);
+  const location = useLocation();
+  const isActive = location.pathname.startsWith(`/orders/${status}`);
+
+  const clients = useQuery({
+    queryKey: ['clients'],
+    queryFn: () => api.get<Client[]>('/clients'),
+    staleTime: 60_000,
+  });
+  const stats = useQuery({
+    queryKey: ['clients-order-stats'],
+    queryFn: () => api.get<{ data: ClientStats[] }>('/clients/order-stats'),
+    staleTime: 30_000,
+  });
+
+  const perClient = useMemo(() => {
+    const byId = new Map((clients.data ?? []).map((c) => [c.id, c]));
+    return (stats.data?.data ?? [])
+      .map((s) => {
+        const count =
+          status === 'awaiting_shipment'
+            ? s.awaiting
+            : status === 'shipped'
+              ? s.shipped
+              : status === 'cancelled'
+                ? s.cancelled
+                : 0;
+        const client = byId.get(s.clientId);
+        return count > 0 && client
+          ? { clientId: s.clientId, name: client.name, count }
+          : null;
+      })
+      .filter((x): x is { clientId: number; name: string; count: number } => !!x)
+      .sort((a, b) => b.count - a.count);
+  }, [clients.data, stats.data, status]);
+
   return (
-    <NavLink
-      to={`/orders/${status}`}
-      className={({ isActive }) =>
-        `flex items-center justify-between px-3 py-[7px] text-sm2 font-semibold border-l-[3px] transition-colors ${
-          isActive
-            ? 'bg-brand-bg text-brand border-brand'
-            : 'text-ink-2 hover:bg-surface-2 hover:text-ink border-transparent'
-        }`
-      }
-    >
-      {({ isActive }) => (
-        <>
-          <span>{label}</span>
-          <span
-            className={`min-w-[20px] text-center rounded-full px-1.5 py-[1px] text-2xs font-bold ${
-              isActive ? 'bg-brand text-white' : 'bg-surface-3 text-ink-2'
-            }`}
-          >
-            {count ?? '—'}
-          </span>
-        </>
+    <div>
+      <NavLink
+        to={`/orders/${status}`}
+        end={false}
+        className={({ isActive: a }) =>
+          `flex items-center justify-between px-3 py-[7px] text-sm2 font-semibold border-l-[3px] transition-colors ${
+            a
+              ? 'bg-brand-bg text-brand border-brand'
+              : 'text-ink-2 hover:bg-surface-2 hover:text-ink border-transparent'
+          }`
+        }
+      >
+        {({ isActive: a }) => (
+          <>
+            <span>{label}</span>
+            <span
+              className={`min-w-[20px] text-center rounded-full px-1.5 py-[1px] text-2xs font-bold ${
+                a ? 'bg-brand text-white' : 'bg-surface-3 text-ink-2'
+              }`}
+            >
+              {total ?? '—'}
+            </span>
+          </>
+        )}
+      </NavLink>
+
+      {isActive && perClient.length > 0 && (
+        <div className="pb-1">
+          {perClient.map((row) => {
+            const targetSearch = `?clientId=${row.clientId}`;
+            const isClientActive =
+              location.pathname.startsWith(`/orders/${status}`) &&
+              location.search.includes(`clientId=${row.clientId}`);
+            return (
+              <NavLink
+                key={row.clientId}
+                to={{
+                  pathname: `/orders/${status}`,
+                  search: targetSearch,
+                }}
+                className={`flex items-center justify-between pl-7 pr-3 py-[5px] text-[11.5px] border-l-[3px] transition-colors ${
+                  isClientActive
+                    ? 'bg-brand-bg text-brand border-brand font-semibold'
+                    : 'text-ink-2 hover:bg-surface-2 hover:text-ink border-transparent'
+                }`}
+              >
+                <span className="truncate" title={row.name}>
+                  {row.name}
+                </span>
+                <span className="font-mono text-tiny ml-2 shrink-0">
+                  {row.count.toLocaleString()}
+                </span>
+              </NavLink>
+            );
+          })}
+        </div>
       )}
-    </NavLink>
+    </div>
   );
 }
 
@@ -104,7 +183,6 @@ export default function Sidebar() {
   const { user, signOut } = useAuth();
   return (
     <aside className="w-sidebar shrink-0 bg-white border-r border-line flex flex-col h-full">
-      {/* Logo */}
       <div className="px-3.5 py-3 border-b border-line">
         <div className="flex items-baseline text-[16px] font-extrabold tracking-[-0.4px]">
           <span className="text-ink">PREP</span>
@@ -115,7 +193,6 @@ export default function Sidebar() {
         </div>
       </div>
 
-      {/* Search */}
       <div className="px-2.5 pt-2.5 pb-1.5">
         <div className="relative">
           <Search
@@ -130,12 +207,10 @@ export default function Sidebar() {
         </div>
       </div>
 
-      {/* Sync action */}
       <div className="px-2.5 pb-1.5">
         <SyncOrdersButton />
       </div>
 
-      {/* Nav */}
       <nav className="flex-1 overflow-y-auto py-1.5">
         {statusItems.map((i) => (
           <StatusRow key={i.status} {...i} />
@@ -146,7 +221,6 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      {/* Bottom */}
       <div className="px-3 py-2.5 border-t border-line flex items-center gap-2">
         <div className="flex-1 min-w-0">
           {user && (

@@ -1,7 +1,7 @@
 import { lazy, Suspense, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Download, Search as SearchIcon } from 'lucide-react';
+import { Download, Search as SearchIcon, X } from 'lucide-react';
 import Topbar from '../components/Topbar';
 import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
@@ -49,11 +49,21 @@ function formatDate(v: string | null) {
 
 export default function Orders() {
   const { status = 'awaiting_shipment', orderId } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const clientIdParam = searchParams.get('clientId');
+  const clientIdFilter = clientIdParam ? Number(clientIdParam) : undefined;
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
   const pageSize = 50;
   const openId = orderId ? Number(orderId) : null;
+
+  const clientName = useQuery({
+    queryKey: ['client-name', clientIdFilter],
+    queryFn: () => api.get<{ id: number; name: string }>(`/clients/${clientIdFilter}`),
+    enabled: clientIdFilter !== undefined,
+    staleTime: 60_000,
+  });
 
   const title = statusLabels[status] ?? 'Orders';
 
@@ -63,9 +73,10 @@ export default function Orders() {
         page,
         pageSize,
         status,
+        clientId: clientIdFilter,
         search: search || undefined,
       }),
-    [page, status, search]
+    [page, status, clientIdFilter, search]
   );
 
   const { data, isLoading, isError, error } = useQuery({
@@ -94,6 +105,23 @@ export default function Orders() {
             placeholder="Search order #, recipient, email…"
           />
         </div>
+        {clientIdFilter !== undefined && (
+          <button
+            type="button"
+            onClick={() => {
+              setPage(1);
+              setSearchParams({});
+            }}
+            className="inline-flex items-center gap-1 px-2 py-1 rounded bg-brand-bg text-brand text-tiny font-semibold border border-brand/30 hover:bg-brand-bg/80"
+            title="Clear client filter"
+          >
+            <span>Client:</span>
+            <span className="font-bold">
+              {clientName.data?.name ?? `#${clientIdFilter}`}
+            </span>
+            <X size={11} />
+          </button>
+        )}
         <div className="flex-1" />
         <Button variant="outline" size="sm">
           <Download size={12} />
