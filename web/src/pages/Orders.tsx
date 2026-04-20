@@ -2,11 +2,14 @@ import { createContext, lazy, Suspense, useContext, useMemo, useState } from 're
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
+  Bell,
+  Calendar,
   ClipboardList,
   Download,
   Package as PackageIcon,
   Printer,
   Search as SearchIcon,
+  Truck,
   X,
 } from 'lucide-react';
 import Topbar from '../components/Topbar';
@@ -511,14 +514,51 @@ export default function Orders() {
 
       {/* Stats strip */}
       <div className="flex items-center gap-6 px-4 py-2 bg-surface-2 border-b border-line text-tiny">
-        <Stat label="Total" value={total} />
-        <Stat
-          label={status === 'awaiting_shipment' ? 'Need to ship' : title}
-          value={total}
-          tone={status === 'awaiting_shipment' ? 'text-warn' : undefined}
-        />
-        <div className="text-ink-3 ml-auto">
-          {dateRanges.find((r) => r.id === rangeId)?.label}
+        <div className="inline-flex items-center gap-1.5 text-ink-2">
+          <Calendar size={12} className="text-brand" />
+          <span className="font-semibold">
+            {dateRanges.find((r) => r.id === rangeId)?.label}
+          </span>
+        </div>
+
+        <div className="inline-flex items-center gap-1.5">
+          <PackageIcon size={14} className="text-orange-500" />
+          <span className="text-[14px] font-bold text-ink leading-none">
+            {total.toLocaleString()}
+          </span>
+          <span className="text-ink-3">Total Orders</span>
+        </div>
+
+        <div className="inline-flex items-center gap-1.5">
+          <Truck size={14} className="text-danger" />
+          <span className="text-[14px] font-bold text-ink leading-none">
+            {(status === 'awaiting_shipment' ? total : 0).toLocaleString()}
+          </span>
+          <span className="text-ink-3">Need to Ship</span>
+        </div>
+
+        <div className="inline-flex items-center gap-1.5">
+          <Bell size={14} className="text-warn" />
+          <span className="text-[14px] font-bold text-ink leading-none">0</span>
+          <span className="text-ink-3">Upcoming</span>
+        </div>
+
+        <div className="flex-1 flex items-center gap-2 ml-auto min-w-[200px] max-w-[420px]">
+          <span className="text-orange-600 font-semibold whitespace-nowrap">
+            {(status === 'shipped' ? total : 0).toLocaleString()} of{' '}
+            {total.toLocaleString()} shipped
+          </span>
+          <div className="flex-1 h-1 bg-surface-3 rounded overflow-hidden">
+            <div
+              className="h-full bg-orange-500"
+              style={{
+                width: `${total > 0 && status === 'shipped' ? 100 : 0}%`,
+              }}
+            />
+          </div>
+          <span className="text-orange-600 font-semibold whitespace-nowrap">
+            {total > 0 && status === 'shipped' ? 100 : 0}%
+          </span>
         </div>
       </div>
 
@@ -827,27 +867,6 @@ export default function Orders() {
         </Suspense>
       )}
     </>
-  );
-}
-
-function Stat({
-  label,
-  value,
-  tone = 'text-ink',
-}: {
-  label: string;
-  value: number;
-  tone?: string;
-}) {
-  return (
-    <div>
-      <div className={`text-[15px] font-extrabold leading-tight ${tone}`}>
-        {value.toLocaleString()}
-      </div>
-      <div className="text-[9.5px] font-semibold uppercase tracking-[0.5px] text-ink-3">
-        {label}
-      </div>
-    </div>
   );
 }
 
