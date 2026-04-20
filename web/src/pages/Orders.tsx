@@ -859,19 +859,19 @@ function Th({
   const widthsCtx = useContext(WidthsContext);
   return (
     <th
-      className={`relative text-left ${TH_DENSITY[density]} font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap overflow-hidden ${className}`}
+      className={`relative text-left ${TH_DENSITY[density]} font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap ${className}`}
     >
-      {children}
+      <div className="overflow-hidden truncate pr-2">{children}</div>
       {id && widthsCtx && (
-        <span
+        <div
           onMouseDown={(e) => widthsCtx.startResize(id, e)}
           onClick={(e) => e.stopPropagation()}
-          className="group absolute top-0 right-0 h-full w-3 cursor-col-resize select-none flex items-center justify-end"
-          style={{ touchAction: 'none' }}
-          title="Drag to resize"
+          className="group absolute top-0 right-0 h-full w-4 cursor-col-resize select-none flex items-center justify-center z-20"
+          style={{ touchAction: 'none', pointerEvents: 'auto' }}
+          title="Drag to resize column"
         >
-          <span className="block h-2/3 w-px bg-line-2 group-hover:w-[3px] group-hover:h-full group-hover:bg-brand transition-all" />
-        </span>
+          <div className="h-full w-[2px] bg-line-2 group-hover:bg-brand group-active:bg-brand transition-colors" />
+        </div>
       )}
     </th>
   );
