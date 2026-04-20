@@ -325,6 +325,11 @@ export default function Orders() {
     [visibleColumns]
   );
 
+  const totalTableWidth = useMemo(
+    () => activeColumnIds.reduce((sum, id) => sum + (widths[id] ?? DEFAULT_WIDTHS[id] ?? 100), 0),
+    [activeColumnIds, widths]
+  );
+
   const cycleDensity = () => {
     setDensity((prev) => {
       const idx = DENSITY_LEVELS.indexOf(prev);
@@ -521,7 +526,7 @@ export default function Orders() {
       <DensityContext.Provider value={density}>
       <WidthsContext.Provider value={widthsCtxValue}>
       <div className="flex-1 min-h-0 overflow-auto bg-white">
-        <table className="text-sm2 border-collapse table-fixed">
+        <table className="text-sm2 border-collapse table-fixed" style={{ width: totalTableWidth }}>
           <colgroup>
             {activeColumnIds.map((id) => (
               <col key={id} style={{ width: widths[id] }} />
