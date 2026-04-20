@@ -21,6 +21,70 @@ const OrderDrawer = lazy(() => import('../components/OrderDrawer'));
 const BatchLabelModal = lazy(() => import('../components/BatchLabelModal'));
 const PrintQueueDrawer = lazy(() => import('../components/PrintQueueDrawer'));
 import OrdersTopbarActions from '../components/OrdersTopbarActions';
+import type { ColumnDef } from '../components/ColumnsPopover';
+
+const COLUMN_DEFS: ColumnDef[] = [
+  { id: 'orderDate', label: 'Order Date' },
+  { id: 'client', label: 'Client' },
+  { id: 'recipient', label: 'Recipient' },
+  { id: 'itemName', label: 'Item Name' },
+  { id: 'sku', label: 'SKU' },
+  { id: 'qty', label: 'Qty' },
+  { id: 'weight', label: 'Weight' },
+  { id: 'shipTo', label: 'Ship To' },
+  { id: 'carrier', label: 'Carrier' },
+  { id: 'shippingAccount', label: 'Shipping Account' },
+  { id: 'orderTotal', label: 'Order Total' },
+  { id: 'bestRate', label: 'Best Rate' },
+  { id: 'shipMargin', label: 'Ship Margin' },
+  { id: 'tracking', label: 'Tracking #' },
+  { id: 'age', label: 'Age' },
+  { id: 'labelCreated', label: 'Label Created' },
+];
+
+const DEFAULT_VISIBLE = new Set([
+  'orderDate',
+  'client',
+  'recipient',
+  'itemName',
+  'sku',
+  'qty',
+  'weight',
+  'shipTo',
+  'carrier',
+  'orderTotal',
+  'bestRate',
+]);
+
+const COLUMNS_KEY = 'prepship_orders_columns';
+
+function loadVisible(): Set<string> {
+  try {
+    const raw = localStorage.getItem(COLUMNS_KEY);
+    if (!raw) return new Set(DEFAULT_VISIBLE);
+    const arr = JSON.parse(raw);
+    if (Array.isArray(arr)) return new Set(arr.filter((x) => typeof x === 'string'));
+  } catch {
+    /* ignore */
+  }
+  return new Set(DEFAULT_VISIBLE);
+}
+
+function saveVisible(set: Set<string>) {
+  localStorage.setItem(COLUMNS_KEY, JSON.stringify([...set]));
+}
+
+function ageStr(iso: string | null) {
+  if (!iso) return '—';
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 0) return 'now';
+  const d = Math.floor(ms / 86400000);
+  const h = Math.floor((ms % 86400000) / 3600000);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h`;
+  const m = Math.floor(ms / 60000);
+  return `${m}m`;
+}
 
 type OrderItem = {
   orderItemId?: number;
@@ -124,6 +188,21 @@ export default function Orders() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [batchOpen, setBatchOpen] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
+  const [visibleColumns, setVisibleColumns] = useState<Set<string>>(() =>
+    loadVisible()
+  );
+
+  const toggleColumn = (id: string) => {
+    setVisibleColumns((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      saveVisible(next);
+      return next;
+    });
+  };
+
+  const visCount = COLUMN_DEFS.filter((c) => visibleColumns.has(c.id)).length + 1; // +1 for checkbox col
   const pageSize = 50;
   const openId = orderId ? Number(orderId) : null;
 
@@ -194,7 +273,14 @@ export default function Orders() {
     <>
       <Topbar
         title={title}
-        right={<OrdersTopbarActions onOpenQueue={() => setQueueOpen(true)} />}
+        right={
+          <OrdersTopbarActions
+            onOpenQueue={() => setQueueOpen(true)}
+            columns={COLUMN_DEFS}
+            visibleColumns={visibleColumns}
+            onToggleColumn={toggleColumn}
+          />
+        }
       />
 
       {/* Filter bar */}
@@ -300,35 +386,52 @@ export default function Orders() {
                   className="accent-brand"
                 />
               </Th>
-              <Th className="w-[130px]">Order Date</Th>
-              <Th className="w-[140px]">Client</Th>
               <Th className="w-[160px]">Order #</Th>
-              <Th className="w-[160px]">Recipient</Th>
-              <Th>Item Name</Th>
-              <Th className="w-[140px]">SKU</Th>
-              <Th className="text-right w-[60px]">Qty</Th>
-              <Th className="w-[90px]">Weight</Th>
-              <Th className="w-[180px]">Ship To</Th>
-              <Th className="w-[80px]">Carrier</Th>
-              <Th className="text-right w-[110px]">Order Total</Th>
-              <Th className="text-right w-[110px]">Best Rate</Th>
+              {visibleColumns.has('orderDate') && <Th className="w-[130px]">Order Date</Th>}
+              {visibleColumns.has('client') && <Th className="w-[140px]">Client</Th>}
+              {visibleColumns.has('recipient') && <Th className="w-[160px]">Recipient</Th>}
+              {visibleColumns.has('itemName') && <Th>Item Name</Th>}
+              {visibleColumns.has('sku') && <Th className="w-[140px]">SKU</Th>}
+              {visibleColumns.has('qty') && <Th className="text-right w-[60px]">Qty</Th>}
+              {visibleColumns.has('weight') && <Th className="w-[90px]">Weight</Th>}
+              {visibleColumns.has('shipTo') && <Th className="w-[180px]">Ship To</Th>}
+              {visibleColumns.has('carrier') && <Th className="w-[80px]">Carrier</Th>}
+              {visibleColumns.has('shippingAccount') && (
+                <Th className="w-[140px]">Shipping Account</Th>
+              )}
+              {visibleColumns.has('orderTotal') && (
+                <Th className="text-right w-[110px]">Order Total</Th>
+              )}
+              {visibleColumns.has('bestRate') && (
+                <Th className="text-right w-[110px]">Best Rate</Th>
+              )}
+              {visibleColumns.has('shipMargin') && (
+                <Th className="text-right w-[100px]">Ship Margin</Th>
+              )}
+              {visibleColumns.has('tracking') && (
+                <Th className="w-[160px]">Tracking #</Th>
+              )}
+              {visibleColumns.has('age') && <Th className="w-[80px]">Age</Th>}
+              {visibleColumns.has('labelCreated') && (
+                <Th className="w-[130px]">Label Created</Th>
+              )}
             </tr>
           </thead>
           <tbody>
             {isLoading &&
               Array.from({ length: 10 }).map((_, i) => (
-                <SkeletonRow key={`sk-${i}`} cols={13} />
+                <SkeletonRow key={`sk-${i}`} cols={visCount} />
               ))}
             {isError && (
               <tr>
-                <td colSpan={13} className="p-10 text-center text-danger">
+                <td colSpan={visCount} className="p-10 text-center text-danger">
                   {(error as Error).message}
                 </td>
               </tr>
             )}
             {!isLoading && !isError && rows.length === 0 && (
               <tr>
-                <td colSpan={13} className="p-16 text-center text-ink-3">
+                <td colSpan={visCount} className="p-16 text-center text-ink-3">
                   <div className="text-4xl mb-2">📦</div>
                   <div className="font-semibold text-ink-2">No orders here</div>
                 </td>
@@ -365,93 +468,152 @@ export default function Orders() {
                       className="accent-brand"
                     />
                   </Td>
-                  <Td className="text-ink-2 whitespace-nowrap text-tiny">
-                    {formatDate(o.orderDate)}
-                  </Td>
-                  <Td>
-                    {o.clientId !== null && clientsById.has(o.clientId) ? (
-                      <ClientBadge name={clientsById.get(o.clientId)!} />
-                    ) : (
-                      <span className="text-ink-3">—</span>
-                    )}
-                  </Td>
                   <Td>
                     <div className="font-bold text-brand">{o.orderNumber}</div>
                     <div className="mt-0.5">
                       <StatusBadge status={o.orderStatus} />
                     </div>
                   </Td>
-                  <Td className="text-ink truncate max-w-[160px]">
-                    {o.shipToName ?? '—'}
-                  </Td>
-                  <Td className="min-w-0">
-                    <div className="flex items-start gap-2">
-                      <div className="w-7 h-7 rounded border border-line bg-surface-2 shrink-0 flex items-center justify-center overflow-hidden">
-                        {firstItem?.imageUrl ? (
-                          <img
-                            src={firstItem.imageUrl}
-                            alt=""
-                            className="w-full h-full object-cover"
-                            loading="lazy"
-                          />
-                        ) : (
-                          <PackageIcon size={12} className="text-ink-3" />
-                        )}
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <div
-                          className="text-sm2 text-ink truncate"
-                          title={firstItem?.name ?? ''}
-                        >
-                          {firstItem?.name ?? '—'}
+                  {visibleColumns.has('orderDate') && (
+                    <Td className="text-ink-2 whitespace-nowrap text-tiny">
+                      {formatDate(o.orderDate)}
+                    </Td>
+                  )}
+                  {visibleColumns.has('client') && (
+                    <Td>
+                      {o.clientId !== null && clientsById.has(o.clientId) ? (
+                        <ClientBadge name={clientsById.get(o.clientId)!} />
+                      ) : (
+                        <span className="text-ink-3">—</span>
+                      )}
+                    </Td>
+                  )}
+                  {visibleColumns.has('recipient') && (
+                    <Td className="text-ink truncate max-w-[160px]">
+                      {o.shipToName ?? '—'}
+                    </Td>
+                  )}
+                  {visibleColumns.has('itemName') && (
+                    <Td className="min-w-0">
+                      <div className="flex items-start gap-2">
+                        <div className="w-7 h-7 rounded border border-line bg-surface-2 shrink-0 flex items-center justify-center overflow-hidden">
+                          {firstItem?.imageUrl ? (
+                            <img
+                              src={firstItem.imageUrl}
+                              alt=""
+                              className="w-full h-full object-cover"
+                              loading="lazy"
+                            />
+                          ) : (
+                            <PackageIcon size={12} className="text-ink-3" />
+                          )}
                         </div>
-                        {moreCount > 0 && (
-                          <div className="text-tiny text-ink-3">
-                            +{moreCount} more
+                        <div className="min-w-0 flex-1">
+                          <div
+                            className="text-sm2 text-ink truncate"
+                            title={firstItem?.name ?? ''}
+                          >
+                            {firstItem?.name ?? '—'}
                           </div>
-                        )}
+                          {moreCount > 0 && (
+                            <div className="text-tiny text-ink-3">
+                              +{moreCount} more
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  </Td>
-                  <Td className="font-mono text-tiny text-ink-2">
-                    {firstItem?.sku ?? '—'}
-                    {moreCount > 0 && (
-                      <div className="text-ink-3">+{moreCount}</div>
-                    )}
-                  </Td>
-                  <Td className="text-right">
-                    {isMulti ? (
-                      <span className="inline-block px-1.5 py-0.5 border border-danger rounded text-danger font-mono font-bold">
-                        {qty}
-                      </span>
-                    ) : (
-                      <span className="font-mono">{qty || 1}</span>
-                    )}
-                  </Td>
-                  <Td className="font-mono text-ink-2 whitespace-nowrap">
-                    {formatWeight(o.weightOz)}
-                  </Td>
-                  <Td className="text-tiny leading-tight">
-                    <div className="text-ink truncate" title={cityLine}>
-                      {cityLine || '—'}
-                    </div>
-                    {country && country !== 'US' && (
-                      <div className="text-ink-3">{country}</div>
-                    )}
-                  </Td>
-                  <Td className="uppercase text-tiny font-semibold text-ink-2">
-                    {o.carrierCode ?? '—'}
-                  </Td>
-                  <Td className="text-right font-mono">${o.orderTotal}</Td>
-                  <Td className="text-right font-mono">
-                    {bestRate ? (
-                      <span className="text-ok-dark font-bold">
-                        ${bestRate.toFixed(2)}
-                      </span>
-                    ) : (
+                    </Td>
+                  )}
+                  {visibleColumns.has('sku') && (
+                    <Td className="font-mono text-tiny text-ink-2">
+                      {firstItem?.sku ?? '—'}
+                      {moreCount > 0 && (
+                        <div className="text-ink-3">+{moreCount}</div>
+                      )}
+                    </Td>
+                  )}
+                  {visibleColumns.has('qty') && (
+                    <Td className="text-right">
+                      {isMulti ? (
+                        <span className="inline-block px-1.5 py-0.5 border border-danger rounded text-danger font-mono font-bold">
+                          {qty}
+                        </span>
+                      ) : (
+                        <span className="font-mono">{qty || 1}</span>
+                      )}
+                    </Td>
+                  )}
+                  {visibleColumns.has('weight') && (
+                    <Td className="font-mono text-ink-2 whitespace-nowrap">
+                      {formatWeight(o.weightOz)}
+                    </Td>
+                  )}
+                  {visibleColumns.has('shipTo') && (
+                    <Td className="text-tiny leading-tight">
+                      <div className="text-ink truncate" title={cityLine}>
+                        {cityLine || '—'}
+                      </div>
+                      {country && country !== 'US' && (
+                        <div className="text-ink-3">{country}</div>
+                      )}
+                    </Td>
+                  )}
+                  {visibleColumns.has('carrier') && (
+                    <Td className="uppercase text-tiny font-semibold text-ink-2">
+                      {o.carrierCode ?? '—'}
+                    </Td>
+                  )}
+                  {visibleColumns.has('shippingAccount') && (
+                    <Td className="text-tiny text-ink-2">
+                      {o.serviceCode ?? <span className="text-ink-3">—</span>}
+                    </Td>
+                  )}
+                  {visibleColumns.has('orderTotal') && (
+                    <Td className="text-right font-mono">${o.orderTotal}</Td>
+                  )}
+                  {visibleColumns.has('bestRate') && (
+                    <Td className="text-right font-mono">
+                      {bestRate ? (
+                        <span className="text-ok-dark font-bold">
+                          ${bestRate.toFixed(2)}
+                        </span>
+                      ) : (
+                        <span className="text-ink-3">—</span>
+                      )}
+                    </Td>
+                  )}
+                  {visibleColumns.has('shipMargin') && (
+                    <Td className="text-right font-mono">
+                      {bestRate && Number(o.orderTotal) ? (
+                        <span
+                          className={
+                            Number(o.orderTotal) - bestRate > 0
+                              ? 'text-ok-dark'
+                              : 'text-danger'
+                          }
+                        >
+                          ${(Number(o.orderTotal) - bestRate).toFixed(2)}
+                        </span>
+                      ) : (
+                        <span className="text-ink-3">—</span>
+                      )}
+                    </Td>
+                  )}
+                  {visibleColumns.has('tracking') && (
+                    <Td className="font-mono text-tiny text-ink-2">
                       <span className="text-ink-3">—</span>
-                    )}
-                  </Td>
+                    </Td>
+                  )}
+                  {visibleColumns.has('age') && (
+                    <Td className="text-tiny text-ink-2 font-mono">
+                      {ageStr(o.orderDate)}
+                    </Td>
+                  )}
+                  {visibleColumns.has('labelCreated') && (
+                    <Td className="text-tiny text-ink-2 whitespace-nowrap">
+                      <span className="text-ink-3">—</span>
+                    </Td>
+                  )}
                 </tr>
               );
             })}

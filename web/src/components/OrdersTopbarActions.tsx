@@ -8,6 +8,7 @@ import {
   ZoomIn,
 } from 'lucide-react';
 import { api } from '../lib/api';
+import ColumnsPopover, { type ColumnDef } from './ColumnsPopover';
 
 type SyncStatus = { lastSyncedAt: string | null; orderCount: number };
 
@@ -41,11 +42,18 @@ function timeAgo(iso: string | null) {
 
 export default function OrdersTopbarActions({
   onOpenQueue,
+  columns,
+  visibleColumns,
+  onToggleColumn,
 }: {
   onOpenQueue: () => void;
+  columns: ColumnDef[];
+  visibleColumns: Set<string>;
+  onToggleColumn: (id: string) => void;
 }) {
   const queryClient = useQueryClient();
   const [zoom, setZoom] = useState<number>(() => loadZoom());
+  const [columnsOpen, setColumnsOpen] = useState(false);
 
   useEffect(() => {
     applyZoom(zoom);
@@ -126,16 +134,26 @@ export default function OrdersTopbarActions({
         <RefreshCw size={11} />
       </button>
 
-      <button
-        type="button"
-        onClick={() =>
-          alert('Column customization is coming soon — let me know if you want it next.')
-        }
-        className="inline-flex items-center gap-1 px-2 py-[5px] rounded-btn border border-line-2 bg-white text-ink-2 hover:bg-surface-2 hover:text-ink text-[12px] font-semibold"
-      >
-        <Columns3 size={12} />
-        Columns
-      </button>
+      <div className="relative">
+        <button
+          type="button"
+          onClick={() => setColumnsOpen((v) => !v)}
+          className={`inline-flex items-center gap-1 px-2 py-[5px] rounded-btn border border-line-2 ${
+            columnsOpen ? 'bg-surface-2' : 'bg-white'
+          } text-ink-2 hover:bg-surface-2 hover:text-ink text-[12px] font-semibold`}
+        >
+          <Columns3 size={12} />
+          Columns
+        </button>
+        {columnsOpen && (
+          <ColumnsPopover
+            columns={columns}
+            visible={visibleColumns}
+            onToggle={onToggleColumn}
+            onClose={() => setColumnsOpen(false)}
+          />
+        )}
+      </div>
 
       <button
         type="button"
