@@ -101,8 +101,9 @@ async function runBackfill(
     job.total = rows.length;
     job.message = `Found ${rows.length} orders; fetching rates…`;
 
-    for (const row of rows) {
-      if (jobs.get(jobId)?.status !== 'running') break;
+    const CONCURRENCY = 16;
+    const processOne = async (row: (typeof rows)[number]) => {
+      if (jobs.get(jobId)?.status !== 'running') return;
 
       const raw = (row.raw ?? {}) as Record<string, unknown> & {
         shipTo?: { country?: string; residential?: boolean };
@@ -152,7 +153,17 @@ async function runBackfill(
       if (job.processed % 10 === 0 || job.processed === job.total) {
         job.message = `${job.processed}/${job.total} — ${job.updated} updated, ${job.skipped} skipped, ${job.failed} failed`;
       }
-    }
+    };
+
+    let idx = 0;
+    const workers = Array.from({ length: CONCURRENCY }, async () => {
+      while (idx < rows.length) {
+        const i = idx++;
+        if (jobs.get(jobId)?.status !== 'running') break;
+        await processOne(rows[i]!);
+      }
+    });
+    await Promise.all(workers);
 
     job.status = 'done';
     job.finishedAt = Date.now();
