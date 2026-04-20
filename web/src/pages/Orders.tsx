@@ -1,4 +1,4 @@
-import { lazy, Suspense, useMemo, useState } from 'react';
+import { createContext, lazy, Suspense, useContext, useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -57,6 +57,35 @@ const DEFAULT_VISIBLE = new Set([
 ]);
 
 const COLUMNS_KEY = 'prepship_orders_columns';
+
+type Density = 'xs' | 'sm' | 'md' | 'lg';
+const DENSITY_LEVELS: Density[] = ['xs', 'sm', 'md', 'lg'];
+const DENSITY_LABEL: Record<Density, string> = {
+  xs: 'XS',
+  sm: 'S',
+  md: 'M',
+  lg: 'L',
+};
+const TH_DENSITY: Record<Density, string> = {
+  xs: 'px-1.5 py-0.5 text-[9px]',
+  sm: 'px-2 py-1 text-[10px]',
+  md: 'px-2 py-1.5 text-[10.5px]',
+  lg: 'px-3 py-2 text-[11.5px]',
+};
+const TD_DENSITY: Record<Density, string> = {
+  xs: 'px-1.5 py-[2px] text-[10.5px]',
+  sm: 'px-2 py-[3px] text-[11px]',
+  md: 'px-2 py-[5px] text-[12px]',
+  lg: 'px-3 py-[8px] text-[13.5px]',
+};
+const DENSITY_KEY = 'prepship_orders_density';
+
+function loadDensity(): Density {
+  const v = localStorage.getItem(DENSITY_KEY);
+  return DENSITY_LEVELS.includes(v as Density) ? (v as Density) : 'md';
+}
+
+const DensityContext = createContext<Density>('md');
 
 function loadVisible(): Set<string> {
   try {
@@ -191,6 +220,16 @@ export default function Orders() {
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(() =>
     loadVisible()
   );
+  const [density, setDensity] = useState<Density>(() => loadDensity());
+
+  const cycleDensity = () => {
+    setDensity((prev) => {
+      const idx = DENSITY_LEVELS.indexOf(prev);
+      const next = DENSITY_LEVELS[(idx + 1) % DENSITY_LEVELS.length]!;
+      localStorage.setItem(DENSITY_KEY, next);
+      return next;
+    });
+  };
 
   const toggleColumn = (id: string) => {
     setVisibleColumns((prev) => {
@@ -279,6 +318,8 @@ export default function Orders() {
             columns={COLUMN_DEFS}
             visibleColumns={visibleColumns}
             onToggleColumn={toggleColumn}
+            density={DENSITY_LABEL[density]}
+            onCycleDensity={cycleDensity}
           />
         }
       />
@@ -374,6 +415,7 @@ export default function Orders() {
       </div>
 
       {/* Table */}
+      <DensityContext.Provider value={density}>
       <div className="flex-1 min-h-0 overflow-auto bg-white">
         <table className="w-full text-sm2 border-collapse min-w-[1500px]">
           <thead className="sticky top-0 z-10 bg-surface-2">
@@ -620,6 +662,7 @@ export default function Orders() {
           </tbody>
         </table>
       </div>
+      </DensityContext.Provider>
 
       {/* Pagination */}
       <div className="flex items-center gap-2 px-4 py-2 bg-white border-t border-line text-tiny text-ink-3">
@@ -700,9 +743,10 @@ function Th({
   children?: React.ReactNode;
   className?: string;
 }) {
+  const density = useContext(DensityContext);
   return (
     <th
-      className={`text-left px-2 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap ${className}`}
+      className={`text-left ${TH_DENSITY[density]} font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap ${className}`}
     >
       {children}
     </th>
@@ -718,10 +762,11 @@ function Td({
   className?: string;
   onClick?: (e: React.MouseEvent) => void;
 }) {
+  const density = useContext(DensityContext);
   return (
     <td
       onClick={onClick}
-      className={`px-2 py-[5px] align-top ${className}`}
+      className={`align-top ${TD_DENSITY[density]} ${className}`}
     >
       {children}
     </td>

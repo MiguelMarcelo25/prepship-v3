@@ -4,6 +4,7 @@ import {
   Columns3,
   Printer,
   RefreshCw,
+  Rows3,
   Tags,
   ZoomIn,
 } from 'lucide-react';
@@ -45,11 +46,15 @@ export default function OrdersTopbarActions({
   columns,
   visibleColumns,
   onToggleColumn,
+  density,
+  onCycleDensity,
 }: {
   onOpenQueue: () => void;
   columns: ColumnDef[];
   visibleColumns: Set<string>;
   onToggleColumn: (id: string) => void;
+  density: string;
+  onCycleDensity: () => void;
 }) {
   const queryClient = useQueryClient();
   const [zoom, setZoom] = useState<number>(() => loadZoom());
@@ -171,6 +176,16 @@ export default function OrdersTopbarActions({
       >
         <Printer size={12} />
         Print Queue
+      </button>
+
+      <button
+        type="button"
+        onClick={onCycleDensity}
+        className="inline-flex items-center gap-1 px-2 py-[5px] rounded-btn border border-line-2 bg-white text-ink-2 hover:bg-surface-2 hover:text-ink text-[12px] font-semibold font-mono w-[64px] justify-center"
+        title="Cycle row density"
+      >
+        <Rows3 size={12} />
+        {density}
       </button>
 
       <button
