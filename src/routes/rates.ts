@@ -5,6 +5,11 @@ import { and, eq, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { rateCache } from '../db/schema/rates';
 import { getRates } from '../services/rates';
+import {
+  getActiveBackfillJob,
+  getBackfillJob,
+  startBackfillBestRates,
+} from '../services/rates-backfill';
 import { ssRequest } from '../lib/shipstation';
 import type { CarriersResponse } from '../lib/shipstation/types';
 
@@ -86,6 +91,35 @@ app.get('/carriers', async (c) => {
     dedupeKey: 'carriers:list',
   });
   return c.json(data);
+});
+
+app.post(
+  '/backfill-best',
+  zValidator(
+    'json',
+    z
+      .object({
+        clientId: z.number().int().optional(),
+        limit: z.number().int().positive().max(10000).optional(),
+        maxAgeHours: z.number().int().positive().max(24 * 30).optional(),
+      })
+      .optional()
+  ),
+  async (c) => {
+    const body = c.req.valid('json') ?? {};
+    const job = startBackfillBestRates(body);
+    return c.json({ job_id: job.jobId, status: job.status });
+  }
+);
+
+app.get('/backfill-best/status/:jobId', (c) => {
+  const job = getBackfillJob(c.req.param('jobId'));
+  if (!job) return c.json({ error: 'Job not found' }, 404);
+  return c.json(job);
+});
+
+app.get('/backfill-best/active', (c) => {
+  return c.json({ job: getActiveBackfillJob() });
 });
 
 app.delete('/cache', async (c) => {

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Columns3,
+  DollarSign,
   Printer,
   RefreshCw,
   Rows3,
@@ -12,6 +13,16 @@ import { api } from '../lib/api';
 import ColumnsPopover, { type ColumnDef } from './ColumnsPopover';
 
 type SyncStatus = { lastSyncedAt: string | null; orderCount: number };
+type BackfillJob = {
+  jobId: string;
+  status: 'pending' | 'running' | 'done' | 'error';
+  total: number;
+  processed: number;
+  updated: number;
+  skipped: number;
+  failed: number;
+  message: string;
+};
 
 const ZOOM_LEVELS = [0.75, 0.9, 1, 1.1, 1.25, 1.5];
 const ZOOM_KEY = 'prepship_zoom';
@@ -59,6 +70,32 @@ export default function OrdersTopbarActions({
   const queryClient = useQueryClient();
   const [zoom, setZoom] = useState<number>(() => loadZoom());
   const [columnsOpen, setColumnsOpen] = useState(false);
+  const [backfillJobId, setBackfillJobId] = useState<string | null>(null);
+
+  const backfillStatus = useQuery({
+    queryKey: ['backfill-best', backfillJobId],
+    queryFn: () =>
+      api.get<BackfillJob>(`/rates/backfill-best/status/${backfillJobId}`),
+    enabled: backfillJobId !== null,
+    refetchInterval: (q) => {
+      const d = q.state.data as BackfillJob | undefined;
+      if (!d) return 2000;
+      return d.status === 'done' || d.status === 'error' ? false : 2000;
+    },
+  });
+
+  const backfill = useMutation({
+    mutationFn: () =>
+      api.post<{ job_id: string; status: string }>('/rates/backfill-best', {}),
+    onSuccess: (r) => setBackfillJobId(r.job_id),
+    onError: (err) => alert(`Backfill failed: ${(err as Error).message}`),
+  });
+
+  useEffect(() => {
+    if (backfillStatus.data?.status === 'done') {
+      queryClient.invalidateQueries({ queryKey: ['orders'] });
+    }
+  }, [backfillStatus.data?.status, queryClient]);
 
   useEffect(() => {
     applyZoom(zoom);
@@ -137,6 +174,28 @@ export default function OrdersTopbarActions({
       >
         Full
         <RefreshCw size={11} />
+      </button>
+
+      <button
+        type="button"
+        onClick={() => backfill.mutate()}
+        disabled={
+          backfill.isPending ||
+          backfillStatus.data?.status === 'running' ||
+          backfillStatus.data?.status === 'pending'
+        }
+        className="inline-flex items-center gap-1 px-2 py-[5px] rounded-btn border border-line-2 bg-white text-ink-2 hover:bg-surface-2 hover:text-ink text-[12px] font-semibold disabled:opacity-50"
+        title={
+          backfillStatus.data
+            ? backfillStatus.data.message
+            : 'Fetch cheapest rate for every awaiting order'
+        }
+      >
+        <DollarSign size={12} />
+        {backfillStatus.data?.status === 'running' ||
+        backfillStatus.data?.status === 'pending'
+          ? `${backfillStatus.data.processed}/${backfillStatus.data.total}`
+          : 'Best rates'}
       </button>
 
       <div className="relative">
