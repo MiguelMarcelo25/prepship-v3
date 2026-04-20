@@ -866,9 +866,12 @@ function Th({
         <span
           onMouseDown={(e) => widthsCtx.startResize(id, e)}
           onClick={(e) => e.stopPropagation()}
-          className="absolute top-0 right-0 h-full w-1.5 cursor-col-resize hover:bg-brand/40 active:bg-brand select-none"
+          className="group absolute top-0 right-0 h-full w-3 cursor-col-resize select-none flex items-center justify-end"
           style={{ touchAction: 'none' }}
-        />
+          title="Drag to resize"
+        >
+          <span className="block h-2/3 w-px bg-line-2 group-hover:w-[3px] group-hover:h-full group-hover:bg-brand transition-all" />
+        </span>
       )}
     </th>
   );
