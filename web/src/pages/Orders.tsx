@@ -19,6 +19,8 @@ import { api, qs, type Paginated } from '../lib/api';
 
 const OrderDrawer = lazy(() => import('../components/OrderDrawer'));
 const BatchLabelModal = lazy(() => import('../components/BatchLabelModal'));
+const PrintQueueDrawer = lazy(() => import('../components/PrintQueueDrawer'));
+import OrdersTopbarActions from '../components/OrdersTopbarActions';
 
 type OrderItem = {
   orderItemId?: number;
@@ -121,6 +123,7 @@ export default function Orders() {
   const [rangeId, setRangeId] = useState<typeof dateRanges[number]['id']>('30d');
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [batchOpen, setBatchOpen] = useState(false);
+  const [queueOpen, setQueueOpen] = useState(false);
   const pageSize = 50;
   const openId = orderId ? Number(orderId) : null;
 
@@ -189,7 +192,10 @@ export default function Orders() {
 
   return (
     <>
-      <Topbar title={title} />
+      <Topbar
+        title={title}
+        right={<OrdersTopbarActions onOpenQueue={() => setQueueOpen(true)} />}
+      />
 
       {/* Filter bar */}
       <div className="flex items-center flex-wrap gap-2 px-4 py-2 bg-white border-b border-line">
@@ -492,6 +498,12 @@ export default function Orders() {
               setSelected(new Set());
             }}
           />
+        </Suspense>
+      )}
+
+      {queueOpen && (
+        <Suspense fallback={null}>
+          <PrintQueueDrawer onClose={() => setQueueOpen(false)} />
         </Suspense>
       )}
     </>
