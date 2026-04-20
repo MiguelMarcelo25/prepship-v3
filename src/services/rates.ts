@@ -182,7 +182,28 @@ export async function fetchLiveRates(input: RateInput): Promise<Rate[]> {
     },
   });
 
-  return res.rate_response.rates ?? [];
+  const rates = res.rate_response.rates ?? [];
+  if (!rates.length) {
+    const errs = res.rate_response.errors ?? [];
+    if (errs.length) {
+      const msg = errs
+        .map((e) => `${e.error_source}/${e.error_type}: ${e.message}`)
+        .join('; ');
+      throw new Error(`ShipStation rate errors: ${msg}`);
+    }
+    const invalid = res.rate_response.invalid_rates ?? [];
+    if (invalid.length) {
+      // Carriers returned rates but ShipStation rejected them all (often
+      // warnings like service unavailable for destination).
+      throw new Error(
+        `All ${invalid.length} carrier rates rejected as invalid — likely unsupported destination, weight, or dimensions`
+      );
+    }
+    throw new Error(
+      `No rates returned (status=${res.rate_response.status}) — carriers may not serve this route`
+    );
+  }
+  return rates;
 }
 
 export type GetRatesResult = {
