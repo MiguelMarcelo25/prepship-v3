@@ -37,10 +37,11 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     ].filter(<T>(x: T | undefined): x is T => x !== undefined)
   );
 
-  const [rows, countRows] = await Promise.all([
+  const [joined, countRows] = await Promise.all([
     db
-      .select()
+      .select({ order: orders, overrides: orderOverrides })
       .from(orders)
+      .leftJoin(orderOverrides, eq(orderOverrides.orderId, orders.id))
       .where(where)
       .orderBy(desc(orders.orderDate))
       .limit(q.pageSize)
@@ -48,6 +49,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     db.select({ count: sql<number>`count(*)::int` }).from(orders).where(where),
   ]);
 
+  const rows = joined.map((r) => ({ ...r.order, overrides: r.overrides }));
   return c.json(paginated(rows, countRows[0]?.count ?? 0, q));
 });
 
