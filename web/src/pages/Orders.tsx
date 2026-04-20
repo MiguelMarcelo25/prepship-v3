@@ -279,7 +279,7 @@ export default function Orders() {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
-  const [rangeId, setRangeId] = useState<typeof dateRanges[number]['id']>('30d');
+  const [rangeId, setRangeId] = useState<typeof dateRanges[number]['id']>('all');
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [batchOpen, setBatchOpen] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
