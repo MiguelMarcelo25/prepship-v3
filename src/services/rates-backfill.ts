@@ -3,6 +3,42 @@ import { and, eq, isNull, lt, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orders, orderOverrides } from '../db/schema/orders';
 import { getRates } from './rates';
+import type { Rate } from '../lib/shipstation';
+
+type ServiceTier = 'overnight' | 'two_day' | 'standard';
+
+function classifyTier(code?: string | null): ServiceTier {
+  if (!code) return 'standard';
+  const c = code.toLowerCase();
+  if (
+    c.includes('next_day') ||
+    c.includes('overnight') ||
+    c.includes('priority_mail_express')
+  ) {
+    return 'overnight';
+  }
+  if (
+    c.includes('2day') ||
+    c.includes('2nd_day') ||
+    c.includes('second_day')
+  ) {
+    return 'two_day';
+  }
+  return 'standard';
+}
+
+function pickBestForTier(rates: Rate[], tier: ServiceTier): Rate | null {
+  const pool = tier === 'standard'
+    ? rates
+    : rates.filter((r) => classifyTier(r.service_code) === tier);
+  // Fall back to all rates if no match in requested tier (customer gets
+  // shipped something — cheapest-available beats nothing).
+  const candidates = pool.length ? pool : rates;
+  if (!candidates.length) return null;
+  return [...candidates].sort(
+    (a, b) => a.shipping_amount.amount - b.shipping_amount.amount
+  )[0]!;
+}
 
 export type BackfillJob = {
   jobId: string;
@@ -77,6 +113,7 @@ async function runBackfill(
         shipToPostalCode: orders.shipToPostalCode,
         shipToState: orders.shipToState,
         shipToCity: orders.shipToCity,
+        serviceCode: orders.serviceCode,
         raw: orders.raw,
         overridesBestRateAt: orderOverrides.bestRateAt,
       })
@@ -119,7 +156,10 @@ async function runBackfill(
           residential: raw.shipTo?.residential ?? undefined,
         });
 
-        if (!result.bestRate) {
+        const tier = classifyTier(row.serviceCode);
+        const best = pickBestForTier(result.rates, tier);
+
+        if (!best) {
           job.skipped++;
         } else {
           const now = new Date();
@@ -127,14 +167,14 @@ async function runBackfill(
             .insert(orderOverrides)
             .values({
               orderId: row.id,
-              bestRateJson: result.bestRate as unknown,
+              bestRateJson: best as unknown,
               bestRateAt: now,
               updatedAt: now,
             })
             .onConflictDoUpdate({
               target: orderOverrides.orderId,
               set: {
-                bestRateJson: result.bestRate as unknown,
+                bestRateJson: best as unknown,
                 bestRateAt: now,
                 updatedAt: now,
               },
