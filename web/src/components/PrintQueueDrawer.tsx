@@ -14,7 +14,6 @@ import {
 import { api } from '../lib/api';
 import { supabase } from '../lib/supabase';
 import { Button } from './ui/Button';
-import { Select } from './ui/Select';
 
 type QueueEntry = {
   queue_entry_id: string;
@@ -34,8 +33,6 @@ type QueueResponse = {
   totalOrders: number;
   totalQty: number;
 };
-
-type Client = { id: number; name: string };
 
 type JobStatus = {
   job_id: string;
@@ -77,28 +74,12 @@ async function downloadAuthedPdf(jobId: string, fileName: string) {
 
 export default function PrintQueueDrawer({ onClose }: { onClose: () => void }) {
   const queryClient = useQueryClient();
-  const [clientId, setClientId] = useState<number | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [autoDownloaded, setAutoDownloaded] = useState<string | null>(null);
 
-  const clients = useQuery({
-    queryKey: ['clients'],
-    queryFn: () => api.get<Client[]>('/clients'),
-    staleTime: 60_000,
-  });
-
-  // Default to first client
-  useEffect(() => {
-    if (clientId === null && clients.data?.length) {
-      setClientId(clients.data[0]!.id);
-    }
-  }, [clients.data, clientId]);
-
   const queue = useQuery({
-    queryKey: ['print-queue', clientId],
-    queryFn: () =>
-      api.get<QueueResponse>(`/print-queue?clientId=${clientId}`),
-    enabled: clientId !== null,
+    queryKey: ['print-queue'],
+    queryFn: () => api.get<QueueResponse>(`/print-queue`),
     refetchInterval: 5_000,
   });
 
@@ -118,7 +99,6 @@ export default function PrintQueueDrawer({ onClose }: { onClose: () => void }) {
   const startPrint = useMutation({
     mutationFn: () =>
       api.post<{ job_id: string; total: number }>('/print-queue/print', {
-        client_id: clientId,
         queue_entry_ids: (queue.data?.queuedOrders ?? []).map(
           (e) => e.queue_entry_id
         ),
@@ -131,20 +111,19 @@ export default function PrintQueueDrawer({ onClose }: { onClose: () => void }) {
       fetch(`${API_BASE}/print-queue/${id}`, {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ client_id: clientId }),
+        body: JSON.stringify({}),
       }).then(async (res) => {
         if (!res.ok) throw new Error((await res.json()).error ?? res.statusText);
         return res.json();
       }),
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ['print-queue', clientId] }),
+      queryClient.invalidateQueries({ queryKey: ['print-queue'] }),
   });
 
   const clearAll = useMutation({
-    mutationFn: () =>
-      api.post('/print-queue/clear', { client_id: clientId }),
+    mutationFn: () => api.post('/print-queue/clear', {}),
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ['print-queue', clientId] }),
+      queryClient.invalidateQueries({ queryKey: ['print-queue'] }),
   });
 
   useEffect(() => {
@@ -158,13 +137,13 @@ export default function PrintQueueDrawer({ onClose }: { onClose: () => void }) {
   // When job finishes, refresh queue + auto-download the PDF.
   useEffect(() => {
     if (job.data?.status !== 'done' || !activeJobId || !job.data.file_name) return;
-    queryClient.invalidateQueries({ queryKey: ['print-queue', clientId] });
+    queryClient.invalidateQueries({ queryKey: ['print-queue'] });
     if (autoDownloaded === activeJobId) return;
     setAutoDownloaded(activeJobId);
     downloadAuthedPdf(activeJobId, job.data.file_name).catch((err) => {
       alert(`Auto-download failed: ${(err as Error).message}`);
     });
-  }, [job.data, activeJobId, autoDownloaded, clientId, queryClient]);
+  }, [job.data, activeJobId, autoDownloaded, queryClient]);
 
   const entries = queue.data?.queuedOrders ?? [];
 
@@ -186,20 +165,7 @@ export default function PrintQueueDrawer({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="px-3.5 py-2.5 border-b border-line bg-white flex items-center gap-2">
-          <Select
-            value={clientId ?? ''}
-            onChange={(e) => {
-              setClientId(Number(e.target.value));
-              setActiveJobId(null);
-            }}
-            className="!py-1 !text-[12px] !w-auto flex-1"
-          >
-            {(clients.data ?? []).map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </Select>
+          <div className="flex-1 text-[12px] text-ink-3">All clients</div>
           <Button
             variant="ghost"
             size="xs"

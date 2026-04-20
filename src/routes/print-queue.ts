@@ -13,7 +13,7 @@ import {
 const app = new Hono();
 
 const listQ = z.object({
-  clientId: z.coerce.number().int(),
+  clientId: z.coerce.number().int().optional(),
   includePrinted: z
     .union([z.boolean(), z.enum(['1', 'true', '0', 'false'])])
     .optional()
@@ -62,9 +62,13 @@ app.post('/add', zValidator('json', addBody), async (c) => {
 
 app.post(
   '/clear',
-  zValidator('json', z.object({ client_id: z.number().int() })),
+  zValidator(
+    'json',
+    z.object({ client_id: z.number().int().optional() }).optional()
+  ),
   async (c) => {
-    const cleared = await clearQueue(c.req.valid('json').client_id);
+    const body = c.req.valid('json');
+    const cleared = await clearQueue(body?.client_id);
     return c.json({ cleared_count: cleared });
   }
 );
@@ -74,7 +78,7 @@ app.post(
   zValidator(
     'json',
     z.object({
-      client_id: z.number().int(),
+      client_id: z.number().int().optional(),
       queue_entry_ids: z.array(z.string().min(1)).min(1),
       merge_headers: z.boolean().optional(),
     })
@@ -124,11 +128,14 @@ app.get('/print/download/:jobId', (c) => {
 
 app.delete(
   '/:entryId',
-  zValidator('json', z.object({ client_id: z.number().int() })),
+  zValidator(
+    'json',
+    z.object({ client_id: z.number().int().optional() }).optional()
+  ),
   async (c) => {
     const entryId = c.req.param('entryId');
-    const { client_id } = c.req.valid('json');
-    await removeFromQueue(entryId, client_id);
+    const body = c.req.valid('json');
+    await removeFromQueue(entryId, body?.client_id);
     return c.json({ removed_entry: entryId });
   }
 );

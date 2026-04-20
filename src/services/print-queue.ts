@@ -40,10 +40,11 @@ function cleanOldJobs() {
 
 // ─── CRUD ─────────────────────────────────────────────────────────────
 
-export async function listQueue(clientId: number, includePrinted = false) {
-  const where = includePrinted
-    ? eq(printQueue.clientId, clientId)
-    : and(eq(printQueue.clientId, clientId), eq(printQueue.status, 'queued'));
+export async function listQueue(clientId?: number, includePrinted = false) {
+  const conds = [];
+  if (clientId !== undefined) conds.push(eq(printQueue.clientId, clientId));
+  if (!includePrinted) conds.push(eq(printQueue.status, 'queued'));
+  const where = conds.length ? and(...conds) : undefined;
   const entries = await db.select().from(printQueue).where(where);
   const totalQty = entries.reduce((s, e) => s + (e.orderQty ?? 1), 0);
   return {
@@ -120,21 +121,21 @@ export async function addToQueue(
   return { entry: entry!, alreadyQueued };
 }
 
-export async function removeFromQueue(entryId: string, clientId: number) {
-  const [row] = await db
-    .delete(printQueue)
-    .where(and(eq(printQueue.id, entryId), eq(printQueue.clientId, clientId)))
-    .returning();
+export async function removeFromQueue(entryId: string, clientId?: number) {
+  const where = clientId !== undefined
+    ? and(eq(printQueue.id, entryId), eq(printQueue.clientId, clientId))
+    : eq(printQueue.id, entryId);
+  const [row] = await db.delete(printQueue).where(where).returning();
   if (!row) throw new Error(`Queue entry not found: ${entryId}`);
   return row;
 }
 
-export async function clearQueue(clientId: number) {
+export async function clearQueue(clientId?: number) {
+  const conds = [eq(printQueue.status, 'queued')];
+  if (clientId !== undefined) conds.push(eq(printQueue.clientId, clientId));
   const rows = await db
     .delete(printQueue)
-    .where(
-      and(eq(printQueue.clientId, clientId), eq(printQueue.status, 'queued'))
-    )
+    .where(and(...conds))
     .returning({ id: printQueue.id });
   return rows.length;
 }
@@ -142,22 +143,18 @@ export async function clearQueue(clientId: number) {
 // ─── PDF MERGE ────────────────────────────────────────────────────────
 
 export async function startPrintJob(input: {
-  clientId: number;
+  clientId?: number;
   queueEntryIds: string[];
   mergeHeaders?: boolean;
 }): Promise<{ jobId: string; total: number }> {
   if (!input.queueEntryIds.length)
     throw new Error('queueEntryIds must be non-empty');
 
-  const entries = await db
-    .select()
-    .from(printQueue)
-    .where(
-      and(
-        inArray(printQueue.id, input.queueEntryIds),
-        eq(printQueue.clientId, input.clientId)
-      )
-    );
+  const conds = [inArray(printQueue.id, input.queueEntryIds)];
+  if (input.clientId !== undefined) {
+    conds.push(eq(printQueue.clientId, input.clientId));
+  }
+  const entries = await db.select().from(printQueue).where(and(...conds));
   if (entries.length !== input.queueEntryIds.length) {
     throw new Error('One or more queue entries not found or unauthorized');
   }
