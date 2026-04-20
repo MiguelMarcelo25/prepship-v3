@@ -87,6 +87,72 @@ function loadDensity(): Density {
 
 const DensityContext = createContext<Density>('md');
 
+type Widths = Record<string, number>;
+
+const DEFAULT_WIDTHS: Widths = {
+  select: 36,
+  orderNumber: 160,
+  orderDate: 130,
+  client: 140,
+  recipient: 160,
+  itemName: 240,
+  sku: 140,
+  qty: 60,
+  weight: 90,
+  shipTo: 180,
+  carrier: 80,
+  shippingAccount: 140,
+  orderTotal: 110,
+  bestRate: 110,
+  shipMargin: 100,
+  tracking: 160,
+  age: 80,
+  labelCreated: 130,
+};
+
+const COLUMN_ORDER = [
+  'select',
+  'orderNumber',
+  'orderDate',
+  'client',
+  'recipient',
+  'itemName',
+  'sku',
+  'qty',
+  'weight',
+  'shipTo',
+  'carrier',
+  'shippingAccount',
+  'orderTotal',
+  'bestRate',
+  'shipMargin',
+  'tracking',
+  'age',
+  'labelCreated',
+] as const;
+
+const WIDTHS_KEY = 'prepship_orders_widths';
+
+function loadWidths(): Widths {
+  try {
+    const raw = localStorage.getItem(WIDTHS_KEY);
+    if (!raw) return { ...DEFAULT_WIDTHS };
+    const obj = JSON.parse(raw);
+    if (obj && typeof obj === 'object') {
+      return { ...DEFAULT_WIDTHS, ...obj };
+    }
+  } catch {
+    /* ignore */
+  }
+  return { ...DEFAULT_WIDTHS };
+}
+
+type WidthsCtx = {
+  widths: Widths;
+  startResize: (id: string, e: React.MouseEvent) => void;
+};
+const WidthsContext = createContext<WidthsCtx | null>(null);
+
 function loadVisible(): Set<string> {
   try {
     const raw = localStorage.getItem(COLUMNS_KEY);
@@ -221,6 +287,43 @@ export default function Orders() {
     loadVisible()
   );
   const [density, setDensity] = useState<Density>(() => loadDensity());
+  const [widths, setWidths] = useState<Widths>(() => loadWidths());
+
+  const startResize = (id: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startW = widths[id] ?? DEFAULT_WIDTHS[id] ?? 100;
+    const onMove = (ev: MouseEvent) => {
+      const dx = ev.clientX - startX;
+      const next = Math.max(40, Math.round(startW + dx));
+      setWidths((prev) => ({ ...prev, [id]: next }));
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      setWidths((prev) => {
+        localStorage.setItem(WIDTHS_KEY, JSON.stringify(prev));
+        return prev;
+      });
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  };
+
+  const widthsCtxValue = useMemo<WidthsCtx>(
+    () => ({ widths, startResize }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [widths]
+  );
+
+  const activeColumnIds = useMemo(
+    () =>
+      COLUMN_ORDER.filter(
+        (id) => id === 'select' || id === 'orderNumber' || visibleColumns.has(id)
+      ),
+    [visibleColumns]
+  );
 
   const cycleDensity = () => {
     setDensity((prev) => {
@@ -416,11 +519,17 @@ export default function Orders() {
 
       {/* Table */}
       <DensityContext.Provider value={density}>
+      <WidthsContext.Provider value={widthsCtxValue}>
       <div className="flex-1 min-h-0 overflow-auto bg-white">
-        <table className="w-full text-sm2 border-collapse min-w-[1500px]">
+        <table className="text-sm2 border-collapse table-fixed">
+          <colgroup>
+            {activeColumnIds.map((id) => (
+              <col key={id} style={{ width: widths[id] }} />
+            ))}
+          </colgroup>
           <thead className="sticky top-0 z-10 bg-surface-2">
             <tr>
-              <Th className="w-[36px]">
+              <Th>
                 <input
                   type="checkbox"
                   checked={rows.length > 0 && selected.size === rows.length}
@@ -428,34 +537,34 @@ export default function Orders() {
                   className="accent-brand"
                 />
               </Th>
-              <Th className="w-[160px]">Order #</Th>
-              {visibleColumns.has('orderDate') && <Th className="w-[130px]">Order Date</Th>}
-              {visibleColumns.has('client') && <Th className="w-[140px]">Client</Th>}
-              {visibleColumns.has('recipient') && <Th className="w-[160px]">Recipient</Th>}
-              {visibleColumns.has('itemName') && <Th>Item Name</Th>}
-              {visibleColumns.has('sku') && <Th className="w-[140px]">SKU</Th>}
-              {visibleColumns.has('qty') && <Th className="text-right w-[60px]">Qty</Th>}
-              {visibleColumns.has('weight') && <Th className="w-[90px]">Weight</Th>}
-              {visibleColumns.has('shipTo') && <Th className="w-[180px]">Ship To</Th>}
-              {visibleColumns.has('carrier') && <Th className="w-[80px]">Carrier</Th>}
+              <Th id="orderNumber">Order #</Th>
+              {visibleColumns.has('orderDate') && <Th id="orderDate">Order Date</Th>}
+              {visibleColumns.has('client') && <Th id="client">Client</Th>}
+              {visibleColumns.has('recipient') && <Th id="recipient">Recipient</Th>}
+              {visibleColumns.has('itemName') && <Th id="itemName">Item Name</Th>}
+              {visibleColumns.has('sku') && <Th id="sku">SKU</Th>}
+              {visibleColumns.has('qty') && <Th id="qty" className="text-right">Qty</Th>}
+              {visibleColumns.has('weight') && <Th id="weight">Weight</Th>}
+              {visibleColumns.has('shipTo') && <Th id="shipTo">Ship To</Th>}
+              {visibleColumns.has('carrier') && <Th id="carrier">Carrier</Th>}
               {visibleColumns.has('shippingAccount') && (
-                <Th className="w-[140px]">Shipping Account</Th>
+                <Th id="shippingAccount">Shipping Account</Th>
               )}
               {visibleColumns.has('orderTotal') && (
-                <Th className="text-right w-[110px]">Order Total</Th>
+                <Th id="orderTotal" className="text-right">Order Total</Th>
               )}
               {visibleColumns.has('bestRate') && (
-                <Th className="text-right w-[110px]">Best Rate</Th>
+                <Th id="bestRate" className="text-right">Best Rate</Th>
               )}
               {visibleColumns.has('shipMargin') && (
-                <Th className="text-right w-[100px]">Ship Margin</Th>
+                <Th id="shipMargin" className="text-right">Ship Margin</Th>
               )}
               {visibleColumns.has('tracking') && (
-                <Th className="w-[160px]">Tracking #</Th>
+                <Th id="tracking">Tracking #</Th>
               )}
-              {visibleColumns.has('age') && <Th className="w-[80px]">Age</Th>}
+              {visibleColumns.has('age') && <Th id="age">Age</Th>}
               {visibleColumns.has('labelCreated') && (
-                <Th className="w-[130px]">Label Created</Th>
+                <Th id="labelCreated">Label Created</Th>
               )}
             </tr>
           </thead>
@@ -662,6 +771,7 @@ export default function Orders() {
           </tbody>
         </table>
       </div>
+      </WidthsContext.Provider>
       </DensityContext.Provider>
 
       {/* Pagination */}
@@ -737,18 +847,29 @@ function Stat({
 }
 
 function Th({
+  id,
   children,
   className = '',
 }: {
+  id?: string;
   children?: React.ReactNode;
   className?: string;
 }) {
   const density = useContext(DensityContext);
+  const widthsCtx = useContext(WidthsContext);
   return (
     <th
-      className={`text-left ${TH_DENSITY[density]} font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap ${className}`}
+      className={`relative text-left ${TH_DENSITY[density]} font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap overflow-hidden ${className}`}
     >
       {children}
+      {id && widthsCtx && (
+        <span
+          onMouseDown={(e) => widthsCtx.startResize(id, e)}
+          onClick={(e) => e.stopPropagation()}
+          className="absolute top-0 right-0 h-full w-1.5 cursor-col-resize hover:bg-brand/40 active:bg-brand select-none"
+          style={{ touchAction: 'none' }}
+        />
+      )}
     </th>
   );
 }
@@ -766,7 +887,7 @@ function Td({
   return (
     <td
       onClick={onClick}
-      className={`align-top ${TD_DENSITY[density]} ${className}`}
+      className={`align-top overflow-hidden ${TD_DENSITY[density]} ${className}`}
     >
       {children}
     </td>
