@@ -22,6 +22,7 @@ type BackfillJob = {
   skipped: number;
   failed: number;
   message: string;
+  failureSamples?: string[];
 };
 
 const ZOOM_LEVELS = [0.75, 0.9, 1, 1.1, 1.25, 1.5];
@@ -92,10 +93,10 @@ export default function OrdersTopbarActions({
   });
 
   useEffect(() => {
-    if (backfillStatus.data?.status === 'done') {
-      queryClient.invalidateQueries({ queryKey: ['orders'] });
-    }
-  }, [backfillStatus.data?.status, queryClient]);
+    if (!backfillStatus.data) return;
+    // Refresh the orders list as new best rates come in, not just at the end.
+    queryClient.invalidateQueries({ queryKey: ['orders'] });
+  }, [backfillStatus.data?.processed, backfillStatus.data?.status, queryClient]);
 
   useEffect(() => {
     applyZoom(zoom);
@@ -187,7 +188,12 @@ export default function OrdersTopbarActions({
         className="inline-flex items-center gap-1 px-2 py-[5px] rounded-btn border border-line-2 bg-white text-ink-2 hover:bg-surface-2 hover:text-ink text-[12px] font-semibold disabled:opacity-50"
         title={
           backfillStatus.data
-            ? backfillStatus.data.message
+            ? `${backfillStatus.data.message}\n${backfillStatus.data.updated} updated · ${backfillStatus.data.skipped} skipped · ${backfillStatus.data.failed} failed${
+                backfillStatus.data.failureSamples?.length
+                  ? '\n\nFailures:\n' +
+                    backfillStatus.data.failureSamples.join('\n')
+                  : ''
+              }`
             : 'Fetch cheapest rate for every awaiting order'
         }
       >

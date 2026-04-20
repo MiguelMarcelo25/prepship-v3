@@ -50,9 +50,31 @@ export type BackfillJob = {
   failed: number;
   message: string;
   error: string | null;
+  failureSamples: string[];
   startedAt: number;
   finishedAt: number | null;
 };
+
+const PER_ORDER_TIMEOUT_MS = 30_000;
+
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(
+      () => reject(new Error(`${label} timed out after ${ms}ms`)),
+      ms
+    );
+    p.then(
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (err) => {
+        clearTimeout(t);
+        reject(err);
+      }
+    );
+  });
+}
 
 const jobs = new Map<string, BackfillJob>();
 let activeJobId: string | null = null;
@@ -84,6 +106,7 @@ export function startBackfillBestRates(opts: {
     failed: 0,
     message: 'Starting…',
     error: null,
+    failureSamples: [],
     startedAt: Date.now(),
     finishedAt: null,
   };
@@ -147,14 +170,18 @@ async function runBackfill(
       };
       const toCountry = raw.shipTo?.country ?? 'US';
       try {
-        const result = await getRates({
-          weightOz: Number(row.weightOz),
-          toZip: row.shipToPostalCode!,
-          toState: row.shipToState ?? undefined,
-          toCity: row.shipToCity ?? undefined,
-          toCountry,
-          residential: raw.shipTo?.residential ?? undefined,
-        });
+        const result = await withTimeout(
+          getRates({
+            weightOz: Number(row.weightOz),
+            toZip: row.shipToPostalCode!,
+            toState: row.shipToState ?? undefined,
+            toCity: row.shipToCity ?? undefined,
+            toCountry,
+            residential: raw.shipTo?.residential ?? undefined,
+          }),
+          PER_ORDER_TIMEOUT_MS,
+          `getRates(order=${row.id})`
+        );
 
         const tier = classifyTier(row.serviceCode);
         const best = pickBestForTier(result.rates, tier);
@@ -184,8 +211,8 @@ async function runBackfill(
       } catch (err) {
         job.failed++;
         const msg = (err as Error).message ?? 'unknown';
-        if (job.failed <= 3) {
-          job.message = `Order ${row.id}: ${msg.slice(0, 120)}`;
+        if (job.failureSamples.length < 5) {
+          job.failureSamples.push(`order ${row.id}: ${msg.slice(0, 200)}`);
         }
       }
 
