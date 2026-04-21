@@ -1,0 +1,36 @@
+name: Sync ShipStation orders + shipments
+
+on:
+  # Every 10 minutes. GitHub-hosted runners use UTC and schedules can be
+  # delayed during high load — if fresher data is needed, use the manual
+  # "Run workflow" button (workflow_dispatch) below.
+  schedule:
+    - cron: '*/10 * * * *'
+  # Manual trigger from the Actions tab.
+  workflow_dispatch:
+
+jobs:
+  sync:
+    name: POST /cron/sync-all
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hit Render sync endpoint
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          API_URL: https://prepshipv4-api.onrender.com
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::CRON_SECRET GitHub secret is not set — add it under Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          response=$(curl -s -o /tmp/body -w "%{http_code}" \
+            -X POST "$API_URL/cron/sync-all" \
+            -H "x-cron-secret: $CRON_SECRET" \
+            -H "Content-Type: application/json")
+          echo "HTTP $response"
+          cat /tmp/body
+          echo ""
+          if [ "$response" -lt 200 ] || [ "$response" -ge 300 ]; then
+            echo "::error::Sync endpoint returned $response"
+            exit 1
+          fi
