@@ -5,8 +5,24 @@ import { and, desc, eq, gte, lte, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { shipments } from '../db/schema/shipments';
 import { offsetOf, paginated, paginationSchema } from '../lib/pagination';
+import {
+  getShipmentSyncStatus,
+  syncShipments,
+} from '../services/shipment-sync';
 
 const app = new Hono();
+
+// User-initiated sync + status. These sit behind requireAuth (mounted at
+// main.ts). /cron/sync-shipments is the cron-secret equivalent for schedulers.
+app.get('/status', async (c) => {
+  const status = await getShipmentSyncStatus();
+  return c.json(status);
+});
+
+app.post('/sync', async (c) => {
+  const result = await syncShipments({});
+  return c.json(result);
+});
 
 const listQuery = paginationSchema.extend({
   clientId: z.coerce.number().int().optional(),
