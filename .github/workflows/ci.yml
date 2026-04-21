@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - prepshipv4-stable
+      - 'parity/**'
+  pull_request:
+    branches:
+      - prepshipv4-stable
+
+jobs:
+  check:
+    name: Typecheck + Frontend build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Typecheck (backend + frontend)
+        run: npm run typecheck
+
+      - name: Frontend build
+        run: npm run build:web
