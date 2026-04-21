@@ -564,11 +564,12 @@ export const apiClient = {
     dateFrom?: string;
     dateTo?: string;
   }): Promise<{ blob: Blob; filename: string }> {
-    // v4 expects `status` (not `orderStatus`) and caps at 5000 rows server-side.
+    // v4 expects `status` (not `orderStatus`) and ISO datetimes (not YYYY-MM-DD).
+    // Caps at 5000 rows server-side, ignores pageSize.
     const query2 = qs({
       status: query?.orderStatus,
-      dateFrom: query?.dateFrom,
-      dateTo: query?.dateTo,
+      dateFrom: toIsoDayStart(query?.dateFrom),
+      dateTo: toIsoDayEnd(query?.dateTo),
     });
     return fetchBlob(
       'downloadOrdersExport',

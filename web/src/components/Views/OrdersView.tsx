@@ -2630,8 +2630,26 @@ export default function OrdersView({
             type="button"
             style={{ fontSize: 11.5, gap: 4 }}
             id="exportBtn"
-            onClick={() => {
-              window.open(`/api/orders/export?orderStatus=${currentStatus}&pageSize=5000`, '_blank', 'noopener,noreferrer')
+            onClick={async () => {
+              try {
+                const { blob, filename } = await apiClient.downloadOrdersExport({
+                  orderStatus: currentStatus,
+                  pageSize: 5000,
+                  dateFrom: dateRange.start || undefined,
+                  dateTo: dateRange.end || undefined,
+                })
+                const url = URL.createObjectURL(blob)
+                const a = document.createElement('a')
+                a.href = url
+                a.download = filename || `orders-${currentStatus}-${new Date().toISOString().slice(0, 10)}.csv`
+                document.body.appendChild(a)
+                a.click()
+                document.body.removeChild(a)
+                setTimeout(() => URL.revokeObjectURL(url), 1000)
+              } catch (err) {
+                console.error('[Export CSV] failed', err)
+                alert('Export failed: ' + (err instanceof Error ? err.message : 'unknown error'))
+              }
             }}
           >
             📥 Export CSV
