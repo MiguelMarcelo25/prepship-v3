@@ -60,7 +60,7 @@ export default function Locations() {
   return (
     <>
       <Topbar
-        title="Locations"
+        title="📍 Ship-From Locations"
         right={
           <>
             <Button
@@ -88,101 +88,99 @@ export default function Locations() {
         }
       />
 
-      <div className="flex-1 min-h-0 overflow-auto p-4">
+      <div className="px-4 pt-2 text-tiny text-ink-3">
+        Add warehouses, 3PL centers, or drop-ship addresses. The ★ default is
+        used for all new labels.
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-auto p-4 bg-page">
         {isLoading ? (
-          <div className="text-center text-ink-3 py-10">Loading…</div>
+          <div className="text-center text-ink-3 py-10">Loading locations…</div>
         ) : rows.length === 0 ? (
           <div className="text-center text-ink-3 py-16">
             <div className="text-4xl mb-2">📍</div>
-            <div className="font-semibold text-ink-2">No locations yet</div>
-            <div className="text-xs mt-1">
-              Add a warehouse address. One marked as default is used as the
-              ship-from for every label.
+            <div className="font-semibold text-ink-2">
+              No locations yet. Add one above.
             </div>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {rows.map((loc) => (
-              <div
-                key={loc.id}
-                className={`bg-white rounded-card border shadow-sm p-3.5 flex flex-col gap-2.5 ${
-                  loc.isDefault
-                    ? 'border-brand ring-1 ring-brand/30'
-                    : 'border-line'
-                }`}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="font-bold text-ink truncate">{loc.name}</div>
-                    {loc.company && (
-                      <div className="text-tiny text-ink-3 truncate">
-                        {loc.company}
+          <div className="space-y-2.5">
+            {rows.map((loc) => {
+              const addressParts = [
+                loc.company,
+                loc.street1,
+                loc.street2,
+                loc.city && loc.state
+                  ? `${loc.city}, ${loc.state} ${loc.postalCode ?? ''}`.trim()
+                  : '',
+              ].filter(Boolean);
+              return (
+                <div
+                  key={loc.id}
+                  className="bg-surface border border-line rounded-card px-4 py-3.5 flex items-start gap-3"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="font-bold text-[13px] text-ink">
+                        {loc.name}
+                      </span>
+                      {loc.isDefault && (
+                        <span className="bg-brand text-white text-[10px] font-bold px-[7px] py-px rounded-full">
+                          DEFAULT
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-[12px] text-ink-2">
+                      {addressParts.join(' · ')}
+                    </div>
+                    {loc.phone && (
+                      <div className="text-[11.5px] text-ink-3 mt-0.5">
+                        {loc.phone}
                       </div>
                     )}
                   </div>
-                  {loc.isDefault && (
-                    <span className="text-2xs font-bold px-1.5 py-0.5 rounded-full bg-brand text-white shrink-0">
-                      DEFAULT
-                    </span>
-                  )}
-                </div>
-
-                <div className="text-tiny text-ink-2 leading-relaxed font-mono">
-                  {loc.street1 && <div>{loc.street1}</div>}
-                  {loc.street2 && <div>{loc.street2}</div>}
-                  <div>
-                    {[loc.city, loc.state, loc.postalCode]
-                      .filter(Boolean)
-                      .join(', ') || '—'}
-                  </div>
-                  {loc.country !== 'US' && (
-                    <div className="text-ink-3">{loc.country}</div>
-                  )}
-                  {loc.phone && <div className="pt-1">{loc.phone}</div>}
-                </div>
-
-                <div className="flex items-center gap-1 pt-1 border-t border-line">
-                  {!loc.isDefault && (
+                  <div className="flex items-start gap-1 shrink-0">
+                    {!loc.isDefault && (
+                      <Button
+                        variant="ghost"
+                        size="xs"
+                        onClick={() => setDefault.mutate(loc.id)}
+                        disabled={setDefault.isPending}
+                        title="Mark as default ship-from"
+                      >
+                        <Star size={11} />
+                        Default
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
                       size="xs"
-                      onClick={() => setDefault.mutate(loc.id)}
-                      disabled={setDefault.isPending}
-                      title="Mark as default ship-from"
+                      onClick={() => setEditing(loc)}
                     >
-                      <Star size={11} />
-                      Default
+                      <Pencil size={11} />
+                      Edit
                     </Button>
-                  )}
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    onClick={() => setEditing(loc)}
-                  >
-                    <Pencil size={11} />
-                    Edit
-                  </Button>
-                  <div className="flex-1" />
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    onClick={() => {
-                      if (
-                        confirm(
-                          `Delete location "${loc.name}"? This can't be undone.`
-                        )
-                      ) {
-                        remove.mutate(loc.id);
-                      }
-                    }}
-                    disabled={remove.isPending}
-                    className="text-ink-3 hover:!text-danger"
-                  >
-                    <Trash2 size={11} />
-                  </Button>
+                    <Button
+                      variant="ghost"
+                      size="xs"
+                      onClick={() => {
+                        if (
+                          confirm(
+                            `Delete location "${loc.name}"? This can't be undone.`
+                          )
+                        ) {
+                          remove.mutate(loc.id);
+                        }
+                      }}
+                      disabled={remove.isPending}
+                      className="text-ink-3 hover:!text-danger"
+                    >
+                      <Trash2 size={11} />
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
