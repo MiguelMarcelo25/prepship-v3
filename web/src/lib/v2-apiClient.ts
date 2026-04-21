@@ -984,10 +984,20 @@ export const apiClient = {
   },
 
   submitInventoryReceive(data: Record<string, unknown>): Promise<any> {
+    // v4's POST /inventory/:id/receive returns {inventory, ledger} (not a flat
+    // item row). v2 InventoryView reads result.received as an array of
+    // {sku, qty, newStock} for its toast string. Reshape each entry so the
+    // UI's "Received X SKU(s): ABC (5 units → 100 total)" renders correctly.
     return safe(
       'submitInventoryReceive',
       async () => {
-        const received = await apiClient.receiveInventory(data);
+        const raw = await apiClient.receiveInventory(data);
+        const entries = Array.isArray(raw) ? raw : [raw];
+        const received = entries.map((e: any) => ({
+          sku: e?.inventory?.sku ?? e?.sku ?? '',
+          qty: e?.ledger?.qty ?? e?.qty ?? (data as any)?.qty ?? 0,
+          newStock: e?.inventory?.stockQty ?? e?.stockQty ?? 0,
+        }));
         return { ok: true, received } as { ok: boolean; received: any[] };
       },
       { ok: false, received: [] as any[] }
@@ -1011,13 +1021,20 @@ export const apiClient = {
   },
 
   submitInventoryAdjustment(data: Record<string, unknown>): Promise<any> {
+    // v4's POST /inventory/:id/adjust returns {inventory, ledger}. Toast was
+    // reading result.stockQty (undefined on current backend, would be defined
+    // if backend flattened). Check the nested path first, fall back to flat
+    // in case the server contract changes.
     return safe(
       'submitInventoryAdjustment',
       async () => {
         const result = await apiClient.adjustInventory(data);
         return {
           ok: true,
-          newStock: (result as any)?.stockQty ?? 0,
+          newStock:
+            (result as any)?.inventory?.stockQty ??
+            (result as any)?.stockQty ??
+            0,
         } as { ok: boolean; newStock: number };
       },
       { ok: false, newStock: 0 }
