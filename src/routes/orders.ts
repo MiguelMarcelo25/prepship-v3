@@ -311,6 +311,8 @@ const patchBody = z.object({
   bestRateJson: z.unknown().optional(),
   bestRateDims: z.string().nullable().optional(),
   shippingAccount: z.string().nullable().optional(),
+  externallyShipped: z.boolean().optional(),
+  externallyShippedSource: z.string().nullable().optional(),
 });
 
 app.patch('/:id{[0-9]+}', zValidator('json', patchBody), async (c) => {
@@ -324,13 +326,24 @@ app.patch('/:id{[0-9]+}', zValidator('json', patchBody), async (c) => {
     .limit(1);
   if (!existing) return c.json({ error: 'Order not found' }, 404);
 
-  const bestRateAt = body.bestRateJson !== undefined ? new Date() : undefined;
+  // Split the body: externallyShipped lives on the `orders` table;
+  // everything else (including externallyShippedSource) lives on order_overrides.
+  const { externallyShipped, ...overridesBody } = body;
+
+  if (externallyShipped !== undefined) {
+    await db
+      .update(orders)
+      .set({ externallyShipped, updatedAt: new Date() })
+      .where(eq(orders.id, id));
+  }
+
+  const bestRateAt = overridesBody.bestRateJson !== undefined ? new Date() : undefined;
   const [row] = await db
     .insert(orderOverrides)
-    .values({ orderId: id, ...body, bestRateAt, updatedAt: new Date() })
+    .values({ orderId: id, ...overridesBody, bestRateAt, updatedAt: new Date() })
     .onConflictDoUpdate({
       target: orderOverrides.orderId,
-      set: { ...body, bestRateAt, updatedAt: new Date() },
+      set: { ...overridesBody, bestRateAt, updatedAt: new Date() },
     })
     .returning();
 
