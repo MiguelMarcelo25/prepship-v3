@@ -594,9 +594,12 @@ export default function AnalysisView() {
             onChange={(event) => setClientId(event.target.value)}
           >
             <option value="">All Clients</option>
-            {clients.map((client) => (
-              <option key={client.clientId} value={String(client.clientId)}>{client.name}</option>
-            ))}
+            {clients.map((client, i) => {
+              const id = client.clientId ?? client.id ?? i
+              return (
+                <option key={id} value={String(id)}>{client.name}</option>
+              )
+            })}
           </select>
           <span id="analysis-summary" style={{ fontSize: 11.5, color: 'var(--text3)', marginLeft: 'auto' }}>
             {getAnalysisSummaryText(dataState.rows.length, dataState.orderCount)}
