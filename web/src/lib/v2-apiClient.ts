@@ -627,16 +627,36 @@ export const apiClient = {
   },
 
   // ─── Labels ────────────────────────────────────────────────────────────────
+  // Throws on failure — callers (OrdersView) use try/catch to surface toasts
+  // and keep flow-control semantics intact. Other methods in this file return
+  // safe fallbacks, but labels MUST surface errors to the UI.
   createLabel(payload: unknown): Promise<any> {
-    return safe('createLabel', () => api.post<any>('/labels', payload), {});
+    return api.post<any>('/labels', payload);
   },
 
-  retrieveLabel(orderLookup: number | string): Promise<any> {
-    return safe(
-      'retrieveLabel',
-      () => api.get<any>(`/labels/${encodeURIComponent(String(orderLookup))}`),
-      { data: [] }
-    );
+  createLabelBatch(payload: {
+    orderIds: number[];
+    serviceCode: string;
+    shippingProviderId: number;
+    carrierCode?: string;
+    packageCode?: string;
+    confirmation?: string;
+    testLabel?: boolean;
+  }): Promise<any> {
+    return api.post<any>('/labels/create-batch', payload);
+  },
+
+  voidLabel(shipmentId: number): Promise<any> {
+    return api.post<any>(`/labels/${shipmentId}/void`, {});
+  },
+
+  returnLabel(shipmentId: number, reason?: string): Promise<any> {
+    return api.post<any>(`/labels/${shipmentId}/return`, reason ? { reason } : {});
+  },
+
+  retrieveLabel(orderLookup: number | string, fresh = false): Promise<any> {
+    const path = `/labels/${encodeURIComponent(String(orderLookup))}/retrieve${fresh ? '?fresh=true' : ''}`;
+    return api.get<any>(path);
   },
 
   async openLabel(url: string): Promise<void> {
