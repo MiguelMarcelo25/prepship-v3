@@ -46,20 +46,36 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     ].filter(<T>(x: T | undefined): x is T => x !== undefined)
   );
 
+  // Dedupe by orderNumber: keep the row with the highest id (most recent
+  // sync wins). ShipStation occasionally syncs the same order_number twice
+  // (separate stores, manual re-sync, etc.) — collapse to one row.
+  // Using a CTE so pagination + count stay accurate against the deduped set.
+  const dedupedIdsSubquery = sql`(
+    SELECT id FROM (
+      SELECT id, ROW_NUMBER() OVER (
+        PARTITION BY order_number ORDER BY id DESC
+      ) AS rn
+      FROM orders
+      WHERE ${where ?? sql`true`}
+    ) ranked
+    WHERE ranked.rn = 1
+  )`;
+
   const [joined, countRows] = await Promise.all([
     db
       .select({ order: orders, overrides: orderOverrides })
       .from(orders)
       .leftJoin(orderOverrides, eq(orderOverrides.orderId, orders.id))
-      .where(where)
+      .where(and(where, sql`${orders.id} IN ${dedupedIdsSubquery}`))
       .orderBy(desc(orders.orderDate))
       .limit(q.pageSize)
       .offset(offsetOf(q)),
-    db.select({ count: sql<number>`count(*)::int` }).from(orders).where(where),
+    db.execute<{ count: number }>(sql`SELECT COUNT(*)::int AS count FROM ${dedupedIdsSubquery} d`),
   ]);
 
   const rows = joined.map((r) => ({ ...r.order, overrides: r.overrides }));
-  return c.json(paginated(rows, countRows[0]?.count ?? 0, q));
+  const total = countRows[0]?.count ?? 0;
+  return c.json(paginated(rows, total, q));
 });
 
 // Picklist: aggregated SKU + qty + order count per client over a date
