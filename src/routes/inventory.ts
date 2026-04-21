@@ -274,7 +274,10 @@ app.post(
   }
 );
 
-// Bulk update of dimensions for many inventory rows in one call.
+// Bulk update of dimensions + pack-size fields for many inventory rows in one call.
+// Extended for v2 parity: baseUnitQty, unitsPerPack, cuFtOverride, packageId — so
+// CSV importers and bulk editors can populate the new pack-size fields without
+// per-row PATCH round-trips.
 const bulkDimsBody = z.object({
   items: z
     .array(
@@ -284,6 +287,10 @@ const bulkDimsBody = z.object({
         length: z.number().nonnegative().optional(),
         width: z.number().nonnegative().optional(),
         height: z.number().nonnegative().optional(),
+        baseUnitQty: z.number().int().positive().optional(),
+        unitsPerPack: z.number().int().positive().optional(),
+        cuFtOverride: z.number().nonnegative().nullable().optional(),
+        packageId: z.number().int().positive().nullable().optional(),
       })
     )
     .min(1)
@@ -299,6 +306,10 @@ app.post('/bulk-update-dims', zValidator('json', bulkDimsBody), async (c) => {
     if (item.length !== undefined) patch.length = item.length;
     if (item.width !== undefined) patch.width = item.width;
     if (item.height !== undefined) patch.height = item.height;
+    if (item.baseUnitQty !== undefined) patch.baseUnitQty = item.baseUnitQty;
+    if (item.unitsPerPack !== undefined) patch.unitsPerPack = item.unitsPerPack;
+    if (item.cuFtOverride !== undefined) patch.cuFtOverride = item.cuFtOverride;
+    if (item.packageId !== undefined) patch.packageId = item.packageId;
     const [row] = await db
       .update(inventory)
       .set(patch)

@@ -123,7 +123,7 @@ app.get(
       select distinct o.id, o.order_number
       from orders o, jsonb_array_elements(o.items) item
       where item ? 'sku' and item->>'sku' = ${sku}
-        ${qty !== undefined ? sql`and coalesce((item->>'quantity')::int, 0) >= ${qty}` : sql``}
+        ${qty !== undefined ? sql`and coalesce((item->>'quantity')::int, 1) >= ${qty}` : sql``}
         ${orderStatus ? sql`and o.order_status = ${orderStatus}` : sql``}
         ${storeId !== undefined ? sql`and o.store_id = ${storeId}` : sql``}
       order by o.id desc
