@@ -543,17 +543,40 @@ export const apiClient = {
     dateFrom?: string;
     dateTo?: string;
   }): Promise<any> {
+    // v4 returns rows with snake_case (`total_qty`, `client_name`, `image_url`).
+    // v2 picklist UI + `buildPicklistPrintHtml` consume camelCase
+    // (`totalQty`, `clientName`, `imageUrl`) — renaming would render `undefined`
+    // in the "Qty to Pick" column and fall back to the 📦 placeholder image.
     return safe(
       'fetchPicklist',
-      () =>
-        api.get<any>(
+      async () => {
+        const res = await api.get<any>(
           `/orders/picklist${qs({
             status: query.status,
             clientId: query.clientId,
             dateFrom: query.dateFrom,
             dateTo: query.dateTo,
           })}`
-        ),
+        );
+        const rawSkus = Array.isArray(res?.skus) ? res.skus : [];
+        const skus = rawSkus.map((r: any) => ({
+          ...r,
+          clientId: r?.clientId ?? r?.client_id ?? null,
+          clientName: r?.clientName ?? r?.client_name ?? null,
+          imageUrl: r?.imageUrl ?? r?.image_url ?? null,
+          totalQty: r?.totalQty ?? r?.total_qty ?? 0,
+          orderCount: r?.orderCount ?? r?.order_count ?? 0,
+          sku: r?.sku ?? '',
+          name: r?.name ?? '',
+        }));
+        return {
+          skus,
+          totalSkus: res?.totalSkus ?? skus.length,
+          totalUnits:
+            res?.totalUnits ??
+            skus.reduce((a: number, s: any) => a + (s?.totalQty ?? 0), 0),
+        };
+      },
       { skus: [], totalSkus: 0, totalUnits: 0 }
     );
   },
