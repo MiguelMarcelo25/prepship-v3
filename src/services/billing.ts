@@ -1,8 +1,13 @@
 import { and, eq, gte, inArray, isNotNull, lte, sql } from 'drizzle-orm';
 import { db } from '../db/client';
-import { billingConfig, billingLineItems } from '../db/schema/billing';
+import {
+  billingConfig,
+  billingLineItems,
+  clientPackagePrices,
+} from '../db/schema/billing';
 import { shipments } from '../db/schema/shipments';
 import { orders } from '../db/schema/orders';
+import { packages } from '../db/schema/packages';
 
 export type GenerateInput = {
   clientId?: number;
@@ -66,6 +71,11 @@ export async function generateLineItems(input: GenerateInput) {
       shipDate: shipments.shipDate,
       labelCost: shipments.labelCost,
       voided: shipments.voided,
+      selectedPid: shipments.selectedPid,
+      selectedPackageId: shipments.selectedPackageId,
+      dimsL: shipments.dimsL,
+      dimsW: shipments.dimsW,
+      dimsH: shipments.dimsH,
     })
     .from(shipments)
     .where(
@@ -99,6 +109,82 @@ export async function generateLineItems(input: GenerateInput) {
   const orderItemsById = new Map<number, unknown[]>();
   for (const r of orderItemsRows) {
     orderItemsById.set(r.id, Array.isArray(r.items) ? r.items : []);
+  }
+
+  // ─── B2 pre-fetch: packages + per-client package prices ──────────────────
+  // Three lookup maps for the resolvePackageId resolver:
+  //   packagesById     — shipment.selectedPid → package
+  //   packagesByCode   — shipment.selectedPackageId (text ShipStation code)
+  //   packagesByDims   — dims fallback when no explicit pid/code on shipment
+  // Pricing is keyed (clientId, packageId) with `isCustom` meaning "don't
+  // overwrite on set-default"; for computation both kinds are equal.
+  const allPackages = await db
+    .select({
+      id: packages.id,
+      name: packages.name,
+      packageCode: packages.packageCode,
+      length: packages.length,
+      width: packages.width,
+      height: packages.height,
+    })
+    .from(packages);
+
+  type PkgRow = (typeof allPackages)[number];
+  const packagesById = new Map<number, PkgRow>();
+  const packagesByCode = new Map<string, PkgRow>();
+  const packagesByDims = new Map<string, PkgRow>();
+  const dimsKey = (l: number, w: number, h: number): string =>
+    `${l}×${w}×${h}`;
+  for (const p of allPackages) {
+    packagesById.set(p.id, p);
+    if (p.packageCode) packagesByCode.set(p.packageCode, p);
+    if (p.length > 0 && p.width > 0 && p.height > 0) {
+      packagesByDims.set(dimsKey(p.length, p.width, p.height), p);
+    }
+  }
+
+  const clientIdsInScope = [...configByClient.keys()];
+  const priceRows = clientIdsInScope.length
+    ? await db
+        .select()
+        .from(clientPackagePrices)
+        .where(inArray(clientPackagePrices.clientId, clientIdsInScope))
+    : [];
+  const pricesByClient = new Map<number, Map<number, number>>();
+  for (const r of priceRows) {
+    let m = pricesByClient.get(r.clientId);
+    if (!m) {
+      m = new Map();
+      pricesByClient.set(r.clientId, m);
+    }
+    m.set(r.packageId, Number(r.price));
+  }
+
+  function resolvePackageId(s: {
+    selectedPid: number | null;
+    selectedPackageId: string | null;
+    dimsL: number | null;
+    dimsW: number | null;
+    dimsH: number | null;
+  }): number | null {
+    // 1. Explicit integer custom-package FK on the shipment.
+    if (s.selectedPid != null && packagesById.has(s.selectedPid)) {
+      return s.selectedPid;
+    }
+    // 2. Text code — could be numeric id stringified, or a ShipStation
+    //    package_code (e.g. "large_flat_rate_box"). Try both.
+    if (s.selectedPackageId) {
+      const asInt = Number.parseInt(s.selectedPackageId, 10);
+      if (Number.isFinite(asInt) && packagesById.has(asInt)) return asInt;
+      const byCode = packagesByCode.get(s.selectedPackageId);
+      if (byCode) return byCode.id;
+    }
+    // 3. Exact dims match (v2 makeDimsKey parity — unsorted, verbatim).
+    if (s.dimsL != null && s.dimsW != null && s.dimsH != null) {
+      const match = packagesByDims.get(dimsKey(s.dimsL, s.dimsW, s.dimsH));
+      if (match) return match.id;
+    }
+    return null;
   }
 
   let generated = 0;
@@ -186,6 +272,34 @@ export async function generateLineItems(input: GenerateInput) {
         unitCost: shipCost.toFixed(2),
         totalCost: shipCost.toFixed(2),
       });
+    }
+
+    // ─── Package cost (gap B2) ──────────────────────────────────────────────
+    // Resolve which custom package was used on this shipment (selectedPid →
+    // selectedPackageId → dims match), look up the client's price for it,
+    // then emit a package_cost line. packageCostMarkup on the billing config
+    // is applied as a percent on top of the base price.
+    const resolvedPkgId = resolvePackageId(s);
+    if (resolvedPkgId != null) {
+      const basePrice = pricesByClient.get(s.clientId)?.get(resolvedPkgId);
+      if (basePrice != null && basePrice > 0) {
+        const markupPct = toNum(cfg.packageCostMarkup);
+        const effectivePrice = basePrice * (1 + markupPct / 100);
+        const pkgName =
+          packagesById.get(resolvedPkgId)?.name ?? `Box #${resolvedPkgId}`;
+        rows.push({
+          clientId: s.clientId,
+          orderId: s.orderId,
+          orderNumber: s.orderNumber,
+          shipmentId: s.id,
+          shipDate: s.shipDate,
+          lineType: 'package_cost',
+          description: `Box (${pkgName})`,
+          qty: '1',
+          unitCost: effectivePrice.toFixed(2),
+          totalCost: effectivePrice.toFixed(2),
+        });
+      }
     }
 
     for (const row of rows) {
