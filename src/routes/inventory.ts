@@ -46,6 +46,56 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   return c.json(paginated(rows, countRows[0]?.count ?? 0, q));
 });
 
+// Global ledger query — flattens the ledger across all SKUs with filters.
+// Safe: the id-scoped `/:id{[0-9]+}/ledger` below won't match the literal
+// string "ledger" because the regex constrains :id to digits.
+const ledgerQuery = paginationSchema.extend({
+  clientId: z.coerce.number().int().optional(),
+  sku: z.string().optional(),
+  type: z.string().optional(),
+});
+
+app.get('/ledger', zValidator('query', ledgerQuery), async (c) => {
+  const q = c.req.valid('query');
+  const where = and(
+    ...[
+      q.clientId !== undefined ? eq(inventory.clientId, q.clientId) : undefined,
+      q.sku ? eq(inventory.sku, q.sku) : undefined,
+      q.type ? eq(inventoryLedger.type, q.type) : undefined,
+    ].filter(<T>(x: T | undefined): x is T => x !== undefined)
+  );
+
+  const [rows, countRows] = await Promise.all([
+    db
+      .select({
+        id: inventoryLedger.id,
+        inventoryId: inventoryLedger.inventoryId,
+        sku: inventory.sku,
+        name: inventory.name,
+        clientId: inventory.clientId,
+        type: inventoryLedger.type,
+        qty: inventoryLedger.qty,
+        orderId: inventoryLedger.orderId,
+        note: inventoryLedger.note,
+        createdBy: inventoryLedger.createdBy,
+        createdAt: inventoryLedger.createdAt,
+      })
+      .from(inventoryLedger)
+      .innerJoin(inventory, eq(inventory.id, inventoryLedger.inventoryId))
+      .where(where)
+      .orderBy(desc(inventoryLedger.createdAt))
+      .limit(q.pageSize)
+      .offset(offsetOf(q)),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(inventoryLedger)
+      .innerJoin(inventory, eq(inventory.id, inventoryLedger.inventoryId))
+      .where(where),
+  ]);
+
+  return c.json(paginated(rows, countRows[0]?.count ?? 0, q));
+});
+
 app.get('/stats', async (c) => {
   const clientId = c.req.query('clientId');
   const parsed = clientId !== undefined ? Number(clientId) : undefined;
@@ -72,6 +122,57 @@ app.get('/:id{[0-9]+}/ledger', async (c) => {
     .limit(200);
   return c.json({ data: rows });
 });
+
+// Orders that contain this SKU, bounded by an optional date window.
+// Scans orders.items JSONB for any element with {sku: <this sku>} and
+// returns an ordered list for the Inventory view's "Used by" panel.
+app.get(
+  '/:id{[0-9]+}/sku-orders',
+  zValidator(
+    'query',
+    z.object({ days: z.coerce.number().int().positive().max(3650).optional() })
+  ),
+  async (c) => {
+    const id = Number(c.req.param('id'));
+    const { days } = c.req.valid('query');
+
+    const [row] = await db
+      .select({ sku: inventory.sku, name: inventory.name, clientId: inventory.clientId })
+      .from(inventory)
+      .where(eq(inventory.id, id))
+      .limit(1);
+    if (!row) return c.json({ error: 'Inventory item not found' }, 404);
+
+    const since = days
+      ? new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
+      : null;
+
+    const rows = await db.execute<{
+      order_id: number;
+      order_number: string;
+      order_date: string | null;
+      order_status: string;
+      qty: number;
+    }>(sql`
+      select
+        o.id                                     as order_id,
+        o.order_number                           as order_number,
+        o.order_date                             as order_date,
+        o.order_status                           as order_status,
+        coalesce((item->>'quantity')::int, 0)    as qty
+      from orders o,
+           jsonb_array_elements(o.items) item
+      where item ? 'sku'
+        and item->>'sku' = ${row.sku}
+        ${row.clientId !== null ? sql`and o.client_id = ${row.clientId}` : sql``}
+        ${since ? sql`and o.order_date >= ${since}::timestamptz` : sql``}
+      order by o.order_date desc nulls last
+      limit 500
+    `);
+
+    return c.json({ sku: row.sku, name: row.name, orders: rows });
+  }
+);
 
 const createBody = z.object({
   clientId: z.number().int().nullable().optional(),
