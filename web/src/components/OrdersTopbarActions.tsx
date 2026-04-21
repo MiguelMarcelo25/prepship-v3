@@ -104,7 +104,7 @@ export default function OrdersTopbarActions({
 
   const status = useQuery({
     queryKey: ['sync-status'],
-    queryFn: () => api.get<SyncStatus>('/sync/status'),
+    queryFn: () => api.get<SyncStatus>('/orders/sync/status'),
     refetchInterval: 30_000,
   });
 
