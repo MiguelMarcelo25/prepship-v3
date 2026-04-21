@@ -35,8 +35,25 @@ type SSOrder = {
   orderTotal?: number | null;
   shippingAmount?: number | null;
   items?: unknown[];
-  advancedOptions?: { storeId?: number | null } | null;
+  externallyFulfilled?: boolean | null;
+  externally_shipped?: boolean | null;
+  advancedOptions?: {
+    storeId?: number | null;
+    nonMachinable?: boolean | null;
+  } | null;
 };
+
+// Derive ShipStation's "externally shipped" / "externally fulfilled" signal
+// from any of three flag names the platform has used over the years. Returns
+// true only when affirmatively set — callers treat a falsy result as "don't
+// touch the DB value" so the sync doesn't clobber a user-set flag.
+function externallyShippedFromRaw(o: SSOrder): boolean {
+  return Boolean(
+    o.externallyFulfilled === true ||
+      o.externally_shipped === true ||
+      o.advancedOptions?.nonMachinable === true
+  );
+}
 
 type SSOrdersList = {
   orders: SSOrder[];
@@ -85,6 +102,7 @@ async function upsertOrder(
 ) {
   const storeId = o.advancedOptions?.storeId ?? null;
   const clientId = storeId !== null ? storeToClient.get(storeId) ?? null : null;
+  const externallyShipped = externallyShippedFromRaw(o);
   const values = {
     externalOrderId: String(o.orderId),
     orderNumber: o.orderNumber,
@@ -104,34 +122,42 @@ async function upsertOrder(
     shippingAmount: toNumericString(o.shippingAmount),
     items: (o.items as unknown[]) ?? [],
     raw: o as unknown as Record<string, unknown>,
+    externallyShipped,
     updatedAt: new Date(),
   };
+
+  // Base SET for the upsert. externallyShipped is only included when the
+  // ShipStation payload AFFIRMATIVELY sets a flag — otherwise the existing
+  // DB value is preserved (protects user-set flags from being clobbered
+  // back to false on a routine sync).
+  const updateSet: Record<string, unknown> = {
+    orderNumber: values.orderNumber,
+    orderStatus: values.orderStatus,
+    orderDate: values.orderDate,
+    clientId: values.clientId,
+    storeId: values.storeId,
+    customerEmail: values.customerEmail,
+    shipToName: values.shipToName,
+    shipToCity: values.shipToCity,
+    shipToState: values.shipToState,
+    shipToPostalCode: values.shipToPostalCode,
+    carrierCode: values.carrierCode,
+    serviceCode: values.serviceCode,
+    weightOz: values.weightOz,
+    orderTotal: values.orderTotal,
+    shippingAmount: values.shippingAmount,
+    items: values.items,
+    raw: values.raw,
+    updatedAt: values.updatedAt,
+  };
+  if (externallyShipped) updateSet.externallyShipped = true;
 
   await db
     .insert(orders)
     .values(values)
     .onConflictDoUpdate({
       target: orders.externalOrderId,
-      set: {
-        orderNumber: values.orderNumber,
-        orderStatus: values.orderStatus,
-        orderDate: values.orderDate,
-        clientId: values.clientId,
-        storeId: values.storeId,
-        customerEmail: values.customerEmail,
-        shipToName: values.shipToName,
-        shipToCity: values.shipToCity,
-        shipToState: values.shipToState,
-        shipToPostalCode: values.shipToPostalCode,
-        carrierCode: values.carrierCode,
-        serviceCode: values.serviceCode,
-        weightOz: values.weightOz,
-        orderTotal: values.orderTotal,
-        shippingAmount: values.shippingAmount,
-        items: values.items,
-        raw: values.raw,
-        updatedAt: values.updatedAt,
-      },
+      set: updateSet,
     });
 }
 
