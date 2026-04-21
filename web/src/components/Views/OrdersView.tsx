@@ -2225,11 +2225,14 @@ export default function OrdersView({
                 <div className="ship-field-value">
                   <select className="ship-select" style={{ flex: 1 }} value={panelForm.locationId} onChange={(event) => setPanelForm((current) => ({ ...current, locationId: event.target.value }))} disabled={shipped}>
                     {locations.length === 0 ? <option value="">Loading…</option> : null}
-                    {locations.map((location: LocationDto) => (
-                      <option key={location.locationId} value={location.locationId}>
-                        {location.name}
-                      </option>
-                    ))}
+                    {locations.map((location: LocationDto, i: number) => {
+                      const id = location.locationId ?? (location as any).id ?? i
+                      return (
+                        <option key={id} value={id}>
+                          {location.name}
+                        </option>
+                      )
+                    })}
                   </select>
                   <button className="ship-icon-btn" type="button" title="Manage locations" onClick={() => onNavigateView?.('locations')}>📍</button>
                 </div>
@@ -2254,11 +2257,14 @@ export default function OrdersView({
                     }}
                   >
                     <option value="">— Select Account —</option>
-                    {shippingAccounts.map((account) => (
-                      <option key={account.shippingProviderId} value={account.shippingProviderId}>
-                        {account._label || account.nickname || account.code}
-                      </option>
-                    ))}
+                    {shippingAccounts.map((account, i) => {
+                      const key = account.shippingProviderId || account.carrierId || account.code || i
+                      return (
+                        <option key={key} value={account.shippingProviderId || key}>
+                          {account._label || account.nickname || account.code}
+                        </option>
+                      )
+                    })}
                   </select>
                 </div>
               </div>
@@ -2312,7 +2318,7 @@ export default function OrdersView({
                   >
                     <option value="">— Select Package —</option>
                     {packages.map((pkg) => (
-                      <option key={pkg.packageId} value={pkg.packageId}>{pkg.name}</option>
+                      <option key={pkg.packageId ?? (pkg as any).id ?? pkg.name} value={pkg.packageId ?? (pkg as any).id ?? ''}>{pkg.name}</option>
                     ))}
                   </select>
                   <button className="ship-icon-btn" type="button" title="Manage packages" onClick={() => onNavigateView?.('packages')}>📐</button>
@@ -2939,7 +2945,7 @@ export default function OrdersView({
               <select className="filter-sel" value={rateBrowserCarrierFilter != null ? String(rateBrowserCarrierFilter) : ''} onChange={(event) => setRateBrowserCarrierFilter(event.target.value ? Number.parseInt(event.target.value, 10) : null)}>
                 <option value="">All carrier accounts</option>
                 {shippingAccounts.map((account) => (
-                  <option key={account.shippingProviderId} value={account.shippingProviderId}>{account._label || account.nickname || account.code}</option>
+                  <option key={account.shippingProviderId || account.carrierId || account.code} value={account.shippingProviderId || account.carrierId || account.code}>{account._label || account.nickname || account.code}</option>
                 ))}
               </select>
             </div>

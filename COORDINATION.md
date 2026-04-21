@@ -16,8 +16,8 @@ Each terminal writes only to its own sub-section (T1 / T2 / T3) to avoid collisi
 ## Status board
 
 ### T1 — Terminal 1
-- Current task: Idle — round-6 v2-apiClient expansion shipped (full surface, try/catch + safe defaults everywhere); awaiting next assignment
-- Last update: 2026-04-21 17:55 — 1110-line adapter covers all 94 `apiClient.*` v2 calls; full `npx tsc --noEmit -p web/tsconfig.json` passes
+- Current task: Packages production debug loop — iteratively fix runtime errors in `PackagesView.tsx` from prod console reports; touch only Packages files + packages methods in v2-apiClient/usePackages hook; typecheck + commit + push each fix as `fix(packages): <one-line>`
+- Last update: 2026-04-21 18:00 — Ready for first error report
 
 ### T2 — Terminal 2 (coordinator)
 - Current task: Idle — stubs + verbatim copy done; waiting on T1 (apiClient adapter) and T3 (hooks) to integrate

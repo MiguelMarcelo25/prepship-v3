@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, qs, type Paginated } from '../lib/api';
+import { HIDDEN_CLIENT_IDS } from '../lib/v2-apiClient';
 
 /**
  * v2 hook shims — React Query-backed.
@@ -163,6 +164,13 @@ export function useOrders(
   // through as clientId.
   const effectiveClientId = clientId ?? storeId;
 
+  // When no specific client is selected, exclude orders from hidden clients
+  // (e.g. "Api Shipments") so the main table isn't buried under test data.
+  const excludeClientId =
+    effectiveClientId == null && HIDDEN_CLIENT_IDS.size > 0
+      ? [...HIDDEN_CLIENT_IDS].join(',')
+      : undefined;
+
   const query = useQuery<Paginated<OrderSummaryDto>>({
     queryKey: [
       'v2-hooks:orders',
@@ -170,6 +178,7 @@ export function useOrders(
       currentPage,
       pageSize,
       effectiveClientId,
+      excludeClientId,
       isoFrom,
       isoTo,
     ],
@@ -180,6 +189,7 @@ export function useOrders(
           page: currentPage,
           pageSize,
           clientId: effectiveClientId,
+          excludeClientId,
           dateFrom: isoFrom,
           dateTo: isoTo,
         })}`

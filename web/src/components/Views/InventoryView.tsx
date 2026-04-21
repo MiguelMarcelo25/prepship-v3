@@ -346,7 +346,8 @@ export default function InventoryView() {
           apiClient.fetchInventoryAlerts(),
         ])
         if (!active) return
-        setClients(nextClients)
+        // v4 returns clients with `id`; v2 code reads `clientId`. Normalize.
+        setClients((nextClients ?? []).map((c: any) => ({ ...c, clientId: c?.clientId ?? c?.id })))
         setPackages(nextPackages)
         setAlerts(nextAlerts)
       } catch (error) {
@@ -464,7 +465,7 @@ export default function InventoryView() {
         apiClient.fetchInventoryAlerts(),
         apiClient.fetchInventory(stockClientId ? { clientId: Number.parseInt(stockClientId, 10) } : undefined),
       ])
-      setClients(nextClients)
+      setClients((nextClients ?? []).map((c: any) => ({ ...c, clientId: c?.clientId ?? c?.id })))
       setAlerts(nextAlerts)
       setItems(nextItems)
       if (activeTab === 'history') {

@@ -46,7 +46,7 @@ const HIDDEN_CLIENT_NAMES = new Set(['api shipments']);
 // Populated by fetchStores / fetchCounts when clients are loaded — lets
 // downstream filtering (e.g. byStatusStore emission) drop rows for hidden
 // clients even when we only have the id.
-const HIDDEN_CLIENT_IDS = new Set<number>();
+export const HIDDEN_CLIENT_IDS = new Set<number>();
 
 function isHiddenClient(c: { name?: string | null; id?: number | null } | null | undefined): boolean {
   if (!c) return false;
@@ -710,12 +710,13 @@ export const apiClient = {
 
   fetchInventoryAlerts(clientId?: number): Promise<any[]> {
     // v4 has no /inventory/alerts endpoint yet — derive client-side from
-    // the lowStock flag on the list endpoint.
+    // the lowStock flag on the list endpoint. Server caps pageSize at 200
+    // (see src/lib/pagination.ts) — exceed it and the zod validator 400s.
     return safe(
       'fetchInventoryAlerts',
       async () => {
         const res = await api.get<any>(
-          `/inventory${qs({ clientId, lowStock: true, pageSize: 500 } as any)}`
+          `/inventory${qs({ clientId, lowStock: true, pageSize: 200 } as any)}`
         );
         if (Array.isArray(res)) return res;
         if (Array.isArray(res?.data)) return res.data;

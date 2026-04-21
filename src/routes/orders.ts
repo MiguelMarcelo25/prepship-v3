@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, desc, eq, gte, ilike, lte, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, ilike, lte, notInArray, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orderOverrides, orders } from '../db/schema/orders';
 import { shipments } from '../db/schema/shipments';
@@ -13,6 +13,7 @@ const listQuery = paginationSchema.extend({
   status: z.string().optional(),
   clientId: z.coerce.number().int().optional(),
   storeId: z.coerce.number().int().optional(),
+  excludeClientId: z.string().optional(),
   dateFrom: z.string().datetime().optional(),
   dateTo: z.string().datetime().optional(),
   search: z.string().optional(),
@@ -20,11 +21,19 @@ const listQuery = paginationSchema.extend({
 
 app.get('/', zValidator('query', listQuery), async (c) => {
   const q = c.req.valid('query');
+  const excludeIds = (q.excludeClientId ?? '')
+    .split(',')
+    .map((s) => Number.parseInt(s.trim(), 10))
+    .filter((n) => Number.isFinite(n) && n > 0);
+
   const where = and(
     ...[
       q.status ? eq(orders.orderStatus, q.status) : undefined,
       q.clientId !== undefined ? eq(orders.clientId, q.clientId) : undefined,
       q.storeId !== undefined ? eq(orders.storeId, q.storeId) : undefined,
+      excludeIds.length > 0 && q.clientId === undefined
+        ? notInArray(orders.clientId, excludeIds)
+        : undefined,
       q.dateFrom ? gte(orders.orderDate, new Date(q.dateFrom)) : undefined,
       q.dateTo ? lte(orders.orderDate, new Date(q.dateTo)) : undefined,
       q.search
