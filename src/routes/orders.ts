@@ -409,57 +409,123 @@ app.get('/export', zValidator('query', exportQuery), async (c) => {
   );
 
   const rows = await db
-    .select({
-      orderNumber: orders.orderNumber,
-      orderDate: orders.orderDate,
-      orderStatus: orders.orderStatus,
-      customerName: orders.shipToName,
-      shipToCity: orders.shipToCity,
-      shipToState: orders.shipToState,
-      shipToPostalCode: orders.shipToPostalCode,
-      carrierCode: orders.carrierCode,
-      serviceCode: orders.serviceCode,
-      weightOz: orders.weightOz,
-      trackingNumber: orderOverrides.trackingNumber,
-      orderTotal: orders.orderTotal,
-    })
+    .select({ order: orders, overrides: orderOverrides })
     .from(orders)
     .leftJoin(orderOverrides, eq(orderOverrides.orderId, orders.id))
     .where(where)
     .orderBy(desc(orders.orderDate))
     .limit(5000);
 
+  // Latest non-voided shipment per order (for label cost / tracking / created)
+  const orderIds = rows.map((r) => r.order.id);
+  const shipmentsByOrder = new Map<number, typeof shipments.$inferSelect>();
+  if (orderIds.length > 0) {
+    const ships = await db
+      .select()
+      .from(shipments)
+      .where(
+        and(
+          sql`${shipments.orderId} = ANY(${orderIds})`,
+          eq(shipments.voided, false)
+        )
+      )
+      .orderBy(desc(shipments.shipDate));
+    for (const s of ships) {
+      if (s.orderId != null && !shipmentsByOrder.has(s.orderId)) {
+        shipmentsByOrder.set(s.orderId, s);
+      }
+    }
+  }
+
   const header = [
-    'orderNumber',
-    'orderDate',
-    'orderStatus',
-    'customerName',
-    'shipToCity',
-    'shipToState',
-    'shipToPostalCode',
-    'carrierCode',
-    'serviceCode',
-    'weightOz',
-    'trackingNumber',
-    'orderTotal',
+    'Order ID',
+    'Order #',
+    'Order Date',
+    'Store ID',
+    'Client ID',
+    'Status',
+    'Recipient',
+    'Item Name',
+    'SKU',
+    'Qty',
+    'Weight (oz)',
+    'Ship To',
+    'Carrier',
+    'Service',
+    'Tracking #',
+    'Order Total',
+    'Best Rate',
+    'Label Cost',
+    'Ship Margin',
+    'Label Created',
+    'Age (hrs)',
+    'Raw API (JSON)',
+    'Best Rate JSON',
   ];
 
   const lines: string[] = [header.join(',')];
-  for (const r of rows) {
+  const now = Date.now();
+
+  for (const { order, overrides } of rows) {
+    const items = Array.isArray(order.items)
+      ? (order.items as Array<Record<string, unknown>>)
+      : [];
+    const firstItem = items[0] ?? null;
+    const itemName = firstItem?.name ?? '';
+    const itemSku = firstItem?.sku ?? '';
+    const totalQty = items.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
+    const shipTo = [order.shipToCity, order.shipToState].filter(Boolean).join(', ');
+
+    const bestRateObj = overrides?.bestRateJson as Record<string, unknown> | null | undefined;
+    const bestRateAmount = bestRateObj
+      ? ((bestRateObj.shipping_amount as Record<string, unknown> | undefined)?.amount ??
+        bestRateObj.cost ?? '')
+      : '';
+
+    const ship = shipmentsByOrder.get(order.id) ?? null;
+    const labelCost = ship?.labelCost ?? '';
+    const tracking = ship?.trackingNumber ?? overrides?.trackingNumber ?? '';
+    const labelCreated = ship?.shipDate ?? '';
+    const carrier = ship?.carrierCode ?? order.carrierCode ?? '';
+    const service = ship?.serviceCode ?? order.serviceCode ?? '';
+
+    let shipMargin = '';
+    if (labelCost !== '' && bestRateAmount !== '' && bestRateAmount != null) {
+      const m = Number(labelCost) - Number(bestRateAmount);
+      if (Number.isFinite(m)) shipMargin = m.toFixed(2);
+    }
+
+    let ageHrs: string | number = '';
+    if (order.orderDate) {
+      const t = new Date(order.orderDate).getTime();
+      if (!Number.isNaN(t)) ageHrs = Math.round((now - t) / 3_600_000);
+    }
+
     lines.push(
       [
-        r.orderNumber,
-        r.orderDate,
-        r.orderStatus,
-        r.customerName,
-        r.shipToCity,
-        r.shipToState,
-        r.shipToPostalCode,
-        r.carrierCode,
-        r.serviceCode,
-        r.weightOz,
-        r.trackingNumber,
-        r.orderTotal,
+        order.id,
+        order.orderNumber,
+        order.orderDate,
+        order.storeId,
+        order.clientId,
+        order.orderStatus,
+        order.shipToName,
+        itemName,
+        itemSku,
+        totalQty || '',
+        order.weightOz,
+        shipTo,
+        carrier,
+        service,
+        tracking,
+        order.orderTotal,
+        bestRateAmount,
+        labelCost,
+        shipMargin,
+        labelCreated,
+        ageHrs,
+        order.raw ? JSON.stringify(order.raw) : '',
+        bestRateObj ? JSON.stringify(bestRateObj) : '',
       ]
         .map(csvEscape)
         .join(',')
@@ -467,16 +533,14 @@ app.get('/export', zValidator('query', exportQuery), async (c) => {
   }
 
   const body = lines.join('\r\n') + '\r\n';
-  const timestamp = new Date()
-    .toISOString()
-    .replace(/[:.]/g, '-')
-    .slice(0, 19);
+  const timestamp = new Date().toISOString().slice(0, 10);
+  const statusLabel = q.status ? `-${q.status}` : '';
 
   return new Response(body, {
     status: 200,
     headers: {
       'Content-Type': 'text/csv; charset=utf-8',
-      'Content-Disposition': `attachment; filename=orders-${timestamp}.csv`,
+      'Content-Disposition': `attachment; filename=orders${statusLabel}-${timestamp}.csv`,
     },
   });
 });
