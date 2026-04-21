@@ -26,7 +26,7 @@ export function SidebarFooter() {
             Connected
           </span>
           <span className="mt-0.5 truncate text-[10.5px] text-[var(--color-text-tertiary)]">
-            Gardena, CA
+            Gardena, CA · prepshipv4-stable
           </span>
         </div>
       </div>
