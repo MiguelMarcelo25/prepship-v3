@@ -1,4 +1,4 @@
-import { and, eq, or, desc } from 'drizzle-orm';
+import { and, eq, or, desc, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { shipments } from '../db/schema/shipments';
 import { orders, orderOverrides } from '../db/schema/orders';
@@ -518,7 +518,18 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
     throw new Error(`Cannot create label for ${order.orderStatus} order`);
   }
 
-  const clientId = order.clientId;
+  // Resolve clientId — prefer order.clientId, fall back to mapping order.storeId
+  // through the clients.storeIds array (v2 parity for legacy orders whose
+  // clientId was never backfilled).
+  let clientId = order.clientId;
+  if (!clientId && order.storeId != null) {
+    const [match] = await db
+      .select({ id: clients.id })
+      .from(clients)
+      .where(sql`${clients.storeIds} @> ${[order.storeId]}::integer[]`)
+      .limit(1);
+    clientId = match?.id ?? null;
+  }
   if (clientId) checkLabelRateLimit(clientId);
 
   const existing = await findActiveLabelForOrder(order.id);

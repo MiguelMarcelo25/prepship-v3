@@ -654,26 +654,64 @@ export const apiClient = {
     );
   },
 
-  fetchOrderDims(orderId: number): Promise<OrderDimsRow> {
+  fetchOrderDims(orderId: number): Promise<any> {
+    // v4 returns { data: { l, w, h, weightOz } }. v2 callers expect
+    // { orderId, sku, qty, dims: { length, width, height }, weightOz }.
+    // Reshape so v2-copied UI gets the shape it expects.
     return safe(
       'fetchOrderDims',
-      () =>
-        api
-          .get<{ data: OrderDimsRow }>(`/orders/${orderId}/dims`)
-          .then((r) => r.data),
+      async () => {
+        const res = await api.get<{ data: OrderDimsRow }>(
+          `/orders/${orderId}/dims`
+        );
+        const d = res?.data;
+        if (!d) return null;
+        return {
+          orderId,
+          sku: null,
+          qty: null,
+          dims:
+            typeof d.l === 'number' ||
+            typeof d.w === 'number' ||
+            typeof d.h === 'number'
+              ? {
+                  length: Number(d.l ?? 0),
+                  width: Number(d.w ?? 0),
+                  height: Number(d.h ?? 0),
+                }
+              : null,
+          weightOz: d.weightOz ?? null,
+        };
+      },
       null
     );
   },
 
   saveOrderDims(
     orderId: number,
-    dims: { l: number; w: number; h: number; weightOz?: number }
+    dims:
+      | { l: number; w: number; h: number; weightOz?: number }
+      | { length: number; width: number; height: number; weightOz?: number }
+      | Record<string, unknown>
   ): Promise<any> {
+    // v2-copied UI call sites send { length, width, height }; v4 accepts
+    // { l, w, h }. Translate either shape to v4 so both work.
+    const anyDims = dims as Record<string, unknown>;
+    const l = Number(anyDims.l ?? anyDims.length ?? 0);
+    const w = Number(anyDims.w ?? anyDims.width ?? 0);
+    const h = Number(anyDims.h ?? anyDims.height ?? 0);
+    const weightOz =
+      anyDims.weightOz === undefined ? undefined : Number(anyDims.weightOz);
     return safe(
       'saveOrderDims',
       () =>
         api
-          .post<{ data: any }>(`/orders/${orderId}/save-dims`, dims)
+          .post<{ data: any }>(`/orders/${orderId}/save-dims`, {
+            l,
+            w,
+            h,
+            ...(weightOz !== undefined ? { weightOz } : {}),
+          })
           .then((r) => r.data),
       {}
     );
@@ -1361,6 +1399,25 @@ export const apiClient = {
         return [];
       },
       []
+    );
+  },
+
+  browseRates(data: Record<string, unknown>): Promise<{ rates: any[] }> {
+    // v2 signature returns { rates: [...] }. v4's /rates/browse returns the
+    // same shape as /rates (with bestRate + cached fields), but callers in
+    // v2-copied code expect only a `.rates` array — normalize.
+    return safe(
+      'browseRates',
+      async () => {
+        const res = await api.post<any>('/rates/browse', data);
+        const rates = Array.isArray(res?.rates)
+          ? res.rates
+          : Array.isArray(res)
+            ? res
+            : [];
+        return { rates };
+      },
+      { rates: [] }
     );
   },
 

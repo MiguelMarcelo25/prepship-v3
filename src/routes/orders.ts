@@ -103,16 +103,29 @@ const picklistQuery = z.object({
   dateTo: z.string().datetime().optional(),
 });
 
-// Order IDs that contain a given SKU (warehouse pick lookup)
+// Order IDs that contain a given SKU (warehouse pick lookup).
+// Optional filters restored for v2 parity: qty (min qty on the line),
+// orderStatus, storeId.
 app.get(
   '/ids',
-  zValidator('query', z.object({ sku: z.string().min(1) })),
+  zValidator(
+    'query',
+    z.object({
+      sku: z.string().min(1),
+      qty: z.coerce.number().int().positive().optional(),
+      orderStatus: z.string().optional(),
+      storeId: z.coerce.number().int().optional(),
+    })
+  ),
   async (c) => {
-    const { sku } = c.req.valid('query');
+    const { sku, qty, orderStatus, storeId } = c.req.valid('query');
     const rows = await db.execute<{ id: number; order_number: string }>(sql`
       select distinct o.id, o.order_number
       from orders o, jsonb_array_elements(o.items) item
       where item ? 'sku' and item->>'sku' = ${sku}
+        ${qty !== undefined ? sql`and coalesce((item->>'quantity')::int, 0) >= ${qty}` : sql``}
+        ${orderStatus ? sql`and o.order_status = ${orderStatus}` : sql``}
+        ${storeId !== undefined ? sql`and o.store_id = ${storeId}` : sql``}
       order by o.id desc
       limit 500
     `);
