@@ -984,10 +984,20 @@ export const apiClient = {
   },
 
   submitInventoryReceive(data: Record<string, unknown>): Promise<any> {
+    // v4's POST /inventory/:id/receive returns {inventory, ledger} (not a flat
+    // item row). v2 InventoryView reads result.received as an array of
+    // {sku, qty, newStock} for its toast string. Reshape each entry so the
+    // UI's "Received X SKU(s): ABC (5 units → 100 total)" renders correctly.
     return safe(
       'submitInventoryReceive',
       async () => {
-        const received = await apiClient.receiveInventory(data);
+        const raw = await apiClient.receiveInventory(data);
+        const entries = Array.isArray(raw) ? raw : [raw];
+        const received = entries.map((e: any) => ({
+          sku: e?.inventory?.sku ?? e?.sku ?? '',
+          qty: e?.ledger?.qty ?? e?.qty ?? (data as any)?.qty ?? 0,
+          newStock: e?.inventory?.stockQty ?? e?.stockQty ?? 0,
+        }));
         return { ok: true, received } as { ok: boolean; received: any[] };
       },
       { ok: false, received: [] as any[] }
@@ -1011,13 +1021,20 @@ export const apiClient = {
   },
 
   submitInventoryAdjustment(data: Record<string, unknown>): Promise<any> {
+    // v4's POST /inventory/:id/adjust returns {inventory, ledger}. Toast was
+    // reading result.stockQty (undefined on current backend, would be defined
+    // if backend flattened). Check the nested path first, fall back to flat
+    // in case the server contract changes.
     return safe(
       'submitInventoryAdjustment',
       async () => {
         const result = await apiClient.adjustInventory(data);
         return {
           ok: true,
-          newStock: (result as any)?.stockQty ?? 0,
+          newStock:
+            (result as any)?.inventory?.stockQty ??
+            (result as any)?.stockQty ??
+            0,
         } as { ok: boolean; newStock: number };
       },
       { ok: false, newStock: 0 }
@@ -1299,17 +1316,50 @@ export const apiClient = {
     // v4's /billing/summary validates `dateFrom`/`dateTo` as ISO datetime
     // (z.string().datetime()) — plain `YYYY-MM-DD` or the legacy `from`/`to`
     // param names will 400. Coerce both.
+    //
+    // Response shape (per src/services/billing.ts):
+    //   { clients: [{clientId, total, byType, count}], grandTotal }
+    // v2 BillingView expects a flat array of rows with clientName + per-type
+    // totals. Reshape here and resolve clientName via a parallel /clients fetch
+    // (the /billing/summary response doesn't join client names).
     const dateFrom = toIsoDayStart(from);
     const dateTo = toIsoDayEnd(to);
     return safe(
       'fetchBillingSummary',
       async () => {
-        const res = await api.get<any>(
-          `/billing/summary${qs({ dateFrom, dateTo, clientId })}`
-        );
+        const [res, clientsRes] = await Promise.all([
+          api.get<any>(`/billing/summary${qs({ dateFrom, dateTo, clientId })}`),
+          api.get<any>('/clients').catch(() => []),
+        ]);
+
+        // Backwards-compat: if server one day changes to a flat array or a
+        // {data: []} envelope, pass it through untouched.
         if (Array.isArray(res)) return res;
         if (Array.isArray(res?.data)) return res.data;
-        return [];
+
+        const clientsArr = Array.isArray(clientsRes) ? clientsRes : [];
+        const nameById = new Map<number, string>();
+        for (const c of clientsArr) {
+          if (c?.id != null) nameById.set(c.id, c?.name ?? '');
+        }
+
+        const entries = Array.isArray(res?.clients) ? res.clients : [];
+        return entries.map((e: any) => {
+          const byType = (e?.byType ?? {}) as Record<string, number | undefined>;
+          return {
+            clientId: e?.clientId,
+            clientName:
+              (e?.clientId != null ? nameById.get(e.clientId) : undefined) ??
+              e?.clientName ??
+              'Unknown',
+            orderCount: e?.count ?? 0,
+            pickPackTotal: byType.pick_pack ?? 0,
+            additionalTotal: byType.additional_unit ?? 0,
+            packageTotal: byType.package_cost ?? 0,
+            shippingTotal: byType.shipping ?? 0,
+            total: e?.total ?? 0,
+          };
+        });
       },
       []
     );
