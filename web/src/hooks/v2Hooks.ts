@@ -365,11 +365,19 @@ export function useShippingAccounts(): UseShippingAccountsResult {
     staleTime: 60_000,
   });
 
+  // SettingsView keys rows by `shippingProviderId` — must be unique per account.
+  // v4's ShipStation response doesn't carry a numeric provider id, so derive a
+  // stable unique integer from the string `carrier_id` (djb2-style hash).
+  const hashToInt = (s: string): number => {
+    let h = 5381;
+    for (let i = 0; i < s.length; i += 1) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+    return Math.abs(h) || 1;
+  };
   const accounts: CarrierAccountDto[] = (query.data?.carriers ?? []).map(
-    (c) => ({
+    (c, i) => ({
       carrierId: c.carrier_id,
       carrierCode: c.carrier_code,
-      shippingProviderId: 0,
+      shippingProviderId: c.carrier_id ? hashToInt(c.carrier_id) : i + 1,
       nickname: c.nickname ?? c.friendly_name ?? c.carrier_code,
       clientId: null,
       code: c.carrier_code,

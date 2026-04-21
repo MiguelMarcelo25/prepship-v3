@@ -138,10 +138,14 @@ export default function Sidebar({
                     key={`${status}-${store.storeId}`}
                     className={`ss-store${currentView === 'orders' && activeStore === store.storeId && currentStatus === status ? ' active' : ''}${store.cnt === 0 ? ' ss-store-zero' : ''}`}
                     onClick={() => {
-                      onSelectStore?.(store.storeId)
+                      // ORDER MATTERS: onSelectStatus resets activeStore to null
+                      // in Home.tsx, so we MUST set the store AFTER switching
+                      // status — otherwise the store selection is wiped.
                       onSelectStatus(status)
+                      onSelectStore?.(store.storeId)
                       onCloseMobileMenu?.()
                     }}
+                    style={{ cursor: 'pointer' }}
                   >
                     <span className="ss-store-name">{store.name}</span>
                     <span className="ss-store-count">{store.cnt > 0 ? store.cnt.toLocaleString() : ''}</span>
