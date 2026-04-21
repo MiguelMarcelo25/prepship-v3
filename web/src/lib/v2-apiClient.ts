@@ -1452,25 +1452,6 @@ export const apiClient = {
     );
   },
 
-  browseRates(data: Record<string, unknown>): Promise<{ rates: any[] }> {
-    // v2 signature returns { rates: [...] }. v4's /rates/browse returns the
-    // same shape as /rates (with bestRate + cached fields), but callers in
-    // v2-copied code expect only a `.rates` array — normalize.
-    return safe(
-      'browseRates',
-      async () => {
-        const res = await api.post<any>('/rates/browse', data);
-        const rates = Array.isArray(res?.rates)
-          ? res.rates
-          : Array.isArray(res)
-            ? res
-            : [];
-        return { rates };
-      },
-      { rates: [] }
-    );
-  },
-
   // ─── Analysis ──────────────────────────────────────────────────────────────
   fetchAnalysisDailySales(query: Record<string, unknown>): Promise<any> {
     // v2 AnalysisView expects `{dates, topSkus, series: {[sku]: number[]}}`.
