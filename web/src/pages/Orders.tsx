@@ -436,7 +436,7 @@ export default function Orders() {
       />
 
       {/* Filter bar */}
-      <div className="flex items-center flex-wrap gap-2 px-4 py-2 bg-white border-b border-line">
+      <div className="flex items-center flex-wrap gap-3 px-4 py-2 bg-white border-b border-line">
         <div className="w-[260px]">
           <Input
             leading={<SearchIcon size={13} />}
@@ -448,6 +448,9 @@ export default function Orders() {
             placeholder="Search orders, SKUs, names…"
           />
         </div>
+        <Select value="" onChange={() => {}}>
+          <option value="">All SKUs</option>
+        </Select>
         <Select
           value={rangeId}
           onChange={(e) => {
@@ -461,6 +464,27 @@ export default function Orders() {
             </option>
           ))}
         </Select>
+        <button
+          type="button"
+          onClick={toggleAll}
+          className="text-[12px] font-semibold text-ink-2 hover:text-ink"
+        >
+          Select All
+        </button>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 text-[12px] font-semibold text-ink-2 hover:text-ink"
+        >
+          <ClipboardList size={12} />
+          SKU Sort
+        </button>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 text-[12px] font-semibold text-ink-2 hover:text-ink"
+        >
+          <Download size={12} />
+          Export CSV
+        </button>
         {clientIdFilter !== undefined && (
           <button
             type="button"
@@ -493,23 +517,19 @@ export default function Orders() {
           </>
         )}
         <div className="flex-1" />
-        <Button
-          variant="outline"
-          size="sm"
+        <button
+          type="button"
           onClick={() => {
             const url = `/picklist?status=${status}${
               clientIdFilter ? `&clientId=${clientIdFilter}` : ''
             }`;
             window.open(url, '_blank');
           }}
+          className="inline-flex items-center gap-1 px-2 py-[5px] rounded-btn border border-line-2 bg-white text-ink-2 hover:bg-surface-2 hover:text-ink text-[12px] font-semibold"
         >
           <ClipboardList size={12} />
           Picklist
-        </Button>
-        <Button variant="outline" size="sm">
-          <Download size={12} />
-          Export CSV
-        </Button>
+        </button>
       </div>
 
       {/* Stats strip */}
