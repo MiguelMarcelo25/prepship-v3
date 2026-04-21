@@ -58,11 +58,9 @@ function cuFtPerUnit(l: number | null, w: number | null, h: number | null) {
 }
 
 function StockCell({ qty, reorder }: { qty: number; reorder: number }) {
-  if (qty <= 0)
-    return <span className="font-mono font-bold text-danger">{qty}</span>;
-  if (qty <= reorder)
-    return <span className="font-mono font-bold text-warn">{qty}</span>;
-  return <span className="font-mono text-ink">{qty}</span>;
+  if (qty <= 0) return <span className="text-danger">{qty}</span>;
+  if (qty <= reorder) return <span className="text-warn">{qty}</span>;
+  return <span className="text-ok">{qty}</span>;
 }
 
 function StatusPill({ qty, reorder }: { qty: number; reorder: number }) {
@@ -164,7 +162,7 @@ export default function Inventory() {
   return (
     <>
       <Topbar
-        title="Inventory"
+        title="📦 Inventory"
         right={
           <>
             <Button
@@ -248,7 +246,7 @@ export default function Inventory() {
       </div>
 
       {/* Grouped table */}
-      <div className="flex-1 min-h-0 overflow-auto bg-white">
+      <div className="flex-1 min-h-0 overflow-auto bg-page p-4 space-y-4">
         {items.isLoading && (
           <div className="p-3 space-y-2">
             <Skeleton className="h-6 w-48" />
@@ -260,8 +258,8 @@ export default function Inventory() {
 
         {!items.isLoading && rows.length === 0 && (
           <div className="text-center text-ink-3 py-16">
-            <div className="text-4xl mb-2">📦</div>
-            <div className="font-semibold text-ink-2">No items</div>
+            <div className="text-4xl mb-2">📭</div>
+            <div className="font-semibold text-ink-2">No SKUs found</div>
             <div className="text-xs mt-1">
               Use <strong>Import SKUs from Orders</strong> or
               <strong> Import Dims from SS</strong> to populate, or click New item.
@@ -272,103 +270,118 @@ export default function Inventory() {
         {!items.isLoading &&
           grouped.map(([clientName, items]) => (
             <div key={clientName}>
-              <div className="px-4 pt-4 pb-1 text-[11.5px] font-bold uppercase tracking-[0.6px] text-ink-3">
-                {clientName} <span className="text-ink-3 font-normal">({items.length})</span>
+              <div className="text-[11px] font-bold uppercase tracking-[0.5px] text-ink-3 mb-1.5">
+                {clientName}
               </div>
-              <table className="w-full text-sm2 border-collapse min-w-[1100px]">
-                <thead className="bg-surface-2 sticky top-0 z-10">
-                  <tr>
-                    <Th className="w-[140px]">SKU</Th>
-                    <Th className="w-[44px]"></Th>
-                    <Th>Name</Th>
-                    <Th className="w-[110px]">Weight</Th>
-                    <Th className="w-[110px]">Dims (L×W×H)</Th>
-                    <Th className="text-right w-[90px]">Cu Ft/Unit</Th>
-                    <Th className="text-right w-[80px]">Stock</Th>
-                    <Th className="text-right w-[60px]">Min</Th>
-                    <Th className="w-[70px]">Status</Th>
-                    <Th className="w-[70px]"></Th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {items.map((it, i) => (
-                    <tr
-                      key={it.id}
-                      className={`cursor-pointer border-b border-line transition-colors ${
-                        i % 2 === 1 ? 'bg-surface-2' : 'bg-white'
-                      } ${openId === it.id ? '!bg-brand-bg' : ''} hover:!bg-brand-bg`}
-                      onClick={() => navigate(`/inventory/${it.id}`)}
-                    >
-                      <Td>
-                        <span className="font-mono font-semibold text-brand">
-                          {it.sku}
-                        </span>
-                      </Td>
-                      <Td>
-                        <div className="w-8 h-8 rounded border border-line bg-surface-2 flex items-center justify-center overflow-hidden">
-                          {it.imageUrl ? (
-                            <img
-                              src={it.imageUrl}
-                              alt=""
-                              className="w-full h-full object-cover"
-                              loading="lazy"
-                            />
-                          ) : (
-                            <PackageIcon size={14} className="text-ink-3" />
-                          )}
-                        </div>
-                      </Td>
-                      <Td className="text-ink truncate max-w-[300px]" title={it.name ?? ''}>
-                        {it.name ?? <span className="text-ink-3">—</span>}
-                      </Td>
-                      <Td className="font-mono text-ink-2">
-                        {formatWeight(it.weightOz)}
-                      </Td>
-                      <Td className="font-mono text-ink-2">
-                        {formatDims(it.length, it.width, it.height)}
-                      </Td>
-                      <Td className="text-right font-mono text-ink-2">
-                        {(() => {
-                          const v = cuFtPerUnit(it.length, it.width, it.height);
-                          return v === null ? '—' : v.toFixed(3);
-                        })()}
-                      </Td>
-                      <Td className="text-right">
-                        <StockCell qty={it.stockQty} reorder={it.reorderLevel} />
-                      </Td>
-                      <Td className="text-right font-mono text-ink-2">
-                        {it.reorderLevel}
-                      </Td>
-                      <Td>
-                        <StatusPill qty={it.stockQty} reorder={it.reorderLevel} />
-                      </Td>
-                      <Td>
-                        <div
-                          className="flex items-center gap-1"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => navigate(`/inventory/${it.id}`)}
-                            className="text-ink-3 hover:text-brand p-1"
-                            title="Edit"
-                          >
-                            <Pencil size={12} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => navigate(`/inventory/${it.id}`)}
-                            className="text-ink-3 hover:text-ok-dark p-1"
-                            title="Receive stock"
-                          >
-                            <Plus size={12} />
-                          </button>
-                        </div>
-                      </Td>
+              <div className="bg-surface border border-line rounded-card overflow-hidden">
+                <table className="w-full text-sm2 border-collapse min-w-[1100px]">
+                  <thead>
+                    <tr className="bg-surface-2 border-b border-line">
+                      <Th className="w-[140px]">SKU</Th>
+                      <Th className="w-[44px]"></Th>
+                      <Th>Name</Th>
+                      <Th className="text-right w-[110px]">Weight</Th>
+                      <Th className="text-center w-[110px]">Dims (L×W×H)</Th>
+                      <Th className="text-center w-[90px]">Cu Ft/Unit</Th>
+                      <Th className="text-center w-[80px]">Stock</Th>
+                      <Th className="text-center w-[60px]">Min</Th>
+                      <Th className="text-center w-[70px]">Status</Th>
+                      <Th className="text-right w-[70px]"></Th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {items.map((it) => (
+                      <tr
+                        key={it.id}
+                        className={`cursor-pointer border-b border-line last:border-b-0 transition-colors ${
+                          openId === it.id ? '!bg-brand-bg' : 'hover:bg-surface-2'
+                        }`}
+                        onClick={() => navigate(`/inventory/${it.id}`)}
+                      >
+                        <Td>
+                          <span className="font-mono text-[11.5px] text-brand">
+                            {it.sku}
+                          </span>
+                        </Td>
+                        <Td className="!py-1">
+                          <div className="w-10 h-10 rounded border border-line bg-surface-3 flex items-center justify-center overflow-hidden">
+                            {it.imageUrl ? (
+                              <img
+                                src={it.imageUrl}
+                                alt=""
+                                className="w-full h-full object-cover"
+                                loading="lazy"
+                              />
+                            ) : (
+                              <PackageIcon size={14} className="text-ink-3" />
+                            )}
+                          </div>
+                        </Td>
+                        <Td
+                          className="text-[12px] text-ink truncate max-w-[300px]"
+                          title={it.name ?? ''}
+                        >
+                          {it.name ?? <span className="text-ink-3">—</span>}
+                        </Td>
+                        <Td className="text-right text-[11.5px] text-ink-2">
+                          {formatWeight(it.weightOz)}
+                        </Td>
+                        <Td className="text-center text-[11.5px] text-ink-2 font-mono">
+                          {formatDims(it.length, it.width, it.height)}
+                        </Td>
+                        <Td className="text-center text-[11px] text-ink-3">
+                          {(() => {
+                            const v = cuFtPerUnit(
+                              it.length,
+                              it.width,
+                              it.height
+                            );
+                            return v === null ? '—' : v.toFixed(3);
+                          })()}
+                        </Td>
+                        <Td className="text-center font-bold text-[13px]">
+                          <StockCell
+                            qty={it.stockQty}
+                            reorder={it.reorderLevel}
+                          />
+                        </Td>
+                        <Td className="text-center text-[12px] text-ink-3">
+                          {it.reorderLevel}
+                        </Td>
+                        <Td className="text-center">
+                          <StatusPill
+                            qty={it.stockQty}
+                            reorder={it.reorderLevel}
+                          />
+                        </Td>
+                        <Td className="text-right whitespace-nowrap">
+                          <div
+                            className="inline-flex items-center gap-0.5"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => navigate(`/inventory/${it.id}`)}
+                              className="text-ink-3 hover:text-brand p-1"
+                              title="Edit SKU details"
+                            >
+                              <Pencil size={12} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => navigate(`/inventory/${it.id}`)}
+                              className="text-brand hover:text-brand-dark p-1 font-bold"
+                              title="Add / Remove Stock"
+                            >
+                              <Plus size={13} />
+                            </button>
+                          </div>
+                        </Td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           ))}
       </div>
