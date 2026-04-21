@@ -430,23 +430,36 @@ export const apiClient = {
 
   clearAndRefetchAllRates(): Promise<any> {
     // v2 "clear & refetch" flow = purge the rates cache then kick a fresh
-    // order sync so best-rate backfill repopulates. v4 exposes both pieces:
-    //   DELETE /rates/cache  — empty the cache
-    //   POST   /cron/sync-orders — queue a sync run that backfills rates
+    // order sync so best-rate backfill repopulates. v4 exposes both:
+    //   DELETE /rates/cache — empty the cache
+    //   POST   /orders/sync — user-initiated sync (JWT-authed mirror of
+    //                         /cron/sync-orders; cron path is secret-gated)
+    // Response shape matches v2's settings-parity toast, which reads
+    // `.message` and `.ordersQueued`.
     return safe(
       'clearAndRefetchAllRates',
       async () => {
         const [cleared, queued] = await Promise.all([
           api.delete<any>('/rates/cache'),
-          api.post<any>('/cron/sync-orders', {}),
+          api.post<any>('/orders/sync', {}),
         ]);
-        return { ok: true, cleared, queued } as {
-          ok: boolean;
-          cleared?: any;
-          queued?: any;
+        const deleted = Number(cleared?.deleted ?? 0);
+        const synced = Number(queued?.synced ?? 0);
+        return {
+          ok: true,
+          ordersQueued: synced,
+          message: `Cleared ${deleted} cached rates — ${synced} orders re-synced`,
+          cleared,
+          queued,
         };
       },
-      { ok: false } as { ok: boolean; cleared?: any; queued?: any }
+      {
+        ok: false,
+        ordersQueued: 0,
+        message: 'Clear & refetch failed',
+        cleared: null,
+        queued: null,
+      }
     );
   },
 

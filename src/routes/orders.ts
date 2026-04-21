@@ -6,8 +6,21 @@ import { db } from '../db/client';
 import { orderOverrides, orders } from '../db/schema/orders';
 import { shipments } from '../db/schema/shipments';
 import { offsetOf, paginated, paginationSchema } from '../lib/pagination';
+import { getSyncStatus, syncOrders } from '../services/order-sync';
 
 const app = new Hono();
+
+// User-initiated sync + status. Sits behind requireAuth (mounted at main.ts).
+// /cron/sync-orders is the cron-secret equivalent for schedulers.
+app.get('/sync/status', async (c) => {
+  const status = await getSyncStatus();
+  return c.json(status);
+});
+
+app.post('/sync', async (c) => {
+  const result = await syncOrders({});
+  return c.json(result);
+});
 
 const listQuery = paginationSchema.extend({
   status: z.string().optional(),
