@@ -58,6 +58,20 @@ function isHiddenClient(c: { name?: string | null; id?: number | null } | null |
   return false;
 }
 
+// Coerce a date-ish input ('YYYY-MM-DD' or any ISO string) to an ISO datetime
+// anchored at start-of-day / end-of-day. Used for endpoints that validate
+// `z.string().datetime()` where a plain `YYYY-MM-DD` would be rejected.
+function toIsoDayStart(d: string | undefined | null): string | undefined {
+  if (!d) return undefined;
+  if (d.includes('T')) return d;
+  return new Date(`${d}T00:00:00.000Z`).toISOString();
+}
+function toIsoDayEnd(d: string | undefined | null): string | undefined {
+  if (!d) return undefined;
+  if (d.includes('T')) return d;
+  return new Date(`${d}T23:59:59.999Z`).toISOString();
+}
+
 function normalizeAnalysisRange(query: Record<string, unknown>): Record<string, string | number | boolean | undefined> {
   const out: Record<string, string | number | boolean | undefined> = {};
   for (const [k, v] of Object.entries(query)) {
@@ -187,12 +201,6 @@ export const apiClient = {
         const clientsArr = Array.isArray(clientsRes) ? clientsRes : [];
         for (const c of clientsArr) isHiddenClient(c); // populates HIDDEN_CLIENT_IDS by side-effect
 
-        const byStatus = [
-          { orderStatus: 'awaiting_shipment', cnt: counts?.awaiting ?? 0 },
-          { orderStatus: 'shipped', cnt: counts?.shipped ?? 0 },
-          { orderStatus: 'cancelled', cnt: counts?.cancelled ?? 0 },
-        ];
-
         // /clients/order-stats returns { data: [...] } (envelope), not a raw array
         const statsArr = Array.isArray(clientStatsRes)
           ? clientStatsRes
@@ -200,14 +208,55 @@ export const apiClient = {
             ? clientStatsRes.data
             : [];
         const byStatusStore: { orderStatus: string; storeId: number; cnt: number }[] = [];
+        // Totals derived from the VISIBLE per-client rows so the top-level badge
+        // equals the sum of its children. /init/counts would include hidden
+        // clients (e.g. "Api Shipments"), leaving the header > sum(rows).
+        let awaitingTotal = 0;
+        let shippedTotal = 0;
+        let cancelledTotal = 0;
         for (const row of statsArr) {
           const cid = row?.clientId ?? row?.client_id;
           if (cid == null) continue;
           if (HIDDEN_CLIENT_IDS.has(cid)) continue;
-          if ((row?.awaiting ?? 0) > 0) byStatusStore.push({ orderStatus: 'awaiting_shipment', storeId: cid, cnt: row.awaiting });
-          if ((row?.shipped ?? 0) > 0) byStatusStore.push({ orderStatus: 'shipped', storeId: cid, cnt: row.shipped });
-          if ((row?.cancelled ?? 0) > 0) byStatusStore.push({ orderStatus: 'cancelled', storeId: cid, cnt: row.cancelled });
+          const a = row?.awaiting ?? 0;
+          const s = row?.shipped ?? 0;
+          const x = row?.cancelled ?? 0;
+          if (a > 0) byStatusStore.push({ orderStatus: 'awaiting_shipment', storeId: cid, cnt: a });
+          if (s > 0) byStatusStore.push({ orderStatus: 'shipped', storeId: cid, cnt: s });
+          if (x > 0) byStatusStore.push({ orderStatus: 'cancelled', storeId: cid, cnt: x });
+          awaitingTotal += a;
+          shippedTotal += s;
+          cancelledTotal += x;
         }
+
+        // Orders with clientId=null (unassigned) aren't in /clients/order-stats
+        // but ARE in /init/counts. Add the difference back in as "Unassigned"
+        // rollups so the top badge stays an honest global count without needing
+        // a store row.
+        const globalAwaiting = counts?.awaiting ?? 0;
+        const globalShipped = counts?.shipped ?? 0;
+        const globalCancelled = counts?.cancelled ?? 0;
+        const hiddenAwaiting = statsArr
+          .filter((r: any) => HIDDEN_CLIENT_IDS.has(r?.clientId ?? r?.client_id))
+          .reduce((a: number, r: any) => a + (r?.awaiting ?? 0), 0);
+        const hiddenShipped = statsArr
+          .filter((r: any) => HIDDEN_CLIENT_IDS.has(r?.clientId ?? r?.client_id))
+          .reduce((a: number, r: any) => a + (r?.shipped ?? 0), 0);
+        const hiddenCancelled = statsArr
+          .filter((r: any) => HIDDEN_CLIENT_IDS.has(r?.clientId ?? r?.client_id))
+          .reduce((a: number, r: any) => a + (r?.cancelled ?? 0), 0);
+        const unassignedAwaiting = Math.max(0, globalAwaiting - awaitingTotal - hiddenAwaiting);
+        const unassignedShipped = Math.max(0, globalShipped - shippedTotal - hiddenShipped);
+        const unassignedCancelled = Math.max(0, globalCancelled - cancelledTotal - hiddenCancelled);
+        awaitingTotal += unassignedAwaiting;
+        shippedTotal += unassignedShipped;
+        cancelledTotal += unassignedCancelled;
+
+        const byStatus = [
+          { orderStatus: 'awaiting_shipment', cnt: awaitingTotal },
+          { orderStatus: 'shipped', cnt: shippedTotal },
+          { orderStatus: 'cancelled', cnt: cancelledTotal },
+        ];
 
         return { byStatus, byStatusStore };
       },
@@ -878,13 +927,18 @@ export const apiClient = {
 
   // ─── Locations ─────────────────────────────────────────────────────────────
   fetchLocations(): Promise<any[]> {
+    // v4 returns rows with `id`; v2 consumers (LocationsView, useLocations)
+    // read `locationId`. Normalize here so every caller gets the v2 shape.
     return safe(
       'fetchLocations',
       async () => {
         const res = await api.get<any>('/locations');
-        if (Array.isArray(res)) return res;
-        if (Array.isArray(res?.data)) return res.data;
-        return [];
+        const rows = Array.isArray(res)
+          ? res
+          : Array.isArray(res?.data)
+            ? res.data
+            : [];
+        return rows.map((r: any) => ({ ...r, locationId: r?.locationId ?? r?.id }));
       },
       []
     );
@@ -1081,11 +1135,16 @@ export const apiClient = {
   },
 
   fetchBillingSummary(from: string, to: string, clientId?: number): Promise<any[]> {
+    // v4's /billing/summary validates `dateFrom`/`dateTo` as ISO datetime
+    // (z.string().datetime()) — plain `YYYY-MM-DD` or the legacy `from`/`to`
+    // param names will 400. Coerce both.
+    const dateFrom = toIsoDayStart(from);
+    const dateTo = toIsoDayEnd(to);
     return safe(
       'fetchBillingSummary',
       async () => {
         const res = await api.get<any>(
-          `/billing/summary${qs({ from, to, clientId })}`
+          `/billing/summary${qs({ dateFrom, dateTo, clientId })}`
         );
         if (Array.isArray(res)) return res;
         if (Array.isArray(res?.data)) return res.data;
@@ -1096,11 +1155,13 @@ export const apiClient = {
   },
 
   fetchBillingDetails(from: string, to: string, clientId: number): Promise<any[]> {
+    const dateFrom = toIsoDayStart(from);
+    const dateTo = toIsoDayEnd(to);
     return safe(
       'fetchBillingDetails',
       async () => {
         const res = await api.get<any>(
-          `/billing/details${qs({ from, to, clientId })}`
+          `/billing/details${qs({ dateFrom, dateTo, clientId })}`
         );
         if (Array.isArray(res)) return res;
         if (Array.isArray(res?.data)) return res.data;
@@ -1182,27 +1243,82 @@ export const apiClient = {
 
   // ─── Analysis ──────────────────────────────────────────────────────────────
   fetchAnalysisDailySales(query: Record<string, unknown>): Promise<any> {
-    // v4's /daily-shipments requires dateFrom/dateTo as ISO datetimes.
-    // v2 passes `from`/`to` as YYYY-MM-DD dates — translate.
+    // v2 AnalysisView expects `{dates, topSkus, series: {[sku]: number[]}}`.
+    // v4's `/analysis/sku-daily` returns `{topSkus:[{sku,name,total_qty}], days:[{day, [sku]:qty, ...}]}`.
+    // Reshape `days[]` → parallel `dates[]` + per-sku `series` arrays.
     return safe(
       'fetchAnalysisDailySales',
-      () => {
+      async () => {
         const q = normalizeAnalysisRange(query);
-        return api.get<any>(`/analysis/daily-shipments${qs(q)}`);
+        const res: any = await api.get<any>(`/analysis/sku-daily${qs(q)}`);
+        const topSkusRaw = Array.isArray(res?.topSkus) ? res.topSkus : [];
+        const daysArr = Array.isArray(res?.days) ? res.days : [];
+        const dates = daysArr.map((d: any) => d?.day).filter(Boolean);
+        const series: Record<string, number[]> = {};
+        for (const t of topSkusRaw) {
+          if (!t?.sku) continue;
+          series[t.sku] = daysArr.map((d: any) => Number(d?.[t.sku]) || 0);
+        }
+        const topSkus = topSkusRaw.map((t: any) => ({
+          sku: t.sku,
+          name: t.name ?? '',
+          totalQty: t.total_qty ?? t.totalQty ?? 0,
+        }));
+        return { dates, topSkus, series };
       },
-      { data: [] }
+      { dates: [], topSkus: [], series: {} }
     );
   },
 
   fetchAnalysisSkus(query: Record<string, unknown>): Promise<any> {
-    // v4's /top-skus requires dateFrom/dateTo as ISO datetimes.
+    // AnalysisView expects `{skus: AnalysisSkuDto[], orderCount}`. The rich
+    // per-SKU breakdown (pending/ext/std/exp counts + totals) lives in v4's
+    // `/analysis/sku-breakdown`, not `/top-skus`. Also resolve clientName.
     return safe(
       'fetchAnalysisSkus',
-      () => {
+      async () => {
         const q = normalizeAnalysisRange(query);
-        return api.get<any>(`/analysis/top-skus${qs(q)}`);
+        const [breakdown, clientsRes] = await Promise.all([
+          api.get<any>(`/analysis/sku-breakdown${qs(q)}`),
+          api.get<any>('/clients').catch(() => []),
+        ]);
+        const clients = Array.isArray(clientsRes) ? clientsRes : [];
+        const nameById = new Map<number, string>();
+        for (const c of clients) {
+          if (c?.id != null) nameById.set(c.id, c?.name ?? '');
+        }
+        const parseNum = (v: unknown): number => {
+          if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
+          if (typeof v === 'string') {
+            const n = Number.parseFloat(v);
+            return Number.isFinite(n) ? n : 0;
+          }
+          return 0;
+        };
+        const rows = Array.isArray(breakdown?.data) ? breakdown.data : [];
+        const skus = rows.map((r: any) => ({
+          sku: r.sku,
+          name: r.name ?? '',
+          imageUrl: r.image_url ?? r.imageUrl ?? null,
+          clientId: r.client_id ?? r.clientId ?? null,
+          clientName:
+            r.client_id != null ? nameById.get(r.client_id) ?? '' : '',
+          orders: r.orders ?? 0,
+          pendingOrders: r.pending ?? 0,
+          externalOrders: r.ext_shipped ?? 0,
+          qty: r.total_qty ?? 0,
+          standardShipCount: r.std_orders ?? 0,
+          standardShipTotal: parseNum(r.std_total),
+          expeditedShipCount: r.exp_orders ?? 0,
+          expeditedShipTotal: parseNum(r.exp_total),
+          totalShipping: parseNum(r.total_shipping),
+        }));
+        return {
+          skus,
+          orderCount: breakdown?.totalOrders ?? 0,
+        };
       },
-      { data: [] }
+      { skus: [], orderCount: 0 }
     );
   },
 

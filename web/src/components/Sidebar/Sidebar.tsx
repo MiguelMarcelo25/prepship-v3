@@ -61,11 +61,24 @@ export default function Sidebar({
     }
 
     void loadCounts()
+    // 10s interval — tight enough to feel real-time without hammering the DB.
     const intervalId = window.setInterval(() => {
       void loadCounts()
-    }, 30000)
+    }, 10000)
 
-    return () => window.clearInterval(intervalId)
+    // Refetch immediately whenever the tab becomes visible or regains focus,
+    // so a returning user always sees current numbers before the next tick.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void loadCounts()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onVisible)
+
+    return () => {
+      window.clearInterval(intervalId)
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onVisible)
+    }
   }, [])
 
   const sidebarSections = useMemo(() => buildSidebarSections(stores, counts), [stores, counts])
