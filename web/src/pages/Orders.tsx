@@ -642,10 +642,11 @@ export default function Orders() {
         </div>
       </div>
 
-      {/* Table */}
+      {/* Table + right panel */}
       <DensityContext.Provider value={density}>
       <WidthsContext.Provider value={widthsCtxValue}>
-      <div className="flex-1 min-h-0 overflow-auto bg-white">
+      <div className="flex-1 min-h-0 flex">
+      <div className="flex-1 min-h-0 overflow-auto bg-white min-w-0">
         <table className="text-sm2 border-collapse table-fixed" style={{ width: totalTableWidth }}>
           <colgroup>
             {activeColumnIds.map((id) => (
@@ -956,6 +957,11 @@ export default function Orders() {
           </tbody>
         </table>
       </div>
+      {/* Right panel — always visible on desktop */}
+      <aside className="w-panel shrink-0 border-l border-line bg-white hidden md:block">
+        {openId === null && <EmptyOrderPanel />}
+      </aside>
+      </div>
       </WidthsContext.Provider>
       </DensityContext.Provider>
 
@@ -1007,6 +1013,49 @@ export default function Orders() {
         </Suspense>
       )}
     </>
+  );
+}
+
+function EmptyOrderPanel() {
+  return (
+    <div className="flex flex-col items-center justify-center h-full px-5 py-10 text-center text-ink-3">
+      <div className="text-[36px] mb-3.5 opacity-50">📋</div>
+      <div className="text-[13px] font-semibold text-ink-2 mb-2">
+        No order selected
+      </div>
+      <div className="text-[12px] leading-relaxed mb-5">
+        Click any row to view details
+      </div>
+      <div
+        className="text-left text-[11px] leading-[2] text-ink-4 border-t border-line pt-3.5 w-full"
+        style={{ maxWidth: 180 }}
+      >
+        <div>
+          <kbd className="bg-surface-3 border border-line-2 rounded text-[10px] px-[5px] py-px mr-1.5">
+            ↑↓
+          </kbd>
+          Navigate rows
+        </div>
+        <div>
+          <kbd className="bg-surface-3 border border-line-2 rounded text-[10px] px-[5px] py-px mr-1.5">
+            Enter
+          </kbd>
+          Select / deselect
+        </div>
+        <div>
+          <kbd className="bg-surface-3 border border-line-2 rounded text-[10px] px-[5px] py-px mr-1.5">
+            Esc
+          </kbd>
+          Deselect &amp; close
+        </div>
+        <div>
+          <kbd className="bg-surface-3 border border-line-2 rounded text-[10px] px-[5px] py-px mr-1.5">
+            ⌘C
+          </kbd>
+          Copy order #
+        </div>
+      </div>
+    </div>
   );
 }
 
