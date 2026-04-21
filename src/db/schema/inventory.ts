@@ -27,6 +27,16 @@ export const inventory = pgTable(
     width: real(),
     height: real(),
     parentSkuId: integer(),
+    // v2-parity pack-size + billing fields.
+    // baseUnitQty: how many base units per master pack (e.g. 12 bottles/case).
+    // unitsPerPack: how many packs per shipping carton (nested multi-pack).
+    // cuFtOverride: manual cubic-feet override for billing calcs when the
+    //   default computed from L*W*H doesn't match reality.
+    // packageId: default package to use when creating a label for this SKU.
+    baseUnitQty: integer('base_unit_qty').default(1).notNull(),
+    unitsPerPack: integer('units_per_pack').default(1).notNull(),
+    cuFtOverride: real('cu_ft_override'),
+    packageId: integer('package_id'),
     active: boolean().default(true).notNull(),
     createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
