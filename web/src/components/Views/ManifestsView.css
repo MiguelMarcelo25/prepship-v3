@@ -1,0 +1,136 @@
+.manifest-overlay{
+  position:fixed;
+  inset:0;
+  z-index:9000;
+  background:rgba(0,0,0,.45);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:20px;
+}
+
+.manifest-modal{
+  background:var(--surface);
+  border-radius:10px;
+  box-shadow:0 8px 40px rgba(0,0,0,.3);
+  width:500px;
+  max-width:95vw;
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+}
+
+.manifest-header{
+  display:flex;
+  align-items:center;
+  padding:13px 18px;
+  border-bottom:1px solid var(--border);
+  flex-shrink:0;
+  background:var(--surface2);
+}
+
+.manifest-header-title{
+  font-size:15px;
+  font-weight:700;
+  color:var(--text);
+  flex:1;
+}
+
+.manifest-close{
+  background:none;
+  border:none;
+  font-size:22px;
+  cursor:pointer;
+  color:var(--text3);
+  padding:0 4px;
+  line-height:1;
+}
+
+.manifest-body{
+  padding:18px;
+  overflow-y:auto;
+  flex:1;
+}
+
+.manifest-fields{
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+}
+
+.manifest-label{
+  font-size:12px;
+  font-weight:700;
+  color:var(--text);
+  display:block;
+  margin-bottom:6px;
+}
+
+.manifest-date-row{
+  display:flex;
+  gap:8px;
+  align-items:center;
+}
+
+.manifest-date-row .ship-select{
+  flex:1;
+  font-size:12px;
+}
+
+.manifest-inline-copy{
+  color:var(--text3);
+  font-size:12px;
+}
+
+.manifest-help{
+  font-size:10px;
+  color:var(--text3);
+  margin-top:4px;
+}
+
+.manifest-select{
+  width:100%;
+  font-size:12px;
+}
+
+.manifest-summary{
+  background:var(--surface2);
+  border:1px solid var(--border);
+  border-radius:6px;
+  padding:10px 12px;
+  font-size:12px;
+  color:var(--text3);
+  display:none;
+}
+
+.manifest-footer{
+  display:flex;
+  gap:8px;
+  padding:12px 18px;
+  border-top:1px solid var(--border);
+  flex-shrink:0;
+  background:var(--surface2);
+  justify-content:flex-end;
+  align-items:center;
+}
+
+.manifest-status{
+  font-size:12px;
+  color:var(--text3);
+  align-self:center;
+}
+
+@media (max-width: 768px) {
+  .manifest-overlay{
+    padding:12px;
+  }
+
+  .manifest-modal{
+    max-width:100%;
+  }
+
+  .manifest-date-row{
+    flex-direction:column;
+    align-items:stretch;
+  }
+}

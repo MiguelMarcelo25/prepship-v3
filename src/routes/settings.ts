@@ -15,7 +15,7 @@ app.get('/', async (c) => {
 app.get('/:key', async (c) => {
   const key = c.req.param('key');
   const [row] = await db.select().from(settings).where(eq(settings.key, key)).limit(1);
-  if (!row) return c.json({ error: 'Setting not found' }, 404);
+  if (!row) return c.json({ key, value: null });
   return c.json(row);
 });
 

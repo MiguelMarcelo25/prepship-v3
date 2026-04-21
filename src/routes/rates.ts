@@ -38,6 +38,28 @@ app.post('/', zValidator('json', rateBody), async (c) => {
   return c.json(result);
 });
 
+const browseBody = rateBody
+  .omit({ carrierIds: true })
+  .extend({ carrierId: z.string().min(1) });
+
+app.post('/browse', zValidator('json', browseBody), async (c) => {
+  const body = c.req.valid('json');
+  const { forceRefresh, carrierId, ...rest } = body;
+  const result = await getRates(
+    { ...rest, carrierIds: [carrierId] },
+    { forceRefresh }
+  );
+  const filtered = result.rates.filter((r) => r.carrier_id === carrierId);
+  const cheapest = [...filtered].sort(
+    (a, b) => a.shipping_amount.amount - b.shipping_amount.amount
+  )[0] ?? null;
+  return c.json({
+    ...result,
+    rates: filtered,
+    bestRate: cheapest,
+  });
+});
+
 const cachedQuery = z.object({
   weightOz: z.coerce.number().positive(),
   toZip: z.string().min(3),

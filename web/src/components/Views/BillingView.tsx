@@ -1,0 +1,940 @@
+// @ts-nocheck
+import { useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { apiClient } from '../../api/client'
+import { ToastContext } from '../../contexts/ToastContext'
+import type {
+  BillingConfigDto,
+  BillingDetailDto,
+  BillingPackagePriceDto,
+  BillingSummaryDto,
+  PackageDto,
+} from '../../types/api'
+import {
+  BILLING_DETAIL_COLUMNS,
+  buildBackfillRefRatesToast,
+  buildBillingConfigInput,
+  buildBillingPackagePriceRows,
+  buildBillingSummaryTotals,
+  buildFetchRefRatesDoneText,
+  buildFetchRefRatesProgressText,
+  buildFetchRefRatesStartText,
+  buildGenerateBillingStatus,
+  computeBillingDetailMetrics,
+  createBillingConfigDraftMap,
+  formatBillingDateTime,
+  formatBillingMoney,
+  getBillingDetailColumnStorageKey,
+  getBillingInitialRange,
+  getBillingInvoiceUrl,
+  getBillingPresetRange,
+  getVisibleBillingDetailColumns,
+  readBillingDetailColumnIds,
+  toggleBillingDetailColumnIds,
+  type BillingConfigDraft,
+  type BillingDetailColumnId,
+  type BillingPresetId,
+} from './billing-parity'
+import './BillingView.css'
+
+interface BillingViewProps {
+  onOpenOrder?: (orderId: number) => void
+}
+
+interface BillingDetailState {
+  open: boolean
+  loading: boolean
+  clientId: number | null
+  clientName: string
+  rows: BillingDetailDto[]
+  error: string | null
+}
+
+const SUMMARY_COL_COUNT = 8
+
+function marginColor(value: number) {
+  if (value > 0) return 'var(--green)'
+  if (value < 0) return 'var(--red)'
+  return 'var(--text3)'
+}
+
+function getPackageMarginMarkup(row: ReturnType<typeof buildBillingPackagePriceRows>[number]) {
+  if (row.marginPct == null || !row.marginColor) {
+    return <span style={{ color: 'var(--text4)' }}>—</span>
+  }
+
+  return <span style={{ color: row.marginColor, fontWeight: 700 }}>{row.marginPct}%</span>
+}
+
+export default function BillingView({ onOpenOrder }: BillingViewProps) {
+  const toastContext = useContext(ToastContext)
+  const initialRange = getBillingInitialRange(typeof window === 'undefined' ? new Date('2026-03-22T00:00:00Z') : new Date())
+  const detailWrapRef = useRef<HTMLDivElement | null>(null)
+  const fetchRefPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  const [configs, setConfigs] = useState<BillingConfigDto[]>([])
+  const [configDrafts, setConfigDrafts] = useState<Record<number, BillingConfigDraft>>({})
+  const [configsLoading, setConfigsLoading] = useState(true)
+  const [packages, setPackages] = useState<PackageDto[]>([])
+  const [selectedPkgClientId, setSelectedPkgClientId] = useState('')
+  const [savedPackagePrices, setSavedPackagePrices] = useState<BillingPackagePriceDto[]>([])
+  const [packagePriceDrafts, setPackagePriceDrafts] = useState<Record<number, string>>({})
+  const [packagePricingLoading, setPackagePricingLoading] = useState(false)
+  const [packagePricingError, setPackagePricingError] = useState<string | null>(null)
+  const [activePreset, setActivePreset] = useState<BillingPresetId>('last_90')
+  const [from, setFrom] = useState(initialRange.from)
+  const [to, setTo] = useState(initialRange.to)
+  const [summaryRows, setSummaryRows] = useState<BillingSummaryDto[]>([])
+  const [summaryLoading, setSummaryLoading] = useState(true)
+  const [summaryError, setSummaryError] = useState<string | null>(null)
+  const [generateLoading, setGenerateLoading] = useState(false)
+  const [generateStatus, setGenerateStatus] = useState('')
+  const [fetchRefRunning, setFetchRefRunning] = useState(false)
+  const [fetchRefStatus, setFetchRefStatus] = useState('')
+  const [backfillLoading, setBackfillLoading] = useState(false)
+  const [detailState, setDetailState] = useState<BillingDetailState>({
+    open: false,
+    loading: false,
+    clientId: null,
+    clientName: '',
+    rows: [],
+    error: null,
+  })
+  const [detailColumnIds, setDetailColumnIds] = useState<BillingDetailColumnId[]>(() => {
+    if (typeof window === 'undefined') return readBillingDetailColumnIds()
+    return readBillingDetailColumnIds(window.localStorage)
+  })
+
+  const packagePricingRows = useMemo(
+    () => buildBillingPackagePriceRows(packages, savedPackagePrices, packagePriceDrafts),
+    [packages, savedPackagePrices, packagePriceDrafts],
+  )
+
+  const summaryTotals = useMemo(() => buildBillingSummaryTotals(summaryRows), [summaryRows])
+  const visibleDetailColumns = useMemo(() => getVisibleBillingDetailColumns(detailColumnIds), [detailColumnIds])
+
+  useEffect(() => {
+    return () => {
+      if (fetchRefPollRef.current) clearInterval(fetchRefPollRef.current)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(getBillingDetailColumnStorageKey(), JSON.stringify(detailColumnIds))
+  }, [detailColumnIds])
+
+  useEffect(() => {
+    let active = true
+
+    const loadConfigs = async () => {
+      setConfigsLoading(true)
+
+      try {
+        const [nextConfigs, nextPackages] = await Promise.all([
+          apiClient.fetchBillingConfigs(),
+          apiClient.fetchPackages().catch(() => [] as PackageDto[]),
+        ])
+
+        if (!active) return
+
+        setConfigs(nextConfigs)
+        setConfigDrafts(createBillingConfigDraftMap(nextConfigs))
+        setPackages(nextPackages)
+
+        setSelectedPkgClientId((current) => {
+          if (current && nextConfigs.some((config) => String(config.clientId) === current)) return current
+          return nextConfigs.length > 0 ? String(nextConfigs[0].clientId) : ''
+        })
+      } catch (error) {
+        if (!active) return
+        toastContext?.addToast(error instanceof Error ? error.message : 'Failed to load billing config', 'error')
+      } finally {
+        if (active) setConfigsLoading(false)
+      }
+    }
+
+    void loadConfigs()
+
+    return () => {
+      active = false
+    }
+  }, [toastContext])
+
+  useEffect(() => {
+    if (!selectedPkgClientId) return
+
+    let active = true
+
+    const loadPackagePrices = async () => {
+      setPackagePricingLoading(true)
+      setPackagePricingError(null)
+
+      try {
+        const rows = await apiClient.fetchBillingPackagePrices(Number(selectedPkgClientId))
+        if (!active) return
+
+        setSavedPackagePrices(rows)
+        const nextRows = buildBillingPackagePriceRows(packages, rows)
+        setPackagePriceDrafts(Object.fromEntries(nextRows.map((row) => [row.packageId, row.charge.toFixed(2)])))
+      } catch (error) {
+        if (!active) return
+        setSavedPackagePrices([])
+        setPackagePriceDrafts({})
+        setPackagePricingError(error instanceof Error ? error.message : 'Failed to load package prices')
+      } finally {
+        if (active) setPackagePricingLoading(false)
+      }
+    }
+
+    void loadPackagePrices()
+
+    return () => {
+      active = false
+    }
+  }, [packages, selectedPkgClientId])
+
+  useEffect(() => {
+    if (!from || !to) return
+
+    let active = true
+
+    const loadSummary = async () => {
+      setSummaryLoading(true)
+      setSummaryError(null)
+
+      try {
+        const rows = await apiClient.fetchBillingSummary(from, to)
+        if (!active) return
+        setSummaryRows(rows)
+      } catch (error) {
+        if (!active) return
+        setSummaryRows([])
+        setSummaryError(error instanceof Error ? error.message : 'Error loading summary')
+      } finally {
+        if (active) setSummaryLoading(false)
+      }
+    }
+
+    void loadSummary()
+
+    return () => {
+      active = false
+    }
+  }, [from, to])
+
+  async function handleSaveConfig(clientId: number) {
+    const draft = configDrafts[clientId]
+    if (!draft) return
+
+    try {
+      await apiClient.updateBillingConfig(clientId, buildBillingConfigInput(draft))
+      setConfigs((current) => current.map((config) => config.clientId === clientId ? {
+        ...config,
+        ...buildBillingConfigInput(draft),
+      } : config))
+      toastContext?.addToast('✅ Config saved', 'success')
+    } catch (error) {
+      toastContext?.addToast(error instanceof Error ? error.message : 'Failed to save config', 'error')
+    }
+  }
+
+  async function handleGenerateBilling() {
+    if (!from || !to) {
+      toastContext?.addToast('Select a date range first', 'error')
+      return
+    }
+
+    setGenerateLoading(true)
+    setGenerateStatus('')
+
+    try {
+      const result = await apiClient.generateBilling(from, to)
+      setGenerateStatus(buildGenerateBillingStatus(result.generated, result.total))
+      toastContext?.addToast(`✅ Generated ${result.generated} billing line items`, 'success')
+
+      const rows = await apiClient.fetchBillingSummary(from, to)
+      setSummaryRows(rows)
+      setSummaryError(null)
+    } catch (error) {
+      toastContext?.addToast(error instanceof Error ? error.message : 'Failed to generate billing', 'error')
+    } finally {
+      setGenerateLoading(false)
+    }
+  }
+
+  async function handleLoadDetails(clientId: number, clientName: string) {
+    setDetailState({
+      open: true,
+      loading: true,
+      clientId,
+      clientName,
+      rows: [],
+      error: null,
+    })
+
+    if (typeof window !== 'undefined') {
+      window.requestAnimationFrame(() => {
+        detailWrapRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+      })
+    }
+
+    try {
+      const rows = await apiClient.fetchBillingDetails(from, to, clientId)
+      setDetailState({
+        open: true,
+        loading: false,
+        clientId,
+        clientName,
+        rows,
+        error: null,
+      })
+    } catch (error) {
+      setDetailState({
+        open: true,
+        loading: false,
+        clientId,
+        clientName,
+        rows: [],
+        error: error instanceof Error ? error.message : 'Error loading details',
+      })
+    }
+  }
+
+  async function handleSavePackagePrices() {
+    if (!selectedPkgClientId) {
+      toastContext?.addToast('Select a client first', 'error')
+      return
+    }
+
+    try {
+      await apiClient.saveBillingPackagePrices({
+        clientId: Number(selectedPkgClientId),
+        prices: packagePricingRows.map((row) => ({
+          packageId: row.packageId,
+          price: Number.parseFloat(packagePriceDrafts[row.packageId] ?? String(row.charge)) || 0,
+        })),
+      })
+
+      setSavedPackagePrices(packagePricingRows.map((row) => ({
+        packageId: row.packageId,
+        price: Number.parseFloat(packagePriceDrafts[row.packageId] ?? String(row.charge)) || 0,
+        is_custom: row.isCustom ? 1 : 0,
+        name: row.name,
+        length: packages.find((pkg) => pkg.packageId === row.packageId)?.length ?? null,
+        width: packages.find((pkg) => pkg.packageId === row.packageId)?.width ?? null,
+        height: packages.find((pkg) => pkg.packageId === row.packageId)?.height ?? null,
+      })))
+      toastContext?.addToast('Package prices saved ✓', 'success')
+    } catch (error) {
+      toastContext?.addToast(error instanceof Error ? error.message : 'Error saving prices', 'error')
+    }
+  }
+
+  async function handleFetchRefRates() {
+    setFetchRefRunning(true)
+    setFetchRefStatus('Starting…')
+
+    try {
+      const result = await apiClient.fetchBillingReferenceRates()
+      const nextStatus = buildFetchRefRatesStartText(result)
+      setFetchRefStatus(nextStatus)
+
+      if (result.total === 0) {
+        setFetchRefRunning(false)
+        return
+      }
+
+      if (fetchRefPollRef.current) clearInterval(fetchRefPollRef.current)
+
+      fetchRefPollRef.current = setInterval(() => {
+        void apiClient.fetchBillingReferenceRateStatus()
+          .then((status) => {
+            setFetchRefStatus(buildFetchRefRatesProgressText(status))
+
+            if (!status.running) {
+              if (fetchRefPollRef.current) clearInterval(fetchRefPollRef.current)
+              fetchRefPollRef.current = null
+              setFetchRefStatus(buildFetchRefRatesDoneText(status))
+              setFetchRefRunning(false)
+              toastContext?.addToast(`Ref rates fetched: ${status.done} rate combos`, 'success')
+            }
+          })
+          .catch(() => {
+            if (fetchRefPollRef.current) clearInterval(fetchRefPollRef.current)
+            fetchRefPollRef.current = null
+            setFetchRefStatus('Error — check console')
+            setFetchRefRunning(false)
+            toastContext?.addToast('Failed to start ref rate fetch', 'error')
+          })
+      }, 5000)
+    } catch (error) {
+      if (fetchRefPollRef.current) clearInterval(fetchRefPollRef.current)
+      fetchRefPollRef.current = null
+      setFetchRefStatus('Error — check console')
+      setFetchRefRunning(false)
+      toastContext?.addToast(error instanceof Error ? error.message : 'Failed to start ref rate fetch', 'error')
+    }
+  }
+
+  async function handleBackfillRefRates() {
+    setBackfillLoading(true)
+
+    try {
+      const result = await apiClient.backfillBillingReferenceRates({ from, to })
+      toastContext?.addToast(buildBackfillRefRatesToast(result), 'success')
+    } catch (error) {
+      toastContext?.addToast(error instanceof Error ? error.message : 'Backfill failed', 'error')
+    } finally {
+      setBackfillLoading(false)
+    }
+  }
+
+  function handleExportInvoice(clientId: number, clientName: string) {
+    if (!from || !to) {
+      toastContext?.addToast('⚠ Select a date range first', 'error')
+      return
+    }
+
+    window.open(getBillingInvoiceUrl(clientId, from, to), '_blank')
+    toastContext?.addToast(`📄 Opening invoice for ${clientName || 'client'}…`, 'success')
+  }
+
+  return (
+    <div id="view-billing" className="view-content">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 16, flexWrap: 'wrap' }}>
+        <h2 style={{ fontSize: 16, fontWeight: 800, color: 'var(--text)', margin: 0 }}>🧾 Billing Dashboard</h2>
+      </div>
+
+      <div className="billing-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18, marginBottom: 18 }}>
+        <div className="markup-card">
+          <h3 style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 10 }}>Client Billing Config</h3>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: 'var(--surface2)', borderBottom: '2px solid var(--border)' }}>
+                  <th style={{ padding: '5px 8px', textAlign: 'left', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Client</th>
+                  <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Pick&amp;Pack</th>
+                  <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Addl Unit</th>
+                  <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Ship %</th>
+                  <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Ship $</th>
+                  <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }} title="Storage fee per cubic foot per month">Storage $/cu ft</th>
+                  <th style={{ padding: '5px 8px', textAlign: 'center', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Mode</th>
+                  <th style={{ padding: '5px 4px', textAlign: 'center', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)' }} />
+                </tr>
+              </thead>
+              <tbody>
+                {configsLoading ? (
+                  <tr><td colSpan={8} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>Loading…</td></tr>
+                ) : configs.length === 0 ? (
+                  <tr><td colSpan={8} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No clients found.</td></tr>
+                ) : configs.map((config) => {
+                  const draft = configDrafts[config.clientId]
+
+                  return (
+                    <tr key={config.clientId}>
+                      <td style={{ padding: '4px 8px', fontWeight: 600, fontSize: 11.5 }}>{config.clientName}</td>
+                      <td style={{ padding: '4px 8px', textAlign: 'right' }}>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          className="markup-input-lg"
+                          style={{ width: 60, textAlign: 'right', fontSize: 11.5 }}
+                          value={draft?.pickPackFee ?? '0.00'}
+                          onChange={(event) => setConfigDrafts((current) => ({
+                            ...current,
+                            [config.clientId]: { ...current[config.clientId], pickPackFee: event.target.value },
+                          }))}
+                        />
+                      </td>
+                      <td style={{ padding: '4px 8px', textAlign: 'right' }}>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          className="markup-input-lg"
+                          style={{ width: 60, textAlign: 'right', fontSize: 11.5 }}
+                          value={draft?.additionalUnitFee ?? '0.00'}
+                          onChange={(event) => setConfigDrafts((current) => ({
+                            ...current,
+                            [config.clientId]: { ...current[config.clientId], additionalUnitFee: event.target.value },
+                          }))}
+                        />
+                      </td>
+                      <td style={{ padding: '4px 8px', textAlign: 'right' }}>
+                        <input
+                          type="number"
+                          step="0.1"
+                          min="0"
+                          className="markup-input-lg"
+                          style={{ width: 55, textAlign: 'right', fontSize: 11.5 }}
+                          value={draft?.shippingMarkupPct ?? '0.0'}
+                          onChange={(event) => setConfigDrafts((current) => ({
+                            ...current,
+                            [config.clientId]: { ...current[config.clientId], shippingMarkupPct: event.target.value },
+                          }))}
+                        />
+                      </td>
+                      <td style={{ padding: '4px 8px', textAlign: 'right' }}>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          className="markup-input-lg"
+                          style={{ width: 60, textAlign: 'right', fontSize: 11.5 }}
+                          value={draft?.shippingMarkupFlat ?? '0.00'}
+                          onChange={(event) => setConfigDrafts((current) => ({
+                            ...current,
+                            [config.clientId]: { ...current[config.clientId], shippingMarkupFlat: event.target.value },
+                          }))}
+                        />
+                      </td>
+                      <td style={{ padding: '4px 8px', textAlign: 'right' }}>
+                        <input
+                          type="number"
+                          step="0.001"
+                          min="0"
+                          className="markup-input-lg"
+                          style={{ width: 64, textAlign: 'right', fontSize: 11.5 }}
+                          title="Storage fee per cubic foot per month (0 = disabled)"
+                          value={draft?.storageFeePerCuFt ?? '0.000'}
+                          onChange={(event) => setConfigDrafts((current) => ({
+                            ...current,
+                            [config.clientId]: { ...current[config.clientId], storageFeePerCuFt: event.target.value },
+                          }))}
+                        />
+                      </td>
+                      <td style={{ padding: '4px 8px', textAlign: 'center' }}>
+                        <select
+                          className="ship-select"
+                          style={{ fontSize: 10, padding: '2px 4px', borderRadius: 4, border: '1px solid var(--border)' }}
+                          value={draft?.billing_mode ?? 'label_cost'}
+                          onChange={(event) => setConfigDrafts((current) => ({
+                            ...current,
+                            [config.clientId]: { ...current[config.clientId], billing_mode: event.target.value },
+                          }))}
+                        >
+                          <option value="label_cost">Label Cost</option>
+                          <option value="reference_rate">SS Ref Rate ★</option>
+                        </select>
+                      </td>
+                      <td style={{ padding: '4px 4px', textAlign: 'center' }}>
+                        <button className="btn btn-outline btn-xs" type="button" onClick={() => void handleSaveConfig(config.clientId)}>Save</button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="markup-card">
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 8, flexWrap: 'wrap' }}>
+            <h3 style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px', margin: 0 }}>Package Pricing by Client</h3>
+            <div style={{ display: 'flex', gap: 7, alignItems: 'center' }}>
+              <select className="filter-sel" style={{ fontSize: 12 }} value={selectedPkgClientId} onChange={(event) => setSelectedPkgClientId(event.target.value)}>
+                <option value="">Select client…</option>
+                {configs.map((config) => (
+                  <option key={config.clientId} value={config.clientId}>{config.clientName}</option>
+                ))}
+              </select>
+              <button className="btn btn-primary btn-sm" type="button" onClick={() => void handleSavePackagePrices()}>Save</button>
+            </div>
+          </div>
+          <div style={{ overflowY: 'auto', maxHeight: 320 }}>
+            {!selectedPkgClientId ? (
+              <div style={{ padding: 24, textAlign: 'center', color: 'var(--text3)', fontSize: 12 }}>Select a client to view pricing</div>
+            ) : packagePricingLoading ? (
+              <div style={{ padding: 16, textAlign: 'center', color: 'var(--text3)', fontSize: 12 }}>Loading…</div>
+            ) : packagePricingError ? (
+              <div style={{ padding: 16, textAlign: 'center', color: 'var(--red)', fontSize: 12 }}>{packagePricingError}</div>
+            ) : packagePricingRows.length === 0 ? (
+              <div style={{ padding: 24, textAlign: 'center', color: 'var(--text3)', fontSize: 12 }}>No custom packages found</div>
+            ) : (
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr style={{ background: 'var(--surface2)', borderBottom: '2px solid var(--border)' }}>
+                    <th style={{ padding: '5px 8px', textAlign: 'left', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px', whiteSpace: 'nowrap' }}>Box</th>
+                    <th style={{ padding: '5px 8px', textAlign: 'center', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px', whiteSpace: 'nowrap' }}>Dims</th>
+                    <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px', whiteSpace: 'nowrap' }}>Our Cost</th>
+                    <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px', whiteSpace: 'nowrap' }}>Charge</th>
+                    <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px', whiteSpace: 'nowrap' }}>Margin</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {packagePricingRows.map((row) => (
+                    <tr key={row.packageId} style={{ borderBottom: '1px solid var(--border)' }}>
+                      <td style={{ padding: '5px 8px', fontWeight: 600, fontSize: 12 }}>
+                        {row.name}
+                        {row.isCustom ? (
+                          <span title="Custom override — won't be changed by Set Default" style={{ fontSize: 9, color: 'var(--ss-blue)', marginLeft: 4, fontWeight: 600, letterSpacing: '.3px' }}>CUSTOM</span>
+                        ) : null}
+                      </td>
+                      <td style={{ padding: '5px 8px', textAlign: 'center', fontSize: 11, color: 'var(--text3)' }}>{row.dimsText}</td>
+                      <td style={{ padding: '5px 8px', textAlign: 'right', fontSize: 11.5 }}>
+                        {row.ourCost == null ? (
+                          <span style={{ color: 'var(--text4)', fontSize: 10.5 }}>not set</span>
+                        ) : (
+                          <span style={{ color: 'var(--text2)' }}>${row.ourCost.toFixed(3)}</span>
+                        )}
+                      </td>
+                      <td style={{ padding: '5px 4px', textAlign: 'right' }}>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          className="markup-input-lg"
+                          style={{ width: 62, textAlign: 'right', fontSize: 12 }}
+                          value={packagePriceDrafts[row.packageId] ?? row.charge.toFixed(2)}
+                          onChange={(event) => setPackagePriceDrafts((current) => ({
+                            ...current,
+                            [row.packageId]: event.target.value,
+                          }))}
+                        />
+                      </td>
+                      <td style={{ padding: '5px 8px', textAlign: 'right' }}>{getPackageMarginMarkup(row)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="markup-card">
+        <h3 style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 12 }}>Generate &amp; Summary</h3>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+          <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+            {([
+              ['this_month', 'This Month'],
+              ['last_month', 'Last Month'],
+              ['last_30', 'Last 30 Days'],
+              ['last_90', 'Last 90 Days'],
+            ] as Array<[BillingPresetId, string]>).map(([preset, label]) => (
+              <button
+                key={preset}
+                className={`btn btn-outline btn-sm analysis-preset${activePreset === preset ? ' active' : ''}`}
+                type="button"
+                onClick={() => {
+                  const range = getBillingPresetRange(preset)
+                  setActivePreset(preset)
+                  setFrom(range.from)
+                  setTo(range.to)
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--text2)' }}>
+            <span>From</span>
+            <input type="date" className="ship-select" style={{ width: 140, fontSize: 12 }} value={from} onChange={(event) => setFrom(event.target.value)} />
+            <span>To</span>
+            <input type="date" className="ship-select" style={{ width: 140, fontSize: 12 }} value={to} onChange={(event) => setTo(event.target.value)} />
+          </div>
+          <button className="btn btn-primary btn-sm" type="button" onClick={() => void handleGenerateBilling()} disabled={generateLoading}>
+            {generateLoading ? '⏳ Generating…' : '⚡ Generate Invoices'}
+          </button>
+          <button
+            className="btn btn-ghost btn-sm"
+            type="button"
+            title="Populate SS USPS/UPS reference rates from rate cache"
+            disabled={backfillLoading}
+            onClick={() => void handleBackfillRefRates()}
+          >
+            {backfillLoading ? '↺ Backfilling…' : '↺ Backfill Ref Rates'}
+          </button>
+          <button
+            className="btn btn-ghost btn-sm"
+            type="button"
+            title="Re-fetch live SS USPS/UPS reference rates for all reference_rate clients (runs in background)"
+            disabled={fetchRefRunning}
+            onClick={() => void handleFetchRefRates()}
+          >
+            ⚡ Fetch Ref Rates
+          </button>
+          <span style={{ fontSize: 10.5, color: 'var(--text3)', marginLeft: 4 }}>{fetchRefStatus}</span>
+          <span style={{ fontSize: 12, color: 'var(--text3)' }}>{generateStatus}</span>
+        </div>
+
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+            <thead>
+              <tr style={{ background: 'var(--surface2)', borderBottom: '2px solid var(--border)' }}>
+                <th style={{ padding: '7px 10px', textAlign: 'left', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Client</th>
+                <th style={{ padding: '7px 10px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Orders</th>
+                <th style={{ padding: '7px 10px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Pick &amp; Pack</th>
+                <th style={{ padding: '7px 10px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Addl Units</th>
+                <th style={{ padding: '7px 10px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Box Cost</th>
+                <th style={{ padding: '7px 10px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Storage</th>
+                <th style={{ padding: '7px 10px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Shipping</th>
+                <th style={{ padding: '7px 10px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {summaryLoading ? (
+                <tr><td colSpan={SUMMARY_COL_COUNT} style={{ padding: 20, textAlign: 'center', color: 'var(--text3)' }}>Loading…</td></tr>
+              ) : summaryError ? (
+                <tr><td colSpan={SUMMARY_COL_COUNT} style={{ padding: 24, textAlign: 'center', color: 'var(--red)' }}>{summaryError}</td></tr>
+              ) : summaryRows.length === 0 ? (
+                <tr><td colSpan={SUMMARY_COL_COUNT} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No billing data. Generate invoices first.</td></tr>
+              ) : (
+                <>
+                  {summaryRows.map((row) => (
+                    <tr key={row.clientId} className="billing-summary-row" onClick={() => void handleLoadDetails(row.clientId, row.clientName)}>
+                      <td style={{ padding: '8px 10px', fontWeight: 600, color: 'var(--ss-blue)' }}>
+                        <span className="billing-summary-client-cell">
+                          {row.clientName}
+                          <button
+                            className="btn btn-ghost btn-xs"
+                            type="button"
+                            title="Export invoice as PDF"
+                            style={{ marginLeft: 6, fontSize: 10, padding: '1px 6px', opacity: 0.7 }}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              handleExportInvoice(row.clientId, row.clientName)
+                            }}
+                          >
+                            📄 Export
+                          </button>
+                        </span>
+                      </td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', color: 'var(--text2)' }}>{row.orderCount || 0}</td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', color: 'var(--text2)' }}>{formatBillingMoney(row.pickPackTotal || 0)}</td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', color: 'var(--text2)' }}>{formatBillingMoney(row.additionalTotal || 0)}</td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', color: 'var(--text2)' }}>{formatBillingMoney(row.packageTotal || 0, { dashIfZero: true })}</td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', color: 'var(--text2)' }}>{formatBillingMoney(row.storageTotal || 0, { dashIfZero: true })}</td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', color: 'var(--text2)' }}>{formatBillingMoney(row.shippingTotal || 0)}</td>
+                      <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, color: 'var(--green)' }}>{formatBillingMoney(row.grandTotal || 0)}</td>
+                    </tr>
+                  ))}
+                  <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface2)' }}>
+                    <td style={{ padding: '8px 10px', fontWeight: 700 }}>Total</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700 }}>{summaryTotals.orders}</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700 }}>{formatBillingMoney(summaryTotals.pickPack)}</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700 }}>{formatBillingMoney(summaryTotals.additional)}</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700 }}>{formatBillingMoney(summaryTotals.package, { dashIfZero: true })}</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700 }}>{formatBillingMoney(summaryTotals.storage, { dashIfZero: true })}</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700 }}>{formatBillingMoney(summaryTotals.shipping)}</td>
+                    <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 800, color: 'var(--green)', fontSize: 13 }}>{formatBillingMoney(summaryTotals.grand)}</td>
+                  </tr>
+                </>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {detailState.open ? (
+          <div ref={detailWrapRef} style={{ display: 'block', marginTop: 16, borderTop: '2px solid var(--border)', paddingTop: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+              <h3 style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', margin: 0 }}>Line Items — {detailState.clientName}</h3>
+              <button className="btn btn-ghost btn-xs" type="button" onClick={() => setDetailState((current) => ({ ...current, open: false }))}>✕ Close</button>
+            </div>
+
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 }}>
+              {BILLING_DETAIL_COLUMNS.filter((column) => !column.always).map((column) => {
+                const active = detailColumnIds.includes(column.id)
+                return (
+                  <button
+                    key={column.id}
+                    type="button"
+                    className={`billing-detail-toggle${active ? ' active' : ''}`}
+                    onClick={() => setDetailColumnIds((current) => toggleBillingDetailColumnIds(current, column.id))}
+                  >
+                    {column.label}
+                  </button>
+                )
+              })}
+            </div>
+
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                <thead>
+                  <tr>
+                    {visibleDetailColumns.map((column) => (
+                      <th
+                        key={column.id}
+                        style={{
+                          fontSize: 10,
+                          fontWeight: 700,
+                          color: 'var(--text3)',
+                          textTransform: 'uppercase',
+                          letterSpacing: '.4px',
+                          padding: '6px 10px',
+                          background: 'var(--surface2)',
+                          borderBottom: '2px solid var(--border)',
+                          textAlign: column.align,
+                        }}
+                      >
+                        {column.label}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {detailState.loading ? (
+                    <tr><td colSpan={visibleDetailColumns.length} style={{ padding: 20, textAlign: 'center', color: 'var(--text3)' }}>Loading…</td></tr>
+                  ) : detailState.error ? (
+                    <tr><td colSpan={visibleDetailColumns.length} style={{ padding: 20, textAlign: 'center', color: 'var(--red)' }}>{detailState.error}</td></tr>
+                  ) : detailState.rows.length === 0 ? (
+                    <tr><td colSpan={visibleDetailColumns.length} style={{ padding: 20, textAlign: 'center', color: 'var(--text3)' }}>No line items found.</td></tr>
+                  ) : (
+                    <>
+                      {detailState.rows.map((row) => {
+                        const metrics = computeBillingDetailMetrics(row)
+
+                        return (
+                          <tr key={row.orderId} style={{ borderBottom: '1px solid var(--border)' }} className={metrics.ssCharged ? 'billing-detail-ss-row' : undefined}>
+                            {visibleDetailColumns.map((column) => {
+                              if (column.id === 'orderNumber') {
+                                return (
+                                  <td key={column.id} style={{ padding: '5px 10px', fontWeight: 600, color: 'var(--ss-blue)' }}>
+                                    <button
+                                      type="button"
+                                      className="inventory-inline-button"
+                                      title="Open order detail"
+                                      onClick={() => onOpenOrder?.(row.orderId)}
+                                    >
+                                      {row.orderNumber}
+                                    </button>
+                                  </td>
+                                )
+                              }
+
+                              if (column.id === 'shipDate') {
+                                return <td key={column.id} style={{ padding: '5px 10px', color: 'var(--text2)', fontSize: 11 }}>{formatBillingDateTime(row.shipDate)}</td>
+                              }
+
+                              if (column.id === 'itemNames') {
+                                return (
+                                  <td key={column.id} style={{ padding: '5px 10px', fontSize: 11, maxWidth: 220 }}>
+                                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={row.itemNames || ''}>
+                                      {row.itemNames ? row.itemNames.split(' | ').map((name, index) => (
+                                        <div key={`${row.orderId}-name-${index}`} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
+                                      )) : <span style={{ color: 'var(--text4)' }}>—</span>}
+                                    </div>
+                                  </td>
+                                )
+                              }
+
+                              if (column.id === 'itemSkus') {
+                                return (
+                                  <td key={column.id} style={{ padding: '5px 10px', fontFamily: 'monospace', fontSize: 10.5, color: 'var(--text2)' }}>
+                                    {row.itemSkus ? row.itemSkus.split(' | ').map((sku, index) => (
+                                      <div key={`${row.orderId}-sku-${index}`}>{sku || '—'}</div>
+                                    )) : <span style={{ color: 'var(--text4)' }}>—</span>}
+                                  </td>
+                                )
+                              }
+
+                              if (column.id === 'totalQty') {
+                                return <td key={column.id} style={{ padding: '5px 10px', textAlign: 'right' }}>{row.totalQty || 0}</td>
+                              }
+
+                              if (column.id === 'pickpack') {
+                                return <td key={column.id} style={{ padding: '5px 10px', textAlign: 'right' }}>{formatBillingMoney(metrics.pickPack)}</td>
+                              }
+
+                              if (column.id === 'additional') {
+                                return <td key={column.id} style={{ padding: '5px 10px', textAlign: 'right' }}>{formatBillingMoney(metrics.additional, { dashIfZero: true })}</td>
+                              }
+
+                              if (column.id === 'packageCost') {
+                                return <td key={column.id} style={{ padding: '5px 10px', textAlign: 'right' }}>{formatBillingMoney(metrics.packageCost, { dashIfZero: true })}</td>
+                              }
+
+                              if (column.id === 'packageName') {
+                                return <td key={column.id} style={{ padding: '5px 10px', textAlign: 'center', fontSize: 10.5, color: 'var(--text2)' }}>{row.packageName || '—'}</td>
+                              }
+
+                              if (column.id === 'bestRate') {
+                                return (
+                                  <td key={column.id} style={{ padding: '5px 10px', textAlign: 'right', fontSize: 11 }} className={metrics.chargedRate === 'bestRate' ? 'billing-detail-rate-hit' : undefined}>
+                                    {formatBillingMoney(row.actualLabelCost, { dashIfZero: true })}
+                                  </td>
+                                )
+                              }
+
+                              if (column.id === 'upsss') {
+                                return (
+                                  <td key={column.id} style={{ padding: '5px 10px', textAlign: 'right', fontSize: 11, color: row.ref_ups_rate ? '#2563eb' : undefined }} className={metrics.chargedRate === 'upsss' ? 'billing-detail-rate-hit' : undefined}>
+                                    {formatBillingMoney(row.ref_ups_rate, { dashIfZero: true })}
+                                  </td>
+                                )
+                              }
+
+                              if (column.id === 'uspsss') {
+                                return (
+                                  <td key={column.id} style={{ padding: '5px 10px', textAlign: 'right', fontSize: 11, color: row.ref_usps_rate ? '#16a34a' : undefined }} className={metrics.chargedRate === 'uspsss' ? 'billing-detail-rate-hit' : undefined}>
+                                    {formatBillingMoney(row.ref_usps_rate, { dashIfZero: true })}
+                                  </td>
+                                )
+                              }
+
+                              if (column.id === 'shipping') {
+                                return (
+                                  <td key={column.id} style={{ padding: '5px 10px', textAlign: 'right' }}>
+                                    {metrics.ssCharged ? (
+                                      <>
+                                        <span style={{ color: '#b45309', fontWeight: 600 }}>{formatBillingMoney(metrics.shipping)}</span>
+                                        <span style={{ fontSize: 9, color: 'var(--text3)', marginLeft: 3 }}>↑SS</span>
+                                      </>
+                                    ) : (
+                                      formatBillingMoney(metrics.shipping)
+                                    )}
+                                  </td>
+                                )
+                              }
+
+                              if (column.id === 'total') {
+                                return <td key={column.id} style={{ padding: '5px 10px', textAlign: 'right', fontWeight: 700, color: 'var(--green)' }}>{formatBillingMoney(metrics.total)}</td>
+                              }
+
+                              return (
+                                <td key={column.id} style={{ padding: '5px 10px', textAlign: 'right', fontSize: 11, color: marginColor(metrics.margin), fontWeight: 600 }}>
+                                  {metrics.margin > 0 ? '+' : ''}${metrics.margin.toFixed(2)}
+                                </td>
+                              )
+                            })}
+                          </tr>
+                        )
+                      })}
+
+                      <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface2)' }}>
+                        {visibleDetailColumns.map((column) => {
+                          const totals = detailState.rows.reduce((acc, row) => {
+                            const metrics = computeBillingDetailMetrics(row)
+                            return {
+                              pickPack: acc.pickPack + metrics.pickPack,
+                              additional: acc.additional + metrics.additional,
+                              packageCost: acc.packageCost + metrics.packageCost,
+                              shipping: acc.shipping + metrics.shipping,
+                              total: acc.total + metrics.total,
+                              margin: acc.margin + metrics.margin,
+                            }
+                          }, { pickPack: 0, additional: 0, packageCost: 0, shipping: 0, total: 0, margin: 0 })
+
+                          if (column.id === 'orderNumber') return <td key={column.id} style={{ padding: '6px 10px', fontWeight: 700 }}>Total</td>
+                          if (column.id === 'pickpack') return <td key={column.id} style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700 }}>{formatBillingMoney(totals.pickPack)}</td>
+                          if (column.id === 'additional') return <td key={column.id} style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700 }}>{formatBillingMoney(totals.additional, { dashIfZero: true })}</td>
+                          if (column.id === 'packageCost') return <td key={column.id} style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700 }}>{formatBillingMoney(totals.packageCost, { dashIfZero: true })}</td>
+                          if (column.id === 'shipping') return <td key={column.id} style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700 }}>{formatBillingMoney(totals.shipping)}</td>
+                          if (column.id === 'total') return <td key={column.id} style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 800, color: 'var(--green)' }}>{formatBillingMoney(totals.total)}</td>
+                          if (column.id === 'margin') return <td key={column.id} style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700, color: marginColor(totals.margin) }}>${totals.margin.toFixed(2)}</td>
+                          return <td key={column.id} />
+                        })}
+                      </tr>
+                    </>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  )
+}

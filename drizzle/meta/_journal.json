@@ -64,6 +64,13 @@
       "when": 1776575922295,
       "tag": "0008_furry_thunderbolt_ross",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1776738282031,
+      "tag": "0009_bouncy_fat_cobra",
+      "breakpoints": true
     }
   ]
 }

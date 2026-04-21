@@ -4,6 +4,7 @@ import { X } from 'lucide-react';
 import { api } from '../lib/api';
 import { Button } from './ui/Button';
 import { Input } from './ui/Input';
+import { Select } from './ui/Select';
 
 type Pkg = {
   id: number;
@@ -21,6 +22,13 @@ type Pkg = {
   isDefault: boolean;
 };
 
+const PACKAGE_TYPE_OPTIONS: Array<{ value: string; label: string }> = [
+  { value: 'box', label: 'Box' },
+  { value: 'poly_mailer', label: 'Polymailer' },
+  { value: 'envelope', label: 'Envelope' },
+  { value: 'other', label: 'Other' },
+];
+
 function dimsLabel(l: number, w: number, h: number) {
   const f = (n: number) => (Number.isInteger(n) ? `${n}` : `${n}`);
   return `${f(l)}×${f(w)}×${f(h)}`;
@@ -37,6 +45,7 @@ export default function PackageModal({
   const isEdit = !!existing;
 
   const [name, setName] = useState(existing?.name ?? '');
+  const [type, setType] = useState(existing?.type ?? 'box');
   const [length, setLength] = useState(existing ? String(existing.length) : '');
   const [width, setWidth] = useState(existing ? String(existing.width) : '');
   const [height, setHeight] = useState(existing ? String(existing.height) : '');
@@ -78,6 +87,7 @@ export default function PackageModal({
     if (!Number.isFinite(l) || !Number.isFinite(w) || !Number.isFinite(h)) return;
     mutation.mutate({
       name: name.trim() || dimsLabel(l, w, h),
+      type,
       length: l,
       width: w,
       height: h,
@@ -123,6 +133,21 @@ export default function PackageModal({
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g. Bubble Mailer Small"
             />
+          </div>
+
+          <div>
+            <label className="section-label block mb-1">Type</label>
+            <Select
+              value={type}
+              onChange={(e) => setType(e.target.value)}
+              className="w-full"
+            >
+              {PACKAGE_TYPE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </Select>
           </div>
 
           <div>

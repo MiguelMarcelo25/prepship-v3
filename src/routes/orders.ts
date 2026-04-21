@@ -114,7 +114,8 @@ app.get(
   }
 );
 
-// Daily stats in a window — orders per day, shipped per day.
+// Daily stats in a window — orders per day, shipped per day, plus
+// summary counts (totalOrders, needToShip, upcomingOrders) matching v2 shape.
 app.get(
   '/daily-stats',
   zValidator(
@@ -142,7 +143,37 @@ app.get(
       group by date_trunc('day', order_date)
       order by date_trunc('day', order_date) desc
     `);
-    return c.json({ data: rows });
+    const summaryRows = await db.execute<{
+      total_orders: number;
+      need_to_ship: number;
+      shipped_total: number;
+    }>(sql`
+      select
+        count(*) filter (where order_status <> 'cancelled')::int as total_orders,
+        count(*) filter (where order_status = 'awaiting_shipment')::int as need_to_ship,
+        count(*) filter (where order_status = 'shipped')::int as shipped_total
+      from orders
+      where order_date >= ${fromIso}::timestamptz
+        and order_date <= ${toIso}::timestamptz
+    `);
+    const upcomingRows = await db.execute<{ upcoming_orders: number }>(sql`
+      select count(*)::int as upcoming_orders
+      from orders
+      where order_date > ${toIso}::timestamptz
+        and order_status <> 'cancelled'
+    `);
+    const s = summaryRows[0];
+    const u = upcomingRows[0];
+    return c.json({
+      data: rows,
+      summary: {
+        totalOrders: s?.total_orders ?? 0,
+        needToShip: s?.need_to_ship ?? 0,
+        shippedTotal: s?.shipped_total ?? 0,
+        upcomingOrders: u?.upcoming_orders ?? 0,
+        window: { from: fromIso, to: toIso },
+      },
+    });
   }
 );
 
@@ -266,6 +297,179 @@ app.patch('/:id{[0-9]+}', zValidator('json', patchBody), async (c) => {
     .returning();
 
   return c.json(row);
+});
+
+const saveDimsBody = z.object({
+  l: z.number().nonnegative(),
+  w: z.number().nonnegative(),
+  h: z.number().nonnegative(),
+  weightOz: z.number().nonnegative().optional(),
+});
+
+app.post(
+  '/:id{[0-9]+}/save-dims',
+  zValidator('json', saveDimsBody),
+  async (c) => {
+    const id = Number(c.req.param('id'));
+    const body = c.req.valid('json');
+
+    const [existing] = await db
+      .select({ id: orders.id })
+      .from(orders)
+      .where(eq(orders.id, id))
+      .limit(1);
+    if (!existing) return c.json({ error: 'Order not found' }, 404);
+
+    const patch: Record<string, unknown> = {
+      rateDimsL: body.l,
+      rateDimsW: body.w,
+      rateDimsH: body.h,
+    };
+    if (body.weightOz !== undefined) patch.rateWeightOz = body.weightOz;
+
+    const [row] = await db
+      .insert(orderOverrides)
+      .values({ orderId: id, ...patch, updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: orderOverrides.orderId,
+        set: { ...patch, updatedAt: new Date() },
+      })
+      .returning();
+
+    return c.json({ data: row });
+  }
+);
+
+app.get('/:id{[0-9]+}/dims', async (c) => {
+  const id = Number(c.req.param('id'));
+  const [row] = await db
+    .select({
+      rateDimsL: orderOverrides.rateDimsL,
+      rateDimsW: orderOverrides.rateDimsW,
+      rateDimsH: orderOverrides.rateDimsH,
+      rateWeightOz: orderOverrides.rateWeightOz,
+    })
+    .from(orderOverrides)
+    .where(eq(orderOverrides.orderId, id))
+    .limit(1);
+
+  if (
+    !row ||
+    (row.rateDimsL == null &&
+      row.rateDimsW == null &&
+      row.rateDimsH == null &&
+      row.rateWeightOz == null)
+  ) {
+    return c.json({ data: null });
+  }
+
+  return c.json({
+    data: {
+      l: row.rateDimsL,
+      w: row.rateDimsW,
+      h: row.rateDimsH,
+      weightOz: row.rateWeightOz,
+    },
+  });
+});
+
+const exportQuery = z.object({
+  status: z.string().optional(),
+  dateFrom: z.string().datetime().optional(),
+  dateTo: z.string().datetime().optional(),
+  clientId: z.coerce.number().int().optional(),
+});
+
+function csvEscape(v: unknown): string {
+  if (v === null || v === undefined) return '';
+  const s = v instanceof Date ? v.toISOString() : String(v);
+  if (/[",\r\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+app.get('/export', zValidator('query', exportQuery), async (c) => {
+  const q = c.req.valid('query');
+
+  const where = and(
+    ...[
+      q.status ? eq(orders.orderStatus, q.status) : undefined,
+      q.clientId !== undefined ? eq(orders.clientId, q.clientId) : undefined,
+      q.dateFrom ? gte(orders.orderDate, new Date(q.dateFrom)) : undefined,
+      q.dateTo ? lte(orders.orderDate, new Date(q.dateTo)) : undefined,
+    ].filter(<T>(x: T | undefined): x is T => x !== undefined)
+  );
+
+  const rows = await db
+    .select({
+      orderNumber: orders.orderNumber,
+      orderDate: orders.orderDate,
+      orderStatus: orders.orderStatus,
+      customerName: orders.shipToName,
+      shipToCity: orders.shipToCity,
+      shipToState: orders.shipToState,
+      shipToPostalCode: orders.shipToPostalCode,
+      carrierCode: orders.carrierCode,
+      serviceCode: orders.serviceCode,
+      weightOz: orders.weightOz,
+      trackingNumber: orderOverrides.trackingNumber,
+      orderTotal: orders.orderTotal,
+    })
+    .from(orders)
+    .leftJoin(orderOverrides, eq(orderOverrides.orderId, orders.id))
+    .where(where)
+    .orderBy(desc(orders.orderDate))
+    .limit(5000);
+
+  const header = [
+    'orderNumber',
+    'orderDate',
+    'orderStatus',
+    'customerName',
+    'shipToCity',
+    'shipToState',
+    'shipToPostalCode',
+    'carrierCode',
+    'serviceCode',
+    'weightOz',
+    'trackingNumber',
+    'orderTotal',
+  ];
+
+  const lines: string[] = [header.join(',')];
+  for (const r of rows) {
+    lines.push(
+      [
+        r.orderNumber,
+        r.orderDate,
+        r.orderStatus,
+        r.customerName,
+        r.shipToCity,
+        r.shipToState,
+        r.shipToPostalCode,
+        r.carrierCode,
+        r.serviceCode,
+        r.weightOz,
+        r.trackingNumber,
+        r.orderTotal,
+      ]
+        .map(csvEscape)
+        .join(',')
+    );
+  }
+
+  const body = lines.join('\r\n') + '\r\n';
+  const timestamp = new Date()
+    .toISOString()
+    .replace(/[:.]/g, '-')
+    .slice(0, 19);
+
+  return new Response(body, {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': `attachment; filename=orders-${timestamp}.csv`,
+    },
+  });
 });
 
 export default app;

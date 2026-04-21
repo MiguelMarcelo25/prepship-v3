@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
@@ -8,12 +8,17 @@ import {
   RefreshCw,
   Check,
   Printer,
+  ChevronLeft,
+  ChevronRight,
+  Search as SearchIcon,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { Button } from './ui/Button';
 import { Card, Field } from './ui/Card';
 import { StatusBadge } from './ui/Badge';
 import { Skeleton } from './ui/Skeleton';
+
+const RateBrowserModal = lazy(() => import('./RateBrowserModal'));
 
 type ItemOption = { name?: string; value?: string };
 
@@ -143,23 +148,49 @@ function buildRatesInput(data: OrderDetail): RatesInput | { error: string } {
   };
 }
 
-export default function OrderDrawer() {
+export default function OrderDrawer({ orderIds = [] }: { orderIds?: number[] }) {
   const { status, orderId } = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const id = Number(orderId);
   const [selectedRateId, setSelectedRateId] = useState<string | null>(null);
+  const [browseOpen, setBrowseOpen] = useState(false);
 
   const close = () => navigate(`/orders/${status ?? 'awaiting_shipment'}`);
 
+  const idx = orderIds.indexOf(id);
+  const prevId = idx > 0 ? orderIds[idx - 1] ?? null : null;
+  const nextId =
+    idx >= 0 && idx < orderIds.length - 1 ? orderIds[idx + 1] ?? null : null;
+  const goTo = (targetId: number | null) => {
+    if (targetId == null) return;
+    navigate(`/orders/${status ?? 'awaiting_shipment'}/${targetId}`);
+  };
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') close();
+      if (e.key === 'Escape') {
+        close();
+        return;
+      }
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (
+        tag === 'INPUT' ||
+        tag === 'TEXTAREA' ||
+        tag === 'SELECT' ||
+        target?.isContentEditable
+      ) {
+        return;
+      }
+      if (e.key === 'ArrowLeft') goTo(prevId);
+      else goTo(nextId);
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [id, orderIds, status]);
 
   const {
     data,
@@ -243,6 +274,29 @@ export default function OrderDrawer() {
           <Button variant="ghost" size="xs" onClick={close} aria-label="Back">
             <ArrowLeft size={14} />
           </Button>
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={() => goTo(prevId)}
+            disabled={prevId == null}
+            aria-label="Previous order"
+          >
+            <ChevronLeft size={14} />
+          </Button>
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={() => goTo(nextId)}
+            disabled={nextId == null}
+            aria-label="Next order"
+          >
+            <ChevronRight size={14} />
+          </Button>
+          {idx >= 0 && orderIds.length > 0 && (
+            <span className="text-tiny text-ink-3 font-mono">
+              {idx + 1} / {orderIds.length}
+            </span>
+          )}
           <div className="flex-1">
             <div className="text-[13px] font-bold text-ink leading-tight">
               Order #{data?.orderNumber ?? '—'}
@@ -415,13 +469,23 @@ export default function OrderDrawer() {
                       <div className="text-sm2 text-ink-2">
                         Live quote from ShipStation carriers.
                       </div>
-                      <Button
-                        variant="primary"
-                        size="sm"
-                        onClick={() => onFetchRates()}
-                      >
-                        Fetch rates
-                      </Button>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setBrowseOpen(true)}
+                        >
+                          <SearchIcon size={12} />
+                          Browse
+                        </Button>
+                        <Button
+                          variant="primary"
+                          size="sm"
+                          onClick={() => onFetchRates()}
+                        >
+                          Fetch rates
+                        </Button>
+                      </div>
                     </div>
                   )}
 
@@ -588,6 +652,26 @@ export default function OrderDrawer() {
           )}
         </div>
       </aside>
+      {browseOpen && data && (() => {
+        const built = buildRatesInput(data);
+        if ('error' in built) {
+          setBrowseOpen(false);
+          alert(built.error);
+          return null;
+        }
+        return (
+          <Suspense fallback={null}>
+            <RateBrowserModal
+              baseInput={built}
+              onClose={() => setBrowseOpen(false)}
+              onSelectRate={(rate) => {
+                setSelectedRateId(rate.rate_id);
+                purchaseMutation.mutate(rate.rate_id);
+              }}
+            />
+          </Suspense>
+        );
+      })()}
     </div>
   );
 }

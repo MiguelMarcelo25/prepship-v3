@@ -2,6 +2,7 @@ export * from './clients';
 export * from './orders';
 export * from './shipments';
 export * from './packages';
+export * from './package-ledger';
 export * from './products';
 export * from './rates';
 export * from './settings';

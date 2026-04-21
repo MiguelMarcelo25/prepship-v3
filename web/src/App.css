@@ -1,0 +1,78 @@
+.react-placeholder-card{
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:8px;
+  box-shadow:var(--shadow);
+  max-width:520px;
+  padding:20px 22px;
+}
+
+.react-placeholder-eyebrow{
+  color:var(--text3);
+  font-size:10px;
+  font-weight:700;
+  letter-spacing:.5px;
+  margin-bottom:8px;
+  text-transform:uppercase;
+}
+
+.react-placeholder-card h2{
+  color:var(--text);
+  font-size:18px;
+  margin-bottom:8px;
+}
+
+.react-placeholder-card p{
+  color:var(--text2);
+  font-size:13px;
+  line-height:1.55;
+}
+
+.react-zoom-wrap .zoom-opt{
+  width:100%;
+  text-align:left;
+  background:none;
+  border:none;
+}
+
+.react-sidebar-clear{
+  position:absolute;
+  right:10px;
+  top:50%;
+  transform:translateY(-50%);
+  background:none;
+  border:none;
+  color:var(--text3);
+  cursor:pointer;
+  font-size:12px;
+  line-height:1;
+  padding:2px;
+}
+
+.react-empty-panel{
+  display:flex;
+  flex:1;
+  align-items:center;
+  justify-content:center;
+  flex-direction:column;
+  gap:8px;
+  padding:24px;
+  color:var(--text3);
+  text-align:center;
+}
+
+.react-empty-panel-icon{
+  font-size:36px;
+}
+
+.react-empty-panel-title{
+  color:var(--text);
+  font-size:14px;
+  font-weight:700;
+}
+
+.react-empty-panel-copy{
+  max-width:240px;
+  font-size:12px;
+  line-height:1.5;
+}

@@ -1,0 +1,20 @@
+.analysis-clickable-row:hover{
+  background:var(--surface2);
+}
+
+.analysis-chart-tooltip{
+  position:fixed;
+  left:50%;
+  transform:translateX(-50%);
+  background:rgba(20,20,30,.88);
+  color:#fff;
+  font-size:11px;
+  padding:7px 11px;
+  border-radius:7px;
+  pointer-events:none;
+  z-index:9999;
+  line-height:1.7;
+  min-width:120px;
+  max-width:min(320px, calc(100vw - 16px));
+  box-shadow:0 4px 16px rgba(0,0,0,.3);
+}

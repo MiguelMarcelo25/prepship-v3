@@ -1,11 +1,18 @@
 import { lazy, Suspense, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import { AlertTriangle, PackagePlus, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
 import Topbar from '../components/Topbar';
 import { Button } from '../components/ui/Button';
 import { api } from '../lib/api';
 
 const PackageModal = lazy(() => import('../components/PackageModal'));
+const PackageReceiveModal = lazy(() => import('../components/PackageReceiveModal'));
+const PackageAdjustModal = lazy(
+  () => import('../components/PackageAdjustModal')
+);
+const PackageLedgerDrawer = lazy(
+  () => import('../components/PackageLedgerDrawer')
+);
 
 type Pkg = {
   id: number;
@@ -41,6 +48,9 @@ export default function Packages() {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState<Pkg | null>(null);
   const [creating, setCreating] = useState(false);
+  const [receiving, setReceiving] = useState<Pkg | null>(null);
+  const [adjusting, setAdjusting] = useState<Pkg | null>(null);
+  const [viewingLedger, setViewingLedger] = useState<Pkg | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['packages'],
@@ -165,6 +175,9 @@ export default function Packages() {
             title="Custom Packages"
             rows={customPackages}
             onEdit={setEditing}
+            onReceive={setReceiving}
+            onAdjust={setAdjusting}
+            onHistory={setViewingLedger}
             onDelete={(id) => {
               if (confirm('Delete this package?')) remove.mutate(id);
             }}
@@ -190,6 +203,33 @@ export default function Packages() {
           />
         </Suspense>
       )}
+
+      {receiving && (
+        <Suspense fallback={null}>
+          <PackageReceiveModal
+            pkg={receiving}
+            onClose={() => setReceiving(null)}
+          />
+        </Suspense>
+      )}
+
+      {adjusting && (
+        <Suspense fallback={null}>
+          <PackageAdjustModal
+            pkg={adjusting}
+            onClose={() => setAdjusting(null)}
+          />
+        </Suspense>
+      )}
+
+      {viewingLedger && (
+        <Suspense fallback={null}>
+          <PackageLedgerDrawer
+            pkg={viewingLedger}
+            onClose={() => setViewingLedger(null)}
+          />
+        </Suspense>
+      )}
     </>
   );
 }
@@ -198,12 +238,18 @@ function PackageSection({
   title,
   rows,
   onEdit,
+  onReceive,
+  onAdjust,
+  onHistory,
   onDelete,
   onReorderChange,
 }: {
   title: string;
   rows: Pkg[];
   onEdit: (p: Pkg) => void;
+  onReceive: (p: Pkg) => void;
+  onAdjust: (p: Pkg) => void;
+  onHistory: (p: Pkg) => void;
   onDelete: (id: number) => void;
   onReorderChange: (id: number, n: number) => void;
 }) {
@@ -228,6 +274,9 @@ function PackageSection({
               key={p.id}
               row={p}
               onEdit={onEdit}
+              onReceive={onReceive}
+              onAdjust={onAdjust}
+              onHistory={onHistory}
               onDelete={onDelete}
               onReorderChange={onReorderChange}
             />
@@ -270,11 +319,17 @@ function CarrierPackageSection({
 function PackageRow({
   row,
   onEdit,
+  onReceive,
+  onAdjust,
+  onHistory,
   onDelete,
   onReorderChange,
 }: {
   row: Pkg;
   onEdit: (p: Pkg) => void;
+  onReceive: (p: Pkg) => void;
+  onAdjust: (p: Pkg) => void;
+  onHistory: (p: Pkg) => void;
   onDelete: (id: number) => void;
   onReorderChange: (id: number, n: number) => void;
 }) {
@@ -325,6 +380,32 @@ function PackageRow({
         {cost}
       </td>
       <td className="px-1.5 py-1.5 text-right whitespace-nowrap">
+        <button
+          type="button"
+          onClick={() => onReceive(row)}
+          className="text-ink-3 hover:text-ok p-1"
+          title="Receive stock"
+        >
+          <PackagePlus size={12} />
+        </button>
+        <button
+          type="button"
+          onClick={() => onAdjust(row)}
+          className="text-ink-3 hover:text-warn p-1 text-[12px] font-bold leading-none"
+          title="Adjust stock"
+          aria-label="Adjust stock"
+        >
+          ±
+        </button>
+        <button
+          type="button"
+          onClick={() => onHistory(row)}
+          className="text-ink-3 hover:text-brand p-1 text-[12px] leading-none"
+          title="History"
+          aria-label="Package history"
+        >
+          📒
+        </button>
         <button
           type="button"
           onClick={() => onEdit(row)}

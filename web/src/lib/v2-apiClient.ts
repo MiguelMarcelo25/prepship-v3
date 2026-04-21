@@ -1,0 +1,1110 @@
+/**
+ * v2 apiClient adapter → v4 api.
+ *
+ * Mirrors the method surface of v2's `apps/react/src/api/client.ts` so
+ * the wholesale OrdersView.tsx (and other v2 views) port without touching
+ * call sites. Every method is wrapped in try/catch and returns a safe
+ * default on error — v2 components don't expect throws.
+ *
+ * Paths and body shapes follow what the v4 Hono routes actually accept,
+ * not the verbatim v2 paths. Methods that have no v4 equivalent warn once
+ * and return a harmless default.
+ */
+
+import { api, qs } from './api';
+import { supabase } from './supabase';
+
+const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
+
+async function authHeaders(): Promise<Record<string, string>> {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  const h: Record<string, string> = {};
+  if (session?.access_token) h['Authorization'] = `Bearer ${session.access_token}`;
+  return h;
+}
+
+function parseDownloadFilename(
+  contentDisposition: string | null,
+  fallback: string
+): string {
+  if (!contentDisposition) return fallback;
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    return decodeURIComponent(utf8Match[1].trim().replace(/^"|"$/g, ''));
+  }
+  const simpleMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
+  if (simpleMatch?.[1]) return simpleMatch[1].trim();
+  return fallback;
+}
+
+async function safe<T>(
+  methodName: string,
+  fn: () => Promise<T>,
+  fallback: T
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    console.warn(
+      `[v2-apiClient] ${methodName} failed:`,
+      err instanceof Error ? err.message : err
+    );
+    return fallback;
+  }
+}
+
+function notImpl<T>(methodName: string, fallback: T): Promise<T> {
+  console.warn(`[v2-apiClient] ${methodName}: no v4 equivalent; returning default`);
+  return Promise.resolve(fallback);
+}
+
+async function fetchBlob(
+  methodName: string,
+  path: string,
+  fallbackFilename: string
+): Promise<{ blob: Blob; filename: string }> {
+  try {
+    const res = await fetch(`${BASE}${path}`, {
+      method: 'GET',
+      headers: await authHeaders(),
+    });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    return {
+      blob: await res.blob(),
+      filename: parseDownloadFilename(
+        res.headers.get('content-disposition'),
+        fallbackFilename
+      ),
+    };
+  } catch (err) {
+    console.warn(
+      `[v2-apiClient] ${methodName} failed:`,
+      err instanceof Error ? err.message : err
+    );
+    return { blob: new Blob([''], { type: 'text/plain' }), filename: fallbackFilename };
+  }
+}
+
+type DailyStatsSummary = {
+  totalOrders: number;
+  needToShip: number;
+  upcomingOrders: number;
+  window: { from: string; to: string };
+};
+
+type V4DailyStatsResponse = {
+  data: unknown;
+  summary: {
+    totalOrders: number;
+    needToShip: number;
+    shippedTotal: number;
+    upcomingOrders: number;
+    window: { from: string; to: string };
+  };
+};
+
+type SettingsRow = { key: string; value: string };
+type OrderDimsRow = { l: number; w: number; h: number; weightOz: number | null } | null;
+
+export const apiClient = {
+  // ─── Auth / token (no-op — v4 uses Supabase) ────────────────────────────────
+  setToken(_token: string): void {
+    // No-op: v4 reads the session from supabase.auth; token is managed there.
+  },
+
+  // ─── Init / bootstrap ───────────────────────────────────────────────────────
+  fetchCounts(_filter?: { dateStart?: string; dateEnd?: string }): Promise<any> {
+    return safe('fetchCounts', () => api.get<any>('/init/counts'), {});
+  },
+
+  fetchStores(): Promise<any[]> {
+    return safe(
+      'fetchStores',
+      async () => {
+        const data = await api.get<any>('/init/init-data');
+        return Array.isArray(data?.stores) ? data.stores : [];
+      },
+      []
+    );
+  },
+
+  fetchInitData(): Promise<any> {
+    return safe('fetchInitData', () => api.get<any>('/init/init-data'), {
+      stores: [],
+      carriers: [],
+    });
+  },
+
+  // ─── Clients ────────────────────────────────────────────────────────────────
+  fetchClients(): Promise<any[]> {
+    return safe(
+      'fetchClients',
+      async () => {
+        const res = await api.get<any>('/clients');
+        return Array.isArray(res) ? res : [];
+      },
+      []
+    );
+  },
+
+  listClients(): Promise<any[]> {
+    return apiClient.fetchClients();
+  },
+
+  fetchClientDetail(clientId: number): Promise<any> {
+    return safe(
+      'fetchClientDetail',
+      () => api.get<any>(`/clients/${clientId}`),
+      null
+    );
+  },
+
+  createClient(data: Record<string, unknown>): Promise<any> {
+    return safe('createClient', () => api.post<any>('/clients', data), {});
+  },
+
+  createClientRecord(data: Record<string, unknown>): Promise<any> {
+    return safe('createClientRecord', () => api.post<any>('/clients', data), {});
+  },
+
+  updateClient(clientId: number, data: Record<string, unknown>): Promise<any> {
+    return safe(
+      'updateClient',
+      () => api.patch<any>(`/clients/${clientId}`, data),
+      {}
+    );
+  },
+
+  updateClientRecord(clientId: number, data: Record<string, unknown>): Promise<any> {
+    return apiClient.updateClient(clientId, data);
+  },
+
+  deleteClientRecord(clientId: number): Promise<any> {
+    return safe(
+      'deleteClientRecord',
+      () => api.delete<any>(`/clients/${clientId}`),
+      { ok: true }
+    );
+  },
+
+  syncClientsFromStores(): Promise<any> {
+    return safe(
+      'syncClientsFromStores',
+      () => api.post<any>('/clients/sync-stores', {}),
+      {}
+    );
+  },
+
+  // ─── Carrier accounts ───────────────────────────────────────────────────────
+  fetchCarrierAccounts(): Promise<any[]> {
+    return safe(
+      'fetchCarrierAccounts',
+      async () => {
+        const res = await api.get<any>('/init/carrier-accounts');
+        if (Array.isArray(res)) return res;
+        if (Array.isArray(res?.carriers)) return res.carriers;
+        return [];
+      },
+      []
+    );
+  },
+
+  // ─── Column preferences (settings kv store) ─────────────────────────────────
+  fetchColumnPrefs(): Promise<any> {
+    return safe(
+      'fetchColumnPrefs',
+      async () => {
+        const row = await api.get<SettingsRow>('/settings/orders.columnPrefs');
+        try {
+          return JSON.parse(row.value);
+        } catch {
+          return null;
+        }
+      },
+      null
+    );
+  },
+
+  saveColumnPrefs(prefs: unknown): Promise<any> {
+    return safe(
+      'saveColumnPrefs',
+      () =>
+        api.put<any>('/settings/orders.columnPrefs', {
+          value: JSON.stringify(prefs ?? null),
+        }),
+      {}
+    );
+  },
+
+  // ─── Sync status ────────────────────────────────────────────────────────────
+  fetchLegacySyncStatus(): Promise<any> {
+    return safe('fetchLegacySyncStatus', () => api.get<any>('/sync/status'), {});
+  },
+
+  triggerLegacySync(mode?: 'incremental' | 'full'): Promise<any> {
+    return safe(
+      'triggerLegacySync',
+      () =>
+        api.post<any>('/sync/orders', mode === 'full' ? { full: true } : {}),
+      { queued: false }
+    );
+  },
+
+  fetchShipmentSyncStatus(): Promise<any> {
+    // v4 /shipments doesn't expose a /status endpoint; the list endpoint is
+    // the closest thing. Return an idle snapshot so the topbar pill can render.
+    return notImpl('fetchShipmentSyncStatus', { status: 'idle' });
+  },
+
+  triggerShipmentSync(): Promise<any> {
+    return notImpl('triggerShipmentSync', { queued: false });
+  },
+
+  clearAndRefetchAllRates(): Promise<any> {
+    return notImpl('clearAndRefetchAllRates', { ok: false });
+  },
+
+  // ─── Orders: list / detail / mutations ──────────────────────────────────────
+  fetchOrders(query: Record<string, unknown>): Promise<any> {
+    return safe(
+      'fetchOrders',
+      () => api.get<any>(`/orders${qs(query as any)}`),
+      { data: [], pagination: { page: 1, pageSize: 0, total: 0, totalPages: 0 } }
+    );
+  },
+
+  listOrders(query: Record<string, unknown>): Promise<any> {
+    return apiClient.fetchOrders(query);
+  },
+
+  fetchOrderFull(orderId: number): Promise<any> {
+    return safe(
+      'fetchOrderFull',
+      () => api.get<any>(`/orders/${orderId}/full`),
+      null
+    );
+  },
+
+  updateOrder(orderId: number, data: Record<string, unknown>): Promise<any> {
+    return safe(
+      'updateOrder',
+      () => api.patch<any>(`/orders/${orderId}`, data),
+      {}
+    );
+  },
+
+  setOrderResidential(orderId: number, residential: boolean | null): Promise<any> {
+    return safe(
+      'setOrderResidential',
+      () => api.patch<any>(`/orders/${orderId}`, { residential }),
+      {}
+    );
+  },
+
+  markOrderShippedExternal(_orderId: number, _source: string): Promise<any> {
+    // v4's PATCH /orders/:id schema doesn't accept externally_shipped /
+    // external_source. Needs a backend endpoint before this works.
+    return notImpl('markOrderShippedExternal', { ok: false });
+  },
+
+  setOrderSelectedPid(orderId: number, pid: number | null): Promise<any> {
+    return safe(
+      'setOrderSelectedPid',
+      () => api.patch<any>(`/orders/${orderId}`, { selectedPid: pid }),
+      {}
+    );
+  },
+
+  setOrderSelectedPackageId(
+    orderId: number,
+    pid: string | number | null
+  ): Promise<any> {
+    return safe(
+      'setOrderSelectedPackageId',
+      () =>
+        api.patch<any>(`/orders/${orderId}`, {
+          selectedPackageId: pid == null ? null : String(pid),
+        }),
+      {}
+    );
+  },
+
+  saveOrderBestRate(
+    orderId: number,
+    rate: unknown,
+    dimsLabel?: string | null
+  ): Promise<any> {
+    return safe(
+      'saveOrderBestRate',
+      () =>
+        api.patch<any>(`/orders/${orderId}`, {
+          bestRateJson: rate,
+          bestRateDims: dimsLabel ?? null,
+        }),
+      {}
+    );
+  },
+
+  // ─── Orders: stats / picklist / export / dims ───────────────────────────────
+  fetchDailyStats(query?: {
+    status?: string;
+    dateFrom?: string;
+    dateTo?: string;
+  }): Promise<DailyStatsSummary> {
+    const nowIso = new Date().toISOString();
+    const yesterdayIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const fallback: DailyStatsSummary = {
+      totalOrders: 0,
+      needToShip: 0,
+      upcomingOrders: 0,
+      window: { from: yesterdayIso, to: nowIso },
+    };
+    return safe(
+      'fetchDailyStats',
+      async () => {
+        const res = await api.get<V4DailyStatsResponse>(
+          `/orders/daily-stats${qs({
+            dateFrom: query?.dateFrom ?? yesterdayIso,
+            dateTo: query?.dateTo ?? nowIso,
+          })}`
+        );
+        return {
+          totalOrders: res.summary.totalOrders,
+          needToShip: res.summary.needToShip,
+          upcomingOrders: res.summary.upcomingOrders,
+          window: res.summary.window,
+        };
+      },
+      fallback
+    );
+  },
+
+  fetchPicklist(query: {
+    status?: string;
+    clientId?: number;
+    dateFrom?: string;
+    dateTo?: string;
+  }): Promise<any> {
+    return safe(
+      'fetchPicklist',
+      () =>
+        api.get<any>(
+          `/orders/picklist${qs({
+            status: query.status,
+            clientId: query.clientId,
+            dateFrom: query.dateFrom,
+            dateTo: query.dateTo,
+          })}`
+        ),
+      { skus: [], totalSkus: 0, totalUnits: 0 }
+    );
+  },
+
+  downloadOrdersExport(query?: {
+    orderStatus?: string;
+    pageSize?: number;
+    dateFrom?: string;
+    dateTo?: string;
+  }): Promise<{ blob: Blob; filename: string }> {
+    // v4 expects `status` (not `orderStatus`) and caps at 5000 rows server-side.
+    const query2 = qs({
+      status: query?.orderStatus,
+      dateFrom: query?.dateFrom,
+      dateTo: query?.dateTo,
+    });
+    return fetchBlob(
+      'downloadOrdersExport',
+      `/orders/export${query2}`,
+      `orders_export_${Date.now()}.csv`
+    );
+  },
+
+  fetchOrderDims(orderId: number): Promise<OrderDimsRow> {
+    return safe(
+      'fetchOrderDims',
+      () =>
+        api
+          .get<{ data: OrderDimsRow }>(`/orders/${orderId}/dims`)
+          .then((r) => r.data),
+      null
+    );
+  },
+
+  saveOrderDims(
+    orderId: number,
+    dims: { l: number; w: number; h: number; weightOz?: number }
+  ): Promise<any> {
+    return safe(
+      'saveOrderDims',
+      () =>
+        api
+          .post<{ data: any }>(`/orders/${orderId}/save-dims`, dims)
+          .then((r) => r.data),
+      {}
+    );
+  },
+
+  // ─── Labels ────────────────────────────────────────────────────────────────
+  createLabel(payload: unknown): Promise<any> {
+    return safe('createLabel', () => api.post<any>('/labels', payload), {});
+  },
+
+  retrieveLabel(orderLookup: number | string): Promise<any> {
+    return safe(
+      'retrieveLabel',
+      () => api.get<any>(`/labels/${encodeURIComponent(String(orderLookup))}`),
+      { data: [] }
+    );
+  },
+
+  async openLabel(url: string): Promise<void> {
+    if (!url) return;
+    window.open(url, '_blank', 'noopener,noreferrer');
+  },
+
+  // ─── Print queue ───────────────────────────────────────────────────────────
+  fetchQueue(clientId: number, historyVisible = false): Promise<any> {
+    return safe(
+      'fetchQueue',
+      () =>
+        api.get<any>(
+          `/print-queue${qs({
+            clientId,
+            includePrinted: historyVisible ? '1' : undefined,
+          })}`
+        ),
+      { entries: [], count: 0 }
+    );
+  },
+
+  addToQueue(payload: Record<string, unknown>): Promise<any> {
+    return safe('addToQueue', () => api.post<any>('/print-queue/add', payload), {});
+  },
+
+  clearQueue(clientId: number): Promise<any> {
+    return safe(
+      'clearQueue',
+      () => api.post<any>('/print-queue/clear', { client_id: clientId }),
+      { cleared_count: 0 }
+    );
+  },
+
+  removeFromQueue(entryId: string, _clientId: number): Promise<any> {
+    // v4's api.delete helper doesn't accept a body; v4 endpoint treats
+    // client_id in the body as optional so omitting it is safe.
+    return safe(
+      'removeFromQueue',
+      () => api.delete<any>(`/print-queue/${encodeURIComponent(entryId)}`),
+      { removed_entry: entryId }
+    );
+  },
+
+  startQueuePrintJob(
+    clientId: number,
+    entryIds: string[],
+    combine = true
+  ): Promise<any> {
+    return safe(
+      'startQueuePrintJob',
+      () =>
+        api.post<any>('/print-queue/print', {
+          client_id: clientId,
+          queue_entry_ids: entryIds,
+          merge_headers: combine,
+        }),
+      {}
+    );
+  },
+
+  fetchQueuePrintJobStatus(jobId: string): Promise<any> {
+    return safe(
+      'fetchQueuePrintJobStatus',
+      () =>
+        api.get<any>(`/print-queue/print/status/${encodeURIComponent(jobId)}`),
+      { status: 'unknown' }
+    );
+  },
+
+  downloadQueuePrintJob(
+    jobId: string
+  ): Promise<{ blob: Blob; filename: string }> {
+    return fetchBlob(
+      'downloadQueuePrintJob',
+      `/print-queue/print/download/${encodeURIComponent(jobId)}`,
+      `batch_print_${jobId}.pdf`
+    );
+  },
+
+  // ─── Products ──────────────────────────────────────────────────────────────
+  fetchProducts(query?: Record<string, unknown>): Promise<any[]> {
+    return safe(
+      'fetchProducts',
+      async () => {
+        const res = await api.get<any>(`/products${qs((query ?? {}) as any)}`);
+        if (Array.isArray(res)) return res;
+        if (Array.isArray(res?.data)) return res.data;
+        return [];
+      },
+      []
+    );
+  },
+
+  fetchProductsBySku(sku: string): Promise<any> {
+    return safe(
+      'fetchProductsBySku',
+      () => api.get<any>(`/products/by-sku/${encodeURIComponent(sku)}`),
+      null
+    );
+  },
+
+  saveProductDefaults(data: Record<string, unknown>): Promise<any> {
+    return safe('saveProductDefaults', () => api.post<any>('/products', data), {});
+  },
+
+  saveProductDefaultsV2(data: Record<string, unknown>): Promise<any> {
+    return safe(
+      'saveProductDefaultsV2',
+      () => api.post<any>('/products/save-defaults', data),
+      {}
+    );
+  },
+
+  // ─── Inventory ─────────────────────────────────────────────────────────────
+  fetchInventory(query?: Record<string, unknown>): Promise<any[]> {
+    return safe(
+      'fetchInventory',
+      async () => {
+        const res = await api.get<any>(`/inventory${qs((query ?? {}) as any)}`);
+        if (Array.isArray(res)) return res;
+        if (Array.isArray(res?.data)) return res.data;
+        return [];
+      },
+      []
+    );
+  },
+
+  fetchInventoryDetail(invSkuId: number): Promise<any> {
+    return safe(
+      'fetchInventoryDetail',
+      () => api.get<any>(`/inventory/${invSkuId}`),
+      null
+    );
+  },
+
+  updateInventoryItem(invSkuId: number, data: Record<string, unknown>): Promise<any> {
+    return safe(
+      'updateInventoryItem',
+      () => api.patch<any>(`/inventory/${invSkuId}`, data),
+      {}
+    );
+  },
+
+  fetchInventoryAlerts(clientId?: number): Promise<any[]> {
+    // v4 has no /inventory/alerts endpoint yet — derive client-side from
+    // the lowStock flag on the list endpoint.
+    return safe(
+      'fetchInventoryAlerts',
+      async () => {
+        const res = await api.get<any>(
+          `/inventory${qs({ clientId, lowStock: true, pageSize: 500 } as any)}`
+        );
+        if (Array.isArray(res)) return res;
+        if (Array.isArray(res?.data)) return res.data;
+        return [];
+      },
+      []
+    );
+  },
+
+  fetchInventoryItemLedger(invSkuId: number): Promise<any[]> {
+    return safe(
+      'fetchInventoryItemLedger',
+      async () => {
+        const res = await api.get<any>(`/inventory/${invSkuId}/ledger`);
+        if (Array.isArray(res?.data)) return res.data;
+        if (Array.isArray(res)) return res;
+        return [];
+      },
+      []
+    );
+  },
+
+  fetchInventoryLedger(_query: Record<string, unknown>): Promise<any[]> {
+    // v4 has no global /inventory/ledger; only per-item /:id/ledger.
+    return notImpl('fetchInventoryLedger', []);
+  },
+
+  fetchInventorySkuOrders(_invSkuId: number, _days?: number): Promise<any> {
+    return notImpl('fetchInventorySkuOrders', { orders: [] });
+  },
+
+  receiveInventory(data: Record<string, unknown>): Promise<any[]> {
+    // v2 receiveInventory payload shape differs from v4's per-item endpoint.
+    // v4 requires POST /inventory/:id/receive with {qty, note, orderId?}.
+    // Best-effort: if payload has an inventoryId+qty, call the endpoint.
+    return safe(
+      'receiveInventory',
+      async () => {
+        const invId = (data as any)?.invSkuId ?? (data as any)?.inventoryId;
+        if (!invId) {
+          console.warn(
+            '[v2-apiClient] receiveInventory: payload missing inventoryId; returning []'
+          );
+          return [];
+        }
+        const res = await api.post<any>(`/inventory/${invId}/receive`, {
+          qty: (data as any).qty,
+          note: (data as any).note,
+          orderId: (data as any).orderId,
+        });
+        return Array.isArray(res) ? res : [res];
+      },
+      []
+    );
+  },
+
+  submitInventoryReceive(data: Record<string, unknown>): Promise<any> {
+    return safe(
+      'submitInventoryReceive',
+      async () => {
+        const received = await apiClient.receiveInventory(data);
+        return { ok: true, received } as { ok: boolean; received: any[] };
+      },
+      { ok: false, received: [] as any[] }
+    );
+  },
+
+  adjustInventory(data: Record<string, unknown>): Promise<any> {
+    return safe(
+      'adjustInventory',
+      async () => {
+        const invId = (data as any)?.invSkuId ?? (data as any)?.inventoryId;
+        if (!invId) return {};
+        return api.post<any>(`/inventory/${invId}/adjust`, {
+          qty: (data as any).qty,
+          note: (data as any).note,
+          orderId: (data as any).orderId,
+        });
+      },
+      {}
+    );
+  },
+
+  submitInventoryAdjustment(data: Record<string, unknown>): Promise<any> {
+    return safe(
+      'submitInventoryAdjustment',
+      async () => {
+        const result = await apiClient.adjustInventory(data);
+        return {
+          ok: true,
+          newStock: (result as any)?.stockQty ?? 0,
+        } as { ok: boolean; newStock: number };
+      },
+      { ok: false, newStock: 0 }
+    );
+  },
+
+  populateInventory(): Promise<any> {
+    // v2's "populate" is closest to v4's /import-from-orders (seed SKUs from orders).
+    return safe(
+      'populateInventory',
+      () => api.post<any>('/inventory/import-from-orders', {}),
+      {}
+    );
+  },
+
+  importInventoryDimensions(_clientId?: number): Promise<any> {
+    // v2's /import-dims isn't 1:1 with v4 — /sync-products is the closest
+    // (pulls dims from ShipStation products). Callers may want a dedicated
+    // endpoint; for now this returns a sync-products result.
+    return safe(
+      'importInventoryDimensions',
+      () => api.post<any>('/inventory/sync-products', {}),
+      {}
+    );
+  },
+
+  bulkUpdateInventoryDimensions(data: Record<string, unknown>): Promise<any> {
+    return safe(
+      'bulkUpdateInventoryDimensions',
+      () => api.post<any>('/inventory/bulk-update-dims', data),
+      { updated: 0, skipped: 0 }
+    );
+  },
+
+  setInventoryParent(invSkuId: number, data: Record<string, unknown>): Promise<any> {
+    return safe(
+      'setInventoryParent',
+      () => api.put<any>(`/inventory/${invSkuId}/set-parent`, data),
+      {}
+    );
+  },
+
+  // ─── Parent SKUs ────────────────────────────────────────────────────────────
+  listParentSkus(clientId: number): Promise<any[]> {
+    return safe(
+      'listParentSkus',
+      async () => {
+        const res = await api.get<any>(`/parent-skus${qs({ clientId })}`);
+        if (Array.isArray(res)) return res;
+        if (Array.isArray(res?.data)) return res.data;
+        return [];
+      },
+      []
+    );
+  },
+
+  createParentSku(data: Record<string, unknown>): Promise<any> {
+    return safe('createParentSku', () => api.post<any>('/parent-skus', data), {});
+  },
+
+  fetchParentSkuDetail(parentSkuId: number): Promise<any> {
+    return safe(
+      'fetchParentSkuDetail',
+      () => api.get<any>(`/inventory/parent/${parentSkuId}`),
+      null
+    );
+  },
+
+  // ─── Locations ─────────────────────────────────────────────────────────────
+  fetchLocations(): Promise<any[]> {
+    return safe(
+      'fetchLocations',
+      async () => {
+        const res = await api.get<any>('/locations');
+        if (Array.isArray(res)) return res;
+        if (Array.isArray(res?.data)) return res.data;
+        return [];
+      },
+      []
+    );
+  },
+
+  fetchLocationDetail(locationId: number): Promise<any> {
+    return safe(
+      'fetchLocationDetail',
+      () => api.get<any>(`/locations/${locationId}`),
+      null
+    );
+  },
+
+  createLocation(data: Record<string, unknown>): Promise<any> {
+    return safe('createLocation', () => api.post<any>('/locations', data), {});
+  },
+
+  createLocationMutation(data: Record<string, unknown>): Promise<any> {
+    return apiClient.createLocation(data);
+  },
+
+  updateLocation(locationId: number, data: Record<string, unknown>): Promise<any> {
+    return safe(
+      'updateLocation',
+      () => api.patch<any>(`/locations/${locationId}`, data),
+      {}
+    );
+  },
+
+  updateLocationMutation(
+    locationId: number,
+    data: Record<string, unknown>
+  ): Promise<any> {
+    return apiClient.updateLocation(locationId, data);
+  },
+
+  deleteLocation(locationId: number): Promise<any> {
+    return safe(
+      'deleteLocation',
+      () => api.delete<any>(`/locations/${locationId}`),
+      { ok: true }
+    );
+  },
+
+  deleteLocationMutation(locationId: number): Promise<any> {
+    return apiClient.deleteLocation(locationId);
+  },
+
+  setDefaultLocation(locationId: number): Promise<any> {
+    return safe(
+      'setDefaultLocation',
+      () => api.post<any>(`/locations/${locationId}/default`, {}),
+      {}
+    );
+  },
+
+  // ─── Packages ──────────────────────────────────────────────────────────────
+  fetchPackages(source?: string): Promise<any[]> {
+    return safe(
+      'fetchPackages',
+      async () => {
+        const res = await api.get<any>(`/packages${qs({ source })}`);
+        return Array.isArray(res) ? res : [];
+      },
+      []
+    );
+  },
+
+  fetchLowStockPackages(): Promise<any[]> {
+    // v4 has no /packages/low-stock — derive client-side.
+    return safe(
+      'fetchLowStockPackages',
+      async () => {
+        const res = await api.get<any[]>('/packages');
+        if (!Array.isArray(res)) return [];
+        return res.filter(
+          (p: any) =>
+            typeof p?.stockQty === 'number' &&
+            typeof p?.reorderLevel === 'number' &&
+            p.stockQty <= p.reorderLevel
+        );
+      },
+      []
+    );
+  },
+
+  createPackageMutation(data: Record<string, unknown>): Promise<any> {
+    return safe(
+      'createPackageMutation',
+      () => api.post<any>('/packages', data),
+      {}
+    );
+  },
+
+  updatePackageMutation(
+    packageId: number,
+    data: Record<string, unknown>
+  ): Promise<any> {
+    return safe(
+      'updatePackageMutation',
+      () => api.patch<any>(`/packages/${packageId}`, data),
+      {}
+    );
+  },
+
+  deletePackageMutation(packageId: number): Promise<any> {
+    return safe(
+      'deletePackageMutation',
+      () => api.delete<any>(`/packages/${packageId}`),
+      { ok: true }
+    );
+  },
+
+  setPackageReorderLevel(packageId: number, reorderLevel: number): Promise<any> {
+    // v4 doesn't expose a dedicated /reorder-level route; use the general
+    // PATCH body, which already accepts reorderLevel.
+    return safe(
+      'setPackageReorderLevel',
+      () => api.patch<any>(`/packages/${packageId}`, { reorderLevel }),
+      { ok: false }
+    );
+  },
+
+  receivePackage(packageId: number, data: Record<string, unknown>): Promise<any> {
+    return safe(
+      'receivePackage',
+      () => api.post<any>(`/packages/${packageId}/receive`, data),
+      {}
+    );
+  },
+
+  adjustPackage(packageId: number, data: Record<string, unknown>): Promise<any> {
+    return safe(
+      'adjustPackage',
+      () => api.post<any>(`/packages/${packageId}/adjust`, data),
+      {}
+    );
+  },
+
+  fetchPackageLedger(packageId: number): Promise<any[]> {
+    return safe(
+      'fetchPackageLedger',
+      async () => {
+        const res = await api.get<any>(`/packages/${packageId}/ledger`);
+        if (Array.isArray(res?.data)) return res.data;
+        if (Array.isArray(res)) return res;
+        return [];
+      },
+      []
+    );
+  },
+
+  syncCarrierPackages(): Promise<any> {
+    return safe(
+      'syncCarrierPackages',
+      () => api.post<any>('/packages/sync', {}),
+      { inserted: 0, skipped: 0, message: '' }
+    );
+  },
+
+  // ─── Billing ───────────────────────────────────────────────────────────────
+  fetchBillingConfigs(): Promise<any[]> {
+    return safe(
+      'fetchBillingConfigs',
+      async () => {
+        const res = await api.get<any>('/billing/config');
+        if (Array.isArray(res)) return res;
+        if (Array.isArray(res?.data)) return res.data;
+        return [];
+      },
+      []
+    );
+  },
+
+  updateBillingConfig(clientId: number, data: Record<string, unknown>): Promise<any> {
+    return safe(
+      'updateBillingConfig',
+      () => api.put<any>(`/billing/config/${clientId}`, data),
+      {}
+    );
+  },
+
+  generateBilling(from: string, to: string, clientId?: number): Promise<any> {
+    return safe(
+      'generateBilling',
+      () =>
+        api.post<any>('/billing/generate', {
+          from,
+          to,
+          ...(clientId != null ? { clientId } : {}),
+        }),
+      {}
+    );
+  },
+
+  fetchBillingSummary(from: string, to: string, clientId?: number): Promise<any[]> {
+    return safe(
+      'fetchBillingSummary',
+      async () => {
+        const res = await api.get<any>(
+          `/billing/summary${qs({ from, to, clientId })}`
+        );
+        if (Array.isArray(res)) return res;
+        if (Array.isArray(res?.data)) return res.data;
+        return [];
+      },
+      []
+    );
+  },
+
+  fetchBillingDetails(from: string, to: string, clientId: number): Promise<any[]> {
+    return safe(
+      'fetchBillingDetails',
+      async () => {
+        const res = await api.get<any>(
+          `/billing/details${qs({ from, to, clientId })}`
+        );
+        if (Array.isArray(res)) return res;
+        if (Array.isArray(res?.data)) return res.data;
+        return [];
+      },
+      []
+    );
+  },
+
+  fetchBillingPackagePrices(clientId: number): Promise<any[]> {
+    return safe(
+      'fetchBillingPackagePrices',
+      async () => {
+        const res = await api.get<any>(
+          `/billing/package-prices${qs({ clientId })}`
+        );
+        if (Array.isArray(res)) return res;
+        if (Array.isArray(res?.data)) return res.data;
+        return [];
+      },
+      []
+    );
+  },
+
+  saveBillingPackagePrices(data: Record<string, unknown>): Promise<any> {
+    return safe(
+      'saveBillingPackagePrices',
+      () => api.put<any>('/billing/package-prices', data),
+      {}
+    );
+  },
+
+  setDefaultPackagePrice(packageId: number, price: number): Promise<any> {
+    return safe(
+      'setDefaultPackagePrice',
+      () =>
+        api.post<any>('/billing/package-prices/set-default', { packageId, price }),
+      {}
+    );
+  },
+
+  fetchBillingReferenceRates(): Promise<any> {
+    return safe(
+      'fetchBillingReferenceRates',
+      () => api.post<any>('/billing/fetch-ref-rates', {}),
+      {}
+    );
+  },
+
+  fetchBillingReferenceRateStatus(): Promise<any> {
+    return safe(
+      'fetchBillingReferenceRateStatus',
+      () => api.get<any>('/billing/fetch-ref-rates/status'),
+      {}
+    );
+  },
+
+  backfillBillingReferenceRates(data: Record<string, unknown>): Promise<any> {
+    return safe(
+      'backfillBillingReferenceRates',
+      () => api.post<any>('/billing/backfill-ref-rates', data),
+      {}
+    );
+  },
+
+  // ─── Rates ─────────────────────────────────────────────────────────────────
+  fetchRates(data: Record<string, unknown>): Promise<any[]> {
+    return safe(
+      'fetchRates',
+      async () => {
+        const res = await api.post<any>('/rates', data);
+        if (Array.isArray(res)) return res;
+        if (Array.isArray(res?.rates)) return res.rates;
+        return [];
+      },
+      []
+    );
+  },
+
+  // ─── Analysis ──────────────────────────────────────────────────────────────
+  fetchAnalysisDailySales(query: Record<string, unknown>): Promise<any> {
+    // v4 analysis exposes /daily-shipments (not /daily-sales). Best-effort map.
+    return safe(
+      'fetchAnalysisDailySales',
+      () => api.get<any>(`/analysis/daily-shipments${qs(query as any)}`),
+      { data: [] }
+    );
+  },
+
+  fetchAnalysisSkus(query: Record<string, unknown>): Promise<any> {
+    // v4 exposes /top-skus and /sku-breakdown; using /top-skus as the default.
+    return safe(
+      'fetchAnalysisSkus',
+      () => api.get<any>(`/analysis/top-skus${qs(query as any)}`),
+      { data: [] }
+    );
+  },
+
+  // ─── Manifests ─────────────────────────────────────────────────────────────
+  downloadManifest(data: {
+    startDate?: string;
+    endDate?: string;
+    [k: string]: unknown;
+  }): Promise<{ blob: Blob; filename: string }> {
+    // v4 exposes GET /manifests/generate with query params. Flatten v2's body
+    // to query string.
+    const path = `/manifests/generate${qs(data as any)}`;
+    const start = data.startDate ?? 'unknown';
+    const end = data.endDate ?? 'unknown';
+    return fetchBlob('downloadManifest', path, `manifest_${start}_${end}.csv`);
+  },
+};
+
+export type V2ApiClient = typeof apiClient;
+export default apiClient;

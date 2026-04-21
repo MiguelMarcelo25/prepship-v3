@@ -1,0 +1,49 @@
+.billing-grid{
+  align-items:start;
+}
+
+.billing-summary-row{
+  cursor:pointer;
+}
+
+.billing-summary-row:hover{
+  background:var(--surface2);
+}
+
+.billing-summary-client-cell{
+  display:inline-flex;
+  align-items:center;
+  gap:0;
+  flex-wrap:wrap;
+}
+
+.billing-detail-toggle{
+  padding:2px 8px;
+  font-size:10px;
+  border-radius:10px;
+  cursor:pointer;
+  border:1px solid var(--border);
+  background:var(--surface2);
+  color:var(--text2);
+  font-weight:600;
+}
+
+.billing-detail-toggle.active{
+  background:var(--ss-blue);
+  color:#fff;
+}
+
+.billing-detail-rate-hit{
+  border:2px solid var(--ss-blue);
+  border-radius:4px;
+}
+
+.billing-detail-ss-row{
+  background:rgba(234,179,8,.06);
+}
+
+@media (max-width: 1100px) {
+  .billing-grid{
+    grid-template-columns:1fr !important;
+  }
+}

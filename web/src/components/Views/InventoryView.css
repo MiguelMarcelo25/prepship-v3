@@ -1,0 +1,91 @@
+.inventory-overlay{
+  position:fixed;
+  inset:0;
+  background:rgba(0,0,0,.45);
+  z-index:3000;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  overflow-y:auto;
+  padding:20px;
+}
+
+.inventory-modal{
+  background:var(--surface);
+  border-radius:10px;
+  padding:22px 24px;
+  width:420px;
+  max-width:95vw;
+  box-shadow:0 8px 40px rgba(0,0,0,.3);
+  margin:auto;
+}
+
+.inventory-drawer-overlay{
+  position:fixed;
+  inset:0;
+  background:rgba(0,0,0,.35);
+  z-index:4000;
+  display:flex;
+  justify-content:flex-end;
+}
+
+.inventory-drawer-panel{
+  width:680px;
+  max-width:100vw;
+  height:100%;
+  background:var(--surface);
+  display:flex;
+  flex-direction:column;
+  box-shadow:-4px 0 32px rgba(0,0,0,.25);
+  overflow:hidden;
+}
+
+.inventory-inline-button{
+  background:none;
+  border:none;
+  color:inherit;
+  padding:0;
+  cursor:pointer;
+  font:inherit;
+}
+
+.inventory-recv-row{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  margin-bottom:8px;
+  padding:8px;
+  background:var(--surface2);
+  border-radius:6px;
+  border:1px solid var(--border);
+}
+
+.inventory-thumb-preview{
+  position:fixed;
+  z-index:99999;
+  background:var(--bg, #fff);
+  border:1px solid var(--border, #ddd);
+  border-radius:8px;
+  box-shadow:0 6px 24px rgba(0,0,0,.22);
+  padding:5px;
+  pointer-events:none;
+}
+
+.inventory-thumb-preview img{
+  width:160px;
+  height:160px;
+  object-fit:contain;
+  border-radius:5px;
+  display:block;
+}
+
+@media (max-width: 768px) {
+  .inventory-modal{
+    width:min(95vw, 420px);
+    padding:18px;
+  }
+
+  .inventory-drawer-panel{
+    width:100vw;
+  }
+}

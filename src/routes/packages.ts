@@ -1,9 +1,10 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { db } from '../db/client';
 import { packages } from '../db/schema/packages';
+import { packageLedger } from '../db/schema/package-ledger';
 import { ssRequest } from '../lib/shipstation';
 import type { CarriersResponse } from '../lib/shipstation/types';
 
@@ -112,6 +113,115 @@ app.post('/sync', async (c) => {
     skipped,
     message: `Synced ${inserted} new packages from ShipStation (${skipped} already existed)`,
   });
+});
+
+const receiveBody = z.object({
+  qty: z.number().int().positive(),
+  unitCost: z.number().nonnegative().optional(),
+  note: z.string().max(500).optional(),
+});
+
+app.post('/:id{[0-9]+}/receive', zValidator('json', receiveBody), async (c) => {
+  const id = Number(c.req.param('id'));
+  const { qty, unitCost, note } = c.req.valid('json');
+
+  const result = await db.transaction(async (tx) => {
+    const [pkg] = await tx
+      .select()
+      .from(packages)
+      .where(eq(packages.id, id))
+      .limit(1);
+    if (!pkg) return null;
+
+    const balanceAfter = pkg.stockQty + qty;
+    const patch: Record<string, unknown> = {
+      stockQty: balanceAfter,
+      updatedAt: new Date(),
+    };
+    if (unitCost !== undefined) patch.unitCost = String(unitCost);
+
+    const [updated] = await tx
+      .update(packages)
+      .set(patch)
+      .where(eq(packages.id, id))
+      .returning();
+
+    const [entry] = await tx
+      .insert(packageLedger)
+      .values({
+        packageId: id,
+        changeType: 'receive',
+        qtyDelta: qty,
+        balanceAfter,
+        note: note ?? null,
+        unitCost: unitCost !== undefined ? String(unitCost) : null,
+      })
+      .returning();
+
+    return { package: updated, ledgerEntry: entry };
+  });
+
+  if (!result) return c.json({ error: 'Package not found' }, 404);
+  return c.json({ data: result });
+});
+
+const adjustBody = z.object({
+  qtyDelta: z.number().int().refine((n) => n !== 0, 'qtyDelta cannot be 0'),
+  note: z.string().max(500).optional(),
+});
+
+app.post('/:id{[0-9]+}/adjust', zValidator('json', adjustBody), async (c) => {
+  const id = Number(c.req.param('id'));
+  const { qtyDelta, note } = c.req.valid('json');
+
+  const result = await db.transaction(async (tx) => {
+    const [pkg] = await tx
+      .select()
+      .from(packages)
+      .where(eq(packages.id, id))
+      .limit(1);
+    if (!pkg) return null;
+
+    const balanceAfter = pkg.stockQty + qtyDelta;
+    const [updated] = await tx
+      .update(packages)
+      .set({ stockQty: balanceAfter, updatedAt: new Date() })
+      .where(eq(packages.id, id))
+      .returning();
+
+    const [entry] = await tx
+      .insert(packageLedger)
+      .values({
+        packageId: id,
+        changeType: 'adjust',
+        qtyDelta,
+        balanceAfter,
+        note: note ?? null,
+      })
+      .returning();
+
+    return { package: updated, ledgerEntry: entry };
+  });
+
+  if (!result) return c.json({ error: 'Package not found' }, 404);
+  return c.json({ data: result });
+});
+
+app.get('/:id{[0-9]+}/ledger', async (c) => {
+  const id = Number(c.req.param('id'));
+  const rawLimit = Number(c.req.query('limit'));
+  const limit = Number.isFinite(rawLimit) && rawLimit > 0
+    ? Math.min(rawLimit, 500)
+    : 100;
+
+  const rows = await db
+    .select()
+    .from(packageLedger)
+    .where(eq(packageLedger.packageId, id))
+    .orderBy(desc(packageLedger.createdAt))
+    .limit(limit);
+
+  return c.json({ data: rows });
 });
 
 export default app;

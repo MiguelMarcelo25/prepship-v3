@@ -2,11 +2,40 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ══════════════════════════════════════════════
+   Legacy CSS variables — used by ported v2 view
+   stylesheets (e.g. OrdersView.css). Values mirror
+   v2's light-mode palette from apps/web/public/css/app.css.
+   Light mode only for now.
+════════════════════════════════════════════════ */
+:root {
+  --background: #f0f2f5;
+  --surface: #ffffff;
+  --border: #e1e4e8;
+  --text-primary: #1a1f2e;
+  --text-secondary: #4a5568;
+  --text-tertiary: #8a95a3;
+  --text3: #8a95a3;
+  --primary: #2a5bd7;
+  --primary-light: #5b8def;
+  --green: #16a34a;
+  --ss-blue: #2a5bd7;
+}
+
 @layer base {
   html,
   body,
   #root {
     height: 100%;
+  }
+
+  /* v2's shell CSS sets `body { display: flex }` but React mounts into
+     #root (a child of body). Extend flex through #root so Sidebar+main
+     render side-by-side, not stacked. */
+  #root {
+    display: flex;
+    min-height: 100vh;
+    width: 100%;
   }
 
   body {
