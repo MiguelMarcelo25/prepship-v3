@@ -603,7 +603,7 @@ export default function AnalysisView() {
           </span>
         </div>
 
-        {dataState.chartData && dataState.chartData.topSkus.length > 0 && dataState.chartData.dates.length > 0 ? (
+        {dataState.chartData && (dataState.chartData.topSkus?.length ?? 0) > 0 && (dataState.chartData.dates?.length ?? 0) > 0 ? (
           <div id="analysis-chart-wrap" style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, padding: '12px 16px', marginBottom: 4 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
               <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Daily Units Sold — Top SKUs</span>
