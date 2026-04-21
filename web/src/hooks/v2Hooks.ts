@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, qs, type Paginated } from '../lib/api';
 import { HIDDEN_CLIENT_IDS } from '../lib/v2-apiClient';
@@ -61,6 +61,30 @@ function transformOrderRowV4toV2(
     | null
     | undefined;
 
+  // Remap ShipStation v2 rate shape → v2-legacy bestRate shape that OrdersView expects.
+  // v2 shape: { amount, shipmentCost, otherCost, carrierCode, serviceCode, serviceName, carrierNickname, shippingProviderId }
+  // SS v2 shape: { shipping_amount: {amount}, other_amount: {amount}, carrier_code, service_code, service_type, carrier_nickname, carrier_id }
+  const bestRateLegacy = (() => {
+    if (!bestRateJson) return null;
+    const num = (v: unknown) => (typeof v === 'number' ? v : null);
+    const ship = bestRateJson.shipping_amount as Record<string, unknown> | undefined;
+    const other = bestRateJson.other_amount as Record<string, unknown> | undefined;
+    const shipmentCost = num(ship?.amount) ?? 0;
+    const otherCost = num(other?.amount) ?? 0;
+    return {
+      carrierCode: (bestRateJson.carrier_code as string) ?? null,
+      serviceCode: (bestRateJson.service_code as string) ?? null,
+      serviceName: (bestRateJson.service_type as string) ?? null,
+      carrierNickname: (bestRateJson.carrier_nickname as string) ?? null,
+      shippingProviderId: (bestRateJson.carrier_id as string) ?? null,
+      amount: shipmentCost + otherCost,
+      shipmentCost,
+      otherCost,
+      // Keep the raw object under `raw` so anything that peeks at SS v2 fields still works.
+      raw: bestRateJson,
+    };
+  })();
+
   const weightOz = typeof row.weightOz === 'number' ? row.weightOz : null;
   const ovL = typeof overrides?.rateDimsL === 'number' ? (overrides.rateDimsL as number) : null;
   const ovW = typeof overrides?.rateDimsW === 'number' ? (overrides.rateDimsW as number) : null;
@@ -114,7 +138,7 @@ function transformOrderRowV4toV2(
       dimsL != null && dimsW != null && dimsH != null
         ? { length: dimsL, width: dimsW, height: dimsH, units: 'inches' }
         : null,
-    bestRate: bestRateJson ?? null,
+    bestRate: bestRateLegacy,
     selectedRate: null,
     label: null,
   };
@@ -196,12 +220,16 @@ export function useOrders(
       ),
   });
 
-  const clientsById = new Map<number, string>();
-  for (const c of clientsQuery.data ?? []) clientsById.set(c.id, c.name);
-
-  const transformedOrders = (query.data?.data ?? []).map((row) =>
-    transformOrderRowV4toV2(row as Record<string, unknown>, clientsById)
-  );
+  // Memoize so the transform only runs when the underlying fetch data changes.
+  // Without this, OrdersView's panel useEffect sees a new panelOrder reference
+  // every render and fires setState in a loop ("Maximum update depth exceeded").
+  const transformedOrders = useMemo(() => {
+    const clientsById = new Map<number, string>();
+    for (const c of clientsQuery.data ?? []) clientsById.set(c.id, c.name);
+    return (query.data?.data ?? []).map((row) =>
+      transformOrderRowV4toV2(row as Record<string, unknown>, clientsById)
+    );
+  }, [query.data, clientsQuery.data]);
 
   const refetch = useCallback(async () => {
     setRefreshing(true);
@@ -306,20 +334,24 @@ export function useLocations(): UseLocationsResult {
     staleTime: 60_000,
   });
 
-  const locations: LocationDto[] = (query.data ?? []).map((row) => ({
-    locationId: row.id,
-    name: row.name,
-    company: row.company,
-    street1: row.street1,
-    street2: row.street2,
-    city: row.city,
-    state: row.state,
-    postalCode: row.postalCode,
-    country: row.country,
-    phone: row.phone,
-    isDefault: row.isDefault,
-    active: row.active,
-  }));
+  const locations = useMemo<LocationDto[]>(
+    () =>
+      (query.data ?? []).map((row) => ({
+        locationId: row.id,
+        name: row.name,
+        company: row.company,
+        street1: row.street1,
+        street2: row.street2,
+        city: row.city,
+        state: row.state,
+        postalCode: row.postalCode,
+        country: row.country,
+        phone: row.phone,
+        isDefault: row.isDefault,
+        active: row.active,
+      })),
+    [query.data]
+  );
 
   return {
     locations,
@@ -373,16 +405,18 @@ export function useShippingAccounts(): UseShippingAccountsResult {
     for (let i = 0; i < s.length; i += 1) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
     return Math.abs(h) || 1;
   };
-  const accounts: CarrierAccountDto[] = (query.data?.carriers ?? []).map(
-    (c, i) => ({
-      carrierId: c.carrier_id,
-      carrierCode: c.carrier_code,
-      shippingProviderId: c.carrier_id ? hashToInt(c.carrier_id) : i + 1,
-      nickname: c.nickname ?? c.friendly_name ?? c.carrier_code,
-      clientId: null,
-      code: c.carrier_code,
-      _label: c.friendly_name ?? c.nickname ?? c.carrier_code,
-    })
+  const accounts = useMemo<CarrierAccountDto[]>(
+    () =>
+      (query.data?.carriers ?? []).map((c, i) => ({
+        carrierId: c.carrier_id,
+        carrierCode: c.carrier_code,
+        shippingProviderId: c.carrier_id ? hashToInt(c.carrier_id) : i + 1,
+        nickname: c.nickname ?? c.friendly_name ?? c.carrier_code,
+        clientId: null,
+        code: c.carrier_code,
+        _label: c.friendly_name ?? c.nickname ?? c.carrier_code,
+      })),
+    [query.data]
   );
 
   return {
@@ -462,13 +496,12 @@ export function useClients(): UseClientsResult {
     staleTime: 60_000,
   });
 
-  const rows = query.data ?? [];
-  const namesById = new Map<number, string>();
-  for (const row of rows) namesById.set(row.id, row.name);
-
-  const clients = rows.map((row) =>
-    transformClientRowV4toV2(row, namesById)
-  );
+  const clients = useMemo(() => {
+    const rows = query.data ?? [];
+    const namesById = new Map<number, string>();
+    for (const row of rows) namesById.set(row.id, row.name);
+    return rows.map((row) => transformClientRowV4toV2(row, namesById));
+  }, [query.data]);
 
   return {
     clients,
@@ -628,12 +661,13 @@ export function useInventory(
       ),
   });
 
-  const clientNamesById = new Map<number, string>();
-  for (const c of clientsQuery.data ?? []) clientNamesById.set(c.id, c.name);
-
-  const items = (query.data?.data ?? []).map((row) =>
-    transformInventoryRowV4toV2(row, clientNamesById)
-  );
+  const items = useMemo(() => {
+    const clientNamesById = new Map<number, string>();
+    for (const c of clientsQuery.data ?? []) clientNamesById.set(c.id, c.name);
+    return (query.data?.data ?? []).map((row) =>
+      transformInventoryRowV4toV2(row, clientNamesById)
+    );
+  }, [query.data, clientsQuery.data]);
 
   return {
     items,
@@ -719,7 +753,10 @@ export function usePackages(): UsePackagesResult {
     staleTime: 60_000,
   });
 
-  const packages = (query.data ?? []).map(transformPackageRowV4toV2);
+  const packages = useMemo(
+    () => (query.data ?? []).map(transformPackageRowV4toV2),
+    [query.data]
+  );
 
   return {
     packages,

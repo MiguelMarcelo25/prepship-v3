@@ -76,8 +76,15 @@ async function getAllCarrierIds(): Promise<string[]> {
   const res = await ssRequest<CarriersResponse>('/v2/carriers', {
     dedupeKey: 'carriers:list',
   });
+  // Only include carriers that can rate arbitrary orders. Skip:
+  //  - amazon_*: requires amazon_order_item_id per line — fails for non-Amazon orders
+  //  - voucher-*: client-shared carriers that don't respond to the rate API
+  //  - tusk and similar resellers that sometimes fail on generic payloads
+  //  - fedex_walleted: One Balance wallet; duplicate of fedex for rating
+  const ALLOWED_CODES = new Set(['usps', 'ups', 'fedex', 'dhl_express', 'stamps_com']);
   const ids = res.carriers
     .filter((c) => !c.disabled_by_billing_plan)
+    .filter((c) => ALLOWED_CODES.has((c.carrier_code ?? '').toLowerCase()))
     .map((c) => c.carrier_id);
   if (!ids.length) {
     throw new Error(
@@ -178,32 +185,47 @@ export async function fetchLiveRates(input: RateInput): Promise<Rate[]> {
         ship_to: buildShipTo(input),
         ship_from: shipFrom,
         packages: buildPackages(input),
+        // Some ShipStation carrier integrations reject rate requests with
+        // `"items" must contain at least 1 items`. Send a minimal placeholder
+        // item so those carriers accept the request — it's only used for
+        // rating, not for customs/invoice generation.
+        items: [{ name: 'Item', quantity: 1 }],
       },
     },
   });
 
   const rates = res.rate_response.rates ?? [];
-  if (!rates.length) {
-    const errs = res.rate_response.errors ?? [];
-    if (errs.length) {
-      const msg = errs
-        .map((e) => `${e.error_source}/${e.error_type}: ${e.message}`)
-        .join('; ');
-      throw new Error(`ShipStation rate errors: ${msg}`);
-    }
-    const invalid = res.rate_response.invalid_rates ?? [];
-    if (invalid.length) {
-      // Carriers returned rates but ShipStation rejected them all (often
-      // warnings like service unavailable for destination).
-      throw new Error(
-        `All ${invalid.length} carrier rates rejected as invalid — likely unsupported destination, weight, or dimensions`
+  if (rates.length) return rates;
+
+  // Fall back to invalid_rates. ShipStation flags rates "invalid" for many
+  // soft reasons (address warnings, delivery-window extensions, generic
+  // non-fatal notes). The rate amount is still usable for estimation.
+  const invalid = res.rate_response.invalid_rates ?? [];
+  if (invalid.length) {
+    if (invalid[0]?.error_messages?.length) {
+      console.warn(
+        '[rates] Using invalid_rates. Sample error_messages:',
+        invalid.slice(0, 3).map((r) => ({
+          carrier: r.carrier_code,
+          service: r.service_code,
+          amount: r.shipping_amount?.amount,
+          errors: r.error_messages,
+        }))
       );
     }
-    throw new Error(
-      `No rates returned (status=${res.rate_response.status}) — carriers may not serve this route`
-    );
+    return invalid;
   }
-  return rates;
+
+  const errs = res.rate_response.errors ?? [];
+  if (errs.length) {
+    const msg = errs
+      .map((e) => `${e.error_source}/${e.error_type}: ${e.message}`)
+      .join('; ');
+    throw new Error(`ShipStation rate errors: ${msg}`);
+  }
+  throw new Error(
+    `No rates returned (status=${res.rate_response.status}) — carriers may not serve this route`
+  );
 }
 
 export type GetRatesResult = {

@@ -1427,20 +1427,32 @@ export default function OrdersView({
       const length = dims.length || payload.dims?.length || getDimensions(panelOrder, panelDetail)?.length || 0
       const width = dims.width || payload.dims?.width || getDimensions(panelOrder, panelDetail)?.width || 0
       const height = dims.height || payload.dims?.height || getDimensions(panelOrder, panelDetail)?.height || 0
-      const liveRates = await fetch('/api/rates', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          toPostalCode: getShipTo(panelOrder, panelDetail).postalCode ?? '',
-          toCountry: getShipTo(panelOrder, panelDetail).country ?? 'US',
-          weight: { value: weightOz, units: 'ounces' },
-          dimensions: { units: 'inches', length, width, height },
-          residential: Boolean(panelOrder.residential ?? panelOrder.sourceResidential),
-          storeId: panelOrder.storeId ?? undefined,
-        }),
+      const shipTo = getShipTo(panelOrder, panelDetail)
+      const rawRates = await apiClient.fetchRates({
+        weightOz,
+        toZip: shipTo.postalCode ?? '',
+        toCountry: shipTo.country ?? 'US',
+        toState: shipTo.state ?? undefined,
+        toCity: shipTo.city ?? undefined,
+        dimsL: length, dimsW: width, dimsH: height,
+        residential: Boolean(panelOrder.residential ?? panelOrder.sourceResidential),
       })
-      const data = await liveRates.json() as Array<Record<string, unknown>> | { rates?: Array<Record<string, unknown>> }
-      const rates = Array.isArray(data) ? data : data.rates ?? []
+      // Remap ShipStation v2 rate shape → v2-legacy shape the panel expects.
+      const rates = (rawRates ?? []).map((r: any) => {
+        const shipmentCost = r.shipping_amount?.amount ?? 0
+        const otherCost = r.other_amount?.amount ?? 0
+        return {
+          carrierCode: r.carrier_code ?? null,
+          serviceCode: r.service_code ?? null,
+          serviceName: r.service_type ?? null,
+          carrierNickname: r.carrier_nickname ?? null,
+          shippingProviderId: r.carrier_id ?? null,
+          amount: shipmentCost + otherCost,
+          shipmentCost,
+          otherCost,
+          raw: r,
+        }
+      })
       setRateBrowserRates(rates)
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Failed to browse rates', 'error')

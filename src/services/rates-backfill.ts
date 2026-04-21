@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { and, eq, isNull, lt, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orders, orderOverrides } from '../db/schema/orders';
+import { packages } from '../db/schema/packages';
 import { getRates } from './rates';
 import type { Rate } from '../lib/shipstation';
 
@@ -149,7 +150,7 @@ async function runBackfill(
             ? eq(orders.clientId, opts.clientId)
             : undefined,
           sql`${orders.weightOz} is not null and ${orders.weightOz} > 0`,
-          sql`${orders.shipToPostalCode} is not null`,
+          sql`${orders.shipToPostalCode} is not null and ${orders.shipToPostalCode} <> ''`,
           or(
             isNull(orderOverrides.bestRateAt),
             lt(orderOverrides.bestRateAt, staleCutoff)
@@ -161,14 +162,38 @@ async function runBackfill(
     job.total = rows.length;
     job.message = `Found ${rows.length} orders; fetching rates…`;
 
+    // Resolve a default L/W/H once per job — every carrier requires dims.
+    // Prefer the packages row marked default; otherwise a safe 6×6×6.
+    const [defaultPkg] = await db
+      .select({
+        length: packages.length,
+        width: packages.width,
+        height: packages.height,
+      })
+      .from(packages)
+      .where(eq(packages.isDefault, true))
+      .limit(1);
+    const fallbackDims = {
+      length: defaultPkg?.length && defaultPkg.length > 0 ? defaultPkg.length : 6,
+      width: defaultPkg?.width && defaultPkg.width > 0 ? defaultPkg.width : 6,
+      height: defaultPkg?.height && defaultPkg.height > 0 ? defaultPkg.height : 6,
+    };
+
     const CONCURRENCY = 16;
     const processOne = async (row: (typeof rows)[number]) => {
       if (jobs.get(jobId)?.status !== 'running') return;
 
       const raw = (row.raw ?? {}) as Record<string, unknown> & {
         shipTo?: { country?: string; residential?: boolean };
+        dimensions?: { length?: number; width?: number; height?: number; units?: string };
       };
       const toCountry = raw.shipTo?.country ?? 'US';
+      // ShipStation dimensions are almost always in inches; if any are 0/missing,
+      // use the default-package fallback for that axis.
+      const rawDims = raw.dimensions ?? {};
+      const dimsL = rawDims.length && rawDims.length > 0 ? rawDims.length : fallbackDims.length;
+      const dimsW = rawDims.width && rawDims.width > 0 ? rawDims.width : fallbackDims.width;
+      const dimsH = rawDims.height && rawDims.height > 0 ? rawDims.height : fallbackDims.height;
       try {
         const result = await withTimeout(
           getRates({
@@ -178,6 +203,9 @@ async function runBackfill(
             toCity: row.shipToCity ?? undefined,
             toCountry,
             residential: raw.shipTo?.residential ?? undefined,
+            dimsL,
+            dimsW,
+            dimsH,
           }),
           PER_ORDER_TIMEOUT_MS,
           `getRates(order=${row.id})`
@@ -212,7 +240,9 @@ async function runBackfill(
         job.failed++;
         const msg = (err as Error).message ?? 'unknown';
         if (job.failureSamples.length < 5) {
-          job.failureSamples.push(`order ${row.id}: ${msg.slice(0, 200)}`);
+          job.failureSamples.push(
+            `order ${row.id} (w=${row.weightOz}, ${row.shipToCity}, ${row.shipToState} ${row.shipToPostalCode}): ${msg.slice(0, 1500)}`
+          );
         }
       }
 

@@ -26,11 +26,21 @@ export type Parcel = {
   package_code?: string;
 };
 
+export type ShipmentItem = {
+  name?: string;
+  sales_order_id?: string;
+  sales_order_item_id?: string;
+  quantity?: number;
+  sku?: string;
+  unit_of_measure?: string;
+};
+
 export type Shipment = {
   validate_address?: 'no_validation' | 'validate_only' | 'validate_and_clean';
   ship_to: Address;
   ship_from: Address;
   packages: Parcel[];
+  items?: ShipmentItem[];
 };
 
 export type Rate = {

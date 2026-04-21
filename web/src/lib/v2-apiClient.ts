@@ -731,12 +731,15 @@ export const apiClient = {
     );
   },
 
-  fetchProductsBySku(sku: string): Promise<any> {
-    return safe(
-      'fetchProductsBySku',
-      () => api.get<any>(`/products/by-sku/${encodeURIComponent(sku)}`),
-      null
-    );
+  async fetchProductsBySku(sku: string): Promise<any> {
+    // A missing product is expected (many order SKUs have no product record
+    // yet), so swallow errors silently instead of piping through safe() which
+    // would log a warning for every row lookup.
+    try {
+      return await api.get<any>(`/products/by-sku/${encodeURIComponent(sku)}`);
+    } catch {
+      return null;
+    }
   },
 
   saveProductDefaults(data: Record<string, unknown>): Promise<any> {
