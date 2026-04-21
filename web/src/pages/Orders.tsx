@@ -2,14 +2,12 @@ import { createContext, lazy, Suspense, useContext, useMemo, useState } from 're
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
-  Bell,
   Calendar,
   ClipboardList,
   Download,
   Package as PackageIcon,
   Printer,
   Search as SearchIcon,
-  Truck,
   X,
 } from 'lucide-react';
 import Topbar from '../components/Topbar';
@@ -563,7 +561,7 @@ export default function Orders() {
         </div>
 
         <div className="inline-flex items-center gap-1.5">
-          <PackageIcon size={14} className="text-orange-500" />
+          <span className="text-[16px] leading-none">📦</span>
           <span className="text-[14px] font-bold text-ink leading-none">
             {total.toLocaleString()}
           </span>
@@ -571,7 +569,7 @@ export default function Orders() {
         </div>
 
         <div className="inline-flex items-center gap-1.5">
-          <Truck size={14} className="text-orange-500" />
+          <span className="text-[16px] leading-none">🚚</span>
           <span className="text-[14px] font-bold text-orange-500 leading-none">
             {(status === 'awaiting_shipment' ? total : 0).toLocaleString()}
           </span>
@@ -579,7 +577,7 @@ export default function Orders() {
         </div>
 
         <div className="inline-flex items-center gap-1.5">
-          <Bell size={14} className="text-amber-500" />
+          <span className="text-[16px] leading-none">🔔</span>
           <span className="text-[14px] font-bold text-amber-500 leading-none">
             0
           </span>
