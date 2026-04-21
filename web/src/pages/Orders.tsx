@@ -679,7 +679,6 @@ export default function Orders() {
             {rows.map((o, i) => {
               const items = o.items ?? [];
               const firstItem = items[0];
-              const moreCount = items.length - 1;
               const qty = totalQty(items);
               const isMulti = items.length > 1;
               const cityLine = [o.shipToCity, o.shipToState, o.shipToPostalCode]
@@ -689,15 +688,24 @@ export default function Orders() {
               const bestRate = o.overrides?.bestRateJson?.shipping_amount?.amount;
               const isOpen = openId === o.id;
               const isSelected = selected.has(o.id);
+              const visibleItems = items.slice(0, 5);
+              const overflowItems = items.length - visibleItems.length;
               return (
                 <tr
                   key={o.id}
                   onClick={() => navigate(`/orders/${status}/${o.id}`)}
-                  className={`cursor-pointer border-b border-line transition-colors ${
+                  className={`cursor-pointer border-b border-line transition-colors relative ${
                     i % 2 === 1 ? 'bg-surface-2' : 'bg-white'
-                  } ${isOpen ? '!bg-brand-bg' : ''} ${
-                    isSelected ? '!bg-blue-50' : ''
-                  } hover:!bg-brand-bg`}
+                  } ${isOpen ? '!bg-warn-bg' : ''} ${
+                    isSelected ? '!bg-brand-bg' : ''
+                  } hover:!bg-warn-bg/60`}
+                  style={
+                    isOpen
+                      ? {
+                          boxShadow: 'inset 3px 0 0 #d97706',
+                        }
+                      : undefined
+                  }
                 >
                   <Td onClick={(e) => e.stopPropagation()}>
                     <input
@@ -734,40 +742,92 @@ export default function Orders() {
                   )}
                   {visibleColumns.has('itemName') && (
                     <Td className="min-w-0">
-                      <div className="flex items-start gap-2">
-                        <div className="w-7 h-7 rounded border border-line bg-surface-2 shrink-0 flex items-center justify-center overflow-hidden">
-                          {firstItem?.imageUrl ? (
-                            <img
-                              src={firstItem.imageUrl}
-                              alt=""
-                              className="w-full h-full object-cover"
-                              loading="lazy"
-                            />
-                          ) : (
-                            <PackageIcon size={12} className="text-ink-3" />
-                          )}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div
-                            className="text-sm2 text-ink truncate"
-                            title={firstItem?.name ?? ''}
-                          >
-                            {firstItem?.name ?? '—'}
-                          </div>
-                          {moreCount > 0 && (
-                            <div className="text-tiny text-ink-3">
-                              +{moreCount} more
+                      {isMulti ? (
+                        <div className="flex flex-col gap-[3px]">
+                          {visibleItems.map((it, idx) => (
+                            <div
+                              key={idx}
+                              className="flex items-center gap-1.5 min-w-0"
+                            >
+                              <div className="w-[22px] h-[22px] rounded border border-line bg-surface-2 shrink-0 flex items-center justify-center overflow-hidden">
+                                {it.imageUrl ? (
+                                  <img
+                                    src={it.imageUrl}
+                                    alt=""
+                                    className="w-full h-full object-cover"
+                                    loading="lazy"
+                                  />
+                                ) : (
+                                  <PackageIcon
+                                    size={10}
+                                    className="text-ink-3"
+                                  />
+                                )}
+                              </div>
+                              <span
+                                className="text-[11.5px] text-ink truncate flex-1 min-w-0"
+                                title={it.name ?? it.sku ?? ''}
+                              >
+                                {it.name ?? it.sku ?? '—'}
+                              </span>
+                              {(it.quantity ?? 1) > 1 && (
+                                <span className="bg-brand-bg text-brand text-[9.5px] font-bold px-1 py-0 rounded shrink-0">
+                                  ×{it.quantity}
+                                </span>
+                              )}
+                            </div>
+                          ))}
+                          {overflowItems > 0 && (
+                            <div className="text-[10.5px] text-ink-3 pl-[27px]">
+                              +{overflowItems} more
                             </div>
                           )}
                         </div>
-                      </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          <div className="w-7 h-7 rounded border border-line bg-surface-2 shrink-0 flex items-center justify-center overflow-hidden">
+                            {firstItem?.imageUrl ? (
+                              <img
+                                src={firstItem.imageUrl}
+                                alt=""
+                                className="w-full h-full object-cover"
+                                loading="lazy"
+                              />
+                            ) : (
+                              <PackageIcon
+                                size={12}
+                                className="text-ink-3"
+                              />
+                            )}
+                          </div>
+                          <span
+                            className="text-[12px] text-ink truncate flex-1 min-w-0"
+                            title={firstItem?.name ?? ''}
+                          >
+                            {firstItem?.name ?? '—'}
+                          </span>
+                        </div>
+                      )}
                     </Td>
                   )}
                   {visibleColumns.has('sku') && (
                     <Td className="font-mono text-tiny text-ink-2">
-                      {firstItem?.sku ?? '—'}
-                      {moreCount > 0 && (
-                        <div className="text-ink-3">+{moreCount}</div>
+                      {isMulti ? (
+                        <div className="flex flex-col gap-[3px]">
+                          {visibleItems.map((it, idx) => (
+                            <div
+                              key={idx}
+                              className="h-[22px] flex items-center text-[11px] truncate"
+                            >
+                              {it.sku ?? (
+                                <span className="text-ink-4">—</span>
+                              )}
+                            </div>
+                          ))}
+                          {overflowItems > 0 && <div className="h-[14px]" />}
+                        </div>
+                      ) : (
+                        firstItem?.sku ?? '—'
                       )}
                     </Td>
                   )}
