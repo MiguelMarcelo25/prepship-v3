@@ -49,7 +49,7 @@ export default function Login() {
       >
         <div className="text-center mb-6">
           <div className="flex items-baseline justify-center text-[24px] font-extrabold tracking-[-0.5px]">
-            <span className="text-ink">PRP</span>
+            <span className="text-ink">PREP</span>
             <span className="text-brand">SHIP</span>
           </div>
           <div className="text-[10px] uppercase tracking-[0.4px] text-ink-3 mt-1">
