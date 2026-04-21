@@ -614,7 +614,7 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
                   {customPackages.map((pkg) => {
                     const ledger = ledgerByPackageId[pkg.packageId]
                     return (
-                      <tr key={pkg.packageId} style={{ borderBottom: '1px solid var(--border)' }}>
+                      <tr key={pkg.packageId ?? pkg.id ?? pkg.name} style={{ borderBottom: '1px solid var(--border)' }}>
                         <td style={{ padding: '7px 10px', maxWidth: 280, overflow: 'hidden' }}>
                           <button
                             type="button"
