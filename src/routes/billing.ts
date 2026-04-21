@@ -27,6 +27,7 @@ app.get('/config', async (c) => {
 
 const configBody = z.object({
   pickPackFee: z.coerce.number().nonnegative().optional(),
+  pickPackMaxUnits: z.coerce.number().int().positive().optional(),
   additionalUnitFee: z.coerce.number().nonnegative().optional(),
   packageCostMarkup: z.coerce.number().nonnegative().optional(),
   shippingMarkupPct: z.coerce.number().nonnegative().optional(),
@@ -44,6 +45,7 @@ app.put(
     const row = await upsertBillingConfig(clientId, {
       pickPackFee:
         body.pickPackFee !== undefined ? body.pickPackFee.toFixed(2) : undefined,
+      pickPackMaxUnits: body.pickPackMaxUnits,
       additionalUnitFee:
         body.additionalUnitFee !== undefined
           ? body.additionalUnitFee.toFixed(2)

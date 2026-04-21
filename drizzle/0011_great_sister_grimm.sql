@@ -1,0 +1,1 @@
+ALTER TABLE "billing_config" ADD COLUMN "pick_pack_max_units" integer DEFAULT 1 NOT NULL;

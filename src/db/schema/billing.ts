@@ -18,6 +18,10 @@ export const billingConfig = pgTable('billing_config', {
     .primaryKey()
     .references(() => clients.id, { onDelete: 'cascade' }),
   pickPackFee: numeric({ precision: 10, scale: 2 }).default('0').notNull(),
+  // Threshold — orders with units ≤ pickPackMaxUnits pay only pickPackFee.
+  // Units beyond the threshold are charged additionalUnitFee each.
+  // Default 1 matches v2's hardcoded constant (one included unit per order).
+  pickPackMaxUnits: integer('pick_pack_max_units').default(1).notNull(),
   additionalUnitFee: numeric({ precision: 10, scale: 2 }).default('0').notNull(),
   packageCostMarkup: numeric({ precision: 5, scale: 2 }).default('0').notNull(),
   shippingMarkupPct: numeric({ precision: 5, scale: 2 }).default('0').notNull(),

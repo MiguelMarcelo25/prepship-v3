@@ -20,7 +20,9 @@ export type GenerateInput = {
 // to 1 (see apps/api/src/modules/billing/data/sqlite-billing-repository.ts:216).
 // If a configurable per-client cap is needed later, add a pick_pack_max_units
 // column to billing_config and read it here.
-const PICK_PACK_MAX_UNITS = 1;
+// Fallback when a client's billing_config row has no pickPackMaxUnits set
+// (legacy rows or newly-created clients). Matches v2's hardcoded constant.
+const PICK_PACK_MAX_UNITS_DEFAULT = 1;
 
 function toNum(v: string | null | undefined) {
   if (v === null || v === undefined) return 0;
@@ -231,15 +233,20 @@ export async function generateLineItems(input: GenerateInput) {
     }
 
     // ─── Additional-unit fee (gap B1) ───────────────────────────────────────
-    // Every unit past PICK_PACK_MAX_UNITS on the order is billed at
-    // additionalUnitFee each. Only emits when there's an extra unit AND the
-    // client's config actually has a non-zero additionalUnitFee.
+    // Every unit past pickPackMaxUnits on the order is billed at
+    // additionalUnitFee each. Threshold is now per-client (was hardcoded);
+    // defaults to 1 via schema default and the constant below as a belt-and-
+    // braces fallback for any row missing the column.
     const additionalUnitFee = toNum(cfg.additionalUnitFee);
+    const maxUnits =
+      typeof cfg.pickPackMaxUnits === 'number' && cfg.pickPackMaxUnits > 0
+        ? cfg.pickPackMaxUnits
+        : PICK_PACK_MAX_UNITS_DEFAULT;
     const items =
       s.orderId !== null ? orderItemsById.get(s.orderId) ?? [] : [];
     const totalUnits = totalUnitsFromItems(items);
-    if (totalUnits > PICK_PACK_MAX_UNITS && additionalUnitFee > 0) {
-      const extraUnits = totalUnits - PICK_PACK_MAX_UNITS;
+    if (totalUnits > maxUnits && additionalUnitFee > 0) {
+      const extraUnits = totalUnits - maxUnits;
       const extraCost = extraUnits * additionalUnitFee;
       rows.push({
         clientId: s.clientId,
@@ -396,6 +403,7 @@ export async function upsertBillingConfig(
   clientId: number,
   patch: Partial<{
     pickPackFee: string;
+    pickPackMaxUnits: number;
     additionalUnitFee: string;
     packageCostMarkup: string;
     shippingMarkupPct: string;
