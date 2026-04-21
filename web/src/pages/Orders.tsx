@@ -172,6 +172,24 @@ function saveVisible(set: Set<string>) {
   localStorage.setItem(COLUMNS_KEY, JSON.stringify([...set]));
 }
 
+function formatRangeWindow(rangeId: string, dateFromIso: string): string {
+  if (rangeId === 'all') return 'All time';
+  const start = new Date(dateFromIso);
+  const end = new Date();
+  const fmt = (d: Date) =>
+    d
+      .toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        hour12: true,
+        timeZoneName: 'short',
+      })
+      .replace(' AM', 'am')
+      .replace(' PM', 'pm');
+  return `${fmt(start)} → ${fmt(end)}`;
+}
+
 function ageStr(iso: string | null) {
   if (!iso) return '—';
   const ms = Date.now() - new Date(iso).getTime();
@@ -537,8 +555,11 @@ export default function Orders() {
         <div className="inline-flex items-center gap-1.5 text-ink-2">
           <Calendar size={12} className="text-brand" />
           <span className="font-semibold">
-            {dateRanges.find((r) => r.id === rangeId)?.label}
+            {formatRangeWindow(rangeId, dateFromIso)}
           </span>
+          {rangeId !== 'all' && (
+            <span className="text-ink-3">(shifts at 6 PM)</span>
+          )}
         </div>
 
         <div className="inline-flex items-center gap-1.5">
@@ -550,16 +571,18 @@ export default function Orders() {
         </div>
 
         <div className="inline-flex items-center gap-1.5">
-          <Truck size={14} className="text-danger" />
-          <span className="text-[14px] font-bold text-ink leading-none">
+          <Truck size={14} className="text-orange-500" />
+          <span className="text-[14px] font-bold text-orange-500 leading-none">
             {(status === 'awaiting_shipment' ? total : 0).toLocaleString()}
           </span>
           <span className="text-ink-3">Need to Ship</span>
         </div>
 
         <div className="inline-flex items-center gap-1.5">
-          <Bell size={14} className="text-warn" />
-          <span className="text-[14px] font-bold text-ink leading-none">0</span>
+          <Bell size={14} className="text-amber-500" />
+          <span className="text-[14px] font-bold text-amber-500 leading-none">
+            0
+          </span>
           <span className="text-ink-3">Upcoming</span>
         </div>
 
