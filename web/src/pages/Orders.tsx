@@ -405,6 +405,48 @@ export default function Orders() {
     queryFn: () => api.get<Paginated<Order>>(`/orders${queryString}`),
   });
 
+  // Counts for the progress bar — total in window + shipped in window,
+  // independent of the current status filter.
+  const totalInWindowQs = useMemo(
+    () =>
+      qs({
+        pageSize: 1,
+        clientId: clientIdFilter,
+        dateFrom: dateFromIso,
+      }),
+    [clientIdFilter, dateFromIso]
+  );
+  const shippedInWindowQs = useMemo(
+    () =>
+      qs({
+        pageSize: 1,
+        status: 'shipped',
+        clientId: clientIdFilter,
+        dateFrom: dateFromIso,
+      }),
+    [clientIdFilter, dateFromIso]
+  );
+  const totalInWindow = useQuery({
+    queryKey: ['orders-total-window', totalInWindowQs],
+    queryFn: () =>
+      api.get<Paginated<unknown>>(`/orders${totalInWindowQs}`),
+    staleTime: 30_000,
+  });
+  const shippedInWindow = useQuery({
+    queryKey: ['orders-shipped-window', shippedInWindowQs],
+    queryFn: () =>
+      api.get<Paginated<unknown>>(`/orders${shippedInWindowQs}`),
+    staleTime: 30_000,
+  });
+  const totalWindowCount =
+    totalInWindow.data?.pagination.total ?? 0;
+  const shippedWindowCount =
+    shippedInWindow.data?.pagination.total ?? 0;
+  const shippedPct =
+    totalWindowCount > 0
+      ? Math.round((shippedWindowCount / totalWindowCount) * 100)
+      : 0;
+
   const clients = useQuery({
     queryKey: ['clients'],
     queryFn: () => api.get<{ id: number; name: string }[]>('/clients'),
@@ -585,19 +627,17 @@ export default function Orders() {
 
         <div className="flex-1 flex items-center gap-2 ml-auto min-w-[240px] max-w-[460px] shrink-0">
           <span className="text-orange-600 font-semibold whitespace-nowrap">
-            {(status === 'shipped' ? total : 0).toLocaleString()} of{' '}
-            {total.toLocaleString()} shipped
+            {shippedWindowCount.toLocaleString()} of{' '}
+            {totalWindowCount.toLocaleString()} shipped
           </span>
           <div className="flex-1 h-1 bg-surface-3 rounded overflow-hidden">
             <div
-              className="h-full bg-orange-500"
-              style={{
-                width: `${total > 0 && status === 'shipped' ? 100 : 0}%`,
-              }}
+              className="h-full bg-orange-500 transition-all"
+              style={{ width: `${shippedPct}%` }}
             />
           </div>
           <span className="text-orange-600 font-semibold whitespace-nowrap">
-            {total > 0 && status === 'shipped' ? 100 : 0}%
+            {shippedPct}%
           </span>
         </div>
       </div>
