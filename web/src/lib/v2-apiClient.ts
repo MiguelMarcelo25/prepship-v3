@@ -39,6 +39,25 @@ function parseDownloadFilename(
   return fallback;
 }
 
+// Clients that should be hidden from the sidebar + per-client stats views.
+// Matched case-insensitively by name. Add more names here to hide them.
+const HIDDEN_CLIENT_NAMES = new Set(['api shipments']);
+
+// Populated by fetchStores / fetchCounts when clients are loaded — lets
+// downstream filtering (e.g. byStatusStore emission) drop rows for hidden
+// clients even when we only have the id.
+const HIDDEN_CLIENT_IDS = new Set<number>();
+
+function isHiddenClient(c: { name?: string | null; id?: number | null } | null | undefined): boolean {
+  if (!c) return false;
+  const name = (c.name ?? '').trim().toLowerCase();
+  if (HIDDEN_CLIENT_NAMES.has(name)) {
+    if (typeof c.id === 'number') HIDDEN_CLIENT_IDS.add(c.id);
+    return true;
+  }
+  return false;
+}
+
 function normalizeAnalysisRange(query: Record<string, unknown>): Record<string, string | number | boolean | undefined> {
   const out: Record<string, string | number | boolean | undefined> = {};
   for (const [k, v] of Object.entries(query)) {
@@ -157,10 +176,16 @@ export const apiClient = {
     return safe(
       'fetchCounts',
       async () => {
-        const [counts, clientStats] = await Promise.all([
+        // Fetch clients alongside stats so we can resolve hidden-client IDs by
+        // name even if fetchStores hasn't populated HIDDEN_CLIENT_IDS yet.
+        const [counts, clientStatsRes, clientsRes] = await Promise.all([
           api.get<any>('/init/counts'),
-          api.get<any>('/clients/order-stats').catch(() => []),
+          api.get<any>('/clients/order-stats').catch(() => ({ data: [] })),
+          api.get<any>('/clients').catch(() => []),
         ]);
+
+        const clientsArr = Array.isArray(clientsRes) ? clientsRes : [];
+        for (const c of clientsArr) isHiddenClient(c); // populates HIDDEN_CLIENT_IDS by side-effect
 
         const byStatus = [
           { orderStatus: 'awaiting_shipment', cnt: counts?.awaiting ?? 0 },
@@ -168,11 +193,17 @@ export const apiClient = {
           { orderStatus: 'cancelled', cnt: counts?.cancelled ?? 0 },
         ];
 
-        const statsArr = Array.isArray(clientStats) ? clientStats : [];
+        // /clients/order-stats returns { data: [...] } (envelope), not a raw array
+        const statsArr = Array.isArray(clientStatsRes)
+          ? clientStatsRes
+          : Array.isArray(clientStatsRes?.data)
+            ? clientStatsRes.data
+            : [];
         const byStatusStore: { orderStatus: string; storeId: number; cnt: number }[] = [];
         for (const row of statsArr) {
           const cid = row?.clientId ?? row?.client_id;
           if (cid == null) continue;
+          if (HIDDEN_CLIENT_IDS.has(cid)) continue;
           if ((row?.awaiting ?? 0) > 0) byStatusStore.push({ orderStatus: 'awaiting_shipment', storeId: cid, cnt: row.awaiting });
           if ((row?.shipped ?? 0) > 0) byStatusStore.push({ orderStatus: 'shipped', storeId: cid, cnt: row.shipped });
           if ((row?.cancelled ?? 0) > 0) byStatusStore.push({ orderStatus: 'cancelled', storeId: cid, cnt: row.cancelled });
@@ -194,11 +225,13 @@ export const apiClient = {
       async () => {
         const clients = await api.get<any>('/clients');
         const arr = Array.isArray(clients) ? clients : [];
-        return arr.map((c) => ({
-          storeId: c?.id,
-          storeName: c?.name ?? `Client ${c?.id}`,
-          active: true,
-        }));
+        return arr
+          .filter((c) => !isHiddenClient(c))
+          .map((c) => ({
+            storeId: c?.id,
+            storeName: c?.name ?? `Client ${c?.id}`,
+            active: true,
+          }));
       },
       []
     );
