@@ -549,8 +549,8 @@ export default function Orders() {
       </div>
 
       {/* Stats strip */}
-      <div className="flex items-center gap-6 px-4 py-2 bg-surface-2 border-b border-line text-tiny">
-        <div className="inline-flex items-center gap-1.5 text-ink-2">
+      <div className="flex items-center flex-nowrap gap-5 px-4 py-1.5 bg-surface-2 border-b border-line text-tiny whitespace-nowrap overflow-x-auto">
+        <div className="inline-flex items-center gap-1.5 text-ink-2 shrink-0">
           <Calendar size={12} className="text-brand" />
           <span className="font-semibold">
             {formatRangeWindow(rangeId, dateFromIso)}
@@ -560,31 +560,30 @@ export default function Orders() {
           )}
         </div>
 
-        <div className="inline-flex items-center gap-1.5">
-          <span className="text-[16px] leading-none">📦</span>
-          <span className="text-[14px] font-bold text-ink leading-none">
-            {total.toLocaleString()}
-          </span>
-          <span className="text-ink-3">Total Orders</span>
-        </div>
+        <div className="w-px h-7 bg-line shrink-0" />
 
-        <div className="inline-flex items-center gap-1.5">
-          <span className="text-[16px] leading-none">🚚</span>
-          <span className="text-[14px] font-bold text-orange-500 leading-none">
-            {(status === 'awaiting_shipment' ? total : 0).toLocaleString()}
-          </span>
-          <span className="text-ink-3">Need to Ship</span>
-        </div>
+        <Stat
+          icon="📦"
+          value={total.toLocaleString()}
+          valueClass="text-ink"
+          label="Total Orders"
+        />
 
-        <div className="inline-flex items-center gap-1.5">
-          <span className="text-[16px] leading-none">🔔</span>
-          <span className="text-[14px] font-bold text-amber-500 leading-none">
-            0
-          </span>
-          <span className="text-ink-3">Upcoming</span>
-        </div>
+        <Stat
+          icon="🚚"
+          value={(status === 'awaiting_shipment' ? total : 0).toLocaleString()}
+          valueClass="text-orange-500"
+          label="Need to Ship"
+        />
 
-        <div className="flex-1 flex items-center gap-2 ml-auto min-w-[200px] max-w-[420px]">
+        <Stat
+          icon="🔔"
+          value="0"
+          valueClass="text-amber-500"
+          label="Upcoming"
+        />
+
+        <div className="flex-1 flex items-center gap-2 ml-auto min-w-[240px] max-w-[460px] shrink-0">
           <span className="text-orange-600 font-semibold whitespace-nowrap">
             {(status === 'shipped' ? total : 0).toLocaleString()} of{' '}
             {total.toLocaleString()} shipped
@@ -968,6 +967,30 @@ export default function Orders() {
         </Suspense>
       )}
     </>
+  );
+}
+
+function Stat({
+  icon,
+  value,
+  valueClass,
+  label,
+}: {
+  icon: string;
+  value: string;
+  valueClass: string;
+  label: string;
+}) {
+  return (
+    <div className="inline-flex items-center gap-1.5 shrink-0">
+      <span className="text-[22px] leading-none">{icon}</span>
+      <div className="flex flex-col leading-tight">
+        <span className={`text-[15px] font-extrabold leading-none ${valueClass}`}>
+          {value}
+        </span>
+        <span className="text-[10.5px] text-ink-3 mt-0.5">{label}</span>
+      </div>
+    </div>
   );
 }
 
