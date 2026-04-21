@@ -10,6 +10,9 @@ const schema = z.object({
   PORT: z.coerce.number().default(3000),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   WEB_ORIGIN: z.string().optional(),
+  // Public base URL of this API. Used when we need to emit an absolute link
+  // back to the frontend (e.g. mock label PDFs opened via window.open).
+  PUBLIC_API_URL: z.string().url().optional(),
   CRON_SECRET: z.string().optional(),
   SHIPSTATION_API_KEY: z.string().optional(),
   SHIPSTATION_API_SECRET: z.string().optional(),

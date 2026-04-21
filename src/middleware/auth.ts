@@ -7,8 +7,18 @@ export type AuthVars = {
   role?: string;
 };
 
+// Paths that are served unauthenticated even when they sit under an auth-gated
+// prefix. Mock test labels live at /labels/mock/:id — the browser loads them
+// via window.open which can't attach a bearer token, and they're fake data
+// anyway. The shipmentId is effectively unguessable (random 8-digit int).
+const AUTH_BYPASS_PREFIXES = ['/labels/mock/'];
+
 export const requireAuth = createMiddleware<{ Variables: AuthVars }>(
   async (c, next) => {
+    if (AUTH_BYPASS_PREFIXES.some((p) => c.req.path.startsWith(p))) {
+      await next();
+      return;
+    }
     const auth = c.req.header('authorization');
     if (!auth?.toLowerCase().startsWith('bearer ')) {
       return c.json({ error: 'Missing bearer token' }, 401);

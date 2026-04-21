@@ -571,7 +571,13 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
     const fakeShipmentId = generateFakeShipmentId();
     const fakeTracking = generateFakeTrackingNumber();
     const shipDate = new Date().toISOString().slice(0, 10);
-    const mockLabelUrl = `/labels/mock/${fakeShipmentId}`;
+    // Absolute URL so window.open from the Vercel-hosted UI resolves to the
+    // API host, not the frontend origin. Falls back to relative path in dev
+    // when PUBLIC_API_URL isn't set (Vite proxies /labels/ to localhost:3000).
+    const apiBase = (process.env.PUBLIC_API_URL ?? '').replace(/\/+$/, '');
+    const mockLabelUrl = apiBase
+      ? `${apiBase}/labels/mock/${fakeShipmentId}`
+      : `/labels/mock/${fakeShipmentId}`;
 
     const mockData: MockLabelData = {
       shipmentId: fakeShipmentId,
