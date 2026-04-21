@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, desc, eq, gte, ilike, lte, notInArray, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, ilike, inArray, lte, notInArray, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orderOverrides, orders } from '../db/schema/orders';
 import { shipments } from '../db/schema/shipments';
@@ -420,20 +420,21 @@ app.get('/export', zValidator('query', exportQuery), async (c) => {
   const orderIds = rows.map((r) => r.order.id);
   const shipmentsByOrder = new Map<number, typeof shipments.$inferSelect>();
   if (orderIds.length > 0) {
-    const ships = await db
-      .select()
-      .from(shipments)
-      .where(
-        and(
-          sql`${shipments.orderId} = ANY(${orderIds})`,
-          eq(shipments.voided, false)
-        )
-      )
-      .orderBy(desc(shipments.shipDate));
-    for (const s of ships) {
-      if (s.orderId != null && !shipmentsByOrder.has(s.orderId)) {
-        shipmentsByOrder.set(s.orderId, s);
+    try {
+      const ships = await db
+        .select()
+        .from(shipments)
+        .where(and(inArray(shipments.orderId, orderIds), eq(shipments.voided, false)))
+        .orderBy(desc(shipments.shipDate));
+      for (const s of ships) {
+        if (s.orderId != null && !shipmentsByOrder.has(s.orderId)) {
+          shipmentsByOrder.set(s.orderId, s);
+        }
       }
+    } catch (err) {
+      // If shipments table is missing, has different columns, or the query
+      // shape is wrong on this DB, log and continue without label data.
+      console.warn('[orders/export] shipments lookup failed; carrying on without label cols:', err);
     }
   }
 
