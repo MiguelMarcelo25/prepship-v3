@@ -116,7 +116,48 @@ export const apiClient = {
 
   // ─── Init / bootstrap ───────────────────────────────────────────────────────
   fetchCounts(_filter?: { dateStart?: string; dateEnd?: string }): Promise<any> {
-    return safe('fetchCounts', () => api.get<any>('/init/counts'), {});
+    // v4's /init/counts returns { awaiting, shipped, cancelled, on_hold, queue, inventory }.
+    // v2's sidebar expects { byStatus: [{orderStatus, cnt}], byStatusStore: [{orderStatus, storeId, cnt}] }.
+    // Also fetch per-store breakdowns for each status via /orders/store-counts.
+    return safe(
+      'fetchCounts',
+      async () => {
+        const [counts, awaitingByStore, shippedByStore, cancelledByStore] =
+          await Promise.all([
+            api.get<any>('/init/counts'),
+            api
+              .get<any>('/orders/store-counts?status=awaiting_shipment')
+              .catch(() => ({ data: [] })),
+            api
+              .get<any>('/orders/store-counts?status=shipped')
+              .catch(() => ({ data: [] })),
+            api
+              .get<any>('/orders/store-counts?status=cancelled')
+              .catch(() => ({ data: [] })),
+          ]);
+
+        const byStatus = [
+          { orderStatus: 'awaiting_shipment', cnt: counts?.awaiting ?? 0 },
+          { orderStatus: 'shipped', cnt: counts?.shipped ?? 0 },
+          { orderStatus: 'cancelled', cnt: counts?.cancelled ?? 0 },
+        ];
+
+        const byStatusStore: { orderStatus: string; storeId: number; cnt: number }[] = [];
+        const pushAll = (status: string, rows: any) => {
+          for (const r of rows?.data ?? []) {
+            if (r?.store_id != null) {
+              byStatusStore.push({ orderStatus: status, storeId: r.store_id, cnt: r.count ?? 0 });
+            }
+          }
+        };
+        pushAll('awaiting_shipment', awaitingByStore);
+        pushAll('shipped', shippedByStore);
+        pushAll('cancelled', cancelledByStore);
+
+        return { byStatus, byStatusStore };
+      },
+      { byStatus: [], byStatusStore: [] }
+    );
   },
 
   fetchStores(): Promise<any[]> {
@@ -354,19 +395,19 @@ export const apiClient = {
     dateTo?: string;
   }): Promise<DailyStatsSummary> {
     const nowIso = new Date().toISOString();
-    const yesterdayIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const weekAgoIso = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const fallback: DailyStatsSummary = {
       totalOrders: 0,
       needToShip: 0,
       upcomingOrders: 0,
-      window: { from: yesterdayIso, to: nowIso },
+      window: { from: weekAgoIso, to: nowIso },
     };
     return safe(
       'fetchDailyStats',
       async () => {
         const res = await api.get<V4DailyStatsResponse>(
           `/orders/daily-stats${qs({
-            dateFrom: query?.dateFrom ?? yesterdayIso,
+            dateFrom: query?.dateFrom ?? weekAgoIso,
             dateTo: query?.dateTo ?? nowIso,
           })}`
         );
