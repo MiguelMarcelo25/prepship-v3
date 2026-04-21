@@ -156,14 +156,20 @@ export function useOrders(
   const isoFrom = toIsoStart(dateStart);
   const isoTo = toIsoEnd(dateEnd);
 
+  // The sidebar treats each CLIENT as a v2 "store" (see v2-apiClient.ts). When
+  // the user clicks "Tran Agency" it bubbles up as `storeId = client.id` in
+  // OrdersView → here. v4's /orders endpoint expects that value as `clientId`,
+  // not ShipStation's raw storeId. Prefer explicit clientId, else route storeId
+  // through as clientId.
+  const effectiveClientId = clientId ?? storeId;
+
   const query = useQuery<Paginated<OrderSummaryDto>>({
     queryKey: [
       'v2-hooks:orders',
       status,
       currentPage,
       pageSize,
-      storeId,
-      clientId,
+      effectiveClientId,
       isoFrom,
       isoTo,
     ],
@@ -173,8 +179,7 @@ export function useOrders(
           status,
           page: currentPage,
           pageSize,
-          storeId,
-          clientId,
+          clientId: effectiveClientId,
           dateFrom: isoFrom,
           dateTo: isoTo,
         })}`
