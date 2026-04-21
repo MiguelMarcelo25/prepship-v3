@@ -409,17 +409,45 @@ export const apiClient = {
   },
 
   fetchShipmentSyncStatus(): Promise<any> {
-    // v4 /shipments doesn't expose a /status endpoint; the list endpoint is
-    // the closest thing. Return an idle snapshot so the topbar pill can render.
-    return notImpl('fetchShipmentSyncStatus', { status: 'idle' });
+    // Expected v4 backend: GET /shipments/status (T2 punch-list item).
+    // Until it lands the call 404s and safe() returns the idle fallback so
+    // the topbar pill still renders.
+    return safe(
+      'fetchShipmentSyncStatus',
+      () => api.get<any>('/shipments/status'),
+      { status: 'idle' }
+    );
   },
 
   triggerShipmentSync(): Promise<any> {
-    return notImpl('triggerShipmentSync', { queued: false });
+    // Expected v4 backend: POST /shipments/sync (T2 punch-list item).
+    return safe(
+      'triggerShipmentSync',
+      () => api.post<any>('/shipments/sync', {}),
+      { queued: false }
+    );
   },
 
   clearAndRefetchAllRates(): Promise<any> {
-    return notImpl('clearAndRefetchAllRates', { ok: false });
+    // v2 "clear & refetch" flow = purge the rates cache then kick a fresh
+    // order sync so best-rate backfill repopulates. v4 exposes both pieces:
+    //   DELETE /rates/cache  — empty the cache
+    //   POST   /cron/sync-orders — queue a sync run that backfills rates
+    return safe(
+      'clearAndRefetchAllRates',
+      async () => {
+        const [cleared, queued] = await Promise.all([
+          api.delete<any>('/rates/cache'),
+          api.post<any>('/cron/sync-orders', {}),
+        ]);
+        return { ok: true, cleared, queued } as {
+          ok: boolean;
+          cleared?: any;
+          queued?: any;
+        };
+      },
+      { ok: false } as { ok: boolean; cleared?: any; queued?: any }
+    );
   },
 
   // ─── Orders: list / detail / mutations ──────────────────────────────────────
@@ -459,10 +487,21 @@ export const apiClient = {
     );
   },
 
-  markOrderShippedExternal(_orderId: number, _source: string): Promise<any> {
-    // v4's PATCH /orders/:id schema doesn't accept externally_shipped /
-    // external_source. Needs a backend endpoint before this works.
-    return notImpl('markOrderShippedExternal', { ok: false });
+  markOrderShippedExternal(orderId: number, source: string): Promise<any> {
+    // v2 "Mark as shipped externally" flow. T2 is extending v4's PATCH
+    // /orders/:id schema to accept `externallyShipped` + optional
+    // `externallyShippedSource`; both columns already exist on orderOverrides.
+    // Until the schema lands the call 400s and safe() returns {ok:false} so
+    // the button stays responsive instead of throwing.
+    return safe(
+      'markOrderShippedExternal',
+      () =>
+        api.patch<any>(`/orders/${orderId}`, {
+          externallyShipped: true,
+          externallyShippedSource: source,
+        }),
+      { ok: false }
+    );
   },
 
   setOrderSelectedPid(orderId: number, pid: number | null): Promise<any> {
@@ -815,13 +854,36 @@ export const apiClient = {
     );
   },
 
-  fetchInventoryLedger(_query: Record<string, unknown>): Promise<any[]> {
-    // v4 has no global /inventory/ledger; only per-item /:id/ledger.
-    return notImpl('fetchInventoryLedger', []);
+  fetchInventoryLedger(query: Record<string, unknown>): Promise<any[]> {
+    // Expected v4 backend: GET /inventory/ledger (global, T2 punch-list item).
+    // InventoryView History tab passes `{clientId?, type?, from?, to?}`; pass
+    // them through as query params so the endpoint has everything it needs.
+    // Until it lands the 404 is swallowed and the history tab shows an empty
+    // ledger instead of crashing.
+    return safe(
+      'fetchInventoryLedger',
+      async () => {
+        const res = await api.get<any>(`/inventory/ledger${qs(query as any)}`);
+        if (Array.isArray(res)) return res;
+        if (Array.isArray(res?.data)) return res.data;
+        return [];
+      },
+      []
+    );
   },
 
-  fetchInventorySkuOrders(_invSkuId: number, _days?: number): Promise<any> {
-    return notImpl('fetchInventorySkuOrders', { orders: [] });
+  fetchInventorySkuOrders(invSkuId: number, days?: number): Promise<any> {
+    // Expected v4 backend: GET /inventory/:id/sku-orders?days= (T2 punch-list
+    // item). InventoryView consumes `{orders, name, sku, dailySales}` to
+    // render the SKU drawer + 30-day chart.
+    return safe(
+      'fetchInventorySkuOrders',
+      () =>
+        api.get<any>(
+          `/inventory/${invSkuId}/sku-orders${qs({ days } as any)}`
+        ),
+      { orders: [], name: '', sku: '', dailySales: [] }
+    );
   },
 
   receiveInventory(data: Record<string, unknown>): Promise<any[]> {
