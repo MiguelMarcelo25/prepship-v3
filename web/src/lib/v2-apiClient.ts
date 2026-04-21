@@ -39,6 +39,38 @@ function parseDownloadFilename(
   return fallback;
 }
 
+function normalizeAnalysisRange(query: Record<string, unknown>): Record<string, string | number | boolean | undefined> {
+  const out: Record<string, string | number | boolean | undefined> = {};
+  for (const [k, v] of Object.entries(query)) {
+    if (v == null) continue;
+    out[k] = v as string | number | boolean;
+  }
+  const toIso = (d: unknown, endOfDay: boolean): string | undefined => {
+    if (typeof d !== 'string' || !d) return undefined;
+    if (d.includes('T')) return d;
+    return new Date(`${d}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}Z`).toISOString();
+  };
+  if (out.from != null && out.dateFrom == null) {
+    const iso = toIso(out.from, false);
+    if (iso) out.dateFrom = iso;
+    delete out.from;
+  }
+  if (out.to != null && out.dateTo == null) {
+    const iso = toIso(out.to, true);
+    if (iso) out.dateTo = iso;
+    delete out.to;
+  }
+  if (typeof out.dateFrom === 'string') {
+    const iso = toIso(out.dateFrom, false);
+    if (iso) out.dateFrom = iso;
+  }
+  if (typeof out.dateTo === 'string') {
+    const iso = toIso(out.dateTo, true);
+    if (iso) out.dateTo = iso;
+  }
+  return out;
+}
+
 async function safe<T>(
   methodName: string,
   fn: () => Promise<T>,
@@ -116,25 +148,19 @@ export const apiClient = {
 
   // ─── Init / bootstrap ───────────────────────────────────────────────────────
   fetchCounts(_filter?: { dateStart?: string; dateEnd?: string }): Promise<any> {
-    // v4's /init/counts returns { awaiting, shipped, cancelled, on_hold, queue, inventory }.
-    // v2's sidebar expects { byStatus: [{orderStatus, cnt}], byStatusStore: [{orderStatus, storeId, cnt}] }.
-    // Also fetch per-store breakdowns for each status via /orders/store-counts.
+    // v4's /init/counts → { awaiting, shipped, cancelled, on_hold, queue, inventory }
+    // v2's sidebar expects { byStatus, byStatusStore }.
+    // Since v4 uses `clientId` as the business grouping (not ShipStation's `storeId`)
+    // and clients have names ("Tran Agency" etc.) while store IDs don't, we map
+    // CLIENTS onto the sidebar's "store" slot. storeId = client.id in this wiring;
+    // see fetchStores below for the matching name resolution.
     return safe(
       'fetchCounts',
       async () => {
-        const [counts, awaitingByStore, shippedByStore, cancelledByStore] =
-          await Promise.all([
-            api.get<any>('/init/counts'),
-            api
-              .get<any>('/orders/store-counts?status=awaiting_shipment')
-              .catch(() => ({ data: [] })),
-            api
-              .get<any>('/orders/store-counts?status=shipped')
-              .catch(() => ({ data: [] })),
-            api
-              .get<any>('/orders/store-counts?status=cancelled')
-              .catch(() => ({ data: [] })),
-          ]);
+        const [counts, clientStats] = await Promise.all([
+          api.get<any>('/init/counts'),
+          api.get<any>('/clients/order-stats').catch(() => []),
+        ]);
 
         const byStatus = [
           { orderStatus: 'awaiting_shipment', cnt: counts?.awaiting ?? 0 },
@@ -142,17 +168,15 @@ export const apiClient = {
           { orderStatus: 'cancelled', cnt: counts?.cancelled ?? 0 },
         ];
 
+        const statsArr = Array.isArray(clientStats) ? clientStats : [];
         const byStatusStore: { orderStatus: string; storeId: number; cnt: number }[] = [];
-        const pushAll = (status: string, rows: any) => {
-          for (const r of rows?.data ?? []) {
-            if (r?.store_id != null) {
-              byStatusStore.push({ orderStatus: status, storeId: r.store_id, cnt: r.count ?? 0 });
-            }
-          }
-        };
-        pushAll('awaiting_shipment', awaitingByStore);
-        pushAll('shipped', shippedByStore);
-        pushAll('cancelled', cancelledByStore);
+        for (const row of statsArr) {
+          const cid = row?.clientId ?? row?.client_id;
+          if (cid == null) continue;
+          if ((row?.awaiting ?? 0) > 0) byStatusStore.push({ orderStatus: 'awaiting_shipment', storeId: cid, cnt: row.awaiting });
+          if ((row?.shipped ?? 0) > 0) byStatusStore.push({ orderStatus: 'shipped', storeId: cid, cnt: row.shipped });
+          if ((row?.cancelled ?? 0) > 0) byStatusStore.push({ orderStatus: 'cancelled', storeId: cid, cnt: row.cancelled });
+        }
 
         return { byStatus, byStatusStore };
       },
@@ -161,11 +185,20 @@ export const apiClient = {
   },
 
   fetchStores(): Promise<any[]> {
+    // v4 has no Store entity with names — each ShipStation store is just a numeric id.
+    // We map CLIENTS into the store slot so the sidebar shows "Tran Agency", "KF Goods",
+    // etc. instead of raw store IDs. Must stay in sync with fetchCounts above, which
+    // emits byStatusStore entries keyed by client.id.
     return safe(
       'fetchStores',
       async () => {
-        const data = await api.get<any>('/init/init-data');
-        return Array.isArray(data?.stores) ? data.stores : [];
+        const clients = await api.get<any>('/clients');
+        const arr = Array.isArray(clients) ? clients : [];
+        return arr.map((c) => ({
+          storeId: c?.id,
+          storeName: c?.name ?? `Client ${c?.id}`,
+          active: true,
+        }));
       },
       []
     );
@@ -1115,19 +1148,26 @@ export const apiClient = {
 
   // ─── Analysis ──────────────────────────────────────────────────────────────
   fetchAnalysisDailySales(query: Record<string, unknown>): Promise<any> {
-    // v4 analysis exposes /daily-shipments (not /daily-sales). Best-effort map.
+    // v4's /daily-shipments requires dateFrom/dateTo as ISO datetimes.
+    // v2 passes `from`/`to` as YYYY-MM-DD dates — translate.
     return safe(
       'fetchAnalysisDailySales',
-      () => api.get<any>(`/analysis/daily-shipments${qs(query as any)}`),
+      () => {
+        const q = normalizeAnalysisRange(query);
+        return api.get<any>(`/analysis/daily-shipments${qs(q)}`);
+      },
       { data: [] }
     );
   },
 
   fetchAnalysisSkus(query: Record<string, unknown>): Promise<any> {
-    // v4 exposes /top-skus and /sku-breakdown; using /top-skus as the default.
+    // v4's /top-skus requires dateFrom/dateTo as ISO datetimes.
     return safe(
       'fetchAnalysisSkus',
-      () => api.get<any>(`/analysis/top-skus${qs(query as any)}`),
+      () => {
+        const q = normalizeAnalysisRange(query);
+        return api.get<any>(`/analysis/top-skus${qs(q)}`);
+      },
       { data: [] }
     );
   },
