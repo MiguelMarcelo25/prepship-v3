@@ -1488,9 +1488,41 @@ export const apiClient = {
   },
 
   updateBillingConfig(clientId: number, data: Record<string, unknown>): Promise<any> {
+    // Translate legacy snake_case keys from v2 callers to v4's camelCase zod
+    // schema. Drop keys v4 doesn't support (e.g. storageFeePerCuFt) so they
+    // don't trigger a 400 rejection. v4 accepted keys (per src/routes/billing.ts
+    // configBody): pickPackFee, pickPackMaxUnits, additionalUnitFee,
+    // packageCostMarkup, shippingMarkupPct, shippingMarkupFlat, billingMode,
+    // active.
+    const rename: Record<string, string> = {
+      billing_mode: 'billingMode',
+      pick_pack_fee: 'pickPackFee',
+      pick_pack_max_units: 'pickPackMaxUnits',
+      additional_unit_fee: 'additionalUnitFee',
+      package_cost_markup: 'packageCostMarkup',
+      shipping_markup_pct: 'shippingMarkupPct',
+      shipping_markup_flat: 'shippingMarkupFlat',
+    };
+    const ACCEPTED = new Set([
+      'pickPackFee',
+      'pickPackMaxUnits',
+      'additionalUnitFee',
+      'packageCostMarkup',
+      'shippingMarkupPct',
+      'shippingMarkupFlat',
+      'billingMode',
+      'active',
+    ]);
+    const payload: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(data ?? {})) {
+      if (v === undefined) continue;
+      const outKey = rename[k] ?? k;
+      if (!ACCEPTED.has(outKey)) continue; // silently drop unknown keys
+      payload[outKey] = v;
+    }
     return safe(
       'updateBillingConfig',
-      () => api.put<any>(`/billing/config/${clientId}`, data),
+      () => api.put<any>(`/billing/config/${clientId}`, payload),
       {}
     );
   },
@@ -1542,6 +1574,7 @@ export const apiClient = {
         const entries = Array.isArray(res?.clients) ? res.clients : [];
         return entries.map((e: any) => {
           const byType = (e?.byType ?? {}) as Record<string, number | undefined>;
+          const total = e?.total ?? 0;
           return {
             clientId: e?.clientId,
             clientName:
@@ -1553,7 +1586,11 @@ export const apiClient = {
             additionalTotal: byType.additional_unit ?? 0,
             packageTotal: byType.package_cost ?? 0,
             shippingTotal: byType.shipping ?? 0,
-            total: e?.total ?? 0,
+            total,
+            // BillingView's summary table reads row.grandTotal for the final
+            // column; expose the same value under both keys so the UI works
+            // whether the view is updated or not.
+            grandTotal: total,
           };
         });
       },
