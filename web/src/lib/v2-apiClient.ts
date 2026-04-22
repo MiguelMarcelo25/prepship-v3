@@ -761,13 +761,16 @@ export const apiClient = {
         ]);
 
         const c = (countsRes ?? {}) as {
+          awaiting?: number;
           awaiting_shipment?: number;
           awaiting_payment?: number;
           on_hold?: number;
           shipped?: number;
           cancelled?: number;
         };
-        const awaiting = Number(c.awaiting_shipment ?? 0);
+        // The v4 /init/counts handler emits `awaiting` (see init.ts:49);
+        // accept either shape so the adapter survives schema drift.
+        const awaiting = Number(c.awaiting ?? c.awaiting_shipment ?? 0);
         const awaitingPayment = Number(c.awaiting_payment ?? 0);
         const onHold = Number(c.on_hold ?? 0);
         const shippedTotal = Number(c.shipped ?? 0);
