@@ -220,14 +220,34 @@ function translateRateToV2Shape(r: unknown): Record<string, unknown> {
 async function fetchBlob(
   methodName: string,
   path: string,
-  fallbackFilename: string
+  fallbackFilename: string,
+  options: { throwOnError?: boolean } = {}
 ): Promise<{ blob: Blob; filename: string }> {
+  // When `throwOnError` is false (default, back-compat), a failed fetch
+  // returns an empty Blob + fallback filename so callers don't need to
+  // handle exceptions — used by downloadOrdersExport / downloadQueuePrintJob
+  // which pre-date the strict behavior.
+  //
+  // When `throwOnError` is true, the caller gets a real exception so their
+  // try/catch can surface an error toast instead of quietly downloading a
+  // 0-byte file (ManifestsView pattern — see MAN1).
   try {
     const res = await fetch(`${BASE}${path}`, {
       method: 'GET',
       headers: await authHeaders(),
     });
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    if (!res.ok) {
+      // Try to pull a human message from the error body before falling
+      // back to the status line.
+      let message = `${res.status} ${res.statusText}`;
+      try {
+        const err = await res.json();
+        if (err?.error) message = err.error;
+      } catch {
+        // body wasn't JSON — keep the status-line message
+      }
+      throw new Error(message);
+    }
     return {
       blob: await res.blob(),
       filename: parseDownloadFilename(
@@ -236,6 +256,7 @@ async function fetchBlob(
       ),
     };
   } catch (err) {
+    if (options.throwOnError) throw err;
     console.warn(
       `[v2-apiClient] ${methodName} failed:`,
       err instanceof Error ? err.message : err
@@ -272,20 +293,53 @@ export const apiClient = {
   },
 
   // ─── Init / bootstrap ───────────────────────────────────────────────────────
-  fetchCounts(_filter?: { dateStart?: string; dateEnd?: string }): Promise<any> {
+  fetchCounts(filter?: { dateStart?: string; dateEnd?: string }): Promise<any> {
     // v4's /init/counts → { awaiting, shipped, cancelled, on_hold, queue, inventory }
     // v2's sidebar expects { byStatus, byStatusStore }.
     // Since v4 uses `clientId` as the business grouping (not ShipStation's `storeId`)
     // and clients have names ("Tran Agency" etc.) while store IDs don't, we map
     // CLIENTS onto the sidebar's "store" slot. storeId = client.id in this wiring;
     // see fetchStores below for the matching name resolution.
+    //
+    // Date filter handling: /init/counts ignores query params (no validator)
+    // and /clients/order-stats has no date filter on the backend. When the
+    // caller wants a bounded count, fall back to three parallel /orders
+    // probes (one per status) using the list endpoint's pagination.total.
+    // byStatusStore stays all-time since we can't break it down per-client
+    // within a date range without N backend calls.
+    const hasDate = Boolean(filter?.dateStart || filter?.dateEnd);
+    const dateFrom = toIsoDayStart(filter?.dateStart);
+    const dateTo = toIsoDayEnd(filter?.dateEnd);
     return safe(
       'fetchCounts',
       async () => {
         // Fetch clients alongside stats so we can resolve hidden-client IDs by
         // name even if fetchStores hasn't populated HIDDEN_CLIENT_IDS yet.
         const [counts, clientStatsRes, clientsRes] = await Promise.all([
-          api.get<any>('/init/counts'),
+          hasDate
+            ? // Probe the list endpoint per status; total comes from pagination.
+              Promise.all([
+                api
+                  .get<any>(
+                    `/orders${qs({ status: 'awaiting_shipment', pageSize: 1, dateFrom, dateTo })}`
+                  )
+                  .catch(() => null),
+                api
+                  .get<any>(
+                    `/orders${qs({ status: 'shipped', pageSize: 1, dateFrom, dateTo })}`
+                  )
+                  .catch(() => null),
+                api
+                  .get<any>(
+                    `/orders${qs({ status: 'cancelled', pageSize: 1, dateFrom, dateTo })}`
+                  )
+                  .catch(() => null),
+              ]).then(([a, s, x]) => ({
+                awaiting: a?.pagination?.total ?? 0,
+                shipped: s?.pagination?.total ?? 0,
+                cancelled: x?.pagination?.total ?? 0,
+              }))
+            : api.get<any>('/init/counts'),
           api.get<any>('/clients/order-stats').catch(() => ({ data: [] })),
           api.get<any>('/clients').catch(() => []),
         ]);
@@ -980,9 +1034,56 @@ export const apiClient = {
   },
 
   updateInventoryItem(invSkuId: number, data: Record<string, unknown>): Promise<any> {
+    // v2 InventoryView sends legacy keys that v4's zod body schema doesn't
+    // accept. Translate before PATCH — anything unmapped gets silently dropped
+    // by v4's zod. Also strip product-dim keys (v4 only has generic length/
+    // width/height; no separate package vs product dims).
+    //
+    // v2 key → v4 key:
+    //   minStock         → reorderLevel
+    //   units_per_pack   → unitsPerPack
+    //   productLength    → (dropped)
+    //   productWidth     → (dropped)
+    //   productHeight    → (dropped)
+    //
+    // Pass-through (v4 already matches): baseUnitQty, length, width, height,
+    //   weightOz, cuFtOverride, packageId, sku, name, imageUrl, stockQty,
+    //   reorderLevel, unitsPerPack, active, clientId.
+    const PASS_THROUGH = new Set([
+      'baseUnitQty',
+      'length',
+      'width',
+      'height',
+      'weightOz',
+      'cuFtOverride',
+      'packageId',
+      'sku',
+      'name',
+      'imageUrl',
+      'stockQty',
+      'reorderLevel',
+      'unitsPerPack',
+      'active',
+      'clientId',
+    ]);
+    const payload: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(data ?? {})) {
+      if (v === undefined) continue;
+      if (k === 'minStock') {
+        payload.reorderLevel = v;
+      } else if (k === 'units_per_pack') {
+        payload.unitsPerPack = v;
+      } else if (k === 'productLength' || k === 'productWidth' || k === 'productHeight') {
+        // v4 doesn't split product vs package dims — drop these silently.
+        continue;
+      } else if (PASS_THROUGH.has(k)) {
+        payload[k] = v;
+      }
+      // Unknown keys dropped to avoid zod 400s.
+    }
     return safe(
       'updateInventoryItem',
-      () => api.patch<any>(`/inventory/${invSkuId}`, data),
+      () => api.patch<any>(`/inventory/${invSkuId}`, payload),
       {}
     );
   },
@@ -991,15 +1092,35 @@ export const apiClient = {
     // v4 has no /inventory/alerts endpoint yet — derive client-side from
     // the lowStock flag on the list endpoint. Server caps pageSize at 200
     // (see src/lib/pagination.ts) — exceed it and the zod validator 400s.
+    //
+    // v2 UI expects enriched rows with clientName + currentStock (the v4
+    // row only has stockQty + clientId). Join /clients here so the alerts
+    // banner doesn't render "undefined" for the client label.
     return safe(
       'fetchInventoryAlerts',
       async () => {
-        const res = await api.get<any>(
-          `/inventory${qs({ clientId, lowStock: true, pageSize: 200 } as any)}`
-        );
-        if (Array.isArray(res)) return res;
-        if (Array.isArray(res?.data)) return res.data;
-        return [];
+        const [res, clientsRes] = await Promise.all([
+          api.get<any>(
+            `/inventory${qs({ clientId, lowStock: true, pageSize: 200 } as any)}`
+          ),
+          api.get<any>('/clients').catch(() => []),
+        ]);
+        const rows = Array.isArray(res)
+          ? res
+          : Array.isArray(res?.data)
+            ? res.data
+            : [];
+        const clientsArr = Array.isArray(clientsRes) ? clientsRes : [];
+        const nameById = new Map<number, string>();
+        for (const c of clientsArr) {
+          if (c?.id != null) nameById.set(c.id, c?.name ?? '');
+        }
+        return rows.map((row: any) => ({
+          ...row,
+          clientName:
+            row?.clientId != null ? nameById.get(row.clientId) ?? null : null,
+          currentStock: row?.stockQty ?? 0,
+        }));
       },
       []
     );
@@ -1037,15 +1158,52 @@ export const apiClient = {
   },
 
   fetchInventorySkuOrders(invSkuId: number, days?: number): Promise<any> {
-    // Expected v4 backend: GET /inventory/:id/sku-orders?days= (T2 punch-list
-    // item). InventoryView consumes `{orders, name, sku, dailySales}` to
-    // render the SKU drawer + 30-day chart.
+    // v4 returns {sku, name, orders: [{order_id, order_number, order_date,
+    // order_status, qty}]} (snake_case, no dailySales).
+    // v2 UI reads camelCase rows + {day, units}[] for the 30-day chart.
+    // Reshape rows and synthesize dailySales by bucketing qty per day.
+    const windowDays = days ?? 30;
     return safe(
       'fetchInventorySkuOrders',
-      () =>
-        api.get<any>(
-          `/inventory/${invSkuId}/sku-orders${qs({ days } as any)}`
-        ),
+      async () => {
+        const res = await api.get<any>(
+          `/inventory/${invSkuId}/sku-orders${qs({ days: windowDays } as any)}`
+        );
+        const rawOrders = Array.isArray(res?.orders) ? res.orders : [];
+        const orders = rawOrders.map((r: any) => ({
+          orderId: r?.order_id ?? r?.orderId ?? null,
+          orderNumber: r?.order_number ?? r?.orderNumber ?? '',
+          orderDate: r?.order_date ?? r?.orderDate ?? null,
+          orderStatus: r?.order_status ?? r?.orderStatus ?? '',
+          qty: Number(r?.qty ?? 0),
+        }));
+
+        // Bucket qty per YYYY-MM-DD, then pad missing days with 0 so the
+        // chart has exactly `windowDays` contiguous data points.
+        const bucket = new Map<string, number>();
+        for (const o of orders) {
+          if (!o.orderDate) continue;
+          const day = String(o.orderDate).slice(0, 10);
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+          bucket.set(day, (bucket.get(day) ?? 0) + o.qty);
+        }
+        const dailySales: { day: string; units: number }[] = [];
+        const today = new Date();
+        today.setUTCHours(0, 0, 0, 0);
+        for (let i = windowDays - 1; i >= 0; i -= 1) {
+          const d = new Date(today);
+          d.setUTCDate(d.getUTCDate() - i);
+          const day = d.toISOString().slice(0, 10);
+          dailySales.push({ day, units: bucket.get(day) ?? 0 });
+        }
+
+        return {
+          sku: res?.sku ?? '',
+          name: res?.name ?? '',
+          orders,
+          dailySales,
+        };
+      },
       { orders: [], name: '', sku: '', dailySales: [] }
     );
   },
@@ -1384,9 +1542,41 @@ export const apiClient = {
   },
 
   updateBillingConfig(clientId: number, data: Record<string, unknown>): Promise<any> {
+    // Translate legacy snake_case keys from v2 callers to v4's camelCase zod
+    // schema. Drop keys v4 doesn't support (e.g. storageFeePerCuFt) so they
+    // don't trigger a 400 rejection. v4 accepted keys (per src/routes/billing.ts
+    // configBody): pickPackFee, pickPackMaxUnits, additionalUnitFee,
+    // packageCostMarkup, shippingMarkupPct, shippingMarkupFlat, billingMode,
+    // active.
+    const rename: Record<string, string> = {
+      billing_mode: 'billingMode',
+      pick_pack_fee: 'pickPackFee',
+      pick_pack_max_units: 'pickPackMaxUnits',
+      additional_unit_fee: 'additionalUnitFee',
+      package_cost_markup: 'packageCostMarkup',
+      shipping_markup_pct: 'shippingMarkupPct',
+      shipping_markup_flat: 'shippingMarkupFlat',
+    };
+    const ACCEPTED = new Set([
+      'pickPackFee',
+      'pickPackMaxUnits',
+      'additionalUnitFee',
+      'packageCostMarkup',
+      'shippingMarkupPct',
+      'shippingMarkupFlat',
+      'billingMode',
+      'active',
+    ]);
+    const payload: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(data ?? {})) {
+      if (v === undefined) continue;
+      const outKey = rename[k] ?? k;
+      if (!ACCEPTED.has(outKey)) continue; // silently drop unknown keys
+      payload[outKey] = v;
+    }
     return safe(
       'updateBillingConfig',
-      () => api.put<any>(`/billing/config/${clientId}`, data),
+      () => api.put<any>(`/billing/config/${clientId}`, payload),
       {}
     );
   },
@@ -1438,6 +1628,7 @@ export const apiClient = {
         const entries = Array.isArray(res?.clients) ? res.clients : [];
         return entries.map((e: any) => {
           const byType = (e?.byType ?? {}) as Record<string, number | undefined>;
+          const total = e?.total ?? 0;
           return {
             clientId: e?.clientId,
             clientName:
@@ -1449,7 +1640,11 @@ export const apiClient = {
             additionalTotal: byType.additional_unit ?? 0,
             packageTotal: byType.package_cost ?? 0,
             shippingTotal: byType.shipping ?? 0,
-            total: e?.total ?? 0,
+            total,
+            // BillingView's summary table reads row.grandTotal for the final
+            // column; expose the same value under both keys so the UI works
+            // whether the view is updated or not.
+            grandTotal: total,
           };
         });
       },
@@ -1531,14 +1726,25 @@ export const apiClient = {
   },
 
   // ─── Rates ─────────────────────────────────────────────────────────────────
+  // fetchRates is the ONE place in the app that translates between v2's rate
+  // shape (shared by the bulk-ported RatesView / OrdersView side-panel / any
+  // future caller) and v4's ShipStation-v2-passthrough shape. Callers may
+  // pass either v4 shape (weightOz / toZip / dimsL/W/H) or legacy v2 shape
+  // (toPostalCode / weight.value / dimensions.length / …); we normalize to v4
+  // on input and remap to v2-legacy on output so every reader of the result
+  // can use the same field names the bulk-ported v2 code expects.
   fetchRates(data: Record<string, unknown>): Promise<any[]> {
     return safe(
       'fetchRates',
       async () => {
-        const res = await api.post<any>('/rates', data);
-        if (Array.isArray(res)) return res;
-        if (Array.isArray(res?.rates)) return res.rates;
-        return [];
+        const body = translateRatePayloadToV4(data);
+        const res = await api.post<any>('/rates', body);
+        const rawRates = Array.isArray(res)
+          ? res
+          : Array.isArray(res?.rates)
+            ? res.rates
+            : [];
+        return rawRates.map(translateRateToV2Shape);
       },
       []
     );
@@ -1632,11 +1838,18 @@ export const apiClient = {
     [k: string]: unknown;
   }): Promise<{ blob: Blob; filename: string }> {
     // v4 exposes GET /manifests/generate with query params. Flatten v2's body
-    // to query string.
+    // to query string. Throws on failure so ManifestsView's try/catch surfaces
+    // the server error in a toast instead of silently downloading a 0-byte
+    // file.
     const path = `/manifests/generate${qs(data as any)}`;
     const start = data.startDate ?? 'unknown';
     const end = data.endDate ?? 'unknown';
-    return fetchBlob('downloadManifest', path, `manifest_${start}_${end}.csv`);
+    return fetchBlob(
+      'downloadManifest',
+      path,
+      `manifest_${start}_${end}.csv`,
+      { throwOnError: true }
+    );
   },
 };
 
