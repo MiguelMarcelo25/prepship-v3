@@ -11,6 +11,7 @@ import {
 } from 'react'
 import { api } from '../lib/api'
 import { apiClient } from '../lib/v2-apiClient'
+import { useAuth } from '../lib/auth'
 
 export type MarkupType = 'amount' | 'percent' | 'pct' | 'flat'
 
@@ -61,6 +62,7 @@ function parseMarkupValue(raw: unknown): Markup | null {
 }
 
 export function MarkupsProvider({ children }: { children: ReactNode }) {
+  const { session, loading: authLoading } = useAuth()
   const [markups, setMarkups] = useState<MarkupsMap>({})
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -104,9 +106,14 @@ export function MarkupsProvider({ children }: { children: ReactNode }) {
   }, [])
 
   // Hydrate from /settings on mount so markup edits survive reload.
+  // Gate on auth: /settings is Supabase-authed, so fire only once auth has
+  // resolved AND a session token exists (the MarkupsProvider sits inside
+  // AuthProvider but mounts synchronously, before supabase.auth.getSession
+  // finishes — firing too early produces a 401 on every page load).
   useEffect(() => {
+    if (authLoading || !session?.access_token) return
     void refreshMarkups()
-  }, [refreshMarkups])
+  }, [authLoading, session?.access_token, refreshMarkups])
 
   const saveMarkup = useCallback(
     async (pidOrCarrier: number | string, type: MarkupType, value: number) => {

@@ -1143,8 +1143,11 @@ export default function RateBrowserModal({
                   <option value="">Select Package</option>
                   {packageGroups.custom.length > 0 && (
                     <optgroup label="Custom">
-                      {packageGroups.custom.map((p) => (
-                        <option key={p.packageId} value={p.packageId}>
+                      {packageGroups.custom.map((p, idx) => (
+                        <option
+                          key={`custom-${p.packageId ?? (p as any).id ?? p.name ?? idx}`}
+                          value={p.packageId ?? (p as any).id ?? ''}
+                        >
                           {packageGroups.strip(p.name)}
                         </option>
                       ))}
@@ -1159,8 +1162,11 @@ export default function RateBrowserModal({
                     const label = labelMap[cc] ?? cc.toUpperCase();
                     return (
                       <optgroup key={cc} label={label}>
-                        {pkgs.map((p) => (
-                          <option key={p.packageId} value={p.packageId}>
+                        {pkgs.map((p, idx) => (
+                          <option
+                            key={`${cc}-${p.packageId ?? (p as any).id ?? p.name ?? idx}`}
+                            value={p.packageId ?? (p as any).id ?? ''}
+                          >
                             {packageGroups.strip(p.name)}
                           </option>
                         ))}
