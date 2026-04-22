@@ -1573,7 +1573,23 @@ export default function OrdersView({
       const weightOz = order.weight?.value ?? 0
       const dims = getDimensions(order, null)
 
-      if (shippingProviderId == null || !serviceCode || !carrierCode) {
+      // Test-client orders bypass the rate-fetch requirement — the backend
+      // forces a VOID mock label regardless, so we just need to reach the
+      // endpoint with a serviceCode + carrierCode. Use the order's stored
+      // defaults when no rate has been shopped.
+      const isTestOrder =
+        typeof order.clientId === 'number' && TEST_CLIENT_IDS.has(order.clientId)
+      const effectiveServiceCode = serviceCode ?? (isTestOrder ? 'usps_first_class_mail' : null)
+      const effectiveCarrierCode = carrierCode ?? (isTestOrder ? 'stamps_com' : null)
+      // shippingProviderId is only required for real postage; the mock path
+      // ignores it. Pass 0 as a placeholder when missing on a test order.
+      const effectiveProviderId = shippingProviderId ?? (isTestOrder ? 0 : null)
+
+      if (
+        effectiveProviderId == null ||
+        !effectiveServiceCode ||
+        !effectiveCarrierCode
+      ) {
         failed += 1
         continue
       }
@@ -1581,15 +1597,15 @@ export default function OrdersView({
       try {
         const response = await apiClient.createLabel({
           orderId: order.orderId,
-          serviceCode,
-          carrierCode,
-          shippingProviderId,
+          serviceCode: effectiveServiceCode,
+          carrierCode: effectiveCarrierCode,
+          shippingProviderId: effectiveProviderId,
           packageCode: 'package',
           weightOz,
           length: dims?.length,
           width: dims?.width,
           height: dims?.height,
-          testLabel: batchTestMode,
+          testLabel: batchTestMode || isTestOrder,
         })
 
         if (mode === 'queue' && response.labelUrl && order.clientId != null) {
