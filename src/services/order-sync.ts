@@ -88,6 +88,7 @@ function toNumericString(n?: number | null): string {
 async function buildStoreToClientMap(): Promise<{
   byStore: Map<number, number>;
   testClients: Set<number>;
+  newPairs: Array<{ storeId: number; clientId: number }>;
 }> {
   const rows = await db
     .select({ id: clients.id, storeIds: clients.storeIds, isTest: clients.isTest })
@@ -98,17 +99,47 @@ async function buildStoreToClientMap(): Promise<{
     for (const sid of c.storeIds ?? []) byStore.set(sid, c.id);
     if (c.isTest) testClients.add(c.id);
   }
-  return { byStore, testClients };
+  return { byStore, testClients, newPairs: [] };
+}
+
+// Batched UPDATE that pushes the store_ids mappings discovered during the
+// sync pass onto each client row. Runs once per sync (outside the hot
+// loop) so the pg array-binding issue doesn't surface per-row.
+async function flushNewStorePairs(
+  pairs: Array<{ storeId: number; clientId: number }>
+): Promise<void> {
+  if (!pairs.length) return;
+  const byClient = new Map<number, Set<number>>();
+  for (const p of pairs) {
+    if (!byClient.has(p.clientId)) byClient.set(p.clientId, new Set());
+    byClient.get(p.clientId)!.add(p.storeId);
+  }
+  for (const [clientId, storeIdSet] of byClient) {
+    const cid = Math.trunc(clientId);
+    const storeList = [...storeIdSet].map((n) => Math.trunc(n)).join(',');
+    if (!storeList) continue;
+    // Inline the ints as literal SQL — both sides are validated upstream
+    // (storeId from SS numeric coercion, clientId from our serial PK).
+    await db.execute(
+      sql.raw(
+        `update clients set store_ids = array(select distinct unnest(
+           coalesce(store_ids, array[]::integer[]) || array[${storeList}]::integer[]
+         )), updated_at = now() where id = ${cid}`
+      )
+    );
+  }
 }
 
 async function upsertOrder(
   o: SSOrder,
-  storeToClient: { byStore: Map<number, number>; testClients: Set<number> },
+  storeToClient: {
+    byStore: Map<number, number>;
+    testClients: Set<number>;
+    newPairs?: Array<{ storeId: number; clientId: number }>;
+  },
   // When this order came from a per-client SS account (e.g. KF Goods'
   // own keys), the sync passes that client's id here. Used as a fallback
-  // when the incoming storeId isn't yet in storeToClient — new stores
-  // auto-attach to the account that fetched them so the first sync
-  // doesn't leave orders stuck at clientId=null.
+  // when the incoming storeId isn't yet in storeToClient.
   fallbackClientId: number | null = null
 ): Promise<boolean> {
   const storeId = o.advancedOptions?.storeId ?? null;
@@ -117,23 +148,13 @@ async function upsertOrder(
   if (clientId === null && fallbackClientId !== null) {
     clientId = fallbackClientId;
     if (storeId !== null) {
-      // Cache the mapping for the rest of this sync pass.
+      // Cache the mapping in-memory for the rest of the sync pass AND
+      // collect it for the batched UPDATE that runs after the sync
+      // finishes (see flushNewStorePairs). We don't touch the DB here —
+      // issuing an UPDATE inside the hot loop was causing pg parameter-
+      // binding errors on integer[] arrays.
       storeToClient.byStore.set(storeId, fallbackClientId);
-      // Persist it too — embed the ints as raw SQL since pg's node driver
-      // doesn't bind JS numbers into integer[] cleanly. Both values are
-      // already int-validated (storeId from SS, fallbackClientId from DB)
-      // so sql.raw is safe here.
-      const sid = Math.trunc(storeId);
-      const cid = Math.trunc(fallbackClientId);
-      await db.execute(sql.raw(
-        `update clients set store_ids = (
-           select array(select distinct unnest(
-             coalesce(store_ids, array[]::integer[]) || array[${sid}]::integer[]
-           ))
-         ), updated_at = now()
-         where id = ${cid}
-           and not (${sid} = any(coalesce(store_ids, array[]::integer[])))`
-      ));
+      storeToClient.newPairs?.push({ storeId, clientId: fallbackClientId });
     }
   }
   // Hard guard: ShipStation orders under a test-flagged client never hit the
@@ -329,6 +350,14 @@ export async function syncOrders(opts: {
         (err as Error).message
       );
     }
+  }
+
+  // Flush any new (storeId → clientId) mappings discovered during this
+  // sync pass — one UPDATE per client, outside the hot loop.
+  try {
+    await flushNewStorePairs(storeToClient.newPairs);
+  } catch (err) {
+    console.error('[order-sync] flushNewStorePairs failed:', (err as Error).message);
   }
 
   return {
