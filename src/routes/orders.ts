@@ -277,8 +277,11 @@ function formatPtLabel(d: Date): string {
   );
 }
 
-// Daily stats — v2 shift-based window (Pacific noon→noon, expanded for
-// weekends). Returns totalOrders / needToShip / upcomingOrders matching v2.
+// Daily stats — hybrid window: 48h activity + all-time awaiting backlog.
+// Accepts excludeClientId (comma-separated) so hidden clients (Api Shipments,
+// Test Orders, etc.) are filtered out of the strip just like they are from
+// the sidebar and orders table. Without this the strip counts thousands of
+// test orders and shows numbers that don't match the visible list.
 app.get(
   '/daily-stats',
   zValidator(
@@ -286,19 +289,27 @@ app.get(
     z.object({
       dateFrom: z.string().datetime().optional(),
       dateTo: z.string().datetime().optional(),
+      excludeClientId: z.string().optional(),
     })
   ),
   async (c) => {
     const q = c.req.valid('query');
-    // Hybrid v2 strategy: totalOrders uses a rolling 48h window so low-volume
-    // accounts still see activity even during quiet shifts. needToShip counts
-    // ALL awaiting_shipment orders regardless of date — that's the real work
-    // queue, not a time-scoped subset. Upcoming is future-dated orders.
     const rolling = computeRolling48hWindow();
     const fromDate = q.dateFrom ? new Date(q.dateFrom) : rolling.from;
     const toDate = q.dateTo ? new Date(q.dateTo) : rolling.to;
     const fromIso = fromDate.toISOString();
     const toIso = toDate.toISOString();
+
+    const excludeIds = (q.excludeClientId ?? '')
+      .split(',')
+      .map((s) => Number.parseInt(s.trim(), 10))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    // Keep orders with NULL client_id (not-yet-assigned orders) visible;
+    // only filter the explicit hidden IDs.
+    const excludeFilter =
+      excludeIds.length > 0
+        ? sql`and (client_id is null or client_id <> all(${excludeIds}::int[]))`
+        : sql``;
 
     const rows = await db.execute<{
       day: string;
@@ -311,6 +322,7 @@ app.get(
       from orders
       where order_date >= ${fromIso}::timestamptz
         and order_date <= ${toIso}::timestamptz
+        ${excludeFilter}
       group by date_trunc('day', order_date)
       order by date_trunc('day', order_date) desc
     `);
@@ -325,18 +337,21 @@ app.get(
       from orders
       where order_date >= ${fromIso}::timestamptz
         and order_date <= ${toIso}::timestamptz
+        ${excludeFilter}
     `);
     // needToShip: ALL awaiting_shipment orders (the real work queue, not windowed).
     const backlogRows = await db.execute<{ need_to_ship: number }>(sql`
       select count(*)::int as need_to_ship
       from orders
       where order_status = 'awaiting_shipment'
+        ${excludeFilter}
     `);
     const upcomingRows = await db.execute<{ upcoming_orders: number }>(sql`
       select count(*)::int as upcoming_orders
       from orders
       where order_date > ${toIso}::timestamptz
         and order_status <> 'cancelled'
+        ${excludeFilter}
     `);
     const w = windowedRows[0];
     const b = backlogRows[0];

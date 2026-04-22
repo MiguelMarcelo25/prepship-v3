@@ -724,10 +724,17 @@ export const apiClient = {
     return safe(
       'fetchDailyStats',
       async () => {
+        // If sidebar has already discovered hidden clients (via fetchStores/
+        // fetchCounts), pass their IDs so the strip counts exclude them —
+        // matches the orders table + sidebar behavior. Without this the
+        // strip counts test/api-shipments orders that aren't actually shown.
+        const excludeClientId =
+          HIDDEN_CLIENT_IDS.size > 0 ? [...HIDDEN_CLIENT_IDS].join(',') : undefined;
         const res = await api.get<V4DailyStatsResponse>(
           `/orders/daily-stats${qs({
             dateFrom: query?.dateFrom,
             dateTo: query?.dateTo,
+            excludeClientId,
           })}`
         );
         return {
