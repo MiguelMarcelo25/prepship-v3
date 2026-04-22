@@ -20,7 +20,17 @@ app.get('/status', async (c) => {
 });
 
 app.post('/sync', async (c) => {
-  const result = await syncShipments({});
+  let sinceMs: number | undefined;
+  try {
+    const body = await c.req.json().catch(() => null);
+    if (body && typeof body === 'object') {
+      if (typeof body.sinceMs === 'number') sinceMs = body.sinceMs;
+      if (body.fullResync === true) sinceMs = 0;
+    }
+  } catch {
+    // empty body — use defaults
+  }
+  const result = await syncShipments({ sinceMs });
   return c.json(result);
 });
 

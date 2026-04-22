@@ -18,7 +18,20 @@ app.get('/sync/status', async (c) => {
 });
 
 app.post('/sync', async (c) => {
-  const result = await syncOrders({});
+  // Optional body lets a caller force a backfill further back than the
+  // default watermark. Used by the UI / admin tools to pull a new keyed
+  // client's recent history without waiting 30 days of cron ticks.
+  let sinceMs: number | undefined;
+  try {
+    const body = await c.req.json().catch(() => null);
+    if (body && typeof body === 'object') {
+      if (typeof body.sinceMs === 'number') sinceMs = body.sinceMs;
+      if (body.fullResync === true) sinceMs = 0;
+    }
+  } catch {
+    // empty / no body — run with defaults
+  }
+  const result = await syncOrders({ sinceMs });
   return c.json(result);
 });
 
