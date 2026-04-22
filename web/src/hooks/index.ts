@@ -34,7 +34,6 @@ export { useAutoPolling } from './useAutoPolling';
 export { useInitStores } from './useInitStores';
 export { useKeyboardShortcuts } from './useKeyboardShortcuts';
 export { useOrdersWithDetails } from './useOrdersWithDetails';
-export { useRates } from './useRates';
 export { useShippedOrdersCache } from './useShippedOrdersCache';
 export { useStoreOrders } from './useStoreOrders';
 export { useStores } from './useStores';
