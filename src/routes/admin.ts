@@ -405,41 +405,43 @@ app.post('/reset-sync', zValidator('json', resetSyncBody), async (c) => {
   const lookbackDays = body.lookbackDays ?? 30;
   const runSync = body.sync !== false;
 
-  // Raw SQL with rowcount-only returns — .returning() on a mass delete
-  // of 4k+ orders overflows the pg protocol's parameter buffer in some
-  // cases. Using `delete ... returning 1` into a counting CTE keeps the
-  // wire traffic minimal.
-  const runDelete = async (tableSql: ReturnType<typeof sql>): Promise<number> => {
-    const rows = await db.execute<{ count: number }>(sql`
-      with d as (delete from ${tableSql} returning 1)
-      select count(*)::int as count from d
-    `);
-    return rows[0]?.count ?? 0;
-  };
-
-  const billingCount = await runDelete(sql`billing_line_items`);
-  const ledgerCount = await runDelete(sql`inventory_ledger`);
-  const shipmentsCount = await runDelete(sql`shipments`);
-  const ordersCount = await runDelete(sql`orders`);
-
-  // Settings: only the sync watermark rows.
-  const settingsRows = await db.execute<{ count: number }>(sql`
-    with d as (
-      delete from settings
-       where key like 'order_sync.%' or key like 'shipment_sync.%'
-       returning 1
-    )
-    select count(*)::int as count from d
+  // Count rows BEFORE the delete so we can report what got wiped, then
+  // TRUNCATE — that bypasses row-by-row protocol serialization entirely.
+  // order_overrides is TRUNCATE-cascaded by the FK on order_id.
+  const preCounts = await db.execute<{
+    billing: number;
+    ledger: number;
+    shipments: number;
+    orders: number;
+    watermarks: number;
+  }>(sql`
+    select
+      (select count(*)::int from billing_line_items) as billing,
+      (select count(*)::int from inventory_ledger) as ledger,
+      (select count(*)::int from shipments) as shipments,
+      (select count(*)::int from orders) as orders,
+      (select count(*)::int from settings where key like 'order_sync.%' or key like 'shipment_sync.%') as watermarks
   `);
-  const watermarkCount = settingsRows[0]?.count ?? 0;
+  const pre = preCounts[0] ?? { billing: 0, ledger: 0, shipments: 0, orders: 0, watermarks: 0 };
+
+  // Order matters — child tables first so FK deletes are clean.
+  // RESTART IDENTITY resets the id sequences so the next sync produces
+  // small integer ids again, matching a fresh DB.
+  await db.execute(sql`truncate table billing_line_items restart identity`);
+  await db.execute(sql`truncate table inventory_ledger restart identity cascade`);
+  await db.execute(sql`truncate table shipments restart identity cascade`);
+  await db.execute(sql`truncate table orders restart identity cascade`);
+  await db.execute(sql`
+    delete from settings where key like 'order_sync.%' or key like 'shipment_sync.%'
+  `);
 
   const sinceMs = Date.now() - lookbackDays * 24 * 60 * 60 * 1000;
   const deleted = {
-    billing_line_items: billingCount,
-    inventory_ledger: ledgerCount,
-    shipments: shipmentsCount,
-    orders: ordersCount,
-    sync_watermarks: watermarkCount,
+    billing_line_items: pre.billing,
+    inventory_ledger: pre.ledger,
+    shipments: pre.shipments,
+    orders: pre.orders,
+    sync_watermarks: pre.watermarks,
   };
 
   if (!runSync) {
