@@ -304,11 +304,15 @@ app.get(
       .split(',')
       .map((s) => Number.parseInt(s.trim(), 10))
       .filter((n) => Number.isFinite(n) && n > 0);
-    // Keep orders with NULL client_id (not-yet-assigned orders) visible;
-    // only filter the explicit hidden IDs.
+    // Keep orders with NULL client_id (not-yet-assigned) visible; only
+    // filter the explicit hidden IDs. Using inArray avoids array-literal
+    // quoting quirks through Drizzle's sql template.
     const excludeFilter =
       excludeIds.length > 0
-        ? sql`and (client_id is null or client_id <> all(${excludeIds}::int[]))`
+        ? sql`and (client_id is null or not (client_id in (${sql.join(
+            excludeIds.map((id) => sql`${id}`),
+            sql`, `
+          )})))`
         : sql``;
 
     const rows = await db.execute<{
