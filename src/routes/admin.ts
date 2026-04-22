@@ -9,6 +9,9 @@ import { shipments } from '../db/schema/shipments';
 import { inventoryLedger } from '../db/schema/inventory';
 import { billingLineItems } from '../db/schema/billing';
 import { products } from '../db/schema/products';
+import { settings } from '../db/schema/settings';
+import { syncOrders } from '../services/order-sync';
+import { syncShipments } from '../services/shipment-sync';
 
 const app = new Hono();
 
@@ -375,6 +378,87 @@ app.get('/test-clients', async (c) => {
     order by c.name
   `);
   return c.json({ data: rows });
+});
+
+// ── Hard reset + fresh sync ─────────────────────────────────────────────
+//
+// Destructive: deletes every synced row (orders, shipments, their billing
+// line items + inventory ledger entries) AND wipes every order/shipment
+// sync watermark so the next sync pulls from DEFAULT_LOOKBACK_MS (30 days).
+//
+// Preserves: clients (with their credentials + storeIds), packages,
+// locations, billing_config, inventory (just not the ledger), settings
+// other than sync watermarks. Test-client seeded orders are also deleted
+// — re-seed from the Settings view after.
+//
+// Pass { lookbackDays: N } to override the default 30-day backfill, or
+// { sync: false } to just wipe without immediately re-syncing.
+const resetSyncBody = z
+  .object({
+    lookbackDays: z.number().int().positive().max(365).optional(),
+    sync: z.boolean().optional(),
+  })
+  .optional();
+
+app.post('/reset-sync', zValidator('json', resetSyncBody), async (c) => {
+  const body = c.req.valid('json') ?? {};
+  const lookbackDays = body.lookbackDays ?? 30;
+  const runSync = body.sync !== false;
+
+  // 1. Wipe dependent rows first so FK constraints are satisfied.
+  const billingDel = await db
+    .delete(billingLineItems)
+    .returning({ id: billingLineItems.id });
+  const ledgerDel = await db
+    .delete(inventoryLedger)
+    .returning({ id: inventoryLedger.id });
+  const shipmentsDel = await db
+    .delete(shipments)
+    .returning({ id: shipments.id });
+  const ordersDel = await db.delete(orders).returning({ id: orders.id });
+  // 2. Blow away sync watermarks so the next run does a full backfill.
+  const settingsDel = await db
+    .delete(settings)
+    .where(
+      sql`${settings.key} like 'order_sync.%' or ${settings.key} like 'shipment_sync.%'`
+    )
+    .returning({ key: settings.key });
+
+  const sinceMs = Date.now() - lookbackDays * 24 * 60 * 60 * 1000;
+  const deleted = {
+    billing_line_items: billingDel.length,
+    inventory_ledger: ledgerDel.length,
+    shipments: shipmentsDel.length,
+    orders: ordersDel.length,
+    sync_watermarks: settingsDel.length,
+  };
+
+  if (!runSync) {
+    return c.json({ deleted, synced: null });
+  }
+
+  // 3. Trigger the fresh sync immediately. Orders first (so shipments can
+  //    match back by externalOrderId), then shipments.
+  const ordersResult = await syncOrders({ sinceMs });
+  const shipmentsResult = await syncShipments({ sinceMs });
+
+  return c.json({
+    deleted,
+    synced: {
+      orders: {
+        synced: ordersResult.synced,
+        pages: ordersResult.pages,
+        sinceIso: ordersResult.sinceIso,
+      },
+      shipments: {
+        fetched: shipmentsResult.fetched,
+        inserted: shipmentsResult.inserted,
+        updated: shipmentsResult.updated,
+        matchedOrders: shipmentsResult.matchedOrders,
+        ordersMarkedShipped: shipmentsResult.ordersMarkedShipped,
+      },
+    },
+  });
 });
 
 export default app;
