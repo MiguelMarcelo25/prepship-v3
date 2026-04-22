@@ -12,7 +12,7 @@
 // service unblocking is wired, extract v2's isBlockedRate into a helper
 // module rather than fattening this component.
 
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { apiClient } from '../lib/v2-apiClient';
 import { useMarkups, type Markup } from '../contexts/MarkupsContext';
 
@@ -358,6 +358,24 @@ export default function RateBrowserModal({
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [open, onClose]);
+
+  // Auto-fetch rates on open when weight + dims are already valid (v2 parity).
+  // Guard with a ref so we only fire once per open, not on every form edit.
+  const autoFetchedRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!open) {
+      autoFetchedRef.current = null;
+      return;
+    }
+    const orderId = order?.orderId ?? 0;
+    if (autoFetchedRef.current === orderId) return;
+    if (!hasWeight || !hasDims || !zip || zip.length < 5) return;
+    autoFetchedRef.current = orderId;
+    void browseRates();
+    // browseRates is stable across renders via function declaration;
+    // intentionally not listed as a dep.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, order?.orderId, hasWeight, hasDims, zip]);
 
   // Auto-select a package when dimensions match within 0.15" tolerance
   // (v2's rbUpdateBadgesAndAutoSelect).
@@ -754,6 +772,18 @@ export default function RateBrowserModal({
       );
     }
     if (!anyFetched) {
+      // Once auto-fetch is armed, the button is redundant — show a status
+      // that reflects what the modal is doing.
+      const missing =
+        !hasWeight && !hasDims
+          ? 'weight and dims'
+          : !hasWeight
+            ? 'weight'
+            : !hasDims
+              ? 'dims (L × W × H)'
+              : !zip || zip.length < 5
+                ? 'a 5-digit ZIP'
+                : null;
       return (
         <div
           style={{
@@ -761,9 +791,20 @@ export default function RateBrowserModal({
             fontSize: 12.5,
             textAlign: 'center',
             marginTop: 80,
+            lineHeight: 1.8,
           }}
         >
-          Click Browse Rates to fetch rates
+          {browsing ? (
+            <>⏳ Fetching rates…</>
+          ) : missing ? (
+            <>
+              📏
+              <br />
+              Enter {missing} to fetch rates
+            </>
+          ) : (
+            <>⏳ Fetching rates…</>
+          )}
         </div>
       );
     }
