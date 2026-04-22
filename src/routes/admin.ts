@@ -8,6 +8,7 @@ import { orders } from '../db/schema/orders';
 import { shipments } from '../db/schema/shipments';
 import { inventoryLedger } from '../db/schema/inventory';
 import { billingLineItems } from '../db/schema/billing';
+import { products } from '../db/schema/products';
 
 const app = new Hono();
 
@@ -124,10 +125,38 @@ const SAMPLE_CITIES = [
   { city: 'Testing Harbor', state: 'WA', zip: '99905' },
 ];
 const SAMPLE_SKUS = [
-  { sku: 'TEST-SKU-001', name: 'TESTING Product — Do Not Ship' },
-  { sku: 'TEST-SKU-002', name: 'TEST Item — Sandbox Only' },
-  { sku: 'TESTING-KIT', name: 'TESTING Starter Kit — Fake' },
-  { sku: 'TEST-PACK', name: 'TEST Accessory Pack — Mock Data' },
+  {
+    sku: 'TEST-SKU-001',
+    name: 'TESTING Product — Do Not Ship',
+    weightOz: 8,
+    length: 6,
+    width: 4,
+    height: 2,
+  },
+  {
+    sku: 'TEST-SKU-002',
+    name: 'TEST Item — Sandbox Only',
+    weightOz: 16,
+    length: 8,
+    width: 6,
+    height: 3,
+  },
+  {
+    sku: 'TESTING-KIT',
+    name: 'TESTING Starter Kit — Fake',
+    weightOz: 32,
+    length: 10,
+    width: 8,
+    height: 4,
+  },
+  {
+    sku: 'TEST-PACK',
+    name: 'TEST Accessory Pack — Mock Data',
+    weightOz: 4,
+    length: 5,
+    width: 3,
+    height: 1,
+  },
 ];
 
 function pick<T>(arr: readonly T[]): T {
@@ -165,6 +194,33 @@ app.post('/seed-test-orders', zValidator('json', seedBody), async (c) => {
     );
   }
 
+  // Upsert product defaults for every TEST SKU so the Create Label flow's
+  // product-lookup succeeds (no 404s) and auto-fills weight/dims. Safe to
+  // call repeatedly — ON CONFLICT keeps the stored values fresh.
+  for (const s of SAMPLE_SKUS) {
+    await db
+      .insert(products)
+      .values({
+        sku: s.sku,
+        name: s.name,
+        weightOz: s.weightOz,
+        length: s.length,
+        width: s.width,
+        height: s.height,
+      })
+      .onConflictDoUpdate({
+        target: products.sku,
+        set: {
+          name: s.name,
+          weightOz: s.weightOz,
+          length: s.length,
+          width: s.width,
+          height: s.height,
+          updatedAt: new Date(),
+        },
+      });
+  }
+
   const now = Date.now();
   const rows = Array.from({ length: count }).map((_, i) => {
     const name = pick(SAMPLE_NAMES);
@@ -191,7 +247,9 @@ app.post('/seed-test-orders', zValidator('json', seedBody), async (c) => {
       shipToPostalCode: city.zip,
       carrierCode: 'stamps_com',
       serviceCode: 'usps_first_class_mail',
-      weightOz: 4 + Math.floor(Math.random() * 28),
+      // Use the product's real weight × qty so Create Label's defaulting
+      // logic produces a sane rate query.
+      weightOz: sku.weightOz * qty,
       orderTotal: (10 + Math.random() * 80).toFixed(2),
       shippingAmount: (3 + Math.random() * 12).toFixed(2),
       items: [
@@ -224,6 +282,7 @@ app.post('/seed-test-orders', zValidator('json', seedBody), async (c) => {
 
   return c.json({
     seeded: inserted.length,
+    seededProducts: SAMPLE_SKUS.length,
     clientId: testClient.id,
     clientName: testClient.name,
     sample: inserted.slice(0, 5),
