@@ -1043,6 +1043,20 @@ export const apiClient = {
     );
   },
 
+  // Convenience wrapper: download the merged PDF and return a blob: URL the
+  // caller can pass to window.open(). The blob URL is auto-revoked after
+  // 30s — long enough for the user to grab the print dialog.
+  async fetchQueuePrintJobPdfUrl(jobId: string): Promise<string | null> {
+    try {
+      const { blob } = await this.downloadQueuePrintJob(jobId);
+      const url = URL.createObjectURL(blob);
+      setTimeout(() => URL.revokeObjectURL(url), 30_000);
+      return url;
+    } catch {
+      return null;
+    }
+  },
+
   // ─── Products ──────────────────────────────────────────────────────────────
   fetchProducts(query?: Record<string, unknown>): Promise<any[]> {
     return safe(

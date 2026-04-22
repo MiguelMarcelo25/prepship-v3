@@ -1534,7 +1534,20 @@ export default function OrdersView({
         setQueuePrintMessage(status.message)
 
         if (status.status === 'done') {
-          window.open(`/api/queue/print/download/${job.job_id}`, '_blank', 'noopener,noreferrer')
+          // The download endpoint requires a Bearer token, so a plain
+          // window.open won't work — fetch the PDF as a blob with auth and
+          // open the resulting object URL. Path is /print-queue/print/...
+          // (matches PrintQueueDrawer.downloadAuthedPdf — the legacy
+          // /api/queue/print/... path that some early builds used was
+          // never wired up on the API).
+          try {
+            const blobUrl = await apiClient.fetchQueuePrintJobPdfUrl(job.job_id)
+            if (blobUrl) {
+              window.open(blobUrl, '_blank', 'noopener,noreferrer')
+            }
+          } catch (err) {
+            console.error('[print-queue] download failed', err)
+          }
           done = true
         }
         if (status.status === 'error') {
