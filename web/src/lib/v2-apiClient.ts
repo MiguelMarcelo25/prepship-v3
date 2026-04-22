@@ -272,20 +272,53 @@ export const apiClient = {
   },
 
   // ─── Init / bootstrap ───────────────────────────────────────────────────────
-  fetchCounts(_filter?: { dateStart?: string; dateEnd?: string }): Promise<any> {
+  fetchCounts(filter?: { dateStart?: string; dateEnd?: string }): Promise<any> {
     // v4's /init/counts → { awaiting, shipped, cancelled, on_hold, queue, inventory }
     // v2's sidebar expects { byStatus, byStatusStore }.
     // Since v4 uses `clientId` as the business grouping (not ShipStation's `storeId`)
     // and clients have names ("Tran Agency" etc.) while store IDs don't, we map
     // CLIENTS onto the sidebar's "store" slot. storeId = client.id in this wiring;
     // see fetchStores below for the matching name resolution.
+    //
+    // Date filter handling: /init/counts ignores query params (no validator)
+    // and /clients/order-stats has no date filter on the backend. When the
+    // caller wants a bounded count, fall back to three parallel /orders
+    // probes (one per status) using the list endpoint's pagination.total.
+    // byStatusStore stays all-time since we can't break it down per-client
+    // within a date range without N backend calls.
+    const hasDate = Boolean(filter?.dateStart || filter?.dateEnd);
+    const dateFrom = toIsoDayStart(filter?.dateStart);
+    const dateTo = toIsoDayEnd(filter?.dateEnd);
     return safe(
       'fetchCounts',
       async () => {
         // Fetch clients alongside stats so we can resolve hidden-client IDs by
         // name even if fetchStores hasn't populated HIDDEN_CLIENT_IDS yet.
         const [counts, clientStatsRes, clientsRes] = await Promise.all([
-          api.get<any>('/init/counts'),
+          hasDate
+            ? // Probe the list endpoint per status; total comes from pagination.
+              Promise.all([
+                api
+                  .get<any>(
+                    `/orders${qs({ status: 'awaiting_shipment', pageSize: 1, dateFrom, dateTo })}`
+                  )
+                  .catch(() => null),
+                api
+                  .get<any>(
+                    `/orders${qs({ status: 'shipped', pageSize: 1, dateFrom, dateTo })}`
+                  )
+                  .catch(() => null),
+                api
+                  .get<any>(
+                    `/orders${qs({ status: 'cancelled', pageSize: 1, dateFrom, dateTo })}`
+                  )
+                  .catch(() => null),
+              ]).then(([a, s, x]) => ({
+                awaiting: a?.pagination?.total ?? 0,
+                shipped: s?.pagination?.total ?? 0,
+                cancelled: x?.pagination?.total ?? 0,
+              }))
+            : api.get<any>('/init/counts'),
           api.get<any>('/clients/order-stats').catch(() => ({ data: [] })),
           api.get<any>('/clients').catch(() => []),
         ]);
