@@ -1,6 +1,7 @@
 // @ts-nocheck
-import { useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { apiClient } from '../../api/client'
+import { api } from '../../lib/api'
 import { useShippingAccounts } from '../../hooks'
 import { ToastContext } from '../../contexts/ToastContext'
 import { useMarkups } from '../../contexts/MarkupsContext'
@@ -73,6 +74,97 @@ export default function SettingsView() {
     })
   }
 
+  // ── Sandbox / test orders ────────────────────────────────────────────────
+  const [testClients, setTestClients] = useState<
+    Array<{ id: number; name: string; order_count: number }>
+  >([])
+  const [sandboxState, setSandboxState] = useState<
+    | { kind: 'idle' }
+    | { kind: 'loading'; op: 'seed' | 'purge' | 'refresh' }
+    | { kind: 'success'; message: string }
+    | { kind: 'error'; message: string }
+  >({ kind: 'idle' })
+  const [seedCount, setSeedCount] = useState<string>('25')
+
+  const refreshTestClients = useCallback(async () => {
+    try {
+      const res = await api.get<{
+        data: Array<{ id: number; name: string; order_count: number }>
+      }>('/admin/test-clients')
+      setTestClients(res.data ?? [])
+    } catch (err) {
+      setSandboxState({
+        kind: 'error',
+        message: err instanceof Error ? err.message : 'Failed to load test clients',
+      })
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshTestClients()
+  }, [refreshTestClients])
+
+  async function handleSeedTestOrders() {
+    const count = Number.parseInt(seedCount, 10)
+    if (!Number.isFinite(count) || count <= 0) {
+      toastContext?.addToast('Enter a positive seed count', 'error')
+      return
+    }
+    setSandboxState({ kind: 'loading', op: 'seed' })
+    try {
+      const res = await api.post<{ seeded: number; clientName: string }>(
+        '/admin/seed-test-orders',
+        { count }
+      )
+      setSandboxState({
+        kind: 'success',
+        message: `Seeded ${res.seeded} test order(s) under "${res.clientName}"`,
+      })
+      toastContext?.addToast(`✅ Seeded ${res.seeded} test orders`, 'success')
+      await refreshTestClients()
+    } catch (err) {
+      setSandboxState({
+        kind: 'error',
+        message: err instanceof Error ? err.message : 'Seed failed',
+      })
+    }
+  }
+
+  async function handlePurgeTestOrders() {
+    if (
+      !window.confirm(
+        'Delete every order under every test-flagged client?\n\n' +
+          'This also deletes their shipments, billing lines, and inventory ledger entries. ' +
+          'This cannot be undone.'
+      )
+    ) {
+      return
+    }
+    setSandboxState({ kind: 'loading', op: 'purge' })
+    try {
+      const res = await api.post<{
+        deleted: {
+          orders: number
+          shipments: number
+          ledger: number
+          billing: number
+        }
+      }>('/admin/purge-test-orders', {})
+      const d = res.deleted
+      setSandboxState({
+        kind: 'success',
+        message: `Deleted ${d.orders} order(s), ${d.shipments} shipment(s), ${d.ledger} ledger entries, ${d.billing} billing line(s)`,
+      })
+      toastContext?.addToast(`🧹 Purged ${d.orders} test orders`, 'success')
+      await refreshTestClients()
+    } catch (err) {
+      setSandboxState({
+        kind: 'error',
+        message: err instanceof Error ? err.message : 'Purge failed',
+      })
+    }
+  }
+
   async function handleRefetchAllRates() {
     setRefetchState({ kind: 'loading' })
 
@@ -138,6 +230,116 @@ export default function SettingsView() {
         {accountsError ? (
           <div style={{ marginTop: 10, fontSize: 12, color: 'var(--red)' }}>
             ⚠ Unable to refresh carrier accounts: {accountsError.message}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="markup-card" style={{ marginTop: 16 }}>
+        <h3>🧪 Sandbox — Test Orders</h3>
+        <p style={{ fontSize: 11.5, color: 'var(--text3)', margin: '0 0 12px' }}>
+          Clients flagged <code>is_test=true</code> are fully isolated: their orders never sync from ShipStation, never create real postage, never bill, and never touch inventory.
+        </p>
+
+        {testClients.length > 0 ? (
+          <div style={{ marginBottom: 12, fontSize: 12, color: 'var(--text2)' }}>
+            <b>Active test clients:</b>
+            <ul style={{ margin: '4px 0 0 18px', padding: 0 }}>
+              {testClients.map((c) => (
+                <li key={c.id}>
+                  {c.name}{' '}
+                  <span style={{ color: 'var(--text3)' }}>
+                    — {c.order_count} order{c.order_count === 1 ? '' : 's'}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : (
+          <div style={{ marginBottom: 12, fontSize: 12, color: 'var(--orange, #d97706)' }}>
+            ⚠ No clients flagged <code>is_test=true</code>. Run the purge SQL in the Supabase editor first — see <code>drizzle/apply-test-client-purge.sql</code>.
+          </div>
+        )}
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <label style={{ fontSize: 12, color: 'var(--text2)' }}>
+            Count:{' '}
+            <input
+              type="number"
+              min="1"
+              max="200"
+              value={seedCount}
+              onChange={(e) => setSeedCount(e.target.value)}
+              style={{
+                width: 70,
+                padding: '3px 6px',
+                border: '1px solid var(--border)',
+                borderRadius: 3,
+                background: 'var(--surface)',
+                color: 'var(--text)',
+                fontSize: 12,
+              }}
+            />
+          </label>
+          <button
+            type="button"
+            onClick={() => void handleSeedTestOrders()}
+            disabled={sandboxState.kind === 'loading' || testClients.length === 0}
+            style={{
+              padding: '6px 14px',
+              background: '#d97706',
+              color: 'white',
+              border: 'none',
+              borderRadius: 4,
+              cursor: sandboxState.kind === 'loading' || testClients.length === 0 ? 'default' : 'pointer',
+              fontSize: 13,
+              fontWeight: 600,
+              opacity: sandboxState.kind === 'loading' || testClients.length === 0 ? 0.5 : 1,
+            }}
+          >
+            🧪 Seed Test Orders
+          </button>
+          <button
+            type="button"
+            onClick={() => void handlePurgeTestOrders()}
+            disabled={sandboxState.kind === 'loading' || testClients.length === 0}
+            style={{
+              padding: '6px 14px',
+              background: 'var(--red, #dc2626)',
+              color: 'white',
+              border: 'none',
+              borderRadius: 4,
+              cursor: sandboxState.kind === 'loading' || testClients.length === 0 ? 'default' : 'pointer',
+              fontSize: 13,
+              fontWeight: 600,
+              opacity: sandboxState.kind === 'loading' || testClients.length === 0 ? 0.5 : 1,
+            }}
+          >
+            🧹 Purge Test Orders
+          </button>
+        </div>
+
+        {sandboxState.kind !== 'idle' ? (
+          <div
+            style={{
+              marginTop: 8,
+              fontSize: 12,
+              color:
+                sandboxState.kind === 'error'
+                  ? 'var(--red)'
+                  : sandboxState.kind === 'success'
+                    ? 'var(--green, #16a34a)'
+                    : 'var(--text3)',
+            }}
+          >
+            {sandboxState.kind === 'loading'
+              ? sandboxState.op === 'seed'
+                ? 'Seeding…'
+                : sandboxState.op === 'purge'
+                  ? 'Purging…'
+                  : 'Loading…'
+              : sandboxState.kind === 'error'
+                ? `✗ ${sandboxState.message}`
+                : `✓ ${sandboxState.message}`}
           </div>
         ) : null}
       </div>
