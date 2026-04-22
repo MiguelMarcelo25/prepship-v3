@@ -1,7 +1,8 @@
 // @ts-nocheck
 import './OrdersView.css'
-import { useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { apiClient } from '../../api/client'
+const RateBrowserModal = lazy(() => import('../RateBrowserModal'))
 import { ToastContext } from '../../contexts/ToastContext'
 import { useLocations, useOrderDetail, useOrders, useShippingAccounts } from '../../hooks'
 import { useMarkups } from '../../contexts/MarkupsContext'
@@ -2965,33 +2966,46 @@ export default function OrdersView({
       ) : null}
 
       {rateBrowserOpen ? (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.55)', zIndex: 1300, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }} onClick={(event) => { if (event.target === event.currentTarget) setRateBrowserOpen(false) }}>
-          <div style={{ width: 'min(980px, 100%)', maxHeight: '85vh', background: 'var(--surface)', borderRadius: 12, boxShadow: '0 20px 60px rgba(0,0,0,.3)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
-              <strong>Browse Rates</strong>
-              <button className="btn btn-ghost btn-sm" type="button" onClick={() => setRateBrowserOpen(false)}>✕</button>
-            </div>
-            <div style={{ display: 'flex', gap: 12, padding: '12px 16px', borderBottom: '1px solid var(--border)' }}>
-              <select className="filter-sel" value={rateBrowserCarrierFilter != null ? String(rateBrowserCarrierFilter) : ''} onChange={(event) => setRateBrowserCarrierFilter(event.target.value ? Number.parseInt(event.target.value, 10) : null)}>
-                <option value="">All carrier accounts</option>
-                {shippingAccounts.map((account) => (
-                  <option key={account.shippingProviderId || account.carrierId || account.code} value={account.shippingProviderId || account.carrierId || account.code}>{account._label || account.nickname || account.code}</option>
-                ))}
-              </select>
-            </div>
-            <div id="rb-rates" style={{ overflow: 'auto', padding: 16 }}>
-              {rateBrowserLoading ? <div className="empty-state">Fetching live rates…</div> : null}
-              {!rateBrowserLoading && rateBrowserRates.length === 0 ? <div className="empty-state">No rates returned.</div> : null}
-              {!rateBrowserLoading && rateBrowserRates.filter((rate) => rateBrowserCarrierFilter == null || toNumberValue(rate.shippingProviderId) === rateBrowserCarrierFilter).map((rate, index) => (
-                <button key={`${toStringValue(rate.serviceCode) ?? 'rate'}-${index}`} type="button" style={{ display: 'flex', width: '100%', alignItems: 'center', gap: 12, padding: '10px 12px', border: '1px solid var(--border)', borderRadius: 8, background: index === 0 ? 'var(--ss-blue-bg)' : 'var(--surface)', marginBottom: 8, cursor: 'pointer' }} onClick={() => applyRateSelection(rate)}>
-                  <strong style={{ minWidth: 120, textAlign: 'left' }}>{formatCarrierCode(toStringValue(rate.carrierCode))}</strong>
-                  <span style={{ flex: 1, textAlign: 'left' }}>{formatServiceCode(toStringValue(rate.serviceCode) ?? toStringValue(rate.serviceName))}</span>
-                  <span style={{ fontWeight: 700 }}>{formatMoney((toNumberValue(rate.shipmentCost) ?? 0) + (toNumberValue(rate.otherCost) ?? 0))}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
+        <Suspense fallback={null}>
+          <RateBrowserModal
+            open={rateBrowserOpen}
+            order={panelOrder}
+            locations={locations}
+            packages={packages}
+            shippingAccounts={shippingAccounts}
+            initialDims={{
+              length: Number.parseFloat(panelForm.length) || 0,
+              width: Number.parseFloat(panelForm.width) || 0,
+              height: Number.parseFloat(panelForm.height) || 0,
+            }}
+            initialWeight={{
+              lb: Number.parseFloat(panelForm.weightLb) || 0,
+              oz: Number.parseFloat(panelForm.weightOz) || 0,
+            }}
+            onClose={() => setRateBrowserOpen(false)}
+            onApplyRate={(applied) => {
+              // Push rate back into the panel using the existing applyRateSelection
+              // path. The v2-style modal also returns weight + dims; sync those to
+              // the panel form so /labels/create sees the user's final numbers.
+              if (applied.weight) {
+                setPanelForm((current) => ({
+                  ...current,
+                  weightLb: String(applied.weight?.lb ?? current.weightLb),
+                  weightOz: String(applied.weight?.oz ?? current.weightOz),
+                }))
+              }
+              if (applied.dims) {
+                setPanelForm((current) => ({
+                  ...current,
+                  length: String(applied.dims?.length ?? current.length),
+                  width: String(applied.dims?.width ?? current.width),
+                  height: String(applied.dims?.height ?? current.height),
+                }))
+              }
+              applyRateSelection(applied)
+            }}
+          />
+        </Suspense>
       ) : null}
     </>
   )
