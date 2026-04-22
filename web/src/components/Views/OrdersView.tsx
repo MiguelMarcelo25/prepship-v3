@@ -3,6 +3,7 @@ import './OrdersView.css'
 import { lazy, Suspense, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import OrderDetailDrawer from '../OrderDetailDrawer'
 import TrackingModal from '../TrackingModal'
+import HoverImage from '../HoverImage'
 import { apiClient } from '../../api/client'
 import { TEST_CLIENT_IDS } from '../../lib/v2-apiClient'
 const RateBrowserModal = lazy(() => import('../RateBrowserModal'))
@@ -1979,11 +1980,16 @@ export default function OrdersView({
             <div style={{ display: 'flex', flexDirection: 'column', gap: 3, padding: '3px 0', maxWidth: column.width + 90, overflow: 'hidden' }}>
               {visibleItems.map((item) => (
                 <div key={`${item.sku ?? 'unknown'}-${item.name ?? 'item'}`} style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
-                  {item.imageUrl ? (
-                    <img src={item.imageUrl} alt="" style={{ width: 22, height: 22, borderRadius: 3, objectFit: 'cover', flexShrink: 0 }} />
-                  ) : (
-                    <span style={{ width: 22, height: 22, flexShrink: 0, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 3, display: 'inline-block' }} />
-                  )}
+                  <HoverImage
+                    src={item.imageUrl}
+                    alt={item.name ?? ''}
+                    size={22}
+                    radius={3}
+                    title={item.name ?? ''}
+                    fallback={
+                      <span style={{ width: 22, height: 22, flexShrink: 0, background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 3, display: 'inline-block' }} />
+                    }
+                  />
                   <span style={{ display: 'flex', alignItems: 'center', gap: 3, flex: 1, minWidth: 0, overflow: 'hidden' }}>
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11.5, minWidth: 0 }}>
                       {item.name ?? item.sku ?? '—'}
@@ -2002,9 +2008,13 @@ export default function OrdersView({
         }
         return (
           <div className="cell-itemname" title={primaryItem?.name ?? '—'} style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: column.width + 90 }}>
-            {primaryItem?.imageUrl ? (
-              <img src={primaryItem.imageUrl} alt="" style={{ width: 28, height: 28, borderRadius: 4, objectFit: 'cover', flexShrink: 0 }} />
-            ) : null}
+            <HoverImage
+              src={primaryItem?.imageUrl ?? null}
+              alt={primaryItem?.name ?? ''}
+              size={28}
+              radius={4}
+              title={primaryItem?.name ?? ''}
+            />
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {primaryItem?.name ?? '—'}
               {items.length > 1 && !multiSku ? <span style={{ color: 'var(--text3)', fontSize: 10.5 }}> ×{getTotalQuantity(order, detail)}</span> : null}
@@ -2540,7 +2550,14 @@ export default function OrdersView({
               {mergedItems.map((item) => (
                 <div key={`${item.sku ?? 'unknown'}-${item.name ?? 'item'}`} className="item-row">
                   <div className="item-img">
-                    {item.imageUrl ? <img src={item.imageUrl} alt="" style={{ width: 42, height: 42, borderRadius: 5, objectFit: 'cover' }} /> : '📦'}
+                    <HoverImage
+                      src={item.imageUrl}
+                      alt={item.name ?? ''}
+                      size={42}
+                      radius={5}
+                      title={item.name ?? ''}
+                      fallback={<span>📦</span>}
+                    />
                   </div>
                   <div className="item-info">
                     <div className="item-name">{item.name ?? 'Unknown Item'}</div>
