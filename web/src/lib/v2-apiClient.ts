@@ -41,7 +41,10 @@ function parseDownloadFilename(
 
 // Clients that should be hidden from the sidebar + per-client stats views.
 // Matched case-insensitively by name. Add more names here to hide them.
-const HIDDEN_CLIENT_NAMES = new Set(['api shipments']);
+// Orders with these clientIds are also excluded from the main orders table
+// via excludeClientId in useOrders (HIDDEN_CLIENT_IDS is populated by
+// isHiddenClient as a side-effect of fetchStores/fetchCounts).
+const HIDDEN_CLIENT_NAMES = new Set(['api shipments', 'test orders']);
 
 // Populated by fetchStores / fetchCounts when clients are loaded — lets
 // downstream filtering (e.g. byStatusStore emission) drop rows for hidden
