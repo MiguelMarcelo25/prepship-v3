@@ -1,6 +1,7 @@
 import { env } from '../lib/env';
 import { syncOrders } from './order-sync';
 import { syncShipments } from './shipment-sync';
+import { startBackfillBestRates, getActiveBackfillJob } from './rates-backfill';
 
 // v2 ran an in-process worker every 3 minutes for orders + shipments. GitHub
 // Actions cron drifts 30–60 min under load, which means users in v4 see stale
@@ -11,6 +12,10 @@ import { syncShipments } from './shipment-sync';
 
 const ORDER_SYNC_INTERVAL_MS = 3 * 60 * 1000; // 3 minutes (v2 parity)
 const SHIPMENT_SYNC_INTERVAL_MS = 3 * 60 * 1000;
+// Rate backfill is expensive (one ShipStation call per order) so fire it
+// less often. maxAgeHours inside the service keeps it cheap — orders with
+// a fresh rate are skipped automatically.
+const RATE_BACKFILL_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 const STARTUP_DELAY_MS = 15 * 1000; // 15s after boot so we don't fight cold-start
 
 // Serialize runs so overlapping intervals don't pile up ShipStation calls.
@@ -18,6 +23,7 @@ let orderSyncRunning = false;
 let shipmentSyncRunning = false;
 let orderTimer: NodeJS.Timeout | null = null;
 let shipmentTimer: NodeJS.Timeout | null = null;
+let backfillTimer: NodeJS.Timeout | null = null;
 
 async function runOrderSync(): Promise<void> {
   if (orderSyncRunning) {
@@ -38,6 +44,22 @@ async function runOrderSync(): Promise<void> {
   } finally {
     orderSyncRunning = false;
   }
+}
+
+function runBackfillTick(): void {
+  // startBackfillBestRates is already idempotent (activeJobId guard).
+  // Just trigger it — if a job is running we'll be a no-op.
+  const active = getActiveBackfillJob();
+  if (active && active.status === 'running') {
+    console.log(
+      `[scheduler] rate backfill already running (job ${active.jobId}, ${active.processed}/${active.total}) — skipping tick`
+    );
+    return;
+  }
+  const job = startBackfillBestRates({});
+  console.log(
+    `[scheduler] rate backfill kicked off (job ${job.jobId}) — only orders with stale/no rates will be fetched`
+  );
 }
 
 async function runShipmentSync(): Promise<void> {
@@ -77,7 +99,7 @@ export function startSyncScheduler(): void {
   }
 
   console.log(
-    `[scheduler] starting — orders every ${ORDER_SYNC_INTERVAL_MS / 1000}s, shipments every ${SHIPMENT_SYNC_INTERVAL_MS / 1000}s (delayed ${STARTUP_DELAY_MS / 1000}s)`
+    `[scheduler] starting — orders every ${ORDER_SYNC_INTERVAL_MS / 1000}s, shipments every ${SHIPMENT_SYNC_INTERVAL_MS / 1000}s, rate backfill every ${RATE_BACKFILL_INTERVAL_MS / 1000}s (delayed ${STARTUP_DELAY_MS / 1000}s)`
   );
 
   // Kick off the first run 15s after boot so the process is warm, then
@@ -96,6 +118,15 @@ export function startSyncScheduler(): void {
       SHIPMENT_SYNC_INTERVAL_MS
     );
   }, STARTUP_DELAY_MS + 90_000);
+
+  // Rate backfill — fires every 10 min, fetches rates for any awaiting order
+  // that has no rate yet OR whose rate is older than 24h (maxAgeHours default).
+  // Start 3 min after boot so the first order-sync has time to pull any new
+  // orders in before we try to rate them.
+  setTimeout(() => {
+    runBackfillTick();
+    backfillTimer = setInterval(runBackfillTick, RATE_BACKFILL_INTERVAL_MS);
+  }, STARTUP_DELAY_MS + 3 * 60 * 1000);
 }
 
 export function stopSyncScheduler(): void {
@@ -106,6 +137,10 @@ export function stopSyncScheduler(): void {
   if (shipmentTimer) {
     clearInterval(shipmentTimer);
     shipmentTimer = null;
+  }
+  if (backfillTimer) {
+    clearInterval(backfillTimer);
+    backfillTimer = null;
   }
   console.log('[scheduler] stopped');
 }
