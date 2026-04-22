@@ -997,7 +997,19 @@ export async function voidLabelV2(shipmentId: number): Promise<VoidLabelResponse
   if (!row) throw new Error('Shipment not found');
   if (row.voided) throw new Error('Label already voided');
 
-  if (row.source !== 'test_offline' && row.labelShipmentId) {
+  // Double guard: honor the explicit test_offline source marker AND verify
+  // the shipment's client isn't flagged is_test (in case a test row was
+  // somehow persisted with a real labelShipmentId).
+  let clientIsTest = false;
+  if (row.clientId) {
+    const [cli] = await db
+      .select({ isTest: clients.isTest })
+      .from(clients)
+      .where(eq(clients.id, row.clientId))
+      .limit(1);
+    clientIsTest = Boolean(cli?.isTest);
+  }
+  if (row.source !== 'test_offline' && !clientIsTest && row.labelShipmentId) {
     const creds = await loadClientCredentials(row.clientId);
     try {
       await ssVoidShipment(row.labelShipmentId, creds.apiKeyV2 ?? undefined);
@@ -1051,6 +1063,21 @@ export async function createReturnLabelV2(
     .limit(1);
   if (!row) throw new Error('Shipment not found');
   if (!row.labelShipmentId) throw new Error('Cannot create return — no ShipStation shipment id on record');
+
+  // Block real-postage returns for test-client shipments. createLabelV2
+  // forces testLabel=true for isTest clients, but returns go through a
+  // separate SS endpoint — without this check a test shipment with a real
+  // labelShipmentId (edge case) would burn real postage.
+  if (row.clientId) {
+    const [cli] = await db
+      .select({ isTest: clients.isTest })
+      .from(clients)
+      .where(eq(clients.id, row.clientId))
+      .limit(1);
+    if (cli?.isTest) {
+      throw new Error('Cannot create return label for a test-client shipment');
+    }
+  }
 
   const creds = await loadClientCredentials(row.clientId);
   const reason = body.reason || 'Customer Return';

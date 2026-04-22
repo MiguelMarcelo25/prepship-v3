@@ -154,7 +154,9 @@ async function runBackfill(
           or(
             isNull(orderOverrides.bestRateAt),
             lt(orderOverrides.bestRateAt, staleCutoff)
-          )
+          ),
+          // Skip test-client orders — no real ShipStation rate calls for sandbox data.
+          sql`not exists (select 1 from clients c where c.id = ${orders.clientId} and c.is_test = true)`
         )
       )
       .limit(hardLimit);

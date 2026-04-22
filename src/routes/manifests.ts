@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, asc, eq, gte, lte } from 'drizzle-orm';
+import { and, asc, eq, gte, lte, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { shipments } from '../db/schema/shipments';
 
@@ -36,7 +36,11 @@ app.get('/generate', zValidator('query', query), async (c) => {
         gte(shipments.shipDate, new Date(q.dateFrom)),
         lte(shipments.shipDate, new Date(q.dateTo)),
         q.carrierCode ? eq(shipments.carrierCode, q.carrierCode) : undefined,
-        q.clientId !== undefined ? eq(shipments.clientId, q.clientId) : undefined
+        q.clientId !== undefined ? eq(shipments.clientId, q.clientId) : undefined,
+        // Drop test-client shipments unless one is explicitly requested.
+        q.clientId === undefined
+          ? sql`not exists (select 1 from clients c where c.id = ${shipments.clientId} and c.is_test = true)`
+          : undefined
       )
     )
     .orderBy(asc(shipments.shipDate), asc(shipments.id));

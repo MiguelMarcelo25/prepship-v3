@@ -124,12 +124,14 @@ async function runFetch(
         o.ship_to_postal_code as zip_to
       from shipments s
       join orders o on o.id = s.order_id
+      left join clients c on c.id = o.client_id
       where s.weight_oz is not null
         and s.weight_oz > 0
         and o.ship_to_postal_code is not null
         and o.ship_to_postal_code <> ''
         and s.ship_date >= ${since.toISOString()}::timestamptz
         and s.voided = false
+        and (c.id is null or c.is_test = false)
       limit ${hardLimit}
     `);
 

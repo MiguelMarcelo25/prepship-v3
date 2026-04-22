@@ -622,12 +622,29 @@ function csvEscape(v: unknown): string {
 app.get('/export', zValidator('query', exportQuery), async (c) => {
   const q = c.req.valid('query');
 
+  // Auto-exclude is_test clients unless one is explicitly requested — keeps
+  // sandbox orders out of the CSV. Mirrors the logic in GET / and
+  // /daily-stats so all three surfaces behave consistently.
+  let testExcludeFilter: ReturnType<typeof sql.raw> | undefined;
+  if (q.clientId === undefined) {
+    const testClientRows = await db.execute<{ id: number }>(
+      sql`select id from clients where is_test = true`
+    );
+    if (testClientRows.length) {
+      const ids = testClientRows.map((r) => r.id).join(',');
+      testExcludeFilter = sql.raw(
+        `(client_id is null or client_id not in (${ids}))`
+      );
+    }
+  }
+
   const where = and(
     ...[
       q.status ? eq(orders.orderStatus, q.status) : undefined,
       q.clientId !== undefined ? eq(orders.clientId, q.clientId) : undefined,
       q.dateFrom ? gte(orders.orderDate, new Date(q.dateFrom)) : undefined,
       q.dateTo ? lte(orders.orderDate, new Date(q.dateTo)) : undefined,
+      testExcludeFilter,
     ].filter(<T>(x: T | undefined): x is T => x !== undefined)
   );
 

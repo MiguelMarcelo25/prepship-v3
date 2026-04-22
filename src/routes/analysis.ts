@@ -7,6 +7,8 @@ import { db } from '../db/client';
 const app = new Hono();
 
 app.get('/overview', async (c) => {
+  // Every sub-query excludes rows tied to is_test clients so sandbox data
+  // never inflates dashboard numbers or the monthly shipping spend metric.
   const rows = await db.execute<{
     orders_today: number;
     orders_week: number;
@@ -17,14 +19,27 @@ app.get('/overview', async (c) => {
     shipping_cost_month: string;
   }>(sql`
     select
-      (select count(*)::int from orders where order_date >= date_trunc('day',  now())) as orders_today,
-      (select count(*)::int from orders where order_date >= date_trunc('week', now())) as orders_week,
-      (select count(*)::int from orders where order_date >= date_trunc('month',now())) as orders_month,
-      (select count(*)::int from shipments where voided = false and ship_date >= date_trunc('day',  now())) as shipped_today,
-      (select count(*)::int from shipments where voided = false and ship_date >= date_trunc('week', now())) as shipped_week,
-      (select count(*)::int from shipments where voided = false and ship_date >= date_trunc('month',now())) as shipped_month,
-      (select coalesce(sum(label_cost),0)::text from shipments
-         where voided = false and ship_date >= date_trunc('month',now())) as shipping_cost_month
+      (select count(*)::int from orders o
+         where order_date >= date_trunc('day',  now())
+           and not exists (select 1 from clients c where c.id = o.client_id and c.is_test = true)) as orders_today,
+      (select count(*)::int from orders o
+         where order_date >= date_trunc('week', now())
+           and not exists (select 1 from clients c where c.id = o.client_id and c.is_test = true)) as orders_week,
+      (select count(*)::int from orders o
+         where order_date >= date_trunc('month',now())
+           and not exists (select 1 from clients c where c.id = o.client_id and c.is_test = true)) as orders_month,
+      (select count(*)::int from shipments s
+         where s.voided = false and s.ship_date >= date_trunc('day',  now())
+           and not exists (select 1 from clients c where c.id = s.client_id and c.is_test = true)) as shipped_today,
+      (select count(*)::int from shipments s
+         where s.voided = false and s.ship_date >= date_trunc('week', now())
+           and not exists (select 1 from clients c where c.id = s.client_id and c.is_test = true)) as shipped_week,
+      (select count(*)::int from shipments s
+         where s.voided = false and s.ship_date >= date_trunc('month',now())
+           and not exists (select 1 from clients c where c.id = s.client_id and c.is_test = true)) as shipped_month,
+      (select coalesce(sum(label_cost),0)::text from shipments s
+         where s.voided = false and s.ship_date >= date_trunc('month',now())
+           and not exists (select 1 from clients c where c.id = s.client_id and c.is_test = true)) as shipping_cost_month
   `);
   const r = rows[0] ?? {
     orders_today: 0,
@@ -61,15 +76,16 @@ app.get('/daily-shipments', zValidator('query', rangeQuery), async (c) => {
     total_cost: string;
   }>(sql`
     select
-      to_char(date_trunc('day', ship_date), 'YYYY-MM-DD') as day,
+      to_char(date_trunc('day', s.ship_date), 'YYYY-MM-DD') as day,
       count(*)::int as count,
-      coalesce(sum(label_cost), 0)::text as total_cost
-    from shipments
-    where voided = false
-      and ship_date >= ${fromIso}::timestamptz
-      and ship_date <= ${toIso}::timestamptz
-    group by date_trunc('day', ship_date)
-    order by date_trunc('day', ship_date) desc
+      coalesce(sum(s.label_cost), 0)::text as total_cost
+    from shipments s
+    where s.voided = false
+      and s.ship_date >= ${fromIso}::timestamptz
+      and s.ship_date <= ${toIso}::timestamptz
+      and not exists (select 1 from clients c where c.id = s.client_id and c.is_test = true)
+    group by date_trunc('day', s.ship_date)
+    order by date_trunc('day', s.ship_date) desc
   `);
   return c.json({ data: rows });
 });
@@ -98,6 +114,7 @@ app.get('/sku-daily', zValidator('query', skuDailyQuery), async (c) => {
       and o.order_date >= ${fromIso}::timestamptz
       and o.order_date <= ${toIso}::timestamptz
       and (${cid}::int is null or o.client_id = ${cid}::int)
+      and not exists (select 1 from clients c where c.id = o.client_id and c.is_test = true)
     group by item->>'sku'
     order by total_qty desc
     limit ${q.topN}
@@ -122,6 +139,7 @@ app.get('/sku-daily', zValidator('query', skuDailyQuery), async (c) => {
       and o.order_date >= ${fromIso}::timestamptz
       and o.order_date <= ${toIso}::timestamptz
       and (${cid}::int is null or o.client_id = ${cid}::int)
+      and not exists (select 1 from clients c where c.id = o.client_id and c.is_test = true)
     group by date_trunc('day', o.order_date), item->>'sku'
     order by date_trunc('day', o.order_date) asc
   `);
@@ -188,6 +206,7 @@ app.get('/sku-breakdown', zValidator('query', skuBreakdownQuery), async (c) => {
         and o.order_date >= ${fromIso}::timestamptz
         and o.order_date <= ${toIso}::timestamptz
         and (${cid}::int is null or o.client_id = ${cid}::int)
+        and not exists (select 1 from clients c where c.id = o.client_id and c.is_test = true)
     ),
     classified as (
       select *,
@@ -221,10 +240,11 @@ app.get('/sku-breakdown', zValidator('query', skuBreakdownQuery), async (c) => {
   `);
 
   const totalOrders = await db.execute<{ count: number }>(sql`
-    select count(*)::int as count from orders
-    where order_date >= ${fromIso}::timestamptz
-      and order_date <= ${toIso}::timestamptz
-      and (${cid}::int is null or client_id = ${cid}::int)
+    select count(*)::int as count from orders o
+    where o.order_date >= ${fromIso}::timestamptz
+      and o.order_date <= ${toIso}::timestamptz
+      and (${cid}::int is null or o.client_id = ${cid}::int)
+      and not exists (select 1 from clients c where c.id = o.client_id and c.is_test = true)
   `);
 
   return c.json({
@@ -254,6 +274,7 @@ app.get('/top-skus', zValidator('query', topSkusQuery), async (c) => {
       and item ? 'sku'
       and item->>'sku' is not null
       and item->>'sku' <> ''
+      and not exists (select 1 from clients c where c.id = o.client_id and c.is_test = true)
     group by item->>'sku'
     order by total_qty desc
     limit ${q.limit}
