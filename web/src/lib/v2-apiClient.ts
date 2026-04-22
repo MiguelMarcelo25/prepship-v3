@@ -708,55 +708,30 @@ export const apiClient = {
     dateFrom?: string;
     dateTo?: string;
   }): Promise<DailyStatsSummary> {
-    // v2 parity — the stats strip is a 24-HOUR WINDOW showing today's
-    // activity, NOT the full backlog. "12 Total Orders, 8 Need to Ship"
-    // in v2 means "12 orders placed in the last 24h, 8 still awaiting".
-    // The full backlog (e.g. 911 awaiting) lives in the sidebar counts.
-    const nowIso = new Date().toISOString();
-    const dayAgoIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const fmtLabel = (iso: string): string => {
-      const d = new Date(iso);
-      if (Number.isNaN(d.getTime())) return iso;
-      return d
-        .toLocaleString('en-US', {
-          month: 'short',
-          day: 'numeric',
-          hour: 'numeric',
-          hour12: true,
-          timeZone: 'America/Los_Angeles',
-        })
-        .replace(',', '') + ' PT';
-    };
+    // v2 parity — server computes the shift-based PT window (noon→noon on
+    // weekdays, expanded Fri-pm through Mon-am to cover weekend orders).
+    // Don't default dateFrom/dateTo here: if the caller doesn't pass them,
+    // the server applies the shift window and returns labels in PT.
     const fallback: DailyStatsSummary = {
       totalOrders: 0,
       needToShip: 0,
       upcomingOrders: 0,
-      window: {
-        from: dayAgoIso,
-        to: nowIso,
-        fromLabel: fmtLabel(dayAgoIso),
-        toLabel: fmtLabel(nowIso),
-      } as any,
+      window: { from: '', to: '', fromLabel: '', toLabel: '' } as any,
     };
     return safe(
       'fetchDailyStats',
       async () => {
         const res = await api.get<V4DailyStatsResponse>(
           `/orders/daily-stats${qs({
-            dateFrom: query?.dateFrom ?? dayAgoIso,
-            dateTo: query?.dateTo ?? nowIso,
+            dateFrom: query?.dateFrom,
+            dateTo: query?.dateTo,
           })}`
         );
-        const w = res.summary.window ?? { from: dayAgoIso, to: nowIso };
         return {
           totalOrders: res.summary.totalOrders,
           needToShip: res.summary.needToShip,
           upcomingOrders: res.summary.upcomingOrders,
-          window: {
-            ...w,
-            fromLabel: fmtLabel(w.from),
-            toLabel: fmtLabel(w.to),
-          } as any,
+          window: res.summary.window as any,
         };
       },
       fallback

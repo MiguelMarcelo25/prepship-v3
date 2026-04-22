@@ -165,8 +165,110 @@ app.get(
   }
 );
 
-// Daily stats in a window — orders per day, shipped per day, plus
-// summary counts (totalOrders, needToShip, upcomingOrders) matching v2 shape.
+// v2 shift-based window (Pacific Time). Noon→noon on weekdays; expanded
+// across Sat/Sun so weekend-placed orders stay visible Mon morning. Mirrors
+// v2's getDailyStats() in apps/api/src/modules/orders/data/sqlite-order-repository.ts:521.
+function computeShiftWindow(now = new Date()): { from: Date; to: Date } {
+  // Read current PT calendar date + time using Intl.DateTimeFormat. We can't
+  // rely on server TZ because Render runs UTC.
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    hour12: false,
+    weekday: 'short',
+  }).formatToParts(now);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
+  const y = Number(get('year'));
+  const m = Number(get('month'));
+  const d = Number(get('day'));
+  const hr = Number(get('hour'));
+  const dowMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  const dow = dowMap[get('weekday')] ?? 0;
+
+  // todayNoon and today6pm as UTC Date objects representing PT noon/6pm today.
+  // PT is UTC-7 (PDT) or UTC-8 (PST). Cheapest correct approach: construct
+  // the ISO string for "YYYY-MM-DDThh:00:00" in PT and let Date parse with
+  // an explicit offset. Use Intl to derive the offset for the given date.
+  const offsetMinutes = (() => {
+    const fmt = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Los_Angeles',
+      timeZoneName: 'shortOffset',
+    }).formatToParts(now);
+    const raw = fmt.find((p) => p.type === 'timeZoneName')?.value ?? 'GMT-8';
+    const match = raw.match(/GMT([+-]\d{1,2})(?::(\d{2}))?/);
+    if (!match) return -480; // fallback PST
+    const h = Number(match[1]);
+    const mm = match[2] ? Number(match[2]) : 0;
+    return h * 60 + (h < 0 ? -mm : mm);
+  })();
+  const offsetSign = offsetMinutes >= 0 ? '+' : '-';
+  const offsetAbs = Math.abs(offsetMinutes);
+  const offsetStr = `${offsetSign}${String(Math.floor(offsetAbs / 60)).padStart(2, '0')}:${String(offsetAbs % 60).padStart(2, '0')}`;
+  const todayNoon = new Date(
+    `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}T12:00:00${offsetStr}`
+  );
+  const isPm = hr >= 18;
+  const dayMs = 24 * 60 * 60 * 1000;
+
+  let windowStart: Date;
+  let windowEnd: Date;
+  if (dow === 6) {
+    // Saturday: from Fri noon → Mon noon (weekend coverage)
+    windowStart = new Date(todayNoon.getTime() - dayMs);
+    windowEnd = new Date(todayNoon.getTime() + 2 * dayMs);
+  } else if (dow === 0) {
+    // Sunday
+    windowStart = new Date(todayNoon.getTime() - 2 * dayMs);
+    windowEnd = new Date(todayNoon.getTime() + dayMs);
+  } else if (dow === 1) {
+    // Monday — before 6pm shows Fri-noon→Mon-noon; after 6pm shows Mon-noon→Tue-noon
+    if (isPm) {
+      windowStart = todayNoon;
+      windowEnd = new Date(todayNoon.getTime() + dayMs);
+    } else {
+      windowStart = new Date(todayNoon.getTime() - 3 * dayMs);
+      windowEnd = todayNoon;
+    }
+  } else if (dow === 5) {
+    // Friday — before 6pm: Thu-noon→Fri-noon; after 6pm: Fri-noon→Mon-noon
+    if (isPm) {
+      windowStart = todayNoon;
+      windowEnd = new Date(todayNoon.getTime() + 3 * dayMs);
+    } else {
+      windowStart = new Date(todayNoon.getTime() - dayMs);
+      windowEnd = todayNoon;
+    }
+  } else if (isPm) {
+    // Tue/Wed/Thu after 6pm — peek into tomorrow
+    windowStart = todayNoon;
+    windowEnd = new Date(todayNoon.getTime() + dayMs);
+  } else {
+    // Tue/Wed/Thu before 6pm — yesterday noon → today noon
+    windowStart = new Date(todayNoon.getTime() - dayMs);
+    windowEnd = todayNoon;
+  }
+  return { from: windowStart, to: windowEnd };
+}
+
+function formatPtLabel(d: Date): string {
+  return (
+    d
+      .toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        hour12: true,
+        timeZone: 'America/Los_Angeles',
+      })
+      .replace(',', '') + ' PT'
+  );
+}
+
+// Daily stats — v2 shift-based window (Pacific noon→noon, expanded for
+// weekends). Returns totalOrders / needToShip / upcomingOrders matching v2.
 app.get(
   '/daily-stats',
   zValidator(
@@ -178,8 +280,14 @@ app.get(
   ),
   async (c) => {
     const q = c.req.valid('query');
-    const fromIso = (q.dateFrom ? new Date(q.dateFrom) : new Date(0)).toISOString();
-    const toIso = (q.dateTo ? new Date(q.dateTo) : new Date(Date.now() + 86400000)).toISOString();
+    // Allow an explicit override (e.g. for debugging), otherwise use the
+    // v2 shift window.
+    const shift = computeShiftWindow();
+    const fromDate = q.dateFrom ? new Date(q.dateFrom) : shift.from;
+    const toDate = q.dateTo ? new Date(q.dateTo) : shift.to;
+    const fromIso = fromDate.toISOString();
+    const toIso = toDate.toISOString();
+
     const rows = await db.execute<{
       day: string;
       count: number;
@@ -222,7 +330,12 @@ app.get(
         needToShip: s?.need_to_ship ?? 0,
         shippedTotal: s?.shipped_total ?? 0,
         upcomingOrders: u?.upcoming_orders ?? 0,
-        window: { from: fromIso, to: toIso },
+        window: {
+          from: fromIso,
+          to: toIso,
+          fromLabel: formatPtLabel(fromDate),
+          toLabel: formatPtLabel(toDate),
+        },
       },
     });
   }
