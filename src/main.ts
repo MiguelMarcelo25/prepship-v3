@@ -86,4 +86,9 @@ app.onError((err, c) => {
 
 serve({ fetch: app.fetch, port: env.PORT }, (info) => {
   console.log(`API listening on http://localhost:${info.port}`);
+  // Start the 3-minute in-process sync scheduler (v2 parity). GitHub Actions
+  // cron remains as a 10-min safety net for when this process is asleep.
+  void import('./services/sync-scheduler').then(({ startSyncScheduler }) =>
+    startSyncScheduler()
+  );
 });

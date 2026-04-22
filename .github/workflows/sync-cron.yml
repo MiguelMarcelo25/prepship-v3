@@ -1,11 +1,13 @@
 name: Sync ShipStation orders + shipments
 
 on:
-  # Every 10 minutes. GitHub-hosted runners use UTC and schedules can be
-  # delayed during high load — if fresher data is needed, use the manual
-  # "Run workflow" button (workflow_dispatch) below.
+  # Backup safety-net sync. The PRIMARY sync lives in-process on the API
+  # (src/services/sync-scheduler.ts) and fires every 3 minutes while Render
+  # is awake. This workflow catches the gap when Render's free tier spins
+  # down after ~15 min of inactivity. GitHub Actions cron drifts 30–60 min
+  # under load, so don't rely on this as the primary source of freshness.
   schedule:
-    - cron: '*/10 * * * *'
+    - cron: '*/5 * * * *'
   # Manual trigger from the Actions tab.
   workflow_dispatch:
 
