@@ -708,15 +708,18 @@ export const apiClient = {
     dateFrom?: string;
     dateTo?: string;
   }): Promise<DailyStatsSummary> {
+    // v2's stats strip shows a ROLLING 24-HOUR window in Pacific Time (DR PREPPER's
+    // warehouse timezone). "Shifts at 6 PM" in the label = the warehouse shift
+    // boundary; the actual window is always the last 24 hours of order_date
+    // from "now" (not midnight-anchored), which matches what v2 displays.
     const nowIso = new Date().toISOString();
-    const weekAgoIso = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const dayAgoIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     // v2 renders `window.fromLabel` / `window.toLabel` (e.g. "Apr 21, 12pm PT"),
     // falling back to the raw ISO otherwise. v4's server returns only raw ISO,
     // so format the label client-side here to match v2's UI exactly.
     const fmtLabel = (iso: string): string => {
       const d = new Date(iso);
       if (Number.isNaN(d.getTime())) return iso;
-      // Always display in Pacific Time to match DR PREPPER's warehouse timezone.
       return d
         .toLocaleString('en-US', {
           month: 'short',
@@ -732,9 +735,9 @@ export const apiClient = {
       needToShip: 0,
       upcomingOrders: 0,
       window: {
-        from: weekAgoIso,
+        from: dayAgoIso,
         to: nowIso,
-        fromLabel: fmtLabel(weekAgoIso),
+        fromLabel: fmtLabel(dayAgoIso),
         toLabel: fmtLabel(nowIso),
       } as any,
     };
@@ -743,11 +746,11 @@ export const apiClient = {
       async () => {
         const res = await api.get<V4DailyStatsResponse>(
           `/orders/daily-stats${qs({
-            dateFrom: query?.dateFrom ?? weekAgoIso,
+            dateFrom: query?.dateFrom ?? dayAgoIso,
             dateTo: query?.dateTo ?? nowIso,
           })}`
         );
-        const w = res.summary.window ?? { from: weekAgoIso, to: nowIso };
+        const w = res.summary.window ?? { from: dayAgoIso, to: nowIso };
         return {
           totalOrders: res.summary.totalOrders,
           needToShip: res.summary.needToShip,
