@@ -165,9 +165,19 @@ app.get(
   }
 );
 
-// v2 shift-based window (Pacific Time). Noon→noon on weekdays; expanded
-// across Sat/Sun so weekend-placed orders stay visible Mon morning. Mirrors
-// v2's getDailyStats() in apps/api/src/modules/orders/data/sqlite-order-repository.ts:521.
+// Rolling 48-hour window ending at the current Pacific Time noon. Used for
+// the stats strip's "Total Orders" count. Wider than v2's shift window so
+// low-activity accounts don't see 0 during quiet shifts, narrower than
+// "all time" so the strip reflects recent activity.
+function computeRolling48hWindow(now = new Date()): { from: Date; to: Date } {
+  const to = now;
+  const from = new Date(now.getTime() - 48 * 60 * 60 * 1000);
+  return { from, to };
+}
+
+// v2 shift-based window (Pacific Time). Kept for reference; no longer used
+// by /daily-stats. Noon→noon weekday, expanded across weekends.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function computeShiftWindow(now = new Date()): { from: Date; to: Date } {
   // Read current PT calendar date + time using Intl.DateTimeFormat. We can't
   // rely on server TZ because Render runs UTC.
@@ -280,11 +290,13 @@ app.get(
   ),
   async (c) => {
     const q = c.req.valid('query');
-    // Allow an explicit override (e.g. for debugging), otherwise use the
-    // v2 shift window.
-    const shift = computeShiftWindow();
-    const fromDate = q.dateFrom ? new Date(q.dateFrom) : shift.from;
-    const toDate = q.dateTo ? new Date(q.dateTo) : shift.to;
+    // Hybrid v2 strategy: totalOrders uses a rolling 48h window so low-volume
+    // accounts still see activity even during quiet shifts. needToShip counts
+    // ALL awaiting_shipment orders regardless of date — that's the real work
+    // queue, not a time-scoped subset. Upcoming is future-dated orders.
+    const rolling = computeRolling48hWindow();
+    const fromDate = q.dateFrom ? new Date(q.dateFrom) : rolling.from;
+    const toDate = q.dateTo ? new Date(q.dateTo) : rolling.to;
     const fromIso = fromDate.toISOString();
     const toIso = toDate.toISOString();
 
@@ -302,18 +314,23 @@ app.get(
       group by date_trunc('day', order_date)
       order by date_trunc('day', order_date) desc
     `);
-    const summaryRows = await db.execute<{
+    // totalOrders + shippedTotal: windowed (last 48h activity)
+    const windowedRows = await db.execute<{
       total_orders: number;
-      need_to_ship: number;
       shipped_total: number;
     }>(sql`
       select
         count(*) filter (where order_status <> 'cancelled')::int as total_orders,
-        count(*) filter (where order_status = 'awaiting_shipment')::int as need_to_ship,
         count(*) filter (where order_status = 'shipped')::int as shipped_total
       from orders
       where order_date >= ${fromIso}::timestamptz
         and order_date <= ${toIso}::timestamptz
+    `);
+    // needToShip: ALL awaiting_shipment orders (the real work queue, not windowed).
+    const backlogRows = await db.execute<{ need_to_ship: number }>(sql`
+      select count(*)::int as need_to_ship
+      from orders
+      where order_status = 'awaiting_shipment'
     `);
     const upcomingRows = await db.execute<{ upcoming_orders: number }>(sql`
       select count(*)::int as upcoming_orders
@@ -321,14 +338,15 @@ app.get(
       where order_date > ${toIso}::timestamptz
         and order_status <> 'cancelled'
     `);
-    const s = summaryRows[0];
+    const w = windowedRows[0];
+    const b = backlogRows[0];
     const u = upcomingRows[0];
     return c.json({
       data: rows,
       summary: {
-        totalOrders: s?.total_orders ?? 0,
-        needToShip: s?.need_to_ship ?? 0,
-        shippedTotal: s?.shipped_total ?? 0,
+        totalOrders: w?.total_orders ?? 0,
+        needToShip: b?.need_to_ship ?? 0,
+        shippedTotal: w?.shipped_total ?? 0,
         upcomingOrders: u?.upcoming_orders ?? 0,
         window: {
           from: fromIso,
