@@ -405,32 +405,41 @@ app.post('/reset-sync', zValidator('json', resetSyncBody), async (c) => {
   const lookbackDays = body.lookbackDays ?? 30;
   const runSync = body.sync !== false;
 
-  // 1. Wipe dependent rows first so FK constraints are satisfied.
-  const billingDel = await db
-    .delete(billingLineItems)
-    .returning({ id: billingLineItems.id });
-  const ledgerDel = await db
-    .delete(inventoryLedger)
-    .returning({ id: inventoryLedger.id });
-  const shipmentsDel = await db
-    .delete(shipments)
-    .returning({ id: shipments.id });
-  const ordersDel = await db.delete(orders).returning({ id: orders.id });
-  // 2. Blow away sync watermarks so the next run does a full backfill.
-  const settingsDel = await db
-    .delete(settings)
-    .where(
-      sql`${settings.key} like 'order_sync.%' or ${settings.key} like 'shipment_sync.%'`
+  // Raw SQL with rowcount-only returns — .returning() on a mass delete
+  // of 4k+ orders overflows the pg protocol's parameter buffer in some
+  // cases. Using `delete ... returning 1` into a counting CTE keeps the
+  // wire traffic minimal.
+  const runDelete = async (tableSql: ReturnType<typeof sql>): Promise<number> => {
+    const rows = await db.execute<{ count: number }>(sql`
+      with d as (delete from ${tableSql} returning 1)
+      select count(*)::int as count from d
+    `);
+    return rows[0]?.count ?? 0;
+  };
+
+  const billingCount = await runDelete(sql`billing_line_items`);
+  const ledgerCount = await runDelete(sql`inventory_ledger`);
+  const shipmentsCount = await runDelete(sql`shipments`);
+  const ordersCount = await runDelete(sql`orders`);
+
+  // Settings: only the sync watermark rows.
+  const settingsRows = await db.execute<{ count: number }>(sql`
+    with d as (
+      delete from settings
+       where key like 'order_sync.%' or key like 'shipment_sync.%'
+       returning 1
     )
-    .returning({ key: settings.key });
+    select count(*)::int as count from d
+  `);
+  const watermarkCount = settingsRows[0]?.count ?? 0;
 
   const sinceMs = Date.now() - lookbackDays * 24 * 60 * 60 * 1000;
   const deleted = {
-    billing_line_items: billingDel.length,
-    inventory_ledger: ledgerDel.length,
-    shipments: shipmentsDel.length,
-    orders: ordersDel.length,
-    sync_watermarks: settingsDel.length,
+    billing_line_items: billingCount,
+    inventory_ledger: ledgerCount,
+    shipments: shipmentsCount,
+    orders: ordersCount,
+    sync_watermarks: watermarkCount,
   };
 
   if (!runSync) {
