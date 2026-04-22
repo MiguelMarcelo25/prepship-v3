@@ -708,15 +708,10 @@ export const apiClient = {
     dateFrom?: string;
     dateTo?: string;
   }): Promise<DailyStatsSummary> {
-    // v4's stats strip shows ACTUAL PENDING WORK (not a time-windowed snapshot)
-    // so users see the real backlog — "911 orders awaiting shipment" — the
-    // same way ShipStation's own dashboard does. The date window in the
-    // label reflects when that data was last synced from ShipStation.
-    //
-    // totalOrders = active pipeline (awaiting + awaiting_payment + on_hold)
-    // needToShip  = count(order_status = awaiting_shipment)
-    // upcoming    = orders whose order_date is in the future
-    // shipped bar = orders shipped in the last 24h (activity indicator)
+    // v2 parity — the stats strip is a 24-HOUR WINDOW showing today's
+    // activity, NOT the full backlog. "12 Total Orders, 8 Need to Ship"
+    // in v2 means "12 orders placed in the last 24h, 8 still awaiting".
+    // The full backlog (e.g. 911 awaiting) lives in the sidebar counts.
     const nowIso = new Date().toISOString();
     const dayAgoIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const fmtLabel = (iso: string): string => {
@@ -746,41 +741,17 @@ export const apiClient = {
     return safe(
       'fetchDailyStats',
       async () => {
-        // Parallel: pull the all-time status counts (real backlog) + the
-        // recent shipped count (for the progress bar).
-        const [countsRes, dailyRes] = await Promise.all([
-          api.get<any>('/init/counts').catch(() => null),
-          api
-            .get<V4DailyStatsResponse>(
-              `/orders/daily-stats${qs({
-                dateFrom: query?.dateFrom ?? dayAgoIso,
-                dateTo: query?.dateTo ?? nowIso,
-              })}`
-            )
-            .catch(() => null),
-        ]);
-
-        const c = (countsRes ?? {}) as {
-          awaiting?: number;
-          awaiting_shipment?: number;
-          awaiting_payment?: number;
-          on_hold?: number;
-          shipped?: number;
-          cancelled?: number;
-        };
-        // The v4 /init/counts handler emits `awaiting` (see init.ts:49);
-        // accept either shape so the adapter survives schema drift.
-        const awaiting = Number(c.awaiting ?? c.awaiting_shipment ?? 0);
-        const awaitingPayment = Number(c.awaiting_payment ?? 0);
-        const onHold = Number(c.on_hold ?? 0);
-        const shippedTotal = Number(c.shipped ?? 0);
-        // Active pipeline = everything not yet shipped and not cancelled.
-        const totalOrders = awaiting + awaitingPayment + onHold + shippedTotal;
-        const w = dailyRes?.summary?.window ?? { from: dayAgoIso, to: nowIso };
+        const res = await api.get<V4DailyStatsResponse>(
+          `/orders/daily-stats${qs({
+            dateFrom: query?.dateFrom ?? dayAgoIso,
+            dateTo: query?.dateTo ?? nowIso,
+          })}`
+        );
+        const w = res.summary.window ?? { from: dayAgoIso, to: nowIso };
         return {
-          totalOrders,
-          needToShip: awaiting,
-          upcomingOrders: Number(dailyRes?.summary?.upcomingOrders ?? 0),
+          totalOrders: res.summary.totalOrders,
+          needToShip: res.summary.needToShip,
+          upcomingOrders: res.summary.upcomingOrders,
           window: {
             ...w,
             fromLabel: fmtLabel(w.from),
