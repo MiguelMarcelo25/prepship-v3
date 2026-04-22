@@ -119,21 +119,21 @@ async function upsertOrder(
     if (storeId !== null) {
       // Cache the mapping for the rest of this sync pass.
       storeToClient.byStore.set(storeId, fallbackClientId);
-      // Persist it too — append the new storeId onto the owner client's
-      // storeIds array (dedupe with array_append + COALESCE). This mirrors
-      // what POST /clients/sync-stores would do manually, but happens
-      // automatically as orders arrive from the account's SS org.
-      await db.execute(sql`
-        update clients
-           set store_ids = (
-             select array(select distinct unnest(
-               coalesce(store_ids, array[]::integer[]) || array[${storeId}]::integer[]
-             ))
-           ),
-               updated_at = now()
-         where id = ${fallbackClientId}
-           and not (${storeId} = any(coalesce(store_ids, array[]::integer[])))
-      `);
+      // Persist it too — embed the ints as raw SQL since pg's node driver
+      // doesn't bind JS numbers into integer[] cleanly. Both values are
+      // already int-validated (storeId from SS, fallbackClientId from DB)
+      // so sql.raw is safe here.
+      const sid = Math.trunc(storeId);
+      const cid = Math.trunc(fallbackClientId);
+      await db.execute(sql.raw(
+        `update clients set store_ids = (
+           select array(select distinct unnest(
+             coalesce(store_ids, array[]::integer[]) || array[${sid}]::integer[]
+           ))
+         ), updated_at = now()
+         where id = ${cid}
+           and not (${sid} = any(coalesce(store_ids, array[]::integer[])))`
+      ));
     }
   }
   // Hard guard: ShipStation orders under a test-flagged client never hit the
