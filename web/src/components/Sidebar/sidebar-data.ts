@@ -69,9 +69,18 @@ export function buildSidebarSections(
       });
     }
 
+    // Pin "Test Orders" / "Test" / anything matching these patterns to the
+    // bottom so real clients stay at the top of the list regardless of count.
+    const TEST_NAME_PATTERN = /^\s*(test|testing|sandbox|qa)\b/i;
+    const isTest = (name: string) => TEST_NAME_PATTERN.test(name);
     mergedStores.sort((left, right) => {
-      return (globalTotals.get(right.storeId) ?? 0) - (globalTotals.get(left.storeId) ?? 0)
-        || left.name.localeCompare(right.name);
+      const leftIsTest = isTest(left.name);
+      const rightIsTest = isTest(right.name);
+      if (leftIsTest !== rightIsTest) return leftIsTest ? 1 : -1;
+      return (
+        (globalTotals.get(right.storeId) ?? 0) - (globalTotals.get(left.storeId) ?? 0) ||
+        left.name.localeCompare(right.name)
+      );
     });
 
     sections[status].stores = mergedStores;
