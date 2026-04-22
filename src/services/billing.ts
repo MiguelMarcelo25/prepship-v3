@@ -8,6 +8,7 @@ import {
 import { shipments } from '../db/schema/shipments';
 import { orders } from '../db/schema/orders';
 import { packages } from '../db/schema/packages';
+import { clients } from '../db/schema/clients';
 
 export type GenerateInput = {
   clientId?: number;
@@ -50,14 +51,23 @@ export async function generateLineItems(input: GenerateInput) {
   const from = new Date(input.dateFrom);
   const to = new Date(input.dateTo);
 
-  const configs = await db
-    .select()
+  const rawConfigs = await db
+    .select({
+      config: billingConfig,
+      isTest: clients.isTest,
+    })
     .from(billingConfig)
+    .innerJoin(clients, eq(clients.id, billingConfig.clientId))
     .where(
       input.clientId !== undefined
         ? eq(billingConfig.clientId, input.clientId)
         : eq(billingConfig.active, true)
     );
+  // Test clients are hard-excluded — their shipments never generate invoice
+  // line items, even if someone manually sets billingConfig.active=true.
+  const configs = rawConfigs
+    .filter((r) => !r.isTest)
+    .map((r) => r.config);
   if (!configs.length) {
     return { generated: 0, skipped: 0, message: 'No billing configs found' };
   }

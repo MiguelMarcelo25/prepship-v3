@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { apiClient } from '../lib/v2-apiClient';
+import { apiClient, TEST_CLIENT_IDS } from '../lib/v2-apiClient';
 
 type ShipTo = {
   name?: string;
@@ -369,6 +369,24 @@ export default function OrderDetailDrawer({
           <strong style={{ fontSize: 15 }}>
             #{raw.orderNumber ?? orderId}
           </strong>
+          {typeof raw.clientId === 'number' &&
+          TEST_CLIENT_IDS.has(raw.clientId) ? (
+            <span
+              title="Sandbox / testing order — no real postage, billing, or inventory impact"
+              style={{
+                display: 'inline-block',
+                padding: '2px 8px',
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: 0.5,
+                color: '#fff',
+                background: '#d97706',
+                borderRadius: 4,
+              }}
+            >
+              TEST ORDER — DO NOT SHIP
+            </span>
+          ) : null}
           <StatusBadge status={raw.orderStatus} />
           {loading ? (
             <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text3)' }}>

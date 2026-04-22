@@ -532,6 +532,20 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
   }
   if (clientId) checkLabelRateLimit(clientId);
 
+  // Hard guard: any order under an isTest client is forced into offline-mock
+  // mode regardless of what the UI sent. Prevents a test row from ever
+  // spending real postage.
+  if (clientId) {
+    const [cli] = await db
+      .select({ isTest: clients.isTest })
+      .from(clients)
+      .where(eq(clients.id, clientId))
+      .limit(1);
+    if (cli?.isTest) {
+      body = { ...body, testLabel: true };
+    }
+  }
+
   const existing = await findActiveLabelForOrder(order.id);
   if (existing) {
     const err = new Error('Label already exists for this order') as Error & {

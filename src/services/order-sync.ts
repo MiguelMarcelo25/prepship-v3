@@ -85,23 +85,35 @@ function toNumericString(n?: number | null): string {
   return Number.isFinite(n as number) ? (n as number).toFixed(2) : '0';
 }
 
-async function buildStoreToClientMap(): Promise<Map<number, number>> {
+async function buildStoreToClientMap(): Promise<{
+  byStore: Map<number, number>;
+  testClients: Set<number>;
+}> {
   const rows = await db
-    .select({ id: clients.id, storeIds: clients.storeIds })
+    .select({ id: clients.id, storeIds: clients.storeIds, isTest: clients.isTest })
     .from(clients);
-  const map = new Map<number, number>();
+  const byStore = new Map<number, number>();
+  const testClients = new Set<number>();
   for (const c of rows) {
-    for (const sid of c.storeIds ?? []) map.set(sid, c.id);
+    for (const sid of c.storeIds ?? []) byStore.set(sid, c.id);
+    if (c.isTest) testClients.add(c.id);
   }
-  return map;
+  return { byStore, testClients };
 }
 
 async function upsertOrder(
   o: SSOrder,
-  storeToClient: Map<number, number>
-) {
+  storeToClient: { byStore: Map<number, number>; testClients: Set<number> }
+): Promise<boolean> {
   const storeId = o.advancedOptions?.storeId ?? null;
-  const clientId = storeId !== null ? storeToClient.get(storeId) ?? null : null;
+  const clientId =
+    storeId !== null ? storeToClient.byStore.get(storeId) ?? null : null;
+  // Hard guard: ShipStation orders under a test-flagged client never hit the
+  // DB. Test clients are sandbox-only — real customer orders must never land
+  // there and sync must never touch the seeded mock rows.
+  if (clientId !== null && storeToClient.testClients.has(clientId)) {
+    return false;
+  }
   const externallyShipped = externallyShippedFromRaw(o);
   const values = {
     externalOrderId: String(o.orderId),
@@ -159,6 +171,7 @@ async function upsertOrder(
       target: orders.externalOrderId,
       set: updateSet,
     });
+  return true;
 }
 
 export type SyncResult = {
@@ -203,8 +216,8 @@ export async function syncOrders(opts: {
     pages = res.pages;
 
     for (const o of res.orders) {
-      await upsertOrder(o, storeToClient);
-      total += 1;
+      const wrote = await upsertOrder(o, storeToClient);
+      if (wrote) total += 1;
     }
 
     if (!res.orders.length || page >= res.pages) break;

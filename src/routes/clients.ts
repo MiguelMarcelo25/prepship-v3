@@ -23,6 +23,7 @@ const body = z.object({
   brandColor: z.string().nullable().optional(),
   brandLogo: z.string().nullable().optional(),
   active: z.boolean().optional(),
+  isTest: z.boolean().optional(),
 });
 
 app.get('/', async (c) => {

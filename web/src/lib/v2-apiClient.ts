@@ -40,10 +40,10 @@ function parseDownloadFilename(
 }
 
 // Clients that should be hidden from the sidebar + per-client stats views.
-// Matched case-insensitively by name. Add more names here to hide them.
-// Orders with these clientIds are also excluded from the main orders table
-// via excludeClientId in useOrders (HIDDEN_CLIENT_IDS is populated by
-// isHiddenClient as a side-effect of fetchStores/fetchCounts).
+// Primary signal is `isTest` (server-side flag on clients.is_test) — any
+// client flagged as a sandbox never appears in stats or the main orders
+// table. The name list below is a legacy fallback kept for clients that
+// predate the flag and haven't been migrated yet.
 const HIDDEN_CLIENT_NAMES = new Set(['api shipments']);
 
 // Populated by fetchStores / fetchCounts when clients are loaded — lets
@@ -51,8 +51,24 @@ const HIDDEN_CLIENT_NAMES = new Set(['api shipments']);
 // clients even when we only have the id.
 export const HIDDEN_CLIENT_IDS = new Set<number>();
 
-function isHiddenClient(c: { name?: string | null; id?: number | null } | null | undefined): boolean {
+// Separate set of just the isTest client IDs — used by the UI to render the
+// TEST badge on order rows / drawer.
+export const TEST_CLIENT_IDS = new Set<number>();
+
+function isHiddenClient(
+  c:
+    | { name?: string | null; id?: number | null; isTest?: boolean | null }
+    | null
+    | undefined
+): boolean {
   if (!c) return false;
+  if (c.isTest === true) {
+    if (typeof c.id === 'number') {
+      HIDDEN_CLIENT_IDS.add(c.id);
+      TEST_CLIENT_IDS.add(c.id);
+    }
+    return true;
+  }
   const name = (c.name ?? '').trim().toLowerCase();
   if (HIDDEN_CLIENT_NAMES.has(name)) {
     if (typeof c.id === 'number') HIDDEN_CLIENT_IDS.add(c.id);

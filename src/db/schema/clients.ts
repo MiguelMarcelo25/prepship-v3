@@ -15,6 +15,11 @@ export const clients = pgTable('clients', {
   brandColor: text(),
   brandLogo: text(),
   active: boolean().default(true).notNull(),
+  // When true this client is a sandbox — orders under it never sync from
+  // ShipStation, never create real postage, never affect billing or
+  // inventory, and are auto-excluded from daily stats. Toggled via the
+  // one-time purge migration for anything whose name contains "test".
+  isTest: boolean('is_test').default(false).notNull(),
   createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
 });

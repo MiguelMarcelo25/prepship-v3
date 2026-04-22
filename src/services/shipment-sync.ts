@@ -2,6 +2,7 @@ import { eq, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orders } from '../db/schema/orders';
 import { shipments } from '../db/schema/shipments';
+import { clients } from '../db/schema/clients';
 import { ssV1Request } from '../lib/shipstation/v1-client';
 import { getSettingNumber, setSetting } from './settings';
 
@@ -76,6 +77,17 @@ async function upsertShipment(s: SSShipment) {
     .from(orders)
     .where(eq(orders.externalOrderId, String(s.orderId)))
     .limit(1);
+
+  // Skip entirely if this shipment belongs to a test-flagged client.
+  // Test clients never get real ShipStation shipment rows written to them.
+  if (order?.clientId) {
+    const [cli] = await db
+      .select({ isTest: clients.isTest })
+      .from(clients)
+      .where(eq(clients.id, order.clientId))
+      .limit(1);
+    if (cli?.isTest) return { inserted: false, matched: true };
+  }
 
   const values = {
     orderId: order?.id ?? null,

@@ -23,6 +23,7 @@ import printQueueRoute from './routes/print-queue';
 import parentSkusRoute from './routes/parent-skus';
 import productsRoute from './routes/products';
 import initRoute from './routes/init';
+import adminRoute from './routes/admin';
 
 const app = new Hono();
 
@@ -54,6 +55,7 @@ app.use('/print-queue/*', requireAuth);
 app.use('/parent-skus/*', requireAuth);
 app.use('/products/*', requireAuth);
 app.use('/init/*', requireAuth);
+app.use('/admin/*', requireAuth);
 
 app.route('/orders', ordersRoute);
 app.route('/shipments', shipmentsRoute);
@@ -72,6 +74,7 @@ app.route('/print-queue', printQueueRoute);
 app.route('/parent-skus', parentSkusRoute);
 app.route('/products', productsRoute);
 app.route('/init', initRoute);
+app.route('/admin', adminRoute);
 
 app.notFound((c) => c.json({ error: 'Not found' }, 404));
 

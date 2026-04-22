@@ -38,6 +38,17 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     .split(',')
     .map((s) => Number.parseInt(s.trim(), 10))
     .filter((n) => Number.isFinite(n) && n > 0);
+  // Always add isTest clients to the exclude set so sandbox orders never
+  // appear in the main orders table (unless explicitly requested by clientId,
+  // which is the one legit way to view them — e.g. from the Testing sidebar).
+  if (q.clientId === undefined) {
+    const testClientRows = await db.execute<{ id: number }>(
+      sql`select id from clients where is_test = true`
+    );
+    for (const r of testClientRows) {
+      if (!excludeIds.includes(r.id)) excludeIds.push(r.id);
+    }
+  }
 
   const where = and(
     ...[
@@ -304,6 +315,14 @@ app.get(
       .split(',')
       .map((s) => Number.parseInt(s.trim(), 10))
       .filter((n) => Number.isFinite(n) && n > 0);
+    // Always union in isTest client IDs server-side so sandbox orders never
+    // appear in the strip even if the frontend forgot to pass them.
+    const testClientRows = await db.execute<{ id: number }>(
+      sql`select id from clients where is_test = true`
+    );
+    for (const r of testClientRows) {
+      if (!excludeIds.includes(r.id)) excludeIds.push(r.id);
+    }
     // Keep orders with NULL client_id (not-yet-assigned) visible; only
     // filter the explicit hidden IDs. Embed IDs as raw SQL (safe — already
     // int-validated above) to dodge Drizzle's numeric-param serialization quirk.

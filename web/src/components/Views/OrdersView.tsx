@@ -4,6 +4,7 @@ import { lazy, Suspense, useContext, useEffect, useMemo, useRef, useState } from
 import OrderDetailDrawer from '../OrderDetailDrawer'
 import TrackingModal from '../TrackingModal'
 import { apiClient } from '../../api/client'
+import { TEST_CLIENT_IDS } from '../../lib/v2-apiClient'
 const RateBrowserModal = lazy(() => import('../RateBrowserModal'))
 import { ToastContext } from '../../contexts/ToastContext'
 import { useLocations, useOrderDetail, useOrders, useShippingAccounts } from '../../hooks'
@@ -1839,8 +1840,29 @@ export default function OrdersView({
       )
   }
 
-  const renderOrderCell = (order: OrderSummaryDto) => (
+  const renderOrderCell = (order: OrderSummaryDto) => {
+    const isTestOrder =
+      typeof order.clientId === 'number' && TEST_CLIENT_IDS.has(order.clientId)
+    return (
     <div className="order-num" style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, minWidth: 0 }}>
+      {isTestOrder && (
+        <span
+          title="Sandbox / test order — no real postage, billing, or inventory impact"
+          style={{
+            display: 'inline-block',
+            padding: '1px 6px',
+            fontSize: 9,
+            fontWeight: 700,
+            letterSpacing: 0.5,
+            color: '#fff',
+            background: '#d97706',
+            borderRadius: 3,
+            flexShrink: 0,
+          }}
+        >
+          TEST
+        </span>
+      )}
       <span
         className="od-order-link"
         title="Open order detail"
@@ -1869,7 +1891,8 @@ export default function OrdersView({
         ⎘
       </span>
     </div>
-  )
+    )
+  }
 
   const renderTableCell = (order: OrderSummaryDto, column: TableColumn) => {
     const detail = orderDetailsById.get(order.orderId) ?? null
