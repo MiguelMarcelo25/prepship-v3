@@ -220,14 +220,34 @@ function translateRateToV2Shape(r: unknown): Record<string, unknown> {
 async function fetchBlob(
   methodName: string,
   path: string,
-  fallbackFilename: string
+  fallbackFilename: string,
+  options: { throwOnError?: boolean } = {}
 ): Promise<{ blob: Blob; filename: string }> {
+  // When `throwOnError` is false (default, back-compat), a failed fetch
+  // returns an empty Blob + fallback filename so callers don't need to
+  // handle exceptions — used by downloadOrdersExport / downloadQueuePrintJob
+  // which pre-date the strict behavior.
+  //
+  // When `throwOnError` is true, the caller gets a real exception so their
+  // try/catch can surface an error toast instead of quietly downloading a
+  // 0-byte file (ManifestsView pattern — see MAN1).
   try {
     const res = await fetch(`${BASE}${path}`, {
       method: 'GET',
       headers: await authHeaders(),
     });
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    if (!res.ok) {
+      // Try to pull a human message from the error body before falling
+      // back to the status line.
+      let message = `${res.status} ${res.statusText}`;
+      try {
+        const err = await res.json();
+        if (err?.error) message = err.error;
+      } catch {
+        // body wasn't JSON — keep the status-line message
+      }
+      throw new Error(message);
+    }
     return {
       blob: await res.blob(),
       filename: parseDownloadFilename(
@@ -236,6 +256,7 @@ async function fetchBlob(
       ),
     };
   } catch (err) {
+    if (options.throwOnError) throw err;
     console.warn(
       `[v2-apiClient] ${methodName} failed:`,
       err instanceof Error ? err.message : err
@@ -1817,11 +1838,18 @@ export const apiClient = {
     [k: string]: unknown;
   }): Promise<{ blob: Blob; filename: string }> {
     // v4 exposes GET /manifests/generate with query params. Flatten v2's body
-    // to query string.
+    // to query string. Throws on failure so ManifestsView's try/catch surfaces
+    // the server error in a toast instead of silently downloading a 0-byte
+    // file.
     const path = `/manifests/generate${qs(data as any)}`;
     const start = data.startDate ?? 'unknown';
     const end = data.endDate ?? 'unknown';
-    return fetchBlob('downloadManifest', path, `manifest_${start}_${end}.csv`);
+    return fetchBlob(
+      'downloadManifest',
+      path,
+      `manifest_${start}_${end}.csv`,
+      { throwOnError: true }
+    );
   },
 };
 
