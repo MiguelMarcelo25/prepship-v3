@@ -103,11 +103,39 @@ async function buildStoreToClientMap(): Promise<{
 
 async function upsertOrder(
   o: SSOrder,
-  storeToClient: { byStore: Map<number, number>; testClients: Set<number> }
+  storeToClient: { byStore: Map<number, number>; testClients: Set<number> },
+  // When this order came from a per-client SS account (e.g. KF Goods'
+  // own keys), the sync passes that client's id here. Used as a fallback
+  // when the incoming storeId isn't yet in storeToClient — new stores
+  // auto-attach to the account that fetched them so the first sync
+  // doesn't leave orders stuck at clientId=null.
+  fallbackClientId: number | null = null
 ): Promise<boolean> {
   const storeId = o.advancedOptions?.storeId ?? null;
-  const clientId =
+  let clientId =
     storeId !== null ? storeToClient.byStore.get(storeId) ?? null : null;
+  if (clientId === null && fallbackClientId !== null) {
+    clientId = fallbackClientId;
+    if (storeId !== null) {
+      // Cache the mapping for the rest of this sync pass.
+      storeToClient.byStore.set(storeId, fallbackClientId);
+      // Persist it too — append the new storeId onto the owner client's
+      // storeIds array (dedupe with array_append + COALESCE). This mirrors
+      // what POST /clients/sync-stores would do manually, but happens
+      // automatically as orders arrive from the account's SS org.
+      await db.execute(sql`
+        update clients
+           set store_ids = (
+             select array(select distinct unnest(
+               coalesce(store_ids, array[]::integer[]) || array[${storeId}]::integer[]
+             ))
+           ),
+               updated_at = now()
+         where id = ${fallbackClientId}
+           and not (${storeId} = any(coalesce(store_ids, array[]::integer[])))
+      `);
+    }
+  }
   // Hard guard: ShipStation orders under a test-flagged client never hit the
   // DB. Test clients are sandbox-only — real customer orders must never land
   // there and sync must never touch the seeded mock rows.
@@ -189,12 +217,19 @@ type SyncAccount = {
   label: string;               // for the per-account watermark + logs
   apiKey: string | undefined;  // undefined → use env default
   apiSecret: string | undefined;
+  // When the account is a per-client account (ss_api_key set on a clients
+  // row), `ownerClientId` lets upsertOrder attribute orphan orders to that
+  // client instead of leaving them at clientId=null.
+  ownerClientId: number | null;
 };
 
 async function loadSyncAccounts(): Promise<SyncAccount[]> {
-  const accounts: SyncAccount[] = [{ label: 'main', apiKey: undefined, apiSecret: undefined }];
+  const accounts: SyncAccount[] = [
+    { label: 'main', apiKey: undefined, apiSecret: undefined, ownerClientId: null },
+  ];
   const rows = await db
     .select({
+      id: clients.id,
       name: clients.name,
       ssApiKey: clients.ssApiKey,
       ssApiSecret: clients.ssApiSecret,
@@ -207,6 +242,7 @@ async function loadSyncAccounts(): Promise<SyncAccount[]> {
         label: `client:${r.name}`,
         apiKey: r.ssApiKey,
         apiSecret: r.ssApiSecret,
+        ownerClientId: r.id,
       });
     }
   }
@@ -257,7 +293,7 @@ async function syncOrdersForAccount(
     pages = res.pages;
 
     for (const o of res.orders) {
-      const wrote = await upsertOrder(o, storeToClient);
+      const wrote = await upsertOrder(o, storeToClient, account.ownerClientId);
       if (wrote) total += 1;
     }
 
