@@ -2217,6 +2217,82 @@ export default function OrdersView({
         </div>
 
         <div className="panel-body">
+          {(() => {
+            const rawOrder = (panelDetail?.raw ?? {}) as Record<string, unknown>
+            const shipTo = panelOrder.shipTo ?? {}
+            const orderTotalNum = typeof panelOrder.orderTotal === 'number' ? panelOrder.orderTotal : Number(panelOrder.orderTotal ?? 0)
+            const shippingAmtNum = typeof panelOrder.shippingAmount === 'number' ? panelOrder.shippingAmount : Number(panelOrder.shippingAmount ?? 0)
+            const taxAmt = Number((rawOrder as any).taxAmount ?? 0)
+            const amountPaid = Number((rawOrder as any).amountPaid ?? orderTotalNum)
+            const productTotal = Math.max(0, orderTotalNum - shippingAmtNum - taxAmt)
+            const addressVerified = (shipTo as any).addressVerified as string | undefined
+            const isValidated = addressVerified && addressVerified !== 'Not Validated' && addressVerified !== 'address_not_yet_validated'
+            const addrBlock = [
+              (shipTo as any).street1,
+              (shipTo as any).street2,
+              [shipTo.city, shipTo.state, shipTo.postalCode].filter(Boolean).join(', '),
+            ].filter(Boolean).join('\n')
+            const orderDate = panelOrder.orderDate as string | undefined
+            const shipByDate = (rawOrder as any).shipByDate as string | undefined
+            const paymentDate = (rawOrder as any).paymentDate as string | undefined
+            const fmtDate = (iso: string | undefined) => {
+              if (!iso) return '—'
+              const d = new Date(iso)
+              if (Number.isNaN(d.getTime())) return '—'
+              return d.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
+            }
+            return (
+              <div className={`panel-section${collapsedSections.shipmentDetails ? ' collapsed' : ''}`} id="sec-shipment-details">
+                <div className="panel-section-header" onClick={() => toggleSection('shipmentDetails')}>
+                  <span className="panel-section-arrow">▶</span>
+                  <span className="panel-section-title">Shipment Details</span>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px 16px', padding: '8px 0 12px', fontSize: 12 }}>
+                  <div>
+                    <div style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text3)', letterSpacing: '.4px', marginBottom: 4 }}>Ship To</div>
+                    <div style={{ fontWeight: 600, marginBottom: 2 }}>{shipTo.name ?? '—'}</div>
+                    <div style={{ whiteSpace: 'pre-line', color: 'var(--text2)', lineHeight: 1.4 }}>{addrBlock || '—'}</div>
+                    <div style={{ marginTop: 5, fontSize: 11, color: isValidated ? 'var(--green)' : 'var(--text3)' }}>
+                      {isValidated ? '✓ Address Validated' : '⚠ Not Validated'}
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text3)', letterSpacing: '.4px', marginBottom: 4 }}>Cost Summary</div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--text2)' }}>Product Total</span><span>{formatMoney(productTotal)}</span></div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--text2)' }}>Shipping</span><span>{formatMoney(shippingAmtNum)}</span></div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: 'var(--text2)' }}>Tax</span><span>{formatMoney(taxAmt)}</span></div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, marginTop: 3, paddingTop: 3, borderTop: '1px solid var(--border)' }}><span>Total Paid</span><span>{formatMoney(amountPaid)}</span></div>
+                  </div>
+                  {panelOrder.customerEmail ? (
+                    <div style={{ gridColumn: '1 / -1' }}>
+                      <div style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text3)', letterSpacing: '.4px', marginBottom: 2 }}>Email</div>
+                      <div style={{ color: 'var(--text2)', fontSize: 11.5 }}>{panelOrder.customerEmail}</div>
+                    </div>
+                  ) : null}
+                  {(shipTo as any).phone ? (
+                    <div>
+                      <div style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text3)', letterSpacing: '.4px', marginBottom: 2 }}>Phone</div>
+                      <div style={{ color: 'var(--text2)', fontSize: 11.5 }}>{(shipTo as any).phone}</div>
+                    </div>
+                  ) : null}
+                  <div>
+                    <div style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text3)', letterSpacing: '.4px', marginBottom: 2 }}>Order Date</div>
+                    <div style={{ color: 'var(--text2)', fontSize: 11.5 }}>{fmtDate(orderDate)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text3)', letterSpacing: '.4px', marginBottom: 2 }}>Date Paid</div>
+                    <div style={{ color: 'var(--text2)', fontSize: 11.5 }}>{fmtDate(paymentDate ?? orderDate)}</div>
+                  </div>
+                  {shipByDate ? (
+                    <div>
+                      <div style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', color: 'var(--text3)', letterSpacing: '.4px', marginBottom: 2 }}>Ship By</div>
+                      <div style={{ color: 'var(--text2)', fontSize: 11.5 }}>{fmtDate(shipByDate)}</div>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            )
+          })()}
           <div className={`panel-section${collapsedSections.shipping ? ' collapsed' : ''}`} id="sec-shipping">
             <div className="panel-section-header" onClick={() => toggleSection('shipping')}>
               <span className="panel-section-arrow">▶</span>
