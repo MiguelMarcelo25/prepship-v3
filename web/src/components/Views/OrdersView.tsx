@@ -1581,32 +1581,35 @@ export default function OrdersView({
         typeof order.clientId === 'number' && TEST_CLIENT_IDS.has(order.clientId)
       const effectiveServiceCode = serviceCode ?? (isTestOrder ? 'usps_first_class_mail' : null)
       const effectiveCarrierCode = carrierCode ?? (isTestOrder ? 'stamps_com' : null)
-      // shippingProviderId is only required for real postage; the mock path
-      // ignores it. Pass 0 as a placeholder when missing on a test order.
-      const effectiveProviderId = shippingProviderId ?? (isTestOrder ? 0 : null)
 
-      if (
-        effectiveProviderId == null ||
-        !effectiveServiceCode ||
-        !effectiveCarrierCode
-      ) {
+      // Real-postage path still requires shippingProviderId. For test orders
+      // the backend never makes that call, so we omit the field entirely
+      // rather than try to sneak a 0 past Zod's .positive() validator.
+      if (!isTestOrder && shippingProviderId == null) {
+        failed += 1
+        continue
+      }
+      if (!effectiveServiceCode || !effectiveCarrierCode) {
         failed += 1
         continue
       }
 
       try {
-        const response = await apiClient.createLabel({
+        const payload: Record<string, unknown> = {
           orderId: order.orderId,
           serviceCode: effectiveServiceCode,
           carrierCode: effectiveCarrierCode,
-          shippingProviderId: effectiveProviderId,
           packageCode: 'package',
           weightOz,
           length: dims?.length,
           width: dims?.width,
           height: dims?.height,
           testLabel: batchTestMode || isTestOrder,
-        })
+        }
+        if (shippingProviderId != null) {
+          payload.shippingProviderId = shippingProviderId
+        }
+        const response = await apiClient.createLabel(payload)
 
         if (mode === 'queue' && response.labelUrl && order.clientId != null) {
           await apiClient.addToQueue(buildQueueAddPayload(order, response.labelUrl))
