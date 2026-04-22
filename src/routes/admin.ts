@@ -269,6 +269,19 @@ app.post('/seed-test-orders', zValidator('json', seedBody), async (c) => {
         testing: true,
         note: 'TESTING ORDER — sandbox data, do not ship',
         seedBatch: new Date().toISOString(),
+        // Label creation reads ship-to from raw.shipTo. Without street1 the
+        // createLabelFromOrderId validator rejects the order with
+        // "ship-to missing street".
+        shipTo: {
+          name,
+          street1: `${100 + i} Testing St`,
+          city: city.city,
+          state: city.state,
+          postalCode: city.zip,
+          country: 'US',
+          phone: '555-000-0000',
+          residential: true,
+        },
       },
       externallyShipped: false,
       externallyFulfilledVerified: false,

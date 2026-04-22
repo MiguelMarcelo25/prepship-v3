@@ -839,6 +839,88 @@ export async function createLabelBatch(
   };
 }
 
+// Persist a VOID/TEST shipment for an is_test client — reused by both the
+// single-order (createLabelV2) and batch (createLabelFromOrderId) paths so
+// every entry point into label creation is safe for sandbox orders.
+async function createMockShipmentForOrder(args: {
+  order: typeof orders.$inferSelect;
+  clientId: number | null;
+  serviceCode: string;
+}) {
+  const { order, clientId, serviceCode } = args;
+  const fakeShipmentId = generateFakeShipmentId();
+  const fakeTracking = generateFakeTrackingNumber();
+  const createdAt = new Date();
+  const apiBase = (process.env.PUBLIC_API_URL ?? '').replace(/\/+$/, '');
+  const mockLabelUrl = apiBase
+    ? `${apiBase}/labels/mock/${fakeShipmentId}`
+    : `/labels/mock/${fakeShipmentId}`;
+
+  const raw = (order.raw as { shipTo?: Record<string, unknown> } | null) ?? {};
+  const shipToRaw = (raw.shipTo ?? {}) as Record<string, unknown>;
+
+  const mockData: MockLabelData = {
+    shipmentId: fakeShipmentId,
+    orderNumber: order.orderNumber ?? null,
+    trackingNumber: fakeTracking,
+    serviceLabel: serviceCodeToLabel(serviceCode),
+    weightOz: order.weightOz ?? 0,
+    shipFrom: {
+      name: 'TEST Ship From',
+      street1: '',
+      city: '',
+      state: '',
+      postalCode: '',
+    },
+    shipTo: {
+      name: order.shipToName ?? 'Ship To',
+      street1: (shipToRaw.street1 as string | undefined) ?? '',
+      city: order.shipToCity ?? '',
+      state: order.shipToState ?? '',
+      postalCode: order.shipToPostalCode ?? '',
+    },
+    shipDate: createdAt.toISOString().slice(0, 10),
+  };
+
+  let pdfBase64: string | undefined;
+  try {
+    pdfBase64 = await generateMockLabelPdf(mockData);
+  } catch (err) {
+    console.error('[mock-label] PDF generation failed:', (err as Error).message);
+  }
+  saveMockLabel(fakeShipmentId, { ...mockData, pdfBase64 });
+
+  const [row] = await db
+    .insert(shipments)
+    .values({
+      orderId: order.id,
+      clientId,
+      orderNumber: order.orderNumber,
+      carrierCode: 'stamps_com',
+      serviceCode,
+      trackingNumber: fakeTracking,
+      shipDate: createdAt,
+      createDate: createdAt,
+      weightOz: order.weightOz,
+      cost: '0.00',
+      labelUrl: mockLabelUrl,
+      labelCreatedAt: createdAt,
+      labelFormat: 'pdf',
+      labelCarrier: 'stamps_com',
+      labelService: serviceCode,
+      labelTracking: fakeTracking,
+      labelCost: '0.00',
+      labelShipDate: createdAt,
+      labelShipmentId: fakeShipmentId,
+      source: 'test_offline',
+      voided: false,
+      isReturn: false,
+    })
+    .returning();
+  if (!row) throw new Error('Failed to persist mock shipment');
+  return row;
+}
+
 async function createLabelFromOrderId(args: {
   orderId: number;
   serviceCode: string;
@@ -864,6 +946,26 @@ async function createLabelFromOrderId(args: {
   if (!postal) missing.push('postal code');
   if (missing.length) {
     throw new Error(`Order ${order.orderNumber}: ship-to missing ${missing.join(', ')}`);
+  }
+
+  // Hard guard on the batch path too — if this order belongs to a test
+  // client, create a mock shipment instead of calling ShipStation. Mirrors
+  // the forced-testLabel guard in createLabelV2 so any entry point into
+  // label creation is safe.
+  const effectiveClientId = args.clientId ?? order.clientId ?? null;
+  if (effectiveClientId) {
+    const [cli] = await db
+      .select({ isTest: clients.isTest })
+      .from(clients)
+      .where(eq(clients.id, effectiveClientId))
+      .limit(1);
+    if (cli?.isTest) {
+      return await createMockShipmentForOrder({
+        order,
+        clientId: effectiveClientId,
+        serviceCode: args.serviceCode,
+      });
+    }
   }
 
   return createLabelFromShipment({
