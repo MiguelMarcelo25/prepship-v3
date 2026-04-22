@@ -7,6 +7,7 @@ export interface SidebarStoreRow {
   storeId: number;
   name: string;
   cnt: number;
+  isTest: boolean;
 }
 
 export interface SidebarSection {
@@ -31,8 +32,12 @@ export function buildSidebarSections(
   };
 
   const storeNameById = new Map<number, string>();
+  const testStoreIds = new Set<number>();
   for (const store of stores) {
     storeNameById.set(store.storeId, store.storeName);
+    if ((store as { isTest?: boolean }).isTest === true) {
+      testStoreIds.add(store.storeId);
+    }
   }
 
   for (const row of counts?.byStatus ?? []) {
@@ -46,6 +51,7 @@ export function buildSidebarSections(
       storeId: row.storeId,
       name: storeNameById.get(row.storeId) ?? `Store ${row.storeId}`,
       cnt: row.cnt,
+      isTest: testStoreIds.has(row.storeId),
     });
   }
 
@@ -66,16 +72,19 @@ export function buildSidebarSections(
         storeId: store.storeId,
         name: store.storeName,
         cnt: 0,
+        isTest: (store as { isTest?: boolean }).isTest === true,
       });
     }
 
-    // Pin "Test Orders" / "Test" / anything matching these patterns to the
-    // bottom so real clients stay at the top of the list regardless of count.
+    // Pin isTest clients to the bottom so real clients stay at the top of
+    // the list regardless of count. Fallback to the legacy name regex for
+    // clients that predate the is_test flag.
     const TEST_NAME_PATTERN = /^\s*(test|testing|sandbox|qa)\b/i;
-    const isTest = (name: string) => TEST_NAME_PATTERN.test(name);
+    const isTestRow = (row: SidebarStoreRow) =>
+      row.isTest || TEST_NAME_PATTERN.test(row.name);
     mergedStores.sort((left, right) => {
-      const leftIsTest = isTest(left.name);
-      const rightIsTest = isTest(right.name);
+      const leftIsTest = isTestRow(left);
+      const rightIsTest = isTestRow(right);
       if (leftIsTest !== rightIsTest) return leftIsTest ? 1 : -1;
       return (
         (globalTotals.get(right.storeId) ?? 0) - (globalTotals.get(left.storeId) ?? 0) ||

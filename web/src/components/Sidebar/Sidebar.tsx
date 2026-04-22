@@ -149,7 +149,8 @@ export default function Sidebar({
                 return (
                   <div
                     key={`${status}-${store.storeId}`}
-                    className={`ss-store${currentView === 'orders' && activeStore === store.storeId && currentStatus === status ? ' active' : ''}${store.cnt === 0 ? ' ss-store-zero' : ''}`}
+                    className={`ss-store${currentView === 'orders' && activeStore === store.storeId && currentStatus === status ? ' active' : ''}${store.cnt === 0 ? ' ss-store-zero' : ''}${store.isTest ? ' ss-store-test' : ''}`}
+                    title={store.isTest ? 'Sandbox / test client — isolated from real data' : undefined}
                     onClick={() => {
                       // ORDER MATTERS: onSelectStatus resets activeStore to null
                       // in Home.tsx, so we MUST set the store AFTER switching
@@ -160,6 +161,24 @@ export default function Sidebar({
                     }}
                     style={{ cursor: 'pointer' }}
                   >
+                    {store.isTest ? (
+                      <span
+                        style={{
+                          display: 'inline-block',
+                          padding: '0 4px',
+                          marginRight: 4,
+                          fontSize: 8,
+                          fontWeight: 700,
+                          letterSpacing: 0.5,
+                          color: '#fff',
+                          background: '#d97706',
+                          borderRadius: 2,
+                          verticalAlign: 'middle',
+                        }}
+                      >
+                        TEST
+                      </span>
+                    ) : null}
                     <span className="ss-store-name">{store.name}</span>
                     <span className="ss-store-count">{store.cnt > 0 ? store.cnt.toLocaleString() : ''}</span>
                   </div>

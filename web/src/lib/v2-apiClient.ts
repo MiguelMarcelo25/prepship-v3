@@ -382,16 +382,24 @@ export const apiClient = {
         for (const row of statsArr) {
           const cid = row?.clientId ?? row?.client_id;
           if (cid == null) continue;
-          if (HIDDEN_CLIENT_IDS.has(cid)) continue;
+          // Test clients flow THROUGH so they appear in the sidebar (pinned
+          // to the bottom by the sort in sidebar-data.ts). Only truly-hidden
+          // clients (e.g. api shipments) are dropped from the list.
+          const isTestRow = TEST_CLIENT_IDS.has(cid);
+          if (HIDDEN_CLIENT_IDS.has(cid) && !isTestRow) continue;
           const a = row?.awaiting ?? 0;
           const s = row?.shipped ?? 0;
           const x = row?.cancelled ?? 0;
           if (a > 0) byStatusStore.push({ orderStatus: 'awaiting_shipment', storeId: cid, cnt: a });
           if (s > 0) byStatusStore.push({ orderStatus: 'shipped', storeId: cid, cnt: s });
           if (x > 0) byStatusStore.push({ orderStatus: 'cancelled', storeId: cid, cnt: x });
-          awaitingTotal += a;
-          shippedTotal += s;
-          cancelledTotal += x;
+          // Exclude test clients from the rolled-up status badges so
+          // "Awaiting Shipment · 23" stays a real-work number.
+          if (!isTestRow) {
+            awaitingTotal += a;
+            shippedTotal += s;
+            cancelledTotal += x;
+          }
         }
 
         // Orders with clientId=null (unassigned) aren't in /clients/order-stats
@@ -439,12 +447,20 @@ export const apiClient = {
       async () => {
         const clients = await api.get<any>('/clients');
         const arr = Array.isArray(clients) ? clients : [];
+        // Call isHiddenClient on every client first so HIDDEN_CLIENT_IDS +
+        // TEST_CLIENT_IDS get populated as a side-effect (downstream filters
+        // rely on those sets). Then keep test clients in the returned list
+        // so the sidebar can render them; drop only non-test hidden clients.
         return arr
-          .filter((c) => !isHiddenClient(c))
+          .filter((c) => {
+            const hidden = isHiddenClient(c);
+            return c?.isTest === true || !hidden;
+          })
           .map((c) => ({
             storeId: c?.id,
             storeName: c?.name ?? `Client ${c?.id}`,
             active: true,
+            isTest: c?.isTest === true,
           }));
       },
       []
