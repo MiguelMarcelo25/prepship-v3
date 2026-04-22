@@ -302,6 +302,64 @@ app.post('/seed-test-orders', zValidator('json', seedBody), async (c) => {
   });
 });
 
+// Upsert a ShipStation client with its own API credentials. Used when
+// onboarding a secondary SS account (e.g. KF Goods has its own SS org —
+// the main DR Prepper key can't see those orders). After this endpoint
+// runs, syncOrders + syncShipments will iterate the new account on their
+// next tick and pull its orders into our local DB.
+const upsertKeyedClientBody = z.object({
+  name: z.string().min(1),
+  apiKey: z.string().min(1),
+  apiSecret: z.string().min(1),
+  apiKeyV2: z.string().nullable().optional(),
+  rateSourceClientId: z.number().int().positive().nullable().optional(),
+});
+
+app.post(
+  '/upsert-keyed-client',
+  zValidator('json', upsertKeyedClientBody),
+  async (c) => {
+    const body = c.req.valid('json');
+
+    // Check for an existing row by name (case-insensitive). If found, just
+    // refresh the creds — safer than duplicating the client.
+    const [existing] = await db
+      .select({ id: clients.id })
+      .from(clients)
+      .where(sql`lower(${clients.name}) = lower(${body.name})`)
+      .limit(1);
+
+    if (existing) {
+      const [updated] = await db
+        .update(clients)
+        .set({
+          ssApiKey: body.apiKey,
+          ssApiSecret: body.apiSecret,
+          ssApiKeyV2: body.apiKeyV2 ?? null,
+          rateSourceClientId: body.rateSourceClientId ?? null,
+          updatedAt: new Date(),
+        })
+        .where(eq(clients.id, existing.id))
+        .returning();
+      return c.json({ created: false, client: updated });
+    }
+
+    const [created] = await db
+      .insert(clients)
+      .values({
+        name: body.name,
+        ssApiKey: body.apiKey,
+        ssApiSecret: body.apiSecret,
+        ssApiKeyV2: body.apiKeyV2 ?? null,
+        rateSourceClientId: body.rateSourceClientId ?? null,
+        storeIds: [],
+        active: true,
+      })
+      .returning();
+    return c.json({ created: true, client: created });
+  }
+);
+
 // List test clients + current order count. Quick way to verify state.
 app.get('/test-clients', async (c) => {
   const rows = await db.execute<{

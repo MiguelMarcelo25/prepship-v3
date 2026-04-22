@@ -1,4 +1,4 @@
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orders } from '../db/schema/orders';
 import { clients } from '../db/schema/clients';
@@ -181,20 +181,59 @@ export type SyncResult = {
   sinceIso: string;
 };
 
-export async function syncOrders(opts: {
-  sinceMs?: number;
-  pageSize?: number;
-} = {}): Promise<SyncResult> {
+// A "SyncAccount" is a ShipStation login we pull orders from. v2-parity:
+// one "main" account (env-level SHIPSTATION_API_KEY/SECRET) plus one per
+// client that has its own ss_api_key stored on the clients table (e.g.
+// KF Goods has its own ShipStation org).
+type SyncAccount = {
+  label: string;               // for the per-account watermark + logs
+  apiKey: string | undefined;  // undefined → use env default
+  apiSecret: string | undefined;
+};
+
+async function loadSyncAccounts(): Promise<SyncAccount[]> {
+  const accounts: SyncAccount[] = [{ label: 'main', apiKey: undefined, apiSecret: undefined }];
+  const rows = await db
+    .select({
+      name: clients.name,
+      ssApiKey: clients.ssApiKey,
+      ssApiSecret: clients.ssApiSecret,
+    })
+    .from(clients)
+    .where(eq(clients.active, true));
+  for (const r of rows) {
+    if (r.ssApiKey && r.ssApiSecret) {
+      accounts.push({
+        label: `client:${r.name}`,
+        apiKey: r.ssApiKey,
+        apiSecret: r.ssApiSecret,
+      });
+    }
+  }
+  return accounts;
+}
+
+function watermarkKey(accountLabel: string): string {
+  return accountLabel === 'main'
+    ? LAST_SYNC_KEY
+    : `${LAST_SYNC_KEY}:${accountLabel}`;
+}
+
+async function syncOrdersForAccount(
+  account: SyncAccount,
+  opts: { sinceMs?: number; pageSize?: number },
+  storeToClient: Awaited<ReturnType<typeof buildStoreToClientMap>>
+): Promise<{ synced: number; pages: number; sinceIso: string }> {
+  const key = watermarkKey(account.label);
   const lastSync =
     opts.sinceMs ??
-    (await getSettingNumber(LAST_SYNC_KEY)) ??
+    (await getSettingNumber(key)) ??
     Date.now() - DEFAULT_LOOKBACK_MS;
 
   const pageSize = opts.pageSize ?? 250;
   const runStartMs = Date.now();
   const sinceIso = new Date(lastSync).toISOString();
   const sinceParam = formatSSDate(lastSync);
-  const storeToClient = await buildStoreToClientMap();
 
   let page = 1;
   let pages = 1;
@@ -210,7 +249,9 @@ export async function syncOrders(opts: {
     });
 
     const res = await ssV1Request<SSOrdersList>(`/orders?${q.toString()}`, {
-      dedupeKey: `orders:list:${sinceParam}:${page}:${pageSize}`,
+      apiKey: account.apiKey,
+      apiSecret: account.apiSecret,
+      dedupeKey: `orders:list:${account.label}:${sinceParam}:${page}:${pageSize}`,
     });
 
     pages = res.pages;
@@ -224,12 +265,41 @@ export async function syncOrders(opts: {
     page += 1;
   }
 
-  await setSetting(LAST_SYNC_KEY, String(runStartMs));
+  await setSetting(key, String(runStartMs));
+  return { synced: total, pages, sinceIso };
+}
+
+export async function syncOrders(opts: {
+  sinceMs?: number;
+  pageSize?: number;
+} = {}): Promise<SyncResult> {
+  const runStartMs = Date.now();
+  const storeToClient = await buildStoreToClientMap();
+  const accounts = await loadSyncAccounts();
+
+  let grandTotal = 0;
+  let maxPages = 1;
+  let earliestSinceIso = new Date(runStartMs).toISOString();
+
+  for (const acct of accounts) {
+    try {
+      const result = await syncOrdersForAccount(acct, opts, storeToClient);
+      grandTotal += result.synced;
+      if (result.pages > maxPages) maxPages = result.pages;
+      if (result.sinceIso < earliestSinceIso) earliestSinceIso = result.sinceIso;
+    } catch (err) {
+      console.error(
+        `[order-sync] account "${acct.label}" failed:`,
+        (err as Error).message
+      );
+    }
+  }
+
   return {
-    synced: total,
-    pages,
+    synced: grandTotal,
+    pages: maxPages,
     lastSyncedAt: new Date(runStartMs).toISOString(),
-    sinceIso,
+    sinceIso: earliestSinceIso,
   };
 }
 
@@ -237,8 +307,14 @@ export async function getSyncStatus(): Promise<{
   lastSyncedAt: string | null;
   orderCount: number;
 }> {
-  const ms = await getSettingNumber(LAST_SYNC_KEY);
-  const lastSyncedAt = ms ? new Date(ms).toISOString() : null;
+  // Latest watermark across accounts — reflects the most-recent successful sync.
+  const accounts = await loadSyncAccounts();
+  let latestMs: number | null = null;
+  for (const acct of accounts) {
+    const ms = await getSettingNumber(watermarkKey(acct.label));
+    if (ms && (latestMs === null || ms > latestMs)) latestMs = ms;
+  }
+  const lastSyncedAt = latestMs ? new Date(latestMs).toISOString() : null;
   const rows = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(orders);

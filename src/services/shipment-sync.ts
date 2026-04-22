@@ -142,75 +142,125 @@ export type ShipmentSyncResult = {
   sinceIso: string;
 };
 
+type ShipmentSyncAccount = {
+  label: string;
+  apiKey: string | undefined;
+  apiSecret: string | undefined;
+};
+
+async function loadShipmentSyncAccounts(): Promise<ShipmentSyncAccount[]> {
+  const accounts: ShipmentSyncAccount[] = [
+    { label: 'main', apiKey: undefined, apiSecret: undefined },
+  ];
+  const rows = await db
+    .select({
+      name: clients.name,
+      ssApiKey: clients.ssApiKey,
+      ssApiSecret: clients.ssApiSecret,
+    })
+    .from(clients)
+    .where(eq(clients.active, true));
+  for (const r of rows) {
+    if (r.ssApiKey && r.ssApiSecret) {
+      accounts.push({
+        label: `client:${r.name}`,
+        apiKey: r.ssApiKey,
+        apiSecret: r.ssApiSecret,
+      });
+    }
+  }
+  return accounts;
+}
+
+function shipWatermarkKey(label: string): string {
+  return label === 'main' ? LAST_SYNC_KEY : `${LAST_SYNC_KEY}:${label}`;
+}
+
 /**
  * Pull shipments from ShipStation v1 that were created after the last sync.
  * Upsert each into our shipments table and — when the matching order is
  * still in "awaiting_shipment" — flip it to "shipped".
  *
- * Runs ONE pass; schedule with cron. Use `opts.sinceMs` to override the
- * watermark (manual backfill).
+ * Iterates every active ShipStation account (env-main + per-client
+ * ss_api_key) so multi-org setups (e.g. DR Prepper + KFG) both land in
+ * our local shipments table. Runs ONE pass per account.
  */
 export async function syncShipments(
   opts: { sinceMs?: number; pageSize?: number } = {}
 ): Promise<ShipmentSyncResult> {
-  const lastSync =
-    opts.sinceMs ??
-    (await getSettingNumber(LAST_SYNC_KEY)) ??
-    Date.now() - DEFAULT_LOOKBACK_MS;
-
   const pageSize = opts.pageSize ?? 250;
   const runStartMs = Date.now();
-  const sinceIso = new Date(lastSync).toISOString();
-  const sinceParam = formatSSDate(lastSync);
 
-  let page = 1;
-  let pages = 1;
-  let fetched = 0;
-  let inserted = 0;
-  let updated = 0;
-  let matchedOrders = 0;
+  let totalFetched = 0;
+  let totalInserted = 0;
+  let totalUpdated = 0;
+  let totalMatched = 0;
+  let maxPages = 1;
+  let earliestSinceIso = new Date(runStartMs).toISOString();
   const shippedOrderIds: number[] = [];
 
-  while (true) {
-    const q = new URLSearchParams({
-      createDateStart: sinceParam,
-      pageSize: String(pageSize),
-      page: String(page),
-      sortBy: 'CreateDate',
-      sortDir: 'ASC',
-    });
+  const accounts = await loadShipmentSyncAccounts();
+  for (const acct of accounts) {
+    try {
+      const key = shipWatermarkKey(acct.label);
+      const lastSync =
+        opts.sinceMs ??
+        (await getSettingNumber(key)) ??
+        Date.now() - DEFAULT_LOOKBACK_MS;
+      const sinceIso = new Date(lastSync).toISOString();
+      if (sinceIso < earliestSinceIso) earliestSinceIso = sinceIso;
+      const sinceParam = formatSSDate(lastSync);
 
-    const res = await ssV1Request<SSShipmentsList>(
-      `/shipments?${q.toString()}`,
-      { dedupeKey: `shipments:list:${sinceParam}:${page}:${pageSize}` }
-    );
+      let page = 1;
+      while (true) {
+        const q = new URLSearchParams({
+          createDateStart: sinceParam,
+          pageSize: String(pageSize),
+          page: String(page),
+          sortBy: 'CreateDate',
+          sortDir: 'ASC',
+        });
 
-    pages = res.pages;
+        const res = await ssV1Request<SSShipmentsList>(
+          `/shipments?${q.toString()}`,
+          {
+            apiKey: acct.apiKey,
+            apiSecret: acct.apiSecret,
+            dedupeKey: `shipments:list:${acct.label}:${sinceParam}:${page}:${pageSize}`,
+          }
+        );
+        if (res.pages > maxPages) maxPages = res.pages;
 
-    for (const s of res.shipments) {
-      const result = await upsertShipment(s);
-      fetched += 1;
-      if (result.inserted) inserted += 1;
-      else updated += 1;
-      if (result.matched) matchedOrders += 1;
+        for (const s of res.shipments) {
+          const result = await upsertShipment(s);
+          totalFetched += 1;
+          if (result.inserted) totalInserted += 1;
+          else totalUpdated += 1;
+          if (result.matched) totalMatched += 1;
 
-      // Queue for "mark shipped" if matched. We batch the order update
-      // after the page loop to avoid interleaving writes with ShipStation
-      // pagination (which can be slow due to rate limits).
-      if (result.matched) {
-        const [order] = await db
-          .select({ id: orders.id, status: orders.orderStatus })
-          .from(orders)
-          .where(eq(orders.externalOrderId, String(s.orderId)))
-          .limit(1);
-        if (order && order.status === 'awaiting_shipment') {
-          shippedOrderIds.push(order.id);
+          if (result.matched) {
+            const [order] = await db
+              .select({ id: orders.id, status: orders.orderStatus })
+              .from(orders)
+              .where(eq(orders.externalOrderId, String(s.orderId)))
+              .limit(1);
+            if (order && order.status === 'awaiting_shipment') {
+              shippedOrderIds.push(order.id);
+            }
+          }
         }
-      }
-    }
 
-    if (!res.shipments.length || page >= res.pages) break;
-    page += 1;
+        if (!res.shipments.length || page >= res.pages) break;
+        page += 1;
+      }
+
+      await setSetting(key, String(runStartMs));
+    } catch (err) {
+      console.error(
+        `[shipment-sync] account "${acct.label}" failed:`,
+        (err as Error).message
+      );
+    }
   }
 
   let ordersMarkedShipped = 0;
@@ -229,7 +279,12 @@ export async function syncShipments(
     ordersMarkedShipped = result[0]?.updated ?? 0;
   }
 
-  await setSetting(LAST_SYNC_KEY, String(runStartMs));
+  const fetched = totalFetched;
+  const inserted = totalInserted;
+  const updated = totalUpdated;
+  const matchedOrders = totalMatched;
+  const pages = maxPages;
+  const sinceIso = earliestSinceIso;
 
   return {
     fetched,
