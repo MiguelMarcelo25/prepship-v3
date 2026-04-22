@@ -20,11 +20,11 @@ export interface BillingDateRange {
 
 export interface BillingConfigDraft {
   pickPackFee: string
+  pickPackMaxUnits: string
   additionalUnitFee: string
   shippingMarkupPct: string
   shippingMarkupFlat: string
-  storageFeePerCuFt: string
-  billing_mode: string
+  billingMode: string
 }
 
 export type BillingDetailColumnId =
@@ -161,13 +161,16 @@ export function getBillingPresetRange(preset: BillingPresetId, now = new Date())
 }
 
 export function createBillingConfigDraft(config: BillingConfigDto): BillingConfigDraft {
+  // Accept either the v4 camelCase (`billingMode`, `pickPackMaxUnits`) or
+  // legacy snake_case (`billing_mode`) shapes on the incoming DTO.
+  const c = config as any
   return {
-    pickPackFee: config.pickPackFee.toFixed(2),
-    additionalUnitFee: config.additionalUnitFee.toFixed(2),
-    shippingMarkupPct: config.shippingMarkupPct.toFixed(1),
-    shippingMarkupFlat: config.shippingMarkupFlat.toFixed(2),
-    storageFeePerCuFt: (config.storageFeePerCuFt || 0).toFixed(3),
-    billing_mode: config.billing_mode || 'label_cost',
+    pickPackFee: Number(c.pickPackFee ?? 0).toFixed(2),
+    pickPackMaxUnits: String(c.pickPackMaxUnits ?? 1),
+    additionalUnitFee: Number(c.additionalUnitFee ?? 0).toFixed(2),
+    shippingMarkupPct: Number(c.shippingMarkupPct ?? 0).toFixed(1),
+    shippingMarkupFlat: Number(c.shippingMarkupFlat ?? 0).toFixed(2),
+    billingMode: c.billingMode ?? c.billing_mode ?? 'per_shipment',
   }
 }
 
@@ -176,13 +179,14 @@ export function createBillingConfigDraftMap(configs: BillingConfigDto[]) {
 }
 
 export function buildBillingConfigInput(draft: BillingConfigDraft): UpdateBillingConfigInput {
+  const parsedMax = Number.parseInt(draft.pickPackMaxUnits ?? '1', 10)
   return {
     pickPackFee: parseNumber(draft.pickPackFee),
+    pickPackMaxUnits: Number.isFinite(parsedMax) && parsedMax > 0 ? parsedMax : 1,
     additionalUnitFee: parseNumber(draft.additionalUnitFee),
     shippingMarkupPct: parseNumber(draft.shippingMarkupPct),
     shippingMarkupFlat: parseNumber(draft.shippingMarkupFlat),
-    billing_mode: draft.billing_mode || 'label_cost',
-    storageFeePerCuFt: parseNumber(draft.storageFeePerCuFt),
+    billingMode: draft.billingMode || 'per_shipment',
   }
 }
 

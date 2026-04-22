@@ -417,7 +417,7 @@ export default function BillingView({ onOpenOrder }: BillingViewProps) {
                   <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Addl Unit</th>
                   <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Ship %</th>
                   <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Ship $</th>
-                  <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }} title="Storage fee per cubic foot per month">Storage $/cu ft</th>
+                  <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }} title="Max units included in the Pick & Pack base fee — orders at or below this count pay only pickPackFee; excess units are billed at additionalUnitFee">Max Units</th>
                   <th style={{ padding: '5px 8px', textAlign: 'center', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Mode</th>
                   <th style={{ padding: '5px 4px', textAlign: 'center', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)' }} />
                 </tr>
@@ -492,15 +492,15 @@ export default function BillingView({ onOpenOrder }: BillingViewProps) {
                       <td style={{ padding: '4px 8px', textAlign: 'right' }}>
                         <input
                           type="number"
-                          step="0.001"
-                          min="0"
+                          step="1"
+                          min="1"
                           className="markup-input-lg"
-                          style={{ width: 64, textAlign: 'right', fontSize: 11.5 }}
-                          title="Storage fee per cubic foot per month (0 = disabled)"
-                          value={draft?.storageFeePerCuFt ?? '0.000'}
+                          style={{ width: 54, textAlign: 'right', fontSize: 11.5 }}
+                          title="Orders with total units ≤ this value pay only the base Pick & Pack fee; excess units are billed at the Addl Unit rate"
+                          value={draft?.pickPackMaxUnits ?? '1'}
                           onChange={(event) => setConfigDrafts((current) => ({
                             ...current,
-                            [config.clientId]: { ...current[config.clientId], storageFeePerCuFt: event.target.value },
+                            [config.clientId]: { ...current[config.clientId], pickPackMaxUnits: event.target.value },
                           }))}
                         />
                       </td>
@@ -508,14 +508,14 @@ export default function BillingView({ onOpenOrder }: BillingViewProps) {
                         <select
                           className="ship-select"
                           style={{ fontSize: 10, padding: '2px 4px', borderRadius: 4, border: '1px solid var(--border)' }}
-                          value={draft?.billing_mode ?? 'label_cost'}
+                          value={draft?.billingMode ?? 'per_shipment'}
                           onChange={(event) => setConfigDrafts((current) => ({
                             ...current,
-                            [config.clientId]: { ...current[config.clientId], billing_mode: event.target.value },
+                            [config.clientId]: { ...current[config.clientId], billingMode: event.target.value },
                           }))}
                         >
-                          <option value="label_cost">Label Cost</option>
-                          <option value="reference_rate">SS Ref Rate ★</option>
+                          <option value="per_shipment">Per Shipment</option>
+                          <option value="monthly">Monthly</option>
                         </select>
                       </td>
                       <td style={{ padding: '4px 4px', textAlign: 'center' }}>
