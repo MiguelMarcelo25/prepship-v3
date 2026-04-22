@@ -710,11 +710,33 @@ export const apiClient = {
   }): Promise<DailyStatsSummary> {
     const nowIso = new Date().toISOString();
     const weekAgoIso = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    // v2 renders `window.fromLabel` / `window.toLabel` (e.g. "Apr 21, 12pm PT"),
+    // falling back to the raw ISO otherwise. v4's server returns only raw ISO,
+    // so format the label client-side here to match v2's UI exactly.
+    const fmtLabel = (iso: string): string => {
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return iso;
+      // Always display in Pacific Time to match DR PREPPER's warehouse timezone.
+      return d
+        .toLocaleString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          hour: 'numeric',
+          hour12: true,
+          timeZone: 'America/Los_Angeles',
+        })
+        .replace(',', '') + ' PT';
+    };
     const fallback: DailyStatsSummary = {
       totalOrders: 0,
       needToShip: 0,
       upcomingOrders: 0,
-      window: { from: weekAgoIso, to: nowIso },
+      window: {
+        from: weekAgoIso,
+        to: nowIso,
+        fromLabel: fmtLabel(weekAgoIso),
+        toLabel: fmtLabel(nowIso),
+      } as any,
     };
     return safe(
       'fetchDailyStats',
@@ -725,11 +747,16 @@ export const apiClient = {
             dateTo: query?.dateTo ?? nowIso,
           })}`
         );
+        const w = res.summary.window ?? { from: weekAgoIso, to: nowIso };
         return {
           totalOrders: res.summary.totalOrders,
           needToShip: res.summary.needToShip,
           upcomingOrders: res.summary.upcomingOrders,
-          window: res.summary.window,
+          window: {
+            ...w,
+            fromLabel: fmtLabel(w.from),
+            toLabel: fmtLabel(w.to),
+          } as any,
         };
       },
       fallback
