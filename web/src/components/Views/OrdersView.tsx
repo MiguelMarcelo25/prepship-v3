@@ -1,6 +1,7 @@
 // @ts-nocheck
 import './OrdersView.css'
 import { lazy, Suspense, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import OrderDetailDrawer from '../OrderDetailDrawer'
 import { apiClient } from '../../api/client'
 const RateBrowserModal = lazy(() => import('../RateBrowserModal'))
 import { ToastContext } from '../../contexts/ToastContext'
@@ -663,6 +664,7 @@ export default function OrdersView({
   const [queuePrintMessage, setQueuePrintMessage] = useState<string | null>(null)
   const [queuePrintInFlight, setQueuePrintInFlight] = useState(false)
   const [rateBrowserOpen, setRateBrowserOpen] = useState(false)
+  const [detailDrawerOrderId, setDetailDrawerOrderId] = useState<number | null>(null)
   const [rateBrowserLoading, setRateBrowserLoading] = useState(false)
   const [rateBrowserRates, setRateBrowserRates] = useState<Array<Record<string, unknown>>>([])
   const [rateBrowserCarrierFilter, setRateBrowserCarrierFilter] = useState<number | null>(null)
@@ -1836,11 +1838,11 @@ export default function OrdersView({
     <div className="order-num" style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, minWidth: 0 }}>
       <span
         className="od-order-link"
-        title="Open detail view"
-        style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+        title="Open order detail"
+        style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'pointer', color: 'var(--ss-blue)' }}
         onClick={(event) => {
           event.stopPropagation()
-          toggleOrderSelection(order.orderId, true)
+          setDetailDrawerOrderId(order.orderId ?? null)
         }}
       >
         {order.orderNumber ?? `#${order.orderId}`}
@@ -3040,6 +3042,11 @@ export default function OrdersView({
           </div>
         </div>
       ) : null}
+
+      <OrderDetailDrawer
+        orderId={detailDrawerOrderId}
+        onClose={() => setDetailDrawerOrderId(null)}
+      />
 
       {rateBrowserOpen ? (
         <Suspense fallback={null}>
