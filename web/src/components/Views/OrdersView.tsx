@@ -2,6 +2,7 @@
 import './OrdersView.css'
 import { lazy, Suspense, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import OrderDetailDrawer from '../OrderDetailDrawer'
+import TrackingModal from '../TrackingModal'
 import { apiClient } from '../../api/client'
 const RateBrowserModal = lazy(() => import('../RateBrowserModal'))
 import { ToastContext } from '../../contexts/ToastContext'
@@ -665,6 +666,10 @@ export default function OrdersView({
   const [queuePrintInFlight, setQueuePrintInFlight] = useState(false)
   const [rateBrowserOpen, setRateBrowserOpen] = useState(false)
   const [detailDrawerOrderId, setDetailDrawerOrderId] = useState<number | null>(null)
+  const [trackingModal, setTrackingModal] = useState<{
+    tracking: string
+    carrierCode: string | null
+  } | null>(null)
   const [rateBrowserLoading, setRateBrowserLoading] = useState(false)
   const [rateBrowserRates, setRateBrowserRates] = useState<Array<Record<string, unknown>>>([])
   const [rateBrowserCarrierFilter, setRateBrowserCarrierFilter] = useState<number | null>(null)
@@ -1998,15 +2003,32 @@ export default function OrdersView({
           return <span style={{ color: 'var(--text4)', fontFamily: 'monospace', fontSize: 11 }}>—</span>
         }
         return (
-          <span
-            style={{ color: 'var(--ss-blue)', cursor: 'pointer', fontFamily: 'monospace', fontSize: 11 }}
-            onClick={(event) => {
-              event.stopPropagation()
-              copyText(order.label?.trackingNumber ?? '')
-            }}
-            title="Click to copy"
-          >
-            {order.label?.trackingNumber}
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11, fontFamily: 'monospace' }}>
+            <span
+              style={{ color: 'var(--ss-blue)', cursor: 'pointer', textDecoration: 'underline', textDecorationStyle: 'dotted' }}
+              onClick={(event) => {
+                event.stopPropagation()
+                setTrackingModal({
+                  tracking: order.label?.trackingNumber ?? '',
+                  carrierCode: order.label?.carrierCode ?? order.bestRate?.carrierCode ?? null,
+                })
+              }}
+              title="Track package"
+            >
+              {order.label?.trackingNumber}
+            </span>
+            <span
+              onClick={(event) => {
+                event.stopPropagation()
+                copyText(order.label?.trackingNumber ?? '')
+              }}
+              style={{ cursor: 'pointer', color: 'var(--text4)', fontSize: 9, opacity: 0.6 }}
+              title="Copy tracking number"
+              onMouseEnter={(event) => { event.currentTarget.style.opacity = '1' }}
+              onMouseLeave={(event) => { event.currentTarget.style.opacity = '0.6' }}
+            >
+              ⎘
+            </span>
           </span>
         )
       case 'labelcreated':
@@ -3046,6 +3068,13 @@ export default function OrdersView({
       <OrderDetailDrawer
         orderId={detailDrawerOrderId}
         onClose={() => setDetailDrawerOrderId(null)}
+      />
+
+      <TrackingModal
+        open={trackingModal != null}
+        trackingNumber={trackingModal?.tracking ?? null}
+        carrierCode={trackingModal?.carrierCode ?? null}
+        onClose={() => setTrackingModal(null)}
       />
 
       {rateBrowserOpen ? (
