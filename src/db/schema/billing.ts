@@ -26,6 +26,12 @@ export const billingConfig = pgTable('billing_config', {
   packageCostMarkup: numeric({ precision: 5, scale: 2 }).default('0').notNull(),
   shippingMarkupPct: numeric({ precision: 5, scale: 2 }).default('0').notNull(),
   shippingMarkupFlat: numeric({ precision: 10, scale: 2 }).default('0').notNull(),
+  // Monthly storage fee in dollars per cubic-foot of inventory on hand.
+  // v2 computed storage line items from inventory_ledger deltas × cuFtOverride
+  // (or default L×W×H/1728). 0 disables storage billing entirely.
+  storageFeePerCuFt: numeric('storage_fee_per_cu_ft', { precision: 10, scale: 4 })
+    .default('0')
+    .notNull(),
   billingMode: text().default('per_shipment').notNull(),
   active: boolean().default(true).notNull(),
   createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),

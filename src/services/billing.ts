@@ -328,6 +328,67 @@ export async function generateLineItems(input: GenerateInput) {
     }
   }
 
+  // ─── Storage fees (once per client per billing period) ──────────────────────
+  // v2 charged storage per cuft/month on current inventory on hand. v4
+  // approximates: for each client with storageFeePerCuFt > 0, compute
+  // SUM(stock_qty × cuFt_per_unit) × feeRate, emitted as one line item
+  // dated at the period's end.
+  const periodEnd = new Date(input.dateTo);
+  for (const [clientId, cfg] of configByClient.entries()) {
+    const storageRate = toNum(cfg.storageFeePerCuFt ?? 0);
+    if (storageRate <= 0) continue;
+    if (cfg.active === false) continue;
+
+    const invRows = await db.execute<{
+      total_cuft: string | number | null;
+    }>(sql`
+      select
+        coalesce(sum(
+          case
+            when coalesce(cu_ft_override, 0) > 0 then stock_qty * cu_ft_override
+            when length > 0 and width > 0 and height > 0
+              then stock_qty * ((length * width * height) / 1728.0)
+            else 0
+          end
+        ), 0)::numeric(14,4) as total_cuft
+      from inventory
+      where client_id = ${clientId}
+        and active = true
+        and stock_qty > 0
+    `);
+    const totalCuFt = Number(invRows[0]?.total_cuft ?? 0);
+    if (totalCuFt <= 0) continue;
+    const fee = totalCuFt * storageRate;
+    if (fee <= 0) continue;
+
+    try {
+      await db
+        .insert(billingLineItems)
+        .values({
+          clientId,
+          orderId: null,
+          orderNumber: null,
+          shipmentId: null,
+          shipDate: periodEnd,
+          lineType: 'storage',
+          description: `Storage — ${totalCuFt.toFixed(2)} cuft × $${storageRate.toFixed(4)}/cuft`,
+          qty: totalCuFt.toFixed(2),
+          unitCost: storageRate.toFixed(4),
+          totalCost: fee.toFixed(2),
+        })
+        .onConflictDoNothing({
+          target: [
+            billingLineItems.orderId,
+            billingLineItems.lineType,
+            billingLineItems.description,
+          ],
+        });
+      generated += 1;
+    } catch {
+      skipped += 1;
+    }
+  }
+
   return { generated, skipped, message: `Generated ${generated} line items from ${ships.length} shipments.` };
 }
 
@@ -408,6 +469,7 @@ export async function upsertBillingConfig(
     packageCostMarkup: string;
     shippingMarkupPct: string;
     shippingMarkupFlat: string;
+    storageFeePerCuFt: string;
     billingMode: string;
     active: boolean;
   }>

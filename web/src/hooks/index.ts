@@ -38,3 +38,7 @@ export { useShippedOrdersCache } from './useShippedOrdersCache';
 export { useStoreOrders } from './useStoreOrders';
 export { useStores } from './useStores';
 export { useSyncPoller } from './useSyncPoller';
+// useRates was deleted in commit 04f8216 — it was orphan code that hit
+// /api/rates without auth and used v2's outdated payload shape. v4 callers
+// should use apiClient.fetchRates() instead (same endpoint, authed, with
+// the v2↔v4 shape translation baked in).

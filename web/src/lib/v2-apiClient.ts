@@ -516,6 +516,21 @@ export const apiClient = {
     );
   },
 
+  // v2 signature: GET /carriers-for-store?storeId=X — returned store-scoped
+  // carriers. v4 doesn't track per-store carrier assignments (ShipStation now
+  // manages multi-tenant via client credentials, not per-store), so return
+  // the full carrier list as a safe superset. Shape matches v2: {carriers: []}.
+  fetchCarriersForStore(_storeId?: number | null): Promise<{ carriers: any[] }> {
+    return safe(
+      'fetchCarriersForStore',
+      async () => {
+        const carriers = await apiClient.fetchCarrierAccounts();
+        return { carriers };
+      },
+      { carriers: [] }
+    );
+  },
+
   // ─── Column preferences (settings kv store) ─────────────────────────────────
   fetchColumnPrefs(): Promise<any> {
     return safe(
@@ -1219,14 +1234,23 @@ export const apiClient = {
           dailySales.push({ day, units: bucket.get(day) ?? 0 });
         }
 
+        // totalUnits = sum of qty across all orders in the window.
+        // The Inventory SKU drawer renders this as the big "30-Day Units Sold"
+        // number at the top. Without it, the drawer crashes on .toLocaleString().
+        const totalUnits = orders.reduce(
+          (acc: number, o: { qty?: number }) => acc + (o.qty || 0),
+          0
+        );
+
         return {
           sku: res?.sku ?? '',
           name: res?.name ?? '',
           orders,
           dailySales,
+          totalUnits,
         };
       },
-      { orders: [], name: '', sku: '', dailySales: [] }
+      { orders: [], name: '', sku: '', dailySales: [], totalUnits: 0 }
     );
   },
 

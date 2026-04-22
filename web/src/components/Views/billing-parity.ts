@@ -22,9 +22,12 @@ export interface BillingConfigDraft {
   pickPackFee: string
   pickPackMaxUnits: string
   additionalUnitFee: string
+  packageCostMarkup: string
   shippingMarkupPct: string
   shippingMarkupFlat: string
+  storageFeePerCuFt: string
   billingMode: string
+  active: boolean
 }
 
 export type BillingDetailColumnId =
@@ -168,9 +171,12 @@ export function createBillingConfigDraft(config: BillingConfigDto): BillingConfi
     pickPackFee: Number(c.pickPackFee ?? 0).toFixed(2),
     pickPackMaxUnits: String(c.pickPackMaxUnits ?? 1),
     additionalUnitFee: Number(c.additionalUnitFee ?? 0).toFixed(2),
+    packageCostMarkup: Number(c.packageCostMarkup ?? 0).toFixed(1),
     shippingMarkupPct: Number(c.shippingMarkupPct ?? 0).toFixed(1),
     shippingMarkupFlat: Number(c.shippingMarkupFlat ?? 0).toFixed(2),
+    storageFeePerCuFt: Number(c.storageFeePerCuFt ?? 0).toFixed(2),
     billingMode: c.billingMode ?? c.billing_mode ?? 'per_shipment',
+    active: c.active === false ? false : true,
   }
 }
 
@@ -184,10 +190,13 @@ export function buildBillingConfigInput(draft: BillingConfigDraft): UpdateBillin
     pickPackFee: parseNumber(draft.pickPackFee),
     pickPackMaxUnits: Number.isFinite(parsedMax) && parsedMax > 0 ? parsedMax : 1,
     additionalUnitFee: parseNumber(draft.additionalUnitFee),
+    packageCostMarkup: parseNumber(draft.packageCostMarkup),
     shippingMarkupPct: parseNumber(draft.shippingMarkupPct),
     shippingMarkupFlat: parseNumber(draft.shippingMarkupFlat),
+    storageFeePerCuFt: parseNumber(draft.storageFeePerCuFt),
     billingMode: draft.billingMode || 'per_shipment',
-  }
+    active: draft.active !== false,
+  } as UpdateBillingConfigInput
 }
 
 export function buildBillingSummaryTotals(rows: BillingSummaryDto[]): BillingSummaryTotals {

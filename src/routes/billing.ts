@@ -32,6 +32,7 @@ const configBody = z.object({
   packageCostMarkup: z.coerce.number().nonnegative().optional(),
   shippingMarkupPct: z.coerce.number().nonnegative().optional(),
   shippingMarkupFlat: z.coerce.number().nonnegative().optional(),
+  storageFeePerCuFt: z.coerce.number().nonnegative().optional(),
   billingMode: z.enum(['per_shipment', 'monthly']).optional(),
   active: z.boolean().optional(),
 });
@@ -61,6 +62,10 @@ app.put(
       shippingMarkupFlat:
         body.shippingMarkupFlat !== undefined
           ? body.shippingMarkupFlat.toFixed(2)
+          : undefined,
+      storageFeePerCuFt:
+        body.storageFeePerCuFt !== undefined
+          ? body.storageFeePerCuFt.toFixed(4)
           : undefined,
       billingMode: body.billingMode,
       active: body.active,
@@ -239,25 +244,38 @@ app.post('/backfill-ref-rates', zValidator('json', refRatesUpsertBody), async (c
   return c.json({ inserted: rates.length });
 });
 
-// In-process fetch job tracker (placeholder — actual carrier-rate
-// fetcher is a future follow-up; this just reports "no job running"
-// so the legacy UI's poll loop doesn't choke).
-app.post('/fetch-ref-rates', async (c) => {
-  return c.json({
-    job_id: null,
-    status: 'not_implemented',
-    message:
-      'Live RateShopper fetch is not wired yet. Use POST /billing/backfill-ref-rates with a static array for now.',
-  });
-});
+// Live rate-shopper job — walks recent shipments, calls ShipStation for the
+// cheapest rate per carrier at the same weight+zip, stores in billing_ref_rates.
+// Used by the billing UI to compare "what did we pay" vs "what we could've paid".
+app.post(
+  '/fetch-ref-rates',
+  zValidator(
+    'json',
+    z
+      .object({
+        daysBack: z.number().int().positive().max(180).optional(),
+        limit: z.number().int().positive().max(1000).optional(),
+      })
+      .optional()
+  ),
+  async (c) => {
+    const body = c.req.valid('json') ?? {};
+    const { startRefRatesFetch } = await import('../services/ref-rates-fetch');
+    const job = startRefRatesFetch(body);
+    return c.json({ job_id: job.jobId, status: job.status });
+  }
+);
 
 app.get('/fetch-ref-rates/status', async (c) => {
-  const rows = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(billingRefRates);
+  const [{ getActiveRefRatesJob }, rows] = await Promise.all([
+    import('../services/ref-rates-fetch'),
+    db.select({ count: sql<number>`count(*)::int` }).from(billingRefRates),
+  ]);
+  const active = getActiveRefRatesJob();
   return c.json({
-    status: 'idle',
+    status: active?.status ?? 'idle',
     total_ref_rates: rows[0]?.count ?? 0,
+    job: active,
   });
 });
 

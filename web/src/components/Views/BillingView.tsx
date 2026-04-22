@@ -415,18 +415,21 @@ export default function BillingView({ onOpenOrder }: BillingViewProps) {
                   <th style={{ padding: '5px 8px', textAlign: 'left', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Client</th>
                   <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Pick&amp;Pack</th>
                   <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Addl Unit</th>
+                  <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }} title="Markup applied to package cost line items (percent on top of the base package price)">Pkg %</th>
                   <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Ship %</th>
                   <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Ship $</th>
+                  <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }} title="Storage fee in dollars per cubic-foot per month (applied to on-hand inventory)">Storage $/cuft</th>
                   <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }} title="Max units included in the Pick & Pack base fee — orders at or below this count pay only pickPackFee; excess units are billed at additionalUnitFee">Max Units</th>
                   <th style={{ padding: '5px 8px', textAlign: 'center', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Mode</th>
+                  <th style={{ padding: '5px 8px', textAlign: 'center', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }} title="Disable billing for this client (line items won't be generated)">Active</th>
                   <th style={{ padding: '5px 4px', textAlign: 'center', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)' }} />
                 </tr>
               </thead>
               <tbody>
                 {configsLoading ? (
-                  <tr><td colSpan={8} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>Loading…</td></tr>
+                  <tr><td colSpan={11} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>Loading…</td></tr>
                 ) : configs.length === 0 ? (
-                  <tr><td colSpan={8} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No clients found.</td></tr>
+                  <tr><td colSpan={11} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No clients found.</td></tr>
                 ) : configs.map((config) => {
                   const draft = configDrafts[config.clientId]
 
@@ -468,6 +471,21 @@ export default function BillingView({ onOpenOrder }: BillingViewProps) {
                           min="0"
                           className="markup-input-lg"
                           style={{ width: 55, textAlign: 'right', fontSize: 11.5 }}
+                          title="Markup applied to package cost lines (percent)"
+                          value={draft?.packageCostMarkup ?? '0.0'}
+                          onChange={(event) => setConfigDrafts((current) => ({
+                            ...current,
+                            [config.clientId]: { ...current[config.clientId], packageCostMarkup: event.target.value },
+                          }))}
+                        />
+                      </td>
+                      <td style={{ padding: '4px 8px', textAlign: 'right' }}>
+                        <input
+                          type="number"
+                          step="0.1"
+                          min="0"
+                          className="markup-input-lg"
+                          style={{ width: 55, textAlign: 'right', fontSize: 11.5 }}
                           value={draft?.shippingMarkupPct ?? '0.0'}
                           onChange={(event) => setConfigDrafts((current) => ({
                             ...current,
@@ -486,6 +504,21 @@ export default function BillingView({ onOpenOrder }: BillingViewProps) {
                           onChange={(event) => setConfigDrafts((current) => ({
                             ...current,
                             [config.clientId]: { ...current[config.clientId], shippingMarkupFlat: event.target.value },
+                          }))}
+                        />
+                      </td>
+                      <td style={{ padding: '4px 8px', textAlign: 'right' }}>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          className="markup-input-lg"
+                          style={{ width: 60, textAlign: 'right', fontSize: 11.5 }}
+                          title="$/cuft/month storage fee applied to inventory on hand"
+                          value={draft?.storageFeePerCuFt ?? '0.00'}
+                          onChange={(event) => setConfigDrafts((current) => ({
+                            ...current,
+                            [config.clientId]: { ...current[config.clientId], storageFeePerCuFt: event.target.value },
                           }))}
                         />
                       </td>
@@ -517,6 +550,17 @@ export default function BillingView({ onOpenOrder }: BillingViewProps) {
                           <option value="per_shipment">Per Shipment</option>
                           <option value="monthly">Monthly</option>
                         </select>
+                      </td>
+                      <td style={{ padding: '4px 8px', textAlign: 'center' }}>
+                        <input
+                          type="checkbox"
+                          checked={draft?.active !== false}
+                          title="Disable to skip billing-line generation for this client"
+                          onChange={(event) => setConfigDrafts((current) => ({
+                            ...current,
+                            [config.clientId]: { ...current[config.clientId], active: event.target.checked },
+                          }))}
+                        />
                       </td>
                       <td style={{ padding: '4px 4px', textAlign: 'center' }}>
                         <button className="btn btn-outline btn-xs" type="button" onClick={() => void handleSaveConfig(config.clientId)}>Save</button>

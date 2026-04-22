@@ -1,0 +1,1 @@
+ALTER TABLE "billing_config" ADD COLUMN "storage_fee_per_cu_ft" numeric(10, 4) DEFAULT '0' NOT NULL;
