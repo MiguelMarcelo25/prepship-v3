@@ -724,12 +724,22 @@ export const apiClient = {
     return safe(
       'fetchDailyStats',
       async () => {
-        // If sidebar has already discovered hidden clients (via fetchStores/
-        // fetchCounts), pass their IDs so the strip counts exclude them —
-        // matches the orders table + sidebar behavior. Without this the
-        // strip counts test/api-shipments orders that aren't actually shown.
+        // HIDDEN_CLIENT_IDS is populated lazily as a side-effect of
+        // fetchStores/fetchCounts. If the stats strip fires before those, the
+        // set is empty and hidden-client orders inflate the counts. Always
+        // fetch /clients inline here, compute hidden IDs by name, and pass
+        // them — guaranteed correct regardless of call order.
+        const [clientsRes, countsCached] = await Promise.all([
+          api.get<any>('/clients').catch(() => []),
+          Promise.resolve(HIDDEN_CLIENT_IDS), // preserve any already-discovered IDs
+        ]);
+        const clientsArr = Array.isArray(clientsRes) ? clientsRes : [];
+        const hiddenIds = new Set<number>([...countsCached]);
+        for (const c of clientsArr) {
+          if (isHiddenClient(c) && typeof c?.id === 'number') hiddenIds.add(c.id);
+        }
         const excludeClientId =
-          HIDDEN_CLIENT_IDS.size > 0 ? [...HIDDEN_CLIENT_IDS].join(',') : undefined;
+          hiddenIds.size > 0 ? [...hiddenIds].join(',') : undefined;
         const res = await api.get<V4DailyStatsResponse>(
           `/orders/daily-stats${qs({
             dateFrom: query?.dateFrom,
