@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   useMutation,
   useQuery,
@@ -12,6 +13,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { api } from '../lib/api';
+import { apiClient } from '../lib/v2-apiClient';
 import { supabase } from '../lib/supabase';
 import { Button } from './ui/Button';
 
@@ -46,6 +48,8 @@ type JobStatus = {
   label_errors: string[];
 };
 
+type ClientRow = { id: number; name: string };
+
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
 
 async function downloadAuthedPdf(jobId: string, fileName: string) {
@@ -74,12 +78,51 @@ async function downloadAuthedPdf(jobId: string, fileName: string) {
 
 export default function PrintQueueDrawer({ onClose }: { onClose: () => void }) {
   const queryClient = useQueryClient();
+  // Active client is read from the current URL's `?clientId=` — v4's
+  // sidebar navigation puts it there when the user drills into a client's
+  // orders. Without a client in scope, the drawer shows an empty-state
+  // prompt and disables all destructive actions (prevents cross-tenant
+  // queue wipes and accidental fetches that leak queue data between
+  // clients).
+  const [searchParams] = useSearchParams();
+  const rawClientId = searchParams.get('clientId');
+  const clientId = (() => {
+    if (!rawClientId) return null;
+    const n = Number.parseInt(rawClientId, 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  })();
+
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [autoDownloaded, setAutoDownloaded] = useState<string | null>(null);
+  const [mergeHeaders, setMergeHeaders] = useState(true);
+  const [historyVisible, setHistoryVisible] = useState(false);
 
-  const queue = useQuery({
-    queryKey: ['print-queue'],
-    queryFn: () => api.get<QueueResponse>(`/print-queue`),
+  // Reset any in-flight job state when the active client changes — an old
+  // job id from a different client is meaningless here.
+  useEffect(() => {
+    setActiveJobId(null);
+    setAutoDownloaded(null);
+  }, [clientId]);
+
+  // Resolve the client's name from the shared clients cache (same query
+  // key Sidebar populates). No extra fetch if it's already warm.
+  const clients = useQuery({
+    queryKey: ['clients'],
+    queryFn: () => api.get<ClientRow[]>('/clients'),
+    staleTime: 60_000,
+  });
+  const clientName = useMemo(() => {
+    if (clientId == null) return null;
+    return (clients.data ?? []).find((c) => c.id === clientId)?.name ?? null;
+  }, [clients.data, clientId]);
+
+  const queue = useQuery<QueueResponse>({
+    queryKey: ['print-queue', clientId, historyVisible],
+    // apiClient.fetchQueue handles auth + query-string params + safe fallback.
+    queryFn: () =>
+      apiClient.fetchQueue(clientId as number, historyVisible) as Promise<QueueResponse>,
+    // Only run once we know which client's queue to fetch.
+    enabled: clientId !== null,
     refetchInterval: 5_000,
   });
 
@@ -97,33 +140,48 @@ export default function PrintQueueDrawer({ onClose }: { onClose: () => void }) {
   });
 
   const startPrint = useMutation({
-    mutationFn: () =>
-      api.post<{ job_id: string; total: number }>('/print-queue/print', {
-        queue_entry_ids: (queue.data?.queuedOrders ?? []).map(
-          (e) => e.queue_entry_id
-        ),
-      }),
-    onSuccess: (r) => setActiveJobId(r.job_id),
+    mutationFn: async () => {
+      if (clientId == null) throw new Error('No active client');
+      const entryIds = (queue.data?.queuedOrders ?? []).map(
+        (e) => e.queue_entry_id
+      );
+      // apiClient.startQueuePrintJob sends client_id + queue_entry_ids +
+      // merge_headers (snake_case body per v4 Zod schema).
+      return apiClient.startQueuePrintJob(clientId, entryIds, mergeHeaders) as Promise<{
+        job_id: string;
+        total: number;
+      }>;
+    },
+    onSuccess: (r) => {
+      if (r?.job_id) setActiveJobId(r.job_id);
+    },
   });
 
   const removeEntry = useMutation({
-    mutationFn: (id: string) =>
-      fetch(`${API_BASE}/print-queue/${id}`, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      }).then(async (res) => {
-        if (!res.ok) throw new Error((await res.json()).error ?? res.statusText);
-        return res.json();
-      }),
+    mutationFn: (id: string) => {
+      if (clientId == null) return Promise.reject(new Error('No active client'));
+      // Routes via the adapter so the Supabase auth header is attached
+      // (raw fetch here was 401'ing in prod) and client_id-bound deletes
+      // can't accidentally cross tenants.
+      return apiClient.removeFromQueue(id, clientId);
+    },
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ['print-queue'] }),
+      queryClient.invalidateQueries({
+        queryKey: ['print-queue', clientId, historyVisible],
+      }),
   });
 
   const clearAll = useMutation({
-    mutationFn: () => api.post('/print-queue/clear', {}),
+    mutationFn: () => {
+      if (clientId == null) return Promise.reject(new Error('No active client'));
+      // NEVER clear without a clientId — the backend treats the body as
+      // optional and would wipe EVERY client's queue otherwise.
+      return apiClient.clearQueue(clientId);
+    },
     onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ['print-queue'] }),
+      queryClient.invalidateQueries({
+        queryKey: ['print-queue', clientId, historyVisible],
+      }),
   });
 
   useEffect(() => {
@@ -137,13 +195,15 @@ export default function PrintQueueDrawer({ onClose }: { onClose: () => void }) {
   // When job finishes, refresh queue + auto-download the PDF.
   useEffect(() => {
     if (job.data?.status !== 'done' || !activeJobId || !job.data.file_name) return;
-    queryClient.invalidateQueries({ queryKey: ['print-queue'] });
+    queryClient.invalidateQueries({
+      queryKey: ['print-queue', clientId, historyVisible],
+    });
     if (autoDownloaded === activeJobId) return;
     setAutoDownloaded(activeJobId);
     downloadAuthedPdf(activeJobId, job.data.file_name).catch((err) => {
       alert(`Auto-download failed: ${(err as Error).message}`);
     });
-  }, [job.data, activeJobId, autoDownloaded, queryClient]);
+  }, [job.data, activeJobId, autoDownloaded, queryClient, clientId, historyVisible]);
 
   const entries = queue.data?.queuedOrders ?? [];
 
@@ -151,6 +211,11 @@ export default function PrintQueueDrawer({ onClose }: { onClose: () => void }) {
     () => job.data?.status === 'done' && !!activeJobId && !!job.data.file_name,
     [job.data, activeJobId]
   );
+
+  const hasClient = clientId !== null;
+  const jobInFlight =
+    !!activeJobId &&
+    (job.data?.status === 'pending' || job.data?.status === 'running');
 
   return (
     <div className="fixed inset-0 z-50 flex" role="dialog" aria-modal="true">
@@ -165,12 +230,25 @@ export default function PrintQueueDrawer({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="px-3.5 py-2.5 border-b border-line bg-white flex items-center gap-2">
-          <div className="flex-1 text-[12px] text-ink-3">All clients</div>
+          <div className="flex-1 text-[12px] text-ink-2 font-semibold truncate">
+            {hasClient
+              ? clientName ?? `Client #${clientId}`
+              : 'No client selected'}
+          </div>
+          <label className="flex items-center gap-1 text-tiny text-ink-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={historyVisible}
+              onChange={(e) => setHistoryVisible(e.target.checked)}
+              className="accent-brand"
+            />
+            History
+          </label>
           <Button
             variant="ghost"
             size="xs"
             onClick={() => queue.refetch()}
-            disabled={queue.isFetching}
+            disabled={!hasClient || queue.isFetching}
             title="Refresh"
           >
             <RefreshCw
@@ -238,10 +316,19 @@ export default function PrintQueueDrawer({ onClose }: { onClose: () => void }) {
 
         {/* Queue list */}
         <div className="flex-1 min-h-0 overflow-y-auto bg-page">
-          {queue.isLoading && (
+          {!hasClient && (
+            <div className="text-center text-ink-3 py-16 px-4">
+              <div className="text-4xl mb-2">🧭</div>
+              <div className="font-semibold text-ink-2">No client selected</div>
+              <div className="text-tiny mt-1">
+                Pick a client from the sidebar to view or print their queue.
+              </div>
+            </div>
+          )}
+          {hasClient && queue.isLoading && (
             <div className="text-center text-ink-3 py-10">Loading…</div>
           )}
-          {!queue.isLoading && entries.length === 0 && (
+          {hasClient && !queue.isLoading && entries.length === 0 && (
             <div className="text-center text-ink-3 py-16">
               <div className="text-4xl mb-2">🖨️</div>
               <div className="font-semibold text-ink-2">Queue is empty</div>
@@ -273,7 +360,7 @@ export default function PrintQueueDrawer({ onClose }: { onClose: () => void }) {
                 onClick={() => removeEntry.mutate(e.queue_entry_id)}
                 className="text-ink-3 hover:text-danger p-1"
                 title="Remove from queue"
-                disabled={removeEntry.isPending}
+                disabled={removeEntry.isPending || !hasClient}
               >
                 <X size={12} />
               </button>
@@ -282,37 +369,54 @@ export default function PrintQueueDrawer({ onClose }: { onClose: () => void }) {
         </div>
 
         {/* Footer actions */}
-        <div className="px-3.5 py-2.5 border-t border-line bg-white flex items-center gap-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => {
-              if (confirm(`Clear all ${entries.length} queued labels?`)) {
-                clearAll.mutate();
+        <div className="px-3.5 py-2.5 border-t border-line bg-white flex flex-col gap-2">
+          <label className="flex items-center gap-1.5 text-tiny text-ink-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={mergeHeaders}
+              onChange={(e) => setMergeHeaders(e.target.checked)}
+              className="accent-brand"
+              disabled={!hasClient}
+            />
+            Merge header pages into combined PDF
+          </label>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                if (!hasClient) return;
+                if (confirm(`Clear all ${entries.length} queued labels for ${clientName ?? `client #${clientId}`}?`)) {
+                  clearAll.mutate();
+                }
+              }}
+              disabled={!hasClient || !entries.length || clearAll.isPending}
+            >
+              <Trash2 size={11} />
+              Clear
+            </Button>
+            <div className="flex-1 text-tiny text-ink-3">
+              {hasClient ? `${entries.length} queued` : ''}
+            </div>
+            <Button
+              variant="green"
+              size="sm"
+              onClick={() => startPrint.mutate()}
+              disabled={
+                !hasClient ||
+                !entries.length ||
+                startPrint.isPending ||
+                jobInFlight
               }
-            }}
-            disabled={!entries.length || clearAll.isPending}
-          >
-            <Trash2 size={11} />
-            Clear
-          </Button>
-          <div className="flex-1 text-tiny text-ink-3">
-            {entries.length} queued
+            >
+              <Printer size={11} />
+              {startPrint.isPending
+                ? 'Starting…'
+                : hasClient
+                  ? `Print ${entries.length}`
+                  : 'Print'}
+            </Button>
           </div>
-          <Button
-            variant="green"
-            size="sm"
-            onClick={() => startPrint.mutate()}
-            disabled={
-              !entries.length ||
-              startPrint.isPending ||
-              (!!activeJobId &&
-                (job.data?.status === 'pending' || job.data?.status === 'running'))
-            }
-          >
-            <Printer size={11} />
-            {startPrint.isPending ? 'Starting…' : `Print ${entries.length}`}
-          </Button>
         </div>
       </aside>
     </div>

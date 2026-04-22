@@ -125,6 +125,98 @@ function notImpl<T>(methodName: string, fallback: T): Promise<T> {
   return Promise.resolve(fallback);
 }
 
+// ── Rate payload / response translation ──────────────────────────────────────
+// Accepts either v4 shape or legacy v2 shape and normalizes to what v4's
+// POST /rates Zod schema expects. Used by fetchRates — do NOT call directly
+// from components; go through apiClient.fetchRates so callers can keep using
+// the v2 input convention if they prefer.
+function translateRatePayloadToV4(
+  input: Record<string, unknown>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+
+  // weight: v4 expects a flat `weightOz` (number); v2 sends `weight.{value,units}`.
+  if (typeof input.weightOz === 'number') {
+    out.weightOz = input.weightOz;
+  } else {
+    const weight = input.weight as
+      | { value?: unknown; units?: unknown }
+      | undefined;
+    if (weight && typeof weight.value === 'number') {
+      const units =
+        typeof weight.units === 'string' ? weight.units.toLowerCase() : 'ounces';
+      out.weightOz = units === 'pounds' ? weight.value * 16 : weight.value;
+    }
+  }
+
+  // destination zip: v2 uses `toPostalCode`, v4 uses `toZip`.
+  if (typeof input.toZip === 'string' && input.toZip.length >= 3) {
+    out.toZip = input.toZip;
+  } else if (typeof input.toPostalCode === 'string') {
+    out.toZip = input.toPostalCode;
+  }
+
+  // string passthroughs (names match across v2/v4).
+  for (const k of ['toCountry', 'toState', 'toCity', 'toAddress', 'toName'] as const) {
+    const v = input[k];
+    if (typeof v === 'string' && v.length > 0) out[k] = v;
+  }
+
+  if (typeof input.residential === 'boolean') out.residential = input.residential;
+  if (typeof input.forceRefresh === 'boolean') out.forceRefresh = input.forceRefresh;
+  if (Array.isArray(input.carrierIds)) out.carrierIds = input.carrierIds;
+
+  // dims: v4 uses flat dimsL/W/H; v2 wraps them under `dimensions`.
+  const dims = input.dimensions as
+    | { length?: unknown; width?: unknown; height?: unknown }
+    | undefined;
+  const flatL = typeof input.dimsL === 'number' ? input.dimsL : undefined;
+  const flatW = typeof input.dimsW === 'number' ? input.dimsW : undefined;
+  const flatH = typeof input.dimsH === 'number' ? input.dimsH : undefined;
+  const wrappedL =
+    dims && typeof dims.length === 'number' ? dims.length : undefined;
+  const wrappedW =
+    dims && typeof dims.width === 'number' ? dims.width : undefined;
+  const wrappedH =
+    dims && typeof dims.height === 'number' ? dims.height : undefined;
+  const L = flatL ?? wrappedL;
+  const W = flatW ?? wrappedW;
+  const H = flatH ?? wrappedH;
+  // v4 Zod requires dims to be strictly positive — omit zero/negative.
+  if (typeof L === 'number' && L > 0) out.dimsL = L;
+  if (typeof W === 'number' && W > 0) out.dimsW = W;
+  if (typeof H === 'number' && H > 0) out.dimsH = H;
+
+  return out;
+}
+
+// Maps v4's ShipStation-v2-passthrough rate object to the v2-legacy shape
+// the bulk-ported components read. Defensive: if a caller already hands us
+// v2-shape data (has `amount` + `carrierCode`), return it unchanged.
+function translateRateToV2Shape(r: unknown): Record<string, unknown> {
+  if (r && typeof r === 'object') {
+    const obj = r as Record<string, unknown>;
+    if ('amount' in obj && 'carrierCode' in obj) return obj;
+    const shipping = obj.shipping_amount as { amount?: unknown } | undefined;
+    const other = obj.other_amount as { amount?: unknown } | undefined;
+    const shipmentCost =
+      typeof shipping?.amount === 'number' ? shipping.amount : 0;
+    const otherCost = typeof other?.amount === 'number' ? other.amount : 0;
+    return {
+      carrierCode: obj.carrier_code ?? null,
+      serviceCode: obj.service_code ?? null,
+      serviceName: obj.service_type ?? null,
+      carrierNickname: obj.carrier_nickname ?? null,
+      shippingProviderId: obj.carrier_id ?? null,
+      amount: shipmentCost + otherCost,
+      shipmentCost,
+      otherCost,
+      raw: obj,
+    };
+  }
+  return { raw: r };
+}
+
 async function fetchBlob(
   methodName: string,
   path: string,
