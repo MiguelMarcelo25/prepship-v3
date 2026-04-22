@@ -176,19 +176,10 @@ app.get(
   }
 );
 
-// Rolling 48-hour window ending at the current Pacific Time noon. Used for
-// the stats strip's "Total Orders" count. Wider than v2's shift window so
-// low-activity accounts don't see 0 during quiet shifts, narrower than
-// "all time" so the strip reflects recent activity.
-function computeRolling48hWindow(now = new Date()): { from: Date; to: Date } {
-  const to = now;
-  const from = new Date(now.getTime() - 48 * 60 * 60 * 1000);
-  return { from, to };
-}
-
-// v2 shift-based window (Pacific Time). Kept for reference; no longer used
-// by /daily-stats. Noon→noon weekday, expanded across weekends.
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
+// v2-parity PT shift window — noon→noon on weekdays, expanded across
+// weekends so Sat/Sun shifts still show Fri's orders. Mirrors
+// sqlite-order-repository.getDailyStats in v2. Used by /daily-stats to
+// populate the stats strip on the Awaiting Shipment / Shipped pages.
 function computeShiftWindow(now = new Date()): { from: Date; to: Date } {
   // Read current PT calendar date + time using Intl.DateTimeFormat. We can't
   // rely on server TZ because Render runs UTC.
@@ -274,18 +265,24 @@ function computeShiftWindow(now = new Date()): { from: Date; to: Date } {
   return { from: windowStart, to: windowEnd };
 }
 
+// v2-parity label — "Apr 21, 12pm PT" (comma, lowercase am/pm, no space).
+// v2 formatted from a server-local Date; we format through Intl so the value
+// reads correctly on a UTC Render host.
 function formatPtLabel(d: Date): string {
-  return (
-    d
-      .toLocaleString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        hour: 'numeric',
-        hour12: true,
-        timeZone: 'America/Los_Angeles',
-      })
-      .replace(',', '') + ' PT'
-  );
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    hour12: false,
+  }).formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
+  const month = get('month');
+  const day = get('day');
+  const hour24 = Number(get('hour'));
+  const hour12 = hour24 % 12 || 12;
+  const suffix = hour24 >= 12 ? 'pm' : 'am';
+  return `${month} ${day}, ${hour12}${suffix} PT`;
 }
 
 // Daily stats — hybrid window: 48h activity + all-time awaiting backlog.
@@ -305,9 +302,13 @@ app.get(
   ),
   async (c) => {
     const q = c.req.valid('query');
-    const rolling = computeRolling48hWindow();
-    const fromDate = q.dateFrom ? new Date(q.dateFrom) : rolling.from;
-    const toDate = q.dateTo ? new Date(q.dateTo) : rolling.to;
+    // v2 parity: use the PT shift-based window (noon→noon weekday, expanded
+    // across weekends) instead of a rolling 48h window. This makes v4's
+    // stats strip show the same "32 Total / 5 Need to Ship" numbers v2 shows
+    // rather than ~2x inflated counts from a wider window.
+    const shift = computeShiftWindow();
+    const fromDate = q.dateFrom ? new Date(q.dateFrom) : shift.from;
+    const toDate = q.dateTo ? new Date(q.dateTo) : shift.to;
     const fromIso = fromDate.toISOString();
     const toIso = toDate.toISOString();
 
@@ -361,11 +362,15 @@ app.get(
         and order_date <= ${toIso}::timestamptz
         ${excludeFilter}
     `);
-    // needToShip: ALL awaiting_shipment orders (the real work queue, not windowed).
+    // v2 parity: needToShip is WINDOWED — it matches totalOrders minus
+    // shipped/cancelled inside the same shift window, not the all-time
+    // awaiting backlog. That's the number v2's "5 Need to Ship" reflects.
     const backlogRows = await db.execute<{ need_to_ship: number }>(sql`
       select count(*)::int as need_to_ship
       from orders
       where order_status = 'awaiting_shipment'
+        and order_date >= ${fromIso}::timestamptz
+        and order_date <= ${toIso}::timestamptz
         ${excludeFilter}
     `);
     const upcomingRows = await db.execute<{ upcoming_orders: number }>(sql`
