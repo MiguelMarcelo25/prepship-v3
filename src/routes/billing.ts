@@ -483,21 +483,138 @@ const refRatesUpsertBody = z.object({
     .max(1000),
 });
 
-app.post('/backfill-ref-rates', zValidator('json', refRatesUpsertBody), async (c) => {
-  const { rates } = c.req.valid('json');
-  await db.insert(billingRefRates).values(
-    rates.map((r) => ({
-      weightOz: r.weightOz,
-      zipTo: r.zipTo.toUpperCase(),
-      carrier: r.carrier,
-      service: r.service ?? null,
-      cost: r.cost.toFixed(2),
-      source: r.source ?? 'manual',
-      fetchedAt: new Date(),
-    }))
-  );
-  return c.json({ inserted: rates.length });
+// Unified backfill endpoint — accepts two shapes:
+//
+//   A) { rates: [{weightOz, zipTo, carrier, ...}] }  → manual CSV upload
+//      Inserts those rates directly into billing_ref_rates.
+//
+//   B) { from, to, clientId? }                       → cache-driven backfill
+//      Walks orders in the range missing ref_usps_rate / ref_ups_rate,
+//      looks them up in billing_ref_rates by (weight, zip5), and saves
+//      the cheapest USPS + UPS rates onto order_overrides. Returns the
+//      {ok, filled, missing, total, message?} shape the BillingView
+//      expects (mirrors v2's backfillReferenceRates).
+app.post('/backfill-ref-rates', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+
+  // Shape A: explicit rates array
+  if (Array.isArray(body?.rates) && body.rates.length) {
+    const parsed = refRatesUpsertBody.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ ok: false, error: parsed.error.flatten() }, 400);
+    }
+    await db.insert(billingRefRates).values(
+      parsed.data.rates.map((r) => ({
+        weightOz: r.weightOz,
+        zipTo: r.zipTo.toUpperCase(),
+        carrier: r.carrier,
+        service: r.service ?? null,
+        cost: r.cost.toFixed(2),
+        source: r.source ?? 'manual',
+        fetchedAt: new Date(),
+      }))
+    );
+    return c.json({ ok: true, inserted: parsed.data.rates.length });
+  }
+
+  // Shape B: range-driven cache backfill
+  const from = typeof body?.from === 'string' ? body.from : null;
+  const to = typeof body?.to === 'string' ? body.to : null;
+  const clientId =
+    typeof body?.clientId === 'number' && body.clientId > 0
+      ? body.clientId
+      : null;
+
+  const orders_missing = await db.execute<{
+    order_id: number;
+    weight_oz: number | null;
+    zip5: string | null;
+  }>(sql`
+    select o.id as order_id, o.weight_oz as weight_oz,
+           substring(regexp_replace(coalesce(o.ship_to_postal_code, ''), '\\D', '', 'g') from 1 for 5) as zip5
+    from orders o
+    left join order_overrides ov on ov.order_id = o.id
+    where (ov.ref_usps_rate is null or ov.ref_ups_rate is null)
+      and o.weight_oz is not null
+      and o.ship_to_postal_code is not null
+      ${from ? sql`and o.order_date >= ${from}::timestamptz` : sql``}
+      ${to ? sql`and o.order_date <= ${to}::timestamptz` : sql``}
+      ${clientId ? sql`and o.client_id = ${clientId}` : sql``}
+    limit 5000
+  `);
+
+  if (orders_missing.length === 0) {
+    return c.json({
+      ok: true,
+      filled: 0,
+      missing: 0,
+      total: 0,
+      message: 'All orders already have reference rates',
+    });
+  }
+
+  let filled = 0;
+  let missing = 0;
+
+  for (const row of orders_missing) {
+    const weightOz = Math.round(Number(row.weight_oz ?? 1));
+    const zip5 = row.zip5 ?? '';
+    if (!zip5 || zip5.length !== 5) {
+      missing += 1;
+      continue;
+    }
+
+    const cached = await db.execute<{
+      carrier: string;
+      cost: string;
+    }>(sql`
+      select carrier, cost from billing_ref_rates
+      where weight_oz = ${weightOz} and zip_to = ${zip5}
+      order by fetched_at desc
+      limit 20
+    `);
+
+    if (!cached.length) {
+      missing += 1;
+      continue;
+    }
+
+    let bestUsps: number | null = null;
+    let bestUps: number | null = null;
+    for (const r of cached) {
+      const cost = Number(r.cost);
+      const carrier = (r.carrier || '').toLowerCase();
+      if (carrier.includes('usps') || carrier.includes('stamps')) {
+        if (bestUsps === null || cost < bestUsps) bestUsps = cost;
+      } else if (carrier.includes('ups')) {
+        if (bestUps === null || cost < bestUps) bestUps = cost;
+      }
+    }
+
+    if (bestUsps === null && bestUps === null) {
+      missing += 1;
+      continue;
+    }
+
+    await db.execute(sql`
+      insert into order_overrides (order_id, ref_usps_rate, ref_ups_rate, updated_at)
+      values (${row.order_id}, ${bestUsps?.toFixed(2) ?? null}, ${bestUps?.toFixed(2) ?? null}, now())
+      on conflict (order_id) do update set
+        ref_usps_rate = coalesce(order_overrides.ref_usps_rate, excluded.ref_usps_rate),
+        ref_ups_rate = coalesce(order_overrides.ref_ups_rate, excluded.ref_ups_rate),
+        updated_at = now()
+    `);
+    filled += 1;
+  }
+
+  return c.json({
+    ok: true,
+    filled,
+    missing,
+    total: orders_missing.length,
+  });
 });
+
 
 // Live rate-shopper job — walks recent shipments, calls ShipStation for the
 // cheapest rate per carrier at the same weight+zip, stores in billing_ref_rates.
