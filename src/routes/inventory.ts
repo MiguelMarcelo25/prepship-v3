@@ -399,6 +399,17 @@ app.post('/import-from-orders', async (c) => {
       .limit(1);
 
     if (existing) {
+      // Back-fill image/name on rows that already exist but are missing
+      // these enrichments. Older rows were created before order-items
+      // started carrying imageUrl, or the first pass pulled an order
+      // where the item had no thumb. Only update NULL/empty columns —
+      // don't clobber data a user may have set manually.
+      if (r.image_url || r.name) {
+        const patch: Record<string, unknown> = { updatedAt: new Date() };
+        if (r.image_url) patch.imageUrl = sql`coalesce(${inventory.imageUrl}, ${r.image_url})`;
+        if (r.name) patch.name = sql`coalesce(nullif(${inventory.name}, ''), ${r.name})`;
+        await db.update(inventory).set(patch).where(eq(inventory.id, existing.id));
+      }
       skipped += 1;
       continue;
     }
@@ -414,7 +425,7 @@ app.post('/import-from-orders', async (c) => {
   return c.json({
     inserted,
     skipped,
-    message: `Imported ${inserted} new SKUs from orders (${skipped} already existed)`,
+    message: `Imported ${inserted} new SKUs from orders (${skipped} existed — images/names back-filled where missing)`,
   });
 });
 
