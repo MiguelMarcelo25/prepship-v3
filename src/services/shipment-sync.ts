@@ -214,8 +214,10 @@ async function upsertShipmentsBatch(pageShipments: SSShipment[]): Promise<{
   }
 
   // 4b. Parallel UPDATEs (no single-statement way to update N rows with
-  // different values; use limited concurrency to avoid pooler saturation)
-  const updateConcurrency = 8;
+  // different values; use limited concurrency to avoid pooler saturation).
+  // Supabase's default pgbouncer pool tops out at 15 shared connections —
+  // 3-at-a-time leaves headroom for other API traffic + the 3-min scheduler.
+  const updateConcurrency = 3;
   let updated = 0;
   for (let i = 0; i < toUpdate.length; i += updateConcurrency) {
     const batch = toUpdate.slice(i, i + updateConcurrency);
