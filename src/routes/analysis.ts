@@ -4,6 +4,21 @@ import { z } from 'zod';
 import { sql } from 'drizzle-orm';
 import { db } from '../db/client';
 
+// v2-parity: exact list from apps/api/src/common/prepship-config.ts.
+// v4 previously used a broad regex `(priority|express|overnight|expedited|...)`
+// which over-matched `usps_priority_mail` as expedited. v2 treats USPS priority
+// as standard; only priority_mail_express is expedited. The regex was inflating
+// AnalysisView "expedited" counts for every USPS priority shipment.
+const EXPEDITED_SERVICES = [
+  'ups_2nd_day_air', 'ups_2nd_day_air_am',
+  'ups_next_day_air', 'ups_next_day_air_saver', 'ups_next_day_air_early_am',
+  'ups_3_day_select',
+  'usps_priority_mail_express',
+  'fedex_2day', 'fedex_2day_am',
+  'fedex_express_saver',
+  'fedex_priority_overnight', 'fedex_standard_overnight', 'fedex_first_overnight',
+] as const;
+
 const app = new Hono();
 
 app.get('/overview', async (c) => {
@@ -211,7 +226,7 @@ app.get('/sku-breakdown', zValidator('query', skuBreakdownQuery), async (c) => {
     classified as (
       select *,
         case
-          when lower(coalesce(service_code, '')) ~ '(priority|express|overnight|expedited|next_day|2day|2_day)'
+          when lower(coalesce(service_code, '')) = ANY(${sql`ARRAY[${sql.join(EXPEDITED_SERVICES.map((s) => sql`${s}`), sql`, `)}]::text[]`})
             then 'exp'
           else 'std'
         end as ship_class
@@ -331,7 +346,7 @@ app.get('/skus', zValidator('query', skuBreakdownQuery), async (c) => {
     classified as (
       select *,
         case
-          when lower(coalesce(service_code, '')) ~ '(priority|express|overnight|expedited|next_day|2day|2_day)'
+          when lower(coalesce(service_code, '')) = ANY(${sql`ARRAY[${sql.join(EXPEDITED_SERVICES.map((s) => sql`${s}`), sql`, `)}]::text[]`})
             then 'exp' else 'std'
         end as ship_class
       from sku_orders

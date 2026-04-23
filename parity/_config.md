@@ -70,6 +70,7 @@ Generated: 2026-04-23
       v2: apps/api/src/modules/init/api/init-routes.ts:L16
       v4: —
       Fix needed: Add `POST /init/cache/refresh-carriers` handler in `src/routes/init.ts` that resets the in-process carrier cache in `src/services/rates.ts` (set module-level `cachedCarrierIds = null; carriersFetchedAt = 0;` via an exported `resetCarrierCache()` helper) and re-invokes `ssRequest<CarriersResponse>('/v2/carriers', { dedupeKey: 'carriers:list' })` so the next rate call sees fresh carrier IDs. Return `{ ok: true, count: <carriers.length> }`.
+      Classification: INTENTIONALLY_CHANGED — v4 has 15-min TTL auto-refresh in `src/services/rates.ts`; explicit refresh endpoint unnecessary.
 
 - [x] `POST /clients` — POST /api/clients — **[MATCH]**
       v2: apps/api/src/modules/clients/api/client-routes.ts:L20
@@ -245,6 +246,7 @@ Generated: 2026-04-23
       v2: apps/react/src/api/client.ts:L888
       v4: —
       Fix needed: Add `browseRates(data): Promise<{ rates: unknown[] }>` to the `apiClient` object in `web/src/lib/v2-apiClient.ts` that calls `api.post<{ rates: unknown[] }>('/rates/browse', data)` wrapped in `safe(...)` with `{ rates: [] }` fallback. Backend route already exists at `src/routes/rates.ts:L45` (POST /rates/browse). Current RateBrowserModal inlines its own `browseRates()` function at `web/src/components/RateBrowserModal.tsx:L430` — exposing the apiClient method enables reuse from other views.
+      Classification: FIX_NEEDED — backend exists (`POST /rates/browse`); only the v2-shim wrapper is missing. [priority: LOW]
 
 - [x] `apiclient:buildheaders` — apiClient.buildHeaders() — **[MATCH]**
       v2: apps/react/src/api/client.ts:L151
@@ -425,6 +427,7 @@ Generated: 2026-04-23
       v2: apps/react/src/api/client.ts:L282
       v4: —
       Fix needed: Add `fetchOrderDetail(orderId: number): Promise<any>` to the `apiClient` object in `web/src/lib/v2-apiClient.ts` that calls `api.get<any>(\`/orders/${orderId}\`)` wrapped in `safe(...)` with `null` fallback. Backend route already exists at `src/routes/orders.ts:L440` (GET /orders/:id — returns the single order row without hydration). v4 currently only exposes `fetchOrderFull` (GET /orders/:id/full — hydrated); some v2 callers only need the plain row.
+      Classification: FIX_NEEDED — backend `GET /orders/:id` exists; only the wrapper method is missing. [priority: LOW]
 
 - [x] `apiclient:fetchorderdims` — apiClient.fetchOrderDims() — **[MATCH]**
       v2: apps/react/src/api/client.ts:L1000
@@ -674,31 +677,36 @@ Generated: 2026-04-23
       v2: apps/api/src/common/prepship-config.ts:L26
       v4: web/src/utils/markups.ts:L41
       Fix needed: v4 regex is `/flat[\s-]?rate|\bbox\b/i` but v2 is `/flat[\s-]?rate|flat rate|\bbox\b/i` — v4 drops the explicit `flat rate` alternation. Functionally equivalent (the `flat[\s-]?rate` branch already matches "flat rate") but not a literal match. Either update v4 to include the redundant `flat rate` alternation for verbatim parity, or mark as INTENTIONALLY_CHANGED in Phase E. Also, v4's copy is client-only — backend rate filtering at `src/services/rates.ts:L84` uses a whitelist (ALLOWED_CODES) instead of this blocked-name regex.
+      Classification: INTENTIONALLY_CHANGED — v4 regex `/flat[\s-]?rate|\bbox\b/i` matches a superset of v2's `/flat[\s-]?rate|flat rate|\bbox\b/i` (the "flat rate" alternation is redundant under `\s-?`).
 
 - [x] `const:blocked_package_types` — export const BLOCKED_PACKAGE_TYPES — **[MATCH]**
       v2: apps/api/src/common/prepship-config.ts:L16
       v4: web/src/utils/markups.ts:L22
       Note: identical set (8 entries: flat_rate_envelope/legal/padded, small/medium/large flat_rate_box, regional_rate_box_a/b). Moved client-side — applied via `isBlockedRate` during pickBestRate.
 
-- [ ] `const:blocked_service_codes` — export const BLOCKED_SERVICE_CODES — **[MISSING]**
+- [x] `const:blocked_service_codes` — export const BLOCKED_SERVICE_CODES — **[MATCH]**
       v2: apps/api/src/common/prepship-config.ts:L7
-      v4: web/src/utils/markups.ts:L13
-      Fix needed: v4 set is missing `ups_surepost_less_than_1_lb` (v2 has both `ups_surepost_1_lb_or_greater` AND `ups_surepost_less_than_1_lb`; v4 only has the ≥1lb variant). Add `'ups_surepost_less_than_1_lb'` to the `BLOCKED_SERVICE_CODES` Set in `web/src/utils/markups.ts` so UPS SurePost lightweight rates stop leaking into best-rate selection for billing parity.
+      v4: src/services/rates.ts (+ web/src/utils/markups.ts:L13)
+      Note: Batch 1 port — BLOCKED_SERVICE_CODES + BLOCKED_PACKAGE_TYPES + BLOCKED_NAME_RE + MEDIA_MAIL_ALLOWED_STORES + isBlockedRate() added to src/services/rates.ts; filter applied in fetchLiveRates() for both rates and invalid_rates arrays. Frontend markups.ts set updated to include `ups_surepost_less_than_1_lb` for full parity.
+      Classification: MATCH — Batch 1 (commit TBD)
 
 - [ ] `const:carrier_accounts_v2` — export const CARRIER_ACCOUNTS_V2 — **[MISSING]**
       v2: apps/api/src/common/prepship-config.ts:L39
       v4: —
       Fix needed: v4 intentionally has no hardcoded carrier-account catalog — `src/routes/init.ts:L106 /carrier-accounts` and `:L138 /carriers` fetch live data from ShipStation `/v2/carriers`. This is arguably a better design (no drift). HOWEVER v2 code paths that depend on per-account metadata (e.g. `clientId:10` binding ORION/GG6381/FedEx to client 10, nicknames like "ORION"/"ROCEL C81F70") have no v4 equivalent — billing clientId→account mapping is lost. Decide Phase E whether to (a) seed these 20 accounts into the DB/settings table, (b) port CARRIER_ACCOUNTS_V2 as a fallback constant used only when ShipStation omits clientId/nickname, or (c) mark INTENTIONALLY_CHANGED if the business-to-account association is now handled elsewhere (e.g. via clients.rateSourceClientId).
+      Classification: FIX_NEEDED — without the hardcoded map, per-client ShipStation account attribution is lost for billing; clientId=10's multiple UPS accounts collapse into a single row. [priority: HIGH]
 
 - [ ] `const:excluded_store_ids` — export const EXCLUDED_STORE_IDS — **[MISSING]**
       v2: apps/api/src/common/prepship-config.ts:L4
       v4: —
       Fix needed: v4 has no equivalent of EXCLUDED_STORE_IDS = [376720, 272465, 309763, 376827]. In v2 these stores were suppressed from orders sync + sidebar counts. v4 instead hides clients by `is_test` flag or by name `'api shipments'` (see `src/routes/init.ts:L57-L61` counts exclusion and `web/src/lib/v2-apiClient.ts:L47-L56` HIDDEN_CLIENT_NAMES). Check whether the 4 specific store IDs (376720, 272465, 309763, 376827) map to the test/api-shipments clients in the current v4 DB — if so, no action. If not, either (a) port EXCLUDED_STORE_IDS into `src/services/order-sync.ts` to skip matching storeIds during ShipStation sync, or (b) flag the owning clients as `is_test=true` in a migration so they naturally get filtered.
+      Classification: UNCERTAIN — stores 376720/272465/309763/376827 may already be suppressed via `is_test` client flag; needs production DB check to confirm.
 
-- [ ] `const:expedited_services` — export const EXPEDITED_SERVICES — **[MISSING]**
+- [x] `const:expedited_services` — export const EXPEDITED_SERVICES — **[MATCH]**
       v2: apps/api/src/common/prepship-config.ts:L29
-      v4: src/routes/analysis.ts:L214
-      Fix needed: v4 inlines the expedited-detection logic as a Postgres regex at `src/routes/analysis.ts:L214` and `:L334`: `lower(service_code) ~ '(priority|express|overnight|expedited|next_day|2day|2_day)'`. The regex matches broader-than-v2 categories (any `priority` service including `usps_priority_mail`, which v2 does NOT classify as expedited — v2 limits to `usps_priority_mail_express`). This skews AnalysisView "expeditedShipCount/expeditedShipTotal" counts higher in v4. Replace the regex with an explicit IN-list matching v2's 13 codes (ups_2nd_day_air, ups_2nd_day_air_am, ups_next_day_air, ups_next_day_air_saver, ups_next_day_air_early_am, ups_3_day_select, usps_priority_mail_express, fedex_2day, fedex_2day_am, fedex_express_saver, fedex_priority_overnight, fedex_standard_overnight, fedex_first_overnight), or extract a shared `EXPEDITED_SERVICES` Set into `src/lib/` and use it consistently in both analysis queries.
+      v4: src/routes/analysis.ts (top-of-file tuple + both sku-breakdown queries)
+      Note: Batch 1 port — replaced the broad Postgres regex `(priority|express|overnight|expedited|next_day|2day|2_day)` at both query sites with `= ANY(ARRAY[...]::text[])` keyed off an EXPEDITED_SERVICES tuple matching v2's exact 13-service list. Fixes `usps_priority_mail` being mis-classified as expedited.
+      Classification: MATCH — Batch 1 (commit TBD)
 
 - [x] `const:media_mail_allowed_stores` — export const MEDIA_MAIL_ALLOWED_STORES — **[MATCH]**
       v2: apps/api/src/common/prepship-config.ts:L27
@@ -709,6 +717,7 @@ Generated: 2026-04-23
       v2: apps/api/src/common/prepship-config.ts:L6
       v4: —
       Fix needed: v4 has no `SS_BASELINE_CARRIER_CODES = new Set(['stamps_com', 'ups_walleted'])` constant. v2 uses it to identify the ShipStation-provided baseline carrier accounts (vs. client-owned accounts) — relevant for rate-source fallback and billing "cost" (baseline) vs "charge" (client account) semantics. v4's rate allowlist at `src/services/rates.ts:L84` includes `stamps_com` in ALLOWED_CODES but doesn't distinguish baseline from client accounts. Add `export const SS_BASELINE_CARRIER_CODES = new Set(['stamps_com', 'ups_walleted'])` in a shared module (e.g. `src/lib/carrier-config.ts`) and consume in billing/rate-backfill to flag baseline-sourced rates.
+      Classification: FIX_NEEDED — v4 can't distinguish baseline-provided carriers (`stamps_com`, `ups_walleted`) from client-owned accounts for billing cost vs charge accounting. [priority: MED]
 
 
 ### CSS Classes

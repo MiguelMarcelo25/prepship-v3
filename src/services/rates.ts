@@ -39,6 +39,57 @@ async function loadCarrierMarkups(): Promise<Map<string, Markup>> {
   return m;
 }
 
+// ── v2-parity rate filters ────────────────────────────────────────────────
+// Ported from v2's apps/api/src/common/prepship-config.ts. v4 previously had
+// NO rate filtering — all blocked service codes / flat-rate package types
+// leaked into best-rate selection, which could silently undercharge vs v2
+// (e.g. UPS SurePost lightweight <1lb rates selectable where v2 blocks them).
+
+export const BLOCKED_SERVICE_CODES = new Set<string>([
+  'usps_media_mail',
+  'usps_first_class_mail',
+  'usps_library_mail',
+  'usps_parcel_select',
+  'usps_parcel_select_lightweight',
+  'ups_surepost_1_lb_or_greater',
+  'ups_surepost_less_than_1_lb',
+]);
+
+export const BLOCKED_PACKAGE_TYPES = new Set<string>([
+  'flat_rate_envelope',
+  'flat_rate_legal_envelope',
+  'flat_rate_padded_envelope',
+  'small_flat_rate_box',
+  'medium_flat_rate_box',
+  'large_flat_rate_box',
+  'regional_rate_box_a',
+  'regional_rate_box_b',
+]);
+
+export const BLOCKED_NAME_RE = /flat[\s-]?rate|flat rate|\bbox\b/i;
+export const MEDIA_MAIL_ALLOWED_STORES = new Set<number>([376759]);
+
+// v4 Rate uses snake_case + `service_type` as the display name equivalent of
+// v2's `serviceName` (there's no separate serviceName field on the ShipStation
+// v2-API rate payload — service_type IS the human label).
+export function isBlockedRate(
+  rate: Pick<Rate, 'service_code' | 'package_type' | 'service_type'>,
+  storeId: number | null = null,
+): boolean {
+  if (
+    rate.service_code === 'usps_media_mail' &&
+    storeId != null &&
+    MEDIA_MAIL_ALLOWED_STORES.has(storeId)
+  ) {
+    return false;
+  }
+  return (
+    BLOCKED_SERVICE_CODES.has(rate.service_code ?? '') ||
+    BLOCKED_PACKAGE_TYPES.has(rate.package_type ?? '') ||
+    BLOCKED_NAME_RE.test(rate.service_type ?? '')
+  );
+}
+
 function applyMarkups(rates: Rate[], markups: Map<string, Markup>): Rate[] {
   if (!markups.size) return rates;
   return rates.map((r) => {
@@ -194,13 +245,19 @@ export async function fetchLiveRates(input: RateInput): Promise<Rate[]> {
     },
   });
 
-  const rates = res.rate_response.rates ?? [];
+  // v2-parity: drop blocked service codes / package types / names before
+  // returning. Without this, UPS SurePost lightweight and flat-rate envelopes
+  // slip into best-rate picks. storeId isn't carried on RateInput yet — pass
+  // null; the media-mail per-store allowlist can wire a storeId through later.
+  const rates = (res.rate_response.rates ?? []).filter((r) => !isBlockedRate(r));
   if (rates.length) return rates;
 
   // Fall back to invalid_rates. ShipStation flags rates "invalid" for many
   // soft reasons (address warnings, delivery-window extensions, generic
   // non-fatal notes). The rate amount is still usable for estimation.
-  const invalid = res.rate_response.invalid_rates ?? [];
+  const invalid = (res.rate_response.invalid_rates ?? []).filter(
+    (r) => !isBlockedRate(r),
+  );
   if (invalid.length) {
     if (invalid[0]?.error_messages?.length) {
       console.warn(

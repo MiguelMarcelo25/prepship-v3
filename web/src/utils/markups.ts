@@ -17,6 +17,7 @@ export const BLOCKED_SERVICE_CODES = new Set([
   'usps_parcel_select',
   'usps_parcel_select_lightweight',
   'ups_surepost_1_lb_or_greater',
+  'ups_surepost_less_than_1_lb',
 ]);
 
 export const BLOCKED_PACKAGE_TYPES = new Set([
