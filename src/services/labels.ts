@@ -336,26 +336,18 @@ function getRefundEstimate(carrierCode: string | null): string {
   return '2-7 days';
 }
 
+// v2-parity: credential resolution now lives in src/lib/shipstation/credentials.ts
+// and includes the rate_source_client_id fallback from v2 (which the previous
+// inline helper ignored — keyed clients with a rate-source fallback would
+// silently fail).
+import { loadClientCredentials as loadClientCredentialsImpl } from '../lib/shipstation/credentials';
+
 async function loadClientCredentials(clientId: number | null | undefined): Promise<{
   apiKeyV2: string | null;
   apiKey: string | null;
   apiSecret: string | null;
 }> {
-  if (!clientId) return { apiKeyV2: null, apiKey: null, apiSecret: null };
-  const [row] = await db
-    .select({
-      apiKeyV2: clients.ssApiKeyV2,
-      apiKey: clients.ssApiKey,
-      apiSecret: clients.ssApiSecret,
-    })
-    .from(clients)
-    .where(eq(clients.id, clientId))
-    .limit(1);
-  return {
-    apiKeyV2: row?.apiKeyV2 ?? null,
-    apiKey: row?.apiKey ?? null,
-    apiSecret: row?.apiSecret ?? null,
-  };
+  return loadClientCredentialsImpl(clientId);
 }
 
 // ── Legacy helpers kept for any internal callers ──────────────────────────────
@@ -875,46 +867,48 @@ export type BatchResultItem = {
   error?: string;
 };
 
-export async function createLabelBatch(
-  orderIds: number[],
-  serviceCode: string
-): Promise<{
-  created: BatchResultItem[];
-  failed: BatchResultItem[];
-  summary: { total: number; created: number; failed: number };
-}> {
-  const created: BatchResultItem[] = [];
-  const failed: BatchResultItem[] = [];
-  const concurrency = 5;
-  for (let i = 0; i < orderIds.length; i += concurrency) {
-    const chunk = orderIds.slice(i, i + concurrency);
-    await Promise.all(
-      chunk.map(async (orderId) => {
-        try {
-          const shipment = await createLabelFromOrderId({ orderId, serviceCode });
-          created.push({
-            orderId,
-            success: true,
-            shipmentId: shipment.id,
-            trackingNumber: shipment.trackingNumber,
-            cost: shipment.labelCost,
-          });
-        } catch (err) {
-          failed.push({ orderId, success: false, error: (err as Error).message });
-        }
-      })
-    );
-  }
-  return {
-    created,
-    failed,
-    summary: { total: orderIds.length, created: created.length, failed: failed.length },
-  };
-}
+// export async function createLabelBatch(
+//   orderIds: number[],
+//   serviceCode: string
+// ): Promise<{
+//   created: BatchResultItem[];
+//   failed: BatchResultItem[];
+//   summary: { total: number; created: number; failed: number };
+// }> {
+//   const created: BatchResultItem[] = [];
+//   const failed: BatchResultItem[] = [];
+//   const concurrency = 5;
+//   for (let i = 0; i < orderIds.length; i += concurrency) {
+//     const chunk = orderIds.slice(i, i + concurrency);
+//     await Promise.all(
+//       chunk.map(async (orderId) => {
+//         try {
+//           const shipment = await createLabelFromOrderId({ orderId, serviceCode });
+//           created.push({
+//             orderId,
+//             success: true,
+//             shipmentId: shipment.id,
+//             trackingNumber: shipment.trackingNumber,
+//             cost: shipment.labelCost,
+//           });
+//         } catch (err) {
+//           failed.push({ orderId, success: false, error: (err as Error).message });
+//         }
+//       })
+//     );
+//   }
+//   return {
+//     created,
+//     failed,
+//     summary: { total: orderIds.length, created: created.length, failed: failed.length },
+//   };
+// }
 
 // Persist a VOID/TEST shipment for an is_test client — reused by both the
 // single-order (createLabelV2) and batch (createLabelFromOrderId) paths so
 // every entry point into label creation is safe for sandbox orders.
+
+
 async function createMockShipmentForOrder(args: {
   order: typeof orders.$inferSelect;
   clientId: number | null;
@@ -1121,9 +1115,9 @@ export async function voidLabelV2(shipmentId: number): Promise<VoidLabelResponse
 }
 
 // Kept for backwards compatibility with earlier callers.
-export async function voidLabel(shipmentId: number) {
-  return voidLabelV2(shipmentId);
-}
+// export async function voidLabel(shipmentId: number) {
+//   return voidLabelV2(shipmentId);
+// }
 
 export async function createReturnLabelV2(
   shipmentId: number,

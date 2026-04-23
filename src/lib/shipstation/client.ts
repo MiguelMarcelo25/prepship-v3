@@ -25,7 +25,15 @@ type RequestOpts = {
   apiKey?: string;
   dedupeKey?: string;
   maxRetries?: number;
+  // v2-parity: caller can pass its own AbortSignal (e.g. request lifecycle
+  // cancellation). We compose it with a 90s timeout signal so the fetch
+  // never hangs indefinitely even when the caller didn't set one.
+  signal?: AbortSignal;
+  timeoutMs?: number;
 };
+
+// v2-parity: default request timeout matches apps/api/src/common/shipstation/client.ts:304-308.
+const DEFAULT_TIMEOUT_MS = 90_000;
 
 export async function ssRequest<T>(path: string, opts: RequestOpts = {}): Promise<T> {
   const key = opts.apiKey ?? env.SHIPSTATION_API_KEY_V2;
@@ -40,6 +48,10 @@ export async function ssRequest<T>(path: string, opts: RequestOpts = {}): Promis
       while (true) {
         attempt += 1;
         await bucket.acquire();
+        const timeoutSignal = AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+        const signal = opts.signal
+          ? AbortSignal.any([opts.signal, timeoutSignal])
+          : timeoutSignal;
         const res = await fetch(`${BASE_URL}${path}`, {
           method: opts.method ?? 'GET',
           headers: {
@@ -47,6 +59,7 @@ export async function ssRequest<T>(path: string, opts: RequestOpts = {}): Promis
             'Content-Type': 'application/json',
           },
           body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+          signal,
         });
 
         if (res.status === 429) {
@@ -57,6 +70,23 @@ export async function ssRequest<T>(path: string, opts: RequestOpts = {}): Promis
           const backoffMs = retryAfter
             ? retryAfter * 1000
             : Math.min(10_000, 2 ** attempt * 250);
+          await new Promise((r) => setTimeout(r, backoffMs));
+          continue;
+        }
+
+        // v2-parity: retry 5xx with exponential backoff (1s, 2s, 4s) before
+        // giving up. Matches apps/api/src/common/shipstation/client.ts:300-346.
+        if (res.status >= 500 && res.status <= 599) {
+          if (attempt >= maxRetries) {
+            let body: unknown = null;
+            try { body = await res.json(); } catch { body = await res.text(); }
+            throw new ShipStationError(
+              res.status,
+              `ShipStation ${res.status} after ${attempt} retries`,
+              body
+            );
+          }
+          const backoffMs = Math.min(4_000, 2 ** attempt * 1000);
           await new Promise((r) => setTimeout(r, backoffMs));
           continue;
         }

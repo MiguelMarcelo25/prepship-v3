@@ -17,7 +17,12 @@ type Opts = {
   apiSecret?: string;
   dedupeKey?: string;
   maxRetries?: number;
+  signal?: AbortSignal;
+  timeoutMs?: number;
 };
+
+// v2-parity: default request timeout (90s) matches the V2 client.
+const DEFAULT_TIMEOUT_MS = 90_000;
 
 function basicAuth(key: string, secret: string) {
   return 'Basic ' + Buffer.from(`${key}:${secret}`).toString('base64');
@@ -39,6 +44,10 @@ export async function ssV1Request<T>(path: string, opts: Opts = {}): Promise<T> 
       while (true) {
         attempt += 1;
         await bucket.acquire();
+        const timeoutSignal = AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+        const signal = opts.signal
+          ? AbortSignal.any([opts.signal, timeoutSignal])
+          : timeoutSignal;
         const res = await fetch(`${V1_BASE}${path}`, {
           method: opts.method ?? 'GET',
           headers: {
@@ -46,6 +55,7 @@ export async function ssV1Request<T>(path: string, opts: Opts = {}): Promise<T> 
             'Content-Type': 'application/json',
           },
           body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
+          signal,
         });
 
         if (res.status === 429) {
@@ -56,6 +66,22 @@ export async function ssV1Request<T>(path: string, opts: Opts = {}): Promise<T> 
           const backoffMs = retryAfter
             ? retryAfter * 1000
             : Math.min(30_000, 2 ** attempt * 1000);
+          await new Promise((r) => setTimeout(r, backoffMs));
+          continue;
+        }
+
+        // v2-parity: retry 5xx with exponential backoff before giving up.
+        if (res.status >= 500 && res.status <= 599) {
+          if (attempt >= maxRetries) {
+            let body: unknown = null;
+            try { body = await res.json(); } catch { body = await res.text(); }
+            throw new ShipStationError(
+              res.status,
+              `ShipStation v1 ${res.status} after ${attempt} retries`,
+              body
+            );
+          }
+          const backoffMs = Math.min(4_000, 2 ** attempt * 1000);
           await new Promise((r) => setTimeout(r, backoffMs));
           continue;
         }
