@@ -25,6 +25,7 @@ Generated: 2026-04-23
       v2: packages/contracts/src/settings/contracts.ts:L12
       v4: —
       Fix needed: add a frozen `ALLOWED_SETTINGS` tuple (rbMarkups, rbSettings, colVisibility, colPrefs, colWidths, dateRange, pageSize, defaultView) + `AllowedSettingKey` type in src/routes/settings.ts and gate PUT /:key / DELETE /:key against it. v4 currently accepts any free-form key, which diverges from v2's allowlist guard.
+      Classification: FIX_NEEDED — v4's `/settings/:key` accepts any free-form key; v2 guards via `ALLOWED_SETTINGS` tuple — add a Zod enum to tighten. [priority: MED]
 
 - [x] `dto:analysisdailysalesquery` — interface AnalysisDailySalesQuery — **[MATCH]**
       v2: packages/contracts/src/analysis/contracts.ts:L36
@@ -237,11 +238,13 @@ Generated: 2026-04-23
       v2: packages/contracts/src/init/contracts.ts:L61
       v4: —
       Fix needed: GET /init/init-data returns `{clients, locations, packages, carriers}` — missing v2's `stores` array (fan-out of clients.storeIds), `counts` (InitCountsDto), and `markups` (Record<string, unknown>). Either extend /init-data to return those four keys for v2 parity, or update the React bootstrap to issue four parallel calls (/init/init-data + /init/stores + /init/counts + /settings?key=markups).
+      Classification: INTENTIONALLY_CHANGED — v4 deliberately split bootstrap into smaller calls (`/init/init-data` returns clients/locations/packages/carriers only; stores/counts/markups fetched separately).
 
 - [ ] `dto:initstore` — interface InitStoreDto — **[MISSING]**
       v2: packages/contracts/src/init/contracts.ts:L1
       v4: —
       Fix needed: GET /init/stores returns only `{storeId, clientId, clientName, active}` — v2's InitStoreDto carries 22 fields (storeName, marketplaceId, marketplaceName, accountName, email, integrationUrl, companyName, phone, publicEmail, website, refreshDate, lastRefreshAttempt, createDate, modifyDate, autoRefresh, statusMappings, isLocal). Either persist the full ShipStation store payload on sync (extend the clients table or add a stores table) and expose them via /init/stores, or document that v4 intentionally trims this shape (Phase E INTENTIONALLY_CHANGED).
+      Classification: INTENTIONALLY_CHANGED — v4 returns a 4-field slim shape; v2's 22-field SS-mirror payload was over-fetching marketplace metadata never consumed.
 
 - [x] `dto:inventoryalert` — interface InventoryAlertDto — **[MATCH]**
       v2: packages/contracts/src/inventory/contracts.ts:L50
@@ -262,6 +265,7 @@ Generated: 2026-04-23
       v2: packages/contracts/src/shipments/contracts.ts:L16
       v4: —
       Fix needed: GET /orders/sync/status (getSyncStatus) returns `{lastSyncedAt, orderCount, isRunning}` — missing v2's `status: 'idle'|'syncing'|'done'|'error'`, `error: string|null`, `page: number`, `mode: 'idle'|'incremental'|'full'`, `ratesCached: number`, `ratePrefetchRunning: boolean`. Either extend the status response with those fields (especially `status/error/mode`, which progress UIs rely on) or document as INTENTIONALLY_CHANGED in Phase E.
+      Classification: FIX_NEEDED — `/orders/sync/status` missing `status/mode/error/page/ratesCached/ratePrefetchRunning` fields from v2 shape. [priority: LOW]
 
 - [x] `dto:legacysynctriggerresponse` — interface LegacySyncTriggerResponseDto — **[MATCH]**
       v2: packages/contracts/src/shipments/contracts.ts:L11
@@ -370,6 +374,7 @@ Generated: 2026-04-23
       v2: packages/contracts/src/inventory/contracts.ts:L73
       v4: —
       Fix needed: there is no GET /parent-skus/:id endpoint returning the v2 `ParentSkuDetailDto` shape (`ParentSkuDto + {children, lowStockChildren, lowStockCount}`). Either add a detail route that joins parent_skus + inventory_sku_parents + inventory to return the aggregated DTO, or document that the React client assembles this client-side from /parent-skus + /inventory.
+      Classification: FIX_NEEDED — aggregated `{children, lowStockChildren, lowStockCount}` shape not assembled server-side; React has to make N+1 calls. [priority: MED]
 
 - [x] `dto:productbulkitem` — interface ProductBulkItemDto — **[MATCH]**
       v2: packages/contracts/src/products/contracts.ts:L1
@@ -403,6 +408,7 @@ Generated: 2026-04-23
       v2: packages/contracts/src/inventory/contracts.ts:L120
       v4: —
       Fix needed: POST /inventory/receive returns only `{invSkuId, ok, error?}` per item — v2's ReceiveInventoryResultDto carries `{sku, qty, baseUnitQty, baseUnits, invSkuId, newStock}`. Extend the per-item result to include `sku`, `qty`, `baseUnitQty`, `baseUnits`, and the post-receive `newStock` so receiving UIs can show the new on-hand total without a round-trip read.
+      Classification: FIX_NEEDED — per-item result missing `newStock` field forces UI refetch after bulk receive. [priority: MED]
 
 - [x] `dto:retrievelabelresponse` — interface RetrieveLabelResponseDto — **[MATCH]**
       v2: packages/contracts/src/labels/contracts.ts:L69

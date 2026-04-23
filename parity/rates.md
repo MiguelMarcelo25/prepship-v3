@@ -18,6 +18,7 @@ Generated: 2026-04-23
       v2: apps/api/src/modules/rates/api/rates-routes.ts:L33
       v4: —
       Fix needed: Add `GET /api/carriers-for-store?storeId=…` backend route that returns `{ carriers: [] }` — today only a frontend compat shim (web/src/lib/v2-apiClient.ts:555) exists and it delegates to `/init/carrier-accounts`, returning the full carrier list rather than store-scoped carriers.
+      Classification: FIX_NEEDED — frontend shim delegates to `/init/carrier-accounts` losing per-store scoping; if no caller depends on scoping this could be reclassified INTENTIONALLY_CHANGED. [priority: LOW]
 
 - [x] `GET /rates/cached` — GET /api/rates/cached — **[MATCH]**
       v2: apps/api/src/modules/rates/api/rates-routes.ts:L42
@@ -39,6 +40,7 @@ Generated: 2026-04-23
       v2: apps/api/src/modules/rates/api/rates-routes.ts:L77
       v4: —
       Fix needed: Add a no-op `POST /rates/prefetch` route in `src/routes/rates.ts` returning `{ queued: false, message: "Prefetch disabled - rates are cached on demand" }` to preserve v2 contract for any external callers (v2 handler: rates-handler.ts:L43 `handlePrefetchDisabled`).
+      Classification: INTENTIONALLY_CHANGED — v2's handler was already `handlePrefetchDisabled` returning `{queued:false}`; no-op endpoint, safe to omit.
 
 
 ### Frontend Hooks
@@ -47,6 +49,7 @@ Generated: 2026-04-23
       v2: apps/react/src/hooks/useRates.ts:L39
       v4: —
       Fix needed: Hook was intentionally deleted in commit 04f8216 (see note at web/src/hooks/index.ts:L41) — callers now use `apiClient.fetchRates()`. If any consumer still imports `useRates`, re-add a thin wrapper at `web/src/hooks/useRates.ts` that delegates to `apiClient.fetchRates()` and exposes the `{ rates, loading, error, fetchRates, clearRates }` shape.
+      Classification: INTENTIONALLY_CHANGED — commit 04f8216 intentionally deleted the hook and migrated callers to `apiClient.fetchRates()`.
 
 
 ---

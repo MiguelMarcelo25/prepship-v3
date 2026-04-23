@@ -110,26 +110,31 @@ Generated: 2026-04-23
       v2: apps/api/src/modules/orders/application/order-rate-dto.ts:L119
       v4: —
       Fix needed: port assertPersistedOrderBestRateDto() from v2 (apps/api/src/modules/orders/application/order-rate-dto.ts) into a new src/services/order-rate-dto.ts; invoke from the POST /orders/:id/best-rate and PATCH /orders/:id handlers in src/routes/orders.ts (which currently accept `z.unknown()` and persist raw JSON without guaranteeing carrierCode/serviceCode are present). v4 may have intentionally dropped this strict validation — needs Phase E review.
+      Classification: FIX_NEEDED — runtime guard that persisted rates have `carrierCode`/`serviceCode` is absent; label-creation + billing depend on these fields being present. [priority: MED]
 
 - [ ] `service:normalizeorderbestratedto` — normalizeOrderBestRateDto(...) — **[MISSING]**
       v2: apps/api/src/modules/orders/application/order-rate-dto.ts:L95
       v4: —
       Fix needed: port normalizeOrderBestRateDto() from v2 (apps/api/src/modules/orders/application/order-rate-dto.ts) into src/services/order-rate-dto.ts; call from src/services/rates-backfill.ts (runBackfill picks a `best` rate and writes it raw) and from POST /orders/:id/best-rate in src/routes/orders.ts so stored bestRateJson has canonical keys (shipmentCost, otherCost, carrierNickname, zone, etc.) rather than raw ShipStation snake_case fields. v4 may have intentionally dropped this normalization layer — needs Phase E review.
+      Classification: FIX_NEEDED — v4 skips field canonicalization, so `bestRateJson` carries mixed camelCase/snake_case shapes that downstream billing backfill + CSV export must defensively handle. [priority: MED]
 
 - [ ] `service:normalizeorderselectedratedto` — normalizeOrderSelectedRateDto(...) — **[MISSING]**
       v2: apps/api/src/modules/orders/application/order-rate-dto.ts:L133
       v4: —
       Fix needed: port normalizeOrderSelectedRateDto() from v2 (apps/api/src/modules/orders/application/order-rate-dto.ts) into src/services/order-rate-dto.ts; call from src/services/labels.ts where `selectedRateJson` is assembled before insert into shipments (labels.ts:544 currently hand-builds the object with only providerAccountId/shippingProviderId). v4 may have intentionally dropped this normalization layer — needs Phase E review.
+      Classification: FIX_NEEDED — same reasoning as normalizeorderbestratedto for user-selected rates. [priority: MED]
 
 - [ ] `service:parseorderratejson` — parseOrderRateJson(...) — **[MISSING]**
       v2: apps/api/src/modules/orders/application/order-rate-dto.ts:L85
       v4: —
       Fix needed: port parseOrderRateJson() from v2 (apps/api/src/modules/orders/application/order-rate-dto.ts) into src/services/order-rate-dto.ts. Less critical in v4 because `bestRateJson`/`selectedRateJson` are stored as Postgres `jsonb` (auto-parsed) rather than TEXT as in v2's SQLite, so a JSON.parse wrapper is rarely needed — may be dropped by design. Needs Phase E review.
+      Classification: INTENTIONALLY_CHANGED — v4 stores rate JSON in `jsonb` columns (auto-parsed on read); wrapper obsolete.
 
 - [ ] `service:resolvecarriernickname` — resolveCarrierNickname(...) — **[MISSING]**
       v2: apps/api/src/modules/orders/application/carrier-resolver.ts:L31
       v4: —
       Fix needed: port resolveCarrierNickname() from v2 (apps/api/src/modules/orders/application/carrier-resolver.ts) into a new src/services/carrier-resolver.ts along with the CARRIER_ACCOUNTS_V2 config table (currently only lives in v2's packages/common/prepship-config.ts). v4 currently reads `carrier_nickname` straight from the ShipStation API response via src/routes/init.ts:L147 and inlines fallback logic in web/src/components/RateBrowserModal.tsx — it does not decode UPS 1Z tracking account codes or map providerAccountId → nickname server-side, so orders with providerAccountId but no upstream nickname render inconsistently. v4 may have intentionally delegated this to the upstream API — needs Phase E review.
+      Classification: FIX_NEEDED — coupled with CARRIER_ACCOUNTS_V2 constant; required for clientId→carrier-account billing attribution (e.g. clientId=10's ORION/ROCEL/GG6381 UPS accounts become indistinguishable in invoices). [priority: HIGH]
 
 
 ### DB Schema
