@@ -13,7 +13,7 @@
 | Area | v2 surface | v4 surface | Parity | Notes |
 |---|---|---|---|---|
 | Backend routes | ~80 endpoints across 14 modules | ~95 endpoints across 20 modules | ~75% | Most CRUD present; several v2 endpoints not yet ported |
-| Database schema | ~18 tables (SQLite) | ~16 tables (Postgres/Drizzle) | ~95% | v4 uses `orderOverrides` instead of `order_local`; minor column gaps |
+| Database schema | ~18 tables (SQLite) | 21 tables (Postgres/Drizzle) | **100%** | Round 4: added inventory_sku_parents, return_labels, mock_labels, product_defaults, sync_meta (migration 0014). v4 is now a superset of v2. |
 | Worker/cron | 1 job skeleton | Sync-scheduler + cron routes | 100%+ | v4 is actually ahead — in-process scheduler already running |
 | Frontend views | 9 Views + 12 hooks + 4 contexts | ~14 pages + ~14 hooks + 4 contexts | ~70% | Bulk-copied OrdersView/InventoryView work but several features partial |
 | apiClient methods | ~120 methods | ~120 methods (compat shim) | ~90% | Shim `web/src/lib/v2-apiClient.ts` covers most; 6 still `notImpl()`, several "semantic mismatch" |

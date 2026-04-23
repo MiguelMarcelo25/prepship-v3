@@ -4,6 +4,8 @@ import { z } from 'zod';
 import { and, desc, eq, ilike, isNull, lte, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { inventory, inventoryLedger } from '../db/schema/inventory';
+import { inventorySkuParents } from '../db/schema/inventory-sku-parents';
+import { parentSkus } from '../db/schema/parent-skus';
 import { offsetOf, paginated, paginationSchema } from '../lib/pagination';
 import { applyMovement, inventoryStats } from '../services/inventory';
 import { ssV1Request } from '../lib/shipstation/v1-client';
@@ -280,13 +282,120 @@ app.put(
   async (c) => {
     const id = Number(c.req.param('id'));
     const { parentSkuId } = c.req.valid('json');
-    const [row] = await db
-      .update(inventory)
-      .set({ parentSkuId, updatedAt: new Date() })
+    // Dual-write: update inventory.parentSkuId FK (primary parent — back-compat)
+    // AND upsert inventory_sku_parents join (v2-parity multi-parent table).
+    // When parentSkuId is null, clear both: null out the FK and delete the
+    // primary row from the join.
+    const result = await db.transaction(async (tx) => {
+      const [row] = await tx
+        .update(inventory)
+        .set({ parentSkuId, updatedAt: new Date() })
+        .where(eq(inventory.id, id))
+        .returning();
+      if (!row) return null;
+
+      // Clear any existing primary row for this inventory id so the unique
+      // partial index doesn't fight us on a re-parent.
+      await tx
+        .delete(inventorySkuParents)
+        .where(
+          and(
+            eq(inventorySkuParents.inventoryId, id),
+            eq(inventorySkuParents.isPrimary, true)
+          )
+        );
+
+      if (parentSkuId !== null) {
+        await tx
+          .insert(inventorySkuParents)
+          .values({ inventoryId: id, parentSkuId, isPrimary: true })
+          .onConflictDoUpdate({
+            target: [inventorySkuParents.inventoryId, inventorySkuParents.parentSkuId],
+            set: { isPrimary: true },
+          });
+      }
+      return row;
+    });
+    if (!result) return c.json({ error: 'Inventory item not found' }, 404);
+    return c.json(result);
+  }
+);
+
+// v2-parity: list all parent SKUs a given inventory row belongs to (may be
+// many, since an inventory item can belong to multiple bundles). Uses the
+// join table + left-joins parent_skus for display fields.
+app.get('/:id{[0-9]+}/parents', async (c) => {
+  const id = Number(c.req.param('id'));
+  const rows = await db
+    .select({
+      parentSkuId: inventorySkuParents.parentSkuId,
+      isPrimary: inventorySkuParents.isPrimary,
+      createdAt: inventorySkuParents.createdAt,
+      name: parentSkus.name,
+      sku: parentSkus.sku,
+      baseUnitQty: parentSkus.baseUnitQty,
+    })
+    .from(inventorySkuParents)
+    .innerJoin(parentSkus, eq(parentSkus.id, inventorySkuParents.parentSkuId))
+    .where(eq(inventorySkuParents.inventoryId, id))
+    .orderBy(desc(inventorySkuParents.isPrimary), parentSkus.name);
+  return c.json({ data: rows });
+});
+
+// Add a non-primary parent (idempotent). For primary parent use /set-parent.
+app.post(
+  '/:id{[0-9]+}/add-parent',
+  zValidator(
+    'json',
+    z.object({ parentSkuId: z.number().int().positive() })
+  ),
+  async (c) => {
+    const id = Number(c.req.param('id'));
+    const { parentSkuId } = c.req.valid('json');
+    const [inv] = await db
+      .select({ id: inventory.id })
+      .from(inventory)
       .where(eq(inventory.id, id))
-      .returning();
-    if (!row) return c.json({ error: 'Inventory item not found' }, 404);
-    return c.json(row);
+      .limit(1);
+    if (!inv) return c.json({ error: 'Inventory item not found' }, 404);
+
+    await db
+      .insert(inventorySkuParents)
+      .values({ inventoryId: id, parentSkuId, isPrimary: false })
+      .onConflictDoNothing({
+        target: [inventorySkuParents.inventoryId, inventorySkuParents.parentSkuId],
+      });
+    return c.json({ data: { inventoryId: id, parentSkuId, isPrimary: false } });
+  }
+);
+
+// Remove a parent from the join. If it was the primary parent, also null
+// out inventory.parentSkuId so the two representations stay consistent.
+app.delete(
+  '/:id{[0-9]+}/parents/:parentSkuId{[0-9]+}',
+  async (c) => {
+    const id = Number(c.req.param('id'));
+    const parentSkuId = Number(c.req.param('parentSkuId'));
+    const result = await db.transaction(async (tx) => {
+      const [removed] = await tx
+        .delete(inventorySkuParents)
+        .where(
+          and(
+            eq(inventorySkuParents.inventoryId, id),
+            eq(inventorySkuParents.parentSkuId, parentSkuId)
+          )
+        )
+        .returning();
+      if (removed?.isPrimary) {
+        await tx
+          .update(inventory)
+          .set({ parentSkuId: null, updatedAt: new Date() })
+          .where(eq(inventory.id, id));
+      }
+      return removed;
+    });
+    if (!result) return c.json({ error: 'Parent link not found' }, 404);
+    return c.json({ deleted: true, wasPrimary: result.isPrimary });
   }
 );
 

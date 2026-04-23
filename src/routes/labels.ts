@@ -8,6 +8,7 @@ import {
   createLabelV2,
   createReturnLabelV2,
   getMockLabel,
+  getMockLabelAsync,
   lookupLabel,
   retrieveLabelV2,
   voidLabelV2,
@@ -170,7 +171,8 @@ app.get('/mock/:shipmentId', async (c) => {
     return c.json({ error: 'Not found' }, 404);
   }
   const shipmentId = Number(param);
-  const data = getMockLabel(shipmentId);
+  // Try the hot in-memory cache first; fall back to DB so mocks survive restarts.
+  const data = getMockLabel(shipmentId) ?? await getMockLabelAsync(shipmentId);
   if (!data) {
     return c.text('Mock label not found (server may have restarted)', 404, {
       'content-type': 'text/plain',

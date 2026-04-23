@@ -129,6 +129,39 @@ app.post('/save-defaults', zValidator('json', saveDefaultsBody), async (c) => {
       },
     })
     .returning();
+
+  // v2-parity: also mirror into the dedicated product_defaults table so v2
+  // integrations reading that table see the same data. Canonical store is
+  // still `products` — the mirror is best-effort.
+  try {
+    const { productDefaults } = await import('../db/schema/product-defaults');
+    const toStr = (n: number | null | undefined) =>
+      n == null ? null : String(n);
+    await db
+      .insert(productDefaults)
+      .values({
+        sku: v.sku,
+        weightOz: toStr(v.weightOz),
+        length: toStr(v.length),
+        width: toStr(v.width),
+        height: toStr(v.height),
+        defaultPackageCode: v.defaultPackageCode ?? null,
+      })
+      .onConflictDoUpdate({
+        target: productDefaults.sku,
+        set: {
+          weightOz: toStr(v.weightOz),
+          length: toStr(v.length),
+          width: toStr(v.width),
+          height: toStr(v.height),
+          defaultPackageCode: v.defaultPackageCode ?? null,
+          updatedAt: new Date(),
+        },
+      });
+  } catch (err) {
+    console.warn('[products] product_defaults mirror failed:', err);
+  }
+
   return c.json(row);
 });
 
