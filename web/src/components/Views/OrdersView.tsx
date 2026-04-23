@@ -904,9 +904,23 @@ export default function OrdersView({
 
     let cancelled = false
 
+    // Forward the picker's date range so the stats strip follows the user's
+    // "Last 30 Days" / custom selection. Backend accepts strict ISO 8601 via
+    // z.string().datetime() — convert YYYY-MM-DD (dateRange format) to full
+    // ISO timestamps (start-of-day UTC for `from`, end-of-day for `to`).
+    // When dateRange is empty (no explicit filter), pass undefined so the
+    // server falls back to its noon-to-noon PT shift window — the v2-parity
+    // default behavior.
+    const toIsoStart = (d?: string) => (d ? `${d}T00:00:00.000Z` : undefined)
+    const toIsoEnd = (d?: string) => (d ? `${d}T23:59:59.999Z` : undefined)
+    const query = {
+      dateFrom: toIsoStart(dateRange.start),
+      dateTo: toIsoEnd(dateRange.end),
+    }
+
     const loadDailyStats = async () => {
       try {
-        const payload = await apiClient.fetchDailyStats()
+        const payload = await apiClient.fetchDailyStats(query)
         if (!cancelled) setDailyStats(payload)
       } catch {
         if (!cancelled) setDailyStats(null)
@@ -922,7 +936,7 @@ export default function OrdersView({
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [currentStatus])
+  }, [currentStatus, dateRange.start, dateRange.end])
 
   useEffect(() => {
     if (refreshVersion === 0) return
