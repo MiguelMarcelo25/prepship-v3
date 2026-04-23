@@ -1,6 +1,7 @@
 // @ts-nocheck
-import { useContext, useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react'
+import { useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { apiClient } from '../../api/client'
+import { api, qs } from '../../lib/api'
 import { ToastContext } from '../../contexts/ToastContext'
 import type {
   PackageDto,
@@ -8,7 +9,6 @@ import type {
   PackageMutationResult,
 } from '../../types/api'
 import {
-  buildLowStockBannerText,
   buildPackageAdjustInput,
   buildPackageReceiveInput,
   buildPackageSaveInput,
@@ -191,6 +191,14 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
   const [adjustModal, setAdjustModal] = useState<AdjustModalState | null>(null)
   const [billingDefaultModal, setBillingDefaultModal] = useState<BillingDefaultModalState | null>(null)
   const [modalSaving, setModalSaving] = useState(false)
+  const [bannerDismissed, setBannerDismissed] = useState(false)
+  const [highlightedPackageId, setHighlightedPackageId] = useState<number | null>(null)
+  const [dimsOpen, setDimsOpen] = useState(false)
+  const [dimsForm, setDimsForm] = useState<{ length: string; width: string; height: string }>({ length: '', width: '', height: '' })
+  const [dimsSearching, setDimsSearching] = useState(false)
+  const [dimsResult, setDimsResult] = useState<{ kind: 'match'; pkg: PackageDto } | { kind: 'nomatch' } | null>(null)
+  const [dimsAutoCreating, setDimsAutoCreating] = useState(false)
+  const rowRefs = useRef<Record<number, HTMLTableRowElement | null>>({})
 
   useEffect(() => {
     let cancelled = false
@@ -467,6 +475,83 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
     }
   }
 
+  const scrollToPackageRow = (packageId: number) => {
+    setHighlightedPackageId(packageId)
+    const row = rowRefs.current[packageId]
+    if (row && typeof row.scrollIntoView === 'function') {
+      row.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+    window.setTimeout(() => {
+      setHighlightedPackageId((current) => (current === packageId ? null : current))
+    }, 2200)
+  }
+
+  const handleDimsSearch = async () => {
+    if (dimsSearching) return
+    const length = Number.parseFloat(dimsForm.length)
+    const width = Number.parseFloat(dimsForm.width)
+    const height = Number.parseFloat(dimsForm.height)
+    if (!Number.isFinite(length) || !Number.isFinite(width) || !Number.isFinite(height) || length <= 0 || width <= 0 || height <= 0) {
+      showToast('⚠ Enter valid length, width, and height', 'error')
+      return
+    }
+
+    setDimsSearching(true)
+    setDimsResult(null)
+
+    try {
+      const res = await api.get<any>(`/packages/find-by-dims${qs({ length, width, height })}`)
+      const match: PackageDto | null = res?.package ?? res?.data ?? (res?.packageId ? res : null)
+      if (match && (match.packageId || match.id)) {
+        setDimsResult({ kind: 'match', pkg: match })
+        const pid = Number(match.packageId ?? match.id)
+        if (Number.isFinite(pid)) scrollToPackageRow(pid)
+      } else {
+        setDimsResult({ kind: 'nomatch' })
+      }
+    } catch (searchError) {
+      // 404 from the backend is the standard "no match" shape — treat as nomatch.
+      const message = searchError instanceof Error ? searchError.message : ''
+      if (/404|not found/i.test(message)) {
+        setDimsResult({ kind: 'nomatch' })
+      } else {
+        showToast(`❌ ${message || 'Find-by-dims failed'}`, 'error')
+      }
+    } finally {
+      setDimsSearching(false)
+    }
+  }
+
+  const handleDimsAutoCreate = async () => {
+    if (dimsAutoCreating) return
+    const length = Number.parseFloat(dimsForm.length)
+    const width = Number.parseFloat(dimsForm.width)
+    const height = Number.parseFloat(dimsForm.height)
+    if (!Number.isFinite(length) || !Number.isFinite(width) || !Number.isFinite(height)) {
+      showToast('⚠ Enter valid dimensions', 'error')
+      return
+    }
+
+    setDimsAutoCreating(true)
+    try {
+      const res = await api.post<any>('/packages/auto-create', { length, width, height })
+      const created: PackageDto | null = res?.package ?? res?.data ?? (res?.packageId ? res : null)
+      showToast('✅ Custom package created')
+      await refreshPackages()
+      if (created && (created.packageId || created.id)) {
+        const pid = Number(created.packageId ?? created.id)
+        if (Number.isFinite(pid)) scrollToPackageRow(pid)
+        setDimsResult({ kind: 'match', pkg: created })
+      } else {
+        setDimsResult(null)
+      }
+    } catch (createError) {
+      showToast(`❌ ${createError instanceof Error ? createError.message : 'Auto-create failed'}`, 'error')
+    } finally {
+      setDimsAutoCreating(false)
+    }
+  }
+
   const handleConfirmDefaultPrice = async () => {
     if (!billingDefaultModal || modalSaving) return
 
@@ -571,10 +656,13 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
           </form>
         ) : null}
 
-        {lowStockPackages.length > 0 ? (
+        {lowStockPackages.length > 0 && !bannerDismissed ? (
           <div
             id="pkgLowStockBanner"
             style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: 10,
               background: '#fffbeb',
               border: '1px solid #fde68a',
               borderRadius: 7,
@@ -584,9 +672,151 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
               color: '#92400e',
             }}
           >
-            ⚠️ <strong>Low stock:</strong> {buildLowStockBannerText(lowStockPackages).replace(/^Low stock:\s*/, '')}
+            <div style={{ flex: 1, lineHeight: 1.5 }}>
+              ⚠ <strong>{lowStockPackages.length} package{lowStockPackages.length === 1 ? '' : 's'} at or below reorder level:</strong>{' '}
+              {lowStockPackages.map((pkg, idx) => (
+                <span key={pkg.packageId ?? pkg.id ?? pkg.name}>
+                  <button
+                    type="button"
+                    className="packages-inline-button"
+                    onClick={() => scrollToPackageRow(Number(pkg.packageId ?? pkg.id))}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      padding: 0,
+                      cursor: 'pointer',
+                      color: '#92400e',
+                      fontWeight: 600,
+                      textDecoration: 'underline',
+                    }}
+                  >
+                    {pkg.name} ({pkg.stockQty ?? 0}/{pkg.reorderLevel ?? 0})
+                  </button>
+                  {idx < lowStockPackages.length - 1 ? ', ' : ''}
+                </span>
+              ))}
+            </div>
+            <button
+              type="button"
+              aria-label="Dismiss low-stock banner"
+              onClick={() => setBannerDismissed(true)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#92400e',
+                cursor: 'pointer',
+                fontSize: 14,
+                lineHeight: 1,
+                padding: '0 2px',
+              }}
+            >
+              ✕
+            </button>
           </div>
         ) : null}
+
+        <div style={{ marginBottom: 12 }}>
+          <button
+            type="button"
+            className="btn btn-ghost btn-xs"
+            onClick={() => {
+              setDimsOpen((open) => !open)
+              if (dimsOpen) setDimsResult(null)
+            }}
+            style={{ fontSize: 12 }}
+          >
+            {dimsOpen ? '▾' : '▸'} Find by dimensions
+          </button>
+          {dimsOpen ? (
+            <div
+              style={{
+                marginTop: 6,
+                padding: '10px 12px',
+                border: '1px solid var(--border)',
+                borderRadius: 7,
+                background: 'var(--surface)',
+              }}
+            >
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                <div className="pkg-form-field">
+                  <label htmlFor="pkgDimsL">Length (in)</label>
+                  <input
+                    id="pkgDimsL"
+                    type="number"
+                    min="0"
+                    step="0.25"
+                    value={dimsForm.length}
+                    onChange={(event) => setDimsForm((current) => ({ ...current, length: event.target.value }))}
+                    onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void handleDimsSearch() } }}
+                    style={{ width: 80 }}
+                  />
+                </div>
+                <div className="pkg-form-field">
+                  <label htmlFor="pkgDimsW">Width (in)</label>
+                  <input
+                    id="pkgDimsW"
+                    type="number"
+                    min="0"
+                    step="0.25"
+                    value={dimsForm.width}
+                    onChange={(event) => setDimsForm((current) => ({ ...current, width: event.target.value }))}
+                    onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void handleDimsSearch() } }}
+                    style={{ width: 80 }}
+                  />
+                </div>
+                <div className="pkg-form-field">
+                  <label htmlFor="pkgDimsH">Height (in)</label>
+                  <input
+                    id="pkgDimsH"
+                    type="number"
+                    min="0"
+                    step="0.25"
+                    value={dimsForm.height}
+                    onChange={(event) => setDimsForm((current) => ({ ...current, height: event.target.value }))}
+                    onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void handleDimsSearch() } }}
+                    style={{ width: 80 }}
+                  />
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  disabled={dimsSearching}
+                  onClick={() => void handleDimsSearch()}
+                >
+                  {dimsSearching ? 'Searching…' : '🔍 Find'}
+                </button>
+                {dimsResult ? (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-xs"
+                    onClick={() => setDimsResult(null)}
+                    style={{ fontSize: 11 }}
+                  >
+                    Clear
+                  </button>
+                ) : null}
+              </div>
+
+              {dimsResult?.kind === 'match' ? (
+                <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text2)' }}>
+                  ✅ Matched <strong>{dimsResult.pkg.name}</strong> — highlighted in the list below.
+                </div>
+              ) : dimsResult?.kind === 'nomatch' ? (
+                <div style={{ marginTop: 8, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', fontSize: 12, color: 'var(--text2)' }}>
+                  <span>No match — create one?</span>
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-xs"
+                    disabled={dimsAutoCreating}
+                    onClick={() => void handleDimsAutoCreate()}
+                  >
+                    {dimsAutoCreating ? 'Creating…' : '＋ Create custom package with these dims'}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
 
         <div id="packagesContent">
           {contentState === 'loading' ? (
@@ -614,7 +844,16 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
                   {customPackages.map((pkg) => {
                     const ledger = ledgerByPackageId[pkg.packageId]
                     return (
-                      <tr key={pkg.packageId ?? pkg.id ?? pkg.name} style={{ borderBottom: '1px solid var(--border)' }}>
+                      <tr
+                        key={pkg.packageId ?? pkg.id ?? pkg.name}
+                        ref={(el) => { rowRefs.current[pkg.packageId] = el }}
+                        id={`pkg-row-${pkg.packageId}`}
+                        style={{
+                          borderBottom: '1px solid var(--border)',
+                          background: highlightedPackageId === pkg.packageId ? 'rgba(254, 240, 138, 0.45)' : undefined,
+                          transition: 'background 0.4s ease',
+                        }}
+                      >
                         <td style={{ padding: '7px 10px', maxWidth: 280, overflow: 'hidden' }}>
                           <button
                             type="button"

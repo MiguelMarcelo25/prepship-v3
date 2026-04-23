@@ -260,7 +260,8 @@ export default function InventoryView() {
   const toastContext = useContext(ToastContext)
   const { stores } = useInitStores()
   const historyDefaults = useMemo(() => getInventoryDateRangePreset(), [])
-  const [activeTab, setActiveTab] = useState<InventoryTab>('stock')
+  // Extend InventoryTab union locally to include ported v2 tabs (alerts, parents)
+  const [activeTab, setActiveTab] = useState<InventoryTab | 'alerts' | 'parents'>('stock')
   const [clients, setClients] = useState<ClientDto[]>([])
   const [packages, setPackages] = useState<PackageDto[]>([])
   const [items, setItems] = useState<InventoryItemDto[]>([])
@@ -298,6 +299,27 @@ export default function InventoryView() {
   const [skuDrawerLoading, setSkuDrawerLoading] = useState(false)
   const [thumbnailPreview, setThumbnailPreview] = useState<ThumbnailPreviewState | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+
+  // ─── Alerts tab state ──────────────────────────────────────────────────────
+  const [alertsClientId, setAlertsClientId] = useState('')
+  const [focusInvSkuId, setFocusInvSkuId] = useState<number | null>(null)
+  const rowRefs = useRef<Record<number, HTMLTableRowElement | null>>({})
+
+  // ─── Parent SKUs tab state ─────────────────────────────────────────────────
+  const [parentsClientId, setParentsClientId] = useState('')
+  const [parentsList, setParentsList] = useState<ParentSkuDto[]>([])
+  const [parentsLoading, setParentsLoading] = useState(false)
+  const [parentsCreateOpen, setParentsCreateOpen] = useState(false)
+  const [parentsCreateForm, setParentsCreateForm] = useState<CreateParentFormState>({
+    clientId: 0,
+    name: '',
+    sku: '',
+    baseUnitQty: '1',
+  })
+
+  // ─── Inline-parent-assign state (per inventory row) ────────────────────────
+  const [inlineParentRowId, setInlineParentRowId] = useState<number | null>(null)
+  const [inlineParentSaving, setInlineParentSaving] = useState(false)
 
   useEffect(() => {
     if (!thumbnailPreview) return
@@ -458,6 +480,46 @@ export default function InventoryView() {
     drawSkuSalesChart(canvasRef.current, skuDrawer.dailySales)
   }, [skuDrawer])
 
+  // Load parent SKUs whenever the Parent SKUs tab is active or its client filter changes.
+  useEffect(() => {
+    if (activeTab !== 'parents') return
+    let active = true
+    const load = async () => {
+      setParentsLoading(true)
+      try {
+        const cid = parentsClientId ? Number.parseInt(parentsClientId, 10) : undefined
+        // listParentSkus accepts clientId?; backend filters when provided.
+        const rows = await apiClient.listParentSkus(cid as any)
+        if (!active) return
+        setParentsList(Array.isArray(rows) ? rows : [])
+      } catch (error) {
+        if (!active) return
+        toastContext?.addToast(error instanceof Error ? error.message : 'Failed to load parent SKUs', 'error')
+      } finally {
+        if (active) setParentsLoading(false)
+      }
+    }
+    void load()
+    return () => {
+      active = false
+    }
+  }, [activeTab, parentsClientId, toastContext])
+
+  // When switching to the Stock tab with a focused SKU, scroll + flash-highlight the row.
+  useEffect(() => {
+    if (activeTab !== 'stock' || !focusInvSkuId) return
+    // Wait a tick for the stock rows to render.
+    const timer = window.setTimeout(() => {
+      const el = rowRefs.current[focusInvSkuId]
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      }
+      // Clear the focus after 2.5s so the highlight fades.
+      window.setTimeout(() => setFocusInvSkuId(null), 2500)
+    }, 80)
+    return () => window.clearTimeout(timer)
+  }, [activeTab, focusInvSkuId, groupedRows])
+
   async function refreshInventoryView() {
     try {
       const [nextClients, nextAlerts, nextItems] = await Promise.all([
@@ -611,6 +673,53 @@ export default function InventoryView() {
       })
       setParentModal(null)
       toastContext?.addToast(`✅ Created parent: ${parentModal.name.trim()}`, 'success')
+    } catch (error) {
+      toastContext?.addToast(error instanceof Error ? error.message : 'Failed to create parent', 'error')
+    }
+  }
+
+  async function handleInlineParentChange(row: InventoryItemDto, nextValue: string) {
+    setInlineParentSaving(true)
+    try {
+      const nextParentSkuId = nextValue ? Number.parseInt(nextValue, 10) : null
+      await apiClient.setInventoryParent(row.id, { parentSkuId: nextParentSkuId })
+      toastContext?.addToast(
+        nextParentSkuId ? '✅ Parent SKU assigned' : '✅ Parent SKU cleared',
+        'success',
+      )
+      await refreshInventoryView()
+    } catch (error) {
+      toastContext?.addToast(error instanceof Error ? error.message : 'Failed to set parent SKU', 'error')
+    } finally {
+      setInlineParentSaving(false)
+      setInlineParentRowId(null)
+    }
+  }
+
+  async function handleCreateParentFromTab() {
+    if (!parentsCreateForm.clientId) {
+      toastContext?.addToast('Select a client first', 'error')
+      return
+    }
+    if (!parentsCreateForm.name.trim()) {
+      toastContext?.addToast('Parent name is required', 'error')
+      return
+    }
+    try {
+      await apiClient.createParentSku({
+        clientId: parentsCreateForm.clientId,
+        name: parentsCreateForm.name.trim(),
+        sku: parentsCreateForm.sku.trim() || undefined,
+        baseUnitQty: Math.max(1, Number.parseInt(parentsCreateForm.baseUnitQty, 10) || 1),
+      })
+      toastContext?.addToast(`✅ Created parent: ${parentsCreateForm.name.trim()}`, 'success')
+      setParentsCreateOpen(false)
+      setParentsCreateForm({ clientId: parentsCreateForm.clientId, name: '', sku: '', baseUnitQty: '1' })
+      // Reload list (also reset the cache so the edit-SKU modal sees it).
+      setParentSkuOptions((current) => ({ ...current, [parentsCreateForm.clientId]: undefined as any }))
+      const cid = parentsClientId ? Number.parseInt(parentsClientId, 10) : undefined
+      const rows = await apiClient.listParentSkus(cid as any)
+      setParentsList(Array.isArray(rows) ? rows : [])
     } catch (error) {
       toastContext?.addToast(error instanceof Error ? error.message : 'Failed to create parent', 'error')
     }
@@ -775,9 +884,11 @@ export default function InventoryView() {
           {([
             ['stock', 'Stock Levels'],
             ['receive', 'Receive'],
+            ['alerts', alerts.length > 0 ? `Alerts (${alerts.length})` : 'Alerts'],
+            ['parents', 'Parent SKUs'],
             ['clients', 'Clients'],
             ['history', 'History'],
-          ] as Array<[InventoryTab, string]>).map(([tab, label]) => (
+          ] as Array<[InventoryTab | 'alerts' | 'parents', string]>).map(([tab, label]) => (
             <button
               key={tab}
               type="button"
@@ -928,8 +1039,13 @@ export default function InventoryView() {
                           }
 
                           const cuFt = getInventoryCuFt(row)
+                          const isFocused = focusInvSkuId === row.id
                           return (
-                            <tr key={row.id}>
+                            <tr
+                              key={row.id}
+                              ref={(el) => { rowRefs.current[row.id] = el }}
+                              style={isFocused ? { background: 'var(--ss-blue-bg)', transition: 'background 1.5s ease' } : undefined}
+                            >
                               <td style={{ fontFamily: 'monospace', fontSize: 11.5 }}>
                                 <button type="button" className="inventory-inline-button" style={{ color: 'var(--ss-blue)' }} onClick={() => void openSkuDrawer(row.id)} title="View orders & sales trend">{row.sku}</button>
                               </td>
@@ -976,6 +1092,22 @@ export default function InventoryView() {
                                 <button
                                   className="btn btn-ghost btn-xs"
                                   type="button"
+                                  title={row.parentSkuId ? 'Change parent SKU' : 'Assign parent SKU'}
+                                  onClick={async () => {
+                                    try {
+                                      await loadParentOptions(row.clientId)
+                                      setInlineParentRowId((current) => (current === row.id ? null : row.id))
+                                    } catch (error) {
+                                      toastContext?.addToast(error instanceof Error ? error.message : 'Failed to load parents', 'error')
+                                    }
+                                  }}
+                                  style={{ fontSize: 12, color: row.parentSkuId ? 'var(--ss-blue)' : 'var(--text3)' }}
+                                >
+                                  🔗
+                                </button>
+                                <button
+                                  className="btn btn-ghost btn-xs"
+                                  type="button"
                                   onClick={() => setAdjustModal({
                                     invSkuId: row.id,
                                     sku: row.sku,
@@ -990,6 +1122,23 @@ export default function InventoryView() {
                                 >
                                   +
                                 </button>
+                                {inlineParentRowId === row.id ? (
+                                  <div style={{ display: 'inline-flex', gap: 4, marginLeft: 6, alignItems: 'center' }}>
+                                    <select
+                                      className="ship-select"
+                                      style={{ fontSize: 11, padding: '2px 4px' }}
+                                      defaultValue={row.parentSkuId ? String(row.parentSkuId) : ''}
+                                      disabled={inlineParentSaving}
+                                      onChange={(event) => void handleInlineParentChange(row, event.target.value)}
+                                    >
+                                      <option value="">— No Parent —</option>
+                                      {(parentSkuOptions[row.clientId] ?? []).map((option) => (
+                                        <option key={option.parentSkuId} value={option.parentSkuId}>{option.name}</option>
+                                      ))}
+                                    </select>
+                                    <button className="btn btn-ghost btn-xs" type="button" onClick={() => setInlineParentRowId(null)} title="Close">✕</button>
+                                  </div>
+                                ) : null}
                               </td>
                             </tr>
                           )
@@ -1251,6 +1400,225 @@ export default function InventoryView() {
                   </tbody>
                 </table>
               </div>
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      {activeTab === 'alerts' ? (
+        <div id="inv-panel-alerts">
+          <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+            <select className="filter-sel" value={alertsClientId} onChange={(event) => setAlertsClientId(event.target.value)}>
+              <option value="">All Clients</option>
+              {clients.map((client) => (
+                <option key={client.clientId} value={client.clientId}>{client.name}</option>
+              ))}
+            </select>
+            <span style={{ fontSize: 11.5, color: 'var(--text3)' }}>
+              {(() => {
+                const filtered = alertsClientId
+                  ? alerts.filter((a: any) => String(a?.clientId ?? '') === alertsClientId)
+                  : alerts
+                const out = filtered.filter((a: any) => (a?.currentStock ?? a?.stockQty ?? 0) <= 0).length
+                const low = filtered.length - out
+                return `${out} out of stock • ${low} low`
+              })()}
+            </span>
+          </div>
+
+          {alerts.length === 0 ? (
+            <div className="empty-state">
+              <div className="empty-icon">✅</div>
+              <div>All stocked — no low/out SKUs.</div>
+            </div>
+          ) : (
+            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+              <table className="inv-table" style={{ margin: 0 }}>
+                <thead>
+                  <tr>
+                    <th>SKU</th>
+                    <th>Name</th>
+                    <th>Client</th>
+                    <th style={{ textAlign: 'center' }}>Current Stock</th>
+                    <th style={{ textAlign: 'center' }}>Min Stock</th>
+                    <th style={{ textAlign: 'center' }}>Status</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {(alertsClientId
+                    ? alerts.filter((a: any) => String(a?.clientId ?? '') === alertsClientId)
+                    : alerts
+                  ).map((alert: any) => {
+                    const stock = alert?.currentStock ?? alert?.stockQty ?? 0
+                    const minStock = alert?.minStock ?? 0
+                    const isOut = stock <= 0
+                    const isLow = !isOut && minStock > 0 && stock <= minStock
+                    const clientName = alert?.clientName
+                      ?? clients.find((c) => c.clientId === alert?.clientId)?.name
+                      ?? '—'
+                    return (
+                      <tr key={alert?.id ?? `${alert?.clientId}-${alert?.sku}`}>
+                        <td style={{ fontFamily: 'monospace', fontSize: 11.5 }}>{alert?.sku || '—'}</td>
+                        <td style={{ fontSize: 12, maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{alert?.name || '—'}</td>
+                        <td style={{ fontSize: 12, color: 'var(--text2)' }}>{clientName}</td>
+                        <td style={{ textAlign: 'center', fontWeight: 700, fontSize: 13, color: isOut ? 'var(--red)' : 'var(--text)' }}>{stock}</td>
+                        <td style={{ textAlign: 'center', fontSize: 12, color: 'var(--text3)' }}>{minStock}</td>
+                        <td style={{ textAlign: 'center' }}>
+                          <span className={`stock-badge ${isOut ? 'stock-out' : isLow ? 'stock-low' : 'stock-ok'}`}>
+                            {isOut ? 'OUT' : isLow ? 'LOW' : 'OK'}
+                          </span>
+                        </td>
+                        <td style={{ whiteSpace: 'nowrap' }}>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-xs"
+                            onClick={() => {
+                              if (alert?.clientId != null) {
+                                setStockClientId(String(alert.clientId))
+                              }
+                              setAlertOnly(false)
+                              setStockSearch('')
+                              setFocusInvSkuId(alert?.id ?? null)
+                              setActiveTab('stock')
+                            }}
+                            title="Jump to this SKU on the Stock tab"
+                            style={{ color: 'var(--ss-blue)', fontWeight: 600 }}
+                          >
+                            Go to SKU →
+                          </button>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      ) : null}
+
+      {activeTab === 'parents' ? (
+        <div id="inv-panel-parents">
+          <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+            <select className="filter-sel" value={parentsClientId} onChange={(event) => setParentsClientId(event.target.value)}>
+              <option value="">All Clients</option>
+              {clients.map((client) => (
+                <option key={client.clientId} value={client.clientId}>{client.name}</option>
+              ))}
+            </select>
+            <button
+              className="btn btn-primary btn-sm"
+              type="button"
+              onClick={() => {
+                const defaultClient = parentsClientId
+                  ? Number.parseInt(parentsClientId, 10)
+                  : clients[0]?.clientId ?? 0
+                setParentsCreateForm({
+                  clientId: defaultClient,
+                  name: '',
+                  sku: '',
+                  baseUnitQty: '1',
+                })
+                setParentsCreateOpen(true)
+              }}
+            >
+              ＋ Create Parent SKU
+            </button>
+          </div>
+
+          {parentsCreateOpen ? (
+            <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: 14, marginBottom: 14, maxWidth: 560 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', marginBottom: 10 }}>Create Parent SKU</div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <label style={{ fontSize: 11, color: 'var(--text3)' }}>Client</label>
+                  <select
+                    className="ship-select"
+                    style={{ width: '100%' }}
+                    value={parentsCreateForm.clientId ? String(parentsCreateForm.clientId) : ''}
+                    onChange={(event) => setParentsCreateForm((current) => ({ ...current, clientId: Number.parseInt(event.target.value, 10) || 0 }))}
+                  >
+                    <option value="">Select client…</option>
+                    {clients.map((client) => (
+                      <option key={client.clientId} value={client.clientId}>{client.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div style={{ gridColumn: '1 / -1' }}>
+                  <label style={{ fontSize: 11, color: 'var(--text3)' }}>Name *</label>
+                  <input
+                    type="text"
+                    className="ship-select"
+                    style={{ width: '100%' }}
+                    placeholder="e.g., Banana Drink"
+                    value={parentsCreateForm.name}
+                    onChange={(event) => setParentsCreateForm((current) => ({ ...current, name: event.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, color: 'var(--text3)' }}>SKU (optional)</label>
+                  <input
+                    type="text"
+                    className="ship-select"
+                    style={{ width: '100%', fontFamily: 'monospace' }}
+                    placeholder="e.g., BANANA-DRINK-PARENT"
+                    value={parentsCreateForm.sku}
+                    onChange={(event) => setParentsCreateForm((current) => ({ ...current, sku: event.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label style={{ fontSize: 11, color: 'var(--text3)' }}>Base Unit Qty</label>
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    className="ship-select"
+                    style={{ width: '100%' }}
+                    value={parentsCreateForm.baseUnitQty}
+                    onChange={(event) => setParentsCreateForm((current) => ({ ...current, baseUnitQty: event.target.value }))}
+                  />
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+                <button className="btn btn-ghost btn-sm" type="button" onClick={() => setParentsCreateOpen(false)}>Cancel</button>
+                <button className="btn btn-primary btn-sm" type="button" onClick={() => void handleCreateParentFromTab()}>💾 Create</button>
+              </div>
+            </div>
+          ) : null}
+
+          {parentsLoading ? (
+            <div className="loading"><div className="spinner" /></div>
+          ) : !parentsList.length ? (
+            <div className="empty-state">
+              <div className="empty-icon">🧬</div>
+              <div>No parent SKUs yet.</div>
+            </div>
+          ) : (
+            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+              <table className="inv-table" style={{ margin: 0 }}>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>SKU</th>
+                    <th>Client</th>
+                    <th style={{ textAlign: 'center' }}>Base Unit Qty</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {parentsList.map((parent: any) => {
+                    const clientName = clients.find((c) => c.clientId === parent?.clientId)?.name ?? '—'
+                    return (
+                      <tr key={parent?.parentSkuId ?? parent?.id}>
+                        <td style={{ fontWeight: 600, fontSize: 12 }}>{parent?.name || '—'}</td>
+                        <td style={{ fontFamily: 'monospace', fontSize: 11.5 }}>{parent?.sku || <span style={{ color: 'var(--text4)' }}>—</span>}</td>
+                        <td style={{ fontSize: 12, color: 'var(--text2)' }}>{clientName}</td>
+                        <td style={{ textAlign: 'center', fontSize: 12, color: 'var(--text3)' }}>{parent?.baseUnitQty ?? 1}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
