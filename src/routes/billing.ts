@@ -102,6 +102,235 @@ app.get(
   }
 );
 
+// ─── Invoice (HTML) ────────────────────────────────────────────────────
+// v2-parity: GET /billing/invoice?clientId=N&dateFrom=ISO&dateTo=ISO
+// Returns a full HTML invoice for a single client + date range. The
+// browser opens it and the user can Ctrl+P → Save as PDF. Mirrors the
+// template from v2 billing-routes.ts:19-128 exactly.
+
+const invoiceQuery = z.object({
+  clientId: z.coerce.number().int().positive(),
+  dateFrom: z.string().datetime(),
+  dateTo: z.string().datetime(),
+});
+
+function escHtml(s: string | number | null | undefined): string {
+  const str = s === null || s === undefined ? '' : String(s);
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
+  const { clientId, dateFrom, dateTo } = c.req.valid('query');
+
+  const clientRow = await db.execute<{ id: number; name: string }>(
+    sql`select id, name from clients where id = ${clientId} limit 1`
+  );
+  if (!clientRow.length) return c.text('Client not found', 404);
+
+  const summaryRow = await db.execute<{
+    pickpack_total: string;
+    additional_total: string;
+    package_total: string;
+    shipping_total: string;
+    storage_total: string;
+    order_count: number;
+    grand_total: string;
+  }>(sql`
+    select
+      coalesce(sum(case when line_type = 'pick_pack' then total_cost else 0 end), 0)::text as pickpack_total,
+      coalesce(sum(case when line_type = 'additional' then total_cost else 0 end), 0)::text as additional_total,
+      coalesce(sum(case when line_type = 'package' then total_cost else 0 end), 0)::text as package_total,
+      coalesce(sum(case when line_type = 'shipping' then total_cost else 0 end), 0)::text as shipping_total,
+      coalesce(sum(case when line_type = 'storage' then total_cost else 0 end), 0)::text as storage_total,
+      count(distinct case when line_type = 'pick_pack' then order_id end)::int as order_count,
+      coalesce(sum(total_cost), 0)::text as grand_total
+    from billing_line_items
+    where client_id = ${clientId}
+      and ship_date >= ${dateFrom}::timestamptz
+      and ship_date <= ${dateTo}::timestamptz
+  `);
+  const s = summaryRow[0];
+
+  const details = await db.execute<{
+    order_id: number | null;
+    order_number: string | null;
+    ship_date: string | null;
+    base_qty: string;
+    addl_qty: string;
+    pickpack_amt: string;
+    additional_amt: string;
+    shipping_amt: string;
+    storage_amt: string;
+    row_total: string;
+    skus: string | null;
+  }>(sql`
+    select
+      b.order_id,
+      b.order_number,
+      to_char(b.ship_date, 'YYYY-MM-DD') as ship_date,
+      coalesce(sum(case when b.line_type = 'pick_pack' then b.qty else 0 end), 0)::text as base_qty,
+      coalesce(sum(case when b.line_type = 'additional' then b.qty else 0 end), 0)::text as addl_qty,
+      coalesce(sum(case when b.line_type = 'pick_pack' then b.total_cost else 0 end), 0)::text as pickpack_amt,
+      coalesce(sum(case when b.line_type = 'additional' then b.total_cost else 0 end), 0)::text as additional_amt,
+      coalesce(sum(case when b.line_type = 'shipping' then b.total_cost else 0 end), 0)::text as shipping_amt,
+      coalesce(sum(case when b.line_type = 'storage' then b.total_cost else 0 end), 0)::text as storage_amt,
+      sum(b.total_cost)::text as row_total,
+      (
+        select string_agg(item->>'sku', ', ')
+        from orders o2, jsonb_array_elements(o2.items) item
+        where o2.id = b.order_id
+          and coalesce((item->>'adjustment')::boolean, false) = false
+      ) as skus
+    from billing_line_items b
+    where b.client_id = ${clientId}
+      and b.ship_date >= ${dateFrom}::timestamptz
+      and b.ship_date <= ${dateTo}::timestamptz
+    group by b.order_id, b.order_number, b.ship_date
+    order by b.ship_date asc, b.order_id asc
+  `);
+
+  const fmt = (n: number | string) => `$${(Number(n) || 0).toFixed(2)}`;
+  const fromDisplay = dateFrom.slice(0, 10);
+  const toDisplay = dateTo.slice(0, 10);
+  const generated = new Date().toLocaleDateString('en-US', {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  });
+  const orderCount = s?.order_count ?? 0;
+  const pickPackTotal = Number(s?.pickpack_total ?? 0);
+  const additionalTotal = Number(s?.additional_total ?? 0);
+  const packageTotal = Number(s?.package_total ?? 0);
+  const shippingTotal = Number(s?.shipping_total ?? 0);
+  const storageTotal = Number(s?.storage_total ?? 0);
+  const grandTotal = Number(s?.grand_total ?? 0);
+  const clientName = clientRow[0]!.name;
+
+  const rowsHtml = details
+    .map((d) => {
+      const baseQty = Number(d.base_qty);
+      const addlQty = Number(d.addl_qty);
+      const pickpackAmt = Number(d.pickpack_amt);
+      const additionalAmt = Number(d.additional_amt);
+      const shippingAmt = Number(d.shipping_amt);
+      const storageAmt = Number(d.storage_amt);
+      const rowTotal = Number(d.row_total);
+      return `
+      <tr>
+        <td>${escHtml(d.ship_date ?? '')}</td>
+        <td class="mono">${escHtml(d.order_number ?? d.order_id ?? '')}</td>
+        <td class="sku">${escHtml(d.skus ?? '—')}</td>
+        <td class="num">${baseQty}</td>
+        <td class="num">${fmt(pickpackAmt)}</td>
+        <td class="num">${addlQty > 0 ? `${addlQty} (${fmt(additionalAmt)})` : '—'}</td>
+        <td class="num">${shippingAmt > 0 ? fmt(shippingAmt) : '—'}</td>
+        <td class="num">${storageAmt > 0 ? fmt(storageAmt) : '—'}</td>
+        <td class="num bold">${fmt(rowTotal)}</td>
+      </tr>`;
+    })
+    .join('');
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Invoice — ${escHtml(clientName)} — ${fromDisplay} to ${toDisplay}</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 13px; color: #111; background: #fff; padding: 40px 48px; max-width: 1100px; margin: 0 auto; }
+    .print-tip { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 10px 16px; margin-bottom: 24px; font-size: 12px; color: #1d4ed8; }
+    .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 28px; padding-bottom: 20px; border-bottom: 2px solid #e5e7eb; }
+    .brand h1 { font-size: 22px; font-weight: 800; color: #111; letter-spacing: -.3px; }
+    .brand .sub { font-size: 11px; color: #9ca3af; margin-top: 3px; }
+    .meta { text-align: right; }
+    .meta .client-name { font-size: 18px; font-weight: 700; color: #111; }
+    .meta .date-range { font-size: 12px; color: #6b7280; margin-top: 2px; }
+    .meta .gen-date { font-size: 10px; color: #9ca3af; margin-top: 2px; }
+    .summary-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin-bottom: 20px; }
+    .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 14px; }
+    .card .cl { font-size: 10px; color: #9ca3af; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 3px; }
+    .card .cv { font-size: 16px; font-weight: 700; color: #111; }
+    .grand-total { background: #f0fdf4; border: 1px solid #86efac; border-radius: 8px; padding: 14px 20px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+    .grand-total .gtl { font-size: 13px; font-weight: 600; color: #166534; }
+    .grand-total .gtv { font-size: 24px; font-weight: 800; color: #166534; }
+    table { width: 100%; border-collapse: collapse; font-size: 12px; }
+    thead th { background: #f9fafb; border: 1px solid #e5e7eb; padding: 7px 10px; font-weight: 700; color: #374151; font-size: 10px; text-transform: uppercase; letter-spacing: .4px; }
+    thead th.num { text-align: right; }
+    tbody td { border: 1px solid #e5e7eb; padding: 6px 10px; color: #374151; vertical-align: middle; }
+    tbody tr:nth-child(even) { background: #fafafa; }
+    td.num { text-align: right; }
+    td.mono { font-family: monospace; font-size: 11px; color: #2563eb; }
+    td.sku { font-family: monospace; font-size: 10px; color: #6b7280; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    td.bold { font-weight: 700; }
+    tfoot td { border: 1px solid #d1d5db; padding: 8px 10px; font-weight: 700; background: #f3f4f6; }
+    tfoot td.num { text-align: right; }
+    .footer { margin-top: 24px; padding-top: 12px; border-top: 1px solid #e5e7eb; font-size: 10px; color: #9ca3af; text-align: center; }
+  </style>
+</head>
+<body>
+  <div class="print-tip">To save as PDF: press <strong>Ctrl+P</strong> or <strong>⌘P</strong>, then choose <strong>Save as PDF</strong>.</div>
+  <div class="header">
+    <div class="brand">
+      <h1>Invoice</h1>
+      <div class="sub">DR Prepper 3PL Services · 14924 S Figueroa St, Gardena CA 90248</div>
+    </div>
+    <div class="meta">
+      <div class="client-name">Bill To: ${escHtml(clientName)}</div>
+      <div class="date-range">Period: ${fromDisplay} → ${toDisplay}</div>
+      <div class="gen-date">Generated ${generated}</div>
+    </div>
+  </div>
+  <div class="summary-grid">
+    <div class="card"><div class="cl">Orders</div><div class="cv">${orderCount}</div></div>
+    <div class="card"><div class="cl">Pick &amp; Pack</div><div class="cv">${fmt(pickPackTotal)}</div></div>
+    <div class="card"><div class="cl">Add'l Units</div><div class="cv">${fmt(additionalTotal)}</div></div>
+    <div class="card"><div class="cl">Packages</div><div class="cv">${packageTotal > 0 ? fmt(packageTotal) : '—'}</div></div>
+    <div class="card"><div class="cl">Shipping</div><div class="cv">${fmt(shippingTotal)}</div></div>
+    <div class="card"><div class="cl">Storage</div><div class="cv">${storageTotal > 0 ? fmt(storageTotal) : '—'}</div></div>
+  </div>
+  <div class="grand-total">
+    <div class="gtl">Total Amount Due — ${fromDisplay} → ${toDisplay}</div>
+    <div class="gtv">${fmt(grandTotal)}</div>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>Ship Date</th>
+        <th>Order #</th>
+        <th>SKU(s)</th>
+        <th class="num">Base Qty</th>
+        <th class="num">Pick &amp; Pack</th>
+        <th class="num">Add'l Units</th>
+        <th class="num">Shipping</th>
+        <th class="num">Storage</th>
+        <th class="num">Row Total</th>
+      </tr>
+    </thead>
+    <tbody>${rowsHtml}</tbody>
+    <tfoot>
+      <tr>
+        <td colspan="4">Totals — ${orderCount} orders</td>
+        <td class="num">${fmt(pickPackTotal)}</td>
+        <td class="num">${fmt(additionalTotal)}</td>
+        <td class="num">${fmt(shippingTotal)}</td>
+        <td class="num">${storageTotal > 0 ? fmt(storageTotal) : '—'}</td>
+        <td class="num" style="font-size:14px">${fmt(grandTotal)}</td>
+      </tr>
+    </tfoot>
+  </table>
+  <div class="footer">PrepShip · Invoice generated ${generated} · Not a formal tax document · ${orderCount} orders · ${fromDisplay} → ${toDisplay}</div>
+</body>
+</html>`;
+
+  c.header('Content-Type', 'text/html; charset=utf-8');
+  return c.body(html);
+});
+
 // ─── Client package prices ────────────────────────────────────────────
 
 app.get(

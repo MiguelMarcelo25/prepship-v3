@@ -105,6 +105,40 @@ app.get('/stats', async (c) => {
   return c.json(stats);
 });
 
+// v2-parity: GET /inventory/alerts?clientId=N
+// Returns low-stock items (stock_qty <= reorder_level) for the given client.
+// v2 computed stock by summing ledger; v4 stores stock_qty on the row, so
+// the query is a simple compare.
+app.get(
+  '/alerts',
+  zValidator('query', z.object({ clientId: z.coerce.number().int().optional() })),
+  async (c) => {
+    const { clientId } = c.req.valid('query');
+    const rows = await db
+      .select({
+        id: inventory.id,
+        sku: inventory.sku,
+        name: inventory.name,
+        stock: inventory.stockQty,
+        minStock: inventory.reorderLevel,
+        parentSkuId: inventory.parentSkuId,
+        clientId: inventory.clientId,
+      })
+      .from(inventory)
+      .where(
+        and(
+          ...[
+            clientId !== undefined ? eq(inventory.clientId, clientId) : undefined,
+            eq(inventory.active, true),
+            lte(inventory.stockQty, inventory.reorderLevel),
+          ].filter(<T>(x: T | undefined): x is T => x !== undefined)
+        )
+      )
+      .orderBy(inventory.stockQty);
+    return c.json({ data: rows.map((r) => ({ type: 'sku' as const, ...r })) });
+  }
+);
+
 app.get('/:id{[0-9]+}', async (c) => {
   const id = Number(c.req.param('id'));
   const [row] = await db.select().from(inventory).where(eq(inventory.id, id)).limit(1);

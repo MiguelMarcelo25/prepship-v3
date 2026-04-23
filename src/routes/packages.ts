@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, lte, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { packages } from '../db/schema/packages';
 import { packageLedger } from '../db/schema/package-ledger';
@@ -223,5 +223,47 @@ app.get('/:id{[0-9]+}/ledger', async (c) => {
 
   return c.json({ data: rows });
 });
+
+// v2-parity: GET /packages/low-stock — packages whose stockQty is at or
+// below reorderLevel. Used by the Packages view's "needs reorder" badge.
+app.get('/low-stock', async (c) => {
+  const rows = await db
+    .select()
+    .from(packages)
+    .where(lte(packages.stockQty, packages.reorderLevel))
+    .orderBy(packages.stockQty);
+  return c.json({ data: rows });
+});
+
+// v2-parity: GET /packages/find-by-dims?length=&width=&height=
+// Fuzzy dimension lookup (±0.1" tolerance) so the rate browser can auto-
+// pick a saved package from user-entered dims.
+app.get(
+  '/find-by-dims',
+  zValidator(
+    'query',
+    z.object({
+      length: z.coerce.number().positive(),
+      width: z.coerce.number().positive(),
+      height: z.coerce.number().positive(),
+    })
+  ),
+  async (c) => {
+    const { length, width, height } = c.req.valid('query');
+    const tol = 0.1;
+    const [row] = await db
+      .select()
+      .from(packages)
+      .where(
+        and(
+          sql`abs(${packages.length} - ${length}) <= ${tol}`,
+          sql`abs(${packages.width} - ${width}) <= ${tol}`,
+          sql`abs(${packages.height} - ${height}) <= ${tol}`
+        )
+      )
+      .limit(1);
+    return c.json({ package: row ?? null });
+  }
+);
 
 export default app;

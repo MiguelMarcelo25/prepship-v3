@@ -60,10 +60,49 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
   });
 });
 
-const cachedQuery = z.object({
-  weightOz: z.coerce.number().positive(),
-  toZip: z.string().min(3),
-});
+// v2-parity: supports v2's param aliases (wt, zip, l, w, h) AND the modern
+// names. Adds optional dims + residential + storeId filters so the rate
+// browser's cache hits return match-quality rates instead of a generic
+// weight+zip bucket.
+const cachedQuery = z
+  .object({
+    weightOz: z.coerce.number().positive().optional(),
+    wt: z.coerce.number().positive().optional(),
+    toZip: z.string().min(3).optional(),
+    zip: z.string().min(3).optional(),
+    dimsL: z.coerce.number().positive().optional(),
+    l: z.coerce.number().positive().optional(),
+    dimsW: z.coerce.number().positive().optional(),
+    w: z.coerce.number().positive().optional(),
+    dimsH: z.coerce.number().positive().optional(),
+    h: z.coerce.number().positive().optional(),
+    residential: z
+      .union([z.boolean(), z.enum(['true', 'false', '1', '0'])])
+      .optional(),
+    storeId: z.coerce.number().int().optional(),
+    signature: z.string().nullable().optional(),
+  })
+  .transform((v) => ({
+    weightOz: v.weightOz ?? v.wt,
+    toZip: v.toZip ?? v.zip,
+    dimsL: v.dimsL ?? v.l,
+    dimsW: v.dimsW ?? v.w,
+    dimsH: v.dimsH ?? v.h,
+    residential:
+      typeof v.residential === 'boolean'
+        ? v.residential
+        : v.residential === 'true' || v.residential === '1'
+          ? true
+          : v.residential === 'false' || v.residential === '0'
+            ? false
+            : undefined,
+    storeId: v.storeId,
+    signature: v.signature,
+  }))
+  .refine(
+    (v) => v.weightOz !== undefined && v.toZip !== undefined,
+    { message: 'weightOz (or wt) and toZip (or zip) are required' }
+  );
 
 // Bulk lookup of cached rates for many (weightOz, toZip) pairs in one call.
 const bulkBody = z.object({
@@ -95,13 +134,15 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
 
 app.get('/cached', zValidator('query', cachedQuery), async (c) => {
   const q = c.req.valid('query');
+  // weightOz + toZip are required by the schema, so the non-null
+  // assertion is safe.
   const rows = await db
     .select()
     .from(rateCache)
     .where(
       and(
-        eq(rateCache.weightOz, q.weightOz),
-        eq(rateCache.toZip, q.toZip.toUpperCase())
+        eq(rateCache.weightOz, q.weightOz!),
+        eq(rateCache.toZip, q.toZip!.toUpperCase())
       )
     )
     .limit(25);
