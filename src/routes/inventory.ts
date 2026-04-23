@@ -429,10 +429,13 @@ app.post('/import-from-orders', async (c) => {
   });
 });
 
-// Pull product catalog from ShipStation v1 and upsert as inventory rows.
-// stockQty stays 0 (ShipStation doesn't expose inventory levels in the
-// standard API). Match by (clientId IS NULL, sku) since we don't know
-// which store a product belongs to.
+// Pull product catalog from ShipStation v1 /products (every account we
+// know about) and upsert as inventory rows. stockQty stays 0 — the
+// standard SS API doesn't expose stock levels. Matching:
+//   • Main account products → clientId IS NULL (shared catalog)
+//   • Per-client accounts (e.g. KFG) → clientId = account owner
+// so each client's product catalog lands on its own row and pulls its
+// ShipStation thumbnail + dims + weight.
 app.post('/sync-products', async (c) => {
   type SSProduct = {
     productId: number;
@@ -453,61 +456,123 @@ app.post('/sync-products', async (c) => {
     pages: number;
   };
 
-  let page = 1;
+  type Account = {
+    label: string;
+    apiKey: string | undefined;
+    apiSecret: string | undefined;
+    ownerClientId: number | null;
+  };
+
+  // Build account list — env-main first, then any client with its own creds.
+  const accounts: Account[] = [
+    { label: 'main', apiKey: undefined, apiSecret: undefined, ownerClientId: null },
+  ];
+  const { clients } = await import('../db/schema/clients');
+  const clientRows = await db
+    .select({
+      id: clients.id,
+      name: clients.name,
+      ssApiKey: clients.ssApiKey,
+      ssApiSecret: clients.ssApiSecret,
+    })
+    .from(clients)
+    .where(eq(clients.active, true));
+  for (const cli of clientRows) {
+    if (cli.ssApiKey && cli.ssApiSecret) {
+      accounts.push({
+        label: `client:${cli.name}`,
+        apiKey: cli.ssApiKey,
+        apiSecret: cli.ssApiSecret,
+        ownerClientId: cli.id,
+      });
+    }
+  }
+
   let inserted = 0;
   let updated = 0;
   let skipped = 0;
+  const byAccount: Record<string, { inserted: number; updated: number }> = {};
 
-  while (true) {
-    const res = await ssV1Request<SSProductsList>(
-      `/products?pageSize=500&page=${page}`,
-      { dedupeKey: `products:list:${page}` }
-    );
+  for (const acct of accounts) {
+    byAccount[acct.label] = { inserted: 0, updated: 0 };
+    let page = 1;
 
-    for (const p of res.products) {
-      const sku = (p.sku ?? '').trim();
-      if (!sku) {
-        skipped += 1;
-        continue;
+    try {
+      while (true) {
+        const res = await ssV1Request<SSProductsList>(
+          `/products?pageSize=500&page=${page}`,
+          {
+            apiKey: acct.apiKey,
+            apiSecret: acct.apiSecret,
+            dedupeKey: `products:list:${acct.label}:${page}`,
+          }
+        );
+
+        for (const p of res.products) {
+          const sku = (p.sku ?? '').trim();
+          if (!sku) {
+            skipped += 1;
+            continue;
+          }
+
+          // Match existing row by (clientId, sku) where clientId tracks the
+          // account owner (null for main).
+          const [existing] = await db
+            .select({ id: inventory.id })
+            .from(inventory)
+            .where(
+              and(
+                eq(inventory.sku, sku),
+                acct.ownerClientId === null
+                  ? isNull(inventory.clientId)
+                  : eq(inventory.clientId, acct.ownerClientId)
+              )
+            )
+            .limit(1);
+
+          const fields = {
+            name: p.name ?? null,
+            weightOz: p.weightOz ?? 0,
+            length: p.length ?? null,
+            width: p.width ?? null,
+            height: p.height ?? null,
+            active: p.active ?? true,
+            imageUrl: p.thumbnailUrl ?? p.imageUrl ?? null,
+          };
+
+          if (existing) {
+            await db
+              .update(inventory)
+              .set({ ...fields, updatedAt: new Date() })
+              .where(eq(inventory.id, existing.id));
+            updated += 1;
+            byAccount[acct.label]!.updated += 1;
+          } else {
+            await db
+              .insert(inventory)
+              .values({ sku, clientId: acct.ownerClientId, ...fields });
+            inserted += 1;
+            byAccount[acct.label]!.inserted += 1;
+          }
+        }
+
+        if (page >= res.pages || !res.products.length) break;
+        page += 1;
       }
-
-      const [existing] = await db
-        .select({ id: inventory.id })
-        .from(inventory)
-        .where(and(eq(inventory.sku, sku), isNull(inventory.clientId)))
-        .limit(1);
-
-      const fields = {
-        name: p.name ?? null,
-        weightOz: p.weightOz ?? 0,
-        length: p.length ?? null,
-        width: p.width ?? null,
-        height: p.height ?? null,
-        active: p.active ?? true,
-        imageUrl: p.thumbnailUrl ?? p.imageUrl ?? null,
-      };
-
-      if (existing) {
-        await db
-          .update(inventory)
-          .set({ ...fields, updatedAt: new Date() })
-          .where(eq(inventory.id, existing.id));
-        updated += 1;
-      } else {
-        await db.insert(inventory).values({ sku, ...fields });
-        inserted += 1;
-      }
+    } catch (err) {
+      console.error(
+        `[sync-products] account "${acct.label}" failed:`,
+        (err as Error).message
+      );
     }
-
-    if (page >= res.pages || !res.products.length) break;
-    page += 1;
   }
 
   return c.json({
     inserted,
     updated,
     skipped,
-    message: `Synced ${inserted + updated} products (${inserted} new, ${updated} updated, ${skipped} without SKU)`,
+    byAccount,
+    message: `Synced ${inserted + updated} products across ${accounts.length} account(s) (${inserted} new, ${updated} updated, ${skipped} without SKU)`,
   });
 });
 
