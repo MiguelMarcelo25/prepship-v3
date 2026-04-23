@@ -193,4 +193,21 @@ app.delete('/cache', async (c) => {
   return c.json({ deleted: counts[0]?.count ?? 0 });
 });
 
+// v2 parity: POST /rates/cache-clear-and-refetch — clears rate cache and
+// kicks off a best-rate backfill. v2 exposed this at /cache/clear-and-refetch;
+// mounting under /rates/ keeps the auth + route ownership clean.
+app.post('/cache-clear-and-refetch', async (c) => {
+  const counts = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(rateCache);
+  await db.delete(rateCache);
+  const { startBackfillBestRates } = await import('../services/rates-backfill');
+  const job = startBackfillBestRates({});
+  return c.json({
+    cleared: counts[0]?.count ?? 0,
+    refetchStarted: true,
+    jobId: job.jobId,
+  });
+});
+
 export default app;

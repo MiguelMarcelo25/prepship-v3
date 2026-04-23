@@ -114,4 +114,48 @@ app.get('/carrier-accounts', async (c) => {
   }
 });
 
+// v2 parity: GET /stores — list all ShipStation stores derived from clients.
+// v2 returns one row per (clientId, storeId) pairing. We hydrate from clients.storeIds.
+app.get('/stores', async (c) => {
+  const rows = await db.select().from(clients);
+  const stores: Array<{
+    storeId: number;
+    clientId: number;
+    clientName: string;
+    active: boolean;
+  }> = [];
+  for (const cli of rows) {
+    if (!cli.active) continue;
+    const ids = Array.isArray(cli.storeIds) ? (cli.storeIds as number[]) : [];
+    for (const sid of ids) {
+      stores.push({ storeId: sid, clientId: cli.id, clientName: cli.name, active: true });
+    }
+  }
+  return c.json({ data: stores });
+});
+
+// v2 parity: GET /carriers — slimmer projection of /carrier-accounts keyed by carrier_code.
+app.get('/carriers', async (c) => {
+  try {
+    const res = await ssRequest<CarriersResponse>('/v2/carriers', {
+      dedupeKey: 'carriers:list',
+    });
+    return c.json({
+      data: res.carriers.map((c) => ({
+        carrierId: c.carrier_id,
+        carrierCode: c.carrier_code,
+        nickname: c.nickname ?? c.friendly_name ?? c.carrier_code,
+        services: (c.services ?? []).map((s) => ({
+          serviceCode: s.service_code,
+          name: s.name,
+          domestic: s.domestic ?? true,
+          international: s.international ?? false,
+        })),
+      })),
+    });
+  } catch (err) {
+    return c.json({ error: (err as Error).message, data: [] }, 502);
+  }
+});
+
 export default app;

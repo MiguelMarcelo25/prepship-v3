@@ -282,4 +282,140 @@ app.get('/top-skus', zValidator('query', topSkusQuery), async (c) => {
   return c.json({ data: rows });
 });
 
+// v2-parity aliases: v2's apiClient calls /analysis/skus and /analysis/daily-sales.
+// v4 picked clearer names (sku-breakdown, sku-daily). Mount the v2 paths as
+// aliases so the v2-apiClient compat shim doesn't need to translate.
+app.get('/skus', zValidator('query', skuBreakdownQuery), async (c) => {
+  const q = c.req.valid('query');
+  const fromIso = new Date(q.dateFrom).toISOString();
+  const toIso = new Date(q.dateTo).toISOString();
+  const cid: number | null = q.clientId ?? null;
+
+  const rows = await db.execute<{
+    sku: string;
+    name: string | null;
+    image_url: string | null;
+    client_id: number | null;
+    orders: number;
+    pending: number;
+    ext_shipped: number;
+    std_orders: number;
+    std_total: string;
+    exp_orders: number;
+    exp_total: string;
+    total_qty: number;
+    total_shipping: string;
+  }>(sql`
+    with sku_orders as (
+      select
+        item->>'sku'                                              as sku,
+        item->>'name'                                             as name,
+        nullif(item->>'imageUrl', '')                             as image_url,
+        o.client_id                                               as client_id,
+        o.id                                                      as order_id,
+        o.order_status                                            as order_status,
+        o.externally_shipped                                      as ext_shipped,
+        o.service_code                                            as service_code,
+        coalesce(o.shipping_amount, 0)                            as shipping_amount,
+        coalesce((item->>'quantity')::int, 1)                     as qty
+      from orders o,
+           jsonb_array_elements(o.items) item
+      where item ? 'sku'
+        and item->>'sku' is not null
+        and item->>'sku' <> ''
+        and o.order_date >= ${fromIso}::timestamptz
+        and o.order_date <= ${toIso}::timestamptz
+        and (${cid}::int is null or o.client_id = ${cid}::int)
+        and not exists (select 1 from clients c where c.id = o.client_id and c.is_test = true)
+    ),
+    classified as (
+      select *,
+        case
+          when lower(coalesce(service_code, '')) ~ '(priority|express|overnight|expedited|next_day|2day|2_day)'
+            then 'exp' else 'std'
+        end as ship_class
+      from sku_orders
+    )
+    select
+      sku,
+      max(name)                                                       as name,
+      max(image_url)                                                  as image_url,
+      client_id,
+      count(distinct order_id)::int                                   as orders,
+      count(distinct order_id)
+        filter (where order_status = 'awaiting_shipment')::int        as pending,
+      count(distinct order_id)
+        filter (where ext_shipped = true)::int                        as ext_shipped,
+      count(distinct order_id) filter (where ship_class = 'std')::int as std_orders,
+      coalesce(sum(shipping_amount) filter (where ship_class = 'std'), 0)::text as std_total,
+      count(distinct order_id) filter (where ship_class = 'exp')::int as exp_orders,
+      coalesce(sum(shipping_amount) filter (where ship_class = 'exp'), 0)::text as exp_total,
+      sum(qty)::int                                                   as total_qty,
+      coalesce(sum(shipping_amount), 0)::text                         as total_shipping
+    from classified
+    group by sku, client_id
+    order by total_qty desc
+    limit ${q.limit}
+  `);
+  return c.json({ data: rows, totalSkus: rows.length });
+});
+
+app.get('/daily-sales', zValidator('query', skuDailyQuery), async (c) => {
+  // Delegate body is identical to /sku-daily — copy the logic to avoid
+  // internal fetch.
+  const q = c.req.valid('query');
+  const fromIso = new Date(q.dateFrom).toISOString();
+  const toIso = new Date(q.dateTo).toISOString();
+  const cid: number | null = q.clientId ?? null;
+
+  const top = await db.execute<{ sku: string; name: string | null; total_qty: number }>(sql`
+    select item->>'sku' as sku,
+           max(item->>'name') as name,
+           sum(coalesce((item->>'quantity')::int, 1))::int as total_qty
+    from orders o, jsonb_array_elements(o.items) item
+    where item ? 'sku' and item->>'sku' is not null and item->>'sku' <> ''
+      and o.order_date >= ${fromIso}::timestamptz
+      and o.order_date <= ${toIso}::timestamptz
+      and (${cid}::int is null or o.client_id = ${cid}::int)
+      and not exists (select 1 from clients c where c.id = o.client_id and c.is_test = true)
+    group by item->>'sku'
+    order by total_qty desc
+    limit ${q.topN}
+  `);
+
+  const skus = top.map((t) => t.sku);
+  if (!skus.length) return c.json({ topSkus: [], days: [] });
+
+  const skuList = sql.join(skus.map((s) => sql`${s}`), sql`, `);
+
+  const daily = await db.execute<{ day: string; sku: string; qty: number }>(sql`
+    select to_char(date_trunc('day', o.order_date), 'YYYY-MM-DD') as day,
+           item->>'sku' as sku,
+           sum(coalesce((item->>'quantity')::int, 1))::int as qty
+    from orders o, jsonb_array_elements(o.items) item
+    where item ? 'sku' and item->>'sku' in (${skuList})
+      and o.order_date >= ${fromIso}::timestamptz
+      and o.order_date <= ${toIso}::timestamptz
+      and (${cid}::int is null or o.client_id = ${cid}::int)
+      and not exists (select 1 from clients c where c.id = o.client_id and c.is_test = true)
+    group by date_trunc('day', o.order_date), item->>'sku'
+    order by date_trunc('day', o.order_date) asc
+  `);
+
+  const byDay = new Map<string, Record<string, number | string>>();
+  for (const row of daily) {
+    const bucket = byDay.get(row.day) ?? { day: row.day };
+    bucket[row.sku] = row.qty;
+    byDay.set(row.day, bucket);
+  }
+  const sortedDays = [...byDay.keys()].sort();
+  const days = sortedDays.map((d) => {
+    const b = byDay.get(d)!;
+    for (const s of skus) if (b[s] === undefined) b[s] = 0;
+    return b;
+  });
+
+  return c.json({ topSkus: top, days });
+});
+
 export default app;

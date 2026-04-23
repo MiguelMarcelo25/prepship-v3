@@ -521,6 +521,131 @@ app.patch('/:id{[0-9]+}', zValidator('json', patchBody), async (c) => {
   return c.json(row);
 });
 
+// v2-parity POST aliases. v2's apiClient hits dedicated action endpoints per
+// field (POST /orders/:id/residential, .../selected-pid, etc.) — v4's canonical
+// update path is a PATCH with the field in the body. These aliases forward to
+// the same upsert logic so v2 callers don't need to know the v4 shape.
+
+async function applyOverridesPatch(
+  id: number,
+  patch: Partial<typeof orderOverrides.$inferInsert>,
+) {
+  const [existing] = await db
+    .select({ id: orders.id })
+    .from(orders)
+    .where(eq(orders.id, id))
+    .limit(1);
+  if (!existing) return null;
+  const bestRateAt = patch.bestRateJson !== undefined ? new Date() : undefined;
+  const [row] = await db
+    .insert(orderOverrides)
+    .values({ orderId: id, ...patch, bestRateAt, updatedAt: new Date() })
+    .onConflictDoUpdate({
+      target: orderOverrides.orderId,
+      set: { ...patch, bestRateAt, updatedAt: new Date() },
+    })
+    .returning();
+  return row;
+}
+
+app.post(
+  '/:id{[0-9]+}/residential',
+  zValidator('json', z.object({ residential: z.boolean().nullable() })),
+  async (c) => {
+    const id = Number(c.req.param('id'));
+    const row = await applyOverridesPatch(id, { residential: c.req.valid('json').residential });
+    if (!row) return c.json({ error: 'Order not found' }, 404);
+    return c.json({ data: row });
+  }
+);
+
+app.post(
+  '/:id{[0-9]+}/selected-pid',
+  zValidator('json', z.object({ selectedPid: z.number().int().nullable() })),
+  async (c) => {
+    const id = Number(c.req.param('id'));
+    const row = await applyOverridesPatch(id, { selectedPid: c.req.valid('json').selectedPid });
+    if (!row) return c.json({ error: 'Order not found' }, 404);
+    return c.json({ data: row });
+  }
+);
+
+app.post(
+  '/:id{[0-9]+}/selected-package-id',
+  // v2 accepts either {packageId} or {selectedPid}; coalesce both into selectedPackageId (text).
+  zValidator(
+    'json',
+    z.object({
+      packageId: z.union([z.string(), z.number()]).nullable().optional(),
+      selectedPid: z.union([z.string(), z.number()]).nullable().optional(),
+    })
+  ),
+  async (c) => {
+    const id = Number(c.req.param('id'));
+    const body = c.req.valid('json');
+    const raw = body.packageId ?? body.selectedPid ?? null;
+    const selectedPackageId = raw === null ? null : String(raw);
+    const row = await applyOverridesPatch(id, { selectedPackageId });
+    if (!row) return c.json({ error: 'Order not found' }, 404);
+    return c.json({ data: row });
+  }
+);
+
+app.post(
+  '/:id{[0-9]+}/best-rate',
+  zValidator(
+    'json',
+    z.object({
+      bestRateJson: z.unknown(),
+      bestRateDims: z.string().nullable().optional(),
+    })
+  ),
+  async (c) => {
+    const id = Number(c.req.param('id'));
+    const body = c.req.valid('json');
+    const row = await applyOverridesPatch(id, {
+      bestRateJson: body.bestRateJson,
+      bestRateDims: body.bestRateDims ?? null,
+    });
+    if (!row) return c.json({ error: 'Order not found' }, 404);
+    return c.json({ data: row });
+  }
+);
+
+app.post(
+  '/:id{[0-9]+}/shipped-external',
+  zValidator(
+    'json',
+    z.object({
+      externalShipped: z.boolean().optional(),
+      externallyShipped: z.boolean().optional(),
+      source: z.string().nullable().optional(),
+    })
+  ),
+  async (c) => {
+    const id = Number(c.req.param('id'));
+    const body = c.req.valid('json');
+    const flag = body.externallyShipped ?? body.externalShipped ?? true;
+
+    const [existing] = await db
+      .select({ id: orders.id })
+      .from(orders)
+      .where(eq(orders.id, id))
+      .limit(1);
+    if (!existing) return c.json({ error: 'Order not found' }, 404);
+
+    await db
+      .update(orders)
+      .set({ externallyShipped: flag, updatedAt: new Date() })
+      .where(eq(orders.id, id));
+
+    const row = await applyOverridesPatch(id, {
+      externallyShippedSource: body.source ?? null,
+    });
+    return c.json({ data: row });
+  }
+);
+
 const saveDimsBody = z.object({
   l: z.number().nonnegative(),
   w: z.number().nonnegative(),

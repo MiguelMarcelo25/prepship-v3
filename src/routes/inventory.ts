@@ -308,6 +308,79 @@ app.post(
   }
 );
 
+// v2-parity bulk receive: POST /inventory/receive body {clientId, items:[{invSkuId, qty, note?}]}.
+// Calls applyMovement per item so every receipt lands in the ledger. Per-item
+// errors are tallied without aborting the batch.
+app.post(
+  '/receive',
+  zValidator(
+    'json',
+    z.object({
+      clientId: z.number().int().nullable().optional(),
+      items: z
+        .array(
+          z.object({
+            invSkuId: z.number().int().positive(),
+            qty: z.number().int().positive(),
+            note: z.string().optional(),
+          })
+        )
+        .min(1),
+    })
+  ),
+  async (c) => {
+    const body = c.req.valid('json');
+    const email = c.get('email' as never) as string | undefined;
+    const results: Array<{ invSkuId: number; ok: boolean; error?: string }> = [];
+    for (const item of body.items) {
+      try {
+        await applyMovement({
+          inventoryId: item.invSkuId,
+          type: 'receive',
+          qty: item.qty,
+          note: item.note,
+          createdBy: email,
+        });
+        results.push({ invSkuId: item.invSkuId, ok: true });
+      } catch (err) {
+        results.push({
+          invSkuId: item.invSkuId,
+          ok: false,
+          error: err instanceof Error ? err.message : 'Unknown error',
+        });
+      }
+    }
+    const ok = results.filter((r) => r.ok).length;
+    return c.json({ received: ok, total: results.length, results });
+  }
+);
+
+// v2-parity single adjust: POST /inventory/adjust body {invSkuId, qty, note?}.
+// Same semantic as POST /:id/adjust but v2 shape with id in the body.
+app.post(
+  '/adjust',
+  zValidator(
+    'json',
+    z.object({
+      invSkuId: z.number().int().positive(),
+      qty: z.number().int().refine((v) => v !== 0, 'qty cannot be 0'),
+      note: z.string().optional(),
+    })
+  ),
+  async (c) => {
+    const body = c.req.valid('json');
+    const email = c.get('email' as never) as string | undefined;
+    const result = await applyMovement({
+      inventoryId: body.invSkuId,
+      type: 'adjust',
+      qty: body.qty,
+      note: body.note,
+      createdBy: email,
+    });
+    return c.json(result);
+  }
+);
+
 // Bulk update of dimensions + pack-size fields for many inventory rows in one call.
 // Extended for v2 parity: baseUnitQty, unitsPerPack, cuFtOverride, packageId — so
 // CSV importers and bulk editors can populate the new pack-size fields without

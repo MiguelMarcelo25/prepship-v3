@@ -606,9 +606,6 @@ export const apiClient = {
   },
 
   fetchShipmentSyncStatus(): Promise<any> {
-    // Expected v4 backend: GET /shipments/status (T2 punch-list item).
-    // Until it lands the call 404s and safe() returns the idle fallback so
-    // the topbar pill still renders.
     return safe(
       'fetchShipmentSyncStatus',
       () => api.get<any>('/shipments/status'),
@@ -617,7 +614,6 @@ export const apiClient = {
   },
 
   triggerShipmentSync(): Promise<any> {
-    // Expected v4 backend: POST /shipments/sync (T2 punch-list item).
     return safe(
       'triggerShipmentSync',
       () => api.post<any>('/shipments/sync', {}),
@@ -626,28 +622,18 @@ export const apiClient = {
   },
 
   clearAndRefetchAllRates(): Promise<any> {
-    // v2 "clear & refetch" flow = purge the rates cache then kick a fresh
-    // order sync so best-rate backfill repopulates. v4 exposes both:
-    //   DELETE /rates/cache — empty the cache
-    //   POST   /orders/sync — user-initiated sync (JWT-authed mirror of
-    //                         /cron/sync-orders; cron path is secret-gated)
-    // Response shape matches v2's settings-parity toast, which reads
-    // `.message` and `.ordersQueued`.
-    return safe(
+    return safe<any>(
       'clearAndRefetchAllRates',
       async () => {
-        const [cleared, queued] = await Promise.all([
-          api.delete<any>('/rates/cache'),
-          api.post<any>('/orders/sync', {}),
-        ]);
-        const deleted = Number(cleared?.deleted ?? 0);
-        const synced = Number(queued?.synced ?? 0);
+        const res = await api.post<any>('/rates/cache-clear-and-refetch', {});
+        const cleared = Number(res?.cleared ?? 0);
         return {
           ok: true,
-          ordersQueued: synced,
-          message: `Cleared ${deleted} cached rates — ${synced} orders re-synced`,
-          cleared,
-          queued,
+          ordersQueued: 0,
+          jobId: res?.jobId ?? null,
+          message: `Cleared ${cleared} cached rates — best-rate refetch started`,
+          cleared: { deleted: cleared },
+          queued: null,
         };
       },
       {
@@ -698,18 +684,9 @@ export const apiClient = {
   },
 
   markOrderShippedExternal(orderId: number, source: string): Promise<any> {
-    // v2 "Mark as shipped externally" flow. T2 is extending v4's PATCH
-    // /orders/:id schema to accept `externallyShipped` + optional
-    // `externallyShippedSource`; both columns already exist on orderOverrides.
-    // Until the schema lands the call 400s and safe() returns {ok:false} so
-    // the button stays responsive instead of throwing.
     return safe(
       'markOrderShippedExternal',
-      () =>
-        api.patch<any>(`/orders/${orderId}`, {
-          externallyShipped: true,
-          externallyShippedSource: source,
-        }),
+      () => api.post<any>(`/orders/${orderId}/shipped-external`, { source }),
       { ok: false }
     );
   },
@@ -1266,11 +1243,6 @@ export const apiClient = {
   },
 
   fetchInventoryLedger(query: Record<string, unknown>): Promise<any[]> {
-    // Expected v4 backend: GET /inventory/ledger (global, T2 punch-list item).
-    // InventoryView History tab passes `{clientId?, type?, from?, to?}`; pass
-    // them through as query params so the endpoint has everything it needs.
-    // Until it lands the 404 is swallowed and the history tab shows an empty
-    // ledger instead of crashing.
     return safe(
       'fetchInventoryLedger',
       async () => {

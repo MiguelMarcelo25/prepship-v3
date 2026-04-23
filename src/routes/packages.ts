@@ -224,6 +224,85 @@ app.get('/:id{[0-9]+}/ledger', async (c) => {
   return c.json({ data: rows });
 });
 
+// v2-parity: PUT /packages/:id — alias for PATCH. v2 apiClient sends PUT.
+app.put('/:id{[0-9]+}', zValidator('json', body.partial()), async (c) => {
+  const id = Number(c.req.param('id'));
+  const v = c.req.valid('json');
+  const [row] = await db
+    .update(packages)
+    .set({ ...v, updatedAt: new Date() })
+    .where(eq(packages.id, id))
+    .returning();
+  if (!row) return c.json({ error: 'Package not found' }, 404);
+  return c.json(row);
+});
+
+// v2-parity: PATCH /packages/:id/reorder-level {reorderLevel}. Dedicated path so
+// v2 callers don't need to know the generic PATCH shape.
+app.patch(
+  '/:id{[0-9]+}/reorder-level',
+  zValidator('json', z.object({ reorderLevel: z.number().int().nonnegative() })),
+  async (c) => {
+    const id = Number(c.req.param('id'));
+    const { reorderLevel } = c.req.valid('json');
+    const [row] = await db
+      .update(packages)
+      .set({ reorderLevel, updatedAt: new Date() })
+      .where(eq(packages.id, id))
+      .returning();
+    if (!row) return c.json({ error: 'Package not found' }, 404);
+    return c.json(row);
+  }
+);
+
+// v2-parity: POST /packages/auto-create {length, width, height, name?, ...}
+// Looks up by dims first (same tolerance as /find-by-dims); if a match exists
+// returns it, otherwise creates a new "custom" package with the given dims.
+app.post(
+  '/auto-create',
+  zValidator(
+    'json',
+    z.object({
+      length: z.number().positive(),
+      width: z.number().positive(),
+      height: z.number().positive(),
+      name: z.string().optional(),
+      tareWeightOz: z.number().nonnegative().optional(),
+    })
+  ),
+  async (c) => {
+    const { length, width, height, name, tareWeightOz } = c.req.valid('json');
+    const tol = 0.1;
+    const [existing] = await db
+      .select()
+      .from(packages)
+      .where(
+        and(
+          sql`abs(${packages.length} - ${length}) <= ${tol}`,
+          sql`abs(${packages.width} - ${width}) <= ${tol}`,
+          sql`abs(${packages.height} - ${height}) <= ${tol}`
+        )
+      )
+      .limit(1);
+    if (existing) return c.json({ data: existing, created: false });
+
+    const genName = name ?? `Custom ${length}x${width}x${height}`;
+    const [row] = await db
+      .insert(packages)
+      .values({
+        name: genName,
+        type: 'box',
+        length,
+        width,
+        height,
+        tareWeightOz: tareWeightOz ?? 0,
+        source: 'custom',
+      })
+      .returning();
+    return c.json({ data: row, created: true }, 201);
+  }
+);
+
 // v2-parity: GET /packages/low-stock — packages whose stockQty is at or
 // below reorderLevel. Used by the Packages view's "needs reorder" badge.
 app.get('/low-stock', async (c) => {
