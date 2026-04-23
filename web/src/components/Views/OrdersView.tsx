@@ -1625,6 +1625,10 @@ export default function OrdersView({
       try {
         const payload: Record<string, unknown> = {
           orderId: order.orderId,
+          // v2-parity: pass orderNumber so ShipStation's external_order_id
+          // field is populated (helps reconciliation reports). Server-side
+          // fallback exists but passing it explicitly matches v2.
+          orderNumber: order.orderNumber ?? undefined,
           serviceCode: effectiveServiceCode,
           carrierCode: effectiveCarrierCode,
           packageCode: 'package',
@@ -1632,6 +1636,12 @@ export default function OrdersView({
           length: dims?.length,
           width: dims?.width,
           height: dims?.height,
+          // v2-parity: batch labels default to 'delivery' confirmation (signed
+          // on delivery, cheapest level that's still tracked). Without this,
+          // v4 falls through to 'none' at src/lib/shipstation/labels.ts:152 →
+          // no signature tracking and different carrier billing vs v2.
+          // Single-order path at line ~1309 already does this conversion.
+          confirmation: 'delivery',
           testLabel: batchTestMode || isTestOrder,
         }
         if (shippingProviderId != null) {
