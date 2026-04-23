@@ -202,6 +202,25 @@ export async function generateLineItems(input: GenerateInput) {
   let generated = 0;
   let skipped = 0;
 
+  // Collect ALL line-item rows across every shipment first, then run a
+  // single batched INSERT at the end. Previous per-row insert + ON
+  // CONFLICT DO NOTHING loop was the bottleneck (16K round-trips over a
+  // 3,267-shipment generate). Batched upsert turns that into ~32
+  // round-trips (chunks of 500).
+  type LineRow = {
+    clientId: number;
+    orderId: number | null;
+    orderNumber: string | null;
+    shipmentId: number | null;
+    shipDate: Date | null;
+    lineType: string;
+    description: string;
+    qty: string;
+    unitCost: string;
+    totalCost: string;
+  };
+  const allRows: LineRow[] = [];
+
   for (const s of ships) {
     if (s.clientId === null) {
       skipped += 1;
@@ -213,18 +232,7 @@ export async function generateLineItems(input: GenerateInput) {
       continue;
     }
 
-    const rows: {
-      clientId: number;
-      orderId: number | null;
-      orderNumber: string | null;
-      shipmentId: number;
-      shipDate: Date | null;
-      lineType: string;
-      description: string;
-      qty: string;
-      unitCost: string;
-      totalCost: string;
-    }[] = [];
+    const rows: LineRow[] = [];
 
     const pickPackFee = toNum(cfg.pickPackFee);
     if (pickPackFee > 0) {
@@ -319,21 +327,47 @@ export async function generateLineItems(input: GenerateInput) {
       }
     }
 
-    for (const row of rows) {
-      try {
-        await db
-          .insert(billingLineItems)
-          .values(row)
-          .onConflictDoNothing({
-            target: [
-              billingLineItems.orderId,
-              billingLineItems.lineType,
-              billingLineItems.description,
-            ],
-          });
-        generated += 1;
-      } catch {
-        skipped += 1;
+    // Collect for batch insert instead of inserting one at a time.
+    for (const row of rows) allRows.push(row);
+  }
+
+  // Batch INSERT in chunks of 500 with ON CONFLICT DO NOTHING. The unique
+  // constraint (order_id, line_type, description) still guards against
+  // duplicates, so re-running the generate is idempotent.
+  const CHUNK = 500;
+  for (let i = 0; i < allRows.length; i += CHUNK) {
+    const chunk = allRows.slice(i, i + CHUNK);
+    if (!chunk.length) continue;
+    try {
+      await db
+        .insert(billingLineItems)
+        .values(chunk)
+        .onConflictDoNothing({
+          target: [
+            billingLineItems.orderId,
+            billingLineItems.lineType,
+            billingLineItems.description,
+          ],
+        });
+      generated += chunk.length;
+    } catch {
+      // Fall back to per-row to isolate which row poisoned the chunk.
+      for (const row of chunk) {
+        try {
+          await db
+            .insert(billingLineItems)
+            .values(row)
+            .onConflictDoNothing({
+              target: [
+                billingLineItems.orderId,
+                billingLineItems.lineType,
+                billingLineItems.description,
+              ],
+            });
+          generated += 1;
+        } catch {
+          skipped += 1;
+        }
       }
     }
   }
