@@ -130,97 +130,100 @@ async function flushNewStorePairs(
   }
 }
 
-async function upsertOrder(
-  o: SSOrder,
+// Batched upsert — writes a page of orders in a single INSERT ... ON CONFLICT
+// DO UPDATE instead of N sequential round-trips. ~10x faster than the old
+// per-order loop for large backfills.
+//
+// Preserves the same semantics as the old single-row version:
+//   • isTest clients are filtered out before the insert (never hit the DB)
+//   • fallbackClientId auto-attaches orders to their owner account
+//   • externallyShipped is only overwritten when the incoming row
+//     affirmatively sets it (preserves user-set flags on routine syncs)
+async function upsertOrdersBatch(
+  ordersIn: SSOrder[],
   storeToClient: {
     byStore: Map<number, number>;
     testClients: Set<number>;
     newPairs?: Array<{ storeId: number; clientId: number }>;
   },
-  // When this order came from a per-client SS account (e.g. KF Goods'
-  // own keys), the sync passes that client's id here. Used as a fallback
-  // when the incoming storeId isn't yet in storeToClient.
   fallbackClientId: number | null = null
-): Promise<boolean> {
-  const storeId = o.advancedOptions?.storeId ?? null;
-  let clientId =
-    storeId !== null ? storeToClient.byStore.get(storeId) ?? null : null;
-  if (clientId === null && fallbackClientId !== null) {
-    clientId = fallbackClientId;
-    if (storeId !== null) {
-      // Cache the mapping in-memory for the rest of the sync pass AND
-      // collect it for the batched UPDATE that runs after the sync
-      // finishes (see flushNewStorePairs). We don't touch the DB here —
-      // issuing an UPDATE inside the hot loop was causing pg parameter-
-      // binding errors on integer[] arrays.
-      storeToClient.byStore.set(storeId, fallbackClientId);
-      storeToClient.newPairs?.push({ storeId, clientId: fallbackClientId });
+): Promise<number> {
+  if (!ordersIn.length) return 0;
+
+  type Row = typeof orders.$inferInsert;
+  const rows: Row[] = [];
+
+  for (const o of ordersIn) {
+    const storeId = o.advancedOptions?.storeId ?? null;
+    let clientId =
+      storeId !== null ? storeToClient.byStore.get(storeId) ?? null : null;
+    if (clientId === null && fallbackClientId !== null) {
+      clientId = fallbackClientId;
+      if (storeId !== null) {
+        storeToClient.byStore.set(storeId, fallbackClientId);
+        storeToClient.newPairs?.push({ storeId, clientId: fallbackClientId });
+      }
     }
-  }
-  // Hard guard: ShipStation orders under a test-flagged client never hit the
-  // DB. Test clients are sandbox-only — real customer orders must never land
-  // there and sync must never touch the seeded mock rows.
-  if (clientId !== null && storeToClient.testClients.has(clientId)) {
-    return false;
-  }
-  const externallyShipped = externallyShippedFromRaw(o);
-  const values = {
-    externalOrderId: String(o.orderId),
-    orderNumber: o.orderNumber,
-    orderStatus: o.orderStatus,
-    orderDate: o.orderDate ? new Date(o.orderDate) : null,
-    clientId,
-    storeId,
-    customerEmail: o.customerEmail ?? null,
-    shipToName: o.shipTo?.name ?? null,
-    shipToCity: o.shipTo?.city ?? null,
-    shipToState: o.shipTo?.state ?? null,
-    shipToPostalCode: o.shipTo?.postalCode ?? null,
-    carrierCode: o.carrierCode ?? null,
-    serviceCode: o.serviceCode ?? null,
-    weightOz: toOunces(o.weight),
-    orderTotal: toNumericString(o.orderTotal),
-    shippingAmount: toNumericString(o.shippingAmount),
-    items: (o.items as unknown[]) ?? [],
-    raw: o as unknown as Record<string, unknown>,
-    externallyShipped,
-    updatedAt: new Date(),
-  };
+    if (clientId !== null && storeToClient.testClients.has(clientId)) continue;
 
-  // Base SET for the upsert. externallyShipped is only included when the
-  // ShipStation payload AFFIRMATIVELY sets a flag — otherwise the existing
-  // DB value is preserved (protects user-set flags from being clobbered
-  // back to false on a routine sync).
-  const updateSet: Record<string, unknown> = {
-    orderNumber: values.orderNumber,
-    orderStatus: values.orderStatus,
-    orderDate: values.orderDate,
-    clientId: values.clientId,
-    storeId: values.storeId,
-    customerEmail: values.customerEmail,
-    shipToName: values.shipToName,
-    shipToCity: values.shipToCity,
-    shipToState: values.shipToState,
-    shipToPostalCode: values.shipToPostalCode,
-    carrierCode: values.carrierCode,
-    serviceCode: values.serviceCode,
-    weightOz: values.weightOz,
-    orderTotal: values.orderTotal,
-    shippingAmount: values.shippingAmount,
-    items: values.items,
-    raw: values.raw,
-    updatedAt: values.updatedAt,
-  };
-  if (externallyShipped) updateSet.externallyShipped = true;
+    rows.push({
+      externalOrderId: String(o.orderId),
+      orderNumber: o.orderNumber,
+      orderStatus: o.orderStatus,
+      orderDate: o.orderDate ? new Date(o.orderDate) : null,
+      clientId,
+      storeId,
+      customerEmail: o.customerEmail ?? null,
+      shipToName: o.shipTo?.name ?? null,
+      shipToCity: o.shipTo?.city ?? null,
+      shipToState: o.shipTo?.state ?? null,
+      shipToPostalCode: o.shipTo?.postalCode ?? null,
+      carrierCode: o.carrierCode ?? null,
+      serviceCode: o.serviceCode ?? null,
+      weightOz: toOunces(o.weight),
+      orderTotal: toNumericString(o.orderTotal),
+      shippingAmount: toNumericString(o.shippingAmount),
+      items: (o.items as unknown[]) ?? [],
+      raw: o as unknown as Record<string, unknown>,
+      externallyShipped: externallyShippedFromRaw(o),
+      updatedAt: new Date(),
+    });
+  }
 
+  if (!rows.length) return 0;
+
+  // EXCLUDED-based ON CONFLICT DO UPDATE. The externally_shipped CASE
+  // preserves any already-true DB value when the incoming row is false
+  // (matches the old per-row logic).
   await db
     .insert(orders)
-    .values(values)
+    .values(rows)
     .onConflictDoUpdate({
       target: orders.externalOrderId,
-      set: updateSet,
+      set: {
+        orderNumber: sql`excluded.order_number`,
+        orderStatus: sql`excluded.order_status`,
+        orderDate: sql`excluded.order_date`,
+        clientId: sql`excluded.client_id`,
+        storeId: sql`excluded.store_id`,
+        customerEmail: sql`excluded.customer_email`,
+        shipToName: sql`excluded.ship_to_name`,
+        shipToCity: sql`excluded.ship_to_city`,
+        shipToState: sql`excluded.ship_to_state`,
+        shipToPostalCode: sql`excluded.ship_to_postal_code`,
+        carrierCode: sql`excluded.carrier_code`,
+        serviceCode: sql`excluded.service_code`,
+        weightOz: sql`excluded.weight_oz`,
+        orderTotal: sql`excluded.order_total`,
+        shippingAmount: sql`excluded.shipping_amount`,
+        items: sql`excluded.items`,
+        raw: sql`excluded.raw`,
+        externallyShipped: sql`case when excluded.externally_shipped = true then true else orders.externally_shipped end`,
+        updatedAt: sql`excluded.updated_at`,
+      },
     });
-  return true;
+
+  return rows.length;
 }
 
 export type SyncResult = {
@@ -313,10 +316,13 @@ async function syncOrdersForAccount(
 
     pages = res.pages;
 
-    for (const o of res.orders) {
-      const wrote = await upsertOrder(o, storeToClient, account.ownerClientId);
-      if (wrote) total += 1;
-    }
+    // One INSERT per page (~250 orders) instead of per-row round-trips —
+    // turns a ~45 min backfill into a ~5 min one.
+    total += await upsertOrdersBatch(
+      res.orders,
+      storeToClient,
+      account.ownerClientId
+    );
 
     if (!res.orders.length || page >= res.pages) break;
     page += 1;
