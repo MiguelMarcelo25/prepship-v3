@@ -164,7 +164,11 @@ app.post('/sync-stores', async (c) => {
   });
 });
 
-// Per-client order counts grouped by status (one row per client)
+// Per-client order counts grouped by status (one row per client).
+// v2-parity: stale awaiting orders (>90 days old, never shipped, never
+// cancelled) don't count against the "awaiting" badge — they inflate
+// the sidebar with orders that aren't actionable. Shipped + cancelled
+// have no date filter since the user expects a full historical total.
 app.get('/order-stats', async (c) => {
   const rows = await db.execute<{
     client_id: number;
@@ -174,6 +178,11 @@ app.get('/order-stats', async (c) => {
     select client_id, order_status, count(*)::int as count
     from orders
     where client_id is not null
+      and (
+        order_status <> 'awaiting_shipment'
+        or order_date is null
+        or order_date >= now() - interval '90 days'
+      )
     group by client_id, order_status
   `);
 
