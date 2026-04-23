@@ -669,16 +669,20 @@ app.get('/fetch-ref-rates/status', async (c) => {
     import('../services/ref-rates-fetch'),
     db.select({ count: sql<number>`count(*)::int` }).from(billingRefRates),
   ]);
-  const active = getActiveRefRatesJob();
+  const job = getActiveRefRatesJob();
+  const isRunning = job?.status === 'running' || job?.status === 'pending';
   return c.json({
-    running: active?.status === 'running' || active?.status === 'pending',
-    done: active?.processed ?? 0,
-    total: active?.total ?? 0,
-    errors: active?.failed ?? 0,
-    status: active?.status ?? 'idle',
-    message: active?.message ?? null,
+    running: isRunning,
+    done: job?.processed ?? 0,
+    total: job?.total ?? 0,
+    errors: job?.failed ?? 0,
+    inserted: job?.inserted ?? 0,
+    status: job?.status ?? 'idle',
+    message: job?.message ?? null,
+    error: job?.error ?? null,
+    failureSamples: job?.failureSamples ?? [],
     totalRefRates: rows[0]?.count ?? 0,
-    job: active,
+    job,
   });
 });
 

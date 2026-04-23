@@ -29,6 +29,9 @@ export type RefRatesJob = {
 
 const jobs = new Map<string, RefRatesJob>();
 let activeJobId: string | null = null;
+// Preserved separately so the status endpoint can still show the most
+// recent job's failure samples / inserted count after it finishes.
+let lastJobId: string | null = null;
 const PER_FETCH_TIMEOUT_MS = 20_000;
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
@@ -55,7 +58,10 @@ export function getRefRatesJob(jobId: string): RefRatesJob | null {
 }
 
 export function getActiveRefRatesJob(): RefRatesJob | null {
-  return activeJobId ? (jobs.get(activeJobId) ?? null) : null;
+  // Falls back to the most recent finished job if none is active, so the
+  // status endpoint can surface its failure samples for debugging.
+  const id = activeJobId ?? lastJobId;
+  return id ? (jobs.get(id) ?? null) : null;
 }
 
 export function startRefRatesFetch(opts: {
@@ -210,5 +216,6 @@ async function runFetch(
     job.finishedAt = Date.now();
   } finally {
     if (activeJobId === jobId) activeJobId = null;
+    lastJobId = jobId;
   }
 }
