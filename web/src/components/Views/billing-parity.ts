@@ -372,6 +372,8 @@ export function buildGenerateBillingStatus(
   return `Generated ${g} line items · $${t.toFixed(2)} total`
 }
 
+// Deprecated — use openBillingInvoice() instead. Kept as a no-op shim in
+// case any v2-legacy caller still imports it.
 export function getBillingInvoiceUrl(clientId: number, from: string, to: string) {
   const params = new URLSearchParams({
     clientId: String(clientId),

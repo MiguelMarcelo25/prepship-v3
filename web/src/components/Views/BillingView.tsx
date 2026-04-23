@@ -395,8 +395,12 @@ export default function BillingView({ onOpenOrder }: BillingViewProps) {
       return
     }
 
-    window.open(getBillingInvoiceUrl(clientId, from, to), '_blank')
     toastContext?.addToast(`📄 Opening invoice for ${clientName || 'client'}…`, 'success')
+    void apiClient.openBillingInvoice(clientId, from, to).then((ok) => {
+      if (!ok) {
+        toastContext?.addToast('Failed to open invoice — check console', 'error')
+      }
+    })
   }
 
   return (

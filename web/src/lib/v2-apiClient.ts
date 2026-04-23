@@ -1057,6 +1057,49 @@ export const apiClient = {
     }
   },
 
+  // Fetch the billing invoice HTML with Bearer auth and open it in a new
+  // tab via blob URL. window.open can't carry a bearer token and the
+  // invoice endpoint (GET /billing/invoice) is auth-gated, so a direct
+  // href falls back to a 401 HTML page on Vercel. This mirrors the
+  // print-queue PDF flow.
+  async openBillingInvoice(
+    clientId: number,
+    from: string,
+    to: string
+  ): Promise<boolean> {
+    const toIsoStart = (d: string) =>
+      d.includes('T') ? d : new Date(`${d}T00:00:00.000Z`).toISOString();
+    const toIsoEnd = (d: string) =>
+      d.includes('T') ? d : new Date(`${d}T23:59:59.999Z`).toISOString();
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (!session?.access_token) throw new Error('Not authenticated');
+      const qs = new URLSearchParams({
+        clientId: String(clientId),
+        dateFrom: toIsoStart(from),
+        dateTo: toIsoEnd(to),
+      }).toString();
+      const res = await fetch(`${BASE}/billing/invoice?${qs}`, {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+      });
+      if (!res.ok) {
+        const msg = await res.text().catch(() => res.statusText);
+        throw new Error(`Invoice failed: ${msg}`);
+      }
+      const html = await res.text();
+      const blob = new Blob([html], { type: 'text/html; charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank', 'noopener,noreferrer');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      return true;
+    } catch (err) {
+      console.error('[invoice] open failed:', (err as Error).message);
+      return false;
+    }
+  },
+
   // ─── Products ──────────────────────────────────────────────────────────────
   fetchProducts(query?: Record<string, unknown>): Promise<any[]> {
     return safe(
