@@ -632,12 +632,38 @@ app.post(
   ),
   async (c) => {
     const body = c.req.valid('json') ?? {};
-    const { startRefRatesFetch } = await import('../services/ref-rates-fetch');
+    const { startRefRatesFetch, getActiveRefRatesJob } = await import(
+      '../services/ref-rates-fetch'
+    );
+    const existing = getActiveRefRatesJob();
+    if (existing && existing.status === 'running') {
+      return c.json({
+        ok: false,
+        message: 'Already running',
+        jobId: existing.jobId,
+        total: existing.total,
+        orders: existing.total,
+        queued: existing.total,
+      });
+    }
     const job = startRefRatesFetch(body);
-    return c.json({ job_id: job.jobId, status: job.status });
+    // job.total isn't populated until the job's first tick; best-effort
+    // fill from the current state. Frontend polls /status for the real
+    // numbers as the worker progresses.
+    return c.json({
+      ok: true,
+      jobId: job.jobId,
+      status: job.status,
+      total: job.total,
+      orders: job.total,
+      queued: job.total,
+    });
   }
 );
 
+// Response shape: {running, done, total, errors, status, message, totalRefRates}
+// — matches v2's BillingReferenceRateFetchStatusDto so the frontend's
+// progress + done toasts render with real numbers instead of "undefined".
 app.get('/fetch-ref-rates/status', async (c) => {
   const [{ getActiveRefRatesJob }, rows] = await Promise.all([
     import('../services/ref-rates-fetch'),
@@ -645,8 +671,13 @@ app.get('/fetch-ref-rates/status', async (c) => {
   ]);
   const active = getActiveRefRatesJob();
   return c.json({
+    running: active?.status === 'running' || active?.status === 'pending',
+    done: active?.processed ?? 0,
+    total: active?.total ?? 0,
+    errors: active?.failed ?? 0,
     status: active?.status ?? 'idle',
-    total_ref_rates: rows[0]?.count ?? 0,
+    message: active?.message ?? null,
+    totalRefRates: rows[0]?.count ?? 0,
     job: active,
   });
 });
