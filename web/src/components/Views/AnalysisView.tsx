@@ -11,6 +11,7 @@ import {
   YAxis,
   BarChart,
   Bar,
+  Brush,
 } from 'recharts'
 import type {
   AnalysisDailySalesResponse,
@@ -85,6 +86,11 @@ export default function AnalysisView() {
   const [from, setFrom] = useState(initialFilters.from)
   const [to, setTo] = useState(initialFilters.to)
   const [presetDays, setPresetDays] = useState<number | null>(initialFilters.presetDays)
+  // `zoomBase*` captures the outer range before a brush zoom. When the user
+  // drags the Brush, we narrow from/to to a subset of this base; the Reset
+  // zoom button restores from/to back to the base range.
+  const [zoomBaseFrom, setZoomBaseFrom] = useState(initialFilters.from)
+  const [zoomBaseTo, setZoomBaseTo] = useState(initialFilters.to)
   const [clientId, setClientId] = useState('')
   const [search, setSearch] = useState('')
   const [sortKey, setSortKey] = useState<AnalysisSortKey>('qty')
@@ -192,6 +198,13 @@ export default function AnalysisView() {
     setPresetDays(days)
     setFrom(range.from)
     setTo(range.to)
+    setZoomBaseFrom(range.from)
+    setZoomBaseTo(range.to)
+  }
+
+  function handleResetZoom() {
+    setFrom(zoomBaseFrom)
+    setTo(zoomBaseTo)
   }
 
   async function openSkuDrawer(invSkuId: number) {
@@ -286,6 +299,7 @@ export default function AnalysisView() {
               value={from}
               onChange={(event) => {
                 setFrom(event.target.value)
+                setZoomBaseFrom(event.target.value)
                 setPresetDays(null)
               }}
             />
@@ -298,6 +312,7 @@ export default function AnalysisView() {
               value={to}
               onChange={(event) => {
                 setTo(event.target.value)
+                setZoomBaseTo(event.target.value)
                 setPresetDays(null)
               }}
             />
@@ -366,6 +381,17 @@ export default function AnalysisView() {
               >
                 Daily Units Sold — Top SKUs
               </span>
+              {from !== zoomBaseFrom || to !== zoomBaseTo ? (
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  onClick={handleResetZoom}
+                  style={{ fontSize: 10.5, padding: '2px 8px' }}
+                  title="Reset brush zoom to the active range"
+                >
+                  Reset zoom
+                </button>
+              ) : null}
             </div>
             <div style={{ width: '100%', height: 180 }}>
               <ResponsiveContainer width="100%" height="100%">
@@ -424,6 +450,35 @@ export default function AnalysisView() {
                       isAnimationActive={false}
                     />
                   ))}
+                  {/* Drag-to-zoom: narrows from/to to a subset of the outer
+                      range. Preset is cleared (mirrors the date-input edit
+                      path); zoomBase* stays intact so Reset zoom can restore. */}
+                  <Brush
+                    dataKey="day"
+                    height={28}
+                    stroke="#2a5bd7"
+                    travellerWidth={8}
+                    tickFormatter={(value: string) =>
+                      typeof value === 'string' ? value.slice(5) : value
+                    }
+                    onChange={(range: { startIndex?: number; endIndex?: number }) => {
+                      if (!chartRows.length) return
+                      const startIndex = range?.startIndex ?? 0
+                      const endIndex = range?.endIndex ?? chartRows.length - 1
+                      const startRow = chartRows[startIndex]
+                      const endRow = chartRows[endIndex]
+                      const nextFrom =
+                        startRow && typeof startRow.day === 'string' ? startRow.day : ''
+                      const nextTo =
+                        endRow && typeof endRow.day === 'string' ? endRow.day : ''
+                      if (!nextFrom || !nextTo) return
+                      // No-op when brush spans the entire dataset unchanged.
+                      if (nextFrom === from && nextTo === to) return
+                      setFrom(nextFrom)
+                      setTo(nextTo)
+                      setPresetDays(null)
+                    }}
+                  />
                 </LineChart>
               </ResponsiveContainer>
             </div>
