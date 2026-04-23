@@ -82,6 +82,7 @@ export async function generateLineItems(input: GenerateInput) {
       clientId: shipments.clientId,
       shipDate: shipments.shipDate,
       labelCost: shipments.labelCost,
+      cost: shipments.cost,
       voided: shipments.voided,
       selectedPid: shipments.selectedPid,
       selectedPackageId: shipments.selectedPackageId,
@@ -280,7 +281,12 @@ export async function generateLineItems(input: GenerateInput) {
       });
     }
 
-    const labelCost = toNum(s.labelCost);
+    // label_cost is set when v4 creates the label itself; for shipments
+    // synced from ShipStation (already-shipped orders) only `cost` is
+    // populated. Prefer label_cost when available, fall back to cost so
+    // historical shipments still generate a shipping line. Matches v2's
+    // behavior where any known cost becomes the shipping charge.
+    const labelCost = toNum(s.labelCost) || toNum(s.cost);
     if (labelCost > 0) {
       const pct = toNum(cfg.shippingMarkupPct);
       const flat = toNum(cfg.shippingMarkupFlat);
