@@ -230,68 +230,196 @@ function buildPackages(input: RateInput): Parcel[] {
   return [parcel];
 }
 
+// v2-parity: what a single rate row looks like after /v2/rates/estimate.
+// ShipStation returns a flat array (not wrapped in rate_response). Shape
+// matches apps/api/src/modules/rates/data/shipstation-rate-shopper.ts:99-114.
+type EstimateRate = {
+  rate_id?: string;
+  service_code?: string;
+  service_type?: string;
+  package_type?: string | null;
+  carrier_id?: string;
+  carrier_code?: string;
+  carrier_nickname?: string;
+  shipping_amount?: { amount?: number; currency?: string };
+  other_amount?: { amount?: number; currency?: string };
+  insurance_amount?: { amount?: number; currency?: string };
+  confirmation_amount?: { amount?: number; currency?: string };
+  delivery_days?: number | null;
+  estimated_delivery_date?: string | null;
+  zone?: number | string | null;
+  guaranteed_service?: boolean;
+  warning_messages?: string[];
+  error_messages?: string[];
+  rate_details?: unknown[];
+};
+
+// Cheap mini-carrier lookup so we can tell stamps_com apart (needs city/state
+// in the rate-estimate body). v2 calls discoverCarriers() per request; v4
+// reuses its 15-min-cached getAllCarrierIds() + a parallel nickname cache.
+type CarrierInfo = { carrier_id: string; carrier_code: string; nickname?: string };
+let cachedCarriers: CarrierInfo[] | null = null;
+let cachedCarriersAt = 0;
+
+async function getAllCarriers(): Promise<CarrierInfo[]> {
+  if (cachedCarriers && Date.now() - cachedCarriersAt < CARRIER_CACHE_MS) {
+    return cachedCarriers;
+  }
+  const res = await ssRequest<CarriersResponse>('/v2/carriers', {
+    dedupeKey: 'carriers:list',
+  });
+  const ALLOWED_CODES = new Set(['usps', 'ups', 'fedex', 'dhl_express', 'stamps_com']);
+  cachedCarriers = res.carriers
+    .filter((c) => !c.disabled_by_billing_plan)
+    .filter((c) => ALLOWED_CODES.has((c.carrier_code ?? '').toLowerCase()))
+    .map((c) => ({
+      carrier_id: c.carrier_id,
+      carrier_code: c.carrier_code,
+      nickname: c.nickname ?? c.friendly_name ?? undefined,
+    }));
+  cachedCarriersAt = Date.now();
+  return cachedCarriers;
+}
+
+function shipFromPostalCode(addr: Address): string {
+  return addr.postal_code ?? '90248';
+}
+
+function shipDateIso(): string {
+  return new Date().toISOString();
+}
+
+// v2-parity: one /v2/rates/estimate call per carrier with v2's flat body.
+// Returns v2-shaped EstimateRate[] flattened across all carriers.
+async function fetchEstimateForCarrier(
+  carrier: CarrierInfo,
+  input: RateInput,
+  shipFrom: Address,
+): Promise<EstimateRate[]> {
+  const needsCity = carrier.carrier_code === 'stamps_com';
+  const body: Record<string, unknown> = {
+    carrier_ids: [carrier.carrier_id],
+    from_country_code: (shipFrom.country_code ?? 'US').toUpperCase(),
+    from_postal_code: shipFromPostalCode(shipFrom),
+    to_country_code: (input.toCountry ?? 'US').toUpperCase(),
+    to_postal_code: input.toZip,
+    weight: { value: input.weightOz, unit: 'ounce' },
+    address_residential_indicator:
+      input.residential === true ? 'yes' : input.residential === false ? 'no' : 'unknown',
+    ship_date: shipDateIso(),
+  };
+  if (needsCity) {
+    if (input.toCity) body.to_city_locality = input.toCity;
+    if (input.toState) body.to_state_province = input.toState;
+  }
+  if (input.dimsL && input.dimsW && input.dimsH) {
+    body.dimensions = {
+      length: input.dimsL,
+      width: input.dimsW,
+      height: input.dimsH,
+      unit: 'inch',
+    };
+  }
+  try {
+    const payload = await ssRequest<EstimateRate[] | { rates?: EstimateRate[] }>(
+      '/v2/rates/estimate',
+      {
+        method: 'POST',
+        body,
+        dedupeKey: `rates-estimate:${carrier.carrier_id}:${rateCacheKey(input)}`,
+      },
+    );
+    const rates = Array.isArray(payload) ? payload : (payload.rates ?? []);
+    // Ensure carrier metadata is on every row (ShipStation sometimes omits)
+    for (const r of rates) {
+      if (!r.carrier_id) r.carrier_id = carrier.carrier_id;
+      if (!r.carrier_code) r.carrier_code = carrier.carrier_code;
+      if (!r.carrier_nickname && carrier.nickname) r.carrier_nickname = carrier.nickname;
+    }
+    return rates;
+  } catch (err) {
+    console.warn(
+      `[rates-estimate] carrier ${carrier.carrier_code} (${carrier.carrier_id}) failed:`,
+      err instanceof Error ? err.message : err,
+    );
+    return [];
+  }
+}
+
+// Lift the EstimateRate shape (flat from ShipStation) into v4's Rate shape
+// (used by the cache + route response).
+function toRate(er: EstimateRate): Rate {
+  return {
+    rate_id: String(er.rate_id ?? ''),
+    rate_type: 'shipment',
+    carrier_id: String(er.carrier_id ?? ''),
+    carrier_code: String(er.carrier_code ?? ''),
+    carrier_nickname: er.carrier_nickname,
+    service_type: String(er.service_type ?? er.service_code ?? ''),
+    service_code: String(er.service_code ?? ''),
+    shipping_amount: {
+      currency: er.shipping_amount?.currency ?? 'usd',
+      amount: Number(er.shipping_amount?.amount ?? 0),
+    },
+    insurance_amount: er.insurance_amount
+      ? { currency: er.insurance_amount.currency ?? 'usd', amount: Number(er.insurance_amount.amount ?? 0) }
+      : undefined,
+    confirmation_amount: er.confirmation_amount
+      ? {
+          currency: er.confirmation_amount.currency ?? 'usd',
+          amount: Number(er.confirmation_amount.amount ?? 0),
+        }
+      : undefined,
+    other_amount: er.other_amount
+      ? { currency: er.other_amount.currency ?? 'usd', amount: Number(er.other_amount.amount ?? 0) }
+      : undefined,
+    delivery_days: er.delivery_days ?? null,
+    estimated_delivery_date: er.estimated_delivery_date ?? null,
+    warning_messages: er.warning_messages,
+    error_messages: er.error_messages,
+    package_type: er.package_type ?? undefined,
+  };
+}
+
 export async function fetchLiveRates(input: RateInput): Promise<Rate[]> {
   const shipFrom = input.shipFrom ?? (await getDefaultShipFrom());
-  const carrierIds = input.carrierIds?.length
-    ? input.carrierIds
-    : await getAllCarrierIds();
 
-  const res = await ssRequest<RatesResponse>('/v2/rates', {
-    method: 'POST',
-    dedupeKey: `rates:${rateCacheKey(input)}`,
-    body: {
-      rate_options: { carrier_ids: carrierIds },
-      shipment: {
-        validate_address: 'no_validation',
-        ship_to: buildShipTo(input),
-        ship_from: shipFrom,
-        packages: buildPackages(input),
-        // Some ShipStation carrier integrations reject rate requests with
-        // `"items" must contain at least 1 items`. Send a minimal placeholder
-        // item so those carriers accept the request — it's only used for
-        // rating, not for customs/invoice generation.
-        items: [{ name: 'Item', quantity: 1 }],
-      },
-    },
-  });
+  // v2-parity: /v2/rates/estimate takes ONE carrier_id per call. Issue N
+  // parallel calls (one per allowed carrier) and flatten. Mirrors
+  // apps/api/src/modules/rates/data/shipstation-rate-shopper.ts:fetchRates().
+  //
+  // If the caller restricted carriers via input.carrierIds, filter the
+  // discovery list to that set. Otherwise use the full cached list.
+  const allCarriers = await getAllCarriers();
+  const carriers = input.carrierIds?.length
+    ? allCarriers.filter((c) => input.carrierIds!.includes(c.carrier_id))
+    : allCarriers;
 
-  // v2-parity: drop blocked service codes / package types / names before
-  // returning. Without this, UPS SurePost lightweight and flat-rate envelopes
-  // slip into best-rate picks. storeId isn't carried on RateInput yet — pass
-  // null; the media-mail per-store allowlist can wire a storeId through later.
-  const rates = (res.rate_response.rates ?? []).filter((r) => !isBlockedRate(r));
-  if (rates.length) return rates;
+  if (!carriers.length) {
+    throw new Error(
+      'No ShipStation carriers available — connect a carrier account in ShipStation first.',
+    );
+  }
 
-  // Fall back to invalid_rates. ShipStation flags rates "invalid" for many
-  // soft reasons (address warnings, delivery-window extensions, generic
-  // non-fatal notes). The rate amount is still usable for estimation.
-  const invalid = (res.rate_response.invalid_rates ?? []).filter(
-    (r) => !isBlockedRate(r),
+  const batches = await Promise.all(
+    carriers.map((c) => fetchEstimateForCarrier(c, input, shipFrom)),
   );
-  if (invalid.length) {
-    if (invalid[0]?.error_messages?.length) {
-      console.warn(
-        '[rates] Using invalid_rates. Sample error_messages:',
-        invalid.slice(0, 3).map((r) => ({
-          carrier: r.carrier_code,
-          service: r.service_code,
-          amount: r.shipping_amount?.amount,
-          errors: r.error_messages,
-        }))
-      );
-    }
-    return invalid;
-  }
+  const lifted: Rate[] = batches.flat().map(toRate);
 
-  const errs = res.rate_response.errors ?? [];
-  if (errs.length) {
-    const msg = errs
-      .map((e) => `${e.error_source}/${e.error_type}: ${e.message}`)
-      .join('; ');
-    throw new Error(`ShipStation rate errors: ${msg}`);
-  }
+  // v2-parity: filter blocked service codes + package types + names.
+  // Sort cheapest first (v2 sorts by shipmentCost + otherCost; v4 sort
+  // uses shipping_amount only since markups apply at read-time later).
+  const filtered = lifted.filter((r) => !isBlockedRate(r));
+  filtered.sort((a, b) => a.shipping_amount.amount - b.shipping_amount.amount);
+
+  if (filtered.length) return filtered;
+
+  // v2's /rates/estimate returns empty array when no rates exist for the
+  // route — treat that as a normal "no service" condition, not an error.
+  // (v4's previous /v2/rates endpoint surfaced this via rate_response.errors;
+  // the estimate endpoint just omits them.)
   throw new Error(
-    `No rates returned (status=${res.rate_response.status}) — carriers may not serve this route`
+    `No rates returned for ${input.toZip} at ${input.weightOz}oz — carriers may not serve this route`,
   );
 }
 

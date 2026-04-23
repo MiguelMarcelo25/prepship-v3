@@ -279,6 +279,55 @@ function watermarkKey(accountLabel: string): string {
     : `${LAST_SYNC_KEY}:${accountLabel}`;
 }
 
+// v2-parity: one paginated pass for a (status, since) pair. Factored out so
+// the 3-pass dispatch below can reuse the batched-upsert + inter-page-delay
+// + dedupe-key logic.
+async function fetchOrdersPage(
+  account: SyncAccount,
+  storeToClient: Awaited<ReturnType<typeof buildStoreToClientMap>>,
+  args: {
+    orderStatus: string;
+    sinceMs: number;
+    pageSize: number;
+  },
+): Promise<{ synced: number; pages: number }> {
+  const sinceParam = formatSSDate(args.sinceMs);
+  let page = 1;
+  let pages = 1;
+  let total = 0;
+
+  while (true) {
+    const q = new URLSearchParams({
+      orderStatus: args.orderStatus,
+      modifyDateStart: sinceParam,
+      pageSize: String(args.pageSize),
+      page: String(page),
+      sortBy: 'ModifyDate',
+      sortDir: 'ASC',
+    });
+
+    const res = await ssV1Request<SSOrdersList>(`/orders?${q.toString()}`, {
+      apiKey: account.apiKey,
+      apiSecret: account.apiSecret,
+      dedupeKey: `orders:list:${account.label}:${args.orderStatus}:${sinceParam}:${page}:${args.pageSize}`,
+    });
+
+    pages = res.pages;
+    total += await upsertOrdersBatch(
+      res.orders,
+      storeToClient,
+      account.ownerClientId,
+    );
+
+    if (!res.orders.length || page >= res.pages) break;
+    page += 1;
+    // v2-parity: 500ms inter-page delay. Matches v1Pages helper.
+    await new Promise((r) => setTimeout(r, 500));
+  }
+
+  return { synced: total, pages };
+}
+
 async function syncOrdersForAccount(
   account: SyncAccount,
   opts: { sinceMs?: number; pageSize?: number },
@@ -290,51 +339,56 @@ async function syncOrdersForAccount(
     (await getSettingNumber(key)) ??
     Date.now() - DEFAULT_LOOKBACK_MS;
 
-  // v2-parity: pageSize=500 (v4 used 250). Matches apps/api/src/common/shipstation/client.ts:247
-  // v1Pages helper. Halves round-trip count for the same data volume.
+  // v2-parity: pageSize=500. Matches v1Pages.
   const pageSize = opts.pageSize ?? 500;
   const runStartMs = Date.now();
   const sinceIso = new Date(lastSync).toISOString();
-  const sinceParam = formatSSDate(lastSync);
 
-  let page = 1;
-  let pages = 1;
+  // v2-parity: three separate status-scoped paginated passes per account.
+  // v2 uses fixed windows per status (2hr shipped, 2hr cancelled, 4hr
+  // awaiting_shipment). We keep v4's watermark as the backstop — use the
+  // EARLIER of (lastSync, now - status-window) so first-run backfills still
+  // work while routine runs use v2's narrow windows. Matches
+  // apps/api/src/modules/sync/order-status-sync.ts:158-318.
+  const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+  const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
+  const passes: Array<{ orderStatus: string; sinceMs: number }> = [
+    {
+      orderStatus: 'shipped',
+      sinceMs: Math.min(lastSync, runStartMs - TWO_HOURS_MS),
+    },
+    {
+      orderStatus: 'cancelled',
+      sinceMs: Math.min(lastSync, runStartMs - TWO_HOURS_MS),
+    },
+    {
+      orderStatus: 'awaiting_shipment',
+      sinceMs: Math.min(lastSync, runStartMs - FOUR_HOURS_MS),
+    },
+  ];
+
   let total = 0;
-
-  while (true) {
-    const q = new URLSearchParams({
-      modifyDateStart: sinceParam,
-      pageSize: String(pageSize),
-      page: String(page),
-      sortBy: 'ModifyDate',
-      sortDir: 'ASC',
-    });
-
-    const res = await ssV1Request<SSOrdersList>(`/orders?${q.toString()}`, {
-      apiKey: account.apiKey,
-      apiSecret: account.apiSecret,
-      dedupeKey: `orders:list:${account.label}:${sinceParam}:${page}:${pageSize}`,
-    });
-
-    pages = res.pages;
-
-    // One INSERT per page (~500 orders) instead of per-row round-trips —
-    // turns a ~45 min backfill into a ~5 min one.
-    total += await upsertOrdersBatch(
-      res.orders,
-      storeToClient,
-      account.ownerClientId
-    );
-
-    if (!res.orders.length || page >= res.pages) break;
-    page += 1;
-    // v2-parity: 500ms inter-page delay. Matches apps/api/src/common/shipstation/client.ts:268
-    // v1Pages. Keeps the token bucket healthy over long backfills.
-    await new Promise((r) => setTimeout(r, 500));
+  let maxPages = 1;
+  for (const pass of passes) {
+    try {
+      const result = await fetchOrdersPage(account, storeToClient, {
+        orderStatus: pass.orderStatus,
+        sinceMs: pass.sinceMs,
+        pageSize,
+      });
+      total += result.synced;
+      if (result.pages > maxPages) maxPages = result.pages;
+    } catch (err) {
+      // Per-status failure shouldn't kill the whole account sync.
+      console.warn(
+        `[order-sync] account="${account.label}" orderStatus="${pass.orderStatus}" failed:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
   }
 
   await setSetting(key, String(runStartMs));
-  return { synced: total, pages, sinceIso };
+  return { synced: total, pages: maxPages, sinceIso };
 }
 
 export async function syncOrders(opts: {
