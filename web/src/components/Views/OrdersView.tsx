@@ -904,23 +904,15 @@ export default function OrdersView({
 
     let cancelled = false
 
-    // Forward the picker's date range so the stats strip follows the user's
-    // "Last 30 Days" / custom selection. Backend accepts strict ISO 8601 via
-    // z.string().datetime() — convert YYYY-MM-DD (dateRange format) to full
-    // ISO timestamps (start-of-day UTC for `from`, end-of-day for `to`).
-    // When dateRange is empty (no explicit filter), pass undefined so the
-    // server falls back to its noon-to-noon PT shift window — the v2-parity
-    // default behavior.
-    const toIsoStart = (d?: string) => (d ? `${d}T00:00:00.000Z` : undefined)
-    const toIsoEnd = (d?: string) => (d ? `${d}T23:59:59.999Z` : undefined)
-    const query = {
-      dateFrom: toIsoStart(dateRange.start),
-      dateTo: toIsoEnd(dateRange.end),
-    }
-
+    // v2-parity: the stats strip ALWAYS uses the server's noon-to-noon PT
+    // shift window, regardless of what the date picker says. v2's strip
+    // header ("Apr 22, 12pm PT → Apr 23, 12pm PT") is hardcoded to the
+    // current shift window — the picker affects only the orders list
+    // below. Do NOT pass dateFrom/dateTo here; the server's default
+    // computeShiftWindow() handles this.
     const loadDailyStats = async () => {
       try {
-        const payload = await apiClient.fetchDailyStats(query)
+        const payload = await apiClient.fetchDailyStats()
         if (!cancelled) setDailyStats(payload)
       } catch {
         if (!cancelled) setDailyStats(null)
@@ -936,7 +928,7 @@ export default function OrdersView({
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [currentStatus, dateRange.start, dateRange.end])
+  }, [currentStatus])
 
   useEffect(() => {
     if (refreshVersion === 0) return
