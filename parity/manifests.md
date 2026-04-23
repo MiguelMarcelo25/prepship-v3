@@ -18,7 +18,7 @@ Generated: 2026-04-23
 - [ ] `POST /manifests/generate` — POST /api/manifests/generate — **[MISSING]**
       v2: apps/api/src/modules/manifests/api/manifests-routes.ts:L25
       v4: —
-      Fix needed: <TODO: port route `POST /manifests/generate` from v2>
+      Fix needed: Add `POST /api/manifests/generate` in `src/routes/manifests.ts` that reads `{ startDate, endDate, carrierId?, clientId? }` from the JSON body and returns the same manifest download response as the existing `GET /generate` handler (src/routes/manifests.ts:L17). v2 supports both GET (query) and POST (JSON body) for the same operation.
 
 
 ### CSS Classes

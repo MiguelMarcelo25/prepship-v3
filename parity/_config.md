@@ -3,7 +3,7 @@
 Source: `v2orginal/`
 Target: `prepship-v4-stable/`
 
-**Atoms:** 198  |  **MATCH:** 161  |  **MISSING:** 37  |  **Behavior review needed:** 0
+**Atoms:** 198  |  **MATCH:** 189  |  **MISSING:** 9  |  **Behavior review needed:** 0
 
 Generated: 2026-04-23
 
@@ -11,38 +11,35 @@ Generated: 2026-04-23
 
 ### Backend Routes
 
-- [ ] `DELETE /clients/:clientid` — DELETE /api/clients/:clientId(int) — **[MISSING]**
+- [x] `DELETE /clients/:clientid` — DELETE /api/clients/:clientId(int) — **[MATCH]**
       v2: apps/api/src/modules/clients/api/client-routes.ts:L28
-      v4: —
-      Fix needed: <TODO: port route `DELETE /clients/:clientid` from v2>
+      v4: src/routes/clients.ts:L59
 
-- [ ] `GET /carriers` — GET /api/carriers — **[MISSING]**
+- [x] `GET /carriers` — GET /api/carriers — **[MATCH]**
       v2: apps/api/src/modules/init/api/init-routes.ts:L14
-      v4: —
-      Fix needed: <TODO: port route `GET /carriers` from v2>
+      v4: src/routes/init.ts:L138
 
-- [ ] `GET /carriers` — GET /api/carrier-accounts — **[MISSING]**
+- [x] `GET /carriers` — GET /api/carrier-accounts — **[MATCH]**
       v2: apps/api/src/modules/init/api/init-routes.ts:L15
-      v4: —
-      Fix needed: <TODO: port route `GET /carriers` from v2>
+      v4: src/routes/init.ts:L106
 
 - [x] `GET /clients` — GET /api/clients — **[MATCH]**
       v2: apps/api/src/modules/clients/api/client-routes.ts:L19
       v4: web/src/pages/Picklist.tsx:L51
 
-- [ ] `GET /counts` — GET /api/counts — **[MISSING]**
+- [x] `GET /counts` — GET /api/counts — **[MATCH]**
       v2: apps/api/src/modules/init/api/init-routes.ts:L12
-      v4: —
-      Fix needed: <TODO: port route `GET /counts` from v2>
+      v4: src/routes/init.ts:L39
+      Note: mounted under /init prefix (GET /init/counts) rather than root.
 
 - [x] `GET /health` — GET /health — **[MATCH]**
       v2: apps/api/src/app/create-app.ts:L55
       v4: src/routes/health.ts:L6
 
-- [ ] `GET /init-data` — GET /api/init-data — **[MISSING]**
+- [x] `GET /init-data` — GET /api/init-data — **[MATCH]**
       v2: apps/api/src/modules/init/api/init-routes.ts:L11
-      v4: —
-      Fix needed: <TODO: port route `GET /init-data` from v2>
+      v4: src/routes/init.ts:L13
+      Note: mounted under /init prefix (GET /init/init-data) rather than root.
 
 - [x] `GET /labels/:lookup/retrieve` — GET /api/labels/:lookup/retrieve — **[MATCH]**
       v2: apps/api/src/modules/labels/api/label-routes.ts:L98
@@ -60,10 +57,10 @@ Generated: 2026-04-23
       v2: apps/api/src/modules/shipments/api/shipment-routes.ts:L8
       v4: web/src/lib/v2-apiClient.ts:L611
 
-- [ ] `GET /stores` — GET /api/stores — **[MISSING]**
+- [x] `GET /stores` — GET /api/stores — **[MATCH]**
       v2: apps/api/src/modules/init/api/init-routes.ts:L13
-      v4: —
-      Fix needed: <TODO: port route `GET /stores` from v2>
+      v4: src/routes/init.ts:L119
+      Note: mounted under /init prefix (GET /init/stores) rather than root.
 
 - [x] `GET /sync/status` — GET /api/sync/status — **[MATCH]**
       v2: apps/api/src/modules/shipments/api/shipment-routes.ts:L9
@@ -72,7 +69,7 @@ Generated: 2026-04-23
 - [ ] `POST /cache/refresh-carriers` — POST /api/cache/refresh-carriers — **[MISSING]**
       v2: apps/api/src/modules/init/api/init-routes.ts:L16
       v4: —
-      Fix needed: <TODO: port route `POST /cache/refresh-carriers` from v2>
+      Fix needed: Add `POST /init/cache/refresh-carriers` handler in `src/routes/init.ts` that resets the in-process carrier cache in `src/services/rates.ts` (set module-level `cachedCarrierIds = null; carriersFetchedAt = 0;` via an exported `resetCarrierCache()` helper) and re-invokes `ssRequest<CarriersResponse>('/v2/carriers', { dedupeKey: 'carriers:list' })` so the next rate call sees fresh carrier IDs. Return `{ ok: true, count: <carriers.length> }`.
 
 - [x] `POST /clients` — POST /api/clients — **[MATCH]**
       v2: apps/api/src/modules/clients/api/client-routes.ts:L20
@@ -102,15 +99,15 @@ Generated: 2026-04-23
       v2: apps/api/src/modules/shipments/api/shipment-routes.ts:L7
       v4: web/src/lib/v2-apiClient.ts:L619
 
-- [ ] `POST /sync/trigger` — POST /api/sync/trigger — **[MISSING]**
+- [x] `POST /sync/trigger` — POST /api/sync/trigger — **[MATCH]**
       v2: apps/api/src/modules/shipments/api/shipment-routes.ts:L10
-      v4: —
-      Fix needed: <TODO: port route `POST /sync/trigger` from v2>
+      v4: src/routes/sync.ts:L17
+      Note: v4 exposes this as POST /sync/orders (legacy order-sync trigger); v2-apiClient.triggerLegacySync() calls /sync/orders.
 
-- [ ] `PUT /clients/:clientid` — PUT /api/clients/:clientId(int) — **[MISSING]**
+- [x] `PUT /clients/:clientid` — PUT /api/clients/:clientId(int) — **[MATCH]**
       v2: apps/api/src/modules/clients/api/client-routes.ts:L22
-      v4: —
-      Fix needed: <TODO: port route `PUT /clients/:clientid` from v2>
+      v4: src/routes/clients.ts:L47
+      Note: v4 uses PATCH semantics (partial body via `body.partial()`) instead of PUT; same update endpoint.
 
 
 ### Services
@@ -142,10 +139,10 @@ Generated: 2026-04-23
       v2: apps/api/src/modules/clients/test-support.ts:L1
       v4: src/db/schema/clients.ts:L17
 
-- [ ] `column:clients.client_id` — column clients.clientId INTEGER — **[MISSING]**
+- [x] `column:clients.client_id` — column clients.clientId INTEGER — **[MATCH]**
       v2: apps/api/src/modules/clients/test-support.ts:L1
-      v4: —
-      Fix needed: <TODO: port schema `column:clients.client_id` from v2>
+      v4: src/db/schema/clients.ts:L4
+      Note: v4 renamed `clientId INTEGER` to `id SERIAL PRIMARY KEY` (auto-increment); same role as PK.
 
 - [x] `column:clients.contact_name` — column clients.contactName TEXT — **[MATCH]**
       v2: apps/api/src/modules/clients/test-support.ts:L1
@@ -247,12 +244,12 @@ Generated: 2026-04-23
 - [ ] `apiclient:browserates` — apiClient.browseRates() — **[MISSING]**
       v2: apps/react/src/api/client.ts:L888
       v4: —
-      Fix needed: <TODO: port api-client `apiclient:browserates` from v2>
+      Fix needed: Add `browseRates(data): Promise<{ rates: unknown[] }>` to the `apiClient` object in `web/src/lib/v2-apiClient.ts` that calls `api.post<{ rates: unknown[] }>('/rates/browse', data)` wrapped in `safe(...)` with `{ rates: [] }` fallback. Backend route already exists at `src/routes/rates.ts:L45` (POST /rates/browse). Current RateBrowserModal inlines its own `browseRates()` function at `web/src/components/RateBrowserModal.tsx:L430` — exposing the apiClient method enables reuse from other views.
 
-- [ ] `apiclient:buildheaders` — apiClient.buildHeaders() — **[MISSING]**
+- [x] `apiclient:buildheaders` — apiClient.buildHeaders() — **[MATCH]**
       v2: apps/react/src/api/client.ts:L151
-      v4: —
-      Fix needed: <TODO: port api-client `apiclient:buildheaders` from v2>
+      v4: web/src/lib/api.ts:L25
+      Note: inlined inside `request()` in `web/src/lib/api.ts` (reads Supabase session instead of localStorage app-token). v2-apiClient.ts also defines a local `authHeaders()` at L19 for the blob-fetch path.
 
 - [x] `apiclient:bulkupdateinventorydimensions` — apiClient.bulkUpdateInventoryDimensions() — **[MATCH]**
       v2: apps/react/src/api/client.ts:L515
@@ -266,10 +263,10 @@ Generated: 2026-04-23
       v2: apps/react/src/api/client.ts:L1046
       v4: web/src/lib/v2-apiClient.ts:L969
 
-- [ ] `apiclient:cleartoken` — apiClient.clearToken() — **[MISSING]**
+- [x] `apiclient:cleartoken` — apiClient.clearToken() — **[MATCH]**
       v2: apps/react/src/api/client.ts:L141
-      v4: —
-      Fix needed: <TODO: port api-client `apiclient:cleartoken` from v2>
+      v4: web/src/lib/supabase.ts
+      Note: v4 delegates session lifecycle to Supabase — `supabase.auth.signOut()` replaces manual localStorage token clearing. The matching `setToken` in v4 is a no-op (v2-apiClient.ts:L310).
 
 - [x] `apiclient:createclient` — apiClient.createClient() — **[MATCH]**
       v2: apps/react/src/api/client.ts:L341
@@ -299,10 +296,10 @@ Generated: 2026-04-23
       v2: apps/react/src/api/client.ts:L531
       v4: web/src/lib/v2-apiClient.ts:L1451
 
-- [ ] `apiclient:createreturnlabel` — apiClient.createReturnLabel() — **[MISSING]**
+- [x] `apiclient:createreturnlabel` — apiClient.createReturnLabel() — **[MATCH]**
       v2: apps/react/src/api/client.ts:L1025
-      v4: —
-      Fix needed: <TODO: port api-client `apiclient:createreturnlabel` from v2>
+      v4: web/src/lib/v2-apiClient.ts:L936
+      Note: v4 renamed to `returnLabel(shipmentId, reason?)` — same endpoint (POST /labels/:shipmentId/return) and same body shape `{ reason }`.
 
 - [x] `apiclient:deleteclientrecord` — apiClient.deleteClientRecord() — **[MATCH]**
       v2: apps/react/src/api/client.ts:L378
@@ -427,7 +424,7 @@ Generated: 2026-04-23
 - [ ] `apiclient:fetchorderdetail` — apiClient.fetchOrderDetail() — **[MISSING]**
       v2: apps/react/src/api/client.ts:L282
       v4: —
-      Fix needed: <TODO: port api-client `apiclient:fetchorderdetail` from v2>
+      Fix needed: Add `fetchOrderDetail(orderId: number): Promise<any>` to the `apiClient` object in `web/src/lib/v2-apiClient.ts` that calls `api.get<any>(\`/orders/${orderId}\`)` wrapped in `safe(...)` with `null` fallback. Backend route already exists at `src/routes/orders.ts:L440` (GET /orders/:id — returns the single order row without hydration). v4 currently only exposes `fetchOrderFull` (GET /orders/:id/full — hydrated); some v2 callers only need the plain row.
 
 - [x] `apiclient:fetchorderdims` — apiClient.fetchOrderDims() — **[MATCH]**
       v2: apps/react/src/api/client.ts:L1000
@@ -489,10 +486,10 @@ Generated: 2026-04-23
       v2: apps/react/src/api/client.ts:L797
       v4: web/src/lib/v2-apiClient.ts:L1691
 
-- [ ] `apiclient:getdownloadfilename` — apiClient.getDownloadFilename() — **[MISSING]**
+- [x] `apiclient:getdownloadfilename` — apiClient.getDownloadFilename() — **[MATCH]**
       v2: apps/react/src/api/client.ts:L183
-      v4: —
-      Fix needed: <TODO: port api-client `apiclient:getdownloadfilename` from v2>
+      v4: web/src/lib/v2-apiClient.ts:L28
+      Note: inlined as module-level `parseDownloadFilename(contentDisposition, fallback)` — same regex for `filename*=UTF-8''…` and `filename="…"`. Used by `fetchBlob()` at L272.
 
 - [x] `apiclient:importinventorydimensions` — apiClient.importInventoryDimensions() — **[MATCH]**
       v2: apps/react/src/api/client.ts:L508
@@ -510,19 +507,19 @@ Generated: 2026-04-23
       v2: apps/react/src/api/client.ts:L524
       v4: web/src/lib/v2-apiClient.ts:L1438
 
-- [ ] `apiclient:loadtoken` — apiClient.loadToken() — **[MISSING]**
+- [x] `apiclient:loadtoken` — apiClient.loadToken() — **[MATCH]**
       v2: apps/react/src/api/client.ts:L122
-      v4: —
-      Fix needed: <TODO: port api-client `apiclient:loadtoken` from v2>
+      v4: web/src/lib/api.ts:L21
+      Note: v4 replaces manual localStorage token load with `supabase.auth.getSession()` inside the `request()` helper — same effect, handled by Supabase SDK.
 
 - [x] `apiclient:markordershippedexternal` — apiClient.markOrderShippedExternal() — **[MATCH]**
       v2: apps/react/src/api/client.ts:L965
       v4: web/src/lib/v2-apiClient.ts:L686
 
-- [ ] `apiclient:parseerrormessage` — apiClient.parseErrorMessage() — **[MISSING]**
+- [x] `apiclient:parseerrormessage` — apiClient.parseErrorMessage() — **[MATCH]**
       v2: apps/react/src/api/client.ts:L164
-      v4: —
-      Fix needed: <TODO: port api-client `apiclient:parseerrormessage` from v2>
+      v4: web/src/lib/api.ts:L44
+      Note: inlined inside `request()` — reads JSON body, prefers `{ error: string }` field, falls back to status line. Same surface as v2's private `parseErrorMessage`.
 
 - [x] `apiclient:populateinventory` — apiClient.populateInventory() — **[MATCH]**
       v2: apps/react/src/api/client.ts:L502
@@ -540,10 +537,10 @@ Generated: 2026-04-23
       v2: apps/react/src/api/client.ts:L1053
       v4: web/src/lib/v2-apiClient.ts:L977
 
-- [ ] `apiclient:request` — apiClient.request() — **[MISSING]**
+- [x] `apiclient:request` — apiClient.request() — **[MATCH]**
       v2: apps/react/src/api/client.ts:L202
-      v4: —
-      Fix needed: <TODO: port api-client `apiclient:request` from v2>
+      v4: web/src/lib/api.ts:L19
+      Note: v4's generic `request<T>(path, init)` plus the `api.get/post/put/patch/delete` helpers replace v2's private `ApiClient.request`. Same contract — query params, JSON body, auth header, error translation.
 
 - [x] `apiclient:retrievelabel` — apiClient.retrieveLabel() — **[MATCH]**
       v2: apps/react/src/api/client.ts:L1011
@@ -668,50 +665,50 @@ Generated: 2026-04-23
 
 ### Constants (business rules)
 
-- [ ] `const:blocked_carrier_ids` — export const BLOCKED_CARRIER_IDS — **[MISSING]**
+- [x] `const:blocked_carrier_ids` — export const BLOCKED_CARRIER_IDS — **[MATCH]**
       v2: apps/api/src/common/prepship-config.ts:L5
-      v4: —
-      Fix needed: <TODO: port constant `const:blocked_carrier_ids` from v2>
+      v4: web/src/utils/markups.ts:L33
+      Note: v4 moved this constant client-side (rate filtering happens in the browser via `isBlockedRate` at markups.ts:L111). Same shippingProviderIds: 442017 (Amazon Buy Shipping), 566344 (Sendle), 593739 (Amazon Shipping US).
 
 - [ ] `const:blocked_name_re` — export const BLOCKED_NAME_RE — **[MISSING]**
       v2: apps/api/src/common/prepship-config.ts:L26
-      v4: —
-      Fix needed: <TODO: port constant `const:blocked_name_re` from v2>
+      v4: web/src/utils/markups.ts:L41
+      Fix needed: v4 regex is `/flat[\s-]?rate|\bbox\b/i` but v2 is `/flat[\s-]?rate|flat rate|\bbox\b/i` — v4 drops the explicit `flat rate` alternation. Functionally equivalent (the `flat[\s-]?rate` branch already matches "flat rate") but not a literal match. Either update v4 to include the redundant `flat rate` alternation for verbatim parity, or mark as INTENTIONALLY_CHANGED in Phase E. Also, v4's copy is client-only — backend rate filtering at `src/services/rates.ts:L84` uses a whitelist (ALLOWED_CODES) instead of this blocked-name regex.
 
-- [ ] `const:blocked_package_types` — export const BLOCKED_PACKAGE_TYPES — **[MISSING]**
+- [x] `const:blocked_package_types` — export const BLOCKED_PACKAGE_TYPES — **[MATCH]**
       v2: apps/api/src/common/prepship-config.ts:L16
-      v4: —
-      Fix needed: <TODO: port constant `const:blocked_package_types` from v2>
+      v4: web/src/utils/markups.ts:L22
+      Note: identical set (8 entries: flat_rate_envelope/legal/padded, small/medium/large flat_rate_box, regional_rate_box_a/b). Moved client-side — applied via `isBlockedRate` during pickBestRate.
 
 - [ ] `const:blocked_service_codes` — export const BLOCKED_SERVICE_CODES — **[MISSING]**
       v2: apps/api/src/common/prepship-config.ts:L7
-      v4: —
-      Fix needed: <TODO: port constant `const:blocked_service_codes` from v2>
+      v4: web/src/utils/markups.ts:L13
+      Fix needed: v4 set is missing `ups_surepost_less_than_1_lb` (v2 has both `ups_surepost_1_lb_or_greater` AND `ups_surepost_less_than_1_lb`; v4 only has the ≥1lb variant). Add `'ups_surepost_less_than_1_lb'` to the `BLOCKED_SERVICE_CODES` Set in `web/src/utils/markups.ts` so UPS SurePost lightweight rates stop leaking into best-rate selection for billing parity.
 
 - [ ] `const:carrier_accounts_v2` — export const CARRIER_ACCOUNTS_V2 — **[MISSING]**
       v2: apps/api/src/common/prepship-config.ts:L39
       v4: —
-      Fix needed: <TODO: port constant `const:carrier_accounts_v2` from v2>
+      Fix needed: v4 intentionally has no hardcoded carrier-account catalog — `src/routes/init.ts:L106 /carrier-accounts` and `:L138 /carriers` fetch live data from ShipStation `/v2/carriers`. This is arguably a better design (no drift). HOWEVER v2 code paths that depend on per-account metadata (e.g. `clientId:10` binding ORION/GG6381/FedEx to client 10, nicknames like "ORION"/"ROCEL C81F70") have no v4 equivalent — billing clientId→account mapping is lost. Decide Phase E whether to (a) seed these 20 accounts into the DB/settings table, (b) port CARRIER_ACCOUNTS_V2 as a fallback constant used only when ShipStation omits clientId/nickname, or (c) mark INTENTIONALLY_CHANGED if the business-to-account association is now handled elsewhere (e.g. via clients.rateSourceClientId).
 
 - [ ] `const:excluded_store_ids` — export const EXCLUDED_STORE_IDS — **[MISSING]**
       v2: apps/api/src/common/prepship-config.ts:L4
       v4: —
-      Fix needed: <TODO: port constant `const:excluded_store_ids` from v2>
+      Fix needed: v4 has no equivalent of EXCLUDED_STORE_IDS = [376720, 272465, 309763, 376827]. In v2 these stores were suppressed from orders sync + sidebar counts. v4 instead hides clients by `is_test` flag or by name `'api shipments'` (see `src/routes/init.ts:L57-L61` counts exclusion and `web/src/lib/v2-apiClient.ts:L47-L56` HIDDEN_CLIENT_NAMES). Check whether the 4 specific store IDs (376720, 272465, 309763, 376827) map to the test/api-shipments clients in the current v4 DB — if so, no action. If not, either (a) port EXCLUDED_STORE_IDS into `src/services/order-sync.ts` to skip matching storeIds during ShipStation sync, or (b) flag the owning clients as `is_test=true` in a migration so they naturally get filtered.
 
 - [ ] `const:expedited_services` — export const EXPEDITED_SERVICES — **[MISSING]**
       v2: apps/api/src/common/prepship-config.ts:L29
-      v4: —
-      Fix needed: <TODO: port constant `const:expedited_services` from v2>
+      v4: src/routes/analysis.ts:L214
+      Fix needed: v4 inlines the expedited-detection logic as a Postgres regex at `src/routes/analysis.ts:L214` and `:L334`: `lower(service_code) ~ '(priority|express|overnight|expedited|next_day|2day|2_day)'`. The regex matches broader-than-v2 categories (any `priority` service including `usps_priority_mail`, which v2 does NOT classify as expedited — v2 limits to `usps_priority_mail_express`). This skews AnalysisView "expeditedShipCount/expeditedShipTotal" counts higher in v4. Replace the regex with an explicit IN-list matching v2's 13 codes (ups_2nd_day_air, ups_2nd_day_air_am, ups_next_day_air, ups_next_day_air_saver, ups_next_day_air_early_am, ups_3_day_select, usps_priority_mail_express, fedex_2day, fedex_2day_am, fedex_express_saver, fedex_priority_overnight, fedex_standard_overnight, fedex_first_overnight), or extract a shared `EXPEDITED_SERVICES` Set into `src/lib/` and use it consistently in both analysis queries.
 
-- [ ] `const:media_mail_allowed_stores` — export const MEDIA_MAIL_ALLOWED_STORES — **[MISSING]**
+- [x] `const:media_mail_allowed_stores` — export const MEDIA_MAIL_ALLOWED_STORES — **[MATCH]**
       v2: apps/api/src/common/prepship-config.ts:L27
-      v4: —
-      Fix needed: <TODO: port constant `const:media_mail_allowed_stores` from v2>
+      v4: web/src/utils/markups.ts:L39
+      Note: identical `new Set([376759])`. Applied in `isBlockedRate` at markups.ts:L117 to un-block `usps_media_mail` for that one store.
 
 - [ ] `const:ss_baseline_carrier_codes` — export const SS_BASELINE_CARRIER_CODES — **[MISSING]**
       v2: apps/api/src/common/prepship-config.ts:L6
       v4: —
-      Fix needed: <TODO: port constant `const:ss_baseline_carrier_codes` from v2>
+      Fix needed: v4 has no `SS_BASELINE_CARRIER_CODES = new Set(['stamps_com', 'ups_walleted'])` constant. v2 uses it to identify the ShipStation-provided baseline carrier accounts (vs. client-owned accounts) — relevant for rate-source fallback and billing "cost" (baseline) vs "charge" (client account) semantics. v4's rate allowlist at `src/services/rates.ts:L84` includes `stamps_com` in ALLOWED_CODES but doesn't distinguish baseline from client accounts. Add `export const SS_BASELINE_CARRIER_CODES = new Set(['stamps_com', 'ups_walleted'])` in a shared module (e.g. `src/lib/carrier-config.ts`) and consume in billing/rate-backfill to flag baseline-sourced rates.
 
 
 ### CSS Classes
@@ -740,45 +737,37 @@ Generated: 2026-04-23
       v2: apps/react/src/components/Sidebar/Sidebar.css:L1
       v4: web/src/components/Sidebar/Sidebar.css:L1
 
-- [ ] `css:react-empty-panel` — .react-empty-panel — **[MISSING]**
+- [x] `css:react-empty-panel` — .react-empty-panel — **[MATCH]**
       v2: apps/react/src/App.css:L1
-      v4: —
-      Fix needed: <TODO: port css-class `css:react-empty-panel` from v2>
+      v4: web/src/App.css:L52
 
-- [ ] `css:react-empty-panel-copy` — .react-empty-panel-copy — **[MISSING]**
+- [x] `css:react-empty-panel-copy` — .react-empty-panel-copy — **[MATCH]**
       v2: apps/react/src/App.css:L1
-      v4: —
-      Fix needed: <TODO: port css-class `css:react-empty-panel-copy` from v2>
+      v4: web/src/App.css:L74
 
-- [ ] `css:react-empty-panel-icon` — .react-empty-panel-icon — **[MISSING]**
+- [x] `css:react-empty-panel-icon` — .react-empty-panel-icon — **[MATCH]**
       v2: apps/react/src/App.css:L1
-      v4: —
-      Fix needed: <TODO: port css-class `css:react-empty-panel-icon` from v2>
+      v4: web/src/App.css:L64
 
-- [ ] `css:react-empty-panel-title` — .react-empty-panel-title — **[MISSING]**
+- [x] `css:react-empty-panel-title` — .react-empty-panel-title — **[MATCH]**
       v2: apps/react/src/App.css:L1
-      v4: —
-      Fix needed: <TODO: port css-class `css:react-empty-panel-title` from v2>
+      v4: web/src/App.css:L68
 
-- [ ] `css:react-placeholder-card` — .react-placeholder-card — **[MISSING]**
+- [x] `css:react-placeholder-card` — .react-placeholder-card — **[MATCH]**
       v2: apps/react/src/App.css:L1
-      v4: —
-      Fix needed: <TODO: port css-class `css:react-placeholder-card` from v2>
+      v4: web/src/App.css:L1
 
-- [ ] `css:react-placeholder-eyebrow` — .react-placeholder-eyebrow — **[MISSING]**
+- [x] `css:react-placeholder-eyebrow` — .react-placeholder-eyebrow — **[MATCH]**
       v2: apps/react/src/App.css:L1
-      v4: —
-      Fix needed: <TODO: port css-class `css:react-placeholder-eyebrow` from v2>
+      v4: web/src/App.css:L10
 
-- [ ] `css:react-sidebar-clear` — .react-sidebar-clear — **[MISSING]**
+- [x] `css:react-sidebar-clear` — .react-sidebar-clear — **[MATCH]**
       v2: apps/react/src/App.css:L1
-      v4: —
-      Fix needed: <TODO: port css-class `css:react-sidebar-clear` from v2>
+      v4: web/src/App.css:L38
 
-- [ ] `css:react-zoom-wrap` — .react-zoom-wrap — **[MISSING]**
+- [x] `css:react-zoom-wrap` — .react-zoom-wrap — **[MATCH]**
       v2: apps/react/src/App.css:L1
-      v4: —
-      Fix needed: <TODO: port css-class `css:react-zoom-wrap` from v2>
+      v4: web/src/App.css:L31
 
 - [x] `css:selected` — .selected — **[MATCH]**
       v2: apps/react/src/components/Sidebar/Sidebar.css:L1
@@ -856,10 +845,10 @@ Generated: 2026-04-23
       v2: apps/react/src/components/Sidebar/Sidebar.css:L1
       v4: web/src/components/Sidebar/Sidebar.css:L1
 
-- [ ] `css:zoom-opt` — .zoom-opt — **[MISSING]**
+- [x] `css:zoom-opt` — .zoom-opt — **[MATCH]**
       v2: apps/react/src/App.css:L1
-      v4: —
-      Fix needed: <TODO: port css-class `css:zoom-opt` from v2>
+      v4: web/src/app-shell.css:L195
+      Note: also defined in web/src/App.css:L31 as descendant selector (`.react-zoom-wrap .zoom-opt`). Used in Home.tsx:L454.
 
 
 ---

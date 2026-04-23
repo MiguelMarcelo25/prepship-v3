@@ -19,20 +19,19 @@ Generated: 2026-04-23
       v2: apps/api/src/modules/orders/api/order-routes.ts:L21
       v4: src/routes/orders.ts:L48
 
-- [ ] `GET /orders/:orderid` — GET /api/orders/:orderId(int) — **[MISSING]**
+- [x] `GET /orders/:orderid` — GET /api/orders/:orderId(int) — **[MATCH]**
       v2: apps/api/src/modules/orders/api/order-routes.ts:L49
-      v4: —
-      Fix needed: <TODO: port route `GET /orders/:orderid` from v2>
+      v4: src/routes/orders.ts:L440
+      Note: v4 uses Hono regex `'/:id{[0-9]+}'` instead of Express `:orderId(int)`.
 
-- [ ] `GET /orders/:orderid/dims` — GET /api/orders/:orderId(int)/dims — **[MISSING]**
+- [x] `GET /orders/:orderid/dims` — GET /api/orders/:orderId(int)/dims — **[MATCH]**
       v2: apps/api/src/modules/orders/api/order-routes.ts:L97
-      v4: —
-      Fix needed: <TODO: port route `GET /orders/:orderid/dims` from v2>
+      v4: src/routes/orders.ts:L690
 
-- [ ] `GET /orders/:orderid/full` — GET /api/orders/:orderId(int)/full — **[MISSING]**
+- [x] `GET /orders/:orderid/full` — GET /api/orders/:orderId(int)/full — **[MATCH]**
       v2: apps/api/src/modules/orders/api/order-routes.ts:L42
-      v4: —
-      Fix needed: <TODO: port route `GET /orders/:orderid/full` from v2>
+      v4: src/routes/orders.ts:L459
+      Note: v4 implements `/full` as an alias of `GET /:id` returning the same order+overrides+shipments payload.
 
 - [x] `GET /orders/daily-stats` — GET /api/orders/daily-stats — **[MATCH]**
       v2: apps/api/src/modules/orders/api/order-routes.ts:L24
@@ -66,35 +65,31 @@ Generated: 2026-04-23
       v2: apps/api/src/modules/queue/api/queue-routes.ts:L44
       v4: src/routes/print-queue.ts:L97
 
-- [ ] `POST /orders/:orderid/best-rate` — POST /api/orders/:orderId(int)/best-rate — **[MISSING]**
+- [x] `POST /orders/:orderid/best-rate` — POST /api/orders/:orderId(int)/best-rate — **[MATCH]**
       v2: apps/api/src/modules/orders/api/order-routes.ts:L85
-      v4: —
-      Fix needed: <TODO: port route `POST /orders/:orderid/best-rate` from v2>
+      v4: src/routes/orders.ts:L594
 
-- [ ] `POST /orders/:orderid/residential` — POST /api/orders/:orderId(int)/residential — **[MISSING]**
+- [x] `POST /orders/:orderid/residential` — POST /api/orders/:orderId(int)/residential — **[MATCH]**
       v2: apps/api/src/modules/orders/api/order-routes.ts:L62
-      v4: —
-      Fix needed: <TODO: port route `POST /orders/:orderid/residential` from v2>
+      v4: src/routes/orders.ts:L551
 
-- [ ] `POST /orders/:orderid/save-dims` — POST /api/orders/:orderId(int)/save-dims — **[MISSING]**
+- [x] `POST /orders/:orderid/save-dims` — POST /api/orders/:orderId(int)/save-dims — **[MATCH]**
       v2: apps/api/src/modules/orders/api/order-routes.ts:L91
-      v4: —
-      Fix needed: <TODO: port route `POST /orders/:orderid/save-dims` from v2>
+      v4: src/routes/orders.ts:L656
 
-- [ ] `POST /orders/:orderid/selected-package-id` — POST /api/orders/:orderId(int)/selected-package-id — **[MISSING]**
+- [x] `POST /orders/:orderid/selected-package-id` — POST /api/orders/:orderId(int)/selected-package-id — **[MATCH]**
       v2: apps/api/src/modules/orders/api/order-routes.ts:L74
-      v4: —
-      Fix needed: <TODO: port route `POST /orders/:orderid/selected-package-id` from v2>
+      v4: src/routes/orders.ts:L573
+      Note: v4 accepts either `{packageId}` or `{selectedPid}` in the body and coalesces to `selectedPackageId` (text).
 
-- [ ] `POST /orders/:orderid/selected-pid` — POST /api/orders/:orderId(int)/selected-pid — **[MISSING]**
+- [x] `POST /orders/:orderid/selected-pid` — POST /api/orders/:orderId(int)/selected-pid — **[MATCH]**
       v2: apps/api/src/modules/orders/api/order-routes.ts:L68
-      v4: —
-      Fix needed: <TODO: port route `POST /orders/:orderid/selected-pid` from v2>
+      v4: src/routes/orders.ts:L562
 
-- [ ] `POST /orders/:orderid/shipped-external` — POST /api/orders/:orderId(int)/shipped-external — **[MISSING]**
+- [x] `POST /orders/:orderid/shipped-external` — POST /api/orders/:orderId(int)/shipped-external — **[MATCH]**
       v2: apps/api/src/modules/orders/api/order-routes.ts:L56
-      v4: —
-      Fix needed: <TODO: port route `POST /orders/:orderid/shipped-external` from v2>
+      v4: src/routes/orders.ts:L615
+      Note: v4 accepts either `{externallyShipped}` or `{externalShipped}` in the body and updates the `orders.externallyShipped` column plus `order_overrides.externallyShippedSource`.
 
 - [x] `POST /print-queue/add` — POST /api/queue/add — **[MATCH]**
       v2: apps/api/src/modules/queue/api/queue-routes.ts:L20
@@ -114,27 +109,27 @@ Generated: 2026-04-23
 - [ ] `service:assertpersistedorderbestratedto` — assertPersistedOrderBestRateDto(...) — **[MISSING]**
       v2: apps/api/src/modules/orders/application/order-rate-dto.ts:L119
       v4: —
-      Fix needed: <TODO: port service `service:assertpersistedorderbestratedto` from v2>
+      Fix needed: port assertPersistedOrderBestRateDto() from v2 (apps/api/src/modules/orders/application/order-rate-dto.ts) into a new src/services/order-rate-dto.ts; invoke from the POST /orders/:id/best-rate and PATCH /orders/:id handlers in src/routes/orders.ts (which currently accept `z.unknown()` and persist raw JSON without guaranteeing carrierCode/serviceCode are present). v4 may have intentionally dropped this strict validation — needs Phase E review.
 
 - [ ] `service:normalizeorderbestratedto` — normalizeOrderBestRateDto(...) — **[MISSING]**
       v2: apps/api/src/modules/orders/application/order-rate-dto.ts:L95
       v4: —
-      Fix needed: <TODO: port service `service:normalizeorderbestratedto` from v2>
+      Fix needed: port normalizeOrderBestRateDto() from v2 (apps/api/src/modules/orders/application/order-rate-dto.ts) into src/services/order-rate-dto.ts; call from src/services/rates-backfill.ts (runBackfill picks a `best` rate and writes it raw) and from POST /orders/:id/best-rate in src/routes/orders.ts so stored bestRateJson has canonical keys (shipmentCost, otherCost, carrierNickname, zone, etc.) rather than raw ShipStation snake_case fields. v4 may have intentionally dropped this normalization layer — needs Phase E review.
 
 - [ ] `service:normalizeorderselectedratedto` — normalizeOrderSelectedRateDto(...) — **[MISSING]**
       v2: apps/api/src/modules/orders/application/order-rate-dto.ts:L133
       v4: —
-      Fix needed: <TODO: port service `service:normalizeorderselectedratedto` from v2>
+      Fix needed: port normalizeOrderSelectedRateDto() from v2 (apps/api/src/modules/orders/application/order-rate-dto.ts) into src/services/order-rate-dto.ts; call from src/services/labels.ts where `selectedRateJson` is assembled before insert into shipments (labels.ts:544 currently hand-builds the object with only providerAccountId/shippingProviderId). v4 may have intentionally dropped this normalization layer — needs Phase E review.
 
 - [ ] `service:parseorderratejson` — parseOrderRateJson(...) — **[MISSING]**
       v2: apps/api/src/modules/orders/application/order-rate-dto.ts:L85
       v4: —
-      Fix needed: <TODO: port service `service:parseorderratejson` from v2>
+      Fix needed: port parseOrderRateJson() from v2 (apps/api/src/modules/orders/application/order-rate-dto.ts) into src/services/order-rate-dto.ts. Less critical in v4 because `bestRateJson`/`selectedRateJson` are stored as Postgres `jsonb` (auto-parsed) rather than TEXT as in v2's SQLite, so a JSON.parse wrapper is rarely needed — may be dropped by design. Needs Phase E review.
 
 - [ ] `service:resolvecarriernickname` — resolveCarrierNickname(...) — **[MISSING]**
       v2: apps/api/src/modules/orders/application/carrier-resolver.ts:L31
       v4: —
-      Fix needed: <TODO: port service `service:resolvecarriernickname` from v2>
+      Fix needed: port resolveCarrierNickname() from v2 (apps/api/src/modules/orders/application/carrier-resolver.ts) into a new src/services/carrier-resolver.ts along with the CARRIER_ACCOUNTS_V2 config table (currently only lives in v2's packages/common/prepship-config.ts). v4 currently reads `carrier_nickname` straight from the ShipStation API response via src/routes/init.ts:L147 and inlines fallback logic in web/src/components/RateBrowserModal.tsx — it does not decode UPS 1Z tracking account codes or map providerAccountId → nickname server-side, so orders with providerAccountId but no upstream nickname render inconsistently. v4 may have intentionally delegated this to the upstream API — needs Phase E review.
 
 
 ### DB Schema

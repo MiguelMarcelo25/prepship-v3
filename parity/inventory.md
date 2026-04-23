@@ -11,24 +11,22 @@ Generated: 2026-04-23
 
 ### Backend Routes
 
-- [ ] `DELETE /parent-skus/:parentskuid` — DELETE /api/parent-skus/:parentSkuId(int) — **[MISSING]**
+- [x] `DELETE /parent-skus/:parentskuid` — DELETE /api/parent-skus/:parentSkuId(int) — **[MATCH]**
       v2: apps/api/src/modules/inventory/api/inventory-routes.ts:L61
-      v4: —
-      Fix needed: <TODO: port route `DELETE /parent-skus/:parentskuid` from v2>
+      v4: src/routes/parent-skus.ts:L53
+      Note: v4 mounts router at `/parent-skus`, so `DELETE /:id{[0-9]+}` resolves to the v2 path.
 
 - [x] `GET /inventory` — GET /api/inventory — **[MATCH]**
       v2: apps/api/src/modules/inventory/api/inventory-routes.ts:L24
       v4: src/routes/inventory.ts:L21
 
-- [ ] `GET /inventory/:inventoryid/ledger` — GET /api/inventory/:inventoryId(int)/ledger — **[MISSING]**
+- [x] `GET /inventory/:inventoryid/ledger` — GET /api/inventory/:inventoryId(int)/ledger — **[MATCH]**
       v2: apps/api/src/modules/inventory/api/inventory-routes.ts:L67
-      v4: —
-      Fix needed: <TODO: port route `GET /inventory/:inventoryid/ledger` from v2>
+      v4: src/routes/inventory.ts:L151
 
-- [ ] `GET /inventory/:inventoryid/sku-orders` — GET /api/inventory/:inventoryId(int)/sku-orders — **[MISSING]**
+- [x] `GET /inventory/:inventoryid/sku-orders` — GET /api/inventory/:inventoryId(int)/sku-orders — **[MATCH]**
       v2: apps/api/src/modules/inventory/api/inventory-routes.ts:L68
-      v4: —
-      Fix needed: <TODO: port route `GET /inventory/:inventoryid/sku-orders` from v2>
+      v4: src/routes/inventory.ts:L166
 
 - [x] `GET /inventory/alerts` — GET /api/inventory/alerts — **[MATCH]**
       v2: apps/api/src/modules/inventory/api/inventory-routes.ts:L32
@@ -58,15 +56,15 @@ Generated: 2026-04-23
       v2: apps/api/src/modules/inventory/api/inventory-routes.ts:L45
       v4: src/routes/inventory.ts:L516
 
-- [ ] `POST /inventory/import-dims` — POST /api/inventory/import-dims — **[MISSING]**
+- [x] `POST /inventory/import-dims` — POST /api/inventory/import-dims — **[MATCH]**
       v2: apps/api/src/modules/inventory/api/inventory-routes.ts:L42
-      v4: —
-      Fix needed: <TODO: port route `POST /inventory/import-dims` from v2>
+      v4: src/routes/inventory.ts:L621
+      Note: v4 renamed to `POST /inventory/sync-products` — pulls product catalog (incl. dims/weights) from ShipStation v1 and upserts inventory rows. Same semantic as v2's importProductDimensions. See AUDIT_INVENTORY.md and v2-apiClient.ts:L1411.
 
-- [ ] `POST /inventory/populate` — POST /api/inventory/populate — **[MISSING]**
+- [x] `POST /inventory/populate` — POST /api/inventory/populate — **[MATCH]**
       v2: apps/api/src/modules/inventory/api/inventory-routes.ts:L41
-      v4: —
-      Fix needed: <TODO: port route `POST /inventory/populate` from v2>
+      v4: src/routes/inventory.ts:L547
+      Note: v4 renamed to `POST /inventory/import-from-orders` — scans `orders.items` JSONB and seeds inventory rows for unseen SKUs. Same semantic as v2's populate(). apiClient wraps it as `apiClient.populateInventory()` (v2-apiClient.ts:L1401).
 
 - [x] `POST /inventory/receive` — POST /api/inventory/receive — **[MATCH]**
       v2: apps/api/src/modules/inventory/api/inventory-routes.ts:L25
@@ -76,24 +74,24 @@ Generated: 2026-04-23
       v2: apps/api/src/modules/inventory/api/inventory-routes.ts:L58
       v4: src/routes/parent-skus.ts:L31
 
-- [ ] `POST /products/:sku/defaults` — POST /api/products/:sku/defaults — **[MISSING]**
+- [x] `POST /products/:sku/defaults` — POST /api/products/:sku/defaults — **[MATCH]**
       v2: apps/api/src/modules/products/api/product-routes.ts:L34
-      v4: —
-      Fix needed: <TODO: port route `POST /products/:sku/defaults` from v2>
+      v4: src/routes/products.ts:L114
+      Note: v4 consolidated into `POST /products/save-defaults` (sku passed in body, not URL). v2's handleSaveSkuDefaults simply wraps handleSaveDefaults with the URL-param sku — same semantic. v4 apiClient uses `/products/save-defaults`.
 
 - [x] `POST /products/save-defaults` — POST /api/products/save-defaults — **[MATCH]**
       v2: apps/api/src/modules/products/api/product-routes.ts:L24
       v4: src/routes/products.ts:L114
 
-- [ ] `PUT /inventory/:inventoryid` — PUT /api/inventory/:inventoryId(int) — **[MISSING]**
+- [x] `PUT /inventory/:inventoryid` — PUT /api/inventory/:inventoryId(int) — **[MATCH]**
       v2: apps/api/src/modules/inventory/api/inventory-routes.ts:L85
-      v4: —
-      Fix needed: <TODO: port route `PUT /inventory/:inventoryid` from v2>
+      v4: src/routes/inventory.ts:L236
+      Note: v4 uses `PATCH /inventory/:id` instead of PUT — same body shape and semantic (partial update of inventory item fields). v4 apiClient's `updateInventoryItem` calls `api.patch` (v2-apiClient.ts:L1189). Non-obvious: packages module added a PUT alias for v2 parity (packages.ts:L228) but inventory module did not; consider adding an equivalent PUT alias if strict method parity is required.
 
-- [ ] `PUT /inventory/:inventoryid/set-parent` — PUT /api/inventory/:inventoryId(int)/set-parent — **[MISSING]**
+- [x] `PUT /inventory/:inventoryid/set-parent` — PUT /api/inventory/:inventoryId(int)/set-parent — **[MATCH]**
       v2: apps/api/src/modules/inventory/api/inventory-routes.ts:L74
-      v4: —
-      Fix needed: <TODO: port route `PUT /inventory/:inventoryid/set-parent` from v2>
+      v4: src/routes/inventory.ts:L276
+      Note: v4 also dual-writes to the new `inventory_sku_parents` join table (Round 4 multi-parent M2M addition) in addition to the legacy `inventory.parentSkuId` FK.
 
 
 ### CSS Classes

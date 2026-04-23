@@ -11,24 +11,21 @@ Generated: 2026-04-23
 
 ### Backend Routes
 
-- [ ] `DELETE /packages/:packageid` — DELETE /api/packages/:packageId(int) — **[MISSING]**
+- [x] `DELETE /packages/:packageid` — DELETE /api/packages/:packageId(int) — **[MATCH]**
       v2: apps/api/src/modules/packages/api/package-routes.ts:L85
-      v4: —
-      Fix needed: <TODO: port route `DELETE /packages/:packageid` from v2>
+      v4: src/routes/packages.ts:L61
 
 - [x] `GET /packages` — GET /api/packages — **[MATCH]**
       v2: apps/api/src/modules/packages/api/package-routes.ts:L30
       v4: web/src/pages/Packages.tsx:L57
 
-- [ ] `GET /packages/:packageid` — GET /api/packages/:packageId(int) — **[MISSING]**
+- [x] `GET /packages/:packageid` — GET /api/packages/:packageId(int) — **[MATCH]**
       v2: apps/api/src/modules/packages/api/package-routes.ts:L72
-      v4: —
-      Fix needed: <TODO: port route `GET /packages/:packageid` from v2>
+      v4: src/routes/packages.ts:L36
 
-- [ ] `GET /packages/:packageid/ledger` — GET /api/packages/:packageId(int)/ledger — **[MISSING]**
+- [x] `GET /packages/:packageid/ledger` — GET /api/packages/:packageId(int)/ledger — **[MATCH]**
       v2: apps/api/src/modules/packages/api/package-routes.ts:L50
-      v4: —
-      Fix needed: <TODO: port route `GET /packages/:packageid/ledger` from v2>
+      v4: src/routes/packages.ts:L210
 
 - [x] `GET /packages/find-by-dims` — GET /api/packages/find-by-dims — **[MATCH]**
       v2: apps/api/src/modules/packages/api/package-routes.ts:L35
@@ -38,24 +35,23 @@ Generated: 2026-04-23
       v2: apps/api/src/modules/packages/api/package-routes.ts:L34
       v4: src/routes/packages.ts:L308
 
-- [ ] `PATCH /packages/:packageid/reorder-level` — PATCH /api/packages/:packageId(int)/reorder-level — **[MISSING]**
+- [x] `PATCH /packages/:packageid/reorder-level` — PATCH /api/packages/:packageId(int)/reorder-level — **[MATCH]**
       v2: apps/api/src/modules/packages/api/package-routes.ts:L63
-      v4: —
-      Fix needed: <TODO: port route `PATCH /packages/:packageid/reorder-level` from v2>
+      v4: src/routes/packages.ts:L242
 
 - [x] `POST /packages` — POST /api/packages — **[MATCH]**
       v2: apps/api/src/modules/packages/api/package-routes.ts:L31
       v4: src/routes/packages.ts:L43
 
-- [ ] `POST /packages/:packageid/adjust` — POST /api/packages/:packageId(int)/adjust — **[MISSING]**
+- [x] `POST /packages/:packageid/adjust` — POST /api/packages/:packageId(int)/adjust — **[MATCH]**
       v2: apps/api/src/modules/packages/api/package-routes.ts:L57
-      v4: —
-      Fix needed: <TODO: port route `POST /packages/:packageid/adjust` from v2>
+      v4: src/routes/packages.ts:L173
+      Note: v4 body uses `qtyDelta` (v2 used `qty`) and writes to the new `package_ledger` table.
 
-- [ ] `POST /packages/:packageid/receive` — POST /api/packages/:packageId(int)/receive — **[MISSING]**
+- [x] `POST /packages/:packageid/receive` — POST /api/packages/:packageId(int)/receive — **[MATCH]**
       v2: apps/api/src/modules/packages/api/package-routes.ts:L51
-      v4: —
-      Fix needed: <TODO: port route `POST /packages/:packageid/receive` from v2>
+      v4: src/routes/packages.ts:L124
+      Note: v4 writes the stock delta + optional unitCost to the new `package_ledger` table in the same transaction.
 
 - [x] `POST /packages/auto-create` — POST /api/packages/auto-create — **[MATCH]**
       v2: apps/api/src/modules/packages/api/package-routes.ts:L46
@@ -65,10 +61,10 @@ Generated: 2026-04-23
       v2: apps/api/src/modules/packages/api/package-routes.ts:L49
       v4: web/src/pages/Packages.tsx:L63
 
-- [ ] `PUT /packages/:packageid` — PUT /api/packages/:packageId(int) — **[MISSING]**
+- [x] `PUT /packages/:packageid` — PUT /api/packages/:packageId(int) — **[MATCH]**
       v2: apps/api/src/modules/packages/api/package-routes.ts:L79
-      v4: —
-      Fix needed: <TODO: port route `PUT /packages/:packageid` from v2>
+      v4: src/routes/packages.ts:L228
+      Note: v4 exposes both `PATCH /:id` (L49) and `PUT /:id` (L228) — the PUT alias was added explicitly for v2 apiClient parity.
 
 
 ### View: Modals / Drawers
