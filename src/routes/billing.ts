@@ -19,8 +19,10 @@ import {
 const app = new Hono();
 
 app.get('/config', async (c) => {
-  // v2-parity: join clients so the frontend can render the CLIENT column.
-  // Exclude is_test and Api Shipments — they never bill.
+  // v2 parity: shows EVERY client that has a billing config row, including
+  // test/sandbox/hidden clients. Matches v2's Billing Dashboard grid which
+  // lists IntegrationTest, TEST_CLIENT_998, TEST_DUAL_WRITE, Test Orders
+  // alongside the real ones.
   const rows = await db
     .select({
       clientId: billingConfig.clientId,
@@ -39,12 +41,6 @@ app.get('/config', async (c) => {
     })
     .from(billingConfig)
     .innerJoin(clients, eq(clients.id, billingConfig.clientId))
-    .where(
-      and(
-        eq(clients.isTest, false),
-        sql`lower(${clients.name}) <> 'api shipments'`
-      )
-    )
     .orderBy(asc(clients.name));
   return c.json({ data: rows });
 });

@@ -51,23 +51,16 @@ export async function generateLineItems(input: GenerateInput) {
   const from = new Date(input.dateFrom);
   const to = new Date(input.dateTo);
 
-  const rawConfigs = await db
-    .select({
-      config: billingConfig,
-      isTest: clients.isTest,
-    })
+  // v2 parity: generate for EVERY configured client, including test ones.
+  // v2 bills test clients too (they appear in the Generate & Summary grid).
+  const configs = await db
+    .select()
     .from(billingConfig)
-    .innerJoin(clients, eq(clients.id, billingConfig.clientId))
     .where(
       input.clientId !== undefined
         ? eq(billingConfig.clientId, input.clientId)
         : eq(billingConfig.active, true)
     );
-  // Test clients are hard-excluded — their shipments never generate invoice
-  // line items, even if someone manually sets billingConfig.active=true.
-  const configs = rawConfigs
-    .filter((r) => !r.isTest)
-    .map((r) => r.config);
   if (!configs.length) {
     return { generated: 0, skipped: 0, message: 'No billing configs found' };
   }
