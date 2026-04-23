@@ -182,7 +182,7 @@ app.get('/order-stats', async (c) => {
       and (
         order_status <> 'awaiting_shipment'
         or order_date is null
-        or order_date >= now() - interval '30 days'
+        or order_date >= now() - interval '14 days'
       )
     group by client_id, order_status
   `);

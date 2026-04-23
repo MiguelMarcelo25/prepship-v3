@@ -53,7 +53,7 @@ app.get('/counts', async (c) => {
       (
         select count(*)::int from orders o
         where o.order_status = 'awaiting_shipment'
-          and (o.order_date is null or o.order_date >= now() - interval '30 days')
+          and (o.order_date is null or o.order_date >= now() - interval '14 days')
           and not exists (
             select 1 from clients c
             where c.id = o.client_id
