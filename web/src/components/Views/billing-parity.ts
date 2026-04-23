@@ -363,8 +363,13 @@ export function buildBackfillRefRatesToast(result: BackfillBillingReferenceRates
   return `Backfill done — ${result.filled} orders filled, ${result.missing} missing from cache`
 }
 
-export function buildGenerateBillingStatus(generated: number, total: number) {
-  return `Generated ${generated} line items · $${total.toFixed(2)} total`
+export function buildGenerateBillingStatus(
+  generated: number | null | undefined,
+  total: number | null | undefined
+) {
+  const g = Number(generated ?? 0)
+  const t = Number(total ?? 0)
+  return `Generated ${g} line items · $${t.toFixed(2)} total`
 }
 
 export function getBillingInvoiceUrl(clientId: number, from: string, to: string) {

@@ -100,33 +100,79 @@ app.put(
   }
 );
 
-const generateSchema = z.object({
+// Accepts v2's short param names (from/to, plain YYYY-MM-DD) and v4's
+// long names (dateFrom/dateTo, ISO datetime). Coerces YYYY-MM-DD to an
+// ISO datetime anchored at start/end-of-day.
+function coerceIsoDay(raw: string | undefined, endOfDay: boolean): string | undefined {
+  if (!raw) return undefined;
+  if (raw.includes('T')) return raw;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    return new Date(
+      `${raw}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}Z`
+    ).toISOString();
+  }
+  return raw;
+}
+
+const generateRawSchema = z.object({
   clientId: z.coerce.number().int().optional(),
-  dateFrom: z.string().datetime(),
-  dateTo: z.string().datetime(),
+  dateFrom: z.string().optional(),
+  dateTo: z.string().optional(),
+  from: z.string().optional(),
+  to: z.string().optional(),
 });
+const generateSchema = generateRawSchema
+  .transform((v) => ({
+    clientId: v.clientId,
+    dateFrom: coerceIsoDay(v.dateFrom ?? v.from, false),
+    dateTo: coerceIsoDay(v.dateTo ?? v.to, true),
+  }))
+  .refine((v) => v.dateFrom !== undefined && v.dateTo !== undefined, {
+    message: 'dateFrom/from and dateTo/to are required',
+  });
+
+const detailsSchema = generateRawSchema
+  .extend({ limit: z.coerce.number().int().max(2000).optional() })
+  .transform((v) => ({
+    clientId: v.clientId,
+    dateFrom: coerceIsoDay(v.dateFrom ?? v.from, false),
+    dateTo: coerceIsoDay(v.dateTo ?? v.to, true),
+    limit: v.limit,
+  }))
+  .refine((v) => v.dateFrom !== undefined && v.dateTo !== undefined, {
+    message: 'dateFrom/from and dateTo/to are required',
+  });
 
 app.post('/generate', zValidator('json', generateSchema), async (c) => {
   const body = c.req.valid('json');
-  const result = await generateLineItems(body);
+  const result = await generateLineItems({
+    clientId: body.clientId,
+    dateFrom: body.dateFrom!,
+    dateTo: body.dateTo!,
+  });
   return c.json(result);
 });
 
 app.get('/summary', zValidator('query', generateSchema), async (c) => {
   const q = c.req.valid('query');
-  const summary = await billingSummary(q);
+  const summary = await billingSummary({
+    clientId: q.clientId,
+    dateFrom: q.dateFrom!,
+    dateTo: q.dateTo!,
+  });
   return c.json(summary);
 });
 
-app.get(
-  '/details',
-  zValidator('query', generateSchema.extend({ limit: z.coerce.number().int().max(2000).optional() })),
-  async (c) => {
-    const q = c.req.valid('query');
-    const rows = await billingDetails(q);
-    return c.json({ data: rows });
-  }
-);
+app.get('/details', zValidator('query', detailsSchema), async (c) => {
+  const q = c.req.valid('query');
+  const rows = await billingDetails({
+    clientId: q.clientId,
+    dateFrom: q.dateFrom!,
+    dateTo: q.dateTo!,
+    limit: q.limit,
+  });
+  return c.json({ data: rows });
+});
 
 // ─── Invoice (HTML) ────────────────────────────────────────────────────
 // v2-parity: GET /billing/invoice?clientId=N&dateFrom=ISO&dateTo=ISO
