@@ -4,17 +4,48 @@ import { z } from 'zod';
 import { and, desc, eq, gte, ilike, inArray, lte, notInArray, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orderOverrides, orders } from '../db/schema/orders';
+import { rateCache } from '../db/schema/rates';
 import { shipments } from '../db/schema/shipments';
 import { offsetOf, paginated, paginationSchema } from '../lib/pagination';
 import { getSyncStatus, syncOrders } from '../services/order-sync';
+import {
+  InputValidationError,
+  assertPersistedOrderBestRateDto,
+  normalizeOrderBestRateDto,
+  normalizeOrderSelectedRateDto,
+} from '../services/order-rate-dto';
 
 const app = new Hono();
 
 // User-initiated sync + status. Sits behind requireAuth (mounted at main.ts).
 // /cron/sync-orders is the cron-secret equivalent for schedulers.
+//
+// v2 parity: the response shape extends v4's native `{lastSyncedAt,
+// orderCount}` with v2's `LegacySyncStatusDto` fields (status, mode, error,
+// page, ratesCached, ratePrefetchRunning) so the ported progress UIs can
+// render without a second round-trip. v4 doesn't track a live sync state
+// machine (the CLI-style `syncOrders()` is synchronous from the caller's POV
+// and returns before responding), so `status`/`mode`/`error`/`page` carry
+// safe defaults while `lastSyncAt` is kept as an alias for back-compat.
 app.get('/sync/status', async (c) => {
   const status = await getSyncStatus();
-  return c.json(status);
+  const [rateCount] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(rateCache);
+  return c.json({
+    // v4 native fields
+    lastSyncedAt: status.lastSyncedAt,
+    orderCount: status.orderCount,
+    // v2 LegacySyncStatusDto parity fields
+    status: 'idle' as 'idle' | 'running' | 'error',
+    mode: 'incremental' as 'incremental' | 'full',
+    error: null as string | null,
+    page: 0,
+    ratesCached: rateCount?.count ?? 0,
+    ratePrefetchRunning: false,
+    // Back-compat alias: some v2 callers read `lastSyncAt` (no "ed").
+    lastSyncAt: status.lastSyncedAt,
+  });
 });
 
 app.post('/sync', async (c) => {
@@ -481,6 +512,11 @@ const patchBody = z.object({
   selectedPackageId: z.string().nullable().optional(),
   bestRateJson: z.unknown().optional(),
   bestRateDims: z.string().nullable().optional(),
+  // v2-parity: clients may send a canonical selectedRateJson alongside
+  // selectedPackageId when the user picks a rate in the Rate Browser.
+  // We normalize it through normalizeOrderSelectedRateDto() before
+  // the shipments insert consumes it (labels.ts).
+  selectedRateJson: z.unknown().optional(),
   shippingAccount: z.string().nullable().optional(),
   externallyShipped: z.boolean().optional(),
   externallyShippedSource: z.string().nullable().optional(),
@@ -499,7 +535,34 @@ app.patch('/:id{[0-9]+}', zValidator('json', patchBody), async (c) => {
 
   // Split the body: externallyShipped lives on the `orders` table;
   // everything else (including externallyShippedSource) lives on order_overrides.
-  const { externallyShipped, ...overridesBody } = body;
+  // selectedRateJson is not a column on order_overrides — drop it from the
+  // overrides payload (it rides along into shipments via the label flow).
+  const { externallyShipped, selectedRateJson, ...overridesBody } = body;
+
+  // v2-parity: canonicalize incoming bestRateJson before persisting.
+  // Accepts raw ShipStation shapes (snake_case) or the already-normalized DTO.
+  if (overridesBody.bestRateJson !== undefined && overridesBody.bestRateJson !== null) {
+    try {
+      overridesBody.bestRateJson = normalizeOrderBestRateDto(
+        overridesBody.bestRateJson,
+        'bestRateJson',
+      );
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 400);
+    }
+  }
+
+  // Normalize the selected rate the same way so downstream consumers see a
+  // canonical shape. v4 has no column for it on order_overrides; currently
+  // this is a no-op persistence-wise (future work: persist to shipments at
+  // label-create time). Kept for request-level validation.
+  if (selectedRateJson !== undefined && selectedRateJson !== null) {
+    try {
+      normalizeOrderSelectedRateDto(selectedRateJson, undefined, 'selectedRateJson');
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 400);
+    }
+  }
 
   if (externallyShipped !== undefined) {
     await db
@@ -603,8 +666,23 @@ app.post(
   async (c) => {
     const id = Number(c.req.param('id'));
     const body = c.req.valid('json');
+
+    // v2-parity: canonicalize + hard-assert that persisted best rate has
+    // carrierCode + serviceCode. Downstream label creation and invoicing
+    // depend on these fields being present. Any-shape (ShipStation raw or
+    // pre-normalized) → canonical OrderBestRateDto.
+    let canonical;
+    try {
+      canonical = assertPersistedOrderBestRateDto(body.bestRateJson, 'bestRateJson');
+    } catch (err) {
+      if (err instanceof InputValidationError) {
+        return c.json({ error: err.message }, 400);
+      }
+      return c.json({ error: (err as Error).message }, 400);
+    }
+
     const row = await applyOverridesPatch(id, {
-      bestRateJson: body.bestRateJson,
+      bestRateJson: canonical,
       bestRateDims: body.bestRateDims ?? null,
     });
     if (!row) return c.json({ error: 'Order not found' }, 404);

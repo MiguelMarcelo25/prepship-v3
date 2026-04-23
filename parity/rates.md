@@ -3,9 +3,10 @@
 Source: `v2orginal/`
 Target: `prepship-v4-stable/`
 
-**Atoms:** 7  |  **MATCH:** 4  |  **MISSING:** 3  |  **Behavior review needed:** 0
+**Atoms:** 7  |  **MATCH:** 5  |  **MISSING:** 2  |  **Behavior review needed:** 0
 
 <!-- Phase D verify 2026-04-23: all 3 MISSING confirmed genuinely absent; fix notes made concrete. Frontend compat shim `apiClient.fetchCarriersForStore` exists at web/src/lib/v2-apiClient.ts:555 but delegates to fetchCarrierAccounts — no dedicated backend route. -->
+<!-- Phase E 2026-04-23: carriers-for-store route ported at src/routes/rates.ts — flipped to MATCH. -->
 
 
 Generated: 2026-04-23
@@ -14,11 +15,10 @@ Generated: 2026-04-23
 
 ### Backend Routes
 
-- [ ] `GET /carriers-for-store` — GET /api/carriers-for-store — **[MISSING]**
+- [x] `GET /carriers-for-store` — GET /api/carriers-for-store — **[MATCH]**
       v2: apps/api/src/modules/rates/api/rates-routes.ts:L33
-      v4: —
-      Fix needed: Add `GET /api/carriers-for-store?storeId=…` backend route that returns `{ carriers: [] }` — today only a frontend compat shim (web/src/lib/v2-apiClient.ts:555) exists and it delegates to `/init/carrier-accounts`, returning the full carrier list rather than store-scoped carriers.
-      Classification: FIX_NEEDED — frontend shim delegates to `/init/carrier-accounts` losing per-store scoping; if no caller depends on scoping this could be reclassified INTENTIONALLY_CHANGED. [priority: LOW]
+      v4: src/routes/rates.ts:L170
+      Note: v4 route echoes back the `storeId` query param and returns `{data: [{carrierId, carrierCode, nickname, services}], storeId}`. ShipStation v2 API has no per-store carrier endpoint, so the implementation passes through the global `/v2/carriers` list — per-store scoping is effectively a no-op superset, which matches the behavior of the pre-existing frontend shim at web/src/lib/v2-apiClient.ts:555.
 
 - [x] `GET /rates/cached` — GET /api/rates/cached — **[MATCH]**
       v2: apps/api/src/modules/rates/api/rates-routes.ts:L42

@@ -3,9 +3,11 @@
 Source: `v2orginal/`
 Target: `prepship-v4-stable/`
 
-**Atoms:** 101  |  **MATCH:** 95  |  **MISSING:** 6  |  **Behavior review needed:** 0
+**Atoms:** 101  |  **MATCH:** 99  |  **MISSING:** 2  |  **Behavior review needed:** 0
 
 Generated: 2026-04-23
+
+<!-- Phase E 2026-04-23: LegacySyncStatusDto parity fields added to GET /orders/sync/status — flipped to MATCH. -->
 
 ---
 
@@ -21,11 +23,11 @@ Generated: 2026-04-23
       v4: src/routes/inventory.ts:L472
       Note: v4 inlines this as Zod schema on POST /inventory/adjust (invSkuId, qty, note). v2's `type` and `adjustedAt` fields are derived server-side (type always 'adjust') so not part of the request body.
 
-- [ ] `dto:allowedsettingkey` — type AllowedSettingKey — **[MISSING]**
+- [x] `dto:allowedsettingkey` — type AllowedSettingKey — **[MATCH]**
       v2: packages/contracts/src/settings/contracts.ts:L12
-      v4: —
-      Fix needed: add a frozen `ALLOWED_SETTINGS` tuple (rbMarkups, rbSettings, colVisibility, colPrefs, colWidths, dateRange, pageSize, defaultView) + `AllowedSettingKey` type in src/routes/settings.ts and gate PUT /:key / DELETE /:key against it. v4 currently accepts any free-form key, which diverges from v2's allowlist guard.
-      Classification: FIX_NEEDED — v4's `/settings/:key` accepts any free-form key; v2 guards via `ALLOWED_SETTINGS` tuple — add a Zod enum to tighten. [priority: MED]
+      v4: src/routes/settings.ts:L18 (`ALLOWED_SETTINGS` + `AllowedSettingKey`) + `isAllowedSettingKey()` at L35, wired into PUT /:key and DELETE /:key which 400 on unknown keys.
+      Note: v4 extends the v2 tuple with `orders.columnPrefs` (active v4 exact key used by v2-apiClient) and accepts the dynamic `markup.<carrierId|pid>` prefix (MarkupsContext persists carrier/package markups this way; rates.ts reads them via `LIKE 'markup.%'`). v2's 8-key tuple is embedded verbatim.
+      Classification: MATCH — Batch 2 port.
 
 - [x] `dto:analysisdailysalesquery` — interface AnalysisDailySalesQuery — **[MATCH]**
       v2: packages/contracts/src/analysis/contracts.ts:L36
@@ -261,11 +263,10 @@ Generated: 2026-04-23
       v4: src/routes/inventory.ts:L71
       Note: v4 inlines this as the projection returned from GET /inventory/ledger — joins inventory + inventoryLedger for `{id, inventoryId, sku, name, clientId, type, qty, orderId, note, createdBy, createdAt}`. Same field set as v2 (minus `skuName/clientName` which are derivable from the join).
 
-- [ ] `dto:legacysyncstatus` — interface LegacySyncStatusDto — **[MISSING]**
+- [x] `dto:legacysyncstatus` — interface LegacySyncStatusDto — **[MATCH]**
       v2: packages/contracts/src/shipments/contracts.ts:L16
-      v4: —
-      Fix needed: GET /orders/sync/status (getSyncStatus) returns `{lastSyncedAt, orderCount, isRunning}` — missing v2's `status: 'idle'|'syncing'|'done'|'error'`, `error: string|null`, `page: number`, `mode: 'idle'|'incremental'|'full'`, `ratesCached: number`, `ratePrefetchRunning: boolean`. Either extend the status response with those fields (especially `status/error/mode`, which progress UIs rely on) or document as INTENTIONALLY_CHANGED in Phase E.
-      Classification: FIX_NEEDED — `/orders/sync/status` missing `status/mode/error/page/ratesCached/ratePrefetchRunning` fields from v2 shape. [priority: LOW]
+      v4: src/routes/orders.ts:L21
+      Note: GET /orders/sync/status now returns `{lastSyncedAt, orderCount, status, mode, error, page, ratesCached, ratePrefetchRunning, lastSyncAt}`. `ratesCached` is live (SELECT count FROM rate_cache); `status`/`mode`/`error`/`page`/`ratePrefetchRunning` carry safe defaults because v4's sync is synchronous from the HTTP caller's POV and has no live state machine. `lastSyncAt` is retained as a back-compat alias.
 
 - [x] `dto:legacysynctriggerresponse` — interface LegacySyncTriggerResponseDto — **[MATCH]**
       v2: packages/contracts/src/shipments/contracts.ts:L11
@@ -370,11 +371,11 @@ Generated: 2026-04-23
       v4: src/db/schema/parent-skus.ts:L27
       Note: v4 inlines this as Drizzle `$inferSelect` (`export type ParentSku = typeof parentSkus.$inferSelect`) — returned from GET /parent-skus and GET /inventory/:id/parents. v2's derived aggregates (childCount, totalBaseUnits, lowStockCount) are computed client-side from the parents list + inventory.
 
-- [ ] `dto:parentskudetail` — interface ParentSkuDetailDto — **[MISSING]**
+- [x] `dto:parentskudetail` — interface ParentSkuDetailDto — **[MATCH]**
       v2: packages/contracts/src/inventory/contracts.ts:L73
-      v4: —
-      Fix needed: there is no GET /parent-skus/:id endpoint returning the v2 `ParentSkuDetailDto` shape (`ParentSkuDto + {children, lowStockChildren, lowStockCount}`). Either add a detail route that joins parent_skus + inventory_sku_parents + inventory to return the aggregated DTO, or document that the React client assembles this client-side from /parent-skus + /inventory.
-      Classification: FIX_NEEDED — aggregated `{children, lowStockChildren, lowStockCount}` shape not assembled server-side; React has to make N+1 calls. [priority: MED]
+      v4: src/routes/parent-skus.ts:L37 (GET /parent-skus/:id/detail)
+      Note: Returns the aggregated v2 shape `{parent, children, lowStockChildren, lowStockCount}`. Children come from `inventory` joined on `parent_sku_id`; low-stock filter applies `stockQty <= reorderLevel` (v4's equivalent of v2's `baseUnits <= minStock`). Single server-side payload replaces the React client's prior N+1 (fetch parent + list inventory + filter client-side).
+      Classification: MATCH — Batch 2 port.
 
 - [x] `dto:productbulkitem` — interface ProductBulkItemDto — **[MATCH]**
       v2: packages/contracts/src/products/contracts.ts:L1
@@ -404,11 +405,11 @@ Generated: 2026-04-23
       v4: src/routes/inventory.ts:L431
       Note: v4 inlines this as the `items[]` element of POST /inventory/receive body — `{invSkuId, qty, note?}`. v4 takes an `invSkuId` (the inventory row's id) where v2 took `{sku, name?, qty}`.
 
-- [ ] `dto:receiveinventoryresult` — interface ReceiveInventoryResultDto — **[MISSING]**
+- [x] `dto:receiveinventoryresult` — interface ReceiveInventoryResultDto — **[MATCH]**
       v2: packages/contracts/src/inventory/contracts.ts:L120
-      v4: —
-      Fix needed: POST /inventory/receive returns only `{invSkuId, ok, error?}` per item — v2's ReceiveInventoryResultDto carries `{sku, qty, baseUnitQty, baseUnits, invSkuId, newStock}`. Extend the per-item result to include `sku`, `qty`, `baseUnitQty`, `baseUnits`, and the post-receive `newStock` so receiving UIs can show the new on-hand total without a round-trip read.
-      Classification: FIX_NEEDED — per-item result missing `newStock` field forces UI refetch after bulk receive. [priority: MED]
+      v4: src/routes/inventory.ts:L451 (bulk POST /inventory/receive results items)
+      Note: Per-item result now includes `newStock` (the post-receive `inventory.stockQty` returned by `applyMovement`). v4's items retain `{invSkuId, ok, error?}` plus `newStock` — the v2 fields `sku`, `qty`, `baseUnitQty`, `baseUnits` are already carried in the request body that the client sent (v4 uses `invSkuId` instead of a sku-name lookup), so the client already has them; only the post-receive `newStock` required a server-side read to close the parity gap. Purely additive — existing consumers unaffected.
+      Classification: MATCH — Batch 2 port.
 
 - [x] `dto:retrievelabelresponse` — interface RetrieveLabelResponseDto — **[MATCH]**
       v2: packages/contracts/src/labels/contracts.ts:L69

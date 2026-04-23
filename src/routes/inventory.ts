@@ -440,17 +440,30 @@ app.post(
   async (c) => {
     const body = c.req.valid('json');
     const email = c.get('email' as never) as string | undefined;
-    const results: Array<{ invSkuId: number; ok: boolean; error?: string }> = [];
+    // v2-parity ReceiveInventoryResultDto adds `newStock` per item so
+    // the receiving UI can display the post-receive on-hand total without a
+    // round-trip fetch. applyMovement returns the updated inventory row,
+    // whose stockQty IS the new on-hand total.
+    const results: Array<{
+      invSkuId: number;
+      ok: boolean;
+      newStock?: number;
+      error?: string;
+    }> = [];
     for (const item of body.items) {
       try {
-        await applyMovement({
+        const res = await applyMovement({
           inventoryId: item.invSkuId,
           type: 'receive',
           qty: item.qty,
           note: item.note,
           createdBy: email,
         });
-        results.push({ invSkuId: item.invSkuId, ok: true });
+        results.push({
+          invSkuId: item.invSkuId,
+          ok: true,
+          newStock: res.inventory?.stockQty ?? 0,
+        });
       } catch (err) {
         results.push({
           invSkuId: item.invSkuId,

@@ -3,9 +3,11 @@
 Source: `v2orginal/`
 Target: `prepship-v4-stable/`
 
-**Atoms:** 198  |  **MATCH:** 189  |  **MISSING:** 9  |  **Behavior review needed:** 0
+**Atoms:** 198  |  **MATCH:** 192  |  **MISSING:** 6  |  **Behavior review needed:** 0
 
 Generated: 2026-04-23
+
+<!-- Phase E 2026-04-23: browseRates + fetchOrderDetail wrappers ported at web/src/lib/v2-apiClient.ts — flipped to MATCH. -->
 
 ---
 
@@ -242,11 +244,10 @@ Generated: 2026-04-23
       v2: apps/react/src/api/client.ts:L856
       v4: web/src/lib/v2-apiClient.ts:L1827
 
-- [ ] `apiclient:browserates` — apiClient.browseRates() — **[MISSING]**
+- [x] `apiclient:browserates` — apiClient.browseRates() — **[MATCH]**
       v2: apps/react/src/api/client.ts:L888
-      v4: —
-      Fix needed: Add `browseRates(data): Promise<{ rates: unknown[] }>` to the `apiClient` object in `web/src/lib/v2-apiClient.ts` that calls `api.post<{ rates: unknown[] }>('/rates/browse', data)` wrapped in `safe(...)` with `{ rates: [] }` fallback. Backend route already exists at `src/routes/rates.ts:L45` (POST /rates/browse). Current RateBrowserModal inlines its own `browseRates()` function at `web/src/components/RateBrowserModal.tsx:L430` — exposing the apiClient method enables reuse from other views.
-      Classification: FIX_NEEDED — backend exists (`POST /rates/browse`); only the v2-shim wrapper is missing. [priority: LOW]
+      v4: web/src/lib/v2-apiClient.ts:L1874
+      Note: thin `safe()` wrapper around `POST /rates/browse`. Returns the backend response verbatim (`{rates, bestRate, ...}`) with `{rates: [], bestRate: null}` fallback.
 
 - [x] `apiclient:buildheaders` — apiClient.buildHeaders() — **[MATCH]**
       v2: apps/react/src/api/client.ts:L151
@@ -423,11 +424,10 @@ Generated: 2026-04-23
       v2: apps/react/src/api/client.ts:L718
       v4: web/src/lib/v2-apiClient.ts:L1545
 
-- [ ] `apiclient:fetchorderdetail` — apiClient.fetchOrderDetail() — **[MISSING]**
+- [x] `apiclient:fetchorderdetail` — apiClient.fetchOrderDetail() — **[MATCH]**
       v2: apps/react/src/api/client.ts:L282
-      v4: —
-      Fix needed: Add `fetchOrderDetail(orderId: number): Promise<any>` to the `apiClient` object in `web/src/lib/v2-apiClient.ts` that calls `api.get<any>(\`/orders/${orderId}\`)` wrapped in `safe(...)` with `null` fallback. Backend route already exists at `src/routes/orders.ts:L440` (GET /orders/:id — returns the single order row without hydration). v4 currently only exposes `fetchOrderFull` (GET /orders/:id/full — hydrated); some v2 callers only need the plain row.
-      Classification: FIX_NEEDED — backend `GET /orders/:id` exists; only the wrapper method is missing. [priority: LOW]
+      v4: web/src/lib/v2-apiClient.ts:L672
+      Note: thin `safe()` wrapper around `GET /orders/:id` (non-hydrated row). `fetchOrderFull` remains the hydrated variant at `GET /orders/:id/full`.
 
 - [x] `apiclient:fetchorderdims` — apiClient.fetchOrderDims() — **[MATCH]**
       v2: apps/react/src/api/client.ts:L1000
@@ -713,11 +713,11 @@ Generated: 2026-04-23
       v4: web/src/utils/markups.ts:L39
       Note: identical `new Set([376759])`. Applied in `isBlockedRate` at markups.ts:L117 to un-block `usps_media_mail` for that one store.
 
-- [ ] `const:ss_baseline_carrier_codes` — export const SS_BASELINE_CARRIER_CODES — **[MISSING]**
+- [x] `const:ss_baseline_carrier_codes` — export const SS_BASELINE_CARRIER_CODES — **[MATCH]**
       v2: apps/api/src/common/prepship-config.ts:L6
-      v4: —
-      Fix needed: v4 has no `SS_BASELINE_CARRIER_CODES = new Set(['stamps_com', 'ups_walleted'])` constant. v2 uses it to identify the ShipStation-provided baseline carrier accounts (vs. client-owned accounts) — relevant for rate-source fallback and billing "cost" (baseline) vs "charge" (client account) semantics. v4's rate allowlist at `src/services/rates.ts:L84` includes `stamps_com` in ALLOWED_CODES but doesn't distinguish baseline from client accounts. Add `export const SS_BASELINE_CARRIER_CODES = new Set(['stamps_com', 'ups_walleted'])` in a shared module (e.g. `src/lib/carrier-config.ts`) and consume in billing/rate-backfill to flag baseline-sourced rates.
-      Classification: FIX_NEEDED — v4 can't distinguish baseline-provided carriers (`stamps_com`, `ups_walleted`) from client-owned accounts for billing cost vs charge accounting. [priority: MED]
+      v4: src/services/rates.ts:L48 (`export const SS_BASELINE_CARRIER_CODES = new Set(['stamps_com', 'ups_walleted'])`)
+      Note: Constant exported alongside the existing BLOCKED_* tuples in rates.ts for downstream use. Billing-line-item generation in `src/services/billing.ts` does not yet resolve shipments to a carrier_code, so no billing-side consumer was wired — downstream cost-vs-charge accounting can import this Set directly once it starts tracking carrier_code per shipment/line item.
+      Classification: MATCH — Batch 2 port.
 
 
 ### CSS Classes

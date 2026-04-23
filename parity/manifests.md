@@ -3,9 +3,11 @@
 Source: `v2orginal/`
 Target: `prepship-v4-stable/`
 
-**Atoms:** 18  |  **MATCH:** 17  |  **MISSING:** 1  |  **Behavior review needed:** 0
+**Atoms:** 18  |  **MATCH:** 18  |  **MISSING:** 0  |  **Behavior review needed:** 0
 
 Generated: 2026-04-23
+
+<!-- Phase E 2026-04-23: POST /manifests/generate ported at src/routes/manifests.ts — flipped to MATCH. -->
 
 ---
 
@@ -15,11 +17,10 @@ Generated: 2026-04-23
       v2: apps/api/src/modules/manifests/api/manifests-routes.ts:L33
       v4: src/routes/manifests.ts:L17
 
-- [ ] `POST /manifests/generate` — POST /api/manifests/generate — **[MISSING]**
+- [x] `POST /manifests/generate` — POST /api/manifests/generate — **[MATCH]**
       v2: apps/api/src/modules/manifests/api/manifests-routes.ts:L25
-      v4: —
-      Fix needed: Add `POST /api/manifests/generate` in `src/routes/manifests.ts` that reads `{ startDate, endDate, carrierId?, clientId? }` from the JSON body and returns the same manifest download response as the existing `GET /generate` handler (src/routes/manifests.ts:L17). v2 supports both GET (query) and POST (JSON body) for the same operation.
-      Classification: FIX_NEEDED — v4 only implements GET; trivial to add POST alias accepting the same body shape. [priority: LOW]
+      v4: src/routes/manifests.ts:L80
+      Note: POST body accepts either v2 (`startDate/endDate/carrierId/clientId`) or v4 (`dateFrom/dateTo/carrierCode/clientId`) field names, normalized through a shared `loadManifest()` helper so GET and POST emit the identical response shape.
 
 
 ### CSS Classes

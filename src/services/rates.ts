@@ -45,6 +45,16 @@ async function loadCarrierMarkups(): Promise<Map<string, Markup>> {
 // leaked into best-rate selection, which could silently undercharge vs v2
 // (e.g. UPS SurePost lightweight <1lb rates selectable where v2 blocks them).
 
+// v2-parity: ShipStation-provided baseline carrier accounts (vs. client-owned
+// carrier accounts). Billing/cost-vs-charge accounting uses this to flag rows
+// sourced from baseline carriers so they can be surfaced at ShipStation's
+// wholesale cost rather than the marked-up charge price. v2 source:
+// apps/api/src/common/prepship-config.ts:L6.
+export const SS_BASELINE_CARRIER_CODES = new Set<string>([
+  'stamps_com',
+  'ups_walleted',
+]);
+
 export const BLOCKED_SERVICE_CODES = new Set<string>([
   'usps_media_mail',
   'usps_first_class_mail',

@@ -69,6 +69,7 @@ Generated: 2026-04-23
 - [x] `POST /inventory/receive` — POST /api/inventory/receive — **[MATCH]**
       v2: apps/api/src/modules/inventory/api/inventory-routes.ts:L25
       v4: src/routes/inventory.ts:L423
+      Note: Batch 2 port added `newStock` to each per-item result row (post-receive `inventory.stockQty` from `applyMovement`). Closes the v2 ReceiveInventoryResultDto parity gap so receiving UIs can render the new on-hand total without a round-trip fetch.
 
 - [x] `POST /parent-skus` — POST /api/parent-skus — **[MATCH]**
       v2: apps/api/src/modules/inventory/api/inventory-routes.ts:L58

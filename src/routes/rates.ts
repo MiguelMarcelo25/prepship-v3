@@ -156,6 +156,32 @@ app.get('/carriers', async (c) => {
   return c.json(data);
 });
 
+// v2 parity: GET /carriers-for-store?storeId=N — returns the list of carriers
+// available for a given ShipStation store. v2 scoped carriers by mapping
+// storeId → clientId and reading per-client carrier configs; v4 delegates to
+// ShipStation's global carrier list (ShipStation v2 API doesn't expose a
+// per-store carrier endpoint). We echo back the storeId so callers can key
+// UI state off the response. Best-effort passthrough — if per-store scoping
+// is required later, plug into clients/store-mapping here.
+const carriersForStoreQuery = z.object({
+  storeId: z.coerce.number().int().optional(),
+});
+
+app.get('/carriers-for-store', zValidator('query', carriersForStoreQuery), async (c) => {
+  const { storeId } = c.req.valid('query');
+  const res = await ssRequest<CarriersResponse>('/v2/carriers', {
+    dedupeKey: 'carriers:list',
+  });
+  const carriers = Array.isArray(res?.carriers) ? res.carriers : [];
+  const data = carriers.map((ca) => ({
+    carrierId: ca.carrier_id,
+    carrierCode: ca.carrier_code,
+    nickname: ca.nickname ?? ca.friendly_name ?? null,
+    services: Array.isArray(ca.services) ? ca.services : [],
+  }));
+  return c.json({ data, storeId: storeId ?? null });
+});
+
 app.post(
   '/backfill-best',
   zValidator(

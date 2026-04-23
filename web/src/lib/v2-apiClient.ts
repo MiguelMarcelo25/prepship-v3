@@ -667,6 +667,16 @@ export const apiClient = {
     );
   },
 
+  // v2 parity: plain single-order read (no hydration). Use when callers only
+  // need the raw order row — `fetchOrderFull` is the hydrated variant.
+  fetchOrderDetail(orderId: number): Promise<any> {
+    return safe(
+      'fetchOrderDetail',
+      () => api.get<any>(`/orders/${orderId}`),
+      null
+    );
+  },
+
   updateOrder(orderId: number, data: Record<string, unknown>): Promise<any> {
     return safe(
       'updateOrder',
@@ -1854,6 +1864,17 @@ export const apiClient = {
         return rawRates.map(translateRateToV2Shape);
       },
       []
+    );
+  },
+
+  // v2 parity: thin wrapper around POST /rates/browse. Backend already
+  // returns `{rates, bestRate, ...}` — we passthrough verbatim (no
+  // translation) since the rate-browser UI consumes the v4 shape directly.
+  browseRates(data: Record<string, unknown>): Promise<any> {
+    return safe(
+      'browseRates',
+      () => api.post<any>('/rates/browse', data),
+      { rates: [], bestRate: null }
     );
   },
 
