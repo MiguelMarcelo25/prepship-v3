@@ -175,7 +175,7 @@ export default function BillingView({ onOpenOrder }: BillingViewProps) {
 
         setSavedPackagePrices(rows)
         const nextRows = buildBillingPackagePriceRows(packages, rows)
-        setPackagePriceDrafts(Object.fromEntries(nextRows.map((row) => [row.packageId, row.charge.toFixed(2)])))
+        setPackagePriceDrafts(Object.fromEntries(nextRows.map((row) => [row.packageId, (Number(row.charge) || 0).toFixed(2)])))
       } catch (error) {
         if (!active) return
         setSavedPackagePrices([])
@@ -547,6 +547,8 @@ export default function BillingView({ onOpenOrder }: BillingViewProps) {
                             [config.clientId]: { ...current[config.clientId], billingMode: event.target.value },
                           }))}
                         >
+                          <option value="label_cost">Label Cost</option>
+                          <option value="ss_ref_rate">SS Ref Rate ★</option>
                           <option value="per_shipment">Per Shipment</option>
                           <option value="monthly">Monthly</option>
                         </select>
@@ -630,7 +632,7 @@ export default function BillingView({ onOpenOrder }: BillingViewProps) {
                           min="0"
                           className="markup-input-lg"
                           style={{ width: 62, textAlign: 'right', fontSize: 12 }}
-                          value={packagePriceDrafts[row.packageId] ?? row.charge.toFixed(2)}
+                          value={packagePriceDrafts[row.packageId] ?? (Number(row.charge) || 0).toFixed(2)}
                           onChange={(event) => setPackagePriceDrafts((current) => ({
                             ...current,
                             [row.packageId]: event.target.value,

@@ -8,6 +8,7 @@ import {
   billingRefRates,
   clientPackagePrices,
 } from '../db/schema/billing';
+import { clients } from '../db/schema/clients';
 import {
   billingDetails,
   billingSummary,
@@ -18,10 +19,33 @@ import {
 const app = new Hono();
 
 app.get('/config', async (c) => {
+  // v2-parity: join clients so the frontend can render the CLIENT column.
+  // Exclude is_test and Api Shipments — they never bill.
   const rows = await db
-    .select()
+    .select({
+      clientId: billingConfig.clientId,
+      clientName: clients.name,
+      pickPackFee: billingConfig.pickPackFee,
+      pickPackMaxUnits: billingConfig.pickPackMaxUnits,
+      additionalUnitFee: billingConfig.additionalUnitFee,
+      packageCostMarkup: billingConfig.packageCostMarkup,
+      shippingMarkupPct: billingConfig.shippingMarkupPct,
+      shippingMarkupFlat: billingConfig.shippingMarkupFlat,
+      storageFeePerCuFt: billingConfig.storageFeePerCuFt,
+      billingMode: billingConfig.billingMode,
+      active: billingConfig.active,
+      createdAt: billingConfig.createdAt,
+      updatedAt: billingConfig.updatedAt,
+    })
     .from(billingConfig)
-    .orderBy(desc(billingConfig.updatedAt));
+    .innerJoin(clients, eq(clients.id, billingConfig.clientId))
+    .where(
+      and(
+        eq(clients.isTest, false),
+        sql`lower(${clients.name}) <> 'api shipments'`
+      )
+    )
+    .orderBy(asc(clients.name));
   return c.json({ data: rows });
 });
 
@@ -33,7 +57,9 @@ const configBody = z.object({
   shippingMarkupPct: z.coerce.number().nonnegative().optional(),
   shippingMarkupFlat: z.coerce.number().nonnegative().optional(),
   storageFeePerCuFt: z.coerce.number().nonnegative().optional(),
-  billingMode: z.enum(['per_shipment', 'monthly']).optional(),
+  billingMode: z
+    .enum(['per_shipment', 'monthly', 'label_cost', 'ss_ref_rate'])
+    .optional(),
   active: z.boolean().optional(),
 });
 
