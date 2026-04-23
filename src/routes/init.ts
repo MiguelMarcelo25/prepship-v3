@@ -37,6 +37,10 @@ app.get('/init-data', async (c) => {
 
 // Quick counts for nav badges / status chips.
 app.get('/counts', async (c) => {
+  // v2-parity: sidebar top-level totals exclude hidden clients (Api
+  // Shipments), is_test clients (Test Orders), and stale awaitings
+  // (>30 days — matches v2's effective sync horizon). Shipped +
+  // cancelled keep their full history so the all-time badges stay big.
   const rows = await db.execute<{
     awaiting: number;
     shipped: number;
@@ -46,12 +50,45 @@ app.get('/counts', async (c) => {
     inventory: number;
   }>(sql`
     select
-      (select count(*)::int from orders where order_status = 'awaiting_shipment') as awaiting,
-      (select count(*)::int from orders where order_status = 'shipped')           as shipped,
-      (select count(*)::int from orders where order_status = 'cancelled')         as cancelled,
-      (select count(*)::int from orders where order_status = 'on_hold')           as on_hold,
-      (select count(*)::int from print_queue_orders where status = 'queued')      as queue,
-      (select count(*)::int from inventory where active = true)                   as inventory
+      (
+        select count(*)::int from orders o
+        where o.order_status = 'awaiting_shipment'
+          and (o.order_date is null or o.order_date >= now() - interval '30 days')
+          and not exists (
+            select 1 from clients c
+            where c.id = o.client_id
+              and (c.is_test = true or lower(c.name) = 'api shipments')
+          )
+      ) as awaiting,
+      (
+        select count(*)::int from orders o
+        where o.order_status = 'shipped'
+          and not exists (
+            select 1 from clients c
+            where c.id = o.client_id
+              and (c.is_test = true or lower(c.name) = 'api shipments')
+          )
+      ) as shipped,
+      (
+        select count(*)::int from orders o
+        where o.order_status = 'cancelled'
+          and not exists (
+            select 1 from clients c
+            where c.id = o.client_id
+              and (c.is_test = true or lower(c.name) = 'api shipments')
+          )
+      ) as cancelled,
+      (
+        select count(*)::int from orders o
+        where o.order_status = 'on_hold'
+          and not exists (
+            select 1 from clients c
+            where c.id = o.client_id
+              and (c.is_test = true or lower(c.name) = 'api shipments')
+          )
+      ) as on_hold,
+      (select count(*)::int from print_queue_orders where status = 'queued') as queue,
+      (select count(*)::int from inventory where active = true) as inventory
   `);
   return c.json(
     rows[0] ?? {
