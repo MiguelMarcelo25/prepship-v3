@@ -290,7 +290,9 @@ async function syncOrdersForAccount(
     (await getSettingNumber(key)) ??
     Date.now() - DEFAULT_LOOKBACK_MS;
 
-  const pageSize = opts.pageSize ?? 250;
+  // v2-parity: pageSize=500 (v4 used 250). Matches apps/api/src/common/shipstation/client.ts:247
+  // v1Pages helper. Halves round-trip count for the same data volume.
+  const pageSize = opts.pageSize ?? 500;
   const runStartMs = Date.now();
   const sinceIso = new Date(lastSync).toISOString();
   const sinceParam = formatSSDate(lastSync);
@@ -316,7 +318,7 @@ async function syncOrdersForAccount(
 
     pages = res.pages;
 
-    // One INSERT per page (~250 orders) instead of per-row round-trips —
+    // One INSERT per page (~500 orders) instead of per-row round-trips —
     // turns a ~45 min backfill into a ~5 min one.
     total += await upsertOrdersBatch(
       res.orders,
@@ -326,6 +328,9 @@ async function syncOrdersForAccount(
 
     if (!res.orders.length || page >= res.pages) break;
     page += 1;
+    // v2-parity: 500ms inter-page delay. Matches apps/api/src/common/shipstation/client.ts:268
+    // v1Pages. Keeps the token bucket healthy over long backfills.
+    await new Promise((r) => setTimeout(r, 500));
   }
 
   await setSetting(key, String(runStartMs));

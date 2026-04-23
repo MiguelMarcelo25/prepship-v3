@@ -206,12 +206,19 @@ export async function ssCreateReturnLabel(
   reason: string,
   apiKeyV2?: string
 ): Promise<ReturnLabelResult> {
-  const id = `se-${shipmentId}`;
-  const payload = await ssRequest<Record<string, unknown>>(`/v2/shipments/${id}/return-labels`, {
-    method: 'POST',
-    body: { reason },
-    apiKey: apiKeyV2,
-  });
+  // v2-parity: ShipStation's documented return-label endpoint is
+  // POST /v2/shipments/{shipmentId}/returnlabel — singular, lowercase, no
+  // se- prefix on the numeric id. v4 previously used `/return-labels`
+  // (plural hyphenated) with an se- prefix which isn't a real ShipStation
+  // endpoint. Matches apps/api/src/modules/labels/data/shipstation-shipping-gateway.ts:228-240.
+  const payload = await ssRequest<Record<string, unknown>>(
+    `/v2/shipments/${shipmentId}/returnlabel`,
+    {
+      method: 'POST',
+      body: { reason },
+      apiKey: apiKeyV2,
+    }
+  );
   const shipmentCost = payload.shipment_cost as Record<string, unknown> | undefined;
   const labelDownload = (payload.label_download as Record<string, unknown> | undefined) ?? {};
   return {

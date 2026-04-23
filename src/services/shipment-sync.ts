@@ -4,6 +4,7 @@ import { orders } from '../db/schema/orders';
 import { shipments } from '../db/schema/shipments';
 import { clients } from '../db/schema/clients';
 import { ssV1Request } from '../lib/shipstation/v1-client';
+import { ssRequest } from '../lib/shipstation/client';
 import { getSettingNumber, setSetting } from './settings';
 
 const LAST_SYNC_KEY = 'shipment_sync.last_created_ms';
@@ -248,17 +249,31 @@ type ShipmentSyncAccount = {
   label: string;
   apiKey: string | undefined;
   apiSecret: string | undefined;
+  // v2-parity: V2 key is used for the /v2/shipments enrichment pass (which
+  // fills in providerAccountId). null when a client has no V2 key set —
+  // enrichment skips that account. Main account uses env.SHIPSTATION_API_KEY_V2.
+  apiKeyV2: string | null;
 };
 
 async function loadShipmentSyncAccounts(): Promise<ShipmentSyncAccount[]> {
+  // Main account's V2 key comes from env; ssRequest already falls back to
+  // env.SHIPSTATION_API_KEY_V2 when apiKey is undefined, so we mirror that
+  // explicitly here so the enrichment pass knows whether it can run for main.
+  const { env } = await import('../lib/env');
   const accounts: ShipmentSyncAccount[] = [
-    { label: 'main', apiKey: undefined, apiSecret: undefined },
+    {
+      label: 'main',
+      apiKey: undefined,
+      apiSecret: undefined,
+      apiKeyV2: env.SHIPSTATION_API_KEY_V2 ?? null,
+    },
   ];
   const rows = await db
     .select({
       name: clients.name,
       ssApiKey: clients.ssApiKey,
       ssApiSecret: clients.ssApiSecret,
+      ssApiKeyV2: clients.ssApiKeyV2,
     })
     .from(clients)
     .where(eq(clients.active, true));
@@ -268,6 +283,7 @@ async function loadShipmentSyncAccounts(): Promise<ShipmentSyncAccount[]> {
         label: `client:${r.name}`,
         apiKey: r.ssApiKey,
         apiSecret: r.ssApiSecret,
+        apiKeyV2: r.ssApiKeyV2 ?? null,
       });
     }
   }
@@ -290,7 +306,8 @@ function shipWatermarkKey(label: string): string {
 export async function syncShipments(
   opts: { sinceMs?: number; pageSize?: number } = {}
 ): Promise<ShipmentSyncResult> {
-  const pageSize = opts.pageSize ?? 250;
+  // v2-parity: pageSize=500 matches v2's v1Pages helper default.
+  const pageSize = opts.pageSize ?? 500;
   const runStartMs = Date.now();
 
   let totalFetched = 0;
@@ -345,6 +362,28 @@ export async function syncShipments(
 
         if (!res.shipments.length || page >= res.pages) break;
         page += 1;
+        // v2-parity: 500ms inter-page delay.
+        await new Promise((r) => setTimeout(r, 500));
+      }
+
+      // v2-parity: enrichment pass. v1's /shipments endpoint doesn't expose
+      // the numeric `carrierId` (provider account ID) — v2 runs a V2
+      // `/v2/shipments` page over the same time window and backfills
+      // `shipments.providerAccountId` by matching on tracking number.
+      // Mirrors apps/api/src/modules/shipments/application/shipment-services.ts:132.
+      try {
+        const enriched = await enrichProviderAccountIds(acct, lastSync);
+        if (enriched > 0) {
+          console.log(
+            `[shipment-sync] enriched providerAccountId on ${enriched} shipments for "${acct.label}"`
+          );
+        }
+      } catch (err) {
+        // Best-effort enrichment — never block the V1 sync on V2 failures.
+        console.warn(
+          `[shipment-sync] V2 enrichment failed for "${acct.label}":`,
+          (err as Error).message
+        );
       }
 
       await setSetting(key, String(runStartMs));
@@ -402,4 +441,88 @@ export async function getShipmentSyncStatus(): Promise<{
     .select({ count: sql<number>`count(*)::int` })
     .from(shipments);
   return { lastSyncedAt, shipmentCount: rows[0]?.count ?? 0 };
+}
+
+// v2-parity: V2 shipments enrichment. The V1 /shipments endpoint doesn't
+// expose ShipStation's numeric carrier id (the "provider account" that billing
+// reconciliation keys on). v2 runs a second V2 `/v2/shipments` pass over the
+// same window and backfills `shipments.providerAccountId` + the nickname by
+// matching on tracking_number (unique per SS shipment).
+//
+// Source: apps/api/src/modules/labels/data/shipstation-shipping-gateway.ts:293-314
+// + apps/api/src/modules/shipments/application/shipment-services.ts:132.
+async function enrichProviderAccountIds(
+  acct: { label: string; apiKeyV2: string | null },
+  sinceMs: number,
+): Promise<number> {
+  if (!acct.apiKeyV2) return 0; // No V2 key → can't enrich this account
+  const createdAtStart = new Date(sinceMs).toISOString();
+  let page = 1;
+  let totalUpdated = 0;
+  const maxPages = 20; // safety cap — v2 doesn't cap explicitly but 20*500=10k is plenty
+
+  type V2ShipmentRow = {
+    shipment_id?: string;
+    carrier_id?: string; // "se-12345"
+    tracking_number?: string | null;
+    external_order_id?: string | null;
+  };
+
+  while (page <= maxPages) {
+    const qs = new URLSearchParams({
+      page_size: '500',
+      page: String(page),
+      sort_dir: 'DESC',
+      created_at_start: createdAtStart,
+    });
+    let payload: { shipments?: V2ShipmentRow[]; pages?: number };
+    try {
+      payload = await ssRequest<{ shipments?: V2ShipmentRow[]; pages?: number }>(
+        `/v2/shipments?${qs.toString()}`,
+        {
+          apiKey: acct.apiKeyV2,
+          dedupeKey: `v2-shipments:enrich:${acct.label}:${createdAtStart}:${page}`,
+        },
+      );
+    } catch (err) {
+      console.warn(
+        `[shipment-sync] V2 enrichment page ${page} failed for "${acct.label}":`,
+        (err as Error).message,
+      );
+      break;
+    }
+
+    const rows = Array.isArray(payload?.shipments) ? payload.shipments : [];
+    if (!rows.length) break;
+
+    for (const row of rows) {
+      const tracking = row.tracking_number ?? null;
+      if (!tracking) continue;
+      const carrierIdStr = typeof row.carrier_id === 'string' ? row.carrier_id : null;
+      if (!carrierIdStr) continue;
+      const numericCarrierId = Number.parseInt(
+        carrierIdStr.replace(/^se-/, ''),
+        10,
+      );
+      if (!Number.isFinite(numericCarrierId)) continue;
+      // Only update rows where providerAccountId is null — don't clobber
+      // an ID that was set during label creation.
+      const result = await db
+        .update(shipments)
+        .set({ providerAccountId: numericCarrierId, updatedAt: new Date() })
+        .where(
+          sql`${shipments.trackingNumber} = ${tracking} and ${shipments.providerAccountId} is null`,
+        )
+        .returning({ id: shipments.id });
+      totalUpdated += result.length;
+    }
+
+    const totalPages = payload.pages ?? 1;
+    if (page >= totalPages || rows.length < 500) break;
+    page += 1;
+    // v2-parity: gentle inter-page pause
+    await new Promise((r) => setTimeout(r, 500));
+  }
+
+  return totalUpdated;
 }
