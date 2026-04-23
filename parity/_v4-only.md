@@ -316,9 +316,9 @@ These atoms exist in v4 but have no v2 counterpart. Either:
 - [ ] `POST /admin/reset-sync` — POST /admin/reset-sync — **[V4_ONLY]**
       v4: src/routes/admin.ts:L403
       Classification: INTENTIONALLY_CHANGED — infrastructure/ops endpoint added in v4 rewrite.
-- [ ] `POST /admin/seed-test-orders` — POST /admin/seed-test-orders — **[V4_ONLY]**
+- [x] `POST /admin/seed-test-orders` — POST /admin/seed-test-orders — **[V4_ONLY] ADJUDICATED**
       v4: src/routes/admin.ts:L169
-      Classification: NEEDS_HUMAN_SECOND_LOOK — test-data seeder shipping under /admin; verify prod guard.
+      Classification: INTENTIONALLY_CHANGED — adjudicated 2026-04-23: double-guarded (1) src/main.ts:L58 mounts /admin/* behind requireAuth (Supabase JWT), and (2) src/routes/admin.ts:L177,L184 only writes to clients where isTest=true. No action needed.
 - [ ] `POST /admin/upsert-keyed-client` — POST /admin/upsert-keyed-client — **[V4_ONLY]**
       v4: src/routes/admin.ts:L321
       Classification: INTENTIONALLY_CHANGED — infrastructure/ops endpoint added in v4 rewrite.
@@ -1216,15 +1216,15 @@ These atoms exist in v4 but have no v2 counterpart. Either:
 - [ ] `service:clearqueue` — clearQueue(...) — **[V4_ONLY]**
       v4: src/services/print-queue.ts:L133
       Classification: INTENTIONALLY_CHANGED — v4 service-layer function backing v4 endpoint.
-- [ ] `service:createbatch` — createBatchV2(...) — **[V4_ONLY]**
+- [x] `service:createbatch` — createBatchV2(...) — **[V4_ONLY] ADJUDICATED**
       v4: src/services/labels.ts:L822
-      Classification: NEEDS_HUMAN_SECOND_LOOK — two batch-label services in labels.ts (createBatchV2 vs createLabelBatch); likely wrapper+primitive but worth confirming.
+      Classification: INTENTIONALLY_CHANGED — adjudicated 2026-04-23: canonical batch-label service; called by src/routes/labels.ts:L121 via POST /labels/create-batch. Keep.
 - [ ] `service:createlabel` — createLabelV2(...) — **[V4_ONLY]**
       v4: src/services/labels.ts:L583
       Classification: INTENTIONALLY_CHANGED — v4 service-layer function backing v4 endpoint.
-- [ ] `service:createlabelbatch` — createLabelBatch(...) — **[V4_ONLY]**
+- [x] `service:createlabelbatch` — createLabelBatch(...) — **[V4_ONLY] ADJUDICATED**
       v4: src/services/labels.ts:L878
-      Classification: NEEDS_HUMAN_SECOND_LOOK — two batch-label services in labels.ts (createBatchV2 vs createLabelBatch); likely wrapper+primitive but worth confirming.
+      Classification: INTENTIONALLY_CHANGED — adjudicated 2026-04-23: legacy batch helper (+ private createLabelFromOrderId). No active server callers (v2-apiClient method name at web/src/lib/v2-apiClient.ts:L930 is client-side, unrelated). User chose to keep (not delete) — noted as dead helper; safe to ignore.
 - [ ] `service:createlabelfromrate` — createLabelFromRate(...) — **[V4_ONLY]**
       v4: src/services/labels.ts:L369
       Classification: INTENTIONALLY_CHANGED — v4 service-layer function backing v4 endpoint.
@@ -1261,12 +1261,12 @@ These atoms exist in v4 but have no v2 counterpart. Either:
 - [ ] `service:startprintjob` — startPrintJob(...) — **[V4_ONLY]**
       v4: src/services/print-queue.ts:L145
       Classification: INTENTIONALLY_CHANGED — v4 service-layer function backing v4 endpoint.
-- [ ] `service:voidlabel` — voidLabelV2(...) — **[V4_ONLY]**
+- [x] `service:voidlabel` — voidLabelV2(...) — **[V4_ONLY] ADJUDICATED**
       v4: src/services/labels.ts:L1064
-      Classification: NEEDS_HUMAN_SECOND_LOOK — two coexisting void paths (voidLabelV2 vs voidLabel); possible legacy overlap.
-- [ ] `service:voidlabel` — voidLabel(...) — **[V4_ONLY]**
+      Classification: INTENTIONALLY_CHANGED — adjudicated 2026-04-23: canonical void service; called by src/routes/labels.ts:L140 via POST /labels/:id/void. Keep.
+- [x] `service:voidlabel` — voidLabel(...) — **[V4_ONLY] ADJUDICATED**
       v4: src/services/labels.ts:L1124
-      Classification: NEEDS_HUMAN_SECOND_LOOK — two coexisting void paths (voidLabelV2 vs voidLabel); possible legacy overlap.
+      Classification: INTENTIONALLY_CHANGED — adjudicated 2026-04-23: 2-line back-compat wrapper that delegates to voidLabelV2 (labels.ts:L1125). No active server callers (v2-apiClient method at web/src/lib/v2-apiClient.ts:L942 is a client-side HTTP call, unrelated). User chose to keep (not delete) — harmless wrapper; safe to ignore.
 - [ ] `orders:modal:orderdetaildrawer` — orders modal OrderDetailDrawer — **[V4_ONLY]**
       v4: web/src/components/Views/OrdersView.tsx:L1
       Classification: INTENTIONALLY_CHANGED — v4 React UI component/handler.
