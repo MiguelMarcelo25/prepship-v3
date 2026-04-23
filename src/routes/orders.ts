@@ -189,52 +189,24 @@ app.get(
   }
 );
 
-// v2-parity PT shift window — noon→noon on weekdays, expanded across
-// weekends so Sat/Sun shifts still show Fri's orders. Mirrors
-// sqlite-order-repository.getDailyStats in v2. Used by /daily-stats to
-// populate the stats strip on the Awaiting Shipment / Shipped pages.
+// v2-parity shift window. v2 uses `new Date(y, m, d, 12, 0, 0)` which
+// creates noon in the SERVER's local timezone. On v2's UTC host that's
+// noon UTC — but the UI label still renders "12pm PT". v4 on Render is
+// also UTC, so we mirror the same behavior: compute noon/6pm in UTC and
+// label it as PT. Matches what the user sees in v2 exactly.
+//
+// See apps/api/src/modules/orders/data/sqlite-order-repository.ts:521
+// in v2. Weekend cases (Sat/Sun/Fri-evening/Mon-morning) extend the
+// window across non-working days so the strip still reflects the
+// pending workload over a weekend.
 function computeShiftWindow(now = new Date()): { from: Date; to: Date } {
-  // Read current PT calendar date + time using Intl.DateTimeFormat. We can't
-  // rely on server TZ because Render runs UTC.
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/Los_Angeles',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    hour12: false,
-    weekday: 'short',
-  }).formatToParts(now);
-  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
-  const y = Number(get('year'));
-  const m = Number(get('month'));
-  const d = Number(get('day'));
-  const hr = Number(get('hour'));
-  const dowMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
-  const dow = dowMap[get('weekday')] ?? 0;
-
-  // todayNoon and today6pm as UTC Date objects representing PT noon/6pm today.
-  // PT is UTC-7 (PDT) or UTC-8 (PST). Cheapest correct approach: construct
-  // the ISO string for "YYYY-MM-DDThh:00:00" in PT and let Date parse with
-  // an explicit offset. Use Intl to derive the offset for the given date.
-  const offsetMinutes = (() => {
-    const fmt = new Intl.DateTimeFormat('en-US', {
-      timeZone: 'America/Los_Angeles',
-      timeZoneName: 'shortOffset',
-    }).formatToParts(now);
-    const raw = fmt.find((p) => p.type === 'timeZoneName')?.value ?? 'GMT-8';
-    const match = raw.match(/GMT([+-]\d{1,2})(?::(\d{2}))?/);
-    if (!match) return -480; // fallback PST
-    const h = Number(match[1]);
-    const mm = match[2] ? Number(match[2]) : 0;
-    return h * 60 + (h < 0 ? -mm : mm);
-  })();
-  const offsetSign = offsetMinutes >= 0 ? '+' : '-';
-  const offsetAbs = Math.abs(offsetMinutes);
-  const offsetStr = `${offsetSign}${String(Math.floor(offsetAbs / 60)).padStart(2, '0')}:${String(offsetAbs % 60).padStart(2, '0')}`;
-  const todayNoon = new Date(
-    `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}T12:00:00${offsetStr}`
-  );
+  // All boundaries in UTC to match v2's server-local Date constructor.
+  const y = now.getUTCFullYear();
+  const m = now.getUTCMonth();
+  const d = now.getUTCDate();
+  const hr = now.getUTCHours();
+  const dow = now.getUTCDay(); // 0=Sun .. 6=Sat
+  const todayNoon = new Date(Date.UTC(y, m, d, 12, 0, 0));
   const isPm = hr >= 18;
   const dayMs = 24 * 60 * 60 * 1000;
 
