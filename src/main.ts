@@ -87,6 +87,35 @@ app.onError((err, c) => {
   );
 });
 
+// Keep the process alive on unhandled rejections / uncaught exceptions.
+// Node v25 crashes on unhandled rejections by default — that's the right
+// default for scripts, but a long-running API server has many background
+// promise chains (the sync scheduler, rate backfill, mock-label persist,
+// connection-level postgres.js events) where a single Postgres timeout or
+// ShipStation error shouldn't take the entire service down. Hono's
+// app.onError already responds 500 to the HTTP caller; these handlers
+// catch anything that escapes the request lifecycle.
+//
+// Render's health check (/health) will start returning non-200 only if the
+// process truly can't respond — which is what we want. Silent timeouts on
+// a single query should log and continue.
+process.on('unhandledRejection', (reason) => {
+  const msg =
+    reason instanceof Error
+      ? `${reason.name}: ${reason.message}`
+      : String(reason);
+  console.error('[unhandledRejection]', msg);
+  if (reason instanceof Error && reason.stack) console.error(reason.stack);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error(
+    '[uncaughtException]',
+    err instanceof Error ? `${err.name}: ${err.message}` : String(err)
+  );
+  if (err instanceof Error && err.stack) console.error(err.stack);
+});
+
 serve({ fetch: app.fetch, port: env.PORT }, (info) => {
   console.log(`API listening on http://localhost:${info.port}`);
   // Start the 3-minute in-process sync scheduler (v2 parity). GitHub Actions
