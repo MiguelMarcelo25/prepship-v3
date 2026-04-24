@@ -191,17 +191,15 @@ export function useOrders(
   const isoFrom = toIsoStart(dateStart);
   const isoTo = toIsoEnd(dateEnd);
 
-  // The sidebar treats each CLIENT as a v2 "store" (see v2-apiClient.ts). When
-  // the user clicks "Tran Agency" it bubbles up as `storeId = client.id` in
-  // OrdersView → here. v4's /orders endpoint expects that value as `clientId`,
-  // not ShipStation's raw storeId. Prefer explicit clientId, else route storeId
-  // through as clientId.
-  const effectiveClientId = clientId ?? storeId;
+  // v2 sidebar semantics: storeId is ShipStation's real storeId. Keep explicit
+  // clientId support for pages that filter by PrepShip client directly.
+  const effectiveClientId = clientId;
+  const effectiveStoreId = storeId;
 
   // When no specific client is selected, exclude orders from hidden clients
   // (e.g. "Api Shipments") so the main table isn't buried under test data.
   const excludeClientId =
-    effectiveClientId == null && HIDDEN_CLIENT_IDS.size > 0
+    effectiveClientId == null && effectiveStoreId == null && HIDDEN_CLIENT_IDS.size > 0
       ? [...HIDDEN_CLIENT_IDS].join(',')
       : undefined;
 
@@ -212,6 +210,7 @@ export function useOrders(
       currentPage,
       pageSize,
       effectiveClientId,
+      effectiveStoreId,
       excludeClientId,
       isoFrom,
       isoTo,
@@ -223,6 +222,7 @@ export function useOrders(
           page: currentPage,
           pageSize,
           clientId: effectiveClientId,
+          storeId: effectiveStoreId,
           excludeClientId,
           dateFrom: isoFrom,
           dateTo: isoTo,

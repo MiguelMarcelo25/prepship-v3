@@ -102,21 +102,18 @@ function toNumericString(n?: number | null): string {
 
 async function buildStoreToClientMap(): Promise<{
   byStore: Map<number, number>;
-  testClients: Set<number>;
   newPairs: Array<{ storeId: number; clientId: number }>;
 }> {
   const rows = await db
-    .select({ id: clients.id, storeIds: clients.storeIds, isTest: clients.isTest })
+    .select({ id: clients.id, storeIds: clients.storeIds })
     .from(clients);
   const byStore = new Map<number, number>();
-  const testClients = new Set<number>();
   for (const c of rows) {
     for (const sid of c.storeIds ?? []) {
       if (!isExcludedStoreId(sid)) byStore.set(sid, c.id);
     }
-    if (c.isTest) testClients.add(c.id);
   }
-  return { byStore, testClients, newPairs: [] };
+  return { byStore, newPairs: [] };
 }
 
 // Batched UPDATE that pushes the store_ids mappings discovered during the
@@ -153,15 +150,14 @@ async function flushNewStorePairs(
 // per-order loop for large backfills.
 //
 // Preserves the same semantics as the old single-row version:
-//   • isTest clients are filtered out before the insert (never hit the DB)
-//   • fallbackClientId auto-attaches orders to their owner account
-//   • externallyShipped is only overwritten when the incoming row
+//   - isTest clients sync like v2; label creation keeps them in test mode
+//   - fallbackClientId auto-attaches orders to their owner account
+//   - externallyShipped is only overwritten when the incoming row
 //     affirmatively sets it (preserves user-set flags on routine syncs)
 async function upsertOrdersBatch(
   ordersIn: SSOrder[],
   storeToClient: {
     byStore: Map<number, number>;
-    testClients: Set<number>;
     newPairs?: Array<{ storeId: number; clientId: number }>;
   },
   fallbackClientId: number | null = null
@@ -183,8 +179,6 @@ async function upsertOrdersBatch(
         storeToClient.newPairs?.push({ storeId, clientId: fallbackClientId });
       }
     }
-    if (clientId !== null && storeToClient.testClients.has(clientId)) continue;
-
     rows.push({
       externalOrderId: String(o.orderId),
       orderNumber: o.orderNumber,

@@ -52,65 +52,113 @@ app.get('/init-data', async (c) => {
 // NO date cutoff — v2 counts ALL awaiting regardless of age. Stale orders
 // that never transitioned are a real operational signal, not noise.
 app.get('/counts', async (c) => {
-  const rows = await db.execute<{
-    awaiting: number;
-    shipped: number;
-    cancelled: number;
-    on_hold: number;
-    queue: number;
-    inventory: number;
-  }>(sql`
-    select
-      (
-        select count(*)::int from orders o
-        where o.order_status = 'awaiting_shipment'
-          and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
-          and coalesce(o.externally_shipped, false) = false
-          and coalesce((o.raw->>'externallyFulfilled')::boolean, false) = false
-          and not exists (
-            select 1 from shipments s
-            where s.order_id = o.id and s.voided = false
+  const [rows, byStatus, byStatusStore] = await Promise.all([
+    db.execute<{
+      awaiting: number;
+      shipped: number;
+      cancelled: number;
+      on_hold: number;
+      queue: number;
+      inventory: number;
+    }>(sql`
+      select
+        (
+          select count(*)::int from orders o
+          where o.order_status = 'awaiting_shipment'
+            and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+            and coalesce(o.externally_shipped, false) = false
+            and coalesce((o.raw->>'externallyFulfilled')::boolean, false) = false
+            and not exists (
+              select 1 from shipments s
+              where s.order_id = o.id and s.voided = false
+            )
+            and not exists (
+              select 1 from clients c
+              where c.id = o.client_id
+                and lower(c.name) = 'api shipments'
+            )
+        ) as awaiting,
+        (
+          select count(*)::int from orders o
+          where o.order_status = 'shipped'
+            and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+            and not exists (
+              select 1 from clients c
+              where c.id = o.client_id
+                and lower(c.name) = 'api shipments'
+            )
+        ) as shipped,
+        (
+          select count(*)::int from orders o
+          where o.order_status = 'cancelled'
+            and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+            and not exists (
+              select 1 from clients c
+              where c.id = o.client_id
+                and lower(c.name) = 'api shipments'
+            )
+        ) as cancelled,
+        (
+          select count(*)::int from orders o
+          where o.order_status = 'on_hold'
+            and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+            and not exists (
+              select 1 from clients c
+              where c.id = o.client_id
+                and lower(c.name) = 'api shipments'
+            )
+        ) as on_hold,
+        (select count(*)::int from print_queue_orders where status = 'queued') as queue,
+        (select count(*)::int from inventory where active = true) as inventory
+    `),
+    db.execute<{ orderStatus: string; cnt: number }>(sql`
+      select o.order_status as "orderStatus", count(*)::int as cnt
+      from orders o
+      where o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+        and not exists (
+          select 1 from clients c
+          where c.id = o.client_id
+            and lower(c.name) = 'api shipments'
+        )
+        and not (
+          o.order_status = 'awaiting_shipment'
+          and (
+            coalesce(o.externally_shipped, false) = true
+            or coalesce((o.raw->>'externallyFulfilled')::boolean, false) = true
+            or exists (
+              select 1 from shipments s
+              where s.order_id = o.id and s.voided = false
+            )
           )
-          and not exists (
-            select 1 from clients c
-            where c.id = o.client_id
-              and lower(c.name) = 'api shipments'
+        )
+      group by o.order_status
+    `),
+    db.execute<{ orderStatus: string; storeId: number; cnt: number }>(sql`
+      select o.order_status as "orderStatus", o.store_id::int as "storeId", count(*)::int as cnt
+      from orders o
+      where o.store_id is not null
+        and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+        and not exists (
+          select 1 from clients c
+          where c.id = o.client_id
+            and lower(c.name) = 'api shipments'
+        )
+        and not (
+          o.order_status = 'awaiting_shipment'
+          and (
+            coalesce(o.externally_shipped, false) = true
+            or coalesce((o.raw->>'externallyFulfilled')::boolean, false) = true
+            or exists (
+              select 1 from shipments s
+              where s.order_id = o.id and s.voided = false
+            )
           )
-      ) as awaiting,
-      (
-        select count(*)::int from orders o
-        where o.order_status = 'shipped'
-          and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
-          and not exists (
-            select 1 from clients c
-            where c.id = o.client_id
-              and lower(c.name) = 'api shipments'
-          )
-      ) as shipped,
-      (
-        select count(*)::int from orders o
-        where o.order_status = 'cancelled'
-          and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
-          and not exists (
-            select 1 from clients c
-            where c.id = o.client_id
-              and lower(c.name) = 'api shipments'
-          )
-      ) as cancelled,
-      (
-        select count(*)::int from orders o
-        where o.order_status = 'on_hold'
-          and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
-          and not exists (
-            select 1 from clients c
-            where c.id = o.client_id
-              and lower(c.name) = 'api shipments'
-          )
-      ) as on_hold,
-      (select count(*)::int from print_queue_orders where status = 'queued') as queue,
-      (select count(*)::int from inventory where active = true) as inventory
-  `);
-  return c.json(
+        )
+      group by o.order_status, o.store_id
+      order by cnt desc
+    `),
+  ]);
+  const totals =
     rows[0] ?? {
       awaiting: 0,
       shipped: 0,
@@ -118,8 +166,8 @@ app.get('/counts', async (c) => {
       on_hold: 0,
       queue: 0,
       inventory: 0,
-    }
-  );
+    };
+  return c.json({ ...totals, byStatus, byStatusStore });
 });
 
 // Direct alias for /rates/carriers — old API exposed it under /init too.

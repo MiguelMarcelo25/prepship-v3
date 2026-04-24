@@ -321,25 +321,50 @@ export const apiClient = {
 
   // ─── Init / bootstrap ───────────────────────────────────────────────────────
   fetchCounts(filter?: { dateStart?: string; dateEnd?: string }): Promise<any> {
-    // v4's /init/counts → { awaiting, shipped, cancelled, on_hold, queue, inventory }
-    // v2's sidebar expects { byStatus, byStatusStore }.
-    // Since v4 uses `clientId` as the business grouping (not ShipStation's `storeId`)
-    // and clients have names ("Tran Agency" etc.) while store IDs don't, we map
-    // CLIENTS onto the sidebar's "store" slot. storeId = client.id in this wiring;
-    // see fetchStores below for the matching name resolution.
-    //
-    // Date filter handling: /init/counts ignores query params (no validator)
-    // and /clients/order-stats has no date filter on the backend. When the
-    // caller wants a bounded count, fall back to three parallel /orders
-    // probes (one per status) using the list endpoint's pagination.total.
-    // byStatusStore stays all-time since we can't break it down per-client
-    // within a date range without N backend calls.
+    // v2 sidebar parity: counts are grouped by real ShipStation storeId.
+    // /init/counts returns the legacy { byStatus, byStatusStore } shape.
     const hasDate = Boolean(filter?.dateStart || filter?.dateEnd);
     const dateFrom = toIsoDayStart(filter?.dateStart);
     const dateTo = toIsoDayEnd(filter?.dateEnd);
     return safe(
       'fetchCounts',
       async () => {
+        if (hasDate) {
+          const [a, s, x] = await Promise.all([
+            api
+              .get<any>(`/orders${qs({ status: 'awaiting_shipment', pageSize: 1, dateFrom, dateTo })}`)
+              .catch(() => null),
+            api
+              .get<any>(`/orders${qs({ status: 'shipped', pageSize: 1, dateFrom, dateTo })}`)
+              .catch(() => null),
+            api
+              .get<any>(`/orders${qs({ status: 'cancelled', pageSize: 1, dateFrom, dateTo })}`)
+              .catch(() => null),
+          ]);
+          return {
+            byStatus: [
+              { orderStatus: 'awaiting_shipment', cnt: a?.pagination?.total ?? 0 },
+              { orderStatus: 'shipped', cnt: s?.pagination?.total ?? 0 },
+              { orderStatus: 'cancelled', cnt: x?.pagination?.total ?? 0 },
+            ],
+            byStatusStore: [],
+          };
+        }
+
+        const legacyCounts = await api.get<any>('/init/counts');
+        return {
+          byStatus: Array.isArray(legacyCounts?.byStatus)
+            ? legacyCounts.byStatus
+            : [
+                { orderStatus: 'awaiting_shipment', cnt: legacyCounts?.awaiting ?? 0 },
+                { orderStatus: 'shipped', cnt: legacyCounts?.shipped ?? 0 },
+                { orderStatus: 'cancelled', cnt: legacyCounts?.cancelled ?? 0 },
+              ],
+          byStatusStore: Array.isArray(legacyCounts?.byStatusStore)
+            ? legacyCounts.byStatusStore
+            : [],
+        };
+
         // Fetch clients alongside stats so we can resolve hidden-client IDs by
         // name even if fetchStores hasn't populated HIDDEN_CLIENT_IDS yet.
         const [counts, clientStatsRes, clientsRes] = await Promise.all([
@@ -446,13 +471,39 @@ export const apiClient = {
   },
 
   fetchStores(): Promise<any[]> {
-    // v4 has no Store entity with names — each ShipStation store is just a numeric id.
-    // We map CLIENTS into the store slot so the sidebar shows "Tran Agency", "KF Goods",
-    // etc. instead of raw store IDs. Must stay in sync with fetchCounts above, which
-    // emits byStatusStore entries keyed by client.id.
+    // v2 sidebar parity: return one row per ShipStation storeId, named from
+    // the owning client.
     return safe(
       'fetchStores',
       async () => {
+        const [storesRes, clientRowsRes] = await Promise.all([
+          api.get<any>('/init/stores').catch(() => ({ data: [] })),
+          api.get<any>('/clients').catch(() => []),
+        ]);
+        const clientRows = Array.isArray(clientRowsRes) ? clientRowsRes : [];
+        const clientsById = new Map<number, any>();
+        for (const client of clientRows) {
+          if (typeof client?.id === 'number') clientsById.set(client.id, client);
+          isHiddenClient(client);
+        }
+        const storesArr = Array.isArray(storesRes?.data)
+          ? storesRes.data
+          : Array.isArray(storesRes)
+            ? storesRes
+            : [];
+        return storesArr
+          .filter((store: any) => !HIDDEN_CLIENT_IDS.has(store?.clientId))
+          .map((store: any) => {
+            const client = clientsById.get(store?.clientId);
+            return {
+              storeId: store?.storeId,
+              storeName: store?.clientName ?? client?.name ?? `Store ${store?.storeId}`,
+              active: store?.active ?? true,
+              isTest: client?.isTest === true,
+            };
+          })
+          .filter((store: any) => Number.isFinite(store.storeId));
+
         const clients = await api.get<any>('/clients');
         const arr = Array.isArray(clients) ? clients : [];
         // Call isHiddenClient on every client first so HIDDEN_CLIENT_IDS +
@@ -460,11 +511,11 @@ export const apiClient = {
         // rely on those sets). Then keep test clients in the returned list
         // so the sidebar can render them; drop only non-test hidden clients.
         return arr
-          .filter((c) => {
+          .filter((c: any) => {
             const hidden = isHiddenClient(c);
             return c?.isTest === true || !hidden;
           })
-          .map((c) => ({
+          .map((c: any) => ({
             storeId: c?.id,
             storeName: c?.name ?? `Client ${c?.id}`,
             active: true,
