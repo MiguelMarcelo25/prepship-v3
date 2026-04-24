@@ -99,7 +99,7 @@ export function startSyncScheduler(): void {
   }
 
   console.log(
-    `[scheduler] starting — orders every ${ORDER_SYNC_INTERVAL_MS / 1000}s, shipments every ${SHIPMENT_SYNC_INTERVAL_MS / 1000}s, rate backfill every ${RATE_BACKFILL_INTERVAL_MS / 1000}s (delayed ${STARTUP_DELAY_MS / 1000}s)`
+    `[scheduler] starting — orders every ${ORDER_SYNC_INTERVAL_MS / 1000}s, shipments every ${SHIPMENT_SYNC_INTERVAL_MS / 1000}s (delayed ${STARTUP_DELAY_MS / 1000}s)`
   );
 
   // Kick off the first run 15s after boot so the process is warm, then
@@ -119,14 +119,23 @@ export function startSyncScheduler(): void {
     );
   }, STARTUP_DELAY_MS + 90_000);
 
-  // Rate backfill — fires every 10 min, fetches rates for any awaiting order
-  // that has no rate yet OR whose rate is older than 24h (maxAgeHours default).
-  // Start 3 min after boot so the first order-sync has time to pull any new
-  // orders in before we try to rate them.
-  setTimeout(() => {
-    runBackfillTick();
-    backfillTimer = setInterval(runBackfillTick, RATE_BACKFILL_INTERVAL_MS);
-  }, STARTUP_DELAY_MS + 3 * 60 * 1000);
+  if (env.ENABLE_RATE_BACKFILL_SCHEDULER) {
+    console.log(
+      `[scheduler] rate backfill enabled — every ${RATE_BACKFILL_INTERVAL_MS / 1000}s`
+    );
+    // Rate backfill — fires every 10 min, fetches rates for any awaiting order
+    // that has no rate yet OR whose rate is older than 24h (maxAgeHours default).
+    // Start 3 min after boot so the first order-sync has time to pull any new
+    // orders in before we try to rate them.
+    setTimeout(() => {
+      runBackfillTick();
+      backfillTimer = setInterval(runBackfillTick, RATE_BACKFILL_INTERVAL_MS);
+    }, STARTUP_DELAY_MS + 3 * 60 * 1000);
+  } else {
+    console.log(
+      '[scheduler] rate backfill disabled; run /rates/backfill-best manually or set ENABLE_RATE_BACKFILL_SCHEDULER=true'
+    );
+  }
 }
 
 export function stopSyncScheduler(): void {

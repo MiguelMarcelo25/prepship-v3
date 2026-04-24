@@ -26,6 +26,10 @@ const schema = z.object({
   SHIP_FROM_POSTAL_CODE: z.string().optional(),
   SHIP_FROM_COUNTRY: z.string().default('US'),
   SHIP_FROM_PHONE: z.string().optional(),
+  ENABLE_RATE_BACKFILL_SCHEDULER: z
+    .string()
+    .optional()
+    .transform((value) => value === 'true' || value === '1'),
 });
 
 const parsed = schema.safeParse(process.env);

@@ -77,6 +77,44 @@ const listQuery = paginationSchema.extend({
   search: z.string().optional(),
 });
 
+const orderListSelect = {
+  id: orders.id,
+  externalOrderId: orders.externalOrderId,
+  clientId: orders.clientId,
+  orderNumber: orders.orderNumber,
+  orderStatus: orders.orderStatus,
+  orderDate: orders.orderDate,
+  storeId: orders.storeId,
+  customerEmail: orders.customerEmail,
+  shipToName: orders.shipToName,
+  shipToCity: orders.shipToCity,
+  shipToState: orders.shipToState,
+  shipToPostalCode: orders.shipToPostalCode,
+  carrierCode: orders.carrierCode,
+  serviceCode: orders.serviceCode,
+  weightOz: orders.weightOz,
+  orderTotal: orders.orderTotal,
+  shippingAmount: orders.shippingAmount,
+  items: orders.items,
+  raw: sql<Record<string, unknown>>`
+    jsonb_strip_nulls(jsonb_build_object(
+      'shipTo', ${orders.raw}->'shipTo',
+      'dimensions', ${orders.raw}->'dimensions',
+      'advancedOptions', ${orders.raw}->'advancedOptions',
+      'requestedShippingService', ${orders.raw}->'requestedShippingService',
+      'serviceCode', ${orders.raw}->'serviceCode',
+      'packageCode', ${orders.raw}->'packageCode',
+      'insuranceOptions', ${orders.raw}->'insuranceOptions',
+      'customerUsername', ${orders.raw}->'customerUsername',
+      'externallyFulfilled', ${orders.raw}->'externallyFulfilled'
+    ))
+  `.as('raw'),
+  externallyShipped: orders.externallyShipped,
+  externallyFulfilledVerified: orders.externallyFulfilledVerified,
+  createdAt: orders.createdAt,
+  updatedAt: orders.updatedAt,
+};
+
 app.get('/', zValidator('query', listQuery), async (c) => {
   const q = c.req.valid('query');
   const excludeIds = (q.excludeClientId ?? '')
@@ -150,7 +188,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   // by order_number and neither should we.
   const [joined, countRows] = await Promise.all([
     db
-      .select({ order: orders, overrides: orderOverrides })
+      .select({ order: orderListSelect, overrides: orderOverrides })
       .from(orders)
       .leftJoin(orderOverrides, eq(orderOverrides.orderId, orders.id))
       .where(where)
