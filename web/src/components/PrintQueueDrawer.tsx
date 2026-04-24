@@ -13,6 +13,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { api } from '../lib/api';
+import { API_BASE } from '../lib/api-base';
 import { apiClient } from '../lib/v2-apiClient';
 import { supabase } from '../lib/supabase';
 import { Button } from './ui/Button';
@@ -49,8 +50,6 @@ type JobStatus = {
 };
 
 type ClientRow = { id: number; name: string };
-
-const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
 
 async function downloadAuthedPdf(jobId: string, fileName: string) {
   const {

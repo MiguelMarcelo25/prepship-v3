@@ -1,6 +1,5 @@
 import { supabase } from './supabase';
-
-const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
+import { API_BASE } from './api-base';
 
 export type Pagination = {
   page: number;
@@ -30,7 +29,7 @@ async function request<T>(path: string, init: Init = {}): Promise<T> {
     finalHeaders['Authorization'] = `Bearer ${session.access_token}`;
   }
 
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await fetch(`${API_BASE}${path}`, {
     ...rest,
     headers: finalHeaders,
     body: body === undefined ? undefined : JSON.stringify(body),

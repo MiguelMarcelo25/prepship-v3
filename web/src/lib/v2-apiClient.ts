@@ -12,9 +12,8 @@
  */
 
 import { api, qs } from './api';
+import { API_BASE } from './api-base';
 import { supabase } from './supabase';
-
-const BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
 
 async function authHeaders(): Promise<Record<string, string>> {
   const {
@@ -251,7 +250,7 @@ async function fetchBlob(
   // try/catch can surface an error toast instead of quietly downloading a
   // 0-byte file (ManifestsView pattern — see MAN1).
   try {
-    const res = await fetch(`${BASE}${path}`, {
+    const res = await fetch(`${API_BASE}${path}`, {
       method: 'GET',
       headers: await authHeaders(),
     });
@@ -1108,7 +1107,7 @@ export const apiClient = {
         dateFrom: toIsoStart(from),
         dateTo: toIsoEnd(to),
       }).toString();
-      const res = await fetch(`${BASE}/billing/invoice?${qs}`, {
+      const res = await fetch(`${API_BASE}/billing/invoice?${qs}`, {
         headers: { Authorization: `Bearer ${session.access_token}` },
       });
       if (!res.ok) {
