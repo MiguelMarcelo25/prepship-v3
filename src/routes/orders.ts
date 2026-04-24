@@ -3,6 +3,7 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, desc, eq, gte, ilike, inArray, lte, notInArray, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
+import { clients } from '../db/schema/clients';
 import { orderOverrides, orders } from '../db/schema/orders';
 import { rateCache } from '../db/schema/rates';
 import { shipments } from '../db/schema/shipments';
@@ -17,6 +18,15 @@ import {
 import { EXCLUDED_STORE_IDS, EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
 
 const app = new Hono();
+
+const visibleStorePredicate = sql`(
+  (${orders.storeId} is not null and ${orders.storeId} not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)}))
+  or exists (
+    select 1 from ${clients} test_client
+    where test_client.id = ${orders.clientId}
+      and test_client.is_test = true
+  )
+)`;
 
 // User-initiated sync + status. Sits behind requireAuth (mounted at main.ts).
 // /cron/sync-orders is the cron-secret equivalent for schedulers.
@@ -173,7 +183,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       statusPredicate,
       q.clientId !== undefined ? eq(orders.clientId, q.clientId) : undefined,
       q.storeId !== undefined ? eq(orders.storeId, q.storeId) : undefined,
-      notInArray(orders.storeId, [...EXCLUDED_STORE_IDS]),
+      visibleStorePredicate,
       excludeIds.length > 0 && q.clientId === undefined
         ? notInArray(orders.clientId, excludeIds)
         : undefined,
@@ -421,7 +431,14 @@ app.get(
       from orders
       where order_date >= ${fromIso}::timestamptz
         and order_date <= ${toIso}::timestamptz
-        and store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+        and (
+          (store_id is not null and store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)}))
+          or exists (
+            select 1 from clients test_client
+            where test_client.id = orders.client_id
+              and test_client.is_test = true
+          )
+        )
         ${excludeFilter}
       group by date_trunc('day', order_date)
       order by date_trunc('day', order_date) desc
@@ -437,7 +454,14 @@ app.get(
       from orders
       where order_date >= ${fromIso}::timestamptz
         and order_date <= ${toIso}::timestamptz
-        and store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+        and (
+          (store_id is not null and store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)}))
+          or exists (
+            select 1 from clients test_client
+            where test_client.id = orders.client_id
+              and test_client.is_test = true
+          )
+        )
         ${excludeFilter}
     `);
     // v2 parity: needToShip is windowed and uses raw ShipStation status;
@@ -446,7 +470,14 @@ app.get(
       select count(*)::int as need_to_ship
       from orders o
       where o.order_status = 'awaiting_shipment'
-        and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+        and (
+          (o.store_id is not null and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)}))
+          or exists (
+            select 1 from clients test_client
+            where test_client.id = o.client_id
+              and test_client.is_test = true
+          )
+        )
         and o.order_date >= ${fromIso}::timestamptz
         and o.order_date <= ${toIso}::timestamptz
         ${excludeFilter}
@@ -456,7 +487,14 @@ app.get(
       from orders
       where order_date > ${toIso}::timestamptz
         and order_status <> 'cancelled'
-        and store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+        and (
+          (store_id is not null and store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)}))
+          or exists (
+            select 1 from clients test_client
+            where test_client.id = orders.client_id
+              and test_client.is_test = true
+          )
+        )
         ${excludeFilter}
     `);
     const w = windowedRows[0];
@@ -513,7 +551,10 @@ app.get('/picklist', zValidator('query', picklistQuery), async (c) => {
     left join clients c on c.id = o.client_id,
          jsonb_array_elements(o.items) item
     where (${status}::text is null or o.order_status = ${status}::text)
-      and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+      and (
+        (o.store_id is not null and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)}))
+        or c.is_test = true
+      )
       and (${cid}::int is null or o.client_id = ${cid}::int)
       and (${sid}::int is null or o.store_id = ${sid}::int)
       and o.order_date >= ${fromIso}::timestamptz

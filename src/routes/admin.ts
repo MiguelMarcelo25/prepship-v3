@@ -182,7 +182,7 @@ app.post('/seed-test-orders', zValidator('json', seedBody), async (c) => {
       .select()
       .from(clients)
       .where(eq(clients.isTest, true))
-      .orderBy(clients.id)
+      .orderBy(sql`case when lower(${clients.name}) = 'test orders' then 0 else 1 end`, clients.id)
       .limit(1);
     testClient = row;
   }

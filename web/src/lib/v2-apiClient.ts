@@ -75,6 +75,14 @@ function isHiddenClient(
   return false;
 }
 
+function normalizeSyntheticTestStoreQuery(q: Record<string, unknown>): void {
+  if (q.storeId == null) return;
+  const storeId = Number(q.storeId);
+  if (!Number.isFinite(storeId) || storeId >= 0) return;
+  q.clientId = Math.abs(storeId);
+  delete q.storeId;
+}
+
 // Coerce a date-ish input ('YYYY-MM-DD' or any ISO string) to an ISO datetime
 // anchored at start-of-day / end-of-day. Used for endpoints that validate
 // `z.string().datetime()` where a plain `YYYY-MM-DD` would be rejected.
@@ -736,6 +744,7 @@ export const apiClient = {
           if (iso) q.dateTo = iso;
           delete q.dateEnd;
         }
+        normalizeSyntheticTestStoreQuery(q);
         const res = await api.get<{
           data: Array<Record<string, any>>;
           pagination: { page: number; pageSize: number; total: number; totalPages: number };
@@ -896,6 +905,7 @@ export const apiClient = {
   fetchPicklist(query: {
     status?: string;
     clientId?: number;
+    storeId?: number;
     dateFrom?: string;
     dateTo?: string;
   }): Promise<any> {
@@ -906,13 +916,16 @@ export const apiClient = {
     return safe(
       'fetchPicklist',
       async () => {
+        const q: Record<string, unknown> = { ...query };
+        normalizeSyntheticTestStoreQuery(q);
         const res = await api.get<any>(
           `/orders/picklist${qs({
-            status: query.status,
-            clientId: query.clientId,
-            dateFrom: query.dateFrom,
-            dateTo: query.dateTo,
-          })}`
+            status: q.status,
+            clientId: q.clientId,
+            storeId: q.storeId,
+            dateFrom: q.dateFrom,
+            dateTo: q.dateTo,
+          } as any)}`
         );
         const rawSkus = Array.isArray(res?.skus) ? res.skus : [];
         const skus = rawSkus.map((r: any) => ({
