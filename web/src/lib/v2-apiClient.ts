@@ -647,11 +647,51 @@ export const apiClient = {
   },
 
   // ─── Orders: list / detail / mutations ──────────────────────────────────────
+  // v4 route: GET /orders → { data: Order[], pagination: { page, pageSize, total, totalPages } }
+  //   query: { page, pageSize, status, clientId, storeId, excludeClientId,
+  //            dateFrom (ISO), dateTo (ISO), search }
+  // v2 callers expect:
+  //   query: { page, pageSize, orderStatus, clientId, storeId, dateStart, dateEnd }
+  //   response: { orders: Order[], total, pages, currentPage }
+  //   each row keyed by `orderId` (not `id`)
+  // This adapter translates both directions so the v2 UI renders.
   fetchOrders(query: Record<string, unknown>): Promise<any> {
     return safe(
       'fetchOrders',
-      () => api.get<any>(`/orders${qs(query as any)}`),
-      { data: [], pagination: { page: 1, pageSize: 0, total: 0, totalPages: 0 } }
+      async () => {
+        const q: Record<string, unknown> = { ...query };
+        if (q.orderStatus !== undefined) {
+          q.status = q.orderStatus;
+          delete q.orderStatus;
+        }
+        if (q.dateStart !== undefined) {
+          const iso = toIsoDayStart(q.dateStart as string | undefined | null);
+          if (iso) q.dateFrom = iso;
+          delete q.dateStart;
+        }
+        if (q.dateEnd !== undefined) {
+          const iso = toIsoDayEnd(q.dateEnd as string | undefined | null);
+          if (iso) q.dateTo = iso;
+          delete q.dateEnd;
+        }
+        const res = await api.get<{
+          data: Array<Record<string, any>>;
+          pagination: { page: number; pageSize: number; total: number; totalPages: number };
+        }>(`/orders${qs(q as any)}`);
+        const rows = Array.isArray(res?.data) ? res.data : [];
+        const orders = rows.map((row) => ({
+          ...row,
+          orderId: row.orderId ?? row.id,
+        }));
+        const pagination = res?.pagination ?? { page: 1, pageSize: 0, total: 0, totalPages: 1 };
+        return {
+          orders,
+          total: pagination.total ?? 0,
+          pages: pagination.totalPages ?? 1,
+          currentPage: pagination.page ?? 1,
+        };
+      },
+      { orders: [], total: 0, pages: 1, currentPage: 1 }
     );
   },
 
