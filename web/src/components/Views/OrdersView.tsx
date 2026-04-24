@@ -109,17 +109,17 @@ const TABLE_COLUMNS: TableColumn[] = [
   { key: 'custcarrier', label: 'Shipping Account', width: 140, sort: 'custcarrier' },
   { key: 'total', label: 'Order Total', width: 85, sort: 'total' },
   { key: 'bestrate', label: 'Best Rate', width: 105, sort: null },
-  { key: 'margin', label: 'Ship Margin', width: 90, sort: null },
-  { key: 'tracking', label: 'Tracking #', width: 160, sort: null },
-  { key: 'labelcreated', label: 'Label Created', width: 115, sort: null },
-  { key: 'age', label: 'Age', width: 50, sort: 'age' },
   { key: 'test_carrierCode', label: 'Carrier Code', width: 120, sort: null },
   { key: 'test_shippingProviderID', label: 'Provider ID', width: 110, sort: null },
   { key: 'test_clientID', label: 'Client ID', width: 90, sort: null },
+  { key: 'test_shippingAccount', label: 'Acct Nickname', width: 120, sort: null },
   { key: 'test_serviceCode', label: 'Service Code', width: 130, sort: null },
   { key: 'test_bestRate', label: 'Best Rate (awaiting)', width: 200, sort: null },
   { key: 'test_orderLocal', label: 'Order Local', width: 140, sort: null },
-  { key: 'test_shippingAccount', label: 'Acct Nickname', width: 120, sort: null },
+  { key: 'labelcreated', label: 'Label Created', width: 115, sort: null },
+  { key: 'margin', label: 'Ship Margin', width: 90, sort: null },
+  { key: 'tracking', label: 'Tracking #', width: 160, sort: null },
+  { key: 'age', label: 'Age', width: 50, sort: 'age' },
 ]
 
 const CLIENT_PALETTES: ClientPalette[] = [

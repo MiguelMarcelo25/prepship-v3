@@ -46,6 +46,38 @@ export interface ResolvedColumnPrefs {
   widths: Record<TableColumnKey, number>
 }
 
+const DIAGNOSTIC_COLUMN_KEYS: TableColumnKey[] = [
+  'test_carrierCode',
+  'test_shippingProviderID',
+  'test_clientID',
+  'test_shippingAccount',
+  'test_serviceCode',
+  'test_bestRate',
+  'test_orderLocal',
+]
+
+function shouldUseCanonicalColumnOrder(prefs?: ColumnPrefs | null) {
+  const order = prefs?.order
+  if (!Array.isArray(order) || order.length === 0) return true
+
+  const hasDiagnostics = DIAGNOSTIC_COLUMN_KEYS.some((key) => order.includes(key))
+  if (!hasDiagnostics) return true
+
+  const labelCreatedIndex = order.indexOf('labelcreated')
+  const carrierCodeIndex = order.indexOf('test_carrierCode')
+  if (labelCreatedIndex !== -1 && carrierCodeIndex !== -1 && labelCreatedIndex < carrierCodeIndex) {
+    return true
+  }
+
+  const acctIndex = order.indexOf('test_shippingAccount')
+  const serviceIndex = order.indexOf('test_serviceCode')
+  if (acctIndex !== -1 && serviceIndex !== -1 && acctIndex > serviceIndex) {
+    return true
+  }
+
+  return false
+}
+
 export interface PrintQueueEntryDto {
   queue_entry_id: string
   order_id: string
@@ -88,8 +120,9 @@ export function resolveColumnPrefs(
   const columnMap = new Map(columns.map((column) => [column.key, column]))
   const seen = new Set<TableColumnKey>()
   const orderedColumns: TableColumnConfig[] = []
+  const savedOrder = shouldUseCanonicalColumnOrder(prefs) ? [] : (prefs?.order ?? [])
 
-  for (const key of prefs?.order ?? []) {
+  for (const key of savedOrder) {
     if (!columnMap.has(key as TableColumnKey)) continue
     const typedKey = key as TableColumnKey
     if (seen.has(typedKey)) continue
