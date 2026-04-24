@@ -218,10 +218,111 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       .where(where),
   ]);
 
-  const rows = joined.map((r) => ({ ...r.order, overrides: r.overrides }));
+  // v2-parity enrichment: the Shipped grid expects `order.label` and
+  // `order.selectedRate` objects so the Shipping Account / Selected Rate /
+  // Service Code / Acct Nickname / Order Local columns render. In v2 those
+  // come from joining the shipments table; v4 previously returned only the
+  // orders row, so those columns rendered as "—". Attach the latest
+  // non-voided shipment per order in one extra query (DISTINCT ON keeps it
+  // a single round-trip regardless of page size).
+  const pageOrderIds = joined
+    .map((r) => r.order.id)
+    .filter((id): id is number => id != null);
+  const latestShipByOrderId = new Map<number, LatestShipmentRow>();
+  if (pageOrderIds.length) {
+    const idList = sql.join(
+      pageOrderIds.map((id) => sql`${id}`),
+      sql`, `
+    );
+    const shipRows = await db.execute<LatestShipmentRow>(sql`
+      select distinct on (order_id)
+        order_id,
+        tracking_number,
+        carrier_code,
+        service_code,
+        ship_date,
+        created_date,
+        label_created_at,
+        cost,
+        label_cost,
+        other_cost,
+        label_url,
+        label_shipment_id,
+        provider_account_id,
+        provider_account_nickname,
+        selected_rate_json
+      from shipments
+      where order_id in (${idList})
+        and coalesce(voided, false) = false
+      order by order_id, id desc
+    `);
+    for (const s of shipRows) {
+      if (s.order_id != null) latestShipByOrderId.set(s.order_id, s);
+    }
+  }
+
+  const rows = joined.map((r) => {
+    const ship = latestShipByOrderId.get(r.order.id);
+    const labelCost = ship?.label_cost ?? ship?.cost;
+    const label = ship
+      ? {
+          trackingNumber: ship.tracking_number,
+          carrierCode: ship.carrier_code,
+          serviceCode: ship.service_code,
+          shipDate: ship.ship_date,
+          createdAt: ship.label_created_at ?? ship.created_date,
+          cost: labelCost != null ? Number(labelCost) : null,
+          labelUrl: ship.label_url,
+          shippingProviderId: ship.provider_account_id,
+          shipmentId: ship.label_shipment_id,
+        }
+      : null;
+    // v4's SS-synced shipments don't persist a full selectedRateJson (only
+    // locally-created labels do). Synthesize a DTO from the shipment's own
+    // columns so the frontend's `selectedRate.*` reads land on real values.
+    const synthSelected = ship
+      ? {
+          carrierCode: ship.carrier_code,
+          serviceCode: ship.service_code,
+          shippingProviderId: ship.provider_account_id,
+          providerAccountNickname: ship.provider_account_nickname,
+          shipmentCost: ship.cost != null ? Number(ship.cost) : null,
+          otherCost: ship.other_cost != null ? Number(ship.other_cost) : null,
+          cost: labelCost != null ? Number(labelCost) : null,
+        }
+      : null;
+    const selectedRate =
+      ship?.selected_rate_json && typeof ship.selected_rate_json === 'object'
+        ? { ...synthSelected, ...(ship.selected_rate_json as Record<string, unknown>) }
+        : synthSelected;
+    return {
+      ...r.order,
+      overrides: r.overrides,
+      label,
+      selectedRate,
+    };
+  });
   const total = countRows[0]?.count ?? 0;
   return c.json(paginated(rows, total, q));
 });
+
+type LatestShipmentRow = {
+  order_id: number | null;
+  tracking_number: string | null;
+  carrier_code: string | null;
+  service_code: string | null;
+  ship_date: string | null;
+  created_date: string | null;
+  label_created_at: string | null;
+  cost: string | null;
+  label_cost: string | null;
+  other_cost: string | null;
+  label_url: string | null;
+  label_shipment_id: number | null;
+  provider_account_id: number | null;
+  provider_account_nickname: string | null;
+  selected_rate_json: Record<string, unknown> | null;
+};
 
 // Picklist: aggregated SKU + qty + order count per client over a date
 // range and status filter. Used to print a warehouse pick list grouped
