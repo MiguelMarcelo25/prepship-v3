@@ -50,7 +50,7 @@ import {
 type OrderStatus = 'awaiting_shipment' | 'shipped' | 'cancelled'
 type SortDirection = 'asc' | 'desc'
 type SortKey = 'date' | 'age' | 'orderNum' | 'client' | 'customer' | 'itemname' | 'sku' | 'qty' | 'weight' | 'shipto' | 'carrier' | 'custcarrier' | 'total'
-type TableColumnKey = 'select' | 'date' | 'client' | 'orderNum' | 'customer' | 'itemname' | 'sku' | 'qty' | 'weight' | 'shipto' | 'carrier' | 'custcarrier' | 'total' | 'bestrate' | 'margin' | 'tracking' | 'labelcreated' | 'age'
+type TableColumnKey = 'select' | 'date' | 'client' | 'orderNum' | 'customer' | 'itemname' | 'sku' | 'qty' | 'weight' | 'shipto' | 'carrier' | 'custcarrier' | 'total' | 'bestrate' | 'margin' | 'tracking' | 'labelcreated' | 'age' | 'test_carrierCode' | 'test_shippingProviderID' | 'test_clientID' | 'test_serviceCode' | 'test_bestRate' | 'test_orderLocal' | 'test_shippingAccount'
 type PanelSectionKey = 'shipping' | 'items' | 'recipient'
 
 interface OrdersViewProps {
@@ -113,6 +113,13 @@ const TABLE_COLUMNS: TableColumn[] = [
   { key: 'tracking', label: 'Tracking #', width: 160, sort: null },
   { key: 'labelcreated', label: 'Label Created', width: 115, sort: null },
   { key: 'age', label: 'Age', width: 50, sort: 'age' },
+  { key: 'test_carrierCode', label: 'Carrier Code', width: 120, sort: null },
+  { key: 'test_shippingProviderID', label: 'Provider ID', width: 110, sort: null },
+  { key: 'test_clientID', label: 'Client ID', width: 90, sort: null },
+  { key: 'test_serviceCode', label: 'Service Code', width: 130, sort: null },
+  { key: 'test_bestRate', label: 'Best Rate (awaiting)', width: 200, sort: null },
+  { key: 'test_orderLocal', label: 'Order Local', width: 140, sort: null },
+  { key: 'test_shippingAccount', label: 'Acct Nickname', width: 120, sort: null },
 ]
 
 const CLIENT_PALETTES: ClientPalette[] = [
@@ -1949,6 +1956,44 @@ export default function OrdersView({
     )
   }
 
+  const renderDiagnosticCell = (
+    value: unknown,
+    options: {
+      fontSize?: number
+      maxWidth?: number
+      title?: string
+      align?: 'left' | 'center'
+      monospace?: boolean
+      muted?: boolean
+      surface?: boolean
+    } = {},
+  ) => {
+    const display = value == null || value === '' ? '—' : String(value)
+    const surface = options.surface ?? !options.muted
+
+    return (
+      <span
+        style={{
+          display: 'block',
+          fontSize: options.fontSize ?? 14,
+          textAlign: options.align ?? 'center',
+          fontFamily: options.monospace ? 'monospace' : undefined,
+          color: options.muted ? 'var(--text3)' : 'var(--text2)',
+          background: surface ? 'var(--surface2)' : undefined,
+          padding: surface ? '4px 6px' : undefined,
+          borderRadius: surface ? 3 : undefined,
+          maxWidth: options.maxWidth,
+          overflow: options.maxWidth ? 'hidden' : undefined,
+          textOverflow: options.maxWidth ? 'ellipsis' : undefined,
+          whiteSpace: options.maxWidth ? 'nowrap' : undefined,
+        }}
+        title={options.title ?? display}
+      >
+        {display}
+      </span>
+    )
+  }
+
   const renderTableCell = (order: OrderSummaryDto, column: TableColumn) => {
     const detail = orderDetailsById.get(order.orderId) ?? null
     const items = getActiveItems(order, detail)
@@ -1959,6 +2004,7 @@ export default function OrdersView({
     const shipTo = getShipTo(order, detail)
     const clientName = order.clientName ?? 'Untagged'
     const clientPalette = getClientPalette(clientName)
+    const diagnosticIsShipped = order.orderStatus !== 'awaiting_shipment' || Boolean(order.label?.trackingNumber && order.label?.carrierCode)
 
     switch (column.key) {
       case 'select':
@@ -2128,6 +2174,67 @@ export default function OrdersView({
             <span style={{ fontSize: 11, color: ageColor === 'var(--green)' ? 'var(--text3)' : ageColor }}>{ageLabel(order.orderDate)}</span>
           </div>
         )
+      }
+      case 'test_carrierCode': {
+        const value = diagnosticIsShipped
+          ? (toStringValue(order.selectedRate?.carrierCode) ?? toStringValue(order.label?.carrierCode) ?? toStringValue(order.carrierCode))
+          : toStringValue(order.bestRate?.carrierCode)
+        return renderDiagnosticCell(value, { monospace: true })
+      }
+      case 'test_shippingProviderID': {
+        const value = diagnosticIsShipped
+          ? (toNumberValue(order.selectedRate?.shippingProviderId) ?? toNumberValue(order.label?.shippingProviderId))
+          : toNumberValue(order.bestRate?.shippingProviderId)
+        return renderDiagnosticCell(value, { monospace: true })
+      }
+      case 'test_clientID':
+        return renderDiagnosticCell(order.clientId, { monospace: true })
+      case 'test_serviceCode': {
+        const value = diagnosticIsShipped
+          ? (toStringValue(order.selectedRate?.serviceCode) ?? toStringValue(order.label?.serviceCode) ?? toStringValue(order.serviceCode))
+          : toStringValue(order.bestRate?.serviceCode)
+        return renderDiagnosticCell(value, {
+          fontSize: 10,
+          maxWidth: column.width,
+          monospace: true,
+        })
+      }
+      case 'test_bestRate': {
+        const bestRate = order.bestRate
+        if (!bestRate) return renderDiagnosticCell(null, { fontSize: 10, muted: true, surface: false })
+
+        const shipmentCost = typeof bestRate.shipmentCost === 'number' ? bestRate.shipmentCost : 0
+        const otherCost = typeof bestRate.otherCost === 'number' ? bestRate.otherCost : 0
+        const amount = shipmentCost + otherCost
+        const display = `${bestRate.carrierCode || '?'}|${bestRate.serviceCode || '?'}|$${amount.toFixed(2)}`
+
+        return renderDiagnosticCell(display, {
+          fontSize: 9,
+          maxWidth: column.width,
+          monospace: true,
+          title: JSON.stringify(bestRate),
+        })
+      }
+      case 'test_orderLocal': {
+        const parts: string[] = []
+        if (order.weight?.value && order.weight.value > 0) {
+          parts.push(`w:${order.weight.value}${order.weight.units?.[0] || 'oz'}`)
+        }
+        if (order.label?.trackingNumber) parts.push('track:✓')
+        if (order.bestRate) parts.push('best:✓')
+
+        const display = parts.length ? parts.join(' ') : null
+        return renderDiagnosticCell(display, {
+          fontSize: 9,
+          maxWidth: column.width,
+          title: display ?? '—',
+        })
+      }
+      case 'test_shippingAccount': {
+        const value = diagnosticIsShipped
+          ? (toStringValue(order.selectedRate?.providerAccountNickname) ?? toStringValue(order.label?.carrierCode))
+          : null
+        return renderDiagnosticCell(value)
       }
     }
   }

@@ -20,6 +20,13 @@ export type TableColumnKey =
   | 'tracking'
   | 'labelcreated'
   | 'age'
+  | 'test_carrierCode'
+  | 'test_shippingProviderID'
+  | 'test_clientID'
+  | 'test_serviceCode'
+  | 'test_bestRate'
+  | 'test_orderLocal'
+  | 'test_shippingAccount'
 
 export interface TableColumnConfig {
   key: TableColumnKey
