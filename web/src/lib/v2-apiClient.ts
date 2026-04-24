@@ -600,7 +600,7 @@ export const apiClient = {
       () =>
         api.post<any>(
           '/sync/orders',
-          mode === 'full' ? { full: true, fullResync: true } : {}
+          mode === 'full' ? { full: true } : {}
         ),
       { queued: false }
     );

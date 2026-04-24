@@ -8,6 +8,7 @@ import { isExcludedStoreId } from '../config/prepship';
 
 const LAST_SYNC_KEY = 'order_sync.last_modified_ms';
 const DEFAULT_LOOKBACK_MS = 1000 * 60 * 60 * 24 * 30; // 30 days on first run
+const AWAITING_CATCHUP_LOOKBACK_MS = 48 * 60 * 60 * 1000;
 
 type SSOrder = {
   orderId: number;
@@ -246,6 +247,7 @@ type SyncAccount = {
   label: string;               // for the per-account watermark + logs
   apiKey: string | undefined;  // undefined → use env default
   apiSecret: string | undefined;
+  storeIds: number[];
   // When the account is a per-client account (ss_api_key set on a clients
   // row), `ownerClientId` lets upsertOrder attribute orphan orders to that
   // client instead of leaving them at clientId=null.
@@ -253,24 +255,37 @@ type SyncAccount = {
 };
 
 async function loadSyncAccounts(): Promise<SyncAccount[]> {
-  const accounts: SyncAccount[] = [
-    { label: 'main', apiKey: undefined, apiSecret: undefined, ownerClientId: null },
-  ];
-  const rows = await db
+  const clientRows = await db
     .select({
       id: clients.id,
       name: clients.name,
+      storeIds: clients.storeIds,
       ssApiKey: clients.ssApiKey,
       ssApiSecret: clients.ssApiSecret,
     })
     .from(clients)
     .where(eq(clients.active, true));
-  for (const r of rows) {
+  const allStoreIds = [
+    ...new Set(
+      clientRows.flatMap((row) => row.storeIds ?? []).filter((sid) => !isExcludedStoreId(sid))
+    ),
+  ];
+  const accounts: SyncAccount[] = [
+    {
+      label: 'main',
+      apiKey: undefined,
+      apiSecret: undefined,
+      storeIds: allStoreIds,
+      ownerClientId: null,
+    },
+  ];
+  for (const r of clientRows) {
     if (r.ssApiKey && r.ssApiSecret) {
       accounts.push({
         label: `client:${r.name}`,
         apiKey: r.ssApiKey,
         apiSecret: r.ssApiSecret,
+        storeIds: (r.storeIds ?? []).filter((sid) => !isExcludedStoreId(sid)),
         ownerClientId: r.id,
       });
     }
@@ -294,6 +309,7 @@ async function fetchOrdersPage(
     orderStatus: string;
     sinceMs: number;
     pageSize: number;
+    storeId?: number;
   },
 ): Promise<{ synced: number; pages: number }> {
   const sinceParam = formatSSDate(args.sinceMs);
@@ -310,11 +326,12 @@ async function fetchOrdersPage(
       sortBy: 'ModifyDate',
       sortDir: 'ASC',
     });
+    if (args.storeId !== undefined) q.set('storeId', String(args.storeId));
 
     const res = await ssV1Request<SSOrdersList>(`/orders?${q.toString()}`, {
       apiKey: account.apiKey,
       apiSecret: account.apiSecret,
-      dedupeKey: `orders:list:${account.label}:${args.orderStatus}:${sinceParam}:${page}:${args.pageSize}`,
+      dedupeKey: `orders:list:${account.label}:${args.orderStatus}:${args.storeId ?? 'all'}:${sinceParam}:${page}:${args.pageSize}`,
     });
 
     pages = res.pages;
@@ -335,7 +352,12 @@ async function fetchOrdersPage(
 
 async function syncOrdersForAccount(
   account: SyncAccount,
-  opts: { sinceMs?: number; pageSize?: number },
+  opts: {
+    sinceMs?: number;
+    awaitingSinceMs?: number;
+    pageSize?: number;
+    skipStatusPasses?: boolean;
+  },
   storeToClient: Awaited<ReturnType<typeof buildStoreToClientMap>>
 ): Promise<{ synced: number; pages: number; sinceIso: string }> {
   const key = watermarkKey(account.label);
@@ -356,24 +378,24 @@ async function syncOrdersForAccount(
   // work while routine runs use v2's narrow windows. Matches
   // apps/api/src/modules/sync/order-status-sync.ts:158-318.
   const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
-  const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
   const passes: Array<{ orderStatus: string; sinceMs: number }> = [
-    {
-      orderStatus: 'shipped',
-      sinceMs: Math.min(lastSync, runStartMs - TWO_HOURS_MS),
-    },
-    {
-      orderStatus: 'cancelled',
-      sinceMs: Math.min(lastSync, runStartMs - TWO_HOURS_MS),
-    },
-    {
-      orderStatus: 'awaiting_shipment',
-      sinceMs: Math.min(lastSync, runStartMs - FOUR_HOURS_MS),
-    },
+    ...(opts.skipStatusPasses
+      ? []
+      : [
+          {
+            orderStatus: 'shipped',
+            sinceMs: Math.min(lastSync, runStartMs - TWO_HOURS_MS),
+          },
+          {
+            orderStatus: 'cancelled',
+            sinceMs: Math.min(lastSync, runStartMs - TWO_HOURS_MS),
+          },
+        ]),
   ];
 
   let total = 0;
   let maxPages = 1;
+  let failed = false;
   for (const pass of passes) {
     try {
       const result = await fetchOrdersPage(account, storeToClient, {
@@ -384,6 +406,7 @@ async function syncOrdersForAccount(
       total += result.synced;
       if (result.pages > maxPages) maxPages = result.pages;
     } catch (err) {
+      failed = true;
       // Per-status failure shouldn't kill the whole account sync.
       console.warn(
         `[order-sync] account="${account.label}" orderStatus="${pass.orderStatus}" failed:`,
@@ -392,13 +415,48 @@ async function syncOrdersForAccount(
     }
   }
 
-  await setSetting(key, String(runStartMs));
+  const awaitingSinceMs =
+    opts.awaitingSinceMs ?? Math.min(lastSync, runStartMs - AWAITING_CATCHUP_LOOKBACK_MS);
+  const awaitingStoreIds = account.storeIds.filter((sid) => !isExcludedStoreId(sid));
+  const awaitingTargets =
+    awaitingStoreIds.length > 0
+      ? awaitingStoreIds.map((storeId) => ({ storeId }))
+      : [{ storeId: undefined as number | undefined }];
+
+  for (const target of awaitingTargets) {
+    try {
+      const result = await fetchOrdersPage(account, storeToClient, {
+        orderStatus: 'awaiting_shipment',
+        sinceMs: awaitingSinceMs,
+        pageSize,
+        storeId: target.storeId,
+      });
+      total += result.synced;
+      if (result.pages > maxPages) maxPages = result.pages;
+    } catch (err) {
+      failed = true;
+      console.warn(
+        `[order-sync] account="${account.label}" orderStatus="awaiting_shipment" storeId="${target.storeId ?? 'all'}" failed:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  if (!failed) {
+    await setSetting(key, String(runStartMs));
+  } else {
+    console.warn(
+      `[order-sync] account="${account.label}" had failed pass(es); watermark not advanced`
+    );
+  }
   return { synced: total, pages: maxPages, sinceIso };
 }
 
 export async function syncOrders(opts: {
   sinceMs?: number;
+  awaitingSinceMs?: number;
   pageSize?: number;
+  skipStatusPasses?: boolean;
 } = {}): Promise<SyncResult> {
   const runStartMs = Date.now();
   const storeToClient = await buildStoreToClientMap();
