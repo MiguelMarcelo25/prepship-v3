@@ -358,7 +358,9 @@ export const apiClient = {
                 cancelled: x?.pagination?.total ?? 0,
               }))
             : api.get<any>('/init/counts'),
-          api.get<any>('/clients/order-stats').catch(() => ({ data: [] })),
+          api
+            .get<any>(`/clients/order-stats${qs({ dateFrom, dateTo })}`)
+            .catch(() => ({ data: [] })),
           api.get<any>('/clients').catch(() => []),
         ]);
 
@@ -784,10 +786,9 @@ export const apiClient = {
     dateFrom?: string;
     dateTo?: string;
   }): Promise<DailyStatsSummary> {
-    // v2 parity — server computes the shift-based PT window (noon→noon on
-    // weekdays, expanded Fri-pm through Mon-am to cover weekend orders).
-    // Don't default dateFrom/dateTo here: if the caller doesn't pass them,
-    // the server applies the shift window and returns labels in PT.
+    // Coerce UI date strings (YYYY-MM-DD) to the ISO datetimes expected by
+    // /orders/daily-stats. With no dates, the server applies its default
+    // shift window.
     const fallback: DailyStatsSummary = {
       totalOrders: 0,
       needToShip: 0,
@@ -815,8 +816,8 @@ export const apiClient = {
           hiddenIds.size > 0 ? [...hiddenIds].join(',') : undefined;
         const res = await api.get<V4DailyStatsResponse>(
           `/orders/daily-stats${qs({
-            dateFrom: query?.dateFrom,
-            dateTo: query?.dateTo,
+            dateFrom: toIsoDayStart(query?.dateFrom),
+            dateTo: toIsoDayEnd(query?.dateTo),
             excludeClientId,
           })}`
         );

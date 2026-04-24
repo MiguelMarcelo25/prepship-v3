@@ -167,63 +167,80 @@ app.post('/sync-stores', async (c) => {
 // Per-client order counts grouped by status (one row per client).
 // v2-parity (sqlite-init-repository.ts:87-102): awaiting count excludes
 // orders that are externally fulfilled (externally_shipped flag OR
-// raw.externallyFulfilled) OR already have a non-voided shipment. NO
-// date cutoff — v2 counts ALL awaiting regardless of age.
-app.get('/order-stats', async (c) => {
-  const rows = await db.execute<{
-    client_id: number;
-    order_status: string;
-    count: number;
-  }>(sql`
-    select o.client_id, o.order_status, count(*)::int as count
-    from orders o
-    where o.client_id is not null
-      and not (
-        o.order_status = 'awaiting_shipment'
-        and (
-          coalesce(o.externally_shipped, false) = true
-          or coalesce((o.raw->>'externallyFulfilled')::boolean, false) = true
-          or exists (
-            select 1 from shipments s
-            where s.order_id = o.id and s.voided = false
+// raw.externallyFulfilled) OR already have a non-voided shipment. Without
+// date params it counts all awaiting regardless of age; dateFrom/dateTo scope
+// this endpoint to the same window as the orders list.
+app.get(
+  '/order-stats',
+  zValidator(
+    'query',
+    z.object({
+      dateFrom: z.string().datetime().optional(),
+      dateTo: z.string().datetime().optional(),
+    })
+  ),
+  async (c) => {
+    const q = c.req.valid('query');
+    const dateFilter = sql`
+      ${q.dateFrom ? sql`and o.order_date >= ${q.dateFrom}::timestamptz` : sql``}
+      ${q.dateTo ? sql`and o.order_date <= ${q.dateTo}::timestamptz` : sql``}
+    `;
+    const rows = await db.execute<{
+      client_id: number;
+      order_status: string;
+      count: number;
+    }>(sql`
+      select o.client_id, o.order_status, count(*)::int as count
+      from orders o
+      where o.client_id is not null
+        ${dateFilter}
+        and not (
+          o.order_status = 'awaiting_shipment'
+          and (
+            coalesce(o.externally_shipped, false) = true
+            or coalesce((o.raw->>'externallyFulfilled')::boolean, false) = true
+            or exists (
+              select 1 from shipments s
+              where s.order_id = o.id and s.voided = false
+            )
           )
         )
-      )
-    group by o.client_id, o.order_status
-  `);
+      group by o.client_id, o.order_status
+    `);
 
-  const byClient = new Map<
-    number,
-    {
-      clientId: number;
-      total: number;
-      awaiting: number;
-      shipped: number;
-      cancelled: number;
-      onHold: number;
-      other: number;
+    const byClient = new Map<
+      number,
+      {
+        clientId: number;
+        total: number;
+        awaiting: number;
+        shipped: number;
+        cancelled: number;
+        onHold: number;
+        other: number;
+      }
+    >();
+    for (const r of rows) {
+      const cur = byClient.get(r.client_id) ?? {
+        clientId: r.client_id,
+        total: 0,
+        awaiting: 0,
+        shipped: 0,
+        cancelled: 0,
+        onHold: 0,
+        other: 0,
+      };
+      cur.total += r.count;
+      if (r.order_status === 'awaiting_shipment') cur.awaiting += r.count;
+      else if (r.order_status === 'shipped') cur.shipped += r.count;
+      else if (r.order_status === 'cancelled') cur.cancelled += r.count;
+      else if (r.order_status === 'on_hold') cur.onHold += r.count;
+      else cur.other += r.count;
+      byClient.set(r.client_id, cur);
     }
-  >();
-  for (const r of rows) {
-    const cur = byClient.get(r.client_id) ?? {
-      clientId: r.client_id,
-      total: 0,
-      awaiting: 0,
-      shipped: 0,
-      cancelled: 0,
-      onHold: 0,
-      other: 0,
-    };
-    cur.total += r.count;
-    if (r.order_status === 'awaiting_shipment') cur.awaiting += r.count;
-    else if (r.order_status === 'shipped') cur.shipped += r.count;
-    else if (r.order_status === 'cancelled') cur.cancelled += r.count;
-    else if (r.order_status === 'on_hold') cur.onHold += r.count;
-    else cur.other += r.count;
-    byClient.set(r.client_id, cur);
+    return c.json({ data: [...byClient.values()] });
   }
-  return c.json({ data: [...byClient.values()] });
-});
+);
 
 // Orphan report: orders with a storeId not owned by any client
 app.get('/unassigned-orphans', async (c) => {

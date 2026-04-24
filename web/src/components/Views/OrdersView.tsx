@@ -836,6 +836,13 @@ export default function OrdersView({
     ?? orders.find((order) => order.orderId === panelOrderId)
     ?? null
   const dailyStripProgress = dailyStats ? buildDailyStripProgress(dailyStats) : null
+  const dailyStatsUsesDateFilter = Boolean(dateRange.start || dateRange.end)
+  const dailyStatsFromLabel = dailyStatsUsesDateFilter && dateRange.start
+    ? formatDateOnly(dateRange.start, { month: 'short', day: 'numeric', year: 'numeric' })
+    : dailyStats?.window.fromLabel || dailyStats?.window.from || ''
+  const dailyStatsToLabel = dailyStatsUsesDateFilter && dateRange.end
+    ? formatDateOnly(dateRange.end, { month: 'short', day: 'numeric', year: 'numeric' })
+    : dailyStats?.window.toLabel || dailyStats?.window.to || ''
   const panelDetail = panelOrderId != null ? orderDetailsById.get(panelOrderId) ?? null : null
   const queueClientId = useMemo(() => {
     const selected = orders.find((order) => selectedIdSet.has(order.orderId) && order.clientId != null)
@@ -904,15 +911,12 @@ export default function OrdersView({
 
     let cancelled = false
 
-    // v2-parity: the stats strip ALWAYS uses the server's noon-to-noon PT
-    // shift window, regardless of what the date picker says. v2's strip
-    // header ("Apr 22, 12pm PT → Apr 23, 12pm PT") is hardcoded to the
-    // current shift window — the picker affects only the orders list
-    // below. Do NOT pass dateFrom/dateTo here; the server's default
-    // computeShiftWindow() handles this.
     const loadDailyStats = async () => {
       try {
-        const payload = await apiClient.fetchDailyStats()
+        const payload = await apiClient.fetchDailyStats({
+          dateFrom: dateRange.start,
+          dateTo: dateRange.end,
+        })
         if (!cancelled) setDailyStats(payload)
       } catch {
         if (!cancelled) setDailyStats(null)
@@ -928,7 +932,7 @@ export default function OrdersView({
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [currentStatus])
+  }, [currentStatus, dateRange.start, dateRange.end])
 
   useEffect(() => {
     if (refreshVersion === 0) return
@@ -2794,10 +2798,12 @@ export default function OrdersView({
           {dailyStats ? (
             <div style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)', padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap', fontSize: 12 }}>
               <div style={{ color: 'var(--text3)', fontSize: 11, whiteSpace: 'nowrap', flexShrink: 0 }}>
-                📅 <span style={{ color: 'var(--text2)' }}>{dailyStats.window.fromLabel || dailyStats.window.from}</span>
+                📅 <span style={{ color: 'var(--text2)' }}>{dailyStatsFromLabel}</span>
                 <span style={{ margin: '0 4px' }}>→</span>
-                <span style={{ color: 'var(--text2)' }}>{dailyStats.window.toLabel || dailyStats.window.to}</span>
-                <span style={{ marginLeft: 4, color: 'var(--text3)' }}>(shifts at 6 PM)</span>
+                <span style={{ color: 'var(--text2)' }}>{dailyStatsToLabel}</span>
+                {!dailyStatsUsesDateFilter ? (
+                  <span style={{ marginLeft: 4, color: 'var(--text3)' }}>(shifts at 6 PM)</span>
+                ) : null}
               </div>
               <div style={{ width: 1, height: 28, background: 'var(--border2)', flexShrink: 0 }} />
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
