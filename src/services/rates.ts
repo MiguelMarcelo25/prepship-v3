@@ -320,7 +320,7 @@ const V2_CARRIER_ACCOUNT_OVERRIDES = new Map<
   { carrier_code: string; nickname: string }
 >([
   ['se-433542', { carrier_code: 'stamps_com', nickname: 'USPS Chase x7439' }],
-  ['se-433543', { carrier_code: 'ups_walleted', nickname: 'UPS by SS - Chase x7439' }],
+  ['se-433543', { carrier_code: 'ups_walleted', nickname: 'Chase x7439' }],
   ['se-565326', { carrier_code: 'ups', nickname: 'GG6381' }],
   ['se-565377', { carrier_code: 'ups', nickname: 'G19Y32' }],
   ['se-596001', { carrier_code: 'ups', nickname: 'ORION' }],

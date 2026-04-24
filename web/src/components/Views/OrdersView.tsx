@@ -482,14 +482,33 @@ function getRequestedService(order: OrderSummaryDto, detail: OrderFullDto | null
   return getPanelRequestedService(order, detail)
 }
 
+function normalizeShippingAccountName(value: unknown) {
+  const label = toStringValue(value)
+  if (!label) return null
+  return label
+    .replace(/^UPS\s+by\s+SS\s*[-—]\s*/i, '')
+    .replace(/^UPS\s+by\s+ShipStation\s*[-—]\s*/i, '')
+}
+
+function getCarrierAccountDisplay(account: CarrierAccountDto | null | undefined) {
+  if (!account) return null
+  return (
+    normalizeShippingAccountName(account.nickname) ??
+    normalizeShippingAccountName(account._label) ??
+    normalizeShippingAccountName(account.code)
+  )
+}
+
 function getShipAccountDisplay(order: OrderSummaryDto, accounts: CarrierAccountDto[]) {
-  if (order.selectedRate?.providerAccountNickname) return order.selectedRate.providerAccountNickname
+  const selectedNickname = normalizeShippingAccountName(order.selectedRate?.providerAccountNickname)
+  if (selectedNickname) return selectedNickname
   if (order.label?.shippingProviderId != null) {
     const account = accounts.find((candidate) => candidate.shippingProviderId === order.label.shippingProviderId)
-    if (account) return account._label || account.nickname || account.code
+    const accountLabel = getCarrierAccountDisplay(account)
+    if (accountLabel) return accountLabel
   }
   if (order.bestRate) {
-    const nickname = toStringValue(order.bestRate.carrierNickname)
+    const nickname = normalizeShippingAccountName(order.bestRate.carrierNickname)
     if (nickname) return nickname
   }
   return formatCarrierCode(order.label?.carrierCode ?? order.selectedRate?.carrierCode ?? order.bestRate?.carrierCode ?? order.carrierCode)
@@ -498,7 +517,7 @@ function getShipAccountDisplay(order: OrderSummaryDto, accounts: CarrierAccountD
 function getShipAccountLabelById(accounts: CarrierAccountDto[], accountId: string) {
   if (!accountId) return null
   const account = accounts.find((candidate) => String(candidate.shippingProviderId) === accountId)
-  return account ? account._label || account.nickname || account.code : null
+  return getCarrierAccountDisplay(account)
 }
 
 function getBestRateBaseCost(order: OrderSummaryDto) {
@@ -2232,7 +2251,7 @@ export default function OrdersView({
       }
       case 'test_shippingAccount': {
         const value = diagnosticIsShipped
-          ? (toStringValue(order.selectedRate?.providerAccountNickname) ?? toStringValue(order.label?.carrierCode))
+          ? (normalizeShippingAccountName(order.selectedRate?.providerAccountNickname) ?? toStringValue(order.label?.carrierCode))
           : null
         return renderDiagnosticCell(value)
       }
@@ -2492,7 +2511,7 @@ export default function OrdersView({
                       const key = account.shippingProviderId || account.carrierId || account.code || i
                       return (
                         <option key={key} value={account.shippingProviderId || key}>
-                          {account._label || account.nickname || account.code}
+                          {getCarrierAccountDisplay(account) ?? account.code}
                         </option>
                       )
                     })}
