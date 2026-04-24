@@ -1666,6 +1666,7 @@ export default function OrdersView({
         residential: Boolean(panelOrder.residential ?? panelOrder.sourceResidential),
         storeId: panelOrder.storeId,
         clientId: panelOrder.clientId,
+        forceRefresh: true,
       })
       // Remap ShipStation v2 rate shape → v2-legacy shape the panel expects.
       const rates = (rawRates ?? []).map((r: any) => {
@@ -3473,6 +3474,20 @@ export default function OrdersView({
               oz: Number.parseFloat(panelForm.weightOz) || 0,
             }}
             onClose={() => setRateBrowserOpen(false)}
+            onBestRateResolved={(best) => {
+              if (!panelOrderId) return
+              setPanelRatePreview([best])
+              const dims = best.dims
+              const dimsLabel = dims
+                ? `${dims.length || 0}x${dims.width || 0}x${dims.height || 0}`
+                : `${panelForm.length || 0}x${panelForm.width || 0}x${panelForm.height || 0}`
+              void apiClient
+                .saveOrderBestRate(panelOrderId, best, dimsLabel)
+                .then(() => refetchOrders())
+                .catch((error) => {
+                  showToast(error instanceof Error ? error.message : 'Failed to save best rate', 'error')
+                })
+            }}
             onApplyRate={(applied) => {
               // Push rate back into the panel using the existing applyRateSelection
               // path. The v2-style modal also returns weight + dims; sync those to

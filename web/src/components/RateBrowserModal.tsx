@@ -76,6 +76,7 @@ export type RateBrowserModalProps = {
   initialWeight?: { lb?: number; oz?: number };
   onClose: () => void;
   onApplyRate: (rate: RbAppliedRate) => void;
+  onBestRateResolved?: (rate: RbAppliedRate) => void;
 };
 
 type RateRow = {
@@ -280,6 +281,7 @@ export default function RateBrowserModal({
   initialWeight,
   onClose,
   onApplyRate,
+  onBestRateResolved,
 }: RateBrowserModalProps) {
   const { markups } = useMarkups();
 
@@ -436,6 +438,7 @@ export default function RateBrowserModal({
     setBrowsing(true);
     setRatesByPid({});
     setPendingPids(new Set(shippingAccounts.map((a) => a.shippingProviderId)));
+    const fetchedRates: RateRow[] = [];
 
     // Persist dims for this order (fire-and-forget) so re-open sees them.
     if (order?.orderId) {
@@ -462,6 +465,7 @@ export default function RateBrowserModal({
           carrierIds: acct.carrierId ? [acct.carrierId] : undefined,
           storeId: order?.storeId ?? undefined,
           clientId: order?.clientId ?? undefined,
+          forceRefresh: true,
         })) as RateRow[];
 
         const list: RateRow[] = (raw ?? []).map((r) => ({
@@ -479,6 +483,7 @@ export default function RateBrowserModal({
           (a, b) =>
             (a.shipmentCost + a.otherCost) - (b.shipmentCost + b.otherCost)
         );
+        fetchedRates.push(...list);
         setRatesByPid((prev) => ({
           ...prev,
           [String(acct.shippingProviderId)]: list,
@@ -495,6 +500,19 @@ export default function RateBrowserModal({
         return next;
       });
       await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+
+    if (onBestRateResolved && fetchedRates.length) {
+      const available = filterBySvcClass(fetchedRates).filter((r) => !isBlockedRate(r));
+      const best = available.sort((a, b) => {
+        const aBase = a.shipmentCost + a.otherCost;
+        const bBase = b.shipmentCost + b.otherCost;
+        const aMarked = applyRbMarkupFn(markups, a.shippingProviderId, aBase);
+        const bMarked = applyRbMarkupFn(markups, b.shippingProviderId, bBase);
+        return aMarked - bMarked;
+      })[0];
+      const applied = best ? toAppliedRate(best) : null;
+      if (applied) onBestRateResolved(applied);
     }
 
     setBrowsing(false);
@@ -588,6 +606,25 @@ export default function RateBrowserModal({
       dims: { length: lenNum, width: widNum, height: hgtNum },
     });
     onClose();
+  }
+
+  function toAppliedRate(r: RateRow): RbAppliedRate | null {
+    const pid =
+      typeof r.shippingProviderId === 'number'
+        ? r.shippingProviderId
+        : Number(r.shippingProviderId);
+    if (!Number.isFinite(pid) || !r.serviceCode) return null;
+    return {
+      carrierCode: r.carrierCode,
+      serviceCode: r.serviceCode,
+      serviceName: r.serviceName,
+      shippingProviderId: pid,
+      shipmentCost: r.shipmentCost,
+      otherCost: r.otherCost,
+      carrierNickname: r.carrierNickname ?? undefined,
+      weight: { lb: lbNum, oz: ozNum },
+      dims: { length: lenNum, width: widNum, height: hgtNum },
+    };
   }
 
   if (!open) return null;

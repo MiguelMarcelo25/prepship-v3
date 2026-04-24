@@ -93,6 +93,17 @@ function readNullableNumber(value: unknown, path: string): number | null {
   return readNumber(value, path);
 }
 
+function readNullableProviderAccountId(value: unknown, path: string): number | null {
+  if (value == null) return null;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const match = value.match(/^se-(\d+)$/i);
+    const parsed = Number.parseInt(match?.[1] ?? value, 10);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  throw new Error(`${path} must be a finite number, se-* carrier id, or null`);
+}
+
 function readBoolean(value: unknown, path: string): boolean {
   if (typeof value !== 'boolean') {
     throw new Error(`${path} must be a boolean`);
@@ -148,27 +159,41 @@ export function normalizeOrderBestRateDto(value: unknown, path = 'bestRate'): Or
   if (value == null) return null;
 
   const record = expectRecord(value, path);
+  const shippingAmount = isRecord(record.shipping_amount) ? record.shipping_amount : null;
+  const otherAmount = isRecord(record.other_amount) ? record.other_amount : null;
   const rate: OrderBestRateDto = {
-    serviceCode: readNullableString(record.serviceCode ?? null, `${path}.serviceCode`),
-    serviceName: readNullableString(record.serviceName ?? record.serviceCode ?? null, `${path}.serviceName`),
-    packageType: readNullableString(record.packageType ?? null, `${path}.packageType`),
-    shipmentCost: readNumber(record.shipmentCost ?? record.cost ?? 0, `${path}.shipmentCost`),
-    otherCost: readNumber(record.otherCost ?? 0, `${path}.otherCost`),
-    rateDetails: readArray(record.rateDetails ?? [], `${path}.rateDetails`),
-    carrierCode: readNullableString(record.carrierCode ?? record.carrier ?? null, `${path}.carrierCode`),
-    shippingProviderId: readNullableNumber(
-      record.shippingProviderId ?? record.providerAccountId ?? null,
+    serviceCode: readNullableString(record.serviceCode ?? record.service_code ?? null, `${path}.serviceCode`),
+    serviceName: readNullableString(
+      record.serviceName ?? record.service_type ?? record.serviceCode ?? record.service_code ?? null,
+      `${path}.serviceName`,
+    ),
+    packageType: readNullableString(record.packageType ?? record.package_type ?? null, `${path}.packageType`),
+    shipmentCost: readNumber(
+      record.shipmentCost ?? shippingAmount?.amount ?? record.cost ?? record.amount ?? 0,
+      `${path}.shipmentCost`,
+    ),
+    otherCost: readNumber(record.otherCost ?? otherAmount?.amount ?? 0, `${path}.otherCost`),
+    rateDetails: readArray(record.rateDetails ?? record.rate_details ?? [], `${path}.rateDetails`),
+    carrierCode: readNullableString(
+      record.carrierCode ?? record.carrier_code ?? record.carrier ?? null,
+      `${path}.carrierCode`,
+    ),
+    shippingProviderId: readNullableProviderAccountId(
+      record.shippingProviderId ?? record.providerAccountId ?? record.carrier_id ?? null,
       `${path}.shippingProviderId`,
     ),
     carrierNickname: readNullableString(
-      record.carrierNickname ?? record._carrierName ?? null,
+      record.carrierNickname ?? record.carrier_nickname ?? record._carrierName ?? null,
       `${path}.carrierNickname`,
     ),
-    guaranteed: readBoolean(record.guaranteed ?? false, `${path}.guaranteed`),
+    guaranteed: readBoolean(record.guaranteed ?? record.guaranteed_service ?? false, `${path}.guaranteed`),
     zone: readNullableStringLike(record.zone ?? null, `${path}.zone`),
     sourceClientId: readNullableNumber(record.sourceClientId ?? record.clientId ?? null, `${path}.sourceClientId`),
-    deliveryDays: readNullableNumber(record.deliveryDays ?? null, `${path}.deliveryDays`),
-    estimatedDelivery: readNullableString(record.estimatedDelivery ?? null, `${path}.estimatedDelivery`),
+    deliveryDays: readNullableNumber(record.deliveryDays ?? record.delivery_days ?? null, `${path}.deliveryDays`),
+    estimatedDelivery: readNullableString(
+      record.estimatedDelivery ?? record.estimated_delivery_date ?? null,
+      `${path}.estimatedDelivery`,
+    ),
   };
 
   return hasAnyMeaningfulRateField(rate) ? rate : null;

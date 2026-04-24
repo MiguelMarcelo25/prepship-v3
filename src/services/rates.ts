@@ -210,6 +210,10 @@ async function resolveRateInput(input: RateInput): Promise<RateInput> {
   const apiKeyV2 = input.apiKeyV2 ?? credentials.apiKeyV2 ?? null;
   const sourceClientId =
     input.sourceClientId ?? credentials.sourceClientId ?? (apiKeyV2 && clientId ? clientId : null);
+  const carrierIds =
+    input.carrierIds?.length
+      ? input.carrierIds
+      : (await getAllCarriers(apiKeyV2)).map((carrier) => carrier.carrier_id).sort();
 
   return {
     ...input,
@@ -219,6 +223,7 @@ async function resolveRateInput(input: RateInput): Promise<RateInput> {
     clientId,
     apiKeyV2,
     sourceClientId,
+    carrierIds,
   };
 }
 

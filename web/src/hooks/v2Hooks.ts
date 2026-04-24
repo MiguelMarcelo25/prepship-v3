@@ -77,13 +77,21 @@ function transformOrderRowV4toV2(
     const num = (v: unknown) => (typeof v === 'number' ? v : null);
     const ship = bestRateJson.shipping_amount as Record<string, unknown> | undefined;
     const other = bestRateJson.other_amount as Record<string, unknown> | undefined;
-    const shipmentCost = num(ship?.amount) ?? 0;
-    const otherCost = num(other?.amount) ?? 0;
+    const shipmentCost =
+      num(ship?.amount) ?? num(bestRateJson.shipmentCost) ?? num(bestRateJson.cost) ?? 0;
+    const otherCost = num(other?.amount) ?? num(bestRateJson.otherCost) ?? 0;
     return {
-      carrierCode: (bestRateJson.carrier_code as string) ?? null,
-      serviceCode: (bestRateJson.service_code as string) ?? null,
-      serviceName: (bestRateJson.service_type as string) ?? null,
-      carrierNickname: (bestRateJson.carrier_nickname as string) ?? null,
+      carrierCode: (bestRateJson.carrier_code as string) ?? (bestRateJson.carrierCode as string) ?? null,
+      serviceCode: (bestRateJson.service_code as string) ?? (bestRateJson.serviceCode as string) ?? null,
+      serviceName:
+        (bestRateJson.service_type as string) ??
+        (bestRateJson.serviceName as string) ??
+        (bestRateJson.serviceCode as string) ??
+        null,
+      carrierNickname:
+        (bestRateJson.carrier_nickname as string) ??
+        (bestRateJson.carrierNickname as string) ??
+        null,
       shippingProviderId: toProviderAccountId(
         bestRateJson.shippingProviderId ?? bestRateJson.carrier_id ?? null,
       ),
