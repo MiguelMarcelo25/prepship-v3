@@ -694,6 +694,11 @@ export default function OrdersView({
   const [dailyStats, setDailyStats] = useState<OrdersDailyStatsDto | null>(null)
   const [columnPrefs, setColumnPrefs] = useState<ColumnPrefs | null>(null)
   const [columnMenuOpen, setColumnMenuOpen] = useState(false)
+  const [dragColumnKey, setDragColumnKey] = useState<TableColumnKey | null>(null)
+  const [dragOverColumnKey, setDragOverColumnKey] = useState<TableColumnKey | null>(null)
+  const [dropdownDragColumnKey, setDropdownDragColumnKey] = useState<TableColumnKey | null>(null)
+  const [dropdownDragOverColumnKey, setDropdownDragOverColumnKey] = useState<TableColumnKey | null>(null)
+  const [resizingColumnKey, setResizingColumnKey] = useState<TableColumnKey | null>(null)
   const [queueOpen, setQueueOpen] = useState(false)
   const [queueHistoryVisible, setQueueHistoryVisible] = useState(false)
   const [queueEntries, setQueueEntries] = useState<PrintQueueEntryDto[]>([])
@@ -745,6 +750,11 @@ export default function OrdersView({
   const [panelRatePreview, setPanelRatePreview] = useState<Array<Record<string, unknown>>>([])
   const [panelRateLoading, setPanelRateLoading] = useState(false)
   const columnMenuRef = useRef<HTMLDivElement | null>(null)
+  const resolvedColumnPrefsRef = useRef(null)
+  const currentStatusRef = useRef(currentStatus)
+  const resizeStateRef = useRef<{ key: TableColumnKey; startX: number; startWidth: number } | null>(null)
+  const pendingResizeWidthsRef = useRef<Record<TableColumnKey, number> | null>(null)
+  const suppressHeaderClickRef = useRef(false)
 
   const dateRange = dateFilter === 'custom'
     ? {
@@ -797,6 +807,8 @@ export default function OrdersView({
       )),
     [currentStatus, resolvedColumnPrefs],
   )
+  resolvedColumnPrefsRef.current = resolvedColumnPrefs
+  currentStatusRef.current = currentStatus
 
   const skuOptions = useMemo(() => {
     const skus = new Set<string>()
@@ -992,6 +1004,47 @@ export default function OrdersView({
     document.addEventListener('click', onClick)
     return () => document.removeEventListener('click', onClick)
   }, [columnMenuOpen])
+
+  useEffect(() => {
+    const onMouseMove = (event: MouseEvent) => {
+      const resizeState = resizeStateRef.current
+      if (!resizeState) return
+
+      const prefs = getLatestColumnPrefs()
+      const nextWidth = Math.max(40, resizeState.startWidth + (event.clientX - resizeState.startX))
+      const nextWidths = {
+        ...prefs.widths,
+        [resizeState.key]: nextWidth,
+      }
+      pendingResizeWidthsRef.current = nextWidths
+      setColumnPrefs(buildSavedColumnPrefs(prefs.orderedColumns, prefs.hiddenColumns, nextWidths))
+    }
+
+    const onMouseUp = () => {
+      const resizeState = resizeStateRef.current
+      if (!resizeState) return
+
+      const prefs = getLatestColumnPrefs()
+      const nextWidths = pendingResizeWidthsRef.current ?? prefs.widths
+      resizeStateRef.current = null
+      pendingResizeWidthsRef.current = null
+      setResizingColumnKey(null)
+      document.body.classList.remove('resizing-active')
+
+      void saveColumnPrefsToServer(buildSavedColumnPrefs(prefs.orderedColumns, prefs.hiddenColumns, nextWidths))
+      window.setTimeout(() => {
+        suppressHeaderClickRef.current = false
+      }, 150)
+    }
+
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
+    return () => {
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mouseup', onMouseUp)
+      document.body.classList.remove('resizing-active')
+    }
+  }, [])
 
   useEffect(() => {
     onQueueStateChange?.({
@@ -1220,6 +1273,135 @@ export default function OrdersView({
     } catch {
       showToast('Failed to save column preferences', 'error')
     }
+  }
+
+  function getLatestColumnPrefs() {
+    return resolvedColumnPrefsRef.current ?? resolvedColumnPrefs
+  }
+
+  function getPersistableHiddenColumns(hiddenColumns: Set<TableColumnKey>) {
+    const nextHidden = new Set(hiddenColumns)
+    if (currentStatusRef.current === 'awaiting_shipment') nextHidden.delete('tracking')
+    else nextHidden.delete('age')
+    return nextHidden
+  }
+
+  function buildSavedColumnPrefs(
+    columns: Array<{ key: TableColumnKey; label: string; width: number }>,
+    hiddenColumns: Set<TableColumnKey>,
+    widths: Record<TableColumnKey, number>,
+  ) {
+    return buildColumnPrefs(columns, getPersistableHiddenColumns(hiddenColumns), widths)
+  }
+
+  function buildMovedColumnPrefs(sourceKey: TableColumnKey, targetKey: TableColumnKey) {
+    if (!sourceKey || !targetKey || sourceKey === targetKey || sourceKey === 'select' || targetKey === 'select') return null
+
+    const prefs = getLatestColumnPrefs()
+    const nextOrdered = [...prefs.orderedColumns]
+    const sourceIndex = nextOrdered.findIndex((column) => column.key === sourceKey)
+    const targetIndex = nextOrdered.findIndex((column) => column.key === targetKey)
+    if (sourceIndex < 0 || targetIndex < 0) return null
+
+    const [column] = nextOrdered.splice(sourceIndex, 1)
+    nextOrdered.splice(targetIndex, 0, column)
+    return buildSavedColumnPrefs(nextOrdered, prefs.hiddenColumns, prefs.widths)
+  }
+
+  function moveColumn(sourceKey: TableColumnKey, targetKey: TableColumnKey) {
+    const nextPrefs = buildMovedColumnPrefs(sourceKey, targetKey)
+    if (!nextPrefs) return
+    void saveColumnPrefsToServer(nextPrefs)
+  }
+
+  function finishHeaderDrag() {
+    setDragColumnKey(null)
+    setDragOverColumnKey(null)
+    suppressHeaderClickRef.current = true
+    window.setTimeout(() => {
+      suppressHeaderClickRef.current = false
+    }, 150)
+  }
+
+  function handleHeaderDragStart(event: React.DragEvent<HTMLTableCellElement>, key: TableColumnKey) {
+    if (resizeStateRef.current || key === 'select') {
+      event.preventDefault()
+      return
+    }
+
+    suppressHeaderClickRef.current = true
+    setDragColumnKey(key)
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', key)
+  }
+
+  function handleHeaderDragOver(event: React.DragEvent<HTMLTableCellElement>, key: TableColumnKey) {
+    if (!dragColumnKey || key === dragColumnKey || key === 'select') return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+    setDragOverColumnKey(key)
+  }
+
+  function handleHeaderDrop(event: React.DragEvent<HTMLTableCellElement>, key: TableColumnKey) {
+    const sourceKey = (event.dataTransfer.getData('text/plain') || dragColumnKey) as TableColumnKey
+    if (!sourceKey || sourceKey === key || key === 'select') return
+
+    event.preventDefault()
+    moveColumn(sourceKey, key)
+    finishHeaderDrag()
+  }
+
+  function handleHeaderClick(column: TableColumn) {
+    if (suppressHeaderClickRef.current) {
+      suppressHeaderClickRef.current = false
+      return
+    }
+    if (column.sort == null) return
+    toggleSort(column.sort as SortKey)
+  }
+
+  function handleDropdownDragStart(event: React.DragEvent<HTMLDivElement>, key: TableColumnKey) {
+    setDropdownDragColumnKey(key)
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', key)
+  }
+
+  function handleDropdownDragOver(event: React.DragEvent<HTMLDivElement>, key: TableColumnKey) {
+    if (!dropdownDragColumnKey || key === dropdownDragColumnKey) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+    setDropdownDragOverColumnKey(key)
+  }
+
+  function handleDropdownDrop(event: React.DragEvent<HTMLDivElement>, key: TableColumnKey) {
+    const sourceKey = (event.dataTransfer.getData('text/plain') || dropdownDragColumnKey) as TableColumnKey
+    if (!sourceKey || sourceKey === key) return
+
+    event.preventDefault()
+    moveColumn(sourceKey, key)
+    setDropdownDragColumnKey(null)
+    setDropdownDragOverColumnKey(null)
+  }
+
+  function finishDropdownDrag() {
+    setDropdownDragColumnKey(null)
+    setDropdownDragOverColumnKey(null)
+  }
+
+  function startColumnResize(event: React.MouseEvent<HTMLDivElement>, column: TableColumn) {
+    event.preventDefault()
+    event.stopPropagation()
+
+    const prefs = getLatestColumnPrefs()
+    resizeStateRef.current = {
+      key: column.key,
+      startX: event.clientX,
+      startWidth: prefs.widths[column.key] ?? column.width,
+    }
+    pendingResizeWidthsRef.current = null
+    suppressHeaderClickRef.current = true
+    setResizingColumnKey(column.key)
+    document.body.classList.add('resizing-active')
   }
 
   async function hydrateQueue(forceOpen = false) {
@@ -2858,23 +3040,38 @@ export default function OrdersView({
             <button className="btn btn-outline btn-sm" type="button" id="colBtnFilter" style={{ display: 'none' }} onClick={() => setColumnMenuOpen((open) => !open)}>⊞ Columns</button>
             {columnMenuOpen ? (
               <div ref={columnMenuRef} className="react-column-menu" style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 8, boxShadow: 'var(--shadow-lg)', padding: '8px 0', zIndex: 300, minWidth: 220 }}>
-                <div style={{ padding: '0 12px 6px', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.5px' }}>Toggle Columns</div>
+                <div style={{ padding: '0 12px 6px', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.5px' }}>Toggle &amp; Reorder Columns</div>
                 {resolvedColumnPrefs.orderedColumns.filter((column) => column.key !== 'select' && column.key !== 'orderNum').map((column) => {
                   const checked = !resolvedColumnPrefs.hiddenColumns.has(column.key)
                   return (
-                    <label key={column.key} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 12px', fontSize: 12, cursor: 'pointer' }}>
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={(event) => {
-                          const nextHidden = new Set(resolvedColumnPrefs.hiddenColumns)
-                          if (event.target.checked) nextHidden.delete(column.key)
-                          else nextHidden.add(column.key)
-                          void saveColumnPrefsToServer(buildColumnPrefs(resolvedColumnPrefs.orderedColumns, nextHidden, resolvedColumnPrefs.widths))
-                        }}
-                      />
-                      {column.label}
-                    </label>
+                    <div
+                      key={column.key}
+                      className={[
+                        'col-dd-item',
+                        dropdownDragColumnKey === column.key ? 'dragging' : '',
+                        dropdownDragOverColumnKey === column.key ? 'drag-over' : '',
+                      ].filter(Boolean).join(' ')}
+                      draggable
+                      onDragStart={(event) => handleDropdownDragStart(event, column.key)}
+                      onDragOver={(event) => handleDropdownDragOver(event, column.key)}
+                      onDrop={(event) => handleDropdownDrop(event, column.key)}
+                      onDragEnd={finishDropdownDrag}
+                    >
+                      <span className="col-dd-handle" aria-hidden="true">::</span>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, cursor: 'pointer' }}>
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(event) => {
+                            const nextHidden = new Set(resolvedColumnPrefs.hiddenColumns)
+                            if (event.target.checked) nextHidden.delete(column.key)
+                            else nextHidden.add(column.key)
+                            void saveColumnPrefsToServer(buildSavedColumnPrefs(resolvedColumnPrefs.orderedColumns, nextHidden, resolvedColumnPrefs.widths))
+                          }}
+                        />
+                        {column.label}
+                      </label>
+                    </div>
                   )
                 })}
               </div>
@@ -2997,21 +3194,45 @@ export default function OrdersView({
 
               {!loading && !error && orderedFilteredOrders.length > 0 ? (
                 <table className="orders-table" id="ordersTable">
+                  <colgroup>
+                    {visibleColumns.map((column) => (
+                      <col key={column.key} style={{ width: column.width }} />
+                    ))}
+                  </colgroup>
                   <thead id="tableHead">
                     <tr>
                       {visibleColumns.map((column) => {
                         const sortable = column.sort != null
                         const sorted = sortable && sortState.key === column.sort
+                        const headerClasses = [
+                          sortable ? (sorted ? `sortable sort-${sortState.dir}` : 'sortable') : '',
+                          dragColumnKey === column.key ? 'col-dragging' : '',
+                          dragOverColumnKey === column.key ? 'col-drag-over' : '',
+                          resizingColumnKey === column.key ? 'col-resizing' : '',
+                        ].filter(Boolean).join(' ')
                         return (
                           <th
                             key={column.key}
                             data-col={column.key}
                             style={{ width: column.width, position: 'relative' }}
-                            className={sortable ? `${sorted ? `sortable sort-${sortState.dir}` : 'sortable'}` : undefined}
-                            onClick={sortable ? () => toggleSort(column.sort as SortKey) : undefined}
+                            className={headerClasses || undefined}
+                            draggable={column.key !== 'select'}
+                            onClick={sortable ? () => handleHeaderClick(column) : undefined}
+                            onDragStart={(event) => handleHeaderDragStart(event, column.key)}
+                            onDragOver={(event) => handleHeaderDragOver(event, column.key)}
+                            onDrop={(event) => handleHeaderDrop(event, column.key)}
+                            onDragEnd={finishHeaderDrag}
                           >
                             {column.label}
                             {sortable ? <span className="sort-arrow" /> : null}
+                            {column.key !== 'select' ? (
+                              <div
+                                className="col-resizer"
+                                onMouseDown={(event) => startColumnResize(event, column)}
+                                onClick={(event) => event.stopPropagation()}
+                                onDragStart={(event) => event.stopPropagation()}
+                              />
+                            ) : null}
                           </th>
                         )
                       })}

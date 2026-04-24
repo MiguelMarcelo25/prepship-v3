@@ -67,6 +67,37 @@
   font-weight: 600;
   color: var(--text-primary);
   background: #f9fafb;
+  user-select: none;
+}
+
+.react-column-menu .col-dd-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  font-size: 12px;
+  cursor: grab;
+}
+
+.react-column-menu .col-dd-item:active {
+  cursor: grabbing;
+}
+
+.react-column-menu .col-dd-item.dragging {
+  opacity: .4;
+}
+
+.react-column-menu .col-dd-item.drag-over {
+  background: var(--ss-blue-bg);
+}
+
+.react-column-menu .col-dd-handle {
+  width: 12px;
+  flex: 0 0 12px;
+  color: var(--text3);
+  font-size: 10px;
+  line-height: 1;
+  text-align: center;
 }
 
 .orders-table td {
