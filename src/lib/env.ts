@@ -30,6 +30,10 @@ const schema = z.object({
     .string()
     .optional()
     .transform((value) => value === 'true' || value === '1'),
+  DISABLE_RATE_BACKFILL_SCHEDULER: z
+    .string()
+    .optional()
+    .transform((value) => value === 'true' || value === '1'),
 });
 
 const parsed = schema.safeParse(process.env);

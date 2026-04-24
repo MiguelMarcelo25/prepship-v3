@@ -119,7 +119,11 @@ export function startSyncScheduler(): void {
     );
   }, STARTUP_DELAY_MS + 90_000);
 
-  if (env.ENABLE_RATE_BACKFILL_SCHEDULER) {
+  const rateBackfillEnabled =
+    env.ENABLE_RATE_BACKFILL_SCHEDULER ||
+    (env.NODE_ENV === 'production' && !env.DISABLE_RATE_BACKFILL_SCHEDULER);
+
+  if (rateBackfillEnabled) {
     console.log(
       `[scheduler] rate backfill enabled — every ${RATE_BACKFILL_INTERVAL_MS / 1000}s`
     );

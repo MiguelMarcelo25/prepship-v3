@@ -190,7 +190,7 @@ app.post(
       .object({
         clientId: z.number().int().optional(),
         limit: z.number().int().positive().max(10000).optional(),
-        maxAgeHours: z.number().int().positive().max(24 * 30).optional(),
+        maxAgeHours: z.number().int().min(0).max(24 * 30).optional(),
       })
       .optional()
   ),
@@ -228,7 +228,7 @@ app.post('/cache-clear-and-refetch', async (c) => {
     .from(rateCache);
   await db.delete(rateCache);
   const { startBackfillBestRates } = await import('../services/rates-backfill');
-  const job = startBackfillBestRates({});
+  const job = startBackfillBestRates({ maxAgeHours: 0 });
   return c.json({
     cleared: counts[0]?.count ?? 0,
     refetchStarted: true,

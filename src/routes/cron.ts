@@ -2,6 +2,7 @@ import { Hono, type Context } from 'hono';
 import { env } from '../lib/env';
 import { syncOrders } from '../services/order-sync';
 import { syncShipments } from '../services/shipment-sync';
+import { startBackfillBestRates } from '../services/rates-backfill';
 
 const app = new Hono();
 
@@ -37,12 +38,26 @@ async function parseSyncBody(c: Context): Promise<{ sinceMs?: number }> {
 app.post('/sync-orders', async (c) => {
   const opts = await parseSyncBody(c);
   const result = await syncOrders(opts);
-  return c.json(result);
+  const rateBackfillJob =
+    result.synced > 0
+      ? (() => {
+          const job = startBackfillBestRates({ limit: 1000 });
+          return { jobId: job.jobId, status: job.status };
+        })()
+      : null;
+  return c.json({ ...result, rateBackfillJob });
 });
 
 app.get('/sync-orders', async (c) => {
   const result = await syncOrders({});
-  return c.json(result);
+  const rateBackfillJob =
+    result.synced > 0
+      ? (() => {
+          const job = startBackfillBestRates({ limit: 1000 });
+          return { jobId: job.jobId, status: job.status };
+        })()
+      : null;
+  return c.json({ ...result, rateBackfillJob });
 });
 
 app.post('/sync-shipments', async (c) => {
@@ -61,8 +76,15 @@ app.get('/sync-shipments', async (c) => {
 app.post('/sync-all', async (c) => {
   const opts = await parseSyncBody(c);
   const ordersResult = await syncOrders(opts);
+  const rateBackfillJob =
+    ordersResult.synced > 0
+      ? (() => {
+          const job = startBackfillBestRates({ limit: 1000 });
+          return { jobId: job.jobId, status: job.status };
+        })()
+      : null;
   const shipmentsResult = await syncShipments(opts);
-  return c.json({ orders: ordersResult, shipments: shipmentsResult });
+  return c.json({ orders: ordersResult, shipments: shipmentsResult, rateBackfillJob });
 });
 
 export default app;

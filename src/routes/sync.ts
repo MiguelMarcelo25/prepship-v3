@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { getSyncStatus, syncOrders } from '../services/order-sync';
+import { startBackfillBestRates } from '../services/rates-backfill';
 
 const app = new Hono();
 
@@ -34,7 +35,15 @@ app.post('/orders', zValidator('json', triggerBody), async (c) => {
     skipStatusPasses: body.full === true && body.fullResync !== true,
     pageSize: body.pageSize,
   });
-  return c.json(result);
+  const shouldBackfillRates = body.full === true || result.synced > 0;
+  const rateBackfillJob = shouldBackfillRates
+    ? (() => {
+        const job = startBackfillBestRates({ limit: 1000 });
+        return { jobId: job.jobId, status: job.status };
+      })()
+    : null;
+
+  return c.json({ ...result, rateBackfillJob });
 });
 
 app.get('/status', async (c) => {

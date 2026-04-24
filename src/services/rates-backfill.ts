@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { and, eq, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, desc, eq, isNull, lt, notInArray, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orders, orderOverrides } from '../db/schema/orders';
 import { packages } from '../db/schema/packages';
 import { getRates } from './rates';
 import type { Rate } from '../lib/shipstation';
+import { EXCLUDED_STORE_IDS } from '../config/prepship';
 
 type ServiceTier = 'overnight' | 'two_day' | 'standard';
 
@@ -91,6 +92,8 @@ export function getActiveBackfillJob(): BackfillJob | null {
 export function startBackfillBestRates(opts: {
   clientId?: number;
   limit?: number;
+  // Omit to fetch only missing rates. Use 0 to refresh every matched order,
+  // or N to refresh rates older than N hours.
   maxAgeHours?: number;
 }): BackfillJob {
   if (activeJobId && jobs.get(activeJobId)?.status === 'running') {
@@ -126,9 +129,14 @@ async function runBackfill(
   job.message = 'Querying orders…';
 
   try {
-    const maxAgeHours = opts.maxAgeHours ?? 24;
-    const staleCutoff = new Date(Date.now() - maxAgeHours * 60 * 60 * 1000);
+    const staleCutoff =
+      opts.maxAgeHours !== undefined
+        ? new Date(Date.now() - opts.maxAgeHours * 60 * 60 * 1000)
+        : null;
     const hardLimit = Math.max(1, Math.min(opts.limit ?? 5000, 10000));
+    const needsRatePredicate = staleCutoff
+      ? or(isNull(orderOverrides.bestRateAt), lt(orderOverrides.bestRateAt, staleCutoff))
+      : isNull(orderOverrides.bestRateAt);
 
     const rows = await db
       .select({
@@ -149,16 +157,15 @@ async function runBackfill(
           opts.clientId !== undefined
             ? eq(orders.clientId, opts.clientId)
             : undefined,
+          notInArray(orders.storeId, [...EXCLUDED_STORE_IDS]),
           sql`${orders.weightOz} is not null and ${orders.weightOz} > 0`,
           sql`${orders.shipToPostalCode} is not null and ${orders.shipToPostalCode} <> ''`,
-          or(
-            isNull(orderOverrides.bestRateAt),
-            lt(orderOverrides.bestRateAt, staleCutoff)
-          ),
+          needsRatePredicate,
           // Skip test-client orders — no real ShipStation rate calls for sandbox data.
           sql`not exists (select 1 from clients c where c.id = ${orders.clientId} and c.is_test = true)`
         )
       )
+      .orderBy(desc(orders.orderDate))
       .limit(hardLimit);
 
     job.total = rows.length;
@@ -181,7 +188,7 @@ async function runBackfill(
       height: defaultPkg?.height && defaultPkg.height > 0 ? defaultPkg.height : 6,
     };
 
-    const CONCURRENCY = 16;
+    const CONCURRENCY = 4;
     const processOne = async (row: (typeof rows)[number]) => {
       if (jobs.get(jobId)?.status !== 'running') return;
 
