@@ -1755,12 +1755,20 @@ export default function OrdersView({
         return <span style={{ color: 'var(--text3)', fontSize: 11 }}>—</span>
       }
 
+      const selectedRateCarrierCode = order.label?.cost == null ? order.selectedRate?.carrierCode : null
       return (
-        <div style={{ lineHeight: 1.3 }}>
-          <strong style={{ color: 'var(--green)', fontSize: 12 }}>{formatMoney(markedAmount ?? selectedRateBase)}</strong>
-          {selectedRateBase != null && markedAmount != null && Math.abs(markedAmount - selectedRateBase) > 0.005 ? (
-            <div style={{ fontSize: 10, color: 'var(--text3)' }}>{formatMoney(selectedRateBase)} cost</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          {selectedRateCarrierCode ? (
+            <span className={`carrier-badge ${getCarrierClass(selectedRateCarrierCode)}`} style={{ fontSize: 9.5, padding: '1px 5px' }}>
+              {formatCarrierCode(selectedRateCarrierCode)}
+            </span>
           ) : null}
+          <div style={{ lineHeight: 1.3 }}>
+            <strong style={{ color: 'var(--green)', fontSize: 12 }}>{formatMoney(markedAmount ?? selectedRateBase)}</strong>
+            {selectedRateBase != null && markedAmount != null && Math.abs(markedAmount - selectedRateBase) > 0.005 ? (
+              <div style={{ fontSize: 10, color: 'var(--text3)' }}>{formatMoney(selectedRateBase)} cost</div>
+            ) : null}
+          </div>
         </div>
       )
     }
@@ -1785,11 +1793,16 @@ export default function OrdersView({
     }, markups)
 
     return (
-      <div style={{ lineHeight: 1.3 }}>
-        <strong style={{ color: 'var(--green)', fontSize: 12 }}>{formatMoney(markedAmount)}</strong>
-        {bestRateBaseCost != null && Math.abs(markedAmount - bestRateBaseCost) > 0.005 ? (
-          <div style={{ fontSize: 10, color: 'var(--text3)' }}>{formatMoney(bestRateBaseCost)} cost</div>
-        ) : null}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span className={`carrier-badge ${getCarrierClass(order.bestRate.carrierCode)}`} style={{ fontSize: 9.5, padding: '1px 5px' }}>
+          {formatCarrierCode(order.bestRate.carrierCode)}
+        </span>
+        <div style={{ lineHeight: 1.3 }}>
+          <strong style={{ color: 'var(--green)', fontSize: 12 }}>{formatMoney(markedAmount)}</strong>
+          {bestRateBaseCost != null && Math.abs(markedAmount - bestRateBaseCost) > 0.005 ? (
+            <div style={{ fontSize: 10, color: 'var(--text3)' }}>{formatMoney(bestRateBaseCost)} cost</div>
+          ) : null}
+        </div>
       </div>
     )
   }
