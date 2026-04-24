@@ -300,14 +300,12 @@ app.get(
 // window across non-working days so the strip still reflects the
 // pending workload over a weekend.
 function computeShiftWindow(now = new Date()): { from: Date; to: Date } {
-  const phtOffsetMs = 8 * 60 * 60 * 1000;
-  const local = new Date(now.getTime() + phtOffsetMs);
-  const y = local.getUTCFullYear();
-  const m = local.getUTCMonth();
-  const d = local.getUTCDate();
-  const hr = local.getUTCHours();
-  const dow = local.getUTCDay(); // 0=Sun .. 6=Sat
-  const todayNoon = new Date(Date.UTC(y, m, d, 12, 0, 0) - phtOffsetMs);
+  const y = now.getUTCFullYear();
+  const m = now.getUTCMonth();
+  const d = now.getUTCDate();
+  const hr = now.getUTCHours();
+  const dow = now.getUTCDay(); // 0=Sun .. 6=Sat
+  const todayNoon = new Date(Date.UTC(y, m, d, 12, 0, 0));
   const isPm = hr >= 18;
   const dayMs = 24 * 60 * 60 * 1000;
 
@@ -356,7 +354,7 @@ function computeShiftWindow(now = new Date()): { from: Date; to: Date } {
 // reads correctly on a UTC Render host.
 function formatPtLabel(d: Date): string {
   const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Asia/Manila',
+    timeZone: 'UTC',
     month: 'short',
     day: 'numeric',
     hour: 'numeric',
@@ -442,12 +440,8 @@ app.get(
         and store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
         ${excludeFilter}
     `);
-    // v2 parity: needToShip is WINDOWED — it matches totalOrders minus
-    // shipped/cancelled inside the same shift window, not the all-time
-    // awaiting backlog. Excludes externally-fulfilled orders (externally_shipped
-    // flag OR raw.externallyFulfilled) AND orders that already have a
-    // non-voided shipment (matches v2's three NOT clauses in
-    // sqlite-init-repository.ts).
+    // v2 parity: needToShip is windowed and uses raw ShipStation status;
+    // bucket/external-shipped rules stay in the order list query.
     const backlogRows = await db.execute<{ need_to_ship: number }>(sql`
       select count(*)::int as need_to_ship
       from orders o
@@ -455,12 +449,6 @@ app.get(
         and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
         and o.order_date >= ${fromIso}::timestamptz
         and o.order_date <= ${toIso}::timestamptz
-        and coalesce(o.externally_shipped, false) = false
-        and coalesce((o.raw->>'externallyFulfilled')::boolean, false) = false
-        and not exists (
-          select 1 from shipments s
-          where s.order_id = o.id and s.voided = false
-        )
         ${excludeFilter}
     `);
     const upcomingRows = await db.execute<{ upcoming_orders: number }>(sql`

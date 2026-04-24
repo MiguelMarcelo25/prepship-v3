@@ -235,6 +235,14 @@ function toNumberValue(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
+function toProviderAccountId(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value !== 'string') return null
+  const match = value.match(/^se-(\d+)$/i)
+  const parsed = Number.parseInt(match?.[1] ?? value, 10)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 function truncate(value: string, maxLength: number) {
   return value.length > maxLength ? `${value.slice(0, maxLength)}…` : value
 }
@@ -1448,17 +1456,19 @@ export default function OrdersView({
         toCity: shipTo.city ?? undefined,
         dimsL: length, dimsW: width, dimsH: height,
         residential: Boolean(panelOrder.residential ?? panelOrder.sourceResidential),
+        storeId: panelOrder.storeId,
+        clientId: panelOrder.clientId,
       })
       // Remap ShipStation v2 rate shape → v2-legacy shape the panel expects.
       const rates = (rawRates ?? []).map((r: any) => {
-        const shipmentCost = r.shipping_amount?.amount ?? 0
-        const otherCost = r.other_amount?.amount ?? 0
+        const shipmentCost = r.shipmentCost ?? r.shipping_amount?.amount ?? 0
+        const otherCost = r.otherCost ?? r.other_amount?.amount ?? 0
         return {
-          carrierCode: r.carrier_code ?? null,
-          serviceCode: r.service_code ?? null,
-          serviceName: r.service_type ?? null,
-          carrierNickname: r.carrier_nickname ?? null,
-          shippingProviderId: r.carrier_id ?? null,
+          carrierCode: r.carrierCode ?? r.carrier_code ?? null,
+          serviceCode: r.serviceCode ?? r.service_code ?? null,
+          serviceName: r.serviceName ?? r.service_type ?? null,
+          carrierNickname: r.carrierNickname ?? r.carrier_nickname ?? null,
+          shippingProviderId: toProviderAccountId(r.shippingProviderId ?? r.carrier_id),
           amount: shipmentCost + otherCost,
           shipmentCost,
           otherCost,

@@ -6,12 +6,14 @@ export type ClientCredentials = {
   apiKeyV2: string | null;
   apiKey: string | null;
   apiSecret: string | null;
+  sourceClientId: number | null;
 };
 
 const EMPTY: ClientCredentials = {
   apiKeyV2: null,
   apiKey: null,
   apiSecret: null,
+  sourceClientId: null,
 };
 
 // v2-parity: resolve per-client ShipStation credentials with the
@@ -52,6 +54,7 @@ export async function loadClientCredentials(
   if (!row) return EMPTY;
 
   let apiKeyV2 = row.apiKeyV2 ?? null;
+  let sourceClientId = apiKeyV2 ? clientId : null;
 
   // v2-parity fallback: if this client has no V2 key of its own AND points
   // at a rate-source client, borrow the source's V2 key.
@@ -62,7 +65,10 @@ export async function loadClientCredentials(
         .from(clients)
         .where(eq(clients.id, row.rateSourceClientId))
         .limit(1);
-      if (src?.apiKeyV2) apiKeyV2 = src.apiKeyV2;
+      if (src?.apiKeyV2) {
+        apiKeyV2 = src.apiKeyV2;
+        sourceClientId = row.rateSourceClientId;
+      }
     } catch (err) {
       // Non-fatal — caller falls through to env default.
       console.warn(
@@ -76,5 +82,6 @@ export async function loadClientCredentials(
     apiKeyV2,
     apiKey: row.apiKey ?? null,
     apiSecret: row.apiSecret ?? null,
+    sourceClientId,
   };
 }

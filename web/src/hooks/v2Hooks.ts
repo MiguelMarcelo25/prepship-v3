@@ -47,6 +47,14 @@ export interface UseOrdersResult {
 
 type V4ClientRow = { id: number; name: string };
 
+function toProviderAccountId(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value !== 'string') return null;
+  const match = value.match(/^se-(\d+)$/i);
+  const parsed = Number.parseInt(match?.[1] ?? value, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 function transformOrderRowV4toV2(
   row: Record<string, unknown>,
   clientsById: Map<number, string>
@@ -76,7 +84,9 @@ function transformOrderRowV4toV2(
       serviceCode: (bestRateJson.service_code as string) ?? null,
       serviceName: (bestRateJson.service_type as string) ?? null,
       carrierNickname: (bestRateJson.carrier_nickname as string) ?? null,
-      shippingProviderId: (bestRateJson.carrier_id as string) ?? null,
+      shippingProviderId: toProviderAccountId(
+        bestRateJson.shippingProviderId ?? bestRateJson.carrier_id ?? null,
+      ),
       amount: shipmentCost + otherCost,
       shipmentCost,
       otherCost,
@@ -398,19 +408,13 @@ export function useShippingAccounts(): UseShippingAccountsResult {
   });
 
   // SettingsView keys rows by `shippingProviderId` — must be unique per account.
-  // v4's ShipStation response doesn't carry a numeric provider id, so derive a
-  // stable unique integer from the string `carrier_id` (djb2-style hash).
-  const hashToInt = (s: string): number => {
-    let h = 5381;
-    for (let i = 0; i < s.length; i += 1) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
-    return Math.abs(h) || 1;
-  };
+  // ShipStation carrier ids are `se-433542`; v2 uses the numeric provider id.
   const accounts = useMemo<CarrierAccountDto[]>(
     () =>
       (query.data?.carriers ?? []).map((c, i) => ({
         carrierId: c.carrier_id,
         carrierCode: c.carrier_code,
-        shippingProviderId: c.carrier_id ? hashToInt(c.carrier_id) : i + 1,
+        shippingProviderId: toProviderAccountId(c.carrier_id) ?? i + 1,
         nickname: c.nickname ?? c.friendly_name ?? c.carrier_code,
         clientId: null,
         code: c.carrier_code,

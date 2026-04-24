@@ -28,6 +28,8 @@ const rateBody = z.object({
   dimsW: z.number().positive().optional(),
   dimsH: z.number().positive().optional(),
   carrierIds: z.array(z.string()).optional(),
+  storeId: z.number().int().nullable().optional(),
+  clientId: z.number().int().nullable().optional(),
   forceRefresh: z.boolean().optional(),
 });
 
@@ -51,7 +53,9 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
   );
   const filtered = result.rates.filter((r) => r.carrier_id === carrierId);
   const cheapest = [...filtered].sort(
-    (a, b) => a.shipping_amount.amount - b.shipping_amount.amount
+    (a, b) =>
+      (a.shipping_amount.amount + (a.other_amount?.amount ?? 0)) -
+      (b.shipping_amount.amount + (b.other_amount?.amount ?? 0))
   )[0] ?? null;
   return c.json({
     ...result,

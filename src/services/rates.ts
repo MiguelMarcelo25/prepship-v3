@@ -1,5 +1,7 @@
-import { eq, like } from 'drizzle-orm';
+import { createHash } from 'node:crypto';
+import { eq, like, sql } from 'drizzle-orm';
 import { db } from '../db/client';
+import { clients } from '../db/schema/clients';
 import { rateCache } from '../db/schema/rates';
 import { settings } from '../db/schema/settings';
 import {
@@ -10,6 +12,7 @@ import {
   type Parcel,
 } from '../lib/shipstation';
 import type { CarriersResponse } from '../lib/shipstation/types';
+import { loadClientCredentials } from '../lib/shipstation/credentials';
 import { getDefaultShipFrom } from '../lib/ship-from';
 
 type Markup = { type: 'amount' | 'percent'; value: number };
@@ -171,16 +174,66 @@ export type RateInput = {
   dimsH?: number;
   carrierIds?: string[];
   shipFrom?: Address;
+  storeId?: number | null;
+  clientId?: number | null;
+  sourceClientId?: number | null;
+  apiKeyV2?: string | null;
 };
+
+function normalizeZip(zip: string): string {
+  const digits = String(zip ?? '').replace(/\D/g, '').slice(0, 5);
+  return digits || String(zip ?? '').trim().toUpperCase();
+}
+
+function apiKeyCacheKey(apiKeyV2?: string | null): string {
+  if (!apiKeyV2) return 'env';
+  return createHash('sha256').update(apiKeyV2).digest('hex').slice(0, 16);
+}
+
+async function resolveClientIdForStoreId(storeId?: number | null): Promise<number | null> {
+  if (storeId == null) return null;
+  const [row] = await db
+    .select({ id: clients.id })
+    .from(clients)
+    .where(sql`${clients.storeIds} @> ${[storeId]}::integer[]`)
+    .limit(1);
+  return row?.id ?? null;
+}
+
+async function resolveRateInput(input: RateInput): Promise<RateInput> {
+  const storeId = input.storeId ?? null;
+  const clientId =
+    input.clientId ?? (storeId != null ? await resolveClientIdForStoreId(storeId) : null);
+  const credentials = await loadClientCredentials(clientId, {
+    storeId: storeId ?? undefined,
+  });
+  const apiKeyV2 = input.apiKeyV2 ?? credentials.apiKeyV2 ?? null;
+  const sourceClientId =
+    input.sourceClientId ?? credentials.sourceClientId ?? (apiKeyV2 && clientId ? clientId : null);
+
+  return {
+    ...input,
+    toZip: normalizeZip(input.toZip),
+    residential: input.residential !== false,
+    storeId,
+    clientId,
+    apiKeyV2,
+    sourceClientId,
+  };
+}
 
 export function rateCacheKey(input: RateInput): string {
   const parts: string[] = [
     `w=${Math.round(input.weightOz * 10)}`,
-    `z=${(input.toZip ?? '').replace(/\s+/g, '').toUpperCase()}`,
+    `z=${normalizeZip(input.toZip)}`,
     `co=${(input.toCountry ?? 'US').toUpperCase()}`,
   ];
   if (input.residential === true) parts.push('r=1');
   else if (input.residential === false) parts.push('r=0');
+  if (input.clientId != null) parts.push(`cl=${input.clientId}`);
+  else if (input.storeId != null) parts.push(`st=${input.storeId}`);
+  if (input.sourceClientId != null) parts.push(`src=${input.sourceClientId}`);
+  else if (input.apiKeyV2) parts.push(`ak=${apiKeyCacheKey(input.apiKeyV2)}`);
   if (input.dimsL) parts.push(`l=${Math.round(input.dimsL * 10)}`);
   if (input.dimsW) parts.push(`dw=${Math.round(input.dimsW * 10)}`);
   if (input.dimsH) parts.push(`h=${Math.round(input.dimsH * 10)}`);
@@ -190,11 +243,13 @@ export function rateCacheKey(input: RateInput): string {
   return parts.join('|');
 }
 
+function rateTotal(rate: Rate): number {
+  return Number(rate.shipping_amount?.amount ?? 0) + Number(rate.other_amount?.amount ?? 0);
+}
+
 function pickBestRate(rates: Rate[]): Rate | null {
   if (!rates.length) return null;
-  return [...rates].sort(
-    (a, b) => a.shipping_amount.amount - b.shipping_amount.amount
-  )[0]!;
+  return [...rates].sort((a, b) => rateTotal(a) - rateTotal(b))[0]!;
 }
 
 function buildShipTo(input: RateInput): Address {
@@ -258,27 +313,62 @@ type EstimateRate = {
 // in the rate-estimate body). v2 calls discoverCarriers() per request; v4
 // reuses its 15-min-cached getAllCarrierIds() + a parallel nickname cache.
 type CarrierInfo = { carrier_id: string; carrier_code: string; nickname?: string };
-let cachedCarriers: CarrierInfo[] | null = null;
-let cachedCarriersAt = 0;
+const scopedCarrierCache = new Map<string, { carriers: CarrierInfo[]; fetchedAt: number }>();
 
-async function getAllCarriers(): Promise<CarrierInfo[]> {
-  if (cachedCarriers && Date.now() - cachedCarriersAt < CARRIER_CACHE_MS) {
-    return cachedCarriers;
+const V2_CARRIER_ACCOUNT_OVERRIDES = new Map<
+  string,
+  { carrier_code: string; nickname: string }
+>([
+  ['se-433542', { carrier_code: 'stamps_com', nickname: 'USPS Chase x7439' }],
+  ['se-433543', { carrier_code: 'ups_walleted', nickname: 'UPS by SS - Chase x7439' }],
+  ['se-565326', { carrier_code: 'ups', nickname: 'GG6381' }],
+  ['se-565377', { carrier_code: 'ups', nickname: 'G19Y32' }],
+  ['se-596001', { carrier_code: 'ups', nickname: 'ORION' }],
+  ['se-604209', { carrier_code: 'ups', nickname: 'ROCEL' }],
+  ['se-607855', { carrier_code: 'ups', nickname: 'ROCEL C81F70' }],
+  ['se-598840', { carrier_code: 'fedex', nickname: 'FedEx' }],
+  ['se-585004', { carrier_code: 'fedex_walleted', nickname: 'FedEx One Balance' }],
+  ['se-442006', { carrier_code: 'stamps_com', nickname: 'GREG PAYABILITY 6/17' }],
+  ['se-461890', { carrier_code: 'ups', nickname: 'ROCEL C81F70' }],
+  ['se-565317', { carrier_code: 'ups', nickname: 'GG6381' }],
+  ['se-595995', { carrier_code: 'ups', nickname: 'ORI Account' }],
+  ['se-442007', { carrier_code: 'ups', nickname: 'GREG PAYABILITY 6/17' }],
+  ['se-442013', { carrier_code: 'fedex', nickname: 'FedEx' }],
+  ['se-585334', { carrier_code: 'fedex_walleted', nickname: 'FedEx One Balance' }],
+]);
+
+async function getAllCarriers(apiKeyV2?: string | null): Promise<CarrierInfo[]> {
+  const cacheKey = apiKeyCacheKey(apiKeyV2);
+  const cached = scopedCarrierCache.get(cacheKey);
+  if (cached && Date.now() - cached.fetchedAt < CARRIER_CACHE_MS) {
+    return cached.carriers;
   }
   const res = await ssRequest<CarriersResponse>('/v2/carriers', {
-    dedupeKey: 'carriers:list',
+    apiKey: apiKeyV2 ?? undefined,
+    dedupeKey: `carriers:list:${cacheKey}`,
   });
-  const ALLOWED_CODES = new Set(['usps', 'ups', 'fedex', 'dhl_express', 'stamps_com']);
-  cachedCarriers = res.carriers
+  const ALLOWED_CODES = new Set([
+    'usps',
+    'ups',
+    'ups_walleted',
+    'fedex',
+    'fedex_walleted',
+    'dhl_express',
+    'stamps_com',
+  ]);
+  const carriers = res.carriers
     .filter((c) => !c.disabled_by_billing_plan)
     .filter((c) => ALLOWED_CODES.has((c.carrier_code ?? '').toLowerCase()))
-    .map((c) => ({
-      carrier_id: c.carrier_id,
-      carrier_code: c.carrier_code,
-      nickname: c.nickname ?? c.friendly_name ?? undefined,
-    }));
-  cachedCarriersAt = Date.now();
-  return cachedCarriers;
+    .map((c) => {
+      const override = V2_CARRIER_ACCOUNT_OVERRIDES.get(c.carrier_id);
+      return {
+        carrier_id: c.carrier_id,
+        carrier_code: override?.carrier_code ?? c.carrier_code,
+        nickname: override?.nickname ?? c.nickname ?? c.friendly_name ?? undefined,
+      };
+    });
+  scopedCarrierCache.set(cacheKey, { carriers, fetchedAt: Date.now() });
+  return carriers;
 }
 
 function shipFromPostalCode(addr: Address): string {
@@ -326,15 +416,17 @@ async function fetchEstimateForCarrier(
       {
         method: 'POST',
         body,
+        apiKey: input.apiKeyV2 ?? undefined,
         dedupeKey: `rates-estimate:${carrier.carrier_id}:${rateCacheKey(input)}`,
       },
     );
     const rates = Array.isArray(payload) ? payload : (payload.rates ?? []);
     // Ensure carrier metadata is on every row (ShipStation sometimes omits)
+    const override = V2_CARRIER_ACCOUNT_OVERRIDES.get(carrier.carrier_id);
     for (const r of rates) {
       if (!r.carrier_id) r.carrier_id = carrier.carrier_id;
-      if (!r.carrier_code) r.carrier_code = carrier.carrier_code;
-      if (!r.carrier_nickname && carrier.nickname) r.carrier_nickname = carrier.nickname;
+      r.carrier_code = override?.carrier_code ?? r.carrier_code ?? carrier.carrier_code;
+      r.carrier_nickname = override?.nickname ?? r.carrier_nickname ?? carrier.nickname;
     }
     return rates;
   } catch (err) {
@@ -390,7 +482,7 @@ export async function fetchLiveRates(input: RateInput): Promise<Rate[]> {
   //
   // If the caller restricted carriers via input.carrierIds, filter the
   // discovery list to that set. Otherwise use the full cached list.
-  const allCarriers = await getAllCarriers();
+  const allCarriers = await getAllCarriers(input.apiKeyV2);
   const carriers = input.carrierIds?.length
     ? allCarriers.filter((c) => input.carrierIds!.includes(c.carrier_id))
     : allCarriers;
@@ -409,8 +501,8 @@ export async function fetchLiveRates(input: RateInput): Promise<Rate[]> {
   // v2-parity: filter blocked service codes + package types + names.
   // Sort cheapest first (v2 sorts by shipmentCost + otherCost; v4 sort
   // uses shipping_amount only since markups apply at read-time later).
-  const filtered = lifted.filter((r) => !isBlockedRate(r));
-  filtered.sort((a, b) => a.shipping_amount.amount - b.shipping_amount.amount);
+  const filtered = lifted.filter((r) => !isBlockedRate(r, input.storeId ?? null));
+  filtered.sort((a, b) => rateTotal(a) - rateTotal(b));
 
   if (filtered.length) return filtered;
 
@@ -435,7 +527,8 @@ export async function getRates(
   input: RateInput,
   opts: { forceRefresh?: boolean } = {}
 ): Promise<GetRatesResult> {
-  const key = rateCacheKey(input);
+  const resolvedInput = await resolveRateInput(input);
+  const key = rateCacheKey(resolvedInput);
 
   // Markups apply at read time so config changes reflect instantly without
   // having to bust the rate cache.
@@ -460,7 +553,7 @@ export async function getRates(
     }
   }
 
-  const rawRates = await fetchLiveRates(input);
+  const rawRates = await fetchLiveRates(resolvedInput);
   const now = new Date();
 
   // Cache the RAW rates so markup updates always show fresh prices.
@@ -468,8 +561,8 @@ export async function getRates(
     .insert(rateCache)
     .values({
       cacheKey: key,
-      weightOz: input.weightOz,
-      toZip: input.toZip,
+      weightOz: resolvedInput.weightOz,
+      toZip: resolvedInput.toZip,
       rates: rawRates as unknown[],
       bestRate: pickBestRate(rawRates),
       weightVersion: 1,

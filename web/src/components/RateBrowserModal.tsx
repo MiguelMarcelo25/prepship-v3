@@ -45,6 +45,8 @@ export type RbCarrierAccountDto = {
 
 export type RbOrderSummaryDto = {
   orderId: number;
+  storeId?: number | null;
+  clientId?: number | null;
   weight?: { value?: number } | null;
   rateDims?: { length?: number | null; width?: number | null; height?: number | null } | null;
   shipTo?: { postalCode?: string | null; company?: string | null } | null;
@@ -458,6 +460,8 @@ export default function RateBrowserModal({
           },
           residential: true,
           carrierIds: acct.carrierId ? [acct.carrierId] : undefined,
+          storeId: order?.storeId ?? undefined,
+          clientId: order?.clientId ?? undefined,
         })) as RateRow[];
 
         const list: RateRow[] = (raw ?? []).map((r) => ({

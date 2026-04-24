@@ -141,6 +141,8 @@ async function runBackfill(
     const rows = await db
       .select({
         id: orders.id,
+        clientId: orders.clientId,
+        storeId: orders.storeId,
         weightOz: orders.weightOz,
         shipToPostalCode: orders.shipToPostalCode,
         shipToState: orders.shipToState,
@@ -215,13 +217,14 @@ async function runBackfill(
             dimsL,
             dimsW,
             dimsH,
+            storeId: row.storeId,
+            clientId: row.clientId,
           }),
           PER_ORDER_TIMEOUT_MS,
           `getRates(order=${row.id})`
         );
 
-        const tier = classifyTier(row.serviceCode);
-        const best = pickBestForTier(result.rates, tier);
+        const best = result.bestRate;
 
         if (!best) {
           job.skipped++;

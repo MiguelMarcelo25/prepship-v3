@@ -182,6 +182,8 @@ function translateRatePayloadToV4(
   if (typeof input.residential === 'boolean') out.residential = input.residential;
   if (typeof input.forceRefresh === 'boolean') out.forceRefresh = input.forceRefresh;
   if (Array.isArray(input.carrierIds)) out.carrierIds = input.carrierIds;
+  if (typeof input.storeId === 'number') out.storeId = input.storeId;
+  if (typeof input.clientId === 'number') out.clientId = input.clientId;
 
   // dims: v4 uses flat dimsL/W/H; v2 wraps them under `dimensions`.
   const dims = input.dimensions as
@@ -207,6 +209,14 @@ function translateRatePayloadToV4(
   return out;
 }
 
+function toProviderAccountId(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value !== 'string') return null;
+  const match = value.match(/^se-(\d+)$/i);
+  const n = Number.parseInt(match?.[1] ?? value, 10);
+  return Number.isFinite(n) ? n : null;
+}
+
 // Maps v4's ShipStation-v2-passthrough rate object to the v2-legacy shape
 // the bulk-ported components read. Defensive: if a caller already hands us
 // v2-shape data (has `amount` + `carrierCode`), return it unchanged.
@@ -224,7 +234,7 @@ function translateRateToV2Shape(r: unknown): Record<string, unknown> {
       serviceCode: obj.service_code ?? null,
       serviceName: obj.service_type ?? null,
       carrierNickname: obj.carrier_nickname ?? null,
-      shippingProviderId: obj.carrier_id ?? null,
+      shippingProviderId: toProviderAccountId(obj.carrier_id),
       amount: shipmentCost + otherCost,
       shipmentCost,
       otherCost,
