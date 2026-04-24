@@ -836,13 +836,8 @@ export default function OrdersView({
     ?? orders.find((order) => order.orderId === panelOrderId)
     ?? null
   const dailyStripProgress = dailyStats ? buildDailyStripProgress(dailyStats) : null
-  const dailyStatsUsesDateFilter = Boolean(dateRange.start || dateRange.end)
-  const dailyStatsFromLabel = dailyStatsUsesDateFilter && dateRange.start
-    ? formatDateOnly(dateRange.start, { month: 'short', day: 'numeric', year: 'numeric' })
-    : dailyStats?.window.fromLabel || dailyStats?.window.from || ''
-  const dailyStatsToLabel = dailyStatsUsesDateFilter && dateRange.end
-    ? formatDateOnly(dateRange.end, { month: 'short', day: 'numeric', year: 'numeric' })
-    : dailyStats?.window.toLabel || dailyStats?.window.to || ''
+  const dailyStatsFromLabel = dailyStats?.window.fromLabel || dailyStats?.window.from || ''
+  const dailyStatsToLabel = dailyStats?.window.toLabel || dailyStats?.window.to || ''
   const panelDetail = panelOrderId != null ? orderDetailsById.get(panelOrderId) ?? null : null
   const queueClientId = useMemo(() => {
     const selected = orders.find((order) => selectedIdSet.has(order.orderId) && order.clientId != null)
@@ -913,10 +908,7 @@ export default function OrdersView({
 
     const loadDailyStats = async () => {
       try {
-        const payload = await apiClient.fetchDailyStats({
-          dateFrom: dateRange.start,
-          dateTo: dateRange.end,
-        })
+        const payload = await apiClient.fetchDailyStats()
         if (!cancelled) setDailyStats(payload)
       } catch {
         if (!cancelled) setDailyStats(null)
@@ -932,7 +924,7 @@ export default function OrdersView({
       cancelled = true
       window.clearInterval(timer)
     }
-  }, [currentStatus, dateRange.start, dateRange.end])
+  }, [currentStatus])
 
   useEffect(() => {
     if (refreshVersion === 0) return
@@ -2801,9 +2793,7 @@ export default function OrdersView({
                 📅 <span style={{ color: 'var(--text2)' }}>{dailyStatsFromLabel}</span>
                 <span style={{ margin: '0 4px' }}>→</span>
                 <span style={{ color: 'var(--text2)' }}>{dailyStatsToLabel}</span>
-                {!dailyStatsUsesDateFilter ? (
-                  <span style={{ marginLeft: 4, color: 'var(--text3)' }}>(shifts at 6 PM)</span>
-                ) : null}
+                <span style={{ marginLeft: 4, color: 'var(--text3)' }}>(shifts at 6 PM)</span>
               </div>
               <div style={{ width: 1, height: 28, background: 'var(--border2)', flexShrink: 0 }} />
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>

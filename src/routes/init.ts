@@ -6,6 +6,7 @@ import { locations } from '../db/schema/locations';
 import { packages } from '../db/schema/packages';
 import { ssRequest } from '../lib/shipstation';
 import type { CarriersResponse } from '../lib/shipstation/types';
+import { EXCLUDED_STORE_IDS, EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
 
 const app = new Hono();
 
@@ -46,7 +47,8 @@ app.get('/init-data', async (c) => {
 //   3. A non-voided shipment already exists for the order (PrepShip or
 //      ShipStation created a label — the order is effectively shipped even
 //      if ShipStation's status hasn't caught up yet)
-// Also excludes is_test clients + hardcoded 'api shipments' client.
+// Also excludes the same hardcoded store IDs as v2, plus the hidden
+// 'api shipments' client bucket. Test clients remain visible like v2.
 // NO date cutoff — v2 counts ALL awaiting regardless of age. Stale orders
 // that never transitioned are a real operational signal, not noise.
 app.get('/counts', async (c) => {
@@ -62,6 +64,7 @@ app.get('/counts', async (c) => {
       (
         select count(*)::int from orders o
         where o.order_status = 'awaiting_shipment'
+          and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
           and coalesce(o.externally_shipped, false) = false
           and coalesce((o.raw->>'externallyFulfilled')::boolean, false) = false
           and not exists (
@@ -71,34 +74,37 @@ app.get('/counts', async (c) => {
           and not exists (
             select 1 from clients c
             where c.id = o.client_id
-              and (c.is_test = true or lower(c.name) = 'api shipments')
+              and lower(c.name) = 'api shipments'
           )
       ) as awaiting,
       (
         select count(*)::int from orders o
         where o.order_status = 'shipped'
+          and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
           and not exists (
             select 1 from clients c
             where c.id = o.client_id
-              and (c.is_test = true or lower(c.name) = 'api shipments')
+              and lower(c.name) = 'api shipments'
           )
       ) as shipped,
       (
         select count(*)::int from orders o
         where o.order_status = 'cancelled'
+          and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
           and not exists (
             select 1 from clients c
             where c.id = o.client_id
-              and (c.is_test = true or lower(c.name) = 'api shipments')
+              and lower(c.name) = 'api shipments'
           )
       ) as cancelled,
       (
         select count(*)::int from orders o
         where o.order_status = 'on_hold'
+          and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
           and not exists (
             select 1 from clients c
             where c.id = o.client_id
-              and (c.is_test = true or lower(c.name) = 'api shipments')
+              and lower(c.name) = 'api shipments'
           )
       ) as on_hold,
       (select count(*)::int from print_queue_orders where status = 'queued') as queue,
@@ -142,6 +148,7 @@ app.get('/stores', async (c) => {
     if (!cli.active) continue;
     const ids = Array.isArray(cli.storeIds) ? (cli.storeIds as number[]) : [];
     for (const sid of ids) {
+      if (EXCLUDED_STORE_IDS.includes(sid as (typeof EXCLUDED_STORE_IDS)[number])) continue;
       stores.push({ storeId: sid, clientId: cli.id, clientName: cli.name, active: true });
     }
   }

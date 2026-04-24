@@ -6,6 +6,7 @@ import { db } from '../db/client';
 import { clients } from '../db/schema/clients';
 import { orders } from '../db/schema/orders';
 import { ssV1Request } from '../lib/shipstation/v1-client';
+import { EXCLUDED_STORE_IDS_SQL, isExcludedStoreId } from '../config/prepship';
 
 const app = new Hono();
 
@@ -85,7 +86,7 @@ app.post(
       .where(eq(clients.id, id))
       .limit(1);
     if (!client) return c.json({ error: 'Client not found' }, 404);
-    const storeIds = client.storeIds ?? [];
+    const storeIds = (client.storeIds ?? []).filter((storeId) => !isExcludedStoreId(storeId));
     if (!storeIds.length) {
       return c.json({ updated: 0, message: 'Client has no storeIds configured' });
     }
@@ -137,6 +138,7 @@ app.post('/sync-stores', async (c) => {
   }
 
   for (const s of stores) {
+    if (isExcludedStoreId(s.storeId)) continue;
     const existing = byStoreId.get(s.storeId);
     const fields = {
       name: s.storeName || s.companyName || `Store ${s.storeId}`,
@@ -193,6 +195,7 @@ app.get(
       select o.client_id, o.order_status, count(*)::int as count
       from orders o
       where o.client_id is not null
+        and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
         ${dateFilter}
         and not (
           o.order_status = 'awaiting_shipment'
@@ -251,6 +254,7 @@ app.get('/unassigned-orphans', async (c) => {
     where o.client_id is null
       and o.store_id is not null
       and c.id is null
+      and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
     group by o.store_id
     order by count desc
   `);

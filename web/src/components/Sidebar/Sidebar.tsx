@@ -17,8 +17,6 @@ interface SidebarProps {
   onSearch?: (query: string) => void
   onSelectStore?: (storeId: number | null) => void
   activeStore?: number | null
-  dateStart?: string
-  dateEnd?: string
 }
 
 const STATUS_LABELS: Record<SidebarOrderStatus, string> = {
@@ -48,8 +46,6 @@ export default function Sidebar({
   onSearch,
   onSelectStore,
   activeStore,
-  dateStart,
-  dateEnd,
 }: SidebarProps) {
   const [expandedSections, setExpandedSections] = useState<Set<SidebarOrderStatus>>(new Set(['awaiting_shipment']))
   const [counts, setCounts] = useState<InitCountsDto | null>(null)
@@ -58,7 +54,7 @@ export default function Sidebar({
   useEffect(() => {
     const loadCounts = async () => {
       try {
-        setCounts(await apiClient.fetchCounts({ dateStart, dateEnd }))
+        setCounts(await apiClient.fetchCounts())
       } catch (error) {
         console.error('Failed to fetch sidebar counts:', error)
       }
@@ -83,7 +79,7 @@ export default function Sidebar({
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', onVisible)
     }
-  }, [dateStart, dateEnd])
+  }, [])
 
   const sidebarSections = useMemo(() => buildSidebarSections(stores, counts), [stores, counts])
 

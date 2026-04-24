@@ -14,6 +14,7 @@ import {
   normalizeOrderBestRateDto,
   normalizeOrderSelectedRateDto,
 } from '../services/order-rate-dto';
+import { EXCLUDED_STORE_IDS, EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
 
 const app = new Hono();
 
@@ -82,23 +83,52 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     .split(',')
     .map((s) => Number.parseInt(s.trim(), 10))
     .filter((n) => Number.isFinite(n) && n > 0);
-  // Always add isTest clients to the exclude set so sandbox orders never
-  // appear in the main orders table (unless explicitly requested by clientId,
-  // which is the one legit way to view them — e.g. from the Testing sidebar).
-  if (q.clientId === undefined) {
-    const testClientRows = await db.execute<{ id: number }>(
-      sql`select id from clients where is_test = true`
-    );
-    for (const r of testClientRows) {
-      if (!excludeIds.includes(r.id)) excludeIds.push(r.id);
-    }
+  // v2 parity: do NOT auto-exclude is_test clients. v2 shows them.
+  // The `excludeClientId` query-string is the caller's explicit opt-in to hide
+  // specific clients (used by the v2 UI when a user has toggled them off in
+  // Settings). Silent server-side filtering caused real clients flagged
+  // is_test=true to disappear from the Awaiting view.
+  // If a future UI wants "hide test" as a toggle, it should pass excludeClientId
+  // itself rather than the server guessing.
+
+  // Bucket-aware status filter (v2 parity).
+  // In v2 an order belongs to the "awaiting_shipment" bucket iff:
+  //   orderStatus = 'awaiting_shipment'
+  //   AND NOT externally_shipped
+  //   AND raw.externallyFulfilled != 1
+  //   AND no PrepShip shipment (label) exists yet
+  // It moves to the "shipped" bucket when EITHER orderStatus = 'shipped' OR a
+  // label exists (even before ShipStation has caught up).
+  // See apps/api/src/modules/orders/data/sqlite-order-repository.ts:75-81 in v2.
+  const hasLabelSubquery = sql`EXISTS (
+    SELECT 1 FROM ${shipments} s
+    WHERE s.order_id = ${orders.id}
+      AND COALESCE(s.voided, false) = false
+  )`;
+
+  let statusPredicate: ReturnType<typeof sql> | undefined;
+  if (q.status === 'awaiting_shipment') {
+    statusPredicate = sql`
+      ${orders.orderStatus} = 'awaiting_shipment'
+      AND ${orders.externallyShipped} = false
+      AND COALESCE((${orders.raw} ->> 'externallyFulfilled')::boolean, false) = false
+      AND NOT ${hasLabelSubquery}
+    `;
+  } else if (q.status === 'shipped') {
+    statusPredicate = sql`(
+      ${orders.orderStatus} = 'shipped'
+      OR (${orders.orderStatus} = 'awaiting_shipment' AND ${hasLabelSubquery})
+    )`;
+  } else if (q.status) {
+    statusPredicate = sql`${orders.orderStatus} = ${q.status}`;
   }
 
   const where = and(
     ...[
-      q.status ? eq(orders.orderStatus, q.status) : undefined,
+      statusPredicate,
       q.clientId !== undefined ? eq(orders.clientId, q.clientId) : undefined,
       q.storeId !== undefined ? eq(orders.storeId, q.storeId) : undefined,
+      notInArray(orders.storeId, [...EXCLUDED_STORE_IDS]),
       excludeIds.length > 0 && q.clientId === undefined
         ? notInArray(orders.clientId, excludeIds)
         : undefined,
@@ -114,31 +144,23 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     ].filter(<T>(x: T | undefined): x is T => x !== undefined)
   );
 
-  // Dedupe by orderNumber: keep the row with the highest id (most recent
-  // sync wins). ShipStation occasionally syncs the same order_number twice
-  // (separate stores, manual re-sync, etc.) — collapse to one row.
-  // Using a CTE so pagination + count stay accurate against the deduped set.
-  const dedupedIdsSubquery = sql`(
-    SELECT id FROM (
-      SELECT id, ROW_NUMBER() OVER (
-        PARTITION BY order_number ORDER BY id DESC
-      ) AS rn
-      FROM orders
-      WHERE ${where ?? sql`true`}
-    ) ranked
-    WHERE ranked.rn = 1
-  )`;
-
+  // No ROW_NUMBER() dedup: orders.external_order_id is already UNIQUE, so
+  // ShipStation's orderId is the true key. Two rows with the same order_number
+  // are legitimately distinct (different store / orderId) — v2 never collapses
+  // by order_number and neither should we.
   const [joined, countRows] = await Promise.all([
     db
       .select({ order: orders, overrides: orderOverrides })
       .from(orders)
       .leftJoin(orderOverrides, eq(orderOverrides.orderId, orders.id))
-      .where(and(where, sql`${orders.id} IN ${dedupedIdsSubquery}`))
+      .where(where)
       .orderBy(desc(orders.orderDate))
       .limit(q.pageSize)
       .offset(offsetOf(q)),
-    db.execute<{ count: number }>(sql`SELECT COUNT(*)::int AS count FROM ${dedupedIdsSubquery} d`),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(orders)
+      .where(where),
   ]);
 
   const rows = joined.map((r) => ({ ...r.order, overrides: r.overrides }));
@@ -178,6 +200,7 @@ app.get(
       select distinct o.id, o.order_number
       from orders o, jsonb_array_elements(o.items) item
       where item ? 'sku' and item->>'sku' = ${sku}
+        and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
         ${qty !== undefined ? sql`and coalesce((item->>'quantity')::int, 1) >= ${qty}` : sql``}
         ${orderStatus ? sql`and o.order_status = ${orderStatus}` : sql``}
         ${storeId !== undefined ? sql`and o.store_id = ${storeId}` : sql``}
@@ -212,6 +235,7 @@ app.get(
       from orders
       where order_date >= ${fromIso}::timestamptz
         and order_date <= ${toIso}::timestamptz
+        and store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
         and (${status}::text is null or order_status = ${status}::text)
       group by store_id
       order by count desc
@@ -231,13 +255,14 @@ app.get(
 // window across non-working days so the strip still reflects the
 // pending workload over a weekend.
 function computeShiftWindow(now = new Date()): { from: Date; to: Date } {
-  // All boundaries in UTC to match v2's server-local Date constructor.
-  const y = now.getUTCFullYear();
-  const m = now.getUTCMonth();
-  const d = now.getUTCDate();
-  const hr = now.getUTCHours();
-  const dow = now.getUTCDay(); // 0=Sun .. 6=Sat
-  const todayNoon = new Date(Date.UTC(y, m, d, 12, 0, 0));
+  const phtOffsetMs = 8 * 60 * 60 * 1000;
+  const local = new Date(now.getTime() + phtOffsetMs);
+  const y = local.getUTCFullYear();
+  const m = local.getUTCMonth();
+  const d = local.getUTCDate();
+  const hr = local.getUTCHours();
+  const dow = local.getUTCDay(); // 0=Sun .. 6=Sat
+  const todayNoon = new Date(Date.UTC(y, m, d, 12, 0, 0) - phtOffsetMs);
   const isPm = hr >= 18;
   const dayMs = 24 * 60 * 60 * 1000;
 
@@ -286,7 +311,7 @@ function computeShiftWindow(now = new Date()): { from: Date; to: Date } {
 // reads correctly on a UTC Render host.
 function formatPtLabel(d: Date): string {
   const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/Los_Angeles',
+    timeZone: 'Asia/Manila',
     month: 'short',
     day: 'numeric',
     hour: 'numeric',
@@ -332,14 +357,6 @@ app.get(
       .split(',')
       .map((s) => Number.parseInt(s.trim(), 10))
       .filter((n) => Number.isFinite(n) && n > 0);
-    // Always union in isTest client IDs server-side so sandbox orders never
-    // appear in the strip even if the frontend forgot to pass them.
-    const testClientRows = await db.execute<{ id: number }>(
-      sql`select id from clients where is_test = true`
-    );
-    for (const r of testClientRows) {
-      if (!excludeIds.includes(r.id)) excludeIds.push(r.id);
-    }
     // Keep orders with NULL client_id (not-yet-assigned) visible; only
     // filter the explicit hidden IDs. Embed IDs as raw SQL (safe — already
     // int-validated above) to dodge Drizzle's numeric-param serialization quirk.
@@ -361,6 +378,7 @@ app.get(
       from orders
       where order_date >= ${fromIso}::timestamptz
         and order_date <= ${toIso}::timestamptz
+        and store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
         ${excludeFilter}
       group by date_trunc('day', order_date)
       order by date_trunc('day', order_date) desc
@@ -376,6 +394,7 @@ app.get(
       from orders
       where order_date >= ${fromIso}::timestamptz
         and order_date <= ${toIso}::timestamptz
+        and store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
         ${excludeFilter}
     `);
     // v2 parity: needToShip is WINDOWED — it matches totalOrders minus
@@ -388,6 +407,7 @@ app.get(
       select count(*)::int as need_to_ship
       from orders o
       where o.order_status = 'awaiting_shipment'
+        and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
         and o.order_date >= ${fromIso}::timestamptz
         and o.order_date <= ${toIso}::timestamptz
         and coalesce(o.externally_shipped, false) = false
@@ -403,6 +423,7 @@ app.get(
       from orders
       where order_date > ${toIso}::timestamptz
         and order_status <> 'cancelled'
+        and store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
         ${excludeFilter}
     `);
     const w = windowedRows[0];
@@ -459,6 +480,7 @@ app.get('/picklist', zValidator('query', picklistQuery), async (c) => {
     left join clients c on c.id = o.client_id,
          jsonb_array_elements(o.items) item
     where (${status}::text is null or o.order_status = ${status}::text)
+      and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
       and (${cid}::int is null or o.client_id = ${cid}::int)
       and (${sid}::int is null or o.store_id = ${sid}::int)
       and o.order_date >= ${fromIso}::timestamptz
@@ -844,6 +866,7 @@ app.get('/export', zValidator('query', exportQuery), async (c) => {
     ...[
       q.status ? eq(orders.orderStatus, q.status) : undefined,
       q.clientId !== undefined ? eq(orders.clientId, q.clientId) : undefined,
+      notInArray(orders.storeId, [...EXCLUDED_STORE_IDS]),
       q.dateFrom ? gte(orders.orderDate, new Date(q.dateFrom)) : undefined,
       q.dateTo ? lte(orders.orderDate, new Date(q.dateTo)) : undefined,
       testExcludeFilter,

@@ -15,7 +15,6 @@ import SettingsView from './components/Views/SettingsView'
 import BillingView from './components/Views/BillingView'
 import ManifestsView from './components/Views/ManifestsView'
 import { formatSyncPill } from './components/Views/orders-parity'
-import { getOrdersDateRange } from './components/Views/orders-view-filters'
 
 type ViewType = 'orders' | 'inventory' | 'locations' | 'packages' | 'rates' | 'analysis' | 'settings' | 'billing' | 'manifests'
 type ContentView = Exclude<ViewType, 'manifests'>
@@ -110,16 +109,6 @@ export default function Home() {
     () => sidebarStores.find((store) => store.storeId === activeStore)?.storeName ?? null,
     [sidebarStores, activeStore],
   )
-
-  const sidebarDateRange = useMemo(() => {
-    if (dateFilter === '' || dateFilter === 'custom') return { start: undefined, end: undefined }
-    const range = getOrdersDateRange(dateFilter)
-    if (!range) return { start: undefined, end: undefined }
-    return {
-      start: range.start.toISOString().split('T')[0],
-      end: range.end.toISOString().split('T')[0],
-    }
-  }, [dateFilter])
 
   useEffect(() => {
     if (currentView === 'manifests') return
@@ -285,8 +274,6 @@ export default function Home() {
           setCurrentView('orders')
         }}
         activeStore={activeStore}
-        dateStart={sidebarDateRange.start}
-        dateEnd={sidebarDateRange.end}
       />
 
       <div className="main bg-bg-base text-text-primary">

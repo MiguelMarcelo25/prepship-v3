@@ -4,6 +4,7 @@ import { orders } from '../db/schema/orders';
 import { clients } from '../db/schema/clients';
 import { ssV1Request } from '../lib/shipstation/v1-client';
 import { getSettingNumber, setSetting } from './settings';
+import { isExcludedStoreId } from '../config/prepship';
 
 const LAST_SYNC_KEY = 'order_sync.last_modified_ms';
 const DEFAULT_LOOKBACK_MS = 1000 * 60 * 60 * 24 * 30; // 30 days on first run
@@ -96,7 +97,9 @@ async function buildStoreToClientMap(): Promise<{
   const byStore = new Map<number, number>();
   const testClients = new Set<number>();
   for (const c of rows) {
-    for (const sid of c.storeIds ?? []) byStore.set(sid, c.id);
+    for (const sid of c.storeIds ?? []) {
+      if (!isExcludedStoreId(sid)) byStore.set(sid, c.id);
+    }
     if (c.isTest) testClients.add(c.id);
   }
   return { byStore, testClients, newPairs: [] };
@@ -111,6 +114,7 @@ async function flushNewStorePairs(
   if (!pairs.length) return;
   const byClient = new Map<number, Set<number>>();
   for (const p of pairs) {
+    if (isExcludedStoreId(p.storeId)) continue;
     if (!byClient.has(p.clientId)) byClient.set(p.clientId, new Set());
     byClient.get(p.clientId)!.add(p.storeId);
   }
@@ -155,6 +159,7 @@ async function upsertOrdersBatch(
 
   for (const o of ordersIn) {
     const storeId = o.advancedOptions?.storeId ?? null;
+    if (isExcludedStoreId(storeId)) continue;
     let clientId =
       storeId !== null ? storeToClient.byStore.get(storeId) ?? null : null;
     if (clientId === null && fallbackClientId !== null) {

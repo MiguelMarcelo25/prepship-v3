@@ -63,10 +63,9 @@ function isHiddenClient(
   if (!c) return false;
   if (c.isTest === true) {
     if (typeof c.id === 'number') {
-      HIDDEN_CLIENT_IDS.add(c.id);
       TEST_CLIENT_IDS.add(c.id);
     }
-    return true;
+    return false;
   }
   const name = (c.name ?? '').trim().toLowerCase();
   if (HIDDEN_CLIENT_NAMES.has(name)) {
@@ -396,11 +395,9 @@ export const apiClient = {
           if (x > 0) byStatusStore.push({ orderStatus: 'cancelled', storeId: cid, cnt: x });
           // Exclude test clients from the rolled-up status badges so
           // "Awaiting Shipment · 23" stays a real-work number.
-          if (!isTestRow) {
-            awaitingTotal += a;
-            shippedTotal += s;
-            cancelledTotal += x;
-          }
+          awaitingTotal += a;
+          shippedTotal += s;
+          cancelledTotal += x;
         }
 
         // Orders with clientId=null (unassigned) aren't in /clients/order-stats
