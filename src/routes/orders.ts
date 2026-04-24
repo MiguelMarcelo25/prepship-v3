@@ -241,7 +241,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         carrier_code,
         service_code,
         ship_date,
-        created_date,
+        create_date,
         label_created_at,
         cost,
         label_cost,
@@ -270,7 +270,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           carrierCode: ship.carrier_code,
           serviceCode: ship.service_code,
           shipDate: ship.ship_date,
-          createdAt: ship.label_created_at ?? ship.created_date,
+          createdAt: ship.label_created_at ?? ship.create_date,
           cost: labelCost != null ? Number(labelCost) : null,
           labelUrl: ship.label_url,
           shippingProviderId: ship.provider_account_id,
@@ -312,7 +312,7 @@ type LatestShipmentRow = {
   carrier_code: string | null;
   service_code: string | null;
   ship_date: string | null;
-  created_date: string | null;
+  create_date: string | null;
   label_created_at: string | null;
   cost: string | null;
   label_cost: string | null;
