@@ -258,8 +258,16 @@ function formatDateTime(value: string | null | undefined) {
   if (!value) return '—'
   const parsed = new Date(value)
   if (Number.isNaN(parsed.getTime())) return '—'
-  const date = parsed.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' })
-  const time = parsed.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+  // v2 parity: order_date is a naive ShipStation wall-clock string (the DR
+  // Prepper SS account runs in Pacific Time). v2 stored the raw string as
+  // TEXT so any browser displayed the original clock face unchanged. v4
+  // stores it as timestamptz with the naive value stamped Z, so we render
+  // in UTC here to reproduce that same clock face regardless of the
+  // viewer's local zone. Without this, an Asia-Pacific viewer sees times
+  // shifted by 7-8 hours.
+  const opts = { timeZone: 'UTC' } as const
+  const date = parsed.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit', ...opts })
+  const time = parsed.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, ...opts })
   return `${date} ${time}`
 }
 
@@ -486,8 +494,6 @@ function normalizeShippingAccountName(value: unknown) {
   const label = toStringValue(value)
   if (!label) return null
   return label
-    .replace(/^UPS\s+by\s+SS\s*[-—]\s*/i, '')
-    .replace(/^UPS\s+by\s+ShipStation\s*[-—]\s*/i, '')
 }
 
 function getCarrierAccountDisplay(account: CarrierAccountDto | null | undefined) {
