@@ -457,17 +457,19 @@ export async function syncShipments(
   let ordersMarkedShipped = 0;
   if (shippedOrderIds.length) {
     const uniqueIds = Array.from(new Set(shippedOrderIds));
-    const result = await db.execute<{ updated: number }>(sql`
-      with u as (
-        update orders
-           set order_status = 'shipped', updated_at = now()
-         where id = any(${uniqueIds})
-           and order_status = 'awaiting_shipment'
-         returning 1
-      )
-      select count(*)::int as updated from u
-    `);
-    ordersMarkedShipped = result[0]?.updated ?? 0;
+    for (let i = 0; i < uniqueIds.length; i += 500) {
+      const rows = await db
+        .update(orders)
+        .set({ orderStatus: 'shipped', updatedAt: new Date() })
+        .where(
+          and(
+            inArray(orders.id, uniqueIds.slice(i, i + 500)),
+            eq(orders.orderStatus, 'awaiting_shipment')
+          )
+        )
+        .returning({ id: orders.id });
+      ordersMarkedShipped += rows.length;
+    }
   }
 
   const fetched = totalFetched;

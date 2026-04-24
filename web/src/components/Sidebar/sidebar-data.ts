@@ -7,7 +7,7 @@ export interface SidebarStoreRow {
   storeId: number;
   name: string;
   cnt: number;
-  isTest: boolean;
+  isTest?: boolean;
 }
 
 export interface SidebarSection {
@@ -76,16 +76,7 @@ export function buildSidebarSections(
       });
     }
 
-    // Pin isTest clients to the bottom so real clients stay at the top of
-    // the list regardless of count. Fallback to the legacy name regex for
-    // clients that predate the is_test flag.
-    const TEST_NAME_PATTERN = /^\s*(test|testing|sandbox|qa)\b/i;
-    const isTestRow = (row: SidebarStoreRow) =>
-      row.isTest || TEST_NAME_PATTERN.test(row.name);
     mergedStores.sort((left, right) => {
-      const leftIsTest = isTestRow(left);
-      const rightIsTest = isTestRow(right);
-      if (leftIsTest !== rightIsTest) return leftIsTest ? 1 : -1;
       return (
         (globalTotals.get(right.storeId) ?? 0) - (globalTotals.get(left.storeId) ?? 0) ||
         left.name.localeCompare(right.name)

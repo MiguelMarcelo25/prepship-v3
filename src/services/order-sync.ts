@@ -1,4 +1,4 @@
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orders } from '../db/schema/orders';
 import { clients } from '../db/schema/clients';
@@ -261,19 +261,23 @@ async function updateExistingOrderStatusesBatch(
   // v2 parity: shipped/cancelled sync is a status catch-up for orders already
   // loaded as awaiting_shipment. It must not insert shipped-only rows or
   // rewrite the original order details/date.
-  const result = await db.execute<{ updated: number }>(sql`
-    with u as (
-      update orders
-         set order_status = ${orderStatus},
-             updated_at = now()
-       where external_order_id = any(${externalIds})
-         and order_status = 'awaiting_shipment'
-       returning 1
-    )
-    select count(*)::int as updated from u
-  `);
+  let updated = 0;
+  for (let i = 0; i < externalIds.length; i += 500) {
+    const chunk = externalIds.slice(i, i + 500);
+    const rows = await db
+      .update(orders)
+      .set({ orderStatus, updatedAt: new Date() })
+      .where(
+        and(
+          inArray(orders.externalOrderId, chunk),
+          eq(orders.orderStatus, 'awaiting_shipment')
+        )
+      )
+      .returning({ id: orders.id });
+    updated += rows.length;
+  }
 
-  return result[0]?.updated ?? 0;
+  return updated;
 }
 
 export type SyncResult = {

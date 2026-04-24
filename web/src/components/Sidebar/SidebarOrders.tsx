@@ -178,8 +178,6 @@ export function SidebarOrders({
   onSelectStatus,
   onSelectStore,
   filter = '',
-  dateStart,
-  dateEnd,
 }: SidebarOrdersProps) {
   const [counts, setCounts] = useState<InitCountsDto | null>(null)
   const [expanded, setExpanded] = useState<Set<SidebarOrderStatus>>(
@@ -187,10 +185,9 @@ export function SidebarOrders({
   )
 
   useEffect(() => {
-    const dateFilter = { dateStart, dateEnd }
     const load = async () => {
       try {
-        setCounts(await apiClient.fetchCounts(dateFilter))
+        setCounts(await apiClient.fetchCounts())
       } catch (error) {
         console.error('Failed to fetch sidebar counts:', error)
       }
@@ -198,7 +195,7 @@ export function SidebarOrders({
     void load()
     const id = window.setInterval(() => void load(), 30000)
     return () => window.clearInterval(id)
-  }, [dateStart, dateEnd])
+  }, [])
 
   const sections = useMemo(() => buildSidebarSections(stores, counts), [stores, counts])
 

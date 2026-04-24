@@ -12,9 +12,8 @@ const triggerBody = z
     sinceMs: z.number().int().nonnegative().optional(),
     pageSize: z.number().int().min(1).max(500).optional(),
     fullResync: z.boolean().optional(),
-    // v2's button sends { full: true }. Accept it as an alias so the UI
-    // can request a real full re-sync instead of silently falling back to
-    // incremental.
+    // v2's button sends { full: true } for legacy sync. Keep accepting it,
+    // but reserve full historical order backfills for explicit fullResync.
     full: z.boolean().optional(),
   })
   .optional()
@@ -22,8 +21,9 @@ const triggerBody = z
 
 app.post('/orders', zValidator('json', triggerBody), async (c) => {
   const body = c.req.valid('json') ?? {};
-  const fullSync = body.fullResync === true || body.full === true;
-  const sinceMs = fullSync
+  const fullResync = body.fullResync === true;
+  const legacyFull = body.full === true;
+  const sinceMs = fullResync
     ? 0
     : body.sinceMs !== undefined
       ? body.sinceMs
@@ -32,10 +32,10 @@ app.post('/orders', zValidator('json', triggerBody), async (c) => {
       : undefined;
   const result = await syncOrders({
     sinceMs,
-    awaitingSinceMs: fullSync ? 0 : sinceMs,
+    awaitingSinceMs: fullResync ? 0 : sinceMs,
     pageSize: body.pageSize,
   });
-  const shouldBackfillRates = fullSync || result.synced > 0;
+  const shouldBackfillRates = fullResync || legacyFull || result.synced > 0;
   const rateBackfillJob = shouldBackfillRates
     ? (() => {
         const job = startBackfillBestRates({ limit: 1000 });
