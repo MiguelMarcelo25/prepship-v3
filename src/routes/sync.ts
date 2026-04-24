@@ -22,7 +22,8 @@ const triggerBody = z
 
 app.post('/orders', zValidator('json', triggerBody), async (c) => {
   const body = c.req.valid('json') ?? {};
-  const sinceMs = body.fullResync
+  const fullSync = body.fullResync === true || body.full === true;
+  const sinceMs = fullSync
     ? 0
     : body.sinceMs !== undefined
       ? body.sinceMs
@@ -31,11 +32,10 @@ app.post('/orders', zValidator('json', triggerBody), async (c) => {
       : undefined;
   const result = await syncOrders({
     sinceMs,
-    awaitingSinceMs: body.full ? 0 : sinceMs,
-    skipStatusPasses: body.full === true && body.fullResync !== true,
+    awaitingSinceMs: fullSync ? 0 : sinceMs,
     pageSize: body.pageSize,
   });
-  const shouldBackfillRates = body.full === true || result.synced > 0;
+  const shouldBackfillRates = fullSync || result.synced > 0;
   const rateBackfillJob = shouldBackfillRates
     ? (() => {
         const job = startBackfillBestRates({ limit: 1000 });

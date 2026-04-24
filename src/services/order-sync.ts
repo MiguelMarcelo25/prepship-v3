@@ -83,6 +83,19 @@ function formatSSDate(ms: number): string {
   return new Date(ms).toISOString().replace('T', ' ').slice(0, 19);
 }
 
+function parseShipStationDate(value?: string): Date | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  // ShipStation V1 returns timestamps like "2026-04-23T21:35:42.0000000"
+  // with no timezone. Treat those as UTC so local dev and Render do not write
+  // different order_date values into the shared DB.
+  const hasZone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(trimmed);
+  const parsed = new Date(hasZone ? trimmed : `${trimmed}Z`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 function toNumericString(n?: number | null): string {
   return Number.isFinite(n as number) ? (n as number).toFixed(2) : '0';
 }
@@ -176,7 +189,7 @@ async function upsertOrdersBatch(
       externalOrderId: String(o.orderId),
       orderNumber: o.orderNumber,
       orderStatus: o.orderStatus,
-      orderDate: o.orderDate ? new Date(o.orderDate) : null,
+      orderDate: parseShipStationDate(o.orderDate),
       clientId,
       storeId,
       customerEmail: o.customerEmail ?? null,
@@ -230,6 +243,37 @@ async function upsertOrdersBatch(
     });
 
   return rows.length;
+}
+
+async function updateExistingOrderStatusesBatch(
+  ordersIn: SSOrder[],
+  orderStatus: 'shipped' | 'cancelled'
+): Promise<number> {
+  const externalIds = Array.from(
+    new Set(
+      ordersIn
+        .map((o) => (o.orderId == null ? null : String(o.orderId)))
+        .filter((v): v is string => Boolean(v))
+    )
+  );
+  if (!externalIds.length) return 0;
+
+  // v2 parity: shipped/cancelled sync is a status catch-up for orders already
+  // loaded as awaiting_shipment. It must not insert shipped-only rows or
+  // rewrite the original order details/date.
+  const result = await db.execute<{ updated: number }>(sql`
+    with u as (
+      update orders
+         set order_status = ${orderStatus},
+             updated_at = now()
+       where external_order_id = any(${externalIds})
+         and order_status = 'awaiting_shipment'
+       returning 1
+    )
+    select count(*)::int as updated from u
+  `);
+
+  return result[0]?.updated ?? 0;
 }
 
 export type SyncResult = {
@@ -310,6 +354,7 @@ async function fetchOrdersPage(
     sinceMs: number;
     pageSize: number;
     storeId?: number;
+    statusOnly?: boolean;
   },
 ): Promise<{ synced: number; pages: number }> {
   const sinceParam = formatSSDate(args.sinceMs);
@@ -335,11 +380,16 @@ async function fetchOrdersPage(
     });
 
     pages = res.pages;
-    total += await upsertOrdersBatch(
-      res.orders,
-      storeToClient,
-      account.ownerClientId,
-    );
+    total += args.statusOnly
+      ? await updateExistingOrderStatusesBatch(
+          res.orders,
+          args.orderStatus === 'cancelled' ? 'cancelled' : 'shipped'
+        )
+      : await upsertOrdersBatch(
+          res.orders,
+          storeToClient,
+          account.ownerClientId,
+        );
 
     if (!res.orders.length || page >= res.pages) break;
     page += 1;
@@ -402,6 +452,7 @@ async function syncOrdersForAccount(
         orderStatus: pass.orderStatus,
         sinceMs: pass.sinceMs,
         pageSize,
+        statusOnly: true,
       });
       total += result.synced;
       if (result.pages > maxPages) maxPages = result.pages;
