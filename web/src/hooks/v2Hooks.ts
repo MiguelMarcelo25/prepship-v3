@@ -191,10 +191,14 @@ export function useOrders(
   const isoFrom = toIsoStart(dateStart);
   const isoTo = toIsoEnd(dateEnd);
 
-  // v2 sidebar semantics: storeId is ShipStation's real storeId. Keep explicit
-  // clientId support for pages that filter by PrepShip client directly.
-  const effectiveClientId = clientId;
-  const effectiveStoreId = storeId;
+  // Test clients can appear in the sidebar without a real ShipStation store.
+  // /init/stores represents those rows with a negative synthetic store id
+  // (-clientId). Translate it back before querying orders, otherwise the
+  // backend receives storeId=-12 while the seeded test row has store_id=null.
+  const syntheticTestClientId =
+    typeof storeId === 'number' && storeId < 0 ? Math.abs(storeId) : undefined;
+  const effectiveClientId = clientId ?? syntheticTestClientId;
+  const effectiveStoreId = syntheticTestClientId != null ? undefined : storeId;
 
   // When no specific client is selected, exclude orders from hidden clients
   // (e.g. "Api Shipments") so the main table isn't buried under test data.
