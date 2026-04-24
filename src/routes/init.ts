@@ -36,11 +36,20 @@ app.get('/init-data', async (c) => {
 });
 
 // Quick counts for nav badges / status chips.
+// v2-parity (apps/api/src/modules/init/data/sqlite-init-repository.ts:70-85):
+// The awaiting count EXCLUDES orders that have been externally fulfilled via
+// one of three mechanisms (matches v2's NOT clauses exactly):
+//   1. `orders.externally_shipped = true` (set by users via /orders/:id/
+//      shipped-external — v2's equivalent is `order_local.external_shipped`)
+//   2. `raw.externallyFulfilled = true` (ShipStation marked it fulfilled
+//      elsewhere — e.g., Amazon MCF, Shopify fulfillment service)
+//   3. A non-voided shipment already exists for the order (PrepShip or
+//      ShipStation created a label — the order is effectively shipped even
+//      if ShipStation's status hasn't caught up yet)
+// Also excludes is_test clients + hardcoded 'api shipments' client.
+// NO date cutoff — v2 counts ALL awaiting regardless of age. Stale orders
+// that never transitioned are a real operational signal, not noise.
 app.get('/counts', async (c) => {
-  // v2-parity: sidebar top-level totals exclude hidden clients (Api
-  // Shipments), is_test clients (Test Orders), and stale awaitings
-  // (>30 days — matches v2's effective sync horizon). Shipped +
-  // cancelled keep their full history so the all-time badges stay big.
   const rows = await db.execute<{
     awaiting: number;
     shipped: number;
@@ -53,7 +62,12 @@ app.get('/counts', async (c) => {
       (
         select count(*)::int from orders o
         where o.order_status = 'awaiting_shipment'
-          and (o.order_date is null or o.order_date >= now() - interval '14 days')
+          and coalesce(o.externally_shipped, false) = false
+          and coalesce((o.raw->>'externallyFulfilled')::boolean, false) = false
+          and not exists (
+            select 1 from shipments s
+            where s.order_id = o.id and s.voided = false
+          )
           and not exists (
             select 1 from clients c
             where c.id = o.client_id

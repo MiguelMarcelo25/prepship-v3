@@ -1,4 +1,4 @@
-import { eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orders } from '../db/schema/orders';
 import { shipments } from '../db/schema/shipments';
@@ -166,16 +166,58 @@ async function upsertShipmentsBatch(pageShipments: SSShipment[]): Promise<{
     for (const c of cliRows) if (c.isTest) testClientSet.add(c.id);
   }
 
-  // 3. Existing shipments lookup
+  // 3. Existing shipments lookup — fetch existing id + providerAccountId +
+  // createDate so we can preserve them in updates (v2-parity: v2's ON CONFLICT
+  // uses COALESCE(excluded.providerAccountId, shipments.providerAccountId)
+  // which keeps the value set by the V2 enrichment pass instead of nulling
+  // it on every re-sync). Without preservation, each sync cycle clobbers
+  // downstream enrichments.
   const existingRows = labelIds.length
     ? await db
-        .select({ id: shipments.id, labelShipmentId: shipments.labelShipmentId })
+        .select({
+          id: shipments.id,
+          labelShipmentId: shipments.labelShipmentId,
+          providerAccountId: shipments.providerAccountId,
+          createDate: shipments.createDate,
+        })
         .from(shipments)
         .where(inArray(shipments.labelShipmentId, labelIds))
     : [];
-  const existingByLabel = new Map<number, number>();
+  const existingByLabel = new Map<
+    number,
+    { id: number; providerAccountId: number | null; createDate: Date | null }
+  >();
   for (const r of existingRows) {
-    if (r.labelShipmentId !== null) existingByLabel.set(r.labelShipmentId, r.id);
+    if (r.labelShipmentId !== null) {
+      existingByLabel.set(r.labelShipmentId, {
+        id: r.id,
+        providerAccountId: r.providerAccountId ?? null,
+        createDate: r.createDate ?? null,
+      });
+    }
+  }
+
+  // 4. v2-parity: find orders that already have a non-voided PrepShip-created
+  // shipment (source IN 'prepship','prepship_v2','test_offline'). v2 skips
+  // SS-sourced shipments for these orders entirely to avoid duplicate rows
+  // (the local PrepShip label is authoritative). v4 was inserting both,
+  // creating duplicates. Source: apps/api/src/modules/sync/order-status-sync.ts:207-216.
+  const orderIdsForCheck = orderRows.map((o) => o.id);
+  const prepshipOrderIds = new Set<number>();
+  if (orderIdsForCheck.length) {
+    const prepshipRows = await db
+      .select({ orderId: shipments.orderId })
+      .from(shipments)
+      .where(
+        and(
+          inArray(shipments.orderId, orderIdsForCheck),
+          eq(shipments.voided, false),
+          inArray(shipments.source, ['prepship', 'prepship_v2', 'test_offline'])
+        )
+      );
+    for (const r of prepshipRows) {
+      if (r.orderId !== null) prepshipOrderIds.add(r.orderId);
+    }
   }
 
   // Build insert / update batches
@@ -189,17 +231,34 @@ async function upsertShipmentsBatch(pageShipments: SSShipment[]): Promise<{
     // Test-client guard: skip entirely if matched order's client is isTest
     if (ord?.clientId && testClientSet.has(ord.clientId)) continue;
 
-    if (ord) {
-      matched += 1;
-      if (ord.status === 'awaiting_shipment') shippedOrderIds.push(ord.id);
-    }
+    // v2-parity PrepShip guard: if the order already has a non-voided
+    // PrepShip label, the SS-sourced shipment is a duplicate — skip it.
+    if (ord && prepshipOrderIds.has(ord.id)) continue;
+
+    if (ord) matched += 1;
 
     const values = shipmentValues(s, ord?.id ?? null, ord?.clientId ?? null);
-    const existingId = existingByLabel.get(s.shipmentId);
-    if (existingId !== undefined) {
-      toUpdate.push({ id: existingId, values });
+    const existing = existingByLabel.get(s.shipmentId);
+    if (existing !== undefined) {
+      // v2-parity preservation: keep existing providerAccountId/createDate
+      // when the SS payload doesn't provide them (COALESCE behavior).
+      if (values.providerAccountId == null && existing.providerAccountId != null) {
+        values.providerAccountId = existing.providerAccountId;
+      }
+      if (values.createDate == null && existing.createDate != null) {
+        values.createDate = existing.createDate;
+      }
+      toUpdate.push({ id: existing.id, values });
     } else {
       toInsert.push(values);
+    }
+
+    // v2-parity: collect shippedOrderIds ONLY for rows that will be
+    // upserted (not skipped). Collected here (after all skips resolved)
+    // so the outer order-status flip doesn't mark orders shipped when
+    // we dropped their corresponding shipment row.
+    if (ord && ord.status === 'awaiting_shipment') {
+      shippedOrderIds.push(ord.id);
     }
   }
 

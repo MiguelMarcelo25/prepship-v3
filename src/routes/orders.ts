@@ -380,13 +380,22 @@ app.get(
     `);
     // v2 parity: needToShip is WINDOWED — it matches totalOrders minus
     // shipped/cancelled inside the same shift window, not the all-time
-    // awaiting backlog. That's the number v2's "5 Need to Ship" reflects.
+    // awaiting backlog. Excludes externally-fulfilled orders (externally_shipped
+    // flag OR raw.externallyFulfilled) AND orders that already have a
+    // non-voided shipment (matches v2's three NOT clauses in
+    // sqlite-init-repository.ts).
     const backlogRows = await db.execute<{ need_to_ship: number }>(sql`
       select count(*)::int as need_to_ship
-      from orders
-      where order_status = 'awaiting_shipment'
-        and order_date >= ${fromIso}::timestamptz
-        and order_date <= ${toIso}::timestamptz
+      from orders o
+      where o.order_status = 'awaiting_shipment'
+        and o.order_date >= ${fromIso}::timestamptz
+        and o.order_date <= ${toIso}::timestamptz
+        and coalesce(o.externally_shipped, false) = false
+        and coalesce((o.raw->>'externallyFulfilled')::boolean, false) = false
+        and not exists (
+          select 1 from shipments s
+          where s.order_id = o.id and s.voided = false
+        )
         ${excludeFilter}
     `);
     const upcomingRows = await db.execute<{ upcoming_orders: number }>(sql`

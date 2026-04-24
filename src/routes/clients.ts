@@ -165,26 +165,31 @@ app.post('/sync-stores', async (c) => {
 });
 
 // Per-client order counts grouped by status (one row per client).
-// v2-parity: stale awaiting orders (>30 days old) don't count against the
-// "awaiting" badge — matches v2's natural behavior where sync uses a
-// ~30-day modifyDateStart window so stale rows never land in the DB.
-// Shipped + cancelled keep their full historical count (what the user
-// expects from the all-time 'Shipped · 33,625' badge).
+// v2-parity (sqlite-init-repository.ts:87-102): awaiting count excludes
+// orders that are externally fulfilled (externally_shipped flag OR
+// raw.externallyFulfilled) OR already have a non-voided shipment. NO
+// date cutoff — v2 counts ALL awaiting regardless of age.
 app.get('/order-stats', async (c) => {
   const rows = await db.execute<{
     client_id: number;
     order_status: string;
     count: number;
   }>(sql`
-    select client_id, order_status, count(*)::int as count
-    from orders
-    where client_id is not null
-      and (
-        order_status <> 'awaiting_shipment'
-        or order_date is null
-        or order_date >= now() - interval '14 days'
+    select o.client_id, o.order_status, count(*)::int as count
+    from orders o
+    where o.client_id is not null
+      and not (
+        o.order_status = 'awaiting_shipment'
+        and (
+          coalesce(o.externally_shipped, false) = true
+          or coalesce((o.raw->>'externallyFulfilled')::boolean, false) = true
+          or exists (
+            select 1 from shipments s
+            where s.order_id = o.id and s.voided = false
+          )
+        )
       )
-    group by client_id, order_status
+    group by o.client_id, o.order_status
   `);
 
   const byClient = new Map<
