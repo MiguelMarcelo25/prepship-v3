@@ -33,15 +33,22 @@ app.get('/sync/status', async (c) => {
   const [rateCount] = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(rateCache);
+  const lastSync =
+    status.lastSyncedAt && Number.isFinite(Date.parse(status.lastSyncedAt))
+      ? Date.parse(status.lastSyncedAt)
+      : null;
   return c.json({
     // v4 native fields
     lastSyncedAt: status.lastSyncedAt,
     orderCount: status.orderCount,
     // v2 LegacySyncStatusDto parity fields
-    status: 'idle' as 'idle' | 'running' | 'error',
-    mode: 'incremental' as 'incremental' | 'full',
+    status: lastSync ? 'done' : 'idle',
+    mode: lastSync ? 'incremental' : 'idle',
     error: null as string | null,
     page: 0,
+    total: 0,
+    count: 0,
+    lastSync,
     ratesCached: rateCount?.count ?? 0,
     ratePrefetchRunning: false,
     // Back-compat alias: some v2 callers read `lastSyncAt` (no "ed").

@@ -598,7 +598,10 @@ export const apiClient = {
     return safe(
       'triggerLegacySync',
       () =>
-        api.post<any>('/sync/orders', mode === 'full' ? { full: true } : {}),
+        api.post<any>(
+          '/sync/orders',
+          mode === 'full' ? { full: true, fullResync: true } : {}
+        ),
       { queued: false }
     );
   },
