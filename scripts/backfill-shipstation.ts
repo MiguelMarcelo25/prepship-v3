@@ -13,19 +13,20 @@
  * from .env at the repo root.
  */
 import 'dotenv/config';
-import { sql as rawSql } from '../src/db/client';
-import { db, sql } from '../src/db/client';
-import { orders } from '../src/db/schema/orders';
-import { shipments } from '../src/db/schema/shipments';
+import { sql as drizzleSql } from 'drizzle-orm';
+import { db, sql as pgClient } from '../src/db/client';
 import { syncOrders } from '../src/services/order-sync';
 import { syncShipments } from '../src/services/shipment-sync';
-
-void rawSql; // keep the import — ensures the client is initialized
 
 function hh(ms: number) {
   const s = Math.floor(ms / 1000);
   const m = Math.floor(s / 60);
   return `${m}m${s % 60}s`;
+}
+
+async function scalar(query: ReturnType<typeof drizzleSql>): Promise<number> {
+  const rows = await db.execute<{ c: number }>(query);
+  return Number(rows[0]?.c ?? 0);
 }
 
 async function main() {
@@ -35,12 +36,8 @@ async function main() {
   console.log('└─────────────────────────────────────────────────────────────');
 
   // Baseline counts
-  const [{ c: ordersBefore }] = await db
-    .select({ c: sql<number>`count(*)::int` })
-    .from(orders);
-  const [{ c: shipmentsBefore }] = await db
-    .select({ c: sql<number>`count(*)::int` })
-    .from(shipments);
+  const ordersBefore = await scalar(drizzleSql`select count(*)::int as c from orders`);
+  const shipmentsBefore = await scalar(drizzleSql`select count(*)::int as c from shipments`);
   console.log(`Before  →  orders=${ordersBefore}  shipments=${shipmentsBefore}`);
 
   // ─── Pass 1 — orders ────────────────────────────────────────────────
@@ -68,18 +65,13 @@ async function main() {
   );
 
   // After counts
-  const [{ c: ordersAfter }] = await db
-    .select({ c: sql<number>`count(*)::int` })
-    .from(orders);
-  const [{ c: shipmentsAfter }] = await db
-    .select({ c: sql<number>`count(*)::int` })
-    .from(shipments);
-
-  const [{ c: shippedCount }] = await db.execute<{ c: number }>(
-    sql`select count(*)::int as c from orders where order_status = 'shipped'`,
+  const ordersAfter = await scalar(drizzleSql`select count(*)::int as c from orders`);
+  const shipmentsAfter = await scalar(drizzleSql`select count(*)::int as c from shipments`);
+  const shippedCount = await scalar(
+    drizzleSql`select count(*)::int as c from orders where order_status = 'shipped'`,
   );
-  const [{ c: awaitingCount }] = await db.execute<{ c: number }>(
-    sql`select count(*)::int as c from orders where order_status = 'awaiting_shipment'`,
+  const awaitingCount = await scalar(
+    drizzleSql`select count(*)::int as c from orders where order_status = 'awaiting_shipment'`,
   );
 
   console.log('\n┌─────────────────────────────────────────────────────────────');
@@ -94,11 +86,11 @@ async function main() {
 
 main()
   .then(async () => {
-    await rawSql.end({ timeout: 5 });
+    await pgClient.end({ timeout: 5 });
     process.exit(0);
   })
   .catch(async (err) => {
     console.error('\nBackfill FAILED:', err instanceof Error ? err.stack : err);
-    await rawSql.end({ timeout: 5 }).catch(() => {});
+    await pgClient.end({ timeout: 5 }).catch(() => {});
     process.exit(1);
   });
