@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, asc, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, notInArray, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import {
   billingConfig,
@@ -18,14 +18,20 @@ import {
 
 const app = new Hono();
 
+// v2 skips these synthetic/system clients from both the Config and Summary
+// grids (sqlite-billing-repository.ts listBillableClients / listSummary).
+const SYSTEM_CLIENT_NAMES = ['Manual Orders', 'Rate Browser', 'Api Shipments'];
+
 app.get('/config', async (c) => {
-  // v2 parity: shows EVERY client that has a billing config row, including
-  // test/sandbox/hidden clients. Matches v2's Billing Dashboard grid which
-  // lists IntegrationTest, TEST_CLIENT_998, TEST_DUAL_WRITE, Test Orders
-  // alongside the real ones.
+  // v2 parity: the Config grid is keyed on `clients`, not `billing_config`.
+  // Every active non-system client appears — clients without a billing_config
+  // row surface with defaults (pickPackFee: 0, pickPackMaxUnits: 1, etc.) so
+  // the user can fill them in. Previously v4 used INNER JOIN which silently
+  // dropped clients that had never been configured (TEST_CLIENT_998,
+  // TEST_DUAL_WRITE, TEST_SCHEMA3_DW_FULL in the screenshot).
   const rows = await db
     .select({
-      clientId: billingConfig.clientId,
+      clientId: clients.id,
       clientName: clients.name,
       pickPackFee: billingConfig.pickPackFee,
       pickPackMaxUnits: billingConfig.pickPackMaxUnits,
@@ -39,10 +45,32 @@ app.get('/config', async (c) => {
       createdAt: billingConfig.createdAt,
       updatedAt: billingConfig.updatedAt,
     })
-    .from(billingConfig)
-    .innerJoin(clients, eq(clients.id, billingConfig.clientId))
+    .from(clients)
+    .leftJoin(billingConfig, eq(billingConfig.clientId, clients.id))
+    .where(
+      and(
+        eq(clients.active, true),
+        notInArray(clients.name, SYSTEM_CLIENT_NAMES)
+      )
+    )
     .orderBy(asc(clients.name));
-  return c.json({ data: rows });
+
+  const data = rows.map((r) => ({
+    clientId: r.clientId,
+    clientName: r.clientName,
+    pickPackFee: r.pickPackFee ?? '0.00',
+    pickPackMaxUnits: r.pickPackMaxUnits ?? 1,
+    additionalUnitFee: r.additionalUnitFee ?? '0.00',
+    packageCostMarkup: r.packageCostMarkup ?? '0.00',
+    shippingMarkupPct: r.shippingMarkupPct ?? '0.00',
+    shippingMarkupFlat: r.shippingMarkupFlat ?? '0.00',
+    storageFeePerCuFt: r.storageFeePerCuFt ?? '0.0000',
+    billingMode: r.billingMode ?? 'per_shipment',
+    active: r.active ?? true,
+    createdAt: r.createdAt,
+    updatedAt: r.updatedAt,
+  }));
+  return c.json({ data });
 });
 
 const configBody = z.object({
@@ -156,7 +184,15 @@ app.get('/summary', zValidator('query', generateSchema), async (c) => {
     dateFrom: q.dateFrom!,
     dateTo: q.dateTo!,
   });
-  return c.json(summary);
+  // v2 parity: the primary consumer (v2 BillingView via v2-apiClient shim)
+  // reads `data: []` as a flat list with clientName + per-type totals.
+  // Keep `clients` + `grandTotal` around for back-compat with the old v4
+  // `pages/Billing.tsx` that still reads them.
+  return c.json({
+    data: summary.clients,
+    clients: summary.clients,
+    grandTotal: summary.grandTotal,
+  });
 });
 
 app.get('/details', zValidator('query', detailsSchema), async (c) => {

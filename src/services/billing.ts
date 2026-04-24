@@ -435,51 +435,100 @@ export async function generateLineItems(input: GenerateInput) {
   return { generated, skipped, message: `Generated ${generated} line items from ${ships.length} shipments.` };
 }
 
-export async function billingSummary(input: GenerateInput) {
-  const from = new Date(input.dateFrom);
-  const to = new Date(input.dateTo);
+export type BillingSummaryRow = {
+  clientId: number;
+  clientName: string;
+  pickPackTotal: number;
+  additionalTotal: number;
+  packageTotal: number;
+  shippingTotal: number;
+  storageTotal: number;
+  orderCount: number;
+  grandTotal: number;
+  // Back-compat fields for legacy callers of the old shape.
+  total: number;
+  count: number;
+  byType: Record<string, number>;
+};
 
-  const rows = await db
-    .select({
-      clientId: billingLineItems.clientId,
-      lineType: billingLineItems.lineType,
-      total: sql<string>`sum(${billingLineItems.totalCost})`,
-      count: sql<number>`count(*)::int`,
-    })
-    .from(billingLineItems)
-    .where(
-      and(
-        gte(billingLineItems.shipDate, from),
-        lte(billingLineItems.shipDate, to),
-        input.clientId !== undefined
-          ? eq(billingLineItems.clientId, input.clientId)
-          : undefined
-      )
-    )
-    .groupBy(billingLineItems.clientId, billingLineItems.lineType);
+export async function billingSummary(
+  input: GenerateInput
+): Promise<{ clients: BillingSummaryRow[]; grandTotal: number }> {
+  // v2-parity aggregation. Starts from `clients` with a LEFT JOIN to
+  // billing_line_items so every active, non-system client surfaces — even
+  // those with zero volume in the window (HUGRAB, KimlyParc, IntegrationTest,
+  // the TEST_* sandboxes). The previous version aggregated from
+  // billing_line_items alone, dropping zero-volume clients entirely and
+  // causing the Summary grid to look half-empty vs. v2.
+  //
+  // Totals are filtered SUMs per line_type; orderCount is a COUNT(DISTINCT
+  // order_id) on pick_pack lines only (one per order), matching v2's
+  // sqlite-billing-repository.ts listSummary query.
+  const rows = await db.execute<{
+    client_id: number;
+    client_name: string;
+    pickpack_total: string;
+    additional_total: string;
+    package_total: string;
+    shipping_total: string;
+    storage_total: string;
+    order_count: number;
+    grand_total: string;
+  }>(sql`
+    select
+      c.id as client_id,
+      c.name as client_name,
+      coalesce(sum(case when b.line_type = 'pick_pack' then b.total_cost else 0 end), 0)::text as pickpack_total,
+      coalesce(sum(case when b.line_type = 'additional_unit' then b.total_cost else 0 end), 0)::text as additional_total,
+      coalesce(sum(case when b.line_type = 'package_cost' then b.total_cost else 0 end), 0)::text as package_total,
+      coalesce(sum(case when b.line_type = 'shipping' then b.total_cost else 0 end), 0)::text as shipping_total,
+      coalesce(sum(case when b.line_type = 'storage' then b.total_cost else 0 end), 0)::text as storage_total,
+      count(distinct case when b.line_type = 'pick_pack' then b.order_id end)::int as order_count,
+      coalesce(sum(b.total_cost), 0)::text as grand_total
+    from clients c
+    left join billing_line_items b
+      on b.client_id = c.id
+      and b.ship_date >= ${input.dateFrom}::timestamptz
+      and b.ship_date <= ${input.dateTo}::timestamptz
+    where c.active = true
+      and c.name not in ('Manual Orders', 'Rate Browser', 'Api Shipments')
+      ${input.clientId !== undefined ? sql`and c.id = ${input.clientId}` : sql``}
+    group by c.id, c.name
+    order by c.name asc
+  `);
 
-  const byClient = new Map<
-    number,
-    { clientId: number; total: number; byType: Record<string, number>; count: number }
-  >();
-
-  for (const r of rows) {
-    const cur = byClient.get(r.clientId) ?? {
-      clientId: r.clientId,
-      total: 0,
-      byType: {},
-      count: 0,
+  const clientsOut: BillingSummaryRow[] = rows.map((r) => {
+    const pickPackTotal = toNum(r.pickpack_total);
+    const additionalTotal = toNum(r.additional_total);
+    const packageTotal = toNum(r.package_total);
+    const shippingTotal = toNum(r.shipping_total);
+    const storageTotal = toNum(r.storage_total);
+    const grandTotal = toNum(r.grand_total);
+    return {
+      clientId: r.client_id,
+      clientName: r.client_name,
+      pickPackTotal,
+      additionalTotal,
+      packageTotal,
+      shippingTotal,
+      storageTotal,
+      orderCount: Number(r.order_count ?? 0),
+      grandTotal,
+      total: grandTotal,
+      count: Number(r.order_count ?? 0),
+      byType: {
+        pick_pack: pickPackTotal,
+        additional_unit: additionalTotal,
+        package_cost: packageTotal,
+        shipping: shippingTotal,
+        storage: storageTotal,
+      },
     };
-    const amount = toNum(r.total);
-    cur.total += amount;
-    cur.byType[r.lineType] = (cur.byType[r.lineType] ?? 0) + amount;
-    cur.count += r.count;
-    byClient.set(r.clientId, cur);
-  }
+  });
 
   return {
-    clients: [...byClient.values()].sort((a, b) => b.total - a.total),
-    grandTotal: [...byClient.values()].reduce((sum, c) => sum + c.total, 0),
+    clients: clientsOut,
+    grandTotal: clientsOut.reduce((sum, c) => sum + c.grandTotal, 0),
   };
 }
 
