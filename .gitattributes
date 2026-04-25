@@ -1,0 +1,11 @@
+# Keep generated/audit parity artifacts out of source-oriented stats and reviews.
+drizzle/meta/*.json linguist-generated=true
+parity/*.jsonl linguist-generated=true
+parity/_*.md linguist-generated=true linguist-documentation=true
+parity/VERIFY_*.md linguist-generated=true linguist-documentation=true
+
+# These are useful project records, but they are not app source.
+AUDIT_*.md linguist-documentation=true
+COORDINATION.md linguist-documentation=true
+INVENTORY.md linguist-documentation=true
+PLAN.md linguist-documentation=true

@@ -6,3 +6,7 @@ dist/
 *.log
 .DS_Store
 .vercel
+.claude/settings.local.json
+undefined/
+cron-inventory.csv
+PARITY_PLAN_ORDER_LIST.md
