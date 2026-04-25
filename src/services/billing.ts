@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, isNotNull, lte, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray, lte, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import {
   billingConfig,
@@ -9,6 +9,7 @@ import { shipments } from '../db/schema/shipments';
 import { orders } from '../db/schema/orders';
 import { packages } from '../db/schema/packages';
 import { clients } from '../db/schema/clients';
+import { inventory } from '../db/schema/inventory';
 
 export type GenerateInput = {
   clientId?: number;
@@ -67,55 +68,103 @@ export async function generateLineItems(input: GenerateInput) {
 
   const configByClient = new Map(configs.map((c) => [c.clientId, c]));
 
-  const ships = await db
+  // Rebuild the requested billing period. v2's generator upserts existing
+  // rows for the window; deleting first keeps v4 from mixing old shipment-only
+  // rows with the corrected shipped-order rows below.
+  await db.delete(billingLineItems).where(
+    and(
+      gte(billingLineItems.shipDate, from),
+      lte(billingLineItems.shipDate, to),
+      input.clientId !== undefined
+        ? eq(billingLineItems.clientId, input.clientId)
+        : undefined
+    )
+  );
+
+  const clientRows = await db
+    .select({ id: clients.id, storeIds: clients.storeIds })
+    .from(clients);
+  const clientByStore = new Map<number, number>();
+  for (const c of clientRows) {
+    for (const storeId of c.storeIds ?? []) {
+      clientByStore.set(storeId, c.id);
+    }
+  }
+
+  const orderShipmentRows = await db
     .select({
-      id: shipments.id,
-      orderId: shipments.orderId,
-      orderNumber: shipments.orderNumber,
-      clientId: shipments.clientId,
+      shipmentId: shipments.id,
+      shipmentClientId: shipments.clientId,
       shipDate: shipments.shipDate,
       labelCost: shipments.labelCost,
       cost: shipments.cost,
-      voided: shipments.voided,
       selectedPid: shipments.selectedPid,
       selectedPackageId: shipments.selectedPackageId,
       dimsL: shipments.dimsL,
       dimsW: shipments.dimsW,
       dimsH: shipments.dimsH,
+      orderId: orders.id,
+      orderNumber: orders.orderNumber,
+      orderClientId: orders.clientId,
+      orderDate: orders.orderDate,
+      orderStoreId: orders.storeId,
+      orderItems: orders.items,
+      orderRaw: orders.raw,
     })
-    .from(shipments)
+    .from(orders)
+    .leftJoin(
+      shipments,
+      and(eq(shipments.orderId, orders.id), eq(shipments.voided, false))
+    )
     .where(
       and(
-        isNotNull(shipments.clientId),
-        isNotNull(shipments.shipDate),
-        gte(shipments.shipDate, from),
-        lte(shipments.shipDate, to),
-        eq(shipments.voided, false),
+        eq(orders.orderStatus, 'shipped'),
+        sql`coalesce(${shipments.shipDate}, ${orders.orderDate}) >= ${from}`,
+        sql`coalesce(${shipments.shipDate}, ${orders.orderDate}) <= ${to}`,
         input.clientId !== undefined
-          ? eq(shipments.clientId, input.clientId)
+          ? sql`coalesce(${shipments.clientId}, ${orders.clientId}) = ${input.clientId}`
           : undefined
       )
     );
 
-  // Pre-fetch order.items for every shipment in the window so the B1
-  // additional-units computation doesn't N+1 the DB. One SELECT, Map lookup.
-  const orderIds = [
-    ...new Set(
-      ships
-        .map((s) => s.orderId)
-        .filter((x): x is number => x !== null && x !== undefined)
-    ),
-  ];
-  const orderItemsRows = orderIds.length
-    ? await db
-        .select({ id: orders.id, items: orders.items })
-        .from(orders)
-        .where(inArray(orders.id, orderIds))
-    : [];
-  const orderItemsById = new Map<number, unknown[]>();
-  for (const r of orderItemsRows) {
-    orderItemsById.set(r.id, Array.isArray(r.items) ? r.items : []);
+  function rawStoreId(
+    raw: Record<string, unknown>,
+    orderStoreId: number | null
+  ): number | null {
+    if (orderStoreId !== null) return orderStoreId;
+    const advanced =
+      raw.advancedOptions && typeof raw.advancedOptions === 'object'
+        ? (raw.advancedOptions as Record<string, unknown>)
+        : {};
+    const rawStore = advanced.storeId ?? raw.storeId;
+    const n = Number(rawStore);
+    return Number.isFinite(n) ? n : null;
   }
+
+  const billableRows = orderShipmentRows
+    .map((row) => {
+      const storeId = rawStoreId(row.orderRaw ?? {}, row.orderStoreId ?? null);
+      const clientId =
+        row.shipmentClientId ??
+        row.orderClientId ??
+        (storeId !== null ? clientByStore.get(storeId) ?? null : null);
+      return {
+        id: row.shipmentId,
+        orderId: row.orderId,
+        orderNumber: row.orderNumber,
+        clientId,
+        shipDate: row.shipDate ?? row.orderDate,
+        labelCost: row.labelCost,
+        cost: row.cost,
+        selectedPid: row.selectedPid,
+        selectedPackageId: row.selectedPackageId,
+        dimsL: row.dimsL,
+        dimsW: row.dimsW,
+        dimsH: row.dimsH,
+        items: Array.isArray(row.orderItems) ? row.orderItems : [],
+      };
+    })
+    .filter((row) => row.shipDate !== null);
 
   // ─── B2 pre-fetch: packages + per-client package prices ──────────────────
   // Three lookup maps for the resolvePackageId resolver:
@@ -166,7 +215,42 @@ export async function generateLineItems(input: GenerateInput) {
     m.set(r.packageId, Number(r.price));
   }
 
+  const skuPackageRows = clientIdsInScope.length
+    ? await db
+        .select({
+          clientId: inventory.clientId,
+          sku: inventory.sku,
+          packageId: inventory.packageId,
+        })
+        .from(inventory)
+        .where(
+          and(
+            inArray(inventory.clientId, clientIdsInScope),
+            eq(inventory.active, true)
+          )
+        )
+    : [];
+  const packageByClientSku = new Map<string, number>();
+  for (const row of skuPackageRows) {
+    if (row.clientId === null || row.packageId === null) continue;
+    packageByClientSku.set(`${row.clientId}:${row.sku}`, row.packageId);
+  }
+
+  function packageIdFromItems(items: unknown[], clientId: number): number | null {
+    for (const it of items) {
+      if (!it || typeof it !== 'object') continue;
+      if ((it as { adjustment?: unknown }).adjustment === true) continue;
+      const sku = (it as { sku?: unknown }).sku;
+      if (typeof sku !== 'string' || !sku) continue;
+      const packageId = packageByClientSku.get(`${clientId}:${sku}`);
+      if (packageId != null && packagesById.has(packageId)) return packageId;
+    }
+    return null;
+  }
+
   function resolvePackageId(s: {
+    clientId: number;
+    items: unknown[];
     selectedPid: number | null;
     selectedPackageId: string | null;
     dimsL: number | null;
@@ -185,6 +269,8 @@ export async function generateLineItems(input: GenerateInput) {
       const byCode = packagesByCode.get(s.selectedPackageId);
       if (byCode) return byCode.id;
     }
+    const bySku = packageIdFromItems(s.items, s.clientId);
+    if (bySku != null) return bySku;
     // 3. Exact dims match (v2 makeDimsKey parity — unsorted, verbatim).
     if (s.dimsL != null && s.dimsW != null && s.dimsH != null) {
       const match = packagesByDims.get(dimsKey(s.dimsL, s.dimsW, s.dimsH));
@@ -196,7 +282,7 @@ export async function generateLineItems(input: GenerateInput) {
   let generated = 0;
   let skipped = 0;
 
-  // Collect ALL line-item rows across every shipment first, then run a
+  // Collect ALL line-item rows across every billable shipped order first, then run a
   // single batched INSERT at the end. Previous per-row insert + ON
   // CONFLICT DO NOTHING loop was the bottleneck (16K round-trips over a
   // 3,267-shipment generate). Batched upsert turns that into ~32
@@ -215,12 +301,13 @@ export async function generateLineItems(input: GenerateInput) {
   };
   const allRows: LineRow[] = [];
 
-  for (const s of ships) {
+  for (const s of billableRows) {
     if (s.clientId === null) {
       skipped += 1;
       continue;
     }
-    const cfg = configByClient.get(s.clientId);
+    const clientId = s.clientId;
+    const cfg = configByClient.get(clientId);
     if (!cfg) {
       skipped += 1;
       continue;
@@ -231,7 +318,7 @@ export async function generateLineItems(input: GenerateInput) {
     const pickPackFee = toNum(cfg.pickPackFee);
     if (pickPackFee > 0) {
       rows.push({
-        clientId: s.clientId,
+        clientId,
         orderId: s.orderId,
         orderNumber: s.orderNumber,
         shipmentId: s.id,
@@ -254,14 +341,13 @@ export async function generateLineItems(input: GenerateInput) {
       typeof cfg.pickPackMaxUnits === 'number' && cfg.pickPackMaxUnits > 0
         ? cfg.pickPackMaxUnits
         : PICK_PACK_MAX_UNITS_DEFAULT;
-    const items =
-      s.orderId !== null ? orderItemsById.get(s.orderId) ?? [] : [];
+    const items = Array.isArray(s.items) ? s.items : [];
     const totalUnits = totalUnitsFromItems(items);
     if (totalUnits > maxUnits && additionalUnitFee > 0) {
       const extraUnits = totalUnits - maxUnits;
       const extraCost = extraUnits * additionalUnitFee;
       rows.push({
-        clientId: s.clientId,
+        clientId,
         orderId: s.orderId,
         orderNumber: s.orderNumber,
         shipmentId: s.id,
@@ -285,7 +371,7 @@ export async function generateLineItems(input: GenerateInput) {
       const flat = toNum(cfg.shippingMarkupFlat);
       const shipCost = labelCost * (1 + pct / 100) + flat;
       rows.push({
-        clientId: s.clientId,
+        clientId,
         orderId: s.orderId,
         orderNumber: s.orderNumber,
         shipmentId: s.id,
@@ -303,16 +389,16 @@ export async function generateLineItems(input: GenerateInput) {
     // selectedPackageId → dims match), look up the client's price for it,
     // then emit a package_cost line. packageCostMarkup on the billing config
     // is applied as a percent on top of the base price.
-    const resolvedPkgId = resolvePackageId(s);
+    const resolvedPkgId = resolvePackageId({ ...s, clientId });
     if (resolvedPkgId != null) {
-      const basePrice = pricesByClient.get(s.clientId)?.get(resolvedPkgId);
+      const basePrice = pricesByClient.get(clientId)?.get(resolvedPkgId);
       if (basePrice != null && basePrice > 0) {
         const markupPct = toNum(cfg.packageCostMarkup);
         const effectivePrice = basePrice * (1 + markupPct / 100);
         const pkgName =
           packagesById.get(resolvedPkgId)?.name ?? `Box #${resolvedPkgId}`;
         rows.push({
-          clientId: s.clientId,
+          clientId,
           orderId: s.orderId,
           orderNumber: s.orderNumber,
           shipmentId: s.id,
@@ -432,7 +518,7 @@ export async function generateLineItems(input: GenerateInput) {
     }
   }
 
-  return { generated, skipped, message: `Generated ${generated} line items from ${ships.length} shipments.` };
+  return { generated, skipped, message: `Generated ${generated} line items from ${billableRows.length} shipped orders.` };
 }
 
 export type BillingSummaryRow = {
