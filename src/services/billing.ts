@@ -51,6 +51,8 @@ function totalUnitsFromItems(items: unknown[] | null | undefined): number {
 export async function generateLineItems(input: GenerateInput) {
   const from = new Date(input.dateFrom);
   const to = new Date(input.dateTo);
+  const fromIso = from.toISOString();
+  const toIso = to.toISOString();
 
   // v2 parity: generate for EVERY configured client, including test ones.
   // v2 bills test clients too (they appear in the Generate & Summary grid).
@@ -63,23 +65,16 @@ export async function generateLineItems(input: GenerateInput) {
         : eq(billingConfig.active, true)
     );
   if (!configs.length) {
-    return { generated: 0, skipped: 0, message: 'No billing configs found' };
+    return {
+      generated: 0,
+      count: 0,
+      total: 0,
+      skipped: 0,
+      message: 'No billing configs found',
+    };
   }
 
   const configByClient = new Map(configs.map((c) => [c.clientId, c]));
-
-  // Rebuild the requested billing period. v2's generator upserts existing
-  // rows for the window; deleting first keeps v4 from mixing old shipment-only
-  // rows with the corrected shipped-order rows below.
-  await db.delete(billingLineItems).where(
-    and(
-      gte(billingLineItems.shipDate, from),
-      lte(billingLineItems.shipDate, to),
-      input.clientId !== undefined
-        ? eq(billingLineItems.clientId, input.clientId)
-        : undefined
-    )
-  );
 
   const clientRows = await db
     .select({ id: clients.id, storeIds: clients.storeIds })
@@ -119,8 +114,8 @@ export async function generateLineItems(input: GenerateInput) {
     .where(
       and(
         eq(orders.orderStatus, 'shipped'),
-        sql`coalesce(${shipments.shipDate}, ${orders.orderDate}) >= ${from}`,
-        sql`coalesce(${shipments.shipDate}, ${orders.orderDate}) <= ${to}`,
+        sql`coalesce(${shipments.shipDate}, ${orders.orderDate}) >= ${fromIso}::timestamptz`,
+        sql`coalesce(${shipments.shipDate}, ${orders.orderDate}) <= ${toIso}::timestamptz`,
         input.clientId !== undefined
           ? sql`coalesce(${shipments.clientId}, ${orders.clientId}) = ${input.clientId}`
           : undefined
@@ -141,7 +136,23 @@ export async function generateLineItems(input: GenerateInput) {
     return Number.isFinite(n) ? n : null;
   }
 
-  const billableRows = orderShipmentRows
+  type BillableRow = {
+    id: number | null;
+    orderId: number | null;
+    orderNumber: string | null;
+    clientId: number | null;
+    shipDate: Date | null;
+    labelCost: string | null;
+    cost: string | null;
+    selectedPid: number | null;
+    selectedPackageId: string | null;
+    dimsL: number | null;
+    dimsW: number | null;
+    dimsH: number | null;
+    items: unknown[];
+  };
+
+  const billableRows: BillableRow[] = orderShipmentRows
     .map((row) => {
       const storeId = rawStoreId(row.orderRaw ?? {}, row.orderStoreId ?? null);
       const clientId =
@@ -165,6 +176,90 @@ export async function generateLineItems(input: GenerateInput) {
       };
     })
     .filter((row) => row.shipDate !== null);
+
+  const seenShipmentIds = new Set(
+    billableRows
+      .map((row) => row.id)
+      .filter((id): id is number => id !== null)
+  );
+  const seenOrderIds = new Set(billableRows.map((row) => row.orderId));
+
+  // Some historical ShipStation shipments in v4 do not have a local order row
+  // linked yet. v2 still bills those when the shipment itself has client/date
+  // data, so keep a shipment-based fallback to avoid dropping old invoices.
+  const shipmentFallbackRows = await db
+    .select({
+      id: shipments.id,
+      orderId: shipments.orderId,
+      orderNumber: shipments.orderNumber,
+      clientId: shipments.clientId,
+      shipDate: shipments.shipDate,
+      labelCost: shipments.labelCost,
+      cost: shipments.cost,
+      selectedPid: shipments.selectedPid,
+      selectedPackageId: shipments.selectedPackageId,
+      dimsL: shipments.dimsL,
+      dimsW: shipments.dimsW,
+      dimsH: shipments.dimsH,
+      orderItems: orders.items,
+    })
+    .from(shipments)
+    .leftJoin(orders, eq(orders.id, shipments.orderId))
+    .where(
+      and(
+        sql`${shipments.clientId} is not null`,
+        sql`${shipments.shipDate} is not null`,
+        sql`${shipments.shipDate} >= ${fromIso}::timestamptz`,
+        sql`${shipments.shipDate} <= ${toIso}::timestamptz`,
+        eq(shipments.voided, false),
+        input.clientId !== undefined
+          ? eq(shipments.clientId, input.clientId)
+          : undefined
+      )
+    );
+
+  for (const row of shipmentFallbackRows) {
+    if (seenShipmentIds.has(row.id)) continue;
+    if (row.orderId !== null && seenOrderIds.has(row.orderId)) continue;
+    billableRows.push({
+      id: row.id,
+      orderId: row.orderId,
+      orderNumber: row.orderNumber,
+      clientId: row.clientId,
+      shipDate: row.shipDate,
+      labelCost: row.labelCost,
+      cost: row.cost,
+      selectedPid: row.selectedPid,
+      selectedPackageId: row.selectedPackageId,
+      dimsL: row.dimsL,
+      dimsW: row.dimsW,
+      dimsH: row.dimsH,
+      items: Array.isArray(row.orderItems) ? row.orderItems : [],
+    });
+  }
+
+  if (!billableRows.length) {
+    return {
+      generated: 0,
+      count: 0,
+      total: 0,
+      skipped: 0,
+      message: 'No billable shipped orders or shipments found for this range.',
+    };
+  }
+
+  // Rebuild the requested billing period only after we know the source query
+  // has billable rows. That protects existing summaries if a transient query
+  // problem happens during generation.
+  await db.delete(billingLineItems).where(
+    and(
+      sql`${billingLineItems.shipDate} >= ${fromIso}::timestamptz`,
+      sql`${billingLineItems.shipDate} <= ${toIso}::timestamptz`,
+      input.clientId !== undefined
+        ? eq(billingLineItems.clientId, input.clientId)
+        : undefined
+    )
+  );
 
   // ─── B2 pre-fetch: packages + per-client package prices ──────────────────
   // Three lookup maps for the resolvePackageId resolver:
@@ -281,6 +376,7 @@ export async function generateLineItems(input: GenerateInput) {
 
   let generated = 0;
   let skipped = 0;
+  let total = 0;
 
   // Collect ALL line-item rows across every billable shipped order first, then run a
   // single batched INSERT at the end. Previous per-row insert + ON
@@ -413,7 +509,10 @@ export async function generateLineItems(input: GenerateInput) {
     }
 
     // Collect for batch insert instead of inserting one at a time.
-    for (const row of rows) allRows.push(row);
+    for (const row of rows) {
+      allRows.push(row);
+      total += toNum(row.totalCost);
+    }
   }
 
   // Batch INSERT in chunks of 500 with ON CONFLICT DO NOTHING. The unique
@@ -513,12 +612,19 @@ export async function generateLineItems(input: GenerateInput) {
           ],
         });
       generated += 1;
+      total += fee;
     } catch {
       skipped += 1;
     }
   }
 
-  return { generated, skipped, message: `Generated ${generated} line items from ${billableRows.length} shipped orders.` };
+  return {
+    generated,
+    count: generated,
+    total,
+    skipped,
+    message: `Generated ${generated} line items from ${billableRows.length} billable shipments/orders.`,
+  };
 }
 
 export type BillingSummaryRow = {
