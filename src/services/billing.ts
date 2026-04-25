@@ -103,6 +103,9 @@ export async function generateLineItems(input: GenerateInput) {
       dimsH: shipments.dimsH,
       refUspsRate: orderOverrides.refUspsRate,
       refUpsRate: orderOverrides.refUpsRate,
+      rateDimsL: orderOverrides.rateDimsL,
+      rateDimsW: orderOverrides.rateDimsW,
+      rateDimsH: orderOverrides.rateDimsH,
       orderId: orders.id,
       orderNumber: orders.orderNumber,
       orderClientId: orders.clientId,
@@ -157,6 +160,9 @@ export async function generateLineItems(input: GenerateInput) {
     dimsL: number | null;
     dimsW: number | null;
     dimsH: number | null;
+    rateDimsL: number | null;
+    rateDimsW: number | null;
+    rateDimsH: number | null;
     refUspsRate: string | null;
     refUpsRate: string | null;
     items: unknown[];
@@ -186,6 +192,9 @@ export async function generateLineItems(input: GenerateInput) {
         dimsH: row.dimsH,
         refUspsRate: row.refUspsRate,
         refUpsRate: row.refUpsRate,
+        rateDimsL: row.rateDimsL,
+        rateDimsW: row.rateDimsW,
+        rateDimsH: row.rateDimsH,
         items: Array.isArray(row.orderItems) ? row.orderItems : [],
       };
     })
@@ -219,6 +228,9 @@ export async function generateLineItems(input: GenerateInput) {
       dimsH: shipments.dimsH,
       refUspsRate: orderOverrides.refUspsRate,
       refUpsRate: orderOverrides.refUpsRate,
+      rateDimsL: orderOverrides.rateDimsL,
+      rateDimsW: orderOverrides.rateDimsW,
+      rateDimsH: orderOverrides.rateDimsH,
       orderItems: orders.items,
     })
     .from(shipments)
@@ -257,6 +269,9 @@ export async function generateLineItems(input: GenerateInput) {
       dimsH: row.dimsH,
       refUspsRate: row.refUspsRate,
       refUpsRate: row.refUpsRate,
+      rateDimsL: row.rateDimsL,
+      rateDimsW: row.rateDimsW,
+      rateDimsH: row.rateDimsH,
       items: Array.isArray(row.orderItems) ? row.orderItems : [],
     });
   }
@@ -306,13 +321,17 @@ export async function generateLineItems(input: GenerateInput) {
   const packagesById = new Map<number, PkgRow>();
   const packagesByCode = new Map<string, PkgRow>();
   const packagesByDims = new Map<string, PkgRow>();
+  const packagesByRoundedDims = new Map<string, PkgRow>();
   const dimsKey = (l: number, w: number, h: number): string =>
     `${l}×${w}×${h}`;
+  const roundedDimsKey = (l: number, w: number, h: number): string =>
+    `${Math.round(l)}x${Math.round(w)}x${Math.round(h)}`;
   for (const p of allPackages) {
     packagesById.set(p.id, p);
     if (p.packageCode) packagesByCode.set(p.packageCode, p);
     if (p.length > 0 && p.width > 0 && p.height > 0) {
       packagesByDims.set(dimsKey(p.length, p.width, p.height), p);
+      packagesByRoundedDims.set(roundedDimsKey(p.length, p.width, p.height), p);
     }
   }
 
@@ -333,25 +352,22 @@ export async function generateLineItems(input: GenerateInput) {
     m.set(r.packageId, Number(r.price));
   }
 
-  const skuPackageRows = clientIdsInScope.length
-    ? await db
-        .select({
-          clientId: inventory.clientId,
-          sku: inventory.sku,
-          packageId: inventory.packageId,
-        })
-        .from(inventory)
-        .where(
-          and(
-            inArray(inventory.clientId, clientIdsInScope),
-            eq(inventory.active, true)
-          )
-        )
-    : [];
+  const skuPackageRows = await db
+    .select({
+      clientId: inventory.clientId,
+      sku: inventory.sku,
+      packageId: inventory.packageId,
+    })
+    .from(inventory)
+    .where(eq(inventory.active, true));
   const packageByClientSku = new Map<string, number>();
+  const packageBySku = new Map<string, number>();
   for (const row of skuPackageRows) {
-    if (row.clientId === null || row.packageId === null) continue;
-    packageByClientSku.set(`${row.clientId}:${row.sku}`, row.packageId);
+    if (row.packageId === null) continue;
+    if (row.clientId !== null) {
+      packageByClientSku.set(`${row.clientId}:${row.sku}`, row.packageId);
+    }
+    if (!packageBySku.has(row.sku)) packageBySku.set(row.sku, row.packageId);
   }
 
   function packageIdFromItems(items: unknown[], clientId: number): number | null {
@@ -360,7 +376,8 @@ export async function generateLineItems(input: GenerateInput) {
       if ((it as { adjustment?: unknown }).adjustment === true) continue;
       const sku = (it as { sku?: unknown }).sku;
       if (typeof sku !== 'string' || !sku) continue;
-      const packageId = packageByClientSku.get(`${clientId}:${sku}`);
+      const packageId =
+        packageByClientSku.get(`${clientId}:${sku}`) ?? packageBySku.get(sku);
       if (packageId != null && packagesById.has(packageId)) return packageId;
     }
     return null;
@@ -374,7 +391,32 @@ export async function generateLineItems(input: GenerateInput) {
     dimsL: number | null;
     dimsW: number | null;
     dimsH: number | null;
+    rateDimsL: number | null;
+    rateDimsW: number | null;
+    rateDimsH: number | null;
   }): number | null {
+    // v2 resolves billed box cost from SKU first, then shipment dims, then
+    // reference-rate dims. Selected package fields are only a v4 fallback.
+    {
+      const packageId = packageIdFromItems(s.items, s.clientId);
+      if (packageId != null) return packageId;
+    }
+    if (s.dimsL != null && s.dimsW != null && s.dimsH != null) {
+      const exact = packagesByDims.get(dimsKey(s.dimsL, s.dimsW, s.dimsH));
+      if (exact) return exact.id;
+      const rounded = packagesByRoundedDims.get(
+        roundedDimsKey(s.dimsL, s.dimsW, s.dimsH)
+      );
+      if (rounded) return rounded.id;
+    }
+    if (s.rateDimsL != null && s.rateDimsW != null && s.rateDimsH != null) {
+      const exact = packagesByDims.get(dimsKey(s.rateDimsL, s.rateDimsW, s.rateDimsH));
+      if (exact) return exact.id;
+      const rounded = packagesByRoundedDims.get(
+        roundedDimsKey(s.rateDimsL, s.rateDimsW, s.rateDimsH)
+      );
+      if (rounded) return rounded.id;
+    }
     // 1. Explicit integer custom-package FK on the shipment.
     if (s.selectedPid != null && packagesById.has(s.selectedPid)) {
       return s.selectedPid;
