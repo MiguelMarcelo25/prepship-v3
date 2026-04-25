@@ -9,6 +9,7 @@ import { getSettingNumber, setSetting } from './settings';
 
 const LAST_SYNC_KEY = 'shipment_sync.last_created_ms';
 const DEFAULT_LOOKBACK_MS = 1000 * 60 * 60 * 24 * 7; // 7 days on first run
+const WATERMARK_OVERLAP_MS = 1000 * 60 * 60 * 48; // re-read recent labels so missed rows self-heal
 
 type SSShipment = {
   shipmentId: number;
@@ -381,10 +382,12 @@ export async function syncShipments(
   for (const acct of accounts) {
     try {
       const key = shipWatermarkKey(acct.label);
+      const storedLastSync = await getSettingNumber(key);
       const lastSync =
         opts.sinceMs ??
-        (await getSettingNumber(key)) ??
-        Date.now() - DEFAULT_LOOKBACK_MS;
+        (storedLastSync != null
+          ? Math.max(0, storedLastSync - WATERMARK_OVERLAP_MS)
+          : Date.now() - DEFAULT_LOOKBACK_MS);
       const sinceIso = new Date(lastSync).toISOString();
       if (sinceIso < earliestSinceIso) earliestSinceIso = sinceIso;
       const sinceParam = formatSSDate(lastSync);
