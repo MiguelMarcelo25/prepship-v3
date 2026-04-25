@@ -546,7 +546,7 @@ export default function RateBrowserModal({
       setSelectedPid((current) => current ?? seededPid);
     }
     setPendingPids(new Set(shippingAccounts.map((a) => a.shippingProviderId)));
-    const fetchedRates: RateRow[] = seededBestRate ? [seededBestRate] : [];
+    const liveFetchedRates: RateRow[] = [];
 
     // Persist dims for this order (fire-and-forget) so re-open sees them.
     if (order?.orderId) {
@@ -594,7 +594,7 @@ export default function RateBrowserModal({
           (a, b) =>
             (a.shipmentCost + a.otherCost) - (b.shipmentCost + b.otherCost)
         );
-        fetchedRates.push(...list.filter((r) => r !== seededBestRate));
+        liveFetchedRates.push(...list.filter((r) => r !== seededBestRate));
         setRatesByPid((prev) => ({
           ...prev,
           [String(acct.shippingProviderId)]: list,
@@ -614,8 +614,12 @@ export default function RateBrowserModal({
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
 
-    if (onBestRateResolved && fetchedRates.length) {
-      const available = filterBySvcClass(fetchedRates).filter((r) => !isBlockedRate(r));
+    if (onBestRateResolved && (liveFetchedRates.length || seededBestRate)) {
+      // Choose the lowest only after every carrier account has finished.
+      // If ShipStation returns no live rates, fall back to the table's
+      // already-saved best rate so the modal stays consistent with the row.
+      const ratesToRank = liveFetchedRates.length ? liveFetchedRates : [seededBestRate!];
+      const available = filterBySvcClass(ratesToRank).filter((r) => !isBlockedRate(r));
       const best = available.sort((a, b) => {
         const aBase = a.shipmentCost + a.otherCost;
         const bBase = b.shipmentCost + b.otherCost;
