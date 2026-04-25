@@ -249,12 +249,20 @@ export default function BillingView({ onOpenOrder }: BillingViewProps) {
 
     try {
       const result = await apiClient.generateBilling(from, to)
-      setGenerateStatus(buildGenerateBillingStatus(result.generated, result.total))
       toastContext?.addToast(`✅ Generated ${result.generated} billing line items`, 'success')
 
       const rows = await apiClient.fetchBillingSummary(from, to)
+      const totals = buildBillingSummaryTotals(rows)
+      setGenerateStatus(buildGenerateBillingStatus(result.generated, totals.grand))
       setSummaryRows(rows)
       setSummaryError(null)
+      const detailTarget =
+        detailState.open && detailState.clientId
+          ? rows.find((row) => row.clientId === detailState.clientId)
+          : rows.find((row) => (row.orderCount || 0) > 0 || (row.grandTotal || row.total || 0) > 0)
+      if (detailTarget) {
+        await handleLoadDetails(detailTarget.clientId, detailTarget.clientName)
+      }
     } catch (error) {
       toastContext?.addToast(error instanceof Error ? error.message : 'Failed to generate billing', 'error')
     } finally {
