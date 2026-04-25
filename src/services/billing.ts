@@ -123,11 +123,10 @@ export async function generateLineItems(input: GenerateInput) {
     .where(
       and(
         eq(orders.orderStatus, 'shipped'),
+        eq(orders.externallyShipped, false),
+        sql`coalesce(${orders.raw}->>'externallyFulfilled', 'false') <> 'true'`,
         sql`coalesce(${shipments.shipDate}, ${orders.orderDate}) >= ${fromIso}::timestamptz`,
-        sql`coalesce(${shipments.shipDate}, ${orders.orderDate}) <= ${toIso}::timestamptz`,
-        input.clientId !== undefined
-          ? sql`coalesce(${shipments.clientId}, ${orders.clientId}) = ${input.clientId}`
-          : undefined
+        sql`coalesce(${shipments.shipDate}, ${orders.orderDate}) <= ${toIso}::timestamptz`
       )
     );
 
@@ -171,10 +170,7 @@ export async function generateLineItems(input: GenerateInput) {
   const billableRows: BillableRow[] = orderShipmentRows
     .map((row) => {
       const storeId = rawStoreId(row.orderRaw ?? {}, row.orderStoreId ?? null);
-      const clientId =
-        row.shipmentClientId ??
-        row.orderClientId ??
-        (storeId !== null ? clientByStore.get(storeId) ?? null : null);
+      const clientId = storeId !== null ? clientByStore.get(storeId) ?? null : null;
       return {
         id: row.shipmentId,
         orderId: row.orderId,
@@ -198,83 +194,11 @@ export async function generateLineItems(input: GenerateInput) {
         items: Array.isArray(row.orderItems) ? row.orderItems : [],
       };
     })
-    .filter((row) => row.shipDate !== null);
-
-  const seenShipmentIds = new Set(
-    billableRows
-      .map((row) => row.id)
-      .filter((id): id is number => id !== null)
-  );
-  const seenOrderIds = new Set(billableRows.map((row) => row.orderId));
-
-  // Some historical ShipStation shipments in v4 do not have a local order row
-  // linked yet. v2 still bills those when the shipment itself has client/date
-  // data, so keep a shipment-based fallback to avoid dropping old invoices.
-  const shipmentFallbackRows = await db
-    .select({
-      id: shipments.id,
-      orderId: shipments.orderId,
-      orderNumber: shipments.orderNumber,
-      clientId: shipments.clientId,
-      shipDate: shipments.shipDate,
-      labelCost: shipments.labelCost,
-      cost: shipments.cost,
-      otherCost: shipments.otherCost,
-      carrierCode: shipments.carrierCode,
-      selectedPid: shipments.selectedPid,
-      selectedPackageId: shipments.selectedPackageId,
-      dimsL: shipments.dimsL,
-      dimsW: shipments.dimsW,
-      dimsH: shipments.dimsH,
-      refUspsRate: orderOverrides.refUspsRate,
-      refUpsRate: orderOverrides.refUpsRate,
-      rateDimsL: orderOverrides.rateDimsL,
-      rateDimsW: orderOverrides.rateDimsW,
-      rateDimsH: orderOverrides.rateDimsH,
-      orderItems: orders.items,
-    })
-    .from(shipments)
-    .leftJoin(orders, eq(orders.id, shipments.orderId))
-    .leftJoin(orderOverrides, eq(orderOverrides.orderId, shipments.orderId))
-    .where(
-      and(
-        sql`${shipments.clientId} is not null`,
-        sql`${shipments.shipDate} is not null`,
-        sql`${shipments.shipDate} >= ${fromIso}::timestamptz`,
-        sql`${shipments.shipDate} <= ${toIso}::timestamptz`,
-        eq(shipments.voided, false),
-        input.clientId !== undefined
-          ? eq(shipments.clientId, input.clientId)
-          : undefined
-      )
+    .filter(
+      (row) =>
+        row.shipDate !== null &&
+        (input.clientId === undefined || row.clientId === input.clientId)
     );
-
-  for (const row of shipmentFallbackRows) {
-    if (seenShipmentIds.has(row.id)) continue;
-    if (row.orderId !== null && seenOrderIds.has(row.orderId)) continue;
-    billableRows.push({
-      id: row.id,
-      orderId: row.orderId,
-      orderNumber: row.orderNumber,
-      clientId: row.clientId,
-      shipDate: row.shipDate,
-      labelCost: row.labelCost,
-      cost: row.cost,
-      otherCost: row.otherCost,
-      carrierCode: row.carrierCode,
-      selectedPid: row.selectedPid,
-      selectedPackageId: row.selectedPackageId,
-      dimsL: row.dimsL,
-      dimsW: row.dimsW,
-      dimsH: row.dimsH,
-      refUspsRate: row.refUspsRate,
-      refUpsRate: row.refUpsRate,
-      rateDimsL: row.rateDimsL,
-      rateDimsW: row.rateDimsW,
-      rateDimsH: row.rateDimsH,
-      items: Array.isArray(row.orderItems) ? row.orderItems : [],
-    });
-  }
 
   if (!billableRows.length) {
     return {
