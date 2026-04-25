@@ -271,21 +271,27 @@ export function getVisibleBillingDetailColumns(columnIds: BillingDetailColumnId[
 }
 
 export function computeBillingDetailMetrics(detail: BillingDetailDto): BillingDetailMetrics {
-  const pickPack = detail.pickpackTotal || 0
-  const additional = detail.additionalTotal || 0
-  const packageCost = detail.packageTotal || 0
-  const shipping = detail.shippingTotal || 0
-  const total = pickPack + additional + packageCost + shipping
-  const ourCost = detail.actualLabelCost || 0
+  const lineType = detail.lineType ?? detail.line_type
+  const lineTotal = Number(detail.totalCost ?? detail.total_cost ?? 0) || 0
+  const pickPack = Number(detail.pickpackTotal ?? detail.pick_pack_total ?? (lineType === 'pick_pack' ? lineTotal : 0)) || 0
+  const additional = Number(detail.additionalTotal ?? detail.additional_total ?? (lineType === 'additional_unit' ? lineTotal : 0)) || 0
+  const packageCost = Number(detail.packageTotal ?? detail.package_total ?? (lineType === 'package_cost' ? lineTotal : 0)) || 0
+  const shipping = Number(detail.shippingTotal ?? detail.shipping_total ?? (lineType === 'shipping' ? lineTotal : 0)) || 0
+  const storage = Number(detail.storageTotal ?? detail.storage_total ?? (lineType === 'storage' ? lineTotal : 0)) || 0
+  const total = Number(detail.grandTotal ?? detail.grand_total ?? detail.total ?? 0) || pickPack + additional + packageCost + shipping + storage
+  const ourCost = Number(detail.actualLabelCost ?? detail.actual_label_cost ?? 0) || 0
   const margin = shipping - ourCost
-  const ssCharged = shipping > 0 && detail.actualLabelCost != null && shipping > detail.actualLabelCost + 0.01
+  const actualLabelCost = detail.actualLabelCost ?? detail.actual_label_cost
+  const refUpsRate = detail.ref_ups_rate ?? detail.refUpsRate
+  const refUspsRate = detail.ref_usps_rate ?? detail.refUspsRate
+  const ssCharged = shipping > 0 && actualLabelCost != null && shipping > Number(actualLabelCost) + 0.01
 
   let chargedRate: BillingDetailMetrics['chargedRate'] = null
   if (shipping > 0) {
     const tol = 0.01
-    if (detail.actualLabelCost != null && Math.abs(shipping - detail.actualLabelCost) <= tol) chargedRate = 'bestRate'
-    else if (detail.ref_ups_rate != null && Math.abs(shipping - detail.ref_ups_rate) <= tol) chargedRate = 'upsss'
-    else if (detail.ref_usps_rate != null && Math.abs(shipping - detail.ref_usps_rate) <= tol) chargedRate = 'uspsss'
+    if (actualLabelCost != null && Math.abs(shipping - Number(actualLabelCost)) <= tol) chargedRate = 'bestRate'
+    else if (refUpsRate != null && Math.abs(shipping - Number(refUpsRate)) <= tol) chargedRate = 'upsss'
+    else if (refUspsRate != null && Math.abs(shipping - Number(refUspsRate)) <= tol) chargedRate = 'uspsss'
   }
 
   return {

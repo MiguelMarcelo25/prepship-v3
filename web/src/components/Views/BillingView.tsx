@@ -841,23 +841,30 @@ export default function BillingView({ onOpenOrder }: BillingViewProps) {
                     <tr><td colSpan={visibleDetailColumns.length} style={{ padding: 20, textAlign: 'center', color: 'var(--text3)' }}>No line items found.</td></tr>
                   ) : (
                     <>
-                      {detailState.rows.map((row) => {
+                      {detailState.rows.map((row, rowIndex) => {
                         const metrics = computeBillingDetailMetrics(row)
+                        const rowKey = row.id ?? `${row.orderId ?? 'storage'}-${row.lineType ?? 'detail'}-${row.description ?? rowIndex}-${rowIndex}`
+                        const lineLabel = row.description || row.itemNames || ''
+                        const lineTypeLabel = row.lineType ? String(row.lineType).replace(/_/g, ' ') : ''
 
                         return (
-                          <tr key={row.orderId} style={{ borderBottom: '1px solid var(--border)' }} className={metrics.ssCharged ? 'billing-detail-ss-row' : undefined}>
+                          <tr key={rowKey} style={{ borderBottom: '1px solid var(--border)' }} className={metrics.ssCharged ? 'billing-detail-ss-row' : undefined}>
                             {visibleDetailColumns.map((column) => {
                               if (column.id === 'orderNumber') {
                                 return (
                                   <td key={column.id} style={{ padding: '5px 10px', fontWeight: 600, color: 'var(--ss-blue)' }}>
-                                    <button
-                                      type="button"
-                                      className="inventory-inline-button"
-                                      title="Open order detail"
-                                      onClick={() => onOpenOrder?.(row.orderId)}
-                                    >
-                                      {row.orderNumber}
-                                    </button>
+                                    {row.orderId ? (
+                                      <button
+                                        type="button"
+                                        className="inventory-inline-button"
+                                        title="Open order detail"
+                                        onClick={() => onOpenOrder?.(row.orderId)}
+                                      >
+                                        {row.orderNumber}
+                                      </button>
+                                    ) : (
+                                      <span style={{ color: 'var(--text2)' }}>{row.orderNumber || 'Storage'}</span>
+                                    )}
                                   </td>
                                 )
                               }
@@ -869,9 +876,9 @@ export default function BillingView({ onOpenOrder }: BillingViewProps) {
                               if (column.id === 'itemNames') {
                                 return (
                                   <td key={column.id} style={{ padding: '5px 10px', fontSize: 11, maxWidth: 220 }}>
-                                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={row.itemNames || ''}>
-                                      {row.itemNames ? row.itemNames.split(' | ').map((name, index) => (
-                                        <div key={`${row.orderId}-name-${index}`} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
+                                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={lineLabel}>
+                                      {lineLabel ? lineLabel.split(' | ').map((name, index) => (
+                                        <div key={`${rowKey}-name-${index}`} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
                                       )) : <span style={{ color: 'var(--text4)' }}>—</span>}
                                     </div>
                                   </td>
@@ -879,9 +886,10 @@ export default function BillingView({ onOpenOrder }: BillingViewProps) {
                               }
 
                               if (column.id === 'itemSkus') {
+                                const skuText = row.itemSkus || lineTypeLabel
                                 return (
                                   <td key={column.id} style={{ padding: '5px 10px', fontFamily: 'monospace', fontSize: 10.5, color: 'var(--text2)' }}>
-                                    {row.itemSkus ? row.itemSkus.split(' | ').map((sku, index) => (
+                                    {skuText ? skuText.split(' | ').map((sku, index) => (
                                       <div key={`${row.orderId}-sku-${index}`}>{sku || '—'}</div>
                                     )) : <span style={{ color: 'var(--text4)' }}>—</span>}
                                   </td>
@@ -889,7 +897,7 @@ export default function BillingView({ onOpenOrder }: BillingViewProps) {
                               }
 
                               if (column.id === 'totalQty') {
-                                return <td key={column.id} style={{ padding: '5px 10px', textAlign: 'right' }}>{row.totalQty || 0}</td>
+                                return <td key={column.id} style={{ padding: '5px 10px', textAlign: 'right' }}>{row.totalQty || row.qty || 0}</td>
                               }
 
                               if (column.id === 'pickpack') {
