@@ -253,6 +253,33 @@ const LEGACY_CLIENT_ID_BY_CURRENT_ID = new Map<number, number>([
   [12, 11],
 ])
 
+type V2CarrierAccountRef = {
+  carrierCode: string
+  shippingProviderId: number
+  nickname: string
+  clientId: number | null
+  accountNumber: string | null
+}
+
+const V2_CARRIER_ACCOUNT_REFS: V2CarrierAccountRef[] = [
+  { carrierCode: 'stamps_com', shippingProviderId: 433542, nickname: 'USPS Chase x7439', clientId: null, accountNumber: 'djeon-952w77' },
+  { carrierCode: 'ups_walleted', shippingProviderId: 433543, nickname: 'UPS by SS - Chase x7439', clientId: null, accountNumber: 'ups_433543' },
+  { carrierCode: 'ups', shippingProviderId: 565326, nickname: 'GG6381', clientId: null, accountNumber: 'GG6381' },
+  { carrierCode: 'ups', shippingProviderId: 565377, nickname: 'G19Y32', clientId: null, accountNumber: 'G19Y32' },
+  { carrierCode: 'ups', shippingProviderId: 596001, nickname: 'ORION', clientId: null, accountNumber: 'R05H19' },
+  { carrierCode: 'ups', shippingProviderId: 604209, nickname: 'ROCEL', clientId: null, accountNumber: null },
+  { carrierCode: 'ups', shippingProviderId: 607855, nickname: 'ROCEL C81F70', clientId: null, accountNumber: 'C81F70' },
+  { carrierCode: 'fedex', shippingProviderId: 598840, nickname: 'FedEx', clientId: null, accountNumber: '208481048' },
+  { carrierCode: 'fedex_walleted', shippingProviderId: 585004, nickname: 'FedEx One Balance', clientId: null, accountNumber: null },
+  { carrierCode: 'stamps_com', shippingProviderId: 442006, nickname: 'GREG PAYABILITY 6/17', clientId: 10, accountNumber: null },
+  { carrierCode: 'ups', shippingProviderId: 461890, nickname: 'ROCEL C81F70', clientId: 10, accountNumber: 'C81F70' },
+  { carrierCode: 'ups', shippingProviderId: 565317, nickname: 'GG6381', clientId: 10, accountNumber: 'GG6381' },
+  { carrierCode: 'ups', shippingProviderId: 595995, nickname: 'ORI Account', clientId: 10, accountNumber: 'R05H19' },
+  { carrierCode: 'ups', shippingProviderId: 442007, nickname: 'GREG PAYABILITY 6/17', clientId: 10, accountNumber: null },
+  { carrierCode: 'fedex', shippingProviderId: 442013, nickname: 'FedEx', clientId: 10, accountNumber: '208481048' },
+  { carrierCode: 'fedex_walleted', shippingProviderId: 585334, nickname: 'FedEx One Balance', clientId: 10, accountNumber: null },
+]
+
 function toRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   return value as Record<string, unknown>
@@ -557,7 +584,74 @@ function getCarrierAccountDisplay(account: CarrierAccountDto | null | undefined)
   )
 }
 
+function resolveV2CarrierAccount(
+  providerAccountId: number | null,
+  carrierCode: string | null,
+  trackingNumber: string | null,
+  clientId: number | null,
+) {
+  if (providerAccountId != null) {
+    const exact = V2_CARRIER_ACCOUNT_REFS.find((account) => account.shippingProviderId === providerAccountId)
+    if (exact) return exact
+  }
+
+  if ((carrierCode === 'ups' || carrierCode === 'ups_walleted') && trackingNumber) {
+    const tracking = trackingNumber.replace(/\s/g, '').toUpperCase()
+    if (tracking.startsWith('1Z') && tracking.length >= 8) {
+      const accountNumber = tracking.slice(2, 8)
+      const matches = V2_CARRIER_ACCOUNT_REFS.filter(
+        (account) =>
+          (account.carrierCode === 'ups' || account.carrierCode === 'ups_walleted') &&
+          account.accountNumber?.toUpperCase() === accountNumber,
+      )
+      const clientMatch = clientId != null ? matches.find((account) => account.clientId === clientId) : null
+      const sharedMatch = matches.find((account) => account.clientId === null)
+      return clientMatch ?? sharedMatch ?? matches[0] ?? null
+    }
+  }
+
+  const matching = V2_CARRIER_ACCOUNT_REFS.filter((account) => account.carrierCode === carrierCode)
+  if (matching.length === 1) return matching[0]
+  if (matching.length > 1) {
+    const clientMatch = clientId != null ? matching.find((account) => account.clientId === clientId) : null
+    const sharedMatch = matching.find((account) => account.clientId === null)
+    return clientMatch ?? sharedMatch ?? null
+  }
+
+  return null
+}
+
+function getV2CarrierAccountForOrder(order: OrderSummaryDto) {
+  const providerAccountId =
+    toNumberValue(order.selectedRate?.shippingProviderId) ??
+    toNumberValue(order.selectedRate?.providerAccountId) ??
+    toNumberValue(order.label?.shippingProviderId) ??
+    toNumberValue(order.bestRate?.shippingProviderId)
+  const carrierCode =
+    toStringValue(order.selectedRate?.carrierCode) ??
+    toStringValue(order.label?.carrierCode) ??
+    toStringValue(order.bestRate?.carrierCode) ??
+    toStringValue(order.carrierCode)
+  const trackingNumber = toStringValue(order.label?.trackingNumber)
+  const clientId = getLegacyClientIdForDisplay(order)
+
+  return resolveV2CarrierAccount(providerAccountId, carrierCode, trackingNumber, clientId)
+}
+
+function getCarrierCodeForDisplay(order: OrderSummaryDto) {
+  return (
+    getV2CarrierAccountForOrder(order)?.carrierCode ??
+    toStringValue(order.selectedRate?.carrierCode) ??
+    toStringValue(order.label?.carrierCode) ??
+    toStringValue(order.bestRate?.carrierCode) ??
+    toStringValue(order.carrierCode)
+  )
+}
+
 function getShipAccountDisplay(order: OrderSummaryDto, accounts: CarrierAccountDto[]) {
+  const v2Account = getV2CarrierAccountForOrder(order)
+  if (v2Account) return v2Account.nickname
+
   const selectedNickname = normalizeShippingAccountName(order.selectedRate?.providerAccountNickname)
   if (selectedNickname) return selectedNickname
   if (order.label?.shippingProviderId != null) {
@@ -2099,7 +2193,7 @@ export default function OrdersView({
         return <span style={{ fontSize: 10, color: 'var(--text2)' }}>Externally Shipped</span>
       }
 
-      const carrierCode = order.label?.carrierCode ?? order.selectedRate?.carrierCode ?? order.carrierCode
+      const carrierCode = getCarrierCodeForDisplay(order)
       const serviceCode = order.label?.serviceCode ?? order.selectedRate?.serviceCode ?? order.serviceCode
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, lineHeight: 1.3 }}>
@@ -2119,7 +2213,7 @@ export default function OrdersView({
 
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, lineHeight: 1.3 }}>
-        <span className={`carrier-badge ${getCarrierClass(order.bestRate.carrierCode)}`}>{formatCarrierCode(order.bestRate.carrierCode)}</span>
+        <span className={`carrier-badge ${getCarrierClass(getCarrierCodeForDisplay(order))}`}>{formatCarrierCode(getCarrierCodeForDisplay(order))}</span>
         <span style={{ fontSize: 10, color: 'var(--text2)' }}>{truncate(formatServiceCode(getBestRateServiceCode(order)), 26)}</span>
       </div>
     )
@@ -2450,8 +2544,10 @@ export default function OrdersView({
       }
       case 'test_carrierCode': {
         const value = diagnosticIsShipped
-          ? (toStringValue(order.selectedRate?.carrierCode) ?? toStringValue(order.label?.carrierCode) ?? toStringValue(order.carrierCode))
-          : toStringValue(order.bestRate?.carrierCode)
+          ? getCarrierCodeForDisplay(order)
+          : order.bestRate
+            ? (getV2CarrierAccountForOrder(order)?.carrierCode ?? toStringValue(order.bestRate?.carrierCode))
+            : null
         return renderDiagnosticCell(value, { monospace: true })
       }
       case 'test_shippingProviderID': {
@@ -2505,8 +2601,10 @@ export default function OrdersView({
       }
       case 'test_shippingAccount': {
         const value = diagnosticIsShipped
-          ? (normalizeShippingAccountName(order.selectedRate?.providerAccountNickname) ?? toStringValue(order.label?.carrierCode))
-          : null
+          ? getShipAccountDisplay(order, shippingAccounts)
+          : order.bestRate
+            ? getV2CarrierAccountForOrder(order)?.nickname ?? null
+            : null
         return renderDiagnosticCell(value)
       }
     }
