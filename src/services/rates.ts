@@ -125,6 +125,15 @@ function applyMarkups(rates: Rate[], markups: Map<string, Markup>): Rate[] {
 
 const CACHE_TTL_MS = 1000 * 60 * 60 * 6; // 6 hours
 const CARRIER_CACHE_MS = 1000 * 60 * 15; // 15 min
+const RATEABLE_CARRIER_CODES = new Set([
+  'usps',
+  'ups',
+  'ups_walleted',
+  'fedex',
+  'fedex_walleted',
+  'dhl_express',
+  'stamps_com',
+]);
 
 let cachedCarrierIds: string[] | null = null;
 let carriersFetchedAt = 0;
@@ -145,10 +154,9 @@ async function getAllCarrierIds(): Promise<string[]> {
   //  - voucher-*: client-shared carriers that don't respond to the rate API
   //  - tusk and similar resellers that sometimes fail on generic payloads
   //  - fedex_walleted: One Balance wallet; duplicate of fedex for rating
-  const ALLOWED_CODES = new Set(['usps', 'ups', 'fedex', 'dhl_express', 'stamps_com']);
   const ids = res.carriers
     .filter((c) => !c.disabled_by_billing_plan)
-    .filter((c) => ALLOWED_CODES.has((c.carrier_code ?? '').toLowerCase()))
+    .filter((c) => RATEABLE_CARRIER_CODES.has((c.carrier_code ?? '').toLowerCase()))
     .map((c) => c.carrier_id);
   if (!ids.length) {
     throw new Error(
@@ -210,11 +218,6 @@ async function resolveRateInput(input: RateInput): Promise<RateInput> {
   const apiKeyV2 = input.apiKeyV2 ?? credentials.apiKeyV2 ?? null;
   const sourceClientId =
     input.sourceClientId ?? credentials.sourceClientId ?? (apiKeyV2 && clientId ? clientId : null);
-  const carrierIds =
-    input.carrierIds?.length
-      ? input.carrierIds
-      : (await getAllCarriers(apiKeyV2)).map((carrier) => carrier.carrier_id).sort();
-
   return {
     ...input,
     toZip: normalizeZip(input.toZip),
@@ -223,7 +226,9 @@ async function resolveRateInput(input: RateInput): Promise<RateInput> {
     clientId,
     apiKeyV2,
     sourceClientId,
-    carrierIds,
+    carrierIds: input.carrierIds?.length
+      ? input.carrierIds
+      : (await getAllCarriers(apiKeyV2)).map((carrier) => carrier.carrier_id).sort(),
   };
 }
 
@@ -348,30 +353,28 @@ async function getAllCarriers(apiKeyV2?: string | null): Promise<CarrierInfo[]> 
   if (cached && Date.now() - cached.fetchedAt < CARRIER_CACHE_MS) {
     return cached.carriers;
   }
-  const res = await ssRequest<CarriersResponse>('/v2/carriers', {
-    apiKey: apiKeyV2 ?? undefined,
-    dedupeKey: `carriers:list:${cacheKey}`,
-  });
-  const ALLOWED_CODES = new Set([
-    'usps',
-    'ups',
-    'ups_walleted',
-    'fedex',
-    'fedex_walleted',
-    'dhl_express',
-    'stamps_com',
-  ]);
-  const carriers = res.carriers
-    .filter((c) => !c.disabled_by_billing_plan)
-    .filter((c) => ALLOWED_CODES.has((c.carrier_code ?? '').toLowerCase()))
-    .map((c) => {
-      const override = V2_CARRIER_ACCOUNT_OVERRIDES.get(c.carrier_id);
-      return {
-        carrier_id: c.carrier_id,
-        carrier_code: override?.carrier_code ?? c.carrier_code,
-        nickname: override?.nickname ?? c.nickname ?? c.friendly_name ?? undefined,
-      };
+  let carriers: CarrierInfo[] = [];
+  try {
+    const res = await ssRequest<CarriersResponse>('/v2/carriers', {
+      apiKey: apiKeyV2 ?? undefined,
+      dedupeKey: `carriers:list:${cacheKey}`,
     });
+    carriers = (res.carriers ?? [])
+      .filter((c) => RATEABLE_CARRIER_CODES.has((c.carrier_code ?? '').toLowerCase()))
+      .map((c) => {
+        const override = V2_CARRIER_ACCOUNT_OVERRIDES.get(c.carrier_id);
+        return {
+          carrier_id: c.carrier_id,
+          carrier_code: override?.carrier_code ?? c.carrier_code,
+          nickname: override?.nickname ?? c.nickname ?? c.friendly_name ?? undefined,
+        };
+      });
+  } catch (err) {
+    console.warn(
+      '[rates] carrier discovery failed:',
+      err instanceof Error ? err.message : err,
+    );
+  }
   scopedCarrierCache.set(cacheKey, { carriers, fetchedAt: Date.now() });
   return carriers;
 }
@@ -492,11 +495,7 @@ export async function fetchLiveRates(input: RateInput): Promise<Rate[]> {
     ? allCarriers.filter((c) => input.carrierIds!.includes(c.carrier_id))
     : allCarriers;
 
-  if (!carriers.length) {
-    throw new Error(
-      'No ShipStation carriers available — connect a carrier account in ShipStation first.',
-    );
-  }
+  if (!carriers.length) return [];
 
   const batches = await Promise.all(
     carriers.map((c) => fetchEstimateForCarrier(c, input, shipFrom)),
@@ -515,9 +514,7 @@ export async function fetchLiveRates(input: RateInput): Promise<Rate[]> {
   // route — treat that as a normal "no service" condition, not an error.
   // (v4's previous /v2/rates endpoint surfaced this via rate_response.errors;
   // the estimate endpoint just omits them.)
-  throw new Error(
-    `No rates returned for ${input.toZip} at ${input.weightOz}oz — carriers may not serve this route`,
-  );
+  return [];
 }
 
 export type GetRatesResult = {
@@ -560,6 +557,16 @@ export async function getRates(
 
   const rawRates = await fetchLiveRates(resolvedInput);
   const now = new Date();
+
+  if (!rawRates.length) {
+    return {
+      rates: [],
+      bestRate: null,
+      cached: false,
+      cacheKey: key,
+      fetchedAt: now.toISOString(),
+    };
+  }
 
   // Cache the RAW rates so markup updates always show fresh prices.
   await db
