@@ -47,6 +47,7 @@ export type RbOrderSummaryDto = {
   orderId: number;
   storeId?: number | null;
   clientId?: number | null;
+  bestRate?: Record<string, unknown> | null;
   weight?: { value?: number } | null;
   rateDims?: { length?: number | null; width?: number | null; height?: number | null } | null;
   shipTo?: { postalCode?: string | null; company?: string | null } | null;
@@ -225,6 +226,94 @@ function formatEta(r: RateRow): string {
   return '—';
 }
 
+function toFiniteNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const n = Number.parseFloat(value);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+function toOptionalString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+
+function buildOrderBestRateSeed(
+  order: RbOrderSummaryDto | null,
+  shippingAccounts: RbCarrierAccountDto[]
+): RateRow | null {
+  const bestRate = order?.bestRate;
+  if (!bestRate) return null;
+
+  const raw = (bestRate.raw && typeof bestRate.raw === 'object'
+    ? bestRate.raw
+    : bestRate) as Record<string, unknown>;
+  const shippingAmount =
+    raw.shipping_amount && typeof raw.shipping_amount === 'object'
+      ? (raw.shipping_amount as Record<string, unknown>)
+      : undefined;
+  const otherAmount =
+    raw.other_amount && typeof raw.other_amount === 'object'
+      ? (raw.other_amount as Record<string, unknown>)
+      : undefined;
+  const shipmentCost =
+    toFiniteNumber(bestRate.shipmentCost) ??
+    toFiniteNumber(raw.shipmentCost) ??
+    toFiniteNumber(shippingAmount?.amount) ??
+    toFiniteNumber(raw.cost) ??
+    toFiniteNumber(bestRate.amount) ??
+    0;
+  const otherCost =
+    toFiniteNumber(bestRate.otherCost) ??
+    toFiniteNumber(raw.otherCost) ??
+    toFiniteNumber(otherAmount?.amount) ??
+    0;
+  const shippingProviderId =
+    toFiniteNumber(bestRate.shippingProviderId) ??
+    toFiniteNumber(raw.shippingProviderId) ??
+    toFiniteNumber(raw.carrier_id);
+  const carrierCode =
+    toOptionalString(bestRate.carrierCode) ??
+    toOptionalString(raw.carrierCode) ??
+    toOptionalString(raw.carrier_code) ??
+    '';
+  const serviceCode =
+    toOptionalString(bestRate.serviceCode) ??
+    toOptionalString(raw.serviceCode) ??
+    toOptionalString(raw.service_code) ??
+    '';
+
+  if (!shippingProviderId || !carrierCode || !serviceCode || shipmentCost + otherCost <= 0) {
+    return null;
+  }
+
+  const account = shippingAccounts.find((acct) => acct.shippingProviderId === shippingProviderId);
+  return {
+    carrierCode,
+    serviceCode,
+    serviceName:
+      toOptionalString(bestRate.serviceName) ??
+      toOptionalString(raw.serviceName) ??
+      toOptionalString(raw.service_type) ??
+      SERVICE_NAMES[serviceCode] ??
+      serviceCode,
+    carrierNickname:
+      toOptionalString(bestRate.carrierNickname) ??
+      toOptionalString(raw.carrierNickname) ??
+      toOptionalString(raw.carrier_nickname) ??
+      account?._label ??
+      account?.nickname ??
+      account?.name ??
+      null,
+    shippingProviderId,
+    shipmentCost,
+    otherCost,
+    amount: shipmentCost + otherCost,
+    raw: bestRate,
+  };
+}
+
 function applyRbMarkupFn(
   markups: Record<string, Markup>,
   pidOrCc: number | string | null,
@@ -336,8 +425,17 @@ export default function RateBrowserModal({
     setSignature('none');
     setSvcClass('');
     setViewMode('all');
-    setSelectedPid(null);
-    setRatesByPid({});
+    const seededBestRate = buildOrderBestRateSeed(order, shippingAccounts);
+    setSelectedPid(
+      typeof seededBestRate?.shippingProviderId === 'number'
+        ? seededBestRate.shippingProviderId
+        : null
+    );
+    setRatesByPid(
+      seededBestRate?.shippingProviderId != null
+        ? { [String(seededBestRate.shippingProviderId)]: [seededBestRate] }
+        : {}
+    );
     // `locations` is intentionally not in deps — it doesn't change per-order
     // and we only want to re-hydrate when the modal opens or the order changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -436,9 +534,19 @@ export default function RateBrowserModal({
 
     const totalOz = lbNum * 16 + ozNum;
     setBrowsing(true);
-    setRatesByPid({});
+    const seededBestRate = buildOrderBestRateSeed(order, shippingAccounts);
+    const seededPid =
+      typeof seededBestRate?.shippingProviderId === 'number'
+        ? seededBestRate.shippingProviderId
+        : null;
+    setRatesByPid(
+      seededBestRate && seededPid != null ? { [String(seededPid)]: [seededBestRate] } : {}
+    );
+    if (seededPid != null) {
+      setSelectedPid((current) => current ?? seededPid);
+    }
     setPendingPids(new Set(shippingAccounts.map((a) => a.shippingProviderId)));
-    const fetchedRates: RateRow[] = [];
+    const fetchedRates: RateRow[] = seededBestRate ? [seededBestRate] : [];
 
     // Persist dims for this order (fire-and-forget) so re-open sees them.
     if (order?.orderId) {
@@ -465,10 +573,10 @@ export default function RateBrowserModal({
           carrierIds: acct.carrierId ? [acct.carrierId] : undefined,
           storeId: order?.storeId ?? undefined,
           clientId: order?.clientId ?? undefined,
-          forceRefresh: true,
+          forceRefresh: false,
         })) as RateRow[];
 
-        const list: RateRow[] = (raw ?? []).map((r) => ({
+        let list: RateRow[] = (raw ?? []).map((r) => ({
           ...r,
           shippingProviderId: r.shippingProviderId ?? acct.shippingProviderId,
           carrierNickname:
@@ -479,11 +587,14 @@ export default function RateBrowserModal({
             acct.name ??
             null,
         }));
+        if (!list.length && seededBestRate && acct.shippingProviderId === seededPid) {
+          list = [seededBestRate];
+        }
         list.sort(
           (a, b) =>
             (a.shipmentCost + a.otherCost) - (b.shipmentCost + b.otherCost)
         );
-        fetchedRates.push(...list);
+        fetchedRates.push(...list.filter((r) => r !== seededBestRate));
         setRatesByPid((prev) => ({
           ...prev,
           [String(acct.shippingProviderId)]: list,
@@ -491,7 +602,8 @@ export default function RateBrowserModal({
       } catch {
         setRatesByPid((prev) => ({
           ...prev,
-          [String(acct.shippingProviderId)]: [],
+          [String(acct.shippingProviderId)]:
+            seededBestRate && acct.shippingProviderId === seededPid ? [seededBestRate] : [],
         }));
       }
       setPendingPids((prev) => {
@@ -545,7 +657,9 @@ export default function RateBrowserModal({
 
   const combinedAll: RateRow[] = useMemo(() => {
     const out: RateRow[] = [];
+    const seenPids = new Set<string>();
     for (const acct of shippingAccounts) {
+      seenPids.add(String(acct.shippingProviderId));
       const rates = ratesByPid[String(acct.shippingProviderId)] ?? [];
       for (const r of rates) {
         out.push({
@@ -560,6 +674,10 @@ export default function RateBrowserModal({
             null,
         });
       }
+    }
+    for (const [pid, rates] of Object.entries(ratesByPid)) {
+      if (seenPids.has(pid)) continue;
+      out.push(...rates);
     }
     return filterBySvcClass(out).sort((a, b) => {
       const am = applyRbMarkupFn(

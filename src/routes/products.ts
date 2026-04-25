@@ -60,7 +60,7 @@ app.get('/bulk', zValidator('query', bulkQ), async (c) => {
 app.get('/by-sku/:sku', async (c) => {
   const sku = c.req.param('sku');
   const [row] = await db.select().from(products).where(eq(products.sku, sku)).limit(1);
-  if (!row) return c.json({ error: 'Product not found' }, 404);
+  if (!row) return c.json(null);
   return c.json(row);
 });
 
