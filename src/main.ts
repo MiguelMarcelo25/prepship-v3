@@ -27,12 +27,35 @@ import adminRoute from './routes/admin';
 
 const app = new Hono();
 
-const corsOrigins: string | string[] = env.WEB_ORIGIN
+const configuredCorsOrigins = env.WEB_ORIGIN
   ? env.WEB_ORIGIN.split(',').map((s) => s.trim()).filter(Boolean)
-  : '*';
+  : [];
+
+const isAllowedCorsOrigin = (origin: string) => {
+  if (configuredCorsOrigins.includes(origin)) return true;
+
+  try {
+    const { hostname, protocol } = new URL(origin);
+    if (protocol !== 'https:') return false;
+
+    return (
+      hostname === 'prepshipv3.vercel.app' ||
+      hostname === 'prepshipv3.drprepperusa.com' ||
+      hostname === 'prepshipv3-dr-prepper-usas-projects.vercel.app' ||
+      hostname.endsWith('-dr-prepper-usas-projects.vercel.app')
+    );
+  } catch {
+    return false;
+  }
+};
 
 app.use('*', logger());
-app.use('*', cors({ origin: corsOrigins }));
+app.use(
+  '*',
+  cors({
+    origin: (origin) => (isAllowedCorsOrigin(origin) ? origin : null),
+  })
+);
 
 app.route('/health', health);
 app.route('/cron', cronRoute);
