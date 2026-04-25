@@ -696,8 +696,61 @@ function getSelectedRateBaseCost(order: OrderSummaryDto) {
   const shipmentCost = typeof order.selectedRate?.shipmentCost === 'number' ? order.selectedRate.shipmentCost : 0
   const otherCost = typeof order.selectedRate?.otherCost === 'number' ? order.selectedRate.otherCost : 0
   const cost = typeof order.selectedRate?.cost === 'number' ? order.selectedRate.cost : 0
+  const labelCost = typeof order.label?.cost === 'number' ? order.label.cost : 0
   const total = shipmentCost + otherCost
-  return total > 0 ? total : cost || null
+  return total > 0 ? total : cost || labelCost || null
+}
+
+function getSelectedRateCarrierCode(order: OrderSummaryDto) {
+  return (
+    getV2CarrierAccountForOrder(order)?.carrierCode ??
+    toStringValue(order.selectedRate?.carrierCode) ??
+    toStringValue(order.label?.carrierCode) ??
+    toStringValue(order.carrierCode)
+  )
+}
+
+function getSelectedRateServiceCode(order: OrderSummaryDto) {
+  return (
+    toStringValue(order.selectedRate?.serviceCode) ??
+    toStringValue(order.label?.serviceCode) ??
+    toStringValue(order.serviceCode)
+  )
+}
+
+function getSelectedRateCarrierNickname(order: OrderSummaryDto) {
+  return (
+    getV2CarrierAccountForOrder(order)?.nickname ??
+    toStringValue(order.selectedRate?.providerAccountNickname) ??
+    toStringValue(order.selectedRate?.carrierNickname) ??
+    toStringValue(order.label?.carrierNickname)
+  )
+}
+
+function getSelectedRateShippingProviderId(order: OrderSummaryDto) {
+  return (
+    getV2CarrierAccountForOrder(order)?.shippingProviderId ??
+    toNumberValue(order.selectedRate?.shippingProviderId) ??
+    toNumberValue(order.selectedRate?.providerAccountId) ??
+    toNumberValue(order.label?.shippingProviderId) ??
+    undefined
+  )
+}
+
+function getSelectedRateMarkedAmount(order: OrderSummaryDto, markups: Record<string | number, { type: string; value: number }>) {
+  const baseAmount = getSelectedRateBaseCost(order)
+  if (baseAmount == null) return null
+
+  return applyCarrierMarkup({
+    shippingProviderId: getSelectedRateShippingProviderId(order),
+    carrierCode: getSelectedRateCarrierCode(order) ?? '',
+    serviceCode: getSelectedRateServiceCode(order) ?? '',
+    serviceName: getSelectedRateServiceCode(order) ?? '',
+    amount: baseAmount,
+    shipmentCost: baseAmount,
+    otherCost: 0,
+    carrierNickname: getSelectedRateCarrierNickname(order),
+  }, markups)
 }
 
 function getMarkupAmount(baseAmount: number, markedAmount: number) {
@@ -2085,12 +2138,12 @@ export default function OrdersView({
     const bestRateBaseCost = getBestRateBaseCost(order)
     if (order.orderStatus !== 'awaiting_shipment') {
       const selectedRateBase = getSelectedRateBaseCost(order)
-      const markedAmount = order.label?.cost ?? order.selectedRate?.cost ?? selectedRateBase
+      const markedAmount = getSelectedRateMarkedAmount(order, markups)
       if (selectedRateBase == null && markedAmount == null) {
         return <span style={{ color: 'var(--text3)', fontSize: 11 }}>—</span>
       }
 
-      const selectedRateCarrierCode = order.label?.cost == null ? order.selectedRate?.carrierCode : null
+      const selectedRateCarrierCode = getSelectedRateCarrierCode(order)
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {selectedRateCarrierCode ? (
@@ -2145,7 +2198,7 @@ export default function OrdersView({
   const renderMargin = (order: OrderSummaryDto) => {
     if (order.orderStatus !== 'awaiting_shipment') {
       const baseAmount = getSelectedRateBaseCost(order)
-      const markedAmount = order.label?.cost ?? order.selectedRate?.cost ?? null
+      const markedAmount = getSelectedRateMarkedAmount(order, markups)
       if (baseAmount == null || markedAmount == null) {
         return <span style={{ color: 'var(--text4)', fontSize: 11 }}>—</span>
       }
