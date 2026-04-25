@@ -229,6 +229,30 @@ const CARRIER_SERVICES: Record<string, Array<{ code: string; label: string }>> =
 
 const clientPaletteCache = new Map<string, ClientPalette>()
 
+const LEGACY_CLIENT_ID_BY_DISPLAY_NAME = new Map<string, number>([
+  ['techtok', 7],
+  ['tran agency', 8],
+  ['walmart - djc', 9],
+  ['kf goods', 10],
+  ['test orders', 11],
+])
+
+const LEGACY_CLIENT_ID_BY_DISPLAY_STORE_ID = new Map<number, number>([
+  [367706, 7],
+  [363392, 8],
+  [376661, 9],
+  [277422, 10],
+  [376827, 10],
+])
+
+const LEGACY_CLIENT_ID_BY_CURRENT_ID = new Map<number, number>([
+  [8, 7],
+  [9, 8],
+  [10, 9],
+  [11, 10],
+  [12, 11],
+])
+
 function toRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   return value as Record<string, unknown>
@@ -240,6 +264,15 @@ function toStringValue(value: unknown) {
 
 function toNumberValue(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function toNumericValue(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number.parseInt(value, 10)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
 }
 
 function toProviderAccountId(value: unknown) {
@@ -494,6 +527,25 @@ function normalizeShippingAccountName(value: unknown) {
   const label = toStringValue(value)
   if (!label) return null
   return label
+}
+
+function getLegacyClientIdForDisplay(order: OrderSummaryDto) {
+  const storeId = toNumericValue(order.storeId)
+  if (storeId != null) {
+    const byStore = LEGACY_CLIENT_ID_BY_DISPLAY_STORE_ID.get(storeId)
+    if (byStore != null) return byStore
+  }
+
+  const byName = LEGACY_CLIENT_ID_BY_DISPLAY_NAME.get((toStringValue(order.clientName) ?? '').trim().toLowerCase())
+  if (byName != null) return byName
+
+  const clientId = toNumericValue(order.clientId)
+  if (clientId != null) {
+    const byCurrentId = LEGACY_CLIENT_ID_BY_CURRENT_ID.get(clientId)
+    if (byCurrentId != null) return byCurrentId
+  }
+
+  return toNumericValue(order.legacyClientId) ?? clientId
 }
 
 function getCarrierAccountDisplay(account: CarrierAccountDto | null | undefined) {
@@ -2409,7 +2461,7 @@ export default function OrdersView({
         return renderDiagnosticCell(value, { monospace: true })
       }
       case 'test_clientID':
-        return renderDiagnosticCell(order.clientId, { monospace: true })
+        return renderDiagnosticCell(getLegacyClientIdForDisplay(order), { monospace: true })
       case 'test_serviceCode': {
         const value = diagnosticIsShipped
           ? (toStringValue(order.selectedRate?.serviceCode) ?? toStringValue(order.label?.serviceCode) ?? toStringValue(order.serviceCode))

@@ -47,12 +47,64 @@ export interface UseOrdersResult {
 
 type V4ClientRow = { id: number; name: string };
 
+const LEGACY_CLIENT_ID_BY_NAME = new Map<string, number>([
+  ['techtok', 7],
+  ['tran agency', 8],
+  ['walmart - djc', 9],
+  ['kf goods', 10],
+  ['test orders', 11],
+]);
+
+const LEGACY_CLIENT_ID_BY_STORE_ID = new Map<number, number>([
+  [367706, 7],
+  [363392, 8],
+  [376661, 9],
+  [277422, 10],
+  [376827, 10],
+]);
+
+const LEGACY_CLIENT_ID_BY_CURRENT_ID = new Map<number, number>([
+  [8, 7],
+  [9, 8],
+  [10, 9],
+  [11, 10],
+  [12, 11],
+]);
+
+function toNumericValue(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
 function toProviderAccountId(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value !== 'string') return null;
   const match = value.match(/^se-(\d+)$/i);
   const parsed = Number.parseInt(match?.[1] ?? value, 10);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function legacyClientId(
+  clientId: number | null,
+  storeId: unknown,
+  clientsById: Map<number, string>,
+): number | null {
+  const numericStoreId = toNumericValue(storeId);
+  if (numericStoreId != null) {
+    const byStore = LEGACY_CLIENT_ID_BY_STORE_ID.get(numericStoreId);
+    if (byStore != null) return byStore;
+  }
+  if (clientId != null) {
+    const byName = LEGACY_CLIENT_ID_BY_NAME.get((clientsById.get(clientId) ?? '').trim().toLowerCase());
+    if (byName != null) return byName;
+    const byCurrentId = LEGACY_CLIENT_ID_BY_CURRENT_ID.get(clientId);
+    if (byCurrentId != null) return byCurrentId;
+  }
+  return clientId;
 }
 
 function transformOrderRowV4toV2(
@@ -136,6 +188,7 @@ function transformOrderRowV4toV2(
     orderTotal: orderTotalNum,
     shippingAmount: shippingAmountNum,
     clientId,
+    legacyClientId: legacyClientId(clientId, row.storeId, clientsById),
     clientName: clientId != null ? clientsById.get(clientId) ?? null : null,
     shipTo: {
       name: (rawShipTo.name as string | undefined) ?? (row.shipToName as string | null) ?? null,

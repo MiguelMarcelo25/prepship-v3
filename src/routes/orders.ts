@@ -28,6 +28,37 @@ const visibleStorePredicate = sql`(
   )
 )`;
 
+const LEGACY_CLIENT_ID_BY_STORE_ID = new Map<number, number>([
+  [367706, 7],
+  [363392, 8],
+  [376661, 9],
+  [277422, 10],
+  [376827, 10],
+]);
+
+const LEGACY_CLIENT_ID_BY_CURRENT_ID = new Map<number, number>([
+  [8, 7],
+  [9, 8],
+  [10, 9],
+  [11, 10],
+  [12, 11],
+]);
+
+function resolveLegacyClientId(
+  clientId: number | null | undefined,
+  storeId: number | null | undefined,
+) {
+  if (typeof storeId === 'number') {
+    const byStore = LEGACY_CLIENT_ID_BY_STORE_ID.get(storeId);
+    if (byStore != null) return byStore;
+  }
+  if (typeof clientId === 'number') {
+    const byCurrentId = LEGACY_CLIENT_ID_BY_CURRENT_ID.get(clientId);
+    if (byCurrentId != null) return byCurrentId;
+  }
+  return clientId ?? null;
+}
+
 // User-initiated sync + status. Sits behind requireAuth (mounted at main.ts).
 // /cron/sync-orders is the cron-secret equivalent for schedulers.
 //
@@ -297,6 +328,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         : synthSelected;
     return {
       ...r.order,
+      legacyClientId: resolveLegacyClientId(r.order.clientId, r.order.storeId),
       overrides: r.overrides,
       label,
       selectedRate,
