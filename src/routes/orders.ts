@@ -188,7 +188,10 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   // See apps/api/src/modules/orders/data/sqlite-order-repository.ts:75-81 in v2.
   const hasLabelSubquery = sql`EXISTS (
     SELECT 1 FROM ${shipments} s
-    WHERE s.order_id = ${orders.id}
+    WHERE (
+        s.order_id = ${orders.id}
+        OR (s.order_id IS NULL AND s.order_number = ${orders.orderNumber})
+      )
       AND COALESCE(s.voided, false) = false
   )`;
 
@@ -259,15 +262,24 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   const pageOrderIds = joined
     .map((r) => r.order.id)
     .filter((id): id is number => id != null);
+  const pageOrderNumbers = [
+    ...new Set(joined.map((r) => r.order.orderNumber).filter(Boolean)),
+  ];
   const latestShipByOrderId = new Map<number, LatestShipmentRow>();
-  if (pageOrderIds.length) {
-    const idList = sql.join(
-      pageOrderIds.map((id) => sql`${id}`),
-      sql`, `
-    );
+  const latestShipByOrderNumber = new Map<string, LatestShipmentRow>();
+  if (pageOrderIds.length || pageOrderNumbers.length) {
+    const shipmentPredicates = [
+      pageOrderIds.length
+        ? sql`order_id in (${sql.join(pageOrderIds.map((id) => sql`${id}`), sql`, `)})`
+        : undefined,
+      pageOrderNumbers.length
+        ? sql`order_number in (${sql.join(pageOrderNumbers.map((n) => sql`${n}`), sql`, `)})`
+        : undefined,
+    ].filter(<T>(x: T | undefined): x is T => x !== undefined);
     const shipRows = await db.execute<LatestShipmentRow>(sql`
-      select distinct on (order_id)
+      select
         order_id,
+        order_number,
         tracking_number,
         carrier_code,
         service_code,
@@ -283,18 +295,32 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         provider_account_nickname,
         selected_rate_json
       from shipments
-      where order_id in (${idList})
+      where (${sql.join(shipmentPredicates, sql` or `)})
         and coalesce(voided, false) = false
-      order by order_id, id desc
+      order by id desc
     `);
     for (const s of shipRows) {
-      if (s.order_id != null) latestShipByOrderId.set(s.order_id, s);
+      if (s.order_id != null && !latestShipByOrderId.has(s.order_id)) {
+        latestShipByOrderId.set(s.order_id, s);
+      }
+      if (s.order_id == null && s.order_number && !latestShipByOrderNumber.has(s.order_number)) {
+        latestShipByOrderNumber.set(s.order_number, s);
+      }
     }
   }
 
   const rows = joined.map((r) => {
-    const ship = latestShipByOrderId.get(r.order.id);
-    const labelCost = ship?.label_cost ?? ship?.cost;
+    const ship =
+      latestShipByOrderId.get(r.order.id) ??
+      latestShipByOrderNumber.get(r.order.orderNumber);
+    const baseShipmentCost = ship?.cost != null ? Number(ship.cost) : null;
+    const shipmentOtherCost = ship?.other_cost != null ? Number(ship.other_cost) : 0;
+    const selectedCost =
+      baseShipmentCost != null ? baseShipmentCost + shipmentOtherCost : null;
+    const labelCost =
+      ship?.label_cost != null
+        ? Number(ship.label_cost)
+        : selectedCost;
     const label = ship
       ? {
           trackingNumber: ship.tracking_number,
@@ -302,7 +328,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           serviceCode: ship.service_code,
           shipDate: ship.ship_date,
           createdAt: ship.label_created_at ?? ship.create_date,
-          cost: labelCost != null ? Number(labelCost) : null,
+          cost: labelCost,
           labelUrl: ship.label_url,
           shippingProviderId: ship.provider_account_id,
           shipmentId: ship.label_shipment_id,
@@ -317,9 +343,9 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           serviceCode: ship.service_code,
           shippingProviderId: ship.provider_account_id,
           providerAccountNickname: ship.provider_account_nickname,
-          shipmentCost: ship.cost != null ? Number(ship.cost) : null,
-          otherCost: ship.other_cost != null ? Number(ship.other_cost) : null,
-          cost: labelCost != null ? Number(labelCost) : null,
+          shipmentCost: baseShipmentCost,
+          otherCost: ship.other_cost != null ? shipmentOtherCost : null,
+          cost: selectedCost ?? labelCost,
         }
       : null;
     const selectedRate =
@@ -340,6 +366,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
 
 type LatestShipmentRow = {
   order_id: number | null;
+  order_number: string | null;
   tracking_number: string | null;
   carrier_code: string | null;
   service_code: string | null;
@@ -355,6 +382,8 @@ type LatestShipmentRow = {
   provider_account_nickname: string | null;
   selected_rate_json: Record<string, unknown> | null;
 };
+
+type ExportShipmentRow = LatestShipmentRow;
 
 // Picklist: aggregated SKU + qty + order count per client over a date
 // range and status filter. Used to print a warehouse pick list grouped
@@ -1088,19 +1117,50 @@ app.get('/export', zValidator('query', exportQuery), async (c) => {
     .orderBy(desc(orders.orderDate))
     .limit(5000);
 
-  // Latest non-voided shipment per order (for label cost / tracking / created)
+  // Latest non-voided shipment per order (for label cost / tracking / created).
+  // Fall back by order number so orphaned ShipStation shipment rows still
+  // populate shipped columns, matching v2's joined shipment display.
   const orderIds = rows.map((r) => r.order.id);
-  const shipmentsByOrder = new Map<number, typeof shipments.$inferSelect>();
-  if (orderIds.length > 0) {
+  const orderNumbers = [
+    ...new Set(rows.map((r) => r.order.orderNumber).filter(Boolean)),
+  ];
+  const shipmentsByOrder = new Map<number, ExportShipmentRow>();
+  const shipmentsByOrderNumber = new Map<string, ExportShipmentRow>();
+  if (orderIds.length > 0 || orderNumbers.length > 0) {
     try {
-      const ships = await db
-        .select()
-        .from(shipments)
-        .where(and(inArray(shipments.orderId, orderIds), eq(shipments.voided, false)))
-        .orderBy(desc(shipments.shipDate));
+      const shipmentPredicates = [
+        orderIds.length
+          ? sql`order_id in (${sql.join(orderIds.map((id) => sql`${id}`), sql`, `)})`
+          : undefined,
+        orderNumbers.length
+          ? sql`order_number in (${sql.join(orderNumbers.map((n) => sql`${n}`), sql`, `)})`
+          : undefined,
+      ].filter(<T>(x: T | undefined): x is T => x !== undefined);
+      const ships = await db.execute<ExportShipmentRow>(sql`
+        select
+          order_id,
+          order_number,
+          tracking_number,
+          carrier_code,
+          service_code,
+          ship_date,
+          create_date,
+          label_created_at,
+          cost,
+          label_cost,
+          other_cost,
+          selected_rate_json
+        from shipments
+        where (${sql.join(shipmentPredicates, sql` or `)})
+          and coalesce(voided, false) = false
+        order by id desc
+      `);
       for (const s of ships) {
-        if (s.orderId != null && !shipmentsByOrder.has(s.orderId)) {
-          shipmentsByOrder.set(s.orderId, s);
+        if (s.order_id != null && !shipmentsByOrder.has(s.order_id)) {
+          shipmentsByOrder.set(s.order_id, s);
+        }
+        if (s.order_id == null && s.order_number && !shipmentsByOrderNumber.has(s.order_number)) {
+          shipmentsByOrderNumber.set(s.order_number, s);
         }
       }
     } catch (err) {
@@ -1149,18 +1209,27 @@ app.get('/export', zValidator('query', exportQuery), async (c) => {
     const totalQty = items.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
     const shipTo = [order.shipToCity, order.shipToState].filter(Boolean).join(', ');
 
-    const bestRateObj = overrides?.bestRateJson as Record<string, unknown> | null | undefined;
-    const bestRateAmount = bestRateObj
+    const ship = shipmentsByOrder.get(order.id) ?? shipmentsByOrderNumber.get(order.orderNumber) ?? null;
+    const selectedRateObj =
+      ship?.selected_rate_json && typeof ship.selected_rate_json === 'object'
+        ? (ship.selected_rate_json as Record<string, unknown>)
+        : null;
+    const bestRateObj =
+      selectedRateObj ?? (overrides?.bestRateJson as Record<string, unknown> | null | undefined);
+    const selectedShipmentCost = ship?.cost != null ? Number(ship.cost) : null;
+    const selectedOtherCost = ship?.other_cost != null ? Number(ship.other_cost) : 0;
+    const bestRateAmount = selectedShipmentCost != null
+      ? selectedShipmentCost + selectedOtherCost
+      : bestRateObj
       ? ((bestRateObj.shipping_amount as Record<string, unknown> | undefined)?.amount ??
         bestRateObj.cost ?? '')
       : '';
 
-    const ship = shipmentsByOrder.get(order.id) ?? null;
-    const labelCost = ship?.labelCost ?? '';
-    const tracking = ship?.trackingNumber ?? overrides?.trackingNumber ?? '';
-    const labelCreated = ship?.shipDate ?? '';
-    const carrier = ship?.carrierCode ?? order.carrierCode ?? '';
-    const service = ship?.serviceCode ?? order.serviceCode ?? '';
+    const labelCost = ship?.label_cost ?? (selectedShipmentCost != null ? String(selectedShipmentCost + selectedOtherCost) : '');
+    const tracking = ship?.tracking_number ?? overrides?.trackingNumber ?? '';
+    const labelCreated = ship?.label_created_at ?? ship?.create_date ?? ship?.ship_date ?? '';
+    const carrier = ship?.carrier_code ?? order.carrierCode ?? '';
+    const service = ship?.service_code ?? order.serviceCode ?? '';
 
     let shipMargin = '';
     if (labelCost !== '' && bestRateAmount !== '' && bestRateAmount != null) {
