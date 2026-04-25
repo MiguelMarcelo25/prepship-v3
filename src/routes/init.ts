@@ -65,14 +65,8 @@ app.get('/counts', async (c) => {
         (
           select count(*)::int from orders o
           where o.order_status = 'awaiting_shipment'
-            and (
-              (o.store_id is not null and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)}))
-              or exists (
-                select 1 from clients test_client
-                where test_client.id = o.client_id
-                  and test_client.is_test = true
-              )
-            )
+              and o.store_id is not null
+              and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
             and coalesce(o.externally_shipped, false) = false
             and coalesce((o.raw->>'externallyFulfilled')::boolean, false) = false
             and not exists (
@@ -88,14 +82,8 @@ app.get('/counts', async (c) => {
         (
           select count(*)::int from orders o
           where o.order_status = 'shipped'
-            and (
-              (o.store_id is not null and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)}))
-              or exists (
-                select 1 from clients test_client
-                where test_client.id = o.client_id
-                  and test_client.is_test = true
-              )
-            )
+              and o.store_id is not null
+              and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
             and not exists (
               select 1 from clients c
               where c.id = o.client_id
@@ -105,14 +93,8 @@ app.get('/counts', async (c) => {
         (
           select count(*)::int from orders o
           where o.order_status = 'cancelled'
-            and (
-              (o.store_id is not null and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)}))
-              or exists (
-                select 1 from clients test_client
-                where test_client.id = o.client_id
-                  and test_client.is_test = true
-              )
-            )
+              and o.store_id is not null
+              and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
             and not exists (
               select 1 from clients c
               where c.id = o.client_id
@@ -122,14 +104,8 @@ app.get('/counts', async (c) => {
         (
           select count(*)::int from orders o
           where o.order_status = 'on_hold'
-            and (
-              (o.store_id is not null and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)}))
-              or exists (
-                select 1 from clients test_client
-                where test_client.id = o.client_id
-                  and test_client.is_test = true
-              )
-            )
+              and o.store_id is not null
+              and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
             and not exists (
               select 1 from clients c
               where c.id = o.client_id
@@ -142,14 +118,8 @@ app.get('/counts', async (c) => {
     db.execute<{ orderStatus: string; cnt: number }>(sql`
       select o.order_status as "orderStatus", count(*)::int as cnt
       from orders o
-      where (
-          (o.store_id is not null and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)}))
-          or exists (
-            select 1 from clients test_client
-            where test_client.id = o.client_id
-              and test_client.is_test = true
-          )
-        )
+        where o.store_id is not null
+          and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
         and not exists (
           select 1 from clients c
           where c.id = o.client_id
@@ -171,14 +141,12 @@ app.get('/counts', async (c) => {
     db.execute<{ orderStatus: string; storeId: number; cnt: number }>(sql`
       select
         o.order_status as "orderStatus",
-        case when c.is_test = true then -o.client_id else o.store_id end::int as "storeId",
+          o.store_id::int as "storeId",
         count(*)::int as cnt
       from orders o
       left join clients c on c.id = o.client_id
-      where (
-          (o.store_id is not null and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)}))
-          or c.is_test = true
-        )
+        where o.store_id is not null
+          and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
         and not exists (
           select 1 from clients hidden_client
           where hidden_client.id = o.client_id
@@ -195,7 +163,7 @@ app.get('/counts', async (c) => {
             )
           )
         )
-      group by o.order_status, case when c.is_test = true then -o.client_id else o.store_id end
+        group by o.order_status, o.store_id
       order by cnt desc
     `),
   ]);

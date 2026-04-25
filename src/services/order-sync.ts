@@ -8,7 +8,8 @@ import { isExcludedStoreId } from '../config/prepship';
 
 const LAST_SYNC_KEY = 'order_sync.last_modified_ms';
 const DEFAULT_LOOKBACK_MS = 1000 * 60 * 60 * 24 * 30; // 30 days on first run
-const AWAITING_CATCHUP_LOOKBACK_MS = 48 * 60 * 60 * 1000;
+const STATUS_CATCHUP_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
+const AWAITING_CATCHUP_LOOKBACK_MS = STATUS_CATCHUP_LOOKBACK_MS;
 
 type SSOrder = {
   orderId: number;
@@ -419,24 +420,21 @@ async function syncOrdersForAccount(
   const runStartMs = Date.now();
   const sinceIso = new Date(lastSync).toISOString();
 
-  // v2-parity: three separate status-scoped paginated passes per account.
-  // v2 uses fixed windows per status (2hr shipped, 2hr cancelled, 4hr
-  // awaiting_shipment). We keep v4's watermark as the backstop — use the
-  // EARLIER of (lastSync, now - status-window) so first-run backfills still
-  // work while routine runs use v2's narrow windows. Matches
-  // apps/api/src/modules/sync/order-status-sync.ts:158-318.
-  const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+  // v2 parity plus production recovery: ShipStation can move an order from
+  // awaiting_shipment to shipped/cancelled without that old awaiting row being
+  // revisited by a narrow watermark. Use a 30-day catch-up window so stale DB
+  // awaiting counts converge back to ShipStation's live sidebar counts.
   const passes: Array<{ orderStatus: string; sinceMs: number }> = [
     ...(opts.skipStatusPasses
       ? []
       : [
           {
             orderStatus: 'shipped',
-            sinceMs: Math.min(lastSync, runStartMs - TWO_HOURS_MS),
+            sinceMs: Math.min(lastSync, runStartMs - STATUS_CATCHUP_LOOKBACK_MS),
           },
           {
             orderStatus: 'cancelled',
-            sinceMs: Math.min(lastSync, runStartMs - TWO_HOURS_MS),
+            sinceMs: Math.min(lastSync, runStartMs - STATUS_CATCHUP_LOOKBACK_MS),
           },
         ]),
   ];
