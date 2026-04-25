@@ -88,6 +88,58 @@ function toProviderAccountId(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function toFiniteNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number.parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function normalizeRateForV2(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object') return null;
+  const rate = value as Record<string, unknown>;
+  const shipping = rate.shipping_amount as Record<string, unknown> | undefined;
+  const other = rate.other_amount as Record<string, unknown> | undefined;
+  const shipmentCost =
+    toFiniteNumber(rate.shipmentCost) ??
+    toFiniteNumber(shipping?.amount) ??
+    toFiniteNumber(rate.cost) ??
+    null;
+  const otherCost = toFiniteNumber(rate.otherCost) ?? toFiniteNumber(other?.amount) ?? 0;
+  const cost = toFiniteNumber(rate.cost) ?? (shipmentCost != null ? shipmentCost + otherCost : null);
+
+  return {
+    ...rate,
+    carrierCode: rate.carrierCode ?? rate.carrier_code ?? null,
+    serviceCode: rate.serviceCode ?? rate.service_code ?? null,
+    serviceName: rate.serviceName ?? rate.service_type ?? rate.serviceCode ?? rate.service_code ?? null,
+    carrierNickname: rate.carrierNickname ?? rate.carrier_nickname ?? null,
+    providerAccountNickname: rate.providerAccountNickname ?? rate.carrierNickname ?? rate.carrier_nickname ?? null,
+    shippingProviderId: toProviderAccountId(rate.shippingProviderId ?? rate.carrier_id ?? null),
+    providerAccountId: toProviderAccountId(rate.providerAccountId ?? rate.shippingProviderId ?? rate.carrier_id ?? null),
+    shipmentCost,
+    otherCost,
+    cost,
+    amount: toFiniteNumber(rate.amount) ?? cost,
+    raw: rate.raw ?? rate,
+  };
+}
+
+function normalizeLabelForV2(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object') return null;
+  const label = value as Record<string, unknown>;
+  return {
+    ...label,
+    trackingNumber: label.trackingNumber ?? label.tracking_number ?? null,
+    carrierCode: label.carrierCode ?? label.carrier_code ?? null,
+    serviceCode: label.serviceCode ?? label.service_code ?? null,
+    shippingProviderId: toProviderAccountId(label.shippingProviderId ?? label.providerAccountId ?? label.carrier_id ?? null),
+    cost: toFiniteNumber(label.cost ?? label.labelCost ?? label.label_cost),
+  };
+}
+
 function legacyClientId(
   clientId: number | null,
   storeId: unknown,
@@ -210,8 +262,8 @@ function transformOrderRowV4toV2(
         ? { length: dimsL, width: dimsW, height: dimsH, units: 'inches' }
         : null,
     bestRate: bestRateLegacy,
-    selectedRate: null,
-    label: null,
+    selectedRate: normalizeRateForV2(row.selectedRate),
+    label: normalizeLabelForV2(row.label),
   };
 }
 
