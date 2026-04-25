@@ -6,10 +6,11 @@ import {
   clientPackagePrices,
 } from '../db/schema/billing';
 import { shipments } from '../db/schema/shipments';
-import { orders } from '../db/schema/orders';
+import { orderOverrides, orders } from '../db/schema/orders';
 import { packages } from '../db/schema/packages';
 import { clients } from '../db/schema/clients';
 import { inventory } from '../db/schema/inventory';
+import { SS_BASELINE_CARRIER_CODES } from './rates';
 
 export type GenerateInput = {
   clientId?: number;
@@ -93,11 +94,15 @@ export async function generateLineItems(input: GenerateInput) {
       shipDate: shipments.shipDate,
       labelCost: shipments.labelCost,
       cost: shipments.cost,
+      otherCost: shipments.otherCost,
+      carrierCode: shipments.carrierCode,
       selectedPid: shipments.selectedPid,
       selectedPackageId: shipments.selectedPackageId,
       dimsL: shipments.dimsL,
       dimsW: shipments.dimsW,
       dimsH: shipments.dimsH,
+      refUspsRate: orderOverrides.refUspsRate,
+      refUpsRate: orderOverrides.refUpsRate,
       orderId: orders.id,
       orderNumber: orders.orderNumber,
       orderClientId: orders.clientId,
@@ -111,6 +116,7 @@ export async function generateLineItems(input: GenerateInput) {
       shipments,
       and(eq(shipments.orderId, orders.id), eq(shipments.voided, false))
     )
+    .leftJoin(orderOverrides, eq(orderOverrides.orderId, orders.id))
     .where(
       and(
         eq(orders.orderStatus, 'shipped'),
@@ -144,11 +150,15 @@ export async function generateLineItems(input: GenerateInput) {
     shipDate: Date | null;
     labelCost: string | null;
     cost: string | null;
+    otherCost: string | null;
+    carrierCode: string | null;
     selectedPid: number | null;
     selectedPackageId: string | null;
     dimsL: number | null;
     dimsW: number | null;
     dimsH: number | null;
+    refUspsRate: string | null;
+    refUpsRate: string | null;
     items: unknown[];
   };
 
@@ -167,11 +177,15 @@ export async function generateLineItems(input: GenerateInput) {
         shipDate: row.shipDate ?? row.orderDate,
         labelCost: row.labelCost,
         cost: row.cost,
+        otherCost: row.otherCost,
+        carrierCode: row.carrierCode,
         selectedPid: row.selectedPid,
         selectedPackageId: row.selectedPackageId,
         dimsL: row.dimsL,
         dimsW: row.dimsW,
         dimsH: row.dimsH,
+        refUspsRate: row.refUspsRate,
+        refUpsRate: row.refUpsRate,
         items: Array.isArray(row.orderItems) ? row.orderItems : [],
       };
     })
@@ -196,15 +210,20 @@ export async function generateLineItems(input: GenerateInput) {
       shipDate: shipments.shipDate,
       labelCost: shipments.labelCost,
       cost: shipments.cost,
+      otherCost: shipments.otherCost,
+      carrierCode: shipments.carrierCode,
       selectedPid: shipments.selectedPid,
       selectedPackageId: shipments.selectedPackageId,
       dimsL: shipments.dimsL,
       dimsW: shipments.dimsW,
       dimsH: shipments.dimsH,
+      refUspsRate: orderOverrides.refUspsRate,
+      refUpsRate: orderOverrides.refUpsRate,
       orderItems: orders.items,
     })
     .from(shipments)
     .leftJoin(orders, eq(orders.id, shipments.orderId))
+    .leftJoin(orderOverrides, eq(orderOverrides.orderId, shipments.orderId))
     .where(
       and(
         sql`${shipments.clientId} is not null`,
@@ -229,11 +248,15 @@ export async function generateLineItems(input: GenerateInput) {
       shipDate: row.shipDate,
       labelCost: row.labelCost,
       cost: row.cost,
+      otherCost: row.otherCost,
+      carrierCode: row.carrierCode,
       selectedPid: row.selectedPid,
       selectedPackageId: row.selectedPackageId,
       dimsL: row.dimsL,
       dimsW: row.dimsW,
       dimsH: row.dimsH,
+      refUspsRate: row.refUspsRate,
+      refUpsRate: row.refUpsRate,
       items: Array.isArray(row.orderItems) ? row.orderItems : [],
     });
   }
@@ -461,11 +484,24 @@ export async function generateLineItems(input: GenerateInput) {
     // populated. Prefer label_cost when available, fall back to cost so
     // historical shipments still generate a shipping line. Matches v2's
     // behavior where any known cost becomes the shipping charge.
-    const labelCost = toNum(s.labelCost) || toNum(s.cost);
+    const labelCost = (toNum(s.labelCost) || toNum(s.cost)) + toNum(s.otherCost);
     if (labelCost > 0) {
+      let billedCost = labelCost;
+      const billingMode = cfg.billingMode ?? 'label_cost';
+      if (
+        (billingMode === 'reference_rate' || billingMode === 'ss_ref_rate') &&
+        !SS_BASELINE_CARRIER_CODES.has(s.carrierCode ?? '')
+      ) {
+        const referenceCandidates = [toNum(s.refUspsRate), toNum(s.refUpsRate)].filter(
+          (value) => value > 0
+        );
+        if (referenceCandidates.length > 0) {
+          billedCost = Math.max(labelCost, Math.min(...referenceCandidates));
+        }
+      }
       const pct = toNum(cfg.shippingMarkupPct);
       const flat = toNum(cfg.shippingMarkupFlat);
-      const shipCost = labelCost * (1 + pct / 100) + flat;
+      const shipCost = billedCost * (1 + pct / 100) + flat;
       rows.push({
         clientId,
         orderId: s.orderId,

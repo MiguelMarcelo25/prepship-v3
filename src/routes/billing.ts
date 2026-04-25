@@ -82,7 +82,7 @@ const configBody = z.object({
   shippingMarkupFlat: z.coerce.number().nonnegative().optional(),
   storageFeePerCuFt: z.coerce.number().nonnegative().optional(),
   billingMode: z
-    .enum(['per_shipment', 'monthly', 'label_cost', 'ss_ref_rate'])
+    .enum(['per_shipment', 'monthly', 'label_cost', 'ss_ref_rate', 'reference_rate'])
     .optional(),
   active: z.boolean().optional(),
 });
@@ -245,12 +245,12 @@ app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
     grand_total: string;
   }>(sql`
     select
-      coalesce(sum(case when line_type = 'pick_pack' then total_cost else 0 end), 0)::text as pickpack_total,
-      coalesce(sum(case when line_type = 'additional' then total_cost else 0 end), 0)::text as additional_total,
-      coalesce(sum(case when line_type = 'package' then total_cost else 0 end), 0)::text as package_total,
+      coalesce(sum(case when line_type in ('pick_pack', 'pickpack') then total_cost else 0 end), 0)::text as pickpack_total,
+      coalesce(sum(case when line_type in ('additional_unit', 'additional') then total_cost else 0 end), 0)::text as additional_total,
+      coalesce(sum(case when line_type in ('package_cost', 'package') then total_cost else 0 end), 0)::text as package_total,
       coalesce(sum(case when line_type = 'shipping' then total_cost else 0 end), 0)::text as shipping_total,
       coalesce(sum(case when line_type = 'storage' then total_cost else 0 end), 0)::text as storage_total,
-      count(distinct case when line_type = 'pick_pack' then order_id end)::int as order_count,
+      count(distinct case when line_type in ('pick_pack', 'pickpack') then order_id end)::int as order_count,
       coalesce(sum(total_cost), 0)::text as grand_total
     from billing_line_items
     where client_id = ${clientId}
@@ -276,10 +276,10 @@ app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
       b.order_id,
       b.order_number,
       to_char(b.ship_date, 'YYYY-MM-DD') as ship_date,
-      coalesce(sum(case when b.line_type = 'pick_pack' then b.qty else 0 end), 0)::text as base_qty,
-      coalesce(sum(case when b.line_type = 'additional' then b.qty else 0 end), 0)::text as addl_qty,
-      coalesce(sum(case when b.line_type = 'pick_pack' then b.total_cost else 0 end), 0)::text as pickpack_amt,
-      coalesce(sum(case when b.line_type = 'additional' then b.total_cost else 0 end), 0)::text as additional_amt,
+      coalesce(sum(case when b.line_type in ('pick_pack', 'pickpack') then b.qty else 0 end), 0)::text as base_qty,
+      coalesce(sum(case when b.line_type in ('additional_unit', 'additional') then b.qty else 0 end), 0)::text as addl_qty,
+      coalesce(sum(case when b.line_type in ('pick_pack', 'pickpack') then b.total_cost else 0 end), 0)::text as pickpack_amt,
+      coalesce(sum(case when b.line_type in ('additional_unit', 'additional') then b.total_cost else 0 end), 0)::text as additional_amt,
       coalesce(sum(case when b.line_type = 'shipping' then b.total_cost else 0 end), 0)::text as shipping_amt,
       coalesce(sum(case when b.line_type = 'storage' then b.total_cost else 0 end), 0)::text as storage_amt,
       sum(b.total_cost)::text as row_total,
