@@ -445,12 +445,10 @@ export async function generateLineItems(input: GenerateInput) {
       });
     }
 
-    // label_cost is set when v4 creates the label itself; for shipments
-    // synced from ShipStation (already-shipped orders) only `cost` is
-    // populated. Prefer label_cost when available, fall back to cost so
-    // historical shipments still generate a shipping line. Matches v2's
-    // behavior where any known cost becomes the shipping charge.
-    const labelCost = (toNum(s.labelCost) || toNum(s.cost)) + toNum(s.otherCost);
+    // v2 bills shipmentCost + otherCost from the synced shipment row. In v4
+    // that source column is `cost`; `labelCost` is only a fallback for rows
+    // created before the synced cost was available.
+    const labelCost = (toNum(s.cost) || toNum(s.labelCost)) + toNum(s.otherCost);
     if (labelCost > 0) {
       let billedCost = labelCost;
       const billingMode = cfg.billingMode ?? 'label_cost';
