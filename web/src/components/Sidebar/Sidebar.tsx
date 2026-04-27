@@ -1,6 +1,8 @@
 // @ts-nocheck
 import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { apiClient } from '../../api/client'
+import { useAuth } from '../../lib/auth'
 import type { InitCountsDto, InitStoreDto } from '../../types/api'
 import { buildSidebarSections, SIDEBAR_STATUSES, type SidebarOrderStatus } from './sidebar-data'
 
@@ -50,6 +52,19 @@ export default function Sidebar({
   const [expandedSections, setExpandedSections] = useState<Set<SidebarOrderStatus>>(new Set(['awaiting_shipment']))
   const [counts, setCounts] = useState<InitCountsDto | null>(null)
   const [searchValue, setSearchValue] = useState('')
+  const { user, session, signOut } = useAuth()
+  const navigate = useNavigate()
+  const [signingOut, setSigningOut] = useState(false)
+
+  const handleSignOut = async () => {
+    if (signingOut) return
+    setSigningOut(true)
+    try {
+      await signOut()
+    } finally {
+      navigate('/login', { replace: true })
+    }
+  }
 
   useEffect(() => {
     const loadCounts = async () => {
@@ -199,6 +214,56 @@ export default function Sidebar({
       <div className="sidebar-bottom">
         <div><span className="conn-dot" />ShipStation Connected</div>
         <div style={{ marginTop: 2 }}>DR PREPPER USA · Gardena CA</div>
+        {session ? (
+          <div
+            style={{
+              marginTop: 10,
+              paddingTop: 10,
+              borderTop: '1px solid var(--border)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              textAlign: 'left',
+            }}
+          >
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: 'var(--text-secondary, #374151)',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+                title={user?.email ?? ''}
+              >
+                {user?.email ?? 'Signed in'}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={handleSignOut}
+              disabled={signingOut}
+              title="Sign out"
+              aria-label="Sign out"
+              style={{
+                fontSize: 11,
+                fontWeight: 600,
+                padding: '5px 10px',
+                borderRadius: 6,
+                border: '1px solid var(--border)',
+                background: 'var(--surface, #fff)',
+                color: 'var(--text-secondary, #374151)',
+                cursor: signingOut ? 'not-allowed' : 'pointer',
+                opacity: signingOut ? 0.6 : 1,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {signingOut ? 'Signing out…' : '↪ Sign out'}
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
   )

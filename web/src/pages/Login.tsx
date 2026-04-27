@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { useLocation, useNavigate, Navigate } from 'react-router-dom';
+import { Eye, EyeOff } from 'lucide-react';
 import { useAuth } from '../lib/auth';
 import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
@@ -10,6 +11,7 @@ export default function Login() {
   const location = useLocation();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -29,13 +31,19 @@ export default function Login() {
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setError(null);
+    const cleanEmail = email.trim();
+    if (!cleanEmail || !password) {
+      setError('Email and password are required.');
+      return;
+    }
     setSubmitting(true);
     try {
-      await signIn(email, password);
+      await signIn(cleanEmail, password);
       const from = (location.state as { from?: { pathname: string } } | null)?.from?.pathname;
       navigate(from ?? '/', { replace: true });
     } catch (err) {
-      setError((err as Error).message);
+      const msg = (err as Error).message ?? 'Sign-in failed';
+      setError(/invalid login/i.test(msg) ? 'Invalid email or password.' : msg);
     } finally {
       setSubmitting(false);
     }
@@ -67,27 +75,43 @@ export default function Login() {
               autoComplete="username"
               required
               autoFocus
+              disabled={submitting}
             />
           </div>
           <div>
             <label className="section-label block mb-1.5">Password</label>
-            <Input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoComplete="current-password"
-              required
-            />
+            <div className="relative">
+              <Input
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete="current-password"
+                required
+                disabled={submitting}
+                className="pr-9"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-ink-3 hover:text-ink"
+                tabIndex={-1}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+              >
+                {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+              </button>
+            </div>
           </div>
           {error && (
-            <div className="text-danger text-tiny py-1">{error}</div>
+            <div className="text-danger text-tiny py-1" role="alert">
+              {error}
+            </div>
           )}
           <Button
             type="submit"
             variant="primary"
             size="md"
             className="w-full"
-            disabled={submitting}
+            disabled={submitting || !email.trim() || !password}
           >
             {submitting ? 'Signing in…' : 'Sign in'}
           </Button>
