@@ -113,16 +113,73 @@ export default function AuthLayout({
             </div>
           </div>
 
-          <div className="bg-white rounded-2xl border border-line shadow-lg p-7 sm:p-8 backdrop-blur-sm">
-            <div className="mb-6">
-              <h2 className="text-[20px] font-bold text-ink tracking-[-0.3px]">
-                {title}
-              </h2>
-              {subtitle ? (
-                <p className="text-tiny text-ink-3 mt-1.5">{subtitle}</p>
-              ) : null}
+          {/* Gradient-bordered glass card with brand-tinted shadow */}
+          <div className="relative group">
+            {/* Outer glow — brand-tinted ambient shadow */}
+            <div
+              className="absolute -inset-1 rounded-[20px] opacity-60 blur-xl transition-opacity duration-500 group-hover:opacity-80 pointer-events-none"
+              style={{
+                background:
+                  'linear-gradient(135deg, rgba(42,91,215,0.35), rgba(255,209,102,0.25) 50%, rgba(42,91,215,0.35))',
+              }}
+            />
+
+            {/* Gradient border wrapper */}
+            <div
+              className="relative rounded-[18px] p-px"
+              style={{
+                background:
+                  'linear-gradient(135deg, rgba(255,255,255,0.9), rgba(195,208,245,0.6) 30%, rgba(42,91,215,0.25) 70%, rgba(255,209,102,0.45))',
+              }}
+            >
+              <div
+                className="relative rounded-[17px] p-7 sm:p-8 overflow-hidden"
+                style={{
+                  background:
+                    'linear-gradient(180deg, rgba(255,255,255,0.92) 0%, rgba(255,255,255,0.78) 100%)',
+                  backdropFilter: 'blur(24px) saturate(140%)',
+                  WebkitBackdropFilter: 'blur(24px) saturate(140%)',
+                  boxShadow:
+                    '0 30px 60px -20px rgba(26,72,192,0.35), 0 12px 24px -10px rgba(26,31,46,0.18), inset 0 1px 0 rgba(255,255,255,0.9)',
+                }}
+              >
+                {/* Subtle top sheen */}
+                <div
+                  className="absolute inset-x-0 top-0 h-px"
+                  style={{
+                    background:
+                      'linear-gradient(90deg, transparent, rgba(255,255,255,0.95) 50%, transparent)',
+                  }}
+                />
+                {/* Inner accent glow */}
+                <div
+                  className="absolute -top-24 -right-16 w-56 h-56 rounded-full opacity-40 blur-3xl pointer-events-none"
+                  style={{
+                    background:
+                      'radial-gradient(circle, rgba(42,91,215,0.35), transparent 70%)',
+                  }}
+                />
+                <div
+                  className="absolute -bottom-20 -left-16 w-48 h-48 rounded-full opacity-30 blur-3xl pointer-events-none"
+                  style={{
+                    background:
+                      'radial-gradient(circle, rgba(255,209,102,0.4), transparent 70%)',
+                  }}
+                />
+
+                <div className="relative">
+                  <div className="mb-6">
+                    <h2 className="text-[22px] font-bold text-ink tracking-[-0.4px]">
+                      {title}
+                    </h2>
+                    {subtitle ? (
+                      <p className="text-tiny text-ink-3 mt-1.5">{subtitle}</p>
+                    ) : null}
+                  </div>
+                  {children}
+                </div>
+              </div>
             </div>
-            {children}
           </div>
 
           {footer ? (
