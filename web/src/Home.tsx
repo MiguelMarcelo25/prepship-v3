@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { ToastContext } from './contexts/ToastContext'
 import { apiClient } from './api/client'
 import type { SyncWorkerStatusDto } from './types/api'
@@ -46,6 +47,37 @@ const VIEW_LABELS: Record<Exclude<ViewType, 'orders' | 'manifests'>, string> = {
   billing: 'Billing',
 }
 
+const VIEW_PATHS: Record<Exclude<ViewType, 'orders'>, string> = {
+  inventory: '/inventory',
+  locations: '/locations',
+  packages: '/packages',
+  rates: '/rates',
+  analysis: '/analysis',
+  settings: '/settings',
+  billing: '/billing',
+  manifests: '/manifest',
+}
+
+const VALID_STATUSES: OrderStatus[] = ['awaiting_shipment', 'shipped', 'cancelled']
+
+function pathToRoute(pathname: string): { view: ViewType; status: OrderStatus | null } {
+  if (pathname === '/' || pathname === '/orders' || pathname === '/orders/') {
+    return { view: 'orders', status: 'awaiting_shipment' }
+  }
+  const ordersMatch = pathname.match(/^\/orders\/([^/]+)/)
+  if (ordersMatch) {
+    const candidate = ordersMatch[1] as OrderStatus
+    if (VALID_STATUSES.includes(candidate)) return { view: 'orders', status: candidate }
+    return { view: 'orders', status: 'awaiting_shipment' }
+  }
+  for (const [view, path] of Object.entries(VIEW_PATHS) as [Exclude<ViewType, 'orders'>, string][]) {
+    if (pathname === path || pathname.startsWith(path + '/')) {
+      return { view, status: null }
+    }
+  }
+  return { view: 'orders', status: 'awaiting_shipment' }
+}
+
 function PlaceholderView({ title }: { title: string }) {
   return (
     <div className="view-content">
@@ -61,9 +93,23 @@ function PlaceholderView({ title }: { title: string }) {
 export default function Home() {
   const { stores: sidebarStores } = useInitStores()
   const toastContext = useContext(ToastContext)
-  const [currentView, setCurrentView] = useState<ViewType>('orders')
-  const [lastContentView, setLastContentView] = useState<ContentView>('orders')
-  const [currentStatus, setCurrentStatus] = useState<OrderStatus>('awaiting_shipment')
+  const location = useLocation()
+  const navigate = useNavigate()
+  const initialRoute = pathToRoute(location.pathname)
+  const [currentView, setCurrentView] = useState<ViewType>(initialRoute.view)
+  const [lastContentView, setLastContentView] = useState<ContentView>(
+    initialRoute.view === 'manifests' ? 'orders' : (initialRoute.view as ContentView),
+  )
+  const [currentStatus, setCurrentStatus] = useState<OrderStatus>(
+    initialRoute.status ?? 'awaiting_shipment',
+  )
+
+  // Sync URL → state when the user navigates via back/forward or a Link.
+  useEffect(() => {
+    const next = pathToRoute(location.pathname)
+    setCurrentView(next.view)
+    if (next.status) setCurrentStatus(next.status)
+  }, [location.pathname])
   const [mobileMenuOpen, setMobileMenuOpen] = useState(true)
   const [activeStore, setActiveStore] = useState<number | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
@@ -280,18 +326,17 @@ export default function Home() {
         currentView={displayView}
         stores={sidebarStores}
         onSelectStatus={(status) => {
-          setCurrentStatus(status)
-          setCurrentView('orders')
           setActiveStore(null)
+          navigate(`/orders/${status}`)
         }}
         onShowView={(view) => {
-          setCurrentView(view)
+          navigate(VIEW_PATHS[view as Exclude<ViewType, 'orders'>] ?? '/')
         }}
         mobileMenuOpen={mobileMenuOpen}
         onCloseMobileMenu={undefined}
         onSelectStore={(storeId) => {
           setActiveStore(storeId)
-          setCurrentView('orders')
+          navigate(`/orders/${currentStatus}`)
         }}
         activeStore={activeStore}
       />
@@ -486,7 +531,10 @@ export default function Home() {
             onSelectedOrderIdsChange={setSelectedOrderIds}
             activeOrderId={activeOrderId}
             onActiveOrderIdChange={setActiveOrderId}
-            onNavigateView={(view) => setCurrentView(view)}
+            onNavigateView={(view) => {
+              if (view === 'orders') navigate(`/orders/${currentStatus}`)
+              else navigate(VIEW_PATHS[view as Exclude<ViewType, 'orders'>] ?? '/')
+            }}
             columnMenuRequestId={columnMenuRequestId}
             labelsActionRequestId={labelsActionRequestId}
             queueToggleRequestId={queueToggleRequestId}
@@ -503,8 +551,8 @@ export default function Home() {
         ) : displayView === 'packages' ? (
           <PackagesView
             onOpenOrder={(orderId) => {
-              setCurrentView('orders')
               setActiveOrderId(orderId)
+              navigate(`/orders/${currentStatus}`)
             }}
           />
         ) : displayView === 'rates' ? (
@@ -516,10 +564,9 @@ export default function Home() {
         ) : displayView === 'billing' ? (
           <BillingView
             onOpenOrder={(orderId) => {
-              setCurrentView('orders')
-              setCurrentStatus('shipped')
               setActiveStore(null)
               setActiveOrderId(orderId)
+              navigate('/orders/shipped')
             }}
           />
         ) : (
@@ -528,7 +575,13 @@ export default function Home() {
 
         <ManifestsView
           open={manifestOpen}
-          onClose={() => setCurrentView(lastContentView)}
+          onClose={() => {
+            const target =
+              lastContentView === 'orders'
+                ? `/orders/${currentStatus}`
+                : VIEW_PATHS[lastContentView as Exclude<ViewType, 'orders'>] ?? '/'
+            navigate(target)
+          }}
         />
       </div>
     </>
