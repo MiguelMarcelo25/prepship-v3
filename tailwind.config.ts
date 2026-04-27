@@ -49,6 +49,7 @@ export default {
       },
       fontFamily: {
         sans: [
+          '"Poppins"',
           '-apple-system',
           'BlinkMacSystemFont',
           '"Segoe UI"',

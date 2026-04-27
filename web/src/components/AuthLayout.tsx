@@ -102,13 +102,13 @@ export default function AuthLayout({
           }}
         />
 
-        <div className="w-full max-w-sm">
+        <div className="w-full max-w-md lg:max-w-lg">
           <div className="md:hidden text-center mb-6">
-            <div className="flex items-baseline justify-center text-[26px] font-extrabold tracking-[-0.5px]">
+            <div className="flex items-baseline justify-center text-[30px] font-extrabold tracking-[-0.5px]">
               <span className="text-ink">PREP</span>
               <span className="text-brand">SHIP</span>
             </div>
-            <div className="text-[10px] uppercase tracking-[0.4px] text-ink-3 mt-1">
+            <div className="text-[11px] uppercase tracking-[0.4px] text-ink-3 mt-1">
               Dr Prepper Fulfillment
             </div>
           </div>
@@ -133,7 +133,7 @@ export default function AuthLayout({
               }}
             >
               <div
-                className="relative rounded-[17px] p-7 sm:p-8 overflow-hidden"
+                className="auth-card relative rounded-[17px] p-9 sm:p-10 lg:p-12 overflow-hidden"
                 style={{
                   background:
                     'linear-gradient(180deg, rgba(255,255,255,0.92) 0%, rgba(255,255,255,0.78) 100%)',
@@ -168,12 +168,12 @@ export default function AuthLayout({
                 />
 
                 <div className="relative">
-                  <div className="mb-6">
-                    <h2 className="text-[22px] font-bold text-ink tracking-[-0.4px]">
+                  <div className="mb-7">
+                    <h2 className="text-[26px] sm:text-[28px] font-bold text-ink tracking-[-0.5px] leading-tight">
                       {title}
                     </h2>
                     {subtitle ? (
-                      <p className="text-tiny text-ink-3 mt-1.5">{subtitle}</p>
+                      <p className="text-[13px] text-ink-3 mt-2">{subtitle}</p>
                     ) : null}
                   </div>
                   {children}

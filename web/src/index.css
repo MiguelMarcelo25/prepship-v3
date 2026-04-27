@@ -77,4 +77,28 @@
   .section-label {
     @apply text-[11.5px] font-semibold tracking-[0.4px] uppercase text-ink-3;
   }
+
+  /* Bigger, rounder fields and buttons inside the auth card */
+  .auth-card input {
+    padding-top: 11px;
+    padding-bottom: 11px;
+    font-size: 14px;
+    border-radius: 10px;
+  }
+  .auth-card input:not([type='checkbox']):not([type='radio']) {
+    padding-left: 36px;
+  }
+  .auth-card .relative > input.pr-9 {
+    padding-right: 38px;
+  }
+  .auth-card .section-label {
+    font-size: 12px;
+    letter-spacing: 0.3px;
+  }
+  .auth-card button[type='submit'] {
+    padding-top: 12px;
+    padding-bottom: 12px;
+    font-size: 14px;
+    border-radius: 10px;
+  }
 }
