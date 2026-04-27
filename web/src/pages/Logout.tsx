@@ -11,7 +11,7 @@ export default function Logout() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-page text-ink-3">
+      <div className="flex-1 w-full min-h-screen flex items-center justify-center bg-page text-ink-3">
         Signing out…
       </div>
     );

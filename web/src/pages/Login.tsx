@@ -17,7 +17,7 @@ export default function Login() {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-page text-ink-3">
+      <div className="flex-1 w-full min-h-screen flex items-center justify-center bg-page text-ink-3">
         Loading…
       </div>
     );
@@ -50,7 +50,7 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-page px-4">
+    <div className="flex-1 w-full min-h-screen flex items-center justify-center bg-page px-4">
       <form
         onSubmit={submit}
         className="w-full max-w-sm bg-white rounded-card border border-line shadow-sm p-6"
