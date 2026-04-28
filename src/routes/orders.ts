@@ -653,6 +653,12 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       selectedCost ??
       labelCost ??
       rateAmount(bestRate);
+    const labelCreatedAt =
+      label?.createdAt ??
+      r.overrides?.bestRateAt ??
+      r.order.updatedAt ??
+      r.order.createdAt ??
+      null;
     const shipping = {
       carrierCode: canonicalCarrierCode,
       serviceCode: canonicalServiceCode,
@@ -662,7 +668,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       selectedRateAmount,
       bestRateAmount: rateAmount(bestRate),
       labelCost,
-      labelCreatedAt: label?.createdAt ?? null,
+      labelCreatedAt,
       shipDate: ship?.ship_date ?? null,
       shipmentId: ship?.label_shipment_id ?? null,
       source: ship ? 'shipment' : overrideBestRate ? 'order_override' : null,
