@@ -445,7 +445,7 @@ export default function Home() {
                 Full↻
               </button>
               <div className="col-toggle-wrap">
-                <button className="btn btn-outline btn-sm" type="button" onClick={() => setColumnMenuRequestId((value) => value + 1)}>⊞ Columns</button>
+                <button data-columns-anchor="true" className="btn btn-outline btn-sm" type="button" onClick={() => setColumnMenuRequestId((value) => value + 1)}>⊞ Columns</button>
               </div>
               <button className="btn btn-primary btn-sm" type="button" onClick={() => setLabelsActionRequestId((value) => value + 1)}>🖨️ Labels</button>
               <button className="btn btn-outline btn-sm" id="pq-toggle-btn" type="button" style={{ position: 'relative', gap: 4 }} onClick={() => setQueueToggleRequestId((value) => value + 1)}>

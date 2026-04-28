@@ -899,6 +899,7 @@ export default function OrdersView({
   const [dailyStats, setDailyStats] = useState<OrdersDailyStatsDto | null>(null)
   const [columnPrefs, setColumnPrefs] = useState<ColumnPrefs | null>(null)
   const [columnMenuOpen, setColumnMenuOpen] = useState(false)
+  const [columnMenuPos, setColumnMenuPos] = useState<{ top: number; right: number } | null>(null)
   const [dragColumnKey, setDragColumnKey] = useState<TableColumnKey | null>(null)
   const [dragOverColumnKey, setDragOverColumnKey] = useState<TableColumnKey | null>(null)
   const [dropdownDragColumnKey, setDropdownDragColumnKey] = useState<TableColumnKey | null>(null)
@@ -1203,11 +1204,38 @@ export default function OrdersView({
     const onClick = (event: MouseEvent) => {
       const target = event.target as HTMLElement | null
       if (target?.closest('.react-column-menu')) return
+      // The topbar anchor toggles the menu via columnMenuRequestId — let that
+      // handler run instead of double-firing a close here.
+      if (target?.closest('[data-columns-anchor]')) return
       setColumnMenuOpen(false)
     }
 
     document.addEventListener('click', onClick)
     return () => document.removeEventListener('click', onClick)
+  }, [columnMenuOpen])
+
+  // Anchor the column menu to the actual topbar button via fixed positioning.
+  useEffect(() => {
+    if (!columnMenuOpen) {
+      setColumnMenuPos(null)
+      return
+    }
+    const measure = () => {
+      const anchor = document.querySelector<HTMLElement>('[data-columns-anchor]')
+      if (!anchor) return
+      const rect = anchor.getBoundingClientRect()
+      setColumnMenuPos({
+        top: rect.bottom + 6,
+        right: Math.max(8, window.innerWidth - rect.right),
+      })
+    }
+    measure()
+    window.addEventListener('resize', measure)
+    window.addEventListener('scroll', measure, true)
+    return () => {
+      window.removeEventListener('resize', measure)
+      window.removeEventListener('scroll', measure, true)
+    }
   }, [columnMenuOpen])
 
   useEffect(() => {
@@ -3248,8 +3276,8 @@ export default function OrdersView({
 
           <div className="col-toggle-wrap">
             <button className="btn btn-outline btn-sm" type="button" id="colBtnFilter" style={{ display: 'none' }} onClick={() => setColumnMenuOpen((open) => !open)}>⊞ Columns</button>
-            {columnMenuOpen ? (
-              <div ref={columnMenuRef} className="react-column-menu" style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 8, boxShadow: 'var(--shadow-lg)', padding: '8px 0', zIndex: 300, minWidth: 220 }}>
+            {columnMenuOpen && columnMenuPos ? (
+              <div ref={columnMenuRef} className="react-column-menu" style={{ position: 'fixed', top: columnMenuPos.top, right: columnMenuPos.right, background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 8, boxShadow: 'var(--shadow-lg)', padding: '8px 0', zIndex: 1000, minWidth: 220 }}>
                 <div style={{ padding: '0 12px 6px', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.5px' }}>Toggle &amp; Reorder Columns</div>
                 {resolvedColumnPrefs.orderedColumns.filter((column) => column.key !== 'select' && column.key !== 'orderNum').map((column) => {
                   const checked = !resolvedColumnPrefs.hiddenColumns.has(column.key)
