@@ -653,9 +653,7 @@ function getV2CarrierAccountForOrder(order: OrderSummaryDto) {
   const carrierCode =
     getShippingString(order, 'carrierCode') ??
     toStringValue(order.selectedRate?.carrierCode) ??
-    toStringValue(order.label?.carrierCode) ??
-    toStringValue(order.bestRate?.carrierCode) ??
-    toStringValue(order.carrierCode)
+    toStringValue(order.bestRate?.carrierCode)
   const trackingNumber = getShippingString(order, 'trackingNumber') ?? toStringValue(order.label?.trackingNumber)
   const clientId = getLegacyClientIdForDisplay(order)
 
@@ -669,17 +667,11 @@ function getCarrierCodeForDisplay(order: OrderSummaryDto) {
   if (order.orderStatus === 'awaiting_shipment') {
     return (
       toStringValue(order.bestRate?.carrierCode) ??
-      toStringValue(order.selectedRate?.carrierCode) ??
-      toStringValue(order.label?.carrierCode) ??
-      toStringValue(order.carrierCode)
+      toStringValue(order.selectedRate?.carrierCode)
     )
   }
 
-  return (
-    toStringValue(order.selectedRate?.carrierCode) ??
-    toStringValue(order.label?.carrierCode) ??
-    toStringValue(order.carrierCode)
-  )
+  return toStringValue(order.selectedRate?.carrierCode) ?? toStringValue(order.bestRate?.carrierCode)
 }
 
 function getShipAccountDisplay(order: OrderSummaryDto, accounts: CarrierAccountDto[]) {
@@ -703,7 +695,7 @@ function getShipAccountDisplay(order: OrderSummaryDto, accounts: CarrierAccountD
     const nickname = normalizeShippingAccountName(order.bestRate.carrierNickname)
     if (nickname) return nickname
   }
-  return formatCarrierCode(order.label?.carrierCode ?? order.selectedRate?.carrierCode ?? order.bestRate?.carrierCode ?? order.carrierCode)
+  return formatCarrierCode(order.selectedRate?.carrierCode ?? order.bestRate?.carrierCode)
 }
 
 function getShipAccountLabelById(accounts: CarrierAccountDto[], accountId: string) {
@@ -751,8 +743,7 @@ function getSelectedRateCarrierCode(order: OrderSummaryDto) {
   return (
     getShippingString(order, 'carrierCode') ??
     toStringValue(order.selectedRate?.carrierCode) ??
-    toStringValue(order.label?.carrierCode) ??
-    toStringValue(order.carrierCode)
+    toStringValue(order.bestRate?.carrierCode)
   )
 }
 
@@ -760,8 +751,7 @@ function getSelectedRateServiceCode(order: OrderSummaryDto) {
   return (
     getShippingString(order, 'serviceCode') ??
     toStringValue(order.selectedRate?.serviceCode) ??
-    toStringValue(order.label?.serviceCode) ??
-    toStringValue(order.serviceCode)
+    toStringValue(order.bestRate?.serviceCode)
   )
 }
 
@@ -880,7 +870,7 @@ function getSortValue(order: OrderSummaryDto, detail: OrderFullDto | null, key: 
       return `${shipTo.state ?? ''}${shipTo.city ?? ''}`.toLowerCase()
     }
     case 'carrier':
-      return `${order.label?.carrierCode ?? order.selectedRate?.carrierCode ?? order.bestRate?.carrierCode ?? order.carrierCode ?? ''}${order.label?.serviceCode ?? order.selectedRate?.serviceCode ?? getBestRateServiceCode(order) ?? order.serviceCode ?? ''}`.toLowerCase()
+      return `${getShippingString(order, 'carrierCode') ?? order.selectedRate?.carrierCode ?? order.bestRate?.carrierCode ?? ''}${getShippingString(order, 'serviceCode') ?? order.selectedRate?.serviceCode ?? getBestRateServiceCode(order) ?? ''}`.toLowerCase()
     case 'custcarrier':
       return String(getShipAccountDisplay(order, accounts)).toLowerCase()
     case 'total':
@@ -2099,8 +2089,8 @@ export default function OrdersView({
       const bestRate = order.bestRate
       const selectedRate = order.selectedRate
       const shippingProviderId = toNumberValue(bestRate?.shippingProviderId) ?? selectedRate?.shippingProviderId ?? order.label?.shippingProviderId ?? null
-      const serviceCode = toStringValue(bestRate?.serviceCode) ?? selectedRate?.serviceCode ?? order.serviceCode
-      const carrierCode = toStringValue(bestRate?.carrierCode) ?? selectedRate?.carrierCode ?? order.label?.carrierCode
+      const serviceCode = getShippingString(order, 'serviceCode') ?? toStringValue(bestRate?.serviceCode) ?? selectedRate?.serviceCode
+      const carrierCode = getShippingString(order, 'carrierCode') ?? toStringValue(bestRate?.carrierCode) ?? selectedRate?.carrierCode
       const weightOz = order.weight?.value ?? 0
       const dims = getDimensions(order, null)
 
@@ -2317,7 +2307,7 @@ export default function OrdersView({
   }
 
   const renderCarrierCell = (order: OrderSummaryDto) => {
-    const shipped = order.orderStatus !== 'awaiting_shipment' || Boolean(order.label?.trackingNumber && order.label?.carrierCode)
+    const shipped = order.orderStatus !== 'awaiting_shipment'
     if (shipped) {
       if (order.externalShipped) {
         return <span style={{ fontSize: 10, color: 'var(--text2)' }}>Externally Shipped</span>
@@ -2347,7 +2337,7 @@ export default function OrdersView({
   }
 
   const renderShippingAccountCell = (order: OrderSummaryDto) => {
-    const shipped = order.orderStatus !== 'awaiting_shipment' || Boolean(order.label?.trackingNumber && order.label?.carrierCode)
+    const shipped = order.orderStatus !== 'awaiting_shipment'
     if (shipped) {
       if (getIsExternallyFulfilled(order)) {
         return (
@@ -2372,7 +2362,7 @@ export default function OrdersView({
         <div style={{ lineHeight: 1.4, whiteSpace: 'nowrap' }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text2)' }}>{getShipAccountDisplay(order, shippingAccounts)}</div>
           <div style={{ fontSize: 10, color: 'var(--text3)' }} className="svc-label">
-            {truncate(formatServiceCode(order.label?.serviceCode ?? order.selectedRate?.serviceCode ?? order.serviceCode), 22)}
+            {truncate(formatServiceCode(getShippingString(order, 'serviceCode') ?? order.selectedRate?.serviceCode ?? order.bestRate?.serviceCode), 22)}
           </div>
         </div>
       )
@@ -2498,7 +2488,7 @@ export default function OrdersView({
     const shipTo = getShipTo(order, detail)
     const clientName = order.clientName ?? 'Untagged'
     const clientPalette = getClientPalette(clientName)
-    const diagnosticIsShipped = order.orderStatus !== 'awaiting_shipment' || Boolean(order.label?.trackingNumber && order.label?.carrierCode)
+    const diagnosticIsShipped = order.orderStatus !== 'awaiting_shipment'
 
     switch (column.key) {
       case 'select':
@@ -2639,7 +2629,7 @@ export default function OrdersView({
                 event.stopPropagation()
                 setTrackingModal({
                   tracking: trackingNumber,
-                  carrierCode: getShippingString(order, 'carrierCode') ?? order.label?.carrierCode ?? order.bestRate?.carrierCode ?? null,
+                  carrierCode: getShippingString(order, 'carrierCode') ?? order.bestRate?.carrierCode ?? null,
                 })
               }}
               title="Track package"
@@ -2674,7 +2664,7 @@ export default function OrdersView({
       }
       case 'test_carrierCode': {
         const value = diagnosticIsShipped
-          ? (getShippingString(order, 'carrierCode') ?? toStringValue(order.selectedRate?.carrierCode) ?? toStringValue(order.label?.carrierCode) ?? toStringValue(order.carrierCode))
+          ? (getShippingString(order, 'carrierCode') ?? toStringValue(order.selectedRate?.carrierCode) ?? toStringValue(order.bestRate?.carrierCode))
           : order.bestRate
             ? (getShippingString(order, 'carrierCode') ?? toStringValue(order.bestRate?.carrierCode))
             : null
@@ -2690,7 +2680,7 @@ export default function OrdersView({
         return renderDiagnosticCell(getLegacyClientIdForDisplay(order), { monospace: true })
       case 'test_serviceCode': {
         const value = diagnosticIsShipped
-          ? (getShippingString(order, 'serviceCode') ?? toStringValue(order.selectedRate?.serviceCode) ?? toStringValue(order.label?.serviceCode) ?? toStringValue(order.serviceCode))
+          ? (getShippingString(order, 'serviceCode') ?? toStringValue(order.selectedRate?.serviceCode) ?? toStringValue(order.bestRate?.serviceCode))
           : (getShippingString(order, 'serviceCode') ?? toStringValue(order.bestRate?.serviceCode))
         return renderDiagnosticCell(value, {
           fontSize: 10,
@@ -2737,8 +2727,7 @@ export default function OrdersView({
         const value =
           getShippingString(order, 'accountNickname') ??
           toStringValue(order.selectedRate?.providerAccountNickname) ??
-          toStringValue(order.bestRate?.carrierNickname) ??
-          toStringValue(order.label?.carrierCode)
+          toStringValue(order.bestRate?.carrierNickname)
         return renderDiagnosticCell(value)
       }
     }

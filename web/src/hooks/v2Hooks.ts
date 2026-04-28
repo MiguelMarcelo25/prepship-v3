@@ -299,8 +299,8 @@ function transformOrderRowV4toV2(
   const shipping = shippingModel
     ? {
         ...shippingModel,
-        carrierCode: shippingModel.carrierCode ?? selectedRate?.carrierCode ?? label?.carrierCode ?? null,
-        serviceCode: shippingModel.serviceCode ?? selectedRate?.serviceCode ?? label?.serviceCode ?? null,
+        carrierCode: shippingModel.carrierCode ?? selectedRate?.carrierCode ?? displayBestRate?.carrierCode ?? null,
+        serviceCode: shippingModel.serviceCode ?? selectedRate?.serviceCode ?? displayBestRate?.serviceCode ?? null,
         trackingNumber: shippingModel.trackingNumber ?? label?.trackingNumber ?? null,
         providerAccountId:
           toProviderAccountId(shippingModel.providerAccountId) ??

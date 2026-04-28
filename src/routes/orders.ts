@@ -657,13 +657,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       ? ship.provider_account_nickname ?? resolvedCarrierAccount?.nickname ?? null
       : null;
     const baseShipmentCost = ship?.cost != null ? Number(ship.cost) : null;
-    const shipmentOtherCost = ship?.other_cost != null ? Number(ship.other_cost) : 0;
-    const selectedCost =
-      baseShipmentCost != null ? baseShipmentCost + shipmentOtherCost : null;
-    const labelCost =
-      ship?.label_cost != null
-        ? Number(ship.label_cost)
-        : selectedCost;
+    const labelCost = ship?.label_cost != null ? Number(ship.label_cost) : null;
     const label = ship
       ? {
           trackingNumber: ship.tracking_number,
@@ -678,25 +672,9 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           shipmentId: ship.label_shipment_id,
         }
       : null;
-    // v4's SS-synced shipments don't persist a full selectedRateJson (only
-    // locally-created labels do). Synthesize a DTO from the shipment's own
-    // columns so the frontend's `selectedRate.*` reads land on real values.
-    const synthSelected = ship
-      ? {
-          providerAccountId,
-          carrierCode: ship.carrier_code,
-          serviceCode: ship.service_code,
-          shippingProviderId: providerAccountId,
-          providerAccountNickname,
-          shipmentCost: baseShipmentCost,
-          otherCost: ship.other_cost != null ? shipmentOtherCost : null,
-          cost: selectedCost ?? labelCost,
-        }
-      : null;
     const selectedRate =
       ship?.selected_rate_json && typeof ship.selected_rate_json === 'object'
         ? {
-            ...synthSelected,
             ...(ship.selected_rate_json as Record<string, unknown>),
             providerAccountId:
               (ship.selected_rate_json as Record<string, unknown>).providerAccountId ?? providerAccountId,
@@ -705,9 +683,9 @@ app.get('/', zValidator('query', listQuery), async (c) => {
             providerAccountNickname:
               providerAccountNickname ??
               (ship.selected_rate_json as Record<string, unknown>).providerAccountNickname ??
-              synthSelected?.providerAccountNickname,
+              null,
           }
-        : synthSelected;
+        : null;
     const selectedRateBestRateCandidate =
       selectedRate && typeof selectedRate === 'object'
         ? {
@@ -745,14 +723,6 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         value: v2BestRateRecord?.carrierCode,
         source: sourceOf('v2', 'order_overrides.best_rate_json.carrierCode', 'ShipStation v2 /rates/estimate best rate'),
       },
-      {
-        value: ship?.carrier_code,
-        source: sourceOf('v1', 'shipments.carrier_code', 'ShipStation v1 /shipments.carrierCode fallback when no v2 JSON exists'),
-      },
-      {
-        value: r.order.carrierCode,
-        source: sourceOf('v1', 'orders.carrier_code', 'ShipStation v1 /orders.carrierCode'),
-      },
     ]);
     const servicePick = pickStringSource([
       {
@@ -762,14 +732,6 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       {
         value: v2BestRateRecord?.serviceCode,
         source: sourceOf('v2', 'order_overrides.best_rate_json.serviceCode', 'ShipStation v2 /rates/estimate best rate'),
-      },
-      {
-        value: ship?.service_code,
-        source: sourceOf('v1', 'shipments.service_code', 'ShipStation v1 /shipments.serviceCode fallback when no v2 JSON exists'),
-      },
-      {
-        value: r.order.serviceCode,
-        source: sourceOf('v1', 'orders.service_code', 'ShipStation v1 /orders.serviceCode'),
       },
     ]);
     const trackingPick = pickStringSource([
@@ -852,10 +814,6 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         value: ship?.label_cost != null ? Number(ship.label_cost) : null,
         source: sourceOf('v2', 'shipments.label_cost', 'ShipStation v2 /labels shipment_cost stored from label purchase/sync'),
       },
-      {
-        value: selectedCost,
-        source: sourceOf('v1', 'shipments.cost + shipments.other_cost', 'ShipStation v1 /shipments shipmentCost + otherCost fallback when no v2 JSON exists'),
-      },
     ]);
     const selectedRateAmount = selectedRatePick.value;
     const bestRatePick = pickNumberSource([
@@ -863,7 +821,9 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         value: rateAmount(bestRate),
         source: overrideBestRate
           ? sourceOf('v2', 'order_overrides.best_rate_json', 'ShipStation v2 /rates/estimate best rate')
-          : sourceOf('v1', 'shipments.cost + shipments.other_cost', 'ShipStation v1 /shipments cost fallback'),
+          : selectedRate
+            ? sourceOf('v2', 'shipments.selected_rate_json', 'ShipStation v2 selected label/rate payload')
+            : sourceOf('local', 'null', 'No v2 best/selected rate JSON present; v1 shipment fallback intentionally disabled'),
       },
     ]);
     const labelCreatedPick = [
@@ -897,9 +857,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     const labelCostPick = pickNumberSource([
       {
         value: labelCost,
-        source: ship?.label_cost != null
-          ? sourceOf('v2', 'shipments.label_cost', 'ShipStation v2 /labels shipment_cost stored from label purchase/sync')
-          : sourceOf('v1', 'shipments.cost + shipments.other_cost', 'ShipStation v1 /shipments cost fallback'),
+        source: sourceOf('v2', 'shipments.label_cost', 'ShipStation v2 /labels shipment_cost stored from label purchase/sync'),
       },
     ]);
     const shipping = {
@@ -944,10 +902,12 @@ app.get('/', zValidator('query', listQuery), async (c) => {
             : sourceOf('local', 'null', 'no populated source field'),
         'shipping.selectedRate': hasV2SelectedRateJson
           ? sourceOf('v2', 'shipments.selected_rate_json', 'ShipStation v2 selected label/rate payload')
-          : sourceOf('v1', 'shipments carrier/service/cost columns', 'Synthesized from ShipStation v1 /shipments columns'),
+          : sourceOf('local', 'null', 'No selected-rate JSON present; v1 shipment fallback intentionally disabled'),
         'shipping.bestRate': overrideBestRate
           ? sourceOf('v2', 'order_overrides.best_rate_json', 'ShipStation v2 /rates/estimate best rate')
-          : sourceOf('v1', 'shipments carrier/service/cost columns', 'Synthesized from shipment selected-rate fallback'),
+          : selectedRate
+            ? sourceOf('v2', 'shipments.selected_rate_json', 'ShipStation v2 selected label/rate payload')
+            : sourceOf('local', 'null', 'No v2 best/selected rate JSON present; v1 shipment fallback intentionally disabled'),
       },
     };
     const canonicalOrder = buildCanonicalOrderModel(
@@ -1823,20 +1783,14 @@ app.get('/export', zValidator('query', exportQuery), async (c) => {
         : null;
     const bestRateObj =
       selectedRateObj ?? (overrides?.bestRateJson as Record<string, unknown> | null | undefined);
-    const selectedShipmentCost = ship?.cost != null ? Number(ship.cost) : null;
-    const selectedOtherCost = ship?.other_cost != null ? Number(ship.other_cost) : 0;
-    const bestRateAmount = selectedShipmentCost != null
-      ? selectedShipmentCost + selectedOtherCost
-      : bestRateObj
-      ? ((bestRateObj.shipping_amount as Record<string, unknown> | undefined)?.amount ??
-        bestRateObj.cost ?? '')
-      : '';
+    const normalizedBestRate = normalizeListBestRate(bestRateObj);
+    const bestRateAmount = normalizedBestRate?.amount ?? '';
 
-    const labelCost = ship?.label_cost ?? (selectedShipmentCost != null ? String(selectedShipmentCost + selectedOtherCost) : '');
+    const labelCost = ship?.label_cost ?? '';
     const tracking = ship?.tracking_number ?? overrides?.trackingNumber ?? '';
     const labelCreated = ship?.label_created_at ?? ship?.create_date ?? ship?.ship_date ?? '';
-    const carrier = ship?.carrier_code ?? order.carrierCode ?? '';
-    const service = ship?.service_code ?? order.serviceCode ?? '';
+    const carrier = normalizedBestRate?.carrierCode ?? '';
+    const service = normalizedBestRate?.serviceCode ?? '';
 
     let shipMargin = '';
     if (labelCost !== '' && bestRateAmount !== '' && bestRateAmount != null) {
