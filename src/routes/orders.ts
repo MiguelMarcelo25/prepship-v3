@@ -86,15 +86,15 @@ function resolveLegacyClientId(
   return clientId ?? null;
 }
 
-function resolveV2CarrierAccountNickname(
+function resolveV2CarrierAccountRef(
   providerAccountId: number | null | undefined,
   carrierCode: string | null | undefined,
   trackingNumber: string | null | undefined,
   clientId: number | null,
-) {
+): V2CarrierAccountRef | null {
   if (providerAccountId != null) {
     const exact = V2_CARRIER_ACCOUNT_REFS.find((account) => account.shippingProviderId === providerAccountId);
-    if (exact) return exact.nickname;
+    if (exact) return exact;
   }
 
   if ((carrierCode === 'ups' || carrierCode === 'ups_walleted') && trackingNumber) {
@@ -108,16 +108,16 @@ function resolveV2CarrierAccountNickname(
       );
       const clientMatch = clientId != null ? matches.find((account) => account.clientId === clientId) : null;
       const sharedMatch = matches.find((account) => account.clientId === null);
-      return (clientMatch ?? sharedMatch ?? matches[0])?.nickname ?? null;
+      return clientMatch ?? sharedMatch ?? matches[0] ?? null;
     }
   }
 
   const matching = V2_CARRIER_ACCOUNT_REFS.filter((account) => account.carrierCode === carrierCode);
-  if (matching.length === 1) return matching[0]?.nickname ?? null;
+  if (matching.length === 1) return matching[0] ?? null;
   if (matching.length > 1) {
     const clientMatch = clientId != null ? matching.find((account) => account.clientId === clientId) : null;
     const sharedMatch = matching.find((account) => account.clientId === null);
-    return (clientMatch ?? sharedMatch)?.nickname ?? null;
+    return clientMatch ?? sharedMatch ?? null;
   }
 
   return null;
@@ -378,14 +378,17 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       latestShipByOrderId.get(r.order.id) ??
       latestShipByOrderNumber.get(r.order.orderNumber);
     const legacyClientId = resolveLegacyClientId(r.order.clientId, r.order.storeId);
-    const providerAccountNickname = ship
-      ? ship.provider_account_nickname ??
-        resolveV2CarrierAccountNickname(
+    const resolvedCarrierAccount = ship
+      ? resolveV2CarrierAccountRef(
           ship.provider_account_id,
           ship.carrier_code,
           ship.tracking_number,
           legacyClientId,
         )
+      : null;
+    const providerAccountId = ship?.provider_account_id ?? resolvedCarrierAccount?.shippingProviderId ?? null;
+    const providerAccountNickname = ship
+      ? ship.provider_account_nickname ?? resolvedCarrierAccount?.nickname ?? null
       : null;
     const baseShipmentCost = ship?.cost != null ? Number(ship.cost) : null;
     const shipmentOtherCost = ship?.other_cost != null ? Number(ship.other_cost) : 0;
@@ -405,7 +408,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           cost: labelCost,
           rawCost: baseShipmentCost,
           labelUrl: ship.label_url,
-          shippingProviderId: ship.provider_account_id,
+          shippingProviderId: providerAccountId,
           shipmentId: ship.label_shipment_id,
         }
       : null;
@@ -414,10 +417,10 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     // columns so the frontend's `selectedRate.*` reads land on real values.
     const synthSelected = ship
       ? {
-          providerAccountId: ship.provider_account_id,
+          providerAccountId,
           carrierCode: ship.carrier_code,
           serviceCode: ship.service_code,
-          shippingProviderId: ship.provider_account_id,
+          shippingProviderId: providerAccountId,
           providerAccountNickname,
           shipmentCost: baseShipmentCost,
           otherCost: ship.other_cost != null ? shipmentOtherCost : null,
@@ -430,9 +433,9 @@ app.get('/', zValidator('query', listQuery), async (c) => {
             ...synthSelected,
             ...(ship.selected_rate_json as Record<string, unknown>),
             providerAccountId:
-              (ship.selected_rate_json as Record<string, unknown>).providerAccountId ?? ship.provider_account_id,
+              (ship.selected_rate_json as Record<string, unknown>).providerAccountId ?? providerAccountId,
             shippingProviderId:
-              (ship.selected_rate_json as Record<string, unknown>).shippingProviderId ?? ship.provider_account_id,
+              (ship.selected_rate_json as Record<string, unknown>).shippingProviderId ?? providerAccountId,
             providerAccountNickname:
               providerAccountNickname ??
               (ship.selected_rate_json as Record<string, unknown>).providerAccountNickname ??

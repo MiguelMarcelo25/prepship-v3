@@ -525,12 +525,38 @@ async function enrichProviderAccountIds(
   let totalUpdated = 0;
   const maxPages = 20; // safety cap — v2 doesn't cap explicitly but 20*500=10k is plenty
 
-  type V2ShipmentRow = {
+  type V2ProviderRow = {
     shipment_id?: string;
     carrier_id?: string; // "se-12345"
     tracking_number?: string | null;
     external_order_id?: string | null;
   };
+
+  async function applyProviderRows(rows: V2ProviderRow[]): Promise<number> {
+    let updated = 0;
+    for (const row of rows) {
+      const tracking = row.tracking_number ?? null;
+      if (!tracking) continue;
+      const carrierIdStr = typeof row.carrier_id === 'string' ? row.carrier_id : null;
+      if (!carrierIdStr) continue;
+      const numericCarrierId = Number.parseInt(
+        carrierIdStr.replace(/^se-/, ''),
+        10,
+      );
+      if (!Number.isFinite(numericCarrierId)) continue;
+      // Only update rows where providerAccountId is null. Don't clobber
+      // an ID that was set during label creation.
+      const result = await db
+        .update(shipments)
+        .set({ providerAccountId: numericCarrierId, updatedAt: new Date() })
+        .where(
+          sql`${shipments.trackingNumber} = ${tracking} and ${shipments.providerAccountId} is null`,
+        )
+        .returning({ id: shipments.id });
+      updated += result.length;
+    }
+    return updated;
+  }
 
   while (page <= maxPages) {
     const qs = new URLSearchParams({
@@ -539,9 +565,9 @@ async function enrichProviderAccountIds(
       sort_dir: 'DESC',
       created_at_start: createdAtStart,
     });
-    let payload: { shipments?: V2ShipmentRow[]; pages?: number };
+    let payload: { shipments?: V2ProviderRow[]; pages?: number };
     try {
-      payload = await ssRequest<{ shipments?: V2ShipmentRow[]; pages?: number }>(
+      payload = await ssRequest<{ shipments?: V2ProviderRow[]; pages?: number }>(
         `/v2/shipments?${qs.toString()}`,
         {
           apiKey: acct.apiKeyV2,
@@ -559,32 +585,67 @@ async function enrichProviderAccountIds(
     const rows = Array.isArray(payload?.shipments) ? payload.shipments : [];
     if (!rows.length) break;
 
-    for (const row of rows) {
-      const tracking = row.tracking_number ?? null;
-      if (!tracking) continue;
-      const carrierIdStr = typeof row.carrier_id === 'string' ? row.carrier_id : null;
-      if (!carrierIdStr) continue;
-      const numericCarrierId = Number.parseInt(
-        carrierIdStr.replace(/^se-/, ''),
-        10,
-      );
-      if (!Number.isFinite(numericCarrierId)) continue;
-      // Only update rows where providerAccountId is null — don't clobber
-      // an ID that was set during label creation.
-      const result = await db
-        .update(shipments)
-        .set({ providerAccountId: numericCarrierId, updatedAt: new Date() })
-        .where(
-          sql`${shipments.trackingNumber} = ${tracking} and ${shipments.providerAccountId} is null`,
-        )
-        .returning({ id: shipments.id });
-      totalUpdated += result.length;
-    }
+    totalUpdated += await applyProviderRows(rows);
 
     const totalPages = payload.pages ?? 1;
     if (page >= totalPages || rows.length < 500) break;
     page += 1;
     // v2-parity: gentle inter-page pause
+    await new Promise((r) => setTimeout(r, 500));
+  }
+
+  // ShipStation's V2 shipment list does not always include tracking_number in
+  // every account/label shape. The labels endpoint consistently carries the
+  // tracking_number + carrier_id pair, so use it as a second best-effort
+  // source for older ShipStation-synced shipped rows.
+  page = 1;
+  while (page <= maxPages) {
+    const qs = new URLSearchParams({
+      page_size: '500',
+      page: String(page),
+      sort_dir: 'DESC',
+      created_at_start: createdAtStart,
+    });
+    let payload: { labels?: V2ProviderRow[]; pages?: number };
+    try {
+      payload = await ssRequest<{ labels?: V2ProviderRow[]; pages?: number }>(
+        `/v2/labels?${qs.toString()}`,
+        {
+          apiKey: acct.apiKeyV2,
+          dedupeKey: `v2-labels:provider-enrich:${acct.label}:${createdAtStart}:${page}`,
+        },
+      );
+    } catch (err) {
+      const fallbackQs = new URLSearchParams({
+        page_size: '500',
+        page: String(page),
+        sort_dir: 'DESC',
+      });
+      try {
+        payload = await ssRequest<{ labels?: V2ProviderRow[]; pages?: number }>(
+          `/v2/labels?${fallbackQs.toString()}`,
+          {
+            apiKey: acct.apiKeyV2,
+            dedupeKey: `v2-labels:provider-enrich:fallback:${acct.label}:${page}`,
+          },
+        );
+      } catch {
+        console.warn(
+          `[shipment-sync] V2 label enrichment page ${page} failed for "${acct.label}":`,
+          (err as Error).message,
+        );
+        break;
+      }
+    }
+
+    const rows = Array.isArray(payload?.labels) ? payload.labels : [];
+    if (!rows.length) break;
+
+    totalUpdated += await applyProviderRows(rows);
+
+    const totalPages = payload.pages ?? 1;
+    if (page >= totalPages || rows.length < 500) break;
+    page += 1;
     await new Promise((r) => setTimeout(r, 500));
   }
 
