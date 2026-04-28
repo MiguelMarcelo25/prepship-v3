@@ -805,6 +805,21 @@ function getMarkupAmount(baseAmount: number, markedAmount: number) {
   return markedAmount - baseAmount
 }
 
+function renderRateAmountWithMarkup(baseAmount: number | null, markedAmount: number | null) {
+  const displayAmount = markedAmount ?? baseAmount
+  if (displayAmount == null) return <span style={{ color: 'var(--text3)', fontSize: 11 }}>{'\u2014'}</span>
+
+  const hasMarkup = baseAmount != null && markedAmount != null && Math.abs(markedAmount - baseAmount) > 0.005
+  return (
+    <div style={{ lineHeight: 1.15 }}>
+      <strong style={{ color: 'var(--green)', fontSize: 12 }}>{formatMoney(displayAmount)}</strong>
+      {hasMarkup ? (
+        <div style={{ fontSize: 10, color: '#111827', fontWeight: 600 }}>{formatMoney(baseAmount)}</div>
+      ) : null}
+    </div>
+  )
+}
+
 function getIsExternallyFulfilled(order: OrderSummaryDto) {
   if (order.externalShipped) return true
   if (order.orderStatus === 'awaiting_shipment') return false
@@ -2213,18 +2228,8 @@ export default function OrdersView({
   const renderBestRatePrice = (order: OrderSummaryDto) => {
     const bestRateBaseCost = getBestRateBaseCost(order)
     if (order.orderStatus !== 'awaiting_shipment') {
-      if (typeof order.label?.cost === 'number') {
-        return (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div style={{ lineHeight: 1.3 }}>
-              <strong style={{ color: 'var(--green)', fontSize: 12 }}>{formatMoney(order.label.cost)}</strong>
-            </div>
-          </div>
-        )
-      }
-
       const selectedRateBase = getSelectedRateBaseCost(order)
-      const markedAmount = getSelectedRateMarkedAmount(order, markups)
+      const markedAmount = selectedRateBase != null ? getSelectedRateMarkedAmount(order, markups) : null
       if (selectedRateBase == null && markedAmount == null) {
         return <span style={{ color: 'var(--text3)', fontSize: 11 }}>—</span>
       }
@@ -2237,12 +2242,7 @@ export default function OrdersView({
               {formatCarrierCode(selectedRateCarrierCode)}
             </span>
           ) : null}
-          <div style={{ lineHeight: 1.3 }}>
-            <strong style={{ color: 'var(--green)', fontSize: 12 }}>{formatMoney(markedAmount ?? selectedRateBase)}</strong>
-            {selectedRateBase != null && markedAmount != null && Math.abs(markedAmount - selectedRateBase) > 0.005 ? (
-              <div style={{ fontSize: 10, color: 'var(--text3)' }}>{formatMoney(selectedRateBase)} cost</div>
-            ) : null}
-          </div>
+          {renderRateAmountWithMarkup(selectedRateBase, markedAmount)}
         </div>
       )
     }
@@ -2254,15 +2254,18 @@ export default function OrdersView({
     if (!order.bestRate) {
       return <div className="spin-center"><span className="spin-sm" /></div>
     }
+    if (bestRateBaseCost == null) {
+      return <span style={{ color: 'var(--text3)', fontSize: 11 }}>—</span>
+    }
 
     const markedAmount = applyCarrierMarkup({
       shippingProviderId: getBestRateShippingProviderId(order),
       carrierCode: order.bestRate.carrierCode ?? '',
       serviceCode: getBestRateServiceCode(order) ?? '',
       serviceName: order.bestRate.serviceName ?? '',
-      amount: typeof order.bestRate.amount === 'number' ? order.bestRate.amount : 0,
-      shipmentCost: typeof order.bestRate.shipmentCost === 'number' ? order.bestRate.shipmentCost : undefined,
-      otherCost: typeof order.bestRate.otherCost === 'number' ? order.bestRate.otherCost : undefined,
+      amount: bestRateBaseCost ?? 0,
+      shipmentCost: bestRateBaseCost ?? undefined,
+      otherCost: 0,
       carrierNickname: getBestRateCarrierNickname(order),
     }, markups)
 
@@ -2271,12 +2274,7 @@ export default function OrdersView({
         <span className={`carrier-badge ${getCarrierClass(order.bestRate.carrierCode)}`} style={{ fontSize: 9.5, padding: '1px 5px' }}>
           {formatCarrierCode(order.bestRate.carrierCode)}
         </span>
-        <div style={{ lineHeight: 1.3 }}>
-          <strong style={{ color: 'var(--green)', fontSize: 12 }}>{formatMoney(markedAmount)}</strong>
-          {bestRateBaseCost != null && Math.abs(markedAmount - bestRateBaseCost) > 0.005 ? (
-            <div style={{ fontSize: 10, color: 'var(--text3)' }}>{formatMoney(bestRateBaseCost)} cost</div>
-          ) : null}
-        </div>
+        {renderRateAmountWithMarkup(bestRateBaseCost, markedAmount)}
       </div>
     )
   }
@@ -2300,9 +2298,9 @@ export default function OrdersView({
       carrierCode: order.bestRate.carrierCode ?? '',
       serviceCode: getBestRateServiceCode(order) ?? '',
       serviceName: order.bestRate.serviceName ?? '',
-      amount: typeof order.bestRate.amount === 'number' ? order.bestRate.amount : 0,
-      shipmentCost: typeof order.bestRate.shipmentCost === 'number' ? order.bestRate.shipmentCost : undefined,
-      otherCost: typeof order.bestRate.otherCost === 'number' ? order.bestRate.otherCost : undefined,
+      amount: bestRateBaseCost,
+      shipmentCost: bestRateBaseCost,
+      otherCost: 0,
       carrierNickname: getBestRateCarrierNickname(order),
     }, markups)
     const diff = getMarkupAmount(bestRateBaseCost, markedAmount)
