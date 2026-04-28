@@ -804,7 +804,7 @@ function renderRateAmountWithMarkup(baseAmount: number | null, markedAmount: num
     <div style={{ lineHeight: 1.15 }}>
       <strong style={{ color: 'var(--green)', fontSize: 12 }}>{formatMoney(displayAmount)}</strong>
       {hasMarkup ? (
-        <div style={{ fontSize: 10, color: '#111827', fontWeight: 600 }}>{formatMoney(baseAmount)}</div>
+        <div style={{ fontSize: 10, color: 'var(--red)', fontWeight: 600 }}>{formatMoney(baseAmount)}</div>
       ) : null}
     </div>
   )
