@@ -733,6 +733,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       normalizeListBestRate(overrideBestRate) ??
       normalizeListBestRate(selectedRateBestRateCandidate);
     const bestRateRecord = recordOrNull(bestRate);
+    const v2BestRateRecord = overrideBestRate ? bestRateRecord : null;
     const selectedRateRecord = recordOrNull(selectedRate);
     const hasV2SelectedRateJson = Boolean(ship?.selected_rate_json);
     const carrierPick = pickStringSource([
@@ -741,12 +742,12 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         source: sourceOf('v2', 'shipments.selected_rate_json.carrierCode', 'ShipStation v2 label/rate payload'),
       },
       {
-        value: ship?.carrier_code,
-        source: sourceOf('v1', 'shipments.carrier_code', 'ShipStation v1 /shipments.carrierCode'),
+        value: v2BestRateRecord?.carrierCode,
+        source: sourceOf('v2', 'order_overrides.best_rate_json.carrierCode', 'ShipStation v2 /rates/estimate best rate'),
       },
       {
-        value: bestRateRecord?.carrierCode,
-        source: sourceOf('v2', 'order_overrides.best_rate_json.carrierCode', 'ShipStation v2 /rates/estimate best rate'),
+        value: ship?.carrier_code,
+        source: sourceOf('v1', 'shipments.carrier_code', 'ShipStation v1 /shipments.carrierCode fallback when no v2 JSON exists'),
       },
       {
         value: r.order.carrierCode,
@@ -759,12 +760,12 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         source: sourceOf('v2', 'shipments.selected_rate_json.serviceCode', 'ShipStation v2 label/rate payload'),
       },
       {
-        value: ship?.service_code,
-        source: sourceOf('v1', 'shipments.service_code', 'ShipStation v1 /shipments.serviceCode'),
+        value: v2BestRateRecord?.serviceCode,
+        source: sourceOf('v2', 'order_overrides.best_rate_json.serviceCode', 'ShipStation v2 /rates/estimate best rate'),
       },
       {
-        value: bestRateRecord?.serviceCode,
-        source: sourceOf('v2', 'order_overrides.best_rate_json.serviceCode', 'ShipStation v2 /rates/estimate best rate'),
+        value: ship?.service_code,
+        source: sourceOf('v1', 'shipments.service_code', 'ShipStation v1 /shipments.serviceCode fallback when no v2 JSON exists'),
       },
       {
         value: r.order.serviceCode,
@@ -837,22 +838,23 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     ]);
     const canonicalAccountNickname = accountPick.value;
     const selectedRateFromJsonAmount = hasV2SelectedRateJson ? rateAmount(selectedRate) : null;
+    const selectedRateFromV2BestRateAmount = overrideBestRate ? rateAmount(bestRate) : null;
     const selectedRatePick = pickNumberSource([
       {
         value: selectedRateFromJsonAmount,
         source: sourceOf('v2', 'shipments.selected_rate_json', 'ShipStation v2 selected label/rate payload'),
       },
       {
-        value: selectedCost,
-        source: sourceOf('v1', 'shipments.cost + shipments.other_cost', 'ShipStation v1 /shipments shipmentCost + otherCost'),
+        value: selectedRateFromV2BestRateAmount,
+        source: sourceOf('v2', 'order_overrides.best_rate_json', 'ShipStation v2 /rates/estimate best rate'),
       },
       {
-        value: labelCost,
+        value: ship?.label_cost != null ? Number(ship.label_cost) : null,
         source: sourceOf('v2', 'shipments.label_cost', 'ShipStation v2 /labels shipment_cost stored from label purchase/sync'),
       },
       {
-        value: rateAmount(bestRate),
-        source: sourceOf('v2', 'order_overrides.best_rate_json', 'ShipStation v2 /rates/estimate best rate fallback'),
+        value: selectedCost,
+        source: sourceOf('v1', 'shipments.cost + shipments.other_cost', 'ShipStation v1 /shipments shipmentCost + otherCost fallback when no v2 JSON exists'),
       },
     ]);
     const selectedRateAmount = selectedRatePick.value;
