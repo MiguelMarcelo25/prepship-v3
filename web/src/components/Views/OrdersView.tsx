@@ -2637,7 +2637,9 @@ export default function OrdersView({
       case 'margin':
         return renderMargin(order)
       case 'tracking':
-        if (!order.label?.trackingNumber) {
+        {
+        const trackingNumber = getShippingString(order, 'trackingNumber') ?? toStringValue(order.label?.trackingNumber)
+        if (!trackingNumber) {
           return <span style={{ color: 'var(--text4)', fontFamily: 'monospace', fontSize: 11 }}>—</span>
         }
         return (
@@ -2647,18 +2649,18 @@ export default function OrdersView({
               onClick={(event) => {
                 event.stopPropagation()
                 setTrackingModal({
-                  tracking: order.label?.trackingNumber ?? '',
-                  carrierCode: order.label?.carrierCode ?? order.bestRate?.carrierCode ?? null,
+                  tracking: trackingNumber,
+                  carrierCode: getShippingString(order, 'carrierCode') ?? order.label?.carrierCode ?? order.bestRate?.carrierCode ?? null,
                 })
               }}
               title="Track package"
             >
-              {order.label?.trackingNumber}
+              {trackingNumber}
             </span>
             <span
               onClick={(event) => {
                 event.stopPropagation()
-                copyText(order.label?.trackingNumber ?? '')
+                copyText(trackingNumber)
               }}
               style={{ cursor: 'pointer', color: 'var(--text4)', fontSize: 9, opacity: 0.6 }}
               title="Copy tracking number"
@@ -2669,8 +2671,9 @@ export default function OrdersView({
             </span>
           </span>
         )
+        }
       case 'labelcreated':
-        return <span style={{ fontSize: 11, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{formatLabelCreated(order.label?.createdAt ?? null)}</span>
+        return <span style={{ fontSize: 11, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{formatLabelCreated(getShippingString(order, 'labelCreatedAt') ?? order.label?.createdAt ?? null)}</span>
       case 'age': {
         const ageColor = getAgeColor(order.orderDate)
         return (
@@ -2742,9 +2745,11 @@ export default function OrdersView({
         })
       }
       case 'test_shippingAccount': {
-        const value = diagnosticIsShipped
-          ? (getShippingString(order, 'accountNickname') ?? toStringValue(order.selectedRate?.providerAccountNickname) ?? toStringValue(order.label?.carrierCode))
-          : null
+        const value =
+          getShippingString(order, 'accountNickname') ??
+          toStringValue(order.selectedRate?.providerAccountNickname) ??
+          toStringValue(order.bestRate?.carrierNickname) ??
+          toStringValue(order.label?.carrierCode)
         return renderDiagnosticCell(value)
       }
     }

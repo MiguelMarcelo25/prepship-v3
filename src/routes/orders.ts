@@ -510,7 +510,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         selected_rate_json
       from shipments
       where (${sql.join(shipmentPredicates, sql` or `)})
-        and coalesce(voided, false) = false
+        ${q.status === 'cancelled' ? sql`` : sql`and coalesce(voided, false) = false`}
       order by id desc
     `);
     for (const s of shipRows) {
@@ -618,30 +618,48 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       normalizeListBestRate(selectedRateBestRateCandidate);
     const bestRateRecord = recordOrNull(bestRate);
     const selectedRateRecord = recordOrNull(selectedRate);
+    const canonicalCarrierCode =
+      stringOrNull(selectedRateRecord?.carrierCode) ??
+      stringOrNull(ship?.carrier_code) ??
+      stringOrNull(bestRateRecord?.carrierCode) ??
+      stringOrNull(r.order.carrierCode);
+    const canonicalServiceCode =
+      stringOrNull(selectedRateRecord?.serviceCode) ??
+      stringOrNull(ship?.service_code) ??
+      stringOrNull(bestRateRecord?.serviceCode) ??
+      stringOrNull(r.order.serviceCode);
+    const canonicalTrackingNumber = stringOrNull(ship?.tracking_number);
+    const canonicalProviderAccountId =
+      providerIdOrNull(selectedRateRecord?.shippingProviderId) ??
+      providerIdOrNull(selectedRateRecord?.providerAccountId) ??
+      providerAccountId ??
+      providerIdOrNull(bestRateRecord?.shippingProviderId) ??
+      providerIdOrNull(bestRateRecord?.providerAccountId);
+    const resolvedCanonicalCarrierAccount = resolveV2CarrierAccountRef(
+      canonicalProviderAccountId,
+      canonicalCarrierCode,
+      canonicalTrackingNumber,
+      legacyClientId,
+    );
+    const canonicalAccountNickname =
+      stringOrNull(selectedRateRecord?.providerAccountNickname) ??
+      providerAccountNickname ??
+      stringOrNull(bestRateRecord?.providerAccountNickname) ??
+      stringOrNull(bestRateRecord?.carrierNickname) ??
+      resolvedCanonicalCarrierAccount?.nickname ??
+      null;
+    const selectedRateAmount =
+      rateAmount(selectedRate) ??
+      selectedCost ??
+      labelCost ??
+      rateAmount(bestRate);
     const shipping = {
-      carrierCode:
-        stringOrNull(selectedRateRecord?.carrierCode) ??
-        stringOrNull(ship?.carrier_code) ??
-        stringOrNull(bestRateRecord?.carrierCode) ??
-        stringOrNull(r.order.carrierCode),
-      serviceCode:
-        stringOrNull(selectedRateRecord?.serviceCode) ??
-        stringOrNull(ship?.service_code) ??
-        stringOrNull(bestRateRecord?.serviceCode) ??
-        stringOrNull(r.order.serviceCode),
-      trackingNumber: stringOrNull(ship?.tracking_number),
-      providerAccountId:
-        providerIdOrNull(selectedRateRecord?.shippingProviderId) ??
-        providerIdOrNull(selectedRateRecord?.providerAccountId) ??
-        providerAccountId ??
-        providerIdOrNull(bestRateRecord?.shippingProviderId) ??
-        providerIdOrNull(bestRateRecord?.providerAccountId),
-      accountNickname:
-        stringOrNull(selectedRateRecord?.providerAccountNickname) ??
-        providerAccountNickname ??
-        stringOrNull(bestRateRecord?.providerAccountNickname) ??
-        stringOrNull(bestRateRecord?.carrierNickname),
-      selectedRateAmount: rateAmount(selectedRate) ?? selectedCost ?? labelCost,
+      carrierCode: canonicalCarrierCode,
+      serviceCode: canonicalServiceCode,
+      trackingNumber: canonicalTrackingNumber,
+      providerAccountId: canonicalProviderAccountId ?? resolvedCanonicalCarrierAccount?.shippingProviderId ?? null,
+      accountNickname: canonicalAccountNickname,
+      selectedRateAmount,
       bestRateAmount: rateAmount(bestRate),
       labelCost,
       labelCreatedAt: label?.createdAt ?? null,
