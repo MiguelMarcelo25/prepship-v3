@@ -353,9 +353,9 @@ export default function Home() {
         }}
         mobileMenuOpen={mobileMenuOpen}
         onCloseMobileMenu={closeMobileMenu}
-        onSelectStore={(storeId) => {
+        onSelectStore={(storeId, statusOverride) => {
           setActiveStore(storeId)
-          navigate(`/orders/${currentStatus}`)
+          navigate(`/orders/${statusOverride ?? currentStatus}`)
           closeMobileMenu()
         }}
         activeStore={activeStore}

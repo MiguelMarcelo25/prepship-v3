@@ -17,7 +17,7 @@ interface SidebarProps {
   mobileMenuOpen: boolean
   onCloseMobileMenu?: () => void
   onSearch?: (query: string) => void
-  onSelectStore?: (storeId: number | null) => void
+  onSelectStore?: (storeId: number | null, status?: SidebarOrderStatus) => void
   activeStore?: number | null
 }
 
@@ -136,7 +136,6 @@ export default function Sidebar({
             <div
               className={`ss-header${currentView === 'orders' && currentStatus === status && activeStore == null ? ' active' : ''}`}
               onClick={() => {
-                onSelectStore?.(null)
                 onSelectStatus(status)
                 onCloseMobileMenu?.()
               }}
@@ -166,11 +165,8 @@ export default function Sidebar({
                     key={`${status}-${store.storeId}`}
                     className={`ss-store${currentView === 'orders' && activeStore === store.storeId && currentStatus === status ? ' active' : ''}${store.cnt === 0 ? ' ss-store-zero' : ''}`}
                     onClick={() => {
-                      // ORDER MATTERS: onSelectStatus resets activeStore to null
-                      // in Home.tsx, so we MUST set the store AFTER switching
-                      // status — otherwise the store selection is wiped.
                       onSelectStatus(status)
-                      onSelectStore?.(store.storeId)
+                      onSelectStore?.(store.storeId, status)
                       onCloseMobileMenu?.()
                     }}
                     style={{ cursor: 'pointer' }}

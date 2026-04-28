@@ -644,7 +644,30 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       latestShipByOrderId.get(r.order.id) ??
       latestShipByOrderNumber.get(r.order.orderNumber);
     const legacyClientId = resolveLegacyClientId(r.order.clientId, r.order.storeId);
-    const resolvedCarrierAccount = ship
+    const isShippedBucket = q.status === 'shipped' || r.order.orderStatus === 'shipped';
+    const effectiveOrderStatus = isShippedBucket ? 'shipped' : r.order.orderStatus;
+    const hasV2SelectedRateJson = Boolean(ship?.selected_rate_json);
+    const selectedRateJsonRecord = recordOrNull(ship?.selected_rate_json);
+    const selectedRateJsonProviderId = providerIdOrNull(
+      selectedRateJsonRecord?.shippingProviderId ??
+        selectedRateJsonRecord?.providerAccountId ??
+        selectedRateJsonRecord?.carrier_id,
+    );
+    const selectedRateCarrierCode =
+      stringOrNull(selectedRateJsonRecord?.carrierCode) ??
+      stringOrNull(selectedRateJsonRecord?.carrier_code);
+    const selectedRateServiceCode =
+      stringOrNull(selectedRateJsonRecord?.serviceCode) ??
+      stringOrNull(selectedRateJsonRecord?.service_code);
+    const selectedRateCarrierNickname =
+      stringOrNull(selectedRateJsonRecord?.providerAccountNickname) ??
+      stringOrNull(selectedRateJsonRecord?.carrierNickname) ??
+      stringOrNull(selectedRateJsonRecord?.carrier_nickname);
+    const selectedRateServiceName =
+      stringOrNull(selectedRateJsonRecord?.serviceName) ??
+      stringOrNull(selectedRateJsonRecord?.service_type) ??
+      selectedRateServiceCode;
+    const resolvedCarrierAccount = ship && !isShippedBucket
       ? resolveV2CarrierAccountRef(
           ship.provider_account_id,
           ship.carrier_code,
@@ -652,9 +675,9 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           legacyClientId,
         )
       : null;
-    const providerAccountId = ship?.provider_account_id ?? resolvedCarrierAccount?.shippingProviderId ?? null;
+    const providerAccountId = ship?.provider_account_id ?? (!isShippedBucket ? resolvedCarrierAccount?.shippingProviderId ?? null : null);
     const providerAccountNickname = ship
-      ? ship.provider_account_nickname ?? resolvedCarrierAccount?.nickname ?? null
+      ? ship.provider_account_nickname ?? (!isShippedBucket && providerAccountId != null ? resolvedCarrierAccount?.nickname ?? null : null)
       : null;
     const baseShipmentCost = ship?.cost != null ? Number(ship.cost) : null;
     const labelCost = ship?.label_cost != null ? Number(ship.label_cost) : null;
@@ -664,7 +687,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           carrierCode: ship.carrier_code,
           serviceCode: ship.service_code,
           shipDate: ship.ship_date,
-          createdAt: ship.label_created_at ?? ship.create_date,
+          createdAt: ship.label_created_at,
           cost: labelCost,
           rawCost: baseShipmentCost,
           labelUrl: ship.label_url,
@@ -673,16 +696,23 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         }
       : null;
     const selectedRate =
-      ship?.selected_rate_json && typeof ship.selected_rate_json === 'object'
+      selectedRateJsonRecord
         ? {
-            ...(ship.selected_rate_json as Record<string, unknown>),
+            ...selectedRateJsonRecord,
             providerAccountId:
-              (ship.selected_rate_json as Record<string, unknown>).providerAccountId ?? providerAccountId,
+              selectedRateJsonRecord.providerAccountId ??
+              selectedRateJsonProviderId ??
+              (!isShippedBucket ? providerAccountId : null),
             shippingProviderId:
-              (ship.selected_rate_json as Record<string, unknown>).shippingProviderId ?? providerAccountId,
+              selectedRateJsonRecord.shippingProviderId ??
+              selectedRateJsonProviderId ??
+              (!isShippedBucket ? providerAccountId : null),
+            carrierCode: selectedRateCarrierCode,
+            serviceCode: selectedRateServiceCode,
+            serviceName: selectedRateServiceName,
             providerAccountNickname:
-              providerAccountNickname ??
-              (ship.selected_rate_json as Record<string, unknown>).providerAccountNickname ??
+              selectedRateCarrierNickname ??
+              (!isShippedBucket ? providerAccountNickname : null) ??
               null,
           }
         : null;
@@ -697,7 +727,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           }
         : null;
     const overrideBestRate =
-      r.overrides?.bestRateJson && typeof r.overrides.bestRateJson === 'object'
+      !isShippedBucket && r.overrides?.bestRateJson && typeof r.overrides.bestRateJson === 'object'
         ? {
             ...selectedRateBestRateCandidate,
             ...(r.overrides.bestRateJson as Record<string, unknown>),
@@ -707,13 +737,10 @@ app.get('/', zValidator('query', listQuery), async (c) => {
               providerAccountNickname,
           }
         : null;
-    const bestRate =
-      normalizeListBestRate(overrideBestRate) ??
-      normalizeListBestRate(selectedRateBestRateCandidate);
+    const bestRate = !isShippedBucket ? normalizeListBestRate(overrideBestRate) : null;
     const bestRateRecord = recordOrNull(bestRate);
     const v2BestRateRecord = overrideBestRate ? bestRateRecord : null;
     const selectedRateRecord = recordOrNull(selectedRate);
-    const hasV2SelectedRateJson = Boolean(ship?.selected_rate_json);
     const carrierPick = pickStringSource([
       {
         value: hasV2SelectedRateJson ? selectedRateRecord?.carrierCode : null,
@@ -739,10 +766,14 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         value: hasV2SelectedRateJson ? ship?.tracking_number : null,
         source: sourceOf('v2', 'shipments.tracking_number', 'ShipStation v2 /labels tracking_number stored on shipment'),
       },
-      {
-        value: ship?.tracking_number,
-        source: sourceOf('v1', 'shipments.tracking_number', 'ShipStation v1 /shipments.trackingNumber'),
-      },
+      ...(!isShippedBucket
+        ? [
+            {
+              value: ship?.tracking_number,
+              source: sourceOf('v1', 'shipments.tracking_number', 'ShipStation v1 /shipments.trackingNumber'),
+            },
+          ]
+        : []),
     ]);
     const canonicalCarrierCode = carrierPick.value;
     const canonicalServiceCode = servicePick.value;
@@ -770,12 +801,14 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       },
     ]);
     const canonicalProviderAccountId = providerPick.value;
-    const resolvedCanonicalCarrierAccount = resolveV2CarrierAccountRef(
-      canonicalProviderAccountId,
-      canonicalCarrierCode,
-      canonicalTrackingNumber,
-      legacyClientId,
-    );
+    const resolvedCanonicalCarrierAccount = !isShippedBucket
+      ? resolveV2CarrierAccountRef(
+          canonicalProviderAccountId,
+          canonicalCarrierCode,
+          canonicalTrackingNumber,
+          legacyClientId,
+        )
+      : null;
     const accountPick = pickStringSource([
       {
         value: hasV2SelectedRateJson ? selectedRateRecord?.providerAccountNickname : null,
@@ -806,46 +839,37 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         value: selectedRateFromJsonAmount,
         source: sourceOf('v2', 'shipments.selected_rate_json', 'ShipStation v2 selected label/rate payload'),
       },
-      {
-        value: selectedRateFromV2BestRateAmount,
-        source: sourceOf('v2', 'order_overrides.best_rate_json', 'ShipStation v2 /rates/estimate best rate'),
-      },
-      {
-        value: ship?.label_cost != null ? Number(ship.label_cost) : null,
-        source: sourceOf('v2', 'shipments.label_cost', 'ShipStation v2 /labels shipment_cost stored from label purchase/sync'),
-      },
+      ...(!isShippedBucket
+        ? [
+            {
+              value: selectedRateFromV2BestRateAmount,
+              source: sourceOf('v2', 'order_overrides.best_rate_json', 'ShipStation v2 /rates/estimate best rate'),
+            },
+            {
+              value: ship?.label_cost != null ? Number(ship.label_cost) : null,
+              source: sourceOf('v2', 'shipments.label_cost', 'ShipStation v2 /labels shipment_cost stored from label purchase/sync'),
+            },
+          ]
+        : []),
     ]);
     const selectedRateAmount = selectedRatePick.value;
-    const bestRatePick = pickNumberSource([
-      {
-        value: rateAmount(bestRate),
-        source: overrideBestRate
-          ? sourceOf('v2', 'order_overrides.best_rate_json', 'ShipStation v2 /rates/estimate best rate')
-          : selectedRate
-            ? sourceOf('v2', 'shipments.selected_rate_json', 'ShipStation v2 selected label/rate payload')
-            : sourceOf('local', 'null', 'No v2 best/selected rate JSON present; v1 shipment fallback intentionally disabled'),
-      },
-    ]);
+    const bestRatePick = isShippedBucket
+      ? {
+          value: null,
+          source: sourceOf('local', 'null', 'Shipped rows intentionally do not expose awaiting best-rate data'),
+        }
+      : pickNumberSource([
+          {
+            value: rateAmount(bestRate),
+            source: overrideBestRate
+              ? sourceOf('v2', 'order_overrides.best_rate_json', 'ShipStation v2 /rates/estimate best rate')
+              : sourceOf('local', 'null', 'No v2 best-rate JSON present'),
+          },
+        ]);
     const labelCreatedPick = [
       {
-        value: hasV2SelectedRateJson ? label?.createdAt : null,
-        source: sourceOf('v2', 'shipments.label_created_at/create_date', 'ShipStation v2 /labels creation timestamp stored on shipment'),
-      },
-      {
-        value: label?.createdAt,
-        source: sourceOf('v1', 'shipments.label_created_at/create_date', 'ShipStation v1 /shipments createDate or label create date'),
-      },
-      {
-        value: r.overrides?.bestRateAt,
-        source: sourceOf('local', 'order_overrides.best_rate_at', 'PrepShip timestamp when v2 best rate was calculated'),
-      },
-      {
-        value: r.order.updatedAt,
-        source: sourceOf('local', 'orders.updated_at', 'PrepShip order row updated timestamp fallback'),
-      },
-      {
-        value: r.order.createdAt,
-        source: sourceOf('local', 'orders.created_at', 'PrepShip order row created timestamp fallback'),
+        value: ship?.label_created_at,
+        source: sourceOf('v2', 'shipments.label_created_at', 'ShipStation v2 label creation timestamp stored on shipment'),
       },
     ].find((candidate) => candidate.value != null) ?? {
       value: null,
@@ -864,7 +888,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       carrierCode: canonicalCarrierCode,
       serviceCode: canonicalServiceCode,
       trackingNumber: canonicalTrackingNumber,
-      providerAccountId: canonicalProviderAccountId ?? resolvedCanonicalCarrierAccount?.shippingProviderId ?? null,
+      providerAccountId: canonicalProviderAccountId,
       accountNickname: canonicalAccountNickname,
       selectedRateAmount,
       bestRateAmount: bestRatePick.value,
@@ -879,11 +903,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         'shipping.carrierCode': carrierPick.source,
         'shipping.serviceCode': servicePick.source,
         'shipping.trackingNumber': trackingPick.source,
-        'shipping.providerAccountId': canonicalProviderAccountId != null
-          ? providerPick.source
-          : resolvedCanonicalCarrierAccount
-            ? sourceOf('derived', 'V2_CARRIER_ACCOUNT_REFS', 'Derived from carrier/tracking/client account lookup')
-            : providerPick.source,
+        'shipping.providerAccountId': providerPick.source,
         'shipping.accountNickname': accountPick.source,
         'shipping.selectedRateAmount': selectedRatePick.source,
         'shipping.bestRateAmount': bestRatePick.source,
@@ -905,19 +925,22 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           : sourceOf('local', 'null', 'No selected-rate JSON present; v1 shipment fallback intentionally disabled'),
         'shipping.bestRate': overrideBestRate
           ? sourceOf('v2', 'order_overrides.best_rate_json', 'ShipStation v2 /rates/estimate best rate')
-          : selectedRate
-            ? sourceOf('v2', 'shipments.selected_rate_json', 'ShipStation v2 selected label/rate payload')
-            : sourceOf('local', 'null', 'No v2 best/selected rate JSON present; v1 shipment fallback intentionally disabled'),
+          : sourceOf('local', 'null', isShippedBucket ? 'Shipped rows intentionally do not expose awaiting best-rate data' : 'No v2 best-rate JSON present'),
       },
     };
+    const orderForCanonical = {
+      ...(r.order as Record<string, unknown>),
+      orderStatus: effectiveOrderStatus,
+    };
     const canonicalOrder = buildCanonicalOrderModel(
-      r.order as Record<string, unknown>,
+      orderForCanonical,
       r.overrides as Record<string, unknown> | null,
       legacyClientId,
       shipping,
     );
     return {
       ...r.order,
+      orderStatus: effectiveOrderStatus,
       legacyClientId,
       overrides: r.overrides,
       label,
@@ -1777,18 +1800,23 @@ app.get('/export', zValidator('query', exportQuery), async (c) => {
     const shipTo = [order.shipToCity, order.shipToState].filter(Boolean).join(', ');
 
     const ship = shipmentsByOrder.get(order.id) ?? shipmentsByOrderNumber.get(order.orderNumber) ?? null;
+    const isShippedExport = q.status === 'shipped' || order.orderStatus === 'shipped';
     const selectedRateObj =
       ship?.selected_rate_json && typeof ship.selected_rate_json === 'object'
         ? (ship.selected_rate_json as Record<string, unknown>)
         : null;
     const bestRateObj =
-      selectedRateObj ?? (overrides?.bestRateJson as Record<string, unknown> | null | undefined);
+      isShippedExport
+        ? selectedRateObj
+        : selectedRateObj ?? (overrides?.bestRateJson as Record<string, unknown> | null | undefined);
     const normalizedBestRate = normalizeListBestRate(bestRateObj);
     const bestRateAmount = normalizedBestRate?.amount ?? '';
 
     const labelCost = ship?.label_cost ?? '';
-    const tracking = ship?.tracking_number ?? overrides?.trackingNumber ?? '';
-    const labelCreated = ship?.label_created_at ?? ship?.create_date ?? ship?.ship_date ?? '';
+    const tracking = isShippedExport
+      ? (selectedRateObj ? ship?.tracking_number ?? '' : '')
+      : ship?.tracking_number ?? overrides?.trackingNumber ?? '';
+    const labelCreated = ship?.label_created_at ?? '';
     const carrier = normalizedBestRate?.carrierCode ?? '';
     const service = normalizedBestRate?.serviceCode ?? '';
 
