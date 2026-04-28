@@ -2325,18 +2325,10 @@ export default function OrdersView({
         return <span style={{ fontSize: 10, color: 'var(--text2)' }}>Externally Shipped</span>
       }
 
-      const carrierCode =
-        toStringValue(order.carrierCode) ??
-        toStringValue(order.label?.carrierCode) ??
-        toStringValue(order.selectedRate?.carrierCode)
-      const serviceCode =
-        toStringValue(order.serviceCode) ??
-        toStringValue(order.label?.serviceCode) ??
-        toStringValue(order.selectedRate?.serviceCode)
+      const carrierCode = getCarrierCodeForDisplay(order)
       return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, lineHeight: 1.3 }}>
+        <div style={{ display: 'flex', alignItems: 'center', lineHeight: 1.3 }}>
           <span className={`carrier-badge ${getCarrierClass(carrierCode)}`}>{formatCarrierCode(carrierCode)}</span>
-          <span style={{ fontSize: 10, color: 'var(--text2)' }}>{truncate(formatServiceCode(serviceCode), 26)}</span>
         </div>
       )
     }
@@ -2350,9 +2342,8 @@ export default function OrdersView({
     }
 
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, lineHeight: 1.3 }}>
+      <div style={{ display: 'flex', alignItems: 'center', lineHeight: 1.3 }}>
         <span className={`carrier-badge ${getCarrierClass(getCarrierCodeForDisplay(order))}`}>{formatCarrierCode(getCarrierCodeForDisplay(order))}</span>
-        <span style={{ fontSize: 10, color: 'var(--text2)' }}>{truncate(formatServiceCode(getBestRateServiceCode(order)), 26)}</span>
       </div>
     )
   }
