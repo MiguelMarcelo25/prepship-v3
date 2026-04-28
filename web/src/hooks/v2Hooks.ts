@@ -97,9 +97,15 @@ function toFiniteNumber(value: unknown): number | null {
   return null;
 }
 
+function toRecordValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
 function normalizeRateForV2(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== 'object') return null;
-  const rate = value as Record<string, unknown>;
+  const rate = toRecordValue(value);
+  if (!rate) return null;
   const shipping = rate.shipping_amount as Record<string, unknown> | undefined;
   const other = rate.other_amount as Record<string, unknown> | undefined;
   const shipmentCost =
@@ -128,8 +134,8 @@ function normalizeRateForV2(value: unknown): Record<string, unknown> | null {
 }
 
 function normalizeLabelForV2(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== 'object') return null;
-  const label = value as Record<string, unknown>;
+  const label = toRecordValue(value);
+  if (!label) return null;
   return {
     ...label,
     trackingNumber: label.trackingNumber ?? label.tracking_number ?? null,
@@ -177,6 +183,7 @@ function transformOrderRowV4toV2(
   const rawDims = (rawAny.dimensions ?? {}) as Record<string, unknown>;
   const clientId = typeof row.clientId === 'number' ? row.clientId : null;
   const overrides = (row.overrides ?? null) as Record<string, unknown> | null;
+  const shippingModel = toRecordValue(row.shipping);
   const bestRateJson = overrides?.bestRateJson as
     | Record<string, unknown>
     | null
@@ -242,14 +249,43 @@ function transformOrderRowV4toV2(
     }
     return null;
   })();
-  const apiBestRate = normalizeRateForV2(row.bestRate);
-  const selectedRate = normalizeRateForV2(row.selectedRate);
-  const label = normalizeLabelForV2(row.label);
+  const apiBestRate = normalizeRateForV2(shippingModel?.bestRate ?? row.bestRate);
+  const selectedRate = normalizeRateForV2(shippingModel?.selectedRate ?? row.selectedRate);
+  const rowLabel = toRecordValue(row.label);
+  const label = normalizeLabelForV2({
+    ...(rowLabel ?? {}),
+    trackingNumber: shippingModel?.trackingNumber ?? rowLabel?.trackingNumber,
+    carrierCode: shippingModel?.carrierCode ?? rowLabel?.carrierCode,
+    serviceCode: shippingModel?.serviceCode ?? rowLabel?.serviceCode,
+    shippingProviderId: shippingModel?.providerAccountId ?? rowLabel?.shippingProviderId,
+    cost: shippingModel?.labelCost ?? rowLabel?.cost,
+  });
   const selectedRateBestFallback = hasPositiveRateAmount(selectedRate) ? selectedRate : null;
   const displayBestRate =
     (hasPositiveRateAmount(apiBestRate) ? apiBestRate : null) ??
     (hasPositiveRateAmount(bestRateLegacy) ? bestRateLegacy : null) ??
     selectedRateBestFallback;
+  const shipping = shippingModel
+    ? {
+        ...shippingModel,
+        carrierCode: shippingModel.carrierCode ?? selectedRate?.carrierCode ?? label?.carrierCode ?? null,
+        serviceCode: shippingModel.serviceCode ?? selectedRate?.serviceCode ?? label?.serviceCode ?? null,
+        trackingNumber: shippingModel.trackingNumber ?? label?.trackingNumber ?? null,
+        providerAccountId:
+          toProviderAccountId(shippingModel.providerAccountId) ??
+          toProviderAccountId(selectedRate?.shippingProviderId) ??
+          toProviderAccountId(label?.shippingProviderId),
+        accountNickname:
+          shippingModel.accountNickname ??
+          selectedRate?.providerAccountNickname ??
+          displayBestRate?.carrierNickname ??
+          null,
+        selectedRateAmount: toFiniteNumber(shippingModel.selectedRateAmount) ?? toFiniteNumber(selectedRate?.cost),
+        bestRateAmount: toFiniteNumber(shippingModel.bestRateAmount) ?? toFiniteNumber(displayBestRate?.amount),
+        selectedRate,
+        bestRate: displayBestRate,
+      }
+    : null;
 
   return {
     ...row,
@@ -281,6 +317,7 @@ function transformOrderRowV4toV2(
     bestRate: displayBestRate,
     selectedRate,
     label,
+    shipping,
   };
 }
 

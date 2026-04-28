@@ -23,6 +23,7 @@ export type OrderSummaryDto = AnyRecord & {
   bestRate?: unknown
   selectedRate?: AnyRecord | null
   label?: AnyRecord | null
+  shipping?: AnyRecord | null
   serviceCode?: string | null
 }
 export type OrdersDailyStatsDto = {

@@ -141,6 +141,47 @@ function normalizeListBestRate(value: unknown) {
   }
 }
 
+function recordOrNull(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value : null;
+}
+
+function finiteNumberOrNull(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number.parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function providerIdOrNull(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value !== 'string') return null;
+  const match = value.match(/^se-(\d+)$/i);
+  const parsed = Number.parseInt(match?.[1] ?? value, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function rateAmount(value: unknown): number | null {
+  const rate = recordOrNull(value);
+  if (!rate) return null;
+  const shippingAmount = recordOrNull(rate.shipping_amount);
+  const otherAmount = recordOrNull(rate.other_amount);
+  const shipmentCost =
+    finiteNumberOrNull(rate.shipmentCost) ??
+    finiteNumberOrNull(shippingAmount?.amount) ??
+    finiteNumberOrNull(rate.cost) ??
+    finiteNumberOrNull(rate.amount);
+  const otherCost = finiteNumberOrNull(rate.otherCost) ?? finiteNumberOrNull(otherAmount?.amount) ?? 0;
+  return shipmentCost != null ? shipmentCost + otherCost : null;
+}
+
 // User-initiated sync + status. Sits behind requireAuth (mounted at main.ts).
 // /cron/sync-orders is the cron-secret equivalent for schedulers.
 //
@@ -484,6 +525,41 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     const bestRate =
       normalizeListBestRate(overrideBestRate) ??
       normalizeListBestRate(selectedRateBestRateCandidate);
+    const bestRateRecord = recordOrNull(bestRate);
+    const selectedRateRecord = recordOrNull(selectedRate);
+    const shipping = {
+      carrierCode:
+        stringOrNull(selectedRateRecord?.carrierCode) ??
+        stringOrNull(ship?.carrier_code) ??
+        stringOrNull(bestRateRecord?.carrierCode) ??
+        stringOrNull(r.order.carrierCode),
+      serviceCode:
+        stringOrNull(selectedRateRecord?.serviceCode) ??
+        stringOrNull(ship?.service_code) ??
+        stringOrNull(bestRateRecord?.serviceCode) ??
+        stringOrNull(r.order.serviceCode),
+      trackingNumber: stringOrNull(ship?.tracking_number),
+      providerAccountId:
+        providerIdOrNull(selectedRateRecord?.shippingProviderId) ??
+        providerIdOrNull(selectedRateRecord?.providerAccountId) ??
+        providerAccountId ??
+        providerIdOrNull(bestRateRecord?.shippingProviderId) ??
+        providerIdOrNull(bestRateRecord?.providerAccountId),
+      accountNickname:
+        stringOrNull(selectedRateRecord?.providerAccountNickname) ??
+        providerAccountNickname ??
+        stringOrNull(bestRateRecord?.providerAccountNickname) ??
+        stringOrNull(bestRateRecord?.carrierNickname),
+      selectedRateAmount: rateAmount(selectedRate) ?? selectedCost ?? labelCost,
+      bestRateAmount: rateAmount(bestRate),
+      labelCost,
+      labelCreatedAt: label?.createdAt ?? null,
+      shipDate: ship?.ship_date ?? null,
+      shipmentId: ship?.label_shipment_id ?? null,
+      source: ship ? 'shipment' : overrideBestRate ? 'order_override' : null,
+      selectedRate,
+      bestRate,
+    };
     return {
       ...r.order,
       legacyClientId,
@@ -491,6 +567,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       label,
       selectedRate,
       bestRate,
+      shipping,
     };
   });
   const total = countRows[0]?.count ?? 0;
