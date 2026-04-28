@@ -190,6 +190,7 @@ app.get('/sku-breakdown', zValidator('query', skuBreakdownQuery), async (c) => {
     sku: string;
     name: string | null;
     image_url: string | null;
+    inv_sku_id: number | null;
     client_id: number | null;
     orders: number;
     pending: number;
@@ -206,6 +207,7 @@ app.get('/sku-breakdown', zValidator('query', skuBreakdownQuery), async (c) => {
         item->>'sku'                                              as sku,
         item->>'name'                                             as name,
         nullif(item->>'imageUrl', '')                             as image_url,
+        inv.id                                                    as inv_sku_id,
         o.client_id                                               as client_id,
         o.id                                                      as order_id,
         o.order_status                                            as order_status,
@@ -213,8 +215,16 @@ app.get('/sku-breakdown', zValidator('query', skuBreakdownQuery), async (c) => {
         o.service_code                                            as service_code,
         coalesce(o.shipping_amount, 0)                            as shipping_amount,
         coalesce((item->>'quantity')::int, 1)                     as qty
-      from orders o,
-           jsonb_array_elements(o.items) item
+      from orders o
+      cross join lateral jsonb_array_elements(o.items) item
+      left join lateral (
+        select inv.id
+        from inventory inv
+        where inv.client_id is not distinct from o.client_id
+          and lower(inv.sku) = lower(item->>'sku')
+        order by inv.active desc, inv.id
+        limit 1
+      ) inv on true
       where item ? 'sku'
         and item->>'sku' is not null
         and item->>'sku' <> ''
@@ -236,6 +246,7 @@ app.get('/sku-breakdown', zValidator('query', skuBreakdownQuery), async (c) => {
       sku,
       max(name)                                                       as name,
       max(image_url)                                                  as image_url,
+      min(inv_sku_id)::int                                            as inv_sku_id,
       client_id,
       count(distinct order_id)::int                                   as orders,
       count(distinct order_id)
@@ -310,6 +321,7 @@ app.get('/skus', zValidator('query', skuBreakdownQuery), async (c) => {
     sku: string;
     name: string | null;
     image_url: string | null;
+    inv_sku_id: number | null;
     client_id: number | null;
     orders: number;
     pending: number;
@@ -326,6 +338,7 @@ app.get('/skus', zValidator('query', skuBreakdownQuery), async (c) => {
         item->>'sku'                                              as sku,
         item->>'name'                                             as name,
         nullif(item->>'imageUrl', '')                             as image_url,
+        inv.id                                                    as inv_sku_id,
         o.client_id                                               as client_id,
         o.id                                                      as order_id,
         o.order_status                                            as order_status,
@@ -333,8 +346,16 @@ app.get('/skus', zValidator('query', skuBreakdownQuery), async (c) => {
         o.service_code                                            as service_code,
         coalesce(o.shipping_amount, 0)                            as shipping_amount,
         coalesce((item->>'quantity')::int, 1)                     as qty
-      from orders o,
-           jsonb_array_elements(o.items) item
+      from orders o
+      cross join lateral jsonb_array_elements(o.items) item
+      left join lateral (
+        select inv.id
+        from inventory inv
+        where inv.client_id is not distinct from o.client_id
+          and lower(inv.sku) = lower(item->>'sku')
+        order by inv.active desc, inv.id
+        limit 1
+      ) inv on true
       where item ? 'sku'
         and item->>'sku' is not null
         and item->>'sku' <> ''
@@ -355,6 +376,7 @@ app.get('/skus', zValidator('query', skuBreakdownQuery), async (c) => {
       sku,
       max(name)                                                       as name,
       max(image_url)                                                  as image_url,
+      min(inv_sku_id)::int                                            as inv_sku_id,
       client_id,
       count(distinct order_id)::int                                   as orders,
       count(distinct order_id)

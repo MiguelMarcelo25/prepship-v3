@@ -412,6 +412,7 @@ export default function AnalysisView() {
                     allowDecimals={false}
                   />
                   <Tooltip
+                    itemSorter={(item) => -(Number(item.value) || 0)}
                     contentStyle={{
                       background: 'rgba(20,20,30,.92)',
                       border: 'none',
@@ -574,6 +575,17 @@ export default function AnalysisView() {
                     className={isClickable ? 'analysis-clickable-row' : undefined}
                     style={isClickable ? { cursor: 'pointer' } : undefined}
                     title={isClickable ? 'View SKU details' : undefined}
+                    tabIndex={isClickable ? 0 : undefined}
+                    onKeyDown={
+                      isClickable
+                        ? (event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.preventDefault()
+                              void openSkuDrawer(row.invSkuId as number)
+                            }
+                          }
+                        : undefined
+                    }
                     onClick={
                       isClickable ? () => void openSkuDrawer(row.invSkuId as number) : undefined
                     }
@@ -592,7 +604,16 @@ export default function AnalysisView() {
                       </div>
                     </td>
                     <td
-                      style={{ padding: '5px 8px', fontFamily: 'monospace', fontSize: 11 }}
+                      style={{
+                        padding: '5px 8px',
+                        fontFamily: 'monospace',
+                        fontSize: 11,
+                        color: isClickable ? 'var(--ss-blue)' : undefined,
+                        fontWeight: isClickable ? 700 : undefined,
+                        textDecoration: isClickable ? 'underline' : undefined,
+                        textDecorationThickness: isClickable ? 1 : undefined,
+                        textUnderlineOffset: isClickable ? 2 : undefined,
+                      }}
                     >
                       {row.sku || <span style={{ color: 'var(--text3)' }}>—</span>}
                     </td>

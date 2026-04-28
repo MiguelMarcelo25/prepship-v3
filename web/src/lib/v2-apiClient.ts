@@ -2004,11 +2004,13 @@ export const apiClient = {
           if (!t?.sku) continue;
           series[t.sku] = daysArr.map((d: any) => Number(d?.[t.sku]) || 0);
         }
-        const topSkus = topSkusRaw.map((t: any) => ({
-          sku: t.sku,
-          name: t.name ?? '',
-          totalQty: t.total_qty ?? t.totalQty ?? 0,
-        }));
+        const topSkus = topSkusRaw
+          .map((t: any) => ({
+            sku: t.sku,
+            name: t.name ?? '',
+            totalQty: Number(t.total_qty ?? t.totalQty ?? 0) || 0,
+          }))
+          .sort((left: any, right: any) => right.totalQty - left.totalQty);
         return { dates, topSkus, series };
       },
       { dates: [], topSkus: [], series: {} }
@@ -2041,23 +2043,31 @@ export const apiClient = {
           return 0;
         };
         const rows = Array.isArray(breakdown?.data) ? breakdown.data : [];
-        const skus = rows.map((r: any) => ({
-          sku: r.sku,
-          name: r.name ?? '',
-          imageUrl: r.image_url ?? r.imageUrl ?? null,
-          clientId: r.client_id ?? r.clientId ?? null,
-          clientName:
-            r.client_id != null ? nameById.get(r.client_id) ?? '' : '',
-          orders: r.orders ?? 0,
-          pendingOrders: r.pending ?? 0,
-          externalOrders: r.ext_shipped ?? 0,
-          qty: r.total_qty ?? 0,
-          standardShipCount: r.std_orders ?? 0,
-          standardShipTotal: parseNum(r.std_total),
-          expeditedShipCount: r.exp_orders ?? 0,
-          expeditedShipTotal: parseNum(r.exp_total),
-          totalShipping: parseNum(r.total_shipping),
-        }));
+        const skus = rows.map((r: any) => {
+          const rawInvSkuId =
+            r.inv_sku_id ?? r.invSkuId ?? r.inventory_id ?? r.inventoryId ?? null;
+          const invSkuId =
+            rawInvSkuId == null || rawInvSkuId === '' ? null : Number(rawInvSkuId);
+
+          return {
+            sku: r.sku,
+            name: r.name ?? '',
+            imageUrl: r.image_url ?? r.imageUrl ?? null,
+            invSkuId: Number.isFinite(invSkuId) ? invSkuId : null,
+            clientId: r.client_id ?? r.clientId ?? null,
+            clientName:
+              r.client_id != null ? nameById.get(r.client_id) ?? '' : '',
+            orders: r.orders ?? 0,
+            pendingOrders: r.pending ?? 0,
+            externalOrders: r.ext_shipped ?? 0,
+            qty: r.total_qty ?? 0,
+            standardShipCount: r.std_orders ?? 0,
+            standardShipTotal: parseNum(r.std_total),
+            expeditedShipCount: r.exp_orders ?? 0,
+            expeditedShipTotal: parseNum(r.exp_total),
+            totalShipping: parseNum(r.total_shipping),
+          };
+        });
         return {
           skus,
           orderCount: breakdown?.totalOrders ?? 0,

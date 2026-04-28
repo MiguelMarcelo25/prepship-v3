@@ -196,10 +196,10 @@ app.get(
         o.order_date                             as order_date,
         o.order_status                           as order_status,
         coalesce((item->>'quantity')::int, 0)    as qty
-      from orders o,
-           jsonb_array_elements(o.items) item
+      from orders o
+      cross join lateral jsonb_array_elements(o.items) item
       where item ? 'sku'
-        and item->>'sku' = ${row.sku}
+        and lower(item->>'sku') = lower(${row.sku})
         ${row.clientId !== null ? sql`and o.client_id = ${row.clientId}` : sql``}
         ${since ? sql`and o.order_date >= ${since}::timestamptz` : sql``}
       order by o.order_date desc nulls last
