@@ -52,6 +52,15 @@ type V2CarrierAccountRef = {
   accountNumber: string | null;
 };
 
+type CanonicalSourceVersion = 'v1' | 'v2' | 'local' | 'derived';
+
+type CanonicalFieldSource = {
+  version: CanonicalSourceVersion;
+  source: string;
+  via: string;
+  note?: string;
+};
+
 const V2_CARRIER_ACCOUNT_REFS: V2CarrierAccountRef[] = [
   { carrierCode: 'stamps_com', shippingProviderId: 433542, nickname: 'USPS Chase x7439', clientId: null, accountNumber: 'djeon-952w77' },
   { carrierCode: 'ups_walleted', shippingProviderId: 433543, nickname: 'UPS by SS - Chase x7439', clientId: null, accountNumber: 'ups_433543' },
@@ -186,6 +195,41 @@ function rateAmount(value: unknown): number | null {
   return shipmentCost != null ? shipmentCost + otherCost : null;
 }
 
+function sourceOf(
+  version: CanonicalSourceVersion,
+  source: string,
+  via: string,
+  note?: string,
+): CanonicalFieldSource {
+  return note ? { version, source, via, note } : { version, source, via };
+}
+
+function pickStringSource(
+  candidates: Array<{ value: unknown; source: CanonicalFieldSource }>,
+): { value: string | null; source: CanonicalFieldSource } {
+  for (const candidate of candidates) {
+    const value = stringOrNull(candidate.value);
+    if (value != null) return { value, source: candidate.source };
+  }
+  return {
+    value: null,
+    source: sourceOf('local', 'null', 'no populated source field'),
+  };
+}
+
+function pickNumberSource(
+  candidates: Array<{ value: unknown; source: CanonicalFieldSource }>,
+): { value: number | null; source: CanonicalFieldSource } {
+  for (const candidate of candidates) {
+    const value = finiteNumberOrNull(candidate.value);
+    if (value != null) return { value, source: candidate.source };
+  }
+  return {
+    value: null,
+    source: sourceOf('local', 'null', 'no populated source field'),
+  };
+}
+
 function dateToIso(value: unknown): string | null {
   if (!value) return null;
   if (value instanceof Date) return value.toISOString();
@@ -205,6 +249,13 @@ function buildCanonicalOrderModel(
   const dimensionLength = finiteNumberOrNull(rawDimensions.length) ?? finiteNumberOrNull(overrides?.rateDimsL);
   const dimensionWidth = finiteNumberOrNull(rawDimensions.width) ?? finiteNumberOrNull(overrides?.rateDimsW);
   const dimensionHeight = finiteNumberOrNull(rawDimensions.height) ?? finiteNumberOrNull(overrides?.rateDimsH);
+  const dimensionSource =
+    dimensionLength != null && dimensionWidth != null && dimensionHeight != null && rawDimensions.length != null
+      ? sourceOf('v1', 'orders.raw.dimensions', 'ShipStation v1 /orders.dimensions')
+      : sourceOf('local', 'order_overrides.rateDims*', 'PrepShip dimension override fallback');
+  const dimensionUnitsSource = stringOrNull(rawDimensions.units)
+    ? sourceOf('v1', 'orders.raw.dimensions.units', 'ShipStation v1 /orders.dimensions.units')
+    : sourceOf('derived', 'default dimensions.units', 'Defaulted to inches when ShipStation did not send units');
   const dimensions =
     dimensionLength != null && dimensionWidth != null && dimensionHeight != null
       ? {
@@ -218,6 +269,67 @@ function buildCanonicalOrderModel(
   const orderId = finiteNumberOrNull(order.id);
   const clientId = finiteNumberOrNull(order.clientId);
   const storeId = finiteNumberOrNull(order.storeId);
+  const sourceMap: Record<string, CanonicalFieldSource> = {
+    id: sourceOf('local', 'orders.id', 'Postgres canonical order id'),
+    orderId: sourceOf('local', 'orders.id', 'Postgres canonical order id'),
+    externalOrderId: sourceOf('v1', 'orders.external_order_id', 'ShipStation v1 /orders.orderId'),
+    orderNumber: sourceOf('v1', 'orders.order_number', 'ShipStation v1 /orders.orderNumber'),
+    orderStatus: sourceOf('v1', 'orders.order_status', 'ShipStation v1 /orders.orderStatus'),
+    orderDate: sourceOf('v1', 'orders.order_date', 'ShipStation v1 /orders.orderDate'),
+    createdAt: sourceOf('local', 'orders.created_at', 'PrepShip order row create timestamp'),
+    updatedAt: sourceOf('local', 'orders.updated_at', 'PrepShip order row update timestamp'),
+    clientId: sourceOf('local', 'orders.client_id', 'PrepShip client/store mapping'),
+    legacyClientId: sourceOf('derived', 'LEGACY_CLIENT_ID_BY_*', 'Derived from store/client id parity map'),
+    storeId: sourceOf('v1', 'orders.store_id', 'ShipStation v1 /orders.advancedOptions.storeId'),
+    'client.id': sourceOf('local', 'orders.client_id', 'PrepShip client/store mapping'),
+    'client.legacyId': sourceOf('derived', 'LEGACY_CLIENT_ID_BY_*', 'Derived from store/client id parity map'),
+    'client.storeId': sourceOf('v1', 'orders.store_id', 'ShipStation v1 /orders.advancedOptions.storeId'),
+    'customer.email': sourceOf('v1', 'orders.customer_email', 'ShipStation v1 /orders.customerEmail'),
+    'customer.username': sourceOf('v1', 'orders.raw.customerUsername', 'ShipStation v1 /orders.customerUsername'),
+    'recipient.name': stringOrNull(rawShipTo.name)
+      ? sourceOf('v1', 'orders.raw.shipTo.name', 'ShipStation v1 /orders.shipTo.name')
+      : sourceOf('local', 'orders.ship_to_name', 'Synced fallback column from ShipStation v1 shipTo.name'),
+    'recipient.company': sourceOf('v1', 'orders.raw.shipTo.company', 'ShipStation v1 /orders.shipTo.company'),
+    'recipient.street1': sourceOf('v1', 'orders.raw.shipTo.street1', 'ShipStation v1 /orders.shipTo.street1'),
+    'recipient.street2': sourceOf('v1', 'orders.raw.shipTo.street2', 'ShipStation v1 /orders.shipTo.street2'),
+    'recipient.city': stringOrNull(rawShipTo.city)
+      ? sourceOf('v1', 'orders.raw.shipTo.city', 'ShipStation v1 /orders.shipTo.city')
+      : sourceOf('local', 'orders.ship_to_city', 'Synced fallback column from ShipStation v1 shipTo.city'),
+    'recipient.state': stringOrNull(rawShipTo.state)
+      ? sourceOf('v1', 'orders.raw.shipTo.state', 'ShipStation v1 /orders.shipTo.state')
+      : sourceOf('local', 'orders.ship_to_state', 'Synced fallback column from ShipStation v1 shipTo.state'),
+    'recipient.postalCode': stringOrNull(rawShipTo.postalCode)
+      ? sourceOf('v1', 'orders.raw.shipTo.postalCode', 'ShipStation v1 /orders.shipTo.postalCode')
+      : sourceOf('local', 'orders.ship_to_postal_code', 'Synced fallback column from ShipStation v1 shipTo.postalCode'),
+    'recipient.country': stringOrNull(rawShipTo.country)
+      ? sourceOf('v1', 'orders.raw.shipTo.country', 'ShipStation v1 /orders.shipTo.country')
+      : sourceOf('derived', 'default recipient.country', 'Defaulted to US when ShipStation did not send a country'),
+    'recipient.phone': sourceOf('v1', 'orders.raw.shipTo.phone', 'ShipStation v1 /orders.shipTo.phone'),
+    'recipient.residential': overrides?.residential != null
+      ? sourceOf('local', 'order_overrides.residential', 'PrepShip user override')
+      : sourceOf('v1', 'orders.raw.shipTo.residential', 'ShipStation v1 /orders.shipTo.residential'),
+    'recipient.addressVerified': sourceOf('v1', 'orders.raw.shipTo.addressVerified', 'ShipStation v1 /orders.shipTo.addressVerified'),
+    weight: sourceOf('v1', 'orders.weight_oz', 'ShipStation v1 /orders.weight.value normalized to ounces'),
+    weightOz: sourceOf('v1', 'orders.weight_oz', 'ShipStation v1 /orders.weight.value normalized to ounces'),
+    'weight.value': sourceOf('v1', 'orders.weight_oz', 'ShipStation v1 /orders.weight.value normalized to ounces'),
+    'weight.units': sourceOf('derived', 'canonical weight.units', 'Normalized to ounces for canonical rows'),
+    dimensions: dimensionSource,
+    'dimensions.length': dimensionSource,
+    'dimensions.width': dimensionSource,
+    'dimensions.height': dimensionSource,
+    'dimensions.units': dimensionUnitsSource,
+    packageCode: sourceOf('v1', 'orders.raw.packageCode', 'ShipStation v1 /orders.packageCode'),
+    requestedShippingService: sourceOf('v1', 'orders.raw.requestedShippingService', 'ShipStation v1 /orders.requestedShippingService'),
+    requestedServiceCode: stringOrNull(raw.serviceCode)
+      ? sourceOf('v1', 'orders.raw.serviceCode', 'ShipStation v1 /orders.serviceCode')
+      : sourceOf('local', 'orders.service_code', 'Synced fallback service column'),
+    'totals.orderTotal': sourceOf('v1', 'orders.order_total', 'ShipStation v1 /orders.orderTotal'),
+    'totals.shippingAmount': sourceOf('v1', 'orders.shipping_amount', 'ShipStation v1 /orders.shippingAmount'),
+    items: sourceOf('v1', 'orders.items', 'ShipStation v1 /orders.items[]'),
+    'flags.externallyShipped': sourceOf('local', 'orders.externally_shipped', 'PrepShip external-shipped override'),
+    'flags.externallyFulfilled': sourceOf('v1', 'orders.raw.externallyFulfilled', 'ShipStation v1 /orders.externallyFulfilled'),
+    'flags.externallyFulfilledVerified': sourceOf('local', 'orders.externally_fulfilled_verified', 'PrepShip verification flag'),
+  };
 
   return {
     id: orderId,
@@ -270,6 +382,10 @@ function buildCanonicalOrderModel(
       externallyFulfilledVerified: Boolean(order.externallyFulfilledVerified),
     },
     shipping,
+    sourceMap: {
+      ...sourceMap,
+      ...recordOrNull(shipping.sourceMap),
+    },
   };
 }
 
@@ -618,47 +734,172 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       normalizeListBestRate(selectedRateBestRateCandidate);
     const bestRateRecord = recordOrNull(bestRate);
     const selectedRateRecord = recordOrNull(selectedRate);
-    const canonicalCarrierCode =
-      stringOrNull(selectedRateRecord?.carrierCode) ??
-      stringOrNull(ship?.carrier_code) ??
-      stringOrNull(bestRateRecord?.carrierCode) ??
-      stringOrNull(r.order.carrierCode);
-    const canonicalServiceCode =
-      stringOrNull(selectedRateRecord?.serviceCode) ??
-      stringOrNull(ship?.service_code) ??
-      stringOrNull(bestRateRecord?.serviceCode) ??
-      stringOrNull(r.order.serviceCode);
-    const canonicalTrackingNumber = stringOrNull(ship?.tracking_number);
-    const canonicalProviderAccountId =
-      providerIdOrNull(selectedRateRecord?.shippingProviderId) ??
-      providerIdOrNull(selectedRateRecord?.providerAccountId) ??
-      providerAccountId ??
-      providerIdOrNull(bestRateRecord?.shippingProviderId) ??
-      providerIdOrNull(bestRateRecord?.providerAccountId);
+    const hasV2SelectedRateJson = Boolean(ship?.selected_rate_json);
+    const carrierPick = pickStringSource([
+      {
+        value: hasV2SelectedRateJson ? selectedRateRecord?.carrierCode : null,
+        source: sourceOf('v2', 'shipments.selected_rate_json.carrierCode', 'ShipStation v2 label/rate payload'),
+      },
+      {
+        value: ship?.carrier_code,
+        source: sourceOf('v1', 'shipments.carrier_code', 'ShipStation v1 /shipments.carrierCode'),
+      },
+      {
+        value: bestRateRecord?.carrierCode,
+        source: sourceOf('v2', 'order_overrides.best_rate_json.carrierCode', 'ShipStation v2 /rates/estimate best rate'),
+      },
+      {
+        value: r.order.carrierCode,
+        source: sourceOf('v1', 'orders.carrier_code', 'ShipStation v1 /orders.carrierCode'),
+      },
+    ]);
+    const servicePick = pickStringSource([
+      {
+        value: hasV2SelectedRateJson ? selectedRateRecord?.serviceCode : null,
+        source: sourceOf('v2', 'shipments.selected_rate_json.serviceCode', 'ShipStation v2 label/rate payload'),
+      },
+      {
+        value: ship?.service_code,
+        source: sourceOf('v1', 'shipments.service_code', 'ShipStation v1 /shipments.serviceCode'),
+      },
+      {
+        value: bestRateRecord?.serviceCode,
+        source: sourceOf('v2', 'order_overrides.best_rate_json.serviceCode', 'ShipStation v2 /rates/estimate best rate'),
+      },
+      {
+        value: r.order.serviceCode,
+        source: sourceOf('v1', 'orders.service_code', 'ShipStation v1 /orders.serviceCode'),
+      },
+    ]);
+    const trackingPick = pickStringSource([
+      {
+        value: hasV2SelectedRateJson ? ship?.tracking_number : null,
+        source: sourceOf('v2', 'shipments.tracking_number', 'ShipStation v2 /labels tracking_number stored on shipment'),
+      },
+      {
+        value: ship?.tracking_number,
+        source: sourceOf('v1', 'shipments.tracking_number', 'ShipStation v1 /shipments.trackingNumber'),
+      },
+    ]);
+    const canonicalCarrierCode = carrierPick.value;
+    const canonicalServiceCode = servicePick.value;
+    const canonicalTrackingNumber = trackingPick.value;
+    const providerPick = pickNumberSource([
+      {
+        value: hasV2SelectedRateJson ? selectedRateRecord?.shippingProviderId : null,
+        source: sourceOf('v2', 'shipments.selected_rate_json.shippingProviderId', 'ShipStation v2 label/rate payload'),
+      },
+      {
+        value: hasV2SelectedRateJson ? selectedRateRecord?.providerAccountId : null,
+        source: sourceOf('v2', 'shipments.selected_rate_json.providerAccountId', 'ShipStation v2 label/rate payload'),
+      },
+      {
+        value: providerAccountId,
+        source: sourceOf('v2', 'shipments.provider_account_id', 'ShipStation v2 /shipments or /labels carrier_id normalized from se-*'),
+      },
+      {
+        value: bestRateRecord?.shippingProviderId,
+        source: sourceOf('v2', 'order_overrides.best_rate_json.shippingProviderId', 'ShipStation v2 /rates/estimate carrier_id normalized from se-*'),
+      },
+      {
+        value: bestRateRecord?.providerAccountId,
+        source: sourceOf('v2', 'order_overrides.best_rate_json.providerAccountId', 'ShipStation v2 /rates/estimate carrier_id normalized from se-*'),
+      },
+    ]);
+    const canonicalProviderAccountId = providerPick.value;
     const resolvedCanonicalCarrierAccount = resolveV2CarrierAccountRef(
       canonicalProviderAccountId,
       canonicalCarrierCode,
       canonicalTrackingNumber,
       legacyClientId,
     );
-    const canonicalAccountNickname =
-      stringOrNull(selectedRateRecord?.providerAccountNickname) ??
-      providerAccountNickname ??
-      stringOrNull(bestRateRecord?.providerAccountNickname) ??
-      stringOrNull(bestRateRecord?.carrierNickname) ??
-      resolvedCanonicalCarrierAccount?.nickname ??
-      null;
-    const selectedRateAmount =
-      rateAmount(selectedRate) ??
-      selectedCost ??
-      labelCost ??
-      rateAmount(bestRate);
+    const accountPick = pickStringSource([
+      {
+        value: hasV2SelectedRateJson ? selectedRateRecord?.providerAccountNickname : null,
+        source: sourceOf('v2', 'shipments.selected_rate_json.providerAccountNickname', 'ShipStation v2 label/rate payload'),
+      },
+      {
+        value: providerAccountNickname,
+        source: sourceOf('v2', 'shipments.provider_account_nickname', 'ShipStation v2 /carriers nickname cached on shipment'),
+      },
+      {
+        value: bestRateRecord?.providerAccountNickname,
+        source: sourceOf('v2', 'order_overrides.best_rate_json.providerAccountNickname', 'ShipStation v2 /rates/estimate account metadata'),
+      },
+      {
+        value: bestRateRecord?.carrierNickname,
+        source: sourceOf('v2', 'order_overrides.best_rate_json.carrierNickname', 'ShipStation v2 /rates/estimate account metadata'),
+      },
+      {
+        value: resolvedCanonicalCarrierAccount?.nickname,
+        source: sourceOf('derived', 'V2_CARRIER_ACCOUNT_REFS', 'Derived from provider id, carrier code, tracking account number, and client id'),
+      },
+    ]);
+    const canonicalAccountNickname = accountPick.value;
+    const selectedRateFromJsonAmount = hasV2SelectedRateJson ? rateAmount(selectedRate) : null;
+    const selectedRatePick = pickNumberSource([
+      {
+        value: selectedRateFromJsonAmount,
+        source: sourceOf('v2', 'shipments.selected_rate_json', 'ShipStation v2 selected label/rate payload'),
+      },
+      {
+        value: selectedCost,
+        source: sourceOf('v1', 'shipments.cost + shipments.other_cost', 'ShipStation v1 /shipments shipmentCost + otherCost'),
+      },
+      {
+        value: labelCost,
+        source: sourceOf('v2', 'shipments.label_cost', 'ShipStation v2 /labels shipment_cost stored from label purchase/sync'),
+      },
+      {
+        value: rateAmount(bestRate),
+        source: sourceOf('v2', 'order_overrides.best_rate_json', 'ShipStation v2 /rates/estimate best rate fallback'),
+      },
+    ]);
+    const selectedRateAmount = selectedRatePick.value;
+    const bestRatePick = pickNumberSource([
+      {
+        value: rateAmount(bestRate),
+        source: overrideBestRate
+          ? sourceOf('v2', 'order_overrides.best_rate_json', 'ShipStation v2 /rates/estimate best rate')
+          : sourceOf('v1', 'shipments.cost + shipments.other_cost', 'ShipStation v1 /shipments cost fallback'),
+      },
+    ]);
+    const labelCreatedPick = [
+      {
+        value: hasV2SelectedRateJson ? label?.createdAt : null,
+        source: sourceOf('v2', 'shipments.label_created_at/create_date', 'ShipStation v2 /labels creation timestamp stored on shipment'),
+      },
+      {
+        value: label?.createdAt,
+        source: sourceOf('v1', 'shipments.label_created_at/create_date', 'ShipStation v1 /shipments createDate or label create date'),
+      },
+      {
+        value: r.overrides?.bestRateAt,
+        source: sourceOf('local', 'order_overrides.best_rate_at', 'PrepShip timestamp when v2 best rate was calculated'),
+      },
+      {
+        value: r.order.updatedAt,
+        source: sourceOf('local', 'orders.updated_at', 'PrepShip order row updated timestamp fallback'),
+      },
+      {
+        value: r.order.createdAt,
+        source: sourceOf('local', 'orders.created_at', 'PrepShip order row created timestamp fallback'),
+      },
+    ].find((candidate) => candidate.value != null) ?? {
+      value: null,
+      source: sourceOf('local', 'null', 'no populated source field'),
+    };
     const labelCreatedAt =
-      label?.createdAt ??
-      r.overrides?.bestRateAt ??
-      r.order.updatedAt ??
-      r.order.createdAt ??
+      labelCreatedPick.value ??
       null;
+    const labelCostPick = pickNumberSource([
+      {
+        value: labelCost,
+        source: ship?.label_cost != null
+          ? sourceOf('v2', 'shipments.label_cost', 'ShipStation v2 /labels shipment_cost stored from label purchase/sync')
+          : sourceOf('v1', 'shipments.cost + shipments.other_cost', 'ShipStation v1 /shipments cost fallback'),
+      },
+    ]);
     const shipping = {
       carrierCode: canonicalCarrierCode,
       serviceCode: canonicalServiceCode,
@@ -666,7 +907,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       providerAccountId: canonicalProviderAccountId ?? resolvedCanonicalCarrierAccount?.shippingProviderId ?? null,
       accountNickname: canonicalAccountNickname,
       selectedRateAmount,
-      bestRateAmount: rateAmount(bestRate),
+      bestRateAmount: bestRatePick.value,
       labelCost,
       labelCreatedAt,
       shipDate: ship?.ship_date ?? null,
@@ -674,6 +915,38 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       source: ship ? 'shipment' : overrideBestRate ? 'order_override' : null,
       selectedRate,
       bestRate,
+      sourceMap: {
+        'shipping.carrierCode': carrierPick.source,
+        'shipping.serviceCode': servicePick.source,
+        'shipping.trackingNumber': trackingPick.source,
+        'shipping.providerAccountId': canonicalProviderAccountId != null
+          ? providerPick.source
+          : resolvedCanonicalCarrierAccount
+            ? sourceOf('derived', 'V2_CARRIER_ACCOUNT_REFS', 'Derived from carrier/tracking/client account lookup')
+            : providerPick.source,
+        'shipping.accountNickname': accountPick.source,
+        'shipping.selectedRateAmount': selectedRatePick.source,
+        'shipping.bestRateAmount': bestRatePick.source,
+        'shipping.labelCost': labelCostPick.source,
+        'shipping.labelCreatedAt': labelCreatedPick.source,
+        'shipping.shipDate': ship?.ship_date != null
+          ? sourceOf('v1', 'shipments.ship_date', 'ShipStation v1 /shipments.shipDate')
+          : sourceOf('local', 'null', 'no populated source field'),
+        'shipping.shipmentId': ship?.label_shipment_id != null
+          ? sourceOf('v1', 'shipments.label_shipment_id', 'ShipStation v1 /shipments.shipmentId')
+          : sourceOf('local', 'null', 'no populated source field'),
+        'shipping.source': ship
+          ? sourceOf('local', 'shipments row', 'Canonical shipping model was built from the linked PrepShip shipment row')
+          : overrideBestRate
+            ? sourceOf('local', 'order_overrides.best_rate_json', 'Canonical shipping model was built from saved rate override data')
+            : sourceOf('local', 'null', 'no populated source field'),
+        'shipping.selectedRate': hasV2SelectedRateJson
+          ? sourceOf('v2', 'shipments.selected_rate_json', 'ShipStation v2 selected label/rate payload')
+          : sourceOf('v1', 'shipments carrier/service/cost columns', 'Synthesized from ShipStation v1 /shipments columns'),
+        'shipping.bestRate': overrideBestRate
+          ? sourceOf('v2', 'order_overrides.best_rate_json', 'ShipStation v2 /rates/estimate best rate')
+          : sourceOf('v1', 'shipments carrier/service/cost columns', 'Synthesized from shipment selected-rate fallback'),
+      },
     };
     const canonicalOrder = buildCanonicalOrderModel(
       r.order as Record<string, unknown>,
