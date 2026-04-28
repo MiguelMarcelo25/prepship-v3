@@ -44,6 +44,33 @@ const LEGACY_CLIENT_ID_BY_CURRENT_ID = new Map<number, number>([
   [12, 11],
 ]);
 
+type V2CarrierAccountRef = {
+  carrierCode: string;
+  shippingProviderId: number;
+  nickname: string;
+  clientId: number | null;
+  accountNumber: string | null;
+};
+
+const V2_CARRIER_ACCOUNT_REFS: V2CarrierAccountRef[] = [
+  { carrierCode: 'stamps_com', shippingProviderId: 433542, nickname: 'USPS Chase x7439', clientId: null, accountNumber: 'djeon-952w77' },
+  { carrierCode: 'ups_walleted', shippingProviderId: 433543, nickname: 'UPS by SS - Chase x7439', clientId: null, accountNumber: 'ups_433543' },
+  { carrierCode: 'ups', shippingProviderId: 565326, nickname: 'GG6381', clientId: null, accountNumber: 'GG6381' },
+  { carrierCode: 'ups', shippingProviderId: 565377, nickname: 'G19Y32', clientId: null, accountNumber: 'G19Y32' },
+  { carrierCode: 'ups', shippingProviderId: 596001, nickname: 'ORION', clientId: null, accountNumber: 'R05H19' },
+  { carrierCode: 'ups', shippingProviderId: 604209, nickname: 'ROCEL', clientId: null, accountNumber: null },
+  { carrierCode: 'ups', shippingProviderId: 607855, nickname: 'ROCEL C81F70', clientId: null, accountNumber: 'C81F70' },
+  { carrierCode: 'fedex', shippingProviderId: 598840, nickname: 'FedEx', clientId: null, accountNumber: '208481048' },
+  { carrierCode: 'fedex_walleted', shippingProviderId: 585004, nickname: 'FedEx One Balance', clientId: null, accountNumber: null },
+  { carrierCode: 'stamps_com', shippingProviderId: 442006, nickname: 'GREG PAYABILITY 6/17', clientId: 10, accountNumber: null },
+  { carrierCode: 'ups', shippingProviderId: 461890, nickname: 'ROCEL C81F70', clientId: 10, accountNumber: 'C81F70' },
+  { carrierCode: 'ups', shippingProviderId: 565317, nickname: 'GG6381', clientId: 10, accountNumber: 'GG6381' },
+  { carrierCode: 'ups', shippingProviderId: 595995, nickname: 'ORI Account', clientId: 10, accountNumber: 'R05H19' },
+  { carrierCode: 'ups', shippingProviderId: 442007, nickname: 'GREG PAYABILITY 6/17', clientId: 10, accountNumber: null },
+  { carrierCode: 'fedex', shippingProviderId: 442013, nickname: 'FedEx', clientId: 10, accountNumber: '208481048' },
+  { carrierCode: 'fedex_walleted', shippingProviderId: 585334, nickname: 'FedEx One Balance', clientId: 10, accountNumber: null },
+];
+
 function resolveLegacyClientId(
   clientId: number | null | undefined,
   storeId: number | null | undefined,
@@ -57,6 +84,43 @@ function resolveLegacyClientId(
     if (byCurrentId != null) return byCurrentId;
   }
   return clientId ?? null;
+}
+
+function resolveV2CarrierAccountNickname(
+  providerAccountId: number | null | undefined,
+  carrierCode: string | null | undefined,
+  trackingNumber: string | null | undefined,
+  clientId: number | null,
+) {
+  if (providerAccountId != null) {
+    const exact = V2_CARRIER_ACCOUNT_REFS.find((account) => account.shippingProviderId === providerAccountId);
+    if (exact) return exact.nickname;
+  }
+
+  if ((carrierCode === 'ups' || carrierCode === 'ups_walleted') && trackingNumber) {
+    const tracking = trackingNumber.replace(/\s/g, '').toUpperCase();
+    if (tracking.startsWith('1Z') && tracking.length >= 8) {
+      const accountNumber = tracking.slice(2, 8);
+      const matches = V2_CARRIER_ACCOUNT_REFS.filter(
+        (account) =>
+          (account.carrierCode === 'ups' || account.carrierCode === 'ups_walleted') &&
+          account.accountNumber?.toUpperCase() === accountNumber,
+      );
+      const clientMatch = clientId != null ? matches.find((account) => account.clientId === clientId) : null;
+      const sharedMatch = matches.find((account) => account.clientId === null);
+      return (clientMatch ?? sharedMatch ?? matches[0])?.nickname ?? null;
+    }
+  }
+
+  const matching = V2_CARRIER_ACCOUNT_REFS.filter((account) => account.carrierCode === carrierCode);
+  if (matching.length === 1) return matching[0]?.nickname ?? null;
+  if (matching.length > 1) {
+    const clientMatch = clientId != null ? matching.find((account) => account.clientId === clientId) : null;
+    const sharedMatch = matching.find((account) => account.clientId === null);
+    return (clientMatch ?? sharedMatch)?.nickname ?? null;
+  }
+
+  return null;
 }
 
 // User-initiated sync + status. Sits behind requireAuth (mounted at main.ts).
@@ -313,6 +377,16 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     const ship =
       latestShipByOrderId.get(r.order.id) ??
       latestShipByOrderNumber.get(r.order.orderNumber);
+    const legacyClientId = resolveLegacyClientId(r.order.clientId, r.order.storeId);
+    const providerAccountNickname = ship
+      ? ship.provider_account_nickname ??
+        resolveV2CarrierAccountNickname(
+          ship.provider_account_id,
+          ship.carrier_code,
+          ship.tracking_number,
+          legacyClientId,
+        )
+      : null;
     const baseShipmentCost = ship?.cost != null ? Number(ship.cost) : null;
     const shipmentOtherCost = ship?.other_cost != null ? Number(ship.other_cost) : 0;
     const selectedCost =
@@ -329,6 +403,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           shipDate: ship.ship_date,
           createdAt: ship.label_created_at ?? ship.create_date,
           cost: labelCost,
+          rawCost: baseShipmentCost,
           labelUrl: ship.label_url,
           shippingProviderId: ship.provider_account_id,
           shipmentId: ship.label_shipment_id,
@@ -339,10 +414,11 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     // columns so the frontend's `selectedRate.*` reads land on real values.
     const synthSelected = ship
       ? {
+          providerAccountId: ship.provider_account_id,
           carrierCode: ship.carrier_code,
           serviceCode: ship.service_code,
           shippingProviderId: ship.provider_account_id,
-          providerAccountNickname: ship.provider_account_nickname,
+          providerAccountNickname,
           shipmentCost: baseShipmentCost,
           otherCost: ship.other_cost != null ? shipmentOtherCost : null,
           cost: selectedCost ?? labelCost,
@@ -350,11 +426,22 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       : null;
     const selectedRate =
       ship?.selected_rate_json && typeof ship.selected_rate_json === 'object'
-        ? { ...synthSelected, ...(ship.selected_rate_json as Record<string, unknown>) }
+        ? {
+            ...synthSelected,
+            ...(ship.selected_rate_json as Record<string, unknown>),
+            providerAccountId:
+              (ship.selected_rate_json as Record<string, unknown>).providerAccountId ?? ship.provider_account_id,
+            shippingProviderId:
+              (ship.selected_rate_json as Record<string, unknown>).shippingProviderId ?? ship.provider_account_id,
+            providerAccountNickname:
+              providerAccountNickname ??
+              (ship.selected_rate_json as Record<string, unknown>).providerAccountNickname ??
+              synthSelected?.providerAccountNickname,
+          }
         : synthSelected;
     return {
       ...r.order,
-      legacyClientId: resolveLegacyClientId(r.order.clientId, r.order.storeId),
+      legacyClientId,
       overrides: r.overrides,
       label,
       selectedRate,

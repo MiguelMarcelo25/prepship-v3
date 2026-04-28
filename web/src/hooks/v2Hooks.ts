@@ -168,6 +168,7 @@ function transformOrderRowV4toV2(
   const rawDims = (rawAny.dimensions ?? {}) as Record<string, unknown>;
   const clientId = typeof row.clientId === 'number' ? row.clientId : null;
   const overrides = (row.overrides ?? null) as Record<string, unknown> | null;
+  const isAwaitingShipment = row.orderStatus === 'awaiting_shipment';
   const bestRateJson = overrides?.bestRateJson as
     | Record<string, unknown>
     | null
@@ -261,7 +262,7 @@ function transformOrderRowV4toV2(
       dimsL != null && dimsW != null && dimsH != null
         ? { length: dimsL, width: dimsW, height: dimsH, units: 'inches' }
         : null,
-    bestRate: bestRateLegacy,
+    bestRate: isAwaitingShipment ? bestRateLegacy : null,
     selectedRate: normalizeRateForV2(row.selectedRate),
     label: normalizeLabelForV2(row.label),
   };

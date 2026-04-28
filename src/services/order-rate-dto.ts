@@ -227,7 +227,7 @@ export function normalizeOrderSelectedRateDto(
   if (value == null) return null;
 
   const record = expectRecord(value, path);
-  const providerAccountId = readNullableNumber(
+  const providerAccountId = readNullableProviderAccountId(
     record.providerAccountId ?? record.shippingProviderId ?? fallback?.providerAccountId ?? null,
     `${path}.providerAccountId`,
   );
@@ -244,7 +244,7 @@ export function normalizeOrderSelectedRateDto(
       record.providerAccountNickname ?? null,
       `${path}.providerAccountNickname`,
     ),
-    shippingProviderId: readNullableNumber(
+    shippingProviderId: readNullableProviderAccountId(
       record.shippingProviderId ?? providerAccountId ?? fallback?.providerAccountId ?? null,
       `${path}.shippingProviderId`,
     ),

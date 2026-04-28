@@ -639,21 +639,31 @@ function getV2CarrierAccountForOrder(order: OrderSummaryDto) {
 }
 
 function getCarrierCodeForDisplay(order: OrderSummaryDto) {
+  if (order.orderStatus === 'awaiting_shipment') {
+    return (
+      toStringValue(order.bestRate?.carrierCode) ??
+      toStringValue(order.selectedRate?.carrierCode) ??
+      toStringValue(order.label?.carrierCode) ??
+      toStringValue(order.carrierCode)
+    )
+  }
+
   return (
-    getV2CarrierAccountForOrder(order)?.carrierCode ??
     toStringValue(order.selectedRate?.carrierCode) ??
     toStringValue(order.label?.carrierCode) ??
-    toStringValue(order.bestRate?.carrierCode) ??
     toStringValue(order.carrierCode)
   )
 }
 
 function getShipAccountDisplay(order: OrderSummaryDto, accounts: CarrierAccountDto[]) {
+  const selectedNickname = normalizeShippingAccountName(order.selectedRate?.providerAccountNickname)
+  if (selectedNickname) return selectedNickname
+
   const v2Account = getV2CarrierAccountForOrder(order)
   if (v2Account) return v2Account.nickname
 
-  const selectedNickname = normalizeShippingAccountName(order.selectedRate?.providerAccountNickname)
-  if (selectedNickname) return selectedNickname
+  if (order.selectedRate) return 'External'
+
   if (order.label?.shippingProviderId != null) {
     const account = accounts.find((candidate) => candidate.shippingProviderId === order.label.shippingProviderId)
     const accountLabel = getCarrierAccountDisplay(account)
@@ -703,7 +713,6 @@ function getSelectedRateBaseCost(order: OrderSummaryDto) {
 
 function getSelectedRateCarrierCode(order: OrderSummaryDto) {
   return (
-    getV2CarrierAccountForOrder(order)?.carrierCode ??
     toStringValue(order.selectedRate?.carrierCode) ??
     toStringValue(order.label?.carrierCode) ??
     toStringValue(order.carrierCode)
@@ -720,16 +729,15 @@ function getSelectedRateServiceCode(order: OrderSummaryDto) {
 
 function getSelectedRateCarrierNickname(order: OrderSummaryDto) {
   return (
-    getV2CarrierAccountForOrder(order)?.nickname ??
     toStringValue(order.selectedRate?.providerAccountNickname) ??
     toStringValue(order.selectedRate?.carrierNickname) ??
-    toStringValue(order.label?.carrierNickname)
+    toStringValue(order.label?.carrierNickname) ??
+    getV2CarrierAccountForOrder(order)?.nickname
   )
 }
 
 function getSelectedRateShippingProviderId(order: OrderSummaryDto) {
   return (
-    getV2CarrierAccountForOrder(order)?.shippingProviderId ??
     toNumberValue(order.selectedRate?.shippingProviderId) ??
     toNumberValue(order.selectedRate?.providerAccountId) ??
     toNumberValue(order.label?.shippingProviderId) ??
@@ -2165,6 +2173,16 @@ export default function OrdersView({
   const renderBestRatePrice = (order: OrderSummaryDto) => {
     const bestRateBaseCost = getBestRateBaseCost(order)
     if (order.orderStatus !== 'awaiting_shipment') {
+      if (typeof order.label?.cost === 'number') {
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <div style={{ lineHeight: 1.3 }}>
+              <strong style={{ color: 'var(--green)', fontSize: 12 }}>{formatMoney(order.label.cost)}</strong>
+            </div>
+          </div>
+        )
+      }
+
       const selectedRateBase = getSelectedRateBaseCost(order)
       const markedAmount = getSelectedRateMarkedAmount(order, markups)
       if (selectedRateBase == null && markedAmount == null) {
@@ -2225,14 +2243,7 @@ export default function OrdersView({
 
   const renderMargin = (order: OrderSummaryDto) => {
     if (order.orderStatus !== 'awaiting_shipment') {
-      const baseAmount = getSelectedRateBaseCost(order)
-      const markedAmount = getSelectedRateMarkedAmount(order, markups)
-      if (baseAmount == null || markedAmount == null) {
-        return <span style={{ color: 'var(--text4)', fontSize: 11 }}>—</span>
-      }
-      const diff = getMarkupAmount(baseAmount, markedAmount)
-      if (diff <= 0.005) return <span style={{ color: 'var(--text4)', fontSize: 11 }}>—</span>
-      return <span style={{ fontSize: 12, fontWeight: 700, color: '#16a34a' }}>+{formatMoney(diff)}</span>
+      return <span style={{ color: 'var(--text4)', fontSize: 11 }}>{'\u2014'}</span>
     }
 
     const bestRateBaseCost = getBestRateBaseCost(order)
@@ -2274,8 +2285,14 @@ export default function OrdersView({
         return <span style={{ fontSize: 10, color: 'var(--text2)' }}>Externally Shipped</span>
       }
 
-      const carrierCode = getCarrierCodeForDisplay(order)
-      const serviceCode = order.label?.serviceCode ?? order.selectedRate?.serviceCode ?? order.serviceCode
+      const carrierCode =
+        toStringValue(order.carrierCode) ??
+        toStringValue(order.label?.carrierCode) ??
+        toStringValue(order.selectedRate?.carrierCode)
+      const serviceCode =
+        toStringValue(order.serviceCode) ??
+        toStringValue(order.label?.serviceCode) ??
+        toStringValue(order.selectedRate?.serviceCode)
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, lineHeight: 1.3 }}>
           <span className={`carrier-badge ${getCarrierClass(carrierCode)}`}>{formatCarrierCode(carrierCode)}</span>
@@ -2625,9 +2642,9 @@ export default function OrdersView({
       }
       case 'test_carrierCode': {
         const value = diagnosticIsShipped
-          ? getCarrierCodeForDisplay(order)
+          ? (toStringValue(order.selectedRate?.carrierCode) ?? toStringValue(order.label?.carrierCode) ?? toStringValue(order.carrierCode))
           : order.bestRate
-            ? (getV2CarrierAccountForOrder(order)?.carrierCode ?? toStringValue(order.bestRate?.carrierCode))
+            ? toStringValue(order.bestRate?.carrierCode)
             : null
         return renderDiagnosticCell(value, { monospace: true })
       }
@@ -2682,10 +2699,8 @@ export default function OrdersView({
       }
       case 'test_shippingAccount': {
         const value = diagnosticIsShipped
-          ? getShipAccountDisplay(order, shippingAccounts)
-          : order.bestRate
-            ? getV2CarrierAccountForOrder(order)?.nickname ?? null
-            : null
+          ? (toStringValue(order.selectedRate?.providerAccountNickname) ?? toStringValue(order.label?.carrierCode))
+          : null
         return renderDiagnosticCell(value)
       }
     }
