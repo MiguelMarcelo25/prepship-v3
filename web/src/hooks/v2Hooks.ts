@@ -155,6 +155,24 @@ function hasPositiveRateAmount(rate: Record<string, unknown> | null): boolean {
   return total > 0;
 }
 
+function getItemsTotalForDisplay(source: unknown): number | null {
+  if (!Array.isArray(source)) return null;
+  let total = 0;
+  let hasPricedItem = false;
+
+  for (const item of source) {
+    const record = toRecordValue(item);
+    if (!record || record.adjustment === true) continue;
+    const unitPrice = toFiniteNumber(record.unitPrice) ?? toFiniteNumber(record.price);
+    if (unitPrice == null) continue;
+    const quantity = toFiniteNumber(record.quantity) ?? 1;
+    total += unitPrice * quantity;
+    hasPricedItem = true;
+  }
+
+  return hasPricedItem && total > 0 ? total : null;
+}
+
 function legacyClientId(
   clientId: number | null,
   storeId: unknown,
@@ -199,6 +217,7 @@ function transformOrderRowV4toV2(
     legacyClientId(clientId, storeId, clientsById);
   const overrides = (row.overrides ?? null) as Record<string, unknown> | null;
   const shippingModel = toRecordValue(canonicalOrder?.shipping) ?? toRecordValue(row.shipping);
+  const orderStatus = (canonicalOrder?.orderStatus as string | undefined) ?? (row.orderStatus as string | undefined) ?? null;
   const bestRateJson = overrides?.bestRateJson as
     | Record<string, unknown>
     | null
@@ -260,14 +279,23 @@ function transformOrderRowV4toV2(
 
   const orderTotalNum = (() => {
     const canonicalTotal = toFiniteNumber(canonicalTotals?.orderTotal);
-    if (canonicalTotal != null) return canonicalTotal;
+    if (canonicalTotal != null && canonicalTotal > 0) return canonicalTotal;
     const v = row.orderTotal;
-    if (typeof v === 'number') return v;
+    if (typeof v === 'number' && v > 0) return v;
     if (typeof v === 'string') {
       const n = Number.parseFloat(v);
-      return Number.isFinite(n) ? n : null;
+      if (Number.isFinite(n) && n > 0) return n;
     }
-    return null;
+    const rawTotal = toFiniteNumber(rawAny.orderTotal ?? rawAny.order_total);
+    if (rawTotal != null && rawTotal > 0) return rawTotal;
+    if (orderStatus === 'cancelled') {
+      const itemsTotal =
+        getItemsTotalForDisplay(canonicalOrder?.items) ??
+        getItemsTotalForDisplay(row.items) ??
+        getItemsTotalForDisplay(rawAny.items);
+      if (itemsTotal != null) return itemsTotal;
+    }
+    return canonicalTotal ?? (typeof v === 'number' ? v : null) ?? rawTotal ?? null;
   })();
   const shippingAmountNum = (() => {
     const canonicalShipping = toFiniteNumber(canonicalTotals?.shippingAmount);
@@ -295,7 +323,7 @@ function transformOrderRowV4toV2(
   const displayBestRate =
     (hasPositiveRateAmount(apiBestRate) ? apiBestRate : null) ??
     (hasPositiveRateAmount(bestRateLegacy) ? bestRateLegacy : null) ??
-    selectedRateBestFallback;
+    (orderStatus === 'cancelled' ? null : selectedRateBestFallback);
   const shipping = shippingModel
     ? {
         ...shippingModel,
@@ -322,7 +350,7 @@ function transformOrderRowV4toV2(
     ...row,
     orderId: toNumericValue(canonicalOrder?.orderId) ?? toNumericValue(canonicalOrder?.id) ?? row.id,
     orderNumber: canonicalOrder?.orderNumber ?? row.orderNumber,
-    orderStatus: canonicalOrder?.orderStatus ?? row.orderStatus,
+    orderStatus,
     orderDate: canonicalOrder?.orderDate ?? row.orderDate,
     externalOrderId: canonicalOrder?.externalOrderId ?? row.externalOrderId,
     orderTotal: orderTotalNum,

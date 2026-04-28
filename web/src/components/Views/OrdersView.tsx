@@ -906,6 +906,11 @@ function getShippedDisplayAccountNickname(order: OrderSummaryDto) {
   return toStringValue(order.label?.carrierCode)
 }
 
+function shouldShowCarrierExtLabel(order: OrderSummaryDto) {
+  if (order.externalShipped) return true
+  return order.orderStatus === 'shipped' && getIsExternallyFulfilled(order)
+}
+
 function getIsException(order: OrderSummaryDto) {
   if (order.orderStatus !== 'awaiting_shipment') return false
   return ageHours(order.orderDate) > 48 || !(order.weight?.value && order.weight.value > 0)
@@ -2411,7 +2416,7 @@ export default function OrdersView({
   const renderCarrierCell = (order: OrderSummaryDto) => {
     const shipped = order.orderStatus !== 'awaiting_shipment'
     if (shipped) {
-      if (getIsExternallyFulfilled(order)) {
+      if (shouldShowCarrierExtLabel(order)) {
         return renderExtLabelBadge()
       }
 
