@@ -151,6 +151,10 @@ function stringOrNull(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value : null;
 }
 
+function booleanOrNull(value: unknown): boolean | null {
+  return typeof value === 'boolean' ? value : null;
+}
+
 function finiteNumberOrNull(value: unknown): number | null {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   if (typeof value === 'string' && value.trim()) {
@@ -180,6 +184,93 @@ function rateAmount(value: unknown): number | null {
     finiteNumberOrNull(rate.amount);
   const otherCost = finiteNumberOrNull(rate.otherCost) ?? finiteNumberOrNull(otherAmount?.amount) ?? 0;
   return shipmentCost != null ? shipmentCost + otherCost : null;
+}
+
+function dateToIso(value: unknown): string | null {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString();
+  return typeof value === 'string' ? value : null;
+}
+
+function buildCanonicalOrderModel(
+  order: Record<string, unknown>,
+  overrides: Record<string, unknown> | null,
+  legacyClientId: number | null,
+  shipping: Record<string, unknown>,
+) {
+  const raw = recordOrNull(order.raw) ?? {};
+  const rawShipTo = recordOrNull(raw.shipTo) ?? {};
+  const rawDimensions = recordOrNull(raw.dimensions) ?? {};
+
+  const dimensionLength = finiteNumberOrNull(rawDimensions.length) ?? finiteNumberOrNull(overrides?.rateDimsL);
+  const dimensionWidth = finiteNumberOrNull(rawDimensions.width) ?? finiteNumberOrNull(overrides?.rateDimsW);
+  const dimensionHeight = finiteNumberOrNull(rawDimensions.height) ?? finiteNumberOrNull(overrides?.rateDimsH);
+  const dimensions =
+    dimensionLength != null && dimensionWidth != null && dimensionHeight != null
+      ? {
+          length: dimensionLength,
+          width: dimensionWidth,
+          height: dimensionHeight,
+          units: stringOrNull(rawDimensions.units) ?? 'inches',
+        }
+      : null;
+  const weightOz = finiteNumberOrNull(order.weightOz);
+  const orderId = finiteNumberOrNull(order.id);
+  const clientId = finiteNumberOrNull(order.clientId);
+  const storeId = finiteNumberOrNull(order.storeId);
+
+  return {
+    id: orderId,
+    orderId,
+    externalOrderId: stringOrNull(order.externalOrderId),
+    orderNumber: stringOrNull(order.orderNumber),
+    orderStatus: stringOrNull(order.orderStatus),
+    orderDate: dateToIso(order.orderDate),
+    createdAt: dateToIso(order.createdAt),
+    updatedAt: dateToIso(order.updatedAt),
+    clientId,
+    legacyClientId,
+    storeId,
+    client: {
+      id: clientId,
+      legacyId: legacyClientId,
+      storeId,
+    },
+    customer: {
+      email: stringOrNull(order.customerEmail),
+      username: stringOrNull(raw.customerUsername),
+    },
+    recipient: {
+      name: stringOrNull(rawShipTo.name) ?? stringOrNull(order.shipToName),
+      company: stringOrNull(rawShipTo.company),
+      street1: stringOrNull(rawShipTo.street1),
+      street2: stringOrNull(rawShipTo.street2),
+      city: stringOrNull(rawShipTo.city) ?? stringOrNull(order.shipToCity),
+      state: stringOrNull(rawShipTo.state) ?? stringOrNull(order.shipToState),
+      postalCode: stringOrNull(rawShipTo.postalCode) ?? stringOrNull(order.shipToPostalCode),
+      country: stringOrNull(rawShipTo.country) ?? 'US',
+      phone: stringOrNull(rawShipTo.phone),
+      residential: booleanOrNull(overrides?.residential) ?? booleanOrNull(rawShipTo.residential),
+      addressVerified: stringOrNull(rawShipTo.addressVerified),
+    },
+    weight: weightOz != null ? { value: weightOz, units: 'ounces' } : null,
+    weightOz,
+    dimensions,
+    packageCode: stringOrNull(raw.packageCode),
+    requestedShippingService: stringOrNull(raw.requestedShippingService),
+    requestedServiceCode: stringOrNull(raw.serviceCode) ?? stringOrNull(order.serviceCode),
+    totals: {
+      orderTotal: finiteNumberOrNull(order.orderTotal) ?? 0,
+      shippingAmount: finiteNumberOrNull(order.shippingAmount) ?? 0,
+    },
+    items: Array.isArray(order.items) ? order.items : [],
+    flags: {
+      externallyShipped: Boolean(order.externallyShipped),
+      externallyFulfilled: booleanOrNull(raw.externallyFulfilled),
+      externallyFulfilledVerified: Boolean(order.externallyFulfilledVerified),
+    },
+    shipping,
+  };
 }
 
 // User-initiated sync + status. Sits behind requireAuth (mounted at main.ts).
@@ -560,6 +651,12 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       selectedRate,
       bestRate,
     };
+    const canonicalOrder = buildCanonicalOrderModel(
+      r.order as Record<string, unknown>,
+      r.overrides as Record<string, unknown> | null,
+      legacyClientId,
+      shipping,
+    );
     return {
       ...r.order,
       legacyClientId,
@@ -568,6 +665,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       selectedRate,
       bestRate,
       shipping,
+      canonicalOrder,
     };
   });
   const total = countRows[0]?.count ?? 0;

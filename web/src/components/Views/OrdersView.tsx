@@ -491,20 +491,21 @@ function buildSearchText(order: OrderSummaryDto, detail: OrderFullDto | null) {
 }
 
 function getShipTo(order: OrderSummaryDto, detail: OrderFullDto | null) {
+  const canonicalRecipient = getCanonicalRecord(order, 'recipient')
   const rawOrder = toRecord(detail?.raw)
   const rawShipTo = toRecord(rawOrder?.shipTo)
 
   return {
-    name: toStringValue(rawShipTo?.name) ?? order.shipTo?.name ?? null,
-    company: toStringValue(rawShipTo?.company) ?? null,
-    street1: toStringValue(rawShipTo?.street1) ?? null,
-    street2: toStringValue(rawShipTo?.street2) ?? null,
-    city: toStringValue(rawShipTo?.city) ?? order.shipTo?.city ?? null,
-    state: toStringValue(rawShipTo?.state) ?? order.shipTo?.state ?? null,
-    postalCode: toStringValue(rawShipTo?.postalCode) ?? order.shipTo?.postalCode ?? null,
-    country: toStringValue(rawShipTo?.country) ?? 'US',
-    phone: toStringValue(rawShipTo?.phone) ?? null,
-    addressVerified: toStringValue(rawShipTo?.addressVerified) ?? null,
+    name: toStringValue(canonicalRecipient?.name) ?? order.shipTo?.name ?? toStringValue(rawShipTo?.name) ?? null,
+    company: toStringValue(canonicalRecipient?.company) ?? order.shipTo?.company ?? toStringValue(rawShipTo?.company) ?? null,
+    street1: toStringValue(canonicalRecipient?.street1) ?? order.shipTo?.street1 ?? toStringValue(rawShipTo?.street1) ?? null,
+    street2: toStringValue(canonicalRecipient?.street2) ?? order.shipTo?.street2 ?? toStringValue(rawShipTo?.street2) ?? null,
+    city: toStringValue(canonicalRecipient?.city) ?? order.shipTo?.city ?? toStringValue(rawShipTo?.city) ?? null,
+    state: toStringValue(canonicalRecipient?.state) ?? order.shipTo?.state ?? toStringValue(rawShipTo?.state) ?? null,
+    postalCode: toStringValue(canonicalRecipient?.postalCode) ?? order.shipTo?.postalCode ?? toStringValue(rawShipTo?.postalCode) ?? null,
+    country: toStringValue(canonicalRecipient?.country) ?? order.shipTo?.country ?? toStringValue(rawShipTo?.country) ?? 'US',
+    phone: toStringValue(canonicalRecipient?.phone) ?? order.shipTo?.phone ?? toStringValue(rawShipTo?.phone) ?? null,
+    addressVerified: toStringValue(canonicalRecipient?.addressVerified) ?? order.shipTo?.addressVerified ?? toStringValue(rawShipTo?.addressVerified) ?? null,
   }
 }
 
@@ -529,12 +530,13 @@ function getAddressBlock(order: OrderSummaryDto, detail: OrderFullDto | null) {
 }
 
 function getDimensions(order: OrderSummaryDto, detail: OrderFullDto | null) {
+  const canonicalDimensions = getCanonicalRecord(order, 'dimensions')
   const rawOrder = toRecord(detail?.raw) ?? toRecord(order.raw)
   const rawDims = toRecord(rawOrder?.dimensions)
 
-  const length = toNumberValue(rawDims?.length) ?? order.rateDims?.length ?? 0
-  const width = toNumberValue(rawDims?.width) ?? order.rateDims?.width ?? 0
-  const height = toNumberValue(rawDims?.height) ?? order.rateDims?.height ?? 0
+  const length = toNumberValue(canonicalDimensions?.length) ?? order.rateDims?.length ?? toNumberValue(rawDims?.length) ?? 0
+  const width = toNumberValue(canonicalDimensions?.width) ?? order.rateDims?.width ?? toNumberValue(rawDims?.width) ?? 0
+  const height = toNumberValue(canonicalDimensions?.height) ?? order.rateDims?.height ?? toNumberValue(rawDims?.height) ?? 0
 
   if (!length || !width || !height) return null
 
@@ -542,7 +544,7 @@ function getDimensions(order: OrderSummaryDto, detail: OrderFullDto | null) {
     length,
     width,
     height,
-    units: toStringValue(rawDims?.units) ?? 'inches',
+    units: toStringValue(canonicalDimensions?.units) ?? order.rateDims?.units ?? toStringValue(rawDims?.units) ?? 'inches',
   }
 }
 
@@ -556,8 +558,16 @@ function normalizeShippingAccountName(value: unknown) {
   return label
 }
 
+function getCanonicalOrderModel(order: OrderSummaryDto) {
+  return toRecord(order.canonicalOrder)
+}
+
+function getCanonicalRecord(order: OrderSummaryDto, key: string) {
+  return toRecord(getCanonicalOrderModel(order)?.[key])
+}
+
 function getShippingModel(order: OrderSummaryDto) {
-  return toRecord(order.shipping)
+  return getCanonicalRecord(order, 'shipping') ?? toRecord(order.shipping)
 }
 
 function getShippingString(order: OrderSummaryDto, key: string) {

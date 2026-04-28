@@ -178,12 +178,27 @@ function transformOrderRowV4toV2(
   row: Record<string, unknown>,
   clientsById: Map<number, string>
 ): OrderSummaryDto {
+  const canonicalOrder = toRecordValue(row.canonicalOrder);
+  const canonicalRecipient = toRecordValue(canonicalOrder?.recipient);
+  const canonicalWeight = toRecordValue(canonicalOrder?.weight);
+  const canonicalDimensions = toRecordValue(canonicalOrder?.dimensions);
+  const canonicalTotals = toRecordValue(canonicalOrder?.totals);
+  const canonicalClient = toRecordValue(canonicalOrder?.client);
+  const canonicalCustomer = toRecordValue(canonicalOrder?.customer);
   const rawAny = (row.raw ?? {}) as Record<string, unknown>;
   const rawShipTo = (rawAny.shipTo ?? {}) as Record<string, unknown>;
   const rawDims = (rawAny.dimensions ?? {}) as Record<string, unknown>;
-  const clientId = typeof row.clientId === 'number' ? row.clientId : null;
+  const clientId =
+    toNumericValue(canonicalOrder?.clientId) ??
+    toNumericValue(canonicalClient?.id) ??
+    (typeof row.clientId === 'number' ? row.clientId : null);
+  const storeId = toNumericValue(canonicalOrder?.storeId) ?? toNumericValue(canonicalClient?.storeId) ?? toNumericValue(row.storeId);
+  const resolvedLegacyClientId =
+    toNumericValue(canonicalOrder?.legacyClientId) ??
+    toNumericValue(canonicalClient?.legacyId) ??
+    legacyClientId(clientId, storeId, clientsById);
   const overrides = (row.overrides ?? null) as Record<string, unknown> | null;
-  const shippingModel = toRecordValue(row.shipping);
+  const shippingModel = toRecordValue(canonicalOrder?.shipping) ?? toRecordValue(row.shipping);
   const bestRateJson = overrides?.bestRateJson as
     | Record<string, unknown>
     | null
@@ -223,15 +238,29 @@ function transformOrderRowV4toV2(
     };
   })();
 
-  const weightOz = typeof row.weightOz === 'number' ? row.weightOz : null;
+  const weightOz =
+    toFiniteNumber(canonicalOrder?.weightOz) ??
+    toFiniteNumber(canonicalWeight?.value) ??
+    (typeof row.weightOz === 'number' ? row.weightOz : null);
   const ovL = typeof overrides?.rateDimsL === 'number' ? (overrides.rateDimsL as number) : null;
   const ovW = typeof overrides?.rateDimsW === 'number' ? (overrides.rateDimsW as number) : null;
   const ovH = typeof overrides?.rateDimsH === 'number' ? (overrides.rateDimsH as number) : null;
-  const dimsL = (typeof rawDims.length === 'number' ? (rawDims.length as number) : null) ?? ovL;
-  const dimsW = (typeof rawDims.width === 'number' ? (rawDims.width as number) : null) ?? ovW;
-  const dimsH = (typeof rawDims.height === 'number' ? (rawDims.height as number) : null) ?? ovH;
+  const dimsL =
+    toFiniteNumber(canonicalDimensions?.length) ??
+    (typeof rawDims.length === 'number' ? (rawDims.length as number) : null) ??
+    ovL;
+  const dimsW =
+    toFiniteNumber(canonicalDimensions?.width) ??
+    (typeof rawDims.width === 'number' ? (rawDims.width as number) : null) ??
+    ovW;
+  const dimsH =
+    toFiniteNumber(canonicalDimensions?.height) ??
+    (typeof rawDims.height === 'number' ? (rawDims.height as number) : null) ??
+    ovH;
 
   const orderTotalNum = (() => {
+    const canonicalTotal = toFiniteNumber(canonicalTotals?.orderTotal);
+    if (canonicalTotal != null) return canonicalTotal;
     const v = row.orderTotal;
     if (typeof v === 'number') return v;
     if (typeof v === 'string') {
@@ -241,6 +270,8 @@ function transformOrderRowV4toV2(
     return null;
   })();
   const shippingAmountNum = (() => {
+    const canonicalShipping = toFiniteNumber(canonicalTotals?.shippingAmount);
+    if (canonicalShipping != null) return canonicalShipping;
     const v = row.shippingAmount;
     if (typeof v === 'number') return v;
     if (typeof v === 'string') {
@@ -289,25 +320,49 @@ function transformOrderRowV4toV2(
 
   return {
     ...row,
-    orderId: row.id,
+    orderId: toNumericValue(canonicalOrder?.orderId) ?? toNumericValue(canonicalOrder?.id) ?? row.id,
+    orderNumber: canonicalOrder?.orderNumber ?? row.orderNumber,
+    orderStatus: canonicalOrder?.orderStatus ?? row.orderStatus,
+    orderDate: canonicalOrder?.orderDate ?? row.orderDate,
+    externalOrderId: canonicalOrder?.externalOrderId ?? row.externalOrderId,
     orderTotal: orderTotalNum,
     shippingAmount: shippingAmountNum,
+    customerEmail: canonicalCustomer?.email ?? row.customerEmail,
+    storeId,
+    items: Array.isArray(canonicalOrder?.items) ? canonicalOrder.items : row.items,
     clientId,
-    legacyClientId: legacyClientId(clientId, row.storeId, clientsById),
+    legacyClientId: resolvedLegacyClientId,
     clientName: clientId != null ? clientsById.get(clientId) ?? null : null,
     shipTo: {
-      name: (rawShipTo.name as string | undefined) ?? (row.shipToName as string | null) ?? null,
-      company: (rawShipTo.company as string | undefined) ?? null,
-      street1: (rawShipTo.street1 as string | undefined) ?? null,
-      street2: (rawShipTo.street2 as string | undefined) ?? null,
-      city: (rawShipTo.city as string | undefined) ?? (row.shipToCity as string | null) ?? null,
-      state: (rawShipTo.state as string | undefined) ?? (row.shipToState as string | null) ?? null,
+      name:
+        (canonicalRecipient?.name as string | undefined) ??
+        (rawShipTo.name as string | undefined) ??
+        (row.shipToName as string | null) ??
+        null,
+      company: (canonicalRecipient?.company as string | undefined) ?? (rawShipTo.company as string | undefined) ?? null,
+      street1: (canonicalRecipient?.street1 as string | undefined) ?? (rawShipTo.street1 as string | undefined) ?? null,
+      street2: (canonicalRecipient?.street2 as string | undefined) ?? (rawShipTo.street2 as string | undefined) ?? null,
+      city:
+        (canonicalRecipient?.city as string | undefined) ??
+        (rawShipTo.city as string | undefined) ??
+        (row.shipToCity as string | null) ??
+        null,
+      state:
+        (canonicalRecipient?.state as string | undefined) ??
+        (rawShipTo.state as string | undefined) ??
+        (row.shipToState as string | null) ??
+        null,
       postalCode:
+        (canonicalRecipient?.postalCode as string | undefined) ??
         (rawShipTo.postalCode as string | undefined) ??
         (row.shipToPostalCode as string | null) ??
         null,
-      country: (rawShipTo.country as string | undefined) ?? 'US',
-      phone: (rawShipTo.phone as string | undefined) ?? null,
+      country: (canonicalRecipient?.country as string | undefined) ?? (rawShipTo.country as string | undefined) ?? 'US',
+      phone: (canonicalRecipient?.phone as string | undefined) ?? (rawShipTo.phone as string | undefined) ?? null,
+      addressVerified:
+        (canonicalRecipient?.addressVerified as string | undefined) ??
+        (rawShipTo.addressVerified as string | undefined) ??
+        null,
     },
     weight: weightOz != null ? { value: weightOz, units: 'ounces' } : null,
     rateDims:
