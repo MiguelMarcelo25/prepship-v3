@@ -123,6 +123,24 @@ function resolveV2CarrierAccountRef(
   return null;
 }
 
+function normalizeListBestRate(value: unknown) {
+  try {
+    const bestRate = normalizeOrderBestRateDto(value);
+    if (!bestRate) return null;
+    const amount = bestRate.shipmentCost + bestRate.otherCost;
+    if (!(amount > 0)) return null;
+    return {
+      ...bestRate,
+      amount,
+      cost: amount,
+      providerAccountId: bestRate.shippingProviderId,
+      providerAccountNickname: bestRate.carrierNickname,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // User-initiated sync + status. Sits behind requireAuth (mounted at main.ts).
 // /cron/sync-orders is the cron-secret equivalent for schedulers.
 //
@@ -442,12 +460,37 @@ app.get('/', zValidator('query', listQuery), async (c) => {
               synthSelected?.providerAccountNickname,
           }
         : synthSelected;
+    const selectedRateBestRateCandidate =
+      selectedRate && typeof selectedRate === 'object'
+        ? {
+            ...(selectedRate as Record<string, unknown>),
+            carrierNickname:
+              (selectedRate as Record<string, unknown>).carrierNickname ??
+              (selectedRate as Record<string, unknown>).providerAccountNickname ??
+              providerAccountNickname,
+          }
+        : null;
+    const overrideBestRate =
+      r.overrides?.bestRateJson && typeof r.overrides.bestRateJson === 'object'
+        ? {
+            ...selectedRateBestRateCandidate,
+            ...(r.overrides.bestRateJson as Record<string, unknown>),
+            carrierNickname:
+              (r.overrides.bestRateJson as Record<string, unknown>).carrierNickname ??
+              selectedRateBestRateCandidate?.carrierNickname ??
+              providerAccountNickname,
+          }
+        : null;
+    const bestRate =
+      normalizeListBestRate(overrideBestRate) ??
+      normalizeListBestRate(selectedRateBestRateCandidate);
     return {
       ...r.order,
       legacyClientId,
       overrides: r.overrides,
       label,
       selectedRate,
+      bestRate,
     };
   });
   const total = countRows[0]?.count ?? 0;
