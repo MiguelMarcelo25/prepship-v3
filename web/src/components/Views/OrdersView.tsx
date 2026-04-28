@@ -60,6 +60,7 @@ interface OrdersViewProps {
   activeStore?: number | null
   dateFilter?: OrdersDateFilter
   onDateFilterChange?: (filter: OrdersDateFilter) => void
+  onResolvedDateRangeChange?: (range: { start?: string; end?: string }) => void
   selectedOrderIds?: number[]
   onSelectedOrderIdsChange?: (ids: number[]) => void
   activeOrderId?: number | null
@@ -944,6 +945,7 @@ export default function OrdersView({
   activeStore,
   dateFilter = '',
   onDateFilterChange,
+  onResolvedDateRangeChange,
   selectedOrderIds = [],
   onSelectedOrderIdsChange,
   activeOrderId = null,
@@ -1058,6 +1060,10 @@ export default function OrdersView({
     dateStart: dateRange.start,
     dateEnd: dateRange.end,
   })
+
+  useEffect(() => {
+    onResolvedDateRangeChange?.(dateRange)
+  }, [dateRange.start, dateRange.end, onResolvedDateRangeChange])
 
   const { order: activeOrderDetail, isLoading: activeOrderLoading, error: activeOrderError } = useOrderDetail(
     activeOrderId != null ? String(activeOrderId) : '',

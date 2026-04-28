@@ -16,6 +16,7 @@ import SettingsView from './components/Views/SettingsView'
 import BillingView from './components/Views/BillingView'
 import ManifestsView from './components/Views/ManifestsView'
 import { formatSyncPill } from './components/Views/orders-parity'
+import { getOrdersDateRange } from './components/Views/orders-view-filters'
 
 type ViewType = 'orders' | 'inventory' | 'locations' | 'packages' | 'rates' | 'analysis' | 'settings' | 'billing' | 'manifests'
 type ContentView = Exclude<ViewType, 'manifests'>
@@ -35,6 +36,15 @@ const STATUS_LABELS: Record<OrderStatus, string> = {
   awaiting_shipment: 'Awaiting Shipment',
   shipped: 'Shipped',
   cancelled: 'Cancelled',
+}
+
+function getResolvedDateRange(filter: OrdersDateFilter) {
+  const range = getOrdersDateRange(filter)
+  if (!range) return { start: undefined, end: undefined }
+  return {
+    start: range.start.toISOString().split('T')[0],
+    end: range.end.toISOString().split('T')[0],
+  }
 }
 
 const VIEW_LABELS: Record<Exclude<ViewType, 'orders' | 'manifests'>, string> = {
@@ -123,6 +133,9 @@ export default function Home() {
   const [activeStore, setActiveStore] = useState<number | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [dateFilter, setDateFilter] = useState<OrdersDateFilter>('last-30')
+  const [ordersDateRange, setOrdersDateRange] = useState<{ start?: string; end?: string }>(
+    () => getResolvedDateRange('last-30'),
+  )
   const [selectedOrderIds, setSelectedOrderIds] = useState<number[]>([])
   const [activeOrderId, setActiveOrderId] = useState<number | null>(null)
   const [columnMenuRequestId, setColumnMenuRequestId] = useState(0)
@@ -359,6 +372,8 @@ export default function Home() {
           closeMobileMenu()
         }}
         activeStore={activeStore}
+        dateStart={ordersDateRange.start}
+        dateEnd={ordersDateRange.end}
       />
 
       <div className="main bg-bg-base text-text-primary">
@@ -547,6 +562,7 @@ export default function Home() {
             activeStore={activeStore}
             dateFilter={dateFilter}
             onDateFilterChange={setDateFilter}
+            onResolvedDateRangeChange={setOrdersDateRange}
             selectedOrderIds={selectedOrderIds}
             onSelectedOrderIdsChange={setSelectedOrderIds}
             activeOrderId={activeOrderId}

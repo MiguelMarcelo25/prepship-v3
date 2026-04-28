@@ -52,6 +52,17 @@ app.get('/init-data', async (c) => {
 // NO date cutoff — v2 counts ALL awaiting regardless of age. Stale orders
 // that never transitioned are a real operational signal, not noise.
 app.get('/counts', async (c) => {
+  const dateFromRaw = c.req.query('dateFrom');
+  const dateToRaw = c.req.query('dateTo');
+  const dateFrom = dateFromRaw ? new Date(dateFromRaw) : null;
+  const dateTo = dateToRaw ? new Date(dateToRaw) : null;
+  const dateFromIso = dateFrom && !Number.isNaN(dateFrom.getTime()) ? dateFrom.toISOString() : null;
+  const dateToIso = dateTo && !Number.isNaN(dateTo.getTime()) ? dateTo.toISOString() : null;
+  const orderDateFilter = () => sql`
+    ${dateFromIso ? sql`and o.order_date >= ${dateFromIso}::timestamptz` : sql``}
+    ${dateToIso ? sql`and o.order_date <= ${dateToIso}::timestamptz` : sql``}
+  `;
+
   const [rows, byStatus, byStatusStore] = await Promise.all([
     db.execute<{
       awaiting: number;
@@ -67,6 +78,7 @@ app.get('/counts', async (c) => {
           where o.order_status = 'awaiting_shipment'
               and o.store_id is not null
               and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+            ${orderDateFilter()}
             and coalesce(o.externally_shipped, false) = false
             and coalesce((o.raw->>'externallyFulfilled')::boolean, false) = false
             and not exists (
@@ -84,6 +96,7 @@ app.get('/counts', async (c) => {
           where o.order_status = 'shipped'
               and o.store_id is not null
               and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+            ${orderDateFilter()}
             and not exists (
               select 1 from clients c
               where c.id = o.client_id
@@ -95,6 +108,7 @@ app.get('/counts', async (c) => {
           where o.order_status = 'cancelled'
               and o.store_id is not null
               and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+            ${orderDateFilter()}
             and not exists (
               select 1 from clients c
               where c.id = o.client_id
@@ -106,6 +120,7 @@ app.get('/counts', async (c) => {
           where o.order_status = 'on_hold'
               and o.store_id is not null
               and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+            ${orderDateFilter()}
             and not exists (
               select 1 from clients c
               where c.id = o.client_id
@@ -120,6 +135,7 @@ app.get('/counts', async (c) => {
       from orders o
         where o.store_id is not null
           and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+        ${orderDateFilter()}
         and not exists (
           select 1 from clients c
           where c.id = o.client_id
@@ -147,6 +163,7 @@ app.get('/counts', async (c) => {
       left join clients c on c.id = o.client_id
         where o.store_id is not null
           and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+        ${orderDateFilter()}
         and not exists (
           select 1 from clients hidden_client
           where hidden_client.id = o.client_id

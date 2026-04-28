@@ -338,24 +338,18 @@ export const apiClient = {
       'fetchCounts',
       async () => {
         if (hasDate) {
-          const [a, s, x] = await Promise.all([
-            api
-              .get<any>(`/orders${qs({ status: 'awaiting_shipment', pageSize: 1, dateFrom, dateTo })}`)
-              .catch(() => null),
-            api
-              .get<any>(`/orders${qs({ status: 'shipped', pageSize: 1, dateFrom, dateTo })}`)
-              .catch(() => null),
-            api
-              .get<any>(`/orders${qs({ status: 'cancelled', pageSize: 1, dateFrom, dateTo })}`)
-              .catch(() => null),
-          ]);
+          const legacyCounts = await api.get<any>(`/init/counts${qs({ dateFrom, dateTo })}`);
           return {
-            byStatus: [
-              { orderStatus: 'awaiting_shipment', cnt: a?.pagination?.total ?? 0 },
-              { orderStatus: 'shipped', cnt: s?.pagination?.total ?? 0 },
-              { orderStatus: 'cancelled', cnt: x?.pagination?.total ?? 0 },
-            ],
-            byStatusStore: [],
+            byStatus: Array.isArray(legacyCounts?.byStatus)
+              ? legacyCounts.byStatus
+              : [
+                  { orderStatus: 'awaiting_shipment', cnt: legacyCounts?.awaiting ?? 0 },
+                  { orderStatus: 'shipped', cnt: legacyCounts?.shipped ?? 0 },
+                  { orderStatus: 'cancelled', cnt: legacyCounts?.cancelled ?? 0 },
+                ],
+            byStatusStore: Array.isArray(legacyCounts?.byStatusStore)
+              ? legacyCounts.byStatusStore
+              : [],
           };
         }
 
