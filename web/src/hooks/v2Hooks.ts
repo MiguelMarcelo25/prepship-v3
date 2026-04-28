@@ -140,6 +140,15 @@ function normalizeLabelForV2(value: unknown): Record<string, unknown> | null {
   };
 }
 
+function hasPositiveRateAmount(rate: Record<string, unknown> | null): boolean {
+  if (!rate) return false;
+  const total =
+    toFiniteNumber(rate.amount) ??
+    toFiniteNumber(rate.cost) ??
+    ((toFiniteNumber(rate.shipmentCost) ?? 0) + (toFiniteNumber(rate.otherCost) ?? 0));
+  return total > 0;
+}
+
 function legacyClientId(
   clientId: number | null,
   storeId: unknown,
@@ -168,7 +177,6 @@ function transformOrderRowV4toV2(
   const rawDims = (rawAny.dimensions ?? {}) as Record<string, unknown>;
   const clientId = typeof row.clientId === 'number' ? row.clientId : null;
   const overrides = (row.overrides ?? null) as Record<string, unknown> | null;
-  const isAwaitingShipment = row.orderStatus === 'awaiting_shipment';
   const bestRateJson = overrides?.bestRateJson as
     | Record<string, unknown>
     | null
@@ -234,6 +242,14 @@ function transformOrderRowV4toV2(
     }
     return null;
   })();
+  const apiBestRate = normalizeRateForV2(row.bestRate);
+  const selectedRate = normalizeRateForV2(row.selectedRate);
+  const label = normalizeLabelForV2(row.label);
+  const selectedRateBestFallback = hasPositiveRateAmount(selectedRate) ? selectedRate : null;
+  const displayBestRate =
+    (hasPositiveRateAmount(apiBestRate) ? apiBestRate : null) ??
+    (hasPositiveRateAmount(bestRateLegacy) ? bestRateLegacy : null) ??
+    selectedRateBestFallback;
 
   return {
     ...row,
@@ -262,9 +278,9 @@ function transformOrderRowV4toV2(
       dimsL != null && dimsW != null && dimsH != null
         ? { length: dimsL, width: dimsW, height: dimsH, units: 'inches' }
         : null,
-    bestRate: isAwaitingShipment ? bestRateLegacy : null,
-    selectedRate: normalizeRateForV2(row.selectedRate),
-    label: normalizeLabelForV2(row.label),
+    bestRate: displayBestRate,
+    selectedRate,
+    label,
   };
 }
 
