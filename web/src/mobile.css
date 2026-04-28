@@ -1,0 +1,147 @@
+/* Mobile-only enhancements. Everything in this file is gated by a media
+ * query so it cannot affect the desktop experience.
+ */
+
+@media (max-width: 768px) {
+  /* ── Body scroll: allow vertical scrolling on mobile ──────────────────── */
+  html, body {
+    overflow: auto !important;
+    height: auto !important;
+  }
+  body {
+    display: block !important;
+    height: auto !important;
+    min-height: 100vh;
+  }
+  #root {
+    display: block !important;
+    min-height: 100vh;
+    width: 100%;
+  }
+
+  /* ── Backdrop when sidebar is open ────────────────────────────────────── */
+  .mobile-sidebar-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(15, 22, 41, 0.55);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+    z-index: 599;
+    animation: mobileFadeIn 180ms ease-out;
+  }
+  @keyframes mobileFadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  /* ── Hamburger button: nicer hit target ───────────────────────────────── */
+  #mobileMenuBtn {
+    width: 36px;
+    height: 36px;
+    border-radius: 8px;
+    background: var(--surface2, #f3f4f6) !important;
+    color: var(--text, #1a1f2e) !important;
+    font-size: 18px !important;
+    margin-right: 4px;
+  }
+  #mobileMenuBtn:active {
+    background: var(--surface3, #e5e7eb) !important;
+  }
+
+  /* ── Topbar: tighter and scrolls horizontally if it overflows ─────────── */
+  .topbar {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .topbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* ── Sidebar: smoother slide and proper overflow ──────────────────────── */
+  .sidebar {
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.18);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* The footer block we added (user email + Sign out button) needs to be
+   * tap-friendly on mobile. */
+  .sidebar-bottom button {
+    min-height: 36px;
+    font-size: 12px !important;
+  }
+
+  /* ── Tables: allow them to scroll horizontally if content is too wide ── */
+  .orders-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* ── Modals: fit within viewport with safe-area insets ────────────────── */
+  .modal-card,
+  [role='dialog'] {
+    max-height: calc(100vh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px) - 24px);
+  }
+
+  /* ── Tap targets: minimum 36px for any clickable row ──────────────────── */
+  .ss-header,
+  .ss-store,
+  .sidebar-tool-item {
+    min-height: 38px;
+  }
+
+  /* ── Inputs: prevent iOS auto-zoom (font ≥ 16px) ──────────────────────── */
+  input[type='text'],
+  input[type='email'],
+  input[type='password'],
+  input[type='search'],
+  input[type='number'],
+  input[type='date'],
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+
+  /* ── Auth pages: make the card fit nicely on phones ───────────────────── */
+  .auth-card {
+    padding: 24px 20px !important;
+    border-radius: 14px !important;
+  }
+  .auth-card h2 {
+    font-size: 22px !important;
+  }
+
+  /* ── Print queue / drawers: fill the screen ───────────────────────────── */
+  .od-drawer,
+  #od-drawer {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  /* ── Hide the desktop column resize handles on touch ──────────────────── */
+  .col-resize-handle {
+    display: none !important;
+  }
+
+  /* ── Toasts: bottom-aligned with safe-area ────────────────────────────── */
+  .toast-container {
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 12px) !important;
+    left: 12px !important;
+    right: 12px !important;
+    width: auto !important;
+  }
+}
+
+/* ── Very small phones (≤ 380px) ─────────────────────────────────────────── */
+@media (max-width: 380px) {
+  .topbar-title {
+    font-size: 11px !important;
+  }
+  .sidebar {
+    width: 88vw !important;
+  }
+  .auth-card {
+    padding: 20px 16px !important;
+  }
+}

@@ -9,6 +9,7 @@ import { MarkupsProvider } from './contexts/MarkupsContext';
 import './index.css';
 import './app-shell.css';
 import './App.css';
+import './mobile.css';
 
 const queryClient = new QueryClient({
   defaultOptions: {

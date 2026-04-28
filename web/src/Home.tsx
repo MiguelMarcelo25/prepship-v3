@@ -110,7 +110,16 @@ export default function Home() {
     setCurrentView(next.view)
     if (next.status) setCurrentStatus(next.status)
   }, [location.pathname])
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(true)
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(() => {
+    if (typeof window === 'undefined') return true
+    // Closed by default on phones, open on tablet/desktop.
+    return window.matchMedia('(min-width: 769px)').matches
+  })
+  const isMobileViewport = () =>
+    typeof window !== 'undefined' && window.matchMedia('(max-width: 768px)').matches
+  const closeMobileMenu = () => {
+    if (isMobileViewport()) setMobileMenuOpen(false)
+  }
   const [activeStore, setActiveStore] = useState<number | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [dateFilter, setDateFilter] = useState<OrdersDateFilter>('last-30')
@@ -321,6 +330,14 @@ export default function Home() {
     <>
       <div className="panel-backdrop" id="panelBackdrop" />
 
+      {mobileMenuOpen ? (
+        <div
+          className="mobile-sidebar-backdrop"
+          onClick={() => setMobileMenuOpen(false)}
+          aria-hidden="true"
+        />
+      ) : null}
+
       <Sidebar
         currentStatus={currentStatus}
         currentView={displayView}
@@ -328,15 +345,18 @@ export default function Home() {
         onSelectStatus={(status) => {
           setActiveStore(null)
           navigate(`/orders/${status}`)
+          closeMobileMenu()
         }}
         onShowView={(view) => {
           navigate(VIEW_PATHS[view as Exclude<ViewType, 'orders'>] ?? '/')
+          closeMobileMenu()
         }}
         mobileMenuOpen={mobileMenuOpen}
-        onCloseMobileMenu={undefined}
+        onCloseMobileMenu={closeMobileMenu}
         onSelectStore={(storeId) => {
           setActiveStore(storeId)
           navigate(`/orders/${currentStatus}`)
+          closeMobileMenu()
         }}
         activeStore={activeStore}
       />
