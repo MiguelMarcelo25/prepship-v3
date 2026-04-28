@@ -1,8 +1,19 @@
 import { Hono } from 'hono';
-import { sql } from '../db/client';
+import postgres from 'postgres';
+import { env } from '../lib/env';
 
 const app = new Hono();
-const DB_HEALTH_TIMEOUT_MS = 4_000;
+const DB_HEALTH_TIMEOUT_MS = env.DB_HEALTH_TIMEOUT_MS;
+const DB_HEALTH_STATEMENT_TIMEOUT_MS = Math.max(1_000, DB_HEALTH_TIMEOUT_MS - 1_000);
+const DB_HEALTH_CONNECT_TIMEOUT_SECONDS = Math.max(1, Math.ceil(DB_HEALTH_TIMEOUT_MS / 1_000));
+
+const healthSql = postgres(env.DATABASE_URL, {
+  prepare: false,
+  max: 1,
+  idle_timeout: 10,
+  connect_timeout: DB_HEALTH_CONNECT_TIMEOUT_SECONDS,
+  connection: { statement_timeout: DB_HEALTH_STATEMENT_TIMEOUT_MS },
+});
 
 type CancelableQuery<T> = Promise<T> & { cancel?: () => void };
 
@@ -35,7 +46,7 @@ async function withTimeout<T>(
 async function checkDbHealth(): Promise<DbHealth> {
   const startedAt = Date.now();
   try {
-    await withTimeout(sql`select 1`, DB_HEALTH_TIMEOUT_MS);
+    await withTimeout(healthSql`select 1`, DB_HEALTH_TIMEOUT_MS);
     return { ok: true, latencyMs: Date.now() - startedAt };
   } catch (err) {
     return {

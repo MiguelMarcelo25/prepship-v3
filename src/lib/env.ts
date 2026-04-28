@@ -14,6 +14,7 @@ const schema = z.object({
   // back to the frontend (e.g. mock label PDFs opened via window.open).
   PUBLIC_API_URL: z.string().url().optional(),
   CRON_SECRET: z.string().optional(),
+  DB_HEALTH_TIMEOUT_MS: z.coerce.number().int().positive().default(12_000),
   SHIPSTATION_API_KEY: z.string().optional(),
   SHIPSTATION_API_SECRET: z.string().optional(),
   SHIPSTATION_API_KEY_V2: z.string().optional(),
