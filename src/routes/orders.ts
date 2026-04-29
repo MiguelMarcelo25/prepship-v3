@@ -507,38 +507,10 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   // If a future UI wants "hide test" as a toggle, it should pass excludeClientId
   // itself rather than the server guessing.
 
-  // Bucket-aware status filter (v2 parity).
-  // In v2 an order belongs to the "awaiting_shipment" bucket iff:
-  //   orderStatus = 'awaiting_shipment'
-  //   AND NOT externally_shipped
-  //   AND raw.externallyFulfilled != 1
-  //   AND no PrepShip shipment (label) exists yet
-  // It moves to the "shipped" bucket when EITHER orderStatus = 'shipped' OR a
-  // label exists (even before ShipStation has caught up).
-  // See apps/api/src/modules/orders/data/sqlite-order-repository.ts:75-81 in v2.
-  const hasLabelSubquery = sql`EXISTS (
-    SELECT 1 FROM ${shipments} s
-    WHERE (
-        s.order_id = ${orders.id}
-        OR (s.order_id IS NULL AND s.order_number = ${orders.orderNumber})
-      )
-      AND COALESCE(s.voided, false) = false
-  )`;
-
+  // Status tabs must reflect the persisted order status. Shipment rows/labels
+  // are enrichment data and should not move an awaiting order into Shipped.
   let statusPredicate: ReturnType<typeof sql> | undefined;
-  if (q.status === 'awaiting_shipment') {
-    statusPredicate = sql`
-      ${orders.orderStatus} = 'awaiting_shipment'
-      AND ${orders.externallyShipped} = false
-      AND COALESCE((${orders.raw} ->> 'externallyFulfilled')::boolean, false) = false
-      AND NOT ${hasLabelSubquery}
-    `;
-  } else if (q.status === 'shipped') {
-    statusPredicate = sql`(
-      ${orders.orderStatus} = 'shipped'
-      OR (${orders.orderStatus} = 'awaiting_shipment' AND ${hasLabelSubquery})
-    )`;
-  } else if (q.status) {
+  if (q.status) {
     statusPredicate = sql`${orders.orderStatus} = ${q.status}`;
   }
 
@@ -1403,6 +1375,7 @@ app.get('/:id{[0-9]+}/full', async (c) => {
       .then((rows) => rows[0] ?? null),
     db.select().from(shipments).where(eq(shipments.orderId, id)),
   ]);
+
   return c.json({ ...order, overrides, shipments: shipmentRows });
 });
 
