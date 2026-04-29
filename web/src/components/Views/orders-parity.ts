@@ -38,6 +38,14 @@ export interface ColumnPrefs {
   order?: string[]
   hidden?: string[]
   widths?: Record<string, number>
+  version?: number
+  views?: Partial<Record<'awaiting_shipment' | 'shipped' | 'cancelled', ColumnViewPrefs>>
+}
+
+export interface ColumnViewPrefs {
+  order?: string[]
+  hidden?: string[]
+  widths?: Record<string, number>
 }
 
 export interface ResolvedColumnPrefs {
@@ -97,6 +105,17 @@ function shouldUseCanonicalColumnOrder(prefs?: ColumnPrefs | null) {
   return false
 }
 
+function getColumnPrefsForStatus(
+  prefs: ColumnPrefs | null | undefined,
+  currentStatus: 'awaiting_shipment' | 'shipped' | 'cancelled',
+): ColumnViewPrefs | null {
+  return prefs?.views?.[currentStatus] ?? prefs ?? null
+}
+
+function hasLegacyColumnPrefs(prefs: ColumnPrefs | null | undefined) {
+  return Boolean(prefs && (Array.isArray(prefs.order) || Array.isArray(prefs.hidden) || prefs.widths))
+}
+
 export interface PrintQueueEntryDto {
   queue_entry_id: string
   order_id: string
@@ -136,10 +155,11 @@ export function resolveColumnPrefs(
   currentStatus: 'awaiting_shipment' | 'shipped' | 'cancelled',
   prefs?: ColumnPrefs | null,
 ): ResolvedColumnPrefs {
+  const statusPrefs = getColumnPrefsForStatus(prefs, currentStatus)
   const columnMap = new Map(columns.map((column) => [column.key, column]))
   const seen = new Set<TableColumnKey>()
   const orderedColumns: TableColumnConfig[] = []
-  const savedOrder = shouldUseCanonicalColumnOrder(prefs) ? [] : (prefs?.order ?? [])
+  const savedOrder = shouldUseCanonicalColumnOrder(statusPrefs) ? [] : (statusPrefs?.order ?? [])
 
   for (const key of savedOrder) {
     if (!columnMap.has(key as TableColumnKey)) continue
@@ -157,13 +177,13 @@ export function resolveColumnPrefs(
 
   const widths = Object.fromEntries(
     columns.map((column) => {
-      const savedWidth = prefs?.widths?.[column.key]
+      const savedWidth = statusPrefs?.widths?.[column.key]
       return [column.key, normalizeColumnWidth(column.key, savedWidth, column.width)]
     }),
   ) as Record<TableColumnKey, number>
 
   const hiddenColumns = new Set<TableColumnKey>()
-  for (const key of prefs?.hidden ?? []) {
+  for (const key of statusPrefs?.hidden ?? []) {
     if (columnMap.has(key as TableColumnKey)) {
       hiddenColumns.add(key as TableColumnKey)
     }
@@ -191,6 +211,32 @@ export function buildColumnPrefs(columns: TableColumnConfig[], hiddenColumns: Se
     order: columns.map((column) => column.key),
     hidden: [...hiddenColumns],
     widths: normalizedWidths,
+  }
+}
+
+export function buildColumnPrefsForStatus(
+  currentPrefs: ColumnPrefs | null | undefined,
+  currentStatus: 'awaiting_shipment' | 'shipped' | 'cancelled',
+  columns: TableColumnConfig[],
+  hiddenColumns: Set<TableColumnKey>,
+  widths: Record<TableColumnKey, number>,
+): ColumnPrefs {
+  const nextStatusPrefs = buildColumnPrefs(columns, hiddenColumns, widths)
+  const views = {
+    ...(currentPrefs?.views ?? {}),
+  }
+
+  if (hasLegacyColumnPrefs(currentPrefs) && !currentPrefs?.views) {
+    views.awaiting_shipment = currentPrefs
+    views.shipped = currentPrefs
+    views.cancelled = currentPrefs
+  }
+
+  views[currentStatus] = nextStatusPrefs
+
+  return {
+    version: 2,
+    views,
   }
 }
 

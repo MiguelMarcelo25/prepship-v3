@@ -27,7 +27,7 @@ import { groupOrdersBySku } from './orders-grouping'
 import { formatQueuedOrderToast, formatQueuedOrdersToast } from './orders-queue'
 import {
   buildDailyStripProgress,
-  buildColumnPrefs,
+  buildColumnPrefsForStatus,
   buildPicklistPrintHtml,
   buildQueueAddPayload,
   getColumnMinWidth,
@@ -124,6 +124,27 @@ const TABLE_COLUMNS: TableColumn[] = [
   { key: 'tracking', label: 'Tracking #', width: 160, sort: null },
   { key: 'age', label: 'Age', width: 50, sort: 'age' },
 ]
+
+const COLUMN_PREFS_LOCAL_STORAGE_KEY = 'prepship.orders.columnPrefs'
+
+function readLocalColumnPrefs() {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(COLUMN_PREFS_LOCAL_STORAGE_KEY)
+    return raw ? JSON.parse(raw) as ColumnPrefs : null
+  } catch {
+    return null
+  }
+}
+
+function writeLocalColumnPrefs(prefs: ColumnPrefs) {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(COLUMN_PREFS_LOCAL_STORAGE_KEY, JSON.stringify(prefs))
+  } catch {
+    // Server persistence is still the source of truth when localStorage is unavailable.
+  }
+}
 
 const CLIENT_PALETTES: ClientPalette[] = [
   { bg: '#dbeafe', color: '#1e40af', border: '#93c5fd' },
@@ -1169,9 +1190,11 @@ export default function OrdersView({
   const [panelRateLoading, setPanelRateLoading] = useState(false)
   const columnMenuRef = useRef<HTMLDivElement | null>(null)
   const resolvedColumnPrefsRef = useRef(null)
+  const columnPrefsRef = useRef<ColumnPrefs | null>(null)
   const currentStatusRef = useRef(currentStatus)
   const resizeStateRef = useRef<{ key: TableColumnKey; startX: number; startWidth: number } | null>(null)
   const pendingResizeWidthsRef = useRef<Record<TableColumnKey, number> | null>(null)
+  const resizeFrameRef = useRef<number | null>(null)
   const suppressHeaderClickRef = useRef(false)
 
   const dateRange = dateFilter === 'custom'
@@ -1233,7 +1256,12 @@ export default function OrdersView({
       )),
     [currentStatus, resolvedColumnPrefs],
   )
+  const tableWidth = useMemo(
+    () => Math.max(800, visibleColumns.reduce((totalWidth, column) => totalWidth + column.width, 0)),
+    [visibleColumns],
+  )
   resolvedColumnPrefsRef.current = resolvedColumnPrefs
+  columnPrefsRef.current = columnPrefs
   currentStatusRef.current = currentStatus
 
   const skuOptions = useMemo(() => {
@@ -1363,13 +1391,26 @@ export default function OrdersView({
 
   useEffect(() => {
     let cancelled = false
+    const localPrefs = readLocalColumnPrefs()
+    if (localPrefs) {
+      columnPrefsRef.current = localPrefs
+      setColumnPrefs(localPrefs)
+    }
 
     void apiClient.fetchColumnPrefs()
       .then((payload) => {
-        if (!cancelled) setColumnPrefs(payload)
+        if (!cancelled) {
+          const nextPrefs = payload ?? localPrefs
+          if (nextPrefs) writeLocalColumnPrefs(nextPrefs)
+          columnPrefsRef.current = nextPrefs
+          setColumnPrefs(nextPrefs)
+        }
       })
       .catch(() => {
-        if (!cancelled) setColumnPrefs(null)
+        if (!cancelled) {
+          columnPrefsRef.current = localPrefs
+          setColumnPrefs(localPrefs)
+        }
       })
 
     return () => {
@@ -1477,7 +1518,19 @@ export default function OrdersView({
         [resizeState.key]: nextWidth,
       }
       pendingResizeWidthsRef.current = nextWidths
-      setColumnPrefs(buildSavedColumnPrefs(prefs.orderedColumns, prefs.hiddenColumns, nextWidths))
+      if (resizeFrameRef.current == null) {
+        resizeFrameRef.current = window.requestAnimationFrame(() => {
+          resizeFrameRef.current = null
+          const activeResizeState = resizeStateRef.current
+          const pendingWidths = pendingResizeWidthsRef.current
+          if (!activeResizeState || !pendingWidths) return
+
+          const latestPrefs = getLatestColumnPrefs()
+          const nextPrefs = buildSavedColumnPrefs(latestPrefs.orderedColumns, latestPrefs.hiddenColumns, pendingWidths)
+          columnPrefsRef.current = nextPrefs
+          setColumnPrefs(nextPrefs)
+        })
+      }
     }
 
     const onMouseUp = () => {
@@ -1486,6 +1539,10 @@ export default function OrdersView({
 
       const prefs = getLatestColumnPrefs()
       const nextWidths = pendingResizeWidthsRef.current ?? prefs.widths
+      if (resizeFrameRef.current != null) {
+        window.cancelAnimationFrame(resizeFrameRef.current)
+        resizeFrameRef.current = null
+      }
       resizeStateRef.current = null
       pendingResizeWidthsRef.current = null
       setResizingColumnKey(null)
@@ -1502,6 +1559,10 @@ export default function OrdersView({
     return () => {
       document.removeEventListener('mousemove', onMouseMove)
       document.removeEventListener('mouseup', onMouseUp)
+      if (resizeFrameRef.current != null) {
+        window.cancelAnimationFrame(resizeFrameRef.current)
+        resizeFrameRef.current = null
+      }
       document.body.classList.remove('resizing-active')
     }
   }, [])
@@ -1728,7 +1789,9 @@ export default function OrdersView({
   }
 
   async function saveColumnPrefsToServer(nextPrefs: ColumnPrefs) {
+    columnPrefsRef.current = nextPrefs
     setColumnPrefs(nextPrefs)
+    writeLocalColumnPrefs(nextPrefs)
     try {
       await apiClient.saveColumnPrefs(nextPrefs)
     } catch {
@@ -1752,7 +1815,13 @@ export default function OrdersView({
     hiddenColumns: Set<TableColumnKey>,
     widths: Record<TableColumnKey, number>,
   ) {
-    return buildColumnPrefs(columns, getPersistableHiddenColumns(hiddenColumns), widths)
+    return buildColumnPrefsForStatus(
+      columnPrefsRef.current,
+      currentStatusRef.current,
+      columns,
+      getPersistableHiddenColumns(hiddenColumns),
+      widths,
+    )
   }
 
   function buildMovedColumnPrefs(sourceKey: TableColumnKey, targetKey: TableColumnKey) {
@@ -1819,6 +1888,42 @@ export default function OrdersView({
     }
     if (column.sort == null) return
     toggleSort(column.sort as SortKey)
+  }
+
+  function resizeColumnByKeyboard(column: TableColumn, delta: number) {
+    if (column.key === 'select') return
+
+    const prefs = getLatestColumnPrefs()
+    const currentWidth = prefs.widths[column.key] ?? column.width
+    const nextWidths = {
+      ...prefs.widths,
+      [column.key]: Math.max(getColumnMinWidth(column.key), currentWidth + delta),
+    }
+    void saveColumnPrefsToServer(buildSavedColumnPrefs(prefs.orderedColumns, prefs.hiddenColumns, nextWidths))
+  }
+
+  function handleHeaderKeyDown(event: React.KeyboardEvent<HTMLTableCellElement>, column: TableColumn) {
+    if (column.key === 'select') return
+
+    if (event.shiftKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+      event.preventDefault()
+      resizeColumnByKeyboard(column, event.key === 'ArrowRight' ? 10 : -10)
+      return
+    }
+
+    if (event.altKey && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+      event.preventDefault()
+      const currentIndex = visibleColumns.findIndex((candidate) => candidate.key === column.key)
+      const targetIndex = event.key === 'ArrowRight' ? currentIndex + 1 : currentIndex - 1
+      const targetColumn = visibleColumns[targetIndex]
+      if (targetColumn && targetColumn.key !== 'select') moveColumn(column.key, targetColumn.key)
+      return
+    }
+
+    if ((event.key === 'Enter' || event.key === ' ') && column.sort != null) {
+      event.preventDefault()
+      handleHeaderClick(column)
+    }
   }
 
   function handleDropdownDragStart(event: React.DragEvent<HTMLDivElement>, key: TableColumnKey) {
@@ -3735,7 +3840,11 @@ export default function OrdersView({
               ) : null}
 
               {!loading && !error && orderedFilteredOrders.length > 0 ? (
-                <table className="orders-table" id="ordersTable">
+                <table
+                  className="orders-table"
+                  id="ordersTable"
+                  style={{ minWidth: tableWidth, width: tableWidth, tableLayout: 'fixed' }}
+                >
                   <colgroup>
                     {visibleColumns.map((column) => (
                       <col key={column.key} style={{ width: column.width }} />
@@ -3759,7 +3868,12 @@ export default function OrdersView({
                             style={{ width: column.width, position: 'relative' }}
                             className={headerClasses || undefined}
                             draggable={column.key !== 'select'}
+                            tabIndex={column.key !== 'select' ? 0 : undefined}
+                            aria-sort={sortable ? (sorted ? (sortState.dir === 'asc' ? 'ascending' : 'descending') : 'none') : undefined}
+                            aria-label={column.key !== 'select' ? `${column.label}. Drag to reorder. Use Alt+Arrow to move and Shift+Arrow to resize.` : undefined}
+                            title={column.key !== 'select' ? 'Drag to reorder. Drag the right edge to resize. Alt+Arrow moves; Shift+Arrow resizes.' : undefined}
                             onClick={sortable ? () => handleHeaderClick(column) : undefined}
+                            onKeyDown={(event) => handleHeaderKeyDown(event, column)}
                             onDragStart={(event) => handleHeaderDragStart(event, column.key)}
                             onDragOver={(event) => handleHeaderDragOver(event, column.key)}
                             onDrop={(event) => handleHeaderDrop(event, column.key)}
@@ -3769,7 +3883,10 @@ export default function OrdersView({
                             {sortable ? <span className="sort-arrow" /> : null}
                             {column.key !== 'select' ? (
                               <div
-                                className="col-resizer"
+                                className={`col-resizer${resizingColumnKey === column.key ? ' active' : ''}`}
+                                role="separator"
+                                aria-orientation="vertical"
+                                aria-label={`Resize ${column.label} column`}
                                 onMouseDown={(event) => startColumnResize(event, column)}
                                 onClick={(event) => event.stopPropagation()}
                                 onDragStart={(event) => event.stopPropagation()}
