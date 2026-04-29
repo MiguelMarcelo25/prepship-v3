@@ -9,6 +9,7 @@
    Light mode only for now.
 ════════════════════════════════════════════════ */
 :root {
+  --prepship-shell-height: 100vh;
   --background: #f0f2f5;
   --surface: #ffffff;
   --border: #e1e4e8;
@@ -34,7 +35,7 @@
      render side-by-side, not stacked. */
   #root {
     display: flex;
-    min-height: 100vh;
+    min-height: var(--prepship-shell-height);
     width: 100%;
   }
 

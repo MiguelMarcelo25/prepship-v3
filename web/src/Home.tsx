@@ -211,15 +211,19 @@ export default function Home() {
     const mobile = window.matchMedia('(max-width:768px)').matches
 
     if (mobile) {
+      document.documentElement.style.removeProperty('--prepship-shell-height')
       document.body.style.zoom = ''
       document.body.style.height = ''
       return
     }
 
+    const shellHeight = `${(10000 / zoomPct).toFixed(2)}vh`
+    document.documentElement.style.setProperty('--prepship-shell-height', shellHeight)
     document.body.style.zoom = `${zoomPct}%`
-    document.body.style.height = `${(10000 / zoomPct).toFixed(2)}vh`
+    document.body.style.height = shellHeight
 
     return () => {
+      document.documentElement.style.removeProperty('--prepship-shell-height')
       document.body.style.zoom = ''
       document.body.style.height = ''
     }
