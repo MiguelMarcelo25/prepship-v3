@@ -3828,6 +3828,7 @@ export default function OrdersView({
 
       <OrderDetailDrawer
         orderId={detailDrawerOrderId}
+        displayStatus={currentStatus}
         onClose={() => setDetailDrawerOrderId(null)}
       />
 

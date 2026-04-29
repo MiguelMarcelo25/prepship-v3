@@ -99,6 +99,7 @@ type OrderFullResponse = {
 
 export type OrderDetailDrawerProps = {
   orderId: number | null;
+  displayStatus?: string;
   onClose: () => void;
 };
 
@@ -223,6 +224,7 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
 
 export default function OrderDetailDrawer({
   orderId,
+  displayStatus,
   onClose,
 }: OrderDetailDrawerProps) {
   const [loading, setLoading] = useState(false);
@@ -269,6 +271,7 @@ export default function OrderDetailDrawer({
   if (orderId == null) return null;
 
   const raw: OrderFull = (payload?.raw ?? payload ?? {}) as OrderFull;
+  const effectiveStatus = displayStatus ?? raw.orderStatus;
   const shipTo: ShipTo = raw.shipTo ?? {};
   const items: OrderItem[] = (raw.items ?? []).filter(
     (it) => (it as any)?.adjustment !== true
@@ -387,7 +390,7 @@ export default function OrderDetailDrawer({
               TEST ORDER — DO NOT SHIP
             </span>
           ) : null}
-          <StatusBadge status={raw.orderStatus} />
+          <StatusBadge status={effectiveStatus} />
           {loading ? (
             <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text3)' }}>
               Loading…
@@ -652,7 +655,7 @@ export default function OrderDetailDrawer({
               )}
 
               <Card title="🚚 Configure Shipment">
-                <Field label="Status" value={<StatusBadge status={raw.orderStatus} />} />
+                <Field label="Status" value={<StatusBadge status={effectiveStatus} />} />
                 {liveShipment ? (
                   <>
                     <Field
@@ -753,7 +756,7 @@ export default function OrderDetailDrawer({
                 </Card>
               ) : null}
 
-              {raw.orderStatus === 'awaiting_shipment' ? (
+              {effectiveStatus === 'awaiting_shipment' ? (
                 <Card title="⚡ Actions">
                   <a
                     className="btn btn-outline"
