@@ -1110,64 +1110,86 @@ app.get(
   }
 );
 
-// v2-parity shift window. v2 uses `new Date(y, m, d, 12, 0, 0)` which
-// creates noon in the SERVER's local timezone. On v2's UTC host that's
-// noon UTC — but the UI label still renders "12pm PT". v4 on Render is
-// also UTC, so we mirror the same behavior: compute noon/6pm in UTC and
-// label it as PT. Matches what the user sees in v2 exactly.
+// Fulfillment-day metrics answer: "How many orders came in early enough to
+// prepare and hand off to the carrier today?" Normal weekdays use 12pm PT
+// yesterday through 12pm PT today before 6pm, then roll to today noon through
+// tomorrow noon after 6pm. Weekends match v2 by holding Friday noon through
+// Monday noon until Monday's 6pm rollover.
 //
-// See apps/api/src/modules/orders/data/sqlite-order-repository.ts:521
-// in v2. Weekend cases (Sat/Sun/Fri-evening/Mon-morning) extend the
-// window across non-working days so the strip still reflects the
-// pending workload over a weekend.
-function computeShiftWindow(now = new Date()): { from: Date; to: Date } {
-  const y = now.getUTCFullYear();
-  const m = now.getUTCMonth();
-  const d = now.getUTCDate();
-  const hr = now.getUTCHours();
-  const dow = now.getUTCDay(); // 0=Sun .. 6=Sat
-  const todayNoon = new Date(Date.UTC(y, m, d, 12, 0, 0));
-  const isPm = hr >= 18;
-  const dayMs = 24 * 60 * 60 * 1000;
+// Order timestamps are stored as ShipStation wall-clock values stamped in UTC,
+// so keep the query bounds as naive UTC noon values for the Pacific dates.
+const FULFILLMENT_TIME_ZONE = 'America/Los_Angeles';
 
-  let windowStart: Date;
-  let windowEnd: Date;
+function getFulfillmentDateParts(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: FULFILLMENT_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(now);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? '';
+  return {
+    year: Number(get('year')),
+    month: Number(get('month')),
+    day: Number(get('day')),
+    hour: Number(get('hour')),
+  };
+}
+
+function addCalendarDaysUtc(year: number, month: number, day: number, days: number) {
+  const date = new Date(Date.UTC(year, month - 1, day + days, 0, 0, 0));
+  return {
+    year: date.getUTCFullYear(),
+    month: date.getUTCMonth() + 1,
+    day: date.getUTCDate(),
+  };
+}
+
+function naiveNoonUtcForFulfillmentDate(year: number, month: number, day: number) {
+  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+}
+
+function computeFulfillmentShiftWindow(now = new Date()): { from: Date; to: Date } {
+  const ptNow = getFulfillmentDateParts(now);
+  const dow = new Date(Date.UTC(ptNow.year, ptNow.month - 1, ptNow.day)).getUTCDay();
+  const isAfterRollover = ptNow.hour >= 18;
+  let startCalendarDate: { year: number; month: number; day: number };
+  let endCalendarDate: { year: number; month: number; day: number };
+
   if (dow === 6) {
-    // Saturday: from Fri noon → Mon noon (weekend coverage)
-    windowStart = new Date(todayNoon.getTime() - dayMs);
-    windowEnd = new Date(todayNoon.getTime() + 2 * dayMs);
+    startCalendarDate = addCalendarDaysUtc(ptNow.year, ptNow.month, ptNow.day, -1);
+    endCalendarDate = addCalendarDaysUtc(ptNow.year, ptNow.month, ptNow.day, 2);
   } else if (dow === 0) {
-    // Sunday
-    windowStart = new Date(todayNoon.getTime() - 2 * dayMs);
-    windowEnd = new Date(todayNoon.getTime() + dayMs);
-  } else if (dow === 1) {
-    // Monday — before 6pm shows Fri-noon→Mon-noon; after 6pm shows Mon-noon→Tue-noon
-    if (isPm) {
-      windowStart = todayNoon;
-      windowEnd = new Date(todayNoon.getTime() + dayMs);
-    } else {
-      windowStart = new Date(todayNoon.getTime() - 3 * dayMs);
-      windowEnd = todayNoon;
-    }
-  } else if (dow === 5) {
-    // Friday — before 6pm: Thu-noon→Fri-noon; after 6pm: Fri-noon→Mon-noon
-    if (isPm) {
-      windowStart = todayNoon;
-      windowEnd = new Date(todayNoon.getTime() + 3 * dayMs);
-    } else {
-      windowStart = new Date(todayNoon.getTime() - dayMs);
-      windowEnd = todayNoon;
-    }
-  } else if (isPm) {
-    // Tue/Wed/Thu after 6pm — peek into tomorrow
-    windowStart = todayNoon;
-    windowEnd = new Date(todayNoon.getTime() + dayMs);
+    startCalendarDate = addCalendarDaysUtc(ptNow.year, ptNow.month, ptNow.day, -2);
+    endCalendarDate = addCalendarDaysUtc(ptNow.year, ptNow.month, ptNow.day, 1);
+  } else if (dow === 1 && !isAfterRollover) {
+    startCalendarDate = addCalendarDaysUtc(ptNow.year, ptNow.month, ptNow.day, -3);
+    endCalendarDate = addCalendarDaysUtc(ptNow.year, ptNow.month, ptNow.day, 0);
+  } else if (dow === 5 && isAfterRollover) {
+    startCalendarDate = addCalendarDaysUtc(ptNow.year, ptNow.month, ptNow.day, 0);
+    endCalendarDate = addCalendarDaysUtc(ptNow.year, ptNow.month, ptNow.day, 3);
+  } else if (isAfterRollover) {
+    startCalendarDate = addCalendarDaysUtc(ptNow.year, ptNow.month, ptNow.day, 0);
+    endCalendarDate = addCalendarDaysUtc(ptNow.year, ptNow.month, ptNow.day, 1);
   } else {
-    // Tue/Wed/Thu before 6pm — yesterday noon → today noon
-    windowStart = new Date(todayNoon.getTime() - dayMs);
-    windowEnd = todayNoon;
+    startCalendarDate = addCalendarDaysUtc(ptNow.year, ptNow.month, ptNow.day, -1);
+    endCalendarDate = addCalendarDaysUtc(ptNow.year, ptNow.month, ptNow.day, 0);
   }
-  return { from: windowStart, to: windowEnd };
+
+  return {
+    from: naiveNoonUtcForFulfillmentDate(
+      startCalendarDate.year,
+      startCalendarDate.month,
+      startCalendarDate.day
+    ),
+    to: naiveNoonUtcForFulfillmentDate(
+      endCalendarDate.year,
+      endCalendarDate.month,
+      endCalendarDate.day
+    ),
+  };
 }
 
 // v2-parity label — "Apr 21, 12pm PT" (comma, lowercase am/pm, no space).
@@ -1190,7 +1212,7 @@ function formatPtLabel(d: Date): string {
   return `${month} ${day}, ${hour12}${suffix} PT`;
 }
 
-// Daily stats — hybrid window: 48h activity + all-time awaiting backlog.
+// Daily stats for the Orders page throughput strip.
 // Accepts excludeClientId (comma-separated) so hidden clients (Api Shipments,
 // Test Orders, etc.) are filtered out of the strip just like they are from
 // the sidebar and orders table. Without this the strip counts thousands of
@@ -1207,11 +1229,9 @@ app.get(
   ),
   async (c) => {
     const q = c.req.valid('query');
-    // v2 parity: use the PT shift-based window (noon→noon weekday, expanded
-    // across weekends) instead of a rolling 48h window. This makes v4's
-    // stats strip show the same "32 Total / 5 Need to Ship" numbers v2 shows
-    // rather than ~2x inflated counts from a wider window.
-    const shift = computeShiftWindow();
+    // Current fulfillment intake: v2's PT noon-to-noon shift window, including
+    // the Friday-noon to Monday-noon weekend hold.
+    const shift = computeFulfillmentShiftWindow();
     const fromDate = q.dateFrom ? new Date(q.dateFrom) : shift.from;
     const toDate = q.dateTo ? new Date(q.dateTo) : shift.to;
     const fromIso = fromDate.toISOString();
@@ -1254,14 +1274,14 @@ app.get(
       group by date_trunc('day', order_date)
       order by date_trunc('day', order_date) desc
     `);
-    // totalOrders + shippedTotal: windowed (last 48h activity)
+    // totalOrders: all non-cancelled orders received inside the current
+    // fulfillment intake window. The strip derives shipped as
+    // totalOrders - needToShip, matching v2 daily-strip.js.
     const windowedRows = await db.execute<{
       total_orders: number;
-      shipped_total: number;
     }>(sql`
       select
-        count(*) filter (where order_status <> 'cancelled')::int as total_orders,
-        count(*) filter (where order_status = 'shipped')::int as shipped_total
+        count(*) filter (where order_status <> 'cancelled')::int as total_orders
       from orders
       where order_date >= ${fromIso}::timestamptz
         and order_date <= ${toIso}::timestamptz
@@ -1275,8 +1295,8 @@ app.get(
         )
         ${excludeFilter}
     `);
-    // v2 parity: needToShip is windowed and uses raw ShipStation status;
-    // bucket/external-shipped rules stay in the order list query.
+    // needToShip: remaining same-day fulfillment work inside the intake
+    // window. Bucket/external-shipped rules stay in the order list query.
     const backlogRows = await db.execute<{ need_to_ship: number }>(sql`
       select count(*)::int as need_to_ship
       from orders o
@@ -1316,7 +1336,6 @@ app.get(
       summary: {
         totalOrders: w?.total_orders ?? 0,
         needToShip: b?.need_to_ship ?? 0,
-        shippedTotal: w?.shipped_total ?? 0,
         upcomingOrders: u?.upcoming_orders ?? 0,
         window: {
           from: fromIso,

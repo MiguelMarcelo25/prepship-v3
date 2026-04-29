@@ -312,7 +312,6 @@ type V4DailyStatsResponse = {
   summary: {
     totalOrders: number;
     needToShip: number;
-    shippedTotal: number;
     upcomingOrders: number;
     window: { from: string; to: string };
   };
