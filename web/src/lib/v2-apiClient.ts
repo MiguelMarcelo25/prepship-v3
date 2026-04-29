@@ -304,17 +304,14 @@ type DailyStatsSummary = {
   totalOrders: number;
   needToShip: number;
   upcomingOrders: number;
-  window: { from: string; to: string };
+  window: { from: string; to: string; fromLabel?: string; toLabel?: string };
 };
 
 type V4DailyStatsResponse = {
-  data: unknown;
-  summary: {
-    totalOrders: number;
-    needToShip: number;
-    upcomingOrders: number;
-    window: { from: string; to: string };
-  };
+  window: { from: string; to: string; fromLabel?: string; toLabel?: string };
+  totalOrders: number;
+  needToShip: number;
+  upcomingOrders: number;
 };
 
 type SettingsRow = { key: string; value: string };
@@ -861,34 +858,19 @@ export const apiClient = {
     return safe(
       'fetchDailyStats',
       async () => {
-        // HIDDEN_CLIENT_IDS is populated lazily as a side-effect of
-        // fetchStores/fetchCounts. If the stats strip fires before those, the
-        // set is empty and hidden-client orders inflate the counts. Always
-        // fetch /clients inline here, compute hidden IDs by name, and pass
-        // them — guaranteed correct regardless of call order.
-        const [clientsRes, countsCached] = await Promise.all([
-          api.get<any>('/clients').catch(() => []),
-          Promise.resolve(HIDDEN_CLIENT_IDS), // preserve any already-discovered IDs
-        ]);
-        const clientsArr = Array.isArray(clientsRes) ? clientsRes : [];
-        const hiddenIds = new Set<number>([...countsCached]);
-        for (const c of clientsArr) {
-          if (isHiddenClient(c) && typeof c?.id === 'number') hiddenIds.add(c.id);
-        }
-        const excludeClientId =
-          hiddenIds.size > 0 ? [...hiddenIds].join(',') : undefined;
+        // V2 parity: the daily stats endpoint applies only the configured
+        // excluded store IDs server-side.
         const res = await api.get<V4DailyStatsResponse>(
           `/orders/daily-stats${qs({
             dateFrom: toIsoDayStart(query?.dateFrom),
             dateTo: toIsoDayEnd(query?.dateTo),
-            excludeClientId,
           })}`
         );
         return {
-          totalOrders: res.summary.totalOrders,
-          needToShip: res.summary.needToShip,
-          upcomingOrders: res.summary.upcomingOrders,
-          window: res.summary.window as any,
+          totalOrders: res.totalOrders,
+          needToShip: res.needToShip,
+          upcomingOrders: res.upcomingOrders,
+          window: res.window,
         };
       },
       fallback

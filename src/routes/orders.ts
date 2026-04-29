@@ -1213,10 +1213,7 @@ function formatPtLabel(d: Date): string {
 }
 
 // Daily stats for the Orders page throughput strip.
-// Accepts excludeClientId (comma-separated) so hidden clients (Api Shipments,
-// Test Orders, etc.) are filtered out of the strip just like they are from
-// the sidebar and orders table. Without this the strip counts thousands of
-// test orders and shows numbers that don't match the visible list.
+// V2 parity: the three counts only apply the configured excluded store IDs.
 app.get(
   '/daily-stats',
   zValidator(
@@ -1224,7 +1221,6 @@ app.get(
     z.object({
       dateFrom: z.string().datetime().optional(),
       dateTo: z.string().datetime().optional(),
-      excludeClientId: z.string().optional(),
     })
   ),
   async (c) => {
@@ -1237,43 +1233,6 @@ app.get(
     const fromIso = fromDate.toISOString();
     const toIso = toDate.toISOString();
 
-    const excludeIds = (q.excludeClientId ?? '')
-      .split(',')
-      .map((s) => Number.parseInt(s.trim(), 10))
-      .filter((n) => Number.isFinite(n) && n > 0);
-    // Keep orders with NULL client_id (not-yet-assigned) visible; only
-    // filter the explicit hidden IDs. Embed IDs as raw SQL (safe — already
-    // int-validated above) to dodge Drizzle's numeric-param serialization quirk.
-    const excludeFilter =
-      excludeIds.length > 0
-        ? sql.raw(
-            `and (client_id is null or client_id not in (${excludeIds.join(',')}))`
-          )
-        : sql``;
-
-    const rows = await db.execute<{
-      day: string;
-      count: number;
-      shipped: number;
-    }>(sql`
-      select to_char(date_trunc('day', order_date), 'YYYY-MM-DD') as day,
-             count(*)::int as count,
-             count(*) filter (where order_status = 'shipped')::int as shipped
-      from orders
-      where order_date >= ${fromIso}::timestamptz
-        and order_date <= ${toIso}::timestamptz
-        and (
-          (store_id is not null and store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)}))
-          or exists (
-            select 1 from clients test_client
-            where test_client.id = orders.client_id
-              and test_client.is_test = true
-          )
-        )
-        ${excludeFilter}
-      group by date_trunc('day', order_date)
-      order by date_trunc('day', order_date) desc
-    `);
     // totalOrders: all non-cancelled orders received inside the current
     // fulfillment intake window. The strip derives shipped as
     // totalOrders - needToShip, matching v2 daily-strip.js.
@@ -1285,15 +1244,7 @@ app.get(
       from orders
       where order_date >= ${fromIso}::timestamptz
         and order_date <= ${toIso}::timestamptz
-        and (
-          (store_id is not null and store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)}))
-          or exists (
-            select 1 from clients test_client
-            where test_client.id = orders.client_id
-              and test_client.is_test = true
-          )
-        )
-        ${excludeFilter}
+        and store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
     `);
     // needToShip: remaining same-day fulfillment work inside the intake
     // window. Bucket/external-shipped rules stay in the order list query.
@@ -1301,49 +1252,30 @@ app.get(
       select count(*)::int as need_to_ship
       from orders o
       where o.order_status = 'awaiting_shipment'
-        and (
-          (o.store_id is not null and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)}))
-          or exists (
-            select 1 from clients test_client
-            where test_client.id = o.client_id
-              and test_client.is_test = true
-          )
-        )
+        and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
         and o.order_date >= ${fromIso}::timestamptz
         and o.order_date <= ${toIso}::timestamptz
-        ${excludeFilter}
     `);
     const upcomingRows = await db.execute<{ upcoming_orders: number }>(sql`
       select count(*)::int as upcoming_orders
       from orders
       where order_date > ${toIso}::timestamptz
         and order_status <> 'cancelled'
-        and (
-          (store_id is not null and store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)}))
-          or exists (
-            select 1 from clients test_client
-            where test_client.id = orders.client_id
-              and test_client.is_test = true
-          )
-        )
-        ${excludeFilter}
+        and store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
     `);
     const w = windowedRows[0];
     const b = backlogRows[0];
     const u = upcomingRows[0];
     return c.json({
-      data: rows,
-      summary: {
-        totalOrders: w?.total_orders ?? 0,
-        needToShip: b?.need_to_ship ?? 0,
-        upcomingOrders: u?.upcoming_orders ?? 0,
-        window: {
-          from: fromIso,
-          to: toIso,
-          fromLabel: formatPtLabel(fromDate),
-          toLabel: formatPtLabel(toDate),
-        },
+      window: {
+        from: fromIso,
+        to: toIso,
+        fromLabel: formatPtLabel(fromDate),
+        toLabel: formatPtLabel(toDate),
       },
+      totalOrders: w?.total_orders ?? 0,
+      needToShip: b?.need_to_ship ?? 0,
+      upcomingOrders: u?.upcoming_orders ?? 0,
     });
   }
 );
