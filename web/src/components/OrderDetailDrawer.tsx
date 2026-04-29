@@ -40,8 +40,10 @@ type Shipment = {
   carrierCode?: string | null;
   serviceCode?: string | null;
   trackingNumber?: string | null;
+  cost?: number | string | null;
+  labelCost?: number | string | null;
   shipmentCost?: number | null;
-  otherCost?: number | null;
+  otherCost?: number | string | null;
   shipDate?: string | null;
   voided?: boolean;
   source?: string | null;
@@ -88,6 +90,11 @@ type OrderFull = {
     insureShipment?: boolean;
     insuredValue?: number;
   };
+  canonicalOrder?: {
+    shipping?: {
+      labelCost?: number | string | null;
+    };
+  };
 };
 
 type OrderFullResponse = {
@@ -114,6 +121,33 @@ const CARRIER_NAMES: Record<string, string> = {
 function fmtMoney(n: number | null | undefined): string {
   const v = Number(n ?? 0);
   return Number.isFinite(v) ? `$${v.toFixed(2)}` : '$0.00';
+}
+
+function toNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function fmtOptionalMoney(n: number | null | undefined): string {
+  return n == null ? '—' : fmtMoney(n);
+}
+
+function getShipmentLabelCost(shipment: Shipment | null | undefined): number | null {
+  if (!shipment) return null;
+
+  const labelCost = toNumber(shipment.labelCost);
+  if (labelCost != null) return labelCost;
+
+  const cost = toNumber(shipment.cost);
+  const otherCost = toNumber(shipment.otherCost) ?? 0;
+  if (cost != null) return cost + otherCost;
+
+  const shipmentCost = toNumber(shipment.shipmentCost);
+  return shipmentCost != null ? shipmentCost + otherCost : null;
 }
 
 function fmtDate(iso: string | null | undefined): string {
@@ -312,6 +346,10 @@ export default function OrderDetailDrawer({
     : 'None';
 
   const liveShipment = shipments.find((s) => !s.voided) ?? shipments[0];
+  const labelCost =
+    getShipmentLabelCost(liveShipment) ??
+    toNumber(raw.canonicalOrder?.shipping?.labelCost);
+  const isShipped = (effectiveStatus ?? '').toLowerCase() === 'shipped';
 
   return (
     <>
@@ -503,6 +541,14 @@ export default function OrderDetailDrawer({
                         <span style={{ color: 'var(--text2)' }}>Shipping</span>
                         <span>{fmtMoney(shippingAmount)}</span>
                       </div>
+                      {isShipped ? (
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                          <span style={{ color: 'var(--text2)' }}>Label Cost</span>
+                          <span style={{ fontWeight: 700, color: 'var(--green, #15803d)' }}>
+                            {fmtOptionalMoney(labelCost)}
+                          </span>
+                        </div>
+                      ) : null}
                       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
                         <span style={{ color: 'var(--text2)' }}>Tax</span>
                         <span>{fmtMoney(taxAmount)}</span>
@@ -656,6 +702,16 @@ export default function OrderDetailDrawer({
 
               <Card title="🚚 Configure Shipment">
                 <Field label="Status" value={<StatusBadge status={effectiveStatus} />} />
+                {isShipped ? (
+                  <Field
+                    label="Label Cost"
+                    value={
+                      <span style={{ fontWeight: 700, color: 'var(--green, #15803d)' }}>
+                        {fmtOptionalMoney(labelCost)}
+                      </span>
+                    }
+                  />
+                ) : null}
                 {liveShipment ? (
                   <>
                     <Field
@@ -669,17 +725,6 @@ export default function OrderDetailDrawer({
                     <Field
                       label="Shipped Service"
                       value={(liveShipment.serviceCode ?? '').replace(/_/g, ' ') || '—'}
-                    />
-                    <Field
-                      label="Label Cost"
-                      value={
-                        <span style={{ fontWeight: 700, color: 'var(--green, #15803d)' }}>
-                          {fmtMoney(
-                            (liveShipment.shipmentCost ?? 0) +
-                              (liveShipment.otherCost ?? 0)
-                          )}
-                        </span>
-                      }
                     />
                     {liveShipment.trackingNumber ? (
                       <Field
