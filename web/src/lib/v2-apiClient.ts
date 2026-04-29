@@ -304,15 +304,51 @@ type DailyStatsSummary = {
   totalOrders: number;
   needToShip: number;
   upcomingOrders: number;
-  window: { from: string; to: string; fromLabel?: string; toLabel?: string };
+  window: { from: string; to: string; fromLabel: string; toLabel: string };
 };
 
-type V4DailyStatsResponse = {
-  window: { from: string; to: string; fromLabel?: string; toLabel?: string };
-  totalOrders: number;
-  needToShip: number;
-  upcomingOrders: number;
-};
+function parseDailyStatsSummary(value: unknown): DailyStatsSummary {
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('invalid daily stats response');
+  }
+
+  const dto = value as Record<string, unknown>;
+  const window = dto.window;
+  if (window == null || typeof window !== 'object' || Array.isArray(window)) {
+    throw new Error('invalid daily stats window');
+  }
+
+  const windowDto = window as Record<string, unknown>;
+  const from = windowDto.from;
+  const to = windowDto.to;
+  const fromLabel = windowDto.fromLabel;
+  const toLabel = windowDto.toLabel;
+  const totalOrders = dto.totalOrders;
+  const needToShip = dto.needToShip;
+  const upcomingOrders = dto.upcomingOrders;
+
+  if (
+    typeof from !== 'string' ||
+    typeof to !== 'string' ||
+    typeof fromLabel !== 'string' ||
+    typeof toLabel !== 'string' ||
+    typeof totalOrders !== 'number' ||
+    typeof needToShip !== 'number' ||
+    typeof upcomingOrders !== 'number' ||
+    !Number.isFinite(totalOrders) ||
+    !Number.isFinite(needToShip) ||
+    !Number.isFinite(upcomingOrders)
+  ) {
+    throw new Error('invalid daily stats fields');
+  }
+
+  return {
+    window: { from, to, fromLabel, toLabel },
+    totalOrders,
+    needToShip,
+    upcomingOrders,
+  };
+}
 
 type SettingsRow = { key: string; value: string };
 type OrderDimsRow = { l: number; w: number; h: number; weightOz: number | null } | null;
@@ -845,35 +881,24 @@ export const apiClient = {
     status?: string;
     dateFrom?: string;
     dateTo?: string;
-  }): Promise<DailyStatsSummary> {
+  }): Promise<DailyStatsSummary | null> {
     // Coerce UI date strings (YYYY-MM-DD) to the ISO datetimes expected by
     // /orders/daily-stats. With no dates, the server applies its default
     // shift window.
-    const fallback: DailyStatsSummary = {
-      totalOrders: 0,
-      needToShip: 0,
-      upcomingOrders: 0,
-      window: { from: '', to: '', fromLabel: '', toLabel: '' } as any,
-    };
     return safe(
       'fetchDailyStats',
       async () => {
         // V2 parity: the daily stats endpoint applies only the configured
         // excluded store IDs server-side.
-        const res = await api.get<V4DailyStatsResponse>(
+        const res = await api.get<unknown>(
           `/orders/daily-stats${qs({
             dateFrom: toIsoDayStart(query?.dateFrom),
             dateTo: toIsoDayEnd(query?.dateTo),
           })}`
         );
-        return {
-          totalOrders: res.totalOrders,
-          needToShip: res.needToShip,
-          upcomingOrders: res.upcomingOrders,
-          window: res.window,
-        };
+        return parseDailyStatsSummary(res);
       },
-      fallback
+      null
     );
   },
 
