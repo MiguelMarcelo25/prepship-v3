@@ -1375,7 +1375,7 @@ export const apiClient = {
 
   fetchInventorySkuOrders(invSkuId: number, days?: number): Promise<any> {
     // v4 returns {sku, name, orders: [{order_id, order_number, order_date,
-    // order_status, qty}]} (snake_case, no dailySales).
+    // order_status, ship_to_name, carrier_code, service_code, qty, ...}]}.
     // v2 UI reads camelCase rows + {day, units}[] for the 30-day chart.
     // Reshape rows and synthesize dailySales by bucketing qty per day.
     const windowDays = days ?? 30;
@@ -1391,45 +1391,62 @@ export const apiClient = {
           orderNumber: r?.order_number ?? r?.orderNumber ?? '',
           orderDate: r?.order_date ?? r?.orderDate ?? null,
           orderStatus: r?.order_status ?? r?.orderStatus ?? '',
+          shipToName: r?.ship_to_name ?? r?.shipToName ?? null,
+          carrierCode: r?.carrier_code ?? r?.carrierCode ?? null,
+          serviceCode: r?.service_code ?? r?.serviceCode ?? null,
+          unitPrice:
+            r?.unit_price == null && r?.unitPrice == null
+              ? null
+              : Number(r?.unit_price ?? r?.unitPrice),
+          itemName: r?.item_name ?? r?.itemName ?? null,
           qty: Number(r?.qty ?? 0),
         }));
 
-        // Bucket qty per YYYY-MM-DD, then pad missing days with 0 so the
-        // chart has exactly `windowDays` contiguous data points.
-        const bucket = new Map<string, number>();
-        for (const o of orders) {
-          if (!o.orderDate) continue;
-          const day = String(o.orderDate).slice(0, 10);
-          if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
-          bucket.set(day, (bucket.get(day) ?? 0) + o.qty);
-        }
-        const dailySales: { day: string; units: number }[] = [];
-        const today = new Date();
-        today.setUTCHours(0, 0, 0, 0);
-        for (let i = windowDays - 1; i >= 0; i -= 1) {
-          const d = new Date(today);
-          d.setUTCDate(d.getUTCDate() - i);
-          const day = d.toISOString().slice(0, 10);
-          dailySales.push({ day, units: bucket.get(day) ?? 0 });
-        }
+        const rawDailySales = Array.isArray(res?.dailySales)
+          ? res.dailySales
+          : Array.isArray(res?.daily_sales)
+            ? res.daily_sales
+            : null;
+        const dailySales: { day: string; units: number }[] = rawDailySales
+          ? rawDailySales.map((r: any) => ({
+              day: String(r?.day ?? ''),
+              units: Number(r?.units ?? 0),
+            }))
+          : (() => {
+              // Fallback for older v4 responses: bucket returned orders per day.
+              const bucket = new Map<string, number>();
+              for (const o of orders) {
+                if (!o.orderDate) continue;
+                const day = String(o.orderDate).slice(0, 10);
+                if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+                bucket.set(day, (bucket.get(day) ?? 0) + o.qty);
+              }
+              const padded: { day: string; units: number }[] = [];
+              const today = new Date();
+              today.setUTCHours(0, 0, 0, 0);
+              for (let i = windowDays - 1; i >= 0; i -= 1) {
+                const d = new Date(today);
+                d.setUTCDate(d.getUTCDate() - i);
+                const day = d.toISOString().slice(0, 10);
+                padded.push({ day, units: bucket.get(day) ?? 0 });
+              }
+              return padded;
+            })();
 
-        // totalUnits = sum of qty across all orders in the window.
-        // The Inventory SKU drawer renders this as the big "30-Day Units Sold"
-        // number at the top. Without it, the drawer crashes on .toLocaleString().
-        const totalUnits = orders.reduce(
-          (acc: number, o: { qty?: number }) => acc + (o.qty || 0),
-          0
-        );
+        const totalUnits =
+          Number(res?.totalUnits ?? res?.total_units) ||
+          dailySales.reduce((acc, row) => acc + (row.units || 0), 0);
 
         return {
           sku: res?.sku ?? '',
           name: res?.name ?? '',
+          clientId: res?.clientId ?? res?.client_id ?? null,
           orders,
           dailySales,
           totalUnits,
         };
       },
-      { orders: [], name: '', sku: '', dailySales: [], totalUnits: 0 }
+      { orders: [], name: '', sku: '', clientId: null, dailySales: [], totalUnits: 0 }
     );
   },
 
@@ -2008,7 +2025,8 @@ export const apiClient = {
           .map((t: any) => ({
             sku: t.sku,
             name: t.name ?? '',
-            totalQty: Number(t.total_qty ?? t.totalQty ?? 0) || 0,
+            total: Number(t.total ?? t.total_qty ?? t.totalQty ?? 0) || 0,
+            totalQty: Number(t.total ?? t.total_qty ?? t.totalQty ?? 0) || 0,
           }))
           .sort((left: any, right: any) => right.totalQty - left.totalQty);
         return { dates, topSkus, series };
@@ -2049,6 +2067,23 @@ export const apiClient = {
           const invSkuId =
             rawInvSkuId == null || rawInvSkuId === '' ? null : Number(rawInvSkuId);
 
+          const standardShipCount = parseNum(
+            r.std_ship_count ?? r.standardShipCount ?? r.std_orders ?? 0
+          );
+          const standardTotalShipping = parseNum(
+            r.std_total ?? r.standardTotalShipping ?? r.standardShipTotal
+          );
+          const expeditedShipCount = parseNum(
+            r.exp_ship_count ?? r.expeditedShipCount ?? r.exp_orders ?? 0
+          );
+          const expeditedTotalShipping = parseNum(
+            r.exp_total ?? r.expeditedTotalShipping ?? r.expeditedShipTotal
+          );
+          const shipCountWithCost = parseNum(
+            r.ship_count_with_cost ?? r.shipCountWithCost ?? standardShipCount + expeditedShipCount
+          );
+          const totalShipping = parseNum(r.total_shipping ?? r.totalShipping);
+
           return {
             sku: r.sku,
             name: r.name ?? '',
@@ -2056,16 +2091,33 @@ export const apiClient = {
             invSkuId: Number.isFinite(invSkuId) ? invSkuId : null,
             clientId: r.client_id ?? r.clientId ?? null,
             clientName:
-              r.client_id != null ? nameById.get(r.client_id) ?? '' : '',
-            orders: r.orders ?? 0,
-            pendingOrders: r.pending ?? 0,
-            externalOrders: r.ext_shipped ?? 0,
-            qty: r.total_qty ?? 0,
-            standardShipCount: r.std_orders ?? 0,
-            standardShipTotal: parseNum(r.std_total),
-            expeditedShipCount: r.exp_orders ?? 0,
-            expeditedShipTotal: parseNum(r.exp_total),
-            totalShipping: parseNum(r.total_shipping),
+              r.client_name ??
+              r.clientName ??
+              (r.client_id != null ? nameById.get(r.client_id) ?? '' : ''),
+            orders: parseNum(r.orders),
+            pendingOrders: parseNum(r.pending ?? r.pendingOrders),
+            externalOrders: parseNum(r.ext_shipped ?? r.externalOrders),
+            qty: parseNum(r.total_qty ?? r.qty),
+            standardOrders: parseNum(r.std_orders ?? r.standardOrders),
+            standardShipCount,
+            standardAvgShipping:
+              standardShipCount > 0
+                ? Number((standardTotalShipping / standardShipCount).toFixed(2))
+                : 0,
+            standardTotalShipping,
+            standardShipTotal: standardTotalShipping,
+            expeditedOrders: parseNum(r.exp_orders ?? r.expeditedOrders),
+            expeditedShipCount,
+            expeditedAvgShipping:
+              expeditedShipCount > 0
+                ? Number((expeditedTotalShipping / expeditedShipCount).toFixed(2))
+                : 0,
+            expeditedTotalShipping,
+            expeditedShipTotal: expeditedTotalShipping,
+            shipCountWithCost,
+            blendedAvgShipping:
+              shipCountWithCost > 0 ? Number((totalShipping / shipCountWithCost).toFixed(2)) : 0,
+            totalShipping,
           };
         });
         return {

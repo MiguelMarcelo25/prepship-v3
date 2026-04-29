@@ -1,17 +1,14 @@
 // @ts-nocheck
-import { useContext, useEffect, useMemo, useState } from 'react'
+import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import {
   CartesianGrid,
-  Legend,
-  Line,
-  LineChart,
+  LabelList,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
   BarChart,
   Bar,
-  Brush,
 } from 'recharts'
 import type {
   AnalysisDailySalesResponse,
@@ -25,10 +22,12 @@ import {
   ANALYSIS_SORT_LABELS,
   filterAnalysisRows,
   formatAnalysisMoney,
+  getAnalysisChartMaxValue,
   getAnalysisEmptyMessage,
   getAnalysisPresetRange,
   getAnalysisSortDirection,
   getAnalysisSummaryText,
+  getChartSelectionRange,
   getInitialAnalysisFilters,
   sortAnalysisRows,
   buildAnalysisTotals,
@@ -55,19 +54,118 @@ function formatDateOnly(value: string | null | undefined) {
   return parsed.toLocaleDateString()
 }
 
-// Build the recharts-friendly dataset for the top-SKUs line chart. Each row is
-// one day with one column per top SKU. This is the same information the v2
-// canvas chart plotted, just pre-zipped for recharts' LineChart.
-function buildChartRows(data: AnalysisDailySalesResponse | null) {
-  if (!data || !data.dates?.length || !data.topSkus?.length) return []
-  return data.dates.map((day, index) => {
-    const row: Record<string, number | string> = { day }
-    for (const sku of data.topSkus) {
-      const series = data.series[sku.sku] || []
-      row[sku.sku] = Number(series[index]) || 0
-    }
-    return row
+interface ChartMeta {
+  W: number
+  H: number
+  PAD: { top: number; right: number; bottom: number; left: number }
+  cW: number
+  cH: number
+  data: AnalysisDailySalesResponse
+  maxVal: number
+}
+
+function drawAnalysisChartBase(
+  canvas: HTMLCanvasElement,
+  meta: ChartMeta,
+  highlightIndex: number | null,
+  dragX1: number | null,
+  dragX2: number | null,
+) {
+  const context = canvas.getContext('2d')
+  if (!context) return
+
+  const { W, H, PAD, cW, cH, data, maxVal } = meta
+  context.clearRect(0, 0, W, H)
+
+  context.strokeStyle = '#e2e6ea'
+  context.lineWidth = 1
+  for (let tick = 0; tick <= 4; tick += 1) {
+    const y = PAD.top + cH - (tick / 4) * cH
+    context.beginPath()
+    context.moveTo(PAD.left, y)
+    context.lineTo(PAD.left + cW, y)
+    context.stroke()
+    context.fillStyle = '#8a95a3'
+    context.font = '9px sans-serif'
+    context.textAlign = 'right'
+    context.fillText(String(Math.round((tick / 4) * maxVal)), PAD.left - 4, y + 3)
+  }
+
+  const dates = data.dates
+  const step = Math.max(1, Math.floor(dates.length / 6))
+  context.fillStyle = '#8a95a3'
+  context.font = '9px sans-serif'
+  context.textAlign = 'center'
+  dates.forEach((date, index) => {
+    if (index % step !== 0 && index !== dates.length - 1) return
+    const x = PAD.left + (index / Math.max(dates.length - 1, 1)) * cW
+    context.fillText(date.slice(5), x, H - 8)
   })
+
+  data.topSkus.forEach((sku, skuIndex) => {
+    const values = data.series[sku.sku] || []
+    const color = ANALYSIS_CHART_COLORS[skuIndex % ANALYSIS_CHART_COLORS.length]
+    context.strokeStyle = color
+    context.lineWidth = 2
+    context.lineJoin = 'round'
+    context.beginPath()
+    values.forEach((value, index) => {
+      const x = PAD.left + (index / Math.max(values.length - 1, 1)) * cW
+      const y = PAD.top + cH - (value / maxVal) * cH
+      if (index === 0) context.moveTo(x, y)
+      else context.lineTo(x, y)
+    })
+    context.stroke()
+
+    context.globalAlpha = 0.07
+    context.fillStyle = color
+    context.beginPath()
+    values.forEach((value, index) => {
+      const x = PAD.left + (index / Math.max(values.length - 1, 1)) * cW
+      const y = PAD.top + cH - (value / maxVal) * cH
+      if (index === 0) context.moveTo(x, y)
+      else context.lineTo(x, y)
+    })
+    context.lineTo(PAD.left + cW, PAD.top + cH)
+    context.lineTo(PAD.left, PAD.top + cH)
+    context.closePath()
+    context.fill()
+    context.globalAlpha = 1
+  })
+
+  if (highlightIndex != null) {
+    const x = PAD.left + (highlightIndex / Math.max(dates.length - 1, 1)) * cW
+    context.strokeStyle = 'rgba(0,0,0,.18)'
+    context.lineWidth = 1
+    context.setLineDash([4, 4])
+    context.beginPath()
+    context.moveTo(x, PAD.top)
+    context.lineTo(x, PAD.top + cH)
+    context.stroke()
+    context.setLineDash([])
+
+    data.topSkus.forEach((sku, skuIndex) => {
+      const value = (data.series[sku.sku] || [])[highlightIndex] || 0
+      const y = PAD.top + cH - (value / maxVal) * cH
+      context.beginPath()
+      context.arc(x, y, 4, 0, Math.PI * 2)
+      context.fillStyle = ANALYSIS_CHART_COLORS[skuIndex % ANALYSIS_CHART_COLORS.length]
+      context.fill()
+      context.strokeStyle = '#fff'
+      context.lineWidth = 1.5
+      context.stroke()
+    })
+  }
+
+  if (dragX1 != null && dragX2 != null) {
+    const x1 = Math.min(dragX1, dragX2)
+    const x2 = Math.max(dragX1, dragX2)
+    context.fillStyle = 'rgba(42,91,215,.12)'
+    context.fillRect(x1, PAD.top, x2 - x1, cH)
+    context.strokeStyle = 'rgba(42,91,215,.5)'
+    context.lineWidth = 1
+    context.strokeRect(x1, PAD.top, x2 - x1, cH)
+  }
 }
 
 function buildDrawerChartRows(dailySales: InventorySkuOrdersDto['dailySales']) {
@@ -78,6 +176,47 @@ function buildDrawerChartRows(dailySales: InventorySkuOrdersDto['dailySales']) {
   }))
 }
 
+function buildDrawerYAxisTicks(maxValue: number) {
+  const maxTick = Math.max(1, Math.round(maxValue))
+  return Array.from(
+    new Set([
+      Math.max(1, Math.round(maxTick / 3)),
+      Math.max(1, Math.round((maxTick * 2) / 3)),
+      maxTick,
+    ]),
+  )
+}
+
+function DrawerBarValueLabel(props: {
+  x?: number
+  y?: number
+  width?: number
+  height?: number
+  value?: number
+}) {
+  const value = Number(props.value) || 0
+  if (value <= 0) return null
+
+  const x = Number(props.x) || 0
+  const y = Number(props.y) || 0
+  const width = Number(props.width) || 0
+  const height = Number(props.height) || 0
+  const drawInside = height >= 12
+
+  return (
+    <text
+      x={x + width / 2}
+      y={drawInside ? y + 9 : y - 4}
+      textAnchor="middle"
+      fill={drawInside ? '#fff' : '#e07a00'}
+      fontSize={9}
+      fontWeight={700}
+    >
+      {value}
+    </text>
+  )
+}
+
 export default function AnalysisView() {
   const toastContext = useContext(ToastContext)
   const initialFilters = getInitialAnalysisFilters(
@@ -86,11 +225,6 @@ export default function AnalysisView() {
   const [from, setFrom] = useState(initialFilters.from)
   const [to, setTo] = useState(initialFilters.to)
   const [presetDays, setPresetDays] = useState<number | null>(initialFilters.presetDays)
-  // `zoomBase*` captures the outer range before a brush zoom. When the user
-  // drags the Brush, we narrow from/to to a subset of this base; the Reset
-  // zoom button restores from/to back to the base range.
-  const [zoomBaseFrom, setZoomBaseFrom] = useState(initialFilters.from)
-  const [zoomBaseTo, setZoomBaseTo] = useState(initialFilters.to)
   const [clientId, setClientId] = useState('')
   const [search, setSearch] = useState('')
   const [sortKey, setSortKey] = useState<AnalysisSortKey>('qty')
@@ -108,6 +242,16 @@ export default function AnalysisView() {
   const [skuDrawerError, setSkuDrawerError] = useState<string | null>(null)
   const [skuDrawerOpen, setSkuDrawerOpen] = useState(false)
   const [skuDrawerLoading, setSkuDrawerLoading] = useState(false)
+  const chartCanvasRef = useRef<HTMLCanvasElement | null>(null)
+  const chartOriginalRangeRef = useRef<{ from: string; to: string } | null>(null)
+  const [chartResetVisible, setChartResetVisible] = useState(false)
+  const [tooltip, setTooltip] = useState({
+    visible: false,
+    top: 0,
+    title: '',
+    items: [] as Array<{ color: string; label: string; value: number }>,
+    hasAny: false,
+  })
 
   const filteredRows = useMemo(
     () => filterAnalysisRows(dataState.rows, search),
@@ -122,10 +266,17 @@ export default function AnalysisView() {
     () => Math.max(...sortedRows.map((row) => row.qty), 1),
     [sortedRows],
   )
-  const chartRows = useMemo(() => buildChartRows(dataState.chartData), [dataState.chartData])
   const drawerChartRows = useMemo(
     () => (skuDrawer ? buildDrawerChartRows(skuDrawer.dailySales) : []),
     [skuDrawer],
+  )
+  const drawerYAxisMax = useMemo(
+    () => Math.max(...drawerChartRows.map((row) => row.units), 1),
+    [drawerChartRows],
+  )
+  const drawerYAxisTicks = useMemo(
+    () => buildDrawerYAxisTicks(drawerYAxisMax),
+    [drawerYAxisMax],
   )
 
   // Load clients once for the filter dropdown.
@@ -193,18 +344,172 @@ export default function AnalysisView() {
     }
   }, [from, to, clientId])
 
+  useEffect(() => {
+    const canvas = chartCanvasRef.current
+    const data = dataState.chartData
+    if (!canvas || !data || !data.topSkus.length || !data.dates.length) {
+      setTooltip((current) => (current.visible ? { ...current, visible: false } : current))
+      return
+    }
+
+    let meta: ChartMeta | null = null
+    let dragStart: number | null = null
+    let isDragging = false
+
+    const getCanvasX = (event: MouseEvent) => {
+      const rect = canvas.getBoundingClientRect()
+      if (!meta || rect.width <= 0) return 0
+      return (event.clientX - rect.left) * (meta.W / rect.width)
+    }
+
+    const redraw = (highlightIndex: number | null = null, dragCurrent: number | null = null) => {
+      if (!meta) return
+      drawAnalysisChartBase(canvas, meta, highlightIndex, dragStart, dragCurrent)
+    }
+
+    const resizeChart = () => {
+      const parent = canvas.parentElement
+      if (!parent) return
+      const width = Math.max(parent.clientWidth - 32, 220)
+      const height = 140
+      canvas.width = width
+      canvas.height = height
+      meta = {
+        W: width,
+        H: height,
+        PAD: { top: 10, right: 10, bottom: 28, left: 34 },
+        cW: width - 34 - 10,
+        cH: height - 10 - 28,
+        data,
+        maxVal: getAnalysisChartMaxValue(data),
+      }
+      redraw()
+    }
+
+    const handleMove = (event: MouseEvent) => {
+      if (!meta) return
+      const x = getCanvasX(event)
+
+      if (x < meta.PAD.left || x > meta.PAD.left + meta.cW) {
+        if (!isDragging) {
+          setTooltip((current) => (current.visible ? { ...current, visible: false } : current))
+          redraw()
+        }
+        return
+      }
+
+      const index = Math.max(0, Math.min(
+        data.dates.length - 1,
+        Math.round(((x - meta.PAD.left) / meta.cW) * (data.dates.length - 1)),
+      ))
+
+      if (dragStart != null && Math.abs(x - dragStart) > 4) {
+        isDragging = true
+      }
+
+      if (isDragging) {
+        redraw(null, Math.min(Math.max(x, meta.PAD.left), meta.PAD.left + meta.cW))
+        setTooltip((current) => (current.visible ? { ...current, visible: false } : current))
+        return
+      }
+
+      redraw(index)
+
+      const items = data.topSkus
+        .map((sku, skuIndex) => ({
+          color: ANALYSIS_CHART_COLORS[skuIndex % ANALYSIS_CHART_COLORS.length],
+          label: (sku.name || sku.sku).slice(0, 28),
+          value: (data.series[sku.sku] || [])[index] || 0,
+        }))
+        .filter((item) => item.value > 0)
+
+      const screenMargin = 8
+      const viewportHeight = window.innerHeight
+      let top = Math.round(event.clientY - 48)
+      if (top < screenMargin) top = Math.round(event.clientY + 20)
+      if (top > viewportHeight - 120) top = Math.max(screenMargin, viewportHeight - 120)
+
+      setTooltip({
+        visible: true,
+        top,
+        title: data.dates[index] || '',
+        items,
+        hasAny: items.length > 0,
+      })
+    }
+
+    const handleDown = (event: MouseEvent) => {
+      if (!meta) return
+      const x = getCanvasX(event)
+      if (x >= meta.PAD.left && x <= meta.PAD.left + meta.cW) {
+        dragStart = x
+        isDragging = false
+      }
+    }
+
+    const handleUp = (event: MouseEvent) => {
+      if (!meta || dragStart == null) return
+
+      const x = getCanvasX(event)
+      const selection = getChartSelectionRange(data, dragStart, x, meta.PAD.left, meta.cW)
+      dragStart = null
+      isDragging = false
+
+      if (!selection) {
+        redraw()
+        return
+      }
+
+      if (!chartOriginalRangeRef.current) {
+        chartOriginalRangeRef.current = { from, to }
+      }
+
+      setTooltip((current) => (current.visible ? { ...current, visible: false } : current))
+      setPresetDays(null)
+      setChartResetVisible(true)
+      setFrom(selection.from)
+      setTo(selection.to)
+    }
+
+    const handleLeave = () => {
+      dragStart = null
+      isDragging = false
+      setTooltip((current) => (current.visible ? { ...current, visible: false } : current))
+      redraw()
+    }
+
+    resizeChart()
+    window.addEventListener('resize', resizeChart)
+    canvas.addEventListener('mousemove', handleMove)
+    canvas.addEventListener('mousedown', handleDown)
+    canvas.addEventListener('mouseup', handleUp)
+    canvas.addEventListener('mouseleave', handleLeave)
+
+    return () => {
+      window.removeEventListener('resize', resizeChart)
+      canvas.removeEventListener('mousemove', handleMove)
+      canvas.removeEventListener('mousedown', handleDown)
+      canvas.removeEventListener('mouseup', handleUp)
+      canvas.removeEventListener('mouseleave', handleLeave)
+    }
+  }, [dataState.chartData, from, to])
+
   function handlePresetClick(days: number) {
     const range = getAnalysisPresetRange(days)
     setPresetDays(days)
     setFrom(range.from)
     setTo(range.to)
-    setZoomBaseFrom(range.from)
-    setZoomBaseTo(range.to)
+    chartOriginalRangeRef.current = null
+    setChartResetVisible(false)
   }
 
-  function handleResetZoom() {
-    setFrom(zoomBaseFrom)
-    setTo(zoomBaseTo)
+  function handleResetChartZoom() {
+    const original = chartOriginalRangeRef.current
+    if (!original) return
+    setFrom(original.from)
+    setTo(original.to)
+    chartOriginalRangeRef.current = null
+    setChartResetVisible(false)
   }
 
   async function openSkuDrawer(invSkuId: number) {
@@ -299,8 +604,9 @@ export default function AnalysisView() {
               value={from}
               onChange={(event) => {
                 setFrom(event.target.value)
-                setZoomBaseFrom(event.target.value)
                 setPresetDays(null)
+                chartOriginalRangeRef.current = null
+                setChartResetVisible(false)
               }}
             />
             <span>–</span>
@@ -312,8 +618,9 @@ export default function AnalysisView() {
               value={to}
               onChange={(event) => {
                 setTo(event.target.value)
-                setZoomBaseTo(event.target.value)
                 setPresetDays(null)
+                chartOriginalRangeRef.current = null
+                setChartResetVisible(false)
               }}
             />
           </div>
@@ -381,111 +688,121 @@ export default function AnalysisView() {
               >
                 Daily Units Sold — Top SKUs
               </span>
-              {from !== zoomBaseFrom || to !== zoomBaseTo ? (
-                <button
-                  type="button"
-                  className="btn btn-outline btn-sm"
-                  onClick={handleResetZoom}
-                  style={{ fontSize: 10.5, padding: '2px 8px' }}
-                  title="Reset brush zoom to the active range"
-                >
-                  Reset zoom
-                </button>
-              ) : null}
-            </div>
-            <div style={{ width: '100%', height: 180 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart
-                  data={chartRows}
-                  margin={{ top: 6, right: 12, bottom: 6, left: 0 }}
-                >
-                  <CartesianGrid stroke="var(--border)" strokeDasharray="3 3" />
-                  <XAxis
-                    dataKey="day"
-                    tick={{ fontSize: 10, fill: 'var(--text3)' }}
-                    tickFormatter={(value: string) => (typeof value === 'string' ? value.slice(5) : value)}
-                    minTickGap={24}
-                  />
-                  <YAxis
-                    tick={{ fontSize: 10, fill: 'var(--text3)' }}
-                    width={34}
-                    allowDecimals={false}
-                  />
-                  <Tooltip
-                    itemSorter={(item) => -(Number(item.value) || 0)}
-                    contentStyle={{
-                      background: 'rgba(20,20,30,.92)',
-                      border: 'none',
-                      borderRadius: 6,
-                      color: '#fff',
-                      fontSize: 11,
+              <div
+                id="analysis-chart-legend"
+                style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginLeft: 4, flex: 1 }}
+              >
+                {dataState.chartData!.topSkus.map((sku, index) => (
+                  <span
+                    key={sku.sku}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      fontSize: 10.5,
+                      color: 'var(--text2)',
                     }}
-                    itemStyle={{ color: '#fff' }}
-                    labelStyle={{ color: '#fff', fontWeight: 700 }}
-                    formatter={(value: number, name: string) => {
-                      // `name` is the SKU key — resolve to its display name.
-                      const match = dataState.chartData?.topSkus.find((s) => s.sku === name)
-                      const label = match?.name || name
-                      return [value, label.length > 28 ? `${label.slice(0, 28)}…` : label]
-                    }}
-                  />
-                  <Legend
-                    wrapperStyle={{ fontSize: 10.5, color: 'var(--text2)' }}
-                    iconSize={10}
-                    formatter={(value: string) => {
-                      const match = dataState.chartData?.topSkus.find((s) => s.sku === value)
-                      const label = match?.name || value
-                      return label.length > 22 ? `${label.slice(0, 22)}…` : label
-                    }}
-                  />
-                  {dataState.chartData!.topSkus.map((sku, index) => (
-                    <Line
-                      key={sku.sku}
-                      type="monotone"
-                      dataKey={sku.sku}
-                      name={sku.sku}
-                      stroke={ANALYSIS_CHART_COLORS[index % ANALYSIS_CHART_COLORS.length]}
-                      strokeWidth={2}
-                      dot={false}
-                      activeDot={{ r: 4 }}
-                      isAnimationActive={false}
+                  >
+                    <span
+                      style={{
+                        width: 18,
+                        height: 3,
+                        background: ANALYSIS_CHART_COLORS[index % ANALYSIS_CHART_COLORS.length],
+                        borderRadius: 2,
+                        display: 'inline-block',
+                      }}
                     />
-                  ))}
-                  {/* Drag-to-zoom: narrows from/to to a subset of the outer
-                      range. Preset is cleared (mirrors the date-input edit
-                      path); zoomBase* stays intact so Reset zoom can restore. */}
-                  <Brush
-                    dataKey="day"
-                    height={28}
-                    stroke="#2a5bd7"
-                    travellerWidth={8}
-                    tickFormatter={(value: string) =>
-                      typeof value === 'string' ? value.slice(5) : value
-                    }
-                    onChange={(range: { startIndex?: number; endIndex?: number }) => {
-                      if (!chartRows.length) return
-                      const startIndex = range?.startIndex ?? 0
-                      const endIndex = range?.endIndex ?? chartRows.length - 1
-                      const startRow = chartRows[startIndex]
-                      const endRow = chartRows[endIndex]
-                      const nextFrom =
-                        startRow && typeof startRow.day === 'string' ? startRow.day : ''
-                      const nextTo =
-                        endRow && typeof endRow.day === 'string' ? endRow.day : ''
-                      if (!nextFrom || !nextTo) return
-                      // No-op when brush spans the entire dataset unchanged.
-                      if (nextFrom === from && nextTo === to) return
-                      setFrom(nextFrom)
-                      setTo(nextTo)
-                      setPresetDays(null)
-                    }}
-                  />
-                </LineChart>
-              </ResponsiveContainer>
+                    <span
+                      title={sku.name}
+                      style={{
+                        maxWidth: 140,
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {sku.name || sku.sku}
+                    </span>
+                  </span>
+                ))}
+              </div>
+              <span id="analysis-chart-zoom-hint" style={{ fontSize: 10, color: 'var(--text4)' }}>
+                drag to zoom
+              </span>
+              <button
+                id="analysis-chart-reset"
+                type="button"
+                onClick={handleResetChartZoom}
+                style={{
+                  display: chartResetVisible ? 'inline-block' : 'none',
+                  padding: '2px 8px',
+                  fontSize: 10.5,
+                  border: '1px solid var(--border2)',
+                  borderRadius: 4,
+                  background: 'var(--surface2)',
+                  color: 'var(--ss-blue)',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                }}
+              >
+                ↺ Reset
+              </button>
             </div>
+            <canvas
+              id="analysis-chart"
+              ref={chartCanvasRef}
+              height={140}
+              style={{ width: '100%', display: 'block', cursor: 'crosshair' }}
+            />
           </div>
         ) : null}
       </div>
+
+      {tooltip.visible ? (
+        <div className="analysis-chart-tooltip" style={{ top: tooltip.top }}>
+          <div
+            style={{
+              fontWeight: 700,
+              borderBottom: '1px solid rgba(255,255,255,.15)',
+              marginBottom: 4,
+              paddingBottom: 3,
+            }}
+          >
+            {tooltip.title}
+          </div>
+          {tooltip.hasAny ? tooltip.items.map((item) => (
+            <div
+              key={`${item.label}-${item.color}`}
+              style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+            >
+              <span
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  background: item.color,
+                  flexShrink: 0,
+                  display: 'inline-block',
+                }}
+              />
+              <span
+                style={{
+                  maxWidth: 160,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  flex: 1,
+                }}
+              >
+                {item.label}
+              </span>
+              <b>{item.value}</b>
+            </div>
+          )) : (
+            <div style={{ color: 'rgba(255,255,255,.5)', fontSize: 10 }}>No sales</div>
+          )}
+        </div>
+      ) : null}
 
       {dataState.loading ? (
         <div
@@ -980,7 +1297,7 @@ export default function AnalysisView() {
                       <ResponsiveContainer width="100%" height="100%">
                         <BarChart
                           data={drawerChartRows}
-                          margin={{ top: 6, right: 8, bottom: 6, left: 0 }}
+                          margin={{ top: 10, right: 8, bottom: 6, left: 0 }}
                         >
                           <CartesianGrid
                             stroke="var(--border)"
@@ -996,9 +1313,14 @@ export default function AnalysisView() {
                             minTickGap={16}
                           />
                           <YAxis
+                            axisLine={false}
+                            tickLine={false}
                             tick={{ fontSize: 9, fill: 'var(--text3)' }}
+                            ticks={drawerYAxisTicks}
+                            domain={[0, drawerYAxisMax]}
                             width={28}
                             allowDecimals={false}
+                            interval={0}
                           />
                           <Tooltip
                             contentStyle={{
@@ -1011,7 +1333,12 @@ export default function AnalysisView() {
                             itemStyle={{ color: '#fff' }}
                             labelStyle={{ color: '#fff', fontWeight: 700 }}
                           />
-                          <Bar dataKey="units" fill="#2a5bd7" isAnimationActive={false} />
+                          <Bar dataKey="units" fill="#e07a00" isAnimationActive={false}>
+                            <LabelList
+                              dataKey="units"
+                              content={(props) => <DrawerBarValueLabel {...props} />}
+                            />
+                          </Bar>
                         </BarChart>
                       </ResponsiveContainer>
                     </div>

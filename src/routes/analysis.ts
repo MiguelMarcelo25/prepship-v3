@@ -3,6 +3,7 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { sql } from 'drizzle-orm';
 import { db } from '../db/client';
+import { EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
 
 // v2-parity: exact list from apps/api/src/common/prepship-config.ts.
 // v4 previously used a broad regex `(priority|express|overnight|expedited|...)`
@@ -111,33 +112,58 @@ const topSkusQuery = rangeQuery.extend({
 
 const skuDailyQuery = rangeQuery.extend({
   clientId: z.coerce.number().int().optional(),
-  topN: z.coerce.number().int().positive().max(15).optional().default(5),
+  top: z.coerce.number().int().positive().max(10).optional(),
+  topN: z.coerce.number().int().positive().max(15).optional(),
 });
 
-app.get('/sku-daily', zValidator('query', skuDailyQuery), async (c) => {
-  const q = c.req.valid('query');
+type SkuDailyQuery = z.infer<typeof skuDailyQuery>;
+
+function buildDateBuckets(fromIso: string, toIso: string) {
+  const startMs = Date.parse(`${fromIso.slice(0, 10)}T00:00:00.000Z`);
+  const endMs = Date.parse(`${toIso.slice(0, 10)}T00:00:00.000Z`);
+  const days = Math.max(1, Math.round((endMs - startMs) / 86_400_000) + 1);
+  return Array.from({ length: days }, (_, index) =>
+    new Date(startMs + index * 86_400_000).toISOString().slice(0, 10)
+  );
+}
+
+async function getSkuDaily(q: SkuDailyQuery) {
   const fromIso = new Date(q.dateFrom).toISOString();
   const toIso = new Date(q.dateTo).toISOString();
   const cid: number | null = q.clientId ?? null;
+  const topLimit = q.top ?? q.topN ?? 5;
 
   const top = await db.execute<{ sku: string; name: string | null; total_qty: number }>(sql`
-    select item->>'sku' as sku,
-           max(item->>'name') as name,
-           sum(coalesce((item->>'quantity')::int, 1))::int as total_qty
-    from orders o, jsonb_array_elements(o.items) item
-    where item ? 'sku' and item->>'sku' is not null and item->>'sku' <> ''
-      and o.order_date >= ${fromIso}::timestamptz
-      and o.order_date <= ${toIso}::timestamptz
-      and (${cid}::int is null or o.client_id = ${cid}::int)
-      and not exists (select 1 from clients c where c.id = o.client_id and c.is_test = true)
-    group by item->>'sku'
+    with item_rows as (
+      select
+        case
+          when nullif(item->>'sku', '') is not null then item->>'sku'
+          else '_name_:' || lower(trim(coalesce(item->>'name', '')))
+        end as sku,
+        coalesce(nullif(item->>'name', ''), '—') as name,
+        coalesce((item->>'quantity')::int, 1) as qty
+      from orders o, jsonb_array_elements(o.items) item
+      where o.order_status not in ('cancelled')
+        and o.order_date >= ${fromIso}::timestamptz
+        and o.order_date <= ${toIso}::timestamptz
+        and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+        and (${cid}::int is null or o.client_id = ${cid}::int)
+        and coalesce((item->>'adjustment')::boolean, false) = false
+    )
+    select
+      sku,
+      (array_agg(name order by length(name) desc))[1] as name,
+      sum(qty)::int as total_qty
+    from item_rows
+    group by sku
     order by total_qty desc
-    limit ${q.topN}
+    limit ${topLimit}
   `);
 
+  const dateBuckets = buildDateBuckets(fromIso, toIso);
   const skus = top.map((t) => t.sku);
   if (!skus.length) {
-    return c.json({ topSkus: [], days: [] });
+    return { topSkus: [], days: dateBuckets.map((day) => ({ day })) };
   }
 
   const skuList = sql.join(
@@ -146,17 +172,28 @@ app.get('/sku-daily', zValidator('query', skuDailyQuery), async (c) => {
   );
 
   const daily = await db.execute<{ day: string; sku: string; qty: number }>(sql`
-    select to_char(date_trunc('day', o.order_date), 'YYYY-MM-DD') as day,
-           item->>'sku' as sku,
-           sum(coalesce((item->>'quantity')::int, 1))::int as qty
+    select
+      to_char(o.order_date at time zone 'UTC', 'YYYY-MM-DD') as day,
+      case
+        when nullif(item->>'sku', '') is not null then item->>'sku'
+        else '_name_:' || lower(trim(coalesce(item->>'name', '')))
+      end as sku,
+      sum(coalesce((item->>'quantity')::int, 1))::int as qty
     from orders o, jsonb_array_elements(o.items) item
-    where item ? 'sku' and item->>'sku' in (${skuList})
+    where o.order_status not in ('cancelled')
       and o.order_date >= ${fromIso}::timestamptz
       and o.order_date <= ${toIso}::timestamptz
+      and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
       and (${cid}::int is null or o.client_id = ${cid}::int)
-      and not exists (select 1 from clients c where c.id = o.client_id and c.is_test = true)
-    group by date_trunc('day', o.order_date), item->>'sku'
-    order by date_trunc('day', o.order_date) asc
+      and coalesce((item->>'adjustment')::boolean, false) = false
+      and (
+        case
+          when nullif(item->>'sku', '') is not null then item->>'sku'
+          else '_name_:' || lower(trim(coalesce(item->>'name', '')))
+        end
+      ) in (${skuList})
+    group by to_char(o.order_date at time zone 'UTC', 'YYYY-MM-DD'), sku
+    order by to_char(o.order_date at time zone 'UTC', 'YYYY-MM-DD') asc
   `);
 
   const byDay = new Map<string, Record<string, number | string>>();
@@ -165,118 +202,184 @@ app.get('/sku-daily', zValidator('query', skuDailyQuery), async (c) => {
     bucket[row.sku] = row.qty;
     byDay.set(row.day, bucket);
   }
-  const sortedDays = [...byDay.keys()].sort();
-  const days = sortedDays.map((d) => {
-    const b = byDay.get(d)!;
+  const days = dateBuckets.map((d) => {
+    const b = byDay.get(d) ?? { day: d };
     for (const s of skus) if (b[s] === undefined) b[s] = 0;
     return b;
   });
 
-  return c.json({ topSkus: top, days });
+  return { topSkus: top, days };
+}
+
+app.get('/sku-daily', zValidator('query', skuDailyQuery), async (c) => {
+  return c.json(await getSkuDaily(c.req.valid('query')));
 });
 
 const skuBreakdownQuery = rangeQuery.extend({
   clientId: z.coerce.number().int().optional(),
-  limit: z.coerce.number().int().positive().max(2000).optional().default(500),
+  limit: z.coerce.number().int().positive().max(2000).optional().default(2000),
 });
 
-app.get('/sku-breakdown', zValidator('query', skuBreakdownQuery), async (c) => {
-  const q = c.req.valid('query');
+type SkuBreakdownQuery = z.infer<typeof skuBreakdownQuery>;
+type SkuBreakdownRow = {
+  sku: string;
+  name: string | null;
+  image_url: string | null;
+  inv_sku_id: number | null;
+  client_id: number | null;
+  client_name: string | null;
+  orders: number;
+  pending: number;
+  ext_shipped: number;
+  std_orders: number;
+  std_ship_count: number;
+  std_total: string;
+  exp_orders: number;
+  exp_ship_count: number;
+  exp_total: string;
+  ship_count_with_cost: number;
+  total_qty: number;
+  total_shipping: string;
+};
+
+async function getSkuBreakdown(q: SkuBreakdownQuery) {
   const fromIso = new Date(q.dateFrom).toISOString();
   const toIso = new Date(q.dateTo).toISOString();
   const cid: number | null = q.clientId ?? null;
 
-  const rows = await db.execute<{
-    sku: string;
-    name: string | null;
-    image_url: string | null;
-    inv_sku_id: number | null;
-    client_id: number | null;
-    orders: number;
-    pending: number;
-    ext_shipped: number;
-    std_orders: number;
-    std_total: string;
-    exp_orders: number;
-    exp_total: string;
-    total_qty: number;
-    total_shipping: string;
-  }>(sql`
-    with sku_orders as (
+  const rows = await db.execute<SkuBreakdownRow>(sql`
+    with item_rows as (
       select
-        item->>'sku'                                              as sku,
-        item->>'name'                                             as name,
-        nullif(item->>'imageUrl', '')                             as image_url,
-        inv.id                                                    as inv_sku_id,
-        o.client_id                                               as client_id,
-        o.id                                                      as order_id,
-        o.order_status                                            as order_status,
-        o.externally_shipped                                      as ext_shipped,
-        o.service_code                                            as service_code,
-        coalesce(o.shipping_amount, 0)                            as shipping_amount,
-        coalesce((item->>'quantity')::int, 1)                     as qty
+        o.id                                                                as order_id,
+        o.order_date                                                        as order_date,
+        o.client_id                                                         as client_id,
+        c.name                                                              as client_name,
+        o.order_status                                                      as order_status,
+        o.service_code                                                      as service_code,
+        ls.order_id                                                         as shipment_order_id,
+        coalesce(ls.label_cost, 0)                                          as label_cost,
+        coalesce(nullif(item->>'sku', ''), '')                              as sku,
+        case
+          when nullif(item->>'sku', '') is not null then item->>'sku'
+          else '_name_:' || lower(trim(coalesce(item->>'name', '')))
+        end                                                                as sku_key,
+        coalesce(nullif(item->>'name', ''), '—')                            as name,
+        nullif(item->>'imageUrl', '')                                       as image_url,
+        coalesce((item->>'quantity')::int, 1)                               as qty
       from orders o
       cross join lateral jsonb_array_elements(o.items) item
+      left join clients c on c.id = o.client_id
       left join lateral (
-        select inv.id
-        from inventory inv
-        where inv.client_id is not distinct from o.client_id
-          and lower(inv.sku) = lower(item->>'sku')
-        order by inv.active desc, inv.id
+        select
+          s.order_id,
+          (coalesce(s.label_cost, s.cost, 0) + coalesce(s.other_cost, 0))::numeric as label_cost
+        from shipments s
+        where s.order_id = o.id
+          and coalesce(s.voided, false) = false
+        order by s.id desc
         limit 1
-      ) inv on true
-      where item ? 'sku'
-        and item->>'sku' is not null
-        and item->>'sku' <> ''
+      ) ls on true
+      where coalesce(o.order_status, '') <> 'cancelled'
         and o.order_date >= ${fromIso}::timestamptz
         and o.order_date <= ${toIso}::timestamptz
         and (${cid}::int is null or o.client_id = ${cid}::int)
-        and not exists (select 1 from clients c where c.id = o.client_id and c.is_test = true)
+        and coalesce((item->>'adjustment')::boolean, false) = false
+        and coalesce((item->>'quantity')::int, 1) > 0
     ),
-    classified as (
-      select *,
+    order_sku_rows as (
+      select
+        order_id,
+        min(order_date)                                                      as order_date,
+        min(client_id)                                                       as client_id,
+        max(client_name)                                                     as client_name,
+        max(order_status)                                                    as order_status,
+        max(service_code)                                                    as service_code,
+        max(shipment_order_id)                                               as shipment_order_id,
+        max(label_cost)                                                      as label_cost,
+        sku_key,
+        max(sku)                                                             as sku,
+        (array_agg(name order by length(name) desc))[1]                      as name,
+        max(image_url)                                                       as image_url,
+        sum(qty)::int                                                        as qty
+      from item_rows
+      group by order_id, sku_key
+    ),
+    allocated as (
+      select
+        r.*,
+        count(*) over (partition by r.order_id)                              as sku_divisor,
         case
-          when lower(coalesce(service_code, '')) = ANY(${sql`ARRAY[${sql.join(EXPEDITED_SERVICES.map((s) => sql`${s}`), sql`, `)}]::text[]`})
+          when r.order_status = 'shipped' and r.shipment_order_id is null then true
+          else false
+        end                                                                 as is_external,
+        case
+          when lower(coalesce(r.service_code, '')) = ANY(${sql`ARRAY[${sql.join(EXPEDITED_SERVICES.map((s) => sql`${s}`), sql`, `)}]::text[]`})
             then 'exp'
           else 'std'
-        end as ship_class
-      from sku_orders
+        end                                                                 as ship_class
+      from order_sku_rows r
+    ),
+    sku_inventory as (
+      select distinct on (lower(inv.sku))
+        lower(inv.sku) as sku_lc,
+        inv.id
+      from inventory inv
+      where inv.sku is not null and inv.sku <> ''
+      order by lower(inv.sku), inv.id
     )
     select
-      sku,
-      max(name)                                                       as name,
-      max(image_url)                                                  as image_url,
-      min(inv_sku_id)::int                                            as inv_sku_id,
-      client_id,
-      count(distinct order_id)::int                                   as orders,
-      count(distinct order_id)
-        filter (where order_status = 'awaiting_shipment')::int        as pending,
-      count(distinct order_id)
-        filter (where ext_shipped = true)::int                        as ext_shipped,
-      count(distinct order_id) filter (where ship_class = 'std')::int as std_orders,
-      coalesce(sum(shipping_amount) filter (where ship_class = 'std'), 0)::text as std_total,
-      count(distinct order_id) filter (where ship_class = 'exp')::int as exp_orders,
-      coalesce(sum(shipping_amount) filter (where ship_class = 'exp'), 0)::text as exp_total,
-      sum(qty)::int                                                   as total_qty,
-      coalesce(sum(shipping_amount), 0)::text                         as total_shipping
-    from classified
-    group by sku, client_id
+      max(sku)                                                                 as sku,
+      (array_agg(name order by length(name) desc))[1]                           as name,
+      max(image_url)                                                            as image_url,
+      min(inv.id)::int                                                          as inv_sku_id,
+      (array_agg(client_id order by order_date asc nulls last))[1]::int          as client_id,
+      (array_agg(client_name order by order_date asc nulls last))[1]             as client_name,
+      count(*)::int                                                             as orders,
+      greatest(
+        count(*)::int
+          - count(*) filter (where is_external)::int
+          - count(*) filter (where not is_external and label_cost > 0 and ship_class = 'std')::int
+          - count(*) filter (where not is_external and label_cost > 0 and ship_class = 'exp')::int,
+        0
+      )::int                                                                    as pending,
+      count(*) filter (where is_external)::int                                   as ext_shipped,
+      count(*) filter (where not is_external and ship_class = 'std')::int         as std_orders,
+      count(*) filter (where not is_external and label_cost > 0 and ship_class = 'std')::int as std_ship_count,
+      coalesce(sum(label_cost / nullif(sku_divisor, 0)) filter (where not is_external and label_cost > 0 and ship_class = 'std'), 0)::text as std_total,
+      count(*) filter (where not is_external and ship_class = 'exp')::int         as exp_orders,
+      count(*) filter (where not is_external and label_cost > 0 and ship_class = 'exp')::int as exp_ship_count,
+      coalesce(sum(label_cost / nullif(sku_divisor, 0)) filter (where not is_external and label_cost > 0 and ship_class = 'exp'), 0)::text as exp_total,
+      count(*) filter (where not is_external and label_cost > 0)::int             as ship_count_with_cost,
+      sum(qty)::int                                                              as total_qty,
+      coalesce(sum(label_cost / nullif(sku_divisor, 0)) filter (where not is_external and label_cost > 0), 0)::text as total_shipping
+    from allocated a
+    left join sku_inventory inv on inv.sku_lc = lower(a.sku)
+    group by sku_key
     order by total_qty desc
     limit ${q.limit}
   `);
 
   const totalOrders = await db.execute<{ count: number }>(sql`
     select count(*)::int as count from orders o
-    where o.order_date >= ${fromIso}::timestamptz
+    where coalesce(o.order_status, '') <> 'cancelled'
+      and o.order_date >= ${fromIso}::timestamptz
       and o.order_date <= ${toIso}::timestamptz
       and (${cid}::int is null or o.client_id = ${cid}::int)
-      and not exists (select 1 from clients c where c.id = o.client_id and c.is_test = true)
   `);
 
-  return c.json({
-    data: rows,
+  return {
+    rows,
     totalSkus: rows.length,
     totalOrders: totalOrders[0]?.count ?? 0,
+  };
+}
+
+app.get('/sku-breakdown', zValidator('query', skuBreakdownQuery), async (c) => {
+  const result = await getSkuBreakdown(c.req.valid('query'));
+  return c.json({
+    data: result.rows,
+    totalSkus: result.totalSkus,
+    totalOrders: result.totalOrders,
   });
 });
 
@@ -312,147 +415,16 @@ app.get('/top-skus', zValidator('query', topSkusQuery), async (c) => {
 // v4 picked clearer names (sku-breakdown, sku-daily). Mount the v2 paths as
 // aliases so the v2-apiClient compat shim doesn't need to translate.
 app.get('/skus', zValidator('query', skuBreakdownQuery), async (c) => {
-  const q = c.req.valid('query');
-  const fromIso = new Date(q.dateFrom).toISOString();
-  const toIso = new Date(q.dateTo).toISOString();
-  const cid: number | null = q.clientId ?? null;
-
-  const rows = await db.execute<{
-    sku: string;
-    name: string | null;
-    image_url: string | null;
-    inv_sku_id: number | null;
-    client_id: number | null;
-    orders: number;
-    pending: number;
-    ext_shipped: number;
-    std_orders: number;
-    std_total: string;
-    exp_orders: number;
-    exp_total: string;
-    total_qty: number;
-    total_shipping: string;
-  }>(sql`
-    with sku_orders as (
-      select
-        item->>'sku'                                              as sku,
-        item->>'name'                                             as name,
-        nullif(item->>'imageUrl', '')                             as image_url,
-        inv.id                                                    as inv_sku_id,
-        o.client_id                                               as client_id,
-        o.id                                                      as order_id,
-        o.order_status                                            as order_status,
-        o.externally_shipped                                      as ext_shipped,
-        o.service_code                                            as service_code,
-        coalesce(o.shipping_amount, 0)                            as shipping_amount,
-        coalesce((item->>'quantity')::int, 1)                     as qty
-      from orders o
-      cross join lateral jsonb_array_elements(o.items) item
-      left join lateral (
-        select inv.id
-        from inventory inv
-        where inv.client_id is not distinct from o.client_id
-          and lower(inv.sku) = lower(item->>'sku')
-        order by inv.active desc, inv.id
-        limit 1
-      ) inv on true
-      where item ? 'sku'
-        and item->>'sku' is not null
-        and item->>'sku' <> ''
-        and o.order_date >= ${fromIso}::timestamptz
-        and o.order_date <= ${toIso}::timestamptz
-        and (${cid}::int is null or o.client_id = ${cid}::int)
-        and not exists (select 1 from clients c where c.id = o.client_id and c.is_test = true)
-    ),
-    classified as (
-      select *,
-        case
-          when lower(coalesce(service_code, '')) = ANY(${sql`ARRAY[${sql.join(EXPEDITED_SERVICES.map((s) => sql`${s}`), sql`, `)}]::text[]`})
-            then 'exp' else 'std'
-        end as ship_class
-      from sku_orders
-    )
-    select
-      sku,
-      max(name)                                                       as name,
-      max(image_url)                                                  as image_url,
-      min(inv_sku_id)::int                                            as inv_sku_id,
-      client_id,
-      count(distinct order_id)::int                                   as orders,
-      count(distinct order_id)
-        filter (where order_status = 'awaiting_shipment')::int        as pending,
-      count(distinct order_id)
-        filter (where ext_shipped = true)::int                        as ext_shipped,
-      count(distinct order_id) filter (where ship_class = 'std')::int as std_orders,
-      coalesce(sum(shipping_amount) filter (where ship_class = 'std'), 0)::text as std_total,
-      count(distinct order_id) filter (where ship_class = 'exp')::int as exp_orders,
-      coalesce(sum(shipping_amount) filter (where ship_class = 'exp'), 0)::text as exp_total,
-      sum(qty)::int                                                   as total_qty,
-      coalesce(sum(shipping_amount), 0)::text                         as total_shipping
-    from classified
-    group by sku, client_id
-    order by total_qty desc
-    limit ${q.limit}
-  `);
-  return c.json({ data: rows, totalSkus: rows.length });
+  const result = await getSkuBreakdown(c.req.valid('query'));
+  return c.json({
+    data: result.rows,
+    totalSkus: result.totalSkus,
+    totalOrders: result.totalOrders,
+  });
 });
 
 app.get('/daily-sales', zValidator('query', skuDailyQuery), async (c) => {
-  // Delegate body is identical to /sku-daily — copy the logic to avoid
-  // internal fetch.
-  const q = c.req.valid('query');
-  const fromIso = new Date(q.dateFrom).toISOString();
-  const toIso = new Date(q.dateTo).toISOString();
-  const cid: number | null = q.clientId ?? null;
-
-  const top = await db.execute<{ sku: string; name: string | null; total_qty: number }>(sql`
-    select item->>'sku' as sku,
-           max(item->>'name') as name,
-           sum(coalesce((item->>'quantity')::int, 1))::int as total_qty
-    from orders o, jsonb_array_elements(o.items) item
-    where item ? 'sku' and item->>'sku' is not null and item->>'sku' <> ''
-      and o.order_date >= ${fromIso}::timestamptz
-      and o.order_date <= ${toIso}::timestamptz
-      and (${cid}::int is null or o.client_id = ${cid}::int)
-      and not exists (select 1 from clients c where c.id = o.client_id and c.is_test = true)
-    group by item->>'sku'
-    order by total_qty desc
-    limit ${q.topN}
-  `);
-
-  const skus = top.map((t) => t.sku);
-  if (!skus.length) return c.json({ topSkus: [], days: [] });
-
-  const skuList = sql.join(skus.map((s) => sql`${s}`), sql`, `);
-
-  const daily = await db.execute<{ day: string; sku: string; qty: number }>(sql`
-    select to_char(date_trunc('day', o.order_date), 'YYYY-MM-DD') as day,
-           item->>'sku' as sku,
-           sum(coalesce((item->>'quantity')::int, 1))::int as qty
-    from orders o, jsonb_array_elements(o.items) item
-    where item ? 'sku' and item->>'sku' in (${skuList})
-      and o.order_date >= ${fromIso}::timestamptz
-      and o.order_date <= ${toIso}::timestamptz
-      and (${cid}::int is null or o.client_id = ${cid}::int)
-      and not exists (select 1 from clients c where c.id = o.client_id and c.is_test = true)
-    group by date_trunc('day', o.order_date), item->>'sku'
-    order by date_trunc('day', o.order_date) asc
-  `);
-
-  const byDay = new Map<string, Record<string, number | string>>();
-  for (const row of daily) {
-    const bucket = byDay.get(row.day) ?? { day: row.day };
-    bucket[row.sku] = row.qty;
-    byDay.set(row.day, bucket);
-  }
-  const sortedDays = [...byDay.keys()].sort();
-  const days = sortedDays.map((d) => {
-    const b = byDay.get(d)!;
-    for (const s of skus) if (b[s] === undefined) b[s] = 0;
-    return b;
-  });
-
-  return c.json({ topSkus: top, days });
+  return c.json(await getSkuDaily(c.req.valid('query')));
 });
 
 export default app;

@@ -183,30 +183,73 @@ app.get(
       ? new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
       : null;
 
+    const dailyRows = since
+      ? await db.execute<{ day: string; units: number }>(sql`
+          select
+            to_char(date_trunc('day', o.order_date), 'YYYY-MM-DD') as day,
+            sum(coalesce((item->>'quantity')::int, 1))::int        as units
+          from orders o
+          cross join lateral jsonb_array_elements(o.items) item
+          where item ? 'sku'
+            and lower(item->>'sku') = lower(${row.sku})
+            and o.order_date >= ${since}::timestamptz
+            and coalesce(o.order_status, '') <> 'cancelled'
+          group by date_trunc('day', o.order_date)
+          order by date_trunc('day', o.order_date) asc
+        `)
+      : [];
+    const salesMap = new Map(dailyRows.map((r) => [r.day, Number(r.units ?? 0)]));
+    const dailySales: { day: string; units: number }[] = [];
+    const safeDays = Math.max(1, Math.min(3650, days ?? 30));
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    for (let i = safeDays - 1; i >= 0; i -= 1) {
+      const d = new Date(today);
+      d.setUTCDate(d.getUTCDate() - i);
+      const day = d.toISOString().slice(0, 10);
+      dailySales.push({ day, units: salesMap.get(day) ?? 0 });
+    }
+
     const rows = await db.execute<{
       order_id: number;
       order_number: string;
       order_date: string | null;
       order_status: string;
+      ship_to_name: string | null;
+      carrier_code: string | null;
+      service_code: string | null;
       qty: number;
+      unit_price: string | null;
+      item_name: string | null;
     }>(sql`
       select
         o.id                                     as order_id,
         o.order_number                           as order_number,
         o.order_date                             as order_date,
         o.order_status                           as order_status,
-        coalesce((item->>'quantity')::int, 0)    as qty
+        o.ship_to_name                           as ship_to_name,
+        o.carrier_code                           as carrier_code,
+        o.service_code                           as service_code,
+        coalesce((item->>'quantity')::int, 1)    as qty,
+        coalesce(item->>'unitPrice', item->>'unit_price') as unit_price,
+        item->>'name'                            as item_name
       from orders o
       cross join lateral jsonb_array_elements(o.items) item
       where item ? 'sku'
         and lower(item->>'sku') = lower(${row.sku})
-        ${row.clientId !== null ? sql`and o.client_id = ${row.clientId}` : sql``}
-        ${since ? sql`and o.order_date >= ${since}::timestamptz` : sql``}
+        and coalesce(o.order_status, '') <> 'cancelled'
       order by o.order_date desc nulls last
-      limit 500
+      limit 200
     `);
 
-    return c.json({ sku: row.sku, name: row.name, orders: rows });
+    return c.json({
+      sku: row.sku,
+      name: row.name,
+      clientId: row.clientId,
+      totalUnits: dailySales.reduce((sum, r) => sum + r.units, 0),
+      dailySales,
+      orders: rows,
+    });
   }
 );
 
