@@ -21,6 +21,8 @@ interface SidebarProps {
   activeStore?: number | null
   dateStart?: string
   dateEnd?: string
+  showTestOrders?: boolean
+  onShowTestOrdersChange?: (show: boolean) => void
 }
 
 const STATUS_LABELS: Record<SidebarOrderStatus, string> = {
@@ -39,6 +41,10 @@ const TOOL_ITEMS: Array<{ view: ViewType; icon: string; label: string }> = [
   { view: 'billing', icon: '🧾', label: 'Billing' },
 ]
 
+function isTestOrdersStore(store: { storeId: number; name: string; isTest?: boolean }) {
+  return store.name.trim().toLowerCase() === 'test orders'
+}
+
 export default function Sidebar({
   currentStatus,
   currentView,
@@ -52,6 +58,8 @@ export default function Sidebar({
   activeStore,
   dateStart,
   dateEnd,
+  showTestOrders = true,
+  onShowTestOrdersChange,
 }: SidebarProps) {
   const [expandedSections, setExpandedSections] = useState<Set<SidebarOrderStatus>>(new Set(['awaiting_shipment']))
   const [counts, setCounts] = useState<InitCountsDto | null>(null)
@@ -101,6 +109,11 @@ export default function Sidebar({
   }, [dateStart, dateEnd])
 
   const sidebarSections = useMemo(() => buildSidebarSections(stores, counts), [stores, counts])
+
+  const toggleTestOrders = (event) => {
+    event.stopPropagation()
+    onShowTestOrdersChange?.(!showTestOrders)
+  }
 
   return (
     <div className={`sidebar${mobileMenuOpen ? ' mobile-open' : ''}`}>
@@ -164,10 +177,24 @@ export default function Sidebar({
 
             <div className="ss-stores">
               {sidebarSections[status].stores.map((store) => {
+                const isTestStore = isTestOrdersStore(store)
+                const testOrdersToggle = isTestStore ? (
+                  <button
+                    type="button"
+                    className={`ss-test-toggle${showTestOrders ? ' is-on' : ' is-off'}`}
+                    aria-label={showTestOrders ? 'Hide Test Orders from all shipments' : 'Show Test Orders in all shipments'}
+                    aria-pressed={showTestOrders}
+                    title={showTestOrders ? 'Hide Test Orders from all shipments' : 'Show Test Orders in all shipments'}
+                    onClick={toggleTestOrders}
+                  >
+                    <span className="ss-test-toggle-knob" />
+                  </button>
+                ) : null
+
                 return (
                   <div
                     key={`${status}-${store.storeId}`}
-                    className={`ss-store${currentView === 'orders' && activeStore === store.storeId && currentStatus === status ? ' active' : ''}${store.cnt === 0 ? ' ss-store-zero' : ''}`}
+                    className={`ss-store${isTestStore ? ' ss-store-test' : ''}${isTestStore && !showTestOrders ? ' ss-store-test-off' : ''}${currentView === 'orders' && activeStore === store.storeId && currentStatus === status ? ' active' : ''}${store.cnt === 0 ? ' ss-store-zero' : ''}`}
                     onClick={() => {
                       onSelectStatus(status)
                       onSelectStore?.(store.storeId, status)
@@ -176,6 +203,7 @@ export default function Sidebar({
                     style={{ cursor: 'pointer' }}
                   >
                     <span className="ss-store-name">{store.name}</span>
+                    {testOrdersToggle}
                     <span className="ss-store-count">{store.cnt > 0 ? store.cnt.toLocaleString() : ''}</span>
                   </div>
                 )

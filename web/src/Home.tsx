@@ -69,6 +69,7 @@ const VIEW_PATHS: Record<Exclude<ViewType, 'orders'>, string> = {
 }
 
 const VALID_STATUSES: OrderStatus[] = ['awaiting_shipment', 'shipped', 'cancelled']
+const TEST_ORDERS_VISIBILITY_KEY = 'prepship_show_test_orders'
 
 function pathToRoute(pathname: string): { view: ViewType; status: OrderStatus | null } {
   if (pathname === '/' || pathname === '/orders' || pathname === '/orders/') {
@@ -144,6 +145,10 @@ export default function Home() {
   const [queueBadgeCount, setQueueBadgeCount] = useState(0)
   const [queueOpen, setQueueOpen] = useState(false)
   const [ordersRefreshVersion, setOrdersRefreshVersion] = useState(0)
+  const [showTestOrders, setShowTestOrdersState] = useState(() => {
+    if (typeof window === 'undefined') return true
+    return window.localStorage.getItem(TEST_ORDERS_VISIBILITY_KEY) !== 'false'
+  })
   const [syncStatus, setSyncStatus] = useState<{
     status: 'idle' | 'syncing' | 'done' | 'error'
     mode: 'idle' | 'incremental' | 'full'
@@ -172,6 +177,13 @@ export default function Home() {
     return stored
   })
   const [zoomMenuOpen, setZoomMenuOpen] = useState(false)
+
+  const setShowTestOrders = (next: boolean) => {
+    setShowTestOrdersState(next)
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(TEST_ORDERS_VISIBILITY_KEY, String(next))
+    }
+  }
 
   const activeStoreName = useMemo(
     () => sidebarStores.find((store) => store.storeId === activeStore)?.storeName ?? null,
@@ -374,6 +386,8 @@ export default function Home() {
         activeStore={activeStore}
         dateStart={ordersDateRange.start}
         dateEnd={ordersDateRange.end}
+        showTestOrders={showTestOrders}
+        onShowTestOrdersChange={setShowTestOrders}
       />
 
       <div className="main bg-bg-base text-text-primary">
@@ -579,6 +593,7 @@ export default function Home() {
               setQueueOpen(isOpen)
             }}
             refreshVersion={ordersRefreshVersion}
+            showTestOrders={showTestOrders}
           />
         ) : displayView === 'inventory' ? (
           <InventoryView searchQuery={searchQuery} />

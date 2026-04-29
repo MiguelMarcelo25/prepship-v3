@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, qs, type Paginated } from '../lib/api';
 import { HIDDEN_CLIENT_IDS } from '../lib/v2-apiClient';
@@ -31,6 +31,7 @@ export interface UseOrdersOptions {
   clientId?: number;
   dateStart?: string;
   dateEnd?: string;
+  hideTestOrders?: boolean;
 }
 
 export interface UseOrdersResult {
@@ -45,7 +46,7 @@ export interface UseOrdersResult {
   goToPage: (page: number) => Promise<void>;
 }
 
-type V4ClientRow = { id: number; name: string };
+type V4ClientRow = { id: number; name: string; isTest?: boolean };
 
 const LEGACY_CLIENT_ID_BY_NAME = new Map<string, number>([
   ['techtok', 7],
@@ -427,10 +428,15 @@ export function useOrders(
     clientId,
     dateStart,
     dateEnd,
+    hideTestOrders = false,
   } = options;
 
   const [currentPage, setCurrentPage] = useState<number>(page);
   const [refreshing, setRefreshing] = useState<boolean>(false);
+
+  useEffect(() => {
+    setCurrentPage(page);
+  }, [page]);
 
   const clientsQuery = useQuery<V4ClientRow[]>({
     queryKey: ['v2-hooks:clients'],
@@ -466,6 +472,7 @@ export function useOrders(
       effectiveClientId,
       effectiveStoreId,
       excludeClientId,
+      hideTestOrders,
       isoFrom,
       isoTo,
     ],
@@ -478,6 +485,7 @@ export function useOrders(
           clientId: effectiveClientId,
           storeId: effectiveStoreId,
           excludeClientId,
+          hideTestOrders: hideTestOrders && effectiveClientId == null && effectiveStoreId == null ? true : undefined,
           dateFrom: isoFrom,
           dateTo: isoTo,
         })}`

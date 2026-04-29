@@ -157,12 +157,20 @@ app.get('/counts', async (c) => {
     db.execute<{ orderStatus: string; storeId: number; cnt: number }>(sql`
       select
         o.order_status as "orderStatus",
-          o.store_id::int as "storeId",
+        case
+          when coalesce(c.is_test, false) = true and o.client_id is not null then -o.client_id
+          else o.store_id
+        end::int as "storeId",
         count(*)::int as cnt
       from orders o
       left join clients c on c.id = o.client_id
-        where o.store_id is not null
-          and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+        where (
+          (coalesce(c.is_test, false) = true and o.client_id is not null)
+          or (
+            o.store_id is not null
+            and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+          )
+        )
         ${orderDateFilter()}
         and not exists (
           select 1 from clients hidden_client
@@ -180,7 +188,12 @@ app.get('/counts', async (c) => {
             )
           )
         )
-        group by o.order_status, o.store_id
+        group by
+          o.order_status,
+          case
+            when coalesce(c.is_test, false) = true and o.client_id is not null then -o.client_id
+            else o.store_id
+          end
       order by cnt desc
     `),
   ]);

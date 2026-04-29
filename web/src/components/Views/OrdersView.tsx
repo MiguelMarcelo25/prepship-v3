@@ -71,6 +71,7 @@ interface OrdersViewProps {
   queueToggleRequestId?: number
   onQueueStateChange?: (state: { count: number; isOpen: boolean }) => void
   refreshVersion?: number
+  showTestOrders?: boolean
 }
 
 interface TableColumn {
@@ -473,11 +474,13 @@ function isTestOrder(order: OrderSummaryDto, detail: OrderFullDto | null = null)
   const clientId = toNumericValue(order.clientId)
   const legacyClientId = getLegacyClientIdForDisplay(order)
   const clientName = (toStringValue(order.clientName) ?? '').trim().toLowerCase()
+  const orderNumber = (toStringValue(order.orderNumber) ?? '').trim().toUpperCase()
   const raw = toRecord(order.raw)
   return (
     (clientId != null && TEST_CLIENT_IDS.has(clientId)) ||
     legacyClientId === 11 ||
     clientName === 'test orders' ||
+    orderNumber.startsWith('TESTING-') ||
     raw?.test === true ||
     raw?.testing === true ||
     hasTestPackItem(order, detail)
@@ -1076,6 +1079,7 @@ export default function OrdersView({
   queueToggleRequestId = 0,
   onQueueStateChange,
   refreshVersion = 0,
+  showTestOrders = true,
 }: OrdersViewProps) {
   const toastContext = useContext(ToastContext)
   const [page, setPage] = useState(1)
@@ -1173,12 +1177,16 @@ export default function OrdersView({
         }
       })()
 
+  const hideTestOrdersInAllAwaiting =
+    currentStatus === 'awaiting_shipment' && activeStore == null && !showTestOrders
+
   const { orders, total, pages, currentPage, loading, error, refetch: refetchOrders } = useOrders(currentStatus, {
     page,
     pageSize: 50,
     storeId: activeStore ?? undefined,
     dateStart: dateRange.start,
     dateEnd: dateRange.end,
+    hideTestOrders: hideTestOrdersInAllAwaiting,
   })
 
   useEffect(() => {
@@ -1231,6 +1239,7 @@ export default function OrdersView({
     const query = searchQuery.trim().toLowerCase()
     return orders.filter((order) => {
       const detail = orderDetailsById.get(order.orderId) ?? null
+      if (hideTestOrdersInAllAwaiting && isTestOrder(order, detail)) return false
       if (query && !buildSearchText(order, detail).includes(query)) return false
       if (skuFilter) {
         const items = getActiveItems(order, detail)
@@ -1238,31 +1247,37 @@ export default function OrdersView({
       }
       return true
     })
-  }, [orders, orderDetailsById, searchQuery, skuFilter])
+  }, [orders, orderDetailsById, hideTestOrdersInAllAwaiting, searchQuery, skuFilter])
 
   const orderedFilteredOrders = useMemo(() => {
     const next = [...searchedOrders]
 
     if (skuSortActive) {
       next.sort((left, right) => {
-        const leftSku = getPrimarySku(left, orderDetailsById.get(left.orderId) ?? null)
-        const rightSku = getPrimarySku(right, orderDetailsById.get(right.orderId) ?? null)
+        const leftDetail = orderDetailsById.get(left.orderId) ?? null
+        const rightDetail = orderDetailsById.get(right.orderId) ?? null
+        const leftSku = getPrimarySku(left, leftDetail)
+        const rightSku = getPrimarySku(right, rightDetail)
         if (leftSku < rightSku) return -1
         if (leftSku > rightSku) return 1
-        return getTotalQuantity(left, orderDetailsById.get(left.orderId) ?? null) - getTotalQuantity(right, orderDetailsById.get(right.orderId) ?? null)
+        return getTotalQuantity(left, leftDetail) - getTotalQuantity(right, rightDetail)
       })
       return next
     }
 
     if (preSkuSortSnapshot) {
       const rank = new Map(preSkuSortSnapshot.map((orderId, index) => [orderId, index]))
-      next.sort((left, right) => (rank.get(left.orderId) ?? Number.MAX_SAFE_INTEGER) - (rank.get(right.orderId) ?? Number.MAX_SAFE_INTEGER))
+      next.sort((left, right) => {
+        return (rank.get(left.orderId) ?? Number.MAX_SAFE_INTEGER) - (rank.get(right.orderId) ?? Number.MAX_SAFE_INTEGER)
+      })
       return next
     }
 
     next.sort((left, right) => {
-      const leftValue = getSortValue(left, orderDetailsById.get(left.orderId) ?? null, sortState.key, shippingAccounts)
-      const rightValue = getSortValue(right, orderDetailsById.get(right.orderId) ?? null, sortState.key, shippingAccounts)
+      const leftDetail = orderDetailsById.get(left.orderId) ?? null
+      const rightDetail = orderDetailsById.get(right.orderId) ?? null
+      const leftValue = getSortValue(left, leftDetail, sortState.key, shippingAccounts)
+      const rightValue = getSortValue(right, rightDetail, sortState.key, shippingAccounts)
       const direction = sortState.dir === 'asc' ? 1 : -1
       if (leftValue < rightValue) return -direction
       if (leftValue > rightValue) return direction
@@ -1300,7 +1315,7 @@ export default function OrdersView({
 
   useEffect(() => {
     setPage(1)
-  }, [currentStatus, activeStore, dateFilter, customDateFrom, customDateTo])
+  }, [currentStatus, activeStore, dateFilter, customDateFrom, customDateTo, hideTestOrdersInAllAwaiting])
 
   useEffect(() => {
     setPreSkuSortSnapshot(null)

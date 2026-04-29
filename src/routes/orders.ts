@@ -28,6 +28,17 @@ const visibleStorePredicate = sql`(
   )
 )`;
 
+const testOrderPredicate = sql`(
+  exists (
+    select 1 from ${clients} test_client
+    where test_client.id = ${orders.clientId}
+      and test_client.is_test = true
+  )
+  or coalesce(${orders.orderNumber}, '') ilike 'TESTING-%'
+  or ${orders.raw} @> '{"test": true}'::jsonb
+  or ${orders.raw} @> '{"testing": true}'::jsonb
+ )`;
+
 const LEGACY_CLIENT_ID_BY_STORE_ID = new Map<number, number>([
   [367706, 7],
   [363392, 8],
@@ -450,6 +461,7 @@ const listQuery = paginationSchema.extend({
   clientId: z.coerce.number().int().optional(),
   storeId: z.coerce.number().int().optional(),
   excludeClientId: z.string().optional(),
+  hideTestOrders: z.coerce.boolean().optional(),
   dateFrom: z.string().datetime().optional(),
   dateTo: z.string().datetime().optional(),
   search: z.string().optional(),
@@ -522,6 +534,9 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       visibleStorePredicate,
       excludeIds.length > 0 && q.clientId === undefined
         ? notInArray(orders.clientId, excludeIds)
+        : undefined,
+      q.hideTestOrders === true && q.clientId === undefined && q.storeId === undefined
+        ? sql`not ${testOrderPredicate}`
         : undefined,
       q.dateFrom ? gte(orders.orderDate, new Date(q.dateFrom)) : undefined,
       q.dateTo ? lte(orders.orderDate, new Date(q.dateTo)) : undefined,

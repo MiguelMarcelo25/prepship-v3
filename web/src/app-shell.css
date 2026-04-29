@@ -89,6 +89,31 @@ body{font-family:'Poppins',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sa
 .ss-store-name{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .ss-store-count{font-size:10.5px;font-weight:700;color:var(--text3);flex-shrink:0;margin-left:4px;}
 .ss-store.active .ss-store-count{color:var(--ss-blue);}
+.ss-store-test{gap:6px;}
+.ss-store-test .ss-store-name{flex:0 1 auto;}
+.ss-store-test .ss-store-count{margin-left:auto;}
+.ss-store-test-off .ss-store-name,
+.ss-store-test-off .ss-store-count{
+  font-style:italic;
+  color:var(--text4);
+}
+.ss-store-test-off.active .ss-store-name,
+.ss-store-test-off.active .ss-store-count{color:var(--ss-blue);}
+.ss-test-toggle{
+  width:22px;height:12px;padding:0;border:1px solid var(--border2);
+  border-radius:999px;background:var(--surface3);flex-shrink:0;
+  display:inline-flex;align-items:center;cursor:pointer;position:relative;
+  transition:background .12s,border-color .12s;
+}
+.ss-test-toggle:hover{border-color:var(--ss-blue);}
+.ss-test-toggle.is-on{background:var(--ss-blue);border-color:var(--ss-blue);}
+.ss-test-toggle.is-off{background:var(--surface3);border-color:var(--border2);}
+.ss-test-toggle-knob{
+  width:8px;height:8px;border-radius:50%;background:#fff;
+  box-shadow:0 1px 2px rgba(15,23,42,.22);transform:translateX(2px);
+  transition:transform .12s;
+}
+.ss-test-toggle.is-on .ss-test-toggle-knob{transform:translateX(10px);}
 
 .sidebar-divider{height:1px;background:var(--border);margin:6px 0;}
 
