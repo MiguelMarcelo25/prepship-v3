@@ -993,6 +993,32 @@ type LatestShipmentRow = {
 
 type ExportShipmentRow = LatestShipmentRow;
 
+function buildOrderDetailPayload(
+  order: Record<string, unknown>,
+  overrides: Record<string, unknown> | null,
+  shipmentRows: unknown[],
+) {
+  const legacyClientId = resolveLegacyClientId(
+    finiteNumberOrNull(order.clientId),
+    finiteNumberOrNull(order.storeId),
+  );
+  const canonicalOrder = buildCanonicalOrderModel(
+    order,
+    overrides,
+    legacyClientId,
+    {},
+  );
+
+  return {
+    ...order,
+    legacyClientId,
+    client: canonicalOrder.client,
+    canonicalOrder,
+    overrides,
+    shipments: shipmentRows,
+  };
+}
+
 // Picklist: aggregated SKU + qty + order count per client over a date
 // range and status filter. Used to print a warehouse pick list grouped
 // by client. Skipping clients table to keep the query simple — we
@@ -1358,7 +1384,7 @@ app.get('/:id{[0-9]+}', async (c) => {
     db.select().from(shipments).where(eq(shipments.orderId, id)),
   ]);
 
-  return c.json({ ...order, overrides, shipments: shipmentRows });
+  return c.json(buildOrderDetailPayload(order as Record<string, unknown>, overrides, shipmentRows));
 });
 
 // Alias of GET /orders/:id — old API exposed both shapes. Same payload.
@@ -1376,7 +1402,7 @@ app.get('/:id{[0-9]+}/full', async (c) => {
     db.select().from(shipments).where(eq(shipments.orderId, id)),
   ]);
 
-  return c.json({ ...order, overrides, shipments: shipmentRows });
+  return c.json(buildOrderDetailPayload(order as Record<string, unknown>, overrides, shipmentRows));
 });
 
 const patchBody = z.object({

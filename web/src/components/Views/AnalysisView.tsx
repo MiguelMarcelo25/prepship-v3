@@ -48,10 +48,220 @@ interface AnalysisDataState {
 }
 
 function formatDateOnly(value: string | null | undefined) {
-  if (!value) return '—'
+  if (!value) return '-'
   const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return '—'
+  if (Number.isNaN(parsed.getTime())) return '-'
   return parsed.toLocaleDateString()
+}
+
+function formatDateTime(value: unknown) {
+  if (!value) return '-'
+  const parsed = new Date(String(value))
+  if (Number.isNaN(parsed.getTime())) return '-'
+  return parsed.toLocaleString()
+}
+
+function asRecord(value: unknown) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+function asArray(value: unknown) {
+  return Array.isArray(value) ? value : []
+}
+
+function displayText(value: unknown, fallback = '-') {
+  if (value == null || value === '') return fallback
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No'
+  return String(value)
+}
+
+function numberValue(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return null
+}
+
+function formatMoneyValue(value: unknown) {
+  const num = numberValue(value)
+  return num == null ? '-' : formatAnalysisMoney(num)
+}
+
+function formatStatusText(value: unknown) {
+  const raw = displayText(value, '').replace(/_/g, ' ').trim()
+  return raw ? raw.replace(/\b\w/g, (char) => char.toUpperCase()) : '-'
+}
+
+function getOrderRaw(order: unknown) {
+  return asRecord(asRecord(order).raw)
+}
+
+function getOrderItems(order: unknown) {
+  const row = asRecord(order)
+  const raw = getOrderRaw(order)
+  return asArray(row.items).length ? asArray(row.items) : asArray(raw.items)
+}
+
+function getOrderShipTo(order: unknown) {
+  const row = asRecord(order)
+  const rawShipTo = asRecord(getOrderRaw(order).shipTo)
+  return {
+    name: rawShipTo.name ?? row.shipToName,
+    company: rawShipTo.company,
+    street1: rawShipTo.street1,
+    street2: rawShipTo.street2,
+    city: rawShipTo.city ?? row.shipToCity,
+    state: rawShipTo.state ?? row.shipToState,
+    postalCode: rawShipTo.postalCode ?? row.shipToPostalCode,
+    country: rawShipTo.country ?? 'US',
+    phone: rawShipTo.phone,
+    addressVerified: rawShipTo.addressVerified,
+  }
+}
+
+function getOrderBillTo(order: unknown) {
+  return asRecord(getOrderRaw(order).billTo)
+}
+
+const LEGACY_CLIENT_ID_BY_STORE_ID = new Map<number, number>([
+  [367706, 7],
+  [363392, 8],
+  [376661, 9],
+  [277422, 10],
+  [376827, 10],
+])
+
+const LEGACY_CLIENT_ID_BY_CURRENT_ID = new Map<number, number>([
+  [8, 7],
+  [9, 8],
+  [10, 9],
+  [11, 10],
+  [12, 11],
+])
+
+function getDisplayClientId(order: unknown) {
+  const row = asRecord(order)
+  const canonicalOrder = asRecord(row.canonicalOrder)
+  const rowClient = asRecord(row.client)
+  const canonicalClient = asRecord(canonicalOrder.client)
+  const legacyClientId = numberValue(
+    row.legacyClientId
+    ?? canonicalOrder.legacyClientId
+    ?? rowClient.legacyId
+    ?? canonicalClient.legacyId,
+  )
+  if (legacyClientId != null) return legacyClientId
+
+  const storeId = numberValue(
+    row.storeId
+    ?? canonicalOrder.storeId
+    ?? rowClient.storeId
+    ?? canonicalClient.storeId,
+  )
+  if (storeId != null) {
+    const mapped = LEGACY_CLIENT_ID_BY_STORE_ID.get(storeId)
+    if (mapped != null) return mapped
+  }
+
+  const clientId = numberValue(row.clientId ?? canonicalOrder.clientId ?? rowClient.id ?? canonicalClient.id)
+  if (clientId != null) {
+    const mapped = LEGACY_CLIENT_ID_BY_CURRENT_ID.get(clientId)
+    return mapped ?? clientId
+  }
+
+  return '-'
+}
+
+function formatAddressLines(address: Record<string, unknown>) {
+  const cityLine = [address.city, address.state, address.postalCode]
+    .map((part) => displayText(part, ''))
+    .filter(Boolean)
+    .join(', ')
+  return [
+    address.name,
+    address.company,
+    address.street1,
+    address.street2,
+    cityLine,
+    address.country,
+  ]
+    .map((part) => displayText(part, ''))
+    .filter(Boolean)
+}
+
+function getItemQty(item: unknown) {
+  return numberValue(asRecord(item).quantity ?? asRecord(item).qty) ?? 1
+}
+
+function getItemUnitPrice(item: unknown) {
+  return asRecord(item).unitPrice ?? asRecord(item).unit_price
+}
+
+function getItemTotal(item: unknown) {
+  const unit = numberValue(getItemUnitPrice(item))
+  if (unit == null) return null
+  return unit * getItemQty(item)
+}
+
+function isAdjustmentItem(item: unknown) {
+  const itemRecord = asRecord(item)
+  const sku = displayText(itemRecord.sku, '').trim()
+  const unit = numberValue(getItemUnitPrice(item))
+  const total = numberValue(itemRecord.total ?? itemRecord.lineItemTotal ?? getItemTotal(item))
+  const hasAdjustmentFlag =
+    itemRecord.adjustment === true
+    || itemRecord.isAdjustment === true
+    || itemRecord.type === 'adjustment'
+    || itemRecord.type === 'discount'
+
+  return hasAdjustmentFlag || (!sku && ((unit != null && unit < 0) || (total != null && total < 0)))
+}
+
+function formatOrderWeight(order: unknown) {
+  const row = asRecord(order)
+  const rawWeight = asRecord(getOrderRaw(order).weight)
+  const weightOz = numberValue(row.weightOz ?? rawWeight.value)
+  if (weightOz == null) return '-'
+  const units = displayText(rawWeight.units, 'ounces').toLowerCase()
+  if (units.startsWith('pound')) return `${weightOz} lb`
+  return `${weightOz} oz`
+}
+
+function formatOrderDimensions(order: unknown) {
+  const rawDims = asRecord(getOrderRaw(order).dimensions)
+  const length = numberValue(rawDims.length)
+  const width = numberValue(rawDims.width)
+  const height = numberValue(rawDims.height)
+  if (length == null || width == null || height == null) return '-'
+  return `${length} x ${width} x ${height} ${displayText(rawDims.units, 'in')}`
+}
+
+function DetailField({ label, value }: { label: string; value: unknown }) {
+  return (
+    <div className="analysis-order-field">
+      <span>{label}</span>
+      <strong>{displayText(value)}</strong>
+    </div>
+  )
+}
+
+function DetailSection({
+  title,
+  children,
+}: {
+  title: string
+  children: React.ReactNode
+}) {
+  return (
+    <section className="analysis-order-section">
+      <h4>{title}</h4>
+      {children}
+    </section>
+  )
 }
 
 interface ChartMeta {
@@ -242,6 +452,13 @@ export default function AnalysisView() {
   const [skuDrawerError, setSkuDrawerError] = useState<string | null>(null)
   const [skuDrawerOpen, setSkuDrawerOpen] = useState(false)
   const [skuDrawerLoading, setSkuDrawerLoading] = useState(false)
+  const [orderModal, setOrderModal] = useState({
+    open: false,
+    loading: false,
+    error: null as string | null,
+    order: null as Record<string, unknown> | null,
+    orderNumber: '',
+  })
   const chartCanvasRef = useRef<HTMLCanvasElement | null>(null)
   const chartOriginalRangeRef = useRef<{ from: string; to: string } | null>(null)
   const [chartResetVisible, setChartResetVisible] = useState(false)
@@ -497,6 +714,15 @@ export default function AnalysisView() {
     }
   }, [dataState.chartData, from, to])
 
+  useEffect(() => {
+    if (!orderModal.open) return undefined
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeOrderDetails()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [orderModal.open])
+
   function handlePresetClick(days: number) {
     const range = getAnalysisPresetRange(days)
     setPresetDays(days)
@@ -537,6 +763,51 @@ export default function AnalysisView() {
     }
   }
 
+  async function openOrderDetails(order: Record<string, unknown>) {
+    const orderId = numberValue(order.orderId)
+    const orderNumber = displayText(order.orderNumber ?? orderId, 'Order')
+    setOrderModal({
+      open: true,
+      loading: true,
+      error: null,
+      order: null,
+      orderNumber,
+    })
+
+    if (orderId == null) {
+      setOrderModal((current) => ({
+        ...current,
+        loading: false,
+        error: 'This order row does not include a valid order id.',
+      }))
+      return
+    }
+
+    try {
+      const detail = await apiClient.fetchOrderFull(orderId)
+      if (!detail) throw new Error('Order details were not found.')
+      setOrderModal({
+        open: true,
+        loading: false,
+        error: null,
+        order: detail,
+        orderNumber: displayText(detail.orderNumber ?? orderNumber, orderNumber),
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to load order details'
+      setOrderModal((current) => ({
+        ...current,
+        loading: false,
+        error: message,
+      }))
+      toastContext?.addToast(message, 'error')
+    }
+  }
+
+  function closeOrderDetails() {
+    setOrderModal((current) => ({ ...current, open: false }))
+  }
+
   function handleSort(nextKey: AnalysisSortKey) {
     setSortDir((currentDir) => getAnalysisSortDirection(nextKey, sortKey, currentDir))
     setSortKey(nextKey)
@@ -546,6 +817,15 @@ export default function AnalysisView() {
     dataState.chartData
     && (dataState.chartData.topSkus?.length ?? 0) > 0
     && (dataState.chartData.dates?.length ?? 0) > 0
+  const modalOrder = orderModal.order
+  const modalRaw = getOrderRaw(modalOrder)
+  const modalShipTo = getOrderShipTo(modalOrder)
+  const modalBillTo = getOrderBillTo(modalOrder)
+  const modalAllItems = getOrderItems(modalOrder)
+  const modalItems = modalAllItems.filter((item) => !isAdjustmentItem(item))
+  const modalAdjustments = modalAllItems.filter(isAdjustmentItem)
+  const modalShipments = asArray(asRecord(modalOrder).shipments)
+  const modalOverrides = asRecord(asRecord(modalOrder).overrides)
 
   return (
     <div className="view-content" id="view-analysis">
@@ -1175,7 +1455,7 @@ export default function AnalysisView() {
                   fontSize: 13,
                 }}
               >
-                ✕
+                x
               </button>
             </div>
             <div style={{ flex: 1, overflowY: 'auto', padding: '18px 20px' }}>
@@ -1456,10 +1736,11 @@ export default function AnalysisView() {
                         </thead>
                         <tbody>
                           {skuDrawer.orders.map((order, index) => {
+                            const orderStatus = displayText(order.orderStatus, '').trim()
                             const statusColor =
-                              order.orderStatus === 'shipped'
+                              orderStatus === 'shipped'
                                 ? 'var(--green)'
-                                : order.orderStatus === 'awaiting_shipment'
+                                : orderStatus === 'awaiting_shipment'
                                   ? 'var(--ss-blue)'
                                   : 'var(--text3)'
 
@@ -1476,10 +1757,19 @@ export default function AnalysisView() {
                                     padding: '6px 10px',
                                     fontFamily: 'monospace',
                                     fontSize: 11,
-                                    color: 'var(--ss-blue)',
                                   }}
                                 >
-                                  {order.orderNumber || String(order.orderId)}
+                                  <button
+                                    type="button"
+                                    className="analysis-order-link"
+                                    onClick={(event) => {
+                                      event.preventDefault()
+                                      event.stopPropagation()
+                                      void openOrderDetails(order)
+                                    }}
+                                  >
+                                    {order.orderNumber || String(order.orderId)}
+                                  </button>
                                 </td>
                                 <td
                                   style={{
@@ -1491,7 +1781,7 @@ export default function AnalysisView() {
                                     whiteSpace: 'nowrap',
                                   }}
                                 >
-                                  {order.shipToName || '—'}
+                                  {displayText(order.shipToName)}
                                 </td>
                                 <td
                                   style={{
@@ -1510,7 +1800,7 @@ export default function AnalysisView() {
                                     color: statusColor,
                                   }}
                                 >
-                                  {order.orderStatus || '—'}
+                                  {displayText(orderStatus)}
                                 </td>
                                 <td
                                   style={{
@@ -1528,6 +1818,253 @@ export default function AnalysisView() {
                       </table>
                     </div>
                   )}
+                </>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {orderModal.open ? (
+        <div
+          className="analysis-order-modal-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Order details ${orderModal.orderNumber}`}
+          onClick={closeOrderDetails}
+        >
+          <div
+            className="analysis-order-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="analysis-order-modal-header">
+              <div>
+                <div className="analysis-order-kicker">Order Details</div>
+                <h3>{orderModal.orderNumber}</h3>
+              </div>
+              <button
+                type="button"
+                className="analysis-order-modal-close"
+                onClick={closeOrderDetails}
+                aria-label="Close order details"
+              >
+                x
+              </button>
+            </div>
+
+            <div className="analysis-order-modal-body">
+              {orderModal.loading ? (
+                <div className="analysis-order-modal-state">
+                  <div className="spinner" />
+                  <span>Loading complete order details...</span>
+                </div>
+              ) : orderModal.error ? (
+                <div className="analysis-order-modal-error">
+                  <strong>Unable to load order</strong>
+                  <span>{orderModal.error}</span>
+                </div>
+              ) : modalOrder ? (
+                <>
+                  <div className="analysis-order-summary-grid">
+                    <div>
+                      <span>Status</span>
+                      <strong>{formatStatusText(asRecord(modalOrder).orderStatus)}</strong>
+                    </div>
+                    <div>
+                      <span>Order Total</span>
+                      <strong>{formatMoneyValue(asRecord(modalOrder).orderTotal ?? modalRaw.orderTotal)}</strong>
+                    </div>
+                    <div>
+                      <span>Shipping</span>
+                      <strong>{formatMoneyValue(asRecord(modalOrder).shippingAmount ?? modalRaw.shippingAmount)}</strong>
+                    </div>
+                    <div>
+                      <span>Items</span>
+                      <strong>{modalItems.length.toLocaleString()}</strong>
+                    </div>
+                  </div>
+
+                  <div className="analysis-order-sections">
+                    <DetailSection title="Customer">
+                      <DetailField label="Recipient" value={modalShipTo.name} />
+                      <DetailField label="Customer Email" value={asRecord(modalOrder).customerEmail ?? modalRaw.customerEmail} />
+                      <DetailField label="Username" value={modalRaw.customerUsername} />
+                      <DetailField label="Phone" value={modalShipTo.phone} />
+                      <DetailField label="Address Verified" value={modalShipTo.addressVerified} />
+                    </DetailSection>
+
+                    <DetailSection title="Ship To">
+                      <div className="analysis-address-block">
+                        {formatAddressLines(modalShipTo).length ? (
+                          formatAddressLines(modalShipTo).map((line) => <div key={line}>{line}</div>)
+                        ) : (
+                          <span>-</span>
+                        )}
+                      </div>
+                    </DetailSection>
+
+                    <DetailSection title="Billing / Payment">
+                      <DetailField label="Amount Paid" value={formatMoneyValue(modalRaw.amountPaid)} />
+                      <DetailField label="Tax" value={formatMoneyValue(modalRaw.taxAmount)} />
+                      <DetailField label="Payment Method" value={modalRaw.paymentMethod} />
+                      <DetailField label="Date Paid" value={formatDateTime(modalRaw.paymentDate ?? modalRaw.datePaid)} />
+                      {Object.keys(modalBillTo).length ? (
+                        <div className="analysis-address-block muted">
+                          {formatAddressLines(modalBillTo).map((line) => <div key={line}>{line}</div>)}
+                        </div>
+                      ) : null}
+                    </DetailSection>
+
+                    <DetailSection title="Fulfillment">
+                      <DetailField label="Carrier" value={asRecord(modalOrder).carrierCode ?? modalRaw.carrierCode} />
+                      <DetailField label="Service" value={asRecord(modalOrder).serviceCode ?? modalRaw.serviceCode} />
+                      <DetailField label="Requested Service" value={modalRaw.requestedShippingService} />
+                      <DetailField label="Package" value={modalRaw.packageCode} />
+                      <DetailField label="Weight" value={formatOrderWeight(modalOrder)} />
+                      <DetailField label="Dimensions" value={formatOrderDimensions(modalOrder)} />
+                    </DetailSection>
+
+                    <DetailSection title="Timeline">
+                      <DetailField label="Order Date" value={formatDateTime(asRecord(modalOrder).orderDate ?? modalRaw.orderDate)} />
+                      <DetailField label="Created" value={formatDateTime(asRecord(modalOrder).createdAt ?? modalRaw.createDate)} />
+                      <DetailField label="Modified" value={formatDateTime(asRecord(modalOrder).updatedAt ?? modalRaw.modifyDate)} />
+                      <DetailField label="Ship By" value={formatDateTime(modalRaw.shipByDate)} />
+                      <DetailField label="Hold Until" value={formatDateTime(modalRaw.holdUntilDate)} />
+                    </DetailSection>
+
+                    <DetailSection title="System">
+                      <DetailField label="Internal ID" value={asRecord(modalOrder).id} />
+                      <DetailField label="External Order ID" value={asRecord(modalOrder).externalOrderId ?? modalRaw.orderId} />
+                      <DetailField label="Client ID" value={getDisplayClientId(modalOrder)} />
+                      <DetailField label="Store ID" value={asRecord(modalOrder).storeId ?? asRecord(modalRaw.advancedOptions).storeId} />
+                      <DetailField label="External Shipped" value={asRecord(modalOrder).externallyShipped} />
+                    </DetailSection>
+                  </div>
+
+                  <div className="analysis-order-wide-section">
+                    <h4>Line Items</h4>
+                    {modalItems.length ? (
+                      <div className="analysis-order-table-wrap">
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>SKU</th>
+                              <th>Product</th>
+                              <th>Qty</th>
+                              <th>Unit</th>
+                              <th>Total</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {modalItems.map((item, index) => {
+                              const itemRecord = asRecord(item)
+                              return (
+                                <tr key={`${displayText(itemRecord.sku, 'item')}-${index}`}>
+                                  <td>{displayText(itemRecord.sku, 'No SKU')}</td>
+                                  <td>{displayText(itemRecord.name)}</td>
+                                  <td>{getItemQty(item)}</td>
+                                  <td>{formatMoneyValue(getItemUnitPrice(item))}</td>
+                                  <td>{formatMoneyValue(getItemTotal(item))}</td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <div className="analysis-empty-note">No line items are available for this order.</div>
+                    )}
+                  </div>
+
+                  {modalAdjustments.length ? (
+                    <div className="analysis-order-wide-section">
+                      <h4>Discounts / Adjustments</h4>
+                      <div className="analysis-order-table-wrap">
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>Code</th>
+                              <th>Description</th>
+                              <th>Qty</th>
+                              <th>Unit</th>
+                              <th>Total</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {modalAdjustments.map((item, index) => {
+                              const itemRecord = asRecord(item)
+                              const adjustmentCode =
+                                displayText(itemRecord.sku, '').trim()
+                                || displayText(itemRecord.code, '').trim()
+                                || displayText(itemRecord.name, '').trim()
+                                || 'Discount'
+                              const adjustmentDescription =
+                                displayText(itemRecord.description, '').trim()
+                                || (adjustmentCode === 'Discount' ? 'Adjustment' : 'Discount')
+                              return (
+                                <tr key={`${displayText(itemRecord.sku ?? itemRecord.name, 'adjustment')}-${index}`}>
+                                  <td>{adjustmentCode}</td>
+                                  <td>{adjustmentDescription}</td>
+                                  <td>{getItemQty(item)}</td>
+                                  <td>{formatMoneyValue(getItemUnitPrice(item))}</td>
+                                  <td>{formatMoneyValue(getItemTotal(item))}</td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="analysis-order-wide-section">
+                    <h4>Shipments</h4>
+                    {modalShipments.length ? (
+                      <div className="analysis-order-table-wrap">
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>Tracking</th>
+                              <th>Carrier</th>
+                              <th>Service</th>
+                              <th>Cost</th>
+                              <th>Ship Date</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {modalShipments.map((shipment, index) => {
+                              const shipmentRecord = asRecord(shipment)
+                              return (
+                                <tr key={`${displayText(shipmentRecord.trackingNumber, 'shipment')}-${index}`}>
+                                  <td>{displayText(shipmentRecord.trackingNumber)}</td>
+                                  <td>{displayText(shipmentRecord.carrierCode)}</td>
+                                  <td>{displayText(shipmentRecord.serviceCode)}</td>
+                                  <td>{formatMoneyValue(shipmentRecord.labelCost ?? shipmentRecord.cost)}</td>
+                                  <td>{formatDateTime(shipmentRecord.shipDate ?? shipmentRecord.labelShipDate)}</td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : (
+                      <div className="analysis-empty-note">No shipment records are linked to this order.</div>
+                    )}
+                  </div>
+
+                  <div className="analysis-order-wide-section">
+                    <h4>Local Overrides</h4>
+                    {Object.keys(modalOverrides).length ? (
+                      <pre className="analysis-order-json">{JSON.stringify(modalOverrides, null, 2)}</pre>
+                    ) : (
+                      <div className="analysis-empty-note">No local overrides are saved for this order.</div>
+                    )}
+                  </div>
+
+                  <details className="analysis-order-raw">
+                    <summary>Raw order payload</summary>
+                    <pre>{JSON.stringify(modalRaw, null, 2)}</pre>
+                  </details>
                 </>
               ) : null}
             </div>
