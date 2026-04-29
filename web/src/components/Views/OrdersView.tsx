@@ -623,6 +623,10 @@ function getShippingNumber(order: OrderSummaryDto, key: string) {
   return toNumberValue(getShippingModel(order)?.[key])
 }
 
+function getShippingProviderAccountId(order: OrderSummaryDto) {
+  return toProviderAccountId(getShippingModel(order)?.providerAccountId)
+}
+
 function getCanonicalSource(order: OrderSummaryDto, key: string) {
   const canonicalSourceMap = toRecord(getCanonicalOrderModel(order)?.sourceMap)
   const shippingSourceMap = toRecord(getShippingModel(order)?.sourceMap)
@@ -704,11 +708,11 @@ function resolveV2CarrierAccount(
 
 function getV2CarrierAccountForOrder(order: OrderSummaryDto) {
   const providerAccountId =
-    getShippingNumber(order, 'providerAccountId') ??
-    toNumberValue(order.selectedRate?.shippingProviderId) ??
-    toNumberValue(order.selectedRate?.providerAccountId) ??
-    toNumberValue(order.label?.shippingProviderId) ??
-    toNumberValue(order.bestRate?.shippingProviderId)
+    getShippingProviderAccountId(order) ??
+    toProviderAccountId(order.selectedRate?.shippingProviderId) ??
+    toProviderAccountId(order.selectedRate?.providerAccountId) ??
+    toProviderAccountId(order.label?.shippingProviderId) ??
+    toProviderAccountId(order.bestRate?.shippingProviderId)
   const carrierCode =
     getShippingString(order, 'carrierCode') ??
     toStringValue(order.selectedRate?.carrierCode) ??
@@ -783,7 +787,7 @@ function getBestRateBaseCost(order: OrderSummaryDto) {
 }
 
 function getBestRateShippingProviderId(order: OrderSummaryDto) {
-  return getShippingNumber(order, 'providerAccountId') ?? (order.bestRate ? toNumberValue(order.bestRate.shippingProviderId) ?? undefined : undefined)
+  return getShippingProviderAccountId(order) ?? (order.bestRate ? toProviderAccountId(order.bestRate.shippingProviderId) ?? undefined : undefined)
 }
 
 function getBestRateServiceCode(order: OrderSummaryDto) {
@@ -834,10 +838,10 @@ function getSelectedRateCarrierNickname(order: OrderSummaryDto) {
 
 function getSelectedRateShippingProviderId(order: OrderSummaryDto) {
   return (
-    getShippingNumber(order, 'providerAccountId') ??
-    toNumberValue(order.selectedRate?.shippingProviderId) ??
-    toNumberValue(order.selectedRate?.providerAccountId) ??
-    toNumberValue(order.label?.shippingProviderId) ??
+    getShippingProviderAccountId(order) ??
+    toProviderAccountId(order.selectedRate?.shippingProviderId) ??
+    toProviderAccountId(order.selectedRate?.providerAccountId) ??
+    toProviderAccountId(order.label?.shippingProviderId) ??
     undefined
   )
 }
@@ -898,7 +902,7 @@ function renderExtLabelBadge() {
 }
 
 function hasAuthoritativeProviderId(order: OrderSummaryDto) {
-  const providerId = toNumberValue(order.label?.shippingProviderId)
+  const providerId = getShippingProviderAccountId(order) ?? toProviderAccountId(order.label?.shippingProviderId)
   if (providerId == null) return false
   const sourceVersion = getCanonicalSourceVersion(order, 'shipping.providerAccountId')
   const sourceName = getCanonicalSourceName(order, 'shipping.providerAccountId')
@@ -941,8 +945,15 @@ function getShippedDisplayServiceCode(order: OrderSummaryDto) {
 }
 
 function getShippedDisplayProviderId(order: OrderSummaryDto) {
-  if (!hasV2SelectedRatePayload(order)) return null
-  return toNumberValue(order.selectedRate?.shippingProviderId) ?? toNumberValue(order.selectedRate?.providerAccountId)
+  return (
+    getShippingProviderAccountId(order) ??
+    toProviderAccountId(order.selectedRate?.shippingProviderId) ??
+    toProviderAccountId(order.selectedRate?.providerAccountId) ??
+    toProviderAccountId(order.label?.shippingProviderId) ??
+    toProviderAccountId(order.bestRate?.shippingProviderId) ??
+    getV2CarrierAccountForOrder(order)?.shippingProviderId ??
+    null
+  )
 }
 
 function getShippedDisplayAccountNickname(order: OrderSummaryDto) {
@@ -2707,6 +2718,7 @@ export default function OrdersView({
     const clientName = order.clientName ?? 'Untagged'
     const clientPalette = getClientPalette(clientName)
     const diagnosticIsShipped = order.orderStatus !== 'awaiting_shipment'
+    const diagnosticIsExternalLabel = shouldShowCarrierExtLabel(order)
 
     switch (column.key) {
       case 'select':
@@ -2889,6 +2901,7 @@ export default function OrdersView({
         )
       }
       case 'test_carrierCode': {
+        if (diagnosticIsExternalLabel) return renderDiagnosticCell(null, { monospace: true })
         const value = diagnosticIsShipped
           ? getShippedDisplayCarrierCode(order)
           : order.bestRate
@@ -2897,14 +2910,22 @@ export default function OrdersView({
         return renderDiagnosticCell(value, { monospace: true })
       }
       case 'test_shippingProviderID': {
+        if (diagnosticIsExternalLabel) return renderDiagnosticCell(null, { monospace: true })
         const value = diagnosticIsShipped
           ? getShippedDisplayProviderId(order)
-          : toNumberValue(order.bestRate?.shippingProviderId)
+          : toProviderAccountId(order.bestRate?.shippingProviderId)
         return renderDiagnosticCell(value, { monospace: true })
       }
       case 'test_clientID':
         return renderDiagnosticCell(getLegacyClientIdForDisplay(order), { monospace: true })
       case 'test_serviceCode': {
+        if (diagnosticIsExternalLabel) {
+          return renderDiagnosticCell(null, {
+            fontSize: 10,
+            maxWidth: column.width,
+            monospace: true,
+          })
+        }
         const value = diagnosticIsShipped
           ? getShippedDisplayServiceCode(order)
           : toStringValue(order.bestRate?.serviceCode)
@@ -2915,6 +2936,7 @@ export default function OrdersView({
         })
       }
       case 'test_bestRate': {
+        if (diagnosticIsExternalLabel) return renderDiagnosticCell(null, { fontSize: 10, muted: true, surface: false })
         const bestRate = order.bestRate
         if (!bestRate) return renderDiagnosticCell(null, { fontSize: 10, muted: true, surface: false })
 
@@ -2934,6 +2956,12 @@ export default function OrdersView({
         })
       }
       case 'test_orderLocal': {
+        if (diagnosticIsExternalLabel) {
+          return renderDiagnosticCell(null, {
+            fontSize: 9,
+            maxWidth: column.width,
+          })
+        }
         const parts: string[] = []
         if (order.weight?.value && order.weight.value > 0) {
           parts.push(`w:${order.weight.value}${order.weight.units?.[0] || 'oz'}`)
@@ -2949,6 +2977,7 @@ export default function OrdersView({
         })
       }
       case 'test_shippingAccount': {
+        if (diagnosticIsExternalLabel) return renderDiagnosticCell(null)
         const value = diagnosticIsShipped
           ? getShippedDisplayAccountNickname(order)
           : null
