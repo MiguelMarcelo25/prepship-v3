@@ -114,6 +114,27 @@ export function filterAnalysisRows(rows: AnalysisSkuDto[], search: string) {
   )
 }
 
+const NUMERIC_ANALYSIS_SORT_KEYS = new Set<AnalysisSortKey>([
+  'orders',
+  'pending',
+  'external',
+  'qty',
+  'stdOrders',
+  'expOrders',
+  'total',
+])
+
+function toAnalysisNumber(value: unknown) {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0
+  if (typeof value === 'string') {
+    const normalized = value.replace(/[$,]/g, '').trim()
+    if (!normalized) return 0
+    const parsed = Number.parseFloat(normalized)
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+  return 0
+}
+
 function getSortValue(row: AnalysisSkuDto, key: AnalysisSortKey) {
   switch (key) {
     case 'name':
@@ -145,6 +166,15 @@ export function sortAnalysisRows(rows: AnalysisSkuDto[], sortKey: AnalysisSortKe
     const leftValue = getSortValue(left, sortKey)
     const rightValue = getSortValue(right, sortKey)
 
+    if (NUMERIC_ANALYSIS_SORT_KEYS.has(sortKey)) {
+      const diff = toAnalysisNumber(leftValue) - toAnalysisNumber(rightValue)
+      if (diff !== 0) return diff * direction
+
+      const leftName = `${left.name || ''}|${left.sku || ''}`.toLowerCase()
+      const rightName = `${right.name || ''}|${right.sku || ''}`.toLowerCase()
+      return leftName.localeCompare(rightName)
+    }
+
     if (leftValue < rightValue) return -direction
     if (leftValue > rightValue) return direction
     return 0
@@ -154,13 +184,13 @@ export function sortAnalysisRows(rows: AnalysisSkuDto[], sortKey: AnalysisSortKe
 export function buildAnalysisTotals(rows: AnalysisSkuDto[]): AnalysisTotals {
   return rows.reduce<AnalysisTotals>((totals, row) => ({
     skuCount: totals.skuCount + 1,
-    totalOrders: totals.totalOrders + (row.orders || 0),
-    totalPending: totals.totalPending + (row.pendingOrders || 0),
-    totalExternal: totals.totalExternal + (row.externalOrders || 0),
-    totalQty: totals.totalQty + (row.qty || 0),
-    totalStdCount: totals.totalStdCount + (row.standardShipCount || 0),
-    totalExpCount: totals.totalExpCount + (row.expeditedShipCount || 0),
-    totalShipping: totals.totalShipping + (row.totalShipping || 0),
+    totalOrders: totals.totalOrders + toAnalysisNumber(row.orders),
+    totalPending: totals.totalPending + toAnalysisNumber(row.pendingOrders),
+    totalExternal: totals.totalExternal + toAnalysisNumber(row.externalOrders),
+    totalQty: totals.totalQty + toAnalysisNumber(row.qty),
+    totalStdCount: totals.totalStdCount + toAnalysisNumber(row.standardShipCount),
+    totalExpCount: totals.totalExpCount + toAnalysisNumber(row.expeditedShipCount),
+    totalShipping: totals.totalShipping + toAnalysisNumber(row.totalShipping),
   }), {
     skuCount: 0,
     totalOrders: 0,

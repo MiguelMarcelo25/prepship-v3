@@ -254,6 +254,13 @@ const LEGACY_CLIENT_ID_BY_CURRENT_ID = new Map<number, number>([
   [12, 11],
 ])
 
+const TEST_PACK_SKU = 'TEST-PACK'
+const TEST_PACK_WEIGHT_OZ = 4
+const TEST_PACK_DIMS = { length: 5, width: 3, height: 1, units: 'inches' }
+const TEST_SHIPPING_ACCOUNT_LABEL = 'TEST ACCOUNT - $0 MOCK ONLY'
+const TEST_CARRIER_CODE = 'test'
+const TEST_SERVICE_CODE = 'test_mock_service'
+
 type V2CarrierAccountRef = {
   carrierCode: string
   shippingProviderId: number
@@ -458,6 +465,35 @@ function getTotalQuantity(order: OrderSummaryDto, detail: OrderFullDto | null) {
   return getActiveItems(order, detail).reduce((sum, item) => sum + (item.quantity || 1), 0)
 }
 
+function hasTestPackItem(order: OrderSummaryDto, detail: OrderFullDto | null) {
+  return getActiveItems(order, detail).some((item) => (item.sku ?? '').trim().toUpperCase() === TEST_PACK_SKU)
+}
+
+function isTestOrder(order: OrderSummaryDto, detail: OrderFullDto | null = null) {
+  const clientId = toNumericValue(order.clientId)
+  const legacyClientId = getLegacyClientIdForDisplay(order)
+  const clientName = (toStringValue(order.clientName) ?? '').trim().toLowerCase()
+  const raw = toRecord(order.raw)
+  return (
+    (clientId != null && TEST_CLIENT_IDS.has(clientId)) ||
+    legacyClientId === 11 ||
+    clientName === 'test orders' ||
+    raw?.test === true ||
+    raw?.testing === true ||
+    hasTestPackItem(order, detail)
+  )
+}
+
+function getOrderWeightOz(order: OrderSummaryDto, detail: OrderFullDto | null) {
+  if (isTestOrder(order, detail) && hasTestPackItem(order, detail)) {
+    return getActiveItems(order, detail).reduce((sum, item) => {
+      const sku = (item.sku ?? '').trim().toUpperCase()
+      return sum + (sku === TEST_PACK_SKU ? (item.quantity || 1) * TEST_PACK_WEIGHT_OZ : 0)
+    }, 0)
+  }
+  return order.weight?.value ?? 0
+}
+
 function getPrimarySku(order: OrderSummaryDto, detail: OrderFullDto | null) {
   const primary = getPrimaryItem(order, detail)
   return (primary?.sku ?? primary?.name ?? '').toLowerCase().trim()
@@ -531,6 +567,10 @@ function getAddressBlock(order: OrderSummaryDto, detail: OrderFullDto | null) {
 }
 
 function getDimensions(order: OrderSummaryDto, detail: OrderFullDto | null) {
+  if (isTestOrder(order, detail) && hasTestPackItem(order, detail)) {
+    return TEST_PACK_DIMS
+  }
+
   const canonicalDimensions = getCanonicalRecord(order, 'dimensions')
   const rawOrder = toRecord(detail?.raw) ?? toRecord(order.raw)
   const rawDims = toRecord(rawOrder?.dimensions)
@@ -680,6 +720,8 @@ function isStrictShippedOrder(order: OrderSummaryDto) {
 }
 
 function getCarrierCodeForDisplay(order: OrderSummaryDto) {
+  if (isTestOrder(order)) return TEST_CARRIER_CODE
+
   const canonicalCarrierCode = getShippingString(order, 'carrierCode')
   if (canonicalCarrierCode) return canonicalCarrierCode
 
@@ -694,6 +736,8 @@ function getCarrierCodeForDisplay(order: OrderSummaryDto) {
 }
 
 function getShipAccountDisplay(order: OrderSummaryDto, accounts: CarrierAccountDto[]) {
+  if (isTestOrder(order)) return TEST_SHIPPING_ACCOUNT_LABEL
+
   const canonicalNickname = normalizeShippingAccountName(getShippingString(order, 'accountNickname'))
   if (canonicalNickname) return canonicalNickname
 
@@ -959,7 +1003,7 @@ function getSortValue(order: OrderSummaryDto, detail: OrderFullDto | null, key: 
     case 'qty':
       return getTotalQuantity(order, detail)
     case 'weight':
-      return order.weight?.value ?? 0
+      return getOrderWeightOz(order, detail)
     case 'shipto': {
       const shipTo = getShipTo(order, detail)
       return `${shipTo.state ?? ''}${shipTo.city ?? ''}`.toLowerCase()
@@ -1481,13 +1525,14 @@ export default function OrdersView({
     const locationId = getPanelWarehouseId(panelOrder, panelDetail) ?? locations.find((location) => location.isDefault)?.locationId ?? locations[0]?.locationId ?? null
     const matchedPackageId = getMatchedPackageIdByDimensions(dimensions, packages)
     const selectedAccountValue = getInitialPanelShipAccountId(panelOrder, panelDetail)
-    const currentWeight = panelOrder.weight?.value ?? 0
+    const currentWeight = getOrderWeightOz(panelOrder, panelDetail)
     const insurance = getPanelInsurance(panelOrder, panelDetail)
+    const panelIsTestOrder = isTestOrder(panelOrder, panelDetail)
 
     setPanelForm({
       locationId: locationId != null ? String(locationId) : '',
-      shipAccountId: selectedAccountValue != null ? String(selectedAccountValue) : '',
-      serviceCode: getInitialPanelServiceCode(panelOrder, panelDetail),
+      shipAccountId: panelIsTestOrder ? TEST_CARRIER_CODE : selectedAccountValue != null ? String(selectedAccountValue) : '',
+      serviceCode: panelIsTestOrder ? TEST_SERVICE_CODE : getInitialPanelServiceCode(panelOrder, panelDetail),
       weightLb: currentWeight ? String(Math.floor(currentWeight / 16)) : '',
       weightOz: currentWeight ? String(Math.round(currentWeight % 16)) : '',
       length: dimensions?.length ? String(dimensions.length) : '',
@@ -1866,15 +1911,20 @@ export default function OrdersView({
       return null
     }
 
+    const isTest = isTestOrder(order, orderDetailsById.get(order.orderId) ?? panelDetail)
     const shippingProviderId = Number.parseInt(panelForm.shipAccountId, 10)
-    const weightOz = getPanelWeightOz()
-    const { length, width, height } = getPanelDims()
+    const weightOz = isTest ? getOrderWeightOz(order, orderDetailsById.get(order.orderId) ?? panelDetail) : getPanelWeightOz()
+    const panelDims = getPanelDims()
+    const testDims = isTest ? getDimensions(order, orderDetailsById.get(order.orderId) ?? panelDetail) : null
+    const length = testDims?.length ?? panelDims.length
+    const width = testDims?.width ?? panelDims.width
+    const height = testDims?.height ?? panelDims.height
     const account = shippingAccounts.find((candidate) => candidate.shippingProviderId === shippingProviderId)
-    if (!shippingProviderId || !account) {
+    if (!isTest && (!shippingProviderId || !account)) {
       showToast('Select a carrier account', 'error')
       return null
     }
-    if (!panelForm.serviceCode) {
+    if (!isTest && !panelForm.serviceCode) {
       showToast('Select a shipping service', 'error')
       return null
     }
@@ -1890,9 +1940,9 @@ export default function OrdersView({
     const payload: CreateLabelRequestDto = {
       orderId: order.orderId,
       orderNumber: order.orderNumber ?? undefined,
-      carrierCode: account.code,
-      serviceCode: panelForm.serviceCode,
-      shippingProviderId,
+      carrierCode: isTest ? TEST_CARRIER_CODE : account.code,
+      serviceCode: isTest ? TEST_SERVICE_CODE : panelForm.serviceCode,
+      shippingProviderId: isTest ? null : shippingProviderId,
       packageCode: 'package',
       customPackageId: selectedPackage && selectedPackage.source !== 'ss_carrier' ? selectedPackage.packageId : null,
       weightOz,
@@ -1900,7 +1950,7 @@ export default function OrdersView({
       width,
       height,
       confirmation: panelForm.confirmation === 'none' ? 'delivery' : panelForm.confirmation,
-      testLabel: mode === 'test',
+      testLabel: isTest || mode === 'test',
       shipTo: {
         name: shipTo.name ?? '',
         company: shipTo.company ?? '',
@@ -2034,6 +2084,20 @@ export default function OrdersView({
 
   async function openRateBrowser() {
     if (!panelOrder) return
+    if (isTestOrder(panelOrder, panelDetail)) {
+      setPanelRatePreview([{
+        carrierCode: TEST_CARRIER_CODE,
+        serviceCode: TEST_SERVICE_CODE,
+        serviceName: 'Test Mock Service',
+        carrierNickname: TEST_SHIPPING_ACCOUNT_LABEL,
+        shippingProviderId: null,
+        amount: 0,
+        shipmentCost: 0,
+        otherCost: 0,
+      }])
+      showToast('Test orders use a $0 mock rate only', 'info')
+      return
+    }
 
     setRateBrowserOpen(true)
     setRateBrowserLoading(true)
@@ -2319,6 +2383,17 @@ export default function OrdersView({
   const queueCount = queuedEntries.length
 
   const renderBestRatePrice = (order: OrderSummaryDto) => {
+    if (isTestOrder(order)) {
+      return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span className="carrier-badge" style={{ fontSize: 9.5, padding: '1px 5px', background: '#f59e0b', color: '#fff' }}>
+            TEST
+          </span>
+          <strong style={{ color: 'var(--green)', fontSize: 12 }}>$0.00</strong>
+        </div>
+      )
+    }
+
     const bestRateBaseCost = getBestRateBaseCost(order)
     if (order.orderStatus !== 'awaiting_shipment') {
       if (getIsExternallyFulfilled(order)) {
@@ -2377,6 +2452,10 @@ export default function OrdersView({
   }
 
   const renderMargin = (order: OrderSummaryDto) => {
+    if (isTestOrder(order)) {
+      return <span style={{ color: 'var(--text4)', fontSize: 11 }}>{'\u2014'}</span>
+    }
+
     if (order.orderStatus !== 'awaiting_shipment') {
       return <span style={{ color: 'var(--text4)', fontSize: 11 }}>{'\u2014'}</span>
     }
@@ -2414,6 +2493,18 @@ export default function OrdersView({
   }
 
   const renderCarrierCell = (order: OrderSummaryDto) => {
+    if (isTestOrder(order)) {
+      return (
+        <span
+          className="carrier-badge"
+          style={{ background: '#f59e0b', color: '#fff' }}
+          title="Test order: mock carrier only, no real postage"
+        >
+          TEST
+        </span>
+      )
+    }
+
     const shipped = order.orderStatus !== 'awaiting_shipment'
     if (shipped) {
       if (shouldShowCarrierExtLabel(order)) {
@@ -2448,6 +2539,17 @@ export default function OrdersView({
   }
 
   const renderShippingAccountCell = (order: OrderSummaryDto) => {
+    if (isTestOrder(order)) {
+      return (
+        <div style={{ lineHeight: 1.4, whiteSpace: 'nowrap' }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: '#b45309' }}>{TEST_SHIPPING_ACCOUNT_LABEL}</div>
+          <div style={{ fontSize: 10, color: 'var(--text3)' }} className="svc-label">
+            no real postage
+          </div>
+        </div>
+      )
+    }
+
     const shipped = order.orderStatus !== 'awaiting_shipment'
     if (shipped) {
       if (getIsExternallyFulfilled(order)) {
@@ -2488,11 +2590,10 @@ export default function OrdersView({
   }
 
   const renderOrderCell = (order: OrderSummaryDto) => {
-    const isTestOrder =
-      typeof order.clientId === 'number' && TEST_CLIENT_IDS.has(order.clientId)
+    const testOrder = isTestOrder(order, orderDetailsById.get(order.orderId) ?? null)
     return (
     <div className="order-num" style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, minWidth: 0 }}>
-      {isTestOrder && (
+      {testOrder && (
         <span
           title="Sandbox / test order — no real postage, billing, or inventory impact"
           style={{
@@ -2703,6 +2804,10 @@ export default function OrdersView({
         )
       }
       case 'weight':
+        if (isTestOrder(order, detail)) {
+          const weightOz = getOrderWeightOz(order, detail)
+          return weightOz ? <span style={{ fontSize: 12, color: 'var(--text2)' }}>{formatWeight(weightOz)}</span> : <span style={{ color: 'var(--text3)', fontSize: 12 }}>—</span>
+        }
         return order.weight?.value ? <span style={{ fontSize: 12, color: 'var(--text2)' }}>{formatWeight(order.weight.value)}</span> : <span style={{ color: 'var(--text3)', fontSize: 12 }}>—</span>
       case 'shipto':
         return <span style={{ fontSize: 11.5, color: 'var(--text2)' }}>{getShipToLine(order, detail)}</span>
@@ -2924,7 +3029,10 @@ export default function OrdersView({
     const nextOrderId = panelIndex >= 0 && panelIndex < orderedFilteredOrders.length - 1 ? orderedFilteredOrders[panelIndex + 1]?.orderId ?? null : null
     const currentWeight = panelOrder.weight?.value ?? 0
     const serviceOptions = getServiceOptionsForAccount(panelForm.shipAccountId)
-    const selectedPanelAccountLabel = getShipAccountLabelById(shippingAccounts, panelForm.shipAccountId) ?? getShipAccountDisplay(panelOrder, shippingAccounts)
+    const panelIsTestOrder = isTestOrder(panelOrder, panelDetail)
+    const selectedPanelAccountLabel = panelIsTestOrder
+      ? TEST_SHIPPING_ACCOUNT_LABEL
+      : getShipAccountLabelById(shippingAccounts, panelForm.shipAccountId) ?? getShipAccountDisplay(panelOrder, shippingAccounts)
     const shipped = panelOrder.orderStatus !== 'awaiting_shipment'
     const trackingNumber = panelOrder.label?.trackingNumber ?? null
     const deliveryLine = panelOrder.label?.shipDate
@@ -3073,7 +3181,7 @@ export default function OrdersView({
                     className="ship-select"
                     style={{ flex: 1 }}
                     value={panelForm.shipAccountId}
-                    disabled={shipped}
+                    disabled={shipped || panelIsTestOrder}
                     onChange={(event) => {
                       const nextValue = event.target.value
                       setPanelForm((current) => ({
@@ -3085,6 +3193,7 @@ export default function OrdersView({
                     }}
                   >
                     <option value="">— Select Account —</option>
+                    {panelIsTestOrder ? <option value={TEST_CARRIER_CODE}>{TEST_SHIPPING_ACCOUNT_LABEL}</option> : null}
                     {shippingAccounts.map((account, i) => {
                       const key = account.shippingProviderId || account.carrierId || account.code || i
                       return (
@@ -3100,7 +3209,8 @@ export default function OrdersView({
               <div className="ship-field-row">
                 <span className="ship-field-label">Service</span>
                 <div className="ship-field-value">
-                  <select className="ship-select" style={{ flex: 1 }} value={panelForm.serviceCode} disabled={shipped} onChange={(event) => setPanelForm((current) => ({ ...current, serviceCode: event.target.value }))}>
+                  <select className="ship-select" style={{ flex: 1 }} value={panelForm.serviceCode} disabled={shipped || panelIsTestOrder} onChange={(event) => setPanelForm((current) => ({ ...current, serviceCode: event.target.value }))}>
+                    {panelIsTestOrder ? <option value={TEST_SERVICE_CODE}>Test Mock Service</option> : null}
                     <option value="">{panelForm.serviceCode ? formatServiceCode(panelForm.serviceCode) : 'Select Service'}</option>
                     {serviceOptions.map((option) => (
                       <option key={option.code} value={option.code}>{option.label}</option>
@@ -3196,7 +3306,11 @@ export default function OrdersView({
 
               <div className="ship-rate-row">
                 <span style={{ fontSize: 11.5, color: 'var(--text2)', fontWeight: 500, width: 90, flexShrink: 0 }}>Rate</span>
-                {shipped ? (
+                {panelIsTestOrder ? (
+                  <span className="ship-rate-val" id="panel-rate-val">
+                    $0.00 · {TEST_SHIPPING_ACCOUNT_LABEL} · Test Mock Service
+                  </span>
+                ) : shipped ? (
                   <span style={{ fontSize: 10.5, color: 'var(--text3)' }}>
                     {getIsExternallyFulfilled(panelOrder)
                       ? '📦 Ext. label — purchased externally'

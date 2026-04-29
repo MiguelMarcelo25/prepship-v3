@@ -227,7 +227,7 @@ export default function AnalysisView() {
   const [presetDays, setPresetDays] = useState<number | null>(initialFilters.presetDays)
   const [clientId, setClientId] = useState('')
   const [search, setSearch] = useState('')
-  const [sortKey, setSortKey] = useState<AnalysisSortKey>('qty')
+  const [sortKey, setSortKey] = useState<AnalysisSortKey>('total')
   const [sortDir, setSortDir] = useState<AnalysisSortDir>('desc')
   const [clients, setClients] = useState<ClientDto[]>([])
   const [dataState, setDataState] = useState<AnalysisDataState>({
@@ -420,8 +420,11 @@ export default function AnalysisView() {
           color: ANALYSIS_CHART_COLORS[skuIndex % ANALYSIS_CHART_COLORS.length],
           label: (sku.name || sku.sku).slice(0, 28),
           value: (data.series[sku.sku] || [])[index] || 0,
+          order: skuIndex,
         }))
         .filter((item) => item.value > 0)
+        .sort((left, right) => right.value - left.value || left.order - right.order)
+        .map(({ order: _order, ...item }) => item)
 
       const screenMargin = 8
       const viewportHeight = window.innerHeight
