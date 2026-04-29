@@ -986,6 +986,45 @@ function getShippedDisplayAccountNickname(order: OrderSummaryDto) {
   return toStringValue(order.label?.carrierCode)
 }
 
+function getCancelledDisplayCarrierCode(order: OrderSummaryDto) {
+  return (
+    getShippingString(order, 'carrierCode') ??
+    toStringValue(order.selectedRate?.carrierCode) ??
+    toStringValue(order.label?.carrierCode) ??
+    toStringValue(order.carrierCode) ??
+    toStringValue(order.bestRate?.carrierCode)
+  )
+}
+
+function getCancelledDisplayProviderId(order: OrderSummaryDto) {
+  return (
+    getSelectedRateShippingProviderId(order) ??
+    toProviderAccountId(order.bestRate?.shippingProviderId) ??
+    getV2CarrierAccountForOrder(order)?.shippingProviderId ??
+    null
+  )
+}
+
+function getCancelledDisplayServiceCode(order: OrderSummaryDto) {
+  return (
+    getShippingString(order, 'serviceCode') ??
+    toStringValue(order.selectedRate?.serviceCode) ??
+    toStringValue(order.label?.serviceCode) ??
+    toStringValue(order.serviceCode) ??
+    toStringValue(order.bestRate?.serviceCode)
+  )
+}
+
+function getCancelledDisplayAccountNickname(order: OrderSummaryDto) {
+  return (
+    getSelectedRateCarrierNickname(order) ??
+    normalizeShippingAccountName(getBestRateCarrierNickname(order)) ??
+    getV2CarrierAccountForOrder(order)?.nickname ??
+    normalizeShippingAccountName(order.label?.carrierCode) ??
+    formatCarrierCode(getCancelledDisplayCarrierCode(order))
+  )
+}
+
 function shouldShowCarrierExtLabel(order: OrderSummaryDto) {
   if (order.externalShipped) return true
   return order.orderStatus === 'shipped' && getIsExternallyFulfilled(order)
@@ -2823,6 +2862,7 @@ export default function OrdersView({
     const clientName = order.clientName ?? 'Untagged'
     const clientPalette = getClientPalette(clientName)
     const diagnosticIsShipped = order.orderStatus !== 'awaiting_shipment'
+    const diagnosticIsCancelled = order.orderStatus === 'cancelled'
     const diagnosticIsExternalLabel = shouldShowCarrierExtLabel(order)
 
     switch (column.key) {
@@ -3006,25 +3046,29 @@ export default function OrdersView({
         )
       }
       case 'test_carrierCode': {
-        if (diagnosticIsExternalLabel) return renderDiagnosticCell(null, { monospace: true })
+        if (diagnosticIsExternalLabel && !diagnosticIsCancelled) return renderDiagnosticCell(null, { monospace: true })
         const value = diagnosticIsShipped
-          ? getShippedDisplayCarrierCode(order)
+          ? diagnosticIsCancelled
+            ? getCancelledDisplayCarrierCode(order)
+            : getShippedDisplayCarrierCode(order)
           : order.bestRate
             ? toStringValue(order.bestRate?.carrierCode)
             : null
         return renderDiagnosticCell(value, { monospace: true })
       }
       case 'test_shippingProviderID': {
-        if (diagnosticIsExternalLabel) return renderDiagnosticCell(null, { monospace: true })
+        if (diagnosticIsExternalLabel && !diagnosticIsCancelled) return renderDiagnosticCell(null, { monospace: true })
         const value = diagnosticIsShipped
-          ? getShippedDisplayProviderId(order)
+          ? diagnosticIsCancelled
+            ? getCancelledDisplayProviderId(order)
+            : getShippedDisplayProviderId(order)
           : toProviderAccountId(order.bestRate?.shippingProviderId)
         return renderDiagnosticCell(value, { monospace: true })
       }
       case 'test_clientID':
         return renderDiagnosticCell(getLegacyClientIdForDisplay(order), { monospace: true })
       case 'test_serviceCode': {
-        if (diagnosticIsExternalLabel) {
+        if (diagnosticIsExternalLabel && !diagnosticIsCancelled) {
           return renderDiagnosticCell(null, {
             fontSize: 10,
             maxWidth: column.width,
@@ -3032,7 +3076,9 @@ export default function OrdersView({
           })
         }
         const value = diagnosticIsShipped
-          ? getShippedDisplayServiceCode(order)
+          ? diagnosticIsCancelled
+            ? getCancelledDisplayServiceCode(order)
+            : getShippedDisplayServiceCode(order)
           : toStringValue(order.bestRate?.serviceCode)
         return renderDiagnosticCell(value, {
           fontSize: 10,
@@ -3082,9 +3128,11 @@ export default function OrdersView({
         })
       }
       case 'test_shippingAccount': {
-        if (diagnosticIsExternalLabel) return renderDiagnosticCell(null)
+        if (diagnosticIsExternalLabel && !diagnosticIsCancelled) return renderDiagnosticCell(null)
         const value = diagnosticIsShipped
-          ? getShippedDisplayAccountNickname(order)
+          ? diagnosticIsCancelled
+            ? getCancelledDisplayAccountNickname(order)
+            : getShippedDisplayAccountNickname(order)
           : null
         return renderDiagnosticCell(value)
       }
