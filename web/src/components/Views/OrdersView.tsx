@@ -30,6 +30,7 @@ import {
   buildColumnPrefs,
   buildPicklistPrintHtml,
   buildQueueAddPayload,
+  getColumnMinWidth,
   groupPrintQueueEntries,
   resolveColumnPrefs,
   type ColumnPrefs,
@@ -103,7 +104,7 @@ const TABLE_COLUMNS: TableColumn[] = [
   { key: 'orderNum', label: 'Order #', width: 85, sort: 'orderNum' },
   { key: 'customer', label: 'Recipient', width: 175, sort: 'customer' },
   { key: 'itemname', label: 'Item Name', width: 170, sort: 'itemname' },
-  { key: 'sku', label: 'SKU', width: 100, sort: 'sku' },
+  { key: 'sku', label: 'SKU', width: 150, sort: 'sku' },
   { key: 'qty', label: 'Qty', width: 44, sort: 'qty' },
   { key: 'weight', label: 'Weight', width: 80, sort: 'weight' },
   { key: 'shipto', label: 'Ship To', width: 135, sort: 'shipto' },
@@ -1459,7 +1460,7 @@ export default function OrdersView({
       if (!resizeState) return
 
       const prefs = getLatestColumnPrefs()
-      const nextWidth = Math.max(40, resizeState.startWidth + (event.clientX - resizeState.startX))
+      const nextWidth = Math.max(getColumnMinWidth(resizeState.key), resizeState.startWidth + (event.clientX - resizeState.startX))
       const nextWidths = {
         ...prefs.widths,
         [resizeState.key]: nextWidth,
@@ -2798,14 +2799,14 @@ export default function OrdersView({
             <div style={{ display: 'flex', flexDirection: 'column', gap: 3, padding: '3px 0' }}>
               {visibleItems.map((item) => (
                 <div key={`${item.sku ?? 'unknown'}-${item.name ?? 'item'}`} style={{ display: 'flex', alignItems: 'center', height: 22, gap: 3, minWidth: 0 }}>
-                  {item.sku ? <span className="sku-link" style={{ fontSize: 11 }}>{item.sku}</span> : <span style={{ color: 'var(--text4)', fontSize: 11 }}>—</span>}
+                  {item.sku ? <span className="sku-link" style={{ fontSize: 11 }} title={item.sku}>{item.sku}</span> : <span style={{ color: 'var(--text4)', fontSize: 11 }}>—</span>}
                 </div>
               ))}
               {overflow > 0 ? <div style={{ height: 14 }} /> : null}
             </div>
           )
         }
-        return primaryItem?.sku ? <span className="sku-link">{primaryItem.sku}</span> : '—'
+        return primaryItem?.sku ? <span className="sku-link" title={primaryItem.sku}>{primaryItem.sku}</span> : '—'
       case 'qty': {
         const totalQuantity = getTotalQuantity(order, detail)
         return (
@@ -3785,7 +3786,7 @@ export default function OrdersView({
                                 }}
                               />
                               <span style={{ fontSize: 13 }}>📦</span>
-                              <span className="sku-link" style={{ fontSize: 11.5 }}>{group.sku}</span>
+                              <span className="sku-link" style={{ fontSize: 11.5 }} title={group.sku}>{group.sku}</span>
                               <span style={{ fontWeight: 400, color: 'var(--text2)' }}>
                                 {group.count.toLocaleString()} order{group.count === 1 ? '' : 's'}
                               </span>

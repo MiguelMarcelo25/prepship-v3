@@ -56,6 +56,25 @@ const DIAGNOSTIC_COLUMN_KEYS: TableColumnKey[] = [
   'test_orderLocal',
 ]
 
+const COLUMN_MIN_WIDTHS: Partial<Record<TableColumnKey, number>> = {
+  select: 34,
+  date: 80,
+  client: 90,
+  orderNum: 85,
+  customer: 120,
+  itemname: 160,
+  sku: 150,
+}
+
+export function getColumnMinWidth(key: TableColumnKey) {
+  return COLUMN_MIN_WIDTHS[key] ?? 40
+}
+
+function normalizeColumnWidth(key: TableColumnKey, width: unknown, fallback: number) {
+  const numericWidth = typeof width === 'number' && Number.isFinite(width) ? width : fallback
+  return Math.max(getColumnMinWidth(key), numericWidth)
+}
+
 function shouldUseCanonicalColumnOrder(prefs?: ColumnPrefs | null) {
   const order = prefs?.order
   if (!Array.isArray(order) || order.length === 0) return true
@@ -139,7 +158,7 @@ export function resolveColumnPrefs(
   const widths = Object.fromEntries(
     columns.map((column) => {
       const savedWidth = prefs?.widths?.[column.key]
-      return [column.key, typeof savedWidth === 'number' && Number.isFinite(savedWidth) ? savedWidth : column.width]
+      return [column.key, normalizeColumnWidth(column.key, savedWidth, column.width)]
     }),
   ) as Record<TableColumnKey, number>
 
@@ -161,10 +180,17 @@ export function resolveColumnPrefs(
 }
 
 export function buildColumnPrefs(columns: TableColumnConfig[], hiddenColumns: Set<TableColumnKey>, widths: Record<TableColumnKey, number>): ColumnPrefs {
+  const normalizedWidths = Object.fromEntries(
+    columns.map((column) => [
+      column.key,
+      normalizeColumnWidth(column.key, widths[column.key], column.width),
+    ]),
+  )
+
   return {
     order: columns.map((column) => column.key),
     hidden: [...hiddenColumns],
-    widths,
+    widths: normalizedWidths,
   }
 }
 
