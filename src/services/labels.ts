@@ -719,7 +719,7 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
         cost: '0.00',
         labelUrl: mockLabelUrl,
         labelCreatedAt: createdAt,
-        labelFormat: 'pdf',
+        labelFormat: 'html',
         labelCarrier: body.carrierCode ?? 'stamps_com',
         labelService: body.serviceCode,
         labelTracking: fakeTracking,
@@ -731,13 +731,15 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
         isReturn: false,
       });
 
+    await markOrderShipped(order.id, fakeTracking);
+
     return {
       shipmentId: fakeShipmentId,
       trackingNumber: fakeTracking,
       labelUrl: mockLabelUrl,
       cost: 0,
       voided: false,
-      orderStatus: order.orderStatus,
+      orderStatus: 'shipped',
       apiVersion: 'v2',
     };
   }
@@ -972,7 +974,7 @@ async function createMockShipmentForOrder(args: {
       cost: '0.00',
       labelUrl: mockLabelUrl,
       labelCreatedAt: createdAt,
-      labelFormat: 'pdf',
+      labelFormat: 'html',
       labelCarrier: 'stamps_com',
       labelService: serviceCode,
       labelTracking: fakeTracking,
@@ -985,6 +987,9 @@ async function createMockShipmentForOrder(args: {
     })
     .returning();
   if (!row) throw new Error('Failed to persist mock shipment');
+
+  await markOrderShipped(order.id, fakeTracking);
+
   return row;
 }
 
