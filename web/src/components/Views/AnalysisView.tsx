@@ -1559,32 +1559,6 @@ export default function AnalysisView() {
                           marginBottom: 4,
                         }}
                       >
-                        Total Orders
-                      </div>
-                      <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text)' }}>
-                        {skuDrawer.orders.length.toLocaleString()}
-                      </div>
-                    </div>
-                    <div
-                      style={{
-                        background: 'var(--surface2)',
-                        border: '1px solid var(--border)',
-                        borderRadius: 8,
-                        padding: '10px 16px',
-                        flex: 1,
-                        minWidth: 120,
-                      }}
-                    >
-                      <div
-                        style={{
-                          fontSize: 10,
-                          fontWeight: 700,
-                          textTransform: 'uppercase',
-                          letterSpacing: '.4px',
-                          color: 'var(--text3)',
-                          marginBottom: 4,
-                        }}
-                      >
                         Avg. Standard Shipping Cost (Markup Included)
                       </div>
                       <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text)' }}>
