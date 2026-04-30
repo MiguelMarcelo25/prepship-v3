@@ -334,21 +334,22 @@ function priceDisplay(
 ): ReactNode {
   const mainSize = opts.mainSize ?? '13px';
   const mainColor = opts.mainColor ?? 'var(--green)';
-  const hasMarkup = markedCost > rawCost + 0.005;
+  const markupCost = Math.max(0, markedCost - rawCost);
   const show = markedCost > 0.005 || rawCost > 0.005;
   if (!show) {
     return <span style={{ color: 'var(--text3)', fontSize: mainSize }}>N/A</span>;
   }
   return (
-    <div style={{ lineHeight: 1.3 }}>
+    <div
+      style={{ lineHeight: 1.3 }}
+      title={`Label Cost $${markedCost.toFixed(2)} | Base $${rawCost.toFixed(2)} + Markup $${markupCost.toFixed(2)}`}
+    >
       <strong style={{ color: mainColor, fontSize: mainSize }}>
-        ${(hasMarkup ? markedCost : rawCost).toFixed(2)}
+        ${markedCost.toFixed(2)}
       </strong>
-      {hasMarkup && (
-        <div style={{ fontSize: 10, color: 'var(--text3)' }}>
-          ${rawCost.toFixed(2)} cost
-        </div>
-      )}
+      <div style={{ fontSize: 10, color: 'var(--text)', whiteSpace: 'nowrap', fontWeight: 600 }}>
+        Base ${rawCost.toFixed(2)} + Markup ${markupCost.toFixed(2)}
+      </div>
     </div>
   );
 }
@@ -883,7 +884,7 @@ export default function RateBrowserModal({
             </div>
           )}
           {carrierBadgeLarge(r.carrierCode)}
-          <div style={{ textAlign: 'right', minWidth: 65 }}>
+          <div style={{ textAlign: 'right', minWidth: 145 }}>
             {priceDisplay(base, marked, {
               mainColor: blocked ? 'var(--text3)' : 'var(--green)',
             })}

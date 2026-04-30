@@ -495,6 +495,10 @@ export default function AnalysisView() {
     () => buildDrawerYAxisTicks(drawerYAxisMax),
     [drawerYAxisMax],
   )
+  const drawerAvgStandardShippingCost = useMemo(
+    () => numberValue(skuDrawer?.avgStandardShippingCost) ?? 0,
+    [skuDrawer],
+  )
 
   // Load clients once for the filter dropdown.
   useEffect(() => {
@@ -748,7 +752,7 @@ export default function AnalysisView() {
     setSkuDrawer(null)
     setSkuDrawerTitle('Loading…')
     try {
-      const result = await apiClient.fetchInventorySkuOrders(invSkuId)
+      const result = await apiClient.fetchInventorySkuOrders(invSkuId, { from, to })
       setSkuDrawer(result)
       setSkuDrawerTitle(result.name || result.sku)
     } catch (error) {
@@ -1523,10 +1527,12 @@ export default function AnalysisView() {
                           marginBottom: 4,
                         }}
                       >
-                        Total Orders
+                        Avg. Standard Shipping Cost (Markup Included)
                       </div>
                       <div style={{ fontSize: 22, fontWeight: 800, color: 'var(--text)' }}>
-                        {skuDrawer.orders.length.toLocaleString()}
+                        {drawerAvgStandardShippingCost > 0
+                          ? formatAnalysisMoney(drawerAvgStandardShippingCost)
+                          : '—'}
                       </div>
                     </div>
                     <div

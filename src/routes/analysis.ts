@@ -20,6 +20,8 @@ const EXPEDITED_SERVICES = [
   'fedex_priority_overnight', 'fedex_standard_overnight', 'fedex_first_overnight',
 ] as const;
 
+const EXPEDITED_SERVICES_SQL = sql`ARRAY[${sql.join(EXPEDITED_SERVICES.map((s) => sql`${s}`), sql`, `)}]::text[]`;
+
 const app = new Hono();
 
 app.get('/overview', async (c) => {
@@ -53,9 +55,33 @@ app.get('/overview', async (c) => {
       (select count(*)::int from shipments s
          where s.voided = false and s.ship_date >= date_trunc('month',now())
            and not exists (select 1 from clients c where c.id = s.client_id and c.is_test = true)) as shipped_month,
-      (select coalesce(sum(label_cost),0)::text from shipments s
-         where s.voided = false and s.ship_date >= date_trunc('month',now())
-           and not exists (select 1 from clients c where c.id = s.client_id and c.is_test = true)) as shipping_cost_month
+      (select coalesce(sum(marked_cost),0)::text
+         from (
+           select
+             case
+               when lower(cost_model.markup->>'type') in ('pct', 'percent')
+                 then cost_model.base_cost * (1 + coalesce(nullif(cost_model.markup->>'value', '')::numeric, 0) / 100)
+               when lower(cost_model.markup->>'type') in ('amount', 'flat')
+                 then cost_model.base_cost + coalesce(nullif(cost_model.markup->>'value', '')::numeric, 0)
+               else cost_model.base_cost
+             end as marked_cost
+           from shipments s
+           left join settings pid_markup
+             on pid_markup.key = 'markup.' || coalesce(s.provider_account_id, s.label_provider, s.selected_pid)::text
+           left join settings carrier_markup
+             on carrier_markup.key in ('markup.' || s.carrier_code, 'markup.' || lower(s.carrier_code))
+           cross join lateral (
+             select
+               (coalesce(s.cost, s.label_cost, 0) + coalesce(s.other_cost, 0))::numeric as base_cost,
+               case
+                 when coalesce(pid_markup.value, carrier_markup.value) ~ '^\\s*\\{'
+                   then coalesce(pid_markup.value, carrier_markup.value)::jsonb
+                 else null::jsonb
+               end as markup
+           ) cost_model
+           where s.voided = false and s.ship_date >= date_trunc('month',now())
+             and not exists (select 1 from clients c where c.id = s.client_id and c.is_test = true)
+         ) shipping_costs) as shipping_cost_month
   `);
   const r = rows[0] ?? {
     orders_today: 0,
@@ -94,8 +120,29 @@ app.get('/daily-shipments', zValidator('query', rangeQuery), async (c) => {
     select
       to_char(date_trunc('day', s.ship_date), 'YYYY-MM-DD') as day,
       count(*)::int as count,
-      coalesce(sum(s.label_cost), 0)::text as total_cost
+      coalesce(sum(
+        case
+          when lower(cost_model.markup->>'type') in ('pct', 'percent')
+            then cost_model.base_cost * (1 + coalesce(nullif(cost_model.markup->>'value', '')::numeric, 0) / 100)
+          when lower(cost_model.markup->>'type') in ('amount', 'flat')
+            then cost_model.base_cost + coalesce(nullif(cost_model.markup->>'value', '')::numeric, 0)
+          else cost_model.base_cost
+        end
+      ), 0)::text as total_cost
     from shipments s
+    left join settings pid_markup
+      on pid_markup.key = 'markup.' || coalesce(s.provider_account_id, s.label_provider, s.selected_pid)::text
+    left join settings carrier_markup
+      on carrier_markup.key in ('markup.' || s.carrier_code, 'markup.' || lower(s.carrier_code))
+    cross join lateral (
+      select
+        (coalesce(s.cost, s.label_cost, 0) + coalesce(s.other_cost, 0))::numeric as base_cost,
+        case
+          when coalesce(pid_markup.value, carrier_markup.value) ~ '^\\s*\\{'
+            then coalesce(pid_markup.value, carrier_markup.value)::jsonb
+          else null::jsonb
+        end as markup
+    ) cost_model
     where s.voided = false
       and s.ship_date >= ${fromIso}::timestamptz
       and s.ship_date <= ${toIso}::timestamptz
@@ -255,7 +302,7 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
         o.client_id                                                         as client_id,
         c.name                                                              as client_name,
         o.order_status                                                      as order_status,
-        o.service_code                                                      as service_code,
+        coalesce(ls.service_code, o.service_code)                           as service_code,
         ls.order_id                                                         as shipment_order_id,
         coalesce(ls.label_cost, 0)                                          as label_cost,
         coalesce(nullif(item->>'sku', ''), '')                              as sku,
@@ -272,8 +319,28 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
       left join lateral (
         select
           s.order_id,
-          (coalesce(s.label_cost, s.cost, 0) + coalesce(s.other_cost, 0))::numeric as label_cost
+          s.service_code,
+          case
+            when lower(cost_model.markup->>'type') in ('pct', 'percent')
+              then cost_model.base_cost * (1 + coalesce(nullif(cost_model.markup->>'value', '')::numeric, 0) / 100)
+            when lower(cost_model.markup->>'type') in ('amount', 'flat')
+              then cost_model.base_cost + coalesce(nullif(cost_model.markup->>'value', '')::numeric, 0)
+            else cost_model.base_cost
+          end as label_cost
         from shipments s
+        left join settings pid_markup
+          on pid_markup.key = 'markup.' || coalesce(s.provider_account_id, s.label_provider, s.selected_pid)::text
+        left join settings carrier_markup
+          on carrier_markup.key in ('markup.' || s.carrier_code, 'markup.' || lower(s.carrier_code))
+        cross join lateral (
+          select
+            (coalesce(s.cost, s.label_cost, 0) + coalesce(s.other_cost, 0))::numeric as base_cost,
+            case
+              when coalesce(pid_markup.value, carrier_markup.value) ~ '^\\s*\\{'
+                then coalesce(pid_markup.value, carrier_markup.value)::jsonb
+              else null::jsonb
+            end as markup
+        ) cost_model
         where s.order_id = o.id
           and coalesce(s.voided, false) = false
         order by s.id desc
@@ -313,7 +380,7 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
           else false
         end                                                                 as is_external,
         case
-          when lower(coalesce(r.service_code, '')) = ANY(${sql`ARRAY[${sql.join(EXPEDITED_SERVICES.map((s) => sql`${s}`), sql`, `)}]::text[]`})
+          when lower(coalesce(r.service_code, '')) = ANY(${EXPEDITED_SERVICES_SQL})
             then 'exp'
           else 'std'
         end                                                                 as ship_class

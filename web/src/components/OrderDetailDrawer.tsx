@@ -150,6 +150,41 @@ function getShipmentLabelCost(shipment: Shipment | null | undefined): number | n
   return shipmentCost != null ? shipmentCost + otherCost : null;
 }
 
+function getShipmentBaseCost(shipment: Shipment | null | undefined): number | null {
+  if (!shipment) return null;
+
+  const shipmentCost = toNumber(shipment.shipmentCost);
+  if (shipmentCost != null) return shipmentCost;
+
+  return toNumber(shipment.cost);
+}
+
+function getLabelCostBreakdown(
+  shipment: Shipment | null | undefined,
+  labelCost: number | null | undefined,
+) {
+  const baseCost = getShipmentBaseCost(shipment);
+  const markupCost =
+    labelCost != null && baseCost != null
+      ? Math.max(0, labelCost - baseCost)
+      : null;
+
+  return { labelCost: labelCost ?? null, baseCost, markupCost };
+}
+
+function LabelCostStack({ breakdown }: { breakdown: ReturnType<typeof getLabelCostBreakdown> }) {
+  return (
+    <div style={{ lineHeight: 1.35 }}>
+      <div style={{ fontWeight: 700, color: 'var(--green, #15803d)' }}>
+        {fmtOptionalMoney(breakdown.labelCost)}
+      </div>
+      <div style={{ fontSize: 10.5, color: 'var(--text)', fontWeight: 600 }}>
+        Base {fmtOptionalMoney(breakdown.baseCost)} + Markup {fmtOptionalMoney(breakdown.markupCost)}
+      </div>
+    </div>
+  );
+}
+
 function fmtDate(iso: string | null | undefined): string {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -349,6 +384,7 @@ export default function OrderDetailDrawer({
   const labelCost =
     getShipmentLabelCost(liveShipment) ??
     toNumber(raw.canonicalOrder?.shipping?.labelCost);
+  const labelBreakdown = getLabelCostBreakdown(liveShipment, labelCost);
   const isShipped = (effectiveStatus ?? '').toLowerCase() === 'shipped';
 
   return (
@@ -542,12 +578,26 @@ export default function OrderDetailDrawer({
                         <span>{fmtMoney(shippingAmount)}</span>
                       </div>
                       {isShipped ? (
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-                          <span style={{ color: 'var(--text2)' }}>Label Cost</span>
-                          <span style={{ fontWeight: 700, color: 'var(--green, #15803d)' }}>
-                            {fmtOptionalMoney(labelCost)}
-                          </span>
-                        </div>
+                        <>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                            <span style={{ color: 'var(--text2)' }}>Label Cost</span>
+                            <span style={{ fontWeight: 700, color: 'var(--green, #15803d)' }}>
+                              {fmtOptionalMoney(labelBreakdown.labelCost)}
+                            </span>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3, fontSize: 11 }}>
+                            <span style={{ color: 'var(--text2)' }}>Base Cost</span>
+                            <span style={{ color: 'var(--text)', fontWeight: 600 }}>
+                              {fmtOptionalMoney(labelBreakdown.baseCost)}
+                            </span>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3, fontSize: 11 }}>
+                            <span style={{ color: 'var(--text2)' }}>Markup</span>
+                            <span style={{ color: 'var(--text)', fontWeight: 600 }}>
+                              {fmtOptionalMoney(labelBreakdown.markupCost)}
+                            </span>
+                          </div>
+                        </>
                       ) : null}
                       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
                         <span style={{ color: 'var(--text2)' }}>Tax</span>
@@ -706,9 +756,7 @@ export default function OrderDetailDrawer({
                   <Field
                     label="Label Cost"
                     value={
-                      <span style={{ fontWeight: 700, color: 'var(--green, #15803d)' }}>
-                        {fmtOptionalMoney(labelCost)}
-                      </span>
+                      <LabelCostStack breakdown={labelBreakdown} />
                     }
                   />
                 ) : null}

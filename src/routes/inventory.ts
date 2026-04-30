@@ -12,6 +12,18 @@ import { ssV1Request } from '../lib/shipstation/v1-client';
 
 const app = new Hono();
 
+const EXPEDITED_SERVICES = [
+  'ups_2nd_day_air', 'ups_2nd_day_air_am',
+  'ups_next_day_air', 'ups_next_day_air_saver', 'ups_next_day_air_early_am',
+  'ups_3_day_select',
+  'usps_priority_mail_express',
+  'fedex_2day', 'fedex_2day_am',
+  'fedex_express_saver',
+  'fedex_priority_overnight', 'fedex_standard_overnight', 'fedex_first_overnight',
+] as const;
+
+const EXPEDITED_SERVICES_SQL = sql`ARRAY[${sql.join(EXPEDITED_SERVICES.map((s) => sql`${s}`), sql`, `)}]::text[]`;
+
 const listQuery = paginationSchema.extend({
   clientId: z.coerce.number().int().optional(),
   search: z.string().optional(),
@@ -166,11 +178,15 @@ app.get(
   '/:id{[0-9]+}/sku-orders',
   zValidator(
     'query',
-    z.object({ days: z.coerce.number().int().positive().max(3650).optional() })
+    z.object({
+      days: z.coerce.number().int().positive().max(3650).optional(),
+      dateFrom: z.string().datetime().optional(),
+      dateTo: z.string().datetime().optional(),
+    })
   ),
   async (c) => {
     const id = Number(c.req.param('id'));
-    const { days } = c.req.valid('query');
+    const { days, dateFrom, dateTo } = c.req.valid('query');
 
     const [row] = await db
       .select({ sku: inventory.sku, name: inventory.name, clientId: inventory.clientId })
@@ -179,11 +195,18 @@ app.get(
       .limit(1);
     if (!row) return c.json({ error: 'Inventory item not found' }, 404);
 
-    const since = days
-      ? new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
-      : null;
+    const since = dateFrom
+      ? new Date(dateFrom).toISOString()
+      : days
+        ? new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString()
+        : null;
+    const until = dateTo ? new Date(dateTo).toISOString() : null;
+    const dateFilterSql = sql`
+      ${since ? sql`and o.order_date >= ${since}::timestamptz` : sql``}
+      ${until ? sql`and o.order_date <= ${until}::timestamptz` : sql``}
+    `;
 
-    const dailyRows = since
+    const dailyRows = since || until
       ? await db.execute<{ day: string; units: number }>(sql`
           select
             to_char(date_trunc('day', o.order_date), 'YYYY-MM-DD') as day,
@@ -192,7 +215,7 @@ app.get(
           cross join lateral jsonb_array_elements(o.items) item
           where item ? 'sku'
             and lower(item->>'sku') = lower(${row.sku})
-            and o.order_date >= ${since}::timestamptz
+            ${dateFilterSql}
             and coalesce(o.order_status, '') <> 'cancelled'
           group by date_trunc('day', o.order_date)
           order by date_trunc('day', o.order_date) asc
@@ -201,14 +224,88 @@ app.get(
     const salesMap = new Map(dailyRows.map((r) => [r.day, Number(r.units ?? 0)]));
     const dailySales: { day: string; units: number }[] = [];
     const safeDays = Math.max(1, Math.min(3650, days ?? 30));
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
-    for (let i = safeDays - 1; i >= 0; i -= 1) {
-      const d = new Date(today);
-      d.setUTCDate(d.getUTCDate() - i);
+    const startDay = since ? new Date(since) : new Date(Date.now() - (safeDays - 1) * 24 * 60 * 60 * 1000);
+    startDay.setUTCHours(0, 0, 0, 0);
+    const endDay = until ? new Date(until) : new Date();
+    endDay.setUTCHours(0, 0, 0, 0);
+    const bucketDays = Math.max(
+      1,
+      Math.min(3650, Math.round((endDay.getTime() - startDay.getTime()) / 86_400_000) + 1)
+    );
+    for (let i = 0; i < bucketDays; i += 1) {
+      const d = new Date(startDay);
+      d.setUTCDate(d.getUTCDate() + i);
       const day = d.toISOString().slice(0, 10);
       dailySales.push({ day, units: salesMap.get(day) ?? 0 });
     }
+
+    const [shippingSummary] = await db.execute<{
+      standard_ship_count: number;
+      standard_shipping_total: string;
+      avg_standard_shipping_cost: string;
+    }>(sql`
+      with matching_orders as (
+        select distinct
+          o.id,
+          o.service_code
+        from orders o
+        cross join lateral jsonb_array_elements(o.items) item
+        where item ? 'sku'
+          and lower(item->>'sku') = lower(${row.sku})
+          ${dateFilterSql}
+          and coalesce(o.order_status, '') <> 'cancelled'
+      ),
+      costed_orders as (
+        select
+          mo.id,
+          coalesce(ls.service_code, mo.service_code) as service_code,
+          ls.marked_cost
+        from matching_orders mo
+        left join lateral (
+          select
+            s.service_code,
+            case
+              when lower(cost_model.markup->>'type') in ('pct', 'percent')
+                then cost_model.base_cost * (1 + coalesce(nullif(cost_model.markup->>'value', '')::numeric, 0) / 100)
+              when lower(cost_model.markup->>'type') in ('amount', 'flat')
+                then cost_model.base_cost + coalesce(nullif(cost_model.markup->>'value', '')::numeric, 0)
+              else cost_model.base_cost
+            end as marked_cost
+          from shipments s
+          left join settings pid_markup
+            on pid_markup.key = 'markup.' || coalesce(s.provider_account_id, s.label_provider, s.selected_pid)::text
+          left join settings carrier_markup
+            on carrier_markup.key in ('markup.' || s.carrier_code, 'markup.' || lower(s.carrier_code))
+          cross join lateral (
+            select
+              (coalesce(s.cost, s.label_cost, 0) + coalesce(s.other_cost, 0))::numeric as base_cost,
+              case
+                when coalesce(pid_markup.value, carrier_markup.value) ~ '^\\s*\\{'
+                  then coalesce(pid_markup.value, carrier_markup.value)::jsonb
+                else null::jsonb
+              end as markup
+          ) cost_model
+          where s.order_id = mo.id
+            and coalesce(s.voided, false) = false
+          order by s.id desc
+          limit 1
+        ) ls on true
+      )
+      select
+        count(*) filter (
+          where marked_cost > 0
+            and lower(coalesce(service_code, '')) <> ALL(${EXPEDITED_SERVICES_SQL})
+        )::int as standard_ship_count,
+        coalesce(sum(marked_cost) filter (
+          where marked_cost > 0
+            and lower(coalesce(service_code, '')) <> ALL(${EXPEDITED_SERVICES_SQL})
+        ), 0)::text as standard_shipping_total,
+        coalesce(avg(marked_cost) filter (
+          where marked_cost > 0
+            and lower(coalesce(service_code, '')) <> ALL(${EXPEDITED_SERVICES_SQL})
+        ), 0)::text as avg_standard_shipping_cost
+      from costed_orders
+    `);
 
     const rows = await db.execute<{
       order_id: number;
@@ -237,6 +334,7 @@ app.get(
       cross join lateral jsonb_array_elements(o.items) item
       where item ? 'sku'
         and lower(item->>'sku') = lower(${row.sku})
+        ${dateFilterSql}
         and coalesce(o.order_status, '') <> 'cancelled'
       order by o.order_date desc nulls last
       limit 200
@@ -247,6 +345,9 @@ app.get(
       name: row.name,
       clientId: row.clientId,
       totalUnits: dailySales.reduce((sum, r) => sum + r.units, 0),
+      standardShipCount: shippingSummary?.standard_ship_count ?? 0,
+      standardShippingTotal: shippingSummary?.standard_shipping_total ?? '0',
+      avgStandardShippingCost: shippingSummary?.avg_standard_shipping_cost ?? '0',
       dailySales,
       orders: rows,
     });

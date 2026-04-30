@@ -72,6 +72,8 @@ const COLUMN_MIN_WIDTHS: Partial<Record<TableColumnKey, number>> = {
   customer: 120,
   itemname: 160,
   sku: 150,
+  bestrate: 175,
+  test_bestRate: 175,
 }
 
 export function getColumnMinWidth(key: TableColumnKey) {

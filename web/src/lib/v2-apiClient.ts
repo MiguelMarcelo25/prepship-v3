@@ -1379,17 +1379,30 @@ export const apiClient = {
     );
   },
 
-  fetchInventorySkuOrders(invSkuId: number, days?: number): Promise<any> {
+  fetchInventorySkuOrders(
+    invSkuId: number,
+    options?: number | { days?: number; from?: string; to?: string; dateFrom?: string; dateTo?: string }
+  ): Promise<any> {
     // v4 returns {sku, name, orders: [{order_id, order_number, order_date,
     // order_status, ship_to_name, carrier_code, service_code, qty, ...}]}.
     // v2 UI reads camelCase rows + {day, units}[] for the 30-day chart.
     // Reshape rows and synthesize dailySales by bucketing qty per day.
-    const windowDays = days ?? 30;
+    const windowDays = typeof options === 'number' ? options : options?.days ?? 30;
+    const query =
+      typeof options === 'object' && options !== null
+        ? normalizeAnalysisRange({
+            days: options.days ?? windowDays,
+            from: options.from,
+            to: options.to,
+            dateFrom: options.dateFrom,
+            dateTo: options.dateTo,
+          })
+        : { days: windowDays };
     return safe(
       'fetchInventorySkuOrders',
       async () => {
         const res = await api.get<any>(
-          `/inventory/${invSkuId}/sku-orders${qs({ days: windowDays } as any)}`
+          `/inventory/${invSkuId}/sku-orders${qs(query as any)}`
         );
         const rawOrders = Array.isArray(res?.orders) ? res.orders : [];
         const orders = rawOrders.map((r: any) => ({
@@ -1450,9 +1463,22 @@ export const apiClient = {
           orders,
           dailySales,
           totalUnits,
+          standardShipCount: Number(res?.standardShipCount ?? res?.standard_ship_count ?? 0),
+          standardShippingTotal: Number(res?.standardShippingTotal ?? res?.standard_shipping_total ?? 0),
+          avgStandardShippingCost: Number(res?.avgStandardShippingCost ?? res?.avg_standard_shipping_cost ?? 0),
         };
       },
-      { orders: [], name: '', sku: '', clientId: null, dailySales: [], totalUnits: 0 }
+      {
+        orders: [],
+        name: '',
+        sku: '',
+        clientId: null,
+        dailySales: [],
+        totalUnits: 0,
+        standardShipCount: 0,
+        standardShippingTotal: 0,
+        avgStandardShippingCost: 0,
+      }
     );
   },
 

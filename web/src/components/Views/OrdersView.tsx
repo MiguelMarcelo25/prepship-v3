@@ -111,7 +111,7 @@ const TABLE_COLUMNS: TableColumn[] = [
   { key: 'carrier', label: 'Carrier', width: 145, sort: 'carrier' },
   { key: 'custcarrier', label: 'Shipping Account', width: 140, sort: 'custcarrier' },
   { key: 'total', label: 'Order Total', width: 85, sort: 'total' },
-  { key: 'bestrate', label: 'Best Rate', width: 105, sort: null },
+  { key: 'bestrate', label: 'Best Rate', width: 175, sort: null },
   { key: 'test_carrierCode', label: 'Carrier Code', width: 120, sort: null },
   { key: 'test_shippingProviderID', label: 'Provider ID', width: 110, sort: null },
   { key: 'test_clientID', label: 'Client ID', width: 90, sort: null },
@@ -914,15 +914,30 @@ function getBestRateCarrierNickname(order: OrderSummaryDto) {
 }
 
 function getSelectedRateBaseCost(order: OrderSummaryDto) {
+  const shipmentCost = typeof order.selectedRate?.shipmentCost === 'number' ? order.selectedRate.shipmentCost : 0
+  const otherCost = typeof order.selectedRate?.otherCost === 'number' ? order.selectedRate.otherCost : 0
+  if (shipmentCost > 0) return shipmentCost
+
+  const rawLabelCost = toNumberValue(order.label?.rawCost)
+  if (rawLabelCost != null && rawLabelCost > 0) return rawLabelCost
+
   const canonicalAmount = getShippingNumber(order, 'selectedRateAmount')
   if (canonicalAmount && canonicalAmount > 0) return canonicalAmount
 
-  const shipmentCost = typeof order.selectedRate?.shipmentCost === 'number' ? order.selectedRate.shipmentCost : 0
-  const otherCost = typeof order.selectedRate?.otherCost === 'number' ? order.selectedRate.otherCost : 0
   const cost = typeof order.selectedRate?.cost === 'number' ? order.selectedRate.cost : 0
   const labelCost = typeof order.label?.cost === 'number' ? order.label.cost : 0
   const total = shipmentCost + otherCost
   return total > 0 ? total : cost || labelCost || null
+}
+
+function getSelectedRateFinalCost(order: OrderSummaryDto) {
+  return (
+    getShippingNumber(order, 'labelCost') ??
+    toNumberValue(order.label?.cost) ??
+    toNumberValue(order.selectedRate?.cost) ??
+    getShippingNumber(order, 'selectedRateAmount') ??
+    null
+  )
 }
 
 function getSelectedRateCarrierCode(order: OrderSummaryDto) {
@@ -961,22 +976,6 @@ function getSelectedRateShippingProviderId(order: OrderSummaryDto) {
   )
 }
 
-function getSelectedRateMarkedAmount(order: OrderSummaryDto, markups: Record<string | number, { type: string; value: number }>) {
-  const baseAmount = getSelectedRateBaseCost(order)
-  if (baseAmount == null) return null
-
-  return applyCarrierMarkup({
-    shippingProviderId: getSelectedRateShippingProviderId(order),
-    carrierCode: getSelectedRateCarrierCode(order) ?? '',
-    serviceCode: getSelectedRateServiceCode(order) ?? '',
-    serviceName: getSelectedRateServiceCode(order) ?? '',
-    amount: baseAmount,
-    shipmentCost: baseAmount,
-    otherCost: 0,
-    carrierNickname: getSelectedRateCarrierNickname(order),
-  }, markups)
-}
-
 function getMarkupAmount(baseAmount: number, markedAmount: number) {
   return markedAmount - baseAmount
 }
@@ -985,12 +984,18 @@ function renderRateAmountWithMarkup(baseAmount: number | null, markedAmount: num
   const displayAmount = markedAmount ?? baseAmount
   if (displayAmount == null) return <span style={{ color: 'var(--text3)', fontSize: 11 }}>{'\u2014'}</span>
 
-  const hasMarkup = baseAmount != null && markedAmount != null && Math.abs(markedAmount - baseAmount) > 0.005
+  const markupAmount = baseAmount != null && markedAmount != null ? Math.max(0, markedAmount - baseAmount) : null
+  const breakdownTitle =
+    baseAmount != null && markupAmount != null
+      ? `Label Cost ${formatMoney(displayAmount)} | Base ${formatMoney(baseAmount)} + Markup ${formatMoney(markupAmount)}`
+      : undefined
   return (
-    <div style={{ lineHeight: 1.15 }}>
+    <div style={{ lineHeight: 1.15 }} title={breakdownTitle}>
       <strong style={{ color: 'var(--green)', fontSize: 12 }}>{formatMoney(displayAmount)}</strong>
-      {hasMarkup ? (
-        <div style={{ fontSize: 10, color: 'var(--text)', fontWeight: 600 }}>{formatMoney(baseAmount)}</div>
+      {baseAmount != null && markupAmount != null ? (
+        <div style={{ fontSize: 10, color: 'var(--text)', fontWeight: 600, whiteSpace: 'nowrap' }}>
+          Base {formatMoney(baseAmount)} + Markup {formatMoney(markupAmount)}
+        </div>
       ) : null}
     </div>
   )
@@ -2677,8 +2682,8 @@ export default function OrdersView({
       }
 
       const selectedRateBase = getSelectedRateBaseCost(order)
-      const markedAmount = selectedRateBase != null ? getSelectedRateMarkedAmount(order, markups) : null
-      if (selectedRateBase == null && markedAmount == null) {
+      const labelCost = getSelectedRateFinalCost(order)
+      if (selectedRateBase == null && labelCost == null) {
         return <span style={{ color: 'var(--text3)', fontSize: 11 }}>—</span>
       }
 
@@ -2690,7 +2695,7 @@ export default function OrdersView({
               {formatCarrierCode(selectedRateCarrierCode)}
             </span>
           ) : null}
-          {renderRateAmountWithMarkup(selectedRateBase, markedAmount)}
+          {renderRateAmountWithMarkup(selectedRateBase, labelCost ?? selectedRateBase)}
         </div>
       )
     }
