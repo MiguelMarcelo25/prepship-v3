@@ -56,7 +56,10 @@ function formatDateOnly(value: string | null | undefined) {
 
 function formatDateTime(value: unknown) {
   if (!value) return '-'
-  const parsed = new Date(String(value))
+  const raw = String(value).trim()
+  if (!raw) return '-'
+  const normalized = /(?:z|[+-]\d{2}:?\d{2})$/i.test(raw) ? raw : `${raw}Z`
+  const parsed = new Date(normalized)
   if (Number.isNaN(parsed.getTime())) return '-'
   return parsed.toLocaleString()
 }
@@ -88,7 +91,7 @@ function numberValue(value: unknown) {
 
 function formatMoneyValue(value: unknown) {
   const num = numberValue(value)
-  return num == null ? '-' : formatAnalysisMoney(num)
+  return num == null ? '-' : `$${num.toFixed(2)}`
 }
 
 function formatStatusText(value: unknown) {

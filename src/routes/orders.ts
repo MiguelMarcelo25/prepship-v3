@@ -1347,7 +1347,11 @@ app.get('/:id{[0-9]+}', async (c) => {
       .where(eq(orderOverrides.orderId, id))
       .limit(1)
       .then((rows) => rows[0] ?? null),
-    db.select().from(shipments).where(eq(shipments.orderId, id)),
+    db
+      .select()
+      .from(shipments)
+      .where(or(eq(shipments.orderId, id), eq(shipments.orderNumber, order.orderNumber)))
+      .orderBy(desc(shipments.id)),
   ]);
 
   return c.json(buildOrderDetailPayload(order as Record<string, unknown>, overrides, shipmentRows));
@@ -1365,7 +1369,11 @@ app.get('/:id{[0-9]+}/full', async (c) => {
       .where(eq(orderOverrides.orderId, id))
       .limit(1)
       .then((rows) => rows[0] ?? null),
-    db.select().from(shipments).where(eq(shipments.orderId, id)),
+    db
+      .select()
+      .from(shipments)
+      .where(or(eq(shipments.orderId, id), eq(shipments.orderNumber, order.orderNumber)))
+      .orderBy(desc(shipments.id)),
   ]);
 
   return c.json(buildOrderDetailPayload(order as Record<string, unknown>, overrides, shipmentRows));
