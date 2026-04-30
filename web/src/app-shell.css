@@ -267,12 +267,20 @@ body{font-family:'Poppins',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sa
 }
 .orders-table th:focus-visible{outline:2px solid var(--ss-blue);outline-offset:-2px;background:var(--ss-blue-bg);}
 .orders-table td{padding:5px 8px;border-bottom:1px solid var(--border);vertical-align:middle;}
-.orders-table tbody tr{cursor:pointer;transition:background .08s;}
+.orders-table tbody tr{cursor:pointer;}
+.orders-table tbody tr.order-row td{transition:background .08s ease,box-shadow .08s ease;}
 .orders-table tbody tr:nth-child(even) td{background:var(--surface2);}
-.orders-table tbody tr:hover td{background:#b8ccf8;}
-.orders-table tbody tr.row-panel-open td{background:var(--ss-blue-bg);}
+.orders-table tbody tr.order-row:hover td:not([data-col="select"]){background:rgba(37,99,235,.05);}
+.orders-table tbody tr.order-row td[data-col="select"]{cursor:pointer;text-align:center;}
+.orders-table tbody tr.order-row td[data-col="select"] input[type="checkbox"]{cursor:pointer;accent-color:var(--ss-blue);}
+.orders-table tbody tr.order-row:hover td[data-col="select"]{background:rgba(37,99,235,.08);box-shadow:inset 3px 0 0 rgba(37,99,235,.55);}
+.orders-table tbody tr.order-row td[data-col="select"]:hover{background:rgba(37,99,235,.14)!important;box-shadow:inset 3px 0 0 var(--ss-blue);}
+.orders-table tbody tr.row-panel-open td:not([data-col="select"]){background:var(--ss-blue-bg);}
 .orders-table tbody tr.row-panel-open td:first-child{border-left:3px solid var(--ss-blue);}
 .orders-table tbody tr.row-selected td{background:#e8f0fe;}
+.orders-table tbody tr.row-selected:hover td:not([data-col="select"]){background:#dbeafe;}
+.orders-table tbody tr.row-selected td[data-col="select"]{background:rgba(37,99,235,.16);box-shadow:inset 3px 0 0 var(--ss-blue);}
+.orders-table tbody tr.row-selected.row-panel-open td:not([data-col="select"]){background:#dbeafe;}
 .orders-table tbody tr.row-exception td:first-child{border-left:3px solid #f59e0b;}
 .orders-table tbody tr.row-exception td{background:#fffbeb;}
 /* Multi-SKU: red border wrapping only item name + SKU cells as a connected box */

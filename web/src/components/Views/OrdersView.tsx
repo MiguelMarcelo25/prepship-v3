@@ -1335,6 +1335,7 @@ export default function OrdersView({
   const pendingResizeWidthsRef = useRef<Record<TableColumnKey, number> | null>(null)
   const resizeFrameRef = useRef<number | null>(null)
   const suppressHeaderClickRef = useRef(false)
+  const selectAllCheckboxRef = useRef<HTMLInputElement | null>(null)
 
   const dateRange = dateFilter === 'custom'
     ? {
@@ -1476,6 +1477,16 @@ export default function OrdersView({
     ),
     [orderedFilteredOrders, orderDetailsById, skuSortActive],
   )
+  const visibleOrderIds = useMemo(
+    () => orderedFilteredOrders.map((order) => order.orderId),
+    [orderedFilteredOrders],
+  )
+  const visibleSelectedCount = useMemo(
+    () => visibleOrderIds.filter((orderId) => selectedIdSet.has(orderId)).length,
+    [visibleOrderIds, selectedIdSet],
+  )
+  const allVisibleSelected = visibleOrderIds.length > 0 && visibleSelectedCount === visibleOrderIds.length
+  const someVisibleSelected = visibleSelectedCount > 0 && !allVisibleSelected
 
   const panelOrderId = activeOrderId ?? (selectedOrderIds.length === 1 ? selectedOrderIds[0] : null)
   const panelOrder = orderedFilteredOrders.find((order) => order.orderId === panelOrderId)
@@ -1511,6 +1522,11 @@ export default function OrdersView({
       onActiveOrderIdChange?.(null)
     }
   }, [orders, selectedOrderIds, activeOrderId, onSelectedOrderIdsChange, onActiveOrderIdChange])
+
+  useEffect(() => {
+    if (!selectAllCheckboxRef.current) return
+    selectAllCheckboxRef.current.indeterminate = someVisibleSelected
+  }, [someVisibleSelected])
 
   useEffect(() => {
     let cancelled = false
@@ -1859,7 +1875,7 @@ export default function OrdersView({
       }
 
       if (event.key === 'Enter' && kbRowId != null) {
-        toggleOrderSelection(kbRowId)
+        updateSelection([kbRowId])
         return
       }
 
@@ -1881,6 +1897,10 @@ export default function OrdersView({
     const nextIds = [...new Set(ids)]
     onSelectedOrderIdsChange?.(nextIds)
     onActiveOrderIdChange?.(nextIds.length === 1 ? nextIds[0] : null)
+  }
+
+  const openOrderDetails = (orderId: number) => {
+    onActiveOrderIdChange?.(orderId)
   }
 
   const toggleOrderSelection = (orderId: number, checked?: boolean) => {
@@ -1906,13 +1926,34 @@ export default function OrdersView({
     updateSelection(selectedOrderIds.filter((id) => !orderIdSet.has(id)))
   }
 
-  const selectAll = () => {
-    updateSelection(orderedFilteredOrders.map((order) => order.orderId))
+  const toggleVisibleSelection = (checked?: boolean) => {
+    const visibleOrderIdSet = new Set(visibleOrderIds)
+    const shouldSelect = checked ?? !allVisibleSelected
+    if (shouldSelect) {
+      updateSelection([...selectedOrderIds, ...visibleOrderIds])
+      return
+    }
+
+    updateSelection(selectedOrderIds.filter((id) => !visibleOrderIdSet.has(id)))
   }
 
   const clearSelection = () => {
     onSelectedOrderIdsChange?.([])
     onActiveOrderIdChange?.(null)
+  }
+
+  const closeSinglePanel = () => {
+    const activeIsOnlySelection =
+      activeOrderId != null &&
+      selectedOrderIds.length === 1 &&
+      selectedOrderIds[0] === activeOrderId
+
+    if (activeOrderId != null && !activeIsOnlySelection) {
+      onActiveOrderIdChange?.(null)
+      return
+    }
+
+    clearSelection()
   }
 
   function showToast(message: string, type: 'success' | 'error' | 'info' = 'info') {
@@ -3356,7 +3397,7 @@ export default function OrdersView({
             type="button"
             onClick={() => {
               if (prevOrderId == null) return
-              updateSelection([prevOrderId])
+              openOrderDetails(prevOrderId)
             }}
             style={{
               background: 'none',
@@ -3376,7 +3417,7 @@ export default function OrdersView({
             type="button"
             onClick={() => {
               if (nextOrderId == null) return
-              updateSelection([nextOrderId])
+              openOrderDetails(nextOrderId)
             }}
             style={{
               background: 'none',
@@ -3445,7 +3486,7 @@ export default function OrdersView({
               ) : null}
             </div>
           )}
-          <button className="panel-close" type="button" onClick={clearSelection}>✕</button>
+          <button className="panel-close" type="button" onClick={closeSinglePanel}>✕</button>
         </div>
 
         <div className="panel-body">
@@ -3883,7 +3924,44 @@ export default function OrdersView({
               </div>
             ) : null}
           </div>
-          <button id="btnSelectAll" className="btn btn-ghost btn-sm" type="button" onClick={selectAll}>Select All</button>
+          <label
+            id="btnSelectAll"
+            className="btn btn-ghost btn-sm"
+            style={{
+              gap: 6,
+              cursor: visibleOrderIds.length > 0 ? 'pointer' : 'default',
+              opacity: visibleOrderIds.length > 0 ? 1 : 0.55,
+              color: allVisibleSelected || someVisibleSelected ? 'var(--ss-blue)' : undefined,
+              background: allVisibleSelected || someVisibleSelected ? 'var(--ss-blue-bg)' : undefined,
+              borderColor: allVisibleSelected || someVisibleSelected ? 'var(--ss-blue)' : undefined,
+            }}
+            title={
+              visibleOrderIds.length === 0
+                ? 'No visible orders to select'
+                : allVisibleSelected
+                  ? 'Clear all visible selected orders'
+                  : 'Select all visible orders'
+            }
+          >
+            <input
+              ref={selectAllCheckboxRef}
+              type="checkbox"
+              checked={allVisibleSelected}
+              disabled={visibleOrderIds.length === 0}
+              onClick={(event) => event.stopPropagation()}
+              onChange={(event) => {
+                event.stopPropagation()
+                toggleVisibleSelection(event.target.checked)
+              }}
+              style={{ width: 13, height: 13, accentColor: 'var(--ss-blue)', cursor: visibleOrderIds.length > 0 ? 'pointer' : 'default' }}
+              aria-label="Select all visible orders"
+            />
+            <span>
+              {visibleSelectedCount > 0
+                ? `${visibleSelectedCount}/${visibleOrderIds.length} selected`
+                : 'Select All'}
+            </span>
+          </label>
           <button
             id="btnSkuSort"
             className="btn btn-ghost btn-sm"
@@ -4122,12 +4200,16 @@ export default function OrdersView({
                             id={`row-${order.orderId}`}
                             className={rowClasses}
                             style={{ borderLeft: `3px solid ${clientColor}`, background: expedited ? 'rgba(34,197,94,.08)' : undefined }}
-                            onClick={() => toggleOrderSelection(order.orderId)}
+                            onClick={() => updateSelection([order.orderId])}
                             onDoubleClick={() => openShipStationOrder(order.orderId)}
                             onMouseEnter={() => setKbRowId(order.orderId)}
                           >
                             {visibleColumns.map((column) => (
-                              <td key={column.key} data-col={column.key}>
+                              <td
+                                key={column.key}
+                                data-col={column.key}
+                                title={column.key === 'select' ? 'Use checkbox for multi-select' : 'Select only this order and view details'}
+                              >
                                 {renderTableCell(order, column)}
                               </td>
                             ))}
@@ -4158,12 +4240,16 @@ export default function OrdersView({
                           id={`row-${order.orderId}`}
                           className={rowClasses}
                           style={{ borderLeft: `3px solid ${clientColor}`, background: expedited ? 'rgba(34,197,94,.08)' : undefined }}
-                          onClick={() => toggleOrderSelection(order.orderId)}
+                          onClick={() => updateSelection([order.orderId])}
                           onDoubleClick={() => openShipStationOrder(order.orderId)}
                           onMouseEnter={() => setKbRowId(order.orderId)}
                         >
                           {visibleColumns.map((column) => (
-                            <td key={column.key} data-col={column.key}>
+                            <td
+                              key={column.key}
+                              data-col={column.key}
+                              title={column.key === 'select' ? 'Use checkbox for multi-select' : 'Select only this order and view details'}
+                            >
                               {renderTableCell(order, column)}
                             </td>
                           ))}
@@ -4185,7 +4271,7 @@ export default function OrdersView({
 
           <div className="order-panel" id="orderPanel">
             <div className="panel-inner" id="panelInner">
-              {selectedOrderIds.length >= 2 ? renderBatchPanel() : renderSinglePanel()}
+              {activeOrderId == null && selectedOrderIds.length >= 2 ? renderBatchPanel() : renderSinglePanel()}
             </div>
           </div>
         </div>
