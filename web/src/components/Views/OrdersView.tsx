@@ -985,16 +985,17 @@ function renderRateAmountWithMarkup(baseAmount: number | null, markedAmount: num
   if (displayAmount == null) return <span style={{ color: 'var(--text3)', fontSize: 11 }}>{'\u2014'}</span>
 
   const markupAmount = baseAmount != null && markedAmount != null ? Math.max(0, markedAmount - baseAmount) : null
+  const hasMarkup = markupAmount != null && markupAmount >= 0.005
   const breakdownTitle =
-    baseAmount != null && markupAmount != null
+    baseAmount != null && markupAmount != null && hasMarkup
       ? `Label Cost ${formatMoney(displayAmount)} | Base ${formatMoney(baseAmount)} + Markup ${formatMoney(markupAmount)}`
       : undefined
   return (
     <div style={{ lineHeight: 1.15 }} title={breakdownTitle}>
       <strong style={{ color: 'var(--green)', fontSize: 12 }}>{formatMoney(displayAmount)}</strong>
-      {baseAmount != null && markupAmount != null ? (
-        <div style={{ fontSize: 10, color: 'var(--text)', fontWeight: 600, whiteSpace: 'nowrap' }}>
-          Base {formatMoney(baseAmount)} + Markup {formatMoney(markupAmount)}
+      {baseAmount != null && markupAmount != null && hasMarkup ? (
+        <div style={{ fontSize: 10, color: '#111827', fontWeight: 600, whiteSpace: 'nowrap' }}>
+          {formatMoney(baseAmount)}
         </div>
       ) : null}
     </div>

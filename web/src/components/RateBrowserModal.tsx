@@ -335,6 +335,7 @@ function priceDisplay(
   const mainSize = opts.mainSize ?? '13px';
   const mainColor = opts.mainColor ?? 'var(--green)';
   const markupCost = Math.max(0, markedCost - rawCost);
+  const hasMarkup = markupCost >= 0.005;
   const show = markedCost > 0.005 || rawCost > 0.005;
   if (!show) {
     return <span style={{ color: 'var(--text3)', fontSize: mainSize }}>N/A</span>;
@@ -342,14 +343,20 @@ function priceDisplay(
   return (
     <div
       style={{ lineHeight: 1.3 }}
-      title={`Label Cost $${markedCost.toFixed(2)} | Base $${rawCost.toFixed(2)} + Markup $${markupCost.toFixed(2)}`}
+      title={
+        hasMarkup
+          ? `Label Cost $${markedCost.toFixed(2)} | Base $${rawCost.toFixed(2)} + Markup $${markupCost.toFixed(2)}`
+          : undefined
+      }
     >
       <strong style={{ color: mainColor, fontSize: mainSize }}>
         ${markedCost.toFixed(2)}
       </strong>
-      <div style={{ fontSize: 10, color: 'var(--text)', whiteSpace: 'nowrap', fontWeight: 600 }}>
-        Base ${rawCost.toFixed(2)} + Markup ${markupCost.toFixed(2)}
-      </div>
+      {hasMarkup ? (
+        <div style={{ fontSize: 10, color: '#111827', whiteSpace: 'nowrap', fontWeight: 600 }}>
+          ${rawCost.toFixed(2)}
+        </div>
+      ) : null}
     </div>
   );
 }
