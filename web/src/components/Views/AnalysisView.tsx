@@ -210,6 +210,33 @@ function getItemTotal(item: unknown) {
   return unit * getItemQty(item)
 }
 
+function sumNumericValues(values: unknown[]) {
+  let total = 0
+  let hasValue = false
+
+  for (const value of values) {
+    const numeric = numberValue(value)
+    if (numeric == null) continue
+    total += numeric
+    hasValue = true
+  }
+
+  return hasValue ? total : null
+}
+
+function getItemsTotal(items: unknown[]) {
+  return sumNumericValues(items.map((item) => getItemTotal(item)))
+}
+
+function getShipmentCost(shipment: unknown) {
+  const shipmentRecord = asRecord(shipment)
+  return shipmentRecord.labelCost ?? shipmentRecord.label_cost ?? shipmentRecord.cost
+}
+
+function getShipmentsTotal(shipments: unknown[]) {
+  return sumNumericValues(shipments.map((shipment) => getShipmentCost(shipment)))
+}
+
 function isAdjustmentItem(item: unknown) {
   const itemRecord = asRecord(item)
   const sku = displayText(itemRecord.sku, '').trim()
@@ -833,6 +860,8 @@ export default function AnalysisView() {
   const modalAdjustments = modalAllItems.filter(isAdjustmentItem)
   const modalShipments = asArray(asRecord(modalOrder).shipments)
   const modalOverrides = asRecord(asRecord(modalOrder).overrides)
+  const modalItemsTotal = getItemsTotal(modalItems)
+  const modalShipmentTotal = getShipmentsTotal(modalShipments)
 
   return (
     <div className="view-content" id="view-analysis">
@@ -1907,11 +1936,11 @@ export default function AnalysisView() {
                     </div>
                     <div>
                       <span>Order Total</span>
-                      <strong>{formatMoneyValue(asRecord(modalOrder).orderTotal ?? modalRaw.orderTotal)}</strong>
+                      <strong>{formatMoneyValue(modalItemsTotal ?? asRecord(modalOrder).orderTotal ?? modalRaw.orderTotal)}</strong>
                     </div>
                     <div>
                       <span>Shipping</span>
-                      <strong>{formatMoneyValue(asRecord(modalOrder).shippingAmount ?? modalRaw.shippingAmount)}</strong>
+                      <strong>{formatMoneyValue(modalShipmentTotal ?? asRecord(modalOrder).shippingAmount ?? modalRaw.shippingAmount)}</strong>
                     </div>
                     <div>
                       <span>Items</span>
@@ -2074,7 +2103,7 @@ export default function AnalysisView() {
                                   <td>{displayText(shipmentRecord.trackingNumber)}</td>
                                   <td>{displayText(shipmentRecord.carrierCode)}</td>
                                   <td>{displayText(shipmentRecord.serviceCode)}</td>
-                                  <td>{formatMoneyValue(shipmentRecord.labelCost ?? shipmentRecord.cost)}</td>
+                                  <td>{formatMoneyValue(getShipmentCost(shipment))}</td>
                                   <td>{formatDateTime(shipmentRecord.shipDate ?? shipmentRecord.labelShipDate)}</td>
                                 </tr>
                               )

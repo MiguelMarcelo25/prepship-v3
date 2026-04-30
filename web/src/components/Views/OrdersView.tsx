@@ -966,6 +966,17 @@ function getSelectedRateCarrierNickname(order: OrderSummaryDto) {
   )
 }
 
+function getAwaitingDisplayAccountNickname(order: OrderSummaryDto) {
+  return (
+    getShippingString(order, 'accountNickname') ??
+    toStringValue(order.selectedRate?.providerAccountNickname) ??
+    toStringValue(order.selectedRate?.carrierNickname) ??
+    normalizeShippingAccountName(getBestRateCarrierNickname(order)) ??
+    getV2CarrierAccountForOrder(order)?.nickname ??
+    null
+  )
+}
+
 function getSelectedRateShippingProviderId(order: OrderSummaryDto) {
   return (
     getShippingProviderAccountId(order) ??
@@ -3285,7 +3296,7 @@ export default function OrdersView({
           ? diagnosticIsCancelled
             ? getCancelledDisplayAccountNickname(order)
             : getShippedDisplayAccountNickname(order)
-          : null
+          : getAwaitingDisplayAccountNickname(order)
         return renderDiagnosticCell(value)
       }
     }
