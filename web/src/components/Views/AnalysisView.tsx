@@ -126,10 +126,6 @@ function getOrderShipTo(order: unknown) {
   }
 }
 
-function getOrderBillTo(order: unknown) {
-  return asRecord(getOrderRaw(order).billTo)
-}
-
 const LEGACY_CLIENT_ID_BY_STORE_ID = new Map<number, number>([
   [367706, 7],
   [363392, 8],
@@ -854,12 +850,10 @@ export default function AnalysisView() {
   const modalOrder = orderModal.order
   const modalRaw = getOrderRaw(modalOrder)
   const modalShipTo = getOrderShipTo(modalOrder)
-  const modalBillTo = getOrderBillTo(modalOrder)
   const modalAllItems = getOrderItems(modalOrder)
   const modalItems = modalAllItems.filter((item) => !isAdjustmentItem(item))
   const modalAdjustments = modalAllItems.filter(isAdjustmentItem)
   const modalShipments = asArray(asRecord(modalOrder).shipments)
-  const modalOverrides = asRecord(asRecord(modalOrder).overrides)
   const modalItemsTotal = getItemsTotal(modalItems)
   const modalShipmentTotal = getShipmentsTotal(modalShipments)
 
@@ -1903,7 +1897,7 @@ export default function AnalysisView() {
                 </div>
               ) : modalOrder ? (
                 <>
-                  <div className="analysis-order-summary-grid">
+                  <div className="analysis-order-simple-summary">
                     <div>
                       <span>Status</span>
                       <strong>{formatStatusText(asRecord(modalOrder).orderStatus)}</strong>
@@ -1923,15 +1917,8 @@ export default function AnalysisView() {
                   </div>
 
                   <div className="analysis-order-sections">
-                    <DetailSection title="Customer">
-                      <DetailField label="Recipient" value={modalShipTo.name} />
-                      <DetailField label="Customer Email" value={asRecord(modalOrder).customerEmail ?? modalRaw.customerEmail} />
-                      <DetailField label="Username" value={modalRaw.customerUsername} />
-                      <DetailField label="Phone" value={modalShipTo.phone} />
-                      <DetailField label="Address Verified" value={modalShipTo.addressVerified} />
-                    </DetailSection>
-
-                    <DetailSection title="Ship To">
+                    <DetailSection title="Shipment Details">
+                      <DetailField label="Ship To" value={modalShipTo.name} />
                       <div className="analysis-address-block">
                         {formatAddressLines(modalShipTo).length ? (
                           formatAddressLines(modalShipTo).map((line) => <div key={line}>{line}</div>)
@@ -1939,21 +1926,18 @@ export default function AnalysisView() {
                           <span>-</span>
                         )}
                       </div>
+                      <DetailField label="Phone" value={modalShipTo.phone} />
+                      <DetailField label="Email" value={asRecord(modalOrder).customerEmail ?? modalRaw.customerEmail} />
                     </DetailSection>
 
-                    <DetailSection title="Billing / Payment">
-                      <DetailField label="Amount Paid" value={formatMoneyValue(modalRaw.amountPaid)} />
+                    <DetailSection title="Cost Summary">
+                      <DetailField label="Product Total" value={formatMoneyValue(modalItemsTotal ?? modalRaw.amountPaid)} />
+                      <DetailField label="Shipping" value={formatMoneyValue(modalShipmentTotal ?? modalRaw.shippingAmount)} />
                       <DetailField label="Tax" value={formatMoneyValue(modalRaw.taxAmount)} />
-                      <DetailField label="Payment Method" value={modalRaw.paymentMethod} />
-                      <DetailField label="Date Paid" value={formatDateTime(modalRaw.paymentDate ?? modalRaw.datePaid)} />
-                      {Object.keys(modalBillTo).length ? (
-                        <div className="analysis-address-block muted">
-                          {formatAddressLines(modalBillTo).map((line) => <div key={line}>{line}</div>)}
-                        </div>
-                      ) : null}
+                      <DetailField label="Total Paid" value={formatMoneyValue(modalRaw.amountPaid)} />
                     </DetailSection>
 
-                    <DetailSection title="Fulfillment">
+                    <DetailSection title="Configure Shipment">
                       <DetailField label="Carrier" value={asRecord(modalOrder).carrierCode ?? modalRaw.carrierCode} />
                       <DetailField label="Service" value={asRecord(modalOrder).serviceCode ?? modalRaw.serviceCode} />
                       <DetailField label="Requested Service" value={modalRaw.requestedShippingService} />
@@ -1964,18 +1948,9 @@ export default function AnalysisView() {
 
                     <DetailSection title="Timeline">
                       <DetailField label="Order Date" value={formatDateTime(asRecord(modalOrder).orderDate ?? modalRaw.orderDate)} />
-                      <DetailField label="Created" value={formatDateTime(asRecord(modalOrder).createdAt ?? modalRaw.createDate)} />
-                      <DetailField label="Modified" value={formatDateTime(asRecord(modalOrder).updatedAt ?? modalRaw.modifyDate)} />
+                      <DetailField label="Date Paid" value={formatDateTime(modalRaw.paymentDate ?? modalRaw.datePaid)} />
                       <DetailField label="Ship By" value={formatDateTime(modalRaw.shipByDate)} />
-                      <DetailField label="Hold Until" value={formatDateTime(modalRaw.holdUntilDate)} />
-                    </DetailSection>
-
-                    <DetailSection title="System">
-                      <DetailField label="Internal ID" value={asRecord(modalOrder).id} />
-                      <DetailField label="External Order ID" value={asRecord(modalOrder).externalOrderId ?? modalRaw.orderId} />
                       <DetailField label="Client ID" value={getDisplayClientId(modalOrder)} />
-                      <DetailField label="Store ID" value={asRecord(modalOrder).storeId ?? asRecord(modalRaw.advancedOptions).storeId} />
-                      <DetailField label="External Shipped" value={asRecord(modalOrder).externallyShipped} />
                     </DetailSection>
                   </div>
 
@@ -2089,20 +2064,6 @@ export default function AnalysisView() {
                       <div className="analysis-empty-note">No shipment records are linked to this order.</div>
                     )}
                   </div>
-
-                  <div className="analysis-order-wide-section">
-                    <h4>Local Overrides</h4>
-                    {Object.keys(modalOverrides).length ? (
-                      <pre className="analysis-order-json">{JSON.stringify(modalOverrides, null, 2)}</pre>
-                    ) : (
-                      <div className="analysis-empty-note">No local overrides are saved for this order.</div>
-                    )}
-                  </div>
-
-                  <details className="analysis-order-raw">
-                    <summary>Raw order payload</summary>
-                    <pre>{JSON.stringify(modalRaw, null, 2)}</pre>
-                  </details>
                 </>
               ) : null}
             </div>
