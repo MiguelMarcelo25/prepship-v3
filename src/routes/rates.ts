@@ -12,7 +12,7 @@ import {
 } from '../services/rates-backfill';
 import { ssRequest } from '../lib/shipstation';
 import type { CarriersResponse } from '../lib/shipstation/types';
-import multiCarrierHandler from '../../api/rates/multi';
+import multiCarrierHandler from '../lib/imported-handlers/rates-multi';
 import { runNodeHandler } from '../lib/node-handler';
 
 const app = new Hono();

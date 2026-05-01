@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import carrierAccountsHandler from '../../api/carrier-accounts';
+import carrierAccountsHandler from '../lib/imported-handlers/carrier-accounts';
 import { runNodeHandler } from '../lib/node-handler';
 
 const app = new Hono();

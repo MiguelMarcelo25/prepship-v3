@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import verifyCarrierHandler from '../../api/carriers/verify';
+import verifyCarrierHandler from '../lib/imported-handlers/carriers-verify';
 import { runNodeHandler } from '../lib/node-handler';
 
 const app = new Hono();
