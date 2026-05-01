@@ -410,7 +410,10 @@ th.col-drag-over{background:var(--ss-blue-bg)!important;box-shadow:inset 2px 0 0
 .ship-save-link{font-size:10.5px;color:var(--ss-blue);cursor:pointer;padding:5px 0;display:block;text-align:center;}
 .ship-save-link:hover{text-decoration:underline;}
 .ship-rate-row{display:flex;align-items:center;gap:8px;padding:6px 0;}
-.ship-rate-val{font-size:12.5px;color:var(--text2);}
+.ship-rate-val{display:inline-flex;flex-direction:column;align-items:flex-start;gap:1px;font-size:12.5px;line-height:1.25;color:var(--text2);min-width:0;}
+.ship-rate-val-muted{color:var(--text3);}
+.ship-rate-price{color:var(--green);font-size:12.5px;font-weight:800;line-height:1.2;}
+.ship-rate-detail{display:block;color:var(--text);font-size:11.5px;font-weight:500;line-height:1.25;overflow-wrap:anywhere;}
 .ship-scout{font-size:11.5px;color:var(--ss-blue);cursor:pointer;display:flex;align-items:center;gap:3px;}
 .ship-scout:hover{text-decoration:underline;}
 

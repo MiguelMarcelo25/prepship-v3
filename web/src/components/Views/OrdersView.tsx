@@ -3927,18 +3927,30 @@ export default function OrdersView({
                 <span style={{ fontSize: 11.5, color: 'var(--text2)', fontWeight: 500, width: 90, flexShrink: 0 }}>Rate</span>
                 {panelIsTestOrder ? (
                   <span className="ship-rate-val" id="panel-rate-val">
-                    $0.00 · {TEST_SHIPPING_ACCOUNT_LABEL} · Test Mock Service
+                    <><span className="ship-rate-price">$0.00</span><span className="ship-rate-detail">{TEST_SHIPPING_ACCOUNT_LABEL} · Test Mock Service</span></>
                   </span>
                 ) : shipped ? (
-                  <span style={{ fontSize: 10.5, color: 'var(--text3)' }}>
+                  <span className="ship-rate-val ship-rate-val-muted">
                     {getIsExternallyFulfilled(panelOrder)
                       ? '📦 Ext. label — purchased externally'
-                      : `${formatMoney(panelOrder.label?.cost ?? panelOrder.selectedRate?.cost ?? getSelectedRateBaseCost(panelOrder))} · ${selectedPanelAccountLabel} · ${formatServiceCode(panelForm.serviceCode)}`}
+                      : (
+                        <>
+                          <span className="ship-rate-price">{formatMoney(panelOrder.label?.cost ?? panelOrder.selectedRate?.cost ?? getSelectedRateBaseCost(panelOrder))}</span>
+                          <span className="ship-rate-detail">{selectedPanelAccountLabel} · {formatServiceCode(panelForm.serviceCode)}</span>
+                        </>
+                      )}
                   </span>
                 ) : (
                   <>
                     <span className="ship-rate-val" id="panel-rate-val">
-                      {panelRateLoading ? 'Loading rates…' : panelRatePreview[0] ? `${formatMoney((toNumberValue(panelRatePreview[0].shipmentCost) ?? 0) + (toNumberValue(panelRatePreview[0].otherCost) ?? 0))} · ${formatCarrierCode(toStringValue(panelRatePreview[0].carrierCode))} · ${formatServiceCode(toStringValue(panelRatePreview[0].serviceCode))}` : panelOrder.bestRate ? `${formatMoney(applyCarrierMarkup({
+                      {panelRateLoading ? 'Loading rates…' : panelRatePreview[0] ? (
+                        <>
+                          <span className="ship-rate-price">{formatMoney((toNumberValue(panelRatePreview[0].shipmentCost) ?? 0) + (toNumberValue(panelRatePreview[0].otherCost) ?? 0))}</span>
+                          <span className="ship-rate-detail">{formatCarrierCode(toStringValue(panelRatePreview[0].carrierCode))} · {formatServiceCode(toStringValue(panelRatePreview[0].serviceCode))}</span>
+                        </>
+                      ) : panelOrder.bestRate ? (
+                        <>
+                          <span className="ship-rate-price">{formatMoney(applyCarrierMarkup({
                         shippingProviderId: getBestRateShippingProviderId(panelOrder),
                         carrierCode: panelOrder.bestRate.carrierCode ?? '',
                         serviceCode: getBestRateServiceCode(panelOrder) ?? '',
@@ -3947,7 +3959,10 @@ export default function OrdersView({
                         shipmentCost: typeof panelOrder.bestRate.shipmentCost === 'number' ? panelOrder.bestRate.shipmentCost : undefined,
                         otherCost: typeof panelOrder.bestRate.otherCost === 'number' ? panelOrder.bestRate.otherCost : undefined,
                         carrierNickname: getBestRateCarrierNickname(panelOrder),
-                      }, markups))} · ${selectedPanelAccountLabel} · ${formatServiceCode(panelForm.serviceCode || getBestRateServiceCode(panelOrder))}` : '—'}
+                      }, markups))}</span>
+                          <span className="ship-rate-detail">{selectedPanelAccountLabel} · {formatServiceCode(panelForm.serviceCode || getBestRateServiceCode(panelOrder))}</span>
+                        </>
+                      ) : '—'}
                     </span>
                     <span style={{ flex: 1 }} />
                     <span className="ship-scout" title="Refresh rates" onClick={() => void openRateBrowser()}>🔄 <span id="panel-scout-label">Scout Review</span></span>
