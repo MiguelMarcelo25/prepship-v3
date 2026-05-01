@@ -1,663 +1,146 @@
-.analysis-table-shell{
-  overflow:visible;
-  border:1px solid var(--border);
-  border-radius:10px;
-  background:var(--surface);
-  box-shadow:0 1px 3px rgba(15,23,42,.05), 0 1px 2px rgba(15,23,42,.03);
-}
-
-/* ─── Density toggle (compact / comfortable / spacious) ─── */
-.analysis-density-toggle{
-  display:inline-flex;
-  align-items:center;
-  gap:0;
-  border:1px solid var(--border2);
-  border-radius:7px;
-  background:var(--surface);
-  padding:2px;
-  margin-left:8px;
-  height:28px;
-}
-
-.analysis-density-btn{
-  appearance:none;
-  border:0;
-  background:transparent;
-  color:var(--text2);
-  font-size:10px;
-  line-height:1;
-  width:22px;
-  height:22px;
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  border-radius:5px;
-  cursor:pointer;
-  transition:background .15s ease, color .15s ease;
-}
-
-.analysis-density-btn:hover:not(:disabled){
-  background:rgba(42,91,215,.10);
-  color:var(--ss-blue);
-}
-
-.analysis-density-btn:disabled{
-  opacity:.35;
-  cursor:not-allowed;
-}
-
-.analysis-density-label{
-  font-size:10px;
-  font-weight:700;
-  text-transform:uppercase;
-  letter-spacing:.05em;
-  color:var(--text3);
-  padding:0 8px;
-  min-width:74px;
-  text-align:center;
-  font-variant:small-caps;
-}
-
-/* ─── Column-size variants (scale column widths via padding + min-width) ─── */
-.analysis-table-shell.is-colsize-narrow{
-  overflow:visible;
-}
-
-.analysis-table-shell.is-colsize-narrow .analysis-data-table{
-  table-layout:auto;
-  min-width:100%;
-  font-size:11.5px;
-}
-
-.analysis-table-shell.is-colsize-narrow .analysis-data-table tbody td,
-.analysis-table-shell.is-colsize-narrow .analysis-data-table tfoot td{
-  padding-left:6px;
-  padding-right:6px;
-}
-
-.analysis-table-shell.is-colsize-narrow .analysis-data-table .col-name{
-  max-width:140px;
-}
-
-.analysis-table-shell.is-colsize-narrow .analysis-table-sort-button{
-  padding-left:6px;
-  padding-right:6px;
-}
-
-.analysis-table-shell.is-colsize-narrow .analysis-pill{
-  padding:1px 6px;
-  font-size:10px;
-}
-
-.analysis-table-shell.is-colsize-medium .analysis-data-table{
-  table-layout:auto;
-  min-width:100%;
-}
-
-.analysis-table-shell.is-colsize-wide{
-  overflow:visible;
-}
-
-.analysis-table-shell.is-colsize-wide .analysis-data-table{
-  table-layout:auto;
-  min-width:1400px;
-  font-size:13.5px;
-}
-
-.analysis-table-shell.is-colsize-wide .analysis-data-table tbody td,
-.analysis-table-shell.is-colsize-wide .analysis-data-table tfoot td{
-  padding-left:20px;
-  padding-right:20px;
-}
-
-.analysis-table-shell.is-colsize-wide .analysis-data-table .col-name{
-  max-width:320px;
-}
-
-.analysis-table-shell.is-colsize-wide .analysis-data-table .col-sku{
-  font-size:12.5px;
-}
-
-.analysis-table-shell.is-colsize-wide .analysis-data-table .col-client{
-  font-size:12.5px;
-}
-
-.analysis-table-shell.is-colsize-wide .analysis-table-sort-button{
-  padding-left:14px;
-  padding-right:14px;
-}
-
-.analysis-table-shell.is-colsize-wide .analysis-pill{
-  padding:3px 10px;
-  font-size:11.5px;
-}
-
-.analysis-table-shell.is-colsize-wide .analysis-table-foot td{
-  padding:14px 20px;
-  font-size:13px;
-}
-
-/* ─── Main Analysis Data Table ─── */
-.analysis-data-table{
-  width:100%;
-  border-collapse:separate;
-  border-spacing:0;
-  font-size:12.5px;
-}
-
-.analysis-data-table tbody tr{
-  transition:background .15s ease, box-shadow .15s ease;
-}
-
-.analysis-data-table tbody tr:nth-child(even){
-  background:#fafbfc;
-}
-
-.analysis-data-table tbody tr.analysis-clickable-row:hover{
-  background:#eef4ff;
-  box-shadow:inset 3px 0 0 var(--ss-blue);
-}
-
-.analysis-data-table tbody td{
-  padding:10px 12px;
-  border-bottom:1px solid var(--border);
-  vertical-align:middle;
-  color:var(--text);
-}
-
-.analysis-data-table .col-name{
-  max-width:220px;
-  overflow:hidden;
-  text-overflow:ellipsis;
-  white-space:nowrap;
-  font-weight:600;
-  color:var(--text);
-}
-
-.analysis-data-table tbody td.col-sku,
-.analysis-data-table tbody td.col-sku.is-link{
-  font-family:'JetBrains Mono','Fira Code',ui-monospace,monospace;
-  font-size:11.5px;
-  color:#1d4ed8 !important;
-  font-weight:700;
-  font-feature-settings:"tnum" 1;
-}
-
-.analysis-data-table tbody td.col-sku.is-link{
-  text-decoration:underline;
-  text-decoration-thickness:1px;
-  text-underline-offset:2px;
-}
-
-.analysis-data-table .col-client{
-  color:var(--text2);
-  font-size:11.5px;
-}
-
-.analysis-data-table .col-num{
-  text-align:right;
-  font-variant-numeric:tabular-nums;
-  white-space:nowrap;
-}
-
-.analysis-data-table .col-num.is-strong{
-  font-weight:700;
-}
-
-.analysis-data-table .col-num.is-total{
-  font-weight:800;
-  font-size:13px;
-  color:var(--text);
-}
-
-.analysis-pill{
-  display:inline-flex;
-  align-items:center;
-  gap:4px;
-  padding:2px 8px;
-  border-radius:999px;
-  font-size:10.5px;
-  font-weight:700;
-  line-height:1.4;
-  font-variant-numeric:tabular-nums;
-}
-
-.analysis-pill.is-pending{
-  background:rgba(224,122,0,.12);
-  color:#b86200;
-}
-
-.analysis-pill.is-external{
-  background:rgba(138,149,163,.16);
-  color:var(--text2);
-}
-
-.analysis-pill.is-expedited{
-  background:rgba(224,122,0,.12);
-  color:#b86200;
-}
-
-.analysis-pill .analysis-pill-suffix{
-  font-size:9px;
-  font-weight:600;
-  opacity:.75;
-}
-
-.analysis-qty-cell{
-  display:inline-flex;
-  align-items:center;
-  gap:7px;
-  justify-content:flex-end;
-}
-
-.analysis-qty-bar{
-  height:6px;
-  background:linear-gradient(90deg, var(--ss-blue), #5b8def);
-  border-radius:3px;
-  opacity:.65;
-  min-width:1px;
-}
-
-.analysis-qty-value{
-  font-weight:600;
-  font-size:12.5px;
-  min-width:36px;
-  text-align:right;
-  font-variant-numeric:tabular-nums;
-}
-
-.analysis-shipcost-detail{
-  font-size:10.5px;
-  color:var(--text3);
-  margin-left:5px;
-  font-weight:600;
-  font-variant-numeric:tabular-nums;
-}
-
-.analysis-shipcost-detail.is-green{
-  color:var(--green);
-}
-
-.analysis-table-foot tr{
-  background:linear-gradient(180deg, #f8fafc 0%, #eef3f8 100%);
-  border-top:2px solid var(--border);
-  font-weight:700;
-}
-
-.analysis-table-foot td{
-  padding:11px 12px;
-  font-size:12px;
-  border-top:2px solid var(--border);
-  color:var(--text);
-  font-variant-numeric:tabular-nums;
-}
-
-.analysis-table-foot td.col-num{
-  text-align:right;
-}
-
-.analysis-table-foot .totals-label{
-  color:var(--text3);
-  font-weight:800;
-  font-size:10px;
-  text-transform:uppercase;
-  letter-spacing:.06em;
-  margin-right:10px;
-}
-
-.analysis-table-foot .totals-pending{
-  color:#b86200;
-}
-
-.analysis-table-foot .totals-external{
-  color:var(--text3);
-}
-
-.analysis-table-foot .totals-expedited{
-  color:#b86200;
-}
-
-.analysis-table-foot .totals-shipping{
-  font-weight:800;
-  font-size:13px;
-}
-
-.analysis-empty-cell{
-  padding:48px 20px;
-  text-align:center;
-  color:var(--text3);
-  font-size:13px;
-}
-
-.analysis-error-cell{
-  padding:48px 20px;
-  text-align:center;
-  color:var(--red);
-  font-size:13px;
-  font-weight:600;
-}
-
-.analysis-dash{
-  color:var(--border2);
-}
-
-/* ─── SKU Drawer "Recent Orders" Table ─── */
-.analysis-orders-table-wrap{
-  background:var(--surface);
-  border:1px solid var(--border);
-  border-radius:10px;
-  overflow:hidden;
-  box-shadow:0 1px 3px rgba(15,23,42,.05), 0 1px 2px rgba(15,23,42,.03);
-}
-
-.analysis-orders-table{
-  width:100%;
-  border-collapse:separate;
-  border-spacing:0;
-  font-size:12.5px;
-}
-
-.analysis-orders-table thead tr{
-  background:linear-gradient(180deg, #f8fafc 0%, #eef3f8 100%);
-}
-
-.analysis-orders-table th{
-  padding:11px 12px;
-  text-align:left;
-  font-size:10px;
-  font-weight:800;
-  text-transform:uppercase;
-  letter-spacing:.05em;
-  color:var(--text3);
-  border-bottom:1px solid var(--border);
-  white-space:nowrap;
-}
-
-.analysis-orders-table th.is-center{
-  text-align:center;
-}
-
-.analysis-orders-table tbody tr{
-  transition:background .15s ease;
-}
-
-.analysis-orders-table tbody tr:nth-child(even){
-  background:#fafbfc;
-}
-
-.analysis-orders-table tbody tr:hover{
-  background:#eef4ff;
-}
-
-.analysis-orders-table td{
-  padding:10px 12px;
-  border-top:1px solid var(--border);
-  color:var(--text);
-  vertical-align:middle;
-}
-
-.analysis-orders-table td.is-center{
-  text-align:center;
-}
-
-.analysis-orders-table .col-order-num{
-  font-family:'JetBrains Mono','Fira Code',ui-monospace,monospace;
-  font-size:11.5px;
-}
-
-.analysis-orders-table .col-customer{
-  max-width:200px;
-  overflow:hidden;
-  text-overflow:ellipsis;
-  white-space:nowrap;
-  font-size:12px;
-}
-
-.analysis-orders-table .col-qty{
-  text-align:center;
-  font-weight:700;
-  font-variant-numeric:tabular-nums;
-}
-
-.analysis-orders-table .col-date{
-  font-size:11.5px;
-  color:var(--text3);
-  white-space:nowrap;
-  font-variant-numeric:tabular-nums;
-}
-
-.analysis-status-pill{
-  display:inline-flex;
-  align-items:center;
-  gap:5px;
-  padding:3px 9px;
-  border-radius:999px;
-  font-size:10.5px;
-  font-weight:700;
-  text-transform:capitalize;
-  white-space:nowrap;
-}
-
-.analysis-status-pill::before{
-  content:'';
-  width:6px;
-  height:6px;
-  border-radius:50%;
-  background:currentColor;
-}
-
-.analysis-status-pill.is-shipped{
-  background:rgba(22,163,74,.12);
-  color:var(--green);
-}
-
-.analysis-status-pill.is-awaiting{
-  background:rgba(42,91,215,.12);
-  color:var(--ss-blue);
-}
-
-.analysis-status-pill.is-other{
-  background:rgba(138,149,163,.16);
-  color:var(--text2);
-}
-
-#view-analysis.view-content{
-  --analysis-table-sticky-top:0px;
-  overflow-x:auto;
-  padding-top:0;
-  padding-bottom:24px;
-}
-
-.analysis-sticky-panel{
-  box-shadow:0 1px 0 var(--border);
-  overflow:hidden;
-  isolation:isolate;
-}
-
-.analysis-table-head tr{
-  background:linear-gradient(180deg, #f8fafc 0%, #eef3f8 100%);
-  border-bottom:1px solid var(--border);
-}
-
-.analysis-table-head-cell{
-  padding:0;
-  vertical-align:middle;
-  white-space:nowrap;
-  position:sticky !important;
-  top:var(--analysis-table-sticky-top, 0px) !important;
-  z-index:25 !important;
-  background:linear-gradient(180deg, #f8fafc 0%, #eef3f8 100%) !important;
-  box-shadow:0 1px 0 var(--border), 0 3px 8px rgba(15,23,42,.08);
-}
-
-/* Drag-to-resize handle styles live in ColumnResizeHandle.css */
-
-.analysis-table-head-cell.is-left{
-  text-align:left;
-}
-
-.analysis-table-head-cell.is-center{
-  text-align:center;
-}
-
-.analysis-table-head-cell.is-right{
-  text-align:right;
-}
-
-.analysis-table-sort-button{
-  width:100%;
-  min-height:34px;
-  display:inline-flex;
-  align-items:center;
-  justify-content:flex-start;
-  gap:6px;
-  padding:7px 8px;
-  border:0;
-  background:transparent;
-  color:var(--text3);
-  cursor:pointer;
-  font:inherit;
-  font-size:10px;
-  font-weight:800;
-  text-transform:uppercase;
-  letter-spacing:.04em;
-}
-
-.analysis-table-head-cell.is-right .analysis-table-sort-button{
-  justify-content:flex-end;
-}
-
-.analysis-table-head-cell.is-center .analysis-table-sort-button{
-  justify-content:center;
-}
-
-.analysis-table-sort-button:hover{
-  background:rgba(42,91,215,.08);
-  color:var(--ss-blue);
-}
-
-.analysis-table-head-cell.is-active .analysis-table-sort-button{
-  color:var(--ss-blue);
-}
-
-.analysis-table-sort-label{
-  overflow:hidden;
-  text-overflow:ellipsis;
-}
-
-.analysis-table-sort-icon{
-  width:18px;
-  height:18px;
-  border-radius:999px;
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  flex:0 0 auto;
-  background:rgba(148,163,184,.18);
-  color:var(--text3);
-  font-size:11px;
-  line-height:1;
-}
-
-.analysis-table-head-cell.is-active .analysis-table-sort-icon{
-  background:var(--ss-blue);
-  color:#fff;
-}
-
-.analysis-pagination{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:12px;
-  padding:10px 2px 2px;
-  color:var(--text3);
-  font-size:12px;
-}
-
-.analysis-pagination-count strong{
-  color:var(--text);
-  font-weight:800;
-}
-
-.analysis-pagination-controls{
-  display:flex;
-  align-items:center;
-  gap:6px;
-  flex-wrap:wrap;
-  justify-content:flex-end;
-}
-
-.analysis-pagination-size{
-  display:inline-flex;
-  align-items:center;
-  gap:6px;
-  margin-right:4px;
-  color:var(--text3);
-  font-weight:700;
-}
-
-.analysis-pagination-size select{
-  height:28px;
-  border:1px solid var(--border2);
-  border-radius:6px;
-  background:var(--surface);
-  color:var(--text);
-  font-size:12px;
-  padding:0 24px 0 8px;
-}
-
-.analysis-pagination-button,
-.analysis-pagination-page{
-  min-width:30px;
-  height:28px;
-  border:1px solid var(--border2);
-  border-radius:6px;
-  background:var(--surface);
-  color:var(--text2);
-  cursor:pointer;
-  font-size:12px;
-  font-weight:700;
-}
-
-.analysis-pagination-button{
-  padding:0 10px;
-}
-
-.analysis-pagination-button:hover:not(:disabled),
-.analysis-pagination-page:hover{
-  border-color:rgba(42,91,215,.45);
-  color:var(--ss-blue);
-  background:#eef4ff;
-}
-
-.analysis-pagination-button:disabled{
-  opacity:.45;
-  cursor:not-allowed;
-}
-
-.analysis-pagination-pages{
-  display:flex;
-  align-items:center;
-  gap:4px;
-}
-
-.analysis-pagination-page.is-active{
-  border-color:var(--ss-blue);
-  background:var(--ss-blue);
-  color:#fff;
-}
-
-@media (max-width: 900px){
-  #view-analysis.view-content{
-    padding-bottom:20px;
+/*
+ * AnalysisDataTable / AnalysisTableHeader / AnalysisPagination are now styled
+ * with Tailwind utility classes inline. Only rules that are reused by other
+ * components (AnalysisView.tsx — the SKU-detail drawer and view-level layout)
+ * remain in this file.
+ */
+
+/* ─── View-level overrides for /analysis ─── */
+#view-analysis.view-content {
+  --analysis-table-sticky-top: 0px;
+  overflow-x: auto;
+  padding-top: 0;
+  padding-bottom: 24px;
+}
+
+.analysis-sticky-panel {
+  box-shadow: 0 1px 0 var(--border);
+  overflow: hidden;
+  isolation: isolate;
+}
+
+@media (max-width: 900px) {
+  #view-analysis.view-content {
+    padding-bottom: 20px;
   }
+}
 
-  .analysis-pagination{
-    align-items:flex-start;
-    flex-direction:column;
-  }
+/* ─── SKU Drawer "Recent Orders" Table (rendered inside AnalysisView.tsx) ─── */
+.analysis-orders-table-wrap {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .05), 0 1px 2px rgba(15, 23, 42, .03);
+}
 
-  .analysis-pagination-controls{
-    justify-content:flex-start;
-  }
+.analysis-orders-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12.5px;
+}
+
+.analysis-orders-table thead tr {
+  background: linear-gradient(180deg, #f8fafc 0%, #eef3f8 100%);
+}
+
+.analysis-orders-table th {
+  padding: 11px 12px;
+  text-align: left;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--text3);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.analysis-orders-table th.is-center {
+  text-align: center;
+}
+
+.analysis-orders-table tbody tr {
+  transition: background .15s ease;
+}
+
+.analysis-orders-table tbody tr:nth-child(even) {
+  background: #fafbfc;
+}
+
+.analysis-orders-table tbody tr:hover {
+  background: #eef4ff;
+}
+
+.analysis-orders-table td {
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  color: var(--text);
+  vertical-align: middle;
+}
+
+.analysis-orders-table td.is-center {
+  text-align: center;
+}
+
+.analysis-orders-table .col-order-num {
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  font-size: 11.5px;
+}
+
+.analysis-orders-table .col-customer {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.analysis-orders-table .col-qty {
+  text-align: center;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.analysis-orders-table .col-date {
+  font-size: 11.5px;
+  color: var(--text3);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.analysis-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+
+.analysis-status-pill::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.analysis-status-pill.is-shipped {
+  background: rgba(22, 163, 74, .12);
+  color: var(--green);
+}
+
+.analysis-status-pill.is-awaiting {
+  background: rgba(42, 91, 215, .12);
+  color: var(--ss-blue);
+}
+
+.analysis-status-pill.is-other {
+  background: rgba(138, 149, 163, .16);
+  color: var(--text2);
 }

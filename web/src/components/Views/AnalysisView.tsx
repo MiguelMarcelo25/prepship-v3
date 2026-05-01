@@ -807,10 +807,14 @@ export default function AnalysisView() {
           >
             {getAnalysisSummaryText(dataState.rows.length, dataState.orderCount)}
           </span>
-          <div className="analysis-density-toggle" role="group" aria-label="Column width">
+          <div
+            className="inline-flex items-center gap-0 border border-line-2 rounded-md bg-surface p-0.5 ml-2 h-7"
+            role="group"
+            aria-label="Column width"
+          >
             <button
               type="button"
-              className="analysis-density-btn"
+              className="appearance-none border-0 bg-transparent text-ink-2 text-[10px] leading-none w-[22px] h-[22px] inline-flex items-center justify-center rounded-[5px] cursor-pointer transition-colors duration-150 enabled:hover:bg-[rgba(42,91,215,.10)] enabled:hover:text-brand disabled:opacity-35 disabled:cursor-not-allowed"
               onClick={() => stepColumnSize(-1)}
               disabled={columnSizeIndex === 0}
               aria-label="Narrower columns"
@@ -818,10 +822,12 @@ export default function AnalysisView() {
             >
               ◀
             </button>
-            <span className="analysis-density-label">{columnSize}</span>
+            <span className="text-[10px] font-bold uppercase tracking-[0.05em] text-ink-3 px-2 min-w-[74px] text-center [font-variant:small-caps]">
+              {columnSize}
+            </span>
             <button
               type="button"
-              className="analysis-density-btn"
+              className="appearance-none border-0 bg-transparent text-ink-2 text-[10px] leading-none w-[22px] h-[22px] inline-flex items-center justify-center rounded-[5px] cursor-pointer transition-colors duration-150 enabled:hover:bg-[rgba(42,91,215,.10)] enabled:hover:text-brand disabled:opacity-35 disabled:cursor-not-allowed"
               onClick={() => stepColumnSize(1)}
               disabled={columnSizeIndex === COLUMN_SIZES.length - 1}
               aria-label="Wider columns"
