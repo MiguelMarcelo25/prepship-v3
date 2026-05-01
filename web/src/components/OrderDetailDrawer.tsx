@@ -212,6 +212,64 @@ function fmtWeight(oz: number | null | undefined): string {
   return `${lb} lb ${ozPart} oz`;
 }
 
+function splitWeight(oz: number | null | undefined) {
+  const total = Number(oz ?? 0);
+  if (!Number.isFinite(total) || total <= 0) return { lb: '', oz: '' };
+  return {
+    lb: String(Math.floor(total / 16)),
+    oz: String(Math.round(total % 16)),
+  };
+}
+
+function textValue(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  }
+  return null;
+}
+
+function formatCode(value: unknown): string {
+  const text = textValue(value);
+  if (!text) return '-';
+  return text
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function getPanelAddressBlock(shipTo: ShipTo): string {
+  const lines: string[] = [];
+  if (shipTo.company) lines.push(shipTo.company);
+  if (shipTo.street1) lines.push(shipTo.street1);
+  if (shipTo.street2) lines.push(shipTo.street2);
+  if (shipTo.street3) lines.push(shipTo.street3);
+  const cityLine = [shipTo.city, shipTo.state, shipTo.postalCode]
+    .filter(Boolean)
+    .join(', ');
+  if (cityLine) lines.push(cityLine);
+  if (shipTo.country && shipTo.country !== 'US') lines.push(shipTo.country);
+  return lines.join('\n');
+}
+
+function PanelReadOnlyField({ value }: { value: React.ReactNode }) {
+  return (
+    <div className="ship-input" style={{ minHeight: 29, display: 'flex', alignItems: 'center' }}>
+      {value || '-'}
+    </div>
+  );
+}
+
+function PanelField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="ship-field-row">
+      <span className="ship-field-label">{label}</span>
+      <div className="ship-field-value">{children}</div>
+    </div>
+  );
+}
+
 function StatusBadge({ status }: { status?: string }) {
   const s = (status ?? 'unknown').toLowerCase();
   const color =
@@ -394,6 +452,276 @@ export default function OrderDetailDrawer({
   const isShipped = (effectiveStatus ?? '').toLowerCase() === 'shipped';
   const isModal = presentation === 'modal';
   const closeIsTextButton = closeLabel !== '✕';
+
+  if (isModal) {
+    const shipmentRecord = (liveShipment ?? {}) as any;
+    const rawRecord = raw as any;
+    const canonicalShipping = (rawRecord.canonicalOrder?.shipping ?? {}) as Record<string, unknown>;
+    const selectedRate = (rawRecord.selectedRate ?? rawRecord.bestRate ?? canonicalShipping.selectedRate ?? {}) as Record<string, unknown>;
+    const modalWeightOz =
+      toNumber(shipmentRecord.weightOz) ??
+      toNumber(rawRecord.weightOz) ??
+      toNumber(raw.weight?.value);
+    const modalWeight = splitWeight(modalWeightOz);
+    const modalDims = {
+      length: toNumber(shipmentRecord.dimsL) ?? toNumber(raw.dimensions?.length),
+      width: toNumber(shipmentRecord.dimsW) ?? toNumber(raw.dimensions?.width),
+      height: toNumber(shipmentRecord.dimsH) ?? toNumber(raw.dimensions?.height),
+    };
+    const carrierCode = textValue(
+      shipmentRecord.carrierCode,
+      selectedRate.carrierCode,
+      selectedRate.carrier_code,
+      raw.carrierCode,
+    );
+    const serviceCode = textValue(
+      shipmentRecord.serviceCode,
+      selectedRate.serviceCode,
+      selectedRate.service_code,
+      raw.serviceCode,
+    );
+    const accountLabel = textValue(
+      shipmentRecord.providerAccountNickname,
+      selectedRate.providerAccountNickname,
+      selectedRate.carrierNickname,
+      selectedRate.carrier_nickname,
+      canonicalShipping.accountNickname,
+      canonicalShipping.providerAccountNickname,
+      carrierCode,
+    );
+    const requestedService = textValue(
+      rawRecord.requestedShippingService,
+      rawRecord.requestedService,
+      serviceCode,
+      carrierCode,
+      'Standard',
+    );
+    const packageText = textValue(
+      shipmentRecord.selectedPackageId,
+      raw.packageCode,
+      rawRecord.packageCode,
+    );
+    const confirmationText = textValue(raw.confirmation, rawRecord.confirmation, 'delivery');
+    const tracking = textValue(shipmentRecord.trackingNumber, rawRecord.trackingNumber);
+    const shipFrom = textValue(
+      rawRecord.shipFrom?.name,
+      rawRecord.shipFrom?.company,
+      raw.advancedOptions?.warehouseId ? `Warehouse ${raw.advancedOptions.warehouseId}` : null,
+    );
+    const rateAmount =
+      labelCost ??
+      toNumber(selectedRate.cost) ??
+      toNumber(selectedRate.amount) ??
+      toNumber(raw.shippingAmount);
+    const rateDetail = [accountLabel, serviceCode ? formatCode(serviceCode) : null]
+      .filter(Boolean)
+      .join(' - ');
+    const addressBlock = getPanelAddressBlock(shipTo);
+    const soldTo = textValue(rawRecord.customerUsername, shipTo.name);
+
+    return (
+      <>
+        <div
+          onClick={onClose}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15,23,42,.45)',
+            zIndex: 1400,
+          }}
+        />
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Order details ${raw.orderNumber ?? orderId}`}
+          style={{
+            position: 'fixed',
+            top: '50%',
+            left: '50%',
+            width: 'min(430px, calc(100vw - 24px))',
+            height: 'min(860px, calc(100vh - 36px))',
+            transform: 'translate(-50%, -50%)',
+            borderRadius: 8,
+            background: 'var(--surface)',
+            zIndex: 1401,
+            boxShadow: '0 18px 54px rgba(15,23,42,.28)',
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+          }}
+        >
+          <div className="panel-topbar">
+            <div className="panel-ordnum">
+              {raw.orderNumber ?? `#${orderId}`}
+            </div>
+            <StatusBadge status={effectiveStatus} />
+            <button className="panel-topbar-btn" type="button" onClick={onClose} title={closeTitle}>
+              {closeLabel}
+            </button>
+          </div>
+
+          <div className="panel-body">
+            {loading ? <div className="loading">Loading full order detail...</div> : null}
+            {error ? (
+              <div className="error" style={{ padding: 24 }}>Error loading order: {error}</div>
+            ) : (
+              <>
+                <div className="panel-section" id="sec-shipping">
+                  <div className="panel-section-header">
+                    <span className="panel-section-arrow">▶</span>
+                    <span className="panel-section-title">Shipping</span>
+                    <div className="panel-section-icons">
+                      <span className="panel-section-icon" title="Settings">⚙</span>
+                      <span className="panel-section-icon" title="Grid">⊞</span>
+                    </div>
+                  </div>
+
+                  <div className="ship-req">
+                    Requested: <span className="ship-req-link">{formatCode(requestedService)}</span>
+                  </div>
+
+                  <div className="panel-section-body">
+                    <PanelField label="Ship From">
+                      <PanelReadOnlyField value={shipFrom} />
+                    </PanelField>
+                    <PanelField label="Ship Acct">
+                      <PanelReadOnlyField value={accountLabel} />
+                    </PanelField>
+                    <PanelField label="Service">
+                      <PanelReadOnlyField value={formatCode(serviceCode)} />
+                    </PanelField>
+                    <PanelField label="Weight">
+                      <input className="ship-input ship-input-sm" value={modalWeight.lb} readOnly />
+                      <span className="ship-input-unit">lb</span>
+                      <input className="ship-input ship-input-sm" value={modalWeight.oz} readOnly />
+                      <span className="ship-input-unit">oz</span>
+                    </PanelField>
+                    <PanelField label="Size">
+                      <input className="ship-input ship-input-sm" value={modalDims.length ?? ''} readOnly />
+                      <span className="ship-input-unit">L</span>
+                      <input className="ship-input ship-input-sm" value={modalDims.width ?? ''} readOnly />
+                      <span className="ship-input-unit">W</span>
+                      <input className="ship-input ship-input-sm" value={modalDims.height ?? ''} readOnly />
+                      <span className="ship-input-unit">H (in)</span>
+                    </PanelField>
+                    <PanelField label="Package">
+                      <PanelReadOnlyField value={packageText} />
+                    </PanelField>
+                    {modalDims.length && modalDims.width && modalDims.height ? (
+                      <div
+                        id="p-package-dims"
+                        style={{
+                          padding: '0 0 6px 98px',
+                          fontSize: 10,
+                          fontWeight: 600,
+                          color: 'var(--green,#16a34a)',
+                          borderBottom: '1px solid var(--border)',
+                        }}
+                      >
+                        {`${modalDims.length} x ${modalDims.width} x ${modalDims.height} in`}
+                      </div>
+                    ) : null}
+                    <PanelField label="Confirmation">
+                      <PanelReadOnlyField value={formatCode(confirmationText)} />
+                    </PanelField>
+                    <PanelField label="Insurance">
+                      <PanelReadOnlyField value={insureHtml} />
+                    </PanelField>
+                    <div className="ship-rate-row">
+                      <span style={{ fontSize: 11.5, color: 'var(--text2)', fontWeight: 500, width: 90, flexShrink: 0 }}>Rate</span>
+                      <span className="ship-rate-val" id="panel-rate-val">
+                        <span className="ship-rate-price">{fmtOptionalMoney(rateAmount)}</span>
+                        <span className="ship-rate-detail">{rateDetail || formatCode(carrierCode)}</span>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {tracking ? (
+                  <div className="delivery-row" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span>Tracking:</span>
+                    <span style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--text)', fontWeight: 600 }}>
+                      {tracking}
+                    </span>
+                  </div>
+                ) : null}
+                <div className="delivery-row">
+                  {liveShipment?.shipDate ? `Shipped: ${fmtDate(liveShipment.shipDate)}` : 'Delivery: -'}
+                </div>
+
+                <div className="panel-section" id="sec-items">
+                  <div className="panel-section-header">
+                    <span className="panel-section-arrow">▶</span>
+                    <span className="panel-section-title">Items</span>
+                    <div className="panel-section-icons">
+                      <span className="panel-section-icon">★</span>
+                      <span className="panel-section-icon">⊞</span>
+                    </div>
+                  </div>
+                  <div className="panel-section-body">
+                    {items.length === 0 ? (
+                      <div style={{ paddingTop: 12, color: 'var(--text3)', fontSize: 11.5 }}>No items found for this order.</div>
+                    ) : null}
+                    {items.map((item, index) => (
+                      <div key={`${item.sku ?? 'unknown'}-${index}`} className="item-row">
+                        <div className="item-img">
+                          {item.imageUrl ? (
+                            <img src={item.imageUrl} alt={item.name ?? ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          ) : (
+                            <span>Box</span>
+                          )}
+                        </div>
+                        <div className="item-info">
+                          <div className="item-name">{item.name ?? 'Unknown Item'}</div>
+                          <div className="item-sku">SKU: {item.sku ?? '-'}</div>
+                          <div className="item-price-row">
+                            {fmtMoney(item.unitPrice)} x {item.quantity ?? 1} = <strong>{fmtMoney((item.unitPrice ?? 0) * (item.quantity ?? 1))}</strong>
+                          </div>
+                        </div>
+                        <div className="item-qty">{item.quantity ?? 1}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="panel-section" id="sec-recipient">
+                  <div className="panel-section-header">
+                    <span className="panel-section-arrow">▶</span>
+                    <span className="panel-section-title">Recipient</span>
+                    <div className="panel-section-icons">
+                      <span className="panel-section-icon">⊞</span>
+                    </div>
+                  </div>
+                  <div className="panel-section-body">
+                    <div className="recip-header">
+                      <span className="recip-title">Ship To</span>
+                    </div>
+                    <div className="recip-name">{shipTo.name ?? '-'}</div>
+                    <div className="recip-addr">{addressBlock || '-'}</div>
+                    {shipTo.phone ? <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 3 }}>{shipTo.phone}</div> : null}
+                    {raw.customerEmail ? <div style={{ fontSize: 11.5, color: 'var(--text2)', marginTop: 3, wordBreak: 'break-all' }}>{raw.customerEmail}</div> : null}
+                    <div id="panel-addr-type" style={{ fontSize: 11, color: 'var(--text3)', marginTop: 5, marginBottom: 2 }}>
+                      {rawRecord.residential ? 'Residential' : 'Commercial'}
+                    </div>
+                    <div className="recip-validated">
+                      {shipTo.addressVerified && shipTo.addressVerified !== 'Not Validated' ? 'Address Validated' : 'Address Not Validated'}
+                    </div>
+                    <div className="recip-tax">
+                      Tax Information: <span style={{ color: 'var(--text3)' }}>0 Tax IDs added</span>
+                    </div>
+                    <div className="recip-sold" style={{ marginTop: 7, paddingTop: 7, borderTop: '1px solid var(--border)' }}>
+                      <div style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--text3)', marginBottom: 4 }}>Sold To</div>
+                      <div className="recip-sold-name">{soldTo ?? '-'}</div>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>

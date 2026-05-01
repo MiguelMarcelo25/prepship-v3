@@ -33,6 +33,7 @@ export interface BillingConfigDraft {
 export type BillingDetailColumnId =
   | 'orderNumber'
   | 'shipDate'
+  | 'carrierNickname'
   | 'itemNames'
   | 'itemSkus'
   | 'totalQty'
@@ -90,6 +91,7 @@ export interface BillingPackagePriceRow {
 export const BILLING_DETAIL_COLUMNS: BillingDetailColumn[] = [
   { id: 'orderNumber', label: 'Order #', align: 'left', always: true },
   { id: 'shipDate', label: 'Ship Date', align: 'left', always: false },
+  { id: 'carrierNickname', label: 'Carrier', align: 'left', always: false },
   { id: 'itemNames', label: 'Item Name', align: 'left', always: false },
   { id: 'itemSkus', label: 'SKU', align: 'left', always: false },
   { id: 'totalQty', label: 'Qty', align: 'right', always: false },
@@ -105,11 +107,12 @@ export const BILLING_DETAIL_COLUMNS: BillingDetailColumn[] = [
   { id: 'margin', label: 'Shipping Margin', align: 'right', always: false },
 ]
 
-const BILLING_DETAIL_COLS_KEY = 'billing_detail_cols_v1'
+const BILLING_DETAIL_COLS_KEY = 'billing_detail_cols_v2'
 
 const DEFAULT_BILLING_DETAIL_COLUMN_IDS: BillingDetailColumnId[] = [
   'orderNumber',
   'shipDate',
+  'carrierNickname',
   'itemNames',
   'itemSkus',
   'totalQty',

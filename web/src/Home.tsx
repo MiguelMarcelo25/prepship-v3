@@ -617,13 +617,7 @@ export default function Home() {
         ) : displayView === 'settings' ? (
           <SettingsView />
         ) : displayView === 'billing' ? (
-          <BillingView
-            onOpenOrder={(orderId) => {
-              setActiveStore(null)
-              setActiveOrderId(orderId)
-              navigate('/orders/shipped')
-            }}
-          />
+          <BillingView />
         ) : (
           <PlaceholderView title={viewTitle} />
         )}

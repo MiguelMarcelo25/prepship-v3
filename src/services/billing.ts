@@ -11,6 +11,7 @@ import { packages } from '../db/schema/packages';
 import { clients } from '../db/schema/clients';
 import { inventory } from '../db/schema/inventory';
 import { SS_BASELINE_CARRIER_CODES } from './rates';
+import { resolveCarrierNickname } from './labels';
 
 export type GenerateInput = {
   clientId?: number;
@@ -31,6 +32,69 @@ function toNum(v: string | null | undefined) {
   if (v === null || v === undefined) return 0;
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
+}
+
+function stringOrNull(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function providerAccountIdOrNull(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const normalized =
+    typeof value === 'string' ? value.replace(/^se-/i, '') : value;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function toFiniteNumber(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function itemSummary(items: unknown) {
+  if (!Array.isArray(items)) {
+    return { itemNames: null, itemSkus: null, totalQty: null };
+  }
+
+  const names: string[] = [];
+  const skus: string[] = [];
+  let totalQty = 0;
+
+  for (const item of items) {
+    if (!item || typeof item !== 'object') continue;
+    const record = item as Record<string, unknown>;
+    if (record.adjustment === true) continue;
+
+    const name = stringOrNull(record.name);
+    const sku = stringOrNull(record.sku);
+    const qty = toFiniteNumber(record.quantity) ?? 1;
+
+    if (name) names.push(name);
+    if (sku) skus.push(sku);
+    if (qty > 0) totalQty += qty;
+  }
+
+  return {
+    itemNames: names.length ? [...new Set(names)].join(' | ') : null,
+    itemSkus: skus.length ? [...new Set(skus)].join(' | ') : null,
+    totalQty: totalQty > 0 ? totalQty : null,
+  };
+}
+
+function dimsKey(length: unknown, width: unknown, height: unknown) {
+  const l = toFiniteNumber(length);
+  const w = toFiniteNumber(width);
+  const h = toFiniteNumber(height);
+  if (l == null || w == null || h == null || l <= 0 || w <= 0 || h <= 0) {
+    return null;
+  }
+  return `${l}x${w}x${h}`;
+}
+
+function dimsLabel(length: unknown, width: unknown, height: unknown) {
+  const key = dimsKey(length, width, height);
+  return key ? `${key} in` : null;
 }
 
 // Sum the billable units on an order. Mirrors v2's logic:
@@ -728,8 +792,42 @@ export async function billingDetails(input: GenerateInput & { limit?: number }) 
   const from = new Date(input.dateFrom);
   const to = new Date(input.dateTo);
   const rows = await db
-    .select()
+    .select({
+      id: billingLineItems.id,
+      clientId: billingLineItems.clientId,
+      orderId: billingLineItems.orderId,
+      orderNumber: billingLineItems.orderNumber,
+      shipmentId: billingLineItems.shipmentId,
+      shipDate: billingLineItems.shipDate,
+      lineType: billingLineItems.lineType,
+      description: billingLineItems.description,
+      qty: billingLineItems.qty,
+      unitCost: billingLineItems.unitCost,
+      totalCost: billingLineItems.totalCost,
+      invoiced: billingLineItems.invoiced,
+      createdAt: billingLineItems.createdAt,
+      carrierCode: shipments.carrierCode,
+      providerAccountId: shipments.providerAccountId,
+      labelProvider: shipments.labelProvider,
+      trackingNumber: shipments.trackingNumber,
+      providerAccountNickname: shipments.providerAccountNickname,
+      selectedRateJson: shipments.selectedRateJson,
+      selectedPackageId: shipments.selectedPackageId,
+      selectedPid: shipments.selectedPid,
+      dimsL: shipments.dimsL,
+      dimsW: shipments.dimsW,
+      dimsH: shipments.dimsH,
+      labelCost: shipments.labelCost,
+      cost: shipments.cost,
+      otherCost: shipments.otherCost,
+      orderItems: orders.items,
+      refUspsRate: orderOverrides.refUspsRate,
+      refUpsRate: orderOverrides.refUpsRate,
+    })
     .from(billingLineItems)
+    .leftJoin(shipments, eq(billingLineItems.shipmentId, shipments.id))
+    .leftJoin(orders, eq(billingLineItems.orderId, orders.id))
+    .leftJoin(orderOverrides, eq(billingLineItems.orderId, orderOverrides.orderId))
     .where(
       and(
         gte(billingLineItems.shipDate, from),
@@ -741,7 +839,132 @@ export async function billingDetails(input: GenerateInput & { limit?: number }) 
     )
     .orderBy(billingLineItems.shipDate)
     .limit(input.limit ?? 500);
-  return rows;
+
+  const packageRows = await db
+    .select({
+      id: packages.id,
+      name: packages.name,
+      packageCode: packages.packageCode,
+      length: packages.length,
+      width: packages.width,
+      height: packages.height,
+    })
+    .from(packages);
+  const packagesById = new Map(packageRows.map((pkg) => [pkg.id, pkg]));
+  const packagesByCode = new Map(
+    packageRows
+      .filter((pkg) => pkg.packageCode)
+      .map((pkg) => [pkg.packageCode!, pkg])
+  );
+  const packagesByDims = new Map(
+    packageRows
+      .map((pkg) => [dimsKey(pkg.length, pkg.width, pkg.height), pkg] as const)
+      .filter((entry): entry is [string, (typeof packageRows)[number]] => Boolean(entry[0]))
+  );
+  const nicknameCache = new Map<string, Promise<string | null>>();
+
+  return Promise.all(
+    rows.map(async (row) => {
+      const selectedRate =
+        row.selectedRateJson && typeof row.selectedRateJson === 'object'
+          ? (row.selectedRateJson as Record<string, unknown>)
+          : null;
+
+      const providerAccountId =
+        row.providerAccountId ??
+        row.labelProvider ??
+        providerAccountIdOrNull(
+          selectedRate?.providerAccountId ??
+            selectedRate?.shippingProviderId ??
+            selectedRate?.carrier_id
+        );
+      const carrierCode =
+        row.carrierCode ??
+        stringOrNull(selectedRate?.carrierCode ?? selectedRate?.carrier_code);
+      const storedNickname =
+        row.providerAccountNickname ??
+        stringOrNull(
+          selectedRate?.providerAccountNickname ??
+            selectedRate?.carrierNickname ??
+            selectedRate?.carrier_nickname
+        );
+
+      let carrierNickname = storedNickname;
+      if (!carrierNickname && carrierCode) {
+        const cacheKey = `${providerAccountId ?? 'none'}:${carrierCode}`;
+        let pending = nicknameCache.get(cacheKey);
+        if (!pending) {
+          pending = resolveCarrierNickname(
+            providerAccountId ?? null,
+            carrierCode,
+            row.trackingNumber,
+            row.clientId
+          );
+          nicknameCache.set(cacheKey, pending);
+        }
+        carrierNickname = await pending;
+      }
+
+      const items = itemSummary(row.orderItems);
+      const lineType = row.lineType ?? '';
+      const isShippingLine = lineType === 'shipping';
+      const labelCost =
+        toFiniteNumber(row.labelCost) ??
+        (() => {
+          const cost = toFiniteNumber(row.cost);
+          if (cost == null) return null;
+          return cost + (toFiniteNumber(row.otherCost) ?? 0);
+        })();
+      const refUspsRate = toFiniteNumber(row.refUspsRate);
+      const refUpsRate = toFiniteNumber(row.refUpsRate);
+      const selectedPackageNumericId = providerAccountIdOrNull(row.selectedPackageId);
+      const selectedPackage =
+        (row.selectedPid != null ? packagesById.get(row.selectedPid) : undefined) ??
+        (selectedPackageNumericId != null ? packagesById.get(selectedPackageNumericId) : undefined) ??
+        (row.selectedPackageId ? packagesByCode.get(row.selectedPackageId) : undefined) ??
+        (dimsKey(row.dimsL, row.dimsW, row.dimsH)
+          ? packagesByDims.get(dimsKey(row.dimsL, row.dimsW, row.dimsH)!)
+          : undefined);
+      const packageName =
+        selectedPackage?.name ??
+        row.description.match(/^Box\s+\((.+)\)$/i)?.[1] ??
+        dimsLabel(row.dimsL, row.dimsW, row.dimsH);
+
+      const {
+        selectedRateJson: _selectedRateJson,
+        labelProvider: _labelProvider,
+        orderItems: _orderItems,
+        labelCost: _labelCost,
+        cost: _cost,
+        otherCost: _otherCost,
+        selectedPackageId: _selectedPackageId,
+        selectedPid: _selectedPid,
+        dimsL: _dimsL,
+        dimsW: _dimsW,
+        dimsH: _dimsH,
+        refUspsRate: _refUspsRate,
+        refUpsRate: _refUpsRate,
+        ...rest
+      } = row;
+      return {
+        ...rest,
+        carrierCode,
+        providerAccountId,
+        providerAccountNickname: carrierNickname,
+        carrierNickname: carrierNickname ?? carrierCode,
+        itemNames: items.itemNames,
+        itemSkus: items.itemSkus,
+        totalQty: items.totalQty,
+        packageName,
+        actualLabelCost: isShippingLine ? labelCost : null,
+        actual_label_cost: isShippingLine ? labelCost : null,
+        refUspsRate: isShippingLine ? refUspsRate : null,
+        ref_usps_rate: isShippingLine ? refUspsRate : null,
+        refUpsRate: isShippingLine ? refUpsRate : null,
+        ref_ups_rate: isShippingLine ? refUpsRate : null,
+      };
+    })
+  );
 }
 
 export async function upsertBillingConfig(

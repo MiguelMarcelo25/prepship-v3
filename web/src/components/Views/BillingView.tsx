@@ -34,11 +34,8 @@ import {
   type BillingDetailColumnId,
   type BillingPresetId,
 } from './billing-parity'
+import OrderDetailDrawer from '../OrderDetailDrawer'
 import './BillingView.css'
-
-interface BillingViewProps {
-  onOpenOrder?: (orderId: number) => void
-}
 
 interface BillingDetailState {
   open: boolean
@@ -65,7 +62,7 @@ function getPackageMarginMarkup(row: ReturnType<typeof buildBillingPackagePriceR
   return <span style={{ color: row.marginColor, fontWeight: 700 }}>{row.marginPct}%</span>
 }
 
-export default function BillingView({ onOpenOrder }: BillingViewProps) {
+export default function BillingView() {
   const toastContext = useContext(ToastContext)
   const initialRange = getBillingInitialRange(typeof window === 'undefined' ? new Date('2026-03-22T00:00:00Z') : new Date())
   const detailWrapRef = useRef<HTMLDivElement | null>(null)
@@ -99,6 +96,7 @@ export default function BillingView({ onOpenOrder }: BillingViewProps) {
     rows: [],
     error: null,
   })
+  const [orderDetailModalId, setOrderDetailModalId] = useState<number | null>(null)
   const [detailColumnIds, setDetailColumnIds] = useState<BillingDetailColumnId[]>(() => {
     if (typeof window === 'undefined') return readBillingDetailColumnIds()
     return readBillingDetailColumnIds(window.localStorage)
@@ -844,7 +842,7 @@ export default function BillingView({ onOpenOrder }: BillingViewProps) {
                       {detailState.rows.map((row, rowIndex) => {
                         const metrics = computeBillingDetailMetrics(row)
                         const rowKey = row.id ?? `${row.orderId ?? 'storage'}-${row.lineType ?? 'detail'}-${row.description ?? rowIndex}-${rowIndex}`
-                        const lineLabel = row.description || row.itemNames || ''
+                        const lineLabel = row.itemNames || row.description || ''
                         const lineTypeLabel = row.lineType ? String(row.lineType).replace(/_/g, ' ') : ''
 
                         return (
@@ -858,7 +856,7 @@ export default function BillingView({ onOpenOrder }: BillingViewProps) {
                                         type="button"
                                         className="inventory-inline-button"
                                         title="Open order detail"
-                                        onClick={() => onOpenOrder?.(row.orderId)}
+                                        onClick={() => setOrderDetailModalId(row.orderId)}
                                       >
                                         {row.orderNumber}
                                       </button>
@@ -871,6 +869,15 @@ export default function BillingView({ onOpenOrder }: BillingViewProps) {
 
                               if (column.id === 'shipDate') {
                                 return <td key={column.id} style={{ padding: '5px 10px', color: 'var(--text2)', fontSize: 11 }}>{formatBillingDateTime(row.shipDate)}</td>
+                              }
+
+                              if (column.id === 'carrierNickname') {
+                                const carrierText = row.carrierNickname || row.providerAccountNickname || row.carrier_nickname || row.provider_account_nickname || row.carrierCode || row.carrier_code || ''
+                                return (
+                                  <td key={column.id} style={{ padding: '5px 10px', color: carrierText ? 'var(--text)' : 'var(--text4)', fontSize: 11, fontWeight: carrierText ? 600 : 400 }}>
+                                    {carrierText || '-'}
+                                  </td>
+                                )
                               }
 
                               if (column.id === 'itemNames') {
@@ -1001,6 +1008,13 @@ export default function BillingView({ onOpenOrder }: BillingViewProps) {
           </div>
         ) : null}
       </div>
+      <OrderDetailDrawer
+        orderId={orderDetailModalId}
+        presentation="modal"
+        closeLabel="Close"
+        closeTitle="Close order details"
+        onClose={() => setOrderDetailModalId(null)}
+      />
     </div>
   )
 }
