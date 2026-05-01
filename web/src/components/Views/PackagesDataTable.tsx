@@ -1,28 +1,27 @@
 // @ts-nocheck
-import { useRef, type MutableRefObject } from 'react'
-import { DollarSign, PackagePlus, Pencil, SlidersHorizontal, Trash2 } from 'lucide-react'
+import { Fragment, useRef, type MutableRefObject, type ReactNode } from 'react'
+import { BadgeDollarSign, PackagePlus, PencilLine, SlidersHorizontal, Trash2 } from 'lucide-react'
 import type { PackageDto, PackageLedgerEntryDto } from '../../types/api'
 import {
   formatPackageDimensionsText,
   formatPackageLedgerDate,
   formatPackageUnitCost,
-  getPackageStockColor,
 } from './packages-parity'
 import { ColumnResizeHandle } from './ColumnResizeHandle'
-import './PackagesView.css'
 
-export type PackagesColumnKey = 'package' | 'stock' | 'reorder' | 'cost' | 'actions'
+export type PackagesColumnKey = 'package' | 'stock' | 'usage30' | 'reorder' | 'cost' | 'actions'
 export type PackagesColumnWidths = Partial<Record<PackagesColumnKey, number>>
 
-const PACKAGES_COLUMNS_ORDER: PackagesColumnKey[] = ['package', 'stock', 'reorder', 'cost', 'actions']
+const PACKAGES_COLUMNS_ORDER: PackagesColumnKey[] = ['package', 'stock', 'usage30', 'reorder', 'cost', 'actions']
 const PACKAGES_COLUMN_DEFAULTS: Record<PackagesColumnKey, number | undefined> = {
   package: undefined,
-  stock: 60,
-  reorder: 75,
-  cost: 70,
-  actions: undefined,
+  stock: 88,
+  usage30: 112,
+  reorder: 116,
+  cost: 112,
+  actions: 174,
 }
-const PACKAGES_MIN_COLUMN_WIDTH = 50
+const PACKAGES_MIN_COLUMN_WIDTH = 56
 
 export interface LedgerState {
   open: boolean
@@ -50,6 +49,80 @@ interface PackagesDataTableProps {
   columnWidths?: PackagesColumnWidths
   onResizeColumn?: (key: PackagesColumnKey, width: number) => void
   onResetColumn?: (key: PackagesColumnKey) => void
+  usageByPackageId?: Record<number, number | null>
+  usageLoading?: boolean
+}
+
+function cn(...parts: Array<string | false | null | undefined>) {
+  return parts.filter(Boolean).join(' ')
+}
+
+function stockTone(pkg: PackageDto) {
+  const qty = Number(pkg.stockQty ?? 0)
+  const reorderLevel = Number(pkg.reorderLevel ?? 10)
+  if (qty <= 0) return 'text-danger'
+  if (qty <= reorderLevel) return 'text-warn'
+  return 'text-ok'
+}
+
+function alignClass(align: 'left' | 'center' | 'right') {
+  if (align === 'center') return 'text-center'
+  if (align === 'right') return 'text-right'
+  return 'text-left'
+}
+
+function renderUsageValue(value: number | null | undefined, loading?: boolean) {
+  if (value == null) {
+    return <span className="text-tiny font-semibold text-ink-3">{loading ? '...' : '-'}</span>
+  }
+  if (value === 0) {
+    return <span className="text-tiny font-semibold text-ink-3">0</span>
+  }
+  return (
+    <span className="inline-flex items-baseline gap-1 text-[13px] font-extrabold text-ink">
+      {value.toLocaleString()}
+      <span className="text-[9.5px] font-bold uppercase tracking-[0.04em] text-ink-3">used</span>
+    </span>
+  )
+}
+
+type ActionTone = 'receive' | 'adjust' | 'edit' | 'billing' | 'delete'
+
+const actionToneClasses: Record<ActionTone, string> = {
+  receive: 'border-ok-border bg-ok-bg text-ok hover:border-ok hover:bg-ok hover:text-white hover:shadow-[0_6px_14px_rgba(22,163,74,.18)]',
+  adjust: 'border-brand-border bg-brand-bg text-brand hover:border-brand hover:bg-brand hover:text-white hover:shadow-[0_6px_14px_rgba(42,91,215,.18)]',
+  edit: 'border-[#fed7aa] bg-[#fff7ed] text-[#ea580c] hover:border-[#f97316] hover:bg-[#f97316] hover:text-white hover:shadow-[0_6px_14px_rgba(249,115,22,.18)]',
+  billing: 'border-[#ddd6fe] bg-[#f5f3ff] text-[#7c3aed] hover:border-[#7c3aed] hover:bg-[#7c3aed] hover:text-white hover:shadow-[0_6px_14px_rgba(124,58,237,.18)]',
+  delete: 'border-danger-border bg-danger-bg text-danger hover:border-danger hover:bg-danger hover:text-white hover:shadow-[0_6px_14px_rgba(220,38,38,.18)]',
+}
+
+function ActionButton({
+  label,
+  tone,
+  onClick,
+  children,
+}: {
+  label: string
+  tone: ActionTone
+  onClick: () => void
+  children: ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      onClick={onClick}
+      className={cn(
+        'inline-flex h-7 w-7 items-center justify-center rounded-[7px] border transition duration-150',
+        'shadow-[inset_0_1px_0_rgba(255,255,255,.65)] hover:-translate-y-px active:translate-y-0 active:shadow-none',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/25',
+        actionToneClasses[tone],
+      )}
+    >
+      {children}
+    </button>
+  )
 }
 
 export function PackagesDataTable({
@@ -71,41 +144,42 @@ export function PackagesDataTable({
   columnWidths,
   onResizeColumn,
   onResetColumn,
+  usageByPackageId,
+  usageLoading,
 }: PackagesDataTableProps) {
   const thRefs = useRef<Partial<Record<PackagesColumnKey, HTMLTableCellElement | null>>>({})
+
+  const columnStyle = (key: PackagesColumnKey) => {
+    const overrideWidth = columnWidths?.[key]
+    if (overrideWidth) {
+      return { width: overrideWidth, minWidth: overrideWidth, maxWidth: overrideWidth }
+    }
+    const defaultWidth = PACKAGES_COLUMN_DEFAULTS[key]
+    if (defaultWidth != null) return { width: defaultWidth, minWidth: defaultWidth }
+    return {}
+  }
 
   const renderHeader = (
     key: PackagesColumnKey,
     label: string,
     align: 'left' | 'center' | 'right',
-    extraStyle: Record<string, unknown> = {},
   ) => {
     const isLast = key === PACKAGES_COLUMNS_ORDER[PACKAGES_COLUMNS_ORDER.length - 1]
     const overrideWidth = columnWidths?.[key]
-    const widthStyle = overrideWidth
-      ? { width: overrideWidth, minWidth: overrideWidth, maxWidth: overrideWidth }
-      : (PACKAGES_COLUMN_DEFAULTS[key] != null
-        ? { width: PACKAGES_COLUMN_DEFAULTS[key] }
-        : (key === 'package' ? { maxWidth: 280 } : {}))
-    const padding = align === 'left' ? '5px 10px' : (key === 'actions' ? '5px 6px' : '5px 8px')
 
     return (
       <th
         ref={(node) => { thRefs.current[key] = node }}
-        style={{
-          position: 'relative',
-          padding,
-          textAlign: align,
-          fontSize: 10,
-          fontWeight: 700,
-          color: 'var(--text3)',
-          textTransform: 'uppercase',
-          letterSpacing: '.3px',
-          ...widthStyle,
-          ...extraStyle,
-        }}
+        scope="col"
+        style={columnStyle(key)}
+        className={cn(
+          '!sticky !top-9 !z-[70] !bg-surface-3',
+          'border-b-2 border-line px-4 py-3 text-2xs font-extrabold uppercase tracking-[0.05em] text-ink-3',
+          'shadow-[0_1px_0_rgba(225,228,232,1)]',
+          alignClass(align),
+        )}
       >
-        {label}
+        <span>{label}</span>
         {!isLast && onResizeColumn ? (
           <ColumnResizeHandle
             getStartWidth={() => {
@@ -116,22 +190,81 @@ export function PackagesDataTable({
             onChange={(width) => onResizeColumn(key, Math.round(width))}
             onReset={onResetColumn ? () => onResetColumn(key) : undefined}
             minWidth={PACKAGES_MIN_COLUMN_WIDTH}
+            className="absolute -right-1 top-0 z-10 block h-full w-2 cursor-col-resize select-none border-r-2 border-transparent hover:border-brand active:border-brand"
           />
         ) : null}
       </th>
     )
   }
 
+  const renderLedger = (pkg: PackageDto, ledger: LedgerState) => (
+    <tr>
+      <td colSpan={PACKAGES_COLUMNS_ORDER.length} className="border-b border-line bg-surface-2 px-4 py-3">
+        <div className="overflow-hidden rounded-card border border-line bg-white">
+          {ledger.loading ? (
+            <div className="px-3 py-3 text-xs2 font-medium text-ink-3">Loading...</div>
+          ) : ledger.error ? (
+            <div className="px-3 py-3 text-xs2 font-semibold text-danger">Failed to load</div>
+          ) : ledger.rows.length === 0 ? (
+            <div className="px-3 py-3 text-xs2 font-medium text-ink-3">No history yet</div>
+          ) : (
+            <>
+              <div className="grid grid-cols-[140px_90px_120px_minmax(180px,1fr)_110px] border-b border-line bg-surface-2 px-3 py-2 text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">
+                <div>Date</div>
+                <div className="text-center">Change</div>
+                <div className="text-right">Cost/unit</div>
+                <div className="pl-4">Reason</div>
+                <div>Order</div>
+              </div>
+              {ledger.rows.map((row) => (
+                <div
+                  key={`${pkg.packageId}-${row.id ?? row.createdAt}`}
+                  className="grid grid-cols-[140px_90px_120px_minmax(180px,1fr)_110px] border-b border-line px-3 py-2 text-xs2 text-ink-2 last:border-b-0 hover:bg-brand-bg/40"
+                >
+                  <div className="whitespace-nowrap">{formatPackageLedgerDate(row.createdAt)}</div>
+                  <div className={cn('text-center font-extrabold', row.delta > 0 ? 'text-ok' : 'text-danger')}>
+                    {row.delta > 0 ? '+' : ''}
+                    {row.delta}
+                  </div>
+                  <div className="text-right font-mono text-ink-3">{formatPackageUnitCost(row.unitCost)}</div>
+                  <div className="pl-4">{row.reason || '-'}</div>
+                  <div>
+                    {row.orderId ? (
+                      <button
+                        type="button"
+                        className="font-semibold text-brand underline decoration-line underline-offset-2 hover:text-brand-dark"
+                        onClick={() => onOpenOrder?.(row.orderId as number)}
+                      >
+                        #{row.orderId}
+                      </button>
+                    ) : '-'}
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      </td>
+    </tr>
+  )
+
   return (
-    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-      <div style={{ padding: '8px 12px', background: 'var(--surface2)', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>
-        {sectionTitle}
-      </div>
-      <table className="pkg-table">
-        <thead>
-          <tr style={{ background: 'var(--surface2)', borderBottom: '1px solid var(--border)' }}>
+    <div className="relative rounded-card border border-line bg-white shadow-sm">
+      <table className="w-full table-fixed border-separate border-spacing-0 text-sm2">
+        <thead className="relative z-50">
+          <tr>
+            <th
+              colSpan={PACKAGES_COLUMNS_ORDER.length}
+              scope="colgroup"
+              className="!sticky !top-0 !z-[80] h-9 rounded-t-card border-b border-line !bg-brand-bg px-4 text-left text-2xs font-extrabold uppercase tracking-[0.05em] text-ink-3 shadow-[0_1px_0_rgba(225,228,232,1)]"
+            >
+              {sectionTitle}
+            </th>
+          </tr>
+          <tr>
             {renderHeader('package', 'Package', 'left')}
             {renderHeader('stock', 'Stock', 'center')}
+            {renderHeader('usage30', '30d Used', 'center')}
             {renderHeader('reorder', 'Reorder', 'center')}
             {renderHeader('cost', 'Cost', 'right')}
             {renderHeader('actions', 'Actions', 'right')}
@@ -140,136 +273,82 @@ export function PackagesDataTable({
         <tbody>
           {packages.map((pkg) => {
             const ledger = ledgerByPackageId[pkg.packageId]
+            const highlighted = highlightedPackageId === pkg.packageId
+
             return (
-              <tr
-                key={pkg.packageId ?? pkg.id ?? pkg.name}
-                ref={(el) => { rowRefs.current[pkg.packageId] = el }}
-                id={`pkg-row-${pkg.packageId}`}
-                style={{
-                  borderBottom: '1px solid var(--border)',
-                  background: highlightedPackageId === pkg.packageId ? 'rgba(254, 240, 138, 0.45)' : undefined,
-                  transition: 'background 0.4s ease',
-                }}
-              >
-                <td style={{ padding: '7px 10px', maxWidth: 280, overflow: 'hidden' }}>
-                  <button
-                    type="button"
-                    className="packages-inline-button"
-                    style={{
-                      fontWeight: 600,
-                      fontSize: 12,
-                      color: 'var(--text)',
-                      cursor: 'pointer',
-                      textDecoration: 'underline',
-                      textDecorationColor: 'var(--border)',
-                      display: 'block',
-                    }}
-                    onClick={() => onToggleLedger(pkg.packageId)}
-                  >
-                    {pkg.name}
-                  </button>
-                  <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 1 }}>{formatPackageDimensionsText(pkg)}</div>
-                  {ledger?.open ? (
-                    <div id={`pkg-ledger-${pkg.packageId}`} style={{ marginTop: 6 }}>
-                      {ledger.loading ? (
-                        <span style={{ fontSize: 11, color: 'var(--text3)' }}>Loading…</span>
-                      ) : ledger.error ? (
-                        <span style={{ fontSize: 11, color: 'var(--red)' }}>Failed to load</span>
-                      ) : ledger.rows.length === 0 ? (
-                        <span style={{ fontSize: 11, color: 'var(--text3)' }}>No history yet</span>
-                      ) : (
-                        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, color: 'var(--text2)' }}>
-                          <thead>
-                            <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                              <th style={{ textAlign: 'left', padding: '3px 6px', fontSize: 10, color: 'var(--text3)' }}>Date</th>
-                              <th style={{ textAlign: 'center', padding: '3px 6px', fontSize: 10, color: 'var(--text3)' }}>Change</th>
-                              <th style={{ textAlign: 'right', padding: '3px 6px', fontSize: 10, color: 'var(--text3)' }}>Cost/unit</th>
-                              <th style={{ textAlign: 'left', padding: '3px 6px', fontSize: 10, color: 'var(--text3)' }}>Reason</th>
-                              <th style={{ textAlign: 'left', padding: '3px 6px', fontSize: 10, color: 'var(--text3)' }}>Order</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {ledger.rows.map((row) => (
-                              <tr key={`${pkg.packageId}-${row.id ?? row.createdAt}`} style={{ borderBottom: '1px solid var(--border)' }}>
-                                <td style={{ padding: '3px 6px', whiteSpace: 'nowrap' }}>{formatPackageLedgerDate(row.createdAt)}</td>
-                                <td style={{ textAlign: 'center', padding: '3px 6px', fontWeight: 700, color: row.delta > 0 ? 'var(--green)' : 'var(--red)' }}>
-                                  {row.delta > 0 ? '+' : ''}
-                                  {row.delta}
-                                </td>
-                                <td style={{ textAlign: 'right', padding: '3px 6px', color: 'var(--text3)' }}>{formatPackageUnitCost(row.unitCost)}</td>
-                                <td style={{ padding: '3px 6px' }}>{row.reason || '—'}</td>
-                                <td style={{ padding: '3px 6px' }}>
-                                  {row.orderId ? (
-                                    <button
-                                      type="button"
-                                      className="packages-inline-button"
-                                      style={{ color: 'var(--ss-blue)' }}
-                                      onClick={() => onOpenOrder?.(row.orderId as number)}
-                                    >
-                                      #{row.orderId}
-                                    </button>
-                                  ) : '—'}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      )}
+              <Fragment key={pkg.packageId ?? pkg.id ?? pkg.name}>
+                <tr
+                  ref={(el) => { rowRefs.current[pkg.packageId] = el }}
+                  id={`pkg-row-${pkg.packageId}`}
+                  className={cn(
+                    'group transition-colors',
+                    highlighted
+                      ? 'bg-warn-bg shadow-[inset_3px_0_0_#f59e0b]'
+                      : 'odd:bg-white even:bg-surface-2 hover:bg-brand-bg/60',
+                  )}
+                >
+                  <td className="border-b border-line px-4 py-3 align-middle">
+                    <button
+                      type="button"
+                      className="block max-w-full truncate text-left text-[13px] font-extrabold text-brand underline decoration-line underline-offset-2 hover:text-brand-dark"
+                      onClick={() => onToggleLedger(pkg.packageId)}
+                    >
+                      {pkg.name}
+                    </button>
+                    <div className="mt-1 truncate text-tiny font-medium text-ink-3">
+                      {formatPackageDimensionsText(pkg)}
                     </div>
-                  ) : null}
-                </td>
-                <td style={{ padding: '7px 8px', textAlign: 'center', fontWeight: 700, fontSize: 13, color: getPackageStockColor(pkg) }}>
-                  {pkg.stockQty ?? 0}
-                </td>
-                <td style={{ padding: '7px 8px', textAlign: 'center' }}>
-                  <input
-                    type="number"
-                    min="0"
-                    step="1"
-                    title="Reorder Level"
-                    value={reorderInputs[pkg.packageId] ?? String(pkg.reorderLevel ?? 10)}
-                    onChange={(event) => onReorderInputChange(pkg.packageId, event.target.value)}
-                    onBlur={() => onSaveReorderLevel(pkg)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        event.preventDefault()
-                        onSaveReorderLevel(pkg)
-                        event.currentTarget.blur()
-                      }
-                    }}
-                    style={{
-                      width: 50,
-                      padding: '3px 4px',
-                      border: '1px solid var(--border2)',
-                      borderRadius: 3,
-                      background: 'var(--surface2)',
-                      color: 'var(--text)',
-                      fontSize: 11,
-                      textAlign: 'center',
-                    }}
-                  />
-                </td>
-                <td style={{ padding: '7px 8px', textAlign: 'right', fontSize: 11.5, color: 'var(--text2)', fontFamily: 'monospace' }}>
-                  {formatPackageUnitCost(pkg.unitCost)}
-                </td>
-                <td style={{ padding: '7px 6px', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                  <button className="btn btn-ghost btn-xs pkg-action-btn" type="button" title="Receive stock" aria-label="Receive stock" onClick={() => onReceive(pkg)}>
-                    <PackagePlus size={15} strokeWidth={2} />
-                  </button>
-                  <button className="btn btn-ghost btn-xs pkg-action-btn" type="button" title="Adjust stock" aria-label="Adjust stock" onClick={() => onAdjust(pkg)}>
-                    <SlidersHorizontal size={15} strokeWidth={2} />
-                  </button>
-                  <button className="btn btn-ghost btn-xs pkg-action-btn" type="button" title="Edit package" aria-label="Edit package" onClick={() => onEdit(pkg.packageId)}>
-                    <Pencil size={14} strokeWidth={2} />
-                  </button>
-                  <button className="btn btn-ghost btn-xs pkg-action-btn" type="button" title="Set billing default" aria-label="Set billing default" onClick={() => onSetBillingDefault(pkg)}>
-                    <DollarSign size={15} strokeWidth={2.25} />
-                  </button>
-                  <button className="btn btn-ghost btn-xs pkg-action-btn pkg-action-btn-danger" type="button" title="Delete package" aria-label="Delete package" onClick={() => onDelete(pkg.packageId)}>
-                    <Trash2 size={14} strokeWidth={2} />
-                  </button>
-                </td>
-              </tr>
+                  </td>
+                  <td className={cn('border-b border-line px-4 py-3 text-center align-middle text-[15px] font-extrabold tabular-nums', stockTone(pkg))}>
+                    {pkg.stockQty ?? 0}
+                  </td>
+                  <td className="border-b border-line px-4 py-3 text-center align-middle tabular-nums" title="Units used in the last 30 days">
+                    {renderUsageValue(usageByPackageId?.[pkg.packageId], usageLoading)}
+                  </td>
+                  <td className="border-b border-line px-4 py-3 text-center align-middle">
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      title="Reorder Level"
+                      value={reorderInputs[pkg.packageId] ?? String(pkg.reorderLevel ?? 10)}
+                      onChange={(event) => onReorderInputChange(pkg.packageId, event.target.value)}
+                      onBlur={() => onSaveReorderLevel(pkg)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault()
+                          onSaveReorderLevel(pkg)
+                          event.currentTarget.blur()
+                        }
+                      }}
+                      className="h-8 w-14 rounded-md border border-line-2 bg-white px-2 text-center text-xs font-semibold text-ink transition focus:border-brand focus:bg-brand-bg/40"
+                    />
+                  </td>
+                  <td className="border-b border-line px-4 py-3 text-right align-middle font-mono text-xs2 font-semibold text-ink-2">
+                    {formatPackageUnitCost(pkg.unitCost)}
+                  </td>
+                  <td className="border-b border-line px-3 py-3 text-right align-middle">
+                    <div className="inline-flex items-center justify-end gap-1.5">
+                      <ActionButton label="Receive stock" tone="receive" onClick={() => onReceive(pkg)}>
+                        <PackagePlus size={15} strokeWidth={2.25} />
+                      </ActionButton>
+                      <ActionButton label="Adjust stock" tone="adjust" onClick={() => onAdjust(pkg)}>
+                        <SlidersHorizontal size={15} strokeWidth={2.25} />
+                      </ActionButton>
+                      <ActionButton label="Edit package" tone="edit" onClick={() => onEdit(pkg.packageId)}>
+                        <PencilLine size={14} strokeWidth={2.25} />
+                      </ActionButton>
+                      <ActionButton label="Set billing default" tone="billing" onClick={() => onSetBillingDefault(pkg)}>
+                        <BadgeDollarSign size={15} strokeWidth={2.15} />
+                      </ActionButton>
+                      <ActionButton label="Delete package" tone="delete" onClick={() => onDelete(pkg.packageId)}>
+                        <Trash2 size={14} strokeWidth={2.15} />
+                      </ActionButton>
+                    </div>
+                  </td>
+                </tr>
+                {ledger?.open ? renderLedger(pkg, ledger) : null}
+              </Fragment>
             )
           })}
         </tbody>

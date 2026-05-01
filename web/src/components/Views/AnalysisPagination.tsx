@@ -7,6 +7,8 @@ interface AnalysisPaginationProps {
   totalItems: number
   onPageChange: (page: number) => void
   onPageSizeChange: (pageSize: number) => void
+  unitLabel?: string
+  ariaLabel?: string
 }
 
 function getVisiblePages(currentPage: number, totalPages: number) {
@@ -23,6 +25,8 @@ export function AnalysisPagination({
   totalItems,
   onPageChange,
   onPageSizeChange,
+  unitLabel = 'SKUs',
+  ariaLabel = 'Table pagination',
 }: AnalysisPaginationProps) {
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
   const currentPage = Math.min(Math.max(page, 1), totalPages)
@@ -31,10 +35,10 @@ export function AnalysisPagination({
   const pageButtons = getVisiblePages(currentPage, totalPages)
 
   return (
-    <div className="analysis-pagination" aria-label="Analysis table pagination">
+    <div className="analysis-pagination" aria-label={ariaLabel}>
       <div className="analysis-pagination-count">
         Showing <strong>{firstItem.toLocaleString()}-{lastItem.toLocaleString()}</strong> of{' '}
-        <strong>{totalItems.toLocaleString()}</strong> SKUs
+        <strong>{totalItems.toLocaleString()}</strong> {unitLabel}
       </div>
 
       <div className="analysis-pagination-controls">

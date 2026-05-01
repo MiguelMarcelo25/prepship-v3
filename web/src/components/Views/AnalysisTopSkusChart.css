@@ -62,6 +62,31 @@
   white-space:nowrap;
 }
 
+.analysis-top-chart-type{
+  height:24px;
+  min-width:106px;
+  border:1px solid var(--border2);
+  border-radius:6px;
+  background:var(--surface);
+  color:var(--text2);
+  font-size:10.5px;
+  font-weight:700;
+  padding:0 26px 0 8px;
+  cursor:pointer;
+  outline:none;
+}
+
+.analysis-top-chart-type:hover{
+  border-color:rgba(42,91,215,.45);
+  background:#eef4ff;
+  color:var(--ss-blue);
+}
+
+.analysis-top-chart-type:focus{
+  border-color:var(--ss-blue);
+  box-shadow:0 0 0 2px rgba(42,91,215,.14);
+}
+
 .analysis-top-chart-reset{
   align-items:center;
   justify-content:center;

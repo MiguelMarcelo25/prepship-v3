@@ -1,9 +1,10 @@
-import { useEffect, useRef } from 'react'
+import { useRef } from 'react'
 import {
   ANALYSIS_SORT_LABELS,
   type AnalysisSortDir,
   type AnalysisSortKey,
 } from './analysis-parity'
+import { ColumnResizeHandle } from './ColumnResizeHandle'
 import './AnalysisDataTable.css'
 
 export interface AnalysisTableColumn {
@@ -25,11 +26,6 @@ interface AnalysisTableHeaderProps {
 }
 
 const MIN_COLUMN_WIDTH = 60
-const MAX_COLUMN_WIDTH = 600
-
-function clampWidth(value: number) {
-  return Math.min(MAX_COLUMN_WIDTH, Math.max(MIN_COLUMN_WIDTH, value))
-}
 
 function getSortIndicator(active: boolean, direction: AnalysisSortDir) {
   if (!active) return '↕'
@@ -102,58 +98,3 @@ export function AnalysisTableHeader({
   )
 }
 
-interface ColumnResizeHandleProps {
-  getStartWidth: () => number
-  onChange: (width: number) => void
-  onReset?: () => void
-}
-
-function ColumnResizeHandle({ getStartWidth, onChange, onReset }: ColumnResizeHandleProps) {
-  const dragRef = useRef<{ startX: number; startWidth: number } | null>(null)
-
-  useEffect(() => {
-    function handleMove(event: MouseEvent) {
-      const drag = dragRef.current
-      if (!drag) return
-      const next = clampWidth(drag.startWidth + (event.clientX - drag.startX))
-      onChange(next)
-    }
-    function handleUp() {
-      if (!dragRef.current) return
-      dragRef.current = null
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-    }
-    document.addEventListener('mousemove', handleMove)
-    document.addEventListener('mouseup', handleUp)
-    return () => {
-      document.removeEventListener('mousemove', handleMove)
-      document.removeEventListener('mouseup', handleUp)
-    }
-  }, [onChange])
-
-  return (
-    <span
-      className="analysis-col-resize-handle"
-      role="separator"
-      aria-orientation="vertical"
-      aria-label="Resize column"
-      onMouseDown={(event) => {
-        event.preventDefault()
-        event.stopPropagation()
-        dragRef.current = { startX: event.clientX, startWidth: getStartWidth() }
-        document.body.style.cursor = 'col-resize'
-        document.body.style.userSelect = 'none'
-      }}
-      onDoubleClick={(event) => {
-        event.preventDefault()
-        event.stopPropagation()
-        onReset?.()
-      }}
-      onClick={(event) => {
-        event.stopPropagation()
-      }}
-      title="Drag to resize · Double-click to reset"
-    />
-  )
-}

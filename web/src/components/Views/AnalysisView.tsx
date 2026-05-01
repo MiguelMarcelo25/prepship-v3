@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useContext, useEffect, useMemo, useState } from 'react'
+import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import {
   CartesianGrid,
   LabelList,
@@ -390,6 +390,7 @@ function DrawerBarValueLabel(props: {
 
 export default function AnalysisView() {
   const toastContext = useContext(ToastContext)
+  const stickyPanelRef = useRef<HTMLDivElement | null>(null)
   const initialFilters = getInitialAnalysisFilters(
     typeof window === 'undefined' ? null : window.localStorage,
   )
@@ -494,6 +495,32 @@ export default function AnalysisView() {
     if (typeof window === 'undefined') return
     window.localStorage.setItem('analysis_column_widths', JSON.stringify(columnWidths))
   }, [columnWidths])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const panel = stickyPanelRef.current
+    const container = panel?.closest<HTMLElement>('#view-analysis')
+    if (!panel || !container) return undefined
+
+    const updateStickyOffset = () => {
+      const height = Math.ceil(panel.getBoundingClientRect().height)
+      container.style.setProperty('--analysis-table-sticky-top', `${height + 1}px`)
+    }
+
+    updateStickyOffset()
+
+    const observer = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(updateStickyOffset)
+      : null
+    observer?.observe(panel)
+    window.addEventListener('resize', updateStickyOffset)
+
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener('resize', updateStickyOffset)
+      container.style.removeProperty('--analysis-table-sticky-top')
+    }
+  }, [])
 
   function handleResizeColumn(key: AnalysisSortKey, width: number) {
     setColumnWidths((current) => ({ ...current, [key]: width }))
@@ -673,6 +700,7 @@ export default function AnalysisView() {
   return (
     <div className="view-content" id="view-analysis">
       <div
+        ref={stickyPanelRef}
         className="analysis-sticky-panel"
         style={{
           position: 'sticky',

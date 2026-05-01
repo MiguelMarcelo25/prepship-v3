@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
-  Area,
+  Bar,
   CartesianGrid,
   ComposedChart,
+  Line,
   ReferenceArea,
   ResponsiveContainer,
   Tooltip,
@@ -34,8 +35,16 @@ type ChartMouseState = {
   activeLabel?: string
 }
 
+type AnalysisChartType = 'line' | 'bar'
+
 interface AnalysisTopSkusChartProps {
   data: AnalysisTopSkusChartData
+}
+
+function readStoredChartType(): AnalysisChartType {
+  if (typeof window === 'undefined') return 'line'
+  const stored = window.localStorage.getItem('analysis_chart_type')
+  return stored === 'bar' || stored === 'line' ? stored : 'line'
 }
 
 function formatChartDate(value: string | null | undefined) {
@@ -105,7 +114,7 @@ function getSelectionFromLabels(
 function TopSkusTooltip(props: {
   active?: boolean
   label?: string
-  payload?: Array<{ dataKey?: string | number; value?: unknown; color?: string }>
+  payload?: Array<{ dataKey?: string | number; value?: unknown; color?: string; fill?: string; stroke?: string }>
   topSkus: ChartSku[]
 }) {
   if (!props.active || !props.payload?.length) return null
@@ -116,7 +125,7 @@ function TopSkusTooltip(props: {
       const skuIndex = Number(String(item.dataKey).replace('sku_', ''))
       const sku = props.topSkus[skuIndex]
       return {
-        color: item.color || ANALYSIS_CHART_COLORS[skuIndex % ANALYSIS_CHART_COLORS.length],
+        color: item.color || item.fill || item.stroke || ANALYSIS_CHART_COLORS[skuIndex % ANALYSIS_CHART_COLORS.length],
         label: sku?.name || sku?.sku || String(item.dataKey),
         value: Number(item.value) || 0,
       }
@@ -140,6 +149,7 @@ function TopSkusTooltip(props: {
 }
 
 export function AnalysisTopSkusChart({ data }: AnalysisTopSkusChartProps) {
+  const [chartType, setChartType] = useState<AnalysisChartType>(readStoredChartType)
   const [drag, setDrag] = useState<{ start: string | null; end: string | null }>({
     start: null,
     end: null,
@@ -165,6 +175,11 @@ export function AnalysisTopSkusChart({ data }: AnalysisTopSkusChartProps) {
     setDrag({ start: null, end: null })
     setZoom(null)
   }, [data])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem('analysis_chart_type', chartType)
+  }, [chartType])
 
   function handleMouseDown(state: ChartMouseState | undefined) {
     if (!state?.activeLabel) return
@@ -202,6 +217,17 @@ export function AnalysisTopSkusChart({ data }: AnalysisTopSkusChartProps) {
         <span id="analysis-chart-zoom-hint" className="analysis-top-chart-hint">
           drag chart to zoom
         </span>
+        <select
+          id="analysis-chart-type"
+          className="analysis-top-chart-type"
+          value={chartType}
+          title="Chart type"
+          aria-label="Chart type"
+          onChange={(event) => setChartType(event.target.value as AnalysisChartType)}
+        >
+          <option value="line">Line graph</option>
+          <option value="bar">Bar graph</option>
+        </select>
         <button
           id="analysis-chart-reset"
           type="button"
@@ -276,14 +302,25 @@ export function AnalysisTopSkusChart({ data }: AnalysisTopSkusChartProps) {
             />
             {data.topSkus.map((sku, index) => {
               const color = ANALYSIS_CHART_COLORS[index % ANALYSIS_CHART_COLORS.length]
-              return (
-                <Area
+              return chartType === 'bar' ? (
+                <Bar
+                  key={sku.sku}
+                  dataKey={`sku_${index}`}
+                  name={sku.name || sku.sku}
+                  fill={color}
+                  fillOpacity={0.78}
+                  radius={[3, 3, 0, 0]}
+                  maxBarSize={18}
+                  isAnimationActive
+                  animationDuration={450}
+                />
+              ) : (
+                <Line
                   key={sku.sku}
                   type="monotone"
                   dataKey={`sku_${index}`}
                   name={sku.name || sku.sku}
                   stroke={color}
-                  fill={`url(#analysisTopSkuGradient${index})`}
                   strokeWidth={2.4}
                   dot={false}
                   activeDot={{

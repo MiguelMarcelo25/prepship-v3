@@ -1,8 +1,7 @@
 // @ts-nocheck
 import { useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import { Box, Plus, RefreshCw, Search } from 'lucide-react'
+import { Box, Plus, RefreshCw, Search, X } from 'lucide-react'
 import { apiClient } from '../../api/client'
-import { api, qs } from '../../lib/api'
 import { ToastContext } from '../../contexts/ToastContext'
 import type {
   PackageDto,
@@ -26,7 +25,19 @@ import {
   type PackagesColumnKey,
   type PackagesColumnWidths,
 } from './PackagesDataTable'
+import { AnalysisPagination } from './AnalysisPagination'
+import { LowStockBanner } from './LowStockBanner'
 import './PackagesView.css'
+
+const PACKAGES_PAGE_SIZE_OPTIONS = [25, 50, 100]
+const PACKAGES_DEFAULT_PAGE_SIZE = 50
+
+function readStoredPackagesPageSize(): number {
+  if (typeof window === 'undefined') return PACKAGES_DEFAULT_PAGE_SIZE
+  const raw = window.localStorage.getItem('packages_page_size')
+  const parsed = raw ? Number.parseInt(raw, 10) : NaN
+  return PACKAGES_PAGE_SIZE_OPTIONS.includes(parsed) ? parsed : PACKAGES_DEFAULT_PAGE_SIZE
+}
 
 function readStoredPackageColumnWidths(): PackagesColumnWidths {
   if (typeof window === 'undefined') return {}
@@ -196,6 +207,111 @@ function PackageBillingDefaultModal({
   )
 }
 
+function PackageFormModal({
+  form,
+  saving,
+  onChange,
+  onSubmit,
+  onClose,
+}: {
+  form: PackageFormState
+  saving: boolean
+  onChange: <K extends keyof PackageFormState>(field: K, value: PackageFormState[K]) => void
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void
+  onClose: () => void
+}) {
+  const isEditing = Boolean(form.packageId)
+
+  return (
+    <div className="packages-overlay" onClick={saving ? undefined : onClose}>
+      <form
+        className="packages-modal packages-modal-package-form"
+        id="pkgFormCard"
+        onSubmit={onSubmit}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="packages-form-modal-header">
+          <div>
+            <div className="packages-form-modal-kicker">Package Library</div>
+            <h3 id="pkgFormTitle">{isEditing ? 'Edit Custom Package' : 'Add Custom Package'}</h3>
+            <p>{isEditing ? 'Update this reusable package size and cost.' : 'Create a reusable package size for future shipments.'}</p>
+          </div>
+          <button
+            type="button"
+            className="packages-modal-close"
+            aria-label="Close package form"
+            title="Close"
+            onClick={onClose}
+            disabled={saving}
+          >
+            <X size={16} strokeWidth={2.4} />
+          </button>
+        </div>
+
+        <input id="pkgFormId" type="hidden" value={form.packageId} readOnly />
+
+        <div className="packages-form-modal-grid">
+          <div className="pkg-form-field packages-form-field-wide">
+            <label htmlFor="pkgFormName">
+              Name <span className="packages-required-mark" aria-hidden="true">*</span>
+            </label>
+            <input
+              id="pkgFormName"
+              type="text"
+              required
+              placeholder="e.g. Small Poly Mailer"
+              value={form.name}
+              autoFocus
+              onChange={(event) => onChange('name', event.target.value)}
+            />
+          </div>
+          <div className="pkg-form-field">
+            <label htmlFor="pkgFormType">Type</label>
+            <select id="pkgFormType" value={form.type} onChange={(event) => onChange('type', event.target.value)}>
+              <option value="box">Box</option>
+              <option value="poly_mailer">Poly Mailer</option>
+              <option value="envelope">Envelope</option>
+              <option value="flat_rate_box_sm">Flat Rate Box SM</option>
+              <option value="flat_rate_box_md">Flat Rate Box MD</option>
+              <option value="flat_rate_box_lg">Flat Rate Box LG</option>
+              <option value="flat_rate_env">Flat Rate Envelope</option>
+            </select>
+          </div>
+          <div className="pkg-form-field">
+            <label htmlFor="pkgFormTare">Tare Weight (oz)</label>
+            <input id="pkgFormTare" type="number" min="0" step="0.5" value={form.tareWeightOz} onChange={(event) => onChange('tareWeightOz', event.target.value)} />
+          </div>
+          <div className="pkg-form-field">
+            <label htmlFor="pkgFormL">Length (in)</label>
+            <input id="pkgFormL" type="number" min="0" step="0.25" value={form.length} onChange={(event) => onChange('length', event.target.value)} />
+          </div>
+          <div className="pkg-form-field">
+            <label htmlFor="pkgFormW">Width (in)</label>
+            <input id="pkgFormW" type="number" min="0" step="0.25" value={form.width} onChange={(event) => onChange('width', event.target.value)} />
+          </div>
+          <div className="pkg-form-field">
+            <label htmlFor="pkgFormH">Height (in)</label>
+            <input id="pkgFormH" type="number" min="0" step="0.25" value={form.height} onChange={(event) => onChange('height', event.target.value)} />
+          </div>
+          <div className="pkg-form-field">
+            <label htmlFor="pkgFormCost">Unit Cost ($)</label>
+            <input id="pkgFormCost" type="number" min="0" step="0.001" placeholder="0.000" value={form.unitCost} onChange={(event) => onChange('unitCost', event.target.value)} />
+          </div>
+        </div>
+
+        <div className="packages-form-modal-actions">
+          <button className="btn btn-ghost btn-sm" type="button" onClick={onClose} disabled={saving}>
+            Cancel
+          </button>
+          <button className="btn btn-primary btn-sm" type="submit" disabled={saving}>
+            {saving ? 'Saving...' : 'Save Package'}
+          </button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
 export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
   const toastContext = useContext(ToastContext)
   const [packages, setPackages] = useState<PackageDto[]>([])
@@ -214,13 +330,13 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
   const [modalSaving, setModalSaving] = useState(false)
   const [bannerDismissed, setBannerDismissed] = useState(false)
   const [highlightedPackageId, setHighlightedPackageId] = useState<number | null>(null)
-  const [dimsOpen, setDimsOpen] = useState(false)
-  const [dimsForm, setDimsForm] = useState<{ length: string; width: string; height: string }>({ length: '', width: '', height: '' })
-  const [dimsSearching, setDimsSearching] = useState(false)
-  const [dimsResult, setDimsResult] = useState<{ kind: 'match'; pkg: PackageDto } | { kind: 'nomatch' } | null>(null)
-  const [dimsAutoCreating, setDimsAutoCreating] = useState(false)
   const rowRefs = useRef<Record<number, HTMLTableRowElement | null>>({})
   const [columnWidths, setColumnWidths] = useState<PackagesColumnWidths>(readStoredPackageColumnWidths)
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState<number>(readStoredPackagesPageSize)
+  const [search, setSearch] = useState('')
+  const [usageByPackageId, setUsageByPackageId] = useState<Record<number, number | null>>({})
+  const [usageLoading, setUsageLoading] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -268,6 +384,52 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
     window.localStorage.setItem('packages_column_widths', JSON.stringify(columnWidths))
   }, [columnWidths])
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem('packages_page_size', String(pageSize))
+  }, [pageSize])
+
+  // Compute "Last 30 days used" per package by parallel-fetching ledgers and
+  // summing negative deltas in the past 30 days. Backend has no aggregate
+  // endpoint, so we fan out one request per package — fine for typical sizes.
+  useEffect(() => {
+    if (packages.length === 0) {
+      setUsageByPackageId({})
+      return
+    }
+    let cancelled = false
+    setUsageLoading(true)
+    const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000
+    const work = packages.map(async (pkg) => {
+      try {
+        const rows = await apiClient.fetchPackageLedger(pkg.packageId)
+        const used = (rows ?? []).reduce((sum, row) => {
+          const delta = Number(row?.delta ?? 0)
+          if (!Number.isFinite(delta) || delta >= 0) return sum
+          const created = Date.parse(String(row?.createdAt ?? ''))
+          if (!Number.isFinite(created) || created < cutoff) return sum
+          return sum + Math.abs(delta)
+        }, 0)
+        return [pkg.packageId, used] as const
+      } catch {
+        return [pkg.packageId, null] as const
+      }
+    })
+    void Promise.allSettled(work).then((results) => {
+      if (cancelled) return
+      const next: Record<number, number | null> = {}
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          const [id, value] = result.value
+          next[id] = value
+        }
+      }
+      setUsageByPackageId(next)
+      setUsageLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [packages])
+
   function handleResizePackageColumn(key: PackagesColumnKey, width: number) {
     setColumnWidths((current) => ({ ...current, [key]: width }))
   }
@@ -282,10 +444,14 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
   }
 
   useEffect(() => {
-    if (!receiveModal && !adjustModal && !billingDefaultModal) return
+    if (!formOpen && !receiveModal && !adjustModal && !billingDefaultModal) return
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return
+      if (formOpen && !saving) {
+        setFormOpen(false)
+        setForm(createPackageFormState())
+      }
       setReceiveModal(null)
       setAdjustModal(null)
       setBillingDefaultModal(null)
@@ -293,7 +459,7 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
 
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [receiveModal, adjustModal, billingDefaultModal])
+  }, [formOpen, saving, receiveModal, adjustModal, billingDefaultModal])
 
   const showToast = (message: string, tone?: 'error' | 'success' | 'info') => {
     toastContext?.addToast(message, tone)
@@ -321,10 +487,43 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
   }
 
   const { custom: customPackages } = useMemo(() => splitPackagesBySource(packages), [packages])
+  const filteredPackages = useMemo(() => {
+    const term = search.trim().toLowerCase()
+    if (!term) return customPackages
+    return customPackages.filter((pkg) => {
+      const fields = [
+        pkg.name,
+        pkg.type,
+        pkg.length != null ? `${pkg.length}` : '',
+        pkg.width != null ? `${pkg.width}` : '',
+        pkg.height != null ? `${pkg.height}` : '',
+      ]
+      return fields.some((field) => String(field ?? '').toLowerCase().includes(term))
+    })
+  }, [customPackages, search])
+  const pagedPackages = useMemo(() => {
+    const start = (page - 1) * pageSize
+    return filteredPackages.slice(start, start + pageSize)
+  }, [filteredPackages, page, pageSize])
+
+  useEffect(() => {
+    setPage(1)
+  }, [search])
+
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(filteredPackages.length / pageSize))
+    setPage((current) => Math.min(current, maxPage))
+  }, [filteredPackages.length, pageSize])
   const contentState = getPackagesContentState({ loading, error, packages })
 
   const handleFormChange = <K extends keyof PackageFormState>(field: K, value: PackageFormState[K]) => {
     setForm((current) => ({ ...current, [field]: value }))
+  }
+
+  const closeFormModal = () => {
+    if (saving) return
+    setFormOpen(false)
+    setForm(createPackageFormState())
   }
 
   const handleShowAdd = () => {
@@ -528,72 +727,6 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
     }, 2200)
   }
 
-  const handleDimsSearch = async () => {
-    if (dimsSearching) return
-    const length = Number.parseFloat(dimsForm.length)
-    const width = Number.parseFloat(dimsForm.width)
-    const height = Number.parseFloat(dimsForm.height)
-    if (!Number.isFinite(length) || !Number.isFinite(width) || !Number.isFinite(height) || length <= 0 || width <= 0 || height <= 0) {
-      showToast('⚠ Enter valid length, width, and height', 'error')
-      return
-    }
-
-    setDimsSearching(true)
-    setDimsResult(null)
-
-    try {
-      const res = await api.get<any>(`/packages/find-by-dims${qs({ length, width, height })}`)
-      const match: PackageDto | null = res?.package ?? res?.data ?? (res?.packageId ? res : null)
-      if (match && (match.packageId || match.id)) {
-        setDimsResult({ kind: 'match', pkg: match })
-        const pid = Number(match.packageId ?? match.id)
-        if (Number.isFinite(pid)) scrollToPackageRow(pid)
-      } else {
-        setDimsResult({ kind: 'nomatch' })
-      }
-    } catch (searchError) {
-      // 404 from the backend is the standard "no match" shape — treat as nomatch.
-      const message = searchError instanceof Error ? searchError.message : ''
-      if (/404|not found/i.test(message)) {
-        setDimsResult({ kind: 'nomatch' })
-      } else {
-        showToast(`❌ ${message || 'Find-by-dims failed'}`, 'error')
-      }
-    } finally {
-      setDimsSearching(false)
-    }
-  }
-
-  const handleDimsAutoCreate = async () => {
-    if (dimsAutoCreating) return
-    const length = Number.parseFloat(dimsForm.length)
-    const width = Number.parseFloat(dimsForm.width)
-    const height = Number.parseFloat(dimsForm.height)
-    if (!Number.isFinite(length) || !Number.isFinite(width) || !Number.isFinite(height)) {
-      showToast('⚠ Enter valid dimensions', 'error')
-      return
-    }
-
-    setDimsAutoCreating(true)
-    try {
-      const res = await api.post<any>('/packages/auto-create', { length, width, height })
-      const created: PackageDto | null = res?.package ?? res?.data ?? (res?.packageId ? res : null)
-      showToast('✅ Custom package created')
-      await refreshPackages()
-      if (created && (created.packageId || created.id)) {
-        const pid = Number(created.packageId ?? created.id)
-        if (Number.isFinite(pid)) scrollToPackageRow(pid)
-        setDimsResult({ kind: 'match', pkg: created })
-      } else {
-        setDimsResult(null)
-      }
-    } catch (createError) {
-      showToast(`❌ ${createError instanceof Error ? createError.message : 'Auto-create failed'}`, 'error')
-    } finally {
-      setDimsAutoCreating(false)
-    }
-  }
-
   const handleConfirmDefaultPrice = async () => {
     if (!billingDefaultModal || modalSaving) return
 
@@ -628,7 +761,29 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
             </h2>
             <p style={{ color: 'var(--text3)', fontSize: 12 }}>Define reusable package types. Select in the right panel when shipping.</p>
           </div>
-          <div style={{ display: 'flex', gap: 7 }}>
+          <div style={{ display: 'flex', gap: 7, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div className="pkg-search-wrap">
+              <Search size={13} strokeWidth={2.25} className="pkg-search-icon" />
+              <input
+                id="pkgSearch"
+                type="text"
+                placeholder="Search packages…"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                className="pkg-search-input"
+              />
+              {search ? (
+                <button
+                  type="button"
+                  className="pkg-search-clear"
+                  aria-label="Clear search"
+                  title="Clear search"
+                  onClick={() => setSearch('')}
+                >
+                  ×
+                </button>
+              ) : null}
+            </div>
             <button className="btn btn-outline btn-sm pkg-header-btn" type="button" onClick={() => void handleSyncCarrierPackages()} id="pkgSyncBtn" disabled={syncing}>
               <RefreshCw size={14} strokeWidth={2} className={syncing ? 'pkg-spin' : undefined} />
               {syncing ? 'Syncing…' : 'Sync from ShipStation'}
@@ -640,7 +795,7 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
           </div>
         </div>
 
-        {formOpen ? (
+        {/* Legacy inline form replaced by PackageFormModal.
           <form className="pkg-form-card" id="pkgFormCard" onSubmit={handleSubmit}>
             <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', marginBottom: 4 }} id="pkgFormTitle">
               {form.packageId ? 'Edit Package' : 'Add Package'}
@@ -704,170 +859,15 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
               </button>
             </div>
           </form>
-        ) : null}
+        */}
 
         {lowStockPackages.length > 0 && !bannerDismissed ? (
-          <div
-            id="pkgLowStockBanner"
-            style={{
-              display: 'flex',
-              alignItems: 'flex-start',
-              gap: 10,
-              background: '#fffbeb',
-              border: '1px solid #fde68a',
-              borderRadius: 7,
-              padding: '9px 14px',
-              marginBottom: 12,
-              fontSize: 12.5,
-              color: '#92400e',
-            }}
-          >
-            <div style={{ flex: 1, lineHeight: 1.5 }}>
-              ⚠ <strong>{lowStockPackages.length} package{lowStockPackages.length === 1 ? '' : 's'} at or below reorder level:</strong>{' '}
-              {lowStockPackages.map((pkg, idx) => (
-                <span key={pkg.packageId ?? pkg.id ?? pkg.name}>
-                  <button
-                    type="button"
-                    className="packages-inline-button"
-                    onClick={() => scrollToPackageRow(Number(pkg.packageId ?? pkg.id))}
-                    style={{
-                      background: 'none',
-                      border: 'none',
-                      padding: 0,
-                      cursor: 'pointer',
-                      color: '#92400e',
-                      fontWeight: 600,
-                      textDecoration: 'underline',
-                    }}
-                  >
-                    {pkg.name} ({pkg.stockQty ?? 0}/{pkg.reorderLevel ?? 0})
-                  </button>
-                  {idx < lowStockPackages.length - 1 ? ', ' : ''}
-                </span>
-              ))}
-            </div>
-            <button
-              type="button"
-              aria-label="Dismiss low-stock banner"
-              onClick={() => setBannerDismissed(true)}
-              style={{
-                background: 'none',
-                border: 'none',
-                color: '#92400e',
-                cursor: 'pointer',
-                fontSize: 14,
-                lineHeight: 1,
-                padding: '0 2px',
-              }}
-            >
-              ✕
-            </button>
-          </div>
+          <LowStockBanner
+            packages={lowStockPackages}
+            onJumpTo={(packageId) => scrollToPackageRow(packageId)}
+            onDismiss={() => setBannerDismissed(true)}
+          />
         ) : null}
-
-        <div style={{ marginBottom: 12 }}>
-          <button
-            type="button"
-            className="btn btn-ghost btn-xs"
-            onClick={() => {
-              setDimsOpen((open) => !open)
-              if (dimsOpen) setDimsResult(null)
-            }}
-            style={{ fontSize: 12 }}
-          >
-            {dimsOpen ? '▾' : '▸'} Find by dimensions
-          </button>
-          {dimsOpen ? (
-            <div
-              style={{
-                marginTop: 6,
-                padding: '10px 12px',
-                border: '1px solid var(--border)',
-                borderRadius: 7,
-                background: 'var(--surface)',
-              }}
-            >
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-                <div className="pkg-form-field">
-                  <label htmlFor="pkgDimsL">Length (in)</label>
-                  <input
-                    id="pkgDimsL"
-                    type="number"
-                    min="0"
-                    step="0.25"
-                    value={dimsForm.length}
-                    onChange={(event) => setDimsForm((current) => ({ ...current, length: event.target.value }))}
-                    onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void handleDimsSearch() } }}
-                    style={{ width: 80 }}
-                  />
-                </div>
-                <div className="pkg-form-field">
-                  <label htmlFor="pkgDimsW">Width (in)</label>
-                  <input
-                    id="pkgDimsW"
-                    type="number"
-                    min="0"
-                    step="0.25"
-                    value={dimsForm.width}
-                    onChange={(event) => setDimsForm((current) => ({ ...current, width: event.target.value }))}
-                    onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void handleDimsSearch() } }}
-                    style={{ width: 80 }}
-                  />
-                </div>
-                <div className="pkg-form-field">
-                  <label htmlFor="pkgDimsH">Height (in)</label>
-                  <input
-                    id="pkgDimsH"
-                    type="number"
-                    min="0"
-                    step="0.25"
-                    value={dimsForm.height}
-                    onChange={(event) => setDimsForm((current) => ({ ...current, height: event.target.value }))}
-                    onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void handleDimsSearch() } }}
-                    style={{ width: 80 }}
-                  />
-                </div>
-                <button
-                  type="button"
-                  className="btn btn-primary btn-sm pkg-header-btn"
-                  disabled={dimsSearching}
-                  onClick={() => void handleDimsSearch()}
-                >
-                  <Search size={13} strokeWidth={2.25} />
-                  {dimsSearching ? 'Searching…' : 'Find'}
-                </button>
-                {dimsResult ? (
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-xs"
-                    onClick={() => setDimsResult(null)}
-                    style={{ fontSize: 11 }}
-                  >
-                    Clear
-                  </button>
-                ) : null}
-              </div>
-
-              {dimsResult?.kind === 'match' ? (
-                <div style={{ marginTop: 8, fontSize: 12, color: 'var(--text2)' }}>
-                  ✅ Matched <strong>{dimsResult.pkg.name}</strong> — highlighted in the list below.
-                </div>
-              ) : dimsResult?.kind === 'nomatch' ? (
-                <div style={{ marginTop: 8, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', fontSize: 12, color: 'var(--text2)' }}>
-                  <span>No match — create one?</span>
-                  <button
-                    type="button"
-                    className="btn btn-primary btn-xs"
-                    disabled={dimsAutoCreating}
-                    onClick={() => void handleDimsAutoCreate()}
-                  >
-                    {dimsAutoCreating ? 'Creating…' : '＋ Create custom package with these dims'}
-                  </button>
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
 
         <div id="packagesContent">
           {contentState === 'loading' ? (
@@ -877,28 +877,62 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
           ) : contentState === 'empty' ? (
             <div className="empty-state"><div className="empty-icon">📐</div><div>No packages yet. Add one or sync from ShipStation.</div></div>
           ) : customPackages.length > 0 ? (
-            <PackagesDataTable
-              packages={customPackages}
-              ledgerByPackageId={ledgerByPackageId}
-              reorderInputs={reorderInputs}
-              highlightedPackageId={highlightedPackageId}
-              rowRefs={rowRefs}
-              onToggleLedger={(packageId) => void handleToggleLedger(packageId)}
-              onReorderInputChange={handleReorderInputChange}
-              onSaveReorderLevel={(pkg) => void handleSaveReorderLevel(pkg)}
-              onReceive={(pkg) => setReceiveModal({ packageId: pkg.packageId, packageName: pkg.name, form: createPackageQuantityFormState(pkg.unitCost != null ? String(pkg.unitCost) : '') })}
-              onAdjust={(pkg) => setAdjustModal({ packageId: pkg.packageId, packageName: pkg.name, sign: 1, form: createPackageQuantityFormState() })}
-              onEdit={handleEdit}
-              onSetBillingDefault={(pkg) => setBillingDefaultModal({ packageId: pkg.packageId, packageName: pkg.name, price: pkg.unitCost != null ? pkg.unitCost.toFixed(2) : '' })}
-              onDelete={(packageId) => void handleDelete(packageId)}
-              onOpenOrder={onOpenOrder}
-              columnWidths={columnWidths}
-              onResizeColumn={handleResizePackageColumn}
-              onResetColumn={handleResetPackageColumn}
-            />
+            filteredPackages.length === 0 ? (
+              <div className="empty-state">
+                <div className="empty-icon">🔍</div>
+                <div>No packages match "{search}"</div>
+              </div>
+            ) : (
+              <>
+                <PackagesDataTable
+                  packages={pagedPackages}
+                  ledgerByPackageId={ledgerByPackageId}
+                  reorderInputs={reorderInputs}
+                  highlightedPackageId={highlightedPackageId}
+                  rowRefs={rowRefs}
+                  onToggleLedger={(packageId) => void handleToggleLedger(packageId)}
+                  onReorderInputChange={handleReorderInputChange}
+                  onSaveReorderLevel={(pkg) => void handleSaveReorderLevel(pkg)}
+                  onReceive={(pkg) => setReceiveModal({ packageId: pkg.packageId, packageName: pkg.name, form: createPackageQuantityFormState(pkg.unitCost != null ? String(pkg.unitCost) : '') })}
+                  onAdjust={(pkg) => setAdjustModal({ packageId: pkg.packageId, packageName: pkg.name, sign: 1, form: createPackageQuantityFormState() })}
+                  onEdit={handleEdit}
+                  onSetBillingDefault={(pkg) => setBillingDefaultModal({ packageId: pkg.packageId, packageName: pkg.name, price: pkg.unitCost != null ? pkg.unitCost.toFixed(2) : '' })}
+                  onDelete={(packageId) => void handleDelete(packageId)}
+                  onOpenOrder={onOpenOrder}
+                  columnWidths={columnWidths}
+                  onResizeColumn={handleResizePackageColumn}
+                  onResetColumn={handleResetPackageColumn}
+                  usageByPackageId={usageByPackageId}
+                  usageLoading={usageLoading}
+                />
+                <AnalysisPagination
+                  page={page}
+                  pageSize={pageSize}
+                  pageSizeOptions={PACKAGES_PAGE_SIZE_OPTIONS}
+                  totalItems={filteredPackages.length}
+                  onPageChange={setPage}
+                  onPageSizeChange={(nextSize) => {
+                    setPageSize(nextSize)
+                    setPage(1)
+                  }}
+                  unitLabel="packages"
+                  ariaLabel="Packages table pagination"
+                />
+              </>
+            )
           ) : null}
         </div>
       </div>
+
+      {formOpen ? (
+        <PackageFormModal
+          form={form}
+          saving={saving}
+          onChange={handleFormChange}
+          onSubmit={handleSubmit}
+          onClose={closeFormModal}
+        />
+      ) : null}
 
       {receiveModal ? (
         <PackageAdjustModal title="📥 Receive Stock" packageName={receiveModal.packageName} onClose={() => setReceiveModal(null)}>

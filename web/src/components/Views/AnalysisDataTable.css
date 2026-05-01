@@ -1,5 +1,5 @@
 .analysis-table-shell{
-  overflow-x:auto;
+  overflow:visible;
   border:1px solid var(--border);
   border-radius:10px;
   background:var(--surface);
@@ -60,7 +60,7 @@
 
 /* ─── Column-size variants (scale column widths via padding + min-width) ─── */
 .analysis-table-shell.is-colsize-narrow{
-  overflow-x:auto;
+  overflow:visible;
 }
 
 .analysis-table-shell.is-colsize-narrow .analysis-data-table{
@@ -95,7 +95,7 @@
 }
 
 .analysis-table-shell.is-colsize-wide{
-  overflow-x:auto;
+  overflow:visible;
 }
 
 .analysis-table-shell.is-colsize-wide .analysis-data-table{
@@ -462,6 +462,8 @@
 }
 
 #view-analysis.view-content{
+  --analysis-table-sticky-top:0px;
+  overflow-x:auto;
   padding-top:0;
   padding-bottom:24px;
 }
@@ -481,39 +483,14 @@
   padding:0;
   vertical-align:middle;
   white-space:nowrap;
-  position:relative;
+  position:sticky !important;
+  top:var(--analysis-table-sticky-top, 0px) !important;
+  z-index:25 !important;
+  background:linear-gradient(180deg, #f8fafc 0%, #eef3f8 100%) !important;
+  box-shadow:0 1px 0 var(--border), 0 3px 8px rgba(15,23,42,.08);
 }
 
-/* ─── Drag-to-resize column handle ─── */
-.analysis-col-resize-handle{
-  position:absolute;
-  top:0;
-  right:-3px;
-  width:7px;
-  height:100%;
-  cursor:col-resize;
-  user-select:none;
-  z-index:2;
-  display:block;
-}
-
-.analysis-col-resize-handle::after{
-  content:'';
-  position:absolute;
-  top:25%;
-  bottom:25%;
-  left:50%;
-  width:2px;
-  margin-left:-1px;
-  background:transparent;
-  border-radius:1px;
-  transition:background .12s ease;
-}
-
-.analysis-col-resize-handle:hover::after,
-.analysis-col-resize-handle:active::after{
-  background:var(--ss-blue);
-}
+/* Drag-to-resize handle styles live in ColumnResizeHandle.css */
 
 .analysis-table-head-cell.is-left{
   text-align:left;
