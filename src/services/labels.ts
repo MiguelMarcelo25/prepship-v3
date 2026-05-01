@@ -26,9 +26,10 @@ import {
 } from './mock-label-generator';
 import { deductInventoryForOrder, deductPackageForShipment } from './fulfillment-deductions';
 
-// ── Rate limiting ─────────────────────────────────────────────────────────────
+// Optional local throttle. Disabled by default so batch queue jobs are not capped.
+// Set LABEL_RATE_LIMIT to a positive value to re-enable a per-minute client cap.
 
-const LABEL_RATE_LIMIT = 10;
+const LABEL_RATE_LIMIT = Number(process.env.LABEL_RATE_LIMIT ?? 0);
 const LABEL_RATE_WINDOW_MS = 60_000;
 const labelRateLimitMap = new Map<number, { count: number; windowStart: number }>();
 
@@ -43,6 +44,8 @@ export class LabelRateLimitError extends Error {
 }
 
 function checkLabelRateLimit(clientId: number): void {
+  if (!Number.isFinite(LABEL_RATE_LIMIT) || LABEL_RATE_LIMIT <= 0) return;
+
   const now = Date.now();
   const bucket = labelRateLimitMap.get(clientId);
   if (!bucket) {
@@ -618,8 +621,6 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
       .limit(1);
     clientId = match?.id ?? null;
   }
-  if (clientId) checkLabelRateLimit(clientId);
-
   // Hard guard: any order under an isTest client is forced into offline-mock
   // mode regardless of what the UI sent. Prevents a test row from ever
   // spending real postage.
@@ -633,6 +634,7 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
       body = { ...body, testLabel: true };
     }
   }
+  if (clientId && !body.testLabel) checkLabelRateLimit(clientId);
 
   const existing = await findActiveLabelForOrder(order.id);
   if (existing) {

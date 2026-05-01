@@ -2462,31 +2462,36 @@ export default function OrdersView({
       eligible.push(order)
     }
 
-    // Fire all addToQueue calls in parallel — each one is an independent
-    // request, so awaiting them sequentially was the source of the slowness.
-    const results = await Promise.allSettled(
-      eligible.map((order) =>
-        apiClient.addToQueue(buildQueueAddPayload(order, order.label!.labelUrl)),
-      ),
-    )
-
     let sent = 0
     let failed = preFailed
     const queuedItems: Array<{ sku?: string | null; name?: string | null; quantity?: number | null }> = []
-    results.forEach((result, index) => {
-      if (result.status === 'fulfilled') {
-        sent += 1
-        const order = eligible[index]
-        queuedItems.push(...getActiveItems(order, orderDetailsById.get(order.orderId) ?? null))
-      } else {
-        failed += 1
+
+    if (eligible.length > 0) {
+      setQueueLoading(true)
+      try {
+        await runWithConcurrency(eligible, BATCH_QUEUE_CONCURRENCY, async (order) => {
+          try {
+            await apiClient.addToQueue(buildQueueAddPayload(order, order.label!.labelUrl))
+            sent += 1
+            queuedItems.push(...getActiveItems(order, orderDetailsById.get(order.orderId) ?? null))
+          } catch {
+            failed += 1
+          }
+        })
+      } finally {
+        setQueueLoading(false)
       }
-    })
+    }
 
     if (sent > 0 && queueClient != null) {
-      const payload = await apiClient.fetchQueue(queueClient, queueHistoryVisible)
-      setQueueEntries(payload.queuedOrders)
-      setQueueOpen(true)
+      setQueueLoading(true)
+      try {
+        const payload = await apiClient.fetchQueue(queueClient, queueHistoryVisible)
+        setQueueEntries(payload.queuedOrders)
+        setQueueOpen(true)
+      } finally {
+        setQueueLoading(false)
+      }
     }
 
     if (sent > 0) {
