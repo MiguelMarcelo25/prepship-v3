@@ -1984,6 +1984,22 @@ export const apiClient = {
   },
 
   // ─── Billing ───────────────────────────────────────────────────────────────
+  importStandardPackageDimensions(): Promise<any> {
+    return safe(
+      'importStandardPackageDimensions',
+      () => api.post<any>('/packages/import-standard-dimensions', {}),
+      {
+        inserted: 0,
+        skippedExisting: 0,
+        skippedInvalid: 0,
+        skippedDuplicates: 0,
+        totalValid: 0,
+        rawLineCount: 0,
+        message: '',
+      }
+    );
+  },
+
   fetchBillingConfigs(): Promise<any[]> {
     return safe(
       'fetchBillingConfigs',

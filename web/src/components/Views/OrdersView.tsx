@@ -377,6 +377,7 @@ const TEST_PACK_DIMS = { length: 5, width: 3, height: 1, units: 'inches' }
 const TEST_SHIPPING_ACCOUNT_LABEL = 'TEST ACCOUNT - $0 MOCK ONLY'
 const TEST_CARRIER_CODE = 'test'
 const TEST_SERVICE_CODE = 'test_mock_service'
+const BATCH_QUEUE_CONCURRENCY = 5
 
 type V2CarrierAccountRef = {
   carrierCode: string
@@ -1244,6 +1245,23 @@ function buildEmptyPanel() {
   )
 }
 
+async function runWithConcurrency<T>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<void>,
+) {
+  let nextIndex = 0
+  const workerCount = Math.min(Math.max(1, limit), items.length)
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex
+      nextIndex += 1
+      await worker(items[index], index)
+    }
+  }))
+}
+
 export default function OrdersView({
   currentStatus,
   searchQuery = '',
@@ -1297,6 +1315,7 @@ export default function OrdersView({
   const [queuePrintInFlight, setQueuePrintInFlight] = useState(false)
   const [rateBrowserOpen, setRateBrowserOpen] = useState(false)
   const [detailDrawerOrderId, setDetailDrawerOrderId] = useState<number | null>(null)
+  const [detailDrawerFromQueue, setDetailDrawerFromQueue] = useState(false)
   const [trackingModal, setTrackingModal] = useState<{
     tracking: string
     carrierCode: string | null
@@ -1800,6 +1819,7 @@ export default function OrdersView({
     const handlePointerDown = (event: MouseEvent) => {
       const target = event.target as Node | null
       if (!target) return
+      if (detailDrawerFromQueue && detailDrawerOrderId != null) return
       const panel = document.getElementById('print-queue-panel')
       const trigger = document.getElementById('pq-toggle-btn')
       if (panel && panel.contains(target)) return
@@ -1817,7 +1837,7 @@ export default function OrdersView({
       document.removeEventListener('mousedown', handlePointerDown)
       document.removeEventListener('keydown', handleKey)
     }
-  }, [queueOpen])
+  }, [queueOpen, detailDrawerFromQueue, detailDrawerOrderId])
 
   useEffect(() => {
     if (!panelOrder) {
@@ -1989,6 +2009,17 @@ export default function OrdersView({
 
   const openOrderDetails = (orderId: number) => {
     onActiveOrderIdChange?.(orderId)
+  }
+
+  const openDetailDrawer = (orderId: number | null, fromQueue = false) => {
+    setDetailDrawerFromQueue(fromQueue)
+    setDetailDrawerOrderId(orderId)
+  }
+
+  const closeDetailDrawer = () => {
+    if (detailDrawerFromQueue) setQueueOpen(true)
+    setDetailDrawerOrderId(null)
+    setDetailDrawerFromQueue(false)
   }
 
   const toggleOrderSelection = (orderId: number, checked?: boolean) => {
@@ -2815,7 +2846,7 @@ export default function OrdersView({
     let failed = 0
     const queuedItems: Array<{ sku?: string | null; name?: string | null; quantity?: number | null }> = []
 
-    for (const order of batchOrders) {
+    const processOrder = async (order: OrderSummaryDto) => {
       const bestRate = order.bestRate
       const selectedRate = order.selectedRate
       const shippingProviderId = toNumberValue(bestRate?.shippingProviderId) ?? selectedRate?.shippingProviderId ?? order.label?.shippingProviderId ?? null
@@ -2838,11 +2869,11 @@ export default function OrdersView({
       // rather than try to sneak a 0 past Zod's .positive() validator.
       if (!isTestOrder && shippingProviderId == null) {
         failed += 1
-        continue
+        return
       }
       if (!effectiveServiceCode || !effectiveCarrierCode) {
         failed += 1
-        continue
+        return
       }
 
       try {
@@ -2881,6 +2912,16 @@ export default function OrdersView({
         created += 1
       } catch {
         failed += 1
+      }
+    }
+
+    if (mode === 'queue') {
+      await runWithConcurrency(batchOrders, BATCH_QUEUE_CONCURRENCY, async (order) => {
+        await processOrder(order)
+      })
+    } else {
+      for (const order of batchOrders) {
+        await processOrder(order)
       }
     }
 
@@ -3180,7 +3221,7 @@ export default function OrdersView({
         style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'pointer', color: 'var(--ss-blue)' }}
         onClick={(event) => {
           event.stopPropagation()
-          setDetailDrawerOrderId(order.orderId ?? null)
+          openDetailDrawer(order.orderId ?? null)
         }}
       >
         {order.orderNumber ?? `#${order.orderId}`}
@@ -4598,7 +4639,9 @@ export default function OrdersView({
               <div key={group.groupId} className="pq-group" style={{ border: '1px solid var(--border)', borderRadius: 8, marginBottom: 10, overflow: 'hidden' }}>
                 <div className="pq-group-header" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', background: 'var(--surface2)' }}>
                   <span className="pq-group-label" style={{ fontWeight: 700 }}>{group.label}{group.description ? ` — ${group.description}` : ''}</span>
-                  <span className="pq-group-meta" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text3)' }}>{group.orders.length} order{group.orders.length === 1 ? '' : 's'} · Qty {group.totalQty}</span>
+                  <span className="pq-group-meta" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text3)' }}>
+                    {group.orders.length} order{group.orders.length === 1 ? '' : 's'} · Qty {group.perOrderQty} each
+                  </span>
                   <button className="btn btn-ghost btn-xs" type="button" onClick={() => void printQueueEntries(group.orders.map((entry) => entry.queue_entry_id))}>🖨️ Print Group</button>
                 </div>
                 <div className="pq-group-orders">
@@ -4615,7 +4658,7 @@ export default function OrdersView({
                           title={orderClickable ? 'View order details' : undefined}
                           onClick={(event) => {
                             event.stopPropagation()
-                            if (orderClickable) setDetailDrawerOrderId(numericOrderId)
+                            if (orderClickable) openDetailDrawer(numericOrderId, true)
                           }}
                         >
                           Order #{entry.order_number || entry.order_id}{entry.print_count > 0 ? ` · Reprint #${entry.print_count}` : ''}
@@ -4647,7 +4690,7 @@ export default function OrdersView({
                         title={orderClickable ? 'View order details' : undefined}
                         onClick={(event) => {
                           event.stopPropagation()
-                          if (orderClickable) setDetailDrawerOrderId(numericOrderId)
+                          if (orderClickable) openDetailDrawer(numericOrderId, true)
                         }}
                       >
                         Order #{entry.order_number || entry.order_id}
@@ -4669,7 +4712,10 @@ export default function OrdersView({
       <OrderDetailDrawer
         orderId={detailDrawerOrderId}
         displayStatus={currentStatus}
-        onClose={() => setDetailDrawerOrderId(null)}
+        presentation={detailDrawerFromQueue ? 'modal' : 'drawer'}
+        closeLabel={detailDrawerFromQueue ? 'Back' : undefined}
+        closeTitle={detailDrawerFromQueue ? 'Back to print queue' : undefined}
+        onClose={closeDetailDrawer}
       />
 
       <TrackingModal

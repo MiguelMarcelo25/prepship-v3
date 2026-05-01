@@ -7,6 +7,7 @@ import { packages } from '../db/schema/packages';
 import { packageLedger } from '../db/schema/package-ledger';
 import { ssRequest } from '../lib/shipstation';
 import type { CarriersResponse } from '../lib/shipstation/types';
+import { importStandardPackageDimensions } from '../services/package-dimension-importer';
 
 const app = new Hono();
 
@@ -302,6 +303,16 @@ app.post(
     return c.json({ data: row, created: true }, 201);
   }
 );
+
+// Adds the saved DR PREPPER custom box-size library. The importer is
+// idempotent: exact/fuzzy dimension matches are skipped instead of duplicated.
+app.post('/import-standard-dimensions', async (c) => {
+  const result = await importStandardPackageDimensions();
+  return c.json({
+    ...result,
+    message: `Added ${result.inserted} package sizes (${result.skippedExisting} already existed)`,
+  });
+});
 
 // v2-parity: GET /packages/low-stock — packages whose stockQty is at or
 // below reorderLevel. Used by the Packages view's "needs reorder" badge.

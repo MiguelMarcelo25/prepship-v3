@@ -139,6 +139,7 @@ export interface PrintQueueGroup {
   groupId: string
   label: string
   description: string
+  perOrderQty: number
   totalQty: number
   orders: PrintQueueEntryDto[]
 }
@@ -150,6 +151,11 @@ export interface DailyStripProgress {
   barColor: string
   needToShipColor: string
   upcomingColor: string
+}
+
+function getQueueEntryQty(entry: PrintQueueEntryDto): number {
+  const qty = Number(entry.order_qty ?? 1)
+  return Number.isFinite(qty) && qty > 0 ? qty : 1
 }
 
 export function resolveColumnPrefs(
@@ -262,23 +268,32 @@ export function groupPrintQueueEntries(entries: PrintQueueEntryDto[]): PrintQueu
   for (const entry of entries) {
     if (entry.status !== 'queued') continue
 
-    const existing = groups.get(entry.sku_group_id)
+    const qty = getQueueEntryQty(entry)
+    const groupKey = `${entry.sku_group_id}|qty:${qty}`
+    const existing = groups.get(groupKey)
     if (existing) {
       existing.orders.push(entry)
-      existing.totalQty += entry.order_qty ?? 1
+      existing.totalQty += qty
       continue
     }
 
-    groups.set(entry.sku_group_id, {
-      groupId: entry.sku_group_id,
+    groups.set(groupKey, {
+      groupId: groupKey,
       label: entry.primary_sku || entry.sku_group_id,
       description: entry.item_description || '',
-      totalQty: entry.order_qty ?? 1,
+      perOrderQty: qty,
+      totalQty: qty,
       orders: [entry],
     })
   }
 
-  return [...groups.values()]
+  return [...groups.values()].sort((left, right) => {
+    const labelCompare = left.label.localeCompare(right.label)
+    if (labelCompare !== 0) return labelCompare
+    const descriptionCompare = left.description.localeCompare(right.description)
+    if (descriptionCompare !== 0) return descriptionCompare
+    return left.perOrderQty - right.perOrderQty
+  })
 }
 
 export function buildQueueAddPayload(order: OrderSummaryDto, labelUrl: string) {

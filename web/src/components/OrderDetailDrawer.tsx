@@ -107,6 +107,9 @@ type OrderFullResponse = {
 export type OrderDetailDrawerProps = {
   orderId: number | null;
   displayStatus?: string;
+  presentation?: 'drawer' | 'modal';
+  closeLabel?: string;
+  closeTitle?: string;
   onClose: () => void;
 };
 
@@ -294,6 +297,9 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
 export default function OrderDetailDrawer({
   orderId,
   displayStatus,
+  presentation = 'drawer',
+  closeLabel = '✕',
+  closeTitle = 'Close',
   onClose,
 }: OrderDetailDrawerProps) {
   const [loading, setLoading] = useState(false);
@@ -386,6 +392,8 @@ export default function OrderDetailDrawer({
     toNumber(raw.canonicalOrder?.shipping?.labelCost);
   const labelBreakdown = getLabelCostBreakdown(liveShipment, labelCost);
   const isShipped = (effectiveStatus ?? '').toLowerCase() === 'shipped';
+  const isModal = presentation === 'modal';
+  const closeIsTextButton = closeLabel !== '✕';
 
   return (
     <>
@@ -399,17 +407,22 @@ export default function OrderDetailDrawer({
           zIndex: 1400,
         }}
       />
-      {/* Drawer */}
+      {/* Detail surface */}
       <div
         style={{
           position: 'fixed',
-          top: 0,
-          right: 0,
-          bottom: 0,
-          width: 'min(720px, 95vw)',
+          top: isModal ? '50%' : 0,
+          right: isModal ? 'auto' : 0,
+          bottom: isModal ? 'auto' : 0,
+          left: isModal ? '50%' : 'auto',
+          width: isModal ? 'min(780px, calc(100vw - 32px))' : 'min(720px, 95vw)',
+          height: isModal ? 'min(820px, calc(100vh - 48px))' : undefined,
+          maxHeight: isModal ? 'calc(100vh - 48px)' : undefined,
+          transform: isModal ? 'translate(-50%, -50%)' : undefined,
+          borderRadius: isModal ? 10 : 0,
           background: 'var(--background, #f6f7fb)',
           zIndex: 1401,
-          boxShadow: '-8px 0 32px rgba(0,0,0,.18)',
+          boxShadow: isModal ? '0 18px 54px rgba(15,23,42,.28)' : '-8px 0 32px rgba(0,0,0,.18)',
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
@@ -431,17 +444,23 @@ export default function OrderDetailDrawer({
             type="button"
             onClick={onClose}
             style={{
-              background: 'none',
-              border: 'none',
-              fontSize: 20,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              minHeight: 28,
+              background: closeIsTextButton ? 'var(--surface2)' : 'none',
+              border: closeIsTextButton ? '1px solid var(--border2)' : 'none',
+              borderRadius: closeIsTextButton ? 6 : 0,
+              fontSize: closeIsTextButton ? 12 : 20,
+              fontWeight: closeIsTextButton ? 700 : 400,
               color: 'var(--text2)',
               cursor: 'pointer',
-              padding: '0 4px',
+              padding: closeIsTextButton ? '5px 10px' : '0 4px',
               lineHeight: 1,
             }}
-            title="Close"
+            title={closeTitle}
           >
-            ✕
+            {closeLabel}
           </button>
           <strong style={{ fontSize: 15 }}>
             #{raw.orderNumber ?? orderId}

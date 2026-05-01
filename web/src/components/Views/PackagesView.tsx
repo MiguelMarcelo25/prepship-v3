@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import { Box, Plus, RefreshCw, Search, X } from 'lucide-react'
+import { Box, CalendarPlus, Plus, RefreshCw, Ruler, Search, X } from 'lucide-react'
 import { apiClient } from '../../api/client'
 import { ToastContext } from '../../contexts/ToastContext'
 import type {
@@ -31,6 +31,26 @@ import './PackagesView.css'
 
 const PACKAGES_PAGE_SIZE_OPTIONS = [25, 50, 100]
 const PACKAGES_DEFAULT_PAGE_SIZE = 50
+const RECENT_PACKAGE_DAYS = 30
+
+function wasPackageCreatedWithinDays(pkg: PackageDto, days: number): boolean {
+  const created = Date.parse(String(pkg.createdAt ?? ''))
+  if (!Number.isFinite(created)) return false
+  return created >= Date.now() - days * 24 * 60 * 60 * 1000
+}
+
+function hasCompletePackageDimensions(pkg: PackageDto): boolean {
+  return Number(pkg.length ?? 0) > 0 && Number(pkg.width ?? 0) > 0 && Number(pkg.height ?? 0) > 0
+}
+
+function sortPackagesWithCompleteDimsFirst(packages: PackageDto[]): PackageDto[] {
+  return [...packages].sort((a, b) => {
+    const aComplete = hasCompletePackageDimensions(a)
+    const bComplete = hasCompletePackageDimensions(b)
+    if (aComplete !== bComplete) return aComplete ? -1 : 1
+    return 0
+  })
+}
 
 function readStoredPackagesPageSize(): number {
   if (typeof window === 'undefined') return PACKAGES_DEFAULT_PAGE_SIZE
@@ -322,6 +342,7 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
   const [form, setForm] = useState<PackageFormState>(() => createPackageFormState())
   const [saving, setSaving] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [importingStandardDims, setImportingStandardDims] = useState(false)
   const [ledgerByPackageId, setLedgerByPackageId] = useState<Record<number, LedgerState>>({})
   const [reorderInputs, setReorderInputs] = useState<Record<number, string>>({})
   const [receiveModal, setReceiveModal] = useState<ReceiveModalState | null>(null)
@@ -335,6 +356,7 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState<number>(readStoredPackagesPageSize)
   const [search, setSearch] = useState('')
+  const [showRecentlyAdded, setShowRecentlyAdded] = useState(false)
   const [usageByPackageId, setUsageByPackageId] = useState<Record<number, number | null>>({})
   const [usageLoading, setUsageLoading] = useState(false)
 
@@ -487,10 +509,24 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
   }
 
   const { custom: customPackages } = useMemo(() => splitPackagesBySource(packages), [packages])
+  const orderedCustomPackages = useMemo(() => {
+    return sortPackagesWithCompleteDimsFirst(customPackages)
+  }, [customPackages])
+  const recentlyAddedPackages = useMemo(() => {
+    return orderedCustomPackages
+      .filter((pkg) => wasPackageCreatedWithinDays(pkg, RECENT_PACKAGE_DAYS))
+      .sort((a, b) => {
+        const aComplete = hasCompletePackageDimensions(a)
+        const bComplete = hasCompletePackageDimensions(b)
+        if (aComplete !== bComplete) return aComplete ? -1 : 1
+        return Date.parse(String(b.createdAt ?? '')) - Date.parse(String(a.createdAt ?? ''))
+      })
+  }, [orderedCustomPackages])
   const filteredPackages = useMemo(() => {
+    const basePackages = showRecentlyAdded ? recentlyAddedPackages : orderedCustomPackages
     const term = search.trim().toLowerCase()
-    if (!term) return customPackages
-    return customPackages.filter((pkg) => {
+    if (!term) return basePackages
+    return basePackages.filter((pkg) => {
       const fields = [
         pkg.name,
         pkg.type,
@@ -500,7 +536,7 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
       ]
       return fields.some((field) => String(field ?? '').toLowerCase().includes(term))
     })
-  }, [customPackages, search])
+  }, [orderedCustomPackages, recentlyAddedPackages, search, showRecentlyAdded])
   const pagedPackages = useMemo(() => {
     const start = (page - 1) * pageSize
     return filteredPackages.slice(start, start + pageSize)
@@ -508,7 +544,7 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
 
   useEffect(() => {
     setPage(1)
-  }, [search])
+  }, [search, showRecentlyAdded])
 
   useEffect(() => {
     const maxPage = Math.max(1, Math.ceil(filteredPackages.length / pageSize))
@@ -597,6 +633,24 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
       showToast(`❌ ${syncError instanceof Error ? syncError.message : 'Failed to sync packages'}`, 'error')
     } finally {
       setSyncing(false)
+    }
+  }
+
+  const handleImportStandardDimensions = async () => {
+    if (importingStandardDims) return
+    setImportingStandardDims(true)
+
+    try {
+      const result = await apiClient.importStandardPackageDimensions()
+      await refreshPackages()
+      setShowRecentlyAdded(true)
+      const inserted = Number(result?.inserted ?? 0)
+      const skippedExisting = Number(result?.skippedExisting ?? 0)
+      showToast(`Added ${inserted} package sizes (${skippedExisting} already existed)`, 'success')
+    } catch (importError) {
+      showToast(`Failed to add dimensions: ${importError instanceof Error ? importError.message : 'Import failed'}`, 'error')
+    } finally {
+      setImportingStandardDims(false)
     }
   }
 
@@ -788,6 +842,20 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
               <RefreshCw size={14} strokeWidth={2} className={syncing ? 'pkg-spin' : undefined} />
               {syncing ? 'Syncing…' : 'Sync from ShipStation'}
             </button>
+            <button className="btn btn-outline btn-sm pkg-header-btn" type="button" onClick={() => void handleImportStandardDimensions()} disabled={importingStandardDims}>
+              <Ruler size={14} strokeWidth={2.2} />
+              {importingStandardDims ? 'Adding...' : 'Add Dims'}
+            </button>
+            <button
+              className={`btn ${showRecentlyAdded ? 'btn-primary' : 'btn-outline'} btn-sm pkg-header-btn`}
+              type="button"
+              aria-pressed={showRecentlyAdded}
+              title="Show packages added in the last 30 days"
+              onClick={() => setShowRecentlyAdded((current) => !current)}
+            >
+              <CalendarPlus size={14} strokeWidth={2.2} />
+              30d Added ({recentlyAddedPackages.length})
+            </button>
             <button className="btn btn-primary btn-sm pkg-header-btn" type="button" onClick={handleShowAdd}>
               <Plus size={14} strokeWidth={2.5} />
               Add Custom
@@ -880,7 +948,13 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
             filteredPackages.length === 0 ? (
               <div className="empty-state">
                 <div className="empty-icon">🔍</div>
-                <div>No packages match "{search}"</div>
+                <div>
+                  {search
+                    ? `No packages match "${search}"`
+                    : showRecentlyAdded
+                      ? `No packages were added in the last ${RECENT_PACKAGE_DAYS} days`
+                      : 'No packages match this filter'}
+                </div>
               </div>
             ) : (
               <>

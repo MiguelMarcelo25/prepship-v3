@@ -182,14 +182,12 @@
 
 /* Section header bar — "Custom Packages" */
 #packagesContent > div > div:first-child {
-  background: linear-gradient(180deg, #eef4ff 0%, #d6e3f7 100%) !important;
   padding: 0 !important;
   font-size: 11px !important;
   font-weight: 800 !important;
   color: var(--text3) !important;
   text-transform: uppercase;
   letter-spacing: .05em !important;
-  border-bottom: 1px solid var(--border);
 }
 
 .pkg-table {
