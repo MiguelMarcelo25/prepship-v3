@@ -193,3 +193,130 @@
   min-width: 80px;
   text-align: center;
 }
+
+/* ─── Visual upgrade: align orders table with analysis table look ─── */
+.orders-table-container {
+  border-radius: 10px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .05), 0 1px 2px rgba(15, 23, 42, .03);
+}
+
+.orders-table thead,
+.orders-table thead tr,
+.orders-table th {
+  background: linear-gradient(180deg, #eef4ff 0%, #d6e3f7 100%) !important;
+}
+
+.orders-table th {
+  padding: 11px 12px;
+  font-size: 10.5px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--text3);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.orders-table td {
+  padding: 10px 12px;
+  vertical-align: middle;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.orders-table th {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.orders-table tbody tr {
+  transition: background .15s ease;
+}
+
+.orders-table tbody tr.order-row:nth-child(even):not(.row-selected):not(.row-panel-open):not(.row-exception) {
+  background: #f3f5f8;
+}
+
+.orders-table tbody tr.order-row:hover:not(.row-selected):not(.row-panel-open) {
+  background: #dde8ff !important;
+}
+
+/* Refined status badges (pill + colored dot, matches analysis status pill) */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+
+.status-badge::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.status-awaiting_shipment {
+  background: rgba(42, 91, 215, .12);
+  color: var(--ss-blue);
+}
+
+.status-shipped {
+  background: rgba(22, 163, 74, .12);
+  color: var(--green);
+}
+
+.status-cancelled {
+  background: rgba(220, 38, 38, .12);
+  color: #b91c1c;
+}
+
+/* Order # link — subtle blue underline like analysis SKUs */
+.order-id {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  font-weight: 700;
+}
+
+.order-id:hover {
+  color: #1746a2;
+}
+
+/* Pagination — refined to match analysis pagination */
+.orders-pagination {
+  padding: 14px 12px;
+  margin-top: 8px;
+}
+
+.orders-pagination button {
+  min-width: 32px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 6px;
+  font-weight: 700;
+  font-size: 12px;
+  transition: background .15s ease, color .15s ease, border-color .15s ease;
+}
+
+.orders-pagination button:hover:not(:disabled) {
+  border-color: rgba(42, 91, 215, .45);
+  color: var(--ss-blue);
+  background: #eef4ff;
+}
+
+/* No-data cell polish */
+.no-data {
+  font-size: 13px;
+  padding: 48px 20px !important;
+}
