@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { Box, Plus, RefreshCw, Search } from 'lucide-react'
 import { apiClient } from '../../api/client'
 import { api, qs } from '../../lib/api'
 import { ToastContext } from '../../contexts/ToastContext'
@@ -15,16 +16,36 @@ import {
   buildSetDefaultPackagePriceToast,
   createPackageFormState,
   createPackageQuantityFormState,
-  formatPackageDimensionsText,
-  formatPackageLedgerDate,
-  formatPackageUnitCost,
-  getPackageStockColor,
   getPackagesContentState,
   splitPackagesBySource,
   type PackageFormState,
   type PackageQuantityFormState,
 } from './packages-parity'
+import {
+  PackagesDataTable,
+  type PackagesColumnKey,
+  type PackagesColumnWidths,
+} from './PackagesDataTable'
 import './PackagesView.css'
+
+function readStoredPackageColumnWidths(): PackagesColumnWidths {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = window.localStorage.getItem('packages_column_widths')
+    if (!raw) return {}
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return {}
+    const cleaned: PackagesColumnWidths = {}
+    for (const [key, value] of Object.entries(parsed)) {
+      if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
+        cleaned[key as PackagesColumnKey] = value
+      }
+    }
+    return cleaned
+  } catch {
+    return {}
+  }
+}
 
 interface PackagesViewProps {
   onOpenOrder?: (orderId: number) => void
@@ -199,6 +220,7 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
   const [dimsResult, setDimsResult] = useState<{ kind: 'match'; pkg: PackageDto } | { kind: 'nomatch' } | null>(null)
   const [dimsAutoCreating, setDimsAutoCreating] = useState(false)
   const rowRefs = useRef<Record<number, HTMLTableRowElement | null>>({})
+  const [columnWidths, setColumnWidths] = useState<PackagesColumnWidths>(readStoredPackageColumnWidths)
 
   useEffect(() => {
     let cancelled = false
@@ -240,6 +262,24 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
       cancelled = true
     }
   }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem('packages_column_widths', JSON.stringify(columnWidths))
+  }, [columnWidths])
+
+  function handleResizePackageColumn(key: PackagesColumnKey, width: number) {
+    setColumnWidths((current) => ({ ...current, [key]: width }))
+  }
+
+  function handleResetPackageColumn(key: PackagesColumnKey) {
+    setColumnWidths((current) => {
+      if (!(key in current)) return current
+      const next = { ...current }
+      delete next[key]
+      return next
+    })
+  }
 
   useEffect(() => {
     if (!receiveModal && !adjustModal && !billingDefaultModal) return
@@ -441,6 +481,7 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
 
     try {
       const result = await apiClient.receivePackage(receiveModal.packageId, payload)
+      if (!result?.package) throw new Error('Receive failed')
       setReceiveModal(null)
       showToast(`✅ Received ${payload.qty} units. New total: ${result.package?.stockQty ?? '?'}`)
       await refreshPackages()
@@ -465,6 +506,7 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
     try {
       const payload = buildPackageAdjustInput(adjustModal.form, adjustModal.sign)
       const result = await apiClient.adjustPackage(adjustModal.packageId, payload)
+      if (!result?.package) throw new Error('Adjust failed')
       setAdjustModal(null)
       showToast(`✅ Adjusted. New total: ${result.package?.stockQty ?? '?'}`)
       await refreshPackages()
@@ -565,6 +607,7 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
 
     try {
       const result = await apiClient.setDefaultPackagePrice(billingDefaultModal.packageId, price)
+      if (typeof result?.updated !== 'number') throw new Error('Failed to set default price')
       setBillingDefaultModal(null)
       showToast(buildSetDefaultPackagePriceToast(result))
     } catch (defaultError) {
@@ -579,14 +622,21 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
       <div id="view-packages" className="view-content">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
           <div>
-            <h2 style={{ fontSize: 16, fontWeight: 800, color: 'var(--text)', marginBottom: 2 }}>📐 Package Library</h2>
+            <h2 style={{ fontSize: 16, fontWeight: 800, color: 'var(--text)', marginBottom: 2, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+              <Box size={18} strokeWidth={2.25} style={{ color: 'var(--ss-blue)' }} />
+              Package Library
+            </h2>
             <p style={{ color: 'var(--text3)', fontSize: 12 }}>Define reusable package types. Select in the right panel when shipping.</p>
           </div>
           <div style={{ display: 'flex', gap: 7 }}>
-            <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleSyncCarrierPackages()} id="pkgSyncBtn" disabled={syncing}>
-              {syncing ? '⏳ Syncing…' : '↻ Sync from ShipStation'}
+            <button className="btn btn-outline btn-sm pkg-header-btn" type="button" onClick={() => void handleSyncCarrierPackages()} id="pkgSyncBtn" disabled={syncing}>
+              <RefreshCw size={14} strokeWidth={2} className={syncing ? 'pkg-spin' : undefined} />
+              {syncing ? 'Syncing…' : 'Sync from ShipStation'}
             </button>
-            <button className="btn btn-primary btn-sm" type="button" onClick={handleShowAdd}>＋ Add Custom</button>
+            <button className="btn btn-primary btn-sm pkg-header-btn" type="button" onClick={handleShowAdd}>
+              <Plus size={14} strokeWidth={2.5} />
+              Add Custom
+            </button>
           </div>
         </div>
 
@@ -779,11 +829,12 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
                 </div>
                 <button
                   type="button"
-                  className="btn btn-primary btn-sm"
+                  className="btn btn-primary btn-sm pkg-header-btn"
                   disabled={dimsSearching}
                   onClick={() => void handleDimsSearch()}
                 >
-                  {dimsSearching ? 'Searching…' : '🔍 Find'}
+                  <Search size={13} strokeWidth={2.25} />
+                  {dimsSearching ? 'Searching…' : 'Find'}
                 </button>
                 {dimsResult ? (
                   <button
@@ -826,148 +877,25 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
           ) : contentState === 'empty' ? (
             <div className="empty-state"><div className="empty-icon">📐</div><div>No packages yet. Add one or sync from ShipStation.</div></div>
           ) : customPackages.length > 0 ? (
-            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-              <div style={{ padding: '8px 12px', background: 'var(--surface2)', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>
-                Custom Packages
-              </div>
-              <table className="pkg-table">
-                <thead>
-                  <tr style={{ background: 'var(--surface2)', borderBottom: '1px solid var(--border)' }}>
-                    <th style={{ padding: '5px 10px', textAlign: 'left', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px', maxWidth: 280 }}>Package</th>
-                    <th style={{ padding: '5px 8px', textAlign: 'center', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px', width: 60 }}>Stock</th>
-                    <th style={{ padding: '5px 8px', textAlign: 'center', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px', width: 75 }}>Reorder</th>
-                    <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px', width: 70 }}>Cost</th>
-                    <th style={{ padding: '5px 6px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {customPackages.map((pkg) => {
-                    const ledger = ledgerByPackageId[pkg.packageId]
-                    return (
-                      <tr
-                        key={pkg.packageId ?? pkg.id ?? pkg.name}
-                        ref={(el) => { rowRefs.current[pkg.packageId] = el }}
-                        id={`pkg-row-${pkg.packageId}`}
-                        style={{
-                          borderBottom: '1px solid var(--border)',
-                          background: highlightedPackageId === pkg.packageId ? 'rgba(254, 240, 138, 0.45)' : undefined,
-                          transition: 'background 0.4s ease',
-                        }}
-                      >
-                        <td style={{ padding: '7px 10px', maxWidth: 280, overflow: 'hidden' }}>
-                          <button
-                            type="button"
-                            className="packages-inline-button"
-                            style={{
-                              fontWeight: 600,
-                              fontSize: 12,
-                              color: 'var(--text)',
-                              cursor: 'pointer',
-                              textDecoration: 'underline',
-                              textDecorationColor: 'var(--border)',
-                              display: 'block',
-                            }}
-                            onClick={() => void handleToggleLedger(pkg.packageId)}
-                          >
-                            {pkg.name}
-                          </button>
-                          <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 1 }}>{formatPackageDimensionsText(pkg)}</div>
-                          {ledger?.open ? (
-                            <div id={`pkg-ledger-${pkg.packageId}`} style={{ marginTop: 6 }}>
-                              {ledger.loading ? (
-                                <span style={{ fontSize: 11, color: 'var(--text3)' }}>Loading…</span>
-                              ) : ledger.error ? (
-                                <span style={{ fontSize: 11, color: 'var(--red)' }}>Failed to load</span>
-                              ) : ledger.rows.length === 0 ? (
-                                <span style={{ fontSize: 11, color: 'var(--text3)' }}>No history yet</span>
-                              ) : (
-                                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, color: 'var(--text2)' }}>
-                                  <thead>
-                                    <tr style={{ borderBottom: '1px solid var(--border)' }}>
-                                      <th style={{ textAlign: 'left', padding: '3px 6px', fontSize: 10, color: 'var(--text3)' }}>Date</th>
-                                      <th style={{ textAlign: 'center', padding: '3px 6px', fontSize: 10, color: 'var(--text3)' }}>Change</th>
-                                      <th style={{ textAlign: 'right', padding: '3px 6px', fontSize: 10, color: 'var(--text3)' }}>Cost/unit</th>
-                                      <th style={{ textAlign: 'left', padding: '3px 6px', fontSize: 10, color: 'var(--text3)' }}>Reason</th>
-                                      <th style={{ textAlign: 'left', padding: '3px 6px', fontSize: 10, color: 'var(--text3)' }}>Order</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {ledger.rows.map((row) => (
-                                      <tr key={`${pkg.packageId}-${row.id ?? row.createdAt}`} style={{ borderBottom: '1px solid var(--border)' }}>
-                                        <td style={{ padding: '3px 6px', whiteSpace: 'nowrap' }}>{formatPackageLedgerDate(row.createdAt)}</td>
-                                        <td style={{ textAlign: 'center', padding: '3px 6px', fontWeight: 700, color: row.delta > 0 ? 'var(--green)' : 'var(--red)' }}>
-                                          {row.delta > 0 ? '+' : ''}
-                                          {row.delta}
-                                        </td>
-                                        <td style={{ textAlign: 'right', padding: '3px 6px', color: 'var(--text3)' }}>{formatPackageUnitCost(row.unitCost)}</td>
-                                        <td style={{ padding: '3px 6px' }}>{row.reason || '—'}</td>
-                                        <td style={{ padding: '3px 6px' }}>
-                                          {row.orderId ? (
-                                            <button
-                                              type="button"
-                                              className="packages-inline-button"
-                                              style={{ color: 'var(--ss-blue)' }}
-                                              onClick={() => onOpenOrder?.(row.orderId as number)}
-                                            >
-                                              #{row.orderId}
-                                            </button>
-                                          ) : '—'}
-                                        </td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              )}
-                            </div>
-                          ) : null}
-                        </td>
-                        <td style={{ padding: '7px 8px', textAlign: 'center', fontWeight: 700, fontSize: 13, color: getPackageStockColor(pkg) }}>
-                          {pkg.stockQty ?? 0}
-                        </td>
-                        <td style={{ padding: '7px 8px', textAlign: 'center' }}>
-                          <input
-                            type="number"
-                            min="0"
-                            step="1"
-                            title="Reorder Level"
-                            value={reorderInputs[pkg.packageId] ?? String(pkg.reorderLevel ?? 10)}
-                            onChange={(event) => handleReorderInputChange(pkg.packageId, event.target.value)}
-                            onBlur={() => void handleSaveReorderLevel(pkg)}
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter') {
-                                event.preventDefault()
-                                void handleSaveReorderLevel(pkg)
-                                event.currentTarget.blur()
-                              }
-                            }}
-                            style={{
-                              width: 50,
-                              padding: '3px 4px',
-                              border: '1px solid var(--border2)',
-                              borderRadius: 3,
-                              background: 'var(--surface2)',
-                              color: 'var(--text)',
-                              fontSize: 11,
-                              textAlign: 'center',
-                            }}
-                          />
-                        </td>
-                        <td style={{ padding: '7px 8px', textAlign: 'right', fontSize: 11.5, color: 'var(--text2)', fontFamily: 'monospace' }}>
-                          {formatPackageUnitCost(pkg.unitCost)}
-                        </td>
-                        <td style={{ padding: '7px 6px', textAlign: 'right', whiteSpace: 'nowrap' }}>
-                          <button className="btn btn-ghost btn-xs" type="button" title="Receive" onClick={() => setReceiveModal({ packageId: pkg.packageId, packageName: pkg.name, form: createPackageQuantityFormState(pkg.unitCost != null ? String(pkg.unitCost) : '') })}>📥</button>
-                          <button className="btn btn-ghost btn-xs" type="button" title="Adjust" onClick={() => setAdjustModal({ packageId: pkg.packageId, packageName: pkg.name, sign: 1, form: createPackageQuantityFormState() })}>±</button>
-                          <button className="btn btn-ghost btn-xs" type="button" title="Edit" onClick={() => handleEdit(pkg.packageId)}>✏️</button>
-                          <button className="btn btn-ghost btn-xs" type="button" title="Default" onClick={() => setBillingDefaultModal({ packageId: pkg.packageId, packageName: pkg.name, price: pkg.unitCost != null ? pkg.unitCost.toFixed(2) : '' })}>📋</button>
-                          <button className="btn btn-ghost btn-xs" type="button" title="Delete" style={{ color: 'var(--red)' }} onClick={() => void handleDelete(pkg.packageId)}>🗑</button>
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
+            <PackagesDataTable
+              packages={customPackages}
+              ledgerByPackageId={ledgerByPackageId}
+              reorderInputs={reorderInputs}
+              highlightedPackageId={highlightedPackageId}
+              rowRefs={rowRefs}
+              onToggleLedger={(packageId) => void handleToggleLedger(packageId)}
+              onReorderInputChange={handleReorderInputChange}
+              onSaveReorderLevel={(pkg) => void handleSaveReorderLevel(pkg)}
+              onReceive={(pkg) => setReceiveModal({ packageId: pkg.packageId, packageName: pkg.name, form: createPackageQuantityFormState(pkg.unitCost != null ? String(pkg.unitCost) : '') })}
+              onAdjust={(pkg) => setAdjustModal({ packageId: pkg.packageId, packageName: pkg.name, sign: 1, form: createPackageQuantityFormState() })}
+              onEdit={handleEdit}
+              onSetBillingDefault={(pkg) => setBillingDefaultModal({ packageId: pkg.packageId, packageName: pkg.name, price: pkg.unitCost != null ? pkg.unitCost.toFixed(2) : '' })}
+              onDelete={(packageId) => void handleDelete(packageId)}
+              onOpenOrder={onOpenOrder}
+              columnWidths={columnWidths}
+              onResizeColumn={handleResizePackageColumn}
+              onResetColumn={handleResetPackageColumn}
+            />
           ) : null}
         </div>
       </div>

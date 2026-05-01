@@ -5,6 +5,7 @@ import { shipments } from '../db/schema/shipments';
 import { clients } from '../db/schema/clients';
 import { ssV1Request } from '../lib/shipstation/v1-client';
 import { ssRequest } from '../lib/shipstation/client';
+import { deductInventoryForOrder } from './fulfillment-deductions';
 import { getSettingNumber, setSetting } from './settings';
 
 const LAST_SYNC_KEY = 'shipment_sync.last_created_ms';
@@ -470,8 +471,15 @@ export async function syncShipments(
             eq(orders.orderStatus, 'awaiting_shipment')
           )
         )
-        .returning({ id: orders.id });
+        .returning();
       ordersMarkedShipped += rows.length;
+      for (const row of rows) {
+        try {
+          await deductInventoryForOrder(row, { source: 'shipment_sync' });
+        } catch (err) {
+          console.warn('[shipment-sync] inventory deduction failed:', err);
+        }
+      }
     }
   }
 

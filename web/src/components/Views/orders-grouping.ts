@@ -1,6 +1,8 @@
 // @ts-nocheck
 export interface GroupedOrdersBySku<T> {
+  key: string
   sku: string
+  quantity: number | null
   count: number
   orders: T[]
 }
@@ -8,12 +10,17 @@ export interface GroupedOrdersBySku<T> {
 export function groupOrdersBySku<T>(
   orders: T[],
   getSku: (order: T) => string | null | undefined,
+  getQuantity: (order: T) => number | null | undefined,
 ): GroupedOrdersBySku<T>[] {
   const groups = new Map<string, GroupedOrdersBySku<T>>()
 
   for (const order of orders) {
     const rawSku = getSku(order)?.trim() || ''
-    const groupKey = rawSku.toLowerCase()
+    const rawQuantity = getQuantity(order)
+    const quantity = typeof rawQuantity === 'number' && Number.isFinite(rawQuantity)
+      ? rawQuantity
+      : null
+    const groupKey = `${rawSku.toLowerCase()}|qty:${quantity ?? 'unknown'}`
     const label = rawSku || 'Unknown SKU'
     const existing = groups.get(groupKey)
 
@@ -24,7 +31,9 @@ export function groupOrdersBySku<T>(
     }
 
     groups.set(groupKey, {
+      key: groupKey,
       sku: label,
+      quantity,
       count: 1,
       orders: [order],
     })

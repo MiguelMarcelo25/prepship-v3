@@ -83,6 +83,149 @@ function normalizeSyntheticTestStoreQuery(q: Record<string, unknown>): void {
   delete q.storeId;
 }
 
+function parseFiniteNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number.parseFloat(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function normalizePackageDto(row: any): any {
+  if (!row || typeof row !== 'object') return row;
+  const packageId = parseFiniteNumber(row.packageId ?? row.id);
+  const unitCost = parseFiniteNumber(row.unitCost);
+  return {
+    ...row,
+    packageId: packageId ?? row.packageId,
+    unitCost,
+  };
+}
+
+function normalizePackageResponse(res: any): any {
+  if (Array.isArray(res)) return res.map(normalizePackageDto);
+  if (!res || typeof res !== 'object') return res;
+
+  const data = Array.isArray(res.data)
+    ? res.data.map(normalizePackageDto)
+    : normalizePackageDto(res.data);
+  const pkg = normalizePackageDto(res.package);
+  const self = normalizePackageDto(res);
+
+  return {
+    ...self,
+    ...(res.data !== undefined ? { data } : {}),
+    ...(res.package !== undefined ? { package: pkg } : {}),
+  };
+}
+
+function normalizePackageMutationPayload(data: Record<string, unknown>): Record<string, unknown> {
+  const next = { ...data };
+  if (next.unitCost == null || next.unitCost === '') {
+    delete next.unitCost;
+  } else {
+    next.unitCost = String(next.unitCost);
+  }
+  return next;
+}
+
+function normalizePackageReceivePayload(data: Record<string, unknown>): Record<string, unknown> {
+  const unitCost = data.unitCost ?? data.costPerUnit;
+  const payload: Record<string, unknown> = {
+    qty: Number(data.qty ?? 0),
+  };
+  if (unitCost != null && unitCost !== '') payload.unitCost = Number(unitCost);
+  if (data.note != null && String(data.note).trim()) payload.note = String(data.note).trim();
+  return payload;
+}
+
+function normalizePackageAdjustPayload(data: Record<string, unknown>): Record<string, unknown> {
+  const qtyDelta = data.qtyDelta ?? data.qty;
+  const payload: Record<string, unknown> = {
+    qtyDelta: Number(qtyDelta ?? 0),
+  };
+  if (data.note != null && String(data.note).trim()) payload.note = String(data.note).trim();
+  return payload;
+}
+
+function normalizePackageLedgerEntry(row: any): any {
+  if (!row || typeof row !== 'object') return row;
+  const delta = parseFiniteNumber(row.delta ?? row.qtyDelta) ?? 0;
+  return {
+    ...row,
+    delta,
+    reason: row.reason ?? row.note ?? row.changeType ?? '',
+    unitCost: parseFiniteNumber(row.unitCost),
+  };
+}
+
+function normalizePackageMovementResponse(res: any): any {
+  if (!res || typeof res !== 'object') return res;
+  const data = res.data && typeof res.data === 'object' ? res.data : res;
+  return {
+    ...res,
+    ...data,
+    package: normalizePackageDto(data.package ?? res.package),
+    ledgerEntry: normalizePackageLedgerEntry(data.ledgerEntry ?? res.ledgerEntry),
+    ok: true,
+  };
+}
+
+function normalizeProductDefaultsPayload(data: Record<string, unknown>): Record<string, unknown> {
+  const next = { ...data };
+  if (next.defaultPackageCode === undefined && 'packageId' in next) {
+    next.defaultPackageCode = next.packageId == null || next.packageId === ''
+      ? null
+      : String(next.packageId);
+  }
+  delete next.packageId;
+  return next;
+}
+
+function inventoryStatus(stockQty: number, reorderLevel: number): 'ok' | 'low' | 'out' {
+  if (stockQty <= 0) return 'out';
+  if (stockQty <= reorderLevel) return 'low';
+  return 'ok';
+}
+
+function normalizeInventoryDto(row: any): any {
+  if (!row || typeof row !== 'object') return row;
+  const currentStock = parseFiniteNumber(row.currentStock ?? row.stockQty) ?? 0;
+  const minStock = parseFiniteNumber(row.minStock ?? row.reorderLevel) ?? 0;
+  const unitsPerPack = parseFiniteNumber(row.units_per_pack ?? row.unitsPerPack) ?? 1;
+  const length = parseFiniteNumber(row.packageLength ?? row.length) ?? 0;
+  const width = parseFiniteNumber(row.packageWidth ?? row.width) ?? 0;
+  const height = parseFiniteNumber(row.packageHeight ?? row.height) ?? 0;
+  const soldLast30Days = parseFiniteNumber(row.soldLast30Days ?? row.last30DaysSold) ?? 0;
+
+  return {
+    ...row,
+    clientId: parseFiniteNumber(row.clientId) ?? 0,
+    minStock,
+    currentStock,
+    stockQty: currentStock,
+    reorderLevel: minStock,
+    status: row.status ?? inventoryStatus(currentStock, minStock),
+    units_per_pack: unitsPerPack,
+    unitsPerPack,
+    packageLength: length,
+    packageWidth: width,
+    packageHeight: height,
+    productLength: parseFiniteNumber(row.productLength ?? row.length) ?? length,
+    productWidth: parseFiniteNumber(row.productWidth ?? row.width) ?? width,
+    productHeight: parseFiniteNumber(row.productHeight ?? row.height) ?? height,
+    baseUnitQty: parseFiniteNumber(row.baseUnitQty) ?? 1,
+    baseUnits: currentStock * (parseFiniteNumber(row.baseUnitQty) ?? 1),
+    cuFtOverride: parseFiniteNumber(row.cuFtOverride),
+    packageId: parseFiniteNumber(row.packageId),
+    packageName: row.packageName ?? null,
+    parentName: row.parentName ?? null,
+    lastMovement: row.lastMovement ?? null,
+    soldLast30Days,
+  };
+}
+
 // Coerce a date-ish input ('YYYY-MM-DD' or any ISO string) to an ISO datetime
 // anchored at start-of-day / end-of-day. Used for endpoints that validate
 // `z.string().datetime()` where a plain `YYYY-MM-DD` would be rejected.
@@ -1227,13 +1370,17 @@ export const apiClient = {
   },
 
   saveProductDefaults(data: Record<string, unknown>): Promise<any> {
-    return safe('saveProductDefaults', () => api.post<any>('/products', data), {});
+    return safe(
+      'saveProductDefaults',
+      () => api.post<any>('/products', normalizeProductDefaultsPayload(data)),
+      {}
+    );
   },
 
   saveProductDefaultsV2(data: Record<string, unknown>): Promise<any> {
     return safe(
       'saveProductDefaultsV2',
-      () => api.post<any>('/products/save-defaults', data),
+      () => api.post<any>('/products/save-defaults', normalizeProductDefaultsPayload(data)),
       {}
     );
   },
@@ -1244,8 +1391,8 @@ export const apiClient = {
       'fetchInventory',
       async () => {
         const res = await api.get<any>(`/inventory${qs((query ?? {}) as any)}`);
-        if (Array.isArray(res)) return res;
-        if (Array.isArray(res?.data)) return res.data;
+        if (Array.isArray(res)) return res.map(normalizeInventoryDto);
+        if (Array.isArray(res?.data)) return res.data.map(normalizeInventoryDto);
         return [];
       },
       []
@@ -1703,7 +1850,9 @@ export const apiClient = {
       'fetchPackages',
       async () => {
         const res = await api.get<any>(`/packages${qs({ source })}`);
-        return Array.isArray(res) ? res : [];
+        if (Array.isArray(res)) return res.map(normalizePackageDto);
+        if (Array.isArray(res?.data)) return res.data.map(normalizePackageDto);
+        return [];
       },
       []
     );
@@ -1721,7 +1870,7 @@ export const apiClient = {
             typeof p?.stockQty === 'number' &&
             typeof p?.reorderLevel === 'number' &&
             p.stockQty <= p.reorderLevel
-        );
+        ).map(normalizePackageDto);
       },
       []
     );
@@ -1730,7 +1879,20 @@ export const apiClient = {
   createPackageMutation(data: Record<string, unknown>): Promise<any> {
     return safe(
       'createPackageMutation',
-      () => api.post<any>('/packages', data),
+      async () => ({
+        ...normalizePackageResponse(
+          await api.post<any>('/packages', normalizePackageMutationPayload(data))
+        ),
+        ok: true,
+      }),
+      {}
+    );
+  },
+
+  autoCreatePackageByDimensions(data: Record<string, unknown>): Promise<any> {
+    return safe(
+      'autoCreatePackageByDimensions',
+      async () => normalizePackageResponse(await api.post<any>('/packages/auto-create', data)),
       {}
     );
   },
@@ -1741,7 +1903,15 @@ export const apiClient = {
   ): Promise<any> {
     return safe(
       'updatePackageMutation',
-      () => api.patch<any>(`/packages/${packageId}`, data),
+      async () => ({
+        ...normalizePackageResponse(
+          await api.patch<any>(
+            `/packages/${packageId}`,
+            normalizePackageMutationPayload(data)
+          )
+        ),
+        ok: true,
+      }),
       {}
     );
   },
@@ -1749,7 +1919,7 @@ export const apiClient = {
   deletePackageMutation(packageId: number): Promise<any> {
     return safe(
       'deletePackageMutation',
-      () => api.delete<any>(`/packages/${packageId}`),
+      async () => ({ ...(await api.delete<any>(`/packages/${packageId}`)), ok: true }),
       { ok: true }
     );
   },
@@ -1767,7 +1937,13 @@ export const apiClient = {
   receivePackage(packageId: number, data: Record<string, unknown>): Promise<any> {
     return safe(
       'receivePackage',
-      () => api.post<any>(`/packages/${packageId}/receive`, data),
+      async () =>
+        normalizePackageMovementResponse(
+          await api.post<any>(
+            `/packages/${packageId}/receive`,
+            normalizePackageReceivePayload(data)
+          )
+        ),
       {}
     );
   },
@@ -1775,7 +1951,13 @@ export const apiClient = {
   adjustPackage(packageId: number, data: Record<string, unknown>): Promise<any> {
     return safe(
       'adjustPackage',
-      () => api.post<any>(`/packages/${packageId}/adjust`, data),
+      async () =>
+        normalizePackageMovementResponse(
+          await api.post<any>(
+            `/packages/${packageId}/adjust`,
+            normalizePackageAdjustPayload(data)
+          )
+        ),
       {}
     );
   },
@@ -1785,8 +1967,8 @@ export const apiClient = {
       'fetchPackageLedger',
       async () => {
         const res = await api.get<any>(`/packages/${packageId}/ledger`);
-        if (Array.isArray(res?.data)) return res.data;
-        if (Array.isArray(res)) return res;
+        if (Array.isArray(res?.data)) return res.data.map(normalizePackageLedgerEntry);
+        if (Array.isArray(res)) return res.map(normalizePackageLedgerEntry);
         return [];
       },
       []

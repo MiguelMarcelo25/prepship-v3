@@ -1279,6 +1279,7 @@ export default function OrdersView({
     recipient: false,
   })
   const [packages, setPackages] = useState<PackageDto[]>([])
+  const [packagesLoaded, setPackagesLoaded] = useState(false)
   const [dailyStats, setDailyStats] = useState<OrdersDailyStatsDto | null>(null)
   const [columnPrefs, setColumnPrefs] = useState<ColumnPrefs | null>(null)
   const [columnMenuOpen, setColumnMenuOpen] = useState(false)
@@ -1309,6 +1310,8 @@ export default function OrdersView({
   const [batchBusy, setBatchBusy] = useState(false)
   const [batchTestMode, setBatchTestMode] = useState(false)
   const [singleActionBusy, setSingleActionBusy] = useState(false)
+  const lastSelectionAnchorRef = useRef<number | null>(null)
+  const shiftHeldOnMouseDownRef = useRef(false)
   const [panelForm, setPanelForm] = useState<{
     locationId: string
     shipAccountId: string
@@ -1347,6 +1350,8 @@ export default function OrdersView({
   const resizeFrameRef = useRef<number | null>(null)
   const suppressHeaderClickRef = useRef(false)
   const selectAllCheckboxRef = useRef<HTMLInputElement | null>(null)
+  const autoPackageDimsKeyRef = useRef<string | null>(null)
+  const panelFormInitKeyRef = useRef<string | null>(null)
 
   const dateRange = dateFilter === 'custom'
     ? {
@@ -1483,6 +1488,7 @@ export default function OrdersView({
         ? groupOrdersBySku(
             orderedFilteredOrders,
             (order) => getPrimarySkuLabel(order, orderDetailsById.get(order.orderId) ?? null),
+            (order) => getTotalQuantity(order, orderDetailsById.get(order.orderId) ?? null),
           )
         : []
     ),
@@ -1542,12 +1548,19 @@ export default function OrdersView({
   useEffect(() => {
     let cancelled = false
 
+    setPackagesLoaded(false)
     void apiClient.fetchPackages()
       .then((payload) => {
-        if (!cancelled) setPackages(payload)
+        if (!cancelled) {
+          setPackages(payload)
+          setPackagesLoaded(true)
+        }
       })
       .catch(() => {
-        if (!cancelled) setPackages([])
+        if (!cancelled) {
+          setPackages([])
+          setPackagesLoaded(true)
+        }
       })
 
     return () => {
@@ -1782,10 +1795,37 @@ export default function OrdersView({
   }, [queueOpen, queueClientId, queueHistoryVisible, toastContext])
 
   useEffect(() => {
+    if (!queueOpen) return
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null
+      if (!target) return
+      const panel = document.getElementById('print-queue-panel')
+      const trigger = document.getElementById('pq-toggle-btn')
+      if (panel && panel.contains(target)) return
+      if (trigger && trigger.contains(target)) return
+      setQueueOpen(false)
+    }
+
+    const handleKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setQueueOpen(false)
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    document.addEventListener('keydown', handleKey)
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      document.removeEventListener('keydown', handleKey)
+    }
+  }, [queueOpen])
+
+  useEffect(() => {
     if (!panelOrder) {
+      panelFormInitKeyRef.current = null
       return
     }
 
+    const initKey = `${panelOrder.orderId}:${panelDetail ? 'detail' : 'summary'}`
     const dimensions = getDimensions(panelOrder, panelDetail)
     const locationId = getPanelWarehouseId(panelOrder, panelDetail) ?? locations.find((location) => location.isDefault)?.locationId ?? locations[0]?.locationId ?? null
     const matchedPackageId = getMatchedPackageIdByDimensions(dimensions, packages)
@@ -1794,6 +1834,22 @@ export default function OrdersView({
     const insurance = getPanelInsurance(panelOrder, panelDetail)
     const panelIsTestOrder = isTestOrder(panelOrder, panelDetail)
 
+    if (panelFormInitKeyRef.current === initKey) {
+      setPanelForm((current) => {
+        if (current.packageId) return current
+        const currentDims = {
+          length: Number.parseFloat(current.length) || 0,
+          width: Number.parseFloat(current.width) || 0,
+          height: Number.parseFloat(current.height) || 0,
+        }
+        const nextPackageId = getPanelPackageId(panelOrder, panelDetail, packages)
+          || getMatchedPackageIdByDimensions(hasCompleteDims(currentDims) ? currentDims : dimensions, packages)
+        return nextPackageId ? { ...current, packageId: nextPackageId } : current
+      })
+      return
+    }
+
+    panelFormInitKeyRef.current = initKey
     setPanelForm({
       locationId: locationId != null ? String(locationId) : '',
       shipAccountId: panelIsTestOrder ? TEST_CARRIER_CODE : selectedAccountValue != null ? String(selectedAccountValue) : '',
@@ -1861,6 +1917,27 @@ export default function OrdersView({
   }, [panelOrderId, panelOrder, panelDetail, locations, packages])
 
   useEffect(() => {
+    if (!panelOrder || panelOrder.orderStatus !== 'awaiting_shipment' || !packagesLoaded) return
+
+    const dims = getPanelDims()
+    if (!hasCompleteDims(dims)) return
+
+    const key = `${panelOrder.orderId}:${getDimsKey(dims)}`
+    if (autoPackageDimsKeyRef.current === key) return
+
+    const timeout = window.setTimeout(() => {
+      if (autoPackageDimsKeyRef.current === key) return
+      autoPackageDimsKeyRef.current = key
+      void ensurePanelPackageForDims({ saveSku: true, silent: true })
+        .catch(() => {
+          autoPackageDimsKeyRef.current = null
+        })
+    }, 450)
+
+    return () => window.clearTimeout(timeout)
+  }, [panelOrderId, panelOrder?.orderStatus, panelForm.length, panelForm.width, panelForm.height, packages, packagesLoaded])
+
+  useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null
       if (target && ['INPUT', 'SELECT', 'TEXTAREA'].includes(target.tagName)) return
@@ -1925,6 +2002,19 @@ export default function OrdersView({
     updateSelection(selectedOrderIds.filter((id) => id !== orderId))
   }
 
+  const selectOrderRange = (anchorOrderId: number, targetOrderId: number) => {
+    const anchorIndex = visibleOrderIds.indexOf(anchorOrderId)
+    const targetIndex = visibleOrderIds.indexOf(targetOrderId)
+    if (anchorIndex < 0 || targetIndex < 0) {
+      toggleOrderSelection(targetOrderId, true)
+      return
+    }
+    const start = Math.min(anchorIndex, targetIndex)
+    const end = Math.max(anchorIndex, targetIndex)
+    const rangeIds = visibleOrderIds.slice(start, end + 1)
+    updateSelection([...selectedOrderIds, ...rangeIds])
+  }
+
   const toggleSkuGroupSelection = (orderIds: number[], checked?: boolean) => {
     const orderIdSet = new Set(orderIds)
     const allSelected = orderIds.length > 0 && orderIds.every((orderId) => selectedIdSet.has(orderId))
@@ -1982,6 +2072,135 @@ export default function OrdersView({
     const width = Number.parseFloat(panelForm.width) || 0
     const height = Number.parseFloat(panelForm.height) || 0
     return { length, width, height }
+  }
+
+  function hasCompleteDims(dims: { length: number; width: number; height: number }) {
+    return dims.length > 0 && dims.width > 0 && dims.height > 0
+  }
+
+  function getDimsKey(dims: { length: number; width: number; height: number }) {
+    return [dims.length, dims.width, dims.height]
+      .map((value) => Number(value).toFixed(3))
+      .join('x')
+  }
+
+  function getPackageIdentifier(pkg: PackageDto | null | undefined) {
+    const raw = pkg?.packageId ?? (pkg as any)?.id
+    const numeric = typeof raw === 'number' ? raw : Number.parseInt(String(raw ?? ''), 10)
+    return Number.isFinite(numeric) ? String(numeric) : ''
+  }
+
+  function getPackageDims(pkg: PackageDto | null | undefined) {
+    if (!pkg) return null
+    const dims = {
+      length: Number.parseFloat(String(pkg.length ?? '')) || 0,
+      width: Number.parseFloat(String(pkg.width ?? '')) || 0,
+      height: Number.parseFloat(String(pkg.height ?? '')) || 0,
+    }
+    return hasCompleteDims(dims) ? dims : null
+  }
+
+  function normalizePanelPackage(pkg: PackageDto | null | undefined) {
+    if (!pkg) return null
+    const packageId = getPackageIdentifier(pkg)
+    return packageId ? { ...pkg, packageId: Number.parseInt(packageId, 10) } : pkg
+  }
+
+  function mergePackageIntoState(pkg: PackageDto | null | undefined) {
+    const normalized = normalizePanelPackage(pkg)
+    const packageId = getPackageIdentifier(normalized)
+    if (!normalized || !packageId) return
+
+    setPackages((current) => {
+      const index = current.findIndex((candidate) => getPackageIdentifier(candidate) === packageId)
+      if (index >= 0) {
+        const next = [...current]
+        next[index] = { ...current[index], ...normalized }
+        return next
+      }
+      return [...current, normalized]
+    })
+  }
+
+  function getSingleSkuDefaultTarget(order: OrderSummaryDto, detail: OrderFullDto | null) {
+    const items = getActiveItems(order, detail).filter((item) => item.sku)
+    const uniqueSkus = [...new Set(items.map((item) => item.sku).filter(Boolean))]
+    if (uniqueSkus.length !== 1) return null
+
+    const sku = uniqueSkus[0]!
+    const matchingItems = items.filter((item) => item.sku === sku)
+    return {
+      sku,
+      name: matchingItems[0]?.name ?? null,
+      qty: matchingItems.reduce((sum, item) => sum + item.quantity, 0) || 1,
+    }
+  }
+
+  async function savePanelSkuDefaults(packageId: string | null, options: { silent?: boolean } = {}) {
+    if (!panelOrder) return null
+
+    const target = getSingleSkuDefaultTarget(panelOrder, panelDetail)
+    if (!target) {
+      if (!options.silent) showToast("Multi-SKU order - edit each product's defaults in the Products tab", 'error')
+      return null
+    }
+
+    const weightOz = getPanelWeightOz()
+    const dims = getPanelDims()
+    if (!weightOz && !hasCompleteDims(dims)) {
+      if (!options.silent) showToast('Enter weight or complete dims first', 'error')
+      return null
+    }
+
+    await apiClient.saveProductDefaultsV2({
+      sku: target.sku,
+      name: target.name,
+      weightOz: target.qty > 1 && weightOz ? Number((weightOz / target.qty).toFixed(2)) : weightOz,
+      length: dims.length,
+      width: dims.width,
+      height: dims.height,
+      defaultPackageCode: packageId || null,
+    })
+
+    return target.sku
+  }
+
+  async function ensurePanelPackageForDims(options: { saveSku?: boolean; silent?: boolean } = {}) {
+    if (!panelOrder || panelOrder.orderStatus !== 'awaiting_shipment') return panelForm.packageId
+
+    const dims = getPanelDims()
+    if (!hasCompleteDims(dims)) return panelForm.packageId
+
+    let packageId = getMatchedPackageIdByDimensions(dims, packages)
+
+    if (!packageId) {
+      const response = await apiClient.autoCreatePackageByDimensions({
+        length: dims.length,
+        width: dims.width,
+        height: dims.height,
+      })
+      const pkg = response?.data ?? response?.package ?? response
+      packageId = getPackageIdentifier(pkg)
+
+      if (!packageId) {
+        if (!options.silent) showToast('Could not create package for those dimensions', 'error')
+        return panelForm.packageId
+      }
+
+      mergePackageIntoState(pkg)
+    }
+
+    setPanelForm((current) => (
+      current.packageId === packageId ? current : { ...current, packageId }
+    ))
+
+    await apiClient.setOrderSelectedPackageId(panelOrder.orderId, Number.parseInt(packageId, 10))
+
+    if (options.saveSku) {
+      await savePanelSkuDefaults(packageId, { silent: true })
+    }
+
+    return packageId
   }
 
   function getServiceOptionsForAccount(accountId: string) {
@@ -2196,27 +2415,42 @@ export default function OrdersView({
       return
     }
 
-    let sent = 0
-    let failed = 0
-    let queueClient: number | null = null
-    const queuedItems: Array<{ sku?: string | null; name?: string | null; quantity?: number | null }> = []
+    // O(1) lookups instead of N×O(N) `orders.find` inside the loop.
+    const orderById = new Map(orders.map((order) => [order.orderId, order]))
 
+    const eligible: typeof orders = []
+    let preFailed = 0
+    let queueClient: number | null = null
     for (const orderId of orderIds) {
-      const order = orders.find((candidate) => candidate.orderId === orderId)
+      const order = orderById.get(orderId)
       if (!order?.label?.labelUrl || order.clientId == null) {
-        failed += 1
+        preFailed += 1
         continue
       }
+      queueClient = queueClient ?? order.clientId
+      eligible.push(order)
+    }
 
-      try {
-        queueClient = queueClient ?? order.clientId
-        await apiClient.addToQueue(buildQueueAddPayload(order, order.label.labelUrl))
+    // Fire all addToQueue calls in parallel — each one is an independent
+    // request, so awaiting them sequentially was the source of the slowness.
+    const results = await Promise.allSettled(
+      eligible.map((order) =>
+        apiClient.addToQueue(buildQueueAddPayload(order, order.label!.labelUrl)),
+      ),
+    )
+
+    let sent = 0
+    let failed = preFailed
+    const queuedItems: Array<{ sku?: string | null; name?: string | null; quantity?: number | null }> = []
+    results.forEach((result, index) => {
+      if (result.status === 'fulfilled') {
         sent += 1
+        const order = eligible[index]
         queuedItems.push(...getActiveItems(order, orderDetailsById.get(order.orderId) ?? null))
-      } catch {
+      } else {
         failed += 1
       }
-    }
+    })
 
     if (sent > 0 && queueClient != null) {
       const payload = await apiClient.fetchQueue(queueClient, queueHistoryVisible)
@@ -2342,37 +2576,32 @@ export default function OrdersView({
   async function saveSkuDefaults() {
     if (!panelOrder) return
 
-    const items = getActiveItems(panelOrder, panelDetail).filter((item) => item.sku)
-    const uniqueSkus = [...new Set(items.map((item) => item.sku).filter(Boolean))]
-    if (uniqueSkus.length === 0) {
-      showToast('No products found on this order', 'error')
-      return
-    }
-    if (uniqueSkus.length > 1) {
-      showToast("Multi-SKU order — edit each product's defaults in the Products tab", 'error')
+    const target = getSingleSkuDefaultTarget(panelOrder, panelDetail)
+    if (!target) {
+      const hasAnySku = getActiveItems(panelOrder, panelDetail).some((item) => item.sku)
+      showToast(
+        hasAnySku
+          ? "Multi-SKU order - edit each product's defaults in the Products tab"
+          : 'No products found on this order',
+        'error',
+      )
       return
     }
 
-    const sku = uniqueSkus[0]!
-    const qty = items.filter((item) => item.sku === sku).reduce((sum, item) => sum + item.quantity, 0)
     const weightOz = getPanelWeightOz()
     const dims = getPanelDims()
 
-    if (!weightOz && !dims.length) {
-      showToast('Enter weight or dims first', 'error')
+    if (!weightOz && !hasCompleteDims(dims)) {
+      showToast('Enter weight or complete dims first', 'error')
       return
     }
 
     try {
-      await apiClient.saveProductDefaultsV2({
-        sku,
-        weightOz: qty > 1 ? Number((weightOz / qty).toFixed(2)) : weightOz,
-        length: dims.length,
-        width: dims.width,
-        height: dims.height,
-        packageId: panelForm.packageId ? Number.parseInt(panelForm.packageId, 10) : null,
-      })
-      showToast(`✅ Saved dims & weight for ${sku}`, 'success')
+      const ensuredPackageId = hasCompleteDims(dims)
+        ? await ensurePanelPackageForDims({ saveSku: false, silent: false })
+        : panelForm.packageId
+      await savePanelSkuDefaults(ensuredPackageId || panelForm.packageId || null)
+      showToast(`Saved dims & weight for ${target.sku}`, 'success')
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Save failed', 'error')
     }
@@ -3034,12 +3263,24 @@ export default function OrdersView({
           <input
             type="checkbox"
             checked={selectedIdSet.has(order.orderId)}
+            onMouseDown={(event) => {
+              shiftHeldOnMouseDownRef.current = event.shiftKey
+            }}
             onClick={(event) => event.stopPropagation()}
             onChange={(event) => {
               event.stopPropagation()
+              const wasShift = shiftHeldOnMouseDownRef.current
+              shiftHeldOnMouseDownRef.current = false
+              const anchor = lastSelectionAnchorRef.current
+              if (wasShift && anchor != null && anchor !== order.orderId) {
+                selectOrderRange(anchor, order.orderId)
+                return
+              }
+              lastSelectionAnchorRef.current = order.orderId
               toggleOrderSelection(order.orderId, event.target.checked)
             }}
-            aria-label={`Select ${order.orderNumber ?? order.orderId}`}
+            aria-label={`Select ${order.orderNumber ?? order.orderId}. Shift+click to select a range.`}
+            title="Tip: Shift+click another checkbox to select a range"
           />
         )
       case 'date':
@@ -3383,7 +3624,11 @@ export default function OrdersView({
     const items = getActiveItems(panelOrder, panelDetail)
     const mergedItems = getMergedItems(panelOrder, panelDetail)
     const shipTo = getShipTo(panelOrder, panelDetail)
-    const dims = getDimensions(panelOrder, panelDetail)
+    const panelFormDims = getPanelDims()
+    const selectedPanelPackage = packages.find((candidate) => getPackageIdentifier(candidate) === panelForm.packageId)
+    const dims = hasCompleteDims(panelFormDims)
+      ? panelFormDims
+      : getPackageDims(selectedPanelPackage) ?? getDimensions(panelOrder, panelDetail)
     const requestedService = getRequestedService(panelOrder, panelDetail)
     const panelIndex = orderedFilteredOrders.findIndex((order) => order.orderId === panelOrder.orderId)
     const prevOrderId = panelIndex > 0 ? orderedFilteredOrders[panelIndex - 1]?.orderId ?? null : null
@@ -3610,9 +3855,22 @@ export default function OrdersView({
                     style={{ flex: 1 }}
                     value={panelForm.packageId}
                     disabled={shipped}
-                  onChange={(event) => {
-                      setPanelForm((current) => ({ ...current, packageId: event.target.value }))
-                      void apiClient.setOrderSelectedPackageId(panelOrder.orderId, event.target.value ? Number.parseInt(event.target.value, 10) : null)
+                    onChange={(event) => {
+                      const packageId = event.target.value
+                      const selectedPackage = packages.find((candidate) => getPackageIdentifier(candidate) === packageId)
+                      const selectedDims = getPackageDims(selectedPackage)
+                      setPanelForm((current) => ({
+                        ...current,
+                        packageId,
+                        ...(selectedDims
+                          ? {
+                              length: String(selectedDims.length),
+                              width: String(selectedDims.width),
+                              height: String(selectedDims.height),
+                            }
+                          : {}),
+                      }))
+                      void apiClient.setOrderSelectedPackageId(panelOrder.orderId, packageId ? Number.parseInt(packageId, 10) : null)
                     }}
                   >
                     <option value="">— Select Package —</option>
@@ -4151,7 +4409,7 @@ export default function OrdersView({
                       const allGroupSelected = groupOrderIds.length > 0 && groupOrderIds.every((orderId) => selectedIdSet.has(orderId))
                       const someGroupSelected = !allGroupSelected && groupOrderIds.some((orderId) => selectedIdSet.has(orderId))
                       const header = (
-                        <tr key={`sku-group-${group.sku}`} className="sku-group-header">
+                        <tr key={`sku-group-${group.key}`} className="sku-group-header">
                           <td
                             colSpan={visibleColumns.length}
                             style={{
@@ -4168,7 +4426,7 @@ export default function OrdersView({
                               <input
                                 type="checkbox"
                                 checked={allGroupSelected}
-                                aria-label={`Select all ${group.count} orders for ${group.sku}`}
+                                aria-label={`Select all ${group.count} orders for ${group.sku} quantity ${group.quantity ?? 'unknown'}`}
                                 ref={(node) => {
                                   if (node) node.indeterminate = someGroupSelected
                                 }}
@@ -4181,6 +4439,9 @@ export default function OrdersView({
                               />
                               <span style={{ fontSize: 13 }}>📦</span>
                               <span className="sku-link" style={{ fontSize: 11.5 }} title={group.sku}>{group.sku}</span>
+                              <span style={{ fontWeight: 700, color: 'var(--text)' }}>
+                                Qty {group.quantity ?? '-'}
+                              </span>
                               <span style={{ fontWeight: 400, color: 'var(--text2)' }}>
                                 {group.count.toLocaleString()} order{group.count === 1 ? '' : 's'}
                               </span>
@@ -4300,7 +4561,7 @@ export default function OrdersView({
       </div>
 
       {queueOpen ? (
-        <div id="print-queue-panel" style={{ display: 'flex', position: 'fixed', top: 56, right: 12, width: 520, maxWidth: 'calc(100vw - 24px)', maxHeight: 'calc(100vh - 80px)', background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 10, boxShadow: '0 8px 32px rgba(0,0,0,.18)', zIndex: 1200, flexDirection: 'column', overflow: 'hidden' }}>
+        <div id="print-queue-panel" style={{ display: 'grid', gridTemplateRows: queuePrintMessage ? 'auto auto auto 1fr auto' : 'auto auto 1fr auto', position: 'fixed', top: 56, right: 12, bottom: 12, width: 520, maxWidth: 'calc(100vw - 24px)', background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 10, boxShadow: '0 8px 32px rgba(0,0,0,.18)', zIndex: 1200, overflow: 'hidden' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '10px 12px', borderBottom: '1px solid var(--border)' }}>
             <strong>Print Queue</strong>
             <div style={{ display: 'flex', gap: 6 }}>
@@ -4315,7 +4576,7 @@ export default function OrdersView({
             <div>{queueGroups.length} SKU Groups</div>
           </div>
           {queuePrintMessage ? <div id="pq-progress" style={{ padding: '8px 12px', fontSize: 11, borderBottom: '1px solid var(--border)' }}>{queuePrintMessage}</div> : null}
-          <div id="pq-order-list" style={{ overflow: 'auto', padding: 12, flex: 1 }}>
+          <div id="pq-order-list" style={{ overflowY: 'auto', overflowX: 'hidden', padding: 12, minHeight: 0 }}>
             {queueLoading ? <div className="empty-state">Loading queue…</div> : null}
             {!queueLoading && queueGroups.length === 0 ? <div className="pq-empty">📭 Queue is empty<br /><small>Click "Send to Queue" on any order with a label</small></div> : null}
             {!queueLoading && queueGroups.map((group) => (
@@ -4326,14 +4587,30 @@ export default function OrdersView({
                   <button className="btn btn-ghost btn-xs" type="button" onClick={() => void printQueueEntries(group.orders.map((entry) => entry.queue_entry_id))}>🖨️ Print Group</button>
                 </div>
                 <div className="pq-group-orders">
-                  {group.orders.map((entry) => (
-                    <div key={entry.queue_entry_id} className="pq-order-row" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderTop: '1px solid var(--border)' }}>
-                      <span className="pq-order-num" style={{ flex: 1, fontFamily: 'monospace', color: 'var(--ss-blue)' }}>Order #{entry.order_number || entry.order_id}{entry.print_count > 0 ? ` · Reprint #${entry.print_count}` : ''}</span>
-                      <span className="pq-order-qty" style={{ fontSize: 11 }}>Qty: {entry.order_qty ?? 1}</span>
-                      <span className="pq-order-time" style={{ fontSize: 11, color: 'var(--text3)' }}>{new Date(entry.queued_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                      <button className="pq-remove-btn" type="button" onClick={() => queueClientId != null ? void apiClient.removeFromQueue(entry.queue_entry_id, queueClientId).then(() => hydrateQueue()).catch((error) => showToast(error instanceof Error ? error.message : 'Failed to remove queue entry', 'error')) : undefined}>✕</button>
-                    </div>
-                  ))}
+                  {group.orders.map((entry) => {
+                    const numericOrderId = Number.parseInt(String(entry.order_id), 10)
+                    const orderClickable = Number.isFinite(numericOrderId) && numericOrderId > 0
+                    return (
+                      <div key={entry.queue_entry_id} className="pq-order-row" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderTop: '1px solid var(--border)' }}>
+                        <button
+                          type="button"
+                          className="pq-order-num"
+                          style={{ flex: 1, textAlign: 'left', fontFamily: 'monospace', color: 'var(--ss-blue)', background: 'none', border: 'none', padding: 0, cursor: orderClickable ? 'pointer' : 'default', textDecoration: orderClickable ? 'underline' : 'none', textUnderlineOffset: 2 }}
+                          disabled={!orderClickable}
+                          title={orderClickable ? 'View order details' : undefined}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            if (orderClickable) setDetailDrawerOrderId(numericOrderId)
+                          }}
+                        >
+                          Order #{entry.order_number || entry.order_id}{entry.print_count > 0 ? ` · Reprint #${entry.print_count}` : ''}
+                        </button>
+                        <span className="pq-order-qty" style={{ fontSize: 11 }}>Qty: {entry.order_qty ?? 1}</span>
+                        <span className="pq-order-time" style={{ fontSize: 11, color: 'var(--text3)' }}>{new Date(entry.queued_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                        <button className="pq-remove-btn" type="button" onClick={() => queueClientId != null ? void apiClient.removeFromQueue(entry.queue_entry_id, queueClientId).then(() => hydrateQueue()).catch((error) => showToast(error instanceof Error ? error.message : 'Failed to remove queue entry', 'error')) : undefined}>✕</button>
+                      </div>
+                    )
+                  })}
                 </div>
               </div>
             ))}
@@ -4342,13 +4619,29 @@ export default function OrdersView({
                 <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--text3)', marginBottom: 6, fontWeight: 600 }}>
                   📋 Printed History ({printedEntries.length})
                 </div>
-                {printedEntries.map((entry) => (
-                  <div key={entry.queue_entry_id} className="pq-order-row" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', opacity: 0.7 }}>
-                    <span className="pq-order-num" style={{ flex: 1 }}>Order #{entry.order_number || entry.order_id}</span>
-                    <span className="pq-order-qty">Qty: {entry.order_qty ?? 1}</span>
-                    <span className="pq-order-time">✅ {entry.last_printed_at ? new Date(entry.last_printed_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}</span>
-                  </div>
-                ))}
+                {printedEntries.map((entry) => {
+                  const numericOrderId = Number.parseInt(String(entry.order_id), 10)
+                  const orderClickable = Number.isFinite(numericOrderId) && numericOrderId > 0
+                  return (
+                    <div key={entry.queue_entry_id} className="pq-order-row" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', opacity: 0.7 }}>
+                      <button
+                        type="button"
+                        className="pq-order-num"
+                        style={{ flex: 1, textAlign: 'left', color: 'var(--ss-blue)', background: 'none', border: 'none', padding: 0, cursor: orderClickable ? 'pointer' : 'default', textDecoration: orderClickable ? 'underline' : 'none', textUnderlineOffset: 2 }}
+                        disabled={!orderClickable}
+                        title={orderClickable ? 'View order details' : undefined}
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          if (orderClickable) setDetailDrawerOrderId(numericOrderId)
+                        }}
+                      >
+                        Order #{entry.order_number || entry.order_id}
+                      </button>
+                      <span className="pq-order-qty">Qty: {entry.order_qty ?? 1}</span>
+                      <span className="pq-order-time">✅ {entry.last_printed_at ? new Date(entry.last_printed_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}</span>
+                    </div>
+                  )
+                })}
               </div>
             ) : null}
           </div>

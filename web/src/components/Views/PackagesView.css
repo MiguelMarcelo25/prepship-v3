@@ -45,3 +45,218 @@
     padding:18px;
   }
 }
+
+/* ─── Visual upgrade: align packages table with analysis/orders table look ─── */
+#packagesContent > div {
+  border-radius: 10px !important;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .05), 0 1px 2px rgba(15, 23, 42, .03) !important;
+  overflow: hidden;
+}
+
+/* Section header bar — "Custom Packages" */
+#packagesContent > div > div:first-child {
+  background: linear-gradient(180deg, #eef4ff 0%, #d6e3f7 100%) !important;
+  padding: 10px 14px !important;
+  font-size: 11px !important;
+  font-weight: 800 !important;
+  color: var(--text3) !important;
+  text-transform: uppercase;
+  letter-spacing: .05em !important;
+  border-bottom: 1px solid var(--border);
+}
+
+.pkg-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12.5px;
+}
+
+.pkg-table thead tr {
+  background: linear-gradient(180deg, #f8fafc 0%, #eef3f8 100%) !important;
+  border-bottom: 1px solid var(--border);
+}
+
+.pkg-table thead th {
+  padding: 11px 12px !important;
+  font-size: 10px !important;
+  font-weight: 800 !important;
+  color: var(--text3) !important;
+  text-transform: uppercase;
+  letter-spacing: .05em !important;
+  background: transparent !important;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.pkg-table tbody tr {
+  transition: background .15s ease, box-shadow .15s ease;
+  border-bottom: 1px solid var(--border) !important;
+}
+
+.pkg-table tbody tr:nth-child(even) {
+  background: #fafbfc;
+}
+
+.pkg-table tbody tr:hover {
+  background: #eef4ff !important;
+  box-shadow: inset 3px 0 0 var(--ss-blue);
+}
+
+.pkg-table tbody td {
+  padding: 12px 12px !important;
+  vertical-align: middle !important;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Package name button — link styling like analysis SKU */
+.pkg-table .packages-inline-button {
+  font-weight: 700 !important;
+  color: var(--ss-blue) !important;
+  text-decoration: underline !important;
+  text-decoration-thickness: 1px !important;
+  text-underline-offset: 2px !important;
+  font-size: 13px !important;
+}
+
+.pkg-table .packages-inline-button:hover {
+  color: #1746a2 !important;
+}
+
+/* Package dimension subtext */
+.pkg-table tbody td > div:not([id^="pkg-ledger"]) {
+  font-size: 11px !important;
+  color: var(--text3) !important;
+  margin-top: 3px !important;
+}
+
+/* Stock cell — large + bold */
+.pkg-table tbody td[style*="text-align: center"][style*="font-weight: 700"] {
+  font-size: 15px !important;
+  font-weight: 800 !important;
+}
+
+/* Reorder input — refined */
+.pkg-table tbody input[type="number"] {
+  width: 56px !important;
+  padding: 5px 6px !important;
+  border: 1px solid var(--border2) !important;
+  border-radius: 6px !important;
+  background: var(--surface) !important;
+  color: var(--text) !important;
+  font-size: 12px !important;
+  text-align: center;
+  transition: border-color .15s ease, background .15s ease;
+}
+
+.pkg-table tbody input[type="number"]:focus {
+  outline: none !important;
+  border-color: var(--ss-blue) !important;
+  background: #eef4ff !important;
+}
+
+/* Cost cell */
+.pkg-table tbody td[style*="font-family: monospace"] {
+  font-size: 12.5px !important;
+  font-weight: 600 !important;
+  color: var(--text2) !important;
+}
+
+/* Action buttons row — modern Lucide icons */
+.pkg-action-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 30px !important;
+  height: 30px !important;
+  padding: 0 !important;
+  margin-left: 3px;
+  border: 1px solid transparent !important;
+  border-radius: 7px !important;
+  background: transparent !important;
+  color: var(--text2) !important;
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease, border-color .15s ease, transform .1s ease;
+}
+
+.pkg-action-btn:hover {
+  background: rgba(42, 91, 215, .10) !important;
+  color: var(--ss-blue) !important;
+  border-color: rgba(42, 91, 215, .25) !important;
+  transform: translateY(-1px);
+}
+
+.pkg-action-btn:active {
+  transform: translateY(0);
+}
+
+.pkg-action-btn-danger:hover {
+  background: rgba(220, 38, 38, .10) !important;
+  color: #dc2626 !important;
+  border-color: rgba(220, 38, 38, .25) !important;
+}
+
+/* Header buttons: icon + label alignment */
+.pkg-header-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+}
+
+@keyframes pkg-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+.pkg-spin {
+  animation: pkg-spin 1s linear infinite;
+}
+
+/* Highlighted row (when scrolled-to from low-stock banner) */
+.pkg-table tbody tr[style*="rgba(254, 240, 138"] {
+  background: rgba(254, 240, 138, 0.45) !important;
+  box-shadow: inset 3px 0 0 #f59e0b !important;
+}
+
+/* Ledger sub-table refinement */
+.pkg-table [id^="pkg-ledger-"] table {
+  margin-top: 6px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  overflow: hidden;
+  width: 100%;
+  border-collapse: separate !important;
+  border-spacing: 0;
+}
+
+.pkg-table [id^="pkg-ledger-"] thead tr {
+  background: var(--surface) !important;
+}
+
+.pkg-table [id^="pkg-ledger-"] th {
+  padding: 6px 9px !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--text3) !important;
+  border-bottom: 1px solid var(--border);
+}
+
+.pkg-table [id^="pkg-ledger-"] tbody tr {
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.pkg-table [id^="pkg-ledger-"] tbody tr:hover {
+  background: rgba(42, 91, 215, .06) !important;
+  box-shadow: none !important;
+}
+
+.pkg-table [id^="pkg-ledger-"] td {
+  padding: 6px 9px !important;
+  font-size: 11.5px !important;
+  border-bottom: 1px solid var(--border);
+}

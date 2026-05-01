@@ -1002,6 +1002,7 @@ export default function InventoryView() {
                             <th style={{ textAlign: 'center' }} title="Cubic footage per unit (used for storage fee billing). Auto-computed from dims or manually overridden.">Cu Ft/Unit</th>
                             <th>Package</th>
                             <th style={{ textAlign: 'center' }}>Stock</th>
+                            <th style={{ textAlign: 'center' }} title="Units sold in the last 30 days">Sold 30d</th>
                             <th style={{ textAlign: 'center' }}>Units/Pack</th>
                             <th style={{ textAlign: 'center' }}>Total Units</th>
                             <th style={{ textAlign: 'center' }}>Min</th>
@@ -1077,6 +1078,7 @@ export default function InventoryView() {
                               </td>
                               <td style={{ fontSize: 11.5 }}>{row.packageName || <span style={{ color: 'var(--text4)' }}>—</span>}</td>
                               <td style={{ textAlign: 'center', fontWeight: 700, fontSize: 13, color: row.currentStock <= 0 ? 'var(--red)' : 'var(--text)' }}>{row.currentStock}</td>
+                              <td style={{ textAlign: 'center', fontWeight: 700, fontSize: 12, color: (row.soldLast30Days ?? 0) > 0 ? 'var(--ss-blue)' : 'var(--text3)' }}>{row.soldLast30Days ?? 0}</td>
                               <td style={{ textAlign: 'center', fontSize: 12, color: 'var(--text3)' }}>
                                 {row.units_per_pack > 1 ? <span style={{ background: 'var(--ss-blue-bg)', color: 'var(--ss-blue)', fontSize: 10.5, fontWeight: 700, padding: '1px 6px', borderRadius: 4 }}>×{row.units_per_pack}</span> : '—'}
                               </td>
@@ -1385,7 +1387,7 @@ export default function InventoryView() {
                   </thead>
                   <tbody>
                     {ledger.map((entry) => {
-                      const typeColor = entry.type === 'receive' ? 'var(--green)' : entry.type === 'adjust' ? 'var(--ss-blue)' : entry.type === 'return' ? 'var(--yellow)' : entry.type === 'damage' ? 'var(--red)' : 'var(--text3)'
+                      const typeColor = entry.type === 'receive' ? 'var(--green)' : entry.type === 'adjust' ? 'var(--ss-blue)' : entry.type === 'ship' ? 'var(--red)' : entry.type === 'return' ? 'var(--yellow)' : entry.type === 'damage' ? 'var(--red)' : 'var(--text3)'
                       return (
                         <tr key={entry.id}>
                           <td style={{ color: 'var(--text3)' }}>{formatDateTime(entry.createdAt)}</td>

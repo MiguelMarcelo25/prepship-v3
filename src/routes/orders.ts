@@ -9,6 +9,7 @@ import { rateCache } from '../db/schema/rates';
 import { shipments } from '../db/schema/shipments';
 import { offsetOf, paginated, paginationSchema } from '../lib/pagination';
 import { getSyncStatus, syncOrders } from '../services/order-sync';
+import { deductInventoryForOrder } from '../services/fulfillment-deductions';
 import {
   InputValidationError,
   assertPersistedOrderBestRateDto,
@@ -1582,7 +1583,7 @@ app.post(
     const flag = body.externallyShipped ?? body.externalShipped ?? true;
 
     const [existing] = await db
-      .select({ id: orders.id })
+      .select()
       .from(orders)
       .where(eq(orders.id, id))
       .limit(1);
@@ -1596,6 +1597,15 @@ app.post(
     const row = await applyOverridesPatch(id, {
       externallyShippedSource: body.source ?? null,
     });
+    if (flag) {
+      try {
+        await deductInventoryForOrder(existing, {
+          source: body.source ? `external:${body.source}` : 'external',
+        });
+      } catch (err) {
+        console.warn('[orders] external shipped inventory deduction failed:', err);
+      }
+    }
     return c.json({ data: row });
   }
 );

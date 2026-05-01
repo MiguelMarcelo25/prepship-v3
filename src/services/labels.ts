@@ -24,6 +24,7 @@ import {
   serviceCodeToLabel,
   type MockLabelData,
 } from './mock-label-generator';
+import { deductInventoryForOrder, deductPackageForShipment } from './fulfillment-deductions';
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
 
@@ -568,6 +569,28 @@ async function markOrderShipped(orderId: number, trackingNumber: string | null):
   }
 }
 
+async function recordFulfillmentDeductions(args: {
+  order: typeof orders.$inferSelect;
+  shipmentId: number;
+  packageId?: number | string | null;
+  source: string;
+}) {
+  try {
+    await deductPackageForShipment({
+      packageId: args.packageId ?? null,
+      shipmentId: args.shipmentId,
+      orderId: args.order.id,
+      orderNumber: args.order.orderNumber,
+    });
+    await deductInventoryForOrder(args.order, {
+      shipmentId: args.shipmentId,
+      source: args.source,
+    });
+  } catch (err) {
+    console.warn('[labels] fulfillment deduction failed:', err);
+  }
+}
+
 /**
  * Create a label (v2-parity). Supports offline testLabel mode (generates a
  * mock PDF with no ShipStation interaction) and real ShipStation creation.
@@ -726,12 +749,19 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
         labelCost: '0.00',
         labelShipDate: createdAt,
         labelShipmentId: fakeShipmentId,
+        selectedPackageId: body.customPackageId ? String(body.customPackageId) : null,
         source: 'test_offline',
         voided: false,
         isReturn: false,
       });
 
     await markOrderShipped(order.id, fakeTracking);
+    await recordFulfillmentDeductions({
+      order,
+      shipmentId: fakeShipmentId,
+      packageId: body.customPackageId ?? null,
+      source: 'test_label',
+    });
 
     return {
       shipmentId: fakeShipmentId,
@@ -782,6 +812,12 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
   });
 
   await markOrderShipped(order.id, created.trackingNumber);
+  await recordFulfillmentDeductions({
+    order,
+    shipmentId: localShipmentId,
+    packageId: body.customPackageId ?? null,
+    source: 'label',
+  });
 
   // Background: v1 enrichment (non-fatal)
   if (creds.apiKey && creds.apiSecret && created.shipmentId && created.trackingNumber) {

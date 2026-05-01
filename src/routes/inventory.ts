@@ -5,6 +5,7 @@ import { and, desc, eq, ilike, isNull, lte, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { inventory, inventoryLedger } from '../db/schema/inventory';
 import { inventorySkuParents } from '../db/schema/inventory-sku-parents';
+import { orders } from '../db/schema/orders';
 import { parentSkus } from '../db/schema/parent-skus';
 import { offsetOf, paginated, paginationSchema } from '../lib/pagination';
 import { applyMovement, inventoryStats } from '../services/inventory';
@@ -57,7 +58,45 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     db.select({ count: sql<number>`count(*)::int` }).from(inventory).where(where),
   ]);
 
-  return c.json(paginated(rows, countRows[0]?.count ?? 0, q));
+  const soldRows = rows.length
+    ? await db.execute<{ inventory_id: number; sold_last_30_days: number }>(sql`
+        select
+          i.id as inventory_id,
+          coalesce(sum(
+            case
+              when coalesce(item->>'quantity', '') ~ '^[0-9]+$'
+                then (item->>'quantity')::int
+              else 1
+            end
+          ), 0)::int as sold_last_30_days
+        from ${inventory} i
+        join ${orders} o
+          on (
+            (i.client_id is null and o.client_id is null)
+            or i.client_id = o.client_id
+          )
+        cross join lateral jsonb_array_elements(o.items) item
+        where i.id in (${sql.join(rows.map((row) => sql`${row.id}`), sql`, `)})
+          and item ? 'sku'
+          and lower(item->>'sku') = lower(i.sku)
+          and coalesce(item->>'adjustment', 'false') <> 'true'
+          and o.order_date >= now() - interval '30 days'
+          and coalesce(o.order_status, '') <> 'cancelled'
+        group by i.id
+      `)
+    : [];
+  const soldByInventoryId = new Map(
+    soldRows.map((row) => [row.inventory_id, Number(row.sold_last_30_days) || 0])
+  );
+
+  return c.json(paginated(
+    rows.map((row) => ({
+      ...row,
+      soldLast30Days: soldByInventoryId.get(row.id) ?? 0,
+    })),
+    countRows[0]?.count ?? 0,
+    q
+  ));
 });
 
 // Global ledger query — flattens the ledger across all SKUs with filters.

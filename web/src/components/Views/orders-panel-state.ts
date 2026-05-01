@@ -19,6 +19,32 @@ function toNumberValue(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
+function toFiniteNumber(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number.parseFloat(value)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
+function getPackageIdentifier(candidate: PackageDto | null | undefined) {
+  const id = toFiniteNumber(candidate?.packageId ?? candidate?.id)
+  return id == null ? '' : String(id)
+}
+
+function toPackageCode(value: unknown) {
+  if (typeof value === 'string' && value.trim()) return value.trim()
+  const numeric = toFiniteNumber(value)
+  return numeric == null ? '' : String(numeric)
+}
+
+function packageExists(packages: PackageDto[], packageCode: unknown) {
+  const code = packageCode == null ? '' : String(packageCode)
+  if (!code) return false
+  return packages.some((candidate) => getPackageIdentifier(candidate) === code)
+}
+
 function getRawOrder(order: OrderSummaryDto, detail: OrderFullDto | null) {
   return toRecord(detail?.raw) ?? toRecord(order.raw)
 }
@@ -63,15 +89,24 @@ export function getPanelBillingProviderId(order: OrderSummaryDto, detail: OrderF
 }
 
 export function getPanelPackageId(order: OrderSummaryDto, detail: OrderFullDto | null, packages: PackageDto[]) {
+  const overrides = toRecord(detail?.overrides) ?? toRecord(detail?.local)
+  const selectedPackageId = toPackageCode(overrides?.selectedPackageId)
+    || toPackageCode(overrides?.selected_package_id)
+    || toPackageCode(order.selectedPackageId)
+    || toPackageCode(order.selected_package_id)
+  if (selectedPackageId && packageExists(packages, selectedPackageId)) {
+    return selectedPackageId
+  }
+
   const local = toRecord(detail?.local)
-  const localSelectedPid = toNumberValue(local?.selected_pid)
-  if (localSelectedPid != null && packages.some((candidate) => candidate.packageId === localSelectedPid)) {
+  const localSelectedPid = toFiniteNumber(local?.selected_pid ?? local?.selectedPid)
+  if (localSelectedPid != null && packageExists(packages, localSelectedPid)) {
     return String(localSelectedPid)
   }
 
   const rawOrder = getRawOrder(order, detail)
   const packageCode = toStringValue(rawOrder?.packageCode)
-  if (packageCode && packages.some((candidate) => String(candidate.packageId) === packageCode)) {
+  if (packageCode && packageExists(packages, packageCode)) {
     return packageCode
   }
 
@@ -83,22 +118,29 @@ export function getMatchedPackageIdByDimensions(
   packages: PackageDto[],
 ) {
   if (!dimensions?.length || !dimensions?.width || !dimensions?.height) return ''
+  const tol = 0.15
 
-  const match = packages.find((candidate) => (
-    candidate.length === dimensions.length
-    && candidate.width === dimensions.width
-    && candidate.height === dimensions.height
-  ))
+  const match = packages.find((candidate) => {
+    const length = toFiniteNumber(candidate.length) ?? 0
+    const width = toFiniteNumber(candidate.width) ?? 0
+    const height = toFiniteNumber(candidate.height) ?? 0
+    return length > 0
+      && width > 0
+      && height > 0
+      && Math.abs(length - dimensions.length) <= tol
+      && Math.abs(width - dimensions.width) <= tol
+      && Math.abs(height - dimensions.height) <= tol
+  })
 
-  return match ? String(match.packageId) : ''
+  return match ? getPackageIdentifier(match) : ''
 }
 
 export function getProductDefaultPackageId(product: ProductDefaultsDto | null, packages: PackageDto[]) {
-  const packageCode = product?.defaultPackageCode?.trim()
+  const packageCode = toPackageCode(product?.defaultPackageCode) || toPackageCode(product?.packageId)
   if (!packageCode) return ''
 
-  const match = packages.find((candidate) => String(candidate.packageId) === packageCode)
-  return match ? String(match.packageId) : ''
+  const match = packages.find((candidate) => getPackageIdentifier(candidate) === packageCode)
+  return match ? getPackageIdentifier(match) : ''
 }
 
 export function getInitialPanelShipAccountId(order: OrderSummaryDto, detail: OrderFullDto | null) {
