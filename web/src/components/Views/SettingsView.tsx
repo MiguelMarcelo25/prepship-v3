@@ -2,7 +2,7 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { apiClient } from '../../api/client'
 import { api } from '../../lib/api'
-import { useShippingAccounts } from '../../hooks'
+import { useShippingAccounts, useClients } from '../../hooks'
 import { ToastContext } from '../../contexts/ToastContext'
 import { useMarkups } from '../../contexts/MarkupsContext'
 import type { MarkupType } from '../../types/markups'
@@ -11,13 +11,38 @@ import {
   buildSettingsRefetchStatus,
   getSettingsMarkupEmptyMessage,
   getSettingsMarkupSavedToastMessage,
+  groupSettingsMarkupRows,
   type SettingsRefetchState,
   parseSettingsMarkupInput,
 } from './settings-parity'
+import { CarrierIntegrationsCard } from '../Settings/CarrierIntegrationsCard'
+import { PendingClientIntegrationsCard } from '../Settings/PendingClientIntegrationsCard'
+
+const COLLAPSE_STORAGE_KEY = 'settings:carrier-groups:collapsed'
+
+function readCollapsedGroups(): Record<string, boolean> {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = window.localStorage.getItem(COLLAPSE_STORAGE_KEY)
+    return raw ? (JSON.parse(raw) as Record<string, boolean>) : {}
+  } catch {
+    return {}
+  }
+}
+
+function writeCollapsedGroups(state: Record<string, boolean>): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(COLLAPSE_STORAGE_KEY, JSON.stringify(state))
+  } catch {
+    /* localStorage full or blocked — non-fatal */
+  }
+}
 
 export default function SettingsView() {
   const toastContext = useContext(ToastContext)
   const { accounts, isLoading: accountsLoading, error: accountsError } = useShippingAccounts()
+  const { clients } = useClients()
   const { markups, loading: markupsLoading, saveMarkup } = useMarkups()
   const [drafts, setDrafts] = useState<Record<number, string>>({})
   const [refetchState, setRefetchState] = useState<SettingsRefetchState>({ kind: 'idle' })
@@ -29,6 +54,22 @@ export default function SettingsView() {
     () => buildSettingsMarkupRows(accounts, markups, drafts),
     [accounts, markups, drafts],
   )
+  const clientPlaceholders = useMemo(
+    () => clients.filter((c) => c.hasOwnAccount && c.active).map((c) => ({ name: c.name })),
+    [clients],
+  )
+  const markupGroups = useMemo(
+    () => groupSettingsMarkupRows(markupRows, clientPlaceholders),
+    [markupRows, clientPlaceholders],
+  )
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(() => readCollapsedGroups())
+  const toggleGroup = useCallback((key: string) => {
+    setCollapsedGroups((prev) => {
+      const next = { ...prev, [key]: !prev[key] }
+      writeCollapsedGroups(next)
+      return next
+    })
+  }, [])
 
   const refetchStatus = buildSettingsRefetchStatus(refetchState)
 
@@ -188,40 +229,88 @@ export default function SettingsView() {
         <h3>Rate Browser — Account Markups</h3>
         <p style={{ fontSize: 11.5, color: 'var(--text3)', margin: '0 0 12px' }}>$ or % added to displayed rates per carrier account. Useful for billing clients above cost.</p>
         <div id="settings-rb-markups">
-          {markupRows.length > 0 ? markupRows.map((row) => (
-            <div key={row.shippingProviderId} className="markup-row">
-              <span className="markup-label">{row.label}</span>
-              <select
-                value={row.type}
-                onChange={(event) => handleMarkupChange(row.shippingProviderId, event.target.value as MarkupType, row.inputValue)}
-                style={{
-                  width: 52,
-                  marginRight: 4,
-                  border: '1px solid var(--border)',
-                  borderRadius: 3,
-                  padding: '3px 2px',
-                  background: 'var(--surface)',
-                  fontSize: 12,
-                  color: 'var(--text)',
-                }}
-                aria-label={`${row.label} markup type`}
-              >
-                <option value="flat">$</option>
-                <option value="pct">%</option>
-              </select>
-              <input
-                className="markup-input-lg"
-                type="number"
-                min="0"
-                step="0.25"
-                value={row.inputValue}
-                placeholder="0"
-                onChange={(event) => handleMarkupChange(row.shippingProviderId, row.type, event.target.value)}
-                aria-label={`${row.label} markup value`}
-              />
-              <span className="markup-preview mu-preview">{row.preview}</span>
-            </div>
-          )) : (
+          {markupGroups.length > 0 ? markupGroups.map((group) => {
+            const collapsed = !!collapsedGroups[group.key]
+            return (
+              <div key={group.key} className="markup-group" style={{ marginBottom: 10 }}>
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(group.key)}
+                  aria-expanded={!collapsed}
+                  aria-controls={`markup-group-${group.key}`}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    width: '100%',
+                    padding: '6px 8px',
+                    background: 'var(--surface2)',
+                    border: '1px solid var(--border)',
+                    borderRadius: 4,
+                    cursor: 'pointer',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    color: 'var(--text)',
+                    textAlign: 'left',
+                  }}
+                >
+                  <span style={{ display: 'inline-block', width: 10, transition: 'transform 0.15s', transform: collapsed ? 'rotate(-90deg)' : 'rotate(0deg)' }}>▾</span>
+                  <span style={{ flex: 1 }}>{group.label}</span>
+                  <span style={{ fontWeight: 400, color: 'var(--text3)', fontSize: 11 }}>{group.rows.length} {group.rows.length === 1 ? 'carrier' : 'carriers'}</span>
+                </button>
+                {!collapsed ? (
+                  <div id={`markup-group-${group.key}`} style={{ paddingTop: 6 }}>
+                    {group.rows.length === 0 ? (
+                      <div style={{
+                        fontSize: 11,
+                        color: 'var(--text3)',
+                        background: 'var(--surface)',
+                        border: '1px dashed var(--border2)',
+                        borderRadius: 3,
+                        padding: '6px 10px',
+                      }}>
+                        ℹ No carriers yet — backend fan-out for this account is pending. Credentials are set on the API host but the rates route hasn't been updated to fetch them.
+                      </div>
+                    ) : null}
+                    {group.rows.map((row) => (
+                      <div key={row.shippingProviderId} className="markup-row">
+                        <span className="markup-label">{row.label}</span>
+                        <select
+                          value={row.type}
+                          onChange={(event) => handleMarkupChange(row.shippingProviderId, event.target.value as MarkupType, row.inputValue)}
+                          style={{
+                            width: 52,
+                            marginRight: 4,
+                            border: '1px solid var(--border)',
+                            borderRadius: 3,
+                            padding: '3px 2px',
+                            background: 'var(--surface)',
+                            fontSize: 12,
+                            color: 'var(--text)',
+                          }}
+                          aria-label={`${row.label} markup type`}
+                        >
+                          <option value="flat">$</option>
+                          <option value="pct">%</option>
+                        </select>
+                        <input
+                          className="markup-input-lg"
+                          type="number"
+                          min="0"
+                          step="0.25"
+                          value={row.inputValue}
+                          placeholder="0"
+                          onChange={(event) => handleMarkupChange(row.shippingProviderId, row.type, event.target.value)}
+                          aria-label={`${row.label} markup value`}
+                        />
+                        <span className="markup-preview mu-preview">{row.preview}</span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            )
+          }) : (
             <span style={{ fontSize: 12, color: 'var(--text3)' }}>
               {accountsLoading || markupsLoading ? 'Loading carrier accounts...' : getSettingsMarkupEmptyMessage()}
             </span>
@@ -233,6 +322,9 @@ export default function SettingsView() {
           </div>
         ) : null}
       </div>
+
+      <CarrierIntegrationsCard />
+      <PendingClientIntegrationsCard />
 
       <div className="markup-card" style={{ marginTop: 16 }}>
         <h3>🧪 Sandbox — Test Orders</h3>

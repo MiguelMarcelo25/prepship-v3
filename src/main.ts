@@ -24,6 +24,8 @@ import parentSkusRoute from './routes/parent-skus';
 import productsRoute from './routes/products';
 import initRoute from './routes/init';
 import adminRoute from './routes/admin';
+import carrierAccountsRoute from './routes/carrier-accounts';
+import carriersRoute from './routes/carriers';
 
 const app = new Hono();
 
@@ -31,14 +33,38 @@ const configuredCorsOrigins = env.WEB_ORIGIN
   ? env.WEB_ORIGIN.split(',').map((s) => s.trim()).filter(Boolean)
   : [];
 
+const isDevelopmentLocalOrigin = (origin: string) => {
+  if (env.NODE_ENV === 'production') return false;
+
+  try {
+    const { hostname, protocol } = new URL(origin);
+    if (protocol !== 'http:' && protocol !== 'https:') return false;
+
+    return (
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname === '[::1]' ||
+      hostname === '::1' ||
+      hostname.startsWith('192.168.') ||
+      hostname.startsWith('10.') ||
+      /^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname)
+    );
+  } catch {
+    return false;
+  }
+};
+
 const isAllowedCorsOrigin = (origin: string) => {
   if (configuredCorsOrigins.includes(origin)) return true;
+  if (isDevelopmentLocalOrigin(origin)) return true;
 
   try {
     const { hostname, protocol } = new URL(origin);
     if (protocol !== 'https:') return false;
 
     return (
+      hostname === 'prepshipv4.vercel.app' ||
+      hostname === 'prepshipv4.drprepperusa.com' ||
       hostname === 'prepshipv3.vercel.app' ||
       hostname === 'prepshipv3.drprepperusa.com' ||
       hostname === 'prepshipv3-dr-prepper-usas-projects.vercel.app' ||
@@ -79,6 +105,9 @@ app.use('/parent-skus/*', requireAuth);
 app.use('/products/*', requireAuth);
 app.use('/init/*', requireAuth);
 app.use('/admin/*', requireAuth);
+app.use('/carrier-accounts', requireAuth);
+app.use('/carrier-accounts/*', requireAuth);
+app.use('/carriers/*', requireAuth);
 
 app.route('/orders', ordersRoute);
 app.route('/shipments', shipmentsRoute);
@@ -98,6 +127,8 @@ app.route('/parent-skus', parentSkusRoute);
 app.route('/products', productsRoute);
 app.route('/init', initRoute);
 app.route('/admin', adminRoute);
+app.route('/carrier-accounts', carrierAccountsRoute);
+app.route('/carriers', carriersRoute);
 
 app.notFound((c) => c.json({ error: 'Not found' }, 404));
 

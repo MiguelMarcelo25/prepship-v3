@@ -645,6 +645,7 @@ export interface CarrierAccountDto {
   clientId: number | null;
   code: string;
   _label: string;
+  sourceClientName?: string;
 }
 
 export interface UseShippingAccountsResult {
@@ -658,6 +659,8 @@ type V4Carrier = {
   carrier_code: string;
   nickname?: string;
   friendly_name?: string;
+  source_client_name?: string;
+  source_client_id?: number | null;
 };
 
 type V4CarriersResponse = { carriers: V4Carrier[] };
@@ -665,7 +668,7 @@ type V4CarriersResponse = { carriers: V4Carrier[] };
 export function useShippingAccounts(): UseShippingAccountsResult {
   const query = useQuery<V4CarriersResponse>({
     queryKey: ['v2-hooks:carriers'],
-    queryFn: () => api.get<V4CarriersResponse>('/rates/carriers'),
+    queryFn: () => api.get<V4CarriersResponse>('/rates/multi'),
     staleTime: 60_000,
   });
 
@@ -678,9 +681,10 @@ export function useShippingAccounts(): UseShippingAccountsResult {
         carrierCode: c.carrier_code,
         shippingProviderId: toProviderAccountId(c.carrier_id) ?? i + 1,
         nickname: c.nickname ?? c.friendly_name ?? c.carrier_code,
-        clientId: null,
+        clientId: c.source_client_id ?? null,
         code: c.carrier_code,
         _label: c.friendly_name ?? c.nickname ?? c.carrier_code,
+        sourceClientName: c.source_client_name,
       })),
     [query.data]
   );

@@ -9,6 +9,44 @@ export interface SettingsMarkupRow {
   value: number
   inputValue: string
   preview: string
+  groupKey: string
+  groupLabel: string
+}
+
+export interface SettingsMarkupGroup {
+  key: string
+  label: string
+  rows: SettingsMarkupRow[]
+}
+
+// Phase 1: every ShipStation carrier we currently fetch lives on the main DR
+// PREPPER account. When Phase 2 adds multi-account fan-out the resolver below
+// inspects the source-client tag on each carrier and emits the matching key.
+const MAIN_SHIPSTATION_GROUP_KEY = 'shipstation:dr-prepper'
+const MAIN_SHIPSTATION_GROUP_LABEL = 'ShipStation Carriers — DR PREPPER'
+
+// Placeholder groups: ShipStation accounts whose creds exist on the backend
+// but don't show up via the per-client DB iteration. We only need to hardcode
+// here when there's a special env-only key (no matching client row). KFG is
+// surfaced by the "KF Goods" client row in DB so it lands automatically — no
+// placeholder needed.
+export const PLACEHOLDER_SHIPSTATION_GROUPS: Array<{ key: string; label: string }> = [
+]
+
+export function resolveCarrierGroup(account: CarrierAccountDto): { key: string; label: string } {
+  const provider = (account as any)?.provider as string | undefined
+  if (provider && provider !== 'shipstation') {
+    const label = String(provider).toUpperCase()
+    return { key: `${provider}:default`, label: `${label} Carriers` }
+  }
+  const sourceClientName = (account as any)?.sourceClientName as string | undefined
+  if (sourceClientName) {
+    return {
+      key: `shipstation:${sourceClientName.toLowerCase().replace(/\s+/g, '-')}`,
+      label: `ShipStation Carriers — ${sourceClientName}`,
+    }
+  }
+  return { key: MAIN_SHIPSTATION_GROUP_KEY, label: MAIN_SHIPSTATION_GROUP_LABEL }
 }
 
 const V2_SETTINGS_CARRIER_ACCOUNTS: Array<{
@@ -124,6 +162,7 @@ export function buildSettingsMarkupRows(
         ? drafts[account.shippingProviderId] ?? ''
         : getSettingsMarkupInputValue(markup.value)
 
+      const group = resolveCarrierGroup(account)
       return {
         shippingProviderId: account.shippingProviderId,
         label: getSettingsAccountLabel(account),
@@ -131,8 +170,48 @@ export function buildSettingsMarkupRows(
         value: markup.value,
         inputValue,
         preview: formatSettingsMarkupPreview(markup.type, inputValue),
+        groupKey: group.key,
+        groupLabel: group.label,
       }
     })
+}
+
+export interface PlaceholderClientGroup {
+  name: string
+}
+
+export function groupSettingsMarkupRows(
+  rows: SettingsMarkupRow[],
+  clientPlaceholders: PlaceholderClientGroup[] = [],
+): SettingsMarkupGroup[] {
+  const byKey = new Map<string, SettingsMarkupGroup>()
+  for (const row of rows) {
+    const existing = byKey.get(row.groupKey)
+    if (existing) {
+      existing.rows.push(row)
+    } else {
+      byKey.set(row.groupKey, { key: row.groupKey, label: row.groupLabel, rows: [row] })
+    }
+  }
+  // Append placeholder groups for known-but-unwired ShipStation accounts so
+  // the structure is visible before backend fan-out lands.
+  for (const ph of PLACEHOLDER_SHIPSTATION_GROUPS) {
+    if (!byKey.has(ph.key)) {
+      byKey.set(ph.key, { key: ph.key, label: ph.label, rows: [] })
+    }
+  }
+  // Per-client placeholders: every client with its own ShipStation creds in
+  // the DB gets a group. Drives "ShipStation Carriers — {ClientName}" headers
+  // so admins can see exactly which clients are pending wire-up.
+  for (const c of clientPlaceholders) {
+    const trimmed = (c?.name ?? '').trim()
+    if (!trimmed) continue
+    const key = `shipstation:${trimmed.toLowerCase().replace(/\s+/g, '-')}`
+    if (byKey.has(key)) continue
+    if (key === MAIN_SHIPSTATION_GROUP_KEY) continue
+    byKey.set(key, { key, label: `ShipStation Carriers — ${trimmed}`, rows: [] })
+  }
+  return Array.from(byKey.values())
 }
 
 export function buildSettingsRefetchStatus(state: SettingsRefetchState): SettingsRefetchStatusView {

@@ -21,6 +21,7 @@ export default defineConfig({
     './src/db/schema/mock-labels.ts',
     './src/db/schema/product-defaults.ts',
     './src/db/schema/sync-meta.ts',
+    './src/db/schema/carrier-accounts.ts',
   ],
   out: './drizzle',
   dialect: 'postgresql',
