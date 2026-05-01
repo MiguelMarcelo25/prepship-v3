@@ -47,6 +47,11 @@ function readStoredChartType(): AnalysisChartType {
   return stored === 'bar' || stored === 'line' ? stored : 'line'
 }
 
+function clearChartTextSelection() {
+  if (typeof window === 'undefined') return
+  window.getSelection()?.removeAllRanges()
+}
+
 function formatChartDate(value: string | null | undefined) {
   if (!value) return '-'
   return value.length >= 10 ? value.slice(5) : value
@@ -182,16 +187,19 @@ export function AnalysisTopSkusChart({ data }: AnalysisTopSkusChartProps) {
   }, [chartType])
 
   function handleMouseDown(state: ChartMouseState | undefined) {
+    clearChartTextSelection()
     if (!state?.activeLabel) return
     setDrag({ start: state.activeLabel, end: state.activeLabel })
   }
 
   function handleMouseMove(state: ChartMouseState | undefined) {
+    clearChartTextSelection()
     if (!drag.start || !state?.activeLabel) return
     setDrag((current) => ({ ...current, end: state.activeLabel ?? null }))
   }
 
   function handleMouseUp() {
+    clearChartTextSelection()
     const selection = getSelectionFromLabels(data.dates, drag.start, drag.end)
     setDrag({ start: null, end: null })
     if (selection) setZoom({ fromIndex: selection.fromIndex, toIndex: selection.toIndex })
@@ -239,7 +247,15 @@ export function AnalysisTopSkusChart({ data }: AnalysisTopSkusChartProps) {
         </button>
       </div>
 
-      <div id="analysis-chart" className="analysis-top-chart">
+      <div
+        id="analysis-chart"
+        className="analysis-top-chart"
+        onMouseDown={(event) => {
+          event.preventDefault()
+          clearChartTextSelection()
+        }}
+        onDragStart={(event) => event.preventDefault()}
+      >
         <ResponsiveContainer width="100%" height="100%">
           <ComposedChart
             data={visibleRows}
@@ -339,8 +355,8 @@ export function AnalysisTopSkusChart({ data }: AnalysisTopSkusChartProps) {
               <ReferenceArea
                 x1={dragSelection.from}
                 x2={dragSelection.to}
-                stroke="rgba(42,91,215,.45)"
-                fill="rgba(42,91,215,.12)"
+                stroke="rgba(100,116,139,.35)"
+                fill="rgba(100,116,139,.12)"
               />
             ) : null}
           </ComposedChart>

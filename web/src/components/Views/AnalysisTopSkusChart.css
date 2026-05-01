@@ -109,10 +109,20 @@
   width:100%;
   height:178px;
   cursor:crosshair;
+  user-select:none;
+  -webkit-user-select:none;
+  -ms-user-select:none;
 }
 
 .analysis-top-chart .recharts-surface{
   overflow:visible;
+}
+
+.analysis-top-chart *,
+.analysis-top-chart text{
+  user-select:none;
+  -webkit-user-select:none;
+  -ms-user-select:none;
 }
 
 .analysis-top-chart-tooltip{
