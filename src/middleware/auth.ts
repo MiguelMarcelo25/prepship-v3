@@ -66,7 +66,7 @@ async function verifySupabaseJwt(token: string): Promise<AuthVars | null> {
     );
     return null;
   }
-  const prefersHmac = protectedHeader.alg?.startsWith('HS') ?? false;
+  const isHmacToken = protectedHeader.alg?.startsWith('HS') ?? false;
 
   const verifyWithSecret = async () => {
     const { payload } = await jwtVerify(
@@ -81,8 +81,8 @@ async function verifySupabaseJwt(token: string): Promise<AuthVars | null> {
     return payloadToAuthVars(payload);
   };
 
-  const attempts = prefersHmac
-    ? [verifyWithSecret, verifyWithJwks]
+  const attempts = isHmacToken
+    ? [verifyWithSecret]
     : [verifyWithJwks, verifyWithSecret];
 
   for (const attempt of attempts) {
