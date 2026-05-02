@@ -3550,9 +3550,57 @@ export default function OrdersView({
     }
   }
 
+  function escapePrintWindowText(message: string) {
+    return message.replace(/[<>&"]/g, (char) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[char] ?? char))
+  }
+
+  function openQueuePrintWindow() {
+    const printWindow = window.open('', '_blank')
+    if (!printWindow) return null
+    printWindow.document.write(`<!doctype html>
+<html>
+  <head>
+    <title>PrepShip Print Queue</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f6f8fb; color: #172033; }
+      main { text-align: center; max-width: 360px; padding: 32px; }
+      .spinner { width: 30px; height: 30px; border: 3px solid #d8e0ef; border-top-color: #2563eb; border-radius: 50%; margin: 0 auto 16px; animation: spin 1s linear infinite; }
+      h1 { font-size: 18px; margin: 0 0 8px; }
+      p { font-size: 13px; color: #5b667a; margin: 0; line-height: 1.45; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="spinner"></div>
+      <h1>Preparing PDF</h1>
+      <p>Your labels are being merged. This tab will show the PDF when it is ready.</p>
+    </main>
+  </body>
+</html>`)
+    printWindow.document.close()
+    return printWindow
+  }
+
+  function showQueuePrintWindowError(printWindow: Window | null, message: string) {
+    if (!printWindow || printWindow.closed) return
+    printWindow.document.open()
+    printWindow.document.write(`<!doctype html>
+<html>
+  <head><title>PrepShip Print Queue</title></head>
+  <body style="font-family: Arial, sans-serif; padding: 32px; color: #172033;">
+    <h1 style="font-size: 18px;">PDF failed</h1>
+    <p style="font-size: 13px; color: #5b667a;">${escapePrintWindowText(message)}</p>
+  </body>
+</html>`)
+    printWindow.document.close()
+  }
+
   async function printQueueEntries(entryIds: string[]) {
     if (queueClientId == null || entryIds.length === 0) return
 
+    const printWindow = openQueuePrintWindow()
+    let pdfOpened = false
     setQueuePrintInFlight(true)
     setQueuePrintProgress(0)
     setQueuePrintMessage('Starting merge…')
@@ -3582,7 +3630,22 @@ export default function OrdersView({
           try {
             const blobUrl = await apiClient.fetchQueuePrintJobPdfUrl(job.job_id)
             if (blobUrl) {
-              window.open(blobUrl, '_blank', 'noopener,noreferrer')
+              if (printWindow && !printWindow.closed) {
+                printWindow.location.href = blobUrl
+                pdfOpened = true
+              } else {
+                const opened = window.open(blobUrl, '_blank', 'noopener,noreferrer')
+                pdfOpened = Boolean(opened)
+                if (!opened) {
+                  const link = document.createElement('a')
+                  link.href = blobUrl
+                  link.download = `prepship-labels-${job.job_id}.pdf`
+                  document.body.appendChild(link)
+                  link.click()
+                  document.body.removeChild(link)
+                  pdfOpened = true
+                }
+              }
             }
           } catch (err) {
             console.error('[print-queue] download failed', err)
@@ -3596,9 +3659,16 @@ export default function OrdersView({
       }
 
       await hydrateQueue()
-      showToast(`✅ ${entryIds.length} label${entryIds.length === 1 ? '' : 's'} — opened in new tab`, 'success')
+      showToast(
+        pdfOpened
+          ? `✅ ${entryIds.length} label${entryIds.length === 1 ? '' : 's'} — opened in new tab`
+          : `✅ ${entryIds.length} label${entryIds.length === 1 ? '' : 's'} — PDF ready, but popup was blocked`,
+        pdfOpened ? 'success' : 'error'
+      )
     } catch (error) {
-      showToast(error instanceof Error ? error.message : 'Print failed', 'error')
+      const message = error instanceof Error ? error.message : 'Print failed'
+      showQueuePrintWindowError(printWindow, message)
+      showToast(message, 'error')
     } finally {
       setQueuePrintInFlight(false)
       setQueuePrintMessage(null)
