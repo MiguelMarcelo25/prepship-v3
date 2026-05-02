@@ -3558,11 +3558,17 @@ export default function OrdersView({
     setQueuePrintMessage('Starting merge…')
     try {
       const job = await apiClient.startQueuePrintJob(queueClientId, entryIds, true)
+      if (!job?.job_id) {
+        throw new Error('Print job did not start')
+      }
 
       let done = false
       while (!done) {
         await new Promise((resolve) => window.setTimeout(resolve, 600))
         const status = await apiClient.fetchQueuePrintJobStatus(job.job_id)
+        if (!status || status.status === 'unknown') {
+          throw new Error('Print job status unavailable')
+        }
         setQueuePrintMessage(status.message)
         setQueuePrintProgress(typeof status.progress === 'number' ? status.progress : null)
 
@@ -3585,7 +3591,7 @@ export default function OrdersView({
           setQueuePrintProgress(100)
         }
         if (status.status === 'error') {
-          throw new Error(status.errorMessage || 'PDF merge failed')
+          throw new Error(status.error || status.errorMessage || 'PDF merge failed')
         }
       }
 

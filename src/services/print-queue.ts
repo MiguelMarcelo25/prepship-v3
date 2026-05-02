@@ -146,6 +146,7 @@ export async function startPrintJob(input: {
   clientId?: number;
   queueEntryIds: string[];
   mergeHeaders?: boolean;
+  requestOrigin?: string;
 }): Promise<{ jobId: string; total: number }> {
   if (!input.queueEntryIds.length)
     throw new Error('queueEntryIds must be non-empty');
@@ -173,7 +174,7 @@ export async function startPrintJob(input: {
   };
   mergeJobs.set(jobId, job);
 
-  void runMergeJob(jobId, entries, input.mergeHeaders !== false);
+  void runMergeJob(jobId, entries, input.mergeHeaders !== false, input.requestOrigin);
   return { jobId, total: entries.length };
 }
 
@@ -184,7 +185,8 @@ export function getMergeJobStatus(jobId: string): MergeJob | null {
 async function runMergeJob(
   jobId: string,
   entries: PrintQueueEntry[],
-  mergeHeaders: boolean
+  mergeHeaders: boolean,
+  requestOrigin?: string
 ) {
   const job = mergeJobs.get(jobId)!;
   job.status = 'running';
@@ -205,6 +207,8 @@ async function runMergeJob(
       groupSizes.set(g, (groupSizes.get(g) ?? 0) + 1);
     }
     let lastGroup: string | null = null;
+    const successfulEntryIds: string[] = [];
+    const failedEntryIds = new Set<string>();
 
     for (let i = 0; i < sorted.length; i += 1) {
       const e = sorted[i]!;
@@ -213,47 +217,81 @@ async function runMergeJob(
       job.message = `Merging label ${i + 1} of ${sorted.length}…`;
 
       let pdfBytes: Uint8Array | null = null;
+      const labelFetchUrl = resolveLabelFetchUrl(e.labelUrl, requestOrigin);
+      const isMockLabel = isMockLabelUrl(e.labelUrl) || isMockLabelUrl(labelFetchUrl);
+      const addGroupHeaderIfNeeded = () => {
+        const groupId = e.skuGroupId ?? '__ungrouped__';
+        if (mergeHeaders && groupId !== lastGroup) {
+          const headerPage = merged.addPage([288, 432]);
+          drawHeader(headerPage, e, groupSizes.get(groupId) ?? 1, font, fontReg, rgb);
+          lastGroup = groupId;
+        }
+      };
+      const addMockFallback = (reason: string) => {
+        addGroupHeaderIfNeeded();
+        const page = merged.addPage([288, 432]);
+        drawMockFallbackLabel(page, e, font, fontReg, rgb, reason);
+        successfulEntryIds.push(e.id);
+      };
       try {
-        const res = await fetch(e.labelUrl, {
+        const res = await fetch(labelFetchUrl, {
           headers: { Accept: 'application/pdf' },
           signal: AbortSignal.timeout(15_000),
         });
         if (res.status === 404 || res.status === 410) {
+          if (isMockLabel) {
+            addMockFallback(`Mock label not found (HTTP ${res.status})`);
+            continue;
+          }
           job.labelErrors!.push(
             `Label expired for order ${e.orderNumber ?? e.orderId} (HTTP ${res.status}).`
           );
+          failedEntryIds.add(e.id);
           continue;
         }
         if (!res.ok) {
+          if (isMockLabel) {
+            addMockFallback(`Mock label fetch failed (HTTP ${res.status})`);
+            continue;
+          }
           job.labelErrors!.push(
             `Failed to fetch label for order ${e.orderNumber ?? e.orderId} (HTTP ${res.status}).`
           );
+          failedEntryIds.add(e.id);
           continue;
         }
         pdfBytes = new Uint8Array(await res.arrayBuffer());
       } catch (err) {
+        if (isMockLabel) {
+          addMockFallback((err as Error).message || 'Mock label fetch failed');
+          continue;
+        }
         job.labelErrors!.push(
           `Network error for order ${e.orderNumber ?? e.orderId}: ${(err as Error).message}`
         );
+        failedEntryIds.add(e.id);
         continue;
-      }
-
-      const groupId = e.skuGroupId ?? '__ungrouped__';
-      if (mergeHeaders && groupId !== lastGroup) {
-        const headerPage = merged.addPage([288, 432]);
-        drawHeader(headerPage, e, groupSizes.get(groupId) ?? 1, font, fontReg, rgb);
-        lastGroup = groupId;
       }
 
       try {
         const labelDoc = await PDFDocument.load(pdfBytes!);
         const indices = labelDoc.getPageIndices();
+        if (indices.length === 0) {
+          throw new Error('PDF contained no pages');
+        }
         const pages = await merged.copyPages(labelDoc, indices);
+        addGroupHeaderIfNeeded();
         for (const p of pages) merged.addPage(p);
+        successfulEntryIds.push(e.id);
       } catch (err) {
+        if (isMockLabel) {
+          addMockFallback(`Mock label PDF fallback: ${(err as Error).message}`);
+          continue;
+        }
         job.labelErrors!.push(
           `PDF parse error for order ${e.orderNumber ?? e.orderId}: ${(err as Error).message}`
         );
+        failedEntryIds.add(e.id);
       }
     }
 
@@ -272,16 +310,18 @@ async function runMergeJob(
     const ts = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
     job.fileName = `batch_print_${ts}.pdf`;
 
-    await db
-      .update(printQueue)
-      .set({ status: 'printed', lastPrintedAt: now, printCount: 1 })
-      .where(inArray(printQueue.id, entries.map((e) => e.id)));
+    if (successfulEntryIds.length > 0) {
+      await db
+        .update(printQueue)
+        .set({ status: 'printed', lastPrintedAt: now, printCount: 1 })
+        .where(inArray(printQueue.id, successfulEntryIds));
+    }
 
-    const failed = job.labelErrors!.length;
-    const success = entries.length - failed;
+    const failed = failedEntryIds.size;
+    const success = successfulEntryIds.length;
     job.status = 'done';
     job.progress = 100;
-    job.current = entries.length;
+    job.current = success;
     job.message =
       failed > 0
         ? `Done — ${success} merged (${failed} failed — re-create those labels and re-queue).`
@@ -291,6 +331,97 @@ async function runMergeJob(
     job.errorMessage = (err as Error).message;
     job.message = `Error: ${job.errorMessage}`;
   }
+}
+
+function resolveApiOrigin(requestOrigin?: string): string {
+  const candidates = [
+    requestOrigin,
+    process.env.PUBLIC_API_URL,
+    process.env.RENDER_EXTERNAL_URL,
+    process.env.API_BASE_URL,
+    process.env.VITE_API_URL,
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      const url = new URL(candidate);
+      if (url.protocol === 'http:' || url.protocol === 'https:') return url.origin;
+    } catch {
+      // Try the next configured origin.
+    }
+  }
+  return `http://localhost:${process.env.PORT || '3000'}`;
+}
+
+function resolveLabelFetchUrl(labelUrl: string, requestOrigin?: string): string {
+  const trimmed = labelUrl.trim();
+  try {
+    return new URL(trimmed).toString();
+  } catch {
+    const path = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+    return new URL(path, resolveApiOrigin(requestOrigin)).toString();
+  }
+}
+
+function isMockLabelUrl(labelUrl: string): boolean {
+  return /(?:^|\/)(?:api\/)?labels\/mock\/-?\d+(?:$|[?#/])/.test(labelUrl);
+}
+
+function safePdfText(value: unknown): string {
+  return String(value ?? '')
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/[\u2010-\u2015]/g, '-')
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201C\u201D]/g, '"')
+    .replace(/[\u00D7]/g, 'x')
+    .replace(/[^\x20-\x7E]/g, '');
+}
+
+function drawMockFallbackLabel(
+  page: ReturnType<import('pdf-lib').PDFDocument['addPage']>,
+  entry: PrintQueueEntry,
+  font: import('pdf-lib').PDFFont,
+  fontReg: import('pdf-lib').PDFFont,
+  rgb: typeof import('pdf-lib').rgb,
+  reason: string
+) {
+  const { width, height } = page.getSize();
+  const pad = 14;
+  const red = rgb(0.85, 0, 0);
+  const black = rgb(0, 0, 0);
+  const gray = rgb(0.38, 0.38, 0.38);
+
+  page.drawRectangle({ x: 0, y: 0, width, height, color: rgb(1, 1, 1) });
+  page.drawRectangle({ x: 0, y: height - 36, width, height: 36, color: red });
+  page.drawText('VOID - TEST LABEL - DO NOT SHIP', {
+    x: pad,
+    y: height - 24,
+    size: 10,
+    font,
+    color: rgb(1, 1, 1),
+  });
+
+  page.drawText('PrepShip Test Label', { x: pad, y: height - 62, size: 16, font, color: black });
+  page.drawText(safePdfText(`Order: ${entry.orderNumber ?? entry.orderId}`), { x: pad, y: height - 84, size: 10, font: fontReg, color: black });
+  page.drawText(safePdfText(`SKU: ${entry.primarySku ?? 'Unknown SKU'}`), { x: pad, y: height - 104, size: 10, font: fontReg, color: black });
+  page.drawText(safePdfText(`Qty: ${entry.orderQty ?? 1}`), { x: pad, y: height - 124, size: 10, font: fontReg, color: black });
+  if (entry.itemDescription) {
+    page.drawText(safePdfText(entry.itemDescription).slice(0, 48), { x: pad, y: height - 144, size: 8, font: fontReg, color: gray });
+  }
+
+  page.drawRectangle({ x: pad, y: 122, width: width - pad * 2, height: 72, borderColor: black, borderWidth: 1 });
+  let x = pad + 8;
+  for (let i = 0; i < 70; i += 1) {
+    const barWidth = i % 3 === 0 ? 2 : 1;
+    if (i % 4 !== 0) {
+      page.drawRectangle({ x, y: 132, width: barWidth, height: 52, color: black });
+    }
+    x += barWidth + 2;
+    if (x > width - pad - 8) break;
+  }
+
+  page.drawText('Fallback mock PDF page', { x: pad, y: 86, size: 9, font, color: black });
+  page.drawText(safePdfText(reason).slice(0, 70), { x: pad, y: 70, size: 7, font: fontReg, color: gray });
 }
 
 function drawHeader(
@@ -330,7 +461,7 @@ function drawHeader(
     color: ReturnType<typeof rgb>,
     lineGap = 6
   ) => {
-    const words = text.split(' ');
+    const words = safePdfText(text).split(' ').filter(Boolean);
     let line = '';
     let cy = startY;
     for (const word of words) {

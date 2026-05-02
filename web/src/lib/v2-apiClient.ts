@@ -1307,25 +1307,15 @@ export const apiClient = {
     entryIds: string[],
     combine = true
   ): Promise<any> {
-    return safe(
-      'startQueuePrintJob',
-      () =>
-        api.post<any>('/print-queue/print', {
-          client_id: clientId,
-          queue_entry_ids: entryIds,
-          merge_headers: combine,
-        }),
-      {}
-    );
+    return api.post<any>('/print-queue/print', {
+      client_id: clientId,
+      queue_entry_ids: entryIds,
+      merge_headers: combine,
+    });
   },
 
   fetchQueuePrintJobStatus(jobId: string): Promise<any> {
-    return safe(
-      'fetchQueuePrintJobStatus',
-      () =>
-        api.get<any>(`/print-queue/print/status/${encodeURIComponent(jobId)}`),
-      { status: 'unknown' }
-    );
+    return api.get<any>(`/print-queue/print/status/${encodeURIComponent(jobId)}`);
   },
 
   downloadQueuePrintJob(

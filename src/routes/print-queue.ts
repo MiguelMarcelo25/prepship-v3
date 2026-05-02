@@ -89,6 +89,7 @@ app.post(
       clientId: b.client_id,
       queueEntryIds: b.queue_entry_ids,
       mergeHeaders: b.merge_headers,
+      requestOrigin: new URL(c.req.url).origin,
     });
     return c.json({ job_id: result.jobId, total: result.total });
   }
