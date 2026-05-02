@@ -59,6 +59,8 @@ interface QueueActionProgress {
   completed: number
   total: number
   failed: number
+  startedAt: number
+  tick: number
 }
 
 type PersistentQueueJobKind = 'existing-labels' | 'batch-queue'
@@ -78,29 +80,69 @@ interface PersistentQueueJob {
 
 const QUEUE_ACTION_JOB_STORAGE_KEY = 'prepship.queueActionJob.v1'
 const QUEUE_ACTION_JOB_MAX_AGE_MS = 30 * 60 * 1000
+const QUEUE_UI_YIELD_MS = 25
+let persistentQueueJobCache: PersistentQueueJob | null | undefined
+
+function createQueueOrderSnapshot(order: OrderSummaryDto): OrderSummaryDto {
+  const raw = order.raw && typeof order.raw === 'object' ? order.raw as Record<string, unknown> : null
+  return {
+    orderId: order.orderId,
+    orderNumber: order.orderNumber,
+    orderStatus: order.orderStatus,
+    clientId: order.clientId,
+    clientName: order.clientName,
+    storeId: order.storeId,
+    items: order.items,
+    label: order.label,
+    bestRate: order.bestRate,
+    selectedRate: order.selectedRate,
+    serviceCode: order.serviceCode,
+    shipping: order.shipping,
+    canonicalOrder: order.canonicalOrder,
+    weight: order.weight,
+    rateDims: order.rateDims,
+    dimensions: order.dimensions,
+    raw: raw ? {
+      test: raw.test,
+      testing: raw.testing,
+      dimensions: raw.dimensions,
+    } : order.raw,
+  } as OrderSummaryDto
+}
 
 function readPersistentQueueJob(): PersistentQueueJob | null {
+  if (persistentQueueJobCache !== undefined) return persistentQueueJobCache
   try {
     const raw = window.localStorage.getItem(QUEUE_ACTION_JOB_STORAGE_KEY)
-    if (!raw) return null
-    const job = JSON.parse(raw) as PersistentQueueJob
-    if (!job?.id || !Array.isArray(job.orders)) return null
-    if (Date.now() - (job.updatedAt || job.createdAt || 0) > QUEUE_ACTION_JOB_MAX_AGE_MS) {
-      window.localStorage.removeItem(QUEUE_ACTION_JOB_STORAGE_KEY)
+    if (!raw) {
+      persistentQueueJobCache = null
       return null
     }
-    return {
+    const job = JSON.parse(raw) as PersistentQueueJob
+    if (!job?.id || !Array.isArray(job.orders)) {
+      persistentQueueJobCache = null
+      return null
+    }
+    if (Date.now() - (job.updatedAt || job.createdAt || 0) > QUEUE_ACTION_JOB_MAX_AGE_MS) {
+      window.localStorage.removeItem(QUEUE_ACTION_JOB_STORAGE_KEY)
+      persistentQueueJobCache = null
+      return null
+    }
+    persistentQueueJobCache = {
       ...job,
       completedOrderIds: Array.isArray(job.completedOrderIds) ? job.completedOrderIds : [],
       failedOrderIds: Array.isArray(job.failedOrderIds) ? job.failedOrderIds : [],
       total: Math.max(job.total || job.orders.length, 1),
     }
+    return persistentQueueJobCache
   } catch {
+    persistentQueueJobCache = null
     return null
   }
 }
 
 function writePersistentQueueJob(job: PersistentQueueJob) {
+  persistentQueueJobCache = job
   try {
     window.localStorage.setItem(QUEUE_ACTION_JOB_STORAGE_KEY, JSON.stringify({ ...job, updatedAt: Date.now() }))
   } catch {
@@ -112,10 +154,14 @@ function clearPersistentQueueJob(jobId?: string | null) {
   try {
     if (!jobId) {
       window.localStorage.removeItem(QUEUE_ACTION_JOB_STORAGE_KEY)
+      persistentQueueJobCache = null
       return
     }
     const current = readPersistentQueueJob()
-    if (!current || current.id === jobId) window.localStorage.removeItem(QUEUE_ACTION_JOB_STORAGE_KEY)
+    if (!current || current.id === jobId) {
+      window.localStorage.removeItem(QUEUE_ACTION_JOB_STORAGE_KEY)
+      persistentQueueJobCache = null
+    }
   } catch {
     // Ignore storage cleanup failures.
   }
@@ -130,7 +176,7 @@ function createPersistentQueueJob(
   const job: PersistentQueueJob = {
     id: `${now}:${Math.random().toString(36).slice(2)}`,
     kind,
-    orders,
+    orders: orders.map(createQueueOrderSnapshot),
     completedOrderIds: [],
     failedOrderIds: [],
     total: Math.max(orders.length, 1),
@@ -141,6 +187,10 @@ function createPersistentQueueJob(
   }
   writePersistentQueueJob(job)
   return job
+}
+
+function yieldToBrowser(delay = QUEUE_UI_YIELD_MS) {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, delay))
 }
 
 function markPersistentQueueJobOrder(jobId: string | null | undefined, orderId: number, failed: boolean) {
@@ -522,7 +572,7 @@ const TEST_RATE_SERVICE_TEMPLATES = [
   { code: TEST_SERVICE_CODE, name: 'PrepShip Test Standard', base: 7.25, spread: 3.8, perLb: 0.96, days: '2-4 days' },
   { code: 'prepship_test_priority', name: 'PrepShip Test Priority', base: 13.9, spread: 6.75, perLb: 1.28, days: '1-3 days' },
 ]
-const BATCH_QUEUE_CONCURRENCY = 5
+const BATCH_QUEUE_CONCURRENCY = 2
 
 function seededTestUnit(seed: string) {
   let hash = 2166136261
@@ -1510,6 +1560,7 @@ async function runWithConcurrency<T>(
       const index = nextIndex
       nextIndex += 1
       await worker(items[index], index)
+      await yieldToBrowser()
     }
   }))
 }
@@ -1585,6 +1636,7 @@ export default function OrdersView({
   const [singleActionBusy, setSingleActionBusy] = useState(false)
   const [shipmentDetailsSaving, setShipmentDetailsSaving] = useState(false)
   const queueActionProgressTimerRef = useRef<number | null>(null)
+  const queueActionHeartbeatTimerRef = useRef<number | null>(null)
   const activePersistentQueueJobIdRef = useRef<string | null>(null)
   const resumePersistentQueueJobIdRef = useRef<string | null>(null)
   const lastSelectionAnchorRef = useRef<number | null>(null)
@@ -1626,13 +1678,29 @@ export default function OrdersView({
     queueActionProgressTimerRef.current = null
   }
 
+  const clearQueueActionHeartbeatTimer = () => {
+    if (queueActionHeartbeatTimerRef.current == null) return
+    window.clearInterval(queueActionHeartbeatTimerRef.current)
+    queueActionHeartbeatTimerRef.current = null
+  }
+
+  const startQueueActionHeartbeat = () => {
+    clearQueueActionHeartbeatTimer()
+    queueActionHeartbeatTimerRef.current = window.setInterval(() => {
+      setQueueActionProgress((current) => current ? { ...current, tick: current.tick + 1 } : current)
+    }, 1000)
+  }
+
   const startQueueActionProgress = (total: number, label = 'Sending to queue', completed = 0, failed = 0) => {
     clearQueueActionProgressTimer()
+    startQueueActionHeartbeat()
     setQueueActionProgress({
       label,
       completed: Math.min(Math.max(total, 1), Math.max(completed, 0)),
       total: Math.max(total, 1),
       failed: Math.max(failed, 0),
+      startedAt: Date.now(),
+      tick: 0,
     })
   }
 
@@ -1646,6 +1714,7 @@ export default function OrdersView({
           ...current,
           completed: Math.min(current.total, current.completed + completedDelta),
           failed: current.failed + failedDelta,
+          tick: current.tick + 1,
         }
       : current
     )
@@ -1657,6 +1726,7 @@ export default function OrdersView({
       : current
     )
     clearQueueActionProgressTimer()
+    clearQueueActionHeartbeatTimer()
     queueActionProgressTimerRef.current = window.setTimeout(() => {
       setQueueActionProgress(null)
       queueActionProgressTimerRef.current = null
@@ -1664,7 +1734,10 @@ export default function OrdersView({
   }
 
   useEffect(() => {
-    return () => clearQueueActionProgressTimer()
+    return () => {
+      clearQueueActionProgressTimer()
+      clearQueueActionHeartbeatTimer()
+    }
   }, [])
 
   function beginPersistentQueueJob(
@@ -3847,10 +3920,13 @@ export default function OrdersView({
   const queueActionProgressPct = queueActionProgress
     ? Math.round((queueActionProgress.completed / Math.max(queueActionProgress.total, 1)) * 100)
     : 0
+  const queueActionElapsedSeconds = queueActionProgress
+    ? Math.max(0, Math.floor((Date.now() - queueActionProgress.startedAt) / 1000))
+    : 0
   const queueToolbarProgress = queueActionProgress
     ? {
         label: queueActionProgress.label,
-        detail: `${queueActionProgress.completed}/${queueActionProgress.total}${queueActionProgress.failed > 0 ? ` - ${queueActionProgress.failed} failed` : ''}`,
+        detail: `${queueActionProgress.completed}/${queueActionProgress.total}${queueActionProgress.completed < queueActionProgress.total ? ` - working ${queueActionElapsedSeconds}s` : ''}${queueActionProgress.failed > 0 ? ` - ${queueActionProgress.failed} failed` : ''}`,
         pct: queueActionProgressPct,
         tone: queueActionProgress.failed > 0 ? '#f59e0b' : 'var(--ss-blue)',
       }
