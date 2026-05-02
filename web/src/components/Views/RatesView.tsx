@@ -152,6 +152,7 @@ export default function RatesView() {
                 <thead>
                   <tr>
                     <th>Carrier</th>
+                    <th>Account</th>
                     <th>Service</th>
                     <th>Base Cost</th>
                     <th>Your Price</th>
@@ -166,6 +167,9 @@ export default function RatesView() {
                         <span className={`carrier-badge ${getCarrierBadgeClass(row.carrierCode)}`} style={{ fontSize: 9.5, padding: '1px 5px' }}>
                           {row.carrierBadgeLabel}
                         </span>
+                      </td>
+                      <td style={{ fontSize: 11.5, color: row.carrierNickname ? 'var(--text2)' : 'var(--text4)', fontWeight: row.carrierNickname ? 600 : 400 }}>
+                        {row.carrierNickname || '—'}
                       </td>
                       <td>
                         {row.serviceLabel} {row.isBest ? <span className="best-badge">✓ CHEAPEST</span> : null}

@@ -38,6 +38,17 @@ function stringOrNull(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+function itemSkuOrFallback(record: Record<string, unknown>): string | null {
+  const sku =
+    stringOrNull(record.sku) ??
+    stringOrNull(record.fulfillmentSku) ??
+    stringOrNull(record.warehouseLocation);
+  if (sku) return sku;
+
+  const productId = toFiniteNumber(record.productId);
+  return productId != null ? String(Math.trunc(productId)) : null;
+}
+
 function providerAccountIdOrNull(value: unknown): number | null {
   if (value === null || value === undefined || value === '') return null;
   const normalized =
@@ -67,7 +78,7 @@ function itemSummary(items: unknown) {
     if (record.adjustment === true) continue;
 
     const name = stringOrNull(record.name);
-    const sku = stringOrNull(record.sku);
+    const sku = itemSkuOrFallback(record);
     const qty = toFiniteNumber(record.quantity) ?? 1;
 
     if (name) names.push(name);

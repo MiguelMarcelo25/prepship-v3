@@ -21,6 +21,7 @@ export interface RatesEmptyState {
 export interface RateRowView {
   carrierLabel: string
   carrierBadgeLabel: string
+  carrierNickname: string | null
   carrierCode: string
   serviceLabel: string
   baseCost: number
@@ -96,6 +97,18 @@ export function getCarrierLabel(rate: RateDto): string {
   return 'UPS'
 }
 
+export function getCarrierNickname(rate: RateDto): string | null {
+  const raw = (rate as any)?.raw ?? {}
+  const nickname =
+    (rate as any)?.carrierNickname ??
+    (rate as any)?.providerAccountNickname ??
+    (rate as any)?.carrier_nickname ??
+    raw.carrier_nickname ??
+    raw.nickname ??
+    null
+  return typeof nickname === 'string' && nickname.trim() ? nickname.trim() : null
+}
+
 export function getServiceLabel(rate: RateDto): string {
   return rate.serviceName || rate.serviceCode || '—'
 }
@@ -106,6 +119,7 @@ export function buildRateRows(rates: RateDto[], markupValue: number): RateRowVie
     return {
       carrierLabel: getCarrierLabel(rate),
       carrierBadgeLabel: getCarrierLabel(rate),
+      carrierNickname: getCarrierNickname(rate),
       carrierCode: rate.carrierCode,
       serviceLabel: getServiceLabel(rate),
       baseCost,

@@ -54,6 +54,13 @@ type SortKey = 'date' | 'age' | 'orderNum' | 'client' | 'customer' | 'itemname' 
 type TableColumnKey = 'select' | 'date' | 'client' | 'orderNum' | 'customer' | 'itemname' | 'sku' | 'qty' | 'weight' | 'shipto' | 'carrier' | 'custcarrier' | 'total' | 'bestrate' | 'margin' | 'tracking' | 'labelcreated' | 'age' | 'test_carrierCode' | 'test_shippingProviderID' | 'test_clientID' | 'test_serviceCode' | 'test_bestRate' | 'test_orderLocal' | 'test_shippingAccount'
 type PanelSectionKey = 'shipping' | 'items' | 'recipient'
 
+interface QueueActionProgress {
+  label: string
+  completed: number
+  total: number
+  failed: number
+}
+
 interface OrdersViewProps {
   currentStatus: OrderStatus
   searchQuery?: string
@@ -1162,8 +1169,7 @@ function copyText(value: string) {
 
 function getVisibleColumns(currentStatus: OrderStatus) {
   const hidden = new Set<TableColumnKey>()
-  if (currentStatus === 'awaiting_shipment') hidden.add('tracking')
-  else hidden.add('age')
+  if (currentStatus !== 'awaiting_shipment') hidden.add('age')
 
   return TABLE_COLUMNS.filter((column) => !hidden.has(column.key)).map((column) => (
     column.key === 'bestrate' && currentStatus !== 'awaiting_shipment'
@@ -1311,7 +1317,9 @@ export default function OrdersView({
   const [queueHistoryVisible, setQueueHistoryVisible] = useState(false)
   const [queueEntries, setQueueEntries] = useState<PrintQueueEntryDto[]>([])
   const [queueLoading, setQueueLoading] = useState(false)
+  const [queueActionProgress, setQueueActionProgress] = useState<QueueActionProgress | null>(null)
   const [queuePrintMessage, setQueuePrintMessage] = useState<string | null>(null)
+  const [queuePrintProgress, setQueuePrintProgress] = useState<number | null>(null)
   const [queuePrintInFlight, setQueuePrintInFlight] = useState(false)
   const [rateBrowserOpen, setRateBrowserOpen] = useState(false)
   const [detailDrawerOrderId, setDetailDrawerOrderId] = useState<number | null>(null)
@@ -1329,6 +1337,7 @@ export default function OrdersView({
   const [batchBusy, setBatchBusy] = useState(false)
   const [batchTestMode, setBatchTestMode] = useState(false)
   const [singleActionBusy, setSingleActionBusy] = useState(false)
+  const queueActionProgressTimerRef = useRef<number | null>(null)
   const lastSelectionAnchorRef = useRef<number | null>(null)
   const shiftHeldOnMouseDownRef = useRef(false)
   const [panelForm, setPanelForm] = useState<{
@@ -1371,6 +1380,53 @@ export default function OrdersView({
   const selectAllCheckboxRef = useRef<HTMLInputElement | null>(null)
   const autoPackageDimsKeyRef = useRef<string | null>(null)
   const panelFormInitKeyRef = useRef<string | null>(null)
+
+  const clearQueueActionProgressTimer = () => {
+    if (queueActionProgressTimerRef.current == null) return
+    window.clearTimeout(queueActionProgressTimerRef.current)
+    queueActionProgressTimerRef.current = null
+  }
+
+  const startQueueActionProgress = (total: number, label = 'Sending to queue') => {
+    clearQueueActionProgressTimer()
+    setQueueActionProgress({
+      label,
+      completed: 0,
+      total: Math.max(total, 1),
+      failed: 0,
+    })
+  }
+
+  const setQueueActionProgressLabel = (label: string) => {
+    setQueueActionProgress((current) => current ? { ...current, label } : current)
+  }
+
+  const advanceQueueActionProgress = (failedDelta = 0) => {
+    setQueueActionProgress((current) => current
+      ? {
+          ...current,
+          completed: Math.min(current.total, current.completed + 1),
+          failed: current.failed + failedDelta,
+        }
+      : current
+    )
+  }
+
+  const finishQueueActionProgress = (label: string) => {
+    setQueueActionProgress((current) => current
+      ? { ...current, label, completed: current.total }
+      : current
+    )
+    clearQueueActionProgressTimer()
+    queueActionProgressTimerRef.current = window.setTimeout(() => {
+      setQueueActionProgress(null)
+      queueActionProgressTimerRef.current = null
+    }, 2200)
+  }
+
+  useEffect(() => {
+    return () => clearQueueActionProgressTimer()
+  }, [])
 
   const dateRange = dateFilter === 'custom'
     ? {
@@ -2257,8 +2313,7 @@ export default function OrdersView({
 
   function getPersistableHiddenColumns(hiddenColumns: Set<TableColumnKey>) {
     const nextHidden = new Set(hiddenColumns)
-    if (currentStatusRef.current === 'awaiting_shipment') nextHidden.delete('tracking')
-    else nextHidden.delete('age')
+    if (currentStatusRef.current !== 'awaiting_shipment') nextHidden.delete('age')
     return nextHidden
   }
 
@@ -2447,6 +2502,8 @@ export default function OrdersView({
     }
 
     // O(1) lookups instead of N×O(N) `orders.find` inside the loop.
+    startQueueActionProgress(orderIds.length, 'Sending to queue')
+
     const orderById = new Map(orders.map((order) => [order.orderId, order]))
 
     const eligible: typeof orders = []
@@ -2466,38 +2523,58 @@ export default function OrdersView({
     let failed = preFailed
     const queuedItems: Array<{ sku?: string | null; name?: string | null; quantity?: number | null }> = []
 
-    if (eligible.length > 0) {
-      setQueueLoading(true)
-      try {
-        await runWithConcurrency(eligible, BATCH_QUEUE_CONCURRENCY, async (order) => {
-          try {
-            await apiClient.addToQueue(buildQueueAddPayload(order, order.label!.labelUrl))
-            sent += 1
-            queuedItems.push(...getActiveItems(order, orderDetailsById.get(order.orderId) ?? null))
-          } catch {
-            failed += 1
+    if (preFailed > 0) {
+      setQueueActionProgress((current) => current
+        ? {
+            ...current,
+            completed: Math.min(current.total, preFailed),
+            failed: current.failed + preFailed,
           }
-        })
-      } finally {
-        setQueueLoading(false)
-      }
+        : current
+      )
     }
 
-    if (sent > 0 && queueClient != null) {
-      setQueueLoading(true)
-      try {
-        const payload = await apiClient.fetchQueue(queueClient, queueHistoryVisible)
-        setQueueEntries(payload.queuedOrders)
-        setQueueOpen(true)
-      } finally {
-        setQueueLoading(false)
+    try {
+      if (eligible.length > 0) {
+        setQueueLoading(true)
+        try {
+          await runWithConcurrency(eligible, BATCH_QUEUE_CONCURRENCY, async (order) => {
+            let orderFailed = false
+            try {
+              await apiClient.addToQueue(buildQueueAddPayload(order, order.label!.labelUrl))
+              sent += 1
+              queuedItems.push(...getActiveItems(order, orderDetailsById.get(order.orderId) ?? null))
+            } catch {
+              failed += 1
+              orderFailed = true
+            } finally {
+              advanceQueueActionProgress(orderFailed ? 1 : 0)
+            }
+          })
+        } finally {
+          setQueueLoading(false)
+        }
       }
-    }
 
-    if (sent > 0) {
-      showToast(formatQueuedOrdersToast(sent, queuedItems, failed), 'success')
-    } else {
-      showToast('⚠ No orders added — create labels first')
+      if (sent > 0 && queueClient != null) {
+        setQueueActionProgressLabel('Refreshing queue')
+        setQueueLoading(true)
+        try {
+          const payload = await apiClient.fetchQueue(queueClient, queueHistoryVisible)
+          setQueueEntries(payload.queuedOrders)
+          setQueueOpen(true)
+        } finally {
+          setQueueLoading(false)
+        }
+      }
+
+      if (sent > 0) {
+        showToast(formatQueuedOrdersToast(sent, queuedItems, failed), 'success')
+      } else {
+        showToast('⚠ No orders added — create labels first')
+      }
+    } finally {
+      finishQueueActionProgress(sent > 0 ? 'Queue updated' : 'Queue checked')
     }
   }
 
@@ -2797,6 +2874,7 @@ export default function OrdersView({
     if (queueClientId == null || entryIds.length === 0) return
 
     setQueuePrintInFlight(true)
+    setQueuePrintProgress(0)
     setQueuePrintMessage('Starting merge…')
     try {
       const job = await apiClient.startQueuePrintJob(queueClientId, entryIds, true)
@@ -2806,6 +2884,7 @@ export default function OrdersView({
         await new Promise((resolve) => window.setTimeout(resolve, 600))
         const status = await apiClient.fetchQueuePrintJobStatus(job.job_id)
         setQueuePrintMessage(status.message)
+        setQueuePrintProgress(typeof status.progress === 'number' ? status.progress : null)
 
         if (status.status === 'done') {
           // The download endpoint requires a Bearer token, so a plain
@@ -2823,6 +2902,7 @@ export default function OrdersView({
             console.error('[print-queue] download failed', err)
           }
           done = true
+          setQueuePrintProgress(100)
         }
         if (status.status === 'error') {
           throw new Error(status.errorMessage || 'PDF merge failed')
@@ -2836,6 +2916,7 @@ export default function OrdersView({
     } finally {
       setQueuePrintInFlight(false)
       setQueuePrintMessage(null)
+      setQueuePrintProgress(null)
     }
   }
 
@@ -2847,6 +2928,7 @@ export default function OrdersView({
     }
 
     setBatchBusy(true)
+    if (mode === 'queue') startQueueActionProgress(batchOrders.length, 'Sending to queue')
     let created = 0
     let failed = 0
     const queuedItems: Array<{ sku?: string | null; name?: string | null; quantity?: number | null }> = []
@@ -2874,10 +2956,12 @@ export default function OrdersView({
       // rather than try to sneak a 0 past Zod's .positive() validator.
       if (!isTestOrder && shippingProviderId == null) {
         failed += 1
+        if (mode === 'queue') advanceQueueActionProgress(1)
         return
       }
       if (!effectiveServiceCode || !effectiveCarrierCode) {
         failed += 1
+        if (mode === 'queue') advanceQueueActionProgress(1)
         return
       }
 
@@ -2915,8 +2999,10 @@ export default function OrdersView({
           window.open(response.labelUrl, '_blank', 'noopener,noreferrer')
         }
         created += 1
+        if (mode === 'queue') advanceQueueActionProgress()
       } catch {
         failed += 1
+        if (mode === 'queue') advanceQueueActionProgress(1)
       }
     }
 
@@ -2932,9 +3018,11 @@ export default function OrdersView({
 
     setBatchBusy(false)
     if (mode === 'queue' && created > 0) {
+      setQueueActionProgressLabel('Refreshing queue')
       await hydrateQueue(true)
     }
     await refetchOrders()
+    if (mode === 'queue') finishQueueActionProgress(created > 0 ? 'Queue updated' : 'Queue checked')
     if (mode === 'queue' && created > 0) {
       showToast(formatQueuedOrdersToast(created, queuedItems, failed), 'success')
     } else if (failed === 0) {
@@ -2990,6 +3078,24 @@ export default function OrdersView({
     [queueEntries],
   )
   const queueCount = queuedEntries.length
+  const queueActionProgressPct = queueActionProgress
+    ? Math.round((queueActionProgress.completed / Math.max(queueActionProgress.total, 1)) * 100)
+    : 0
+  const queueToolbarProgress = queueActionProgress
+    ? {
+        label: queueActionProgress.label,
+        detail: `${queueActionProgress.completed}/${queueActionProgress.total}${queueActionProgress.failed > 0 ? ` - ${queueActionProgress.failed} failed` : ''}`,
+        pct: queueActionProgressPct,
+        tone: queueActionProgress.failed > 0 ? '#f59e0b' : 'var(--ss-blue)',
+      }
+    : queuePrintInFlight && queuePrintMessage
+      ? {
+          label: 'Print queue',
+          detail: queuePrintMessage,
+          pct: queuePrintProgress ?? 0,
+          tone: 'var(--ss-blue)',
+        }
+      : null
 
   const renderBestRatePrice = (order: OrderSummaryDto) => {
     if (isTestOrder(order)) {
@@ -4335,10 +4441,48 @@ export default function OrdersView({
           >
             📥 Export CSV
           </button>
+          {currentStatus === 'awaiting_shipment' && queueToolbarProgress ? (
+            <div
+              id="queue-progress-indicator"
+              role="status"
+              aria-live="polite"
+              style={{
+                marginLeft: 'auto',
+                width: 240,
+                maxWidth: '34vw',
+                minWidth: 170,
+                padding: '5px 8px',
+                border: '1px solid var(--border2)',
+                borderRadius: 6,
+                background: 'var(--surface)',
+                boxShadow: '0 1px 2px rgba(15,23,42,.06)',
+                flexShrink: 1,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, lineHeight: 1.2, color: 'var(--text2)', minWidth: 0 }}>
+                <span style={{ fontWeight: 800, whiteSpace: 'nowrap' }}>{queueToolbarProgress.label}</span>
+                <span style={{ marginLeft: 'auto', fontFamily: 'monospace', color: queueToolbarProgress.tone, whiteSpace: 'nowrap' }}>{queueToolbarProgress.pct}%</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 3 }}>
+                <div
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={queueToolbarProgress.pct}
+                  style={{ height: 5, flex: 1, minWidth: 0, background: 'var(--surface3)', borderRadius: 999, overflow: 'hidden' }}
+                >
+                  <div style={{ height: '100%', width: `${Math.min(100, Math.max(0, queueToolbarProgress.pct))}%`, background: queueToolbarProgress.tone, borderRadius: 999, transition: 'width .25s ease' }} />
+                </div>
+                <span style={{ fontSize: 10, color: 'var(--text3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 112 }}>
+                  {queueToolbarProgress.detail}
+                </span>
+              </div>
+            </div>
+          ) : null}
           <button
             className="btn btn-ghost btn-sm"
             type="button"
-            style={{ fontSize: 11.5, gap: 4, marginLeft: 'auto', display: currentStatus === 'awaiting_shipment' ? '' : 'none' }}
+            style={{ fontSize: 11.5, gap: 4, marginLeft: queueToolbarProgress ? 0 : 'auto', display: currentStatus === 'awaiting_shipment' ? '' : 'none' }}
             id="picklistBtn"
             onClick={() => void printPicklist()}
           >
@@ -4636,7 +4780,17 @@ export default function OrdersView({
             <div>{queuedEntries.reduce((sum, entry) => sum + (entry.order_qty ?? 1), 0)} Total Qty</div>
             <div>{queueGroups.length} SKU Groups</div>
           </div>
-          {queuePrintMessage ? <div id="pq-progress" style={{ padding: '8px 12px', fontSize: 11, borderBottom: '1px solid var(--border)' }}>{queuePrintMessage}</div> : null}
+          {queuePrintMessage ? (
+            <div id="pq-progress" style={{ padding: '8px 12px', fontSize: 11, borderBottom: '1px solid var(--border)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ flex: 1 }}>{queuePrintMessage}</span>
+                <span style={{ fontFamily: 'monospace', color: 'var(--ss-blue)', fontWeight: 700 }}>{queuePrintProgress ?? 0}%</span>
+              </div>
+              <div style={{ height: 5, marginTop: 6, background: 'var(--surface3)', borderRadius: 999, overflow: 'hidden' }}>
+                <div style={{ height: '100%', width: `${Math.min(100, Math.max(0, queuePrintProgress ?? 0))}%`, background: 'var(--ss-blue)', borderRadius: 999, transition: 'width .25s ease' }} />
+              </div>
+            </div>
+          ) : null}
           <div id="pq-order-list" style={{ overflowY: 'auto', overflowX: 'hidden', padding: 12, minHeight: 0 }}>
             {queueLoading ? <div className="empty-state">Loading queue…</div> : null}
             {!queueLoading && queueGroups.length === 0 ? <div className="pq-empty">📭 Queue is empty<br /><small>Click "Send to Queue" on any order with a label</small></div> : null}

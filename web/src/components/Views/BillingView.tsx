@@ -34,6 +34,7 @@ import {
   type BillingDetailColumnId,
   type BillingPresetId,
 } from './billing-parity'
+import { AnalysisPagination } from './AnalysisPagination'
 import OrderDetailDrawer from '../OrderDetailDrawer'
 import './BillingView.css'
 
@@ -47,6 +48,8 @@ interface BillingDetailState {
 }
 
 const SUMMARY_COL_COUNT = 8
+const BILLING_SUMMARY_PAGE_SIZE_OPTIONS = [10, 25, 50, 100]
+const BILLING_DETAIL_PAGE_SIZE_OPTIONS = [25, 50, 100, 250]
 
 function marginColor(value: number) {
   if (value > 0) return 'var(--green)'
@@ -81,6 +84,8 @@ export default function BillingView() {
   const [from, setFrom] = useState(initialRange.from)
   const [to, setTo] = useState(initialRange.to)
   const [summaryRows, setSummaryRows] = useState<BillingSummaryDto[]>([])
+  const [summaryPage, setSummaryPage] = useState(1)
+  const [summaryPageSize, setSummaryPageSize] = useState(25)
   const [summaryLoading, setSummaryLoading] = useState(true)
   const [summaryError, setSummaryError] = useState<string | null>(null)
   const [generateLoading, setGenerateLoading] = useState(false)
@@ -96,6 +101,8 @@ export default function BillingView() {
     rows: [],
     error: null,
   })
+  const [detailPage, setDetailPage] = useState(1)
+  const [detailPageSize, setDetailPageSize] = useState(50)
   const [orderDetailModalId, setOrderDetailModalId] = useState<number | null>(null)
   const [detailColumnIds, setDetailColumnIds] = useState<BillingDetailColumnId[]>(() => {
     if (typeof window === 'undefined') return readBillingDetailColumnIds()
@@ -109,6 +116,32 @@ export default function BillingView() {
 
   const summaryTotals = useMemo(() => buildBillingSummaryTotals(summaryRows), [summaryRows])
   const visibleDetailColumns = useMemo(() => getVisibleBillingDetailColumns(detailColumnIds), [detailColumnIds])
+  const summaryPageCount = Math.max(1, Math.ceil(summaryRows.length / summaryPageSize))
+  const currentSummaryPage = Math.min(Math.max(summaryPage, 1), summaryPageCount)
+  const pagedSummaryRows = useMemo(() => {
+    const start = (currentSummaryPage - 1) * summaryPageSize
+    return summaryRows.slice(start, start + summaryPageSize)
+  }, [currentSummaryPage, summaryPageSize, summaryRows])
+  const detailPageCount = Math.max(1, Math.ceil(detailState.rows.length / detailPageSize))
+  const currentDetailPage = Math.min(Math.max(detailPage, 1), detailPageCount)
+  const detailRowOffset = (currentDetailPage - 1) * detailPageSize
+  const pagedDetailRows = useMemo(() => {
+    const start = (currentDetailPage - 1) * detailPageSize
+    return detailState.rows.slice(start, start + detailPageSize)
+  }, [currentDetailPage, detailPageSize, detailState.rows])
+  const detailTotals = useMemo(() => {
+    return detailState.rows.reduce((acc, row) => {
+      const metrics = computeBillingDetailMetrics(row)
+      return {
+        pickPack: acc.pickPack + metrics.pickPack,
+        additional: acc.additional + metrics.additional,
+        packageCost: acc.packageCost + metrics.packageCost,
+        shipping: acc.shipping + metrics.shipping,
+        total: acc.total + metrics.total,
+        margin: acc.margin + metrics.margin,
+      }
+    }, { pickPack: 0, additional: 0, packageCost: 0, shipping: 0, total: 0, margin: 0 })
+  }, [detailState.rows])
 
   useEffect(() => {
     return () => {
@@ -120,6 +153,20 @@ export default function BillingView() {
     if (typeof window === 'undefined') return
     window.localStorage.setItem(getBillingDetailColumnStorageKey(), JSON.stringify(detailColumnIds))
   }, [detailColumnIds])
+
+  useEffect(() => {
+    setSummaryPage(1)
+  }, [from, to])
+
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(summaryRows.length / summaryPageSize))
+    setSummaryPage((current) => Math.min(current, maxPage))
+  }, [summaryRows.length, summaryPageSize])
+
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(detailState.rows.length / detailPageSize))
+    setDetailPage((current) => Math.min(current, maxPage))
+  }, [detailState.rows.length, detailPageSize])
 
   useEffect(() => {
     let active = true
@@ -269,6 +316,7 @@ export default function BillingView() {
   }
 
   async function handleLoadDetails(clientId: number, clientName: string) {
+    setDetailPage(1)
     setDetailState({
       open: true,
       loading: true,
@@ -739,7 +787,7 @@ export default function BillingView() {
                 <tr><td colSpan={SUMMARY_COL_COUNT} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No billing data. Generate invoices first.</td></tr>
               ) : (
                 <>
-                  {summaryRows.map((row) => (
+                  {pagedSummaryRows.map((row) => (
                     <tr key={row.clientId} className="billing-summary-row" onClick={() => void handleLoadDetails(row.clientId, row.clientName)}>
                       <td style={{ padding: '8px 10px', fontWeight: 600, color: 'var(--ss-blue)' }}>
                         <span className="billing-summary-client-cell">
@@ -782,6 +830,21 @@ export default function BillingView() {
             </tbody>
           </table>
         </div>
+        {!summaryLoading && !summaryError && summaryRows.length > 0 ? (
+          <AnalysisPagination
+            page={summaryPage}
+            pageSize={summaryPageSize}
+            pageSizeOptions={BILLING_SUMMARY_PAGE_SIZE_OPTIONS}
+            totalItems={summaryRows.length}
+            onPageChange={setSummaryPage}
+            onPageSizeChange={(nextSize) => {
+              setSummaryPageSize(nextSize)
+              setSummaryPage(1)
+            }}
+            unitLabel="clients"
+            ariaLabel="Billing summary table pagination"
+          />
+        ) : null}
 
         {detailState.open ? (
           <div ref={detailWrapRef} style={{ display: 'block', marginTop: 16, borderTop: '2px solid var(--border)', paddingTop: 14 }}>
@@ -839,11 +902,11 @@ export default function BillingView() {
                     <tr><td colSpan={visibleDetailColumns.length} style={{ padding: 20, textAlign: 'center', color: 'var(--text3)' }}>No line items found.</td></tr>
                   ) : (
                     <>
-                      {detailState.rows.map((row, rowIndex) => {
+                      {pagedDetailRows.map((row, pageRowIndex) => {
+                        const rowIndex = detailRowOffset + pageRowIndex
                         const metrics = computeBillingDetailMetrics(row)
                         const rowKey = row.id ?? `${row.orderId ?? 'storage'}-${row.lineType ?? 'detail'}-${row.description ?? rowIndex}-${rowIndex}`
                         const lineLabel = row.itemNames || row.description || ''
-                        const lineTypeLabel = row.lineType ? String(row.lineType).replace(/_/g, ' ') : ''
 
                         return (
                           <tr key={rowKey} style={{ borderBottom: '1px solid var(--border)' }} className={metrics.ssCharged ? 'billing-detail-ss-row' : undefined}>
@@ -893,7 +956,7 @@ export default function BillingView() {
                               }
 
                               if (column.id === 'itemSkus') {
-                                const skuText = row.itemSkus || lineTypeLabel
+                                const skuText = row.itemSkus || ''
                                 return (
                                   <td key={column.id} style={{ padding: '5px 10px', fontFamily: 'monospace', fontSize: 10.5, color: 'var(--text2)' }}>
                                     {skuText ? skuText.split(' | ').map((sku, index) => (
@@ -978,25 +1041,13 @@ export default function BillingView() {
 
                       <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface2)' }}>
                         {visibleDetailColumns.map((column) => {
-                          const totals = detailState.rows.reduce((acc, row) => {
-                            const metrics = computeBillingDetailMetrics(row)
-                            return {
-                              pickPack: acc.pickPack + metrics.pickPack,
-                              additional: acc.additional + metrics.additional,
-                              packageCost: acc.packageCost + metrics.packageCost,
-                              shipping: acc.shipping + metrics.shipping,
-                              total: acc.total + metrics.total,
-                              margin: acc.margin + metrics.margin,
-                            }
-                          }, { pickPack: 0, additional: 0, packageCost: 0, shipping: 0, total: 0, margin: 0 })
-
                           if (column.id === 'orderNumber') return <td key={column.id} style={{ padding: '6px 10px', fontWeight: 700 }}>Total</td>
-                          if (column.id === 'pickpack') return <td key={column.id} style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700 }}>{formatBillingMoney(totals.pickPack)}</td>
-                          if (column.id === 'additional') return <td key={column.id} style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700 }}>{formatBillingMoney(totals.additional, { dashIfZero: true })}</td>
-                          if (column.id === 'packageCost') return <td key={column.id} style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700 }}>{formatBillingMoney(totals.packageCost, { dashIfZero: true })}</td>
-                          if (column.id === 'shipping') return <td key={column.id} style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700 }}>{formatBillingMoney(totals.shipping)}</td>
-                          if (column.id === 'total') return <td key={column.id} style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 800, color: 'var(--green)' }}>{formatBillingMoney(totals.total)}</td>
-                          if (column.id === 'margin') return <td key={column.id} style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700, color: marginColor(totals.margin) }}>${totals.margin.toFixed(2)}</td>
+                          if (column.id === 'pickpack') return <td key={column.id} style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700 }}>{formatBillingMoney(detailTotals.pickPack)}</td>
+                          if (column.id === 'additional') return <td key={column.id} style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700 }}>{formatBillingMoney(detailTotals.additional, { dashIfZero: true })}</td>
+                          if (column.id === 'packageCost') return <td key={column.id} style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700 }}>{formatBillingMoney(detailTotals.packageCost, { dashIfZero: true })}</td>
+                          if (column.id === 'shipping') return <td key={column.id} style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700 }}>{formatBillingMoney(detailTotals.shipping)}</td>
+                          if (column.id === 'total') return <td key={column.id} style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 800, color: 'var(--green)' }}>{formatBillingMoney(detailTotals.total)}</td>
+                          if (column.id === 'margin') return <td key={column.id} style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700, color: marginColor(detailTotals.margin) }}>${detailTotals.margin.toFixed(2)}</td>
                           return <td key={column.id} />
                         })}
                       </tr>
@@ -1005,6 +1056,21 @@ export default function BillingView() {
                 </tbody>
               </table>
             </div>
+            {!detailState.loading && !detailState.error && detailState.rows.length > 0 ? (
+              <AnalysisPagination
+                page={detailPage}
+                pageSize={detailPageSize}
+                pageSizeOptions={BILLING_DETAIL_PAGE_SIZE_OPTIONS}
+                totalItems={detailState.rows.length}
+                onPageChange={setDetailPage}
+                onPageSizeChange={(nextSize) => {
+                  setDetailPageSize(nextSize)
+                  setDetailPage(1)
+                }}
+                unitLabel="line items"
+                ariaLabel="Billing line items table pagination"
+              />
+            ) : null}
           </div>
         ) : null}
       </div>

@@ -284,7 +284,19 @@ app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
       coalesce(sum(case when b.line_type = 'storage' then b.total_cost else 0 end), 0)::text as storage_amt,
       sum(b.total_cost)::text as row_total,
       (
-        select string_agg(item->>'sku', ', ')
+        select string_agg(
+          coalesce(
+            nullif(item->>'sku', ''),
+            nullif(item->>'fulfillmentSku', ''),
+            nullif(item->>'warehouseLocation', ''),
+            case
+              when nullif(item->>'productId', '') is not null
+                then item->>'productId'
+              else null
+            end
+          ),
+          ', '
+        )
         from orders o2, jsonb_array_elements(o2.items) item
         where o2.id = b.order_id
           and coalesce((item->>'adjustment')::boolean, false) = false
