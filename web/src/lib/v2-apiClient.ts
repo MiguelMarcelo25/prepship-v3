@@ -727,6 +727,7 @@ export const apiClient = {
             const client = clientsById.get(store?.clientId);
             return {
               storeId: store?.storeId,
+              clientId: store?.clientId,
               storeName: store?.clientName ?? client?.name ?? `Store ${store?.storeId}`,
               active: store?.active ?? true,
               isTest: client?.isTest === true,
@@ -747,6 +748,7 @@ export const apiClient = {
           })
           .map((c: any) => ({
             storeId: c?.id,
+            clientId: c?.id,
             storeName: c?.name ?? `Client ${c?.id}`,
             active: true,
             isTest: c?.isTest === true,

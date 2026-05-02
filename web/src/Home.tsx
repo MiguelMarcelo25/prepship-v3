@@ -592,6 +592,7 @@ export default function Home() {
             columnMenuRequestId={columnMenuRequestId}
             labelsActionRequestId={labelsActionRequestId}
             queueToggleRequestId={queueToggleRequestId}
+            stores={sidebarStores}
             onQueueStateChange={({ count, isOpen }) => {
               setQueueBadgeCount(count)
               setQueueOpen(isOpen)

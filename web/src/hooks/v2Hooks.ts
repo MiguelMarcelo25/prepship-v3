@@ -20,6 +20,9 @@ export type OrderSummaryDto = any;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type OrderFullDto = any;
 
+const ORDERS_STALE_MS = 30_000;
+const ORDERS_CACHE_MS = 10 * 60_000;
+
 // ──────────────────────────────────────────────────────────────────
 // useOrders
 // ──────────────────────────────────────────────────────────────────
@@ -494,6 +497,14 @@ export function useOrders(
           dateTo: isoTo,
         })}`
       ),
+    staleTime: ORDERS_STALE_MS,
+    gcTime: ORDERS_CACHE_MS,
+    refetchOnWindowFocus: false,
+    retry: 1,
+    placeholderData: (previousData, previousQuery) => {
+      const previousKey = previousQuery?.queryKey as unknown[] | undefined;
+      return previousKey?.[1] === status ? previousData : undefined;
+    },
   });
 
   // Memoize so the transform only runs when the underlying fetch data changes.
@@ -520,13 +531,16 @@ export function useOrders(
     setCurrentPage(pageNum);
   }, []);
 
+  const hasOrdersPayload = query.data != null;
+  const backgroundFetching = query.isFetching && hasOrdersPayload;
+
   return {
     orders: transformedOrders,
     total: query.data?.pagination.total ?? 0,
     pages: query.data?.pagination.totalPages ?? 0,
     currentPage,
-    loading: query.isLoading,
-    refreshing,
+    loading: query.isLoading && !hasOrdersPayload,
+    refreshing: refreshing || backgroundFetching,
     error: (query.error as Error | null) ?? null,
     refetch,
     goToPage,

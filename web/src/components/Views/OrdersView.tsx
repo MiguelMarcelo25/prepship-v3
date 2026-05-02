@@ -256,6 +256,7 @@ interface OrdersViewProps {
   onQueueStateChange?: (state: { count: number; isOpen: boolean }) => void
   refreshVersion?: number
   showTestOrders?: boolean
+  stores?: Array<{ storeId?: number | null; clientId?: number | null }>
 }
 
 interface TableColumn {
@@ -1584,6 +1585,7 @@ export default function OrdersView({
   onQueueStateChange,
   refreshVersion = 0,
   showTestOrders = true,
+  stores = [],
 }: OrdersViewProps) {
   const toastContext = useContext(ToastContext)
   const [page, setPage] = useState(1)
@@ -1613,6 +1615,7 @@ export default function OrdersView({
   const [queueOpen, setQueueOpen] = useState(false)
   const [queueHistoryVisible, setQueueHistoryVisible] = useState(false)
   const [queueEntries, setQueueEntries] = useState<PrintQueueEntryDto[]>([])
+  const [queueEntriesClientId, setQueueEntriesClientId] = useState<number | null>(null)
   const [queueLoading, setQueueLoading] = useState(false)
   const [queueActionProgress, setQueueActionProgress] = useState<QueueActionProgress | null>(null)
   const [queuePrintMessage, setQueuePrintMessage] = useState<string | null>(null)
@@ -1918,12 +1921,19 @@ export default function OrdersView({
   const dailyStatsFromLabel = dailyStats?.window.fromLabel || dailyStats?.window.from || ''
   const dailyStatsToLabel = dailyStats?.window.toLabel || dailyStats?.window.to || ''
   const panelDetail = panelOrderId != null ? orderDetailsById.get(panelOrderId) ?? null : null
+  const activeStoreClientId = useMemo(() => {
+    if (activeStore == null) return null
+    if (activeStore < 0) return Math.abs(activeStore)
+    const store = stores.find((row) => row.storeId === activeStore)
+    return typeof store?.clientId === 'number' ? store.clientId : null
+  }, [activeStore, stores])
   const queueClientId = useMemo(() => {
     const selected = orders.find((order) => selectedIdSet.has(order.orderId) && order.clientId != null)
     if (selected?.clientId != null) return selected.clientId
     if (panelOrder?.clientId != null) return panelOrder.clientId
+    if (activeStoreClientId != null) return activeStoreClientId
     return orders.find((order) => order.clientId != null)?.clientId ?? null
-  }, [orders, panelOrder, selectedIdSet])
+  }, [activeStoreClientId, orders, panelOrder, selectedIdSet])
 
   useEffect(() => {
     setPage(1)
@@ -2170,7 +2180,11 @@ export default function OrdersView({
   }, [queueEntries, queueOpen, onQueueStateChange])
 
   useEffect(() => {
-    if (!queueOpen || queueClientId == null) return
+    if (!queueOpen) return
+    if (queueClientId == null) {
+      setQueueLoading(false)
+      return
+    }
 
     let cancelled = false
 
@@ -2178,7 +2192,10 @@ export default function OrdersView({
       setQueueLoading(true)
       try {
         const payload = await apiClient.fetchQueue(queueClientId, queueHistoryVisible)
-        if (!cancelled) setQueueEntries(payload.queuedOrders)
+        if (!cancelled) {
+          setQueueEntries(payload.queuedOrders)
+          setQueueEntriesClientId(queueClientId)
+        }
       } catch (error) {
         if (!cancelled) {
           toastContext?.addToast(error instanceof Error ? error.message : 'Failed to load print queue', 'error')
@@ -2956,6 +2973,7 @@ export default function OrdersView({
     try {
       const payload = await apiClient.fetchQueue(queueClientId, queueHistoryVisible)
       setQueueEntries(payload.queuedOrders)
+      setQueueEntriesClientId(queueClientId)
       if (forceOpen) setQueueOpen(true)
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Failed to load print queue', 'error')
@@ -3036,6 +3054,7 @@ export default function OrdersView({
         try {
           const payload = await apiClient.fetchQueue(queueClient, queueHistoryVisible)
           setQueueEntries(payload.queuedOrders)
+          setQueueEntriesClientId(queueClient)
           setQueueOpen(true)
         } finally {
           setQueueLoading(false)
@@ -3917,6 +3936,7 @@ export default function OrdersView({
         try {
           const payload = await apiClient.fetchQueue(queueClient, queueHistoryVisible)
           setQueueEntries(payload.queuedOrders)
+          setQueueEntriesClientId(queueClient)
           setQueueOpen(true)
         } finally {
           setQueueLoading(false)
@@ -3980,19 +4000,21 @@ export default function OrdersView({
     window.open(`https://ship.shipstation.com/orders/${orderId}`, '_blank', 'noopener,noreferrer')
   }
 
+  const activeQueueEntries = queueEntriesClientId === queueClientId ? queueEntries : []
   const queuedEntries = useMemo(
-    () => queueEntries.filter((entry) => entry.status === 'queued'),
-    [queueEntries],
+    () => activeQueueEntries.filter((entry) => entry.status === 'queued'),
+    [activeQueueEntries],
   )
   const printedEntries = useMemo(
-    () => queueHistoryVisible ? queueEntries.filter((entry) => entry.status === 'printed') : [],
-    [queueEntries, queueHistoryVisible],
+    () => queueHistoryVisible ? activeQueueEntries.filter((entry) => entry.status === 'printed') : [],
+    [activeQueueEntries, queueHistoryVisible],
   )
   const queueGroups = useMemo<PrintQueueGroup[]>(
-    () => groupPrintQueueEntries(queueEntries),
-    [queueEntries],
+    () => groupPrintQueueEntries(activeQueueEntries),
+    [activeQueueEntries],
   )
   const queueCount = queuedEntries.length
+  const queueHasVisibleEntries = queueGroups.length > 0 || printedEntries.length > 0
   const queueActionProgressPct = queueActionProgress
     ? Math.round((queueActionProgress.completed / Math.max(queueActionProgress.total, 1)) * 100)
     : 0
@@ -5738,9 +5760,9 @@ export default function OrdersView({
             </div>
           ) : null}
           <div id="pq-order-list" style={{ overflowY: 'auto', overflowX: 'hidden', padding: 12, minHeight: 0 }}>
-            {queueLoading ? <div className="empty-state">Loading queue…</div> : null}
-            {!queueLoading && queueGroups.length === 0 ? <div className="pq-empty">📭 Queue is empty<br /><small>Click "Send to Queue" on any order with a label</small></div> : null}
-            {!queueLoading && queueGroups.map((group) => (
+            {queueLoading && !queueHasVisibleEntries ? <div className="empty-state">Loading queue…</div> : null}
+            {!queueLoading && !queueHasVisibleEntries ? <div className="pq-empty">📭 Queue is empty<br /><small>Click "Send to Queue" on any order with a label</small></div> : null}
+            {queueGroups.map((group) => (
               <div key={group.groupId} className="pq-group" style={{ border: '1px solid var(--border)', borderRadius: 8, marginBottom: 10, overflow: 'hidden' }}>
                 <div className="pq-group-header" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', background: 'var(--surface2)' }}>
                   <span className="pq-group-label" style={{ fontWeight: 700 }}>{group.label}{group.description ? ` — ${group.description}` : ''}</span>
