@@ -1,5 +1,11 @@
 import { createMiddleware } from 'hono/factory';
-import { supabaseAdmin } from '../lib/supabase';
+import {
+  createRemoteJWKSet,
+  decodeProtectedHeader,
+  jwtVerify,
+  type JWTPayload,
+} from 'jose';
+import { env } from '../lib/env';
 
 export type AuthVars = {
   userId: string;
@@ -13,6 +19,86 @@ export type AuthVars = {
 // anyway. The shipmentId is effectively unguessable (random 8-digit int).
 const AUTH_BYPASS_PREFIXES = ['/labels/mock/'];
 
+let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
+
+function getSupabaseJwks() {
+  if (!cachedJwks) {
+    const base = env.SUPABASE_URL.replace(/\/+$/, '');
+    cachedJwks = createRemoteJWKSet(
+      new URL(`${base}/auth/v1/.well-known/jwks.json`)
+    );
+  }
+  return cachedJwks;
+}
+
+function payloadToAuthVars(payload: JWTPayload): AuthVars | null {
+  if (typeof payload.sub !== 'string' || !payload.sub) return null;
+  const appMetadata =
+    payload.app_metadata &&
+    typeof payload.app_metadata === 'object' &&
+    !Array.isArray(payload.app_metadata)
+      ? (payload.app_metadata as Record<string, unknown>)
+      : null;
+  const email = typeof payload.email === 'string' ? payload.email : undefined;
+  const role =
+    typeof appMetadata?.role === 'string'
+      ? appMetadata.role
+      : typeof payload.role === 'string'
+        ? payload.role
+        : undefined;
+
+  return {
+    userId: payload.sub,
+    email,
+    role,
+  };
+}
+
+async function verifySupabaseJwt(token: string): Promise<AuthVars | null> {
+  const errors: string[] = [];
+  let protectedHeader: ReturnType<typeof decodeProtectedHeader>;
+  try {
+    protectedHeader = decodeProtectedHeader(token);
+  } catch (err) {
+    console.warn(
+      '[auth] Malformed Supabase JWT:',
+      err instanceof Error ? err.message : String(err)
+    );
+    return null;
+  }
+  const prefersHmac = protectedHeader.alg?.startsWith('HS') ?? false;
+
+  const verifyWithSecret = async () => {
+    const { payload } = await jwtVerify(
+      token,
+      new TextEncoder().encode(env.SUPABASE_JWT_SECRET)
+    );
+    return payloadToAuthVars(payload);
+  };
+
+  const verifyWithJwks = async () => {
+    const { payload } = await jwtVerify(token, getSupabaseJwks());
+    return payloadToAuthVars(payload);
+  };
+
+  const attempts = prefersHmac
+    ? [verifyWithSecret, verifyWithJwks]
+    : [verifyWithJwks, verifyWithSecret];
+
+  for (const attempt of attempts) {
+    try {
+      const authVars = await attempt();
+      if (authVars) return authVars;
+      errors.push('verified token missing subject');
+    } catch (err) {
+      errors.push(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  console.warn('[auth] Invalid Supabase JWT:', errors.join(' | '));
+  return null;
+}
+
 export const requireAuth = createMiddleware<{ Variables: AuthVars }>(
   async (c, next) => {
     if (AUTH_BYPASS_PREFIXES.some((p) => c.req.path.startsWith(p))) {
@@ -24,13 +110,13 @@ export const requireAuth = createMiddleware<{ Variables: AuthVars }>(
       return c.json({ error: 'Missing bearer token' }, 401);
     }
     const token = auth.slice(7).trim();
-    const { data, error } = await supabaseAdmin.auth.getUser(token);
-    if (error || !data.user) {
+    const authVars = await verifySupabaseJwt(token);
+    if (!authVars) {
       return c.json({ error: 'Invalid token' }, 401);
     }
-    c.set('userId', data.user.id);
-    c.set('email', data.user.email ?? undefined);
-    c.set('role', (data.user.app_metadata?.role as string | undefined) ?? undefined);
+    c.set('userId', authVars.userId);
+    c.set('email', authVars.email);
+    c.set('role', authVars.role);
     await next();
   }
 );
