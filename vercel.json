@@ -7,7 +7,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://prepshipv4-api.onrender.com/:path*"
+      "destination": "https://prepshipv4-api-l5xc.onrender.com/:path*"
     },
     {
       "source": "/aws-api/:path*",
