@@ -259,24 +259,28 @@ function transformOrderRowV4toV2(
   })();
 
   const weightOz =
+    toFiniteNumber(overrides?.rateWeightOz) ??
     toFiniteNumber(canonicalOrder?.weightOz) ??
     toFiniteNumber(canonicalWeight?.value) ??
     (typeof row.weightOz === 'number' ? row.weightOz : null);
-  const ovL = typeof overrides?.rateDimsL === 'number' ? (overrides.rateDimsL as number) : null;
-  const ovW = typeof overrides?.rateDimsW === 'number' ? (overrides.rateDimsW as number) : null;
-  const ovH = typeof overrides?.rateDimsH === 'number' ? (overrides.rateDimsH as number) : null;
+  const ovL = toFiniteNumber(overrides?.rateDimsL);
+  const ovW = toFiniteNumber(overrides?.rateDimsW);
+  const ovH = toFiniteNumber(overrides?.rateDimsH);
   const dimsL =
+    ovL ??
     toFiniteNumber(canonicalDimensions?.length) ??
     (typeof rawDims.length === 'number' ? (rawDims.length as number) : null) ??
-    ovL;
+    null;
   const dimsW =
+    ovW ??
     toFiniteNumber(canonicalDimensions?.width) ??
     (typeof rawDims.width === 'number' ? (rawDims.width as number) : null) ??
-    ovW;
+    null;
   const dimsH =
+    ovH ??
     toFiniteNumber(canonicalDimensions?.height) ??
     (typeof rawDims.height === 'number' ? (rawDims.height as number) : null) ??
-    ovH;
+    null;
 
   const orderTotalNum = (() => {
     const canonicalTotal = toFiniteNumber(canonicalTotals?.orderTotal);

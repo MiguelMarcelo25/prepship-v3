@@ -1149,28 +1149,31 @@ export const apiClient = {
   saveOrderDims(
     orderId: number,
     dims:
-      | { l: number; w: number; h: number; weightOz?: number }
-      | { length: number; width: number; height: number; weightOz?: number }
+      | { l?: number; w?: number; h?: number; weightOz?: number }
+      | { length?: number; width?: number; height?: number; weightOz?: number }
       | Record<string, unknown>
   ): Promise<any> {
     // v2-copied UI call sites send { length, width, height }; v4 accepts
     // { l, w, h }. Translate either shape to v4 so both work.
     const anyDims = dims as Record<string, unknown>;
-    const l = Number(anyDims.l ?? anyDims.length ?? 0);
-    const w = Number(anyDims.w ?? anyDims.width ?? 0);
-    const h = Number(anyDims.h ?? anyDims.height ?? 0);
+    const rawL = anyDims.l ?? anyDims.length;
+    const rawW = anyDims.w ?? anyDims.width;
+    const rawH = anyDims.h ?? anyDims.height;
+    const l = parseFiniteNumber(rawL);
+    const w = parseFiniteNumber(rawW);
+    const h = parseFiniteNumber(rawH);
     const weightOz =
-      anyDims.weightOz === undefined ? undefined : Number(anyDims.weightOz);
+      anyDims.weightOz === undefined ? undefined : parseFiniteNumber(anyDims.weightOz);
+    const payload: Record<string, number> = {};
+    if (rawL != null && l != null) payload.l = l;
+    if (rawW != null && w != null) payload.w = w;
+    if (rawH != null && h != null) payload.h = h;
+    if (weightOz !== undefined && weightOz != null) payload.weightOz = weightOz;
     return safe(
       'saveOrderDims',
       () =>
         api
-          .post<{ data: any }>(`/orders/${orderId}/save-dims`, {
-            l,
-            w,
-            h,
-            ...(weightOz !== undefined ? { weightOz } : {}),
-          })
+          .post<{ data: any }>(`/orders/${orderId}/save-dims`, payload)
           .then((r) => r.data),
       {}
     );

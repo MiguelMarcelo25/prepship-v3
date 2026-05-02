@@ -149,7 +149,7 @@ function normalizeListBestRate(value: unknown) {
     const bestRate = normalizeOrderBestRateDto(value);
     if (!bestRate) return null;
     const amount = bestRate.shipmentCost + bestRate.otherCost;
-    if (!(amount > 0)) return null;
+    if (!(amount > 0) && !(bestRate.carrierCode && bestRate.serviceCode)) return null;
     return {
       ...bestRate,
       amount,
@@ -257,12 +257,24 @@ function buildCanonicalOrderModel(
   const raw = recordOrNull(order.raw) ?? {};
   const rawShipTo = recordOrNull(raw.shipTo) ?? {};
   const rawDimensions = recordOrNull(raw.dimensions) ?? {};
+  const overrideDimensionLength = finiteNumberOrNull(overrides?.rateDimsL);
+  const overrideDimensionWidth = finiteNumberOrNull(overrides?.rateDimsW);
+  const overrideDimensionHeight = finiteNumberOrNull(overrides?.rateDimsH);
+  const rawDimensionLength = finiteNumberOrNull(rawDimensions.length);
+  const rawDimensionWidth = finiteNumberOrNull(rawDimensions.width);
+  const rawDimensionHeight = finiteNumberOrNull(rawDimensions.height);
+  const hasOverrideDimensions =
+    overrideDimensionLength != null ||
+    overrideDimensionWidth != null ||
+    overrideDimensionHeight != null;
 
-  const dimensionLength = finiteNumberOrNull(rawDimensions.length) ?? finiteNumberOrNull(overrides?.rateDimsL);
-  const dimensionWidth = finiteNumberOrNull(rawDimensions.width) ?? finiteNumberOrNull(overrides?.rateDimsW);
-  const dimensionHeight = finiteNumberOrNull(rawDimensions.height) ?? finiteNumberOrNull(overrides?.rateDimsH);
+  const dimensionLength = overrideDimensionLength ?? rawDimensionLength;
+  const dimensionWidth = overrideDimensionWidth ?? rawDimensionWidth;
+  const dimensionHeight = overrideDimensionHeight ?? rawDimensionHeight;
   const dimensionSource =
-    dimensionLength != null && dimensionWidth != null && dimensionHeight != null && rawDimensions.length != null
+    hasOverrideDimensions
+      ? sourceOf('local', 'order_overrides.rateDims*', 'PrepShip dimension override')
+      : dimensionLength != null && dimensionWidth != null && dimensionHeight != null && rawDimensions.length != null
       ? sourceOf('v1', 'orders.raw.dimensions', 'ShipStation v1 /orders.dimensions')
       : sourceOf('local', 'order_overrides.rateDims*', 'PrepShip dimension override fallback');
   const dimensionUnitsSource = stringOrNull(rawDimensions.units)
@@ -277,7 +289,8 @@ function buildCanonicalOrderModel(
           units: stringOrNull(rawDimensions.units) ?? 'inches',
         }
       : null;
-  const weightOz = finiteNumberOrNull(order.weightOz);
+  const overrideWeightOz = finiteNumberOrNull(overrides?.rateWeightOz);
+  const weightOz = overrideWeightOz ?? finiteNumberOrNull(order.weightOz);
   const orderId = finiteNumberOrNull(order.id);
   const clientId = finiteNumberOrNull(order.clientId);
   const storeId = finiteNumberOrNull(order.storeId);
@@ -321,9 +334,15 @@ function buildCanonicalOrderModel(
       ? sourceOf('local', 'order_overrides.residential', 'PrepShip user override')
       : sourceOf('v1', 'orders.raw.shipTo.residential', 'ShipStation v1 /orders.shipTo.residential'),
     'recipient.addressVerified': sourceOf('v1', 'orders.raw.shipTo.addressVerified', 'ShipStation v1 /orders.shipTo.addressVerified'),
-    weight: sourceOf('v1', 'orders.weight_oz', 'ShipStation v1 /orders.weight.value normalized to ounces'),
-    weightOz: sourceOf('v1', 'orders.weight_oz', 'ShipStation v1 /orders.weight.value normalized to ounces'),
-    'weight.value': sourceOf('v1', 'orders.weight_oz', 'ShipStation v1 /orders.weight.value normalized to ounces'),
+    weight: overrideWeightOz != null
+      ? sourceOf('local', 'order_overrides.rateWeightOz', 'PrepShip weight override')
+      : sourceOf('v1', 'orders.weight_oz', 'ShipStation v1 /orders.weight.value normalized to ounces'),
+    weightOz: overrideWeightOz != null
+      ? sourceOf('local', 'order_overrides.rateWeightOz', 'PrepShip weight override')
+      : sourceOf('v1', 'orders.weight_oz', 'ShipStation v1 /orders.weight.value normalized to ounces'),
+    'weight.value': overrideWeightOz != null
+      ? sourceOf('local', 'order_overrides.rateWeightOz', 'PrepShip weight override')
+      : sourceOf('v1', 'orders.weight_oz', 'ShipStation v1 /orders.weight.value normalized to ounces'),
     'weight.units': sourceOf('derived', 'canonical weight.units', 'Normalized to ounces for canonical rows'),
     dimensions: dimensionSource,
     'dimensions.length': dimensionSource,
@@ -1611,11 +1630,18 @@ app.post(
 );
 
 const saveDimsBody = z.object({
-  l: z.number().nonnegative(),
-  w: z.number().nonnegative(),
-  h: z.number().nonnegative(),
+  l: z.number().nonnegative().optional(),
+  w: z.number().nonnegative().optional(),
+  h: z.number().nonnegative().optional(),
   weightOz: z.number().nonnegative().optional(),
-});
+}).refine(
+  (body) =>
+    body.l !== undefined ||
+    body.w !== undefined ||
+    body.h !== undefined ||
+    body.weightOz !== undefined,
+  { message: 'At least one dimension or weight is required' },
+);
 
 app.post(
   '/:id{[0-9]+}/save-dims',
@@ -1631,11 +1657,10 @@ app.post(
       .limit(1);
     if (!existing) return c.json({ error: 'Order not found' }, 404);
 
-    const patch: Record<string, unknown> = {
-      rateDimsL: body.l,
-      rateDimsW: body.w,
-      rateDimsH: body.h,
-    };
+    const patch: Record<string, unknown> = {};
+    if (body.l !== undefined) patch.rateDimsL = body.l;
+    if (body.w !== undefined) patch.rateDimsW = body.w;
+    if (body.h !== undefined) patch.rateDimsH = body.h;
     if (body.weightOz !== undefined) patch.rateWeightOz = body.weightOz;
 
     const [row] = await db

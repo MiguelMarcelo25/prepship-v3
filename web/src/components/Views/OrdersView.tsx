@@ -61,6 +61,21 @@ interface QueueActionProgress {
   failed: number
 }
 
+interface PanelFormState {
+  locationId: string
+  shipAccountId: string
+  serviceCode: string
+  weightLb: string
+  weightOz: string
+  length: string
+  width: string
+  height: string
+  packageId: string
+  confirmation: string
+  insurance: string
+  insuranceValue: string
+}
+
 interface OrdersViewProps {
   currentStatus: OrderStatus
   searchQuery?: string
@@ -612,13 +627,16 @@ function isTestOrder(order: OrderSummaryDto, detail: OrderFullDto | null = null)
 }
 
 function getOrderWeightOz(order: OrderSummaryDto, detail: OrderFullDto | null) {
+  const savedWeightOz = order.weight?.value ?? 0
+  if (savedWeightOz > 0) return savedWeightOz
+
   if (isTestOrder(order, detail) && hasTestPackItem(order, detail)) {
     return getActiveItems(order, detail).reduce((sum, item) => {
       const sku = (item.sku ?? '').trim().toUpperCase()
       return sum + (sku === TEST_PACK_SKU ? (item.quantity || 1) * TEST_PACK_WEIGHT_OZ : 0)
     }, 0)
   }
-  return order.weight?.value ?? 0
+  return 0
 }
 
 function getPrimarySku(order: OrderSummaryDto, detail: OrderFullDto | null) {
@@ -694,10 +712,6 @@ function getAddressBlock(order: OrderSummaryDto, detail: OrderFullDto | null) {
 }
 
 function getDimensions(order: OrderSummaryDto, detail: OrderFullDto | null) {
-  if (isTestOrder(order, detail) && hasTestPackItem(order, detail)) {
-    return TEST_PACK_DIMS
-  }
-
   const canonicalDimensions = getCanonicalRecord(order, 'dimensions')
   const rawOrder = toRecord(detail?.raw) ?? toRecord(order.raw)
   const rawDims = toRecord(rawOrder?.dimensions)
@@ -706,7 +720,12 @@ function getDimensions(order: OrderSummaryDto, detail: OrderFullDto | null) {
   const width = toNumberValue(canonicalDimensions?.width) ?? order.rateDims?.width ?? toNumberValue(rawDims?.width) ?? 0
   const height = toNumberValue(canonicalDimensions?.height) ?? order.rateDims?.height ?? toNumberValue(rawDims?.height) ?? 0
 
-  if (!length || !width || !height) return null
+  if (!length || !width || !height) {
+    if (isTestOrder(order, detail) && hasTestPackItem(order, detail)) {
+      return TEST_PACK_DIMS
+    }
+    return null
+  }
 
   return {
     length,
@@ -902,11 +921,17 @@ function getBestRateBaseCost(order: OrderSummaryDto) {
   const canonicalAmount = getShippingNumber(order, 'bestRateAmount')
   if (canonicalAmount && canonicalAmount > 0) return canonicalAmount
 
-  const shipmentCost = typeof order.bestRate?.shipmentCost === 'number' ? order.bestRate.shipmentCost : 0
-  const otherCost = typeof order.bestRate?.otherCost === 'number' ? order.bestRate.otherCost : 0
-  const amount = typeof order.bestRate?.amount === 'number' ? order.bestRate.amount : 0
+  const hasShipmentCost = typeof order.bestRate?.shipmentCost === 'number'
+  const hasOtherCost = typeof order.bestRate?.otherCost === 'number'
+  const hasAmount = typeof order.bestRate?.amount === 'number'
+  const shipmentCost = hasShipmentCost ? order.bestRate!.shipmentCost as number : 0
+  const otherCost = hasOtherCost ? order.bestRate!.otherCost as number : 0
+  const amount = hasAmount ? order.bestRate!.amount as number : 0
   const total = shipmentCost + otherCost
-  return total > 0 ? total : amount || null
+  if (total > 0) return total
+  if (hasAmount) return amount
+  if (hasShipmentCost || hasOtherCost) return total
+  return null
 }
 
 function getBestRateShippingProviderId(order: OrderSummaryDto) {
@@ -1337,23 +1362,11 @@ export default function OrdersView({
   const [batchBusy, setBatchBusy] = useState(false)
   const [batchTestMode, setBatchTestMode] = useState(false)
   const [singleActionBusy, setSingleActionBusy] = useState(false)
+  const [shipmentDetailsSaving, setShipmentDetailsSaving] = useState(false)
   const queueActionProgressTimerRef = useRef<number | null>(null)
   const lastSelectionAnchorRef = useRef<number | null>(null)
   const shiftHeldOnMouseDownRef = useRef(false)
-  const [panelForm, setPanelForm] = useState<{
-    locationId: string
-    shipAccountId: string
-    serviceCode: string
-    weightLb: string
-    weightOz: string
-    length: string
-    width: string
-    height: string
-    packageId: string
-    confirmation: string
-    insurance: string
-    insuranceValue: string
-  }>({
+  const [panelForm, setPanelForm] = useState<PanelFormState>({
     locationId: '',
     shipAccountId: '',
     serviceCode: '',
@@ -1380,6 +1393,9 @@ export default function OrdersView({
   const selectAllCheckboxRef = useRef<HTMLInputElement | null>(null)
   const autoPackageDimsKeyRef = useRef<string | null>(null)
   const panelFormInitKeyRef = useRef<string | null>(null)
+  const shipmentAutoSaveTimerRef = useRef<number | null>(null)
+  const shipmentLastSavedKeyRef = useRef<string | null>(null)
+  const bestRateRefreshSeqRef = useRef(0)
 
   const clearQueueActionProgressTimer = () => {
     if (queueActionProgressTimerRef.current == null) return
@@ -1898,6 +1914,9 @@ export default function OrdersView({
   useEffect(() => {
     if (!panelOrder) {
       panelFormInitKeyRef.current = null
+      shipmentLastSavedKeyRef.current = null
+      bestRateRefreshSeqRef.current += 1
+      setPanelRateLoading(false)
       return
     }
 
@@ -1920,13 +1939,17 @@ export default function OrdersView({
         }
         const nextPackageId = getPanelPackageId(panelOrder, panelDetail, packages)
           || getMatchedPackageIdByDimensions(hasCompleteDims(currentDims) ? currentDims : dimensions, packages)
-        return nextPackageId ? { ...current, packageId: nextPackageId } : current
+        if (!nextPackageId) return current
+        const next = { ...current, packageId: nextPackageId }
+        shipmentLastSavedKeyRef.current = getShipmentDetailsKey(panelOrder.orderId, next)
+        return next
       })
       return
     }
 
     panelFormInitKeyRef.current = initKey
-    setPanelForm({
+    bestRateRefreshSeqRef.current += 1
+    const initialPanelForm: PanelFormState = {
       locationId: locationId != null ? String(locationId) : '',
       shipAccountId: panelIsTestOrder ? TEST_CARRIER_CODE : selectedAccountValue != null ? String(selectedAccountValue) : '',
       serviceCode: panelIsTestOrder ? TEST_SERVICE_CODE : getInitialPanelServiceCode(panelOrder, panelDetail),
@@ -1939,7 +1962,9 @@ export default function OrdersView({
       confirmation: getPanelConfirmation(panelOrder, panelDetail),
       insurance: insurance.type,
       insuranceValue: insurance.value != null ? String(insurance.value) : '',
-    })
+    }
+    shipmentLastSavedKeyRef.current = getShipmentDetailsKey(panelOrder.orderId, initialPanelForm)
+    setPanelForm(initialPanelForm)
     setPanelRatePreview([])
 
     const activeItems = getActiveItems(panelOrder, panelDetail).filter((item) => item.sku)
@@ -2012,6 +2037,50 @@ export default function OrdersView({
 
     return () => window.clearTimeout(timeout)
   }, [panelOrderId, panelOrder?.orderStatus, panelForm.length, panelForm.width, panelForm.height, packages, packagesLoaded])
+
+  useEffect(() => {
+    if (!panelOrder || panelOrder.orderStatus !== 'awaiting_shipment') return
+
+    const currentKey = getShipmentDetailsKey(panelOrder.orderId, panelForm)
+    if (!currentKey || currentKey === shipmentLastSavedKeyRef.current) return
+
+    const dims = getPanelDims()
+    const weightOz = getPanelWeightOz()
+    const hasWeightToSave = (panelForm.weightLb.trim() !== '' || panelForm.weightOz.trim() !== '') && weightOz > 0
+    const hasSomethingToSave = hasWeightToSave || hasCompleteDims(dims) || Boolean(panelForm.packageId)
+    if (!hasSomethingToSave) return
+
+    if (shipmentAutoSaveTimerRef.current != null) {
+      window.clearTimeout(shipmentAutoSaveTimerRef.current)
+    }
+
+    shipmentAutoSaveTimerRef.current = window.setTimeout(() => {
+      shipmentAutoSaveTimerRef.current = null
+      void persistShipmentDetails({
+        silent: true,
+        refreshBestRate: true,
+        skipIfUnchanged: true,
+      })
+    }, 750)
+
+    return () => {
+      if (shipmentAutoSaveTimerRef.current != null) {
+        window.clearTimeout(shipmentAutoSaveTimerRef.current)
+        shipmentAutoSaveTimerRef.current = null
+      }
+    }
+  }, [
+    panelOrderId,
+    panelOrder?.orderStatus,
+    panelForm.weightLb,
+    panelForm.weightOz,
+    panelForm.length,
+    panelForm.width,
+    panelForm.height,
+    panelForm.packageId,
+    panelDetail,
+    packages,
+  ])
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -2148,17 +2217,38 @@ export default function OrdersView({
     toastContext?.addToast(message, type)
   }
 
-  function getPanelWeightOz() {
-    const lb = Number.parseFloat(panelForm.weightLb) || 0
-    const oz = Number.parseFloat(panelForm.weightOz) || 0
+  function getPanelWeightOzFromForm(form: PanelFormState) {
+    const lb = Number.parseFloat(form.weightLb) || 0
+    const oz = Number.parseFloat(form.weightOz) || 0
     return (lb * 16) + oz
   }
 
-  function getPanelDims() {
-    const length = Number.parseFloat(panelForm.length) || 0
-    const width = Number.parseFloat(panelForm.width) || 0
-    const height = Number.parseFloat(panelForm.height) || 0
+  function getPanelDimsFromForm(form: PanelFormState) {
+    const length = Number.parseFloat(form.length) || 0
+    const width = Number.parseFloat(form.width) || 0
+    const height = Number.parseFloat(form.height) || 0
     return { length, width, height }
+  }
+
+  function getPanelWeightOz() {
+    return getPanelWeightOzFromForm(panelForm)
+  }
+
+  function getPanelDims() {
+    return getPanelDimsFromForm(panelForm)
+  }
+
+  function getShipmentDetailsKey(orderId: number | null | undefined, form: PanelFormState) {
+    if (orderId == null) return ''
+    const dims = getPanelDimsFromForm(form)
+    return [
+      orderId,
+      getPanelWeightOzFromForm(form).toFixed(3),
+      dims.length.toFixed(3),
+      dims.width.toFixed(3),
+      dims.height.toFixed(3),
+      form.packageId || '',
+    ].join(':')
   }
 
   function hasCompleteDims(dims: { length: number; width: number; height: number }) {
@@ -2592,14 +2682,15 @@ export default function OrdersView({
       return null
     }
 
-    const isTest = isTestOrder(order, orderDetailsById.get(order.orderId) ?? panelDetail)
+    const orderDetail = orderDetailsById.get(order.orderId) ?? panelDetail
+    const isTest = isTestOrder(order, orderDetail)
     const shippingProviderId = Number.parseInt(panelForm.shipAccountId, 10)
-    const weightOz = isTest ? getOrderWeightOz(order, orderDetailsById.get(order.orderId) ?? panelDetail) : getPanelWeightOz()
+    const weightOz = getPanelWeightOz() || getOrderWeightOz(order, orderDetail)
     const panelDims = getPanelDims()
-    const testDims = isTest ? getDimensions(order, orderDetailsById.get(order.orderId) ?? panelDetail) : null
-    const length = testDims?.length ?? panelDims.length
-    const width = testDims?.width ?? panelDims.width
-    const height = testDims?.height ?? panelDims.height
+    const savedDims = getDimensions(order, orderDetail)
+    const length = panelDims.length || savedDims?.length || 0
+    const width = panelDims.width || savedDims?.width || 0
+    const height = panelDims.height || savedDims?.height || 0
     const account = shippingAccounts.find((candidate) => candidate.shippingProviderId === shippingProviderId)
     if (!isTest && (!shippingProviderId || !account)) {
       showToast('Select a carrier account', 'error')
@@ -2615,7 +2706,7 @@ export default function OrdersView({
     }
 
     const location = locations.find((candidate) => String(candidate.locationId) === panelForm.locationId) ?? null
-    const shipTo = getShipTo(order, panelDetail)
+    const shipTo = getShipTo(order, orderDetail)
     const selectedPackage = packages.find((candidate) => String(candidate.packageId) === panelForm.packageId)
 
     const payload: CreateLabelRequestDto = {
@@ -2720,6 +2811,185 @@ export default function OrdersView({
     }
   }
 
+  function getRateTotalForSort(rate: Record<string, unknown>) {
+    const shipmentCost = toNumberValue(rate.shipmentCost) ?? toNumberValue(rate.amount) ?? 0
+    const otherCost = toNumberValue(rate.otherCost) ?? 0
+    return shipmentCost + otherCost
+  }
+
+  function pickBestPanelRate(rates: Array<Record<string, unknown>>) {
+    return [...rates]
+      .filter((rate) => {
+        const serviceCode = toStringValue(rate.serviceCode)
+        const carrierCode = toStringValue(rate.carrierCode)
+        const hasAmount = toNumberValue(rate.shipmentCost) != null || toNumberValue(rate.amount) != null
+        return Boolean(serviceCode && carrierCode && hasAmount)
+      })
+      .sort((left, right) => getRateTotalForSort(left) - getRateTotalForSort(right))[0] ?? null
+  }
+
+  async function refreshPanelBestRate(options: {
+    order: OrderSummaryDto
+    dims: { length: number; width: number; height: number }
+    weightOz: number
+    silent?: boolean
+  }) {
+    const { order, dims, weightOz, silent = false } = options
+    if (!hasCompleteDims(dims) || weightOz <= 0) return null
+    const orderDetail = orderDetailsById.get(order.orderId) ?? panelDetail
+
+    if (isTestOrder(order, orderDetail)) {
+      const testRate = {
+        carrierCode: TEST_CARRIER_CODE,
+        serviceCode: TEST_SERVICE_CODE,
+        serviceName: 'Test Mock Service',
+        carrierNickname: TEST_SHIPPING_ACCOUNT_LABEL,
+        shippingProviderId: null,
+        amount: 0,
+        shipmentCost: 0,
+        otherCost: 0,
+      }
+      setPanelRatePreview([testRate])
+      setPanelForm((current) => ({
+        ...current,
+        shipAccountId: TEST_CARRIER_CODE,
+        serviceCode: TEST_SERVICE_CODE,
+      }))
+      await apiClient.saveOrderBestRate(order.orderId, testRate, `${dims.length || 0}x${dims.width || 0}x${dims.height || 0}`)
+      return testRate
+    }
+
+    const shipTo = getShipTo(order, orderDetail)
+    if (!shipTo.postalCode) return null
+
+    const runId = bestRateRefreshSeqRef.current + 1
+    bestRateRefreshSeqRef.current = runId
+    setPanelRateLoading(true)
+    setPanelRatePreview([])
+
+    try {
+      const rates = await apiClient.fetchRates({
+        weightOz,
+        toZip: shipTo.postalCode,
+        toCountry: shipTo.country ?? 'US',
+        toState: shipTo.state ?? undefined,
+        toCity: shipTo.city ?? undefined,
+        dimsL: dims.length,
+        dimsW: dims.width,
+        dimsH: dims.height,
+        residential: Boolean(order.residential ?? order.sourceResidential),
+        storeId: order.storeId,
+        clientId: order.clientId,
+        forceRefresh: true,
+      }) as Array<Record<string, unknown>>
+
+      if (bestRateRefreshSeqRef.current !== runId) return null
+
+      const bestRate = pickBestPanelRate(rates)
+      const dimsLabel = `${dims.length || 0}x${dims.width || 0}x${dims.height || 0}`
+
+      if (bestRate) {
+        setPanelRatePreview([bestRate])
+        const shippingProviderId = toProviderAccountId(bestRate.shippingProviderId)
+        const serviceCode = toStringValue(bestRate.serviceCode)
+        if (shippingProviderId != null && serviceCode) {
+          setPanelForm((current) => ({
+            ...current,
+            shipAccountId: String(shippingProviderId),
+            serviceCode,
+          }))
+          void apiClient.setOrderSelectedPid(order.orderId, shippingProviderId)
+        }
+        await apiClient.saveOrderBestRate(order.orderId, bestRate, dimsLabel)
+        return bestRate
+      }
+
+      await apiClient.saveOrderBestRate(order.orderId, null, dimsLabel)
+      setPanelRatePreview([])
+      return null
+    } catch (error) {
+      if (!silent) showToast(error instanceof Error ? error.message : 'Failed to refresh best rate', 'error')
+      return null
+    } finally {
+      if (bestRateRefreshSeqRef.current === runId) setPanelRateLoading(false)
+    }
+  }
+
+  async function persistShipmentDetails(options: {
+    silent?: boolean
+    refreshBestRate?: boolean
+    skipIfUnchanged?: boolean
+  } = {}) {
+    if (!panelOrder) return false
+
+    const { silent = false, refreshBestRate = true, skipIfUnchanged = false } = options
+    const currentKey = getShipmentDetailsKey(panelOrder.orderId, panelForm)
+    if (skipIfUnchanged && currentKey === shipmentLastSavedKeyRef.current) return false
+
+    const weightOz = getPanelWeightOz()
+    const dims = getPanelDims()
+    const selectedPackage = packages.find((candidate) => getPackageIdentifier(candidate) === panelForm.packageId)
+    const dimsToSave = hasCompleteDims(dims) ? dims : getPackageDims(selectedPackage)
+    const hasWeightInput = panelForm.weightLb.trim() !== '' || panelForm.weightOz.trim() !== ''
+    const hasWeightToSave = hasWeightInput && weightOz > 0
+
+    if (!hasWeightToSave && !dimsToSave && !panelForm.packageId) {
+      if (!silent) showToast('Enter weight, size, or package first', 'error')
+      return false
+    }
+
+    setShipmentDetailsSaving(true)
+    try {
+      let savedPackageId = panelForm.packageId
+      if (hasCompleteDims(dims)) {
+        savedPackageId = await ensurePanelPackageForDims({ saveSku: false, silent: true }) || panelForm.packageId
+      } else {
+        await apiClient.setOrderSelectedPackageId(
+          panelOrder.orderId,
+          panelForm.packageId ? Number.parseInt(panelForm.packageId, 10) : null,
+        )
+      }
+
+      const payload: Record<string, number> = {}
+      if (dimsToSave) {
+        payload.length = dimsToSave.length
+        payload.width = dimsToSave.width
+        payload.height = dimsToSave.height
+      }
+      if (hasWeightToSave) payload.weightOz = weightOz
+
+      if (Object.keys(payload).length > 0) {
+        await apiClient.saveOrderDims(panelOrder.orderId, payload)
+      }
+
+      if (savedPackageId && savedPackageId !== panelForm.packageId) {
+        setPanelForm((current) => ({ ...current, packageId: savedPackageId }))
+      }
+
+      shipmentLastSavedKeyRef.current = getShipmentDetailsKey(panelOrder.orderId, {
+        ...panelForm,
+        packageId: savedPackageId || panelForm.packageId,
+      })
+
+      if (refreshBestRate && dimsToSave && hasWeightToSave) {
+        await refreshPanelBestRate({ order: panelOrder, dims: dimsToSave, weightOz, silent })
+      }
+
+      await refetchOrders()
+      if (!silent) showToast('Shipment details saved', 'success')
+      return true
+    } catch (error) {
+      if (!silent) showToast(error instanceof Error ? error.message : 'Failed to save shipment details', 'error')
+      return false
+    } finally {
+      setShipmentDetailsSaving(false)
+    }
+  }
+
+  async function saveShipmentDetails() {
+    await persistShipmentDetails({ silent: false, refreshBestRate: true })
+  }
+
   async function toggleResidential() {
     if (!panelOrder) return
     const next = panelOrder.residential == null ? true : panelOrder.residential ? false : null
@@ -2761,17 +3031,25 @@ export default function OrdersView({
   async function openRateBrowser() {
     if (!panelOrder) return
     if (isTestOrder(panelOrder, panelDetail)) {
-      setPanelRatePreview([{
-        carrierCode: TEST_CARRIER_CODE,
-        serviceCode: TEST_SERVICE_CODE,
-        serviceName: 'Test Mock Service',
-        carrierNickname: TEST_SHIPPING_ACCOUNT_LABEL,
-        shippingProviderId: null,
-        amount: 0,
-        shipmentCost: 0,
-        otherCost: 0,
-      }])
-      showToast('Test orders use a $0 mock rate only', 'info')
+      const weightOz = getPanelWeightOz() || getOrderWeightOz(panelOrder, panelDetail)
+      const panelDims = getPanelDims()
+      const selectedPackage = packages.find((candidate) => getPackageIdentifier(candidate) === panelForm.packageId)
+      const dims = hasCompleteDims(panelDims)
+        ? panelDims
+        : getPackageDims(selectedPackage) ?? getDimensions(panelOrder, panelDetail)
+
+      if (!weightOz) {
+        showToast('Enter shipment weight', 'error')
+        return
+      }
+      if (!dims || !hasCompleteDims(dims)) {
+        showToast('Enter shipment size', 'error')
+        return
+      }
+
+      await refreshPanelBestRate({ order: panelOrder, dims, weightOz, silent: false })
+      await refetchOrders()
+      showToast('Test mock rate refreshed', 'success')
       return
     }
 
@@ -2946,15 +3224,14 @@ export default function OrdersView({
       // forces a VOID mock label regardless, so we just need to reach the
       // endpoint with a serviceCode + carrierCode. Use the order's stored
       // defaults when no rate has been shopped.
-      const isTestOrder =
-        typeof order.clientId === 'number' && TEST_CLIENT_IDS.has(order.clientId)
-      const effectiveServiceCode = serviceCode ?? (isTestOrder ? 'usps_first_class_mail' : null)
-      const effectiveCarrierCode = carrierCode ?? (isTestOrder ? 'stamps_com' : null)
+      const orderIsTest = isTestOrder(order, orderDetailsById.get(order.orderId) ?? null)
+      const effectiveServiceCode = serviceCode ?? (orderIsTest ? TEST_SERVICE_CODE : null)
+      const effectiveCarrierCode = carrierCode ?? (orderIsTest ? TEST_CARRIER_CODE : null)
 
       // Real-postage path still requires shippingProviderId. For test orders
       // the backend never makes that call, so we omit the field entirely
       // rather than try to sneak a 0 past Zod's .positive() validator.
-      if (!isTestOrder && shippingProviderId == null) {
+      if (!orderIsTest && shippingProviderId == null) {
         failed += 1
         if (mode === 'queue') advanceQueueActionProgress(1)
         return
@@ -2985,7 +3262,7 @@ export default function OrdersView({
           // no signature tracking and different carrier billing vs v2.
           // Single-order path at line ~1309 already does this conversion.
           confirmation: 'delivery',
-          testLabel: batchTestMode || isTestOrder,
+          testLabel: batchTestMode || orderIsTest,
         }
         if (shippingProviderId != null) {
           payload.shippingProviderId = shippingProviderId
@@ -4039,8 +4316,22 @@ export default function OrdersView({
               </div>
 
               {shipped ? null : (
-                <div style={{ padding: '4px 0' }}>
+                <div style={{ padding: '4px 0', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                   <button className="btn btn-primary btn-sm" type="button" style={{ fontSize: 11.5, gap: 4 }} onClick={() => void openRateBrowser()}>🔍 Browse Rates</button>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    type="button"
+                    style={{
+                      fontSize: 11.5,
+                      gap: 4,
+                      borderColor: 'var(--green-border)',
+                      color: 'var(--green-dark)',
+                    }}
+                    onClick={() => void saveShipmentDetails()}
+                    disabled={shipmentDetailsSaving}
+                  >
+                    {shipmentDetailsSaving ? 'Saving...' : 'Save'}
+                  </button>
                 </div>
               )}
 
