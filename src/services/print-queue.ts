@@ -75,6 +75,7 @@ export type QueueSendJob = {
 
 const mergeJobs = new Map<string, MergeJob>();
 const queueSendJobs = new Map<string, QueueSendJob>();
+const QUEUE_SEND_ORDER_TIMEOUT_MS = 30_000;
 
 function cleanOldJobs() {
   const cutoff = Date.now() - 30 * 60 * 1000;
@@ -120,6 +121,59 @@ function getExistingLabelUrl(err: unknown): string | null {
   const details = (err as { details?: Record<string, unknown> })?.details;
   const labelUrl = details?.labelUrl;
   return typeof labelUrl === 'string' && labelUrl ? labelUrl : null;
+}
+
+function timeoutAfter(ms: number, message: string): Promise<never> {
+  return new Promise((_, reject) => {
+    setTimeout(() => reject(new Error(message)), ms);
+  });
+}
+
+async function processQueueSendOrder(
+  order: QueueSendOrderInput
+): Promise<QueueSendJobResult> {
+  let labelUrl = order.labelUrl ?? null;
+  let trackingNumber: string | null = null;
+
+  if (!labelUrl) {
+    if (!order.label) throw new Error('Missing label payload');
+    try {
+      const created = await createLabelV2({
+        ...order.label,
+        orderId: order.orderId,
+        orderNumber: order.orderNumber ?? order.label.orderNumber,
+      });
+      labelUrl = created.labelUrl;
+      trackingNumber = created.trackingNumber;
+    } catch (err) {
+      const existingLabelUrl = getExistingLabelUrl(err);
+      if (!existingLabelUrl) throw err;
+      labelUrl = existingLabelUrl;
+    }
+  }
+
+  if (!labelUrl) throw new Error('Label was created without a queueable URL');
+
+  const { entry, alreadyQueued } = await addToQueue({
+    clientId: order.clientId,
+    orderId: String(order.orderId),
+    orderNumber: order.orderNumber ?? null,
+    labelUrl,
+    skuGroupId: order.skuGroupId,
+    primarySku: order.primarySku ?? null,
+    itemDescription: order.itemDescription ?? null,
+    orderQty: order.orderQty ?? 1,
+    multiSkuData: order.multiSkuData ?? null,
+  });
+
+  return {
+    orderId: order.orderId,
+    success: true,
+    queueEntryId: entry.id,
+    alreadyQueued,
+    labelUrl,
+    trackingNumber,
+  };
 }
 
 // ─── CRUD ─────────────────────────────────────────────────────────────
@@ -256,51 +310,18 @@ async function runQueueSendJob(
     await withConcurrency(
       orders,
       async (order) => {
-        let labelUrl = order.labelUrl ?? null;
-        let trackingNumber: string | null = null;
-
         try {
-          if (!labelUrl) {
-            if (!order.label) throw new Error('Missing label payload');
-            try {
-              const created = await createLabelV2({
-                ...order.label,
-                orderId: order.orderId,
-                orderNumber: order.orderNumber ?? order.label.orderNumber,
-              });
-              labelUrl = created.labelUrl;
-              trackingNumber = created.trackingNumber;
-            } catch (err) {
-              const existingLabelUrl = getExistingLabelUrl(err);
-              if (!existingLabelUrl) throw err;
-              labelUrl = existingLabelUrl;
-            }
-          }
-
-          if (!labelUrl) throw new Error('Label was created without a queueable URL');
-
-          const { entry, alreadyQueued } = await addToQueue({
-            clientId: order.clientId,
-            orderId: String(order.orderId),
-            orderNumber: order.orderNumber ?? null,
-            labelUrl,
-            skuGroupId: order.skuGroupId,
-            primarySku: order.primarySku ?? null,
-            itemDescription: order.itemDescription ?? null,
-            orderQty: order.orderQty ?? 1,
-            multiSkuData: order.multiSkuData ?? null,
-          });
+          const result = await Promise.race([
+            processQueueSendOrder(order),
+            timeoutAfter(
+              QUEUE_SEND_ORDER_TIMEOUT_MS,
+              `Timed out while sending order ${order.orderNumber ?? order.orderId} to queue`
+            ),
+          ]);
 
           job.queued += 1;
-          job.queuedEntryIds.push(entry.id);
-          job.results.push({
-            orderId: order.orderId,
-            success: true,
-            queueEntryId: entry.id,
-            alreadyQueued,
-            labelUrl,
-            trackingNumber,
-          });
+          if (result.queueEntryId) job.queuedEntryIds.push(result.queueEntryId);
+          job.results.push(result);
         } catch (err) {
           job.failed += 1;
           job.results.push({
@@ -316,6 +337,18 @@ async function runQueueSendJob(
       concurrency
     );
 
+    const seenOrderIds = new Set(job.results.map((result) => result.orderId));
+    for (const order of orders) {
+      if (seenOrderIds.has(order.orderId)) continue;
+      job.failed += 1;
+      job.current += 1;
+      job.results.push({
+        orderId: order.orderId,
+        success: false,
+        error: 'Queue send did not report a result',
+      });
+    }
+    if (job.current > job.total) job.current = job.total;
     job.status = 'done';
     updateQueueSendProgress(job);
   } catch (err) {
