@@ -31,7 +31,7 @@ jobs:
       - name: Hit Render sync endpoint
         env:
           CRON_SECRET: ${{ secrets.CRON_SECRET }}
-          API_URL: https://prepshipv4-api.onrender.com
+          API_URL: ${{ vars.SYNC_API_URL || 'https://prepshipv4-api-l5xc.onrender.com' }}
           MODE: ${{ github.event.inputs.mode || 'all' }}
           SINCE_DAYS: ${{ github.event.inputs.since_days || '0' }}
         run: |
