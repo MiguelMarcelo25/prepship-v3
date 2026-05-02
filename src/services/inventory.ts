@@ -5,10 +5,11 @@ import { inventory, inventoryLedger } from '../db/schema/inventory';
 export type StockMovement = {
   inventoryId: number;
   qty: number;
-  type: 'receive' | 'adjust' | 'pick' | 'return';
+  type: 'receive' | 'adjust' | 'pick' | 'ship' | 'return' | 'damage';
   orderId?: number;
   note?: string;
   createdBy?: string;
+  createdAt?: Date;
 };
 
 export async function applyMovement(move: StockMovement) {
@@ -42,6 +43,7 @@ export async function applyMovement(move: StockMovement) {
         orderId: move.orderId ?? null,
         note: move.note ?? null,
         createdBy: move.createdBy ?? null,
+        createdAt: move.createdAt ?? new Date(),
       })
       .returning();
 

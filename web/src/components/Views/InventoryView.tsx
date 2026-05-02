@@ -354,6 +354,16 @@ export default function InventoryView() {
     }
     return nextMap
   }, [stores])
+  const rateSourceOptions = useMemo(() => {
+    const currentClientId = Number.parseInt(clientForm.clientId, 10)
+    const selectedRateSourceId = Number.parseInt(clientForm.rateSourceClientId, 10)
+    return clients
+      .filter((client) => {
+        if (Number.isFinite(currentClientId) && client.clientId === currentClientId) return false
+        return client.hasOwnAccount || client.clientId === selectedRateSourceId
+      })
+      .sort((left, right) => left.name.localeCompare(right.name))
+  }, [clientForm.clientId, clientForm.rateSourceClientId, clients])
 
   useEffect(() => {
     let active = true
@@ -456,6 +466,7 @@ export default function InventoryView() {
         const nextMap: Record<string, ReceiveSkuLookup> = {}
         for (const row of clientRows) {
           nextMap[row.sku] = {
+            invSkuId: row.id,
             name: row.name || '',
             unitsPerPack: row.units_per_pack || 1,
           }
@@ -731,7 +742,7 @@ export default function InventoryView() {
       return
     }
 
-    const itemsToReceive = buildReceiveItems(receiveRows)
+    const itemsToReceive = buildReceiveItems(receiveRows, receiveSkuMap)
     if (!itemsToReceive.length) {
       toastContext?.addToast('Add at least one SKU with quantity', 'error')
       return
@@ -749,8 +760,18 @@ export default function InventoryView() {
         receivedAt,
       })
 
+      const receivedRows = Array.isArray(result.received) ? result.received : []
+      if (!result.ok || receivedRows.length === 0) {
+        throw new Error(result.error || 'No inventory rows were received')
+      }
+
       const dateLabel = new Date(receivedAt).toLocaleDateString()
-      setReceiveResultMessage(`✅ Received ${result.received.length} SKU(s) on ${dateLabel}: ${result.received.map((row) => `${row.sku} (${row.qty} units → ${row.newStock} total)`).join(', ')}`)
+      const failureNote = result.failed ? ` (${result.failed} failed)` : ''
+      setReceiveResultMessage(`✅ Received ${receivedRows.length} SKU(s) on ${dateLabel}${failureNote}: ${receivedRows.map((row) => `${row.sku} (${row.qty} units → ${row.newStock} total)`).join(', ')}`)
+      setHistoryClientId(receiveClientId)
+      setHistoryType('receive')
+      setHistoryFrom(receiveDate)
+      setHistoryTo(receiveDate)
       setReceiveRows([createReceiveDraftRow()])
       setReceiveNote('')
       setReceiveDate(new Date().toISOString().slice(0, 10))
@@ -762,6 +783,8 @@ export default function InventoryView() {
   }
 
   async function handleSaveClient() {
+    const rateSourceClientId = clientForm.rateSourceClientId ? Number.parseInt(clientForm.rateSourceClientId, 10) : null
+    const currentClientId = clientForm.clientId ? Number.parseInt(clientForm.clientId, 10) : null
     const payload: UpdateClientInput = {
       name: clientForm.name.trim(),
       contactName: clientForm.contactName.trim(),
@@ -771,11 +794,15 @@ export default function InventoryView() {
         .split(',')
         .map((part) => Number.parseInt(part.trim(), 10))
         .filter((value) => Number.isFinite(value)),
-      rate_source_client_id: clientForm.rateSourceClientId ? Number.parseInt(clientForm.rateSourceClientId, 10) : null,
+      rateSourceClientId,
     }
 
     if (!payload.name) {
       toastContext?.addToast('Client name is required', 'error')
+      return
+    }
+    if (rateSourceClientId != null && currentClientId != null && rateSourceClientId === currentClientId) {
+      toastContext?.addToast('Rate source must be a different client account', 'error')
       return
     }
 
@@ -1281,7 +1308,9 @@ export default function InventoryView() {
                   <label style={{ fontSize: 11, color: 'var(--text3)' }}>Rate Source Account</label>
                   <select className="ship-select" style={{ width: '100%' }} value={clientForm.rateSourceClientId} onChange={(event) => setClientForm((current) => ({ ...current, rateSourceClientId: event.target.value }))}>
                     <option value="">DR PREPPER</option>
-                    <option value="10">KFG</option>
+                    {rateSourceOptions.map((client) => (
+                      <option key={client.clientId} value={client.clientId}>{client.name}</option>
+                    ))}
                   </select>
                 </div>
                 <div style={{ gridColumn: '1 / -1' }}>

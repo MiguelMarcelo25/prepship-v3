@@ -14,6 +14,7 @@ export interface InventoryStockFilters {
 }
 
 export interface ReceiveSkuLookup {
+  invSkuId?: number
   name: string
   unitsPerPack: number
 }
@@ -121,22 +122,31 @@ export function getReceiveRowHints(row: ReceiveDraftRow, lookup: ReceiveSkuLooku
   }
 }
 
-export function buildReceiveItems(rows: ReceiveDraftRow[]) {
+function getReceiveSkuLookup(lookups: Record<string, ReceiveSkuLookup>, sku: string) {
+  return lookups[sku]
+    ?? Object.entries(lookups).find(([candidate]) => candidate.toLowerCase() === sku.toLowerCase())?.[1]
+    ?? null
+}
+
+export function buildReceiveItems(rows: ReceiveDraftRow[], lookups: Record<string, ReceiveSkuLookup> = {}) {
   return rows.flatMap((row) => {
     const sku = row.sku.trim()
-    const qty = Number.parseInt(row.qty, 10) || 0
-    if (!sku || qty <= 0) return []
+    const packQty = Number.parseInt(row.qty, 10) || 0
+    if (!sku || packQty <= 0) return []
+    const lookup = getReceiveSkuLookup(lookups, sku)
+    const unitsPerPack = Math.max(1, Number.parseInt(String(lookup?.unitsPerPack ?? 1), 10) || 1)
     const name = row.name.trim()
     return [{
+      invSkuId: lookup?.invSkuId,
       sku,
-      qty,
+      qty: packQty * unitsPerPack,
       name: name || undefined,
     }]
   })
 }
 
 export function buildInventoryLedgerQuery(filters: InventoryHistoryFilters): ListInventoryLedgerQuery {
-  const query: ListInventoryLedgerQuery = { limit: 500 }
+  const query: ListInventoryLedgerQuery = { limit: 200 }
   if (filters.clientId) query.clientId = Number.parseInt(filters.clientId, 10)
   if (filters.type) query.type = filters.type
   if (filters.from) query.dateStart = new Date(`${filters.from}T00:00:00`).getTime()

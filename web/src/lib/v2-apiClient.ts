@@ -226,6 +226,59 @@ function normalizeInventoryDto(row: any): any {
   };
 }
 
+function normalizeClientDtoRows(rows: any[]): any[] {
+  const namesById = new Map<number, string>();
+  for (const row of rows) {
+    const id = parseFiniteNumber(row?.clientId ?? row?.id);
+    if (id != null) namesById.set(id, row?.name ?? '');
+  }
+
+  return rows.map((row) => {
+    const clientId = parseFiniteNumber(row?.clientId ?? row?.id) ?? 0;
+    const rateSourceClientId = parseFiniteNumber(
+      row?.rateSourceClientId ?? row?.rate_source_client_id
+    );
+    const storeIds = Array.isArray(row?.storeIds)
+      ? row.storeIds.map((value: unknown) => Number(value)).filter(Number.isFinite)
+      : [];
+    return {
+      ...row,
+      id: parseFiniteNumber(row?.id) ?? clientId,
+      clientId,
+      storeIds,
+      contactName: row?.contactName ?? '',
+      email: row?.email ?? '',
+      phone: row?.phone ?? '',
+      active: row?.active ?? true,
+      hasOwnAccount: Boolean((row?.ssApiKey && row?.ssApiSecret) || row?.ssApiKeyV2),
+      rateSourceClientId,
+      rateSourceName: rateSourceClientId != null ? namesById.get(rateSourceClientId) ?? '' : '',
+    };
+  });
+}
+
+function normalizeClientMutationPayload(data: Record<string, unknown>): Record<string, unknown> {
+  const next: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(data ?? {})) {
+    if (value === undefined) continue;
+    if (key === 'rate_source_client_id') {
+      next.rateSourceClientId = value;
+      continue;
+    }
+    next[key] = value;
+  }
+
+  for (const key of ['contactName', 'email', 'phone', 'ssApiKey', 'ssApiSecret', 'ssApiKeyV2']) {
+    if (next[key] === '') next[key] = null;
+  }
+
+  if (next.rateSourceClientId === '' || Number.isNaN(next.rateSourceClientId)) {
+    next.rateSourceClientId = null;
+  }
+
+  return next;
+}
+
 // Coerce a date-ish input ('YYYY-MM-DD' or any ISO string) to an ISO datetime
 // anchored at start-of-day / end-of-day. Used for endpoints that validate
 // `z.string().datetime()` where a plain `YYYY-MM-DD` would be rejected.
@@ -712,14 +765,7 @@ export const apiClient = {
 
   // ─── Clients ────────────────────────────────────────────────────────────────
   fetchClients(): Promise<any[]> {
-    return safe(
-      'fetchClients',
-      async () => {
-        const res = await api.get<any>('/clients');
-        return Array.isArray(res) ? res : [];
-      },
-      []
-    );
+    return api.get<any>('/clients').then((res) => normalizeClientDtoRows(Array.isArray(res) ? res : []));
   },
 
   listClients(): Promise<any[]> {
@@ -735,19 +781,15 @@ export const apiClient = {
   },
 
   createClient(data: Record<string, unknown>): Promise<any> {
-    return safe('createClient', () => api.post<any>('/clients', data), {});
+    return api.post<any>('/clients', normalizeClientMutationPayload(data));
   },
 
   createClientRecord(data: Record<string, unknown>): Promise<any> {
-    return safe('createClientRecord', () => api.post<any>('/clients', data), {});
+    return api.post<any>('/clients', normalizeClientMutationPayload(data));
   },
 
   updateClient(clientId: number, data: Record<string, unknown>): Promise<any> {
-    return safe(
-      'updateClient',
-      () => api.patch<any>(`/clients/${clientId}`, data),
-      {}
-    );
+    return api.patch<any>(`/clients/${clientId}`, normalizeClientMutationPayload(data));
   },
 
   updateClientRecord(clientId: number, data: Record<string, unknown>): Promise<any> {
@@ -765,7 +807,13 @@ export const apiClient = {
   syncClientsFromStores(): Promise<any> {
     return safe(
       'syncClientsFromStores',
-      () => api.post<any>('/clients/sync-stores', {}),
+      async () => {
+        const res = await api.post<any>('/clients/sync-stores', {});
+        return {
+          ...res,
+          clients: normalizeClientDtoRows(Array.isArray(res?.clients) ? res.clients : []),
+        };
+      },
       {}
     );
   },
@@ -1373,19 +1421,11 @@ export const apiClient = {
   },
 
   saveProductDefaults(data: Record<string, unknown>): Promise<any> {
-    return safe(
-      'saveProductDefaults',
-      () => api.post<any>('/products', normalizeProductDefaultsPayload(data)),
-      {}
-    );
+    return api.post<any>('/products', normalizeProductDefaultsPayload(data));
   },
 
   saveProductDefaultsV2(data: Record<string, unknown>): Promise<any> {
-    return safe(
-      'saveProductDefaultsV2',
-      () => api.post<any>('/products/save-defaults', normalizeProductDefaultsPayload(data)),
-      {}
-    );
+    return api.post<any>('/products/save-defaults', normalizeProductDefaultsPayload(data));
   },
 
   // ─── Inventory ─────────────────────────────────────────────────────────────
@@ -1517,16 +1557,19 @@ export const apiClient = {
   },
 
   fetchInventoryLedger(query: Record<string, unknown>): Promise<any[]> {
-    return safe(
-      'fetchInventoryLedger',
-      async () => {
-        const res = await api.get<any>(`/inventory/ledger${qs(query as any)}`);
-        if (Array.isArray(res)) return res;
-        if (Array.isArray(res?.data)) return res.data;
-        return [];
-      },
-      []
-    );
+    const ledgerQuery = { ...(query as Record<string, unknown>) };
+    if (ledgerQuery.limit != null && ledgerQuery.pageSize == null) {
+      ledgerQuery.pageSize = Math.min(200, Number(ledgerQuery.limit) || 200);
+    }
+    if (ledgerQuery.pageSize != null) {
+      ledgerQuery.pageSize = Math.min(200, Number(ledgerQuery.pageSize) || 200);
+    }
+    delete ledgerQuery.limit;
+    return api.get<any>(`/inventory/ledger${qs(ledgerQuery as any)}`).then((res) => {
+      if (Array.isArray(res)) return res;
+      if (Array.isArray(res?.data)) return res.data;
+      return [];
+    });
   },
 
   fetchInventorySkuOrders(
@@ -1632,29 +1675,34 @@ export const apiClient = {
     );
   },
 
-  receiveInventory(data: Record<string, unknown>): Promise<any[]> {
-    // v2 receiveInventory payload shape differs from v4's per-item endpoint.
-    // v4 requires POST /inventory/:id/receive with {qty, note, orderId?}.
-    // Best-effort: if payload has an inventoryId+qty, call the endpoint.
-    return safe(
-      'receiveInventory',
-      async () => {
-        const invId = (data as any)?.invSkuId ?? (data as any)?.inventoryId;
-        if (!invId) {
-          console.warn(
-            '[v2-apiClient] receiveInventory: payload missing inventoryId; returning []'
-          );
-          return [];
-        }
-        const res = await api.post<any>(`/inventory/${invId}/receive`, {
-          qty: (data as any).qty,
-          note: (data as any).note,
-          orderId: (data as any).orderId,
-        });
-        return Array.isArray(res) ? res : [res];
-      },
-      []
-    );
+  receiveInventory(data: Record<string, unknown>): Promise<any> {
+    // v2 receiveInventory can submit a client-scoped batch of SKU rows. v4
+    // supports both that bulk route and the older per-inventory-id route.
+    if (Array.isArray((data as any)?.items)) {
+      return api.post<any>('/inventory/receive', {
+        clientId: (data as any).clientId ?? null,
+        note: (data as any).note,
+        receivedAt: (data as any).receivedAt,
+        items: ((data as any).items as any[]).map((item) => ({
+          invSkuId: item?.invSkuId ?? item?.inventoryId,
+          sku: item?.sku,
+          name: item?.name,
+          qty: Number(item?.qty ?? 0),
+          note: item?.note,
+        })),
+      });
+    }
+
+    const invId = (data as any)?.invSkuId ?? (data as any)?.inventoryId;
+    if (!invId) {
+      throw new Error('Inventory item is required to receive stock');
+    }
+    return api.post<any>(`/inventory/${invId}/receive`, {
+      qty: (data as any).qty,
+      note: (data as any).note,
+      orderId: (data as any).orderId,
+      receivedAt: (data as any).receivedAt,
+    }).then((res) => (Array.isArray(res) ? res : [res]));
   },
 
   submitInventoryReceive(data: Record<string, unknown>): Promise<any> {
@@ -1662,20 +1710,34 @@ export const apiClient = {
     // item row). v2 InventoryView reads result.received as an array of
     // {sku, qty, newStock} for its toast string. Reshape each entry so the
     // UI's "Received X SKU(s): ABC (5 units → 100 total)" renders correctly.
-    return safe(
-      'submitInventoryReceive',
-      async () => {
-        const raw = await apiClient.receiveInventory(data);
-        const entries = Array.isArray(raw) ? raw : [raw];
-        const received = entries.map((e: any) => ({
-          sku: e?.inventory?.sku ?? e?.sku ?? '',
-          qty: e?.ledger?.qty ?? e?.qty ?? (data as any)?.qty ?? 0,
-          newStock: e?.inventory?.stockQty ?? e?.stockQty ?? 0,
-        }));
-        return { ok: true, received } as { ok: boolean; received: any[] };
-      },
-      { ok: false, received: [] as any[] }
-    );
+    return apiClient.receiveInventory(data).then((raw) => {
+      const resultRows = Array.isArray((raw as any)?.results) ? (raw as any).results : [];
+      const failedRows = resultRows.filter((row: any) => !row?.ok);
+      const entries = Array.isArray((raw as any)?.received)
+        ? (raw as any).received
+        : resultRows.length
+          ? resultRows.filter((row: any) => row?.ok)
+          : Array.isArray(raw)
+            ? raw
+            : [raw];
+      const received = entries.map((e: any) => ({
+        invSkuId: e?.invSkuId ?? e?.inventory?.id ?? e?.inventoryId ?? null,
+        sku: e?.inventory?.sku ?? e?.sku ?? '',
+        name: e?.inventory?.name ?? e?.name ?? '',
+        qty: e?.ledger?.qty ?? e?.qty ?? (data as any)?.qty ?? 0,
+        newStock: e?.inventory?.stockQty ?? e?.newStock ?? e?.stockQty ?? 0,
+        ledgerId: e?.ledger?.id ?? e?.ledgerId ?? null,
+      }));
+      const error = failedRows
+        .map((row: any) => `${row?.sku || 'SKU'}: ${row?.error || 'Receive failed'}`)
+        .join('; ');
+      return {
+        ok: ((raw as any)?.ok ?? failedRows.length === 0) && received.length > 0,
+        received,
+        failed: (raw as any)?.failed ?? failedRows.length,
+        error: received.length ? error || undefined : error || 'No inventory rows were received',
+      } as { ok: boolean; received: any[]; failed?: number; error?: string };
+    });
   },
 
   adjustInventory(data: Record<string, unknown>): Promise<any> {
@@ -1688,6 +1750,8 @@ export const apiClient = {
           qty: (data as any).qty,
           note: (data as any).note,
           orderId: (data as any).orderId,
+          type: (data as any).type,
+          adjustedAt: (data as any).adjustedAt,
         });
       },
       {}

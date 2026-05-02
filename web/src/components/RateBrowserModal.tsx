@@ -75,6 +75,7 @@ export type RateBrowserModalProps = {
   shippingAccounts: RbCarrierAccountDto[];
   initialDims?: { length?: number; width?: number; height?: number };
   initialWeight?: { lb?: number; oz?: number };
+  testMode?: boolean;
   onClose: () => void;
   onApplyRate: (rate: RbAppliedRate) => void;
   onBestRateResolved?: (rate: RbAppliedRate) => void;
@@ -94,6 +95,7 @@ type RateRow = {
 
 // ── v2 constants ports (trimmed to what the row renderer needs) ──────────────
 const CARRIER_NAMES: Record<string, string> = {
+  prepship_test: 'PrepShip Test',
   stamps_com: 'USPS',
   ups: 'UPS',
   ups_walleted: 'UPS',
@@ -108,6 +110,11 @@ const CARRIER_NAMES: Record<string, string> = {
 };
 
 const SERVICE_NAMES: Record<string, string> = {
+  test_mock_service: 'Test Mock Service',
+  prepship_test_standard: 'PrepShip Test Standard',
+  prepship_test_economy: 'PrepShip Test Economy',
+  prepship_test_priority: 'PrepShip Test Priority',
+  prepship_test_express: 'PrepShip Test Express',
   // USPS
   usps_priority_mail: 'Priority Mail',
   usps_priority_mail_express: 'Priority Express',
@@ -145,6 +152,25 @@ const SERVICE_NAMES: Record<string, string> = {
 // the existing <span class="carrier-badge"> pattern because the rate row
 // wants a bold solid-color badge, not the subtle inline chip.
 function carrierBadgeLarge(code: string | null | undefined): ReactNode {
+  if (code === 'prepship_test') {
+    return (
+      <div
+        style={{
+          width: 40,
+          height: 40,
+          borderRadius: 8,
+          background: '#0f766e',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
+          boxShadow: 'inset 0 0 0 1px rgba(255,255,255,.35)',
+        }}
+      >
+        <img src="/prepship-test-logo.svg" alt="" style={{ width: 34, height: 34, display: 'block' }} />
+      </div>
+    );
+  }
   const styles: Record<string, { bg: string; fg: string }> = {
     ups: { bg: '#351c15', fg: '#ffb500' },
     ups_walleted: { bg: '#351c15', fg: '#ffb500' },
@@ -176,7 +202,7 @@ function carrierBadgeLarge(code: string | null | undefined): ReactNode {
         fontWeight: 900,
         fontSize: 10,
         flexShrink: 0,
-        letterSpacing: '-0.3px',
+        letterSpacing: 0,
       }}
     >
       {l}
@@ -314,6 +340,115 @@ function buildOrderBestRateSeed(
   };
 }
 
+const TEST_MOCK_SERVICE_TEMPLATES: Record<
+  string,
+  Array<{ code: string; name: string; base: number; spread: number; perLb: number; days: string }>
+> = {
+  prepship_test: [
+    { code: 'prepship_test_economy', name: 'PrepShip Test Economy', base: 4.65, spread: 2.75, perLb: 0.72, days: '3-6 days' },
+    { code: 'prepship_test_standard', name: 'PrepShip Test Standard', base: 7.25, spread: 3.8, perLb: 0.96, days: '2-4 days' },
+    { code: 'prepship_test_priority', name: 'PrepShip Test Priority', base: 13.9, spread: 6.75, perLb: 1.28, days: '1-3 days' },
+  ],
+  stamps_com: [
+    { code: 'usps_ground_advantage', name: 'USPS Ground Advantage', base: 4.45, spread: 2.5, perLb: 0.72, days: '2-5 days' },
+    { code: 'usps_priority_mail', name: 'USPS Priority Mail', base: 7.85, spread: 3.4, perLb: 0.94, days: '1-3 days' },
+    { code: 'usps_priority_mail_express', name: 'USPS Priority Mail Express', base: 27.4, spread: 9.5, perLb: 1.55, days: '1 day' },
+  ],
+  ups: [
+    { code: 'ups_ground', name: 'UPS Ground', base: 8.65, spread: 4.25, perLb: 1.05, days: '2-5 days' },
+    { code: 'ups_3_day_select', name: 'UPS 3 Day Select', base: 14.8, spread: 6.5, perLb: 1.28, days: '3 days' },
+    { code: 'ups_2nd_day_air', name: 'UPS 2nd Day Air', base: 20.95, spread: 8.2, perLb: 1.62, days: '2 days' },
+  ],
+  ups_walleted: [
+    { code: 'ups_ground_saver', name: 'UPS Ground Saver', base: 7.55, spread: 3.95, perLb: 0.86, days: '3-6 days' },
+    { code: 'ups_surepost', name: 'UPS SurePost', base: 6.95, spread: 3.1, perLb: 0.78, days: '2-7 days' },
+    { code: 'ups_next_day_air_saver', name: 'UPS Next Day Air Saver', base: 31.5, spread: 10.2, perLb: 1.9, days: '1 day' },
+  ],
+  fedex: [
+    { code: 'fedex_ground', name: 'FedEx Ground', base: 8.95, spread: 4.1, perLb: 1.08, days: '2-5 days' },
+    { code: 'fedex_2day', name: 'FedEx 2Day', base: 21.35, spread: 8.4, perLb: 1.55, days: '2 days' },
+    { code: 'fedex_standard_overnight', name: 'FedEx Standard Overnight', base: 33.75, spread: 12.5, perLb: 2.1, days: '1 day' },
+  ],
+  fedex_walleted: [
+    { code: 'fedex_home_delivery', name: 'FedEx Home Delivery', base: 9.25, spread: 4.2, perLb: 1.02, days: '2-5 days' },
+    { code: 'fedex_express_saver', name: 'FedEx Express Saver', base: 17.65, spread: 6.8, perLb: 1.35, days: '3 days' },
+    { code: 'fedex_priority_overnight', name: 'FedEx Priority Overnight', base: 38.4, spread: 13.2, perLb: 2.2, days: '1 day' },
+  ],
+};
+
+function seededUnit(seed: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < seed.length; i += 1) {
+    hash ^= seed.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) / 4294967295;
+}
+
+function roundMoney(value: number): number {
+  return Math.round(Math.max(0, value) * 100) / 100;
+}
+
+function buildTestMockRateSeeds(
+  shippingAccounts: RbCarrierAccountDto[],
+  context: {
+    orderId?: number | null;
+    weightOz?: number;
+    dims?: { length?: number; width?: number; height?: number };
+  } = {}
+): RateRow[] {
+  const weightLb = Math.max(0.25, (context.weightOz ?? 0) / 16);
+  const dims = context.dims ?? {};
+  const cubicInches = Math.max(0, (dims.length ?? 0) * (dims.width ?? 0) * (dims.height ?? 0));
+  const dimFactor = Math.min(18, cubicInches / 1728) * 1.15;
+  const seedBase = `${context.orderId ?? 'test'}:${context.weightOz ?? 0}:${dims.length ?? 0}x${dims.width ?? 0}x${dims.height ?? 0}`;
+
+  return shippingAccounts.flatMap((account, accountIndex) => {
+    const templates = TEST_MOCK_SERVICE_TEMPLATES[account.code] ?? TEST_MOCK_SERVICE_TEMPLATES.prepship_test ?? [];
+    return templates.map((template, templateIndex) => {
+      const jitter = seededUnit(`${seedBase}:${account.shippingProviderId}:${template.code}`);
+      const surchargeSeed = seededUnit(`${seedBase}:fuel:${account.shippingProviderId}:${templateIndex}`);
+      const shipmentCost = roundMoney(template.base + template.spread * jitter + weightLb * template.perLb + dimFactor);
+      const otherCost = roundMoney(surchargeSeed > 0.72 ? 0.55 + surchargeSeed * 1.45 : 0);
+      return {
+        carrierCode: account.code || 'test',
+        serviceCode: template.code,
+        serviceName: template.name,
+        carrierNickname:
+          account._label ??
+          account.nickname ??
+          account.name ??
+          `Test Carrier ${accountIndex + 1}`,
+        shippingProviderId: account.shippingProviderId,
+        shipmentCost,
+        otherCost,
+        amount: shipmentCost + otherCost,
+        raw: {
+          testRate: true,
+          mocked: true,
+          carrierCode: account.code || 'test',
+          serviceCode: template.code,
+          serviceName: template.name,
+          deliveryDays: template.days,
+          delivery_days: Number.parseInt(template.days, 10) || null,
+          rate_details: otherCost > 0
+            ? [{ rate_detail_type: 'fuel_surcharge', carrier_description: 'Mock fuel surcharge', amount: { amount: otherCost } }]
+            : [],
+        },
+      };
+    });
+  });
+}
+
+function groupRatesByProviderId(rates: RateRow[]): Record<string, RateRow[]> {
+  return rates.reduce<Record<string, RateRow[]>>((acc, rate) => {
+    if (rate.shippingProviderId == null) return acc;
+    const key = String(rate.shippingProviderId);
+    (acc[key] ??= []).push(rate);
+    return acc;
+  }, {});
+}
+
 function applyRbMarkupFn(
   markups: Record<string, Markup>,
   pidOrCc: number | string | null,
@@ -376,6 +511,7 @@ export default function RateBrowserModal({
   shippingAccounts,
   initialDims,
   initialWeight,
+  testMode = false,
   onClose,
   onApplyRate,
   onBestRateResolved,
@@ -433,21 +569,36 @@ export default function RateBrowserModal({
     setSignature('none');
     setSvcClass('');
     setViewMode('all');
-    const seededBestRate = buildOrderBestRateSeed(order, shippingAccounts);
+    const initialTotalOz =
+      initialWeight && ((initialWeight.lb ?? 0) > 0 || (initialWeight.oz ?? 0) > 0)
+        ? (initialWeight.lb ?? 0) * 16 + (initialWeight.oz ?? 0)
+        : order?.weight?.value ?? 0;
+    const seededTestRates = testMode
+      ? buildTestMockRateSeeds(shippingAccounts, {
+          orderId: order?.orderId,
+          weightOz: initialTotalOz,
+          dims: { length: panelLen || savedLen || 0, width: panelWid || savedWid || 0, height: panelHgt || savedHgt || 0 },
+        })
+      : [];
+    const seededBestRate = testMode
+      ? [...seededTestRates].sort((a, b) => a.shipmentCost + a.otherCost - (b.shipmentCost + b.otherCost))[0] ?? null
+      : buildOrderBestRateSeed(order, shippingAccounts);
     setSelectedPid(
       typeof seededBestRate?.shippingProviderId === 'number'
         ? seededBestRate.shippingProviderId
         : null
     );
     setRatesByPid(
-      seededBestRate?.shippingProviderId != null
-        ? { [String(seededBestRate.shippingProviderId)]: [seededBestRate] }
-        : {}
+      testMode
+        ? groupRatesByProviderId(seededTestRates)
+        : seededBestRate?.shippingProviderId != null
+          ? { [String(seededBestRate.shippingProviderId)]: [seededBestRate] }
+          : {}
     );
     // `locations` is intentionally not in deps — it doesn't change per-order
     // and we only want to re-hydrate when the modal opens or the order changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, order?.orderId]);
+  }, [open, order?.orderId, testMode]);
 
   // Derived
   const lbNum = parseFloat(wtLb) || 0;
@@ -542,13 +693,26 @@ export default function RateBrowserModal({
 
     const totalOz = lbNum * 16 + ozNum;
     setBrowsing(true);
-    const seededBestRate = buildOrderBestRateSeed(order, shippingAccounts);
+    const seededTestRates = testMode
+      ? buildTestMockRateSeeds(shippingAccounts, {
+          orderId: order?.orderId,
+          weightOz: totalOz,
+          dims: { length: lenNum, width: widNum, height: hgtNum },
+        })
+      : [];
+    const seededBestRate = testMode
+      ? [...seededTestRates].sort((a, b) => a.shipmentCost + a.otherCost - (b.shipmentCost + b.otherCost))[0] ?? null
+      : buildOrderBestRateSeed(order, shippingAccounts);
     const seededPid =
       typeof seededBestRate?.shippingProviderId === 'number'
         ? seededBestRate.shippingProviderId
         : null;
     setRatesByPid(
-      seededBestRate && seededPid != null ? { [String(seededPid)]: [seededBestRate] } : {}
+      testMode
+        ? groupRatesByProviderId(seededTestRates)
+        : seededBestRate && seededPid != null
+          ? { [String(seededPid)]: [seededBestRate] }
+          : {}
     );
     if (seededPid != null) {
       setSelectedPid((current) => current ?? seededPid);
@@ -563,6 +727,18 @@ export default function RateBrowserModal({
         w: widNum,
         h: hgtNum,
       });
+    }
+
+    if (testMode) {
+      if (seededBestRate) {
+        setRatesByPid(groupRatesByProviderId(seededTestRates));
+        setSelectedPid(seededPid);
+        const applied = toAppliedRate(seededBestRate);
+        if (applied && onBestRateResolved) onBestRateResolved(applied);
+      }
+      setPendingPids(new Set());
+      setBrowsing(false);
+      return;
     }
 
     for (const acct of shippingAccounts) {
@@ -649,6 +825,8 @@ export default function RateBrowserModal({
       if (svcClass === 'ground') {
         return (
           n.includes('ground') ||
+          n.includes('economy') ||
+          n.includes('standard') ||
           n.includes('surepost') ||
           n.includes('parcel') ||
           n.includes('media')
@@ -721,7 +899,7 @@ export default function RateBrowserModal({
         ? r.shippingProviderId
         : Number(r.shippingProviderId);
     if (!Number.isFinite(pid) || !r.serviceCode) return;
-    if (order?.orderId) {
+    if (!testMode && order?.orderId) {
       void apiClient.setOrderSelectedPid(order.orderId, pid);
     }
     onApplyRate({
@@ -1564,21 +1742,38 @@ export default function RateBrowserModal({
                     transition: 'background .1s',
                   }}
                 >
-                  <span
-                    className={`carrier-badge ${
-                      c.code?.includes('ups')
-                        ? 'carrier-ups'
-                        : c.code?.includes('fedex')
-                          ? 'carrier-fedex'
-                          : c.code?.includes('stamps') || c.code?.includes('usps')
-                            ? 'carrier-usps'
-                            : 'carrier-other'
-                    }`}
-                    style={{ fontSize: 9.5, padding: '1px 5px' }}
-                  >
-                    {CARRIER_NAMES[c.code] ??
-                      (c.code || '?').toUpperCase().slice(0, 4)}
-                  </span>
+                  {c.code === 'prepship_test' ? (
+                    <span
+                      style={{
+                        width: 24,
+                        height: 24,
+                        borderRadius: 6,
+                        background: '#0f766e',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flexShrink: 0,
+                      }}
+                    >
+                      <img src="/prepship-test-logo.svg" alt="" style={{ width: 20, height: 20, display: 'block' }} />
+                    </span>
+                  ) : (
+                    <span
+                      className={`carrier-badge ${
+                        c.code?.includes('ups')
+                          ? 'carrier-ups'
+                          : c.code?.includes('fedex')
+                            ? 'carrier-fedex'
+                            : c.code?.includes('stamps') || c.code?.includes('usps')
+                              ? 'carrier-usps'
+                              : 'carrier-other'
+                      }`}
+                      style={{ fontSize: 9.5, padding: '1px 5px' }}
+                    >
+                      {CARRIER_NAMES[c.code] ??
+                        (c.code || '?').toUpperCase().slice(0, 4)}
+                    </span>
+                  )}
                   <span
                     style={{
                       fontSize: 12,

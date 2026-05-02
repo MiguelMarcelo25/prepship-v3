@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, desc, eq, ilike, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, ilike, isNull, lte, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { inventory, inventoryLedger } from '../db/schema/inventory';
 import { inventorySkuParents } from '../db/schema/inventory-sku-parents';
@@ -106,15 +106,21 @@ const ledgerQuery = paginationSchema.extend({
   clientId: z.coerce.number().int().optional(),
   sku: z.string().optional(),
   type: z.string().optional(),
+  dateStart: z.coerce.number().optional(),
+  dateEnd: z.coerce.number().optional(),
 });
 
 app.get('/ledger', zValidator('query', ledgerQuery), async (c) => {
   const q = c.req.valid('query');
+  const dateStart = q.dateStart != null && Number.isFinite(q.dateStart) ? new Date(q.dateStart) : null;
+  const dateEnd = q.dateEnd != null && Number.isFinite(q.dateEnd) ? new Date(q.dateEnd) : null;
   const where = and(
     ...[
       q.clientId !== undefined ? eq(inventory.clientId, q.clientId) : undefined,
       q.sku ? eq(inventory.sku, q.sku) : undefined,
       q.type ? eq(inventoryLedger.type, q.type) : undefined,
+      dateStart && !Number.isNaN(dateStart.getTime()) ? gte(inventoryLedger.createdAt, dateStart) : undefined,
+      dateEnd && !Number.isNaN(dateEnd.getTime()) ? lte(inventoryLedger.createdAt, dateEnd) : undefined,
     ].filter(<T>(x: T | undefined): x is T => x !== undefined)
   );
 
@@ -436,7 +442,16 @@ const movementBody = z.object({
   qty: z.number().int(),
   note: z.string().optional(),
   orderId: z.number().int().optional(),
+  type: z.enum(['receive', 'adjust', 'pick', 'ship', 'return', 'damage']).optional(),
+  receivedAt: z.string().datetime().optional(),
+  adjustedAt: z.string().datetime().optional(),
 });
+
+function movementDateFrom(value: string | undefined) {
+  if (!value) return undefined;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+}
 
 app.post(
   '/:id{[0-9]+}/receive',
@@ -451,6 +466,7 @@ app.post(
       qty: body.qty,
       note: body.note,
       createdBy: email,
+      createdAt: movementDateFrom(body.receivedAt ?? body.adjustedAt),
     });
     return c.json(result);
   }
@@ -591,72 +607,141 @@ app.post(
     const email = c.get('email' as never) as string | undefined;
     const result = await applyMovement({
       inventoryId: id,
-      type: 'adjust',
+      type: body.type ?? 'adjust',
       qty: body.qty,
       note: body.note,
       createdBy: email,
+      createdAt: movementDateFrom(body.adjustedAt ?? body.receivedAt),
     });
     return c.json(result);
   }
 );
 
-// v2-parity bulk receive: POST /inventory/receive body {clientId, items:[{invSkuId, qty, note?}]}.
+const bulkReceiveBody = z.object({
+  clientId: z.number().int().nullable().optional(),
+  note: z.string().optional(),
+  receivedAt: z.string().datetime().optional(),
+  items: z
+    .array(
+      z.object({
+        invSkuId: z.number().int().positive().optional(),
+        inventoryId: z.number().int().positive().optional(),
+        sku: z.string().trim().optional(),
+        name: z.string().trim().optional(),
+        qty: z.number().int().positive(),
+        note: z.string().optional(),
+      }).refine(
+        (item) => item.invSkuId != null || item.inventoryId != null || Boolean(item.sku?.trim()),
+        'Each receive item needs an inventory id or SKU'
+      )
+    )
+    .min(1),
+});
+
+async function findOrCreateInventoryForReceive(
+  item: z.infer<typeof bulkReceiveBody>['items'][number],
+  clientId: number | null | undefined,
+) {
+  const requestedId = item.invSkuId ?? item.inventoryId;
+  if (requestedId != null) {
+    const [row] = await db
+      .select()
+      .from(inventory)
+      .where(eq(inventory.id, requestedId))
+      .limit(1);
+    if (!row) throw new Error(`Inventory item #${requestedId} not found`);
+    return row;
+  }
+
+  const sku = item.sku?.trim();
+  if (!sku) throw new Error('SKU is required');
+  const clientFilter = clientId == null ? isNull(inventory.clientId) : eq(inventory.clientId, clientId);
+  const [existing] = await db
+    .select()
+    .from(inventory)
+    .where(and(clientFilter, sql`lower(${inventory.sku}) = lower(${sku})`))
+    .limit(1);
+  if (existing) return existing;
+
+  const [created] = await db
+    .insert(inventory)
+    .values({
+      clientId: clientId ?? null,
+      sku,
+      name: item.name?.trim() || sku,
+      stockQty: 0,
+    })
+    .returning();
+  if (!created) throw new Error(`Could not create inventory item for ${sku}`);
+  return created;
+}
+
+// v2-parity bulk receive: POST /inventory/receive body
+// {clientId, note, receivedAt, items:[{sku|invSkuId, qty, name?, note?}]}.
 // Calls applyMovement per item so every receipt lands in the ledger. Per-item
 // errors are tallied without aborting the batch.
 app.post(
   '/receive',
-  zValidator(
-    'json',
-    z.object({
-      clientId: z.number().int().nullable().optional(),
-      items: z
-        .array(
-          z.object({
-            invSkuId: z.number().int().positive(),
-            qty: z.number().int().positive(),
-            note: z.string().optional(),
-          })
-        )
-        .min(1),
-    })
-  ),
+  zValidator('json', bulkReceiveBody),
   async (c) => {
     const body = c.req.valid('json');
     const email = c.get('email' as never) as string | undefined;
+    const receivedAt = movementDateFrom(body.receivedAt);
     // v2-parity ReceiveInventoryResultDto adds `newStock` per item so
     // the receiving UI can display the post-receive on-hand total without a
     // round-trip fetch. applyMovement returns the updated inventory row,
     // whose stockQty IS the new on-hand total.
     const results: Array<{
       invSkuId: number;
+      sku?: string | null;
+      name?: string | null;
+      qty?: number;
       ok: boolean;
       newStock?: number;
+      ledgerId?: number;
+      createdAt?: Date;
       error?: string;
     }> = [];
     for (const item of body.items) {
       try {
+        const inv = await findOrCreateInventoryForReceive(item, body.clientId);
         const res = await applyMovement({
-          inventoryId: item.invSkuId,
+          inventoryId: inv.id,
           type: 'receive',
           qty: item.qty,
-          note: item.note,
+          note: item.note?.trim() || body.note?.trim() || undefined,
           createdBy: email,
+          createdAt: receivedAt,
         });
         results.push({
-          invSkuId: item.invSkuId,
+          invSkuId: inv.id,
+          sku: res.inventory?.sku ?? inv.sku,
+          name: res.inventory?.name ?? inv.name,
+          qty: item.qty,
           ok: true,
           newStock: res.inventory?.stockQty ?? 0,
+          ledgerId: res.ledger?.id,
+          createdAt: res.ledger?.createdAt,
         });
       } catch (err) {
         results.push({
-          invSkuId: item.invSkuId,
+          invSkuId: item.invSkuId ?? item.inventoryId ?? 0,
+          sku: item.sku ?? null,
+          qty: item.qty,
           ok: false,
           error: err instanceof Error ? err.message : 'Unknown error',
         });
       }
     }
-    const ok = results.filter((r) => r.ok).length;
-    return c.json({ received: ok, total: results.length, results });
+    const received = results.filter((r) => r.ok);
+    const failed = results.filter((r) => !r.ok);
+    return c.json({
+      ok: failed.length === 0,
+      received,
+      failed: failed.length,
+      total: results.length,
+      results,
+    });
   }
 );
 
@@ -670,6 +755,9 @@ app.post(
       invSkuId: z.number().int().positive(),
       qty: z.number().int().refine((v) => v !== 0, 'qty cannot be 0'),
       note: z.string().optional(),
+      type: z.enum(['receive', 'adjust', 'pick', 'ship', 'return', 'damage']).optional(),
+      adjustedAt: z.string().datetime().optional(),
+      receivedAt: z.string().datetime().optional(),
     })
   ),
   async (c) => {
@@ -677,10 +765,11 @@ app.post(
     const email = c.get('email' as never) as string | undefined;
     const result = await applyMovement({
       inventoryId: body.invSkuId,
-      type: 'adjust',
+      type: body.type ?? 'adjust',
       qty: body.qty,
       note: body.note,
       createdBy: email,
+      createdAt: movementDateFrom(body.adjustedAt ?? body.receivedAt),
     });
     return c.json(result);
   }

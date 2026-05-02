@@ -197,8 +197,7 @@ export function resolveColumnPrefs(
     }
   }
 
-  if (currentStatus === 'awaiting_shipment') hiddenColumns.add('tracking')
-  else hiddenColumns.add('age')
+  if (currentStatus !== 'awaiting_shipment') hiddenColumns.add('age')
 
   return {
     orderedColumns,

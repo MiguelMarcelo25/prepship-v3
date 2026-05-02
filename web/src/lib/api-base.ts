@@ -1,7 +1,10 @@
 const LOCAL_API_BASE = 'http://localhost:3000';
-const PRODUCTION_API_BASE = 'https://prepshipv4-api.onrender.com';
+const PRODUCTION_API_BASE = 'https://prepshipv4-api-l5xc.onrender.com';
 
-const configuredApiBase = (import.meta.env.VITE_API_URL as string | undefined)?.trim();
+const configuredApiBase = (
+  (import.meta.env.VITE_API_URL as string | undefined) ??
+  (import.meta.env.VITE_API_BASE_URL as string | undefined)
+)?.trim();
 const isProductionBuild = import.meta.env.MODE !== 'development';
 const appOrigin =
   typeof globalThis.location?.origin === 'string'

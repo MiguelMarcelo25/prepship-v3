@@ -396,10 +396,120 @@ const LEGACY_CLIENT_ID_BY_CURRENT_ID = new Map<number, number>([
 const TEST_PACK_SKU = 'TEST-PACK'
 const TEST_PACK_WEIGHT_OZ = 4
 const TEST_PACK_DIMS = { length: 5, width: 3, height: 1, units: 'inches' }
-const TEST_SHIPPING_ACCOUNT_LABEL = 'TEST ACCOUNT - $0 MOCK ONLY'
-const TEST_CARRIER_CODE = 'test'
-const TEST_SERVICE_CODE = 'test_mock_service'
+const TEST_SHIPPING_ACCOUNT_LABEL = 'PrepShip Test'
+const TEST_CARRIER_CODE = 'prepship_test'
+const TEST_SERVICE_CODE = 'prepship_test_standard'
+const TEST_RATE_BROWSER_ACCOUNTS = [
+  { shippingProviderId: 900001, carrierId: 'se-prepship-test-a', code: TEST_CARRIER_CODE, nickname: 'PrepShip Test Standard', accountNumber: 'MOCK-PT-A', name: 'PrepShip Test Standard', _label: 'PrepShip Test Standard' },
+  { shippingProviderId: 900002, carrierId: 'se-prepship-test-b', code: TEST_CARRIER_CODE, nickname: 'PrepShip Test Saver', accountNumber: 'MOCK-PT-B', name: 'PrepShip Test Saver', _label: 'PrepShip Test Saver' },
+  { shippingProviderId: 900003, carrierId: 'se-prepship-test-c', code: TEST_CARRIER_CODE, nickname: 'PrepShip Test Priority', accountNumber: 'MOCK-PT-C', name: 'PrepShip Test Priority', _label: 'PrepShip Test Priority' },
+  { shippingProviderId: 900004, carrierId: 'se-prepship-test-d', code: TEST_CARRIER_CODE, nickname: 'PrepShip Test Express', accountNumber: 'MOCK-PT-D', name: 'PrepShip Test Express', _label: 'PrepShip Test Express' },
+  { shippingProviderId: 900005, carrierId: 'se-prepship-test-e', code: TEST_CARRIER_CODE, nickname: 'PrepShip Test Local', accountNumber: 'MOCK-PT-E', name: 'PrepShip Test Local', _label: 'PrepShip Test Local' },
+]
+const TEST_RATE_SERVICE_TEMPLATES = [
+  { code: 'prepship_test_economy', name: 'PrepShip Test Economy', base: 4.65, spread: 2.75, perLb: 0.72, days: '3-6 days' },
+  { code: TEST_SERVICE_CODE, name: 'PrepShip Test Standard', base: 7.25, spread: 3.8, perLb: 0.96, days: '2-4 days' },
+  { code: 'prepship_test_priority', name: 'PrepShip Test Priority', base: 13.9, spread: 6.75, perLb: 1.28, days: '1-3 days' },
+]
 const BATCH_QUEUE_CONCURRENCY = 5
+
+function seededTestUnit(seed: string) {
+  let hash = 2166136261
+  for (let index = 0; index < seed.length; index += 1) {
+    hash ^= seed.charCodeAt(index)
+    hash = Math.imul(hash, 16777619)
+  }
+  return (hash >>> 0) / 4294967295
+}
+
+function roundTestMoney(value: number) {
+  return Math.round(Math.max(0, value) * 100) / 100
+}
+
+function buildTestRatesForShipment(orderId: number, dims: { length: number; width: number; height: number }, weightOz: number) {
+  const weightLb = Math.max(0.25, weightOz / 16)
+  const cubicInches = Math.max(0, dims.length * dims.width * dims.height)
+  const dimFactor = Math.min(18, cubicInches / 1728) * 1.15
+  const seedBase = `${orderId}:${weightOz}:${dims.length}x${dims.width}x${dims.height}`
+
+  return TEST_RATE_BROWSER_ACCOUNTS.flatMap((account) => (
+    TEST_RATE_SERVICE_TEMPLATES.map((template, templateIndex) => {
+      const jitter = seededTestUnit(`${seedBase}:${account.shippingProviderId}:${template.code}`)
+      const surchargeSeed = seededTestUnit(`${seedBase}:fuel:${account.shippingProviderId}:${templateIndex}`)
+      const shipmentCost = roundTestMoney(template.base + template.spread * jitter + weightLb * template.perLb + dimFactor)
+      const otherCost = roundTestMoney(surchargeSeed > 0.72 ? 0.55 + surchargeSeed * 1.45 : 0)
+      return {
+        carrierCode: TEST_CARRIER_CODE,
+        serviceCode: template.code,
+        serviceName: template.name,
+        carrierNickname: account._label,
+        shippingProviderId: account.shippingProviderId,
+        amount: shipmentCost + otherCost,
+        shipmentCost,
+        otherCost,
+        raw: {
+          testRate: true,
+          mocked: true,
+          carrierCode: TEST_CARRIER_CODE,
+          serviceCode: template.code,
+          serviceName: template.name,
+          carrierNickname: account._label,
+          deliveryDays: template.days,
+          delivery_days: Number.parseInt(template.days, 10) || null,
+          rate_details: otherCost > 0
+            ? [{ rate_detail_type: 'fuel_surcharge', carrier_description: 'Mock fuel surcharge', amount: { amount: otherCost } }]
+            : [],
+        },
+      }
+    })
+  ))
+}
+
+function buildBestTestRateForShipment(orderId: number, dims: { length: number; width: number; height: number }, weightOz: number) {
+  return buildTestRatesForShipment(orderId, dims, weightOz)
+    .sort((left, right) => (left.shipmentCost + left.otherCost) - (right.shipmentCost + right.otherCost))[0] ?? null
+}
+
+function buildTestMockRate(source?: Record<string, unknown>) {
+  const readString = (value: unknown) => typeof value === 'string' && value.trim() ? value : null
+  const readNumber = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : null
+  const raw = source && typeof source.raw === 'object' && source.raw !== null ? source.raw as Record<string, unknown> : {}
+  const shipmentCost = Math.max(0, readNumber(source?.shipmentCost) ?? readNumber(source?.amount) ?? 0)
+  const otherCost = Math.max(0, readNumber(source?.otherCost) ?? 0)
+  const amount = shipmentCost + otherCost
+  const carrierCode = readString(source?.carrierCode) ?? TEST_CARRIER_CODE
+  const serviceCode = readString(source?.serviceCode) ?? TEST_SERVICE_CODE
+  const serviceName = readString(source?.serviceName) ?? readString(raw.serviceName) ?? 'PrepShip Test Standard'
+  const carrierNickname = readString(source?.carrierNickname) ?? readString(raw.carrierNickname) ?? TEST_SHIPPING_ACCOUNT_LABEL
+  return {
+    carrierCode,
+    serviceCode,
+    serviceName,
+    carrierNickname,
+    providerAccountNickname: carrierNickname,
+    shippingProviderId: null,
+    providerAccountId: null,
+    amount,
+    cost: amount,
+    shipmentCost,
+    otherCost,
+    raw: {
+      ...raw,
+      testRate: true,
+      simulatedProviderId: source?.shippingProviderId ?? null,
+      carrierCode,
+      serviceCode,
+      serviceName,
+      carrierNickname,
+      shipmentCost,
+      otherCost,
+    },
+  }
+}
+
+function buildTestRateBrowserAccounts() {
+  return TEST_RATE_BROWSER_ACCOUNTS
+}
 
 type V2CarrierAccountRef = {
   carrierCode: string
@@ -2277,6 +2387,64 @@ export default function OrdersView({
     return hasCompleteDims(dims) ? dims : null
   }
 
+  function getPanelSkuDefaultDims(packageId: string | null) {
+    const panelDims = getPanelDims()
+    if (hasCompleteDims(panelDims)) return panelDims
+
+    const selectedPackageId = packageId || panelForm.packageId
+    const selectedPackage = selectedPackageId
+      ? packages.find((candidate) => getPackageIdentifier(candidate) === selectedPackageId)
+      : null
+    return getPackageDims(selectedPackage) ?? panelDims
+  }
+
+  function assertSavedProductDefaults(
+    product: unknown,
+    expected: {
+      sku: string
+      weightOz: number
+      length: number
+      width: number
+      height: number
+      defaultPackageCode: string | null
+    },
+  ) {
+    const row = toRecord(product)
+    if (!row || toStringValue(row.sku) !== expected.sku) {
+      throw new Error('SKU defaults were not saved')
+    }
+
+    const readNumber = (value: unknown) => {
+      if (typeof value === 'number' && Number.isFinite(value)) return value
+      if (typeof value === 'string' && value.trim()) {
+        const parsed = Number.parseFloat(value)
+        return Number.isFinite(parsed) ? parsed : null
+      }
+      return null
+    }
+    const matches = (field: 'weightOz' | 'length' | 'width' | 'height', expectedValue: number) => {
+      if (expectedValue <= 0) return true
+      const savedValue = readNumber(row[field])
+      return savedValue != null && Math.abs(savedValue - expectedValue) <= 0.01
+    }
+
+    if (
+      !matches('weightOz', expected.weightOz)
+      || !matches('length', expected.length)
+      || !matches('width', expected.width)
+      || !matches('height', expected.height)
+    ) {
+      throw new Error('SKU defaults did not match the saved weight and dimensions')
+    }
+
+    if (expected.defaultPackageCode) {
+      const savedPackageCode = row.defaultPackageCode == null ? null : String(row.defaultPackageCode)
+      if (savedPackageCode !== expected.defaultPackageCode) {
+        throw new Error('SKU default package was not saved')
+      }
+    }
+  }
+
   function normalizePanelPackage(pkg: PackageDto | null | undefined) {
     if (!pkg) return null
     const packageId = getPackageIdentifier(pkg)
@@ -2323,13 +2491,13 @@ export default function OrdersView({
     }
 
     const weightOz = getPanelWeightOz()
-    const dims = getPanelDims()
+    const dims = getPanelSkuDefaultDims(packageId)
     if (!weightOz && !hasCompleteDims(dims)) {
       if (!options.silent) showToast('Enter weight or complete dims first', 'error')
       return null
     }
 
-    await apiClient.saveProductDefaultsV2({
+    const payload = {
       sku: target.sku,
       name: target.name,
       weightOz: target.qty > 1 && weightOz ? Number((weightOz / target.qty).toFixed(2)) : weightOz,
@@ -2337,7 +2505,14 @@ export default function OrdersView({
       width: dims.width,
       height: dims.height,
       defaultPackageCode: packageId || null,
-    })
+    }
+    const saved = await apiClient.saveProductDefaultsV2(payload)
+    const savedRow = toRecord(saved)
+    if (!savedRow || toStringValue(savedRow.sku) !== target.sku) {
+      throw new Error('SKU defaults were not saved')
+    }
+    const confirmed = await apiClient.fetchProductsBySku(target.sku)
+    assertSavedProductDefaults(confirmed, payload)
 
     return target.sku
   }
@@ -2708,12 +2883,15 @@ export default function OrdersView({
     const location = locations.find((candidate) => String(candidate.locationId) === panelForm.locationId) ?? null
     const shipTo = getShipTo(order, orderDetail)
     const selectedPackage = packages.find((candidate) => String(candidate.packageId) === panelForm.packageId)
+    const testSelectedRate = isTest ? (panelRatePreview[0] ?? order.bestRate ?? null) : null
+    const testCarrierCode = toStringValue(testSelectedRate?.carrierCode) ?? TEST_CARRIER_CODE
+    const testServiceCode = panelForm.serviceCode || toStringValue(testSelectedRate?.serviceCode) || TEST_SERVICE_CODE
 
     const payload: CreateLabelRequestDto = {
       orderId: order.orderId,
       orderNumber: order.orderNumber ?? undefined,
-      carrierCode: isTest ? TEST_CARRIER_CODE : account.code,
-      serviceCode: isTest ? TEST_SERVICE_CODE : panelForm.serviceCode,
+      carrierCode: isTest ? testCarrierCode : account.code,
+      serviceCode: isTest ? testServiceCode : panelForm.serviceCode,
       shippingProviderId: isTest ? null : shippingProviderId,
       packageCode: 'package',
       customPackageId: selectedPackage && selectedPackage.source !== 'ss_carrier' ? selectedPackage.packageId : null,
@@ -2804,8 +2982,8 @@ export default function OrdersView({
       const ensuredPackageId = hasCompleteDims(dims)
         ? await ensurePanelPackageForDims({ saveSku: false, silent: false })
         : panelForm.packageId
-      await savePanelSkuDefaults(ensuredPackageId || panelForm.packageId || null)
-      showToast(`Saved dims & weight for ${target.sku}`, 'success')
+      const savedSku = await savePanelSkuDefaults(ensuredPackageId || panelForm.packageId || null)
+      if (savedSku) showToast(`Saved dims & weight for ${savedSku}`, 'success')
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Save failed', 'error')
     }
@@ -2839,21 +3017,12 @@ export default function OrdersView({
     const orderDetail = orderDetailsById.get(order.orderId) ?? panelDetail
 
     if (isTestOrder(order, orderDetail)) {
-      const testRate = {
-        carrierCode: TEST_CARRIER_CODE,
-        serviceCode: TEST_SERVICE_CODE,
-        serviceName: 'Test Mock Service',
-        carrierNickname: TEST_SHIPPING_ACCOUNT_LABEL,
-        shippingProviderId: null,
-        amount: 0,
-        shipmentCost: 0,
-        otherCost: 0,
-      }
+      const testRate = buildTestMockRate(buildBestTestRateForShipment(order.orderId, dims, weightOz) ?? undefined)
       setPanelRatePreview([testRate])
       setPanelForm((current) => ({
         ...current,
         shipAccountId: TEST_CARRIER_CODE,
-        serviceCode: TEST_SERVICE_CODE,
+        serviceCode: testRate.serviceCode,
       }))
       await apiClient.saveOrderBestRate(order.orderId, testRate, `${dims.length || 0}x${dims.width || 0}x${dims.height || 0}`)
       return testRate
@@ -3047,9 +3216,9 @@ export default function OrdersView({
         return
       }
 
-      await refreshPanelBestRate({ order: panelOrder, dims, weightOz, silent: false })
-      await refetchOrders()
-      showToast('Test mock rate refreshed', 'success')
+      setRateBrowserRates([buildTestMockRate(buildBestTestRateForShipment(panelOrder.orderId, dims, weightOz) ?? undefined)])
+      setRateBrowserLoading(false)
+      setRateBrowserOpen(true)
       return
     }
 
@@ -3101,6 +3270,29 @@ export default function OrdersView({
   }
 
   function applyRateSelection(rate: Record<string, unknown>) {
+    if (panelOrder && isTestOrder(panelOrder, panelDetail)) {
+      const testRate = buildTestMockRate(rate)
+      const dims = rate?.dims && typeof rate.dims === 'object' ? rate.dims as Record<string, unknown> : null
+      const dimsLabel = dims
+        ? `${Number(dims.length) || 0}x${Number(dims.width) || 0}x${Number(dims.height) || 0}`
+        : `${panelForm.length || 0}x${panelForm.width || 0}x${panelForm.height || 0}`
+
+      setPanelForm((current) => ({
+        ...current,
+        shipAccountId: TEST_CARRIER_CODE,
+        serviceCode: testRate.serviceCode,
+      }))
+      setPanelRatePreview([testRate])
+      setRateBrowserOpen(false)
+      void apiClient
+        .saveOrderBestRate(panelOrder.orderId, testRate, dimsLabel)
+        .then(() => refetchOrders())
+        .catch((error) => {
+          showToast(error instanceof Error ? error.message : 'Failed to save test mock rate', 'error')
+        })
+      return
+    }
+
     const shippingProviderId = toNumberValue(rate.shippingProviderId)
     const serviceCode = toStringValue(rate.serviceCode)
     if (shippingProviderId == null || !serviceCode) return
@@ -3376,12 +3568,15 @@ export default function OrdersView({
 
   const renderBestRatePrice = (order: OrderSummaryDto) => {
     if (isTestOrder(order)) {
+      const testAmount = order.bestRate
+        ? (toNumberValue(order.bestRate.shipmentCost) ?? 0) + (toNumberValue(order.bestRate.otherCost) ?? 0)
+        : 0
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <span className="carrier-badge" style={{ fontSize: 9.5, padding: '1px 5px', background: '#f59e0b', color: '#fff' }}>
             TEST
           </span>
-          <strong style={{ color: 'var(--green)', fontSize: 12 }}>$0.00</strong>
+          <strong style={{ color: 'var(--green)', fontSize: 12 }}>{formatMoney(testAmount)}</strong>
         </div>
       )
     }
@@ -3532,11 +3727,12 @@ export default function OrdersView({
 
   const renderShippingAccountCell = (order: OrderSummaryDto) => {
     if (isTestOrder(order)) {
+      const testAccount = normalizeShippingAccountName(order.bestRate?.carrierNickname) ?? TEST_SHIPPING_ACCOUNT_LABEL
       return (
         <div style={{ lineHeight: 1.4, whiteSpace: 'nowrap' }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: '#b45309' }}>{TEST_SHIPPING_ACCOUNT_LABEL}</div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: '#b45309' }}>{testAccount}</div>
           <div style={{ fontSize: 10, color: 'var(--text3)' }} className="svc-label">
-            no real postage
+            test mock - no real postage
           </div>
         </div>
       )
@@ -4068,6 +4264,13 @@ export default function OrdersView({
     const selectedPanelAccountLabel = panelIsTestOrder
       ? TEST_SHIPPING_ACCOUNT_LABEL
       : getShipAccountLabelById(shippingAccounts, panelForm.shipAccountId) ?? getShipAccountDisplay(panelOrder, shippingAccounts)
+    const panelTestRate = panelIsTestOrder ? (panelRatePreview[0] ?? panelOrder.bestRate ?? buildTestMockRate()) : null
+    const panelTestRateAmount = panelTestRate
+      ? (toNumberValue(panelTestRate.shipmentCost) ?? 0) + (toNumberValue(panelTestRate.otherCost) ?? 0)
+      : 0
+    const panelTestRateDetail = panelTestRate
+      ? `${toStringValue(panelTestRate.carrierNickname) ?? formatCarrierCode(toStringValue(panelTestRate.carrierCode))} · ${toStringValue(panelTestRate.serviceName) ?? formatServiceCode(toStringValue(panelTestRate.serviceCode))}`
+      : `${TEST_SHIPPING_ACCOUNT_LABEL} · PrepShip Test Standard`
     const shipped = panelOrder.orderStatus !== 'awaiting_shipment'
     const trackingNumber = panelOrder.label?.trackingNumber ?? null
     const deliveryLine = panelOrder.label?.shipDate
@@ -4245,7 +4448,10 @@ export default function OrdersView({
                 <span className="ship-field-label">Service</span>
                 <div className="ship-field-value">
                   <select className="ship-select" style={{ flex: 1 }} value={panelForm.serviceCode} disabled={shipped || panelIsTestOrder} onChange={(event) => setPanelForm((current) => ({ ...current, serviceCode: event.target.value }))}>
-                    {panelIsTestOrder ? <option value={TEST_SERVICE_CODE}>Test Mock Service</option> : null}
+                    {panelIsTestOrder && panelForm.serviceCode && panelForm.serviceCode !== TEST_SERVICE_CODE ? (
+                      <option value={panelForm.serviceCode}>{formatServiceCode(panelForm.serviceCode)}</option>
+                    ) : null}
+                    {panelIsTestOrder ? <option value={TEST_SERVICE_CODE}>PrepShip Test Standard</option> : null}
                     <option value="">{panelForm.serviceCode ? formatServiceCode(panelForm.serviceCode) : 'Select Service'}</option>
                     {serviceOptions.map((option) => (
                       <option key={option.code} value={option.code}>{option.label}</option>
@@ -4370,7 +4576,7 @@ export default function OrdersView({
                 <span style={{ fontSize: 11.5, color: 'var(--text2)', fontWeight: 500, width: 90, flexShrink: 0 }}>Rate</span>
                 {panelIsTestOrder ? (
                   <span className="ship-rate-val" id="panel-rate-val">
-                    <><span className="ship-rate-price">$0.00</span><span className="ship-rate-detail">{TEST_SHIPPING_ACCOUNT_LABEL} · Test Mock Service</span></>
+                    <><span className="ship-rate-price">{formatMoney(panelTestRateAmount)}</span><span className="ship-rate-detail">{panelTestRateDetail}</span></>
                   </span>
                 ) : shipped ? (
                   <span className="ship-rate-val ship-rate-val-muted">
@@ -5182,7 +5388,8 @@ export default function OrdersView({
             order={panelOrder}
             locations={locations}
             packages={packages}
-            shippingAccounts={shippingAccounts}
+            shippingAccounts={panelOrder && isTestOrder(panelOrder, panelDetail) ? buildTestRateBrowserAccounts() : shippingAccounts}
+            testMode={Boolean(panelOrder && isTestOrder(panelOrder, panelDetail))}
             initialDims={{
               length: Number.parseFloat(panelForm.length) || 0,
               width: Number.parseFloat(panelForm.width) || 0,
@@ -5195,6 +5402,26 @@ export default function OrdersView({
             onClose={() => setRateBrowserOpen(false)}
             onBestRateResolved={(best) => {
               if (!panelOrderId) return
+              if (panelOrder && isTestOrder(panelOrder, panelDetail)) {
+                const testRate = buildTestMockRate(best)
+                setPanelRatePreview([testRate])
+                setPanelForm((current) => ({
+                  ...current,
+                  shipAccountId: TEST_CARRIER_CODE,
+                  serviceCode: testRate.serviceCode,
+                }))
+                const dims = best.dims
+                const dimsLabel = dims
+                  ? `${dims.length || 0}x${dims.width || 0}x${dims.height || 0}`
+                  : `${panelForm.length || 0}x${panelForm.width || 0}x${panelForm.height || 0}`
+                void apiClient
+                  .saveOrderBestRate(panelOrderId, testRate, dimsLabel)
+                  .then(() => refetchOrders())
+                  .catch((error) => {
+                    showToast(error instanceof Error ? error.message : 'Failed to save test mock rate', 'error')
+                  })
+                return
+              }
               setPanelRatePreview([best])
               const dims = best.dims
               const dimsLabel = dims
