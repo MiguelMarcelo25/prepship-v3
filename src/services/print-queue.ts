@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '../db/client';
 import { printQueue, type PrintQueueEntry } from '../db/schema/print-queue';
+import { createLabelV2, type CreateLabelInputDto } from './labels';
 
 export type AddToQueueInput = {
   clientId: number;
@@ -29,13 +30,96 @@ export type MergeJob = {
   createdAt: number;
 };
 
+export type QueueSendOrderInput = {
+  orderId: number;
+  clientId: number;
+  orderNumber?: string | null;
+  labelUrl?: string | null;
+  label?: Omit<CreateLabelInputDto, 'orderId' | 'orderNumber'> & {
+    orderId?: number;
+    orderNumber?: string;
+  };
+  skuGroupId: string;
+  primarySku?: string | null;
+  itemDescription?: string | null;
+  orderQty?: number;
+  multiSkuData?: { sku: string; qty: number }[] | null;
+};
+
+export type QueueSendJobResult = {
+  orderId: number;
+  success: boolean;
+  queueEntryId?: string;
+  alreadyQueued?: boolean;
+  labelUrl?: string | null;
+  trackingNumber?: string | null;
+  error?: string;
+};
+
+export type QueueSendJob = {
+  jobId: string;
+  status: 'pending' | 'running' | 'done' | 'error';
+  progress: number;
+  total: number;
+  current: number;
+  queued: number;
+  failed: number;
+  message: string;
+  clientId?: number | null;
+  createdAt: number;
+  updatedAt: number;
+  results: QueueSendJobResult[];
+  queuedEntryIds: string[];
+  errorMessage?: string;
+};
+
 const mergeJobs = new Map<string, MergeJob>();
+const queueSendJobs = new Map<string, QueueSendJob>();
 
 function cleanOldJobs() {
   const cutoff = Date.now() - 30 * 60 * 1000;
   for (const [id, job] of mergeJobs.entries()) {
     if (job.createdAt < cutoff) mergeJobs.delete(id);
   }
+  for (const [id, job] of queueSendJobs.entries()) {
+    if (job.createdAt < cutoff) queueSendJobs.delete(id);
+  }
+}
+
+async function withConcurrency<T>(
+  items: T[],
+  fn: (item: T) => Promise<void>,
+  maxConcurrent = 5
+): Promise<void> {
+  const queue = [...items];
+  const running = new Set<Promise<void>>();
+  while (queue.length > 0 || running.size > 0) {
+    while (running.size < maxConcurrent && queue.length > 0) {
+      const item = queue.shift();
+      if (item !== undefined) {
+        const task = fn(item).finally(() => running.delete(task));
+        running.add(task);
+      }
+    }
+    if (running.size > 0) {
+      await Promise.race(running);
+    }
+  }
+}
+
+function updateQueueSendProgress(job: QueueSendJob) {
+  job.progress = job.total > 0 ? Math.round((job.current / job.total) * 100) : 100;
+  job.updatedAt = Date.now();
+  job.message =
+    job.status === 'done'
+      ? `Queued ${job.queued}/${job.total}${job.failed ? `, ${job.failed} failed` : ''}`
+      : `Sending to queue ${job.current}/${job.total}`;
+}
+
+function getExistingLabelUrl(err: unknown): string | null {
+  const details = (err as { details?: Record<string, unknown> })?.details;
+  const labelUrl = details?.labelUrl;
+  return typeof labelUrl === 'string' && labelUrl ? labelUrl : null;
 }
 
 // ─── CRUD ─────────────────────────────────────────────────────────────
@@ -119,6 +203,127 @@ export async function addToQueue(
     .returning();
 
   return { entry: entry!, alreadyQueued };
+}
+
+export function startQueueSendJob(input: {
+  orders: QueueSendOrderInput[];
+  concurrency?: number;
+}): { jobId: string; total: number } {
+  if (!input.orders.length) throw new Error('orders must be non-empty');
+
+  cleanOldJobs();
+  const jobId = randomUUID();
+  const firstClientId = input.orders.find((order) => Number.isFinite(order.clientId))?.clientId ?? null;
+  const job: QueueSendJob = {
+    jobId,
+    status: 'pending',
+    progress: 0,
+    total: input.orders.length,
+    current: 0,
+    queued: 0,
+    failed: 0,
+    message: `Starting queue send of ${input.orders.length} order${input.orders.length === 1 ? '' : 's'}...`,
+    clientId: firstClientId,
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    results: [],
+    queuedEntryIds: [],
+  };
+  queueSendJobs.set(jobId, job);
+
+  void runQueueSendJob(jobId, input.orders, input.concurrency);
+  return { jobId, total: input.orders.length };
+}
+
+export function getQueueSendJobStatus(jobId: string): QueueSendJob | null {
+  cleanOldJobs();
+  return queueSendJobs.get(jobId) ?? null;
+}
+
+async function runQueueSendJob(
+  jobId: string,
+  orders: QueueSendOrderInput[],
+  requestedConcurrency = 5
+) {
+  const job = queueSendJobs.get(jobId);
+  if (!job) return;
+
+  const concurrency = Math.max(1, Math.min(8, Math.floor(requestedConcurrency || 5)));
+  job.status = 'running';
+  updateQueueSendProgress(job);
+
+  try {
+    await withConcurrency(
+      orders,
+      async (order) => {
+        let labelUrl = order.labelUrl ?? null;
+        let trackingNumber: string | null = null;
+
+        try {
+          if (!labelUrl) {
+            if (!order.label) throw new Error('Missing label payload');
+            try {
+              const created = await createLabelV2({
+                ...order.label,
+                orderId: order.orderId,
+                orderNumber: order.orderNumber ?? order.label.orderNumber,
+              });
+              labelUrl = created.labelUrl;
+              trackingNumber = created.trackingNumber;
+            } catch (err) {
+              const existingLabelUrl = getExistingLabelUrl(err);
+              if (!existingLabelUrl) throw err;
+              labelUrl = existingLabelUrl;
+            }
+          }
+
+          if (!labelUrl) throw new Error('Label was created without a queueable URL');
+
+          const { entry, alreadyQueued } = await addToQueue({
+            clientId: order.clientId,
+            orderId: String(order.orderId),
+            orderNumber: order.orderNumber ?? null,
+            labelUrl,
+            skuGroupId: order.skuGroupId,
+            primarySku: order.primarySku ?? null,
+            itemDescription: order.itemDescription ?? null,
+            orderQty: order.orderQty ?? 1,
+            multiSkuData: order.multiSkuData ?? null,
+          });
+
+          job.queued += 1;
+          job.queuedEntryIds.push(entry.id);
+          job.results.push({
+            orderId: order.orderId,
+            success: true,
+            queueEntryId: entry.id,
+            alreadyQueued,
+            labelUrl,
+            trackingNumber,
+          });
+        } catch (err) {
+          job.failed += 1;
+          job.results.push({
+            orderId: order.orderId,
+            success: false,
+            error: err instanceof Error ? err.message : 'Unknown error',
+          });
+        } finally {
+          job.current += 1;
+          updateQueueSendProgress(job);
+        }
+      },
+      concurrency
+    );
+
+    job.status = 'done';
+    updateQueueSendProgress(job);
+  } catch (err) {
+    job.status = 'error';
+    job.errorMessage = err instanceof Error ? err.message : 'Queue send failed';
+    job.message = job.errorMessage;
+    job.updatedAt = Date.now();
+  }
 }
 
 export async function removeFromQueue(entryId: string, clientId?: number) {

@@ -74,6 +74,7 @@ interface PersistentQueueJob {
   total: number
   label: string
   batchTestMode?: boolean
+  backendJobId?: string
   createdAt: number
   updatedAt: number
 }
@@ -209,6 +210,16 @@ function markPersistentQueueJobOrder(jobId: string | null | undefined, orderId: 
     ...job,
     completedOrderIds: [...completed],
     failedOrderIds: [...failedSet],
+  })
+}
+
+function attachPersistentQueueBackendJob(jobId: string | null | undefined, backendJobId: string | null | undefined) {
+  if (!jobId || !backendJobId) return
+  const job = readPersistentQueueJob()
+  if (!job || job.id !== jobId) return
+  writePersistentQueueJob({
+    ...job,
+    backendJobId,
   })
 }
 
@@ -574,6 +585,9 @@ const TEST_RATE_SERVICE_TEMPLATES = [
   { code: 'prepship_test_priority', name: 'PrepShip Test Priority', base: 13.9, spread: 6.75, perLb: 1.28, days: '1-3 days' },
 ]
 const BATCH_QUEUE_CONCURRENCY = 2
+const BACKEND_QUEUE_SEND_CONCURRENCY = 5
+const BACKEND_TEST_QUEUE_SEND_CONCURRENCY = 8
+const BACKEND_QUEUE_SEND_POLL_MS = 750
 
 function seededTestUnit(seed: string) {
   let hash = 2166136261
@@ -2982,6 +2996,193 @@ export default function OrdersView({
     }
   }
 
+  function buildQueueSendOrderPayload(order: OrderSummaryDto, options: { existingLabelOnly?: boolean; batchTestMode?: boolean } = {}) {
+    if (order.clientId == null) {
+      return { payload: null, items: [], error: 'Missing client id', order }
+    }
+
+    const labelUrl = toStringValue(order.label?.labelUrl)
+    const queuePayload = buildQueueAddPayload(order, labelUrl ?? '')
+    const multiSkuData = Array.isArray(queuePayload.multi_sku_data)
+      ? queuePayload.multi_sku_data
+          .map((item) => ({
+            sku: toStringValue(item?.sku) ?? '',
+            qty: toNumberValue(item?.qty) ?? 1,
+          }))
+          .filter((item) => item.sku)
+      : null
+    const payload: Record<string, unknown> = {
+      order_id: order.orderId,
+      client_id: order.clientId,
+      order_number: queuePayload.order_number,
+      sku_group_id: queuePayload.sku_group_id,
+      primary_sku: queuePayload.primary_sku,
+      item_description: queuePayload.item_description,
+      order_qty: queuePayload.order_qty,
+      multi_sku_data: multiSkuData,
+    }
+
+    if (labelUrl) {
+      payload.label_url = labelUrl
+    } else {
+      if (options.existingLabelOnly) {
+        return { payload: null, items: [], error: 'No existing label URL', order }
+      }
+
+      const bestRate = order.bestRate
+      const selectedRate = order.selectedRate
+      const shippingProviderId = toNumberValue(bestRate?.shippingProviderId) ?? selectedRate?.shippingProviderId ?? order.label?.shippingProviderId ?? null
+      const serviceCode = getShippingString(order, 'serviceCode') ?? toStringValue(bestRate?.serviceCode) ?? selectedRate?.serviceCode
+      const carrierCode = getShippingString(order, 'carrierCode') ?? toStringValue(bestRate?.carrierCode) ?? selectedRate?.carrierCode
+      const dims = getDimensions(order, null)
+      const weightOz = order.weight?.value ?? 0
+      const orderIsTest = isTestOrder(order, orderDetailsById.get(order.orderId) ?? null)
+      const effectiveServiceCode = serviceCode ?? (orderIsTest ? TEST_SERVICE_CODE : undefined)
+      const effectiveCarrierCode = carrierCode ?? (orderIsTest ? TEST_CARRIER_CODE : undefined)
+
+      payload.label = {
+        serviceCode: effectiveServiceCode,
+        carrierCode: effectiveCarrierCode,
+        packageCode: 'package',
+        shippingProviderId: shippingProviderId ?? undefined,
+        weightOz: weightOz > 0 ? weightOz : undefined,
+        length: dims?.length,
+        width: dims?.width,
+        height: dims?.height,
+        confirmation: 'delivery',
+        testLabel: Boolean(options.batchTestMode) || orderIsTest,
+      }
+    }
+
+    return {
+      payload,
+      items: getActiveItems(order, orderDetailsById.get(order.orderId) ?? null),
+      error: null,
+      order,
+    }
+  }
+
+  async function pollBackendQueueSendJob(
+    backendJobId: string,
+    progressTotal: number,
+    offsets: { completed?: number; failed?: number } = {},
+  ) {
+    let status: any = null
+    while (true) {
+      status = await apiClient.fetchQueueSendJobStatus(backendJobId)
+      const current = toNumberValue(status.current) ?? 0
+      const failed = toNumberValue(status.failed) ?? 0
+      const completedOffset = offsets.completed ?? 0
+      const failedOffset = offsets.failed ?? 0
+      setQueueActionProgress((active) => active
+        ? {
+            ...active,
+            label: status.status === 'done' ? 'Refreshing queue' : 'Sending to queue',
+            total: progressTotal,
+            completed: Math.min(progressTotal, completedOffset + current),
+            failed: failedOffset + failed,
+          }
+        : active
+      )
+
+      if (status.status === 'done') return status
+      if (status.status === 'error') {
+        throw new Error(status.error || status.message || 'Queue send failed')
+      }
+      await yieldToBrowser(BACKEND_QUEUE_SEND_POLL_MS)
+    }
+  }
+
+  async function refreshQueueAfterBackendStatus(status: any, fallbackClientId: number | null) {
+    const queued = toNumberValue(status?.queued) ?? 0
+    const clientId = toNumberValue(status?.client_id) ?? fallbackClientId
+    if (queued <= 0 || clientId == null) return
+
+    setQueueActionProgressLabel('Refreshing queue')
+    setQueueLoading(true)
+    try {
+      const payload = await apiClient.fetchQueue(clientId, queueHistoryVisible)
+      setQueueEntries(payload.queuedOrders)
+      setQueueEntriesClientId(clientId)
+      setQueueOpen(true)
+    } finally {
+      setQueueLoading(false)
+    }
+  }
+
+  async function sendOrdersToQueueBackend(
+    jobOrders: OrderSummaryDto[],
+    options: {
+      kind: PersistentQueueJobKind
+      label?: string
+      batchTestMode?: boolean
+      existingLabelOnly?: boolean
+    },
+  ) {
+    const queueJobId = beginPersistentQueueJob(options.kind, jobOrders, {
+      label: options.label ?? 'Sending to queue',
+      batchTestMode: options.batchTestMode,
+    })
+    const prepared = jobOrders.map((order) => buildQueueSendOrderPayload(order, options))
+    const skipped = prepared.filter((entry) => !entry.payload)
+    const queueOrders = prepared.filter((entry) => entry.payload).map((entry) => entry.payload as Record<string, unknown>)
+    const skippedFailed = skipped.length
+    const fallbackClientId = toNumberValue(queueOrders[0]?.client_id) ?? null
+    let finalStatus: any = null
+
+    for (const entry of skipped) {
+      markPersistentQueueJobOrder(queueJobId, entry.order.orderId, true)
+    }
+    if (skippedFailed > 0) {
+      setQueueActionProgress((active) => active
+        ? {
+            ...active,
+            completed: Math.min(active.total, skippedFailed),
+            failed: active.failed + skippedFailed,
+          }
+        : active
+      )
+    }
+
+    try {
+      if (queueOrders.length > 0) {
+        const started = await apiClient.startQueueSendJob({
+          orders: queueOrders,
+          concurrency: options.batchTestMode ? BACKEND_TEST_QUEUE_SEND_CONCURRENCY : BACKEND_QUEUE_SEND_CONCURRENCY,
+        })
+        attachPersistentQueueBackendJob(queueJobId, started.job_id)
+        finalStatus = await pollBackendQueueSendJob(started.job_id, Math.max(jobOrders.length, 1), {
+          completed: skippedFailed,
+          failed: skippedFailed,
+        })
+        await refreshQueueAfterBackendStatus(finalStatus, fallbackClientId)
+      }
+
+      await refetchOrders()
+    } finally {
+      setQueueLoading(false)
+      finishPersistentQueueJob(queueJobId)
+      const queued = toNumberValue(finalStatus?.queued) ?? 0
+      finishQueueActionProgress(queued > 0 ? 'Queue updated' : 'Queue checked')
+    }
+
+    const successOrderIds = new Set(
+      ((finalStatus?.results ?? []) as Array<Record<string, unknown>>)
+        .filter((result) => result.success === true)
+        .map((result) => toNumberValue(result.orderId ?? result.order_id))
+        .filter((orderId): orderId is number => orderId != null),
+    )
+    const queuedItems = prepared
+      .filter((entry) => successOrderIds.has(entry.order.orderId))
+      .flatMap((entry) => entry.items)
+
+    return {
+      queued: toNumberValue(finalStatus?.queued) ?? 0,
+      failed: skippedFailed + (toNumberValue(finalStatus?.failed) ?? 0),
+      queuedItems,
+    }
+  }
+
   async function queueExistingLabels(orderIds: number[]) {
     if (orderIds.length === 0) {
       await hydrateQueue(true)
@@ -2990,85 +3191,23 @@ export default function OrdersView({
 
     // O(1) lookups instead of N×O(N) `orders.find` inside the loop.
     const orderById = new Map(orders.map((order) => [order.orderId, order]))
-    const persistentOrderSnapshots = orderIds
+    const jobOrders = orderIds
       .map((orderId) => orderById.get(orderId))
       .filter(Boolean) as OrderSummaryDto[]
-    const queueJobId = beginPersistentQueueJob('existing-labels', persistentOrderSnapshots, { label: 'Sending to queue' })
-
-    const eligible: typeof orders = []
-    let preFailed = 0
-    let queueClient: number | null = null
-    for (const orderId of orderIds) {
-      const order = orderById.get(orderId)
-      if (!order?.label?.labelUrl || order.clientId == null) {
-        preFailed += 1
-        if (order) markPersistentQueueJobOrder(queueJobId, order.orderId, true)
-        continue
-      }
-      queueClient = queueClient ?? order.clientId
-      eligible.push(order)
-    }
-
-    let sent = 0
-    let failed = preFailed
-    const queuedItems: Array<{ sku?: string | null; name?: string | null; quantity?: number | null }> = []
-
-    if (preFailed > 0) {
-      setQueueActionProgress((current) => current
-        ? {
-            ...current,
-            completed: Math.min(current.total, preFailed),
-            failed: current.failed + preFailed,
-          }
-        : current
-      )
-    }
 
     try {
-      if (eligible.length > 0) {
-        setQueueLoading(true)
-        try {
-          await runWithConcurrency(eligible, BATCH_QUEUE_CONCURRENCY, async (order) => {
-            let orderFailed = false
-            try {
-              await apiClient.addToQueue(buildQueueAddPayload(order, order.label!.labelUrl))
-              sent += 1
-              markPersistentQueueJobOrder(queueJobId, order.orderId, false)
-              queuedItems.push(...getActiveItems(order, orderDetailsById.get(order.orderId) ?? null))
-            } catch {
-              failed += 1
-              orderFailed = true
-              markPersistentQueueJobOrder(queueJobId, order.orderId, true)
-            } finally {
-              advanceQueueActionProgress(orderFailed ? 1 : 0)
-            }
-          })
-        } finally {
-          setQueueLoading(false)
-        }
-      }
-
-      if (sent > 0 && queueClient != null) {
-        setQueueActionProgressLabel('Refreshing queue')
-        setQueueLoading(true)
-        try {
-          const payload = await apiClient.fetchQueue(queueClient, queueHistoryVisible)
-          setQueueEntries(payload.queuedOrders)
-          setQueueEntriesClientId(queueClient)
-          setQueueOpen(true)
-        } finally {
-          setQueueLoading(false)
-        }
-      }
-
-      if (sent > 0) {
-        showToast(formatQueuedOrdersToast(sent, queuedItems, failed), 'success')
+      const result = await sendOrdersToQueueBackend(jobOrders, {
+        kind: 'existing-labels',
+        label: 'Sending to queue',
+        existingLabelOnly: true,
+      })
+      if (result.queued > 0) {
+        showToast(formatQueuedOrdersToast(result.queued, result.queuedItems, result.failed), 'success')
       } else {
-        showToast('⚠ No orders added — create labels first')
+        showToast('No orders added - create labels first')
       }
-    } finally {
-      finishPersistentQueueJob(queueJobId)
-      finishQueueActionProgress(sent > 0 ? 'Queue updated' : 'Queue checked')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Failed to send to queue', 'error')
     }
   }
 
@@ -3702,6 +3841,27 @@ export default function OrdersView({
       return
     }
 
+    if (mode === 'queue') {
+      setBatchBusy(true)
+      try {
+        const result = await sendOrdersToQueueBackend(batchOrders, {
+          kind: 'batch-queue',
+          label: 'Sending to queue',
+          batchTestMode,
+        })
+        if (result.queued > 0) {
+          showToast(formatQueuedOrdersToast(result.queued, result.queuedItems, result.failed), 'success')
+        } else {
+          showToast('No orders added to queue', 'error')
+        }
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : 'Failed to send to queue', 'error')
+      } finally {
+        setBatchBusy(false)
+      }
+      return
+    }
+
     setBatchBusy(true)
     const queueJobId = mode === 'queue'
       ? beginPersistentQueueJob('batch-queue', batchOrders, { label: 'Sending to queue', batchTestMode })
@@ -3821,6 +3981,30 @@ export default function OrdersView({
     const completedOrFailed = new Set([...(job.completedOrderIds ?? []), ...(job.failedOrderIds ?? [])])
     const pendingOrders = (job.orders ?? []).filter((order) => order?.orderId != null && !completedOrFailed.has(order.orderId))
     const progress = getPersistentQueueJobProgress(job)
+
+    if (job.backendJobId) {
+      resumePersistentQueueJobIdRef.current = job.id
+      activePersistentQueueJobIdRef.current = job.id
+      startQueueActionProgress(progress.total, 'Resuming queue', progress.completed, progress.failed)
+      showToast(`Resuming queue send (${progress.completed}/${progress.total})`)
+      try {
+        const status = await pollBackendQueueSendJob(job.backendJobId, progress.total)
+        await refreshQueueAfterBackendStatus(status, null)
+        await refetchOrders()
+        const queued = toNumberValue(status?.queued) ?? 0
+        const failed = toNumberValue(status?.failed) ?? 0
+        showToast(queued > 0 ? `Queue updated: ${queued} queued${failed ? `, ${failed} failed` : ''}` : 'Queue checked', queued > 0 ? 'success' : 'info')
+        finishQueueActionProgress(queued > 0 ? 'Queue updated' : 'Queue checked')
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : 'Failed to resume queue send', 'error')
+        finishQueueActionProgress('Queue resume failed')
+      } finally {
+        clearPersistentQueueJob(job.id)
+        activePersistentQueueJobIdRef.current = null
+        resumePersistentQueueJobIdRef.current = null
+      }
+      return
+    }
 
     if (pendingOrders.length === 0) {
       clearPersistentQueueJob(job.id)

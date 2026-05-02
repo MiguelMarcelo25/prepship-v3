@@ -1286,6 +1286,17 @@ export const apiClient = {
     return safe('addToQueue', () => api.post<any>('/print-queue/add', payload), {});
   },
 
+  startQueueSendJob(payload: {
+    orders: Array<Record<string, unknown>>;
+    concurrency?: number;
+  }): Promise<any> {
+    return api.post<any>('/print-queue/batch-send', payload);
+  },
+
+  fetchQueueSendJobStatus(jobId: string): Promise<any> {
+    return api.get<any>(`/print-queue/batch-send/status/${encodeURIComponent(jobId)}`);
+  },
+
   clearQueue(clientId: number): Promise<any> {
     return safe(
       'clearQueue',
