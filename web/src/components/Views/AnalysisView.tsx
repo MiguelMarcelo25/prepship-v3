@@ -1134,7 +1134,7 @@ export default function AnalysisView() {
                                 </td>
                                 <td className="col-customer">{displayText(order.shipToName)}</td>
                                 <td className="col-qty">{order.qty || 1}</td>
-                                <td className="col-cost">{formatMoneyValue(order.shippingCost)}</td>
+                                <td className="col-cost">{formatMoneyValue(order.standardShippingCost)}</td>
                                 <td>
                                   <span className={`analysis-status-pill ${statusClass}`}>
                                     {statusLabel}
