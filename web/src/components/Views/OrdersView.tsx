@@ -248,6 +248,8 @@ interface PanelFormState {
   insuranceValue: string
 }
 
+type ShipmentDims = { length: number; width: number; height: number }
+
 interface OrdersViewProps {
   currentStatus: OrderStatus
   searchQuery?: string
@@ -472,9 +474,9 @@ const SERVICE_NAMES: Record<string, string> = {
   usps_parcel_select: 'Parcel Select',
   ups_ground: 'UPS Ground',
   ups_ground_saver: 'UPS Ground Saver',
-  ups_surepost: 'UPS SurePost',
-  ups_surepost_1_lb_or_greater: 'UPS SurePost (≥1 lb)',
-  ups_surepost_less_than_1_lb: 'UPS SurePost (<1 lb)',
+  ups_surepost: 'UPS Ground Saver',
+  ups_surepost_1_lb_or_greater: 'UPS Ground Saver (1 lb+)',
+  ups_surepost_less_than_1_lb: 'UPS Ground Saver (<1 lb)',
   ups_3_day_select: 'UPS 3 Day Select',
   ups_2nd_day_air: 'UPS 2nd Day Air',
   ups_2nd_day_air_am: 'UPS 2nd Day Air AM',
@@ -504,8 +506,8 @@ const CARRIER_SERVICES: Record<string, Array<{ code: string; label: string }>> =
   ups: [
     { code: 'ups_ground', label: 'UPS Ground' },
     { code: 'ups_ground_saver', label: 'UPS Ground Saver' },
-    { code: 'ups_surepost_less_than_1_lb', label: 'UPS SurePost (<1 lb)' },
-    { code: 'ups_surepost_1_lb_or_greater', label: 'UPS SurePost (≥1 lb)' },
+    { code: 'ups_surepost_less_than_1_lb', label: 'UPS Ground Saver (<1 lb)' },
+    { code: 'ups_surepost_1_lb_or_greater', label: 'UPS Ground Saver (1 lb+)' },
     { code: 'ups_3_day_select', label: 'UPS 3 Day Select' },
     { code: 'ups_2nd_day_air', label: 'UPS 2nd Day Air' },
     { code: 'ups_2nd_day_air_am', label: 'UPS 2nd Day Air AM' },
@@ -515,8 +517,8 @@ const CARRIER_SERVICES: Record<string, Array<{ code: string; label: string }>> =
   ups_walleted: [
     { code: 'ups_ground', label: 'UPS Ground' },
     { code: 'ups_ground_saver', label: 'UPS Ground Saver' },
-    { code: 'ups_surepost_less_than_1_lb', label: 'UPS SurePost (<1 lb)' },
-    { code: 'ups_surepost_1_lb_or_greater', label: 'UPS SurePost (≥1 lb)' },
+    { code: 'ups_surepost_less_than_1_lb', label: 'UPS Ground Saver (<1 lb)' },
+    { code: 'ups_surepost_1_lb_or_greater', label: 'UPS Ground Saver (1 lb+)' },
     { code: 'ups_3_day_select', label: 'UPS 3 Day Select' },
     { code: 'ups_2nd_day_air', label: 'UPS 2nd Day Air' },
     { code: 'ups_next_day_air_saver', label: 'UPS Next Day Air Saver' },
@@ -938,8 +940,13 @@ function getPrimarySkuLabel(order: OrderSummaryDto, detail: OrderFullDto | null)
 function buildSearchText(order: OrderSummaryDto, detail: OrderFullDto | null) {
   const rawOrder = toRecord(detail?.raw)
   const shipTo = getShipTo(order, detail)
+  const label = toRecord(order.label) ?? toRecord(detail?.label)
+  const shipping = toRecord(order.shipping) ?? toRecord(detail?.shipping)
   return [
+    order.orderId != null ? String(order.orderId) : null,
     order.orderNumber,
+    order.externalOrderId,
+    detail?.externalOrderId,
     order.clientName,
     order.customerEmail,
     shipTo.name,
@@ -949,7 +956,10 @@ function buildSearchText(order: OrderSummaryDto, detail: OrderFullDto | null) {
     shipTo.city,
     shipTo.state,
     shipTo.postalCode,
-    order.label?.trackingNumber,
+    toStringValue(label?.trackingNumber),
+    toStringValue(label?.labelTracking),
+    toStringValue(shipping?.trackingNumber),
+    toStringValue(shipping?.labelTracking),
     ...getActiveItems(order, detail).flatMap((item) => [item.sku, item.name]),
     toStringValue(rawOrder?.customerUsername),
   ]
@@ -1800,6 +1810,7 @@ export default function OrdersView({
     dateStart: dateRange.start,
     dateEnd: dateRange.end,
     hideTestOrders: hideTestOrdersInAllAwaiting,
+    search: searchQuery,
   })
 
   useEffect(() => {
@@ -1951,7 +1962,7 @@ export default function OrdersView({
 
   useEffect(() => {
     setPage(1)
-  }, [currentStatus, activeStore, dateFilter, customDateFrom, customDateTo, hideTestOrdersInAllAwaiting])
+  }, [currentStatus, activeStore, dateFilter, customDateFrom, customDateTo, hideTestOrdersInAllAwaiting, searchQuery])
 
   useEffect(() => {
     setPreSkuSortSnapshot(null)
@@ -2596,11 +2607,12 @@ export default function OrdersView({
     ].join(':')
   }
 
-  function hasCompleteDims(dims: { length: number; width: number; height: number }) {
+  function hasCompleteDims(dims: ShipmentDims | null | undefined): dims is ShipmentDims {
+    if (!dims) return false
     return dims.length > 0 && dims.width > 0 && dims.height > 0
   }
 
-  function getDimsKey(dims: { length: number; width: number; height: number }) {
+  function getDimsKey(dims: ShipmentDims) {
     return [dims.length, dims.width, dims.height]
       .map((value) => Number(value).toFixed(3))
       .join('x')
@@ -2716,30 +2728,53 @@ export default function OrdersView({
     }
   }
 
-  async function savePanelSkuDefaults(packageId: string | null, options: { silent?: boolean } = {}) {
-    if (!panelOrder) return null
+  async function savePanelSkuDefaults(
+    packageId: string | null,
+    options: {
+      silent?: boolean
+      order?: OrderSummaryDto | null
+      detail?: OrderFullDto | null
+      weightOz?: number
+      dims?: ShipmentDims | null
+    } = {},
+  ) {
+    const sourceOrder = options.order ?? panelOrder
+    if (!sourceOrder) return null
 
-    const target = getSingleSkuDefaultTarget(panelOrder, panelDetail)
+    const sourceDetail = options.detail ?? (
+      sourceOrder.orderId === panelOrder?.orderId
+        ? panelDetail
+        : orderDetailsById.get(sourceOrder.orderId) ?? null
+    )
+    const target = getSingleSkuDefaultTarget(sourceOrder, sourceDetail)
     if (!target) {
       if (!options.silent) showToast("Multi-SKU order - edit each product's defaults in the Products tab", 'error')
       return null
     }
 
-    const weightOz = getPanelWeightOz()
-    const dims = getPanelSkuDefaultDims(packageId)
+    const weightOz = options.weightOz ?? getPanelWeightOz()
+    const dims = hasCompleteDims(options.dims) ? options.dims! : getPanelSkuDefaultDims(packageId)
     if (!weightOz && !hasCompleteDims(dims)) {
       if (!options.silent) showToast('Enter weight or complete dims first', 'error')
       return null
     }
 
-    const payload = {
+    const clientId = typeof sourceOrder.clientId === 'number' && sourceOrder.clientId > 0
+      ? sourceOrder.clientId
+      : null
+    const skuWeightOz = target.qty > 1 && weightOz ? Number((weightOz / target.qty).toFixed(2)) : weightOz
+    const packageCode = packageId || null
+    const payload: Record<string, unknown> = {
       sku: target.sku,
       name: target.name,
-      weightOz: target.qty > 1 && weightOz ? Number((weightOz / target.qty).toFixed(2)) : weightOz,
-      length: dims.length,
-      width: dims.width,
-      height: dims.height,
-      defaultPackageCode: packageId || null,
+      clientId,
+      defaultPackageCode: packageCode,
+    }
+    if (skuWeightOz > 0) payload.weightOz = skuWeightOz
+    if (hasCompleteDims(dims)) {
+      payload.length = dims.length
+      payload.width = dims.width
+      payload.height = dims.height
     }
     const saved = await apiClient.saveProductDefaultsV2(payload)
     const savedRow = toRecord(saved)
@@ -2747,9 +2782,28 @@ export default function OrdersView({
       throw new Error('SKU defaults were not saved')
     }
     const confirmed = await apiClient.fetchProductsBySku(target.sku)
-    assertSavedProductDefaults(confirmed, payload)
+    assertSavedProductDefaults(confirmed, {
+      sku: target.sku,
+      weightOz: skuWeightOz,
+      length: hasCompleteDims(dims) ? dims.length : 0,
+      width: hasCompleteDims(dims) ? dims.width : 0,
+      height: hasCompleteDims(dims) ? dims.height : 0,
+      defaultPackageCode: packageCode,
+    })
 
     return target.sku
+  }
+
+  async function autoSavePanelSkuDefaults(
+    packageId: string | null,
+    options: Parameters<typeof savePanelSkuDefaults>[1] = {},
+  ) {
+    try {
+      return await savePanelSkuDefaults(packageId, { ...options, silent: true })
+    } catch (error) {
+      console.warn('[orders] automatic SKU defaults save failed:', error)
+      return null
+    }
   }
 
   async function ensurePanelPackageForDims(options: { saveSku?: boolean; silent?: boolean } = {}) {
@@ -3234,6 +3288,7 @@ export default function OrdersView({
     const length = panelDims.length || savedDims?.length || 0
     const width = panelDims.width || savedDims?.width || 0
     const height = panelDims.height || savedDims?.height || 0
+    const labelDims = { length, width, height }
     const account = shippingAccounts.find((candidate) => candidate.shippingProviderId === shippingProviderId)
     if (!isTest && (!shippingProviderId || !account)) {
       showToast('Select a carrier account', 'error')
@@ -3313,6 +3368,13 @@ export default function OrdersView({
         showToast('Label created but no PDF returned', 'info')
       }
 
+      await autoSavePanelSkuDefaults(panelForm.packageId || null, {
+        order,
+        detail: orderDetail,
+        weightOz,
+        dims: hasCompleteDims(labelDims) ? labelDims : null,
+      })
+
       await refetchOrders()
       return response
     } catch (error) {
@@ -3360,7 +3422,16 @@ export default function OrdersView({
   function getRateTotalForSort(rate: Record<string, unknown>) {
     const shipmentCost = toNumberValue(rate.shipmentCost) ?? toNumberValue(rate.amount) ?? 0
     const otherCost = toNumberValue(rate.otherCost) ?? 0
-    return shipmentCost + otherCost
+    return applyCarrierMarkup({
+      shippingProviderId: toNumberValue(rate.shippingProviderId) ?? undefined,
+      carrierCode: toStringValue(rate.carrierCode) ?? '',
+      serviceCode: toStringValue(rate.serviceCode) ?? '',
+      serviceName: toStringValue(rate.serviceName) ?? '',
+      amount: shipmentCost + otherCost,
+      shipmentCost,
+      otherCost,
+      carrierNickname: toStringValue(rate.carrierNickname) ?? undefined,
+    }, markups)
   }
 
   function pickBestPanelRate(rates: Array<Record<string, unknown>>) {
@@ -3498,6 +3569,13 @@ export default function OrdersView({
       if (Object.keys(payload).length > 0) {
         await apiClient.saveOrderDims(panelOrder.orderId, payload)
       }
+
+      await autoSavePanelSkuDefaults(savedPackageId || panelForm.packageId || null, {
+        order: panelOrder,
+        detail: panelDetail,
+        weightOz: hasWeightToSave ? weightOz : undefined,
+        dims: dimsToSave,
+      })
 
       if (savedPackageId && savedPackageId !== panelForm.packageId) {
         setPanelForm((current) => ({ ...current, packageId: savedPackageId }))
@@ -6078,6 +6156,21 @@ export default function OrdersView({
                 return
               }
               setPanelRatePreview([best])
+              const shippingProviderId = toNumberValue(best.shippingProviderId)
+              const serviceCode = toStringValue(best.serviceCode)
+              if (shippingProviderId != null && serviceCode) {
+                setPanelForm((current) => ({
+                  ...current,
+                  shipAccountId: String(shippingProviderId),
+                  serviceCode,
+                  weightLb: best.weight ? String(best.weight.lb ?? current.weightLb) : current.weightLb,
+                  weightOz: best.weight ? String(best.weight.oz ?? current.weightOz) : current.weightOz,
+                  length: best.dims ? String(best.dims.length ?? current.length) : current.length,
+                  width: best.dims ? String(best.dims.width ?? current.width) : current.width,
+                  height: best.dims ? String(best.dims.height ?? current.height) : current.height,
+                }))
+                void apiClient.setOrderSelectedPid(panelOrderId, shippingProviderId)
+              }
               const dims = best.dims
               const dimsLabel = dims
                 ? `${dims.length || 0}x${dims.width || 0}x${dims.height || 0}`

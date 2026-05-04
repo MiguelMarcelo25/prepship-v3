@@ -527,6 +527,8 @@ const orderListSelect = {
 
 app.get('/', zValidator('query', listQuery), async (c) => {
   const q = c.req.valid('query');
+  const search = q.search?.trim();
+  const searchPattern = search ? `%${search}%` : null;
   const excludeIds = (q.excludeClientId ?? '')
     .split(',')
     .map((s) => Number.parseInt(s.trim(), 10))
@@ -560,11 +562,42 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         : undefined,
       q.dateFrom ? gte(orders.orderDate, new Date(q.dateFrom)) : undefined,
       q.dateTo ? lte(orders.orderDate, new Date(q.dateTo)) : undefined,
-      q.search
+      searchPattern
         ? or(
-            ilike(orders.orderNumber, `%${q.search}%`),
-            ilike(orders.shipToName, `%${q.search}%`),
-            ilike(orders.customerEmail, `%${q.search}%`)
+            ilike(orders.orderNumber, searchPattern),
+            ilike(orders.externalOrderId, searchPattern),
+            ilike(orders.shipToName, searchPattern),
+            ilike(orders.customerEmail, searchPattern),
+            ilike(orders.shipToCity, searchPattern),
+            ilike(orders.shipToState, searchPattern),
+            ilike(orders.shipToPostalCode, searchPattern),
+            sql`${orders.id}::text ilike ${searchPattern}`,
+            sql`${orders.raw}->>'customerUsername' ilike ${searchPattern}`,
+            sql`${orders.raw}->'shipTo'->>'company' ilike ${searchPattern}`,
+            sql`${orders.raw}->'shipTo'->>'street1' ilike ${searchPattern}`,
+            sql`${orders.raw}->'shipTo'->>'street2' ilike ${searchPattern}`,
+            sql`exists (
+              select 1
+              from jsonb_array_elements(${orders.items}) item
+              where item->>'sku' ilike ${searchPattern}
+                 or item->>'name' ilike ${searchPattern}
+            )`,
+            sql`exists (
+              select 1
+              from ${shipments} shipment_search
+              where (
+                  shipment_search.order_id = ${orders.id}
+                  or (
+                    shipment_search.order_number is not null
+                    and shipment_search.order_number = ${orders.orderNumber}
+                  )
+                )
+                and coalesce(shipment_search.voided, false) = false
+                and (
+                  shipment_search.tracking_number ilike ${searchPattern}
+                  or shipment_search.label_tracking ilike ${searchPattern}
+                )
+            )`
           )
         : undefined,
     ].filter(<T>(x: T | undefined): x is T => x !== undefined)
