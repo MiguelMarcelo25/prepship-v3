@@ -44,9 +44,10 @@ async function loadCarrierMarkups(): Promise<Map<string, Markup>> {
 
 // ── v2-parity rate filters ────────────────────────────────────────────────
 // Ported from v2's apps/api/src/common/prepship-config.ts. v4 previously had
-// NO rate filtering — all blocked service codes / flat-rate package types
-// leaked into best-rate selection, which could silently undercharge vs v2
-// (e.g. UPS SurePost lightweight <1lb rates selectable where v2 blocks them).
+// NO rate filtering — blocked service codes / flat-rate package types leaked
+// into best-rate selection, which could silently undercharge vs v2. UPS
+// SurePost/Ground Saver is not blocked; ShipStation now returns it as the
+// correct economy service for several UPS accounts.
 
 // v2-parity: ShipStation-provided baseline carrier accounts (vs. client-owned
 // carrier accounts). Billing/cost-vs-charge accounting uses this to flag rows
@@ -64,8 +65,6 @@ export const BLOCKED_SERVICE_CODES = new Set<string>([
   'usps_library_mail',
   'usps_parcel_select',
   'usps_parcel_select_lightweight',
-  'ups_surepost_1_lb_or_greater',
-  'ups_surepost_less_than_1_lb',
 ]);
 
 export const BLOCKED_PACKAGE_TYPES = new Set<string>([
@@ -125,6 +124,7 @@ function applyMarkups(rates: Rate[], markups: Map<string, Markup>): Rate[] {
 
 const CACHE_TTL_MS = 1000 * 60 * 60 * 6; // 6 hours
 const CARRIER_CACHE_MS = 1000 * 60 * 15; // 15 min
+const RATE_CACHE_VERSION = 'ground-saver-v1';
 const RATEABLE_CARRIER_CODES = new Set([
   'usps',
   'ups',
@@ -209,31 +209,24 @@ async function resolveClientIdForStoreId(storeId?: number | null): Promise<numbe
 }
 
 async function resolveRateInput(input: RateInput): Promise<RateInput> {
-  const storeId = input.storeId ?? null;
-  const clientId =
-    input.clientId ?? (storeId != null ? await resolveClientIdForStoreId(storeId) : null);
-  const credentials = await loadClientCredentials(clientId, {
-    storeId: storeId ?? undefined,
-  });
-  const apiKeyV2 = input.apiKeyV2 ?? credentials.apiKeyV2 ?? null;
-  const sourceClientId =
-    input.sourceClientId ?? credentials.sourceClientId ?? (apiKeyV2 && clientId ? clientId : null);
+  const context = await resolveRateCredentialContext(input);
   return {
     ...input,
     toZip: normalizeZip(input.toZip),
     residential: input.residential !== false,
-    storeId,
-    clientId,
-    apiKeyV2,
-    sourceClientId,
+    storeId: context.storeId,
+    clientId: context.clientId,
+    apiKeyV2: context.apiKeyV2,
+    sourceClientId: context.sourceClientId,
     carrierIds: input.carrierIds?.length
       ? input.carrierIds
-      : (await getAllCarriers(apiKeyV2)).map((carrier) => carrier.carrier_id).sort(),
+      : (await getAllCarriers(context.apiKeyV2)).map((carrier) => carrier.carrier_id).sort(),
   };
 }
 
 export function rateCacheKey(input: RateInput): string {
   const parts: string[] = [
+    `v=${RATE_CACHE_VERSION}`,
     `w=${Math.round(input.weightOz * 10)}`,
     `z=${normalizeZip(input.toZip)}`,
     `co=${(input.toCountry ?? 'US').toUpperCase()}`,
@@ -323,6 +316,11 @@ type EstimateRate = {
 // in the rate-estimate body). v2 calls discoverCarriers() per request; v4
 // reuses its 15-min-cached getAllCarrierIds() + a parallel nickname cache.
 type CarrierInfo = { carrier_id: string; carrier_code: string; nickname?: string };
+export type RateCarrierAccount = CarrierInfo & {
+  friendly_name?: string;
+  source_client_id: number | null;
+  source_client_name: string;
+};
 const scopedCarrierCache = new Map<string, { carriers: CarrierInfo[]; fetchedAt: number }>();
 
 const V2_CARRIER_ACCOUNT_OVERRIDES = new Map<
@@ -360,6 +358,7 @@ async function getAllCarriers(apiKeyV2?: string | null): Promise<CarrierInfo[]> 
       dedupeKey: `carriers:list:${cacheKey}`,
     });
     carriers = (res.carriers ?? [])
+      .filter((c) => !c.disabled_by_billing_plan)
       .filter((c) => RATEABLE_CARRIER_CODES.has((c.carrier_code ?? '').toLowerCase()))
       .map((c) => {
         const override = V2_CARRIER_ACCOUNT_OVERRIDES.get(c.carrier_id);
@@ -377,6 +376,62 @@ async function getAllCarriers(apiKeyV2?: string | null): Promise<CarrierInfo[]> 
   }
   scopedCarrierCache.set(cacheKey, { carriers, fetchedAt: Date.now() });
   return carriers;
+}
+
+type RateCredentialContext = {
+  storeId: number | null;
+  clientId: number | null;
+  apiKeyV2: string | null;
+  sourceClientId: number | null;
+  sourceClientName: string;
+};
+
+async function loadClientName(clientId: number | null | undefined): Promise<string | null> {
+  if (!clientId) return null;
+  const [row] = await db
+    .select({ name: clients.name })
+    .from(clients)
+    .where(eq(clients.id, clientId))
+    .limit(1);
+  return row?.name ?? null;
+}
+
+async function resolveRateCredentialContext(
+  input: Pick<RateInput, 'storeId' | 'clientId' | 'sourceClientId' | 'apiKeyV2'>,
+): Promise<RateCredentialContext> {
+  const storeId = input.storeId ?? null;
+  const clientId =
+    input.clientId ?? (storeId != null ? await resolveClientIdForStoreId(storeId) : null);
+  const credentials = await loadClientCredentials(clientId, {
+    storeId: storeId ?? undefined,
+  });
+  const apiKeyV2 = input.apiKeyV2 ?? credentials.apiKeyV2 ?? null;
+  const sourceClientId =
+    input.sourceClientId ?? credentials.sourceClientId ?? (apiKeyV2 && clientId ? clientId : null);
+  const sourceClientName = (await loadClientName(sourceClientId)) ?? 'DR PREPPER';
+  return {
+    storeId,
+    clientId,
+    apiKeyV2,
+    sourceClientId,
+    sourceClientName,
+  };
+}
+
+export async function getCarrierAccountsForRateContext(
+  input: Pick<RateInput, 'storeId' | 'clientId'>,
+): Promise<RateCarrierAccount[]> {
+  const context = await resolveRateCredentialContext({
+    storeId: input.storeId ?? null,
+    clientId: input.clientId ?? null,
+  });
+  const carriers = await getAllCarriers(context.apiKeyV2);
+  return carriers.map((carrier) => ({
+    ...carrier,
+    friendly_name: carrier.nickname,
+    source_client_id: context.sourceClientId,
+    source_client_name: context.sourceClientName,
+  }));
 }
 
 function shipFromPostalCode(addr: Address): string {

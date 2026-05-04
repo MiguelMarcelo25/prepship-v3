@@ -4,9 +4,10 @@
 // (apiClient.fetchRates translates v2 payload shape to v4 server-side).
 //
 // Layout: Configure (220px) | Carriers (190px) | Rates (flex).
-// Rate fetching: iterates shippingAccounts sequentially with a 200ms spacing
-// to mirror v2's rate-limit-friendly loop; partition by shippingProviderId
-// so the carrier-count badges fill in progressively.
+// Rate fetching: asks the v4 adapter for all scoped carrier IDs in one request.
+// The server still performs ShipStation's one-carrier estimate calls behind the
+// adapter, but does them in parallel so the modal is not blocked account by
+// account.
 //
 // Keep the file under ~600 lines. If/when block-list logic or per-client
 // service unblocking is wired, extract v2's isBlockedRate into a helper
@@ -36,6 +37,7 @@ export type RbPackageDto = {
 export type RbCarrierAccountDto = {
   shippingProviderId: number;
   carrierId?: string | null;
+  carrierCode?: string | null;
   code: string;
   nickname?: string | null;
   accountNumber?: string | null;
@@ -93,6 +95,15 @@ type RateRow = {
   raw?: any;
 };
 
+const scopedCarrierAccountsCache = new Map<string, RbCarrierAccountDto[]>();
+
+function carrierAccountScopeKey(order: RbOrderSummaryDto | null): string {
+  return [
+    order?.clientId != null ? `client:${order.clientId}` : 'client:none',
+    order?.storeId != null ? `store:${order.storeId}` : 'store:none',
+  ].join('|');
+}
+
 // ── v2 constants ports (trimmed to what the row renderer needs) ──────────────
 const CARRIER_NAMES: Record<string, string> = {
   prepship_test: 'PrepShip Test',
@@ -108,6 +119,43 @@ const CARRIER_NAMES: Record<string, string> = {
   amazon_swa: 'Amazon',
   globegistics: 'Globegistics',
 };
+
+function toDisplayLabel(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() && !value.trim().startsWith('se-')
+    ? value.trim()
+    : null;
+}
+
+function isGenericAccountLabel(
+  value: string,
+  account: Partial<RbCarrierAccountDto> | null | undefined
+): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return true;
+  const generic = account?.code ? CARRIER_NAMES[account.code] : null;
+  const candidates = [
+    generic,
+    account?.code,
+    account?.carrierCode,
+    account?.name,
+  ]
+    .map((candidate) => toDisplayLabel(candidate)?.toLowerCase())
+    .filter(Boolean);
+  return candidates.includes(normalized);
+}
+
+function formatAccountDisplay(
+  account: Partial<RbCarrierAccountDto> | null | undefined,
+  fallback = 'Account'
+): string {
+  const labels = [
+    toDisplayLabel(account?.nickname),
+    toDisplayLabel(account?._label),
+    toDisplayLabel(account?.accountNumber),
+    toDisplayLabel(account?.name),
+  ].filter(Boolean) as string[];
+  return labels.find((label) => !isGenericAccountLabel(label, account)) ?? labels[0] ?? fallback;
+}
 
 const SERVICE_NAMES: Record<string, string> = {
   test_mock_service: 'Test Mock Service',
@@ -126,9 +174,9 @@ const SERVICE_NAMES: Record<string, string> = {
   // UPS
   ups_ground: 'UPS Ground',
   ups_ground_saver: 'UPS Ground Saver',
-  ups_surepost: 'UPS SurePost',
-  ups_surepost_1_lb_or_greater: 'UPS SurePost (≥1 lb)',
-  ups_surepost_less_than_1_lb: 'UPS SurePost (<1 lb)',
+  ups_surepost: 'UPS Ground Saver',
+  ups_surepost_1_lb_or_greater: 'UPS Ground Saver (1 lb+)',
+  ups_surepost_less_than_1_lb: 'UPS Ground Saver (<1 lb)',
   ups_3_day_select: 'UPS 3 Day Select',
   ups_2nd_day_air: 'UPS 2nd Day Air',
   ups_2nd_day_air_am: 'UPS 2nd Day Air AM',
@@ -328,10 +376,7 @@ function buildOrderBestRateSeed(
       toOptionalString(bestRate.carrierNickname) ??
       toOptionalString(raw.carrierNickname) ??
       toOptionalString(raw.carrier_nickname) ??
-      account?._label ??
-      account?.nickname ??
-      account?.name ??
-      null,
+      (formatAccountDisplay(account, '') || null),
     shippingProviderId,
     shipmentCost,
     otherCost,
@@ -361,7 +406,7 @@ const TEST_MOCK_SERVICE_TEMPLATES: Record<
   ],
   ups_walleted: [
     { code: 'ups_ground_saver', name: 'UPS Ground Saver', base: 7.55, spread: 3.95, perLb: 0.86, days: '3-6 days' },
-    { code: 'ups_surepost', name: 'UPS SurePost', base: 6.95, spread: 3.1, perLb: 0.78, days: '2-7 days' },
+    { code: 'ups_surepost', name: 'UPS Ground Saver', base: 6.95, spread: 3.1, perLb: 0.78, days: '2-7 days' },
     { code: 'ups_next_day_air_saver', name: 'UPS Next Day Air Saver', base: 31.5, spread: 10.2, perLb: 1.9, days: '1 day' },
   ],
   fedex: [
@@ -414,11 +459,7 @@ function buildTestMockRateSeeds(
         carrierCode: account.code || 'test',
         serviceCode: template.code,
         serviceName: template.name,
-        carrierNickname:
-          account._label ??
-          account.nickname ??
-          account.name ??
-          `Test Carrier ${accountIndex + 1}`,
+        carrierNickname: formatAccountDisplay(account, `Test Carrier ${accountIndex + 1}`),
         shippingProviderId: account.shippingProviderId,
         shipmentCost,
         otherCost,
@@ -460,6 +501,14 @@ function applyRbMarkupFn(
   return m.type === 'pct' || m.type === 'percent'
     ? base * (1 + m.value / 100)
     : base + m.value;
+}
+
+function rateBaseTotal(rate: RateRow): number {
+  return (Number(rate.shipmentCost) || 0) + (Number(rate.otherCost) || 0);
+}
+
+function rateDisplayTotal(rate: RateRow, markups: Record<string, Markup>): number {
+  return applyRbMarkupFn(markups, rate.shippingProviderId, rateBaseTotal(rate));
 }
 
 function priceDisplay(
@@ -537,6 +586,61 @@ export default function RateBrowserModal({
   const [viewMode, setViewMode] = useState<'all' | 'carriers'>('all');
   const [hideUnavail, setHideUnavail] = useState(true);
   const [browsing, setBrowsing] = useState(false);
+  const [scopedShippingAccounts, setScopedShippingAccounts] = useState<RbCarrierAccountDto[]>([]);
+  const [scopedAccountsLoading, setScopedAccountsLoading] = useState(false);
+  const [scopedAccountsError, setScopedAccountsError] = useState<string | null>(null);
+
+  const rateShippingAccounts = useMemo(
+    () => (testMode ? shippingAccounts : scopedShippingAccounts),
+    [testMode, shippingAccounts, scopedShippingAccounts]
+  );
+  const rateAccountsReady = testMode || rateShippingAccounts.length > 0;
+
+  useEffect(() => {
+    if (!open) {
+      setScopedShippingAccounts([]);
+      setScopedAccountsLoading(false);
+      setScopedAccountsError(null);
+      return;
+    }
+    if (testMode) {
+      setScopedShippingAccounts(shippingAccounts);
+      setScopedAccountsLoading(false);
+      setScopedAccountsError(null);
+      return;
+    }
+
+    let cancelled = false;
+    const scopeKey = carrierAccountScopeKey(order);
+    const hasCachedScope = scopedCarrierAccountsCache.has(scopeKey);
+    const cached = scopedCarrierAccountsCache.get(scopeKey) ?? [];
+    setScopedShippingAccounts(cached);
+    setScopedAccountsLoading(!hasCachedScope);
+    setScopedAccountsError(null);
+
+    void apiClient
+      .fetchCarriersForStore(order?.storeId ?? null, order?.clientId ?? null)
+      .then((res) => {
+        if (cancelled) return;
+        const carriers = Array.isArray(res?.carriers) ? res.carriers : [];
+        scopedCarrierAccountsCache.set(scopeKey, carriers);
+        setScopedShippingAccounts(carriers);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        if (!hasCachedScope) {
+          setScopedShippingAccounts([]);
+          setScopedAccountsError(err instanceof Error ? err.message : 'Unable to load carrier accounts');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setScopedAccountsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open, testMode, order?.storeId, order?.clientId]);
 
   // Populate form from order on open. Priority for dims: panel > saved >
   // nothing. Priority for weight: initialWeight prop > order.weight.value.
@@ -574,7 +678,7 @@ export default function RateBrowserModal({
         ? (initialWeight.lb ?? 0) * 16 + (initialWeight.oz ?? 0)
         : order?.weight?.value ?? 0;
     const seededTestRates = testMode
-      ? buildTestMockRateSeeds(shippingAccounts, {
+      ? buildTestMockRateSeeds(rateShippingAccounts, {
           orderId: order?.orderId,
           weightOz: initialTotalOz,
           dims: { length: panelLen || savedLen || 0, width: panelWid || savedWid || 0, height: panelHgt || savedHgt || 0 },
@@ -582,7 +686,7 @@ export default function RateBrowserModal({
       : [];
     const seededBestRate = testMode
       ? [...seededTestRates].sort((a, b) => a.shipmentCost + a.otherCost - (b.shipmentCost + b.otherCost))[0] ?? null
-      : buildOrderBestRateSeed(order, shippingAccounts);
+      : buildOrderBestRateSeed(order, rateShippingAccounts);
     setSelectedPid(
       typeof seededBestRate?.shippingProviderId === 'number'
         ? seededBestRate.shippingProviderId
@@ -598,7 +702,7 @@ export default function RateBrowserModal({
     // `locations` is intentionally not in deps — it doesn't change per-order
     // and we only want to re-hydrate when the modal opens or the order changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, order?.orderId, testMode]);
+  }, [open, order?.orderId, testMode, rateShippingAccounts.length]);
 
   // Derived
   const lbNum = parseFloat(wtLb) || 0;
@@ -631,12 +735,13 @@ export default function RateBrowserModal({
     const orderId = order?.orderId ?? 0;
     if (autoFetchedRef.current === orderId) return;
     if (!hasWeight || !hasDims || !zip || zip.length < 5) return;
+    if (!rateAccountsReady) return;
     autoFetchedRef.current = orderId;
     void browseRates();
     // browseRates is stable across renders via function declaration;
     // intentionally not listed as a dep.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, order?.orderId, hasWeight, hasDims, zip]);
+  }, [open, order?.orderId, hasWeight, hasDims, zip, rateAccountsReady]);
 
   // Auto-select a package when dimensions match within 0.15" tolerance
   // (v2's rbUpdateBadgesAndAutoSelect).
@@ -684,17 +789,17 @@ export default function RateBrowserModal({
     if (typeof pkg.height === 'number' && pkg.height > 0) setHgt(String(pkg.height));
   }
 
-  // Per-carrier fetch loop with 200ms spacing (v2 parity for rate-limit
-  // friendliness). Each call returns a full rate list from the adapter;
-  // we partition by shippingProviderId so the carrier-count badges fill in
-  // progressively as each carrier resolves.
+  // Fetch all scoped carrier accounts in one UI request. The backend still calls
+  // ShipStation per carrier, but it does that work in parallel and returns one
+  // grouped result set for the modal.
   async function browseRates(): Promise<void> {
     if (!zip || zip.length < 5 || !hasWeight || !hasDims) return;
+    if (!testMode && !rateShippingAccounts.length) return;
 
     const totalOz = lbNum * 16 + ozNum;
     setBrowsing(true);
     const seededTestRates = testMode
-      ? buildTestMockRateSeeds(shippingAccounts, {
+      ? buildTestMockRateSeeds(rateShippingAccounts, {
           orderId: order?.orderId,
           weightOz: totalOz,
           dims: { length: lenNum, width: widNum, height: hgtNum },
@@ -702,7 +807,7 @@ export default function RateBrowserModal({
       : [];
     const seededBestRate = testMode
       ? [...seededTestRates].sort((a, b) => a.shipmentCost + a.otherCost - (b.shipmentCost + b.otherCost))[0] ?? null
-      : buildOrderBestRateSeed(order, shippingAccounts);
+      : buildOrderBestRateSeed(order, rateShippingAccounts);
     const seededPid =
       typeof seededBestRate?.shippingProviderId === 'number'
         ? seededBestRate.shippingProviderId
@@ -717,8 +822,8 @@ export default function RateBrowserModal({
     if (seededPid != null) {
       setSelectedPid((current) => current ?? seededPid);
     }
-    setPendingPids(new Set(shippingAccounts.map((a) => a.shippingProviderId)));
-    const liveFetchedRates: RateRow[] = [];
+    setPendingPids(new Set(rateShippingAccounts.map((a) => a.shippingProviderId)));
+    let liveFetchedRates: RateRow[] = [];
 
     // Persist dims for this order (fire-and-forget) so re-open sees them.
     if (order?.orderId) {
@@ -741,61 +846,76 @@ export default function RateBrowserModal({
       return;
     }
 
-    for (const acct of shippingAccounts) {
-      try {
-        const raw = (await apiClient.fetchRates({
-          toPostalCode: zip,
-          toCountry: 'US',
-          weight: { value: totalOz, units: 'ounces' },
-          dimensions: {
-            units: 'inches',
-            length: lenNum,
-            width: widNum,
-            height: hgtNum,
-          },
-          residential: true,
-          carrierIds: acct.carrierId ? [acct.carrierId] : undefined,
-          storeId: order?.storeId ?? undefined,
-          clientId: order?.clientId ?? undefined,
-          forceRefresh: false,
-        })) as RateRow[];
+    try {
+      const accountByPid = new Map(
+        rateShippingAccounts.map((acct) => [acct.shippingProviderId, acct])
+      );
+      const accountByCarrierId = new Map(
+        rateShippingAccounts
+          .filter((acct) => typeof acct.carrierId === 'string' && acct.carrierId.length > 0)
+          .map((acct) => [acct.carrierId as string, acct])
+      );
+      const carrierIds = [...new Set([...accountByCarrierId.keys()])];
+      const raw = (await apiClient.fetchRates({
+        toPostalCode: zip,
+        toCountry: 'US',
+        weight: { value: totalOz, units: 'ounces' },
+        dimensions: {
+          units: 'inches',
+          length: lenNum,
+          width: widNum,
+          height: hgtNum,
+        },
+        residential: true,
+        carrierIds: carrierIds.length ? carrierIds : undefined,
+        storeId: order?.storeId ?? undefined,
+        clientId: order?.clientId ?? undefined,
+        forceRefresh: false,
+      })) as RateRow[];
 
-        let list: RateRow[] = (raw ?? []).map((r) => ({
-          ...r,
-          shippingProviderId: r.shippingProviderId ?? acct.shippingProviderId,
-          carrierNickname:
-            r.carrierNickname ??
-            acct._label ??
-            acct.nickname ??
-            acct.accountNumber ??
-            acct.name ??
-            null,
-        }));
-        if (!list.length && seededBestRate && acct.shippingProviderId === seededPid) {
-          list = [seededBestRate];
-        }
-        list.sort(
-          (a, b) =>
-            (a.shipmentCost + a.otherCost) - (b.shipmentCost + b.otherCost)
-        );
-        liveFetchedRates.push(...list.filter((r) => r !== seededBestRate));
-        setRatesByPid((prev) => ({
-          ...prev,
-          [String(acct.shippingProviderId)]: list,
-        }));
-      } catch {
-        setRatesByPid((prev) => ({
-          ...prev,
-          [String(acct.shippingProviderId)]:
-            seededBestRate && acct.shippingProviderId === seededPid ? [seededBestRate] : [],
-        }));
+      liveFetchedRates = (raw ?? [])
+        .map((r) => {
+          const pid =
+            typeof r.shippingProviderId === 'number'
+              ? r.shippingProviderId
+              : Number(r.shippingProviderId);
+          const rawCarrierId = typeof r.raw?.carrier_id === 'string' ? r.raw.carrier_id : null;
+          const account =
+            (Number.isFinite(pid) ? accountByPid.get(pid) : undefined) ??
+            (rawCarrierId ? accountByCarrierId.get(rawCarrierId) : undefined);
+          return {
+            ...r,
+            shippingProviderId: account?.shippingProviderId ?? r.shippingProviderId,
+            carrierNickname: r.carrierNickname ?? formatAccountDisplay(account, ''),
+          };
+        })
+        .filter((r) => {
+          const pid =
+            typeof r.shippingProviderId === 'number'
+              ? r.shippingProviderId
+              : Number(r.shippingProviderId);
+          return Number.isFinite(pid) && accountByPid.has(pid);
+        })
+        .sort((a, b) => (a.shipmentCost + a.otherCost) - (b.shipmentCost + b.otherCost));
+
+      const grouped = groupRatesByProviderId(liveFetchedRates);
+      const nextRatesByPid: Record<string, RateRow[]> = {};
+      for (const acct of rateShippingAccounts) {
+        const key = String(acct.shippingProviderId);
+        nextRatesByPid[key] = grouped[key] ?? [];
       }
-      setPendingPids((prev) => {
-        const next = new Set(prev);
-        next.delete(acct.shippingProviderId);
-        return next;
-      });
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      if (seededBestRate && seededPid != null && !nextRatesByPid[String(seededPid)]?.length) {
+        nextRatesByPid[String(seededPid)] = [seededBestRate];
+      }
+      setRatesByPid(nextRatesByPid);
+    } catch {
+      setRatesByPid(
+        seededBestRate && seededPid != null
+          ? { [String(seededPid)]: [seededBestRate] }
+          : {}
+      );
+    } finally {
+      setPendingPids(new Set());
     }
 
     if (onBestRateResolved && (liveFetchedRates.length || seededBestRate)) {
@@ -804,15 +924,12 @@ export default function RateBrowserModal({
       // already-saved best rate so the modal stays consistent with the row.
       const ratesToRank = liveFetchedRates.length ? liveFetchedRates : [seededBestRate!];
       const available = filterBySvcClass(ratesToRank).filter((r) => !isBlockedRate(r));
-      const best = available.sort((a, b) => {
-        const aBase = a.shipmentCost + a.otherCost;
-        const bBase = b.shipmentCost + b.otherCost;
-        const aMarked = applyRbMarkupFn(markups, a.shippingProviderId, aBase);
-        const bMarked = applyRbMarkupFn(markups, b.shippingProviderId, bBase);
-        return aMarked - bMarked;
-      })[0];
+      const best = available.sort((a, b) => rateDisplayTotal(a, markups) - rateDisplayTotal(b, markups))[0];
       const applied = best ? toAppliedRate(best) : null;
-      if (applied) onBestRateResolved(applied);
+      if (applied) {
+        setSelectedPid(applied.shippingProviderId);
+        onBestRateResolved(applied);
+      }
     }
 
     setBrowsing(false);
@@ -848,20 +965,14 @@ export default function RateBrowserModal({
   const combinedAll: RateRow[] = useMemo(() => {
     const out: RateRow[] = [];
     const seenPids = new Set<string>();
-    for (const acct of shippingAccounts) {
+    for (const acct of rateShippingAccounts) {
       seenPids.add(String(acct.shippingProviderId));
       const rates = ratesByPid[String(acct.shippingProviderId)] ?? [];
       for (const r of rates) {
         out.push({
           ...r,
           shippingProviderId: r.shippingProviderId ?? acct.shippingProviderId,
-          carrierNickname:
-            r.carrierNickname ??
-            acct._label ??
-            acct.nickname ??
-            acct.accountNumber ??
-            acct.name ??
-            null,
+          carrierNickname: r.carrierNickname ?? formatAccountDisplay(acct, ''),
         });
       }
     }
@@ -869,28 +980,16 @@ export default function RateBrowserModal({
       if (seenPids.has(pid)) continue;
       out.push(...rates);
     }
-    return filterBySvcClass(out).sort((a, b) => {
-      const am = applyRbMarkupFn(
-        markups,
-        a.shippingProviderId,
-        a.shipmentCost + a.otherCost
-      );
-      const bm = applyRbMarkupFn(
-        markups,
-        b.shippingProviderId,
-        b.shipmentCost + b.otherCost
-      );
-      return am - bm;
-    });
+    return filterBySvcClass(out).sort((a, b) => rateDisplayTotal(a, markups) - rateDisplayTotal(b, markups));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ratesByPid, shippingAccounts, svcClass, markups]);
+  }, [ratesByPid, rateShippingAccounts, svcClass, markups]);
 
   const totalCarriersAvailable = useMemo(
     () =>
-      shippingAccounts.filter(
+      rateShippingAccounts.filter(
         (c) => (ratesByPid[String(c.shippingProviderId)] ?? []).length > 0
       ).length,
-    [shippingAccounts, ratesByPid]
+    [rateShippingAccounts, ratesByPid]
   );
 
   function handleRateClick(r: RateRow): void {
@@ -941,7 +1040,7 @@ export default function RateBrowserModal({
 
   function renderRateRow(r: RateRow, index: number, showCarrier: boolean, isRecommended: boolean): ReactNode {
     const blocked = isBlockedRate(r);
-    const base = r.shipmentCost + r.otherCost;
+    const base = rateBaseTotal(r);
     const pid =
       typeof r.shippingProviderId === 'number'
         ? r.shippingProviderId
@@ -1234,7 +1333,7 @@ export default function RateBrowserModal({
         </div>
       );
     }
-    const acct = shippingAccounts.find((c) => c.shippingProviderId === selectedPid);
+    const acct = rateShippingAccounts.find((c) => c.shippingProviderId === selectedPid);
     const all = ratesByPid[String(selectedPid)] ?? [];
     const filtered = filterBySvcClass(all);
     const displayed = hideUnavail
@@ -1256,7 +1355,7 @@ export default function RateBrowserModal({
             marginTop: 80,
           }}
         >
-          No rates available for <b>{acct?.nickname || 'this account'}</b>
+          No rates available for <b>{formatAccountDisplay(acct, 'this account')}</b>
         </div>
       );
     }
@@ -1280,7 +1379,7 @@ export default function RateBrowserModal({
             }}
           >
             <span style={{ fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>
-              {acct?._label || acct?.nickname || acct?.accountNumber || 'Account'}
+              {formatAccountDisplay(acct)}
             </span>
             <span style={{ fontSize: 11, color: 'var(--text3)' }}>{countLabel}</span>
           </div>
@@ -1677,7 +1776,12 @@ export default function RateBrowserModal({
                 className="btn btn-primary"
                 onClick={() => void browseRates()}
                 disabled={
-                  browsing || !hasWeight || !hasDims || !zip || zip.length < 5
+                  browsing ||
+                  !hasWeight ||
+                  !hasDims ||
+                  !zip ||
+                  zip.length < 5 ||
+                  (!testMode && !rateShippingAccounts.length)
                 }
                 style={{
                   width: '100%',
@@ -1713,7 +1817,17 @@ export default function RateBrowserModal({
             >
               Carrier Accounts
             </div>
-            {shippingAccounts.map((c) => {
+            {!testMode && scopedAccountsLoading && rateShippingAccounts.length === 0 ? (
+              <div style={{ padding: '12px', fontSize: 11, color: 'var(--text3)' }}>
+                Loading accounts...
+              </div>
+            ) : null}
+            {!testMode && !scopedAccountsLoading && rateShippingAccounts.length === 0 ? (
+              <div style={{ padding: '12px', fontSize: 11, color: 'var(--text3)' }}>
+                {scopedAccountsError || 'No carrier accounts for this order'}
+              </div>
+            ) : null}
+            {rateShippingAccounts.map((c) => {
               const isSel = c.shippingProviderId === selectedPid;
               const rates = ratesByPid[String(c.shippingProviderId)];
               const count =
@@ -1784,7 +1898,7 @@ export default function RateBrowserModal({
                       whiteSpace: 'nowrap',
                     }}
                   >
-                    {c._label || c.nickname || c.accountNumber || c.name}
+                    {formatAccountDisplay(c)}
                   </span>
                   {count != null ? (
                     <span
@@ -1845,7 +1959,7 @@ export default function RateBrowserModal({
               </span>
               <span style={{ fontSize: 11.5, color: 'var(--text3)', flex: 1 }}>
                 {anyFetched
-                  ? `${totalCarriersAvailable} out of ${shippingAccounts.length} carriers available`
+                  ? `${totalCarriersAvailable} out of ${rateShippingAccounts.length} carriers available`
                   : ''}
               </span>
               <label
