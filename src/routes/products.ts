@@ -1,8 +1,9 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, asc, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, ilike, inArray, isNull, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
+import { inventory } from '../db/schema/inventory';
 import { products } from '../db/schema/products';
 import { offsetOf, paginated, paginationSchema } from '../lib/pagination';
 
@@ -104,6 +105,7 @@ app.patch('/:id{[0-9]+}', zValidator('json', body), async (c) => {
 const saveDefaultsBody = z.object({
   sku: z.string().min(1),
   name: z.string().nullable().optional(),
+  clientId: z.number().int().positive().nullable().optional(),
   weightOz: z.number().nonnegative().optional(),
   length: z.number().nonnegative().optional(),
   width: z.number().nonnegative().optional(),
@@ -113,18 +115,19 @@ const saveDefaultsBody = z.object({
 
 app.post('/save-defaults', zValidator('json', saveDefaultsBody), async (c) => {
   const v = c.req.valid('json');
+  const { clientId: inventoryClientId, ...productValues } = v;
   const [row] = await db
     .insert(products)
-    .values(v)
+    .values(productValues)
     .onConflictDoUpdate({
       target: products.sku,
       set: {
-        name: v.name,
-        weightOz: v.weightOz,
-        length: v.length,
-        width: v.width,
-        height: v.height,
-        defaultPackageCode: v.defaultPackageCode,
+        name: productValues.name,
+        weightOz: productValues.weightOz,
+        length: productValues.length,
+        width: productValues.width,
+        height: productValues.height,
+        defaultPackageCode: productValues.defaultPackageCode,
         updatedAt: new Date(),
       },
     })
@@ -160,6 +163,38 @@ app.post('/save-defaults', zValidator('json', saveDefaultsBody), async (c) => {
       });
   } catch (err) {
     console.warn('[products] product_defaults mirror failed:', err);
+  }
+
+  // Keep Inventory in sync with shipping/product defaults. The inventory grid
+  // reads from inventory.*, not products.*, so SKU-level package auto-detection
+  // in the shipping panel needs to land here too.
+  try {
+    const patch: Record<string, unknown> = { updatedAt: new Date() };
+    if (v.name !== undefined && v.name !== null) patch.name = v.name;
+    if (v.weightOz !== undefined) patch.weightOz = v.weightOz;
+    if (v.length !== undefined) patch.length = v.length;
+    if (v.width !== undefined) patch.width = v.width;
+    if (v.height !== undefined) patch.height = v.height;
+
+    if (v.defaultPackageCode === null) {
+      patch.packageId = null;
+    } else if (typeof v.defaultPackageCode === 'string') {
+      const packageId = Number.parseInt(v.defaultPackageCode, 10);
+      if (Number.isFinite(packageId) && packageId > 0) patch.packageId = packageId;
+    }
+
+    const skuWhere = sql`lower(${inventory.sku}) = lower(${v.sku})`;
+    const where =
+      inventoryClientId === undefined
+        ? skuWhere
+        : and(
+            skuWhere,
+            inventoryClientId === null ? isNull(inventory.clientId) : eq(inventory.clientId, inventoryClientId)
+          );
+
+    await db.update(inventory).set(patch).where(where);
+  } catch (err) {
+    console.warn('[products] inventory defaults mirror failed:', err);
   }
 
   return c.json(row);

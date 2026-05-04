@@ -35,6 +35,7 @@ export interface UseOrdersOptions {
   dateStart?: string;
   dateEnd?: string;
   hideTestOrders?: boolean;
+  search?: string;
 }
 
 export interface UseOrdersResult {
@@ -436,6 +437,7 @@ export function useOrders(
     dateStart,
     dateEnd,
     hideTestOrders = false,
+    search,
   } = options;
 
   const [currentPage, setCurrentPage] = useState<number>(page);
@@ -453,6 +455,7 @@ export function useOrders(
 
   const isoFrom = toIsoStart(dateStart);
   const isoTo = toIsoEnd(dateEnd);
+  const searchTerm = search?.trim() || undefined;
 
   // Test clients can appear in the sidebar without a real ShipStation store.
   // /init/stores represents those rows with a negative synthetic store id
@@ -480,6 +483,7 @@ export function useOrders(
       effectiveStoreId,
       excludeClientId,
       hideTestOrders,
+      searchTerm,
       isoFrom,
       isoTo,
     ],
@@ -493,6 +497,7 @@ export function useOrders(
           storeId: effectiveStoreId,
           excludeClientId,
           hideTestOrders: hideTestOrders && effectiveClientId == null && effectiveStoreId == null ? true : undefined,
+          search: searchTerm,
           dateFrom: isoFrom,
           dateTo: isoTo,
         })}`
@@ -701,7 +706,7 @@ export function useShippingAccounts(): UseShippingAccountsResult {
         nickname: c.nickname ?? c.friendly_name ?? c.carrier_code,
         clientId: c.source_client_id ?? null,
         code: c.carrier_code,
-        _label: c.friendly_name ?? c.nickname ?? c.carrier_code,
+        _label: c.nickname ?? c.friendly_name ?? c.carrier_code,
         sourceClientName: c.source_client_name,
       })),
     [query.data]

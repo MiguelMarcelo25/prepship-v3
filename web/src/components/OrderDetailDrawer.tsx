@@ -107,7 +107,7 @@ type OrderFullResponse = {
 export type OrderDetailDrawerProps = {
   orderId: number | null;
   displayStatus?: string;
-  presentation?: 'drawer' | 'modal';
+  presentation?: 'drawer' | 'modal' | 'centered';
   closeLabel?: string;
   closeTitle?: string;
   onClose: () => void;
@@ -179,10 +179,7 @@ function LabelCostStack({ breakdown }: { breakdown: ReturnType<typeof getLabelCo
   return (
     <div style={{ lineHeight: 1.35 }}>
       <div style={{ fontWeight: 700, color: 'var(--green, #15803d)' }}>
-        {fmtOptionalMoney(breakdown.labelCost)}
-      </div>
-      <div style={{ fontSize: 10.5, color: 'var(--text)', fontWeight: 600 }}>
-        Base {fmtOptionalMoney(breakdown.baseCost)} + Markup {fmtOptionalMoney(breakdown.markupCost)}
+        {fmtOptionalMoney(breakdown.labelCost ?? breakdown.baseCost)}
       </div>
     </div>
   );
@@ -450,10 +447,11 @@ export default function OrderDetailDrawer({
     toNumber(raw.canonicalOrder?.shipping?.labelCost);
   const labelBreakdown = getLabelCostBreakdown(liveShipment, labelCost);
   const isShipped = (effectiveStatus ?? '').toLowerCase() === 'shipped';
-  const isModal = presentation === 'modal';
+  const isCompactModal = presentation === 'modal';
+  const isModal = isCompactModal || presentation === 'centered';
   const closeIsTextButton = closeLabel !== '✕';
 
-  if (isModal) {
+  if (isCompactModal) {
     const shipmentRecord = (liveShipment ?? {}) as any;
     const rawRecord = raw as any;
     const canonicalShipping = (rawRecord.canonicalOrder?.shipping ?? {}) as Record<string, unknown>;
@@ -527,7 +525,7 @@ export default function OrderDetailDrawer({
             position: 'fixed',
             inset: 0,
             background: 'rgba(15,23,42,.45)',
-            zIndex: 1400,
+            zIndex: 6000,
           }}
         />
         <div
@@ -543,7 +541,7 @@ export default function OrderDetailDrawer({
             transform: 'translate(-50%, -50%)',
             borderRadius: 8,
             background: 'var(--surface)',
-            zIndex: 1401,
+            zIndex: 6001,
             boxShadow: '0 18px 54px rgba(15,23,42,.28)',
             display: 'flex',
             flexDirection: 'column',
@@ -732,7 +730,7 @@ export default function OrderDetailDrawer({
           position: 'fixed',
           inset: 0,
           background: 'rgba(15,23,42,.45)',
-          zIndex: 1400,
+          zIndex: 6000,
         }}
       />
       {/* Detail surface */}
@@ -749,7 +747,7 @@ export default function OrderDetailDrawer({
           transform: isModal ? 'translate(-50%, -50%)' : undefined,
           borderRadius: isModal ? 10 : 0,
           background: 'var(--background, #f6f7fb)',
-          zIndex: 1401,
+          zIndex: 6001,
           boxShadow: isModal ? '0 18px 54px rgba(15,23,42,.28)' : '-8px 0 32px rgba(0,0,0,.18)',
           display: 'flex',
           flexDirection: 'column',

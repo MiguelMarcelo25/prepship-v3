@@ -421,6 +421,29 @@ function toProviderAccountId(value: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+function normalizeCarrierAccountDto(c: any, index = 0): any {
+  const carrierId = c?.carrier_id ?? c?.carrierId ?? '';
+  const carrierCode = c?.carrier_code ?? c?.carrierCode ?? c?.code ?? '';
+  const label =
+    c?.nickname ??
+    c?.friendly_name ??
+    c?.friendlyName ??
+    c?.accountNumber ??
+    c?.name ??
+    carrierCode;
+  return {
+    ...c,
+    carrierId,
+    carrierCode,
+    shippingProviderId: toProviderAccountId(carrierId) ?? c?.shippingProviderId ?? index + 1,
+    nickname: c?.nickname ?? label,
+    clientId: c?.source_client_id ?? c?.sourceClientId ?? c?.clientId ?? null,
+    code: carrierCode,
+    _label: label,
+    sourceClientName: c?.source_client_name ?? c?.sourceClientName,
+  };
+}
+
 // Maps v4's ShipStation-v2-passthrough rate object to the v2-legacy shape
 // the bulk-ported components read. Defensive: if a caller already hands us
 // v2-shape data (has `amount` + `carrierCode`), return it unchanged.
@@ -835,15 +858,29 @@ export const apiClient = {
   },
 
   // v2 signature: GET /carriers-for-store?storeId=X — returned store-scoped
-  // carriers. v4 doesn't track per-store carrier assignments (ShipStation now
-  // manages multi-tenant via client credentials, not per-store), so return
-  // the full carrier list as a safe superset. Shape matches v2: {carriers: []}.
-  fetchCarriersForStore(_storeId?: number | null): Promise<{ carriers: any[] }> {
+  // carriers. v4 scopes by client/store credential source so order-specific
+  // rate browsing never mixes DRP and KFG ShipStation accounts.
+  fetchCarriersForStore(
+    storeId?: number | null,
+    clientId?: number | null
+  ): Promise<{ carriers: any[] }> {
     return safe(
       'fetchCarriersForStore',
       async () => {
-        const carriers = await apiClient.fetchCarrierAccounts();
-        return { carriers };
+        const res = await api.get<any>(
+          `/rates/carriers-for-store${qs({
+            storeId: storeId ?? undefined,
+            clientId: clientId ?? undefined,
+          })}`
+        );
+        const raw = Array.isArray(res?.carriers)
+          ? res.carriers
+          : Array.isArray(res?.data)
+            ? res.data
+            : Array.isArray(res)
+              ? res
+              : [];
+        return { carriers: raw.map(normalizeCarrierAccountDto) };
       },
       { carriers: [] }
     );
@@ -1615,6 +1652,14 @@ export const apiClient = {
               : Number(r?.unit_price ?? r?.unitPrice),
           itemName: r?.item_name ?? r?.itemName ?? null,
           qty: Number(r?.qty ?? 0),
+          shippingCost:
+            r?.shipping_cost == null && r?.shippingCost == null
+              ? null
+              : Number(r?.shipping_cost ?? r?.shippingCost),
+          standardShippingCost:
+            r?.standard_shipping_cost == null && r?.standardShippingCost == null
+              ? null
+              : Number(r?.standard_shipping_cost ?? r?.standardShippingCost),
         }));
 
         const rawDailySales = Array.isArray(res?.dailySales)
@@ -1744,21 +1789,17 @@ export const apiClient = {
   },
 
   adjustInventory(data: Record<string, unknown>): Promise<any> {
-    return safe(
-      'adjustInventory',
-      async () => {
-        const invId = (data as any)?.invSkuId ?? (data as any)?.inventoryId;
-        if (!invId) return {};
-        return api.post<any>(`/inventory/${invId}/adjust`, {
-          qty: (data as any).qty,
-          note: (data as any).note,
-          orderId: (data as any).orderId,
-          type: (data as any).type,
-          adjustedAt: (data as any).adjustedAt,
-        });
-      },
-      {}
-    );
+    const invId = (data as any)?.invSkuId ?? (data as any)?.inventoryId;
+    if (!invId) {
+      throw new Error('Inventory item is required to adjust stock');
+    }
+    return api.post<any>(`/inventory/${invId}/adjust`, {
+      qty: (data as any).qty,
+      note: (data as any).note,
+      orderId: (data as any).orderId,
+      type: (data as any).type,
+      adjustedAt: (data as any).adjustedAt,
+    });
   },
 
   submitInventoryAdjustment(data: Record<string, unknown>): Promise<any> {
@@ -1766,20 +1807,13 @@ export const apiClient = {
     // reading result.stockQty (undefined on current backend, would be defined
     // if backend flattened). Check the nested path first, fall back to flat
     // in case the server contract changes.
-    return safe(
-      'submitInventoryAdjustment',
-      async () => {
-        const result = await apiClient.adjustInventory(data);
-        return {
-          ok: true,
-          newStock:
-            (result as any)?.inventory?.stockQty ??
-            (result as any)?.stockQty ??
-            0,
-        } as { ok: boolean; newStock: number };
-      },
-      { ok: false, newStock: 0 }
-    );
+    return apiClient.adjustInventory(data).then((result) => ({
+      ok: true,
+      newStock:
+        (result as any)?.inventory?.stockQty ??
+        (result as any)?.stockQty ??
+        0,
+    } as { ok: boolean; newStock: number }));
   },
 
   populateInventory(): Promise<any> {

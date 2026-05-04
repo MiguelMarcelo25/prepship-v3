@@ -139,6 +139,8 @@ export default function Home() {
   )
   const [selectedOrderIds, setSelectedOrderIds] = useState<number[]>([])
   const [activeOrderId, setActiveOrderId] = useState<number | null>(null)
+  const pendingOpenOrderIdRef = useRef<number | null>(null)
+  const [externalOpenOrderVersion, setExternalOpenOrderVersion] = useState(0)
   const [columnMenuRequestId, setColumnMenuRequestId] = useState(0)
   const [labelsActionRequestId, setLabelsActionRequestId] = useState(0)
   const [queueToggleRequestId, setQueueToggleRequestId] = useState(0)
@@ -212,6 +214,7 @@ export default function Home() {
 
     if (mobile) {
       document.documentElement.style.removeProperty('--prepship-shell-height')
+      document.documentElement.style.removeProperty('--prepship-zoom-scale')
       document.body.style.zoom = ''
       document.body.style.height = ''
       return
@@ -219,11 +222,13 @@ export default function Home() {
 
     const shellHeight = `${(10000 / zoomPct).toFixed(2)}vh`
     document.documentElement.style.setProperty('--prepship-shell-height', shellHeight)
+    document.documentElement.style.setProperty('--prepship-zoom-scale', String(zoomPct / 100))
     document.body.style.zoom = `${zoomPct}%`
     document.body.style.height = shellHeight
 
     return () => {
       document.documentElement.style.removeProperty('--prepship-shell-height')
+      document.documentElement.style.removeProperty('--prepship-zoom-scale')
       document.body.style.zoom = ''
       document.body.style.height = ''
     }
@@ -243,9 +248,23 @@ export default function Home() {
   }, [zoomMenuOpen])
 
   useEffect(() => {
+    const pendingOrderId = pendingOpenOrderIdRef.current
+    if (displayView === 'orders' && pendingOrderId != null) {
+      pendingOpenOrderIdRef.current = null
+      setSelectedOrderIds([pendingOrderId])
+      setActiveOrderId(pendingOrderId)
+      return
+    }
     setSelectedOrderIds([])
     setActiveOrderId(null)
-  }, [displayView, currentStatus, activeStore, dateFilter])
+  }, [displayView, currentStatus, activeStore, dateFilter, externalOpenOrderVersion])
+
+  const openOrderFromContentView = (orderId: number, status?: string | null) => {
+    const targetStatus = VALID_STATUSES.includes(status as OrderStatus) ? status as OrderStatus : currentStatus
+    pendingOpenOrderIdRef.current = orderId
+    setExternalOpenOrderVersion((value) => value + 1)
+    navigate(`/orders/${targetStatus}`)
+  }
 
   useEffect(() => {
     if (displayView !== 'orders') return
@@ -382,6 +401,11 @@ export default function Home() {
         }}
         mobileMenuOpen={mobileMenuOpen}
         onCloseMobileMenu={closeMobileMenu}
+        searchValue={searchQuery}
+        onSearch={(query) => {
+          setSearchQuery(query)
+          if (query.trim()) navigate(`/orders/${currentStatus}`)
+        }}
         onSelectStore={(storeId, statusOverride) => {
           setActiveStore(storeId)
           navigate(`/orders/${statusOverride ?? currentStatus}`)
@@ -601,15 +625,12 @@ export default function Home() {
             showTestOrders={showTestOrders}
           />
         ) : displayView === 'inventory' ? (
-          <InventoryView searchQuery={searchQuery} />
+          <InventoryView searchQuery={searchQuery} onOpenOrder={openOrderFromContentView} />
         ) : displayView === 'locations' ? (
           <LocationsView />
         ) : displayView === 'packages' ? (
           <PackagesView
-            onOpenOrder={(orderId) => {
-              setActiveOrderId(orderId)
-              navigate(`/orders/${currentStatus}`)
-            }}
+            onOpenOrder={openOrderFromContentView}
           />
         ) : displayView === 'rates' ? (
           <RatesView />

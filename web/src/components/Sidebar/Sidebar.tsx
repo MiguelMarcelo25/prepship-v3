@@ -16,6 +16,7 @@ interface SidebarProps {
   onSelectStatus: (status: SidebarOrderStatus) => void
   mobileMenuOpen: boolean
   onCloseMobileMenu?: () => void
+  searchValue?: string
   onSearch?: (query: string) => void
   onSelectStore?: (storeId: number | null, status?: SidebarOrderStatus) => void
   activeStore?: number | null
@@ -53,6 +54,7 @@ export default function Sidebar({
   onShowView,
   mobileMenuOpen,
   onCloseMobileMenu,
+  searchValue,
   onSearch,
   onSelectStore,
   activeStore,
@@ -63,10 +65,11 @@ export default function Sidebar({
 }: SidebarProps) {
   const [expandedSections, setExpandedSections] = useState<Set<SidebarOrderStatus>>(new Set(['awaiting_shipment']))
   const [counts, setCounts] = useState<InitCountsDto | null>(null)
-  const [searchValue, setSearchValue] = useState('')
+  const [localSearchValue, setLocalSearchValue] = useState('')
   const { user, session, signOut } = useAuth()
   const navigate = useNavigate()
   const [signingOut, setSigningOut] = useState(false)
+  const effectiveSearchValue = searchValue ?? localSearchValue
 
   const handleSignOut = async () => {
     if (signingOut) return
@@ -126,18 +129,19 @@ export default function Sidebar({
         <input
           type="text"
           placeholder="Search Orders…"
-          value={searchValue}
+          value={effectiveSearchValue}
           onChange={(event) => {
-            setSearchValue(event.target.value)
-            onSearch?.(event.target.value)
+            const next = event.target.value
+            if (searchValue === undefined) setLocalSearchValue(next)
+            onSearch?.(next)
           }}
         />
-        {searchValue ? (
+        {effectiveSearchValue ? (
           <button
             type="button"
             className="react-sidebar-clear"
             onClick={() => {
-              setSearchValue('')
+              if (searchValue === undefined) setLocalSearchValue('')
               onSearch?.('')
             }}
             aria-label="Clear search"

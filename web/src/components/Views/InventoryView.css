@@ -31,13 +31,66 @@
 
 .inventory-drawer-panel{
   width:680px;
-  max-width:100vw;
+  max-width:calc(100vw / var(--prepship-zoom-scale, 1));
   height:100%;
   background:var(--surface);
   display:flex;
   flex-direction:column;
   box-shadow:-4px 0 32px rgba(0,0,0,.25);
   overflow:hidden;
+  min-width:0;
+}
+
+.inventory-drawer-body{
+  flex:1;
+  min-width:0;
+  overflow-x:hidden;
+  overflow-y:auto;
+  padding:18px 20px;
+}
+
+.inventory-sku-chart-card{
+  min-width:0;
+  overflow:hidden;
+}
+
+.inventory-sku-chart-canvas{
+  display:block;
+  width:100%;
+  max-width:100%;
+  height:160px;
+}
+
+.inventory-sku-orders-wrap{
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:8px;
+  overflow:auto;
+  max-width:100%;
+}
+
+.inventory-order-link{
+  background:none;
+  border:none;
+  color:var(--ss-blue);
+  cursor:pointer;
+  font:inherit;
+  font-family:monospace;
+  font-size:11px;
+  padding:0;
+  text-align:left;
+  text-decoration:underline;
+  text-underline-offset:2px;
+}
+
+.inventory-order-link:hover{
+  color:var(--ss-blue2);
+}
+
+.inventory-order-link:disabled{
+  color:var(--text3);
+  cursor:default;
+  text-decoration:none;
 }
 
 .inventory-inline-button{

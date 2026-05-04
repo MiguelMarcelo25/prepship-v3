@@ -7,6 +7,7 @@ const Logout = lazy(() => import('./pages/Logout'));
 const Signup = lazy(() => import('./pages/Signup'));
 const ForgotPassword = lazy(() => import('./pages/ForgotPassword'));
 const ResetPassword = lazy(() => import('./pages/ResetPassword'));
+const PromptLibrary = lazy(() => import('./pages/PromptLibrary'));
 const Home = lazy(() => import('./Home'));
 const Picklist = lazy(() => import('./pages/Picklist'));
 const Clients = lazy(() => import('./pages/Clients'));
@@ -31,6 +32,7 @@ export default function App() {
         <Route path="/signup" element={<Signup />} />
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/reset-password" element={<ResetPassword />} />
+        <Route path="/prompt-library" element={<PromptLibrary />} />
 
         {/* Protected app routes */}
         <Route

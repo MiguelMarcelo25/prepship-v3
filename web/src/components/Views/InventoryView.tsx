@@ -3,6 +3,7 @@ import { useContext, useEffect, useMemo, useRef, useState, type MouseEvent as Re
 import { apiClient, ApiError } from '../../api/client'
 import { ToastContext } from '../../contexts/ToastContext'
 import { useInitStores } from '../../hooks'
+import OrderDetailDrawer from '../OrderDetailDrawer'
 import type {
   ClientDto,
   CreateParentSkuResult,
@@ -149,11 +150,13 @@ function createEditSkuFormState(item: InventoryItemDto): EditSkuFormState {
 function drawSkuSalesChart(canvas: HTMLCanvasElement, dailySales: InventorySkuOrdersDto['dailySales']) {
   const dpr = window.devicePixelRatio || 1
   const rect = canvas.getBoundingClientRect()
-  const width = rect.width || 620
-  const height = rect.height || 160
+  const parentWidth = canvas.parentElement?.clientWidth ?? 0
+  const width = Math.max(260, Math.floor(rect.width || parentWidth || 320))
+  const height = Math.max(140, Math.floor(rect.height || 160))
   canvas.width = width * dpr
   canvas.height = height * dpr
-  canvas.style.width = `${width}px`
+  canvas.style.width = '100%'
+  canvas.style.maxWidth = '100%'
   canvas.style.height = `${height}px`
 
   const context = canvas.getContext('2d')
@@ -256,7 +259,12 @@ function positionThumbnailPreview(cursorX: number, cursorY: number) {
   }
 }
 
-export default function InventoryView() {
+interface InventoryViewProps {
+  searchQuery?: string
+  onOpenOrder?: (orderId: number, status?: string | null) => void
+}
+
+export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) {
   const toastContext = useContext(ToastContext)
   const { stores } = useInitStores()
   const historyDefaults = useMemo(() => getInventoryDateRangePreset(), [])
@@ -297,6 +305,7 @@ export default function InventoryView() {
   const [skuDrawerError, setSkuDrawerError] = useState<string | null>(null)
   const [skuDrawerOpen, setSkuDrawerOpen] = useState(false)
   const [skuDrawerLoading, setSkuDrawerLoading] = useState(false)
+  const [orderDetailModal, setOrderDetailModal] = useState<{ orderId: number; status?: string | null } | null>(null)
   const [thumbnailPreview, setThumbnailPreview] = useState<ThumbnailPreviewState | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
 
@@ -488,7 +497,22 @@ export default function InventoryView() {
 
   useEffect(() => {
     if (!skuDrawer || !canvasRef.current) return
-    drawSkuSalesChart(canvasRef.current, skuDrawer.dailySales)
+    const canvas = canvasRef.current
+    const redraw = () => drawSkuSalesChart(canvas, skuDrawer.dailySales)
+    redraw()
+
+    const resizeTarget = canvas.parentElement
+    let observer: ResizeObserver | null = null
+    if (resizeTarget && typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver(redraw)
+      observer.observe(resizeTarget)
+    }
+    window.addEventListener('resize', redraw)
+
+    return () => {
+      observer?.disconnect()
+      window.removeEventListener('resize', redraw)
+    }
   }, [skuDrawer])
 
   // Load parent SKUs whenever the Parent SKUs tab is active or its client filter changes.
@@ -863,6 +887,13 @@ export default function InventoryView() {
     } finally {
       setSkuDrawerLoading(false)
     }
+  }
+
+  function openSkuDrawerOrder(order: InventorySkuOrdersDto['orders'][number]) {
+    const orderId = Number(order?.orderId)
+    if (!Number.isFinite(orderId) || orderId <= 0) return
+
+    setOrderDetailModal({ orderId, status: order?.orderStatus ?? null })
   }
 
   async function handleAdjustSubmit() {
@@ -1849,7 +1880,7 @@ export default function InventoryView() {
               </div>
               <button type="button" onClick={() => setSkuDrawerOpen(false)} style={{ padding: '5px 10px', border: '1px solid var(--border2)', borderRadius: 6, background: 'var(--surface2)', color: 'var(--text)', cursor: 'pointer', fontSize: 13 }}>✕</button>
             </div>
-            <div style={{ flex: 1, overflowY: 'auto', padding: '18px 20px' }}>
+            <div className="inventory-drawer-body">
               {skuDrawerLoading ? (
                 <div className="loading"><div className="spinner" /></div>
               ) : skuDrawerError ? (
@@ -1871,16 +1902,16 @@ export default function InventoryView() {
                     </div>
                   </div>
 
-                  <div style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '14px 16px', marginBottom: 18 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', marginBottom: 10 }}>📊 Units Sold — Last 30 Days</div>
-                    <canvas ref={canvasRef} width={620} height={160} style={{ width: '100%', height: 160, display: 'block' }} />
+                  <div className="inventory-sku-chart-card" style={{ background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 8, padding: '14px 16px', marginBottom: 18 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', marginBottom: 10 }}>Units Sold — Last 30 Days</div>
+                    <canvas ref={canvasRef} className="inventory-sku-chart-canvas" width={620} height={160} />
                   </div>
 
                   <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', marginBottom: 8 }}>Recent Orders ({skuDrawer.orders.length})</div>
                   {skuDrawer.orders.length === 0 ? (
                     <div style={{ color: 'var(--text3)', fontSize: 12, padding: 16, textAlign: 'center' }}>No orders found for this SKU.</div>
                   ) : (
-                    <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+                    <div className="inventory-sku-orders-wrap">
                       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                         <thead>
                           <tr style={{ background: 'var(--surface2)', borderBottom: '1px solid var(--border)' }}>
@@ -1896,7 +1927,16 @@ export default function InventoryView() {
                             const statusColor = order.orderStatus === 'shipped' ? 'var(--green)' : order.orderStatus === 'awaiting_shipment' ? 'var(--ss-blue)' : 'var(--text3)'
                             return (
                               <tr key={order.orderId} style={{ borderTop: '1px solid var(--border)', background: index % 2 === 0 ? '' : 'var(--surface2)' }}>
-                                <td style={{ padding: '6px 10px', fontFamily: 'monospace', fontSize: 11, color: 'var(--ss-blue)' }}>{order.orderNumber || String(order.orderId)}</td>
+                                <td style={{ padding: '6px 10px' }}>
+                                  <button
+                                    type="button"
+                                    className="inventory-order-link"
+                                    disabled={!Number.isFinite(Number(order.orderId)) || Number(order.orderId) <= 0}
+                                    onClick={() => openSkuDrawerOrder(order)}
+                                  >
+                                    {order.orderNumber || String(order.orderId)}
+                                  </button>
+                                </td>
                                 <td style={{ padding: '6px 10px', fontSize: 11.5, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{order.shipToName || '—'}</td>
                                 <td style={{ padding: '6px 6px', textAlign: 'center', fontWeight: 700 }}>{order.qty || 1}</td>
                                 <td style={{ padding: '6px 10px', fontSize: 11, fontWeight: 700, color: statusColor }}>{order.orderStatus || '—'}</td>
@@ -1914,6 +1954,15 @@ export default function InventoryView() {
           </div>
         </div>
       ) : null}
+
+      <OrderDetailDrawer
+        orderId={orderDetailModal?.orderId ?? null}
+        displayStatus={orderDetailModal?.status ?? undefined}
+        presentation="modal"
+        closeLabel="Close"
+        closeTitle="Close order details"
+        onClose={() => setOrderDetailModal(null)}
+      />
 
       {thumbnailPreview ? (
         <div

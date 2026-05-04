@@ -2,6 +2,10 @@
   background:var(--surface2);
 }
 
+.analysis-sku-drawer-panel{
+  width:820px;
+}
+
 .analysis-order-link{
   appearance:none;
   border:none;

@@ -22,7 +22,6 @@ import {
   formatAnalysisMoney,
   getAnalysisEmptyMessage,
   getAnalysisPresetRange,
-  getAnalysisSortDirection,
   getAnalysisSummaryText,
   getInitialAnalysisFilters,
   sortAnalysisRows,
@@ -34,6 +33,7 @@ import { AnalysisDataTable } from './AnalysisDataTable'
 import { AnalysisPagination } from './AnalysisPagination'
 import type { AnalysisTableColumn, ColumnWidths } from './AnalysisTableHeader'
 import { AnalysisTopSkusChart } from './AnalysisTopSkusChart'
+import OrderDetailDrawer from '../OrderDetailDrawer'
 import './InventoryView.css'
 import './AnalysisView.css'
 
@@ -399,8 +399,8 @@ export default function AnalysisView() {
   const [presetDays, setPresetDays] = useState<number | null>(initialFilters.presetDays)
   const [clientId, setClientId] = useState('')
   const [search, setSearch] = useState('')
-  const [sortKey, setSortKey] = useState<AnalysisSortKey>('total')
-  const [sortDir, setSortDir] = useState<AnalysisSortDir>('desc')
+  const sortKey: AnalysisSortKey = 'qty'
+  const sortDir: AnalysisSortDir = 'desc'
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(50)
   const [columnSize, setColumnSize] = useState<ColumnSize>(readStoredColumnSize)
@@ -418,6 +418,7 @@ export default function AnalysisView() {
   const [skuDrawerError, setSkuDrawerError] = useState<string | null>(null)
   const [skuDrawerOpen, setSkuDrawerOpen] = useState(false)
   const [skuDrawerLoading, setSkuDrawerLoading] = useState(false)
+  const [orderDetailDrawer, setOrderDetailDrawer] = useState<{ orderId: number; status?: string | null } | null>(null)
   const [orderModal, setOrderModal] = useState({
     open: false,
     loading: false,
@@ -431,7 +432,7 @@ export default function AnalysisView() {
   )
   const sortedRows = useMemo(
     () => sortAnalysisRows(filteredRows, sortKey, sortDir),
-    [filteredRows, sortKey, sortDir],
+    [filteredRows],
   )
   const totals = useMemo(() => buildAnalysisTotals(sortedRows), [sortedRows])
   const pagedRows = useMemo(() => {
@@ -550,7 +551,7 @@ export default function AnalysisView() {
 
   useEffect(() => {
     setPage(1)
-  }, [from, to, clientId, search, sortKey, sortDir])
+  }, [from, to, clientId, search])
 
   useEffect(() => {
     const maxPage = Math.max(1, Math.ceil(sortedRows.length / pageSize))
@@ -635,52 +636,19 @@ export default function AnalysisView() {
 
   async function openOrderDetails(order: Record<string, unknown>) {
     const orderId = numberValue(order.orderId)
-    const orderNumber = displayText(order.orderNumber ?? orderId, 'Order')
-    setOrderModal({
-      open: true,
-      loading: true,
-      error: null,
-      order: null,
-      orderNumber,
-    })
-
     if (orderId == null) {
-      setOrderModal((current) => ({
-        ...current,
-        loading: false,
-        error: 'This order row does not include a valid order id.',
-      }))
+      toastContext?.addToast('This order row does not include a valid order id.', 'error')
       return
     }
-
-    try {
-      const detail = await apiClient.fetchOrderFull(orderId)
-      if (!detail) throw new Error('Order details were not found.')
-      setOrderModal({
-        open: true,
-        loading: false,
-        error: null,
-        order: detail,
-        orderNumber: displayText(detail.orderNumber ?? orderNumber, orderNumber),
-      })
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Failed to load order details'
-      setOrderModal((current) => ({
-        ...current,
-        loading: false,
-        error: message,
-      }))
-      toastContext?.addToast(message, 'error')
-    }
+    setOrderDetailDrawer({ orderId, status: displayText(order.orderStatus, '') || null })
   }
 
   function closeOrderDetails() {
     setOrderModal((current) => ({ ...current, open: false }))
   }
 
-  function handleSort(nextKey: AnalysisSortKey) {
-    setSortDir((currentDir) => getAnalysisSortDirection(nextKey, sortKey, currentDir))
-    setSortKey(nextKey)
+  function handleSort() {
+    // Analysis rows are intentionally locked to total units sold, highest first.
   }
 
   const hasChart =
@@ -887,7 +855,7 @@ export default function AnalysisView() {
       {skuDrawerOpen ? (
         <div className="inventory-drawer-overlay" onClick={() => setSkuDrawerOpen(false)}>
           <div
-            className="inventory-drawer-panel"
+            className="inventory-drawer-panel analysis-sku-drawer-panel"
             onClick={(event) => event.stopPropagation()}
           >
             <div
@@ -1131,6 +1099,7 @@ export default function AnalysisView() {
                             <th>Order #</th>
                             <th>Customer</th>
                             <th className="is-center">Qty</th>
+                            <th className="is-right">Cost</th>
                             <th>Status</th>
                             <th>Date</th>
                           </tr>
@@ -1165,6 +1134,7 @@ export default function AnalysisView() {
                                 </td>
                                 <td className="col-customer">{displayText(order.shipToName)}</td>
                                 <td className="col-qty">{order.qty || 1}</td>
+                                <td className="col-cost">{formatMoneyValue(order.shippingCost)}</td>
                                 <td>
                                   <span className={`analysis-status-pill ${statusClass}`}>
                                     {statusLabel}
@@ -1184,6 +1154,13 @@ export default function AnalysisView() {
           </div>
         </div>
       ) : null}
+
+      <OrderDetailDrawer
+        orderId={orderDetailDrawer?.orderId ?? null}
+        displayStatus={orderDetailDrawer?.status ?? undefined}
+        presentation="centered"
+        onClose={() => setOrderDetailDrawer(null)}
+      />
 
       {orderModal.open ? (
         <div

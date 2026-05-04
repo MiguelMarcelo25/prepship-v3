@@ -8,6 +8,7 @@ type OrderForDeduction = {
   id: number;
   clientId: number | null;
   orderNumber: string | null;
+  orderDate?: Date | string | null;
   items: unknown[];
 };
 
@@ -36,7 +37,13 @@ function toQuantity(value: unknown) {
   return Math.max(1, Math.round(parsed));
 }
 
-function buildDeductionLines(items: unknown[]): DeductionLine[] {
+function toMovementDate(value: Date | string | null | undefined) {
+  if (!value) return undefined;
+  const parsed = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+}
+
+function buildDeductionLines(items: unknown[], skuFilter?: Set<string>): DeductionLine[] {
   const bySku = new Map<string, DeductionLine>();
 
   for (const rawItem of items) {
@@ -47,6 +54,7 @@ function buildDeductionLines(items: unknown[]): DeductionLine[] {
     if (!sku) continue;
 
     const key = sku.toLowerCase();
+    if (skuFilter && !skuFilter.has(key)) continue;
     const existing = bySku.get(key);
     const qty = toQuantity(item.quantity);
     if (existing) {
@@ -104,21 +112,17 @@ export async function deductPackageForShipment(input: {
 
 export async function deductInventoryForOrder(
   order: OrderForDeduction,
-  input: { shipmentId?: number; source?: string } = {},
+  input: { shipmentId?: number; source?: string; createdAt?: Date; skus?: string[] } = {},
 ) {
-  const lines = buildDeductionLines(order.items);
+  const skuFilter = input.skus?.length
+    ? new Set(input.skus.map((sku) => sku.trim().toLowerCase()).filter(Boolean))
+    : undefined;
+  const lines = buildDeductionLines(order.items, skuFilter);
   if (!lines.length) return { deducted: 0, skipped: true };
 
   return db.transaction(async (tx) => {
-    const [existingPick] = await tx
-      .select({ id: inventoryLedger.id })
-      .from(inventoryLedger)
-      .where(and(eq(inventoryLedger.orderId, order.id), eq(inventoryLedger.type, 'ship')))
-      .limit(1);
-
-    if (existingPick) return { deducted: 0, skipped: true };
-
     let deducted = 0;
+    let skipped = 0;
     for (const line of lines) {
       const skuMatches = sql`lower(${inventory.sku}) = lower(${line.sku})`;
       let row: { id: number; stockQty: number } | null = null;
@@ -154,6 +158,23 @@ export async function deductInventoryForOrder(
         row = created;
       }
 
+      const [existingShipLine] = await tx
+        .select({ id: inventoryLedger.id })
+        .from(inventoryLedger)
+        .where(
+          and(
+            eq(inventoryLedger.orderId, order.id),
+            eq(inventoryLedger.type, 'ship'),
+            eq(inventoryLedger.inventoryId, row.id)
+          )
+        )
+        .limit(1);
+
+      if (existingShipLine) {
+        skipped += line.qty;
+        continue;
+      }
+
       const balanceAfter = row.stockQty - line.qty;
       const patch: Record<string, unknown> = {
         stockQty: balanceAfter,
@@ -175,10 +196,11 @@ export async function deductInventoryForOrder(
         orderId: order.id,
         note: `Order ${order.orderNumber ?? order.id}${input.shipmentId ? ` / shipment ${input.shipmentId}` : ''}`,
         createdBy: input.source ?? 'label',
+        createdAt: input.createdAt ?? toMovementDate(order.orderDate) ?? new Date(),
       });
       deducted += line.qty;
     }
 
-    return { deducted, skipped: false };
+    return { deducted, skipped: deducted === 0, skippedUnits: skipped };
   });
 }
