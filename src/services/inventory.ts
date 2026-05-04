@@ -22,7 +22,7 @@ export async function applyMovement(move: StockMovement) {
     if (!current) throw new Error('Inventory item not found');
 
     const newQty = current.stockQty + move.qty;
-    if (newQty < 0) {
+    if (move.qty < 0 && newQty < 0) {
       throw new Error(
         `Stock would go negative (${current.stockQty} + ${move.qty} = ${newQty})`
       );

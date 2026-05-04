@@ -262,6 +262,8 @@ app.get(
             and lower(item->>'sku') = lower(${row.sku})
             ${dateFilterSql}
             and coalesce(o.order_status, '') <> 'cancelled'
+            and coalesce((item->>'adjustment')::boolean, false) = false
+            and coalesce((item->>'quantity')::int, 1) > 0
           group by date_trunc('day', o.order_date)
           order by date_trunc('day', o.order_date) asc
         `)
@@ -289,25 +291,169 @@ app.get(
       standard_shipping_total: string;
       avg_standard_shipping_cost: string;
     }>(sql`
-      with matching_orders as (
+      with matching_order_ids as (
         select distinct
-          o.id,
-          o.service_code
+          o.id
         from orders o
         cross join lateral jsonb_array_elements(o.items) item
         where item ? 'sku'
           and lower(item->>'sku') = lower(${row.sku})
           ${dateFilterSql}
           and coalesce(o.order_status, '') <> 'cancelled'
+          and coalesce((item->>'adjustment')::boolean, false) = false
+          and coalesce((item->>'quantity')::int, 1) > 0
       ),
-      costed_orders as (
+      item_rows as (
         select
-          mo.id,
-          coalesce(ls.service_code, mo.service_code) as service_code,
-          ls.marked_cost
-        from matching_orders mo
+          o.id                                                               as order_id,
+          o.order_status                                                     as order_status,
+          coalesce(ls.service_code, o.service_code)                          as service_code,
+          ls.order_id                                                        as shipment_order_id,
+          coalesce(ls.marked_cost, 0)                                        as label_cost,
+          coalesce(nullif(item->>'sku', ''), '')                             as sku,
+          case
+            when nullif(item->>'sku', '') is not null then item->>'sku'
+            else '_name_:' || lower(trim(coalesce(item->>'name', '')))
+          end                                                               as sku_key,
+          coalesce(nullif(item->>'name', ''), '—')                           as name,
+          coalesce((item->>'quantity')::int, 1)                              as qty
+        from matching_order_ids moi
+        join orders o on o.id = moi.id
+        cross join lateral jsonb_array_elements(o.items) item
         left join lateral (
           select
+            s.order_id,
+            s.service_code,
+            case
+              when lower(cost_model.markup->>'type') in ('pct', 'percent')
+                then cost_model.base_cost * (1 + coalesce(nullif(cost_model.markup->>'value', '')::numeric, 0) / 100)
+              when lower(cost_model.markup->>'type') in ('amount', 'flat')
+                then cost_model.base_cost + coalesce(nullif(cost_model.markup->>'value', '')::numeric, 0)
+              else cost_model.base_cost
+            end as marked_cost
+          from shipments s
+          left join settings pid_markup
+            on pid_markup.key = 'markup.' || coalesce(s.provider_account_id, s.label_provider, s.selected_pid)::text
+          left join settings carrier_markup
+            on carrier_markup.key in ('markup.' || s.carrier_code, 'markup.' || lower(s.carrier_code))
+          cross join lateral (
+            select
+              (coalesce(s.cost, s.label_cost, 0) + coalesce(s.other_cost, 0))::numeric as base_cost,
+              case
+                when coalesce(pid_markup.value, carrier_markup.value) ~ '^\\s*\\{'
+                  then coalesce(pid_markup.value, carrier_markup.value)::jsonb
+              else null::jsonb
+            end as markup
+          ) cost_model
+          where s.order_id = o.id
+            and coalesce(s.voided, false) = false
+          order by s.id desc
+          limit 1
+        ) ls on true
+        where coalesce((item->>'adjustment')::boolean, false) = false
+          and coalesce((item->>'quantity')::int, 1) > 0
+      ),
+      order_sku_rows as (
+        select
+          order_id,
+          max(order_status)                                                   as order_status,
+          max(service_code)                                                    as service_code,
+          max(shipment_order_id)                                               as shipment_order_id,
+          max(label_cost)                                                      as label_cost,
+          sku_key,
+          max(sku)                                                             as sku,
+          sum(qty)::int                                                        as qty
+        from item_rows
+        group by order_id, sku_key
+      ),
+      allocated as (
+        select
+          r.*,
+          count(*) over (partition by r.order_id)                              as sku_divisor,
+          case
+            when r.order_status = 'shipped' and r.shipment_order_id is null then true
+            else false
+          end                                                                 as is_external,
+          case
+            when lower(coalesce(r.service_code, '')) = ANY(${EXPEDITED_SERVICES_SQL})
+              then 'exp'
+            else 'std'
+          end                                                                 as ship_class
+        from order_sku_rows r
+      )
+      select
+        count(*) filter (
+          where lower(sku) = lower(${row.sku})
+            and not is_external
+            and label_cost > 0
+            and ship_class = 'std'
+        )::int as standard_ship_count,
+        coalesce(sum(label_cost / nullif(sku_divisor, 0)) filter (
+          where lower(sku) = lower(${row.sku})
+            and not is_external
+            and label_cost > 0
+            and ship_class = 'std'
+        ), 0)::text as standard_shipping_total,
+        coalesce(avg(label_cost / nullif(sku_divisor, 0)) filter (
+          where lower(sku) = lower(${row.sku})
+            and not is_external
+            and label_cost > 0
+            and ship_class = 'std'
+        ), 0)::text as avg_standard_shipping_cost
+      from allocated
+    `);
+
+    const rows = await db.execute<{
+      order_id: number;
+      order_number: string;
+      order_date: string | null;
+      order_status: string;
+      ship_to_name: string | null;
+      carrier_code: string | null;
+      service_code: string | null;
+      qty: number;
+      unit_price: string | null;
+      item_name: string | null;
+      shipping_cost: string | null;
+      standard_shipping_cost: string | null;
+    }>(sql`
+      with matching_order_ids as (
+        select distinct
+          o.id
+        from orders o
+        cross join lateral jsonb_array_elements(o.items) item
+        where item ? 'sku'
+          and lower(item->>'sku') = lower(${row.sku})
+          ${dateFilterSql}
+          and coalesce(o.order_status, '') <> 'cancelled'
+          and coalesce((item->>'adjustment')::boolean, false) = false
+          and coalesce((item->>'quantity')::int, 1) > 0
+      ),
+      item_rows as (
+        select
+          o.id                                                               as order_id,
+          o.order_number                                                     as order_number,
+          o.order_date                                                       as order_date,
+          o.order_status                                                     as order_status,
+          o.ship_to_name                                                     as ship_to_name,
+          o.carrier_code                                                     as carrier_code,
+          coalesce(ls.service_code, o.service_code)                          as service_code,
+          ls.order_id                                                        as shipment_order_id,
+          coalesce(ls.marked_cost, 0)                                        as label_cost,
+          coalesce(nullif(item->>'sku', ''), '')                             as sku,
+          case
+            when nullif(item->>'sku', '') is not null then item->>'sku'
+            else '_name_:' || lower(trim(coalesce(item->>'name', '')))
+          end                                                               as sku_key,
+          coalesce(nullif(item->>'name', ''), '—')                           as item_name,
+          coalesce((item->>'quantity')::int, 1)                              as qty,
+          coalesce(item->>'unitPrice', item->>'unit_price')                  as unit_price
+        from matching_order_ids moi
+        join orders o on o.id = moi.id
+        cross join lateral jsonb_array_elements(o.items) item
+        left join lateral (
+          select
+            s.order_id,
             s.service_code,
             case
               when lower(cost_model.markup->>'type') in ('pct', 'percent')
@@ -330,58 +476,70 @@ app.get(
                 else null::jsonb
               end as markup
           ) cost_model
-          where s.order_id = mo.id
+          where s.order_id = o.id
             and coalesce(s.voided, false) = false
           order by s.id desc
           limit 1
         ) ls on true
+        where coalesce((item->>'adjustment')::boolean, false) = false
+          and coalesce((item->>'quantity')::int, 1) > 0
+      ),
+      order_sku_rows as (
+        select
+          order_id,
+          max(order_number)                                                   as order_number,
+          min(order_date)                                                      as order_date,
+          max(order_status)                                                    as order_status,
+          max(ship_to_name)                                                    as ship_to_name,
+          max(carrier_code)                                                    as carrier_code,
+          max(service_code)                                                    as service_code,
+          max(shipment_order_id)                                               as shipment_order_id,
+          max(label_cost)                                                      as label_cost,
+          sku_key,
+          max(sku)                                                             as sku,
+          (array_agg(item_name order by length(item_name) desc))[1]            as item_name,
+          sum(qty)::int                                                        as qty,
+          max(unit_price)                                                      as unit_price
+        from item_rows
+        group by order_id, sku_key
+      ),
+      allocated as (
+        select
+          r.*,
+          count(*) over (partition by r.order_id)                              as sku_divisor,
+          case
+            when r.order_status = 'shipped' and r.shipment_order_id is null then true
+            else false
+          end                                                                 as is_external,
+          case
+            when lower(coalesce(r.service_code, '')) = ANY(${EXPEDITED_SERVICES_SQL})
+              then 'exp'
+            else 'std'
+          end                                                                 as ship_class
+        from order_sku_rows r
       )
       select
-        count(*) filter (
-          where marked_cost > 0
-            and lower(coalesce(service_code, '')) <> ALL(${EXPEDITED_SERVICES_SQL})
-        )::int as standard_ship_count,
-        coalesce(sum(marked_cost) filter (
-          where marked_cost > 0
-            and lower(coalesce(service_code, '')) <> ALL(${EXPEDITED_SERVICES_SQL})
-        ), 0)::text as standard_shipping_total,
-        coalesce(avg(marked_cost) filter (
-          where marked_cost > 0
-            and lower(coalesce(service_code, '')) <> ALL(${EXPEDITED_SERVICES_SQL})
-        ), 0)::text as avg_standard_shipping_cost
-      from costed_orders
-    `);
-
-    const rows = await db.execute<{
-      order_id: number;
-      order_number: string;
-      order_date: string | null;
-      order_status: string;
-      ship_to_name: string | null;
-      carrier_code: string | null;
-      service_code: string | null;
-      qty: number;
-      unit_price: string | null;
-      item_name: string | null;
-    }>(sql`
-      select
-        o.id                                     as order_id,
-        o.order_number                           as order_number,
-        o.order_date                             as order_date,
-        o.order_status                           as order_status,
-        o.ship_to_name                           as ship_to_name,
-        o.carrier_code                           as carrier_code,
-        o.service_code                           as service_code,
-        coalesce((item->>'quantity')::int, 1)    as qty,
-        coalesce(item->>'unitPrice', item->>'unit_price') as unit_price,
-        item->>'name'                            as item_name
-      from orders o
-      cross join lateral jsonb_array_elements(o.items) item
-      where item ? 'sku'
-        and lower(item->>'sku') = lower(${row.sku})
-        ${dateFilterSql}
-        and coalesce(o.order_status, '') <> 'cancelled'
-      order by o.order_date desc nulls last
+        order_id,
+        order_number,
+        order_date,
+        order_status,
+        ship_to_name,
+        carrier_code,
+        service_code,
+        qty,
+        unit_price,
+        item_name,
+        case
+          when not is_external and label_cost > 0 then (label_cost / nullif(sku_divisor, 0))::text
+          else null
+        end as shipping_cost,
+        case
+          when not is_external and label_cost > 0 and ship_class = 'std' then (label_cost / nullif(sku_divisor, 0))::text
+          else null
+        end as standard_shipping_cost
+      from allocated
+      where lower(sku) = lower(${row.sku})
+      order by order_date desc nulls last
       limit 200
     `);
 
@@ -465,7 +623,7 @@ app.post(
       type: 'receive',
       qty: body.qty,
       note: body.note,
-      createdBy: email,
+      createdBy: email ?? 'manual',
       createdAt: movementDateFrom(body.receivedAt ?? body.adjustedAt),
     });
     return c.json(result);
@@ -610,7 +768,7 @@ app.post(
       type: body.type ?? 'adjust',
       qty: body.qty,
       note: body.note,
-      createdBy: email,
+      createdBy: email ?? 'manual',
       createdAt: movementDateFrom(body.adjustedAt ?? body.receivedAt),
     });
     return c.json(result);
@@ -710,7 +868,7 @@ app.post(
           type: 'receive',
           qty: item.qty,
           note: item.note?.trim() || body.note?.trim() || undefined,
-          createdBy: email,
+          createdBy: email ?? 'manual',
           createdAt: receivedAt,
         });
         results.push({
@@ -768,7 +926,7 @@ app.post(
       type: body.type ?? 'adjust',
       qty: body.qty,
       note: body.note,
-      createdBy: email,
+      createdBy: email ?? 'manual',
       createdAt: movementDateFrom(body.adjustedAt ?? body.receivedAt),
     });
     return c.json(result);
