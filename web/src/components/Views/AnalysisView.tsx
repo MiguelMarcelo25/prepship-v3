@@ -1183,7 +1183,7 @@ export default function AnalysisView() {
                                 minWidth={DRAWER_ORDERS_COLUMN_MIN.orderNum}
                               />
                             </th>
-                            <th style={{ position: 'relative' }}>
+                            <th className="is-center" style={{ position: 'relative' }}>
                               Customer
                               <ColumnResizeHandle
                                 getStartWidth={() => getDrawerOrderColumnWidth('customer')}
@@ -1201,7 +1201,7 @@ export default function AnalysisView() {
                                 minWidth={DRAWER_ORDERS_COLUMN_MIN.qty}
                               />
                             </th>
-                            <th className="is-right" style={{ position: 'relative' }}>
+                            <th className="is-center" style={{ position: 'relative' }}>
                               Cost
                               <ColumnResizeHandle
                                 getStartWidth={() => getDrawerOrderColumnWidth('cost')}
@@ -1210,7 +1210,7 @@ export default function AnalysisView() {
                                 minWidth={DRAWER_ORDERS_COLUMN_MIN.cost}
                               />
                             </th>
-                            <th style={{ position: 'relative' }}>
+                            <th className="is-center" style={{ position: 'relative' }}>
                               Status
                               <ColumnResizeHandle
                                 getStartWidth={() => getDrawerOrderColumnWidth('status')}
@@ -1258,9 +1258,9 @@ export default function AnalysisView() {
                                     {order.orderNumber || String(order.orderId)}
                                   </button>
                                 </td>
-                                <td className="col-customer">{displayText(order.shipToName)}</td>
-                                <td className="col-qty">{order.qty || 1}</td>
-                                <td className="col-cost">
+                                <td className="col-customer is-center">{displayText(order.shipToName)}</td>
+                                <td className="col-qty is-center">{order.qty || 1}</td>
+                                <td className="col-cost is-center">
                                   {order.externallyShipped ? (
                                     <span
                                       className="analysis-status-pill is-external"
@@ -1272,7 +1272,7 @@ export default function AnalysisView() {
                                     formatMoneyValue(order.standardShippingCost)
                                   )}
                                 </td>
-                                <td>
+                                <td className="is-center">
                                   <span className={`analysis-status-pill ${statusClass}`}>
                                     {statusLabel}
                                   </span>
