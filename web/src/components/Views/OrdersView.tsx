@@ -4360,6 +4360,19 @@ export default function OrdersView({
       : null
 
   const renderBestRatePrice = (order: OrderSummaryDto) => {
+    // If the user is actively re-typing weight/dims in the panel for this
+    // exact order, the saved bestRate on the row is stale until the debounced
+    // /rates fetch lands. Show the spinner so the row visibly reflects the
+    // recalculation in progress instead of flashing the old number.
+    if (panelRateLoading && panelOrder?.orderId === order.orderId) {
+      return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--ss-blue)', fontSize: 11, fontWeight: 600 }}>
+          <span className="ship-rate-spinner" aria-hidden="true" />
+          <span>Calculating…</span>
+        </div>
+      )
+    }
+
     if (isTestOrder(order)) {
       const testAmount = order.bestRate
         ? (toNumberValue(order.bestRate.shipmentCost) ?? 0) + (toNumberValue(order.bestRate.otherCost) ?? 0)
