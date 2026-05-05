@@ -6060,7 +6060,7 @@ export default function OrdersView({
           ) : null}
         </div>
 
-        <div className="content-split">
+        <div className="content-split relative">
           <div className="orders-section" id="ordersSection">
             <div className="orders-wrap">
               {loading ? (
@@ -6285,12 +6285,17 @@ export default function OrdersView({
               </div>
             </div>
           ) : (
+            // Pill is anchored to the right edge of the .content-split (which
+            // is now position: relative). top-3 places it just below the
+            // toolbar row that ends with the Picklist button, so the user
+            // sees "Picklist" up top and "Show panel" stacked right below it
+            // along the same right edge.
             <button
               type="button"
               aria-label="Show details panel"
               title="Show details panel"
               onClick={() => setShowEmptyPanel(true)}
-              className="absolute top-3.5 right-3.5 z-50 flex items-center gap-1.5 px-2.5 py-1.5 rounded-full border border-line-2 bg-surface text-xs2 font-semibold text-ink-2 shadow-md cursor-pointer transition-colors hover:bg-brand-bg hover:border-brand hover:text-brand"
+              className="absolute top-3 right-3 z-50 flex items-center gap-1.5 px-2.5 py-1.5 rounded-full border border-line-2 bg-surface text-xs2 font-semibold text-ink-2 shadow-md cursor-pointer transition-colors hover:bg-brand-bg hover:border-brand hover:text-brand"
             >
               <span aria-hidden="true">◧</span>
               <span>Show panel</span>
