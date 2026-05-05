@@ -13,6 +13,10 @@ type Client = {
   phone: string | null;
   active: boolean;
   storeIds: number[];
+  ssApiKey?: string | null;
+  ssApiSecret?: string | null;
+  ssApiKeyV2?: string | null;
+  rateSourceClientId?: number | null;
 };
 
 type Body = {
@@ -22,6 +26,10 @@ type Body = {
   phone?: string | null;
   active?: boolean;
   storeIds?: number[];
+  ssApiKey?: string | null;
+  ssApiSecret?: string | null;
+  ssApiKeyV2?: string | null;
+  rateSourceClientId?: number | null;
 };
 
 function parseStoreIds(input: string): number[] {
@@ -51,6 +59,31 @@ export default function ClientModal({
   const [storeIds, setStoreIds] = useState(
     (existing?.storeIds ?? []).join(', ')
   );
+  // Carrier credentials. Optional, advanced. Setting any of these scopes
+  // this client's Rate Browser to a specific ShipStation account; leaving
+  // them blank falls through to the env-default (DR PREPPER main).
+  const [ssApiKey, setSsApiKey] = useState(existing?.ssApiKey ?? '');
+  const [ssApiSecret, setSsApiSecret] = useState(existing?.ssApiSecret ?? '');
+  const [ssApiKeyV2, setSsApiKeyV2] = useState(existing?.ssApiKeyV2 ?? '');
+  const [rateSourceClientId, setRateSourceClientId] = useState(
+    existing?.rateSourceClientId != null ? String(existing.rateSourceClientId) : ''
+  );
+  const [carrierOpen, setCarrierOpen] = useState(false);
+  // Pull other clients for the rate-source dropdown so admins can borrow
+  // another client's v2 key (e.g. Walmart-DJC → KF Goods).
+  const [allClients, setAllClients] = useState<Array<{ id: number; name: string; hasV2: boolean }>>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void api.get<Client[]>('/clients').then((rows) => {
+      if (cancelled) return;
+      setAllClients(
+        rows
+          .filter((r) => !existing || r.id !== existing.id)
+          .map((r) => ({ id: r.id, name: r.name, hasV2: Boolean(r.ssApiKeyV2) }))
+      );
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [existing]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -74,6 +107,9 @@ export default function ClientModal({
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
+    const parsedRateSource = rateSourceClientId.trim()
+      ? Number.parseInt(rateSourceClientId, 10)
+      : null;
     mutation.mutate({
       name: name.trim(),
       contactName: contactName.trim() || null,
@@ -81,6 +117,13 @@ export default function ClientModal({
       phone: phone.trim() || null,
       active,
       storeIds: parseStoreIds(storeIds),
+      ssApiKey: ssApiKey.trim() || null,
+      ssApiSecret: ssApiSecret.trim() || null,
+      ssApiKeyV2: ssApiKeyV2.trim() || null,
+      rateSourceClientId:
+        parsedRateSource != null && Number.isFinite(parsedRateSource) && parsedRateSource > 0
+          ? parsedRateSource
+          : null,
     });
   };
 
@@ -171,6 +214,91 @@ export default function ClientModal({
             />
             Active
           </label>
+
+          <div className="border border-line rounded-md">
+            <button
+              type="button"
+              onClick={() => setCarrierOpen((v) => !v)}
+              className="w-full flex items-center justify-between px-3 py-2 text-left text-sm2 font-bold text-ink hover:bg-bg-2"
+            >
+              <span>🚚 Carrier credentials (advanced)</span>
+              <span className="text-ink-3">{carrierOpen ? '▾' : '▸'}</span>
+            </button>
+            {carrierOpen ? (
+              <div className="px-3 py-3 border-t border-line space-y-3">
+                <div className="text-tiny text-ink-3 leading-relaxed">
+                  Leave blank to inherit the default ShipStation account
+                  (DR PREPPER main). Set a v2 key below to scope this client's
+                  Rate Browser to a different account, or pick a "Rate source"
+                  client to borrow another client's v2 key.
+                </div>
+                <div>
+                  <label className="section-label block mb-1">
+                    ShipStation v2 API key
+                  </label>
+                  <Input
+                    type="password"
+                    value={ssApiKeyV2}
+                    onChange={(e) => setSsApiKeyV2(e.target.value)}
+                    placeholder={existing?.ssApiKeyV2 ? '•••••• (set)' : 'TEST_xxxxxxx'}
+                  />
+                  <div className="text-tiny text-ink-3 mt-1">
+                    Used by the Rate Browser, /v2/carriers, and /v2/rates/estimate.
+                  </div>
+                </div>
+                <div>
+                  <label className="section-label block mb-1">
+                    Rate source client (fallback v2 key)
+                  </label>
+                  <select
+                    value={rateSourceClientId}
+                    onChange={(e) => setRateSourceClientId(e.target.value)}
+                    className="w-full border border-line rounded-md px-2 py-1.5 text-sm2 bg-white"
+                  >
+                    <option value="">— None (use env default) —</option>
+                    {allClients.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}{c.hasV2 ? ' (has v2 key)' : ' (no v2 key)'}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="text-tiny text-ink-3 mt-1">
+                    If this client has no v2 key of its own, borrows the
+                    selected client's key for rate-browser/carrier scoping.
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className="section-label block mb-1">
+                      v1 API key
+                    </label>
+                    <Input
+                      type="password"
+                      value={ssApiKey}
+                      onChange={(e) => setSsApiKey(e.target.value)}
+                      placeholder={existing?.ssApiKey ? '•••••• (set)' : '—'}
+                    />
+                  </div>
+                  <div>
+                    <label className="section-label block mb-1">
+                      v1 API secret
+                    </label>
+                    <Input
+                      type="password"
+                      value={ssApiSecret}
+                      onChange={(e) => setSsApiSecret(e.target.value)}
+                      placeholder={existing?.ssApiSecret ? '•••••• (set)' : '—'}
+                    />
+                  </div>
+                </div>
+                <div className="text-tiny text-ink-3 leading-relaxed">
+                  v1 key+secret are used by legacy ShipStation v1 endpoints
+                  (e.g. product sync, mark-as-shipped). Most carrier work uses
+                  the v2 key only.
+                </div>
+              </div>
+            ) : null}
+          </div>
 
           {mutation.isError && (
             <div className="text-danger text-tiny py-1">
