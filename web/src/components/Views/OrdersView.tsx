@@ -1683,6 +1683,21 @@ export default function OrdersView({
   const [extShipMenuOpen, setExtShipMenuOpen] = useState(false)
   const [batchBusy, setBatchBusy] = useState(false)
   const [batchTestMode, setBatchTestMode] = useState(false)
+  // Row-density preference for the orders table. Persists per-browser so a
+  // user who picks Narrow stays Narrow across reloads. Three steps:
+  //   - narrow:  ~24 px row, 11 px font (max rows visible)
+  //   - cozy:    ~34 px row, 12.5 px font (default, what the table had before)
+  //   - wide:    ~48 px row, 13 px font (more breathing room, easier to scan)
+  type TableDensity = 'narrow' | 'cozy' | 'wide'
+  const [tableDensity, setTableDensity] = useState<TableDensity>(() => {
+    if (typeof window === 'undefined') return 'cozy'
+    const saved = window.localStorage.getItem('orders_table_density')
+    return saved === 'narrow' || saved === 'cozy' || saved === 'wide' ? saved : 'cozy'
+  })
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem('orders_table_density', tableDensity)
+  }, [tableDensity])
   const [singleActionBusy, setSingleActionBusy] = useState(false)
   const [shipmentDetailsSaving, setShipmentDetailsSaving] = useState(false)
   const queueActionProgressTimerRef = useRef<number | null>(null)
@@ -5907,6 +5922,50 @@ export default function OrdersView({
           >
             📥 Export CSV
           </button>
+          <div
+            role="group"
+            aria-label="Row density"
+            title="Row density"
+            style={{
+              display: 'inline-flex',
+              marginLeft: 8,
+              border: '1px solid var(--border2)',
+              borderRadius: 6,
+              overflow: 'hidden',
+              background: 'var(--surface)',
+            }}
+          >
+            {([
+              { key: 'narrow', label: '≡', tip: 'Narrow rows' },
+              { key: 'cozy', label: '☰', tip: 'Cozy rows (default)' },
+              { key: 'wide', label: '⫿', tip: 'Wide rows' },
+            ] as const).map((opt) => {
+              const isActive = tableDensity === opt.key
+              return (
+                <button
+                  key={opt.key}
+                  type="button"
+                  className="btn-density"
+                  title={opt.tip}
+                  aria-pressed={isActive}
+                  onClick={() => setTableDensity(opt.key)}
+                  style={{
+                    padding: '4px 9px',
+                    fontSize: 13,
+                    background: isActive ? 'var(--ss-blue)' : 'transparent',
+                    color: isActive ? '#fff' : 'var(--text2)',
+                    border: 'none',
+                    borderRight: opt.key !== 'wide' ? '1px solid var(--border2)' : 'none',
+                    cursor: 'pointer',
+                    fontWeight: 700,
+                    transition: 'background .15s, color .15s',
+                  }}
+                >
+                  {opt.label}
+                </button>
+              )
+            })}
+          </div>
           {currentStatus === 'awaiting_shipment' && queueToolbarProgress ? (
             <div
               id="queue-progress-indicator"
@@ -6023,7 +6082,7 @@ export default function OrdersView({
 
               {!loading && !error && orderedFilteredOrders.length > 0 ? (
                 <table
-                  className="orders-table"
+                  className={`orders-table density-${tableDensity}`}
                   id="ordersTable"
                   style={{ minWidth: tableWidth, width: tableWidth, tableLayout: 'fixed' }}
                 >
