@@ -41,6 +41,22 @@ const testOrderPredicate = sql`(
   or ${orders.raw} @> '{"testing": true}'::jsonb
  )`;
 
+// Match the awaiting-bucket logic in /init/counts. An order with status
+// 'awaiting_shipment' is removed from "actually needs to ship" if it's been
+// flagged externally shipped, ShipStation marked it externallyFulfilled, OR
+// a non-voided shipment already exists. Without this, the sidebar bucket
+// counts (which DO apply this exclusion) disagree with the table list (which
+// previously did not), so a user filtered to Walmart-DJC saw "1 in sidebar
+// but 2 in table". Applied only when the list is filtering by awaiting.
+const awaitingShipmentRealPredicate = sql`(
+  coalesce(${orders.externallyShipped}, false) = false
+  and coalesce((${orders.raw}->>'externallyFulfilled')::boolean, false) = false
+  and not exists (
+    select 1 from ${shipments} s
+    where s.order_id = ${orders.id} and s.voided = false
+  )
+)`;
+
 const LEGACY_CLIENT_ID_BY_STORE_ID = new Map<number, number>([
   [367706, 7],
   [363392, 8],
@@ -562,10 +578,17 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   if (q.status) {
     statusPredicate = sql`${orders.orderStatus} = ${q.status}`;
   }
+  // When asking for the awaiting bucket, mirror the same "actually needs
+  // shipping" filter that /init/counts uses, so the sidebar count and the
+  // table count agree.
+  const awaitingFilter = q.status === 'awaiting_shipment'
+    ? awaitingShipmentRealPredicate
+    : undefined;
 
   const where = and(
     ...[
       statusPredicate,
+      awaitingFilter,
       assigneeFilter,
       q.clientId !== undefined ? eq(orders.clientId, q.clientId) : undefined,
       q.storeId !== undefined ? eq(orders.storeId, q.storeId) : undefined,
