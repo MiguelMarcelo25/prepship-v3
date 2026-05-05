@@ -5755,7 +5755,7 @@ export default function OrdersView({
               role="status"
               aria-live="polite"
               style={{
-                marginLeft: 'auto',
+                marginLeft: 8,
                 width: 240,
                 maxWidth: '34vw',
                 minWidth: 170,
