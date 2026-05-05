@@ -1134,20 +1134,22 @@ export default function AnalysisView() {
                                 </td>
                                 <td className="col-customer">{displayText(order.shipToName)}</td>
                                 <td className="col-qty">{order.qty || 1}</td>
-                                <td className="col-cost">{formatMoneyValue(order.standardShippingCost)}</td>
-                                <td>
-                                  <span className={`analysis-status-pill ${statusClass}`}>
-                                    {statusLabel}
-                                  </span>
+                                <td className="col-cost">
                                   {order.externallyShipped ? (
                                     <span
                                       className="analysis-status-pill is-external"
                                       title="Externally fulfilled — shipped without a PrepShip label"
-                                      style={{ marginLeft: 4 }}
                                     >
                                       EXT
                                     </span>
-                                  ) : null}
+                                  ) : (
+                                    formatMoneyValue(order.standardShippingCost)
+                                  )}
+                                </td>
+                                <td>
+                                  <span className={`analysis-status-pill ${statusClass}`}>
+                                    {statusLabel}
+                                  </span>
                                 </td>
                                 <td className="col-date">{formatDateOnly(order.orderDate)}</td>
                               </tr>
