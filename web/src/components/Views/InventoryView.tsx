@@ -858,6 +858,24 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
     }
   }
 
+  // Toggles the client's `active` flag — same behavior as the Test Orders
+  // sidebar switch but per-client. Inactive clients are hidden from the
+  // sidebar (init/stores already filters by active=true) and from the
+  // sidebar bucket counts. Doesn't delete the client or its data.
+  async function handleToggleClientActive(client: ClientDto) {
+    const next = !(client.active ?? true)
+    try {
+      await apiClient.updateClientRecord(client.clientId, { active: next })
+      toastContext?.addToast(
+        `${next ? '✅' : '⏸️'} ${client.name} ${next ? 'enabled' : 'disabled'}`,
+        'success'
+      )
+      await refreshInventoryView()
+    } catch (error) {
+      toastContext?.addToast(error instanceof Error ? error.message : 'Toggle failed', 'error')
+    }
+  }
+
   async function handleSyncClients() {
     setClientSyncStatus('Syncing…')
     try {
@@ -1371,11 +1389,13 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
             <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
               <table className="inv-table" style={{ margin: 0 }}>
                 <thead>
-                  <tr><th>Name</th><th>Contact</th><th>Email</th><th>ShipStation Stores</th><th>Rate Source</th><th /></tr>
+                  <tr><th>Name</th><th>Contact</th><th>Email</th><th>ShipStation Stores</th><th>Rate Source</th><th style={{ textAlign: 'center', width: 70 }}>Active</th><th /></tr>
                 </thead>
                 <tbody>
-                  {clients.map((client) => (
-                    <tr key={client.clientId}>
+                  {clients.map((client) => {
+                    const isActive = client.active ?? true
+                    return (
+                    <tr key={client.clientId} style={{ opacity: isActive ? 1 : 0.55 }}>
                       <td style={{ fontWeight: 600 }}>{client.name}</td>
                       <td style={{ fontSize: 12 }}>{client.contactName || '—'}</td>
                       <td style={{ fontSize: 12 }}>{client.email || '—'}</td>
@@ -1385,6 +1405,17 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
                           : '—'}
                       </td>
                       <td style={{ fontSize: 12, fontWeight: 500 }}>{client.rateSourceName || 'DR PREPPER'}</td>
+                      <td style={{ textAlign: 'center' }}>
+                        <button
+                          type="button"
+                          className={`ss-test-toggle${isActive ? ' is-on' : ' is-off'}`}
+                          aria-label={isActive ? `Disable ${client.name}` : `Enable ${client.name}`}
+                          title={isActive ? `Disable ${client.name} (hide from sidebar + views)` : `Enable ${client.name}`}
+                          onClick={() => void handleToggleClientActive(client)}
+                        >
+                          <span className="ss-test-toggle-knob" />
+                        </button>
+                      </td>
                       <td>
                         <button className="btn btn-ghost btn-xs" type="button" onClick={() => {
                           setClientFormOpen(true)
@@ -1397,7 +1428,8 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
                         </button>
                       </td>
                     </tr>
-                  ))}
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
