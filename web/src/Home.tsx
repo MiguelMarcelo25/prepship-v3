@@ -1,12 +1,24 @@
 // @ts-nocheck
 import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
+import { AnimatePresence, motion } from 'framer-motion'
+import {
+  Menu,
+  Printer,
+  RotateCw,
+  Search as SearchIcon,
+  Columns3,
+  X as XIcon,
+  Loader2,
+  ZoomIn,
+} from 'lucide-react'
 import { ToastContext } from './contexts/ToastContext'
 import { apiClient } from './api/client'
 import type { SyncWorkerStatusDto } from './types/api'
 import { useInitStores } from './hooks'
 import Sidebar from './components/Sidebar/Sidebar'
 import OrdersView from './components/Views/OrdersView'
+import DashboardView from './components/Views/DashboardView'
 import InventoryView from './components/Views/InventoryView'
 import LocationsView from './components/Views/LocationsView'
 import PackagesView from './components/Views/PackagesView'
@@ -18,7 +30,7 @@ import ManifestsView from './components/Views/ManifestsView'
 import { formatSyncPill } from './components/Views/orders-parity'
 import { getOrdersDateRange } from './components/Views/orders-view-filters'
 
-type ViewType = 'orders' | 'inventory' | 'locations' | 'packages' | 'rates' | 'analysis' | 'settings' | 'billing' | 'manifests'
+type ViewType = 'orders' | 'dashboard' | 'inventory' | 'locations' | 'packages' | 'rates' | 'analysis' | 'settings' | 'billing' | 'manifests'
 type ContentView = Exclude<ViewType, 'manifests'>
 type OrderStatus = 'awaiting_shipment' | 'shipped' | 'cancelled'
 type OrdersDateFilter = '' | 'this-month' | 'last-month' | 'last-30' | 'last-90' | 'custom'
@@ -48,6 +60,7 @@ function getResolvedDateRange(filter: OrdersDateFilter) {
 }
 
 const VIEW_LABELS: Record<Exclude<ViewType, 'orders' | 'manifests'>, string> = {
+  dashboard: 'Dashboard',
   inventory: 'Inventory',
   locations: 'Locations',
   packages: 'Packages',
@@ -58,6 +71,7 @@ const VIEW_LABELS: Record<Exclude<ViewType, 'orders' | 'manifests'>, string> = {
 }
 
 const VIEW_PATHS: Record<Exclude<ViewType, 'orders'>, string> = {
+  dashboard: '/dashboard',
   inventory: '/inventory',
   locations: '/locations',
   packages: '/packages',
@@ -133,6 +147,10 @@ export default function Home() {
   }
   const [activeStore, setActiveStore] = useState<number | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
+  // Separate slot for SKU pre-fills coming from Dashboard clicks. Routed into
+  // AnalysisView's `initialSearch` prop so we don't pollute the orders/global
+  // search box with a SKU that's only meaningful on the Analysis screen.
+  const [analysisInitialSku, setAnalysisInitialSku] = useState('')
   const [dateFilter, setDateFilter] = useState<OrdersDateFilter>('last-30')
   const [ordersDateRange, setOrdersDateRange] = useState<{ start?: string; end?: string }>(
     () => getResolvedDateRange('last-30'),
@@ -418,43 +436,103 @@ export default function Home() {
         onShowTestOrdersChange={setShowTestOrders}
       />
 
-      <div className="main bg-bg-base text-text-primary">
-        <div className="topbar relative">
-          {syncStatus.status === 'syncing' && syncStatus.total > 0 && (
-            <div 
-              className="absolute top-0 left-0 h-1 bg-indigo-600 transition-all duration-300 z-50" 
-              style={{ width: `${Math.min(100, (syncStatus.page / syncStatus.total) * 100)}%` }} 
-            />
-          )}
+      <div className="main bg-bg-base text-text-primary !font-sans antialiased tracking-[-0.005em]">
+        <div className="topbar relative !bg-white/90 !backdrop-blur-xl !border-b !border-line !px-5 !py-2.5 !shadow-[0_1px_0_0_rgba(15,23,42,0.03),0_2px_8px_-3px_rgba(15,23,42,0.06)]">
+          <AnimatePresence>
+            {syncStatus.status === 'syncing' && syncStatus.total > 0 ? (
+              <motion.div
+                key="sync-progress"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="absolute top-0 left-0 right-0 h-0.5 bg-line/40 z-50 overflow-hidden"
+              >
+                <motion.div
+                  className="h-full bg-gradient-to-r from-brand via-indigo-500 to-indigo-600"
+                  initial={{ width: 0 }}
+                  animate={{ width: `${Math.min(100, (syncStatus.page / syncStatus.total) * 100)}%` }}
+                  transition={{ duration: 0.4, ease: 'easeOut' }}
+                  style={{
+                    boxShadow: '0 0 8px rgba(79,70,229,0.55)',
+                  }}
+                />
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
           <button
             id="mobileMenuBtn"
             type="button"
             onClick={() => setMobileMenuOpen((open) => !open)}
-            style={{ alignItems: 'center', justifyContent: 'center', background: 'none', border: 'none', fontSize: 20, cursor: 'pointer', padding: 4, color: 'var(--text)' }}
+            className="flex items-center justify-center bg-transparent border-0 cursor-pointer p-1.5 text-ink hover:text-brand hover:bg-line/40 transition-all duration-150 rounded-btn focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 active:scale-90"
             aria-label="Toggle menu"
           >
-            ☰
+            <Menu size={20} strokeWidth={2.25} />
           </button>
 
-          <div className="topbar-title" id="viewTitle">{viewTitle}</div>
-
-          <div className={`batch-bar${displayView === 'orders' && selectedOrderIds.length > 0 ? ' show' : ''}`} id="batchBar">
-            <span id="batchCount">{selectedOrderIds.length} selected</span>
-            <div className="batch-btns">
-              <button className="batch-btn" type="button">🗂️ Batch</button>
-              <button className="batch-btn" type="button">🖨️ Print</button>
-              <button
-                className="batch-btn"
-                type="button"
-                onClick={() => {
-                  setSelectedOrderIds([])
-                  setActiveOrderId(null)
-                }}
-              >
-                ✕
-              </button>
-            </div>
+          <div
+            className="topbar-title !text-[16px] !font-extrabold font-display !tracking-[-0.03em] !text-ink !flex !items-center !gap-2"
+            id="viewTitle"
+          >
+            <span className="inline-block w-1 h-5 rounded-full bg-gradient-to-b from-brand to-indigo-700" />
+            {viewTitle}
           </div>
+
+          <AnimatePresence>
+            {displayView === 'orders' && selectedOrderIds.length > 0 ? (
+              <motion.div
+                key="batch-bar"
+                initial={{ opacity: 0, y: -8, scale: 0.96 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -8, scale: 0.96 }}
+                transition={{ type: 'spring', stiffness: 380, damping: 28 }}
+                className="!flex !items-center !gap-2 !px-3 !py-1.5 !rounded-lg !bg-gradient-to-r !from-brand !to-indigo-600 !text-white !shadow-md"
+                id="batchBar"
+                role="region"
+                aria-label="Bulk actions"
+              >
+                <span id="batchCount" className="font-mono tabular-nums font-semibold !text-white !text-[12px]">
+                  <motion.span
+                    key={selectedOrderIds.length}
+                    initial={{ opacity: 0, y: 4 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="inline-block tabular-nums"
+                  >
+                    {selectedOrderIds.length}
+                  </motion.span>{' '}
+                  selected
+                </span>
+                <div className="!flex !gap-1.5">
+                  <motion.button
+                    type="button"
+                    whileTap={{ scale: 0.94 }}
+                    whileHover={{ y: -1 }}
+                    transition={{ duration: 0.12 }}
+                    className="!inline-flex !items-center !gap-1.5 !px-2.5 !py-1 !rounded-md !bg-white/15 !text-white !text-[11.5px] !font-semibold !border-0 hover:!bg-white/25 !transition-colors !duration-150 disabled:!opacity-50 disabled:!cursor-not-allowed"
+                    onClick={() => setLabelsActionRequestId((value) => value + 1)}
+                    aria-label={`Print labels for ${selectedOrderIds.length} selected orders`}
+                  >
+                    <Printer size={13} strokeWidth={2.25} />
+                    Print Labels
+                  </motion.button>
+                  <motion.button
+                    type="button"
+                    whileTap={{ scale: 0.9 }}
+                    whileHover={{ rotate: 90 }}
+                    transition={{ type: 'spring', stiffness: 400, damping: 24 }}
+                    className="!inline-flex !items-center !justify-center !w-6 !h-6 !rounded-md !bg-white/10 !text-white hover:!bg-white/25 !transition-colors !duration-150"
+                    onClick={() => {
+                      setSelectedOrderIds([])
+                      setActiveOrderId(null)
+                    }}
+                    aria-label="Clear selection"
+                    title="Clear selection"
+                  >
+                    <XIcon size={13} strokeWidth={2.5} />
+                  </motion.button>
+                </div>
+              </motion.div>
+            ) : null}
+          </AnimatePresence>
 
           {displayView === 'orders' ? (
             <div className="topbar-right" id="topbarActions">
@@ -473,23 +551,19 @@ export default function Home() {
                 <div
                   id="workerPill"
                   title={workerPill.title}
-                  style={{
-                    fontSize: 11,
-                    padding: '3px 9px',
-                    borderRadius: 999,
-                    background: 'var(--surface2, #f3f4f6)',
-                    color: workerPill.color,
-                    border: '1px solid var(--border, #e5e7eb)',
-                    whiteSpace: 'nowrap',
-                  }}
+                  className="text-tiny px-2.5 py-0.5 rounded-full bg-surface-2 border border-line whitespace-nowrap font-mono tabular-nums tracking-tight"
+                  style={{ color: workerPill.color }}
                 >
                   {workerPill.text}
                 </div>
               ) : null}
               <button
-                className="btn btn-ghost btn-sm"
+                className="btn btn-ghost btn-sm !inline-flex !items-center !justify-center !w-8 !h-8 !p-0 !transition-all !duration-150 hover:!bg-line/40 active:!scale-90 disabled:!opacity-50 disabled:!cursor-not-allowed"
                 id="btnSyncIncr"
                 type="button"
+                disabled={syncStatus.status === 'syncing'}
+                aria-label="Incremental sync"
+                title="Incremental sync (changed orders only)"
                 onClick={async () => {
                   setSyncStatus((current) => ({ ...current, status: 'syncing', mode: 'incremental', page: 0, total: 0, error: null }))
                   try {
@@ -501,13 +575,19 @@ export default function Home() {
                   }
                 }}
               >
-                ↻
+                {syncStatus.status === 'syncing' && syncStatus.mode === 'incremental' ? (
+                  <Loader2 size={15} strokeWidth={2.25} className="animate-spinSlow text-brand" />
+                ) : (
+                  <RotateCw size={15} strokeWidth={2.25} />
+                )}
               </button>
               <button
-                className="btn btn-ghost btn-sm"
+                className="btn btn-ghost btn-sm text-tiny px-2 py-1 text-ink-3 hover:text-ink !transition-all !duration-150 hover:!bg-line/40 active:!scale-95 disabled:!opacity-50 disabled:!cursor-not-allowed"
                 id="btnSyncFull"
                 type="button"
-                style={{ fontSize: 11, padding: '4px 8px', color: 'var(--text3)' }}
+                disabled={syncStatus.status === 'syncing'}
+                aria-label="Full re-sync"
+                title="Full re-sync (all orders)"
                 onClick={async () => {
                   setSyncStatus((current) => ({ ...current, status: 'syncing', mode: 'full', page: 0, total: 0, error: null }))
                   try {
@@ -519,130 +599,184 @@ export default function Home() {
                   }
                 }}
               >
-                Full↻
+                <span className="inline-flex items-center gap-1">
+                  {syncStatus.status === 'syncing' && syncStatus.mode === 'full' ? (
+                    <span className="inline-block animate-spinSlow">↻</span>
+                  ) : (
+                    'Full↻'
+                  )}
+                </span>
               </button>
               <div className="col-toggle-wrap">
-                <button data-columns-anchor="true" className="btn btn-outline btn-sm" type="button" onClick={() => setColumnMenuRequestId((value) => value + 1)}>⊞ Columns</button>
-              </div>
-              <button className="btn btn-primary btn-sm" type="button" onClick={() => setLabelsActionRequestId((value) => value + 1)}>🖨️ Labels</button>
-              <button className="btn btn-outline btn-sm" id="pq-toggle-btn" type="button" style={{ position: 'relative', gap: 4 }} onClick={() => setQueueToggleRequestId((value) => value + 1)}>
-                {queueOpen ? '✕ Close Queue' : `🖨️ Print Queue${queueBadgeCount > 0 ? ` (${queueBadgeCount})` : ''}`}
-                <span
-                  id="pq-badge"
-                  style={{
-                    display: queueBadgeCount > 0 ? 'inline-flex' : 'none',
-                    position: 'absolute',
-                    top: -6,
-                    right: -6,
-                    background: '#f59e0b',
-                    color: '#000',
-                    borderRadius: 99,
-                    fontSize: 9,
-                    fontWeight: 700,
-                    minWidth: 16,
-                    height: 16,
-                    padding: '0 3px',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
+                <button
+                  data-columns-anchor="true"
+                  className="btn btn-outline btn-sm !inline-flex !items-center !gap-1.5 !transition-all !duration-150 hover:!shadow-sm hover:!-translate-y-px active:!translate-y-0 active:!scale-95"
+                  type="button"
+                  aria-label="Configure visible columns"
+                  onClick={() => setColumnMenuRequestId((value) => value + 1)}
                 >
-                  {queueBadgeCount}
-                </span>
+                  <Columns3 size={13} strokeWidth={2.25} />
+                  Columns
+                </button>
+              </div>
+              <button
+                className="btn btn-primary btn-sm !inline-flex !items-center !gap-1.5 !transition-all !duration-150 hover:!shadow-md hover:!-translate-y-px active:!translate-y-0 active:!scale-95 focus-visible:!ring-2 focus-visible:!ring-brand/40 focus-visible:!ring-offset-1"
+                type="button"
+                aria-label="Print labels"
+                onClick={() => setLabelsActionRequestId((value) => value + 1)}
+              >
+                <Printer size={13} strokeWidth={2.25} />
+                Labels
+              </button>
+              <button
+                className="btn btn-outline btn-sm relative !inline-flex !items-center !gap-1.5 !transition-all !duration-150 hover:!shadow-sm hover:!-translate-y-px active:!translate-y-0 active:!scale-95"
+                id="pq-toggle-btn"
+                type="button"
+                aria-label={queueOpen ? 'Close print queue panel' : 'Open print queue panel'}
+                onClick={() => setQueueToggleRequestId((value) => value + 1)}
+              >
+                {queueOpen ? (
+                  <>
+                    <XIcon size={13} strokeWidth={2.5} />
+                    Close Queue
+                  </>
+                ) : (
+                  <>
+                    <Printer size={13} strokeWidth={2.25} />
+                    Print Queue{queueBadgeCount > 0 ? ` (${queueBadgeCount})` : ''}
+                  </>
+                )}
+                <AnimatePresence>
+                  {queueBadgeCount > 0 ? (
+                    <motion.span
+                      key="pq-badge"
+                      id="pq-badge"
+                      initial={{ scale: 0, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      exit={{ scale: 0, opacity: 0 }}
+                      transition={{ type: 'spring', stiffness: 500, damping: 22 }}
+                      className="inline-flex absolute -top-1.5 -right-1.5 bg-amber-400 text-black rounded-full text-[9px] font-bold min-w-4 h-4 px-1 items-center justify-center font-mono tabular-nums shadow-sm ring-2 ring-white"
+                    >
+                      {queueBadgeCount}
+                    </motion.span>
+                  ) : null}
+                </AnimatePresence>
               </button>
             </div>
           ) : null}
 
-          <div className="col-toggle-wrap react-zoom-wrap" style={{ position: 'relative' }}>
+          <div className="col-toggle-wrap react-zoom-wrap relative">
             <button
-              className="btn btn-outline btn-sm"
+              className="btn btn-outline btn-sm !inline-flex !items-center !gap-1.5 min-w-[72px] font-mono tabular-nums !transition-all !duration-150 hover:!shadow-sm hover:!-translate-y-px active:!translate-y-0 active:!scale-95"
               type="button"
+              aria-label={`Current zoom ${zoomPct}%, click to change`}
+              aria-haspopup="menu"
+              aria-expanded={zoomMenuOpen}
               onClick={() => setZoomMenuOpen((open) => !open)}
               id="zoomBtn"
-              style={{ gap: 4, minWidth: 68 }}
             >
-              🔍 <span id="zoomLabel">{zoomPct}%</span>
+              <ZoomIn size={13} strokeWidth={2.25} />
+              <span id="zoomLabel">{zoomPct}%</span>
             </button>
-            <div
-              id="zoomMenu"
-              style={{
-                display: zoomMenuOpen ? 'block' : 'none',
-                position: 'absolute',
-                right: 0,
-                top: 'calc(100% + 5px)',
-                background: 'var(--surface)',
-                border: '1px solid var(--border2)',
-                borderRadius: 8,
-                boxShadow: 'var(--shadow-lg)',
-                padding: '5px 0',
-                zIndex: 200,
-                minWidth: 130,
-              }}
-            >
-              <div style={{ padding: '4px 12px 3px', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--text3)' }}>Zoom</div>
-              {ZOOM_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  className={`zoom-opt${zoomPct === option.value ? ' active' : ''}`}
-                  type="button"
-                  onClick={() => {
-                    setZoomPct(option.value)
-                    setZoomMenuOpen(false)
-                  }}
+            <AnimatePresence>
+              {zoomMenuOpen ? (
+                <motion.div
+                  id="zoomMenu"
+                  role="menu"
+                  initial={{ opacity: 0, y: -6, scale: 0.96 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: -6, scale: 0.96 }}
+                  transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+                  className="absolute right-0 top-[calc(100%+6px)] bg-surface border border-line-2 rounded-lg shadow-lg py-1.5 z-[200] min-w-[150px] overflow-hidden origin-top-right"
                 >
-                  {option.label}
-                </button>
-              ))}
-            </div>
+                  <div className="px-3 pt-1 pb-1.5 text-[10px] font-bold uppercase tracking-[0.08em] text-ink-3">Zoom</div>
+                  {ZOOM_OPTIONS.map((option, idx) => (
+                    <motion.button
+                      key={option.value}
+                      initial={{ opacity: 0, x: -4 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: idx * 0.02, duration: 0.18 }}
+                      className={`zoom-opt${zoomPct === option.value ? ' active' : ''}`}
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setZoomPct(option.value)
+                        setZoomMenuOpen(false)
+                      }}
+                    >
+                      {option.label}
+                    </motion.button>
+                  ))}
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
           </div>
         </div>
 
-        {displayView === 'orders' ? (
-          <OrdersView
-            currentStatus={currentStatus}
-            searchQuery={searchQuery}
-            onSearchQueryChange={setSearchQuery}
-            activeStore={activeStore}
-            dateFilter={dateFilter}
-            onDateFilterChange={setDateFilter}
-            onResolvedDateRangeChange={setOrdersDateRange}
-            selectedOrderIds={selectedOrderIds}
-            onSelectedOrderIdsChange={setSelectedOrderIds}
-            activeOrderId={activeOrderId}
-            onActiveOrderIdChange={setActiveOrderId}
-            onNavigateView={(view) => {
-              if (view === 'orders') navigate(`/orders/${currentStatus}`)
-              else navigate(VIEW_PATHS[view as Exclude<ViewType, 'orders'>] ?? '/')
-            }}
-            columnMenuRequestId={columnMenuRequestId}
-            labelsActionRequestId={labelsActionRequestId}
-            queueToggleRequestId={queueToggleRequestId}
-            stores={sidebarStores}
-            onQueueStateChange={({ count, isOpen }) => {
-              setQueueBadgeCount(count)
-              setQueueOpen(isOpen)
-            }}
-            refreshVersion={ordersRefreshVersion}
-            showTestOrders={showTestOrders}
-          />
-        ) : displayView === 'inventory' ? (
-          <InventoryView searchQuery={searchQuery} onOpenOrder={openOrderFromContentView} />
-        ) : displayView === 'locations' ? (
-          <LocationsView />
-        ) : displayView === 'packages' ? (
-          <PackagesView
-            onOpenOrder={openOrderFromContentView}
-          />
-        ) : displayView === 'rates' ? (
-          <RatesView />
-        ) : displayView === 'analysis' ? (
-          <AnalysisView searchQuery={searchQuery} />
-        ) : displayView === 'settings' ? (
-          <SettingsView />
-        ) : displayView === 'billing' ? (
-          <BillingView />
-        ) : (
-          <PlaceholderView title={viewTitle} />
-        )}
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={displayView}
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+            className="flex-1 min-h-0 flex flex-col"
+          >
+            {displayView === 'dashboard' ? (
+              <DashboardView
+                onOpenSku={(sku) => {
+                  if (!sku) return
+                  setAnalysisInitialSku(sku)
+                  navigate('/analysis')
+                }}
+              />
+            ) : displayView === 'orders' ? (
+              <OrdersView
+                currentStatus={currentStatus}
+                searchQuery={searchQuery}
+                onSearchQueryChange={setSearchQuery}
+                activeStore={activeStore}
+                dateFilter={dateFilter}
+                onDateFilterChange={setDateFilter}
+                onResolvedDateRangeChange={setOrdersDateRange}
+                selectedOrderIds={selectedOrderIds}
+                onSelectedOrderIdsChange={setSelectedOrderIds}
+                activeOrderId={activeOrderId}
+                onActiveOrderIdChange={setActiveOrderId}
+                onNavigateView={(view) => {
+                  if (view === 'orders') navigate(`/orders/${currentStatus}`)
+                  else navigate(VIEW_PATHS[view as Exclude<ViewType, 'orders'>] ?? '/')
+                }}
+                columnMenuRequestId={columnMenuRequestId}
+                labelsActionRequestId={labelsActionRequestId}
+                queueToggleRequestId={queueToggleRequestId}
+                stores={sidebarStores}
+                onQueueStateChange={({ count, isOpen }) => {
+                  setQueueBadgeCount(count)
+                  setQueueOpen(isOpen)
+                }}
+                refreshVersion={ordersRefreshVersion}
+                showTestOrders={showTestOrders}
+              />
+            ) : displayView === 'inventory' ? (
+              <InventoryView searchQuery={searchQuery} onOpenOrder={openOrderFromContentView} />
+            ) : displayView === 'locations' ? (
+              <LocationsView />
+            ) : displayView === 'packages' ? (
+              <PackagesView onOpenOrder={openOrderFromContentView} />
+            ) : displayView === 'rates' ? (
+              <RatesView />
+            ) : displayView === 'analysis' ? (
+              <AnalysisView initialSearch={analysisInitialSku} />
+            ) : displayView === 'settings' ? (
+              <SettingsView />
+            ) : displayView === 'billing' ? (
+              <BillingView />
+            ) : (
+              <PlaceholderView title={viewTitle} />
+            )}
+          </motion.div>
+        </AnimatePresence>
 
         <ManifestsView
           open={manifestOpen}

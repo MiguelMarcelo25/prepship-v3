@@ -16,8 +16,16 @@ const Invoice = lazy(() => import('./pages/Invoice'));
 
 function PageFallback() {
   return (
-    <div className="h-full w-full flex items-center justify-center text-ink-3 text-sm2">
-      Loading…
+    <div className="h-full w-full flex items-center justify-center bg-page animate-fadeIn">
+      <div className="flex flex-col items-center gap-3">
+        <div className="relative w-10 h-10">
+          <div className="absolute inset-0 rounded-full border-2 border-line" />
+          <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-brand animate-spinSlow" />
+        </div>
+        <div className="text-tiny text-ink-3 font-sans tracking-wide uppercase">
+          Loading
+        </div>
+      </div>
     </div>
   );
 }

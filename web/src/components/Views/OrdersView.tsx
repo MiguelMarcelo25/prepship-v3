@@ -1,6 +1,16 @@
 // @ts-nocheck
 import './OrdersView.css'
 import { lazy, Suspense, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
+import {
+  Package,
+  Truck,
+  Bell,
+  Calendar,
+  Inbox,
+  AlertTriangle,
+  Loader2,
+} from 'lucide-react'
 import OrderDetailDrawer from '../OrderDetailDrawer'
 import TrackingModal from '../TrackingModal'
 import HoverImage from '../HoverImage'
@@ -1536,39 +1546,19 @@ function getSortValue(order: OrderSummaryDto, detail: OrderFullDto | null, key: 
   }
 }
 
-function buildEmptyPanel(onClose?: () => void) {
+function buildEmptyPanel() {
+  const kbdCls =
+    'inline-block bg-surface-3 px-1.5 py-px rounded text-[10px] border border-line-2 font-mono tabular-nums'
   return (
-    <div className="relative flex flex-col items-center justify-center h-full px-5 py-10 text-center text-ink-3">
-      {onClose ? (
-        <button
-          type="button"
-          aria-label="Hide details panel"
-          title="Hide details panel"
-          onClick={onClose}
-          className="absolute top-2 right-2 w-6 h-6 flex items-center justify-center rounded-full border border-line-2 bg-surface text-ink-3 text-sm leading-none cursor-pointer transition-colors hover:bg-surface-2 hover:text-ink hover:border-brand"
-        >
-          ×
-        </button>
-      ) : null}
-      <div style={{ fontSize: 36, marginBottom: 14, opacity: 0.5 }}>📋</div>
-      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: 'var(--text2)' }}>No order selected</div>
-      <div style={{ fontSize: 12, lineHeight: 1.5, marginBottom: 20 }}>Click any row to view details</div>
-      <div
-        style={{
-          textAlign: 'left',
-          fontSize: 11,
-          lineHeight: 2,
-          color: 'var(--text4)',
-          borderTop: '1px solid var(--border)',
-          paddingTop: 14,
-          width: '100%',
-          maxWidth: 180,
-        }}
-      >
-        <div><kbd style={{ background: 'var(--surface3)', padding: '1px 5px', borderRadius: 3, fontSize: 10, border: '1px solid var(--border2)' }}>↑↓</kbd> Navigate rows</div>
-        <div><kbd style={{ background: 'var(--surface3)', padding: '1px 5px', borderRadius: 3, fontSize: 10, border: '1px solid var(--border2)' }}>Enter</kbd> Select / deselect</div>
-        <div><kbd style={{ background: 'var(--surface3)', padding: '1px 5px', borderRadius: 3, fontSize: 10, border: '1px solid var(--border2)' }}>Esc</kbd> Deselect &amp; close</div>
-        <div><kbd style={{ background: 'var(--surface3)', padding: '1px 5px', borderRadius: 3, fontSize: 10, border: '1px solid var(--border2)' }}>⌘C</kbd> Copy order #</div>
+    <div className="relative flex flex-col items-center justify-center h-full px-5 py-10 text-center text-ink-3 animate-[fadeIn_0.3s_ease-out]">
+      <div className="text-[40px] mb-4 opacity-60 animate-[bounceIn_0.5s_cubic-bezier(0.34,1.56,0.64,1)]">📋</div>
+      <div className="text-[14px] font-semibold mb-1.5 text-ink-2 font-display tracking-tight">No order selected</div>
+      <div className="text-[12px] leading-relaxed mb-5 text-ink-3">Click any row to view details</div>
+      <div className="text-left text-[11px] leading-loose text-ink-4 border-t border-line pt-3.5 w-full max-w-[180px] space-y-0.5">
+        <div><kbd className={kbdCls}>↑↓</kbd> <span className="ml-1">Navigate rows</span></div>
+        <div><kbd className={kbdCls}>Enter</kbd> <span className="ml-1">Select / deselect</span></div>
+        <div><kbd className={kbdCls}>Esc</kbd> <span className="ml-1">Deselect &amp; close</span></div>
+        <div><kbd className={kbdCls}>⌘C</kbd> <span className="ml-1">Copy order #</span></div>
       </div>
     </div>
   )
@@ -1699,18 +1689,6 @@ export default function OrdersView({
     window.localStorage.setItem('orders_table_density', tableDensity)
   }, [tableDensity])
 
-  // Whether to show the right-hand "No order selected" empty-state panel
-  // when no row is highlighted. Hiding it gives the orders table the full
-  // window width. Persists per-browser; flipped via the × on the empty
-  // state and the "Show panel" pill that appears when hidden.
-  const [showEmptyPanel, setShowEmptyPanel] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return true
-    return window.localStorage.getItem('orders_show_empty_panel') !== '0'
-  })
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    window.localStorage.setItem('orders_show_empty_panel', showEmptyPanel ? '1' : '0')
-  }, [showEmptyPanel])
   const [singleActionBusy, setSingleActionBusy] = useState(false)
   const [shipmentDetailsSaving, setShipmentDetailsSaving] = useState(false)
   const queueActionProgressTimerRef = useRef<number | null>(null)
@@ -1749,6 +1727,14 @@ export default function OrdersView({
   const shipmentAutoSaveTimerRef = useRef<number | null>(null)
   const shipmentLastSavedKeyRef = useRef<string | null>(null)
   const bestRateRefreshSeqRef = useRef(0)
+  // Tracks whether the user has *manually* edited weight or any dim in the
+  // panel since the current order was loaded. The auto-rate-refresh effect
+  // only fires when this is true. Reset to false whenever panelOrderId
+  // changes, set to true inside the panel input onChange handlers.
+  // Without this, simply clicking an order seeds weight/dims into the form
+  // (in a render cycle separate from the orderId change), trips the effect's
+  // deps, and fires an unwanted /rates fetch.
+  const dimsUserEditedRef = useRef(false)
 
   const clearQueueActionProgressTimer = () => {
     if (queueActionProgressTimerRef.current == null) return
@@ -2449,13 +2435,27 @@ export default function OrdersView({
     return () => window.clearTimeout(timeout)
   }, [panelOrderId, panelOrder?.orderStatus, panelForm.length, panelForm.width, panelForm.height, packages, packagesLoaded])
 
+  // Reset the "user has edited dims" flag whenever the active order changes.
+  // Without this, switching from order A (where the user typed) to order B
+  // would leave the flag set and immediately auto-refresh B's rate just by
+  // clicking — defeating the whole guard.
+  useEffect(() => {
+    dimsUserEditedRef.current = false
+  }, [panelOrderId])
+
   // Auto-refresh the panel's best rate whenever weight or any dimension
   // changes. Debounced so a user typing "1 → 12 → 125" doesn't fire three
   // separate /rates calls. refreshPanelBestRate already toggles
   // panelRateLoading and uses bestRateRefreshSeqRef to ignore stale results
   // when the inputs change again before a fetch completes.
+  //
+  // Only fire when the user has *manually* edited weight or dims. Clicking an
+  // order seeds the form values in a separate render cycle, which would also
+  // trip this effect — we ignore those programmatic fills via the user-edit
+  // flag set in the input onChange handlers.
   useEffect(() => {
     if (!panelOrder || panelOrder.orderStatus !== 'awaiting_shipment') return
+    if (!dimsUserEditedRef.current) return
     const dims = getPanelDims()
     const weightOz = getPanelWeightOz()
     if (!hasCompleteDims(dims) || weightOz <= 0) return
@@ -4457,11 +4457,14 @@ export default function OrdersView({
       : null
 
   const renderBestRatePrice = (order: OrderSummaryDto) => {
-    // If the user is actively re-typing weight/dims in the panel for this
-    // exact order, the saved bestRate on the row is stale until the debounced
-    // /rates fetch lands. Show the spinner so the row visibly reflects the
-    // recalculation in progress instead of flashing the old number.
-    if (panelRateLoading && panelOrder?.orderId === order.orderId) {
+    // If the user is actively saving shipment details OR re-fetching rates
+    // for this exact order, the saved bestRate on the row is stale until the
+    // debounced /rates fetch lands. Show the spinner so the row visibly
+    // reflects the recalculation in progress instead of flashing the old
+    // number. Covers both phases of an edit:
+    //   1. shipmentDetailsSaving — POSTing weight/dims to the server
+    //   2. panelRateLoading — fetching new rates after save
+    if ((panelRateLoading || shipmentDetailsSaving) && panelOrder?.orderId === order.orderId) {
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--ss-blue)', fontSize: 11, fontWeight: 600 }}>
           <span className="ship-rate-spinner" aria-hidden="true" />
@@ -4497,6 +4500,28 @@ export default function OrdersView({
       }
 
       const selectedRateCarrierCode = getSelectedRateCarrierCode(order)
+      // Apply the same markup the awaiting-shipment column uses, so shipped
+      // rows show what the customer was charged (base + markup) — not just
+      // the raw carrier label cost. Falls back to labelCost / selectedRateBase
+      // when carrier metadata isn't enough to look up a markup rule.
+      const baseForMarkup = selectedRateBase ?? labelCost ?? 0
+      const selectedMarkedAmount = applyCarrierMarkup(
+        {
+          shippingProviderId: getSelectedRateShippingProviderId(order),
+          carrierCode: selectedRateCarrierCode ?? '',
+          serviceCode: getSelectedRateServiceCode(order) ?? '',
+          serviceName: order.selectedRate?.serviceName ?? '',
+          amount: baseForMarkup,
+          shipmentCost: baseForMarkup,
+          otherCost: 0,
+          carrierNickname: getSelectedRateCarrierNickname(order),
+        },
+        markups,
+      )
+      const displayMarked =
+        selectedMarkedAmount != null
+          ? selectedMarkedAmount
+          : labelCost ?? selectedRateBase
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {selectedRateCarrierCode ? (
@@ -4504,7 +4529,7 @@ export default function OrdersView({
               {formatCarrierCode(selectedRateCarrierCode)}
             </span>
           ) : null}
-          {renderRateAmountWithMarkup(selectedRateBase, labelCost ?? selectedRateBase)}
+          {renderRateAmountWithMarkup(selectedRateBase, displayMarked)}
         </div>
       )
     }
@@ -4575,7 +4600,7 @@ export default function OrdersView({
     const percent = bestRateBaseCost > 0 ? Math.round((diff / bestRateBaseCost) * 100) : 0
 
     return (
-      <div style={{ lineHeight: 1.3, textAlign: 'right' }}>
+      <div style={{ lineHeight: 1.3, textAlign: 'left' }}>
         <div style={{ fontSize: 12, fontWeight: 700, color: '#16a34a' }}>+{formatMoney(diff)}</div>
         <div style={{ fontSize: 10, color: 'var(--text3)' }}>{percent}%</div>
       </div>
@@ -4753,7 +4778,7 @@ export default function OrdersView({
         style={{
           display: 'block',
           fontSize: options.fontSize ?? 14,
-          textAlign: options.align ?? 'center',
+          textAlign: options.align ?? 'left',
           fontFamily: options.monospace ? 'monospace' : undefined,
           color: options.muted ? 'var(--text3)' : 'var(--text2)',
           background: surface ? 'var(--surface2)' : undefined,
@@ -4934,7 +4959,7 @@ export default function OrdersView({
       case 'qty': {
         const totalQuantity = getTotalQuantity(order, detail)
         return (
-          <div style={{ textAlign: 'center', fontWeight: 700, color: 'var(--text2)' }}>
+          <div style={{ textAlign: 'left', fontWeight: 700, color: 'var(--text2)' }}>
             {totalQuantity > 1 ? (
               <span style={{ display: 'inline-block', padding: '1px 6px', border: '2px solid var(--red)', borderRadius: 4, color: 'var(--red)' }}>{totalQuantity}</span>
             ) : (
@@ -5236,7 +5261,7 @@ export default function OrdersView({
   }
 
   const renderSinglePanel = () => {
-    if (!panelOrder) return buildEmptyPanel(() => setShowEmptyPanel(false))
+    if (!panelOrder) return buildEmptyPanel()
 
     const items = getActiveItems(panelOrder, panelDetail)
     const mergedItems = getMergedItems(panelOrder, panelDetail)
@@ -5455,9 +5480,9 @@ export default function OrdersView({
               <div className="ship-field-row">
                 <span className="ship-field-label">Weight</span>
                 <div className="ship-field-value">
-                  <input type="number" className="ship-input ship-input-sm" value={panelForm.weightLb} readOnly={shipped} onChange={(event) => setPanelForm((current) => ({ ...current, weightLb: event.target.value }))} />
+                  <input type="number" className="ship-input ship-input-sm" value={panelForm.weightLb} readOnly={shipped} onChange={(event) => { dimsUserEditedRef.current = true; setPanelForm((current) => ({ ...current, weightLb: event.target.value })) }} />
                   <span className="ship-input-unit">lb</span>
-                  <input type="number" className="ship-input ship-input-sm" value={panelForm.weightOz} readOnly={shipped} onChange={(event) => setPanelForm((current) => ({ ...current, weightOz: event.target.value }))} />
+                  <input type="number" className="ship-input ship-input-sm" value={panelForm.weightOz} readOnly={shipped} onChange={(event) => { dimsUserEditedRef.current = true; setPanelForm((current) => ({ ...current, weightOz: event.target.value })) }} />
                   <span className="ship-input-unit">oz</span>
                 </div>
               </div>
@@ -5465,11 +5490,11 @@ export default function OrdersView({
               <div className="ship-field-row">
                 <span className="ship-field-label">Size</span>
                 <div className="ship-field-value" style={{ gap: 3, flexWrap: 'wrap' }}>
-                  <input type="number" className="ship-input ship-input-sm" value={panelForm.length} readOnly={shipped} onChange={(event) => setPanelForm((current) => ({ ...current, length: event.target.value }))} />
+                  <input type="number" className="ship-input ship-input-sm" value={panelForm.length} readOnly={shipped} onChange={(event) => { dimsUserEditedRef.current = true; setPanelForm((current) => ({ ...current, length: event.target.value })) }} />
                   <span className="ship-input-unit">L</span>
-                  <input type="number" className="ship-input ship-input-sm" value={panelForm.width} readOnly={shipped} onChange={(event) => setPanelForm((current) => ({ ...current, width: event.target.value }))} />
+                  <input type="number" className="ship-input ship-input-sm" value={panelForm.width} readOnly={shipped} onChange={(event) => { dimsUserEditedRef.current = true; setPanelForm((current) => ({ ...current, width: event.target.value })) }} />
                   <span className="ship-input-unit">W</span>
-                  <input type="number" className="ship-input ship-input-sm" value={panelForm.height} readOnly={shipped} onChange={(event) => setPanelForm((current) => ({ ...current, height: event.target.value }))} />
+                  <input type="number" className="ship-input ship-input-sm" value={panelForm.height} readOnly={shipped} onChange={(event) => { dimsUserEditedRef.current = true; setPanelForm((current) => ({ ...current, height: event.target.value })) }} />
                   <span className="ship-input-unit">H (in)</span>
                 </div>
               </div>
@@ -5486,6 +5511,9 @@ export default function OrdersView({
                       const packageId = event.target.value
                       const selectedPackage = packages.find((candidate) => getPackageIdentifier(candidate) === packageId)
                       const selectedDims = getPackageDims(selectedPackage)
+                      // User-driven package change should trigger an
+                      // auto-rate-refresh — flag it as a real edit.
+                      dimsUserEditedRef.current = true
                       setPanelForm((current) => ({
                         ...current,
                         packageId,
@@ -6016,64 +6044,237 @@ export default function OrdersView({
           </button>
         </div>
 
-        <div id="daily-strip" style={{ display: dailyStats ? 'block' : 'none' }}>
+        <AnimatePresence>
           {dailyStats ? (
-            <div style={{ background: 'var(--surface)', borderBottom: '1px solid var(--border)', padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap', fontSize: 12 }}>
-              <div style={{ color: 'var(--text3)', fontSize: 11, whiteSpace: 'nowrap', flexShrink: 0 }}>
-                📅 <span style={{ color: 'var(--text2)' }}>{dailyStatsFromLabel}</span>
-                <span style={{ margin: '0 4px' }}>→</span>
-                <span style={{ color: 'var(--text2)' }}>{dailyStatsToLabel}</span>
-                <span style={{ marginLeft: 4, color: 'var(--text3)' }}>(shifts at 6 PM)</span>
-              </div>
-              <div style={{ width: 1, height: 28, background: 'var(--border2)', flexShrink: 0 }} />
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                <span style={{ fontSize: 16 }}>📦</span>
-                <div>
-                  <div style={{ fontSize: 18, fontWeight: 800, lineHeight: 1, color: 'var(--text)' }}>{dailyStats.totalOrders}</div>
-                  <div style={{ fontSize: 10, color: 'var(--text3)', lineHeight: 1.2, marginTop: 1 }}>Total Orders</div>
+            <motion.div
+              id="daily-strip"
+              initial={{ opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+              className="bg-gradient-to-b from-page to-surface-2/40 border-b border-line px-4 py-3 font-sans"
+            >
+              <div className="flex items-center justify-between mb-2.5">
+                <div className="flex items-center gap-2 text-tiny text-ink-3">
+                  <span className="inline-flex items-center justify-center w-5 h-5 rounded-md bg-white shadow-sm border border-line">
+                    <Calendar size={11} strokeWidth={2.25} className="text-ink-2" />
+                  </span>
+                  <span className="text-ink font-semibold">{dailyStatsFromLabel}</span>
+                  <span className="text-ink-4">→</span>
+                  <span className="text-ink font-semibold">{dailyStatsToLabel}</span>
+                  <span className="text-ink-4 italic">· shifts 6 PM</span>
+                </div>
+                <div className="flex items-center gap-2 text-tiny">
+                  <span className="text-ink-3 font-mono tabular-nums">
+                    {dailyStripProgress?.shipped} / {dailyStats.totalOrders}
+                  </span>
+                  <motion.span
+                    key={dailyStripProgress?.pct}
+                    initial={{ scale: 0.85, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    transition={{ type: 'spring', stiffness: 380, damping: 22 }}
+                    className="font-bold tabular-nums px-1.5 py-0.5 rounded-md font-mono text-white"
+                    style={{ background: dailyStripProgress?.barColor }}
+                  >
+                    {dailyStripProgress?.pct}%
+                  </motion.span>
                 </div>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                <span style={{ fontSize: 16 }}>🚚</span>
-                <div>
-                  <div style={{ fontSize: 18, fontWeight: 800, lineHeight: 1, color: dailyStripProgress?.needToShipColor }}>{dailyStats.needToShip}</div>
-                  <div style={{ fontSize: 10, color: 'var(--text3)', lineHeight: 1.2, marginTop: 1 }}>Need to Ship</div>
-                </div>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                <span style={{ fontSize: 16 }}>🔔</span>
-                <div>
-                  <div style={{ fontSize: 18, fontWeight: 800, lineHeight: 1, color: dailyStripProgress?.upcomingColor }}>{dailyStats.upcomingOrders}</div>
-                  <div style={{ fontSize: 10, color: 'var(--text3)', lineHeight: 1.2, marginTop: 1 }}>Upcoming</div>
-                </div>
-              </div>
-              <div style={{ flex: 1, minWidth: 120, maxWidth: 220 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
-                  <span style={{ fontSize: 10, color: 'var(--text3)' }}>{dailyStripProgress?.shipped} of {dailyStats.totalOrders} shipped</span>
-                  <span style={{ fontSize: 11, fontWeight: 700, color: dailyStripProgress?.barColor }}>{dailyStripProgress?.pct}%</span>
-                </div>
-                <div style={{ height: 6, background: 'var(--border2)', borderRadius: 3, overflow: 'hidden' }}>
-                  <div style={{ height: '100%', width: `${dailyStripProgress?.barFill ?? 0}%`, background: dailyStripProgress?.barColor, borderRadius: 3, transition: 'width .4s ease' }} />
-                </div>
-              </div>
-            </div>
+              <motion.div
+                className="grid grid-cols-[repeat(3,minmax(0,1fr))_2fr] gap-2.5"
+                variants={{
+                  hidden: {},
+                  show: { transition: { staggerChildren: 0.06, delayChildren: 0.04 } },
+                }}
+                initial="hidden"
+                animate="show"
+              >
+                {/* Total tile */}
+                <motion.div
+                  variants={{
+                    hidden: { opacity: 0, y: 8 },
+                    show: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 320, damping: 24 } },
+                  }}
+                  whileHover={{ y: -2 }}
+                  className="bg-white rounded-lg border border-line px-3 py-2 shadow-sm hover:shadow-md transition-shadow flex items-center gap-2.5"
+                >
+                  <div className="w-8 h-8 rounded-md bg-gradient-to-br from-slate-50 to-slate-100 ring-1 ring-line flex items-center justify-center">
+                    <Package size={15} strokeWidth={2.25} className="text-ink-2" />
+                  </div>
+                  <div className="min-w-0">
+                    <motion.div
+                      key={dailyStats.totalOrders}
+                      initial={{ opacity: 0, y: 4 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="text-[20px] font-extrabold leading-none tracking-[-0.03em] text-ink font-mono tabular-nums"
+                    >
+                      {dailyStats.totalOrders}
+                    </motion.div>
+                    <div className="text-[10px] text-ink-3 mt-1 uppercase tracking-[0.08em] font-semibold">Total</div>
+                  </div>
+                </motion.div>
+                {/* Need to ship */}
+                <motion.div
+                  variants={{
+                    hidden: { opacity: 0, y: 8 },
+                    show: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 320, damping: 24 } },
+                  }}
+                  whileHover={{ y: -2 }}
+                  className="bg-white rounded-lg border border-line px-3 py-2 shadow-sm hover:shadow-md transition-shadow flex items-center gap-2.5 relative overflow-hidden"
+                >
+                  <div
+                    className="absolute inset-y-0 left-0 w-0.5"
+                    style={{ background: dailyStripProgress?.needToShipColor }}
+                  />
+                  <div
+                    className="w-8 h-8 rounded-md ring-1 flex items-center justify-center"
+                    style={{
+                      background: `linear-gradient(135deg, ${dailyStripProgress?.needToShipColor}15, ${dailyStripProgress?.needToShipColor}25)`,
+                      borderColor: 'transparent',
+                    }}
+                  >
+                    <Truck size={15} strokeWidth={2.25} style={{ color: dailyStripProgress?.needToShipColor }} />
+                  </div>
+                  <div className="min-w-0">
+                    <motion.div
+                      key={dailyStats.needToShip}
+                      initial={{ opacity: 0, y: 4 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="text-[20px] font-extrabold leading-none tracking-[-0.03em] font-mono tabular-nums"
+                      style={{ color: dailyStripProgress?.needToShipColor }}
+                    >
+                      {dailyStats.needToShip}
+                    </motion.div>
+                    <div className="text-[10px] text-ink-3 mt-1 uppercase tracking-[0.08em] font-semibold">Need to Ship</div>
+                  </div>
+                </motion.div>
+                {/* Upcoming */}
+                <motion.div
+                  variants={{
+                    hidden: { opacity: 0, y: 8 },
+                    show: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 320, damping: 24 } },
+                  }}
+                  whileHover={{ y: -2 }}
+                  className="bg-white rounded-lg border border-line px-3 py-2 shadow-sm hover:shadow-md transition-shadow flex items-center gap-2.5 relative overflow-hidden"
+                >
+                  <div
+                    className="absolute inset-y-0 left-0 w-0.5"
+                    style={{ background: dailyStripProgress?.upcomingColor }}
+                  />
+                  <div
+                    className="w-8 h-8 rounded-md ring-1 flex items-center justify-center"
+                    style={{
+                      background: `linear-gradient(135deg, ${dailyStripProgress?.upcomingColor}15, ${dailyStripProgress?.upcomingColor}25)`,
+                      borderColor: 'transparent',
+                    }}
+                  >
+                    <Bell size={15} strokeWidth={2.25} style={{ color: dailyStripProgress?.upcomingColor }} />
+                  </div>
+                  <div className="min-w-0">
+                    <motion.div
+                      key={dailyStats.upcomingOrders}
+                      initial={{ opacity: 0, y: 4 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="text-[20px] font-extrabold leading-none tracking-[-0.03em] font-mono tabular-nums"
+                      style={{ color: dailyStripProgress?.upcomingColor }}
+                    >
+                      {dailyStats.upcomingOrders}
+                    </motion.div>
+                    <div className="text-[10px] text-ink-3 mt-1 uppercase tracking-[0.08em] font-semibold">Upcoming</div>
+                  </div>
+                </motion.div>
+                {/* Progress card */}
+                <motion.div
+                  variants={{
+                    hidden: { opacity: 0, y: 8 },
+                    show: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 320, damping: 24 } },
+                  }}
+                  className="bg-white rounded-lg border border-line px-3 py-2 shadow-sm flex items-center gap-3"
+                >
+                  <div className="flex-1">
+                    <div className="text-[10px] text-ink-3 uppercase tracking-[0.08em] font-semibold mb-1">Shipping Progress</div>
+                    <div className="h-2 bg-line/60 rounded-full overflow-hidden">
+                      <motion.div
+                        className="h-full rounded-full"
+                        initial={{ width: 0 }}
+                        animate={{ width: `${dailyStripProgress?.barFill ?? 0}%` }}
+                        transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
+                        style={{
+                          background: `linear-gradient(90deg, ${dailyStripProgress?.barColor}, ${dailyStripProgress?.barColor}dd)`,
+                          boxShadow: `0 0 8px ${dailyStripProgress?.barColor}50`,
+                        }}
+                      />
+                    </div>
+                  </div>
+                </motion.div>
+              </motion.div>
+            </motion.div>
           ) : null}
-        </div>
+        </AnimatePresence>
 
         <div className="content-split relative">
           <div className="orders-section" id="ordersSection">
             <div className="orders-wrap">
               {loading ? (
-                <div id="loadingState" className="loading">
-                  <div className="spinner" />
-                  <div style={{ fontSize: 12, marginTop: 4 }}>Loading orders…</div>
-                </div>
+                <motion.div
+                  id="loadingState"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: 0.2 }}
+                  className="p-4"
+                >
+                  <motion.div
+                    className="space-y-2"
+                    variants={{
+                      hidden: {},
+                      show: { transition: { staggerChildren: 0.04 } },
+                    }}
+                    initial="hidden"
+                    animate="show"
+                  >
+                    {Array.from({ length: 8 }).map((_, idx) => (
+                      <motion.div
+                        key={idx}
+                        variants={{
+                          hidden: { opacity: 0, y: 6 },
+                          show: { opacity: 1, y: 0 },
+                        }}
+                        className="flex items-center gap-3 px-3 py-2 rounded-md bg-white border border-line"
+                      >
+                        <div className="w-4 h-4 rounded bg-line/60 animate-pulse" />
+                        <div className="w-20 h-3 rounded bg-line/60 animate-pulse" />
+                        <div className="w-32 h-3 rounded bg-line/60 animate-pulse" />
+                        <div className="flex-1 h-3 rounded bg-line/60 animate-pulse" />
+                        <div className="w-16 h-3 rounded bg-line/60 animate-pulse" />
+                        <div className="w-12 h-3 rounded bg-line/60 animate-pulse" />
+                      </motion.div>
+                    ))}
+                  </motion.div>
+                  <div className="flex items-center justify-center gap-2 text-tiny text-ink-3 mt-4 font-sans tracking-wide uppercase">
+                    <Loader2 size={12} strokeWidth={2.5} className="animate-spinSlow" />
+                    Loading orders
+                  </div>
+                </motion.div>
               ) : null}
 
               {!loading && error ? (
-                <div id="loadingState" className="loading">
-                  <div style={{ color: 'var(--red)', fontSize: 12.5 }}>⚠️ Error: {error.message}</div>
-                </div>
+                <motion.div
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.25 }}
+                  className="p-8 flex flex-col items-center justify-center gap-3"
+                >
+                  <motion.div
+                    initial={{ scale: 0.6, rotate: -8 }}
+                    animate={{ scale: 1, rotate: 0 }}
+                    transition={{ type: 'spring', stiffness: 320, damping: 18 }}
+                    className="w-14 h-14 rounded-full bg-danger-bg ring-2 ring-danger/15 flex items-center justify-center"
+                  >
+                    <AlertTriangle size={26} strokeWidth={2.25} className="text-danger" />
+                  </motion.div>
+                  <div className="text-sm2 font-semibold text-danger font-display tracking-tight">Failed to load orders</div>
+                  <div className="text-xs2 text-ink-3 max-w-md text-center leading-relaxed">{error.message}</div>
+                </motion.div>
               ) : null}
 
               {!loading && !error && orderedFilteredOrders.length > 0 ? (
@@ -6264,59 +6465,64 @@ export default function OrdersView({
               ) : null}
 
               {!loading && !error && orderedFilteredOrders.length === 0 ? (
-                <div id="emptyState" className="empty-state">
-                  <div className="empty-icon">📭</div>
-                  <div>No orders match your filters</div>
-                </div>
+                <motion.div
+                  id="emptyState"
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+                  className="flex flex-col items-center justify-center gap-3 py-16 px-6"
+                >
+                  <motion.div
+                    initial={{ scale: 0.5, rotate: -10 }}
+                    animate={{ scale: 1, rotate: 0 }}
+                    transition={{ type: 'spring', stiffness: 280, damping: 14, delay: 0.05 }}
+                    className="w-16 h-16 rounded-2xl bg-gradient-to-br from-slate-100 to-slate-200 ring-1 ring-line flex items-center justify-center"
+                  >
+                    <Inbox size={30} strokeWidth={2} className="text-ink-3" />
+                  </motion.div>
+                  <div className="text-sm font-semibold text-ink font-display tracking-tight mt-1">No orders match</div>
+                  <div className="text-xs2 text-ink-3 max-w-sm text-center leading-relaxed">
+                    Try clearing the search, broadening your date range, or selecting a different status.
+                  </div>
+                </motion.div>
               ) : null}
             </div>
           </div>
 
-          {/* Right details panel. Hidden entirely when:
-              - user closed the empty panel via the × (showEmptyPanel=false), AND
-              - no order is selected, AND
-              - no batch (>=2) selected.
-              In that state the orders table reclaims the panel's 390 px. A
-              floating "Show panel" pill (below) brings it back. */}
-          {(showEmptyPanel || panelOrder || selectedOrderIds.length >= 2) ? (
-            <div className="order-panel" id="orderPanel">
-              <div className="panel-inner" id="panelInner">
-                {activeOrderId == null && selectedOrderIds.length >= 2 ? renderBatchPanel() : renderSinglePanel()}
-              </div>
+          <div className="order-panel" id="orderPanel">
+            <div className="panel-inner" id="panelInner">
+              {activeOrderId == null && selectedOrderIds.length >= 2 ? renderBatchPanel() : renderSinglePanel()}
             </div>
-          ) : (
-            // Vertical "reopen sidebar" tab pinned to the right edge of the
-            // .content-split (which is position: relative). Centered top-to-
-            // bottom — same pattern Slack / Notion / VSCode use for a
-            // collapsed sidebar's reopen handle. z-[200] floats it above the
-            // orders table's sticky <thead> (z-index 100 in app-shell.css),
-            // and writing-mode rotates the label so the tab stays narrow.
-            <button
-              type="button"
-              aria-label="Show details panel"
-              title="Show details panel"
-              onClick={() => setShowEmptyPanel(true)}
-              className="absolute top-1/2 -translate-y-1/2 right-0 z-[200] flex flex-col items-center gap-1.5 px-1.5 py-3 rounded-l-md border border-r-0 border-line-2 bg-surface text-ink-2 shadow-md cursor-pointer transition-colors hover:bg-brand-bg hover:border-brand hover:text-brand"
-            >
-              <span aria-hidden="true" className="text-base leading-none">◧</span>
-              <span
-                className="text-[10px] font-bold tracking-wider uppercase"
-                style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}
-              >
-                Show panel
-              </span>
-            </button>
-          )}
+          </div>
         </div>
       </div>
 
-      <div className="pagination-bar" id="paginationBar">
-        <button className="btn btn-outline btn-sm" type="button" id="prevBtn" disabled={currentPage <= 1} onClick={() => setPage((current) => Math.max(1, current - 1))}>
+      <div className="pagination-bar !flex !items-center !gap-2 !px-4 !py-2 !bg-white !border-t !border-line" id="paginationBar">
+        <button
+          className="btn btn-outline btn-sm !transition-all !duration-150 hover:!shadow-sm hover:!-translate-y-px active:!translate-y-0 active:!scale-95 disabled:!opacity-40 disabled:hover:!translate-y-0 disabled:hover:!shadow-none disabled:!cursor-not-allowed"
+          type="button"
+          id="prevBtn"
+          disabled={currentPage <= 1}
+          aria-label="Previous page"
+          onClick={() => setPage((current) => Math.max(1, current - 1))}
+        >
           ← Prev
         </button>
-        <span id="pageInfo">Page {pages === 0 ? 0 : currentPage} of {pages || 0}</span>
-        <span id="totalInfo">{total.toLocaleString()} total</span>
-        <button className="btn btn-outline btn-sm" type="button" id="nextBtn" disabled={pages === 0 || currentPage >= pages} onClick={() => setPage((current) => Math.min(pages, current + 1))}>
+        <span id="pageInfo" className="text-tiny text-ink-2 font-mono tabular-nums">
+          Page <span className="font-bold text-ink">{pages === 0 ? 0 : currentPage}</span> <span className="text-ink-3">of</span> <span className="font-bold text-ink">{pages || 0}</span>
+        </span>
+        <span className="w-px h-4 bg-line-2" aria-hidden />
+        <span id="totalInfo" className="text-tiny text-ink-3 font-mono tabular-nums">
+          <span className="font-semibold text-ink-2">{total.toLocaleString()}</span> total
+        </span>
+        <button
+          className="btn btn-outline btn-sm !ml-auto !transition-all !duration-150 hover:!shadow-sm hover:!-translate-y-px active:!translate-y-0 active:!scale-95 disabled:!opacity-40 disabled:hover:!translate-y-0 disabled:hover:!shadow-none disabled:!cursor-not-allowed"
+          type="button"
+          id="nextBtn"
+          disabled={pages === 0 || currentPage >= pages}
+          aria-label="Next page"
+          onClick={() => setPage((current) => Math.min(pages, current + 1))}
+        >
           Next →
         </button>
       </div>

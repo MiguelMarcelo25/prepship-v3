@@ -1,5 +1,7 @@
 // @ts-nocheck
 import { useContext, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { motion } from 'framer-motion'
+import { Boxes } from 'lucide-react'
 import { apiClient, ApiError } from '../../api/client'
 import { ToastContext } from '../../contexts/ToastContext'
 import { useInitStores } from '../../hooks'
@@ -982,9 +984,19 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
   }
 
   return (
-    <div id="view-inventory" className="view-content">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
-        <h2 style={{ fontSize: 16, fontWeight: 800, color: 'var(--text)', margin: 0 }}>📦 Inventory</h2>
+    <div id="view-inventory" className="view-content !p-5 !overflow-y-auto">
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+        className="flex items-center gap-4 mb-4 flex-wrap"
+      >
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-sky-500 to-sky-600 flex items-center justify-center shadow-md ring-1 ring-sky-400/20">
+            <Boxes size={20} strokeWidth={2.25} className="text-white" />
+          </div>
+          <h2 className="text-[16px] font-extrabold text-ink font-display tracking-tight m-0">Inventory</h2>
+        </div>
         <div style={{ display: 'flex', gap: 3 }}>
           {([
             ['stock', 'Stock Levels'],
@@ -1035,7 +1047,7 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
           {bulkEditMode ? '✕ Exit Bulk' : '✏️ Bulk Edit'}
         </button>
         <button className="btn btn-outline btn-sm" type="button" onClick={() => void refreshInventoryView()}>↻ Refresh</button>
-      </div>
+      </motion.div>
 
       {bootError ? (
         <div className="empty-state" style={{ marginBottom: 12 }}>Error: {bootError}</div>
@@ -1101,20 +1113,34 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
                         </colgroup>
                       ) : (
                         <colgroup>
-                          <col style={{ width: 150 }} /> {/* SKU */}
-                          <col style={{ width: 56 }} />  {/* Image */}
-                          <col />                         {/* Name (flex) */}
-                          <col style={{ width: 90 }} />  {/* Weight */}
-                          <col style={{ width: 100 }} /> {/* Dims */}
-                          <col style={{ width: 80 }} />  {/* Cu Ft/Unit */}
-                          <col style={{ width: 110 }} /> {/* Package */}
-                          <col style={{ width: 70 }} />  {/* Stock */}
-                          <col style={{ width: 75 }} />  {/* Sold 30d */}
-                          <col style={{ width: 85 }} />  {/* Units/Pack */}
-                          <col style={{ width: 90 }} />  {/* Total Units */}
-                          <col style={{ width: 55 }} />  {/* Min */}
-                          <col style={{ width: 70 }} />  {/* Status */}
-                          <col style={{ width: 110 }} /> {/* Actions */}
+                          {/* SKU */}
+                          <col style={{ width: 150 }} />
+                          {/* Image */}
+                          <col style={{ width: 56 }} />
+                          {/* Name (flex) */}
+                          <col />
+                          {/* Weight */}
+                          <col style={{ width: 90 }} />
+                          {/* Dims */}
+                          <col style={{ width: 100 }} />
+                          {/* Cu Ft/Unit */}
+                          <col style={{ width: 80 }} />
+                          {/* Package */}
+                          <col style={{ width: 110 }} />
+                          {/* Stock */}
+                          <col style={{ width: 70 }} />
+                          {/* Sold 30d */}
+                          <col style={{ width: 75 }} />
+                          {/* Units/Pack */}
+                          <col style={{ width: 85 }} />
+                          {/* Total Units */}
+                          <col style={{ width: 90 }} />
+                          {/* Min */}
+                          <col style={{ width: 55 }} />
+                          {/* Status */}
+                          <col style={{ width: 70 }} />
+                          {/* Actions */}
+                          <col style={{ width: 110 }} />
                         </colgroup>
                       )}
                       <thead>

@@ -1221,6 +1221,13 @@ function addCalendarDaysUtc(year: number, month: number, day: number, days: numb
 }
 
 function naiveNoonUtcForFulfillmentDate(year: number, month: number, day: number) {
+  // NB: returns *literal* noon-UTC, not noon-PT. Reason: orders are migrated
+  // from v2's SQLite (which stored PT-local ISO strings) and the migration
+  // labeled those PT clock values with `Z` rather than re-interpreting them
+  // as PT moments. So `orders.order_date` in this database is PT-clock-time
+  // wrapped in a UTC label. Comparing it against a PT-clock-as-UTC window
+  // (this function) preserves the v2 semantic. Switching to true noon-PT-UTC
+  // would shift the comparison off by 7-8 hours.
   return new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
 }
 
@@ -1266,8 +1273,10 @@ function computeFulfillmentShiftWindow(now = new Date()): { from: Date; to: Date
 }
 
 // v2-parity label — "Apr 21, 12pm PT" (comma, lowercase am/pm, no space).
-// v2 formatted from a server-local Date; we format through Intl so the value
-// reads correctly on a UTC Render host.
+// Formats with `timeZone: 'UTC'` because `naiveNoonUtcForFulfillmentDate`
+// returns a Date whose UTC clock reads the desired PT clock value (see the
+// comment on that function for why). Reading the same UTC clock back gives
+// the right label.
 function formatPtLabel(d: Date): string {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: 'UTC',

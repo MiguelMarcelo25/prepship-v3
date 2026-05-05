@@ -1,5 +1,7 @@
 // @ts-nocheck
 import { useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { motion } from 'framer-motion'
+import { Receipt } from 'lucide-react'
 import { apiClient } from '../../api/client'
 import { ToastContext } from '../../contexts/ToastContext'
 import type {
@@ -458,10 +460,21 @@ export default function BillingView() {
   }
 
   return (
-    <div id="view-billing" className="view-content">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 16, flexWrap: 'wrap' }}>
-        <h2 style={{ fontSize: 16, fontWeight: 800, color: 'var(--text)', margin: 0 }}>🧾 Billing Dashboard</h2>
-      </div>
+    <div id="view-billing" className="view-content !p-5 !overflow-y-auto">
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+        className="flex items-center gap-3 mb-5"
+      >
+        <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-emerald-500 to-emerald-600 flex items-center justify-center shadow-md ring-1 ring-emerald-400/20">
+          <Receipt size={20} strokeWidth={2.25} className="text-white" />
+        </div>
+        <div>
+          <h2 className="text-[16px] font-extrabold text-ink font-display tracking-tight">Billing Dashboard</h2>
+          <p className="text-tiny text-ink-3 mt-0.5">Per-client billing config, package pricing and invoice history</p>
+        </div>
+      </motion.div>
 
       <div className="billing-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18, marginBottom: 18 }}>
         <div className="markup-card">

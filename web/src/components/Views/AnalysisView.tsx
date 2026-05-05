@@ -1,5 +1,7 @@
 // @ts-nocheck
 import { useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { motion } from 'framer-motion'
+import { BarChart3 } from 'lucide-react'
 import {
   CartesianGrid,
   LabelList,
@@ -436,7 +438,12 @@ function DrawerBarValueLabel(props: {
   )
 }
 
-export default function AnalysisView() {
+interface AnalysisViewProps {
+  /** Pre-fill the SKU search field. Set by the Dashboard click-to-open flow. */
+  initialSearch?: string
+}
+
+export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) {
   const toastContext = useContext(ToastContext)
   const stickyPanelRef = useRef<HTMLDivElement | null>(null)
   const initialFilters = getInitialAnalysisFilters(
@@ -446,7 +453,18 @@ export default function AnalysisView() {
   const [to, setTo] = useState(initialFilters.to)
   const [presetDays, setPresetDays] = useState<number | null>(initialFilters.presetDays)
   const [clientId, setClientId] = useState('')
-  const [search, setSearch] = useState('')
+  const [search, setSearch] = useState(initialSearch ?? '')
+
+  // Keep search in sync if the parent passes a new initialSearch (e.g. user
+  // returns to dashboard and clicks a different SKU). Only fires when the
+  // incoming prop is non-empty so it never *clears* a search the user is
+  // typing into the field directly.
+  useEffect(() => {
+    if (initialSearch && initialSearch !== search) {
+      setSearch(initialSearch)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialSearch])
   const sortKey: AnalysisSortKey = 'qty'
   const sortDir: AnalysisSortDir = 'desc'
   const [page, setPage] = useState(1)
@@ -759,9 +777,17 @@ export default function AnalysisView() {
             flexWrap: 'wrap',
           }}
         >
-          <h2 style={{ fontSize: 15, fontWeight: 800, color: 'var(--text)', margin: 0 }}>
-            📊 SKU Analysis
-          </h2>
+          <motion.div
+            initial={{ opacity: 0, x: -8 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+            className="flex items-center gap-2.5"
+          >
+            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-violet-500 to-violet-600 flex items-center justify-center shadow-md ring-1 ring-violet-400/20">
+              <BarChart3 size={18} strokeWidth={2.25} className="text-white" />
+            </div>
+            <h2 className="text-[15px] font-extrabold text-ink font-display tracking-tight m-0">SKU Analysis</h2>
+          </motion.div>
           <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
             {[
               { days: 30, label: '30d' },

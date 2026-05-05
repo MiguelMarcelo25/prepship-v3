@@ -48,7 +48,15 @@ export default {
         },
       },
       fontFamily: {
+        display: [
+          '"Bricolage Grotesque"',
+          '-apple-system',
+          'BlinkMacSystemFont',
+          'system-ui',
+          'sans-serif',
+        ],
         sans: [
+          '"Geist"',
           '-apple-system',
           'BlinkMacSystemFont',
           '"Segoe UI"',
@@ -56,6 +64,7 @@ export default {
           'sans-serif',
         ],
         mono: [
+          '"Geist Mono"',
           'ui-monospace',
           'SFMono-Regular',
           'Menlo',
@@ -91,9 +100,40 @@ export default {
           '0%, 100%': { opacity: '1' },
           '50%': { opacity: '0.3' },
         },
+        fadeIn: {
+          '0%': { opacity: '0' },
+          '100%': { opacity: '1' },
+        },
+        fadeInUp: {
+          '0%': { opacity: '0', transform: 'translateY(8px)' },
+          '100%': { opacity: '1', transform: 'translateY(0)' },
+        },
+        slideInRight: {
+          '0%': { opacity: '0', transform: 'translateX(12px)' },
+          '100%': { opacity: '1', transform: 'translateX(0)' },
+        },
+        bounceIn: {
+          '0%': { opacity: '0', transform: 'scale(0.7)' },
+          '60%': { opacity: '1', transform: 'scale(1.08)' },
+          '100%': { opacity: '1', transform: 'scale(1)' },
+        },
+        shimmer: {
+          '0%': { backgroundPosition: '-200% 0' },
+          '100%': { backgroundPosition: '200% 0' },
+        },
+        spinSlow: {
+          '0%': { transform: 'rotate(0deg)' },
+          '100%': { transform: 'rotate(360deg)' },
+        },
       },
       animation: {
         pulse: 'pulse 0.8s ease-in-out infinite',
+        fadeIn: 'fadeIn 0.25s ease-out',
+        fadeInUp: 'fadeInUp 0.3s cubic-bezier(0.22, 1, 0.36, 1)',
+        slideInRight: 'slideInRight 0.25s ease-out',
+        bounceIn: 'bounceIn 0.45s cubic-bezier(0.34, 1.56, 0.64, 1)',
+        shimmer: 'shimmer 2s linear infinite',
+        spinSlow: 'spinSlow 1.6s linear infinite',
       },
     },
   },

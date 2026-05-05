@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { motion } from 'framer-motion'
 import { Box, CalendarPlus, Plus, RefreshCw, Ruler, Search, X } from 'lucide-react'
 import { apiClient } from '../../api/client'
 import { ToastContext } from '../../contexts/ToastContext'
@@ -806,14 +807,21 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
 
   return (
     <>
-      <div id="view-packages" className="view-content">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
-          <div>
-            <h2 style={{ fontSize: 16, fontWeight: 800, color: 'var(--text)', marginBottom: 2, display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-              <Box size={18} strokeWidth={2.25} style={{ color: 'var(--ss-blue)' }} />
-              Package Library
-            </h2>
-            <p style={{ color: 'var(--text3)', fontSize: 12 }}>Define reusable package types. Select in the right panel when shipping.</p>
+      <div id="view-packages" className="view-content !p-5 !overflow-y-auto">
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+          className="flex items-start justify-between gap-3 mb-5 flex-wrap"
+        >
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-amber-500 to-orange-600 flex items-center justify-center shadow-md ring-1 ring-amber-400/20">
+              <Box size={20} strokeWidth={2.25} className="text-white" />
+            </div>
+            <div>
+              <h2 className="text-[16px] font-extrabold text-ink font-display tracking-tight">Package Library</h2>
+              <p className="text-tiny text-ink-3 mt-0.5">Define reusable package types. Select in the right panel when shipping.</p>
+            </div>
           </div>
           <div style={{ display: 'flex', gap: 7, alignItems: 'center', flexWrap: 'wrap' }}>
             <div className="pkg-search-wrap">
@@ -861,7 +869,7 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
               Add Custom
             </button>
           </div>
-        </div>
+        </motion.div>
 
         {/* Legacy inline form replaced by PackageFormModal.
           <form className="pkg-form-card" id="pkgFormCard" onSubmit={handleSubmit}>

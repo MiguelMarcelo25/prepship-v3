@@ -1,5 +1,7 @@
 // @ts-nocheck
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { motion } from 'framer-motion'
+import { Settings as SettingsIcon, ChevronDown } from 'lucide-react'
 import { apiClient } from '../../api/client'
 import { api } from '../../lib/api'
 import { useShippingAccounts, useClients } from '../../hooks'
@@ -221,9 +223,21 @@ export default function SettingsView() {
   }
 
   return (
-    <div id="view-settings" className="view-content">
-      <h2 style={{ fontSize: 16, fontWeight: 800, color: 'var(--text)', marginBottom: 3 }}>⚙️ Markup Settings</h2>
-      <p style={{ color: 'var(--text3)', fontSize: 12, marginBottom: 16 }}>$ or % markup added per carrier account — applied to displayed rates in the Rate Browser.</p>
+    <div id="view-settings" className="view-content !p-5 !overflow-y-auto">
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+        className="flex items-center gap-3 mb-5"
+      >
+        <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-slate-700 to-slate-900 flex items-center justify-center shadow-md ring-1 ring-slate-600/20">
+          <SettingsIcon size={20} strokeWidth={2.25} className="text-white" />
+        </div>
+        <div>
+          <h2 className="text-[16px] font-extrabold text-ink font-display tracking-tight">Markup Settings</h2>
+          <p className="text-tiny text-ink-3 mt-0.5">$ or % markup added per carrier account — applied to displayed rates in the Rate Browser.</p>
+        </div>
+      </motion.div>
 
       <div className="markup-card">
         <h3>Rate Browser — Account Markups</h3>

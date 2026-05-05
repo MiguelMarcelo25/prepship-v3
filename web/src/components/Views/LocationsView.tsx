@@ -1,5 +1,17 @@
 // @ts-nocheck
 import { useContext, useEffect, useState, type FormEvent } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
+import {
+  MapPin,
+  Plus,
+  Star,
+  Pencil,
+  Trash2,
+  Save,
+  Loader2,
+  AlertTriangle,
+  X as XIcon,
+} from 'lucide-react'
 import { apiClient } from '../../api/client'
 import { ToastContext } from '../../contexts/ToastContext'
 import type { LocationDto } from '../../types/api'
@@ -7,7 +19,6 @@ import {
   buildLocationSaveInput,
   buildLocationSummary,
   createLocationFormState,
-  getLocationActionLabels,
   getLocationFormTitle,
   getLocationsContentState,
   type LocationFormState,
@@ -44,121 +55,246 @@ export function LocationsViewContent({
 }: LocationsViewContentProps) {
   const contentState = getLocationsContentState({ loading, error, locations })
 
+  const inputCls =
+    'w-full px-3 py-2 rounded-lg border border-line bg-white text-[13px] text-ink placeholder:text-ink-3 ' +
+    'focus:border-brand/60 focus:ring-2 focus:ring-brand/15 transition-all duration-150 outline-none'
+  const labelCls = 'block text-tiny font-bold uppercase tracking-[0.06em] text-ink-3 mb-1.5'
+
   return (
-    <div id="view-locations" className="view-content">
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
-        <div>
-          <h2 style={{ fontSize: 16, fontWeight: 800, color: 'var(--text)', marginBottom: 2 }}>📍 Ship-From Locations</h2>
-          <p style={{ color: 'var(--text3)', fontSize: 12 }}>Add warehouses, 3PL centers, or drop-ship addresses. The ★ default is used for all new labels.</p>
+    <div id="view-locations" className="view-content !p-5 !overflow-y-auto">
+      <div className="flex items-start justify-between gap-3 mb-5 flex-wrap max-w-3xl">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-rose-500 to-rose-600 flex items-center justify-center shadow-md ring-1 ring-rose-400/20">
+            <MapPin size={20} strokeWidth={2.25} className="text-white" />
+          </div>
+          <div>
+            <h2 className="text-[16px] font-extrabold text-ink font-display tracking-tight">Ship-From Locations</h2>
+            <p className="text-tiny text-ink-3 mt-0.5">Warehouses, 3PL centers, or drop-ship addresses. The ★ default is used for new labels.</p>
+          </div>
         </div>
-        <button className="btn btn-primary btn-sm" type="button" onClick={onShowAdd}>＋ Add Location</button>
+        <motion.button
+          whileHover={{ y: -1 }}
+          whileTap={{ scale: 0.96 }}
+          type="button"
+          onClick={onShowAdd}
+          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-semibold text-white bg-gradient-to-br from-brand to-indigo-600 shadow-md hover:shadow-lg transition-all duration-150 focus-visible:ring-2 focus-visible:ring-brand/40 focus-visible:ring-offset-2 outline-none"
+        >
+          <Plus size={14} strokeWidth={2.5} />
+          Add Location
+        </motion.button>
       </div>
 
-      {formOpen ? (
-        <form id="locFormCard" className="loc-form-card" onSubmit={onSubmit}>
-          <div id="locFormTitle" style={{ fontSize: 13, fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}>
-            {getLocationFormTitle(form)}
-          </div>
-          <input id="locFormId" type="hidden" value={form.locationId} readOnly />
-          <div className="loc-form-grid">
-            <div className="loc-form-field full">
-              <label htmlFor="locFormName">Location Name</label>
-              <input id="locFormName" type="text" placeholder="e.g. GWH Fulfillment Center" value={form.name} onChange={(event) => onFieldChange('name', event.target.value)} />
+      <AnimatePresence>
+        {formOpen ? (
+          <motion.form
+            key="loc-form"
+            id="locFormCard"
+            initial={{ opacity: 0, y: -8, height: 0 }}
+            animate={{ opacity: 1, y: 0, height: 'auto' }}
+            exit={{ opacity: 0, y: -8, height: 0 }}
+            transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+            className="bg-white rounded-2xl border border-line shadow-sm overflow-hidden mb-5 max-w-3xl"
+            onSubmit={onSubmit}
+          >
+            <div className="px-5 py-4 border-b border-line bg-gradient-to-b from-page to-surface-2/30 flex items-center justify-between">
+              <div className="text-[14px] font-bold text-ink font-display tracking-tight">{getLocationFormTitle(form)}</div>
+              <motion.button
+                type="button"
+                whileTap={{ scale: 0.85 }}
+                whileHover={{ rotate: 90 }}
+                onClick={onCancelForm}
+                aria-label="Close form"
+                className="w-7 h-7 rounded-md flex items-center justify-center text-ink-3 hover:text-ink hover:bg-line/40 transition-colors"
+              >
+                <XIcon size={14} strokeWidth={2.5} />
+              </motion.button>
             </div>
-            <div className="loc-form-field full">
-              <label htmlFor="locFormCompany">Company</label>
-              <input id="locFormCompany" type="text" placeholder="e.g. DR PREPPER USA" value={form.company} onChange={(event) => onFieldChange('company', event.target.value)} />
+            <input id="locFormId" type="hidden" value={form.locationId} readOnly />
+            <div className="p-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="sm:col-span-2">
+                <label htmlFor="locFormName" className={labelCls}>Location Name</label>
+                <input id="locFormName" type="text" className={inputCls} placeholder="e.g. GWH Fulfillment Center" value={form.name} onChange={(event) => onFieldChange('name', event.target.value)} />
+              </div>
+              <div className="sm:col-span-2">
+                <label htmlFor="locFormCompany" className={labelCls}>Company</label>
+                <input id="locFormCompany" type="text" className={inputCls} placeholder="e.g. DR PREPPER USA" value={form.company} onChange={(event) => onFieldChange('company', event.target.value)} />
+              </div>
+              <div className="sm:col-span-2">
+                <label htmlFor="locFormStreet1" className={labelCls}>Street Address</label>
+                <input id="locFormStreet1" type="text" className={inputCls} placeholder="123 Main St" value={form.street1} onChange={(event) => onFieldChange('street1', event.target.value)} />
+              </div>
+              <div className="sm:col-span-2">
+                <label htmlFor="locFormStreet2" className={labelCls}>Suite / Unit <span className="text-ink-4 normal-case font-normal tracking-normal">(optional)</span></label>
+                <input id="locFormStreet2" type="text" className={inputCls} placeholder="Suite 100" value={form.street2} onChange={(event) => onFieldChange('street2', event.target.value)} />
+              </div>
+              <div>
+                <label htmlFor="locFormCity" className={labelCls}>City</label>
+                <input id="locFormCity" type="text" className={inputCls} placeholder="Gardena" value={form.city} onChange={(event) => onFieldChange('city', event.target.value)} />
+              </div>
+              <div>
+                <label htmlFor="locFormState" className={labelCls}>State</label>
+                <input id="locFormState" type="text" className={inputCls} placeholder="CA" maxLength={2} value={form.state} onChange={(event) => onFieldChange('state', event.target.value)} />
+              </div>
+              <div>
+                <label htmlFor="locFormZip" className={labelCls}>ZIP Code</label>
+                <input id="locFormZip" type="text" className={`${inputCls} font-mono tabular-nums`} placeholder="90248" maxLength={10} value={form.postalCode} onChange={(event) => onFieldChange('postalCode', event.target.value)} />
+              </div>
+              <div>
+                <label htmlFor="locFormPhone" className={labelCls}>Phone <span className="text-ink-4 normal-case font-normal tracking-normal">(optional)</span></label>
+                <input id="locFormPhone" type="text" className={`${inputCls} font-mono tabular-nums`} placeholder="(310) 555-0000" value={form.phone} onChange={(event) => onFieldChange('phone', event.target.value)} />
+              </div>
             </div>
-            <div className="loc-form-field full">
-              <label htmlFor="locFormStreet1">Street Address</label>
-              <input id="locFormStreet1" type="text" placeholder="123 Main St" value={form.street1} onChange={(event) => onFieldChange('street1', event.target.value)} />
+            <div className="px-5 py-4 border-t border-line bg-page/30 flex items-center gap-2">
+              <label className="inline-flex items-center gap-2 text-tiny text-ink-2 font-medium cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={form.isDefault}
+                  onChange={(event) => onFieldChange('isDefault', event.target.checked)}
+                  className="w-4 h-4 rounded border-line text-brand focus:ring-2 focus:ring-brand/30 cursor-pointer"
+                />
+                Set as default ship-from
+              </label>
+              <div className="flex-1" />
+              <motion.button
+                type="button"
+                whileTap={{ scale: 0.96 }}
+                onClick={onCancelForm}
+                className="px-3 py-1.5 rounded-md text-[12.5px] font-semibold text-ink-2 hover:text-ink hover:bg-line/40 transition-colors"
+              >
+                Cancel
+              </motion.button>
+              <motion.button
+                type="submit"
+                whileHover={{ y: -1 }}
+                whileTap={{ scale: 0.96 }}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-md text-[12.5px] font-semibold text-white bg-gradient-to-br from-brand to-indigo-600 shadow-sm hover:shadow-md transition-all duration-150"
+              >
+                <Save size={13} strokeWidth={2.5} />
+                Save Location
+              </motion.button>
             </div>
-            <div className="loc-form-field full">
-              <label htmlFor="locFormStreet2">Suite / Unit (optional)</label>
-              <input id="locFormStreet2" type="text" placeholder="Suite 100" value={form.street2} onChange={(event) => onFieldChange('street2', event.target.value)} />
-            </div>
-            <div className="loc-form-field">
-              <label htmlFor="locFormCity">City</label>
-              <input id="locFormCity" type="text" placeholder="Gardena" value={form.city} onChange={(event) => onFieldChange('city', event.target.value)} />
-            </div>
-            <div className="loc-form-field">
-              <label htmlFor="locFormState">State</label>
-              <input id="locFormState" type="text" placeholder="CA" maxLength={2} value={form.state} onChange={(event) => onFieldChange('state', event.target.value)} />
-            </div>
-            <div className="loc-form-field">
-              <label htmlFor="locFormZip">ZIP Code</label>
-              <input id="locFormZip" type="text" placeholder="90248" maxLength={10} value={form.postalCode} onChange={(event) => onFieldChange('postalCode', event.target.value)} />
-            </div>
-            <div className="loc-form-field">
-              <label htmlFor="locFormPhone">Phone (optional)</label>
-              <input id="locFormPhone" type="text" placeholder="(310) 555-0000" value={form.phone} onChange={(event) => onFieldChange('phone', event.target.value)} />
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: 8, marginTop: 12, alignItems: 'center' }}>
-            <label style={{ fontSize: 12, display: 'flex', alignItems: 'center', gap: 5, color: 'var(--text2)' }}>
-              <input type="checkbox" checked={form.isDefault} onChange={(event) => onFieldChange('isDefault', event.target.checked)} />
-              {' '}
-              Set as default ship-from
-            </label>
-            <div style={{ flex: 1 }} />
-            <button className="btn btn-ghost btn-sm" type="button" onClick={onCancelForm}>Cancel</button>
-            <button className="btn btn-primary btn-sm" type="submit">💾 Save Location</button>
-          </div>
-        </form>
-      ) : null}
+          </motion.form>
+        ) : null}
+      </AnimatePresence>
 
-      <div id="locationsContent">
-        {contentState === 'loading' ? (
-          <div className="loading"><div className="spinner" /><div style={{ fontSize: 12, marginTop: 4 }}>Loading locations…</div></div>
-        ) : contentState === 'error' ? (
-          <div className="empty-state"><div className="empty-icon">⚠️</div><div>{error}</div></div>
-        ) : contentState === 'empty' ? (
-          <div className="empty-state"><div className="empty-icon">📍</div><div>No locations yet. Add one above.</div></div>
-        ) : (
-          locations.map((location) => (
-            <div
-              key={location.locationId}
-              style={{
-                background: 'var(--surface)',
-                border: '1px solid var(--border)',
-                borderRadius: 8,
-                padding: '14px 16px',
-                marginBottom: 10,
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: 12,
-              }}
+      <div id="locationsContent" className="max-w-3xl">
+        <AnimatePresence mode="wait">
+          {contentState === 'loading' ? (
+            <motion.div
+              key="loading"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="flex flex-col items-center justify-center gap-3 py-12 bg-white rounded-2xl border border-line"
             >
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                  <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--text)' }}>{location.name}</span>
-                  {location.isDefault ? (
-                    <span style={{ background: 'var(--ss-blue)', color: '#fff', fontSize: 10, fontWeight: 700, padding: '1px 7px', borderRadius: 10 }}>DEFAULT</span>
-                  ) : null}
-                </div>
-                <div style={{ fontSize: 12, color: 'var(--text2)' }}>{buildLocationSummary(location)}</div>
-                {location.phone ? <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 2 }}>{location.phone}</div> : null}
+              <Loader2 size={22} strokeWidth={2.25} className="text-brand animate-spinSlow" />
+              <div className="text-tiny text-ink-3 uppercase tracking-wider font-semibold">Loading locations…</div>
+            </motion.div>
+          ) : contentState === 'error' ? (
+            <motion.div
+              key="error"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              className="flex flex-col items-center justify-center gap-3 py-14 bg-white rounded-2xl border border-danger/20"
+            >
+              <div className="w-14 h-14 rounded-full bg-danger-bg ring-2 ring-danger/15 flex items-center justify-center">
+                <AlertTriangle size={26} strokeWidth={2.25} className="text-danger" />
               </div>
-              <div style={{ display: 'flex', gap: 5, flexShrink: 0, alignItems: 'flex-start' }}>
-                {getLocationActionLabels(location).map((label) => (
-                  <button
-                    key={`${location.locationId}-${label}`}
-                    className="btn btn-ghost btn-xs"
-                    type="button"
-                    style={label === '🗑' ? { color: 'var(--red)' } : undefined}
-                    onClick={() => {
-                      if (label === '★ Default') onSetDefault(location.locationId)
-                      else if (label === '✏️ Edit') onEdit(location.locationId)
-                      else onDelete(location.locationId)
-                    }}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ))
-        )}
+              <div className="text-sm font-semibold text-danger">Failed to load locations</div>
+              <div className="text-xs2 text-ink-3 max-w-md text-center leading-relaxed">{error}</div>
+            </motion.div>
+          ) : contentState === 'empty' ? (
+            <motion.div
+              key="empty"
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              className="flex flex-col items-center justify-center gap-3 py-14 bg-white rounded-2xl border border-line"
+            >
+              <motion.div
+                initial={{ scale: 0.6, rotate: -10 }}
+                animate={{ scale: 1, rotate: 0 }}
+                transition={{ type: 'spring', stiffness: 280, damping: 14 }}
+                className="w-16 h-16 rounded-2xl bg-gradient-to-br from-rose-50 to-rose-100 ring-1 ring-rose-200 flex items-center justify-center"
+              >
+                <MapPin size={28} strokeWidth={2} className="text-rose-500" />
+              </motion.div>
+              <div className="text-sm font-semibold text-ink font-display tracking-tight">No locations yet</div>
+              <div className="text-xs2 text-ink-3 leading-relaxed">Click <strong className="text-ink">Add Location</strong> above to get started.</div>
+            </motion.div>
+          ) : (
+            <motion.div
+              key="list"
+              variants={{ hidden: {}, show: { transition: { staggerChildren: 0.05 } } }}
+              initial="hidden"
+              animate="show"
+              className="space-y-2.5"
+            >
+              {locations.map((location) => (
+                <motion.div
+                  key={location.locationId}
+                  variants={{
+                    hidden: { opacity: 0, y: 8 },
+                    show: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 320, damping: 24 } },
+                  }}
+                  whileHover={{ y: -1 }}
+                  className="bg-white rounded-xl border border-line shadow-sm hover:shadow-md transition-shadow p-4 flex items-start gap-3"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="font-bold text-[13.5px] text-ink font-display tracking-tight truncate">{location.name}</span>
+                      {location.isDefault ? (
+                        <span className="inline-flex items-center gap-1 bg-brand text-white text-[9px] font-bold px-1.5 py-0.5 rounded-md uppercase tracking-wider shadow-sm">
+                          <Star size={9} strokeWidth={2.75} fill="currentColor" />
+                          Default
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="text-[12px] text-ink-2 leading-relaxed">{buildLocationSummary(location)}</div>
+                    {location.phone ? (
+                      <div className="text-tiny text-ink-3 mt-1 font-mono tabular-nums">{location.phone}</div>
+                    ) : null}
+                  </div>
+                  <div className="flex gap-1 flex-shrink-0">
+                    {!location.isDefault ? (
+                      <motion.button
+                        whileTap={{ scale: 0.92 }}
+                        type="button"
+                        title="Set as default"
+                        aria-label="Set as default"
+                        onClick={() => onSetDefault(location.locationId)}
+                        className="w-8 h-8 rounded-md flex items-center justify-center text-amber-500 hover:bg-amber-50 hover:text-amber-600 transition-colors"
+                      >
+                        <Star size={14} strokeWidth={2.25} />
+                      </motion.button>
+                    ) : null}
+                    <motion.button
+                      whileTap={{ scale: 0.92 }}
+                      type="button"
+                      title="Edit"
+                      aria-label="Edit location"
+                      onClick={() => onEdit(location.locationId)}
+                      className="w-8 h-8 rounded-md flex items-center justify-center text-ink-2 hover:bg-brand-bg hover:text-brand transition-colors"
+                    >
+                      <Pencil size={13} strokeWidth={2.25} />
+                    </motion.button>
+                    <motion.button
+                      whileTap={{ scale: 0.92 }}
+                      type="button"
+                      title="Delete"
+                      aria-label="Delete location"
+                      onClick={() => onDelete(location.locationId)}
+                      className="w-8 h-8 rounded-md flex items-center justify-center text-ink-3 hover:bg-danger-bg hover:text-danger transition-colors"
+                    >
+                      <Trash2 size={13} strokeWidth={2.25} />
+                    </motion.button>
+                  </div>
+                </motion.div>
+              ))}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </div>
     </div>
   )
