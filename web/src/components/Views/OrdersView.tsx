@@ -2394,6 +2394,36 @@ export default function OrdersView({
     return () => window.clearTimeout(timeout)
   }, [panelOrderId, panelOrder?.orderStatus, panelForm.length, panelForm.width, panelForm.height, packages, packagesLoaded])
 
+  // Auto-refresh the panel's best rate whenever weight or any dimension
+  // changes. Debounced so a user typing "1 → 12 → 125" doesn't fire three
+  // separate /rates calls. refreshPanelBestRate already toggles
+  // panelRateLoading and uses bestRateRefreshSeqRef to ignore stale results
+  // when the inputs change again before a fetch completes.
+  useEffect(() => {
+    if (!panelOrder || panelOrder.orderStatus !== 'awaiting_shipment') return
+    const dims = getPanelDims()
+    const weightOz = getPanelWeightOz()
+    if (!hasCompleteDims(dims) || weightOz <= 0) return
+
+    const handle = window.setTimeout(() => {
+      void refreshPanelBestRate({ order: panelOrder, dims, weightOz, silent: true })
+    }, 700)
+
+    return () => window.clearTimeout(handle)
+    // panelOrder identity intentionally re-checked via id; eslint disable for
+    // the inline calls (refreshPanelBestRate / getPanelDims / getPanelWeightOz
+    // are stable closures that read latest state).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    panelOrderId,
+    panelOrder?.orderStatus,
+    panelForm.weightLb,
+    panelForm.weightOz,
+    panelForm.length,
+    panelForm.width,
+    panelForm.height,
+  ])
+
   useEffect(() => {
     if (!panelOrder || panelOrder.orderStatus !== 'awaiting_shipment') return
 
@@ -5355,7 +5385,12 @@ export default function OrdersView({
                 ) : (
                   <>
                     <span className="ship-rate-val" id="panel-rate-val">
-                      {panelRateLoading ? 'Loading rates…' : panelRatePreview[0] ? (
+                      {panelRateLoading ? (
+                        <span className="ship-rate-loading">
+                          <span className="ship-rate-spinner" aria-hidden="true" />
+                          <span>Calculating best rate…</span>
+                        </span>
+                      ) : panelRatePreview[0] ? (
                         <>
                           <span className="ship-rate-price">{formatMoney((toNumberValue(panelRatePreview[0].shipmentCost) ?? 0) + (toNumberValue(panelRatePreview[0].otherCost) ?? 0))}</span>
                           <span className="ship-rate-detail">{formatCarrierCode(toStringValue(panelRatePreview[0].carrierCode))} · {formatServiceCode(toStringValue(panelRatePreview[0].serviceCode))}</span>
