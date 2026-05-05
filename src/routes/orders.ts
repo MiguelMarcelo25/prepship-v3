@@ -17,6 +17,7 @@ import {
   normalizeOrderSelectedRateDto,
 } from '../services/order-rate-dto';
 import { EXCLUDED_STORE_IDS, EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
+import { isAdminEmail } from '../lib/admin-emails';
 
 const app = new Hono();
 
@@ -521,6 +522,9 @@ const orderListSelect = {
   `.as('raw'),
   externallyShipped: orders.externallyShipped,
   externallyFulfilledVerified: orders.externallyFulfilledVerified,
+  assignedToUserId: orders.assignedToUserId,
+  assignedToEmail: orders.assignedToEmail,
+  assignedAt: orders.assignedAt,
   createdAt: orders.createdAt,
   updatedAt: orders.updatedAt,
 };
@@ -529,6 +533,17 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   const q = c.req.valid('query');
   const search = q.search?.trim();
   const searchPattern = search ? `%${search}%` : null;
+
+  // Order assignment scoping. Admins see every order. Non-admin callers see
+  // only orders whose assigned_to_user_id matches their Supabase UUID. An
+  // unassigned order is invisible to non-admins. Admin status is decided by
+  // the caller's email (see src/lib/admin-emails.ts).
+  const callerEmail = c.get('email' as never) as string | undefined;
+  const callerUserId = c.get('userId' as never) as string | undefined;
+  const callerIsAdmin = isAdminEmail(callerEmail);
+  const assigneeFilter = !callerIsAdmin && callerUserId
+    ? eq(orders.assignedToUserId, callerUserId)
+    : undefined;
   const excludeIds = (q.excludeClientId ?? '')
     .split(',')
     .map((s) => Number.parseInt(s.trim(), 10))
@@ -551,6 +566,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   const where = and(
     ...[
       statusPredicate,
+      assigneeFilter,
       q.clientId !== undefined ? eq(orders.clientId, q.clientId) : undefined,
       q.storeId !== undefined ? eq(orders.storeId, q.storeId) : undefined,
       visibleStorePredicate,
@@ -1964,5 +1980,48 @@ app.get('/export', zValidator('query', exportQuery), async (c) => {
     },
   });
 });
+
+// POST /orders/bulk-assign — admin-only. Body either:
+//   { orderIds: number[], userId: string, email: string } → assign
+//   { orderIds: number[], userId: null, email: null }     → unassign
+// Updates orders.assigned_to_user_id / email / at for every id.
+const bulkAssignBody = z.object({
+  orderIds: z.array(z.number().int().positive()).min(1).max(500),
+  userId: z.string().min(1).nullable(),
+  email: z.string().email().nullable(),
+});
+
+app.post(
+  '/bulk-assign',
+  zValidator('json', bulkAssignBody),
+  async (c) => {
+    const callerEmail = c.get('email' as never) as string | undefined;
+    if (!isAdminEmail(callerEmail)) {
+      return c.json({ error: 'Only admins can assign orders' }, 403);
+    }
+
+    const { orderIds, userId, email } = c.req.valid('json');
+    if ((userId == null) !== (email == null)) {
+      return c.json({ error: 'userId and email must both be set or both null' }, 400);
+    }
+
+    const updated = await db
+      .update(orders)
+      .set({
+        assignedToUserId: userId,
+        assignedToEmail: email,
+        assignedAt: userId ? new Date() : null,
+        updatedAt: new Date(),
+      })
+      .where(inArray(orders.id, orderIds))
+      .returning({ id: orders.id });
+
+    return c.json({
+      updated: updated.length,
+      requested: orderIds.length,
+      assignedTo: userId ? { userId, email } : null,
+    });
+  }
+);
 
 export default app;

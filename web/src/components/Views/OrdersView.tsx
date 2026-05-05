@@ -10,6 +10,8 @@ const RateBrowserModal = lazy(() => import('../RateBrowserModal'))
 import { ToastContext } from '../../contexts/ToastContext'
 import { useLocations, useOrderDetail, useOrders, useShippingAccounts } from '../../hooks'
 import { useMarkups } from '../../contexts/MarkupsContext'
+import { useAuth } from '../../lib/auth'
+import { api } from '../../lib/api'
 import { applyCarrierMarkup } from '../../utils/markups'
 import type {
   CarrierAccountDto,
@@ -1612,6 +1614,27 @@ export default function OrdersView({
   stores = [],
 }: OrdersViewProps) {
   const toastContext = useContext(ToastContext)
+  const { user: authUser } = useAuth()
+  // Order assignment: only admins can assign orders to other users. Workers
+  // see only their own assigned rows (server-side filter; this flag just
+  // controls visibility of the admin-only UI).
+  const ADMIN_EMAILS = useMemo(() => new Set(['admin@drprepper.com']), [])
+  const callerIsAdmin = Boolean(authUser?.email && ADMIN_EMAILS.has(authUser.email.toLowerCase()))
+  type AssignableUser = { id: string; email: string; isAdmin: boolean }
+  const [assignableUsers, setAssignableUsers] = useState<AssignableUser[]>([])
+  const [assignTo, setAssignTo] = useState<string>('')  // userId or '' (none) or 'unassign'
+  const [assignBusy, setAssignBusy] = useState(false)
+  useEffect(() => {
+    if (!callerIsAdmin) return
+    let cancelled = false
+    void api.get<{ users: AssignableUser[] }>('/users')
+      .then((res) => {
+        if (cancelled) return
+        setAssignableUsers(res.users ?? [])
+      })
+      .catch((err) => console.warn('[orders] failed to load assignable users:', err))
+    return () => { cancelled = true }
+  }, [callerIsAdmin])
   const [page, setPage] = useState(1)
   const [skuFilter, setSkuFilter] = useState('')
   const [customDateFrom, setCustomDateFrom] = useState('')
@@ -3976,6 +3999,48 @@ export default function OrdersView({
     }
   }
 
+  async function handleAssignSelectedOrders() {
+    if (!callerIsAdmin) {
+      showToast('Only admins can assign orders', 'error')
+      return
+    }
+    const ids = [...selectedIdSet]
+    if (ids.length === 0) {
+      showToast('No orders selected', 'error')
+      return
+    }
+    if (!assignTo) {
+      showToast('Pick a user (or "Unassign") first', 'error')
+      return
+    }
+
+    const target = assignTo === 'unassign'
+      ? { userId: null, email: null, label: 'Unassigned' }
+      : (() => {
+          const u = assignableUsers.find((cand) => cand.id === assignTo)
+          return u ? { userId: u.id, email: u.email, label: u.email } : null
+        })()
+    if (!target) {
+      showToast('User not found in list — refresh the page', 'error')
+      return
+    }
+
+    setAssignBusy(true)
+    try {
+      const res = await api.post<{ updated: number; requested: number }>(
+        '/orders/bulk-assign',
+        { orderIds: ids, userId: target.userId, email: target.email },
+      )
+      showToast(`Assigned ${res.updated}/${res.requested} order(s) to ${target.label}`, 'success')
+      clearSelection()
+      await refetchOrders()
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to assign orders', 'error')
+    } finally {
+      setAssignBusy(false)
+    }
+  }
+
   async function handleBatchAction(mode: 'print' | 'queue') {
     const batchOrders = orders.filter((order) => selectedIdSet.has(order.orderId))
     if (batchOrders.length === 0) {
@@ -5026,6 +5091,44 @@ export default function OrdersView({
                 <input type="checkbox" checked={batchTestMode} onChange={(event) => setBatchTestMode(event.target.checked)} />
                 🧪 Test mode (no charges)
               </label>
+
+              {callerIsAdmin ? (
+                <div style={{ marginTop: 16, padding: 12, background: 'var(--surface2)', borderRadius: 4 }}>
+                  <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 8, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                    👤 Assign Orders
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'stretch' }}>
+                    <select
+                      className="ship-select"
+                      style={{ flex: 1, fontSize: 12 }}
+                      value={assignTo}
+                      onChange={(e) => setAssignTo(e.target.value)}
+                      disabled={assignBusy}
+                    >
+                      <option value="">— Pick a user —</option>
+                      {assignableUsers.map((u) => (
+                        <option key={u.id} value={u.id}>
+                          {u.email}{u.isAdmin ? ' (admin)' : ''}
+                        </option>
+                      ))}
+                      <option value="unassign">Unassign (clear)</option>
+                    </select>
+                    <button
+                      className="create-label-btn"
+                      type="button"
+                      style={{ flex: '0 0 auto', padding: '0 12px', fontSize: 12, background: 'var(--ss-blue)' }}
+                      onClick={() => void handleAssignSelectedOrders()}
+                      disabled={assignBusy || !assignTo || selectedOrderIds.length === 0}
+                    >
+                      {assignBusy ? '…' : 'Assign'}
+                    </button>
+                  </div>
+                  <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 6 }}>
+                    Assigns the {selectedOrderIds.length} selected order{selectedOrderIds.length === 1 ? '' : 's'}.
+                    Workers see only their own assigned orders.
+                  </div>
+                </div>
+              ) : null}
 
               <div style={{ marginTop: 16, padding: 12, background: 'var(--surface2)', borderRadius: 4, marginBottom: 12 }}>
                 <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 8, fontWeight: 600 }}>Shipping Parameters (from 1st order):</div>

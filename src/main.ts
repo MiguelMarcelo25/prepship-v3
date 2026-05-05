@@ -26,6 +26,7 @@ import initRoute from './routes/init';
 import adminRoute from './routes/admin';
 import carrierAccountsRoute from './routes/carrier-accounts';
 import carriersRoute from './routes/carriers';
+import usersRoute from './routes/users';
 
 const app = new Hono();
 
@@ -129,6 +130,7 @@ app.route('/init', initRoute);
 app.route('/admin', adminRoute);
 app.route('/carrier-accounts', carrierAccountsRoute);
 app.route('/carriers', carriersRoute);
+app.route('/users', usersRoute);
 
 app.notFound((c) => c.json({ error: 'Not found' }, 404));
 

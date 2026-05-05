@@ -36,6 +36,13 @@ export const orders = pgTable(
     raw: jsonb().$type<Record<string, unknown>>().default({}).notNull(),
     externallyShipped: boolean().default(false).notNull(),
     externallyFulfilledVerified: boolean().default(false).notNull(),
+    // Order assignment: admin selects an order and "assigns" it to one of the
+    // worker users. Workers see only orders assigned to them; admins see all.
+    // user_id is the Supabase auth user UUID; email is mirrored for display
+    // and audit so the row is still informative if the user is later deleted.
+    assignedToUserId: text(),
+    assignedToEmail: text(),
+    assignedAt: timestamp({ withTimezone: true }),
     createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
   },
@@ -44,6 +51,7 @@ export const orders = pgTable(
     index('orders_client_idx').on(t.clientId),
     index('orders_store_idx').on(t.storeId),
     index('orders_date_idx').on(t.orderDate),
+    index('orders_assigned_user_idx').on(t.assignedToUserId),
   ]
 );
 
