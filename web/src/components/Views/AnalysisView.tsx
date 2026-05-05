@@ -34,8 +34,56 @@ import { AnalysisPagination } from './AnalysisPagination'
 import type { AnalysisTableColumn, ColumnWidths } from './AnalysisTableHeader'
 import { AnalysisTopSkusChart } from './AnalysisTopSkusChart'
 import OrderDetailDrawer from '../OrderDetailDrawer'
+import { ColumnResizeHandle } from './ColumnResizeHandle'
 import './InventoryView.css'
 import './AnalysisView.css'
+
+// SKU drawer's "Recent Orders" table — user-resizable columns. Widths persist
+// per-browser via localStorage so the layout sticks across page loads. Defaults
+// roughly match the previous fixed-CSS layout; no <colgroup> means the table
+// stays auto-sized until the user drags a handle.
+type DrawerOrdersColumnKey = 'orderNum' | 'customer' | 'qty' | 'cost' | 'status' | 'date'
+const DRAWER_ORDERS_COLUMN_DEFAULTS: Record<DrawerOrdersColumnKey, number> = {
+  orderNum: 150,
+  customer: 200,
+  qty: 60,
+  cost: 110,
+  status: 110,
+  date: 100,
+}
+const DRAWER_ORDERS_COLUMN_MIN: Record<DrawerOrdersColumnKey, number> = {
+  orderNum: 90,
+  customer: 100,
+  qty: 50,
+  cost: 70,
+  status: 80,
+  date: 80,
+}
+const DRAWER_ORDERS_STORAGE_KEY = 'analysis_sku_drawer_widths'
+
+function readStoredDrawerOrderWidths(): Partial<Record<DrawerOrdersColumnKey, number>> {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = window.localStorage.getItem(DRAWER_ORDERS_STORAGE_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return {}
+    const cleaned: Partial<Record<DrawerOrdersColumnKey, number>> = {}
+    for (const [key, value] of Object.entries(parsed)) {
+      if (
+        (key === 'orderNum' || key === 'customer' || key === 'qty' || key === 'cost' || key === 'status' || key === 'date')
+        && typeof value === 'number'
+        && Number.isFinite(value)
+        && value > 0
+      ) {
+        cleaned[key as DrawerOrdersColumnKey] = value
+      }
+    }
+    return cleaned
+  } catch {
+    return {}
+  }
+}
 
 const TABLE_COLUMN_COUNT = 10
 const ANALYSIS_PAGE_SIZE_OPTIONS = [25, 50, 100]
@@ -405,6 +453,9 @@ export default function AnalysisView() {
   const [pageSize, setPageSize] = useState(50)
   const [columnSize, setColumnSize] = useState<ColumnSize>(readStoredColumnSize)
   const [columnWidths, setColumnWidths] = useState<ColumnWidths>(readStoredColumnWidths)
+  const [drawerOrderWidths, setDrawerOrderWidths] = useState<Partial<Record<DrawerOrdersColumnKey, number>>>(
+    readStoredDrawerOrderWidths
+  )
   const [clients, setClients] = useState<ClientDto[]>([])
   const [dataState, setDataState] = useState<AnalysisDataState>({
     loading: true,
@@ -496,6 +547,25 @@ export default function AnalysisView() {
     if (typeof window === 'undefined') return
     window.localStorage.setItem('analysis_column_widths', JSON.stringify(columnWidths))
   }, [columnWidths])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(DRAWER_ORDERS_STORAGE_KEY, JSON.stringify(drawerOrderWidths))
+  }, [drawerOrderWidths])
+
+  function getDrawerOrderColumnWidth(key: DrawerOrdersColumnKey): number {
+    return drawerOrderWidths[key] ?? DRAWER_ORDERS_COLUMN_DEFAULTS[key]
+  }
+  function handleResizeDrawerOrderColumn(key: DrawerOrdersColumnKey, width: number) {
+    setDrawerOrderWidths((current) => ({ ...current, [key]: width }))
+  }
+  function handleResetDrawerOrderColumn(key: DrawerOrdersColumnKey) {
+    setDrawerOrderWidths((current) => {
+      if (!(key in current)) return current
+      const { [key]: _removed, ...rest } = current
+      return rest
+    })
+  }
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined
@@ -1093,15 +1163,71 @@ export default function AnalysisView() {
                     </div>
                   ) : (
                     <div className="analysis-orders-table-wrap">
-                      <table className="analysis-orders-table">
+                      <table className="analysis-orders-table" style={{ tableLayout: 'fixed' }}>
+                        <colgroup>
+                          <col style={{ width: getDrawerOrderColumnWidth('orderNum') }} />
+                          <col style={{ width: getDrawerOrderColumnWidth('customer') }} />
+                          <col style={{ width: getDrawerOrderColumnWidth('qty') }} />
+                          <col style={{ width: getDrawerOrderColumnWidth('cost') }} />
+                          <col style={{ width: getDrawerOrderColumnWidth('status') }} />
+                          <col style={{ width: getDrawerOrderColumnWidth('date') }} />
+                        </colgroup>
                         <thead>
                           <tr>
-                            <th>Order #</th>
-                            <th>Customer</th>
-                            <th className="is-center">Qty</th>
-                            <th className="is-right">Cost</th>
-                            <th>Status</th>
-                            <th>Date</th>
+                            <th style={{ position: 'relative' }}>
+                              Order #
+                              <ColumnResizeHandle
+                                getStartWidth={() => getDrawerOrderColumnWidth('orderNum')}
+                                onChange={(w) => handleResizeDrawerOrderColumn('orderNum', w)}
+                                onReset={() => handleResetDrawerOrderColumn('orderNum')}
+                                minWidth={DRAWER_ORDERS_COLUMN_MIN.orderNum}
+                              />
+                            </th>
+                            <th style={{ position: 'relative' }}>
+                              Customer
+                              <ColumnResizeHandle
+                                getStartWidth={() => getDrawerOrderColumnWidth('customer')}
+                                onChange={(w) => handleResizeDrawerOrderColumn('customer', w)}
+                                onReset={() => handleResetDrawerOrderColumn('customer')}
+                                minWidth={DRAWER_ORDERS_COLUMN_MIN.customer}
+                              />
+                            </th>
+                            <th className="is-center" style={{ position: 'relative' }}>
+                              Qty
+                              <ColumnResizeHandle
+                                getStartWidth={() => getDrawerOrderColumnWidth('qty')}
+                                onChange={(w) => handleResizeDrawerOrderColumn('qty', w)}
+                                onReset={() => handleResetDrawerOrderColumn('qty')}
+                                minWidth={DRAWER_ORDERS_COLUMN_MIN.qty}
+                              />
+                            </th>
+                            <th className="is-right" style={{ position: 'relative' }}>
+                              Cost
+                              <ColumnResizeHandle
+                                getStartWidth={() => getDrawerOrderColumnWidth('cost')}
+                                onChange={(w) => handleResizeDrawerOrderColumn('cost', w)}
+                                onReset={() => handleResetDrawerOrderColumn('cost')}
+                                minWidth={DRAWER_ORDERS_COLUMN_MIN.cost}
+                              />
+                            </th>
+                            <th style={{ position: 'relative' }}>
+                              Status
+                              <ColumnResizeHandle
+                                getStartWidth={() => getDrawerOrderColumnWidth('status')}
+                                onChange={(w) => handleResizeDrawerOrderColumn('status', w)}
+                                onReset={() => handleResetDrawerOrderColumn('status')}
+                                minWidth={DRAWER_ORDERS_COLUMN_MIN.status}
+                              />
+                            </th>
+                            <th style={{ position: 'relative' }}>
+                              Date
+                              <ColumnResizeHandle
+                                getStartWidth={() => getDrawerOrderColumnWidth('date')}
+                                onChange={(w) => handleResizeDrawerOrderColumn('date', w)}
+                                onReset={() => handleResetDrawerOrderColumn('date')}
+                                minWidth={DRAWER_ORDERS_COLUMN_MIN.date}
+                              />
+                            </th>
                           </tr>
                         </thead>
                         <tbody>
