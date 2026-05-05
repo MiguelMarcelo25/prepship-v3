@@ -1139,6 +1139,15 @@ export default function AnalysisView() {
                                   <span className={`analysis-status-pill ${statusClass}`}>
                                     {statusLabel}
                                   </span>
+                                  {order.externallyShipped ? (
+                                    <span
+                                      className="analysis-status-pill is-external"
+                                      title="Externally fulfilled — shipped without a PrepShip label"
+                                      style={{ marginLeft: 4 }}
+                                    >
+                                      EXT
+                                    </span>
+                                  ) : null}
                                 </td>
                                 <td className="col-date">{formatDateOnly(order.orderDate)}</td>
                               </tr>

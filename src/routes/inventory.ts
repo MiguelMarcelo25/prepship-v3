@@ -416,6 +416,7 @@ app.get(
       item_name: string | null;
       shipping_cost: string | null;
       standard_shipping_cost: string | null;
+      is_external_shipped: boolean;
     }>(sql`
       with matching_order_ids as (
         select distinct
@@ -440,6 +441,7 @@ app.get(
           coalesce(ls.service_code, o.service_code)                          as service_code,
           ls.order_id                                                        as shipment_order_id,
           coalesce(ls.marked_cost, 0)                                        as label_cost,
+          coalesce(o.externally_shipped, false)                              as externally_shipped_flag,
           coalesce(nullif(item->>'sku', ''), '')                             as sku,
           case
             when nullif(item->>'sku', '') is not null then item->>'sku'
@@ -495,6 +497,7 @@ app.get(
           max(service_code)                                                    as service_code,
           max(shipment_order_id)                                               as shipment_order_id,
           max(label_cost)                                                      as label_cost,
+          bool_or(externally_shipped_flag)                                     as externally_shipped_flag,
           sku_key,
           max(sku)                                                             as sku,
           (array_agg(item_name order by length(item_name) desc))[1]            as item_name,
@@ -536,7 +539,8 @@ app.get(
         case
           when not is_external and label_cost > 0 and ship_class = 'std' then (label_cost / nullif(sku_divisor, 0))::text
           else null
-        end as standard_shipping_cost
+        end as standard_shipping_cost,
+        (is_external or externally_shipped_flag)                               as is_external_shipped
       from allocated
       where lower(sku) = lower(${row.sku})
       order by order_date desc nulls last

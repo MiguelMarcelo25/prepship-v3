@@ -1676,6 +1676,12 @@ export const apiClient = {
             r?.standard_shipping_cost == null && r?.standardShippingCost == null
               ? null
               : Number(r?.standard_shipping_cost ?? r?.standardShippingCost),
+          externallyShipped: Boolean(
+            r?.is_external_shipped
+              ?? r?.isExternalShipped
+              ?? r?.externally_shipped
+              ?? r?.externallyShipped
+          ),
         }));
 
         const rawDailySales = Array.isArray(res?.dailySales)

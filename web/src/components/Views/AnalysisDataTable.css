@@ -155,3 +155,8 @@
   background: rgba(138, 149, 163, .16);
   color: var(--text2);
 }
+
+.analysis-status-pill.is-external {
+  background: rgba(217, 119, 6, .14);
+  color: #b45309;
+}
