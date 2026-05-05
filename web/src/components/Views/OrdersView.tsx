@@ -4801,8 +4801,43 @@ export default function OrdersView({
         )
       case 'orderNum':
         return renderOrderCell(order)
-      case 'customer':
-        return <div className="customer-name">{shipTo.name ?? '—'}</div>
+      case 'customer': {
+        // Tiny "Assigned to" badge under the customer name. Only renders when
+        // the order has an assignee — keeps the cell quiet for unassigned
+        // rows. Uses the email's local-part (before @) so it stays narrow.
+        const assignedEmail = toStringValue(order.assignedToEmail)
+        const assignedLocal = assignedEmail ? assignedEmail.split('@')[0] : null
+        return (
+          <div>
+            <div className="customer-name">{shipTo.name ?? '—'}</div>
+            {assignedLocal ? (
+              <div
+                title={`Assigned to ${assignedEmail}`}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 3,
+                  marginTop: 2,
+                  fontSize: 9.5,
+                  fontWeight: 700,
+                  color: '#6d28d9',
+                  background: 'rgba(124, 58, 237, .12)',
+                  padding: '1px 6px',
+                  borderRadius: 999,
+                  lineHeight: 1.4,
+                  maxWidth: '100%',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                <span aria-hidden="true">👤</span>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{assignedLocal}</span>
+              </div>
+            ) : null}
+          </div>
+        )
+      }
       case 'itemname':
         if (multiSku) {
           const visibleItems = mergedItems.slice(0, 5)
@@ -5093,39 +5128,55 @@ export default function OrdersView({
               </label>
 
               {callerIsAdmin ? (
-                <div style={{ marginTop: 16, padding: 12, background: 'var(--surface2)', borderRadius: 4 }}>
+                <div style={{ marginTop: 16, padding: 12, background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 6 }}>
                   <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 8, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5 }}>
                     👤 Assign Orders
                   </div>
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'stretch' }}>
-                    <select
-                      className="ship-select"
-                      style={{ flex: 1, fontSize: 12 }}
-                      value={assignTo}
-                      onChange={(e) => setAssignTo(e.target.value)}
-                      disabled={assignBusy}
-                    >
-                      <option value="">— Pick a user —</option>
-                      {assignableUsers.map((u) => (
-                        <option key={u.id} value={u.id}>
-                          {u.email}{u.isAdmin ? ' (admin)' : ''}
-                        </option>
-                      ))}
-                      <option value="unassign">Unassign (clear)</option>
-                    </select>
-                    <button
-                      className="create-label-btn"
-                      type="button"
-                      style={{ flex: '0 0 auto', padding: '0 12px', fontSize: 12, background: 'var(--ss-blue)' }}
-                      onClick={() => void handleAssignSelectedOrders()}
-                      disabled={assignBusy || !assignTo || selectedOrderIds.length === 0}
-                    >
-                      {assignBusy ? '…' : 'Assign'}
-                    </button>
-                  </div>
-                  <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 6 }}>
-                    Assigns the {selectedOrderIds.length} selected order{selectedOrderIds.length === 1 ? '' : 's'}.
-                    Workers see only their own assigned orders.
+                  <select
+                    style={{
+                      width: '100%',
+                      fontSize: 13,
+                      padding: '8px 10px',
+                      border: '1px solid var(--border2)',
+                      borderRadius: 4,
+                      background: 'var(--surface)',
+                      color: 'var(--text)',
+                      cursor: assignBusy ? 'not-allowed' : 'pointer',
+                      marginBottom: 8,
+                    }}
+                    value={assignTo}
+                    onChange={(e) => setAssignTo(e.target.value)}
+                    disabled={assignBusy}
+                  >
+                    <option value="">— Pick a user —</option>
+                    {assignableUsers.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.email}{u.isAdmin ? ' (admin)' : ''}
+                      </option>
+                    ))}
+                    <option value="unassign">— Unassign (clear) —</option>
+                  </select>
+                  <button
+                    type="button"
+                    style={{
+                      width: '100%',
+                      padding: '9px 12px',
+                      fontSize: 13,
+                      fontWeight: 700,
+                      color: '#fff',
+                      background: assignBusy || !assignTo || selectedOrderIds.length === 0 ? 'var(--text4)' : 'var(--ss-blue)',
+                      border: 'none',
+                      borderRadius: 5,
+                      cursor: assignBusy || !assignTo || selectedOrderIds.length === 0 ? 'not-allowed' : 'pointer',
+                      opacity: assignBusy || !assignTo || selectedOrderIds.length === 0 ? 0.7 : 1,
+                    }}
+                    onClick={() => void handleAssignSelectedOrders()}
+                    disabled={assignBusy || !assignTo || selectedOrderIds.length === 0}
+                  >
+                    {assignBusy ? 'Assigning…' : `Assign ${selectedOrderIds.length} order${selectedOrderIds.length === 1 ? '' : 's'}`}
+                  </button>
+                  <div style={{ fontSize: 10.5, color: 'var(--text3)', marginTop: 6, lineHeight: 1.4 }}>
+                    Workers see only orders assigned to them. Pick "Unassign" to clear.
                   </div>
                 </div>
               ) : null}
