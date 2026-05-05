@@ -1536,20 +1536,20 @@ function getSortValue(order: OrderSummaryDto, detail: OrderFullDto | null, key: 
   }
 }
 
-function buildEmptyPanel() {
+function buildEmptyPanel(onClose?: () => void) {
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        height: '100%',
-        padding: '40px 20px',
-        textAlign: 'center',
-        color: 'var(--text3)',
-      }}
-    >
+    <div className="relative flex flex-col items-center justify-center h-full px-5 py-10 text-center text-ink-3">
+      {onClose ? (
+        <button
+          type="button"
+          aria-label="Hide details panel"
+          title="Hide details panel"
+          onClick={onClose}
+          className="absolute top-2 right-2 w-6 h-6 flex items-center justify-center rounded-full border border-line-2 bg-surface text-ink-3 text-sm leading-none cursor-pointer transition-colors hover:bg-surface-2 hover:text-ink hover:border-brand"
+        >
+          ×
+        </button>
+      ) : null}
       <div style={{ fontSize: 36, marginBottom: 14, opacity: 0.5 }}>📋</div>
       <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8, color: 'var(--text2)' }}>No order selected</div>
       <div style={{ fontSize: 12, lineHeight: 1.5, marginBottom: 20 }}>Click any row to view details</div>
@@ -1698,6 +1698,19 @@ export default function OrdersView({
     if (typeof window === 'undefined') return
     window.localStorage.setItem('orders_table_density', tableDensity)
   }, [tableDensity])
+
+  // Whether to show the right-hand "No order selected" empty-state panel
+  // when no row is highlighted. Hiding it gives the orders table the full
+  // window width. Persists per-browser; flipped via the × on the empty
+  // state and the "Show panel" pill that appears when hidden.
+  const [showEmptyPanel, setShowEmptyPanel] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true
+    return window.localStorage.getItem('orders_show_empty_panel') !== '0'
+  })
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem('orders_show_empty_panel', showEmptyPanel ? '1' : '0')
+  }, [showEmptyPanel])
   const [singleActionBusy, setSingleActionBusy] = useState(false)
   const [shipmentDetailsSaving, setShipmentDetailsSaving] = useState(false)
   const queueActionProgressTimerRef = useRef<number | null>(null)
@@ -5223,7 +5236,7 @@ export default function OrdersView({
   }
 
   const renderSinglePanel = () => {
-    if (!panelOrder) return buildEmptyPanel()
+    if (!panelOrder) return buildEmptyPanel(() => setShowEmptyPanel(false))
 
     const items = getActiveItems(panelOrder, panelDetail)
     const mergedItems = getMergedItems(panelOrder, panelDetail)
@@ -5926,40 +5939,23 @@ export default function OrdersView({
             role="group"
             aria-label="Row density"
             title="Row density"
-            style={{
-              display: 'inline-flex',
-              marginLeft: 8,
-              border: '1px solid var(--border2)',
-              borderRadius: 6,
-              overflow: 'hidden',
-              background: 'var(--surface)',
-            }}
+            className="ml-2 inline-flex overflow-hidden rounded-md border border-line-2 bg-surface"
           >
             {([
               { key: 'narrow', label: '≡', tip: 'Narrow rows' },
               { key: 'cozy', label: '☰', tip: 'Cozy rows (default)' },
               { key: 'wide', label: '⫿', tip: 'Wide rows' },
-            ] as const).map((opt) => {
+            ] as const).map((opt, idx, arr) => {
               const isActive = tableDensity === opt.key
+              const isLast = idx === arr.length - 1
               return (
                 <button
                   key={opt.key}
                   type="button"
-                  className="btn-density"
                   title={opt.tip}
                   aria-pressed={isActive}
                   onClick={() => setTableDensity(opt.key)}
-                  style={{
-                    padding: '4px 9px',
-                    fontSize: 13,
-                    background: isActive ? 'var(--ss-blue)' : 'transparent',
-                    color: isActive ? '#fff' : 'var(--text2)',
-                    border: 'none',
-                    borderRight: opt.key !== 'wide' ? '1px solid var(--border2)' : 'none',
-                    cursor: 'pointer',
-                    fontWeight: 700,
-                    transition: 'background .15s, color .15s',
-                  }}
+                  className={`px-2.5 py-1 text-[13px] font-bold cursor-pointer transition-colors ${isLast ? '' : 'border-r border-line-2'} ${isActive ? 'bg-brand text-white' : 'bg-transparent text-ink-2 hover:bg-surface-2'}`}
                 >
                   {opt.label}
                 </button>
@@ -6276,11 +6272,30 @@ export default function OrdersView({
             </div>
           </div>
 
-          <div className="order-panel" id="orderPanel">
-            <div className="panel-inner" id="panelInner">
-              {activeOrderId == null && selectedOrderIds.length >= 2 ? renderBatchPanel() : renderSinglePanel()}
+          {/* Right details panel. Hidden entirely when:
+              - user closed the empty panel via the × (showEmptyPanel=false), AND
+              - no order is selected, AND
+              - no batch (>=2) selected.
+              In that state the orders table reclaims the panel's 390 px. A
+              floating "Show panel" pill (below) brings it back. */}
+          {(showEmptyPanel || panelOrder || selectedOrderIds.length >= 2) ? (
+            <div className="order-panel" id="orderPanel">
+              <div className="panel-inner" id="panelInner">
+                {activeOrderId == null && selectedOrderIds.length >= 2 ? renderBatchPanel() : renderSinglePanel()}
+              </div>
             </div>
-          </div>
+          ) : (
+            <button
+              type="button"
+              aria-label="Show details panel"
+              title="Show details panel"
+              onClick={() => setShowEmptyPanel(true)}
+              className="absolute top-3.5 right-3.5 z-50 flex items-center gap-1.5 px-2.5 py-1.5 rounded-full border border-line-2 bg-surface text-xs2 font-semibold text-ink-2 shadow-md cursor-pointer transition-colors hover:bg-brand-bg hover:border-brand hover:text-brand"
+            >
+              <span aria-hidden="true">◧</span>
+              <span>Show panel</span>
+            </button>
+          )}
         </div>
       </div>
 
