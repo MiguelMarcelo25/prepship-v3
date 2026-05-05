@@ -63,6 +63,23 @@ app.get('/counts', async (c) => {
     ${dateToIso ? sql`and o.order_date <= ${dateToIso}::timestamptz` : sql``}
   `;
 
+  // Test-client orders use store_id = NULL with a synthetic negative
+  // (-client_id) elsewhere in the UI, so the totals/per-status queries used
+  // to filter them out via `store_id is not null`. The byStatusStore query
+  // below already INCLUDES them, which made the sidebar's parent badge
+  // ("Awaiting Shipment 39") disagree with the sum of its children
+  // ("Tran Agency 3 + KF Goods 4 + Walmart-DJC 1 + Test Orders 102 + …
+  // = 141"). v2 never had this gap because both queries used the same
+  // visibility predicate. Use one shared predicate here so parent and
+  // children always agree.
+  const visibleOrderPredicate = sql`(
+    (coalesce(c.is_test, false) = true and o.client_id is not null)
+    or (
+      o.store_id is not null
+      and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+    )
+  )`;
+
   const [rows, byStatus, byStatusStore] = await Promise.all([
     db.execute<{
       awaiting: number;
@@ -75,9 +92,9 @@ app.get('/counts', async (c) => {
       select
         (
           select count(*)::int from orders o
+          left join clients c on c.id = o.client_id
           where o.order_status = 'awaiting_shipment'
-              and o.store_id is not null
-              and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+            and ${visibleOrderPredicate}
             ${orderDateFilter()}
             and coalesce(o.externally_shipped, false) = false
             and coalesce((o.raw->>'externallyFulfilled')::boolean, false) = false
@@ -86,45 +103,45 @@ app.get('/counts', async (c) => {
               where s.order_id = o.id and s.voided = false
             )
             and not exists (
-              select 1 from clients c
-              where c.id = o.client_id
-                and lower(c.name) = 'api shipments'
+              select 1 from clients hidden_client
+              where hidden_client.id = o.client_id
+                and lower(hidden_client.name) = 'api shipments'
             )
         ) as awaiting,
         (
           select count(*)::int from orders o
+          left join clients c on c.id = o.client_id
           where o.order_status = 'shipped'
-              and o.store_id is not null
-              and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+            and ${visibleOrderPredicate}
             ${orderDateFilter()}
             and not exists (
-              select 1 from clients c
-              where c.id = o.client_id
-                and lower(c.name) = 'api shipments'
+              select 1 from clients hidden_client
+              where hidden_client.id = o.client_id
+                and lower(hidden_client.name) = 'api shipments'
             )
         ) as shipped,
         (
           select count(*)::int from orders o
+          left join clients c on c.id = o.client_id
           where o.order_status = 'cancelled'
-              and o.store_id is not null
-              and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+            and ${visibleOrderPredicate}
             ${orderDateFilter()}
             and not exists (
-              select 1 from clients c
-              where c.id = o.client_id
-                and lower(c.name) = 'api shipments'
+              select 1 from clients hidden_client
+              where hidden_client.id = o.client_id
+                and lower(hidden_client.name) = 'api shipments'
             )
         ) as cancelled,
         (
           select count(*)::int from orders o
+          left join clients c on c.id = o.client_id
           where o.order_status = 'on_hold'
-              and o.store_id is not null
-              and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+            and ${visibleOrderPredicate}
             ${orderDateFilter()}
             and not exists (
-              select 1 from clients c
-              where c.id = o.client_id
-                and lower(c.name) = 'api shipments'
+              select 1 from clients hidden_client
+              where hidden_client.id = o.client_id
+                and lower(hidden_client.name) = 'api shipments'
             )
         ) as on_hold,
         (select count(*)::int from print_queue_orders where status = 'queued') as queue,
@@ -133,13 +150,13 @@ app.get('/counts', async (c) => {
     db.execute<{ orderStatus: string; cnt: number }>(sql`
       select o.order_status as "orderStatus", count(*)::int as cnt
       from orders o
-        where o.store_id is not null
-          and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+      left join clients c on c.id = o.client_id
+        where ${visibleOrderPredicate}
         ${orderDateFilter()}
         and not exists (
-          select 1 from clients c
-          where c.id = o.client_id
-            and lower(c.name) = 'api shipments'
+          select 1 from clients hidden_client
+          where hidden_client.id = o.client_id
+            and lower(hidden_client.name) = 'api shipments'
         )
         and not (
           o.order_status = 'awaiting_shipment'
