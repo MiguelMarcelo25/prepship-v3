@@ -96,12 +96,6 @@ app.get('/counts', async (c) => {
           where o.order_status = 'awaiting_shipment'
             and ${visibleOrderPredicate}
             ${orderDateFilter()}
-            and coalesce(o.externally_shipped, false) = false
-            and coalesce((o.raw->>'externallyFulfilled')::boolean, false) = false
-            and not exists (
-              select 1 from shipments s
-              where s.order_id = o.id and s.voided = false
-            )
             and not exists (
               select 1 from clients hidden_client
               where hidden_client.id = o.client_id
@@ -158,17 +152,6 @@ app.get('/counts', async (c) => {
           where hidden_client.id = o.client_id
             and lower(hidden_client.name) = 'api shipments'
         )
-        and not (
-          o.order_status = 'awaiting_shipment'
-          and (
-            coalesce(o.externally_shipped, false) = true
-            or coalesce((o.raw->>'externallyFulfilled')::boolean, false) = true
-            or exists (
-              select 1 from shipments s
-              where s.order_id = o.id and s.voided = false
-            )
-          )
-        )
       group by o.order_status
     `),
     db.execute<{ orderStatus: string; storeId: number; cnt: number }>(sql`
@@ -181,29 +164,12 @@ app.get('/counts', async (c) => {
         count(*)::int as cnt
       from orders o
       left join clients c on c.id = o.client_id
-        where (
-          (coalesce(c.is_test, false) = true and o.client_id is not null)
-          or (
-            o.store_id is not null
-            and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
-          )
-        )
+        where ${visibleOrderPredicate}
         ${orderDateFilter()}
         and not exists (
           select 1 from clients hidden_client
           where hidden_client.id = o.client_id
             and lower(hidden_client.name) = 'api shipments'
-        )
-        and not (
-          o.order_status = 'awaiting_shipment'
-          and (
-            coalesce(o.externally_shipped, false) = true
-            or coalesce((o.raw->>'externallyFulfilled')::boolean, false) = true
-            or exists (
-              select 1 from shipments s
-              where s.order_id = o.id and s.voided = false
-            )
-          )
         )
         group by
           o.order_status,
