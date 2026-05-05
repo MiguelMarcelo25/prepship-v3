@@ -100,6 +100,14 @@
   padding:0;
   cursor:pointer;
   font:inherit;
+  /* Always left-align — defaults render <button> text centered, which made
+     wrapped multi-line SKUs (e.g. "6 PACK - ZOTE BLANCO FLAKES") look
+     centered against neighboring single-line cells. */
+  text-align:left;
+  display:block;
+  width:100%;
+  white-space:normal;
+  word-break:break-word;
 }
 
 .inventory-recv-row{
