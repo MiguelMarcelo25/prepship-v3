@@ -1468,6 +1468,22 @@ export const apiClient = {
     return api.post<any>('/products/save-defaults', normalizeProductDefaultsPayload(data));
   },
 
+  // Multi-SKU fallback for the shipping panel: when an order has more than one
+  // SKU, savePanelSkuDefaults skips the per-SKU save (no clean way to allocate
+  // one parcel's weight/dims across many lines), but the package selection IS
+  // still meaningful for every SKU on the order. This endpoint stamps just
+  // inventory.package_id for each provided SKU under the given clientId.
+  bulkSetInventoryPackageDefault(payload: {
+    clientId: number | null;
+    packageId: number | null;
+    skus: string[];
+  }): Promise<{ updated: number; skipped: number; total: number }> {
+    return api.post<{ updated: number; skipped: number; total: number }>(
+      '/inventory/bulk-set-default-package',
+      payload
+    );
+  },
+
   // ─── Inventory ─────────────────────────────────────────────────────────────
   fetchInventory(query?: Record<string, unknown>): Promise<any[]> {
     return safe(

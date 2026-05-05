@@ -25,6 +25,40 @@ import {
   type MockLabelData,
 } from './mock-label-generator';
 import { deductInventoryForOrder, deductPackageForShipment } from './fulfillment-deductions';
+import { packages } from '../db/schema/packages';
+
+// Batch-label callers don't carry a panel-selected package, so customPackageId
+// is often null. When dims are present, fall back to the same ±0.1" tolerance
+// that /packages/auto-create uses to find an existing package — without this,
+// the package's stock_qty never decrements for batch-issued labels and the
+// PACKAGES section count stays flat regardless of how many labels go out.
+async function resolveLabelPackageId(args: {
+  customPackageId?: number | string | null;
+  length: number | null;
+  width: number | null;
+  height: number | null;
+}): Promise<number | null> {
+  if (args.customPackageId != null && args.customPackageId !== '') {
+    const id = Number(args.customPackageId);
+    if (Number.isFinite(id) && id > 0) return id;
+  }
+  if (args.length && args.width && args.height) {
+    const tol = 0.1;
+    const [match] = await db
+      .select({ id: packages.id })
+      .from(packages)
+      .where(
+        and(
+          sql`abs(${packages.length} - ${args.length}) <= ${tol}`,
+          sql`abs(${packages.width} - ${args.width}) <= ${tol}`,
+          sql`abs(${packages.height} - ${args.height}) <= ${tol}`
+        )
+      )
+      .limit(1);
+    if (match) return match.id;
+  }
+  return null;
+}
 
 // Optional local throttle. Disabled by default so batch queue jobs are not capped.
 // Set LABEL_RATE_LIMIT to a positive value to re-enable a per-minute client cap.
@@ -681,6 +715,15 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
     }
   }
 
+  // Resolve which package this shipment is consuming so its stock_qty is
+  // decremented correctly. Used for both the test-mode and real-postage paths.
+  const resolvedPackageId = await resolveLabelPackageId({
+    customPackageId: body.customPackageId,
+    length,
+    width,
+    height,
+  });
+
   // ── Offline test mode ───────────────────────────────────────────────────────
   if (body.testLabel === true) {
     const fakeShipmentId = generateFakeShipmentId();
@@ -751,7 +794,7 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
         labelCost: '0.00',
         labelShipDate: createdAt,
         labelShipmentId: fakeShipmentId,
-        selectedPackageId: body.customPackageId ? String(body.customPackageId) : null,
+        selectedPackageId: resolvedPackageId != null ? String(resolvedPackageId) : null,
         source: 'test_offline',
         voided: false,
         isReturn: false,
@@ -761,7 +804,7 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
     await recordFulfillmentDeductions({
       order,
       shipmentId: fakeShipmentId,
-      packageId: body.customPackageId ?? null,
+      packageId: resolvedPackageId,
       source: 'test_label',
     });
 
@@ -817,7 +860,7 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
   await recordFulfillmentDeductions({
     order,
     shipmentId: localShipmentId,
-    packageId: body.customPackageId ?? null,
+    packageId: resolvedPackageId,
     source: 'label',
   });
 

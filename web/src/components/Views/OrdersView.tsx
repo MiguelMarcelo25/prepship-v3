@@ -2748,6 +2748,36 @@ export default function OrdersView({
     )
     const target = getSingleSkuDefaultTarget(sourceOrder, sourceDetail)
     if (!target) {
+      // Multi-SKU fallback: weight/dims can't be allocated across lines, but
+      // the chosen package IS the right default for every SKU on the order.
+      // Stamp inventory.package_id for each line so future orders containing
+      // any of these SKUs default to the same box. Silent on failure — this
+      // runs from the auto-detect debouncer and shouldn't block the user.
+      if (packageId) {
+        try {
+          const items = getActiveItems(sourceOrder, sourceDetail)
+          const skus = Array.from(
+            new Set(
+              items
+                .map((item) => (typeof item.sku === 'string' ? item.sku.trim() : ''))
+                .filter((sku) => sku.length > 0)
+            )
+          )
+          const pid = Number.parseInt(packageId, 10)
+          const fallbackClientId = typeof sourceOrder.clientId === 'number' && sourceOrder.clientId > 0
+            ? sourceOrder.clientId
+            : null
+          if (skus.length > 0 && Number.isFinite(pid) && pid > 0) {
+            await apiClient.bulkSetInventoryPackageDefault({
+              clientId: fallbackClientId,
+              packageId: pid,
+              skus,
+            })
+          }
+        } catch (err) {
+          console.warn('[orders] multi-SKU package default save failed:', err)
+        }
+      }
       if (!options.silent) showToast("Multi-SKU order - edit each product's defaults in the Products tab", 'error')
       return null
     }

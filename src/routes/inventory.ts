@@ -956,6 +956,48 @@ const bulkDimsBody = z.object({
     .max(500),
 });
 
+// v2-parity: POST /inventory/bulk-set-default-package
+// {clientId, packageId, skus[]} — sets inventory.package_id for many SKUs in
+// one call. Fired by the shipping panel when an auto-detected package can't be
+// saved through the single-SKU savePanelSkuDefaults path (multi-SKU orders),
+// so the same default package lands on every line item rather than only on
+// single-SKU orders. clientId is required when scoping to a tenant; pass null
+// to update the shared (clientId IS NULL) catalog rows.
+const bulkSetPackageBody = z.object({
+  clientId: z.number().int().nullable(),
+  packageId: z.number().int().positive().nullable(),
+  skus: z.array(z.string().trim().min(1)).min(1).max(200),
+});
+
+app.post(
+  '/bulk-set-default-package',
+  zValidator('json', bulkSetPackageBody),
+  async (c) => {
+    const { clientId, packageId, skus } = c.req.valid('json');
+    let updated = 0;
+    for (const rawSku of skus) {
+      const sku = rawSku.trim();
+      if (!sku) continue;
+      const skuWhere = sql`lower(${inventory.sku}) = lower(${sku})`;
+      const where = and(
+        skuWhere,
+        clientId === null ? isNull(inventory.clientId) : eq(inventory.clientId, clientId)
+      );
+      const rows = await db
+        .update(inventory)
+        .set({ packageId, updatedAt: new Date() })
+        .where(where)
+        .returning({ id: inventory.id });
+      updated += rows.length;
+    }
+    return c.json({
+      updated,
+      skipped: skus.length - updated,
+      total: skus.length,
+    });
+  }
+);
+
 app.post('/bulk-update-dims', zValidator('json', bulkDimsBody), async (c) => {
   const { items } = c.req.valid('json');
   let updated = 0;
