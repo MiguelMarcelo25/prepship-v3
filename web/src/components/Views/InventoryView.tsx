@@ -296,6 +296,13 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
   const [clientFormOpen, setClientFormOpen] = useState(false)
   const [clientForm, setClientForm] = useState<ClientFormState>(createClientFormState())
   const [clientSyncStatus, setClientSyncStatus] = useState('')
+  // Per-client optimistic toggle override + pending flag. While the PATCH
+  // /clients/:id call is in flight we paint the toggle in its target state
+  // immediately (optimistic) and add an .is-pending class for the spinner
+  // visual. On success the override is cleared (server data wins on the
+  // refetch). On failure we revert and toast.
+  const [clientActiveOverrides, setClientActiveOverrides] = useState<Record<number, boolean>>({})
+  const [pendingClientToggleId, setPendingClientToggleId] = useState<number | null>(null)
   const [editSkuForm, setEditSkuForm] = useState<EditSkuFormState | null>(null)
   const [parentSkuOptions, setParentSkuOptions] = useState<Record<number, ParentSkuDto[]>>({})
   const [parentModal, setParentModal] = useState<CreateParentFormState | null>(null)
@@ -862,8 +869,17 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
   // sidebar switch but per-client. Inactive clients are hidden from the
   // sidebar (init/stores already filters by active=true) and from the
   // sidebar bucket counts. Doesn't delete the client or its data.
+  //
+  // Optimistic UI: the toggle paints its target state immediately on click
+  // (clientActiveOverrides), and the row gets an .is-pending visual
+  // (pendingClientToggleId) so the user sees the slide animation right away
+  // without waiting for the API round-trip. If the PATCH fails the override
+  // is dropped (toggle snaps back) and a toast explains why.
   async function handleToggleClientActive(client: ClientDto) {
+    if (pendingClientToggleId === client.clientId) return // ignore double-click while pending
     const next = !(client.active ?? true)
+    setClientActiveOverrides((current) => ({ ...current, [client.clientId]: next }))
+    setPendingClientToggleId(client.clientId)
     try {
       await apiClient.updateClientRecord(client.clientId, { active: next })
       toastContext?.addToast(
@@ -871,8 +887,21 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
         'success'
       )
       await refreshInventoryView()
+      // Drop the override — fresh server data is now authoritative.
+      setClientActiveOverrides((current) => {
+        const { [client.clientId]: _removed, ...rest } = current
+        return rest
+      })
     } catch (error) {
+      // Revert: drop the override so the toggle snaps back to the server's
+      // truth on next render.
+      setClientActiveOverrides((current) => {
+        const { [client.clientId]: _removed, ...rest } = current
+        return rest
+      })
       toastContext?.addToast(error instanceof Error ? error.message : 'Toggle failed', 'error')
+    } finally {
+      setPendingClientToggleId((current) => (current === client.clientId ? null : current))
     }
   }
 
@@ -1393,9 +1422,11 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
                 </thead>
                 <tbody>
                   {clients.map((client) => {
-                    const isActive = client.active ?? true
+                    const override = clientActiveOverrides[client.clientId]
+                    const isActive = override !== undefined ? override : (client.active ?? true)
+                    const isPending = pendingClientToggleId === client.clientId
                     return (
-                    <tr key={client.clientId} style={{ opacity: isActive ? 1 : 0.55 }}>
+                    <tr key={client.clientId} style={{ opacity: isActive ? 1 : 0.55, transition: 'opacity .28s ease' }}>
                       <td style={{ fontWeight: 600 }}>{client.name}</td>
                       <td style={{ fontSize: 12 }}>{client.contactName || '—'}</td>
                       <td style={{ fontSize: 12 }}>{client.email || '—'}</td>
@@ -1408,10 +1439,12 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
                       <td style={{ textAlign: 'center' }}>
                         <button
                           type="button"
-                          className={`ss-test-toggle${isActive ? ' is-on' : ' is-off'}`}
+                          className={`ss-test-toggle${isActive ? ' is-on' : ' is-off'}${isPending ? ' is-pending' : ''}`}
                           aria-label={isActive ? `Disable ${client.name}` : `Enable ${client.name}`}
-                          title={isActive ? `Disable ${client.name} (hide from sidebar + views)` : `Enable ${client.name}`}
+                          aria-busy={isPending}
+                          title={isPending ? 'Saving…' : isActive ? `Disable ${client.name} (hide from sidebar + views)` : `Enable ${client.name}`}
                           onClick={() => void handleToggleClientActive(client)}
+                          disabled={isPending}
                         >
                           <span className="ss-test-toggle-knob" />
                         </button>
