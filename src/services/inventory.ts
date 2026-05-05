@@ -21,12 +21,13 @@ export async function applyMovement(move: StockMovement) {
       .limit(1);
     if (!current) throw new Error('Inventory item not found');
 
+    // No negative-balance blocker. Stock can go arbitrarily negative — the
+    // ledger is the source of truth, not the running balance, and the
+    // shipment_sync path already writes through without a check, so manual
+    // adjusts/picks would be the only writer that ever throws otherwise.
+    // Receives, adjusts, picks, ships, returns, and damage moves all proceed
+    // and persist even when the resulting stockQty < 0.
     const newQty = current.stockQty + move.qty;
-    if (move.qty < 0 && newQty < 0) {
-      throw new Error(
-        `Stock would go negative (${current.stockQty} + ${move.qty} = ${newQty})`
-      );
-    }
 
     const [updated] = await tx
       .update(inventory)
