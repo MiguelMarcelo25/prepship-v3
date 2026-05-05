@@ -5765,6 +5765,11 @@ export default function OrdersView({
                 background: 'var(--surface)',
                 boxShadow: '0 1px 2px rgba(15,23,42,.06)',
                 flexShrink: 1,
+                // Print Queue panel overlays at z-index 1200; lift this above
+                // it so the in-progress label stays visible while a Print All
+                // job is running with the panel still open.
+                position: 'relative',
+                zIndex: 1300,
               }}
             >
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 10.5, lineHeight: 1.2, color: 'var(--text2)', minWidth: 0 }}>
