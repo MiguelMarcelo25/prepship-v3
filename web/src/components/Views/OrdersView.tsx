@@ -5790,7 +5790,7 @@ export default function OrdersView({
           <button
             className="btn btn-ghost btn-sm"
             type="button"
-            style={{ fontSize: 11.5, gap: 4, marginLeft: queueToolbarProgress ? 0 : 'auto', display: currentStatus === 'awaiting_shipment' ? '' : 'none' }}
+            style={{ fontSize: 11.5, gap: 4, marginLeft: 'auto', display: currentStatus === 'awaiting_shipment' ? '' : 'none' }}
             id="picklistBtn"
             onClick={() => void printPicklist()}
           >
