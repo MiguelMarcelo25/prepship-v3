@@ -121,16 +121,27 @@ function TopSkusTooltip(props: {
   label?: string
   payload?: Array<{ dataKey?: string | number; value?: unknown; color?: string; fill?: string; stroke?: string }>
   topSkus: ChartSku[]
+  focusedIndex: number | null
 }) {
   if (!props.active || !props.payload?.length) return null
 
   const items = props.payload
-    .filter((item) => item.dataKey && item.dataKey !== 'dayLabel' && Number(item.value) > 0)
+    .filter((item) => {
+      if (!item.dataKey || item.dataKey === 'dayLabel') return false
+      if (Number(item.value) <= 0) return false
+      // When a SKU is focused, only show that series in the tooltip — the
+      // others are visually muted so they shouldn't compete for attention here.
+      if (props.focusedIndex !== null) {
+        const skuIndex = Number(String(item.dataKey).replace('sku_', ''))
+        return skuIndex === props.focusedIndex
+      }
+      return true
+    })
     .map((item) => {
       const skuIndex = Number(String(item.dataKey).replace('sku_', ''))
       const sku = props.topSkus[skuIndex]
       return {
-        color: item.color || item.fill || item.stroke || ANALYSIS_CHART_COLORS[skuIndex % ANALYSIS_CHART_COLORS.length],
+        color: ANALYSIS_CHART_COLORS[skuIndex % ANALYSIS_CHART_COLORS.length],
         label: sku?.name || sku?.sku || String(item.dataKey),
         value: Number(item.value) || 0,
       }
@@ -153,6 +164,10 @@ function TopSkusTooltip(props: {
   )
 }
 
+// Muted color for unfocused series in focus mode. Slate-300-ish, low contrast
+// against the chart bg so the focused line genuinely pops.
+const FOCUS_MUTED_COLOR = '#cbd5e1'
+
 export function AnalysisTopSkusChart({ data }: AnalysisTopSkusChartProps) {
   const [chartType, setChartType] = useState<AnalysisChartType>(readStoredChartType)
   const [drag, setDrag] = useState<{ start: string | null; end: string | null }>({
@@ -160,6 +175,10 @@ export function AnalysisTopSkusChart({ data }: AnalysisTopSkusChartProps) {
     end: null,
   })
   const [zoom, setZoom] = useState<{ fromIndex: number; toIndex: number } | null>(null)
+  // Index of the SKU currently in spotlight; null = all colors normal.
+  // Click a line or its legend chip to focus that series and grayscale
+  // the rest. Click the same one again (or a non-line area) to clear.
+  const [focusedIndex, setFocusedIndex] = useState<number | null>(null)
 
   const rows = useMemo(() => buildChartRows(data), [data])
   const visibleRows = useMemo(() => {
@@ -179,7 +198,12 @@ export function AnalysisTopSkusChart({ data }: AnalysisTopSkusChartProps) {
   useEffect(() => {
     setDrag({ start: null, end: null })
     setZoom(null)
+    setFocusedIndex(null)
   }, [data])
+
+  function toggleFocus(index: number) {
+    setFocusedIndex((current) => (current === index ? null : index))
+  }
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -210,20 +234,53 @@ export function AnalysisTopSkusChart({ data }: AnalysisTopSkusChartProps) {
       <div className="analysis-top-chart-header">
         <span className="analysis-top-chart-title">Daily Units Sold - Top SKUs</span>
         <div id="analysis-chart-legend" className="analysis-top-chart-legend">
-          {data.topSkus.map((sku, index) => (
-            <span className="analysis-top-chart-legend-item" key={sku.sku}>
-              <span
-                className="analysis-top-chart-legend-line"
-                style={{ background: ANALYSIS_CHART_COLORS[index % ANALYSIS_CHART_COLORS.length] }}
-              />
-              <span className="analysis-top-chart-legend-label" title={sku.name || sku.sku}>
-                {sku.name || sku.sku}
-              </span>
-            </span>
-          ))}
+          {data.topSkus.map((sku, index) => {
+            const seriesColor = ANALYSIS_CHART_COLORS[index % ANALYSIS_CHART_COLORS.length]
+            const isFocused = focusedIndex === index
+            const dimmed = focusedIndex !== null && !isFocused
+            return (
+              <button
+                type="button"
+                className="analysis-top-chart-legend-item"
+                key={sku.sku}
+                onClick={() => toggleFocus(index)}
+                title={
+                  isFocused
+                    ? `Click to clear focus on ${sku.name || sku.sku}`
+                    : `Click to focus on ${sku.name || sku.sku}`
+                }
+                aria-pressed={isFocused}
+                style={{
+                  cursor: 'pointer',
+                  background: 'none',
+                  border: 'none',
+                  padding: 0,
+                  font: 'inherit',
+                  color: 'inherit',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  opacity: dimmed ? 0.4 : 1,
+                  fontWeight: isFocused ? 700 : 'inherit',
+                  transition: 'opacity 0.18s ease, font-weight 0.18s ease',
+                }}
+              >
+                <span
+                  className="analysis-top-chart-legend-line"
+                  style={{
+                    background: dimmed ? FOCUS_MUTED_COLOR : seriesColor,
+                    transition: 'background 0.18s ease',
+                  }}
+                />
+                <span className="analysis-top-chart-legend-label" title={sku.name || sku.sku}>
+                  {sku.name || sku.sku}
+                </span>
+              </button>
+            )
+          })}
         </div>
         <span id="analysis-chart-zoom-hint" className="analysis-top-chart-hint">
-          drag chart to zoom
+          {focusedIndex !== null ? 'click line again to clear focus' : 'drag to zoom · click a line to focus'}
         </span>
         <select
           id="analysis-chart-type"
@@ -312,23 +369,31 @@ export function AnalysisTopSkusChart({ data }: AnalysisTopSkusChartProps) {
                 <TopSkusTooltip
                   {...props}
                   topSkus={data.topSkus}
+                  focusedIndex={focusedIndex}
                 />
               )}
               cursor={{ stroke: 'rgba(15,23,42,.22)', strokeDasharray: '4 4' }}
             />
             {data.topSkus.map((sku, index) => {
-              const color = ANALYSIS_CHART_COLORS[index % ANALYSIS_CHART_COLORS.length]
+              const seriesColor = ANALYSIS_CHART_COLORS[index % ANALYSIS_CHART_COLORS.length]
+              const isFocused = focusedIndex === index
+              const dimmed = focusedIndex !== null && !isFocused
+              const effectiveColor = dimmed ? FOCUS_MUTED_COLOR : seriesColor
+              // Render dimmed series first (lower z) so the focused one paints
+              // on top — recharts respects child order for stacking.
               return chartType === 'bar' ? (
                 <Bar
                   key={sku.sku}
                   dataKey={`sku_${index}`}
                   name={sku.name || sku.sku}
-                  fill={color}
-                  fillOpacity={0.78}
+                  fill={effectiveColor}
+                  fillOpacity={dimmed ? 0.32 : 0.78}
                   radius={[3, 3, 0, 0]}
                   maxBarSize={18}
                   isAnimationActive
                   animationDuration={450}
+                  onClick={() => toggleFocus(index)}
+                  style={{ cursor: 'pointer' }}
                 />
               ) : (
                 <Line
@@ -336,18 +401,21 @@ export function AnalysisTopSkusChart({ data }: AnalysisTopSkusChartProps) {
                   type="monotone"
                   dataKey={`sku_${index}`}
                   name={sku.name || sku.sku}
-                  stroke={color}
-                  strokeWidth={2.4}
+                  stroke={effectiveColor}
+                  strokeWidth={isFocused ? 3.2 : dimmed ? 1.6 : 2.4}
+                  strokeOpacity={dimmed ? 0.55 : 1}
                   dot={false}
                   activeDot={{
-                    r: 4,
+                    r: isFocused ? 5 : 4,
                     stroke: '#fff',
                     strokeWidth: 2,
-                    fill: color,
+                    fill: effectiveColor,
                   }}
                   connectNulls
                   isAnimationActive
-                  animationDuration={550}
+                  animationDuration={350}
+                  onClick={() => toggleFocus(index)}
+                  style={{ cursor: 'pointer' }}
                 />
               )
             })}
