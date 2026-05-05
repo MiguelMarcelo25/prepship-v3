@@ -6286,16 +6286,20 @@ export default function OrdersView({
             </div>
           ) : (
             // Pill is anchored to the right edge of the .content-split (which
-            // is now position: relative). top-3 places it just below the
-            // toolbar row that ends with the Picklist button, so the user
-            // sees "Picklist" up top and "Show panel" stacked right below it
-            // along the same right edge.
+            // is now position: relative). The orders table's sticky thead has
+            // z-index: 100 (app-shell.css), so the pill needs z-[200] to
+            // float above it; otherwise it hides behind the column headers
+            // when the user scrolls to the top.
+            //
+            // top-12 (48 px) drops it below the sticky column header row,
+            // so the column-name labels stay readable and the pill sits on
+            // the empty body area to the right of the data.
             <button
               type="button"
               aria-label="Show details panel"
               title="Show details panel"
               onClick={() => setShowEmptyPanel(true)}
-              className="absolute top-3 right-3 z-50 flex items-center gap-1.5 px-2.5 py-1.5 rounded-full border border-line-2 bg-surface text-xs2 font-semibold text-ink-2 shadow-md cursor-pointer transition-colors hover:bg-brand-bg hover:border-brand hover:text-brand"
+              className="absolute top-12 right-3 z-[200] flex items-center gap-1.5 px-3 py-2 rounded-full border border-line-2 bg-surface text-xs2 font-semibold text-ink-2 shadow-md cursor-pointer transition-colors hover:bg-brand-bg hover:border-brand hover:text-brand"
             >
               <span aria-hidden="true">◧</span>
               <span>Show panel</span>
