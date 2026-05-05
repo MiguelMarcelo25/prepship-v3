@@ -1085,22 +1085,53 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
                 <div key={group.clientId} style={{ marginBottom: 18 }}>
                   <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 6 }}>{group.clientName}</div>
                   <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-                    <table className="inv-table" style={{ margin: 0 }}>
+                    <table className="inv-table" style={{ margin: 0, tableLayout: 'fixed' }}>
+                      {/* colgroup pins column widths so EVERY client's table
+                          renders the same layout — auto-sizing was the cause
+                          of the visual drift between groups. */}
+                      {bulkEditMode ? (
+                        <colgroup>
+                          <col style={{ width: 140 }} />
+                          <col style={{ width: 48 }} />
+                          <col />
+                          <col style={{ width: 90 }} />
+                          <col style={{ width: 72 }} />
+                          <col style={{ width: 72 }} />
+                          <col style={{ width: 72 }} />
+                        </colgroup>
+                      ) : (
+                        <colgroup>
+                          <col style={{ width: 150 }} /> {/* SKU */}
+                          <col style={{ width: 56 }} />  {/* Image */}
+                          <col />                         {/* Name (flex) */}
+                          <col style={{ width: 90 }} />  {/* Weight */}
+                          <col style={{ width: 100 }} /> {/* Dims */}
+                          <col style={{ width: 80 }} />  {/* Cu Ft/Unit */}
+                          <col style={{ width: 110 }} /> {/* Package */}
+                          <col style={{ width: 70 }} />  {/* Stock */}
+                          <col style={{ width: 75 }} />  {/* Sold 30d */}
+                          <col style={{ width: 85 }} />  {/* Units/Pack */}
+                          <col style={{ width: 90 }} />  {/* Total Units */}
+                          <col style={{ width: 55 }} />  {/* Min */}
+                          <col style={{ width: 70 }} />  {/* Status */}
+                          <col style={{ width: 110 }} /> {/* Actions */}
+                        </colgroup>
+                      )}
                       <thead>
                         {bulkEditMode ? (
                           <tr>
                             <th>SKU</th>
-                            <th style={{ width: 48 }} />
+                            <th />
                             <th>Name</th>
-                            <th style={{ width: 90 }}>Wt (oz)</th>
-                            <th style={{ width: 72 }}>L (in)</th>
-                            <th style={{ width: 72 }}>W (in)</th>
-                            <th style={{ width: 72 }}>H (in)</th>
+                            <th>Wt (oz)</th>
+                            <th>L (in)</th>
+                            <th>W (in)</th>
+                            <th>H (in)</th>
                           </tr>
                         ) : (
                           <tr>
                             <th>SKU</th>
-                            <th style={{ width: 48 }} />
+                            <th />
                             <th>Name</th>
                             <th style={{ textAlign: 'right' }}>Weight</th>
                             <th style={{ textAlign: 'center' }}>Dims (L×W×H)</th>
