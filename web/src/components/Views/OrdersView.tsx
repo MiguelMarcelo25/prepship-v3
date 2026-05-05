@@ -6285,24 +6285,26 @@ export default function OrdersView({
               </div>
             </div>
           ) : (
-            // Pill is anchored to the right edge of the .content-split (which
-            // is now position: relative). The orders table's sticky thead has
-            // z-index: 100 (app-shell.css), so the pill needs z-[200] to
-            // float above it; otherwise it hides behind the column headers
-            // when the user scrolls to the top.
-            //
-            // top-12 (48 px) drops it below the sticky column header row,
-            // so the column-name labels stay readable and the pill sits on
-            // the empty body area to the right of the data.
+            // Vertical "reopen sidebar" tab pinned to the right edge of the
+            // .content-split (which is position: relative). Centered top-to-
+            // bottom — same pattern Slack / Notion / VSCode use for a
+            // collapsed sidebar's reopen handle. z-[200] floats it above the
+            // orders table's sticky <thead> (z-index 100 in app-shell.css),
+            // and writing-mode rotates the label so the tab stays narrow.
             <button
               type="button"
               aria-label="Show details panel"
               title="Show details panel"
               onClick={() => setShowEmptyPanel(true)}
-              className="absolute top-12 right-3 z-[200] flex items-center gap-1.5 px-3 py-2 rounded-full border border-line-2 bg-surface text-xs2 font-semibold text-ink-2 shadow-md cursor-pointer transition-colors hover:bg-brand-bg hover:border-brand hover:text-brand"
+              className="absolute top-1/2 -translate-y-1/2 right-0 z-[200] flex flex-col items-center gap-1.5 px-1.5 py-3 rounded-l-md border border-r-0 border-line-2 bg-surface text-ink-2 shadow-md cursor-pointer transition-colors hover:bg-brand-bg hover:border-brand hover:text-brand"
             >
-              <span aria-hidden="true">◧</span>
-              <span>Show panel</span>
+              <span aria-hidden="true" className="text-base leading-none">◧</span>
+              <span
+                className="text-[10px] font-bold tracking-wider uppercase"
+                style={{ writingMode: 'vertical-rl', textOrientation: 'mixed' }}
+              >
+                Show panel
+              </span>
             </button>
           )}
         </div>
