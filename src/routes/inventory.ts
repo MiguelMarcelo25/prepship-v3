@@ -1201,27 +1201,52 @@ app.post('/sync-products', async (c) => {
             )
             .limit(1);
 
-          const fields = {
-            name: p.name ?? null,
-            weightOz: p.weightOz ?? 0,
-            length: p.length ?? null,
-            width: p.width ?? null,
-            height: p.height ?? null,
-            active: p.active ?? true,
-            imageUrl: p.thumbnailUrl ?? p.imageUrl ?? null,
-          };
+          // ShipStation often returns null thumbnailUrl/imageUrl for products
+          // that DO have images sourced elsewhere (e.g. extracted from order
+          // items). Use coalesce on UPDATE so a null from SS never destroys
+          // an existing URL that was filled by import-from-orders or a prior
+          // sync run. Same for name — preserve a previously-saved name when
+          // SS returns blank.
+          const incomingImage = p.thumbnailUrl ?? p.imageUrl ?? null;
+          const incomingName = p.name ?? null;
 
           if (existing) {
+            const updateFields: Record<string, unknown> = {
+              weightOz: p.weightOz ?? 0,
+              length: p.length ?? null,
+              width: p.width ?? null,
+              height: p.height ?? null,
+              active: p.active ?? true,
+              updatedAt: new Date(),
+            };
+            if (incomingName) {
+              updateFields.name = sql`coalesce(nullif(${inventory.name}, ''), ${incomingName})`;
+            }
+            if (incomingImage) {
+              // Only overwrite when SS actually returned an image. Null /
+              // empty SS values keep whatever was already on the row.
+              updateFields.imageUrl = incomingImage;
+            }
             await db
               .update(inventory)
-              .set({ ...fields, updatedAt: new Date() })
+              .set(updateFields)
               .where(eq(inventory.id, existing.id));
             updated += 1;
             byAccount[acct.label]!.updated += 1;
           } else {
             await db
               .insert(inventory)
-              .values({ sku, clientId: acct.ownerClientId, ...fields });
+              .values({
+                sku,
+                clientId: acct.ownerClientId,
+                name: incomingName,
+                weightOz: p.weightOz ?? 0,
+                length: p.length ?? null,
+                width: p.width ?? null,
+                height: p.height ?? null,
+                active: p.active ?? true,
+                imageUrl: incomingImage,
+              });
             inserted += 1;
             byAccount[acct.label]!.inserted += 1;
           }
