@@ -1800,8 +1800,12 @@ export default function OrdersView({
         }
       })()
 
+  // Hide Test Orders client across every status tab (Awaiting / Shipped /
+  // Cancelled), not just Awaiting. Toggle in the sidebar still controls the
+  // override. Only suppressed when no specific store is selected — viewing
+  // the Test Orders client directly always shows its rows.
   const hideTestOrdersInAllAwaiting =
-    currentStatus === 'awaiting_shipment' && activeStore == null && !showTestOrders
+    activeStore == null && !showTestOrders
 
   const { orders, total, pages, currentPage, loading, error, refetch: refetchOrders } = useOrders(currentStatus, {
     page,
