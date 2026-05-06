@@ -291,6 +291,15 @@ interface OrdersViewProps {
   onQueueStateChange?: (state: { count: number; isOpen: boolean }) => void
   refreshVersion?: number
   showTestOrders?: boolean
+  // User preference (from localStorage in Home.tsx) — when true, the
+  // right-side order detail panel is hidden when no order is selected.
+  // The panel still appears the moment a row is clicked (showing details).
+  // Default false (panel always visible) for back-compat.
+  hideEmptyPanel?: boolean
+  // Callback fired when the user toggles hideEmptyPanel from inside the
+  // panel itself (the × close button) or from the vertical edge tab
+  // ("Show panel"). Updates the same localStorage-backed pref in Home.tsx.
+  onHideEmptyPanelChange?: (hide: boolean) => void
   stores?: Array<{ storeId?: number | null; clientId?: number | null }>
 }
 
@@ -1556,11 +1565,30 @@ function getSortValue(order: OrderSummaryDto, detail: OrderFullDto | null, key: 
   }
 }
 
-function buildEmptyPanel() {
+function buildEmptyPanel(onHide?: () => void) {
   const kbdCls =
     'inline-block bg-surface-3 px-1.5 py-px rounded text-[10px] border border-line-2 font-mono tabular-nums'
   return (
     <div className="relative flex flex-col items-center justify-center h-full px-5 py-10 text-center text-ink-3 animate-[fadeIn_0.3s_ease-out]">
+      {/* Drawer-style close button — top-right of the empty panel. Calls
+          onHide() which sets the localStorage `prepship_hide_empty_panel`
+          preference to true and slides the panel out. The panel returns
+          automatically when a row is clicked OR when the user clicks the
+          vertical "Show panel" tab on the right edge of the orders view. */}
+      {onHide ? (
+        <button
+          type="button"
+          onClick={onHide}
+          aria-label="Hide this panel when no order is selected"
+          title="Hide this panel when no order is selected"
+          className="absolute top-2 right-2 inline-flex items-center justify-center w-7 h-7 rounded-md text-ink-3 hover:text-ink hover:bg-surface-2 ring-1 ring-transparent hover:ring-line transition"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      ) : null}
       <div className="text-[40px] mb-4 opacity-60 animate-[bounceIn_0.5s_cubic-bezier(0.34,1.56,0.64,1)]">📋</div>
       <div className="text-[14px] font-semibold mb-1.5 text-ink-2 font-display tracking-tight">No order selected</div>
       <div className="text-[12px] leading-relaxed mb-5 text-ink-3">Click any row to view details</div>
@@ -1611,6 +1639,8 @@ export default function OrdersView({
   onQueueStateChange,
   refreshVersion = 0,
   showTestOrders = true,
+  hideEmptyPanel = false,
+  onHideEmptyPanelChange,
   stores = [],
 }: OrdersViewProps) {
   const toastContext = useContext(ToastContext)
@@ -5453,7 +5483,7 @@ export default function OrdersView({
   }
 
   const renderSinglePanel = () => {
-    if (!panelOrder) return buildEmptyPanel()
+    if (!panelOrder) return buildEmptyPanel(onHideEmptyPanelChange ? () => onHideEmptyPanelChange(true) : undefined)
 
     const items = getActiveItems(panelOrder, panelDetail)
     const mergedItems = getMergedItems(panelOrder, panelDetail)
@@ -6778,11 +6808,40 @@ export default function OrdersView({
             </div>
           </div>
 
-          <div className="order-panel" id="orderPanel">
-            <div className="panel-inner" id="panelInner">
-              {activeOrderId == null && selectedOrderIds.length >= 2 ? renderBatchPanel() : renderSinglePanel()}
+          {/* Right-side detail panel — drawer-style hide/show.
+              Hidden when: pref is true AND nothing is selected.
+              Reappears: when row clicked OR batch selection grows ≥ 2.
+              When hidden, a vertical "Show panel" tab on the right edge
+              lets the user reopen it without going to the topbar toggle. */}
+          {hideEmptyPanel && panelOrderId == null && selectedOrderIds.length < 2 ? (
+            // Vertical edge tab — small persistent reopen control on the
+            // right edge of the orders area. Tailwind-only; the rotated
+            // text reads bottom-to-top, click to flip the pref back to
+            // "show". Mirrors the close-button in the panel header so
+            // users have a visible way to undo their hide action.
+            onHideEmptyPanelChange ? (
+              <button
+                type="button"
+                onClick={() => onHideEmptyPanelChange(false)}
+                aria-label="Show order detail panel"
+                title="Show order detail panel"
+                className="absolute top-1/2 right-0 -translate-y-1/2 z-10 inline-flex items-center justify-center px-1.5 py-3 rounded-l-lg bg-surface ring-1 ring-line border-r-0 text-ink-3 hover:text-brand hover:bg-brand/5 hover:ring-brand/30 transition-all duration-150 shadow-sm group"
+              >
+                <span className="flex flex-col items-center gap-1 [writing-mode:vertical-rl] rotate-180 text-[10.5px] font-semibold uppercase tracking-[0.08em] select-none">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="rotate-90 group-hover:-translate-x-0.5 transition-transform" aria-hidden="true">
+                    <polyline points="15 18 9 12 15 6" />
+                  </svg>
+                  Show panel
+                </span>
+              </button>
+            ) : null
+          ) : (
+            <div className="order-panel" id="orderPanel">
+              <div className="panel-inner" id="panelInner">
+                {activeOrderId == null && selectedOrderIds.length >= 2 ? renderBatchPanel() : renderSinglePanel()}
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
 

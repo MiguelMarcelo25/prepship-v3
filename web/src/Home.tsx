@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
@@ -11,6 +12,8 @@ import {
   X as XIcon,
   Loader2,
   ZoomIn,
+  PanelRightClose,
+  PanelRightOpen,
 } from 'lucide-react'
 import { ToastContext } from './contexts/ToastContext'
 import { apiClient } from './api/client'
@@ -197,6 +200,24 @@ export default function Home() {
     return stored
   })
   const [zoomMenuOpen, setZoomMenuOpen] = useState(false)
+  // Refs + measured anchor for the zoom dropdown. Positioning the menu
+  // via the button's getBoundingClientRect (instead of hardcoded
+  // top-[60px]) makes it bulletproof against ancestor stacking contexts,
+  // backdrop-filter, and any future topbar height change. Recomputed each
+  // time the menu opens so it always lines up with the live button.
+  const zoomBtnRef = useRef<HTMLButtonElement | null>(null)
+  const [zoomMenuAnchor, setZoomMenuAnchor] = useState<{ top: number; right: number } | null>(null)
+  // localStorage-backed preference: hide the right-side order detail panel
+  // when no order is selected. Default false (panel visible) for back-compat.
+  // OrdersView reads this via prop; toggle via the lock pill in the topbar.
+  const [hideEmptyPanel, setHideEmptyPanel] = useState(() => {
+    if (typeof window === 'undefined') return false
+    return window.localStorage.getItem('prepship_hide_empty_panel') === 'true'
+  })
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem('prepship_hide_empty_panel', String(hideEmptyPanel))
+  }, [hideEmptyPanel])
 
   const setShowTestOrders = (next: boolean) => {
     setShowTestOrdersState(next)
@@ -257,15 +278,11 @@ export default function Home() {
 
     const handleClick = (event: MouseEvent) => {
       const target = event.target as HTMLElement | null
-      // The click-outside selector previously used `.react-zoom-wrap`, a
-      // holdover class name from the v2 codebase that was dropped when the
-      // topbar was rewritten — the actual wrapper now uses `id="zoom-wrap"`
-      // with no matching class. As a result every click was treated as
-      // "outside" the menu (including option clicks INSIDE the menu),
-      // which closed the dropdown before the user could pick a zoom level.
-      // Match against the real id so clicks inside the menu are correctly
-      // recognized as "inside."
-      if (target?.closest('#zoom-wrap')) return
+      // Clicks inside the trigger button's wrapper (#zoom-wrap) OR inside
+      // the portal-rendered menu (#zoomMenu — lives at document.body
+      // outside the wrapper) both count as "inside." Match either id so
+      // option clicks aren't mistaken for outside-clicks.
+      if (target?.closest('#zoom-wrap') || target?.closest('#zoomMenu')) return
       setZoomMenuOpen(false)
     }
 
@@ -712,76 +729,70 @@ export default function Home() {
             </div>
           ) : null}
 
-          {/* Zoom — always visible, far right */}
+          {/* Hide-empty-panel toggle — only relevant on the Orders view
+              where the right detail panel exists. Persists in localStorage
+              via Home.tsx's useEffect. Icon flips between PanelRightOpen
+              (currently visible / click to hide) and PanelRightClose
+              (currently hidden / click to show). Tooltip explains the
+              behavior so first-time users don't get confused. */}
+          {displayView === 'orders' ? (
+            <button
+              type="button"
+              aria-label={hideEmptyPanel ? 'Show order detail panel when nothing selected' : 'Hide order detail panel when nothing selected'}
+              aria-pressed={hideEmptyPanel}
+              title={
+                hideEmptyPanel
+                  ? 'Right panel is hidden when no order is selected — click to keep it visible'
+                  : 'Right panel always visible — click to hide it when no order is selected'
+              }
+              onClick={() => setHideEmptyPanel((open) => !open)}
+              className={[
+                'inline-flex items-center justify-center h-8 w-8 rounded-lg ring-1 transition-all duration-150 active:scale-95',
+                hideEmptyPanel
+                  ? 'bg-brand/10 text-brand ring-brand/30 hover:bg-brand/15'
+                  : 'bg-surface text-ink-2 ring-line hover:text-ink hover:ring-line-2 hover:bg-surface-2',
+              ].join(' ')}
+            >
+              {hideEmptyPanel ? (
+                <PanelRightClose size={14} strokeWidth={2.25} />
+              ) : (
+                <PanelRightOpen size={14} strokeWidth={2.25} />
+              )}
+            </button>
+          ) : null}
+
+          {/* Zoom trigger — pure Tailwind. The dropdown menu itself is
+              rendered separately via React Portal at the bottom of the
+              component (see <ZoomMenuPortal/> below) so it lives at
+              document.body and can't be clipped by ANY ancestor. */}
           <div className="relative" id="zoom-wrap">
             <button
               id="zoomBtn"
+              ref={zoomBtnRef}
               type="button"
               aria-label={`Current zoom ${zoomPct}%, click to change`}
               aria-haspopup="menu"
               aria-expanded={zoomMenuOpen}
               className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg ring-1 ring-line bg-surface text-ink-2 hover:text-ink hover:ring-line-2 hover:bg-surface-2 active:scale-95 transition-all duration-150 text-[12px] font-mono tabular-nums font-semibold min-w-[64px]"
-              onClick={() => setZoomMenuOpen((open) => !open)}
+              onClick={(e) => {
+                // stopPropagation prevents the click from bubbling to the
+                // document-level click-outside handler that's registered
+                // when the menu is open — without this, opening the menu
+                // could immediately close it on the same click.
+                e.stopPropagation()
+                if (!zoomMenuOpen && zoomBtnRef.current) {
+                  const rect = zoomBtnRef.current.getBoundingClientRect()
+                  setZoomMenuAnchor({
+                    top: rect.bottom + 6,
+                    right: window.innerWidth - rect.right,
+                  })
+                }
+                setZoomMenuOpen((open) => !open)
+              }}
             >
               <ZoomIn size={13} strokeWidth={2.25} />
               <span id="zoomLabel">{zoomPct}%</span>
             </button>
-            <AnimatePresence>
-              {zoomMenuOpen ? (
-                <motion.div
-                  id="zoomMenu"
-                  role="menu"
-                  initial={{ opacity: 0, y: -6, scale: 0.96 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: -6, scale: 0.96 }}
-                  transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
-                  // `fixed` so the menu escapes the topbar's backdrop-blur
-                  // stacking context AND .main's overflow:hidden. Position
-                  // anchored to viewport (60px below top so it sits 4px under
-                  // the 56px topbar; right padding mirrors the topbar's
-                  // px-4/sm:px-5 so it aligns under the 100% trigger).
-                  // max-h + overflow-y-auto guards against tiny viewports
-                  // where 6+ options could exceed the screen height — they
-                  // simply scroll inside the menu rather than getting cut off.
-                  className="fixed top-[60px] right-4 sm:right-5 z-[200] flex flex-col bg-surface ring-1 ring-line-2 rounded-xl shadow-xl py-1.5 min-w-[200px] max-h-[calc(100vh-80px)] overflow-y-auto origin-top-right"
-                >
-                  <div className="px-3 pt-1.5 pb-2 text-[10px] font-bold uppercase tracking-[0.1em] text-ink-3">Zoom level</div>
-                  {ZOOM_OPTIONS.map((option, idx) => {
-                    const isActive = zoomPct === option.value
-                    return (
-                      <motion.button
-                        key={option.value}
-                        initial={{ opacity: 0, x: -4 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        transition={{ delay: idx * 0.02, duration: 0.18 }}
-                        type="button"
-                        role="menuitem"
-                        onClick={() => {
-                          setZoomPct(option.value)
-                          setZoomMenuOpen(false)
-                        }}
-                        // Pure-Tailwind option button. block + w-full makes the
-                        // hover/active background span the full menu width so
-                        // the active highlight isn't a narrow rectangle around
-                        // the text. font-inherit removes the browser's default
-                        // <button> font so it picks up the menu's typography.
-                        className={[
-                          'block w-full text-left whitespace-nowrap',
-                          'px-3.5 py-1.5 text-[12.5px] font-sans',
-                          'border-0 bg-transparent cursor-pointer',
-                          'transition-colors duration-100',
-                          isActive
-                            ? 'text-brand font-bold bg-brand/10'
-                            : 'text-ink-2 hover:text-ink hover:bg-surface-2',
-                        ].join(' ')}
-                      >
-                        {option.label}
-                      </motion.button>
-                    )
-                  })}
-                </motion.div>
-              ) : null}
-            </AnimatePresence>
           </div>
         </header>
 
@@ -829,6 +840,8 @@ export default function Home() {
                 }}
                 refreshVersion={ordersRefreshVersion}
                 showTestOrders={showTestOrders}
+                hideEmptyPanel={hideEmptyPanel}
+                onHideEmptyPanelChange={setHideEmptyPanel}
               />
             ) : displayView === 'inventory' ? (
               <InventoryView searchQuery={searchQuery} onOpenOrder={openOrderFromContentView} />
@@ -861,6 +874,68 @@ export default function Home() {
           }}
         />
       </div>
+
+      {/* Zoom dropdown — portal-rendered at document.body level so it
+          escapes EVERY ancestor stacking context, transform,
+          backdrop-filter, and overflow:hidden. Position is computed live
+          from the trigger button's getBoundingClientRect (set in
+          onClick). No max-height — all 6 options always fit. z-[9999]
+          stacks above all page-level UI but below modal overlays
+          (3000+). */}
+      {createPortal(
+        <AnimatePresence>
+          {zoomMenuOpen ? (
+            <motion.div
+              id="zoomMenu"
+              role="menu"
+              initial={{ opacity: 0, y: -6, scale: 0.96 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -6, scale: 0.96 }}
+              transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
+              style={
+                zoomMenuAnchor
+                  ? { top: zoomMenuAnchor.top, right: zoomMenuAnchor.right }
+                  : { top: 60, right: 16 }
+              }
+              className="fixed z-[9999] flex flex-col bg-surface ring-1 ring-line-2 rounded-xl shadow-xl py-1.5 min-w-[200px] origin-top-right"
+            >
+              <div className="px-3 pt-1.5 pb-2 text-[10px] font-bold uppercase tracking-[0.1em] text-ink-3 select-none">
+                Zoom level
+              </div>
+              {ZOOM_OPTIONS.map((option, idx) => {
+                const isActive = zoomPct === option.value
+                return (
+                  <motion.button
+                    key={option.value}
+                    initial={{ opacity: 0, x: -4 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: idx * 0.02, duration: 0.18 }}
+                    type="button"
+                    role="menuitem"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setZoomPct(option.value)
+                      setZoomMenuOpen(false)
+                    }}
+                    className={[
+                      'block w-full text-left whitespace-nowrap',
+                      'px-3.5 py-1.5 text-[12.5px] font-sans',
+                      'border-0 bg-transparent cursor-pointer',
+                      'transition-colors duration-100',
+                      isActive
+                        ? 'text-brand font-bold bg-brand/10'
+                        : 'text-ink-2 hover:text-ink hover:bg-surface-2',
+                    ].join(' ')}
+                  >
+                    {option.label}
+                  </motion.button>
+                )
+              })}
+            </motion.div>
+          ) : null}
+        </AnimatePresence>,
+        document.body
+      )}
     </>
   )
 }
