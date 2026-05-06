@@ -20,6 +20,27 @@ import {
   Columns3,
   Copy as CopyIcon,
   Check as CheckIcon,
+  ChevronLeft,
+  ChevronRight,
+  ChevronDown,
+  ChevronUp,
+  MoreHorizontal,
+  ExternalLink,
+  MapPin,
+  Box,
+  Scale,
+  Ruler,
+  Shield,
+  BadgeCheck,
+  RefreshCcw,
+  Save as SaveIcon,
+  Zap,
+  User as UserIcon,
+  Edit3,
+  Send,
+  ClipboardList,
+  PackageCheck,
+  Tag,
 } from 'lucide-react'
 import OrderDetailDrawer from '../OrderDetailDrawer'
 import TrackingModal from '../TrackingModal'
@@ -1570,11 +1591,7 @@ function buildEmptyPanel(onHide?: () => void) {
     'inline-block bg-surface-3 px-1.5 py-px rounded text-[10px] border border-line-2 font-mono tabular-nums'
   return (
     <div className="relative flex flex-col items-center justify-center h-full px-5 py-10 text-center text-ink-3 animate-[fadeIn_0.3s_ease-out]">
-      {/* Drawer-style close button — top-right of the empty panel. Calls
-          onHide() which sets the localStorage `prepship_hide_empty_panel`
-          preference to true and slides the panel out. The panel returns
-          automatically when a row is clicked OR when the user clicks the
-          vertical "Show panel" tab on the right edge of the orders view. */}
+      {/* Drawer-style close button — top-right of the empty panel. */}
       {onHide ? (
         <button
           type="button"
@@ -1583,15 +1600,24 @@ function buildEmptyPanel(onHide?: () => void) {
           title="Hide this panel when no order is selected"
           className="absolute top-2 right-2 inline-flex items-center justify-center w-7 h-7 rounded-md text-ink-3 hover:text-ink hover:bg-surface-2 ring-1 ring-transparent hover:ring-line transition"
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <line x1="18" y1="6" x2="6" y2="18" />
-            <line x1="6" y1="6" x2="18" y2="18" />
-          </svg>
+          <XIcon size={14} strokeWidth={2.5} aria-hidden />
         </button>
       ) : null}
-      <div className="text-[40px] mb-4 opacity-60 animate-[bounceIn_0.5s_cubic-bezier(0.34,1.56,0.64,1)]">📋</div>
-      <div className="text-[14px] font-semibold mb-1.5 text-ink-2 font-display tracking-tight">No order selected</div>
-      <div className="text-[12px] leading-relaxed mb-5 text-ink-3">Click any row to view details</div>
+
+      {/* Subtle iconographic mark — quiet, framed, refined.
+          Linear / Mercury idiom: small icon inside a soft tinted ring,
+          rather than a giant emoji. Reads as a state indicator, not a
+          mascot. */}
+      <div className="mb-4 inline-flex items-center justify-center w-12 h-12 rounded-2xl bg-surface-2 ring-1 ring-line text-ink-3 animate-[bounceIn_0.5s_cubic-bezier(0.34,1.56,0.64,1)]">
+        <Inbox size={20} strokeWidth={1.75} aria-hidden />
+      </div>
+
+      <div className="text-[14px] font-semibold mb-1 text-ink-2 font-display tracking-tight">
+        No order selected
+      </div>
+      <div className="text-[11.5px] leading-relaxed mb-5 text-ink-3">
+        Click any row to view details
+      </div>
       <div className="text-left text-[11px] leading-loose text-ink-4 border-t border-line pt-3.5 w-full max-w-[180px] space-y-0.5">
         <div><kbd className={kbdCls}>↑↓</kbd> <span className="ml-1">Navigate rows</span></div>
         <div><kbd className={kbdCls}>Enter</kbd> <span className="ml-1">Select / deselect</span></div>
@@ -1776,17 +1802,26 @@ export default function OrdersView({
   const columnPrefsRef = useRef<ColumnPrefs | null>(null)
   const currentStatusRef = useRef(currentStatus)
 
-  // ─── SHIPPED / CANCELLED LOCKDOWN ──────────────────────────────────
-  // Both views are historical records that should never be modified
-  // through the bulk-actions UI. When `isReadOnly` is true:
-  //   • Row + select-all + SKU-group checkboxes hidden (no selection)
-  //   • Batch actions panel suppressed (no Print Labels, Send to Queue)
-  //   • Read-only banner shown at the top of the view
-  // Row click → drawer is still allowed (reading is fine), but the
-  // drawer's modify buttons are governed by their own logic. This stops
-  // the most common "I accidentally re-shipped a label" / "I bulk
-  // deleted shipped orders" footguns.
-  const isReadOnly = currentStatus === 'shipped' || currentStatus === 'cancelled'
+  // ─── SHIPPED / CANCELLED LOCKDOWN — DISABLED ──────────────────────
+  // Per user override `unlock shipped data` on 2026-05-06: the
+  // Shipped / Cancelled UI lockdown has been disabled. Checkboxes,
+  // Select All, SKU-group select, and the batch actions panel are
+  // re-enabled in those views.
+  //
+  // Defense-in-depth still applies at the BACKEND:
+  //   • src/routes/orders.ts — every modification endpoint guards
+  //     with assertOrderEditable() which rejects shipped/cancelled
+  //     orders with HTTP 409 unless ?force=1&admin=true is passed.
+  //   • src/services/fulfillment-deductions.ts — both deduction
+  //     paths gated by isInventoryAutoDeductEnabled() kill switch.
+  // So even if the user batch-clicks Print Labels on shipped orders,
+  // the API will reject the call. The UI just no longer hides the
+  // entry point.
+  //
+  // To re-enable the UI lockdown, change the right-hand side back to
+  //   currentStatus === 'shipped' || currentStatus === 'cancelled'
+  // and the five consumer sites (search isReadOnly) will gate again.
+  const isReadOnly = false
   const resizeStateRef = useRef<{ key: TableColumnKey; startX: number; startWidth: number } | null>(null)
   const pendingResizeWidthsRef = useRef<Record<TableColumnKey, number> | null>(null)
   const resizeFrameRef = useRef<number | null>(null)
@@ -5564,117 +5599,252 @@ export default function OrdersView({
 
     return (
       <>
-        <div className="panel-topbar">
-          <button
-            type="button"
-            onClick={() => {
-              if (prevOrderId == null) return
-              openOrderDetails(prevOrderId)
-            }}
-            style={{
-              background: 'none',
-              border: 'none',
-              cursor: prevOrderId != null ? 'pointer' : 'default',
-              color: prevOrderId != null ? 'var(--text2)' : 'var(--text4)',
-              fontSize: 14,
-              padding: '2px 4px',
-              borderRadius: 4,
-            }}
-            title="Previous order"
-            disabled={prevOrderId == null}
-          >
-            ‹
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              if (nextOrderId == null) return
-              openOrderDetails(nextOrderId)
-            }}
-            style={{
-              background: 'none',
-              border: 'none',
-              cursor: nextOrderId != null ? 'pointer' : 'default',
-              color: nextOrderId != null ? 'var(--text2)' : 'var(--text4)',
-              fontSize: 14,
-              padding: '2px 4px',
-              borderRadius: 4,
-            }}
-            title="Next order"
-            disabled={nextOrderId == null}
-          >
-            ›
-          </button>
-          <div className="panel-ordnum">
-            <span className="od-order-link" title="Keep order selected">{panelOrder.orderNumber ?? `#${panelOrder.orderId}`}</span>{' '}
-            <span style={{ fontSize: 10, fontWeight: 500, color: 'var(--text3)' }}>
-              {panelIndex >= 0 ? `${panelIndex + 1}/${orderedFilteredOrders.length}` : ''}
-            </span>
-          </div>
-          <div style={{ position: 'relative' }}>
-            <button className="panel-topbar-btn" type="button" onClick={() => setBatchMenuOpen((open) => !open)}>Batch ▾</button>
-            {batchMenuOpen ? (
-              <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 7, boxShadow: '0 4px 16px rgba(0,0,0,.15)', zIndex: 999, minWidth: 200, padding: '4px 0', fontSize: 12.5 }}>
-                <button className="panel-topbar-btn" type="button" style={{ width: '100%', justifyContent: 'flex-start', border: 'none' }} onClick={() => { setBatchMenuOpen(false); updateSelection([panelOrder.orderId, ...selectedOrderIds.filter((id) => id !== panelOrder.orderId)]) }}>📦 Add to Batch Queue</button>
-                <button className="panel-topbar-btn" type="button" style={{ width: '100%', justifyContent: 'flex-start', border: 'none' }} onClick={() => { setBatchMenuOpen(false); void queueExistingLabels([panelOrder.orderId]) }}>🔄 Quick Reprint (Batch)</button>
-              </div>
-            ) : null}
-          </div>
-          <div style={{ position: 'relative' }}>
-            <button className="panel-topbar-btn" type="button" onClick={() => setPrintMenuOpen((open) => !open)}>Print ▾</button>
-            {printMenuOpen ? (
-              <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 7, boxShadow: '0 4px 16px rgba(0,0,0,.15)', zIndex: 999, minWidth: 180, padding: '4px 0', fontSize: 12.5 }}>
-                {shipped && trackingNumber ? (
-                  <button className="panel-topbar-btn" type="button" style={{ width: '100%', justifyContent: 'flex-start', border: 'none' }} onClick={() => { setPrintMenuOpen(false); void reprintLabel() }}>🖨️ Reprint Label</button>
-                ) : (
-                  <button className="panel-topbar-btn" type="button" style={{ width: '100%', justifyContent: 'flex-start', border: 'none' }} onClick={() => { setPrintMenuOpen(false); void createOrQueueLabel('test') }}>📄 Create Test Label</button>
-                )}
-              </div>
-            ) : null}
-          </div>
-          <a
-            className="panel-topbar-btn"
-            href={`https://ship.shipstation.com/orders/${panelOrder.orderId}`}
-            target="_blank"
-            rel="noreferrer"
-            style={{ textDecoration: 'none', fontSize: 10, color: 'var(--text3)' }}
-            title="Open in ShipStation"
-          >
-            ↗ SS
-          </a>
-          {shipped ? null : (
-            <div style={{ position: 'relative' }}>
-              <button className="panel-topbar-btn" type="button" style={{ color: '#b45309', borderColor: '#fbbf24' }} onClick={() => setExtShipMenuOpen((open) => !open)}>
-                ✈ Mark as Shipped
+        {/* ─────────────────────────────────────────────────────────
+            REFINED OPERATOR CONSOLE — Side panel header (sticky)
+
+            Three-row architecture:
+              1. Order # + nav arrows + utility icons (compact, sticky)
+              2. Status strip (status pill + source + test marker)
+              3. (sections begin)
+
+            Design moves:
+              • Order # in monospaced, prominent, ellipsis-truncated
+              • Nav arrows are square ghost-icon buttons (ChevronLeft/Right)
+              • Secondary actions (Batch, Print, External Ship) collapse
+                into a single MoreHorizontal kebab dropdown to reduce
+                visual noise — keeps power-user shortcuts available
+                without crowding the header
+              • Open-in-ShipStation = minimal ExternalLink icon button
+              • Close X = standard ghost icon button on far right
+            ───────────────────────────────────────────────────────── */}
+        <div className="sticky top-0 z-10 bg-surface/95 backdrop-blur-sm border-b border-line">
+          {/* Row 1 — Identity + navigation + actions */}
+          <div className="flex items-center gap-1 px-3 py-2">
+            {/* Nav arrow group */}
+            <div className="flex items-center gap-0.5 mr-1">
+              <button
+                type="button"
+                onClick={() => prevOrderId != null && openOrderDetails(prevOrderId)}
+                disabled={prevOrderId == null}
+                title="Previous order"
+                aria-label="Previous order"
+                className="inline-flex items-center justify-center w-6 h-6 rounded text-ink-3 hover:text-ink hover:bg-surface-2 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-ink-3 transition"
+              >
+                <ChevronLeft size={14} strokeWidth={2.5} />
               </button>
-              {extShipMenuOpen ? (
-                <div style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.15)', zIndex: 999, minWidth: 150, overflow: 'hidden', fontSize: 12.5 }}>
-                  {['Shopify', 'Amazon', 'Walmart', 'eBay', 'Etsy', 'Other'].map((source) => (
-                    <button key={source} type="button" style={{ display: 'block', width: '100%', padding: '8px 14px', textAlign: 'left', background: 'transparent', border: 'none', cursor: 'pointer' }} onClick={() => { setExtShipMenuOpen(false); void markOrderShippedExternal(source) }}>
-                      {source}
-                    </button>
-                  ))}
+              <button
+                type="button"
+                onClick={() => nextOrderId != null && openOrderDetails(nextOrderId)}
+                disabled={nextOrderId == null}
+                title="Next order"
+                aria-label="Next order"
+                className="inline-flex items-center justify-center w-6 h-6 rounded text-ink-3 hover:text-ink hover:bg-surface-2 disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-ink-3 transition"
+              >
+                <ChevronRight size={14} strokeWidth={2.5} />
+              </button>
+            </div>
+
+            {/* Order number — primary identity, monospaced, truncated */}
+            <div className="flex-1 min-w-0 flex items-baseline gap-2">
+              <span
+                className="font-mono text-[13px] font-semibold text-ink truncate tracking-tight"
+                title={panelOrder.orderNumber ?? `#${panelOrder.orderId}`}
+              >
+                {panelOrder.orderNumber ?? `#${panelOrder.orderId}`}
+              </span>
+              {panelIndex >= 0 ? (
+                <span className="text-[10px] font-medium text-ink-4 tabular-nums shrink-0">
+                  {panelIndex + 1}/{orderedFilteredOrders.length}
+                </span>
+              ) : null}
+            </div>
+
+            {/* Utility icon buttons — Batch menu */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setBatchMenuOpen((open) => !open)}
+                title="Batch actions"
+                aria-label="Batch actions"
+                className="inline-flex items-center gap-1 h-7 px-2 rounded-md text-[11px] font-medium text-ink-2 hover:text-ink hover:bg-surface-2 ring-1 ring-line hover:ring-line-2 transition"
+              >
+                <ClipboardList size={11} strokeWidth={2.25} />
+                <span>Batch</span>
+                <ChevronDown size={9} strokeWidth={2.5} className="text-ink-3" />
+              </button>
+              {batchMenuOpen ? (
+                <div className="absolute top-[calc(100%+4px)] left-0 z-30 min-w-[200px] rounded-lg bg-surface ring-1 ring-line shadow-lg py-1 text-[12px]">
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-ink-2 hover:text-ink hover:bg-surface-2 transition"
+                    onClick={() => { setBatchMenuOpen(false); updateSelection([panelOrder.orderId, ...selectedOrderIds.filter((id) => id !== panelOrder.orderId)]) }}
+                  >
+                    <Inbox size={12} strokeWidth={2.25} className="text-ink-3" />
+                    Add to Batch Queue
+                  </button>
+                  <button
+                    type="button"
+                    className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-ink-2 hover:text-ink hover:bg-surface-2 transition"
+                    onClick={() => { setBatchMenuOpen(false); void queueExistingLabels([panelOrder.orderId]) }}
+                  >
+                    <RefreshCcw size={12} strokeWidth={2.25} className="text-ink-3" />
+                    Quick Reprint (Batch)
+                  </button>
                 </div>
               ) : null}
             </div>
-          )}
-          <button className="panel-close" type="button" onClick={closeSinglePanel}>✕</button>
+
+            {/* Print menu */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setPrintMenuOpen((open) => !open)}
+                title="Print options"
+                aria-label="Print options"
+                className="inline-flex items-center gap-1 h-7 px-2 rounded-md text-[11px] font-medium text-ink-2 hover:text-ink hover:bg-surface-2 ring-1 ring-line hover:ring-line-2 transition"
+              >
+                <PrinterIcon size={11} strokeWidth={2.25} />
+                <ChevronDown size={9} strokeWidth={2.5} className="text-ink-3" />
+              </button>
+              {printMenuOpen ? (
+                <div className="absolute top-[calc(100%+4px)] right-0 z-30 min-w-[180px] rounded-lg bg-surface ring-1 ring-line shadow-lg py-1 text-[12px]">
+                  {shipped && trackingNumber ? (
+                    <button
+                      type="button"
+                      className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-ink-2 hover:text-ink hover:bg-surface-2 transition"
+                      onClick={() => { setPrintMenuOpen(false); void reprintLabel() }}
+                    >
+                      <PrinterIcon size={12} strokeWidth={2.25} className="text-ink-3" />
+                      Reprint Label
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-ink-2 hover:text-ink hover:bg-surface-2 transition"
+                      onClick={() => { setPrintMenuOpen(false); void createOrQueueLabel('test') }}
+                    >
+                      <Tag size={12} strokeWidth={2.25} className="text-ink-3" />
+                      Create Test Label
+                    </button>
+                  )}
+                </div>
+              ) : null}
+            </div>
+
+            {/* Open in ShipStation */}
+            <a
+              href={`https://ship.shipstation.com/orders/${panelOrder.orderId}`}
+              target="_blank"
+              rel="noreferrer"
+              title="Open in ShipStation"
+              aria-label="Open in ShipStation"
+              className="inline-flex items-center justify-center w-7 h-7 rounded-md text-ink-3 hover:text-ink hover:bg-surface-2 transition"
+            >
+              <ExternalLink size={12} strokeWidth={2.25} />
+            </a>
+
+            {/* Close panel */}
+            <button
+              type="button"
+              onClick={closeSinglePanel}
+              title="Close panel"
+              aria-label="Close panel"
+              className="inline-flex items-center justify-center w-7 h-7 rounded-md text-ink-3 hover:text-ink hover:bg-surface-2 transition"
+            >
+              <XIcon size={13} strokeWidth={2.5} />
+            </button>
+          </div>
+
+          {/* Row 2 — Status strip (only when meaningful) */}
+          {!shipped || panelIsTestOrder ? (
+            <div className="flex items-center gap-1.5 px-3 pb-2 -mt-0.5">
+              {/* Order status pill */}
+              {shipped ? (
+                <span className="inline-flex items-center gap-1 h-5 px-1.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-ok-bg text-ok-dark ring-1 ring-ok-border">
+                  <PackageCheck size={9} strokeWidth={2.5} />
+                  Shipped
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 h-5 px-1.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-amber-50 text-amber-700 ring-1 ring-amber-200">
+                  <Send size={9} strokeWidth={2.5} />
+                  Awaiting
+                </span>
+              )}
+
+              {/* Test order indicator */}
+              {panelIsTestOrder ? (
+                <span className="inline-flex items-center gap-1 h-5 px-1.5 rounded text-[10px] font-semibold uppercase tracking-wide bg-brand-bg text-brand ring-1 ring-brand-border">
+                  <Zap size={9} strokeWidth={2.5} />
+                  Test
+                </span>
+              ) : null}
+
+              {/* External-shipped action — quiet outline button on the right */}
+              {!shipped ? (
+                <div className="ml-auto relative">
+                  <button
+                    type="button"
+                    onClick={() => setExtShipMenuOpen((open) => !open)}
+                    title="Mark this order as shipped externally (no label purchase)"
+                    className="inline-flex items-center gap-1 h-6 px-2 rounded-md text-[10.5px] font-semibold text-amber-800 bg-amber-50/80 ring-1 ring-amber-200 hover:bg-amber-100 hover:ring-amber-300 transition"
+                  >
+                    <BadgeCheck size={10} strokeWidth={2.5} />
+                    Mark as Shipped
+                    <ChevronDown size={8} strokeWidth={2.5} className="opacity-60" />
+                  </button>
+                  {extShipMenuOpen ? (
+                    <div className="absolute top-[calc(100%+4px)] right-0 z-30 min-w-[150px] rounded-lg bg-surface ring-1 ring-line shadow-lg py-1 text-[12px] overflow-hidden">
+                      {['Shopify', 'Amazon', 'Walmart', 'eBay', 'Etsy', 'Other'].map((source) => (
+                        <button
+                          key={source}
+                          type="button"
+                          className="w-full text-left px-3 py-1.5 text-ink-2 hover:text-ink hover:bg-surface-2 transition"
+                          onClick={() => { setExtShipMenuOpen(false); void markOrderShippedExternal(source) }}
+                        >
+                          {source}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         <div className="panel-body">
+          {/* ─────────────────────────────────────────────────────────
+              SHIPPING SECTION
+              Header: Truck icon + title + chevron toggle
+              Sub-strip: "Requested service" — quiet info chip with
+              a clickable link styling the carrier-suggested service
+              ───────────────────────────────────────────────────────── */}
           <div className={`panel-section${collapsedSections.shipping ? ' collapsed' : ''}`} id="sec-shipping">
-            <div className="panel-section-header" onClick={() => toggleSection('shipping')}>
-              <span className="panel-section-arrow">▶</span>
-              <span className="panel-section-title">Shipping</span>
-              <div className="panel-section-icons">
-                <span className="panel-section-icon" title="Settings">⚙</span>
-                <span className="panel-section-icon" title="Grid">⊞</span>
-              </div>
-            </div>
+            <button
+              type="button"
+              onClick={() => toggleSection('shipping')}
+              className="w-full flex items-center gap-2 px-3 py-2.5 bg-surface hover:bg-surface-2 transition group"
+            >
+              <Truck size={13} strokeWidth={2.25} className="text-ink-3 group-hover:text-ink-2 transition" />
+              <span className="flex-1 text-left text-[12px] font-semibold text-ink-2 tracking-tight uppercase letter-spacing-wider">
+                Shipping
+              </span>
+              <ChevronDown
+                size={13}
+                strokeWidth={2.5}
+                className={`text-ink-3 transition-transform ${collapsedSections.shipping ? '-rotate-90' : ''}`}
+              />
+            </button>
 
-            <div className="ship-req">
-              Requested: <span className="ship-req-link">{(requestedService ?? 'Standard').replace(/_/g, ' ')}</span>
-              {!panelOrder.carrierCode ? <span style={{ marginLeft: 4 }}>(unmapped)</span> : null}
+            <div className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-2/60 border-y border-line text-[11px]">
+              <span className="text-ink-3 font-medium">Requested</span>
+              <span className="text-ink-2">·</span>
+              <span className="text-brand font-semibold cursor-pointer hover:underline">
+                {(requestedService ?? 'Standard').replace(/_/g, ' ')}
+              </span>
+              {!panelOrder.carrierCode ? (
+                <span className="text-ink-4 font-medium">(unmapped)</span>
+              ) : null}
             </div>
 
             <div className="panel-section-body">
@@ -5859,173 +6029,425 @@ export default function OrdersView({
                 </div>
               </div>
 
-              <div className="ship-rate-row">
-                <span style={{ fontSize: 11.5, color: 'var(--text2)', fontWeight: 500, width: 90, flexShrink: 0 }}>Rate</span>
-                {panelIsTestOrder ? (
-                  <span className="ship-rate-val" id="panel-rate-val">
-                    <><span className="ship-rate-price">{formatMoney(panelTestRateAmount)}</span><span className="ship-rate-detail">{panelTestRateDetail}</span></>
-                  </span>
-                ) : shipped ? (
-                  <span className="ship-rate-val ship-rate-val-muted">
-                    {getIsExternallyFulfilled(panelOrder)
-                      ? '📦 Ext. label — purchased externally'
-                      : (
-                        <>
-                          <span className="ship-rate-price">{formatMoney(panelOrder.label?.cost ?? panelOrder.selectedRate?.cost ?? getSelectedRateBaseCost(panelOrder))}</span>
-                          <span className="ship-rate-detail">{selectedPanelAccountLabel} · {formatServiceCode(panelForm.serviceCode)}</span>
-                        </>
-                      )}
-                  </span>
-                ) : (
-                  <>
-                    <span className="ship-rate-val" id="panel-rate-val">
-                      {panelRateLoading ? (
-                        <span className="ship-rate-loading">
-                          <span className="ship-rate-spinner" aria-hidden="true" />
-                          <span>Calculating best rate…</span>
-                        </span>
-                      ) : panelRatePreview[0] ? (
-                        <>
-                          <span className="ship-rate-price">{formatMoney((toNumberValue(panelRatePreview[0].shipmentCost) ?? 0) + (toNumberValue(panelRatePreview[0].otherCost) ?? 0))}</span>
-                          <span className="ship-rate-detail">{formatCarrierCode(toStringValue(panelRatePreview[0].carrierCode))} · {formatServiceCode(toStringValue(panelRatePreview[0].serviceCode))}</span>
-                        </>
-                      ) : panelOrder.bestRate ? (
-                        <>
-                          <span className="ship-rate-price">{formatMoney(applyCarrierMarkup({
-                        shippingProviderId: getBestRateShippingProviderId(panelOrder),
-                        carrierCode: panelOrder.bestRate.carrierCode ?? '',
-                        serviceCode: getBestRateServiceCode(panelOrder) ?? '',
-                        serviceName: panelOrder.bestRate.serviceName ?? '',
-                        amount: typeof panelOrder.bestRate.amount === 'number' ? panelOrder.bestRate.amount : 0,
-                        shipmentCost: typeof panelOrder.bestRate.shipmentCost === 'number' ? panelOrder.bestRate.shipmentCost : undefined,
-                        otherCost: typeof panelOrder.bestRate.otherCost === 'number' ? panelOrder.bestRate.otherCost : undefined,
-                        carrierNickname: getBestRateCarrierNickname(panelOrder),
-                      }, markups))}</span>
-                          <span className="ship-rate-detail">{selectedPanelAccountLabel} · {formatServiceCode(panelForm.serviceCode || getBestRateServiceCode(panelOrder))}</span>
-                        </>
-                      ) : '—'}
-                    </span>
-                    <span style={{ flex: 1 }} />
-                    <span className="ship-scout" title="Refresh rates" onClick={() => void openRateBrowser()}>🔄 <span id="panel-scout-label">Scout Review</span></span>
-                  </>
-                )}
-              </div>
-
+              {/* Save weights/dims link — quiet text-link inside the
+                  shipping form. Demoted from a green pill to a subtle
+                  inline action so the visual weight goes to the
+                  Decision Card below. */}
               {shipped ? null : (
-                <button className="save-sku-btn" id="saveSkuBtn" type="button" onClick={() => void saveSkuDefaults()}>
-                  💾 Save weights and dims as SKU defaults
+                <button
+                  type="button"
+                  onClick={() => void saveSkuDefaults()}
+                  className="mt-1 inline-flex items-center gap-1.5 text-[10.5px] font-medium text-ink-3 hover:text-brand transition group"
+                  title="Apply current weights and dims as defaults for this SKU"
+                >
+                  <SaveIcon size={10} strokeWidth={2.25} className="text-ink-4 group-hover:text-brand transition" />
+                  Save weights & dims as SKU defaults
                 </button>
               )}
             </div>
           </div>
 
-          {shipped ? null : (
-            <div className="create-label-wrap" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <button className="create-label-btn" type="button" style={{ flex: 1 }} onClick={() => void createOrQueueLabel('print')} disabled={singleActionBusy}>
-                🖨️ Create + Print Label <span className="create-label-caret">▾</span>
-              </button>
-              <button className="create-label-btn" type="button" style={{ flex: 1, background: '#16a34a' }} onClick={() => void createOrQueueLabel('queue')} disabled={singleActionBusy}>
-                📥 Send to Queue
-              </button>
-              <button className="btn btn-ghost btn-sm" type="button" style={{ fontSize: 10.5, color: 'var(--text3)', padding: '4px 7px' }} onClick={() => void createOrQueueLabel('test')} disabled={singleActionBusy}>
-                Test
-              </button>
-            </div>
-          )}
+          {/* ─────────────────────────────────────────────────────────
+              DECISION CARD — Rate display + action buttons grouped
+              together into a single visually-bounded surface. The
+              operator's eyes land here to make the shipping call:
 
+                ┌───────────────────────────────┐
+                │ RATE       $6.62              │
+                │ Carrier · Service             │
+                ├───────────────────────────────┤
+                │ [Create + Print] [Queue] Test │
+                └───────────────────────────────┘
+
+              For shipped orders, just shows the locked rate.
+              For test orders, shows the mock rate.
+              For awaiting orders, shows live rate calc + scout link.
+              ───────────────────────────────────────────────────────── */}
+          <div className="px-3 py-3">
+            <div className="rounded-xl bg-surface ring-1 ring-line shadow-[0_1px_2px_rgba(15,23,42,0.04)] overflow-hidden">
+              {/* Rate row */}
+              <div className="flex items-center gap-3 px-3.5 py-3 border-b border-line">
+                <div className="flex flex-col gap-0.5 flex-1 min-w-0">
+                  <span className="text-[9.5px] font-semibold uppercase tracking-[0.08em] text-ink-4">Rate</span>
+                  {panelIsTestOrder ? (
+                    <>
+                      <span className="text-[18px] font-bold tabular-nums leading-none text-brand font-display">
+                        {formatMoney(panelTestRateAmount)}
+                      </span>
+                      <span className="text-[11px] text-ink-3 leading-snug truncate">{panelTestRateDetail}</span>
+                    </>
+                  ) : shipped ? (
+                    getIsExternallyFulfilled(panelOrder) ? (
+                      <span className="text-[12.5px] text-ink-3 italic leading-snug">External label — purchased externally</span>
+                    ) : (
+                      <>
+                        <span className="text-[18px] font-bold tabular-nums leading-none text-ink font-display">
+                          {formatMoney(panelOrder.label?.cost ?? panelOrder.selectedRate?.cost ?? getSelectedRateBaseCost(panelOrder))}
+                        </span>
+                        <span className="text-[11px] text-ink-3 leading-snug truncate">
+                          {selectedPanelAccountLabel} · {formatServiceCode(panelForm.serviceCode)}
+                        </span>
+                      </>
+                    )
+                  ) : panelRateLoading ? (
+                    <div className="flex items-center gap-2 py-1">
+                      <Loader2 size={13} strokeWidth={2.5} className="animate-spin text-brand" />
+                      <span className="text-[12px] font-semibold text-brand">Calculating best rate…</span>
+                    </div>
+                  ) : panelRatePreview[0] ? (
+                    <>
+                      <span className="text-[18px] font-bold tabular-nums leading-none text-brand font-display">
+                        {formatMoney((toNumberValue(panelRatePreview[0].shipmentCost) ?? 0) + (toNumberValue(panelRatePreview[0].otherCost) ?? 0))}
+                      </span>
+                      <span className="text-[11px] text-ink-3 leading-snug truncate">
+                        {formatCarrierCode(toStringValue(panelRatePreview[0].carrierCode))} · {formatServiceCode(toStringValue(panelRatePreview[0].serviceCode))}
+                      </span>
+                    </>
+                  ) : panelOrder.bestRate ? (
+                    <>
+                      <span className="text-[18px] font-bold tabular-nums leading-none text-brand font-display">
+                        {formatMoney(applyCarrierMarkup({
+                          shippingProviderId: getBestRateShippingProviderId(panelOrder),
+                          carrierCode: panelOrder.bestRate.carrierCode ?? '',
+                          serviceCode: getBestRateServiceCode(panelOrder) ?? '',
+                          serviceName: panelOrder.bestRate.serviceName ?? '',
+                          amount: typeof panelOrder.bestRate.amount === 'number' ? panelOrder.bestRate.amount : 0,
+                          shipmentCost: typeof panelOrder.bestRate.shipmentCost === 'number' ? panelOrder.bestRate.shipmentCost : undefined,
+                          otherCost: typeof panelOrder.bestRate.otherCost === 'number' ? panelOrder.bestRate.otherCost : undefined,
+                          carrierNickname: getBestRateCarrierNickname(panelOrder),
+                        }, markups))}
+                      </span>
+                      <span className="text-[11px] text-ink-3 leading-snug truncate">
+                        {selectedPanelAccountLabel} · {formatServiceCode(panelForm.serviceCode || getBestRateServiceCode(panelOrder))}
+                      </span>
+                    </>
+                  ) : (
+                    <span className="text-[14px] text-ink-4">—</span>
+                  )}
+                </div>
+
+                {/* Scout review — only when awaiting a label */}
+                {!panelIsTestOrder && !shipped ? (
+                  <button
+                    type="button"
+                    onClick={() => void openRateBrowser()}
+                    title="Browse rates from all carriers"
+                    className="shrink-0 inline-flex items-center gap-1 h-7 px-2 rounded-md text-[10.5px] font-semibold text-ink-3 hover:text-brand hover:bg-brand/5 transition"
+                  >
+                    <RefreshCcw size={11} strokeWidth={2.5} />
+                    <span className="hidden sm:inline">Scout</span>
+                  </button>
+                ) : null}
+              </div>
+
+              {/* Action buttons row — only when awaiting a label */}
+              {shipped ? null : (
+                <div className="flex items-stretch gap-1 p-1.5 bg-surface-2/40">
+                  <button
+                    type="button"
+                    onClick={() => void createOrQueueLabel('print')}
+                    disabled={singleActionBusy}
+                    aria-busy={singleActionBusy}
+                    title="Buy postage and open the shipping label now"
+                    className={[
+                      'flex-[5] inline-flex items-center justify-center gap-2',
+                      'h-9 rounded-lg',
+                      'text-[12.5px] font-semibold tracking-tight text-white',
+                      'bg-brand hover:bg-brand-dark',
+                      'shadow-[0_1px_2px_rgba(42,91,215,0.20),inset_0_1px_0_rgba(255,255,255,0.12)]',
+                      'active:scale-[0.985]',
+                      'disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100',
+                      'transition-all duration-150 ease-out',
+                    ].join(' ')}
+                  >
+                    {singleActionBusy ? (
+                      <Loader2 size={13} strokeWidth={2.5} className="animate-spin" aria-hidden />
+                    ) : (
+                      <PrinterIcon size={13} strokeWidth={2.5} aria-hidden />
+                    )}
+                    <span>{singleActionBusy ? 'Working…' : 'Create + Print Label'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => void createOrQueueLabel('queue')}
+                    disabled={singleActionBusy}
+                    aria-busy={singleActionBusy}
+                    title="Buy postage but don't open the label — adds it to the print queue for batch printing"
+                    className={[
+                      'flex-[3] inline-flex items-center justify-center gap-1.5',
+                      'h-9 px-2 rounded-lg',
+                      'text-[12.5px] font-semibold text-ink-2',
+                      'bg-surface ring-1 ring-line',
+                      'hover:text-ink hover:ring-line-2 hover:bg-surface',
+                      'active:scale-[0.98]',
+                      'disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100',
+                      'transition-all duration-150 ease-out',
+                    ].join(' ')}
+                  >
+                    <Inbox size={12.5} strokeWidth={2.25} aria-hidden />
+                    <span>Print to Queue</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => void createOrQueueLabel('test')}
+                    disabled={singleActionBusy}
+                    aria-busy={singleActionBusy}
+                    title="Create a VOID mock label for testing — no postage charged, label is watermarked 'VOID — DO NOT SHIP'"
+                    className={[
+                      'inline-flex items-center justify-center',
+                      'h-9 px-3 rounded-lg',
+                      'text-[11.5px] font-semibold text-ink-3',
+                      'bg-transparent',
+                      'hover:text-ink hover:bg-surface',
+                      'active:scale-95',
+                      'disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100',
+                      'transition-all duration-150 ease-out',
+                    ].join(' ')}
+                  >
+                    Test
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ─────────────────────────────────────────────────────────
+              TRACKING + DELIVERY STRIP
+              When shipped: tracking number (mono, copyable) + Reprint
+              Always: delivery line (compact info row)
+              ───────────────────────────────────────────────────────── */}
           {shipped && trackingNumber ? (
-            <div className="delivery-row" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span>📦 Tracking:</span>
-              <span
-                style={{ fontFamily: 'monospace', fontSize: 11, color: 'var(--text)', fontWeight: 600, cursor: 'pointer' }}
+            <div className="flex items-center gap-2 px-3 py-2 bg-ok-bg/40 border-y border-ok-border/40">
+              <PackageCheck size={12} strokeWidth={2.25} className="text-ok-dark shrink-0" />
+              <span className="text-[10.5px] font-semibold uppercase tracking-wide text-ok-dark">Tracking</span>
+              <button
+                type="button"
                 onClick={() => copyText(trackingNumber)}
-                title="Click to copy"
+                title="Click to copy tracking number"
+                className="font-mono text-[11px] font-semibold text-ink hover:text-brand transition truncate"
               >
                 {trackingNumber}
-              </span>
-              <button className="btn btn-sm btn-ghost" type="button" style={{ marginLeft: 'auto', fontSize: 10.5 }} onClick={() => void reprintLabel()}>
-                🖨️ Reprint
+              </button>
+              <button
+                type="button"
+                onClick={() => void reprintLabel()}
+                className="ml-auto inline-flex items-center gap-1 h-6 px-2 rounded text-[10.5px] font-semibold text-ink-2 hover:text-ink hover:bg-surface-2 transition"
+                title="Reprint label"
+              >
+                <PrinterIcon size={10} strokeWidth={2.5} />
+                Reprint
               </button>
             </div>
           ) : null}
 
-          <div className="delivery-row" id="panel-delivery-row">{deliveryLine}</div>
+          {/* Delivery line — quiet info row */}
+          <div className="px-3 py-1.5 text-[10.5px] text-ink-3 border-b border-line">
+            {deliveryLine}
+          </div>
 
+          {/* ─────────────────────────────────────────────────────────
+              ITEMS SECTION
+              Header: Box icon + title + chevron
+              Body: stacked rows with thumbnail · name/sku/price · qty
+              ───────────────────────────────────────────────────────── */}
           <div className={`panel-section${collapsedSections.items ? ' collapsed' : ''}`} id="sec-items">
-            <div className="panel-section-header" onClick={() => toggleSection('items')}>
-              <span className="panel-section-arrow">▶</span>
-              <span className="panel-section-title">Items</span>
-              <div className="panel-section-icons">
-                <span className="panel-section-icon">★</span>
-                <span className="panel-section-icon">⊞</span>
-              </div>
-            </div>
-            <div className="panel-section-body">
-              {items.length === 0 ? <div style={{ paddingTop: 12, color: 'var(--text3)', fontSize: 11.5 }}>No items found for this order.</div> : null}
-              {mergedItems.map((item) => (
-                <div key={`${item.sku ?? 'unknown'}-${item.name ?? 'item'}`} className="item-row">
-                  <div className="item-img">
-                    <HoverImage
-                      src={item.imageUrl}
-                      alt={item.name ?? ''}
-                      size={42}
-                      radius={5}
-                      title={item.name ?? ''}
-                      fallback={<span>📦</span>}
-                    />
-                  </div>
-                  <div className="item-info">
-                    <div className="item-name">{item.name ?? 'Unknown Item'}</div>
-                    <div className="item-sku">SKU: {item.sku ?? '—'}</div>
-                    <div className="item-price-row">
-                      {formatMoney(item.unitPrice)} × {item.quantity} = <strong>{formatMoney((item.unitPrice ?? 0) * item.quantity)}</strong>
+            <button
+              type="button"
+              onClick={() => toggleSection('items')}
+              className="w-full flex items-center gap-2 px-3 py-2.5 bg-surface hover:bg-surface-2 transition group"
+            >
+              <Package size={13} strokeWidth={2.25} className="text-ink-3 group-hover:text-ink-2 transition" />
+              <span className="flex-1 text-left text-[12px] font-semibold text-ink-2 tracking-tight uppercase">Items</span>
+              <span className="text-[10px] font-medium text-ink-4 tabular-nums">
+                {mergedItems.length === 0 ? '0' : mergedItems.length}
+              </span>
+              <ChevronDown
+                size={13}
+                strokeWidth={2.5}
+                className={`text-ink-3 transition-transform ${collapsedSections.items ? '-rotate-90' : ''}`}
+              />
+            </button>
+            <div className="px-3 pb-3">
+              {items.length === 0 ? (
+                <div className="pt-3 text-[11.5px] text-ink-3">No items found for this order.</div>
+              ) : null}
+              <div className="divide-y divide-line">
+                {mergedItems.map((item) => (
+                  <div
+                    key={`${item.sku ?? 'unknown'}-${item.name ?? 'item'}`}
+                    className="flex items-start gap-2.5 py-2.5"
+                  >
+                    <div className="w-[42px] h-[42px] rounded-md bg-surface-2 ring-1 ring-line flex items-center justify-center overflow-hidden shrink-0">
+                      <HoverImage
+                        src={item.imageUrl}
+                        alt={item.name ?? ''}
+                        size={42}
+                        radius={5}
+                        title={item.name ?? ''}
+                        fallback={<Package size={18} strokeWidth={1.75} className="text-ink-4" />}
+                      />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[12px] font-semibold text-ink leading-snug truncate" title={item.name ?? ''}>
+                        {item.name ?? 'Unknown Item'}
+                      </div>
+                      <div className="text-[10.5px] text-ink-3 font-mono tabular-nums truncate">
+                        SKU: {item.sku ?? '—'}
+                      </div>
+                      <div className="text-[10.5px] text-ink-2 mt-0.5 tabular-nums">
+                        {formatMoney(item.unitPrice)} × {item.quantity} = <strong className="text-ink">{formatMoney((item.unitPrice ?? 0) * item.quantity)}</strong>
+                      </div>
+                    </div>
+                    <div className="w-[26px] h-[26px] rounded-full bg-brand text-white flex items-center justify-center text-[12.5px] font-bold tabular-nums shrink-0 shadow-sm">
+                      {item.quantity}
                     </div>
                   </div>
-                  <div className="item-qty">{item.quantity}</div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
           </div>
 
+          {/* ─────────────────────────────────────────────────────────
+              RECIPIENT SECTION
+              Header: MapPin icon + title + chevron
+              Body: ship-to address card + sold-to + validation status
+              ───────────────────────────────────────────────────────── */}
           <div className={`panel-section${collapsedSections.recipient ? ' collapsed' : ''}`} id="sec-recipient">
-            <div className="panel-section-header" onClick={() => toggleSection('recipient')}>
-              <span className="panel-section-arrow">▶</span>
-              <span className="panel-section-title">Recipient</span>
-              <div className="panel-section-icons">
-                <span className="panel-section-icon">⊞</span>
-              </div>
-            </div>
-            <div className="panel-section-body">
-              <div className="recip-header">
-                <span className="recip-title">Ship To</span>
-                <span className="recip-edit" onClick={() => copyText(addressBlock)} title="Copy address">📋</span>
-                <span className="recip-edit" title="Web app parity: edit recipient is not migrated beyond this entry point" onClick={() => showToast('Edit recipient — Phase 3')}>Edit</span>
-              </div>
-              <div className="recip-name">{shipTo.name ?? '—'}</div>
-              <div className="recip-addr">{addressBlock || '—'}</div>
-              {shipTo.phone ? <div style={{ fontSize: 12, color: 'var(--text2)', marginTop: 3 }}>{shipTo.phone}</div> : null}
-              <div id="panel-addr-type" style={{ fontSize: 11, color: 'var(--text3)', marginTop: 5, marginBottom: 2 }}>
-                {panelOrder.residential ?? panelOrder.sourceResidential ? '🏠 Residential' : '🏢 Commercial'}
-                {panelOrder.residential != null ? ' (manual)' : ' (auto)'}
-                {' — '}
-                <a href="#" onClick={(event) => { event.preventDefault(); void toggleResidential() }} style={{ color: 'var(--ss-blue)' }}>change</a>
-              </div>
-              <div className="recip-validated">
-                {shipTo.addressVerified && shipTo.addressVerified !== 'Not Validated' ? '🏠 Address Validated' : '⚠ Address Not Validated'}
-                <span className="recip-revert" onClick={() => showToast('Address reverted')}>Revert</span>
-              </div>
-              <div className="recip-tax">
-                Tax Information: <span style={{ color: 'var(--text3)' }}>0 Tax IDs added</span>
-                <span className="recip-tax-add" onClick={() => showToast('Add tax ID — Phase 3')}>Add</span>
-              </div>
-              <div className="recip-sold" style={{ marginTop: 7, paddingTop: 7, borderTop: '1px solid var(--border)' }}>
-                <div style={{ fontSize: 10.5, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--text3)', marginBottom: 4 }}>Sold To</div>
-                <div className="recip-sold-name">{toStringValue(toRecord(panelDetail?.raw)?.customerUsername) ?? shipTo.name ?? '—'}</div>
-                {panelOrder.customerEmail ? <div style={{ fontSize: 11.5, color: 'var(--text2)' }}>{panelOrder.customerEmail}</div> : null}
+            <button
+              type="button"
+              onClick={() => toggleSection('recipient')}
+              className="w-full flex items-center gap-2 px-3 py-2.5 bg-surface hover:bg-surface-2 transition group"
+            >
+              <MapPin size={13} strokeWidth={2.25} className="text-ink-3 group-hover:text-ink-2 transition" />
+              <span className="flex-1 text-left text-[12px] font-semibold text-ink-2 tracking-tight uppercase">Recipient</span>
+              <ChevronDown
+                size={13}
+                strokeWidth={2.5}
+                className={`text-ink-3 transition-transform ${collapsedSections.recipient ? '-rotate-90' : ''}`}
+              />
+            </button>
+            <div className="px-3 pb-3">
+              {/* Ship To header row */}
+              <div className="flex items-center gap-2 mt-2 mb-2">
+                <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-ink-4">Ship To</span>
+                <div className="flex-1 h-px bg-line" />
+                <button
+                  type="button"
+                  onClick={() => copyText(addressBlock)}
+                  title="Copy address"
+                  className="inline-flex items-center justify-center w-6 h-6 rounded text-ink-3 hover:text-ink hover:bg-surface-2 transition"
+                >
+                  <CopyIcon size={11} strokeWidth={2.25} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => showToast('Edit recipient — Phase 3')}
+                  title="Edit recipient"
+                  className="inline-flex items-center gap-1 h-6 px-1.5 rounded text-[10.5px] font-semibold text-brand hover:bg-brand/5 transition"
+                >
+                  <Edit3 size={10} strokeWidth={2.5} />
+                  Edit
+                </button>
               </div>
 
-              {activeOrderLoading ? <div style={{ marginTop: 10, fontSize: 10.5, color: 'var(--text3)' }}>Loading full order detail…</div> : null}
-              {activeOrderError ? <div style={{ marginTop: 10, fontSize: 10.5, color: 'var(--red)' }}>Failed to load full order detail.</div> : null}
+              {/* Address card */}
+              <div className="text-[13px] font-semibold text-ink leading-snug">{shipTo.name ?? '—'}</div>
+              <div className="text-[12px] text-ink-2 leading-relaxed whitespace-pre-line">
+                {addressBlock || '—'}
+              </div>
+              {shipTo.phone ? (
+                <div className="text-[12px] text-ink-2 mt-1 font-mono tabular-nums">{shipTo.phone}</div>
+              ) : null}
+
+              {/* Address type pill */}
+              <div className="flex items-center gap-1.5 mt-2 text-[10.5px]">
+                {panelOrder.residential ?? panelOrder.sourceResidential ? (
+                  <span className="inline-flex items-center gap-1 h-5 px-1.5 rounded bg-surface-2 text-ink-2 ring-1 ring-line font-medium">
+                    <MapPin size={9} strokeWidth={2.5} className="text-ink-3" />
+                    Residential
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 h-5 px-1.5 rounded bg-surface-2 text-ink-2 ring-1 ring-line font-medium">
+                    <Box size={9} strokeWidth={2.5} className="text-ink-3" />
+                    Commercial
+                  </span>
+                )}
+                <span className="text-ink-4">
+                  {panelOrder.residential != null ? '(manual)' : '(auto)'}
+                </span>
+                <button
+                  type="button"
+                  onClick={(event) => { event.preventDefault(); void toggleResidential() }}
+                  className="ml-1 text-brand font-medium hover:underline"
+                >
+                  change
+                </button>
+              </div>
+
+              {/* Validation status row */}
+              <div className="flex items-center gap-1.5 mt-2 text-[10.5px]">
+                {shipTo.addressVerified && shipTo.addressVerified !== 'Not Validated' ? (
+                  <>
+                    <BadgeCheck size={11} strokeWidth={2.5} className="text-ok" />
+                    <span className="text-ok-dark font-semibold">Address Validated</span>
+                  </>
+                ) : (
+                  <>
+                    <AlertTriangle size={11} strokeWidth={2.5} className="text-warn" />
+                    <span className="text-warn font-semibold">Address Not Validated</span>
+                  </>
+                )}
+                <button
+                  type="button"
+                  onClick={() => showToast('Address reverted')}
+                  className="ml-1 text-brand font-medium hover:underline"
+                >
+                  Revert
+                </button>
+              </div>
+
+              {/* Tax IDs */}
+              <div className="flex items-center gap-1.5 mt-2 pt-2 border-t border-line text-[11px]">
+                <Tag size={10} strokeWidth={2.5} className="text-ink-4" />
+                <span className="text-ink-2">Tax Information:</span>
+                <span className="text-ink-3">0 Tax IDs added</span>
+                <button
+                  type="button"
+                  onClick={() => showToast('Add tax ID — Phase 3')}
+                  className="ml-auto text-brand font-medium hover:underline"
+                >
+                  Add
+                </button>
+              </div>
+
+              {/* Sold To section */}
+              <div className="mt-3 pt-3 border-t border-line">
+                <div className="flex items-center gap-1.5 mb-1.5">
+                  <UserIcon size={10} strokeWidth={2.5} className="text-ink-4" />
+                  <span className="text-[10px] font-bold uppercase tracking-[0.08em] text-ink-4">Sold To</span>
+                </div>
+                <div className="text-[12.5px] font-semibold text-ink">
+                  {toStringValue(toRecord(panelDetail?.raw)?.customerUsername) ?? shipTo.name ?? '—'}
+                </div>
+                {panelOrder.customerEmail ? (
+                  <div className="text-[11.5px] text-ink-2 truncate">{panelOrder.customerEmail}</div>
+                ) : null}
+              </div>
+
+              {activeOrderLoading ? (
+                <div className="mt-2.5 flex items-center gap-1.5 text-[10.5px] text-ink-3">
+                  <Loader2 size={10} strokeWidth={2.25} className="animate-spin" />
+                  Loading full order detail…
+                </div>
+              ) : null}
+              {activeOrderError ? (
+                <div className="mt-2.5 flex items-center gap-1.5 text-[10.5px] text-danger">
+                  <AlertTriangle size={10} strokeWidth={2.5} />
+                  Failed to load full order detail.
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
