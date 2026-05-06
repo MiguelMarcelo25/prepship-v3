@@ -4,6 +4,7 @@
 // uniform calm content on top. No display-font typography, no bar accents,
 // no aggressive states — just whisper-quiet hierarchy with a beautiful
 // atmospheric backdrop that carries the visual weight.
+import { BrandLogo } from '../../BrandLogo'
 import {
   Search as SearchIcon,
   X as XIcon,
@@ -81,8 +82,8 @@ export default function SidebarD(props: SidebarVariantProps) {
         {/* Logo */}
         <div className="px-4 pt-4 pb-3.5">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-white/70 backdrop-blur-md ring-1 ring-white/80 flex items-center justify-center shadow-[0_1px_2px_rgba(15,23,42,0.04)]">
-              <Feather size={15} strokeWidth={2} className="text-indigo-600" />
+            <div className="w-8 h-8 rounded-lg bg-white/70 backdrop-blur-md ring-1 ring-white/80 flex items-center justify-center shadow-[0_1px_2px_rgba(15,23,42,0.04)] overflow-hidden">
+              <BrandLogo size={24} />
             </div>
             <div className="flex-1 min-w-0">
               <div className="text-[14px] font-semibold tracking-tight leading-none text-slate-800">

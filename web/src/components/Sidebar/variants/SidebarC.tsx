@@ -2,6 +2,7 @@
 // Variant C — Executive Glass (refined, professional)
 // Frosted glass on a calm slate base. Single deep-indigo accent throughout —
 // no rainbow. Refined typography, premium fintech / Stripe-style polish.
+import { BrandLogo } from '../../BrandLogo'
 import {
   Search as SearchIcon,
   X as XIcon,
@@ -57,8 +58,8 @@ export default function SidebarC(props: SidebarVariantProps) {
       <div className="relative px-3 pt-4">
         <div className="rounded-xl p-3.5 bg-white/80 backdrop-blur-xl ring-1 ring-slate-900/5 shadow-[0_1px_2px_rgba(15,23,42,0.04),0_4px_16px_-8px_rgba(15,23,42,0.08)]">
           <div className="flex items-center gap-3">
-            <div className="relative w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-600 to-indigo-700 flex items-center justify-center shadow-[inset_0_1px_0_rgba(255,255,255,0.18)]">
-              <Diamond size={15} strokeWidth={2.5} className="text-white" fill="rgba(255,255,255,0.15)" />
+            <div className="relative w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-600 to-indigo-700 flex items-center justify-center shadow-[inset_0_1px_0_rgba(255,255,255,0.18)] overflow-hidden">
+              <BrandLogo size={26} />
             </div>
             <div className="flex-1 min-w-0">
               <div className="text-[15px] font-extrabold tracking-[-0.02em] leading-none text-slate-900">

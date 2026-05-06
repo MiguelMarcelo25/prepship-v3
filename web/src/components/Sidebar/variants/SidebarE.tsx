@@ -5,6 +5,7 @@
 // sans for body, premium icon family. Stagger-fade on mount, animated
 // progress shimmer on active item, hover scale + glow. Motion makes the
 // difference between "dark sidebar" and "alive product."
+import { BrandLogo } from '../../BrandLogo'
 import {
   Search as SearchIcon,
   X as XIcon,
@@ -63,8 +64,8 @@ export default function SidebarE(props: SidebarVariantProps) {
           <div className="relative w-10 h-10 group">
             <div className="absolute inset-0 rounded-xl bg-gradient-to-br from-indigo-500 to-blue-600 opacity-90 transition-all duration-300 group-hover:opacity-100 group-hover:scale-105" aria-hidden />
             <div className="absolute inset-[1.5px] rounded-[10.5px] bg-slate-900" aria-hidden />
-            <div className="relative w-full h-full flex items-center justify-center">
-              <Diamond size={16} strokeWidth={2.5} className="text-indigo-300 transition-transform duration-300 group-hover:rotate-12" fill="rgba(165,180,252,0.2)" />
+            <div className="relative w-full h-full flex items-center justify-center overflow-hidden rounded-[10.5px]">
+              <BrandLogo size={28} className="transition-transform duration-300 group-hover:rotate-12" />
             </div>
           </div>
           <div className="flex-1 min-w-0">

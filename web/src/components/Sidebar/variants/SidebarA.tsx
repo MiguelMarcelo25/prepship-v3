@@ -2,6 +2,7 @@
 // Variant A — Clean Linear / Notion-inspired
 // White surface, subtle slate hover, 3px left accent bar for active items.
 // Calm, professional, Software-product feel.
+import { BrandLogo } from '../../BrandLogo'
 import {
   Search as SearchIcon,
   X as XIcon,
@@ -67,8 +68,8 @@ export default function SidebarA(props: SidebarVariantProps) {
     >
       {/* Logo */}
       <div className="flex items-center gap-2.5 px-4 py-3.5 border-b border-slate-100">
-        <div className="w-7 h-7 rounded-md bg-indigo-50 ring-1 ring-indigo-100 flex items-center justify-center">
-          <Box size={15} strokeWidth={2.5} className="text-indigo-600" />
+        <div className="w-7 h-7 rounded-md bg-indigo-50 ring-1 ring-indigo-100 flex items-center justify-center overflow-hidden">
+          <BrandLogo size={22} />
         </div>
         <div className="flex-1 min-w-0">
           <div className="text-[14px] font-bold text-slate-900 tracking-tight leading-none">PrepShip</div>

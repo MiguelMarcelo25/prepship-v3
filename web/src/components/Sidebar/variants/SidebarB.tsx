@@ -2,6 +2,7 @@
 // Variant B — Bold Dark Premium
 // Slate-950 gradient canvas, indigo/violet glow blobs, color-tinted icon tiles
 // per status (amber/emerald/rose), gradient ring brand mark, premium feel.
+import { BrandLogo } from '../../BrandLogo'
 import {
   Search as SearchIcon,
   X as XIcon,
@@ -62,7 +63,7 @@ export default function SidebarB(props: SidebarVariantProps) {
           <div className="relative w-10 h-10 flex items-center justify-center">
             <div className="absolute inset-0 rounded-xl bg-gradient-to-br from-indigo-500 via-violet-500 to-fuchsia-500 opacity-90" aria-hidden />
             <div className="absolute inset-[2px] rounded-[10px] bg-slate-950" aria-hidden />
-            <Zap size={18} strokeWidth={2.5} className="relative text-indigo-300" aria-hidden />
+            <BrandLogo size={26} className="relative" />
           </div>
           <div className="flex-1 min-w-0">
             <div className="font-display text-[18px] font-extrabold tracking-[-0.025em] leading-none text-white">
