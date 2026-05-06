@@ -496,9 +496,25 @@ app.post('/reset-sync', zValidator('json', resetSyncBody), async (c) => {
 //   - Hard cap of 50 orders/call (v1 rate limit is 40/min, leave room)
 //
 // Per user override `unlock shipped data` on 2026-05-07.
-const retryNotifyBody = z.object({
-  orderNumbers: z.array(z.string().min(1)).min(1).max(50),
-});
+//
+// Accepts EITHER orderNumbers (marketplace-facing IDs like
+// "111-4349324-2899466") OR ssShipmentIds (the upstream ShipStation
+// shipment ID, e.g. 284049105 — visible in ShipStation's "Shipment #"
+// column). Pass at least one. Both can be passed together; total cap
+// is 50 per call across both arrays combined.
+const retryNotifyBody = z
+  .object({
+    orderNumbers: z.array(z.string().min(1)).optional(),
+    ssShipmentIds: z.array(z.number().int().positive()).optional(),
+  })
+  .refine(
+    (data) => (data.orderNumbers?.length ?? 0) + (data.ssShipmentIds?.length ?? 0) > 0,
+    { message: 'Pass at least one orderNumber or ssShipmentId' }
+  )
+  .refine(
+    (data) => (data.orderNumbers?.length ?? 0) + (data.ssShipmentIds?.length ?? 0) <= 50,
+    { message: 'Maximum 50 lookups per call' }
+  );
 
 type RetryNotifyResult = {
   orderNumber: string;
@@ -610,13 +626,53 @@ app.post(
   '/retry-marketplace-notify',
   zValidator('json', retryNotifyBody),
   async (c) => {
-    const { orderNumbers } = c.req.valid('json');
-    const results: RetryNotifyResult[] = [];
+    const body = c.req.valid('json');
+    const explicitOrderNumbers = body.orderNumbers ?? [];
+    const ssShipmentIds = body.ssShipmentIds ?? [];
+
+    // Track per-input failures (e.g. shipmentId not found in our DB) so
+    // we surface them to the caller instead of silently dropping them.
+    const inputFailures: RetryNotifyResult[] = [];
+    const resolvedOrderNumbers = new Set<string>(explicitOrderNumbers);
+
+    // ssShipmentId → orderNumber lookup. We join shipments to orders by
+    // local order_id; the SS-side shipment ID lives in label_shipment_id.
+    if (ssShipmentIds.length > 0) {
+      const rows = await db
+        .select({
+          ssShipmentId: shipments.labelShipmentId,
+          orderNumber: orders.orderNumber,
+        })
+        .from(shipments)
+        .innerJoin(orders, eq(orders.id, shipments.orderId))
+        .where(inArray(shipments.labelShipmentId, ssShipmentIds));
+
+      const found = new Map<number, string>();
+      for (const row of rows) {
+        if (row.ssShipmentId != null && row.orderNumber) {
+          found.set(row.ssShipmentId, row.orderNumber);
+        }
+      }
+      for (const ssShipmentId of ssShipmentIds) {
+        const orderNumber = found.get(ssShipmentId);
+        if (orderNumber) {
+          resolvedOrderNumbers.add(orderNumber);
+        } else {
+          inputFailures.push({
+            orderNumber: `ssShipmentId=${ssShipmentId}`,
+            ok: false,
+            reason: 'no shipment row matched this SS shipmentId in PrepShip DB',
+          });
+        }
+      }
+    }
+
+    const results: RetryNotifyResult[] = [...inputFailures];
 
     // Sequential to play nice with the v1 rate limiter (40 req/min).
     // The TokenBucket in v1-client.ts already enforces this, but
     // serial execution gives cleaner logs and predictable ordering.
-    for (const orderNumber of orderNumbers) {
+    for (const orderNumber of resolvedOrderNumbers) {
       const result = await retryMarketplaceNotifyOne(orderNumber);
       results.push(result);
     }
@@ -625,7 +681,8 @@ app.post(
     const failedCount = results.filter((r) => !r.ok).length;
 
     return c.json({
-      requested: orderNumbers.length,
+      requested: explicitOrderNumbers.length + ssShipmentIds.length,
+      resolved: resolvedOrderNumbers.size,
       ok: okCount,
       failed: failedCount,
       results,
