@@ -101,16 +101,18 @@ async function ackOrder(label: string, order: typeof orders.$inferSelect): Promi
 
   if (!shipment) return { label, ok: false, reason: 'no non-voided shipment row for this order' };
   if (!shipment.trackingNumber) return { label, ok: false, reason: `shipment ${shipment.id} has no tracking number` };
-  if (!order.clientId) return { label, ok: false, reason: 'order has no clientId — can\'t load credentials' };
 
-  const creds = await loadClientCredentials(order.clientId);
-  if (!creds.apiKey || !creds.apiSecret) {
-    return {
-      label,
-      ok: false,
-      reason: `client ${order.clientId} has no v1 ShipStation API credentials configured`,
-    };
-  }
+  // Per-client creds are PREFERRED but not required. If a client has no
+  // v1 keys of its own (common for sub-stores under a master ShipStation
+  // account, e.g. Tran Agency at clientId=9), we pass undefined and let
+  // ssV1Request fall back to env.SHIPSTATION_API_KEY/SECRET — the same
+  // env-level master credentials the order sync uses successfully.
+  // Per the loadClientCredentials docstring contract:
+  //   "If nothing resolves, return all-null — callers fall through to
+  //    env defaults via ssRequest/ssV1Request."
+  const creds = order.clientId ? await loadClientCredentials(order.clientId) : null;
+  const apiKey = creds?.apiKey ?? undefined;
+  const apiSecret = creds?.apiSecret ?? undefined;
 
   const shipDate =
     shipment.shipDate?.toISOString().slice(0, 10) ??
@@ -129,7 +131,7 @@ async function ackOrder(label: string, order: typeof orders.$inferSelect): Promi
         trackingNumber: shipment.trackingNumber,
         shipDate,
       },
-      { apiKey: creds.apiKey, apiSecret: creds.apiSecret }
+      { apiKey, apiSecret }
     );
     return { label: `${label} (orderNumber=${order.orderNumber})`, ok: true };
   } catch (err) {

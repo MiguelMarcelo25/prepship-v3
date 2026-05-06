@@ -893,10 +893,19 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
   //
   // Per user override `unlock shipped data` on 2026-05-06 (and
   // re-confirmed on 2026-05-07 for this fix).
+  //
+  // Credential resolution: per-client v1 keys are PREFERRED but optional.
+  // Sub-stores under a master ShipStation account (e.g. Tran Agency at
+  // clientId=9) have no per-client v1 keys; they're synced + acked via
+  // env.SHIPSTATION_API_KEY/SECRET — the master account credentials.
+  // We pass `undefined` (not null) for missing per-client creds so that
+  // ssV1Request's nullish-coalesce fallback to env vars kicks in. This
+  // matches the order-sync's already-working behavior for the same
+  // clients.
   const ssUpstreamOrderId = order.externalOrderId ? Number(order.externalOrderId) : null;
+  const v1ApiKey = creds.apiKey ?? undefined;
+  const v1ApiSecret = creds.apiSecret ?? undefined;
   if (
-    creds.apiKey &&
-    creds.apiSecret &&
     created.shipmentId &&
     created.trackingNumber &&
     ssUpstreamOrderId &&
@@ -913,7 +922,7 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
               trackingNumber: created.trackingNumber!,
               shipDate: created.shipDate,
             },
-            { apiKey: creds.apiKey!, apiSecret: creds.apiSecret! }
+            { apiKey: v1ApiKey, apiSecret: v1ApiSecret }
           );
           console.info(
             `${tag} ✅ v1 mark-shipped acked (attempt=${attempt}) — marketplace will be notified by ShipStation`
@@ -934,12 +943,13 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
     })();
   } else if (created.trackingNumber) {
     // Diagnostic: tracking exists but we can't ack to ShipStation.
-    // Three reasons we skip:
-    //   1. Missing apiKey/apiSecret (client never configured ShipStation)
-    //   2. Missing externalOrderId (manual order with no SS counterpart)
-    //   3. externalOrderId not a valid number (corrupted sync data)
+    // Reasons we skip:
+    //   1. Missing externalOrderId (manual order with no SS counterpart)
+    //   2. externalOrderId not a valid number (corrupted sync data)
+    //   3. Missing shipmentId (createLabel returned no SS-side ID)
+    // (We no longer skip on missing per-client creds — env fallback
+    // handles that case.)
     const reasons: string[] = [];
-    if (!creds.apiKey || !creds.apiSecret) reasons.push('missing apiKey/apiSecret');
     if (!ssUpstreamOrderId) reasons.push('missing or invalid externalOrderId');
     if (!created.shipmentId) reasons.push('missing shipmentId');
     console.warn(
