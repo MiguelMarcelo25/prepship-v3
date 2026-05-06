@@ -101,18 +101,23 @@ function formatWeight(ounces: number | null | undefined) {
   return `${pounds} lb ${remaining} oz`
 }
 
+// CA-time delegation per boss directive 2026-05-07. InventoryView
+// uses these for ledger entries (createdAt — true UTC) and order
+// dates (orderDate — naive-PT-stamped-Z). The ledger paths use UTC
+// helpers; order paths use naive-PT helpers.
+import {
+  formatCaDateTime,
+  formatNaivePtDateLong,
+} from '../../lib/ca-time'
+
 function formatDateTime(value: number | string | null | undefined) {
-  if (value == null) return '—'
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return '—'
-  return parsed.toLocaleString()
+  // Ledger entries use createdAt (true UTC). Render in CA TZ.
+  return formatCaDateTime(value)
 }
 
 function formatDateOnly(value: string | null | undefined) {
-  if (!value) return '—'
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return '—'
-  return parsed.toLocaleDateString()
+  // Order dates from orders.raw / orders.orderDate are naive-PT-stamped-Z.
+  return formatNaivePtDateLong(value)
 }
 
 function createClientFormState(client?: ClientDto | null): ClientFormState {

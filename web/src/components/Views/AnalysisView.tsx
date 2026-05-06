@@ -146,11 +146,17 @@ interface AnalysisDataState {
   chartData: AnalysisDailySalesResponse | null
 }
 
+// CA-time delegation per boss directive 2026-05-07. AnalysisView
+// pulls from `orders.raw` JSON (paymentDate, shipByDate, etc) which
+// originate from ShipStation V1 — same naive-PT-stamped-Z convention
+// as orderDate. Normalize bare strings to Z (matching prior behavior)
+// then route to formatNaivePt* helpers in ca-time.ts.
+import { formatNaivePtDateLong, formatNaivePtDateTime } from '../../lib/ca-time'
+
 function formatDateOnly(value: string | null | undefined) {
   if (!value) return '-'
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return '-'
-  return parsed.toLocaleDateString()
+  const result = formatNaivePtDateLong(value)
+  return result === '—' ? '-' : result
 }
 
 function formatDateTime(value: unknown) {
@@ -158,9 +164,8 @@ function formatDateTime(value: unknown) {
   const raw = String(value).trim()
   if (!raw) return '-'
   const normalized = /(?:z|[+-]\d{2}:?\d{2})$/i.test(raw) ? raw : `${raw}Z`
-  const parsed = new Date(normalized)
-  if (Number.isNaN(parsed.getTime())) return '-'
-  return parsed.toLocaleString()
+  const result = formatNaivePtDateTime(normalized)
+  return result === '—' ? '-' : result
 }
 
 function asRecord(value: unknown) {

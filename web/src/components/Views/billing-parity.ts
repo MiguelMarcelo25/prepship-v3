@@ -228,14 +228,10 @@ export function formatBillingMoney(value: number | null | undefined, options: { 
   return `$${value.toFixed(2)}`
 }
 
-export function formatBillingDateTime(value: string | null | undefined) {
-  if (!value) return '—'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '—'
-  const day = date.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' })
-  const time = date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
-  return `${day} ${time}`
-}
+// CA-time delegation per boss directive 2026-05-07. Billing dates
+// are typically shipDate from shipments table — naive-PT-stamped-Z
+// (originated from ShipStation V1 sync).
+export { formatNaivePtDateTime as formatBillingDateTime } from '../../lib/ca-time'
 
 export function getBillingDetailColumnStorageKey() {
   return BILLING_DETAIL_COLS_KEY

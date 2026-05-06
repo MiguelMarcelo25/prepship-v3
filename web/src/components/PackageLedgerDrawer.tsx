@@ -22,16 +22,12 @@ type LedgerRow = {
   createdAt: string;
 };
 
+// CA-time delegation per boss directive 2026-05-07. Package ledger
+// uses createdAt (true UTC).
+import { formatCaShort } from '../lib/ca-time';
+
 function formatTimestamp(iso: string) {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  return formatCaShort(iso);
 }
 
 function changeTypeBadge(type: string) {

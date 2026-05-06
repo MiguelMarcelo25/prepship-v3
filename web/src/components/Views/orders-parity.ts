@@ -411,8 +411,18 @@ export function formatSyncPill(sync: {
   }
 
   if (sync.status === 'done') {
+    // Render in California time (DST-aware) with explicit "CA" label,
+    // per boss directive (2026-05-07): all operator-facing times are
+    // CA time. lastSync is a numeric ms-since-epoch from Date.now()
+    // — true UTC, so we use formatCaTimeOnly (the CA-flavored helper)
+    // not formatNaivePtTimeOnly (which is for naive-stamped-Z fields).
     const syncTime = sync.lastSync
-      ? new Date(sync.lastSync).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+      ? `${new Intl.DateTimeFormat('en-US', {
+          hour: 'numeric',
+          minute: '2-digit',
+          hour12: true,
+          timeZone: 'America/Los_Angeles',
+        }).format(new Date(sync.lastSync))} CA`
       : '—'
     return {
       className: 'sync-pill done',

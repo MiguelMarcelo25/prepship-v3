@@ -802,38 +802,49 @@ function truncate(value: string, maxLength: number) {
   return value.length > maxLength ? `${value.slice(0, maxLength)}…` : value
 }
 
+// ───────────────────────────────────────────────────────────────────
+// Date/time formatters — DELEGATE to the canonical CA-time module.
+//
+// These exports preserve the legacy function signatures so the rest
+// of OrdersView doesn't have to change. Under the hood they use
+// formatNaivePt* helpers from web/src/lib/ca-time.ts because the
+// orderDate / shipDate / labelShipDate fields are "naive PT stamped
+// Z" (see ca-time.ts module docstring for the full backstory).
+//
+// Boss directive (2026-05-07): "I want all CA TIME, no PST". So
+// every operator-facing time renders in California time and labels
+// say "CA" where a TZ disambiguator is meaningful.
+// ───────────────────────────────────────────────────────────────────
+import {
+  formatNaivePtDateTime,
+  formatNaivePtLabelCreated,
+  formatNaivePtDateLong,
+  formatNaivePtWeekday,
+} from '../../lib/ca-time'
+
 function formatDateTime(value: string | null | undefined) {
-  if (!value) return '—'
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return '—'
-  // v2 parity: order_date is a naive ShipStation wall-clock string (the DR
-  // Prepper SS account runs in Pacific Time). v2 stored the raw string as
-  // TEXT so any browser displayed the original clock face unchanged. v4
-  // stores it as timestamptz with the naive value stamped Z, so we render
-  // in UTC here to reproduce that same clock face regardless of the
-  // viewer's local zone. Without this, an Asia-Pacific viewer sees times
-  // shifted by 7-8 hours.
-  const opts = { timeZone: 'UTC' } as const
-  const date = parsed.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit', ...opts })
-  const time = parsed.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, ...opts })
-  return `${date} ${time}`
+  return formatNaivePtDateTime(value)
 }
 
 function formatLabelCreated(value: string | null | undefined) {
-  if (!value) return '—'
-  const parsed = new Date(value)
-  if (Number.isNaN(parsed.getTime())) return '—'
-  const month = parsed.toLocaleDateString('en-US', { month: 'short' })
-  const day = parsed.getDate()
-  const time = parsed.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }).toLowerCase()
-  return `${month} ${day}, ${time}`
+  return formatNaivePtLabelCreated(value)
 }
 
 function formatDateOnly(value: string | null | undefined, options?: Intl.DateTimeFormatOptions) {
   if (!value) return '—'
+  // Two specific shapes used in OrdersView are mapped to the canonical
+  // helpers; everything else falls back to a custom Intl call (still
+  // forced to CA timezone for consistency).
+  if (!options || (options.month === 'short' && options.day === 'numeric' && options.year === 'numeric' && !options.weekday)) {
+    return formatNaivePtDateLong(value)
+  }
+  if (options.weekday === 'short') {
+    return formatNaivePtWeekday(value)
+  }
   const parsed = new Date(value)
   if (Number.isNaN(parsed.getTime())) return '—'
-  return parsed.toLocaleDateString('en-US', options)
+  // Caller provided custom Intl options; render in CA TZ regardless.
+  return parsed.toLocaleDateString('en-US', { ...options, timeZone: 'UTC' })
 }
 
 function formatMoney(amount: number | null | undefined) {
@@ -2095,8 +2106,17 @@ export default function OrdersView({
     ?? orders.find((order) => order.orderId === panelOrderId)
     ?? null
   const dailyStripProgress = dailyStats ? buildDailyStripProgress(dailyStats) : null
-  const dailyStatsFromLabel = dailyStats?.window.fromLabel || dailyStats?.window.from || ''
-  const dailyStatsToLabel = dailyStats?.window.toLabel || dailyStats?.window.to || ''
+  // Replace any "PT" / "PST" / "PDT" suffix in the server-formatted
+  // labels with "CA" so the daily strip's date range matches the rest
+  // of the app's labeling convention (boss directive 2026-05-07).
+  const normalizeTzLabel = (s: string) =>
+    s.replace(/\b(?:PST|PDT|PT)\b/g, 'CA')
+  const dailyStatsFromLabel = normalizeTzLabel(
+    dailyStats?.window.fromLabel || dailyStats?.window.from || ''
+  )
+  const dailyStatsToLabel = normalizeTzLabel(
+    dailyStats?.window.toLabel || dailyStats?.window.to || ''
+  )
   const panelDetail = panelOrderId != null ? orderDetailsById.get(panelOrderId) ?? null : null
   const activeStoreClientId = useMemo(() => {
     if (activeStore == null) return null
@@ -6888,7 +6908,7 @@ export default function OrdersView({
                   <span className="text-ink-2 font-semibold">{dailyStatsFromLabel}</span>
                   <span className="text-ink-4">→</span>
                   <span className="text-ink-2 font-semibold">{dailyStatsToLabel}</span>
-                  <span className="text-ink-4 italic">(shifts at 6 PM)</span>
+                  <span className="text-ink-4 italic">(shifts at 6 PM CA)</span>
                 </div>
 
                 {/* Total Orders — neutral ink */}

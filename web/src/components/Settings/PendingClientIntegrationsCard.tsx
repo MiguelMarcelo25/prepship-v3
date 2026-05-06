@@ -2,6 +2,7 @@
 import { useEffect, useState } from 'react'
 import { callVercelFunction } from '../../lib/vercelFunction'
 import { api } from '../../lib/api'
+import { formatCaDateShort, formatCaTimeOnly } from '../../lib/ca-time'
 
 interface PendingIntegration {
   id: number
@@ -186,8 +187,8 @@ export function PendingClientIntegrationsCard() {
                   }}>{item.source}</span>
                 </td>
                 <td style={{ ...td, textAlign: 'right', color: 'var(--text3)', fontSize: 11 }}>
-                  {new Date(item.createdAt).toLocaleDateString()}{' '}
-                  <span style={{ fontSize: 10 }}>{new Date(item.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                  {formatCaDateShort(item.createdAt)}{' '}
+                  <span style={{ fontSize: 10 }}>{formatCaTimeOnly(item.createdAt)} CA</span>
                 </td>
                 <td style={{ ...td, textAlign: 'right' }}>
                   <button

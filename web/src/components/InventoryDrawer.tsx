@@ -46,14 +46,12 @@ type LedgerRow = {
 
 type MovementResponse = { inventory: Item; ledger: LedgerRow };
 
+// CA-time delegation per boss directive 2026-05-07. Inventory ledger
+// rows use createdAt (true UTC). formatCaShort produces "May 6, 2:30 PM".
+import { formatCaShort } from '../lib/ca-time';
+
 function formatDate(v: string) {
-  return new Date(v).toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  return formatCaShort(v);
 }
 
 export default function InventoryDrawer() {
