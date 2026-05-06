@@ -13,6 +13,10 @@
       "source": "/aws-api/:path*",
       "destination": "http://13.58.82.26:3000/:path*"
     },
+    {
+      "source": "/oauth/:path*",
+      "destination": "/api/oauth/:path*"
+    },
     { "source": "/((?!assets/).*)", "destination": "/index.html" }
   ]
 }
