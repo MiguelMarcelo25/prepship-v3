@@ -220,7 +220,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 /* ── Quick Filter Chips ── */
 /* ── Sortable Column Headers ── */
 .orders-table th.sortable{cursor:pointer;}
-.orders-table th.sortable:hover{background:#edf0f6;}
+.orders-table th.sortable:hover{background:var(--surface3);}
 .sort-arrow{font-size:8px;color:var(--text4);margin-left:3px;display:inline-block;}
 .orders-table th.sort-asc .sort-arrow::after  {content:'▲';color:var(--ss-blue);}
 .orders-table th.sort-desc .sort-arrow::after {content:'▼';color:var(--ss-blue);}
@@ -232,7 +232,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .age-wrap{display:flex;align-items:center;white-space:nowrap;}
 
 /* ── Keyboard-focused row ── */
-.orders-table tbody tr.row-kb-focus td{background:#eff3ff;outline:none;}
+.orders-table tbody tr.row-kb-focus td{background:var(--ss-blue-bg);outline:none;}
 
 /* ── Order Number copy ── */
 .order-num{font-weight:700;color:var(--ss-blue);cursor:pointer;font-size:12.5px;}
@@ -327,10 +327,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .orders-table tbody tr.order-row td[data-col="select"]:hover{background:rgba(37,99,235,.14)!important;box-shadow:inset 3px 0 0 var(--ss-blue);}
 .orders-table tbody tr.row-panel-open td:not([data-col="select"]){background:var(--ss-blue-bg);}
 .orders-table tbody tr.row-panel-open td:first-child{border-left:3px solid var(--ss-blue);}
-.orders-table tbody tr.row-selected td{background:#e8f0fe;}
-.orders-table tbody tr.row-selected:hover td:not([data-col="select"]){background:#dbeafe;}
+.orders-table tbody tr.row-selected td{background:var(--ss-blue-bg);}
+.orders-table tbody tr.row-selected:hover td:not([data-col="select"]){background:var(--ss-blue-bg);filter:brightness(0.97);}
 .orders-table tbody tr.row-selected td[data-col="select"]{background:rgba(37,99,235,.16);box-shadow:inset 3px 0 0 var(--ss-blue);}
-.orders-table tbody tr.row-selected.row-panel-open td:not([data-col="select"]){background:#dbeafe;}
+.orders-table tbody tr.row-selected.row-panel-open td:not([data-col="select"]){background:var(--ss-blue-bg);filter:brightness(0.97);}
 .orders-table tbody tr.row-exception td:first-child{border-left:3px solid #f59e0b;}
 .orders-table tbody tr.row-exception td{background:#fffbeb;}
 /* Multi-SKU: red border wrapping only item name + SKU cells as a connected box */
@@ -713,7 +713,7 @@ th.col-drag-over{background:var(--ss-blue-bg)!important;box-shadow:inset 2px 0 0
    PACKAGES TAB
 ══════════════════════════════════════════════ */
 .pkg-type-badge{display:inline-block;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;}
-.pkg-type-box{background:#dbeafe;color:#1e40af;}
+.pkg-type-box{background:var(--ss-blue-bg);filter:brightness(0.97);color:#1e40af;}
 .pkg-type-poly_mailer{background:#dcfce7;color:#166534;}
 .pkg-type-envelope{background:#fef9c3;color:#854d0e;}
 .pkg-type-flat_rate_box_sm,.pkg-type-flat_rate_box_md,.pkg-type-flat_rate_box_lg{background:#f3e8ff;color:#6b21a8;}

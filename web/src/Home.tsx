@@ -436,8 +436,25 @@ export default function Home() {
         onShowTestOrdersChange={setShowTestOrders}
       />
 
-      <div className="main bg-bg-base text-text-primary !font-sans antialiased tracking-[-0.005em]">
-        <div className="topbar relative !bg-white/90 !backdrop-blur-xl !border-b !border-line !px-5 !py-2.5 !shadow-[0_1px_0_0_rgba(15,23,42,0.03),0_2px_8px_-3px_rgba(15,23,42,0.06)]">
+      <div className="main bg-page text-ink font-sans antialiased tracking-[-0.005em]">
+        {/* ────────────────────── TOPBAR ──────────────────────
+            Reworked: single sticky header, theme-aware surfaces,
+            grouped right-cluster (sync · view controls · zoom),
+            consistent 32px-tall buttons, hairline group dividers,
+            polished hover/press states, smooth batch-bar swap.
+        */}
+        <header
+          id="topbar"
+          className="
+            relative flex items-center gap-3
+            px-4 sm:px-5 h-14
+            bg-surface/85 backdrop-blur-xl
+            border-b border-line
+            text-ink
+            shadow-[0_1px_0_0_rgba(var(--shadow-color,15_23_42)/0.04)]
+          "
+        >
+          {/* Sync progress bar — pinned to the very top edge */}
           <AnimatePresence>
             {syncStatus.status === 'syncing' && syncStatus.total > 0 ? (
               <motion.div
@@ -445,52 +462,44 @@ export default function Home() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="absolute top-0 left-0 right-0 h-0.5 bg-line/40 z-50 overflow-hidden"
+                className="absolute top-0 left-0 right-0 h-[2px] bg-line/30 z-50 overflow-hidden"
               >
                 <motion.div
-                  className="h-full bg-gradient-to-r from-brand via-indigo-500 to-indigo-600"
+                  className="h-full bg-gradient-to-r from-brand via-indigo-500 to-indigo-600 shadow-[0_0_10px_rgba(99,102,241,0.65)]"
                   initial={{ width: 0 }}
                   animate={{ width: `${Math.min(100, (syncStatus.page / syncStatus.total) * 100)}%` }}
                   transition={{ duration: 0.4, ease: 'easeOut' }}
-                  style={{
-                    boxShadow: '0 0 8px rgba(79,70,229,0.55)',
-                  }}
                 />
               </motion.div>
             ) : null}
           </AnimatePresence>
+
+          {/* Mobile menu */}
           <button
             id="mobileMenuBtn"
             type="button"
             onClick={() => setMobileMenuOpen((open) => !open)}
-            className="flex items-center justify-center bg-transparent border-0 cursor-pointer p-1.5 text-ink hover:text-brand hover:bg-line/40 transition-all duration-150 rounded-btn focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 active:scale-90"
+            className="md:hidden flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-lg text-ink-2 hover:text-ink hover:bg-surface-2 active:scale-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 transition-all duration-150"
             aria-label="Toggle menu"
           >
-            <Menu size={20} strokeWidth={2.25} />
+            <Menu size={18} strokeWidth={2.25} />
           </button>
 
-          <div
-            className="topbar-title !text-[16px] !font-extrabold font-display !tracking-[-0.03em] !text-ink !flex !items-center !gap-2"
-            id="viewTitle"
-          >
-            <span className="inline-block w-1 h-5 rounded-full bg-gradient-to-b from-brand to-indigo-700" />
-            {viewTitle}
-          </div>
-
-          <AnimatePresence>
+          {/* Title — animates out when batch-bar appears */}
+          <AnimatePresence mode="wait">
             {displayView === 'orders' && selectedOrderIds.length > 0 ? (
               <motion.div
                 key="batch-bar"
-                initial={{ opacity: 0, y: -8, scale: 0.96 }}
+                initial={{ opacity: 0, y: -6, scale: 0.96 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: -8, scale: 0.96 }}
+                exit={{ opacity: 0, y: -6, scale: 0.96 }}
                 transition={{ type: 'spring', stiffness: 380, damping: 28 }}
-                className="!flex !items-center !gap-2 !px-3 !py-1.5 !rounded-lg !bg-gradient-to-r !from-brand !to-indigo-600 !text-white !shadow-md"
+                className="flex items-center gap-2 pl-2.5 pr-1.5 py-1 rounded-xl bg-gradient-to-r from-brand to-indigo-600 text-white shadow-[0_4px_16px_-4px_rgba(99,102,241,0.45)] ring-1 ring-white/10 min-w-0"
                 id="batchBar"
                 role="region"
                 aria-label="Bulk actions"
               >
-                <span id="batchCount" className="font-mono tabular-nums font-semibold !text-white !text-[12px]">
+                <span id="batchCount" className="font-mono tabular-nums font-bold text-[12px] text-white whitespace-nowrap">
                   <motion.span
                     key={selectedOrderIds.length}
                     initial={{ opacity: 0, y: 4 }}
@@ -499,181 +508,212 @@ export default function Home() {
                   >
                     {selectedOrderIds.length}
                   </motion.span>{' '}
-                  selected
+                  <span className="font-medium opacity-80">selected</span>
                 </span>
-                <div className="!flex !gap-1.5">
-                  <motion.button
-                    type="button"
-                    whileTap={{ scale: 0.94 }}
-                    whileHover={{ y: -1 }}
-                    transition={{ duration: 0.12 }}
-                    className="!inline-flex !items-center !gap-1.5 !px-2.5 !py-1 !rounded-md !bg-white/15 !text-white !text-[11.5px] !font-semibold !border-0 hover:!bg-white/25 !transition-colors !duration-150 disabled:!opacity-50 disabled:!cursor-not-allowed"
-                    onClick={() => setLabelsActionRequestId((value) => value + 1)}
-                    aria-label={`Print labels for ${selectedOrderIds.length} selected orders`}
-                  >
-                    <Printer size={13} strokeWidth={2.25} />
-                    Print Labels
-                  </motion.button>
-                  <motion.button
-                    type="button"
-                    whileTap={{ scale: 0.9 }}
-                    whileHover={{ rotate: 90 }}
-                    transition={{ type: 'spring', stiffness: 400, damping: 24 }}
-                    className="!inline-flex !items-center !justify-center !w-6 !h-6 !rounded-md !bg-white/10 !text-white hover:!bg-white/25 !transition-colors !duration-150"
-                    onClick={() => {
-                      setSelectedOrderIds([])
-                      setActiveOrderId(null)
-                    }}
-                    aria-label="Clear selection"
-                    title="Clear selection"
-                  >
-                    <XIcon size={13} strokeWidth={2.5} />
-                  </motion.button>
-                </div>
+                <div className="w-px h-5 bg-white/20" aria-hidden />
+                <motion.button
+                  type="button"
+                  whileTap={{ scale: 0.94 }}
+                  whileHover={{ y: -1 }}
+                  transition={{ duration: 0.12 }}
+                  className="inline-flex items-center gap-1.5 px-2.5 h-7 rounded-lg bg-white/15 text-white text-[11.5px] font-semibold hover:bg-white/25 transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
+                  onClick={() => setLabelsActionRequestId((value) => value + 1)}
+                  aria-label={`Print labels for ${selectedOrderIds.length} selected orders`}
+                >
+                  <Printer size={12.5} strokeWidth={2.25} />
+                  Print Labels
+                </motion.button>
+                <motion.button
+                  type="button"
+                  whileTap={{ scale: 0.9 }}
+                  whileHover={{ rotate: 90 }}
+                  transition={{ type: 'spring', stiffness: 400, damping: 24 }}
+                  className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-white/10 text-white hover:bg-white/25 transition-colors duration-150"
+                  onClick={() => {
+                    setSelectedOrderIds([])
+                    setActiveOrderId(null)
+                  }}
+                  aria-label="Clear selection"
+                  title="Clear selection"
+                >
+                  <XIcon size={13} strokeWidth={2.5} />
+                </motion.button>
               </motion.div>
-            ) : null}
+            ) : (
+              <motion.div
+                key="title"
+                initial={{ opacity: 0, x: -6 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -6 }}
+                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+                className="flex items-center gap-2.5 min-w-0"
+                id="viewTitle"
+              >
+                <h1 className="text-[15px] font-extrabold font-display tracking-[-0.025em] text-ink truncate">
+                  {viewTitle}
+                </h1>
+              </motion.div>
+            )}
           </AnimatePresence>
 
+          {/* Spacer pushes the right cluster to the edge */}
+          <div className="flex-1 min-w-0" />
+
+          {/* Right cluster — only on /orders */}
           {displayView === 'orders' ? (
-            <div className="topbar-right" id="topbarActions">
-              <div className={syncPill.className} id="syncPill">
-                <span className="sync-dot" />
+            <div className="flex items-center gap-2 flex-shrink-0" id="topbarActions">
+              {/* Sync status pill */}
+              <div
+                className={`hidden md:inline-flex items-center gap-1.5 h-8 pl-2.5 pr-3 rounded-full text-[11.5px] font-medium font-mono tabular-nums whitespace-nowrap transition-colors ${syncPill.className}`}
+                id="syncPill"
+              >
+                <span className="sync-dot" aria-hidden />
                 <span id="syncText">
                   {syncPill.text}
-                  {syncStatus.status === 'syncing' && syncStatus.total > 0 && (
-                    <span className="ml-1.5 opacity-70">
-                      ({syncStatus.page}/{syncStatus.total})
-                    </span>
-                  )}
+                  {syncStatus.status === 'syncing' && syncStatus.total > 0 ? (
+                    <span className="ml-1 opacity-70">({syncStatus.page}/{syncStatus.total})</span>
+                  ) : null}
                 </span>
               </div>
+
+              {/* Worker pill */}
               {workerPill ? (
                 <div
                   id="workerPill"
                   title={workerPill.title}
-                  className="text-tiny px-2.5 py-0.5 rounded-full bg-surface-2 border border-line whitespace-nowrap font-mono tabular-nums tracking-tight"
+                  className="hidden lg:inline-flex items-center h-8 px-3 rounded-full bg-surface-2 ring-1 ring-line text-[11px] font-mono tabular-nums whitespace-nowrap"
                   style={{ color: workerPill.color }}
                 >
                   {workerPill.text}
                 </div>
               ) : null}
-              <button
-                className="btn btn-ghost btn-sm !inline-flex !items-center !justify-center !w-8 !h-8 !p-0 !transition-all !duration-150 hover:!bg-line/40 active:!scale-90 disabled:!opacity-50 disabled:!cursor-not-allowed"
-                id="btnSyncIncr"
-                type="button"
-                disabled={syncStatus.status === 'syncing'}
-                aria-label="Incremental sync"
-                title="Incremental sync (changed orders only)"
-                onClick={async () => {
-                  setSyncStatus((current) => ({ ...current, status: 'syncing', mode: 'incremental', page: 0, total: 0, error: null }))
-                  try {
-                    const result = await apiClient.triggerLegacySync('incremental')
-                    applyCompletedSync('incremental', result)
-                    toastContext?.addToast('🔄 Incremental sync triggered')
-                  } catch (error) {
-                    toastContext?.addToast(error instanceof Error ? error.message : 'Failed to trigger sync', 'error')
-                  }
-                }}
-              >
-                {syncStatus.status === 'syncing' && syncStatus.mode === 'incremental' ? (
-                  <Loader2 size={15} strokeWidth={2.25} className="animate-spinSlow text-brand" />
-                ) : (
-                  <RotateCw size={15} strokeWidth={2.25} />
-                )}
-              </button>
-              <button
-                className="btn btn-ghost btn-sm text-tiny px-2 py-1 text-ink-3 hover:text-ink !transition-all !duration-150 hover:!bg-line/40 active:!scale-95 disabled:!opacity-50 disabled:!cursor-not-allowed"
-                id="btnSyncFull"
-                type="button"
-                disabled={syncStatus.status === 'syncing'}
-                aria-label="Full re-sync"
-                title="Full re-sync (all orders)"
-                onClick={async () => {
-                  setSyncStatus((current) => ({ ...current, status: 'syncing', mode: 'full', page: 0, total: 0, error: null }))
-                  try {
-                    const result = await apiClient.triggerLegacySync('full')
-                    applyCompletedSync('full', result)
-                    toastContext?.addToast('🔄 Full re-sync triggered')
-                  } catch (error) {
-                    toastContext?.addToast(error instanceof Error ? error.message : 'Failed to trigger sync', 'error')
-                  }
-                }}
-              >
-                <span className="inline-flex items-center gap-1">
+
+              {/* Group: sync actions */}
+              <div className="inline-flex items-center gap-0.5 h-8 px-1 rounded-lg bg-surface-2 ring-1 ring-line">
+                <button
+                  id="btnSyncIncr"
+                  type="button"
+                  disabled={syncStatus.status === 'syncing'}
+                  aria-label="Incremental sync"
+                  title="Incremental sync (changed orders only)"
+                  className="inline-flex items-center justify-center w-7 h-6 rounded-md text-ink-2 hover:text-ink hover:bg-surface active:scale-90 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-150"
+                  onClick={async () => {
+                    setSyncStatus((current) => ({ ...current, status: 'syncing', mode: 'incremental', page: 0, total: 0, error: null }))
+                    try {
+                      const result = await apiClient.triggerLegacySync('incremental')
+                      applyCompletedSync('incremental', result)
+                      toastContext?.addToast('🔄 Incremental sync triggered')
+                    } catch (error) {
+                      toastContext?.addToast(error instanceof Error ? error.message : 'Failed to trigger sync', 'error')
+                    }
+                  }}
+                >
+                  {syncStatus.status === 'syncing' && syncStatus.mode === 'incremental' ? (
+                    <Loader2 size={13} strokeWidth={2.5} className="animate-spinSlow text-brand" />
+                  ) : (
+                    <RotateCw size={13} strokeWidth={2.25} />
+                  )}
+                </button>
+                <button
+                  id="btnSyncFull"
+                  type="button"
+                  disabled={syncStatus.status === 'syncing'}
+                  aria-label="Full re-sync"
+                  title="Full re-sync (all orders)"
+                  className="inline-flex items-center justify-center px-2 h-6 rounded-md text-[10.5px] font-bold uppercase tracking-wide text-ink-3 hover:text-ink hover:bg-surface active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-150"
+                  onClick={async () => {
+                    setSyncStatus((current) => ({ ...current, status: 'syncing', mode: 'full', page: 0, total: 0, error: null }))
+                    try {
+                      const result = await apiClient.triggerLegacySync('full')
+                      applyCompletedSync('full', result)
+                      toastContext?.addToast('🔄 Full re-sync triggered')
+                    } catch (error) {
+                      toastContext?.addToast(error instanceof Error ? error.message : 'Failed to trigger sync', 'error')
+                    }
+                  }}
+                >
                   {syncStatus.status === 'syncing' && syncStatus.mode === 'full' ? (
                     <span className="inline-block animate-spinSlow">↻</span>
                   ) : (
-                    'Full↻'
+                    'Full'
                   )}
-                </span>
-              </button>
-              <div className="col-toggle-wrap">
+                </button>
+              </div>
+
+              {/* Group: view controls */}
+              <div className="inline-flex items-center gap-1">
                 <button
                   data-columns-anchor="true"
-                  className="btn btn-outline btn-sm !inline-flex !items-center !gap-1.5 !transition-all !duration-150 hover:!shadow-sm hover:!-translate-y-px active:!translate-y-0 active:!scale-95"
                   type="button"
                   aria-label="Configure visible columns"
+                  className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg ring-1 ring-line bg-surface text-ink-2 hover:text-ink hover:ring-line-2 hover:bg-surface-2 active:scale-95 transition-all duration-150 text-[12px] font-semibold"
                   onClick={() => setColumnMenuRequestId((value) => value + 1)}
                 >
                   <Columns3 size={13} strokeWidth={2.25} />
-                  Columns
+                  <span className="hidden sm:inline">Columns</span>
+                </button>
+
+                <button
+                  type="button"
+                  aria-label="Print labels"
+                  className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg bg-gradient-to-br from-brand to-indigo-600 text-white shadow-[0_2px_8px_-2px_rgba(99,102,241,0.5)] hover:shadow-[0_4px_14px_-3px_rgba(99,102,241,0.6)] hover:-translate-y-px active:translate-y-0 active:scale-95 transition-all duration-150 text-[12px] font-bold focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 focus-visible:ring-offset-1"
+                  onClick={() => setLabelsActionRequestId((value) => value + 1)}
+                >
+                  <Printer size={13} strokeWidth={2.5} />
+                  Labels
+                </button>
+
+                <button
+                  id="pq-toggle-btn"
+                  type="button"
+                  aria-label={queueOpen ? 'Close print queue panel' : 'Open print queue panel'}
+                  className="relative inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg ring-1 ring-line bg-surface text-ink-2 hover:text-ink hover:ring-line-2 hover:bg-surface-2 active:scale-95 transition-all duration-150 text-[12px] font-semibold"
+                  onClick={() => setQueueToggleRequestId((value) => value + 1)}
+                >
+                  {queueOpen ? (
+                    <>
+                      <XIcon size={13} strokeWidth={2.5} />
+                      <span className="hidden sm:inline">Close Queue</span>
+                    </>
+                  ) : (
+                    <>
+                      <Printer size={13} strokeWidth={2.25} />
+                      <span className="hidden sm:inline">Queue</span>
+                    </>
+                  )}
+                  <AnimatePresence>
+                    {queueBadgeCount > 0 ? (
+                      <motion.span
+                        key="pq-badge"
+                        id="pq-badge"
+                        initial={{ scale: 0, opacity: 0 }}
+                        animate={{ scale: 1, opacity: 1 }}
+                        exit={{ scale: 0, opacity: 0 }}
+                        transition={{ type: 'spring', stiffness: 500, damping: 22 }}
+                        className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-amber-400 text-black text-[9px] font-bold font-mono tabular-nums shadow-sm ring-2 ring-surface"
+                      >
+                        {queueBadgeCount}
+                      </motion.span>
+                    ) : null}
+                  </AnimatePresence>
                 </button>
               </div>
-              <button
-                className="btn btn-primary btn-sm !inline-flex !items-center !gap-1.5 !transition-all !duration-150 hover:!shadow-md hover:!-translate-y-px active:!translate-y-0 active:!scale-95 focus-visible:!ring-2 focus-visible:!ring-brand/40 focus-visible:!ring-offset-1"
-                type="button"
-                aria-label="Print labels"
-                onClick={() => setLabelsActionRequestId((value) => value + 1)}
-              >
-                <Printer size={13} strokeWidth={2.25} />
-                Labels
-              </button>
-              <button
-                className="btn btn-outline btn-sm relative !inline-flex !items-center !gap-1.5 !transition-all !duration-150 hover:!shadow-sm hover:!-translate-y-px active:!translate-y-0 active:!scale-95"
-                id="pq-toggle-btn"
-                type="button"
-                aria-label={queueOpen ? 'Close print queue panel' : 'Open print queue panel'}
-                onClick={() => setQueueToggleRequestId((value) => value + 1)}
-              >
-                {queueOpen ? (
-                  <>
-                    <XIcon size={13} strokeWidth={2.5} />
-                    Close Queue
-                  </>
-                ) : (
-                  <>
-                    <Printer size={13} strokeWidth={2.25} />
-                    Print Queue{queueBadgeCount > 0 ? ` (${queueBadgeCount})` : ''}
-                  </>
-                )}
-                <AnimatePresence>
-                  {queueBadgeCount > 0 ? (
-                    <motion.span
-                      key="pq-badge"
-                      id="pq-badge"
-                      initial={{ scale: 0, opacity: 0 }}
-                      animate={{ scale: 1, opacity: 1 }}
-                      exit={{ scale: 0, opacity: 0 }}
-                      transition={{ type: 'spring', stiffness: 500, damping: 22 }}
-                      className="inline-flex absolute -top-1.5 -right-1.5 bg-amber-400 text-black rounded-full text-[9px] font-bold min-w-4 h-4 px-1 items-center justify-center font-mono tabular-nums shadow-sm ring-2 ring-white"
-                    >
-                      {queueBadgeCount}
-                    </motion.span>
-                  ) : null}
-                </AnimatePresence>
-              </button>
+
+              {/* Hairline divider before zoom (always-visible) */}
+              <div className="hidden md:block w-px h-5 bg-line" aria-hidden />
             </div>
           ) : null}
 
-          <div className="col-toggle-wrap react-zoom-wrap relative">
+          {/* Zoom — always visible, far right */}
+          <div className="relative" id="zoom-wrap">
             <button
-              className="btn btn-outline btn-sm !inline-flex !items-center !gap-1.5 min-w-[72px] font-mono tabular-nums !transition-all !duration-150 hover:!shadow-sm hover:!-translate-y-px active:!translate-y-0 active:!scale-95"
+              id="zoomBtn"
               type="button"
               aria-label={`Current zoom ${zoomPct}%, click to change`}
               aria-haspopup="menu"
               aria-expanded={zoomMenuOpen}
+              className="inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg ring-1 ring-line bg-surface text-ink-2 hover:text-ink hover:ring-line-2 hover:bg-surface-2 active:scale-95 transition-all duration-150 text-[12px] font-mono tabular-nums font-semibold min-w-[64px]"
               onClick={() => setZoomMenuOpen((open) => !open)}
-              id="zoomBtn"
             >
               <ZoomIn size={13} strokeWidth={2.25} />
               <span id="zoomLabel">{zoomPct}%</span>
@@ -687,9 +727,9 @@ export default function Home() {
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: -6, scale: 0.96 }}
                   transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
-                  className="absolute right-0 top-[calc(100%+6px)] bg-surface border border-line-2 rounded-lg shadow-lg py-1.5 z-[200] min-w-[150px] overflow-hidden origin-top-right"
+                  className="absolute right-0 top-[calc(100%+6px)] bg-surface ring-1 ring-line-2 rounded-xl shadow-xl py-1.5 z-[200] min-w-[160px] overflow-hidden origin-top-right"
                 >
-                  <div className="px-3 pt-1 pb-1.5 text-[10px] font-bold uppercase tracking-[0.08em] text-ink-3">Zoom</div>
+                  <div className="px-3 pt-1.5 pb-2 text-[10px] font-bold uppercase tracking-[0.1em] text-ink-3">Zoom level</div>
                   {ZOOM_OPTIONS.map((option, idx) => (
                     <motion.button
                       key={option.value}
@@ -711,7 +751,7 @@ export default function Home() {
               ) : null}
             </AnimatePresence>
           </div>
-        </div>
+        </header>
 
         <AnimatePresence mode="wait">
           <motion.div

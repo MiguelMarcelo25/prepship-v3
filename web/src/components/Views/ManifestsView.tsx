@@ -73,8 +73,8 @@ export default function ManifestsView({ open, onClose }: ManifestsViewProps) {
   }
 
   const inputCls =
-    'w-full px-3 py-2 rounded-lg border border-line bg-white text-[13px] text-ink placeholder:text-ink-3 ' +
-    'focus:bg-white focus:border-brand/60 focus:ring-2 focus:ring-brand/15 transition-all duration-150 outline-none ' +
+    'w-full px-3 py-2 rounded-lg border border-line bg-surface text-[13px] text-ink placeholder:text-ink-3 ' +
+    'focus:bg-surface focus:border-brand/60 focus:ring-2 focus:ring-brand/15 transition-all duration-150 outline-none ' +
     'font-mono tabular-nums'
 
   return (
@@ -98,7 +98,7 @@ export default function ManifestsView({ open, onClose }: ManifestsViewProps) {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 8, scale: 0.97 }}
             transition={{ type: 'spring', stiffness: 360, damping: 30 }}
-            className="w-full max-w-md mx-4 bg-white rounded-2xl shadow-2xl border border-line overflow-hidden"
+            className="w-full max-w-md mx-4 bg-surface rounded-2xl shadow-2xl border border-line overflow-hidden"
           >
             {/* Header */}
             <div className="flex items-center gap-3 px-5 py-4 border-b border-line bg-gradient-to-br from-page to-surface-2/40">
@@ -171,7 +171,7 @@ export default function ManifestsView({ open, onClose }: ManifestsViewProps) {
                   id="manifest-carrier"
                   value={form.carrierId}
                   onChange={(event) => setForm((current) => ({ ...current, carrierId: event.target.value }))}
-                  className="w-full px-3 py-2 rounded-lg border border-line bg-white text-[13px] text-ink focus:border-brand/60 focus:ring-2 focus:ring-brand/15 transition-all duration-150 outline-none cursor-pointer"
+                  className="w-full px-3 py-2 rounded-lg border border-line bg-surface text-[13px] text-ink focus:border-brand/60 focus:ring-2 focus:ring-brand/15 transition-all duration-150 outline-none cursor-pointer"
                 >
                   <option value="">All Carriers</option>
                   <option value="stamps_com">USPS</option>

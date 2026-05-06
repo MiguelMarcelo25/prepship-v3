@@ -134,7 +134,7 @@ function KpiTile({ icon, iconBg, iconRing, label, value, helper, delay = 0 }: Kp
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay, duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
       whileHover={{ y: -2 }}
-      className="bg-white rounded-2xl border border-line shadow-sm hover:shadow-md transition-shadow p-4"
+      className="bg-surface rounded-2xl border border-line shadow-sm hover:shadow-md transition-shadow p-4"
     >
       <div className="flex items-start gap-3">
         <div
@@ -436,7 +436,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         </div>
 
         {stats?.window?.fromLabel && stats?.window?.toLabel ? (
-          <div className="inline-flex items-center gap-1.5 text-tiny text-ink-2 bg-white px-3 py-2 rounded-lg border border-line shadow-sm">
+          <div className="inline-flex items-center gap-1.5 text-tiny text-ink-2 bg-surface px-3 py-2 rounded-lg border border-line shadow-sm">
             <Activity size={12} strokeWidth={2.25} className="text-brand" />
             <span className="text-ink-3">Today's window:</span>
             <span className="font-mono font-semibold text-ink">
@@ -459,7 +459,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             {Array.from({ length: 5 }).map((_, i) => (
               <div
                 key={i}
-                className="bg-white rounded-2xl border border-line p-4 h-[96px] flex items-center gap-3"
+                className="bg-surface rounded-2xl border border-line p-4 h-[96px] flex items-center gap-3"
               >
                 <div className="w-10 h-10 rounded-lg bg-line/60 animate-pulse" />
                 <div className="flex-1 space-y-2">
@@ -586,7 +586,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.15, duration: 0.3 }}
-            className="bg-white rounded-2xl border border-line shadow-sm p-4 mb-4"
+            className="bg-surface rounded-2xl border border-line shadow-sm p-4 mb-4"
           >
             <div className="flex items-start justify-between gap-3 mb-3 flex-wrap">
               <SectionHeader
@@ -719,7 +719,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.18, duration: 0.3 }}
-              className="lg:col-span-2 bg-white rounded-2xl border border-line shadow-sm p-4"
+              className="lg:col-span-2 bg-surface rounded-2xl border border-line shadow-sm p-4"
             >
               <div className="flex items-start justify-between gap-3 mb-3">
                 <SectionHeader
@@ -847,7 +847,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.22, duration: 0.3 }}
-              className="bg-white rounded-2xl border border-line shadow-sm p-4 flex flex-col"
+              className="bg-surface rounded-2xl border border-line shadow-sm p-4 flex flex-col"
             >
               <SectionHeader title="Top SKUs (30d)" subtitle="By total units sold" />
               {topSkus.length === 0 ? (
@@ -909,7 +909,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.28, duration: 0.3 }}
-            className="bg-white rounded-2xl border border-line shadow-sm p-4"
+            className="bg-surface rounded-2xl border border-line shadow-sm p-4"
           >
             <div className="flex items-center justify-between gap-3 mb-3">
               <SectionHeader title="Inventory Alerts" subtitle="SKUs with low or zero stock" />
@@ -948,7 +948,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                         show: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 320, damping: 24 } },
                       }}
                       whileHover={{ y: -1 }}
-                      className={`relative flex items-center gap-3 rounded-xl border bg-white p-3 transition-shadow hover:shadow-md ${
+                      className={`relative flex items-center gap-3 rounded-xl border bg-surface p-3 transition-shadow hover:shadow-md ${
                         isOut ? 'border-rose-200/70' : 'border-amber-200/70'
                       }`}
                     >

@@ -51,7 +51,7 @@ function formatMoney(amount: number) {
 }
 
 const inputCls =
-  'w-full px-3 py-2 rounded-lg border border-line bg-white text-[13px] text-ink placeholder:text-ink-3 ' +
+  'w-full px-3 py-2 rounded-lg border border-line bg-surface text-[13px] text-ink placeholder:text-ink-3 ' +
   'focus:border-brand/60 focus:ring-2 focus:ring-brand/15 transition-all duration-150 outline-none ' +
   'font-mono tabular-nums'
 
@@ -114,7 +114,7 @@ export default function RatesView() {
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-        className="bg-white rounded-2xl border border-line shadow-sm p-5 max-w-4xl"
+        className="bg-surface rounded-2xl border border-line shadow-sm p-5 max-w-4xl"
         onSubmit={handleSubmit}
       >
         <div className="flex items-center gap-3 mb-5">
@@ -249,7 +249,7 @@ export default function RatesView() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="flex flex-col items-center justify-center gap-3 py-12 bg-white rounded-2xl border border-line"
+              className="flex flex-col items-center justify-center gap-3 py-12 bg-surface rounded-2xl border border-line"
             >
               <Loader2 size={24} strokeWidth={2.25} className="text-brand animate-spinSlow" />
               <div className="text-tiny text-ink-3 uppercase tracking-wider font-semibold">Fetching live rates…</div>
@@ -260,7 +260,7 @@ export default function RatesView() {
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
-              className="flex flex-col items-center justify-center gap-3 py-14 bg-white rounded-2xl border border-line"
+              className="flex flex-col items-center justify-center gap-3 py-14 bg-surface rounded-2xl border border-line"
             >
               <motion.div
                 initial={{ scale: 0.6, rotate: -8 }}
@@ -278,7 +278,7 @@ export default function RatesView() {
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
-              className="flex flex-col items-center justify-center gap-3 py-14 bg-white rounded-2xl border border-danger/20"
+              className="flex flex-col items-center justify-center gap-3 py-14 bg-surface rounded-2xl border border-danger/20"
             >
               <motion.div
                 initial={{ scale: 0.6 }}
@@ -298,7 +298,7 @@ export default function RatesView() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.3 }}
-              className="bg-white rounded-2xl border border-line shadow-sm overflow-hidden"
+              className="bg-surface rounded-2xl border border-line shadow-sm overflow-hidden"
             >
               <div className="px-4 py-3 border-b border-line bg-gradient-to-b from-page to-surface-2/30 flex items-center gap-3">
                 <div className="flex-1">

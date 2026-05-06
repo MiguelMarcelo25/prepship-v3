@@ -6,6 +6,8 @@ import App from './App';
 import { AuthProvider } from './lib/auth';
 import { ToastProvider } from './contexts/ToastContext';
 import { MarkupsProvider } from './contexts/MarkupsContext';
+import { ThemeProvider } from './lib/ThemeProvider';
+import DesignPicker from './components/DesignPicker';
 import './index.css';
 import './app-shell.css';
 import './App.css';
@@ -22,16 +24,19 @@ const queryClient = new QueryClient({
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <ToastProvider>
-          <MarkupsProvider>
-            <BrowserRouter>
-              <App />
-            </BrowserRouter>
-          </MarkupsProvider>
-        </ToastProvider>
-      </AuthProvider>
-    </QueryClientProvider>
+    <ThemeProvider>
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>
+          <ToastProvider>
+            <MarkupsProvider>
+              <BrowserRouter>
+                <App />
+                <DesignPicker />
+              </BrowserRouter>
+            </MarkupsProvider>
+          </ToastProvider>
+        </AuthProvider>
+      </QueryClientProvider>
+    </ThemeProvider>
   </React.StrictMode>
 );

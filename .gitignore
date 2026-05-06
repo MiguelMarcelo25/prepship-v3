@@ -10,3 +10,10 @@ dist/
 undefined/
 cron-inventory.csv
 PARITY_PLAN_ORDER_LIST.md
+
+# Working artifacts (logs, generated reports, ad-hoc analysis output)
+outputs/
+
+# One-off research artifacts (raw API field tables, etc.)
+ShipStation_API_Field_Tables.xlsx
+ShipStation_API_Fieldr.md

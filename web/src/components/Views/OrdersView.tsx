@@ -10,6 +10,14 @@ import {
   Inbox,
   AlertTriangle,
   Loader2,
+  Search as SearchIcon,
+  X as XIcon,
+  Filter,
+  CheckSquare,
+  ListOrdered,
+  Download,
+  Printer as PrinterIcon,
+  Columns3,
 } from 'lucide-react'
 import OrderDetailDrawer from '../OrderDetailDrawer'
 import TrackingModal from '../TrackingModal'
@@ -1651,6 +1659,10 @@ export default function OrdersView({
   const [resizingColumnKey, setResizingColumnKey] = useState<TableColumnKey | null>(null)
   const [queueOpen, setQueueOpen] = useState(false)
   const [queueHistoryVisible, setQueueHistoryVisible] = useState(false)
+  // Print Queue panel: free-text filter for both active queue + history list,
+  // plus sort direction for the printed-history list (newest first by default).
+  const [pqSearch, setPqSearch] = useState('')
+  const [pqHistoryAsc, setPqHistoryAsc] = useState(false)
   const [queueEntries, setQueueEntries] = useState<PrintQueueEntryDto[]>([])
   const [queueEntriesClientId, setQueueEntriesClientId] = useState<number | null>(null)
   const [queueLoading, setQueueLoading] = useState(false)
@@ -4433,7 +4445,34 @@ export default function OrdersView({
     [activeQueueEntries],
   )
   const queueCount = queuedEntries.length
-  const queueHasVisibleEntries = queueGroups.length > 0 || printedEntries.length > 0
+  // Search & sort applied to the queue and history lists. Search matches the
+  // order number OR the order_id (cast to string) — covers both how users
+  // type queries (full order #, partial digits, etc.).
+  const pqSearchLower = pqSearch.trim().toLowerCase()
+  const matchesPqSearch = (entry: { order_number?: string | null; order_id?: number | string | null }) => {
+    if (!pqSearchLower) return true
+    const num = String(entry.order_number ?? '').toLowerCase()
+    const id = String(entry.order_id ?? '').toLowerCase()
+    return num.includes(pqSearchLower) || id.includes(pqSearchLower)
+  }
+  const visibleQueueGroups = useMemo<PrintQueueGroup[]>(() => {
+    if (!pqSearchLower) return queueGroups
+    return queueGroups
+      .map((group) => ({ ...group, orders: group.orders.filter(matchesPqSearch) }))
+      .filter((group) => group.orders.length > 0)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queueGroups, pqSearchLower])
+  const visiblePrintedEntries = useMemo(() => {
+    const filtered = pqSearchLower ? printedEntries.filter(matchesPqSearch) : printedEntries
+    const sorted = [...filtered].sort((a, b) => {
+      const aT = a.last_printed_at ? Date.parse(a.last_printed_at) : 0
+      const bT = b.last_printed_at ? Date.parse(b.last_printed_at) : 0
+      return pqHistoryAsc ? aT - bT : bT - aT
+    })
+    return sorted
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [printedEntries, pqSearchLower, pqHistoryAsc])
+  const queueHasVisibleEntries = visibleQueueGroups.length > 0 || visiblePrintedEntries.length > 0
   const queueActionProgressPct = queueActionProgress
     ? Math.round((queueActionProgress.completed / Math.max(queueActionProgress.total, 1)) * 100)
     : 0
@@ -5769,77 +5808,131 @@ export default function OrdersView({
   return (
     <>
       <div id="view-orders">
-        <div className="filterbar">
-          <div className="search-wrap" style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+        {/* ─────────────── FILTER BAR (reworked) ─────────────── */}
+        <div
+          id="filterbar"
+          className="
+            flex items-center gap-2 flex-wrap
+            px-4 sm:px-5 py-2.5
+            bg-surface border-b border-line
+            text-ink
+          "
+        >
+          {/* Search input with icon + clear */}
+          <div className="relative flex-1 min-w-[200px] max-w-[340px]">
+            <SearchIcon
+              size={13}
+              strokeWidth={2.25}
+              className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-3 pointer-events-none"
+              aria-hidden
+            />
             <input
               type="text"
               id="searchInput"
               placeholder="Search orders, SKUs, names…"
               value={searchQuery}
               onChange={(event) => onSearchQueryChange?.(event.target.value)}
-              style={{ paddingRight: 26, width: '100%' }}
+              className="
+                w-full h-8 pl-8 pr-7
+                rounded-lg
+                bg-surface-2 ring-1 ring-line
+                text-[12.5px] text-ink placeholder:text-ink-3
+                focus:bg-surface focus:ring-2 focus:ring-brand/40
+                focus:outline-none
+                transition-all duration-150
+              "
             />
-            <button
-              id="searchClear"
-              type="button"
-              onClick={() => onSearchQueryChange?.('')}
-              style={{
-                display: searchQuery ? 'flex' : 'none',
-                position: 'absolute',
-                right: 7,
-                background: 'none',
-                border: 'none',
-                cursor: 'pointer',
-                color: 'var(--text3)',
-                fontSize: 13,
-                padding: 2,
-                lineHeight: 1,
-              }}
+            {searchQuery ? (
+              <button
+                id="searchClear"
+                type="button"
+                onClick={() => onSearchQueryChange?.('')}
+                aria-label="Clear search"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 w-5 h-5 rounded-md flex items-center justify-center text-ink-3 hover:text-ink hover:bg-line/40 active:scale-90 transition-all duration-150"
+              >
+                <XIcon size={11} strokeWidth={2.5} />
+              </button>
+            ) : null}
+          </div>
+
+          {/* SKU filter dropdown */}
+          <div className="relative inline-flex items-center">
+            <Filter size={11} strokeWidth={2.25} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-3 pointer-events-none" aria-hidden />
+            <select
+              id="skuFilter"
+              value={skuFilter}
+              onChange={(event) => setSkuFilter(event.target.value)}
+              aria-label="Filter by SKU"
+              className="
+                appearance-none cursor-pointer
+                h-8 pl-7 pr-7
+                rounded-lg
+                bg-surface ring-1 ring-line
+                text-[12px] font-medium text-ink-2
+                hover:text-ink hover:ring-line-2
+                focus:bg-surface focus:ring-2 focus:ring-brand/40
+                focus:outline-none
+                transition-all duration-150
+              "
             >
-              ✕
-            </button>
+              <option value="">All SKUs</option>
+              {skuOptions.map((sku) => (
+                <option key={sku} value={sku}>{sku}</option>
+              ))}
+            </select>
+            <span className="absolute right-2 top-1/2 -translate-y-1/2 text-ink-3 text-[8px] pointer-events-none" aria-hidden>▼</span>
           </div>
 
-          <select className="filter-sel" id="skuFilter" value={skuFilter} onChange={(event) => setSkuFilter(event.target.value)}>
-            <option value="">All SKUs</option>
-            {skuOptions.map((sku) => (
-              <option key={sku} value={sku}>{sku}</option>
-            ))}
-          </select>
-
-          <select
-            className="filter-sel"
-            id="dateFilter"
-            value={dateFilter}
-            onChange={(event) => onDateFilterChange?.(event.target.value as OrdersDateFilter)}
-          >
-            <option value="">All Dates</option>
-            <option value="this-month">This Month</option>
-            <option value="last-month">Last Month</option>
-            <option value="last-30">Last 30 Days</option>
-            <option value="last-90">Last 90 Days</option>
-            <option value="custom">Custom…</option>
-          </select>
-
-          <div id="customDateWrap" style={{ display: dateFilter === 'custom' ? 'flex' : 'none', alignItems: 'center', gap: 4 }}>
-            <input
-              type="date"
-              id="dateFrom"
-              className="filter-sel"
-              style={{ padding: '4px 6px', fontSize: 11.5, width: 'auto' }}
-              value={customDateFrom}
-              onChange={(event) => setCustomDateFrom(event.target.value)}
-            />
-            <span style={{ color: 'var(--text3)', fontSize: 11 }}>–</span>
-            <input
-              type="date"
-              id="dateTo"
-              className="filter-sel"
-              style={{ padding: '4px 6px', fontSize: 11.5, width: 'auto' }}
-              value={customDateTo}
-              onChange={(event) => setCustomDateTo(event.target.value)}
-            />
+          {/* Date filter dropdown */}
+          <div className="relative inline-flex items-center">
+            <Calendar size={11} strokeWidth={2.25} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-3 pointer-events-none" aria-hidden />
+            <select
+              id="dateFilter"
+              value={dateFilter}
+              onChange={(event) => onDateFilterChange?.(event.target.value as OrdersDateFilter)}
+              aria-label="Filter by date"
+              className="
+                appearance-none cursor-pointer
+                h-8 pl-7 pr-7
+                rounded-lg
+                bg-surface ring-1 ring-line
+                text-[12px] font-medium text-ink-2
+                hover:text-ink hover:ring-line-2
+                focus:bg-surface focus:ring-2 focus:ring-brand/40
+                focus:outline-none
+                transition-all duration-150
+              "
+            >
+              <option value="">All Dates</option>
+              <option value="this-month">This Month</option>
+              <option value="last-month">Last Month</option>
+              <option value="last-30">Last 30 Days</option>
+              <option value="last-90">Last 90 Days</option>
+              <option value="custom">Custom…</option>
+            </select>
+            <span className="absolute right-2 top-1/2 -translate-y-1/2 text-ink-3 text-[8px] pointer-events-none" aria-hidden>▼</span>
           </div>
+
+          {/* Custom date range — only shown when dateFilter is 'custom' */}
+          {dateFilter === 'custom' ? (
+            <div id="customDateWrap" className="inline-flex items-center gap-1.5 h-8 px-2 rounded-lg bg-surface-2 ring-1 ring-line">
+              <input
+                type="date"
+                id="dateFrom"
+                value={customDateFrom}
+                onChange={(event) => setCustomDateFrom(event.target.value)}
+                className="bg-transparent border-0 text-[11.5px] text-ink-2 font-mono tabular-nums focus:outline-none focus:text-ink"
+              />
+              <span className="text-ink-3 text-[11px]">→</span>
+              <input
+                type="date"
+                id="dateTo"
+                value={customDateTo}
+                onChange={(event) => setCustomDateTo(event.target.value)}
+                className="bg-transparent border-0 text-[11.5px] text-ink-2 font-mono tabular-nums focus:outline-none focus:text-ink"
+              />
+            </div>
+          ) : null}
 
           <div className="col-toggle-wrap">
             <button className="btn btn-outline btn-sm" type="button" id="colBtnFilter" style={{ display: 'none' }} onClick={() => setColumnMenuOpen((open) => !open)}>⊞ Columns</button>
@@ -5884,15 +5977,6 @@ export default function OrdersView({
           </div>
           <label
             id="btnSelectAll"
-            className="btn btn-ghost btn-sm"
-            style={{
-              gap: 6,
-              cursor: visibleOrderIds.length > 0 ? 'pointer' : 'default',
-              opacity: visibleOrderIds.length > 0 ? 1 : 0.55,
-              color: allVisibleSelected || someVisibleSelected ? 'var(--ss-blue)' : undefined,
-              background: allVisibleSelected || someVisibleSelected ? 'var(--ss-blue-bg)' : undefined,
-              borderColor: allVisibleSelected || someVisibleSelected ? 'var(--ss-blue)' : undefined,
-            }}
             title={
               visibleOrderIds.length === 0
                 ? 'No visible orders to select'
@@ -5900,6 +5984,16 @@ export default function OrdersView({
                   ? 'Clear all visible selected orders'
                   : 'Select all visible orders'
             }
+            className={`
+              inline-flex items-center gap-1.5
+              h-8 px-2.5 rounded-lg ring-1 select-none
+              text-[12px] font-medium
+              transition-all duration-150
+              ${visibleOrderIds.length > 0 ? 'cursor-pointer' : 'cursor-default opacity-50'}
+              ${allVisibleSelected || someVisibleSelected
+                ? 'bg-brand-bg ring-brand text-brand'
+                : 'bg-surface ring-line text-ink-2 hover:text-ink hover:ring-line-2'}
+            `}
           >
             <input
               ref={selectAllCheckboxRef}
@@ -5911,34 +6005,49 @@ export default function OrdersView({
                 event.stopPropagation()
                 toggleVisibleSelection(event.target.checked)
               }}
-              style={{ width: 13, height: 13, accentColor: 'var(--ss-blue)', cursor: visibleOrderIds.length > 0 ? 'pointer' : 'default' }}
+              style={{ accentColor: 'var(--ss-blue)' }}
+              className="w-3.5 h-3.5 cursor-pointer"
               aria-label="Select all visible orders"
             />
-            <span>
+            <span className="font-mono tabular-nums">
               {visibleSelectedCount > 0
-                ? `${visibleSelectedCount}/${visibleOrderIds.length} selected`
+                ? `${visibleSelectedCount}/${visibleOrderIds.length}`
                 : 'Select All'}
             </span>
           </label>
+
           <button
             id="btnSkuSort"
-            className="btn btn-ghost btn-sm"
             type="button"
-            style={{
-              gap: 4,
-              borderColor: skuSortActive ? 'var(--ss-blue)' : undefined,
-              background: skuSortActive ? 'var(--ss-blue-bg)' : undefined,
-              color: skuSortActive ? 'var(--ss-blue)' : undefined,
-            }}
             onClick={toggleSkuSort}
+            aria-pressed={skuSortActive}
+            title="Sort orders by SKU groups"
+            className={`
+              inline-flex items-center gap-1.5
+              h-8 px-2.5 rounded-lg ring-1
+              text-[12px] font-medium
+              transition-all duration-150
+              ${skuSortActive
+                ? 'bg-brand-bg ring-brand text-brand'
+                : 'bg-surface ring-line text-ink-2 hover:text-ink hover:ring-line-2'}
+            `}
           >
-            {skuSortActive ? '📋 SKU Sort ✓' : '📋 SKU Sort'}
+            <ListOrdered size={12.5} strokeWidth={2.25} />
+            SKU Sort
+            {skuSortActive ? <span className="text-brand">✓</span> : null}
           </button>
+
           <button
-            className="btn btn-ghost btn-sm"
-            type="button"
-            style={{ fontSize: 11.5, gap: 4 }}
             id="exportBtn"
+            type="button"
+            title="Export visible orders as CSV"
+            className="
+              inline-flex items-center gap-1.5
+              h-8 px-2.5 rounded-lg ring-1 ring-line bg-surface
+              text-[12px] font-medium text-ink-2
+              hover:text-ink hover:ring-line-2 active:scale-95
+              transition-all duration-150
+            "
             onClick={async () => {
               try {
                 const { blob, filename } = await apiClient.downloadOrdersExport({
@@ -5961,13 +6070,16 @@ export default function OrdersView({
               }
             }}
           >
-            📥 Export CSV
+            <Download size={12.5} strokeWidth={2.25} />
+            <span className="hidden sm:inline">Export CSV</span>
           </button>
+
+          {/* Density toggle — segmented control */}
           <div
             role="group"
             aria-label="Row density"
             title="Row density"
-            className="ml-2 inline-flex overflow-hidden rounded-md border border-line-2 bg-surface"
+            className="inline-flex h-8 overflow-hidden rounded-lg ring-1 ring-line bg-surface"
           >
             {([
               { key: 'narrow', label: '≡', tip: 'Narrow rows' },
@@ -5983,7 +6095,7 @@ export default function OrdersView({
                   title={opt.tip}
                   aria-pressed={isActive}
                   onClick={() => setTableDensity(opt.key)}
-                  className={`px-2.5 py-1 text-[13px] font-bold cursor-pointer transition-colors ${isLast ? '' : 'border-r border-line-2'} ${isActive ? 'bg-brand text-white' : 'bg-transparent text-ink-2 hover:bg-surface-2'}`}
+                  className={`px-2.5 text-[13px] font-bold cursor-pointer transition-colors ${isLast ? '' : 'border-r border-line'} ${isActive ? 'bg-brand text-white' : 'text-ink-3 hover:bg-surface-2 hover:text-ink'}`}
                 >
                   {opt.label}
                 </button>
@@ -6033,15 +6145,27 @@ export default function OrdersView({
               </div>
             </div>
           ) : null}
-          <button
-            className="btn btn-ghost btn-sm"
-            type="button"
-            style={{ fontSize: 11.5, gap: 4, marginLeft: 'auto', display: currentStatus === 'awaiting_shipment' ? '' : 'none' }}
-            id="picklistBtn"
-            onClick={() => void printPicklist()}
-          >
-            🖨️ Picklist
-          </button>
+          {currentStatus === 'awaiting_shipment' ? (
+            <button
+              id="picklistBtn"
+              type="button"
+              onClick={() => void printPicklist()}
+              title="Print picklist for visible orders"
+              className="
+                ml-auto
+                inline-flex items-center gap-1.5
+                h-8 px-3 rounded-lg
+                ring-1 ring-line bg-surface
+                text-[12px] font-semibold text-ink-2
+                hover:text-ink hover:ring-line-2 hover:bg-surface-2
+                active:scale-95
+                transition-all duration-150
+              "
+            >
+              <PrinterIcon size={12.5} strokeWidth={2.25} />
+              Picklist
+            </button>
+          ) : null}
         </div>
 
         <AnimatePresence>
@@ -6528,19 +6652,118 @@ export default function OrdersView({
       </div>
 
       {queueOpen ? (
-        <div id="print-queue-panel" style={{ display: 'grid', gridTemplateRows: queuePrintMessage ? 'auto auto auto 1fr auto' : 'auto auto 1fr auto', position: 'fixed', top: 56, right: 12, bottom: 12, width: 520, maxWidth: 'calc(100vw - 24px)', background: 'var(--surface)', border: '1px solid var(--border2)', borderRadius: 10, boxShadow: '0 8px 32px rgba(0,0,0,.18)', zIndex: 1200, overflow: 'hidden' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '10px 12px', borderBottom: '1px solid var(--border)' }}>
-            <strong>Print Queue</strong>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <button className="btn btn-ghost btn-xs" type="button" id="pq-history-btn" onClick={() => setQueueHistoryVisible((value) => !value)}>{queueHistoryVisible ? '🔼 Hide History' : '🕐 History'}</button>
-              <button className="btn btn-ghost btn-xs" type="button" onClick={() => queueClientId != null ? void apiClient.clearQueue(queueClientId).then(() => hydrateQueue()).catch((error) => showToast(error instanceof Error ? error.message : 'Failed to clear queue', 'error')) : undefined}>🗑️ Clear</button>
-              <button className="btn btn-ghost btn-xs" type="button" onClick={() => setQueueOpen(false)}>✕</button>
+        <div
+          id="print-queue-panel"
+          style={{
+            display: 'grid',
+            gridTemplateRows: queuePrintMessage ? 'auto auto auto auto 1fr auto' : 'auto auto auto 1fr auto',
+            position: 'fixed',
+            top: 56,
+            right: 12,
+            bottom: 12,
+            width: 520,
+            maxWidth: 'calc(100vw - 24px)',
+            background: 'var(--surface)',
+            border: '1px solid var(--border2)',
+            borderRadius: 10,
+            boxShadow: '0 8px 32px rgba(var(--shadow-color, 15 23 42), .18)',
+            zIndex: 1200,
+            overflow: 'hidden',
+          }}
+        >
+          {/* Header */}
+          <div className="flex items-center justify-between gap-2 px-3 py-2.5 border-b border-line">
+            <strong className="text-ink text-[13px]">Print Queue</strong>
+            <div className="flex gap-1.5">
+              <button
+                className="btn btn-ghost btn-xs"
+                type="button"
+                id="pq-history-btn"
+                onClick={() => setQueueHistoryVisible((value) => !value)}
+              >
+                {queueHistoryVisible ? '🔼 Hide History' : '🕐 History'}
+              </button>
+              <button
+                className="btn btn-ghost btn-xs"
+                type="button"
+                onClick={() =>
+                  queueClientId != null
+                    ? void apiClient
+                        .clearQueue(queueClientId)
+                        .then(() => hydrateQueue())
+                        .catch((error) => showToast(error instanceof Error ? error.message : 'Failed to clear queue', 'error'))
+                    : undefined
+                }
+              >
+                🗑️ Clear
+              </button>
+              <button className="btn btn-ghost btn-xs" type="button" onClick={() => setQueueOpen(false)}>
+                ✕
+              </button>
             </div>
           </div>
-          <div id="pq-summary" style={{ display: 'flex', gap: 8, padding: '10px 12px', borderBottom: '1px solid var(--border)', fontSize: 11 }}>
-            <div>{queueCount} Orders</div>
-            <div>{queuedEntries.reduce((sum, entry) => sum + (entry.order_qty ?? 1), 0)} Total Qty</div>
-            <div>{queueGroups.length} SKU Groups</div>
+
+          {/* Search + sort row */}
+          <div className="flex items-center gap-2 px-3 py-2 border-b border-line">
+            <div className="relative flex-1">
+              <SearchIcon
+                size={12}
+                strokeWidth={2.25}
+                className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-3 pointer-events-none"
+                aria-hidden
+              />
+              <input
+                type="text"
+                id="pq-search"
+                value={pqSearch}
+                onChange={(event) => setPqSearch(event.target.value)}
+                placeholder="Search order # or ID…"
+                aria-label="Search Print Queue"
+                className="
+                  w-full h-8 pl-8 pr-7 rounded-lg
+                  bg-surface-2 ring-1 ring-line
+                  text-[12px] text-ink placeholder:text-ink-3
+                  focus:bg-surface focus:ring-2 focus:ring-brand/40
+                  focus:outline-none transition-all duration-150
+                "
+              />
+              {pqSearch ? (
+                <button
+                  type="button"
+                  onClick={() => setPqSearch('')}
+                  aria-label="Clear search"
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 w-5 h-5 rounded-md flex items-center justify-center text-ink-3 hover:text-ink hover:bg-line/40 active:scale-90 transition-all duration-150"
+                >
+                  <XIcon size={11} strokeWidth={2.5} />
+                </button>
+              ) : null}
+            </div>
+            {queueHistoryVisible ? (
+              <button
+                type="button"
+                onClick={() => setPqHistoryAsc((v) => !v)}
+                aria-label={pqHistoryAsc ? 'History sorted oldest first — switch to newest first' : 'History sorted newest first — switch to oldest first'}
+                title={pqHistoryAsc ? 'Sort: Oldest → Newest (click for newest first)' : 'Sort: Newest → Oldest (click for oldest first)'}
+                className="
+                  inline-flex items-center gap-1 h-8 px-2.5 rounded-lg
+                  ring-1 ring-line bg-surface
+                  text-[11.5px] font-mono text-ink-2
+                  hover:text-ink hover:ring-line-2 active:scale-95
+                  transition-all duration-150
+                "
+              >
+                <span>{pqHistoryAsc ? '↑ Oldest' : '↓ Newest'}</span>
+              </button>
+            ) : null}
+          </div>
+
+          <div id="pq-summary" className="flex gap-3 px-3 py-2 border-b border-line text-[11px] text-ink-2">
+            <div><span className="font-semibold text-ink">{queueCount}</span> Orders</div>
+            <div><span className="font-semibold text-ink">{queuedEntries.reduce((sum, entry) => sum + (entry.order_qty ?? 1), 0)}</span> Total Qty</div>
+            <div><span className="font-semibold text-ink">{visibleQueueGroups.length}</span> SKU Groups</div>
+            {pqSearchLower ? (
+              <div className="ml-auto text-ink-3 italic">filtered</div>
+            ) : null}
           </div>
           {queuePrintMessage ? (
             <div id="pq-progress" style={{ padding: '8px 12px', fontSize: 11, borderBottom: '1px solid var(--border)' }}>
@@ -6555,26 +6778,45 @@ export default function OrdersView({
           ) : null}
           <div id="pq-order-list" style={{ overflowY: 'auto', overflowX: 'hidden', padding: 12, minHeight: 0 }}>
             {queueLoading && !queueHasVisibleEntries ? <div className="empty-state">Loading queue…</div> : null}
-            {!queueLoading && !queueHasVisibleEntries ? <div className="pq-empty">📭 Queue is empty<br /><small>Click "Send to Queue" on any order with a label</small></div> : null}
-            {queueGroups.map((group) => (
-              <div key={group.groupId} className="pq-group" style={{ border: '1px solid var(--border)', borderRadius: 8, marginBottom: 10, overflow: 'hidden' }}>
-                <div className="pq-group-header" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', background: 'var(--surface2)' }}>
-                  <span className="pq-group-label" style={{ fontWeight: 700 }}>{group.label}{group.description ? ` — ${group.description}` : ''}</span>
-                  <span className="pq-group-meta" style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text3)' }}>
-                    {group.orders.length} order{group.orders.length === 1 ? '' : 's'} · Qty {group.perOrderQty} each
+            {!queueLoading && !queueHasVisibleEntries ? (
+              <div className="pq-empty">
+                {pqSearchLower
+                  ? <>🔍 No matches for <strong>"{pqSearch}"</strong><br /><small>Clear the search to see all entries.</small></>
+                  : <>📭 Queue is empty<br /><small>Click "Send to Queue" on any order with a label</small></>}
+              </div>
+            ) : null}
+            {visibleQueueGroups.map((group) => (
+              <div
+                key={group.groupId}
+                className="pq-group mb-3 overflow-hidden rounded-xl bg-surface ring-1 ring-line shadow-sm"
+              >
+                <div className="pq-group-header flex items-center gap-2 px-3 py-2.5 bg-surface-2 border-b border-line">
+                  <span className="pq-group-label flex-1 min-w-0 truncate font-semibold text-ink text-[12.5px]">
+                    {group.label}{group.description ? ` — ${group.description}` : ''}
                   </span>
-                  <button className="btn btn-ghost btn-xs" type="button" onClick={() => void printQueueEntries(group.orders.map((entry) => entry.queue_entry_id))}>🖨️ Print Group</button>
+                  <span className="pq-group-meta hidden sm:inline-flex items-center gap-1 text-[10.5px] font-medium text-ink-3 uppercase tracking-wide">
+                    {group.orders.length} order{group.orders.length === 1 ? '' : 's'} · Qty {group.perOrderQty} ea
+                  </span>
+                  <button
+                    className="inline-flex items-center gap-1 h-7 px-2.5 rounded-md bg-brand text-white text-[11px] font-semibold shadow-sm hover:opacity-90 active:opacity-100 transition"
+                    type="button"
+                    onClick={() => void printQueueEntries(group.orders.map((entry) => entry.queue_entry_id))}
+                  >
+                    🖨️ Print Group
+                  </button>
                 </div>
-                <div className="pq-group-orders">
+                <div className="pq-group-orders flex flex-col gap-1.5 p-2 bg-page/40">
                   {group.orders.map((entry) => {
                     const numericOrderId = Number.parseInt(String(entry.order_id), 10)
                     const orderClickable = Number.isFinite(numericOrderId) && numericOrderId > 0
                     return (
-                      <div key={entry.queue_entry_id} className="pq-order-row" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderTop: '1px solid var(--border)' }}>
+                      <div
+                        key={entry.queue_entry_id}
+                        className="pq-order-row group/row flex items-center gap-2 px-3 py-2 rounded-lg bg-surface ring-1 ring-line hover:ring-brand/40 hover:shadow-sm transition"
+                      >
                         <button
                           type="button"
-                          className="pq-order-num"
-                          style={{ flex: 1, textAlign: 'left', fontFamily: 'monospace', color: 'var(--ss-blue)', background: 'none', border: 'none', padding: 0, cursor: orderClickable ? 'pointer' : 'default', textDecoration: orderClickable ? 'underline' : 'none', textUnderlineOffset: 2 }}
+                          className="pq-order-num flex-1 min-w-0 text-left font-mono text-[12px] text-brand truncate disabled:cursor-default disabled:no-underline hover:underline underline-offset-2"
                           disabled={!orderClickable}
                           title={orderClickable ? 'View order details' : undefined}
                           onClick={(event) => {
@@ -6582,50 +6824,99 @@ export default function OrdersView({
                             if (orderClickable) openDetailDrawer(numericOrderId, true)
                           }}
                         >
-                          Order #{entry.order_number || entry.order_id}{entry.print_count > 0 ? ` · Reprint #${entry.print_count}` : ''}
+                          Order #{entry.order_number || entry.order_id}
+                          {entry.print_count > 0 ? (
+                            <span className="ml-1.5 inline-flex items-center px-1.5 py-px rounded-sm bg-amber-100 text-amber-800 text-[9.5px] font-semibold uppercase tracking-wide">
+                              Reprint #{entry.print_count}
+                            </span>
+                          ) : null}
                         </button>
-                        <span className="pq-order-qty" style={{ fontSize: 11 }}>Qty: {entry.order_qty ?? 1}</span>
-                        <span className="pq-order-time" style={{ fontSize: 11, color: 'var(--text3)' }}>{new Date(entry.queued_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
-                        <button className="pq-remove-btn" type="button" onClick={() => queueClientId != null ? void apiClient.removeFromQueue(entry.queue_entry_id, queueClientId).then(() => hydrateQueue()).catch((error) => showToast(error instanceof Error ? error.message : 'Failed to remove queue entry', 'error')) : undefined}>✕</button>
+                        <span className="pq-order-qty inline-flex items-center px-1.5 py-0.5 rounded-md bg-surface-2 text-ink-2 text-[10.5px] font-semibold tabular-nums ring-1 ring-line/70">
+                          Qty {entry.order_qty ?? 1}
+                        </span>
+                        <span className="pq-order-time text-[10.5px] text-ink-3 tabular-nums">
+                          {new Date(entry.queued_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                        <button
+                          className="pq-remove-btn inline-flex items-center justify-center w-6 h-6 rounded-md text-ink-3 hover:text-rose-600 hover:bg-rose-50 ring-1 ring-transparent hover:ring-rose-200 transition opacity-60 group-hover/row:opacity-100"
+                          type="button"
+                          title="Remove from queue"
+                          onClick={() => queueClientId != null
+                            ? void apiClient.removeFromQueue(entry.queue_entry_id, queueClientId)
+                                .then(() => hydrateQueue())
+                                .catch((error) => showToast(error instanceof Error ? error.message : 'Failed to remove queue entry', 'error'))
+                            : undefined}
+                        >
+                          ✕
+                        </button>
                       </div>
                     )
                   })}
                 </div>
               </div>
             ))}
-            {printedEntries.length > 0 ? (
-              <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--border)' }}>
-                <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: '.5px', color: 'var(--text3)', marginBottom: 6, fontWeight: 600 }}>
-                  📋 Printed History ({printedEntries.length})
+            {visiblePrintedEntries.length > 0 ? (
+              <div className="mt-3 pt-3 border-t border-line">
+                <div className="mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wide text-ink-3">
+                  <span>📋 Printed History</span>
+                  <span className="inline-flex items-center px-1.5 py-px rounded-sm bg-surface-2 text-ink-2 text-[10px] tabular-nums ring-1 ring-line/70">
+                    {visiblePrintedEntries.length}
+                    {pqSearchLower && visiblePrintedEntries.length !== printedEntries.length ? ` / ${printedEntries.length}` : ''}
+                  </span>
                 </div>
-                {printedEntries.map((entry) => {
-                  const numericOrderId = Number.parseInt(String(entry.order_id), 10)
-                  const orderClickable = Number.isFinite(numericOrderId) && numericOrderId > 0
-                  return (
-                    <div key={entry.queue_entry_id} className="pq-order-row" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', opacity: 0.7 }}>
-                      <button
-                        type="button"
-                        className="pq-order-num"
-                        style={{ flex: 1, textAlign: 'left', color: 'var(--ss-blue)', background: 'none', border: 'none', padding: 0, cursor: orderClickable ? 'pointer' : 'default', textDecoration: orderClickable ? 'underline' : 'none', textUnderlineOffset: 2 }}
-                        disabled={!orderClickable}
-                        title={orderClickable ? 'View order details' : undefined}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          if (orderClickable) openDetailDrawer(numericOrderId, true)
-                        }}
+                <div className="flex flex-col gap-1.5">
+                  {visiblePrintedEntries.map((entry) => {
+                    const numericOrderId = Number.parseInt(String(entry.order_id), 10)
+                    const orderClickable = Number.isFinite(numericOrderId) && numericOrderId > 0
+                    return (
+                      <div
+                        key={entry.queue_entry_id}
+                        className="pq-order-row flex items-center gap-2 px-3 py-2 rounded-lg bg-surface/80 ring-1 ring-line hover:ring-brand/30 hover:bg-surface transition"
                       >
-                        Order #{entry.order_number || entry.order_id}
-                      </button>
-                      <span className="pq-order-qty">Qty: {entry.order_qty ?? 1}</span>
-                      <span className="pq-order-time">✅ {entry.last_printed_at ? new Date(entry.last_printed_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}</span>
-                    </div>
-                  )
-                })}
+                        <button
+                          type="button"
+                          className="pq-order-num flex-1 min-w-0 text-left font-mono text-[12px] text-brand truncate disabled:cursor-default disabled:no-underline hover:underline underline-offset-2"
+                          disabled={!orderClickable}
+                          title={orderClickable ? 'View order details' : undefined}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            if (orderClickable) openDetailDrawer(numericOrderId, true)
+                          }}
+                        >
+                          Order #{entry.order_number || entry.order_id}
+                        </button>
+                        <span className="pq-order-qty inline-flex items-center px-1.5 py-0.5 rounded-md bg-surface-2 text-ink-2 text-[10.5px] font-semibold tabular-nums ring-1 ring-line/70">
+                          Qty {entry.order_qty ?? 1}
+                        </span>
+                        <span className="pq-order-time inline-flex items-center gap-1 text-[10.5px] text-ink-3 tabular-nums">
+                          <span className="text-emerald-600">✓</span>
+                          {entry.last_printed_at ? new Date(entry.last_printed_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
               </div>
             ) : null}
           </div>
           <div style={{ display: 'flex', gap: 8, padding: 12, borderTop: '1px solid var(--border)' }}>
-            <button className="btn btn-primary btn-sm" id="pq-print-all-btn" type="button" disabled={queueCount === 0 || queuePrintInFlight} onClick={() => void printQueueEntries(queuedEntries.map((entry) => entry.queue_entry_id))}>🖨️ Print All</button>
+            {/* Print All hidden while History is being viewed (it would print
+                from the active queue, which is irrelevant in history view). */}
+            {!queueHistoryVisible ? (
+              <button
+                className="btn btn-primary btn-sm"
+                id="pq-print-all-btn"
+                type="button"
+                disabled={queueCount === 0 || queuePrintInFlight}
+                onClick={() => void printQueueEntries(queuedEntries.map((entry) => entry.queue_entry_id))}
+              >
+                🖨️ Print All
+              </button>
+            ) : (
+              <div className="text-[11px] text-ink-3 italic px-1">
+                Viewing history · {visiblePrintedEntries.length}{pqSearchLower && visiblePrintedEntries.length !== printedEntries.length ? ` of ${printedEntries.length}` : ''} record{printedEntries.length === 1 ? '' : 's'}
+              </div>
+            )}
           </div>
         </div>
       ) : null}

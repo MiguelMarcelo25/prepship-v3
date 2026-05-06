@@ -56,7 +56,7 @@ export function LocationsViewContent({
   const contentState = getLocationsContentState({ loading, error, locations })
 
   const inputCls =
-    'w-full px-3 py-2 rounded-lg border border-line bg-white text-[13px] text-ink placeholder:text-ink-3 ' +
+    'w-full px-3 py-2 rounded-lg border border-line bg-surface text-[13px] text-ink placeholder:text-ink-3 ' +
     'focus:border-brand/60 focus:ring-2 focus:ring-brand/15 transition-all duration-150 outline-none'
   const labelCls = 'block text-tiny font-bold uppercase tracking-[0.06em] text-ink-3 mb-1.5'
 
@@ -93,7 +93,7 @@ export function LocationsViewContent({
             animate={{ opacity: 1, y: 0, height: 'auto' }}
             exit={{ opacity: 0, y: -8, height: 0 }}
             transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-            className="bg-white rounded-2xl border border-line shadow-sm overflow-hidden mb-5 max-w-3xl"
+            className="bg-surface rounded-2xl border border-line shadow-sm overflow-hidden mb-5 max-w-3xl"
             onSubmit={onSubmit}
           >
             <div className="px-5 py-4 border-b border-line bg-gradient-to-b from-page to-surface-2/30 flex items-center justify-between">
@@ -185,7 +185,7 @@ export function LocationsViewContent({
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="flex flex-col items-center justify-center gap-3 py-12 bg-white rounded-2xl border border-line"
+              className="flex flex-col items-center justify-center gap-3 py-12 bg-surface rounded-2xl border border-line"
             >
               <Loader2 size={22} strokeWidth={2.25} className="text-brand animate-spinSlow" />
               <div className="text-tiny text-ink-3 uppercase tracking-wider font-semibold">Loading locations…</div>
@@ -196,7 +196,7 @@ export function LocationsViewContent({
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
-              className="flex flex-col items-center justify-center gap-3 py-14 bg-white rounded-2xl border border-danger/20"
+              className="flex flex-col items-center justify-center gap-3 py-14 bg-surface rounded-2xl border border-danger/20"
             >
               <div className="w-14 h-14 rounded-full bg-danger-bg ring-2 ring-danger/15 flex items-center justify-center">
                 <AlertTriangle size={26} strokeWidth={2.25} className="text-danger" />
@@ -210,7 +210,7 @@ export function LocationsViewContent({
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
-              className="flex flex-col items-center justify-center gap-3 py-14 bg-white rounded-2xl border border-line"
+              className="flex flex-col items-center justify-center gap-3 py-14 bg-surface rounded-2xl border border-line"
             >
               <motion.div
                 initial={{ scale: 0.6, rotate: -10 }}
@@ -239,7 +239,7 @@ export function LocationsViewContent({
                     show: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 320, damping: 24 } },
                   }}
                   whileHover={{ y: -1 }}
-                  className="bg-white rounded-xl border border-line shadow-sm hover:shadow-md transition-shadow p-4 flex items-start gap-3"
+                  className="bg-surface rounded-xl border border-line shadow-sm hover:shadow-md transition-shadow p-4 flex items-start gap-3"
                 >
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">

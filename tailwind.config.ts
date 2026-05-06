@@ -1,50 +1,79 @@
 import type { Config } from 'tailwindcss';
 
+// Accent palette names used by the spec-driven sidebar template (variants F–Y).
+// Listed once here so the safelist knows which color names are allowed in
+// dynamic class strings like `bg-${accent}-500`.
+const ACCENT_PALETTES = [
+  'indigo', 'violet', 'purple', 'fuchsia', 'pink', 'rose',
+  'red', 'orange', 'amber', 'yellow', 'lime', 'green',
+  'emerald', 'teal', 'cyan', 'sky', 'blue', 'slate', 'zinc', 'stone',
+].join('|')
+
 export default {
   content: [
     './web/index.html',
     './web/src/**/*.{ts,tsx}',
   ],
+  // Spec-driven sidebar variants (SidebarTemplated.tsx) compose Tailwind
+  // classes at runtime like `bg-${accent}-500/20`. Tailwind's JIT can't see
+  // those strings during the build, so the patterns must be whitelisted.
+  safelist: [
+    {
+      pattern: new RegExp(
+        `(bg|text|ring|border|shadow|from|via|to)-(${ACCENT_PALETTES})-(50|100|200|300|400|500|600|700|800|900)(/[0-9]{1,3})?`,
+      ),
+    },
+    {
+      pattern: new RegExp(
+        `(bg|text|ring|border)-(${ACCENT_PALETTES})-(50|100|200|300|400|500|600|700|800|900)`,
+      ),
+    },
+  ],
   theme: {
     extend: {
+      // All semantic tokens reference CSS variables that ThemeProvider
+      // writes onto :root. Using `rgb(var(--*-rgb) / <alpha-value>)`
+      // keeps Tailwind opacity modifiers (e.g. `bg-brand/30`) working —
+      // a raw `var(--brand)` would not let Tailwind compute the alpha.
+      // Fallback triplets match the default Indigo theme.
       colors: {
         brand: {
-          DEFAULT: '#2a5bd7',
-          dark: '#1a48c0',
-          bg: '#eef2ff',
-          border: '#c3d0f5',
+          DEFAULT: 'rgb(var(--brand-rgb, 42 91 215) / <alpha-value>)',
+          dark: 'rgb(var(--brand-2-rgb, 26 72 192) / <alpha-value>)',
+          bg: 'rgb(var(--brand-bg-rgb, 238 242 255) / <alpha-value>)',
+          border: 'rgb(var(--brand-border-rgb, 195 208 245) / <alpha-value>)',
         },
         ok: {
-          DEFAULT: '#16a34a',
+          DEFAULT: 'rgb(var(--ok-rgb, 22 163 74) / <alpha-value>)',
           dark: '#15803d',
           bg: '#f0fdf4',
           border: '#bbf7d0',
         },
         warn: {
-          DEFAULT: '#d97706',
+          DEFAULT: 'rgb(var(--warn-rgb, 217 119 6) / <alpha-value>)',
           bg: '#fffbeb',
           border: '#fcd34d',
         },
         danger: {
-          DEFAULT: '#dc2626',
+          DEFAULT: 'rgb(var(--danger-rgb, 220 38 38) / <alpha-value>)',
           bg: '#fef2f2',
           border: '#fecaca',
         },
         ink: {
-          DEFAULT: '#1a1f2e',
-          2: '#4a5568',
-          3: '#8a95a3',
-          4: '#b0b8c4',
+          DEFAULT: 'rgb(var(--text-rgb, 26 31 46) / <alpha-value>)',
+          2: 'rgb(var(--text-2-rgb, 74 85 104) / <alpha-value>)',
+          3: 'rgb(var(--text-3-rgb, 138 149 163) / <alpha-value>)',
+          4: 'rgb(var(--text-4-rgb, 176 184 196) / <alpha-value>)',
         },
         surface: {
-          DEFAULT: '#ffffff',
-          2: '#f8f9fb',
-          3: '#eef0f4',
+          DEFAULT: 'rgb(var(--surface-rgb, 255 255 255) / <alpha-value>)',
+          2: 'rgb(var(--surface-2-rgb, 248 249 251) / <alpha-value>)',
+          3: 'rgb(var(--surface-3-rgb, 238 240 244) / <alpha-value>)',
         },
-        page: '#f0f2f5',
+        page: 'rgb(var(--bg-rgb, 240 242 245) / <alpha-value>)',
         line: {
-          DEFAULT: '#e1e4e8',
-          2: '#c8cdd5',
+          DEFAULT: 'rgb(var(--border-rgb, 225 228 232) / <alpha-value>)',
+          2: 'rgb(var(--border-2-rgb, 200 205 213) / <alpha-value>)',
         },
       },
       fontFamily: {
