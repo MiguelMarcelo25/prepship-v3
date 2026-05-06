@@ -90,12 +90,26 @@ async function assertOrderEditable(
   };
 }
 
+// Active-client filter (added 2026-05-07): orders belonging to clients
+// flagged inactive (Inventory > Clients > Active toggle off) are hidden
+// from the main orders list, matching the sidebar's behavior. Without
+// this, the sidebar's per-store badge would drop disabled clients while
+// the main /orders list still returned their rows — desync between the
+// parent count and the visible list. coalesce(active, true) defaults
+// legacy null rows to visible.
 const visibleStorePredicate = sql`(
   (${orders.storeId} is not null and ${orders.storeId} not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)}))
   or exists (
     select 1 from ${clients} test_client
     where test_client.id = ${orders.clientId}
       and test_client.is_test = true
+  )
+) and (
+  ${orders.clientId} is null
+  or exists (
+    select 1 from ${clients} owner_client
+    where owner_client.id = ${orders.clientId}
+      and coalesce(owner_client.active, true) = true
   )
 )`;
 

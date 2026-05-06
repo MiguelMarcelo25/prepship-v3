@@ -72,13 +72,22 @@ app.get('/counts', async (c) => {
   // = 141"). v2 never had this gap because both queries used the same
   // visibility predicate. Use one shared predicate here so parent and
   // children always agree.
+  //
+  // Active-client filter (added 2026-05-07): when a user disables a
+  // client via Inventory > Clients (active=false), their orders should
+  // disappear from the sidebar and main orders list. /init/stores
+  // already filters by active, but /init/counts and /orders did not —
+  // causing the sidebar to show "Store 9000001" (raw fallback) for
+  // disabled clients because the counts included them but the
+  // store-name resolver dropped them. Use coalesce(active, true) so
+  // legacy clients with null `active` default to visible.
   const visibleOrderPredicate = sql`(
     (coalesce(c.is_test, false) = true and o.client_id is not null)
     or (
       o.store_id is not null
       and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
     )
-  )`;
+  ) and coalesce(c.active, true) = true`;
 
   const [rows, byStatus, byStatusStore] = await Promise.all([
     db.execute<{
