@@ -194,7 +194,15 @@ export function SidebarOrders({
     }
     void load()
     const id = window.setInterval(() => void load(), 30000)
-    return () => window.clearInterval(id)
+    // Real-time refresh on client active-toggle (dispatched from
+    // InventoryView). Mirrors the listener in useSidebarController so
+    // BOTH sidebar implementations refresh immediately on toggle.
+    const onClientActiveChanged = () => void load()
+    window.addEventListener('prepship:client-active-changed', onClientActiveChanged)
+    return () => {
+      window.clearInterval(id)
+      window.removeEventListener('prepship:client-active-changed', onClientActiveChanged)
+    }
   }, [])
 
   const sections = useMemo(() => buildSidebarSections(stores, counts), [stores, counts])

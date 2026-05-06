@@ -99,12 +99,22 @@ export function useSidebarController(props: SidebarVariantProps) {
     const onVisible = () => {
       if (document.visibilityState === 'visible') void loadCounts()
     }
+    // Real-time refresh on client active-toggle: dispatched from
+    // InventoryView's handleToggleClientActive after a successful PATCH.
+    // Without this listener the user would see the toggled client
+    // linger in the sidebar count tree for up to 10 seconds before
+    // the interval-driven refresh dropped it.
+    const onClientActiveChanged = () => {
+      void loadCounts()
+    }
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('focus', onVisible)
+    window.addEventListener('prepship:client-active-changed', onClientActiveChanged)
     return () => {
       window.clearInterval(intervalId)
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', onVisible)
+      window.removeEventListener('prepship:client-active-changed', onClientActiveChanged)
     }
   }, [dateStart, dateEnd])
 

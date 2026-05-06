@@ -35,6 +35,23 @@ export function useInitStores(): UseInitStoresResult {
     void fetchStores();
   }, [fetchStores]);
 
+  // Real-time refresh on client active-toggle: when the user toggles a
+  // client's `active` flag in Inventory > Clients, the store list must
+  // refetch immediately so the sidebar drops/restores the corresponding
+  // store row. The `prepship:client-active-changed` event is dispatched
+  // from InventoryView's handleToggleClientActive after the PATCH
+  // succeeds. Without this listener, the sidebar would only update on
+  // page reload (or on the next interval-driven refresh elsewhere).
+  useEffect(() => {
+    const handler = () => {
+      void fetchStores();
+    };
+    window.addEventListener('prepship:client-active-changed', handler);
+    return () => {
+      window.removeEventListener('prepship:client-active-changed', handler);
+    };
+  }, [fetchStores]);
+
   return {
     stores,
     loading,

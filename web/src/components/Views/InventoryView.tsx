@@ -888,6 +888,17 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
         `${next ? '✅' : '⏸️'} ${client.name} ${next ? 'enabled' : 'disabled'}`,
         'success'
       )
+      // Real-time sidebar refresh: notify any listeners (sidebar
+      // counts + store list) that client visibility just changed.
+      // Without this, the sidebar would only refresh on its 10-second
+      // interval or when the tab regained focus — meaning the user
+      // sees the toggled client linger for several seconds before
+      // disappearing. Custom DOM event is a zero-dep cross-component
+      // notification channel that doesn't require lifting state up
+      // through props.
+      window.dispatchEvent(new CustomEvent('prepship:client-active-changed', {
+        detail: { clientId: client.clientId, active: next }
+      }))
       await refreshInventoryView()
       // Drop the override — fresh server data is now authoritative.
       setClientActiveOverrides((current) => {
