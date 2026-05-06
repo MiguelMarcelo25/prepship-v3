@@ -288,13 +288,57 @@ export async function ssGetShipmentV1(
 }
 
 /**
+ * SSUpstreamOrderId — a branded number that represents a ShipStation
+ * upstream orderId (the numeric ID ShipStation assigns when ingesting
+ * an order from a marketplace).
+ *
+ * Why brand it: Our `orders` table has TWO numeric IDs:
+ *   - `orders.id`            — local Postgres serial PK (small numbers)
+ *   - `orders.externalOrderId` — SS upstream orderId stored as text (large numbers)
+ *
+ * ShipStation's v1 API endpoints (markasshipped, holds, etc.) require
+ * the UPSTREAM orderId. Passing the local PK results in 404. Before
+ * this brand existed, both were `number` to TS, so the wrong one
+ * could be passed silently. With the brand, the only way to produce
+ * a valid `SSUpstreamOrderId` is via `asSSUpstreamOrderId()` below
+ * — passing `order.id` directly will fail to compile.
+ *
+ * This regression caused the marketplace-notification bug discovered
+ * 2026-05-07: every label created since v4 launch passed `order.id`
+ * to v1 markasshipped → 404 → silently swallowed → marketplace never
+ * notified. The brand makes that bug uncompilable forever.
+ */
+declare const __ssUpstreamOrderIdBrand: unique symbol;
+export type SSUpstreamOrderId = number & { readonly [__ssUpstreamOrderIdBrand]: never };
+
+/**
+ * Convert an `orders.externalOrderId` (text column) into a branded
+ * `SSUpstreamOrderId`. Returns `null` if the input is missing or
+ * not a valid positive integer string.
+ *
+ * Use this at the call site of any ShipStation v1 API that needs an
+ * orderId. NEVER cast `order.id` (the local PK) with `as SSUpstreamOrderId`
+ * — that defeats the entire point of the brand. If you find yourself
+ * wanting to do that, you've located a bug.
+ */
+export function asSSUpstreamOrderId(
+  externalOrderId: string | null | undefined,
+): SSUpstreamOrderId | null {
+  if (!externalOrderId) return null;
+  const n = Number(externalOrderId);
+  if (!Number.isFinite(n) || n <= 0 || !Number.isInteger(n)) return null;
+  return n as SSUpstreamOrderId;
+}
+
+/**
  * Marks an order as shipped on ShipStation v1 with notifySalesChannel:true,
  * which triggers ShipStation's downstream marketplace notification
  * (Amazon Confirm-Shipment, eBay Order-Update, Walmart Acknowledge, etc.).
  *
- * ⚠️ orderId MUST be the upstream ShipStation orderId (the numeric ID
- * ShipStation assigns when ingesting from the marketplace), NOT a local
- * database primary key. Pass parseInt(order.externalOrderId) here.
+ * orderId is typed as `SSUpstreamOrderId` so the only way to call this
+ * is by first converting via `asSSUpstreamOrderId(order.externalOrderId)`.
+ * Passing `order.id` directly is a TypeScript compile error — see the
+ * SSUpstreamOrderId docstring for why.
  *
  * Errors are RE-THROWN, not swallowed — the previous swallow-and-return-false
  * design hid 404s caused by passing the wrong orderId, leaving operators
@@ -305,7 +349,7 @@ export async function ssGetShipmentV1(
  */
 export async function ssMarkOrderShippedV1(
   args: {
-    orderId: number;
+    orderId: SSUpstreamOrderId;
     carrierCode: string | null;
     trackingNumber: string;
     shipDate: string;

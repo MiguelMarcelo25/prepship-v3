@@ -53,7 +53,7 @@ import { eq, desc, inArray, and } from 'drizzle-orm';
 import { db } from '../src/db/client';
 import { orders } from '../src/db/schema/orders';
 import { shipments } from '../src/db/schema/shipments';
-import { ssMarkOrderShippedV1 } from '../src/lib/shipstation/labels';
+import { ssMarkOrderShippedV1, asSSUpstreamOrderId } from '../src/lib/shipstation/labels';
 import { loadClientCredentials } from '../src/lib/shipstation/credentials';
 
 type Result = { label: string; ok: boolean; reason?: string };
@@ -84,12 +84,16 @@ async function recoverBySsShipmentId(ssShipmentId: number): Promise<Result> {
 }
 
 async function ackOrder(label: string, order: typeof orders.$inferSelect): Promise<Result> {
-  if (!order.externalOrderId) {
-    return { label, ok: false, reason: 'order has no externalOrderId (manual order or sync gap)' };
-  }
-  const ssUpstreamOrderId = Number(order.externalOrderId);
-  if (!Number.isFinite(ssUpstreamOrderId) || ssUpstreamOrderId <= 0) {
-    return { label, ok: false, reason: `externalOrderId="${order.externalOrderId}" is not a valid number` };
+  // asSSUpstreamOrderId is the only safe path to produce the branded
+  // SSUpstreamOrderId type that ssMarkOrderShippedV1 requires. Any
+  // attempt to pass order.id directly would fail to compile.
+  const ssUpstreamOrderId = asSSUpstreamOrderId(order.externalOrderId);
+  if (!ssUpstreamOrderId) {
+    return {
+      label,
+      ok: false,
+      reason: `externalOrderId="${order.externalOrderId ?? '(null)'}" is missing or not a valid positive integer`,
+    };
   }
 
   const [shipment] = await db

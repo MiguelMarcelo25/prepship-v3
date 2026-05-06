@@ -12,7 +12,7 @@ import { products } from '../db/schema/products';
 import { settings } from '../db/schema/settings';
 import { syncOrders } from '../services/order-sync';
 import { syncShipments } from '../services/shipment-sync';
-import { ssMarkOrderShippedV1 } from '../lib/shipstation/labels';
+import { ssMarkOrderShippedV1, asSSUpstreamOrderId } from '../lib/shipstation/labels';
 import { loadClientCredentials } from '../lib/shipstation/credentials';
 
 const app = new Hono();
@@ -535,19 +535,16 @@ async function retryMarketplaceNotifyOne(orderNumber: string): Promise<RetryNoti
   if (!order) {
     return { orderNumber, ok: false, reason: 'order not found in DB' };
   }
-  if (!order.externalOrderId) {
+  // asSSUpstreamOrderId is the only safe path to produce the
+  // SSUpstreamOrderId branded type. Returns null if externalOrderId
+  // is missing/invalid — protects against passing the local PK by
+  // mistake (compile-time guarantee, see lib/shipstation/labels.ts).
+  const ssUpstreamOrderId = asSSUpstreamOrderId(order.externalOrderId);
+  if (!ssUpstreamOrderId) {
     return {
       orderNumber,
       ok: false,
-      reason: 'order has no externalOrderId (manual order or sync gap)',
-    };
-  }
-  const ssUpstreamOrderId = Number(order.externalOrderId);
-  if (!Number.isFinite(ssUpstreamOrderId) || ssUpstreamOrderId <= 0) {
-    return {
-      orderNumber,
-      ok: false,
-      reason: `externalOrderId="${order.externalOrderId}" is not a valid number`,
+      reason: `externalOrderId="${order.externalOrderId ?? '(null)'}" is missing or not a valid positive integer`,
     };
   }
 
@@ -568,18 +565,15 @@ async function retryMarketplaceNotifyOne(orderNumber: string): Promise<RetryNoti
       reason: `shipment ${shipment.id} has no tracking number`,
     };
   }
-  if (!order.clientId) {
-    return { orderNumber, ok: false, reason: 'order has no clientId — can\'t load credentials' };
-  }
 
-  const creds = await loadClientCredentials(order.clientId);
-  if (!creds.apiKey || !creds.apiSecret) {
-    return {
-      orderNumber,
-      ok: false,
-      reason: `client ${order.clientId} has no v1 ShipStation API credentials configured`,
-    };
-  }
+  // Per-client v1 keys are PREFERRED but optional. Sub-stores under a
+  // master ShipStation account (e.g. Tran Agency) have no per-client
+  // v1 keys; v1-client falls back to env.SHIPSTATION_API_KEY/SECRET
+  // when we pass undefined. Matches the production label flow's
+  // behavior. See loadClientCredentials docstring.
+  const creds = order.clientId ? await loadClientCredentials(order.clientId) : null;
+  const apiKey = creds?.apiKey ?? undefined;
+  const apiSecret = creds?.apiSecret ?? undefined;
 
   const shipDate =
     shipment.shipDate?.toISOString().slice(0, 10) ??
@@ -594,7 +588,7 @@ async function retryMarketplaceNotifyOne(orderNumber: string): Promise<RetryNoti
         trackingNumber: shipment.trackingNumber,
         shipDate,
       },
-      { apiKey: creds.apiKey, apiSecret: creds.apiSecret }
+      { apiKey, apiSecret }
     );
     console.info(
       `[admin/retry-marketplace-notify] ✅ ${orderNumber} ssUpstreamOrderId=${ssUpstreamOrderId} tracking=${shipment.trackingNumber} — marketplace will be notified by ShipStation`

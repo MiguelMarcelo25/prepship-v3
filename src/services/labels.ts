@@ -11,6 +11,7 @@ import {
   ssListRecentLabels,
   ssMarkOrderShippedV1,
   ssVoidShipment,
+  asSSUpstreamOrderId,
   type CreatedExternalLabel,
   type ShipstationAddressInput,
 } from '../lib/shipstation/labels';
@@ -902,14 +903,18 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
   // ssV1Request's nullish-coalesce fallback to env vars kicks in. This
   // matches the order-sync's already-working behavior for the same
   // clients.
-  const ssUpstreamOrderId = order.externalOrderId ? Number(order.externalOrderId) : null;
+  //
+  // OrderId resolution: asSSUpstreamOrderId is the ONLY safe way to
+  // produce the SSUpstreamOrderId branded type. Passing order.id (the
+  // local PK) here would fail to compile — that's the regression
+  // protection for the orderId-mismatch bug discovered 2026-05-07.
+  const ssUpstreamOrderId = asSSUpstreamOrderId(order.externalOrderId);
   const v1ApiKey = creds.apiKey ?? undefined;
   const v1ApiSecret = creds.apiSecret ?? undefined;
   if (
     created.shipmentId &&
     created.trackingNumber &&
-    ssUpstreamOrderId &&
-    Number.isFinite(ssUpstreamOrderId)
+    ssUpstreamOrderId
   ) {
     void (async () => {
       const tag = `[labels] localOrderId=${order.id} ssUpstreamOrderId=${ssUpstreamOrderId} ssShipmentId=${created.shipmentId}`;
