@@ -305,7 +305,7 @@ const PROVIDER_DEFS: ProviderDef[] = [
     key: 'ebay',
     category: 'store',
     label: 'eBay',
-    blurb: 'eBay Sell API. Pull orders, push tracking, manage listings. Requires app keyset + user OAuth refresh token.',
+    blurb: 'eBay Sell API. Pull orders, push tracking, manage listings. Save the keyset below, then click "Connect with eBay" on the saved row to grant access — the OAuth flow auto-populates the refresh token.',
     badge: 'eBay',
     badgeColor: '#E53238',
     domain: 'ebay.com',
@@ -314,7 +314,8 @@ const PROVIDER_DEFS: ProviderDef[] = [
       { name: 'appId', label: 'App ID (Client ID)', hint: 'Production app ID from developer.ebay.com → My Account → Application Keys.' },
       { name: 'certId', label: 'Cert ID (Client Secret)', type: 'password' },
       { name: 'devId', label: 'Dev ID', hint: 'Your developer account ID; needed for Trading API legacy calls.' },
-      { name: 'refreshToken', label: 'User OAuth Refresh Token', type: 'password', hint: 'Long-lived token from the user-consent flow (v^1.1.#i^1#…). Required for Sell API order operations.' },
+      { name: 'ruName', label: 'RuName (Redirect URL Name)', hint: 'eBay-issued alias for your callback URL. developer.ebay.com → User Tokens → Get a Token from eBay via Your Application → "Get RuName". The RuName\'s "Auth Accepted URL" must point to <your-domain>/oauth/ebay/callback for Connect with eBay to work.' },
+      { name: 'refreshToken', label: 'User OAuth Refresh Token', type: 'password', required: false, hint: 'OPTIONAL — leave blank and use the "Connect with eBay" button on the saved row to obtain this automatically. Manually paste only if you already have a long-lived token from a prior OAuth dance.' },
       { name: 'environment', label: 'Environment (optional)', required: false, placeholder: 'production | sandbox', hint: "Defaults to 'production'. Use 'sandbox' to point at api.sandbox.ebay.com." },
     ],
   },
@@ -552,6 +553,17 @@ interface SavedRow {
   source: string
   active: boolean
   createdAt: string
+  // Non-secret subset of credentials needed for client-side OAuth init
+  // (e.g. constructing the eBay sign-in URL). Returned by the GET endpoint
+  // for stores; secrets like certId / refreshToken stay server-side.
+  // `hasRefreshToken` is a presence flag (boolean) not the value itself.
+  oauthMeta?: {
+    appId?: string | null
+    clientId?: string | null
+    ruName?: string | null
+    environment?: string | null
+    hasRefreshToken?: boolean
+  }
 }
 
 // Stores live in /api/store-accounts, carriers in /api/carrier-accounts.
@@ -758,6 +770,63 @@ export function CarrierIntegrationsCard() {
     }
   }
 
+  // Opens eBay's OAuth consent screen in a new tab. eBay redirects back to
+  // /oauth/ebay/callback (handled by api/oauth/ebay/callback.ts), which
+  // exchanges the auth code for a refresh_token and writes it into this
+  // store_accounts row's credentials JSONB. After the new tab closes,
+  // the user clicks "Test Connection" to confirm everything is wired.
+  //
+  // eBay quirk: the `redirect_uri` parameter on the authorize URL must be
+  // the RuName ALIAS (e.g. "DrPrepperUSA-Prepship-PRD-…"), NOT the actual
+  // callback URL. The actual URL is configured server-side in eBay's
+  // developer console as the RuName's "Auth Accepted URL". Token exchange
+  // (in the callback handler) uses the actual URL — they don't match,
+  // by design.
+  const connectEbay = (d: SavedRow) => {
+    const meta = d.oauthMeta ?? {}
+    const appId = String(meta.appId ?? '').trim()
+    const ruName = String(meta.ruName ?? '').trim()
+    const environment = String(meta.environment ?? '').toLowerCase()
+    if (!appId) {
+      alert(
+        'This eBay row is missing the App ID.\n\n' +
+        'Click Delete on this row, then re-add it making sure all fields are filled in.',
+      )
+      return
+    }
+    if (!ruName) {
+      alert(
+        'This eBay row is missing the RuName.\n\n' +
+        'Get a RuName from developer.ebay.com → User Tokens → Get a Token from eBay via Your Application,\n' +
+        'set its "Auth Accepted URL" to ' + window.location.origin + '/oauth/ebay/callback,\n' +
+        'then Delete this row and re-add it with the RuName filled in.',
+      )
+      return
+    }
+    const isSandbox = environment === 'sandbox'
+    const authBase = isSandbox
+      ? 'https://auth.sandbox.ebay.com/oauth2/authorize'
+      : 'https://auth.ebay.com/oauth2/authorize'
+    // Scopes for Sell Fulfillment (orders) + Sell Account (store info).
+    // Same scopes the api/carriers/ebay/orders.ts puller needs.
+    const scopes = [
+      'https://api.ebay.com/oauth/api_scope',
+      'https://api.ebay.com/oauth/api_scope/sell.fulfillment',
+      'https://api.ebay.com/oauth/api_scope/sell.fulfillment.readonly',
+      'https://api.ebay.com/oauth/api_scope/sell.account',
+      'https://api.ebay.com/oauth/api_scope/sell.account.readonly',
+    ].join(' ')
+    const params = new URLSearchParams({
+      client_id: appId,
+      redirect_uri: ruName,
+      response_type: 'code',
+      scope: scopes,
+      state: String(d.accountId),
+    })
+    const authUrl = `${authBase}?${params.toString()}`
+    window.open(authUrl, '_blank', 'noopener,noreferrer')
+  }
+
   const refresh = async () => {
     try {
       // Fetch from BOTH tables in parallel and merge for the unified list view.
@@ -922,6 +991,34 @@ export function CarrierIntegrationsCard() {
               }}
             >
               {pulling[d.id] ? 'Pulling…' : 'Pull Orders'}
+            </button>
+          ) : null}
+          {/* Connect with eBay — opens the eBay OAuth consent screen so the
+              user can grant access without manually pasting a refresh token.
+              The /oauth/ebay/callback Vercel function completes the exchange
+              and writes the refresh_token into this row's credentials. */}
+          {d.provider === 'ebay' ? (
+            <button
+              type="button"
+              onClick={() => connectEbay(d)}
+              title={
+                d.oauthMeta?.hasRefreshToken
+                  ? 'Re-connect — replace the saved refresh token by signing in to eBay again'
+                  : 'Connect — sign in to eBay to grant PrepShip access (auto-saves the refresh token)'
+              }
+              style={{
+                padding: '3px 10px',
+                border: '1px solid #E53238',
+                borderRadius: 3,
+                background: d.oauthMeta?.hasRefreshToken ? 'var(--surface2)' : '#E53238',
+                color: d.oauthMeta?.hasRefreshToken ? '#E53238' : '#fff',
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {d.oauthMeta?.hasRefreshToken ? '↻ Re-connect eBay' : '🔗 Connect with eBay'}
             </button>
           ) : null}
           {!isStore && !PROVIDER_DEFS.find((p) => p.key === d.provider)?.noRateQuotes ? (

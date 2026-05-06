@@ -688,6 +688,61 @@ type V4Carrier = {
 
 type V4CarriersResponse = { carriers: V4Carrier[] };
 
+// Direct carrier accounts from /carrier-accounts (Walmart, etc.). The
+// /rates/multi endpoint only enumerates ShipStation carriers, so we
+// fetch this in parallel and merge — keeps the Rate Browser sidebar in
+// sync with what's connected in Settings without a backend deploy.
+type V4DirectCarrierRow = {
+  id: number;
+  clientId?: number | null;
+  provider: string;
+  label?: string | null;
+  accountIdentifier?: string | null;
+  active?: boolean;
+};
+type V4DirectCarriersResponse = { data?: V4DirectCarrierRow[] };
+
+// Shift direct-carrier ids well above the ShipStation 6-digit range so
+// the synthetic numeric shippingProviderId can't collide with real ones.
+const DIRECT_CARRIER_PROVIDER_ID_OFFSET = 10_000_000;
+
+// Marketplace order sources, NOT shipping carriers — they should never
+// surface in the Rate Browser sidebar regardless of being saved in the
+// carrier_accounts table. Mirrors STORE_PROVIDERS in the Settings card
+// (kept in sync manually since they live in different files; if you add
+// a store here, also add it there).
+const STORE_PROVIDER_KEYS = new Set<string>([
+  'walmart',
+  'amazon',
+  'ebay',
+  'shopify',
+  'etsy',
+  'tiktok_shop',
+  'woocommerce',
+  'bigcommerce',
+]);
+
+// Route the direct-carrier list through the Vercel function we control
+// (api/carrier-accounts.ts) rather than Render's same-named endpoint,
+// whose code lives in a separate repo and may not match. Using fetch
+// directly here so we don't have to thread callVercelFunction through
+// the React Query queryFn — same-origin /api/* path + Supabase JWT.
+async function fetchDirectCarrierAccounts(): Promise<V4DirectCarriersResponse> {
+  const { supabase } = await import('../lib/supabase');
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
+  const res = await fetch('/api/carrier-accounts?source=admin', { headers });
+  if (!res.ok) {
+    let msg = `${res.status} ${res.statusText}`;
+    try { const e = await res.json(); if (e?.error) msg = e.error; } catch { /* ignore */ }
+    throw new Error(msg);
+  }
+  return (await res.json()) as V4DirectCarriersResponse;
+}
+
 export function useShippingAccounts(): UseShippingAccountsResult {
   const query = useQuery<V4CarriersResponse>({
     queryKey: ['v2-hooks:carriers'],
@@ -695,27 +750,65 @@ export function useShippingAccounts(): UseShippingAccountsResult {
     staleTime: 60_000,
   });
 
+  const directQuery = useQuery<V4DirectCarriersResponse>({
+    queryKey: ['v2-hooks:carrier-accounts'],
+    queryFn: fetchDirectCarrierAccounts,
+    staleTime: 60_000,
+  });
+
   // SettingsView keys rows by `shippingProviderId` — must be unique per account.
   // ShipStation carrier ids are `se-433542`; v2 uses the numeric provider id.
   const accounts = useMemo<CarrierAccountDto[]>(
-    () =>
-      (query.data?.carriers ?? []).map((c, i) => ({
+    () => {
+      const ssAccounts: CarrierAccountDto[] = (query.data?.carriers ?? []).map((c, i) => ({
         carrierId: c.carrier_id,
         carrierCode: c.carrier_code,
         shippingProviderId: toProviderAccountId(c.carrier_id) ?? i + 1,
         nickname: c.nickname ?? c.friendly_name ?? c.carrier_code,
         clientId: c.source_client_id ?? null,
         code: c.carrier_code,
-        _label: c.nickname ?? c.friendly_name ?? c.carrier_code,
+        _label: c.friendly_name ?? c.nickname ?? c.carrier_code,
         sourceClientName: c.source_client_name,
-      })),
-    [query.data]
+      }));
+      const directAccounts: CarrierAccountDto[] = (directQuery.data?.data ?? [])
+        .filter((row) => row && row.active !== false && row.provider)
+        // Exclude marketplace stores — they're order sources, not carriers.
+        .filter((row) => !STORE_PROVIDER_KEYS.has(row.provider))
+        .map((row) => {
+          const friendly = row.label || row.provider;
+          const synthId = `se-${DIRECT_CARRIER_PROVIDER_ID_OFFSET + row.id}`;
+          return {
+            carrierId: synthId,
+            carrierCode: row.provider,
+            shippingProviderId: DIRECT_CARRIER_PROVIDER_ID_OFFSET + row.id,
+            nickname: friendly,
+            clientId: row.clientId ?? null,
+            code: row.provider,
+            _label: friendly,
+            sourceClientName: 'Direct carrier accounts',
+          };
+        });
+      return [...ssAccounts, ...directAccounts];
+    },
+    [query.data, directQuery.data]
   );
+
+  // Only treat the hook as errored when BOTH sources failed. ShipStation
+  // (via Render /rates/multi) and direct carriers (via Vercel
+  // /api/carrier-accounts) are independent — losing one shouldn't make
+  // the Settings UI look broken when the other is healthy. Common case
+  // for this: Render's JWT or ShipStation config drifts and /rates/multi
+  // returns 401, while direct UPS / FedEx / USPS continue working.
+  const ssQueryError = (query.error as Error | null) ?? null;
+  const directQueryError = (directQuery.error as Error | null) ?? null;
+  const mergedError = ssQueryError && directQueryError
+    ? ssQueryError
+    : null;
 
   return {
     accounts,
-    isLoading: query.isLoading,
-    error: (query.error as Error | null) ?? null,
+    isLoading: query.isLoading || directQuery.isLoading,
+    error: mergedError,
   };
 }
 

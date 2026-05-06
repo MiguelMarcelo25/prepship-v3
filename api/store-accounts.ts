@@ -256,10 +256,24 @@ export default async function handler(req: any, res: any): Promise<void> {
       // table" — for now just filters by source since we don't have a
       // reviewed_at column. Tightening can come later.
       const wantSource = source && ALLOWED_SOURCES.has(source) ? source : null;
+      // `oauthMeta` exposes only the NON-secret fields needed to construct
+      // an OAuth authorize URL on the client (e.g. eBay sign-in). Secret
+      // fields like certId / refreshToken stay server-side; the frontend
+      // only needs identifiers + RuName + environment to redirect the user
+      // to the provider's consent screen. `hasRefreshToken` is a presence
+      // flag (not the value) so the UI can show "Connected ✓" without
+      // exposing the token.
       const rows = wantSource
         ? await sql<Array<Record<string, unknown>>>`
             SELECT id, client_id AS "clientId", provider, label, account_identifier AS "accountIdentifier",
-                   source, active, created_at AS "createdAt"
+                   source, active, created_at AS "createdAt",
+                   jsonb_build_object(
+                     'appId', credentials->>'appId',
+                     'clientId', credentials->>'clientId',
+                     'ruName', credentials->>'ruName',
+                     'environment', credentials->>'environment',
+                     'hasRefreshToken', (credentials->>'refreshToken' IS NOT NULL AND credentials->>'refreshToken' <> '')
+                   ) AS "oauthMeta"
             FROM ${sql(TABLE)}
             WHERE source = ${wantSource}
             ORDER BY created_at DESC
@@ -267,7 +281,14 @@ export default async function handler(req: any, res: any): Promise<void> {
           `
         : await sql<Array<Record<string, unknown>>>`
             SELECT id, client_id AS "clientId", provider, label, account_identifier AS "accountIdentifier",
-                   source, active, created_at AS "createdAt"
+                   source, active, created_at AS "createdAt",
+                   jsonb_build_object(
+                     'appId', credentials->>'appId',
+                     'clientId', credentials->>'clientId',
+                     'ruName', credentials->>'ruName',
+                     'environment', credentials->>'environment',
+                     'hasRefreshToken', (credentials->>'refreshToken' IS NOT NULL AND credentials->>'refreshToken' <> '')
+                   ) AS "oauthMeta"
             FROM ${sql(TABLE)}
             ORDER BY created_at DESC
             LIMIT 200
