@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, desc, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { clients } from '../db/schema/clients';
 import { orders } from '../db/schema/orders';
@@ -12,6 +12,8 @@ import { products } from '../db/schema/products';
 import { settings } from '../db/schema/settings';
 import { syncOrders } from '../services/order-sync';
 import { syncShipments } from '../services/shipment-sync';
+import { ssMarkOrderShippedV1 } from '../lib/shipstation/labels';
+import { loadClientCredentials } from '../lib/shipstation/credentials';
 
 const app = new Hono();
 
@@ -471,5 +473,164 @@ app.post('/reset-sync', zValidator('json', resetSyncBody), async (c) => {
     },
   });
 });
+
+// ─── /admin/retry-marketplace-notify ──────────────────────────────────────
+// One-shot recovery for orders that were shipped through PrepShip during
+// the marketplace-notification bug window (pre-2026-05-07). The bug:
+// every label hit ShipStation's /orders/markasshipped v1 endpoint with
+// the LOCAL DB primary key instead of the upstream SS orderId, causing
+// ShipStation to return 404 → silently swallowed → marketplace never
+// notified → Amazon Seller Central kept showing "Buy shipping".
+//
+// This endpoint retries the v1 mark-shipped call with the CORRECT
+// upstream orderId (parsed from orders.external_order_id) so historical
+// stuck orders can finally close the loop with their marketplace.
+//
+// Request body:
+//   { "orderNumbers": ["111-4349324-2899466", "112-6551875-5121844", …] }
+//
+// Behaviour:
+//   - Idempotent: ShipStation accepts re-acks safely
+//   - Never spends postage / never creates a new label
+//   - Per-order result with specific failure reason for each
+//   - Hard cap of 50 orders/call (v1 rate limit is 40/min, leave room)
+//
+// Per user override `unlock shipped data` on 2026-05-07.
+const retryNotifyBody = z.object({
+  orderNumbers: z.array(z.string().min(1)).min(1).max(50),
+});
+
+type RetryNotifyResult = {
+  orderNumber: string;
+  ok: boolean;
+  reason?: string;
+  ssUpstreamOrderId?: number;
+  trackingNumber?: string;
+  carrierCode?: string | null;
+};
+
+async function retryMarketplaceNotifyOne(orderNumber: string): Promise<RetryNotifyResult> {
+  const [order] = await db
+    .select()
+    .from(orders)
+    .where(eq(orders.orderNumber, orderNumber))
+    .limit(1);
+
+  if (!order) {
+    return { orderNumber, ok: false, reason: 'order not found in DB' };
+  }
+  if (!order.externalOrderId) {
+    return {
+      orderNumber,
+      ok: false,
+      reason: 'order has no externalOrderId (manual order or sync gap)',
+    };
+  }
+  const ssUpstreamOrderId = Number(order.externalOrderId);
+  if (!Number.isFinite(ssUpstreamOrderId) || ssUpstreamOrderId <= 0) {
+    return {
+      orderNumber,
+      ok: false,
+      reason: `externalOrderId="${order.externalOrderId}" is not a valid number`,
+    };
+  }
+
+  const [shipment] = await db
+    .select()
+    .from(shipments)
+    .where(and(eq(shipments.orderId, order.id), eq(shipments.voided, false)))
+    .orderBy(desc(shipments.createdAt))
+    .limit(1);
+
+  if (!shipment) {
+    return { orderNumber, ok: false, reason: 'no non-voided shipment row for this order' };
+  }
+  if (!shipment.trackingNumber) {
+    return {
+      orderNumber,
+      ok: false,
+      reason: `shipment ${shipment.id} has no tracking number`,
+    };
+  }
+  if (!order.clientId) {
+    return { orderNumber, ok: false, reason: 'order has no clientId — can\'t load credentials' };
+  }
+
+  const creds = await loadClientCredentials(order.clientId);
+  if (!creds.apiKey || !creds.apiSecret) {
+    return {
+      orderNumber,
+      ok: false,
+      reason: `client ${order.clientId} has no v1 ShipStation API credentials configured`,
+    };
+  }
+
+  const shipDate =
+    shipment.shipDate?.toISOString().slice(0, 10) ??
+    shipment.labelShipDate?.toISOString().slice(0, 10) ??
+    new Date().toISOString().slice(0, 10);
+
+  try {
+    await ssMarkOrderShippedV1(
+      {
+        orderId: ssUpstreamOrderId,
+        carrierCode: shipment.carrierCode,
+        trackingNumber: shipment.trackingNumber,
+        shipDate,
+      },
+      { apiKey: creds.apiKey, apiSecret: creds.apiSecret }
+    );
+    console.info(
+      `[admin/retry-marketplace-notify] ✅ ${orderNumber} ssUpstreamOrderId=${ssUpstreamOrderId} tracking=${shipment.trackingNumber} — marketplace will be notified by ShipStation`
+    );
+    return {
+      orderNumber,
+      ok: true,
+      ssUpstreamOrderId,
+      trackingNumber: shipment.trackingNumber,
+      carrierCode: shipment.carrierCode,
+    };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(
+      `[admin/retry-marketplace-notify] ❌ ${orderNumber} ssUpstreamOrderId=${ssUpstreamOrderId} — ${msg}`
+    );
+    return {
+      orderNumber,
+      ok: false,
+      reason: `ssMarkOrderShippedV1 threw: ${msg}`,
+      ssUpstreamOrderId,
+      trackingNumber: shipment.trackingNumber,
+      carrierCode: shipment.carrierCode,
+    };
+  }
+}
+
+app.post(
+  '/retry-marketplace-notify',
+  zValidator('json', retryNotifyBody),
+  async (c) => {
+    const { orderNumbers } = c.req.valid('json');
+    const results: RetryNotifyResult[] = [];
+
+    // Sequential to play nice with the v1 rate limiter (40 req/min).
+    // The TokenBucket in v1-client.ts already enforces this, but
+    // serial execution gives cleaner logs and predictable ordering.
+    for (const orderNumber of orderNumbers) {
+      const result = await retryMarketplaceNotifyOne(orderNumber);
+      results.push(result);
+    }
+
+    const okCount = results.filter((r) => r.ok).length;
+    const failedCount = results.filter((r) => !r.ok).length;
+
+    return c.json({
+      requested: orderNumbers.length,
+      ok: okCount,
+      failed: failedCount,
+      results,
+    });
+  }
+);
 
 export default app;
