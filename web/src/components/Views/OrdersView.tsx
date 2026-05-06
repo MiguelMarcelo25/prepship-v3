@@ -18,6 +18,8 @@ import {
   Download,
   Printer as PrinterIcon,
   Columns3,
+  Copy as CopyIcon,
+  Check as CheckIcon,
 } from 'lucide-react'
 import OrderDetailDrawer from '../OrderDetailDrawer'
 import TrackingModal from '../TrackingModal'
@@ -1685,6 +1687,12 @@ export default function OrdersView({
   const [extShipMenuOpen, setExtShipMenuOpen] = useState(false)
   const [batchBusy, setBatchBusy] = useState(false)
   const [batchTestMode, setBatchTestMode] = useState(false)
+  // Tracks which order# pill in the batch panel was just copied. Set on
+  // click, cleared after ~1.2s so the pill flashes a "Copied!" check
+  // and reverts. Single string at a time — clicking another pill
+  // immediately replaces the previous flash.
+  const [copiedOrderNum, setCopiedOrderNum] = useState<string | null>(null)
+  const [copiedAll, setCopiedAll] = useState(false)
   // Row-density preference for the orders table. Persists per-browser so a
   // user who picks Narrow stays Narrow across reloads. Three steps:
   //   - narrow:  ~24 px row, 11 px font (max rows visible)
@@ -5192,10 +5200,133 @@ export default function OrdersView({
               <span className="panel-section-title">Batch Actions</span>
             </div>
             <div className="panel-section-body">
-              <div style={{ padding: 12, borderBottom: '1px solid var(--border)', marginBottom: 12 }}>
-                <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 6 }}>Selected orders:</div>
-                <div style={{ fontSize: 12, fontFamily: 'monospace', color: 'var(--text2)', lineHeight: 1.4, wordBreak: 'break-all' }}>
-                  {selectedOrders.map((order) => order.orderNumber ?? `#${order.orderId}`).sort().join(', ')}
+              {/* Selected-orders pill list. Replaces the previous wordBreak:
+                  break-all comma-soup which was illegible at >5 orders. Each
+                  order# is its own monospace pill in a scrollable tray; click
+                  to copy that ID, or use "Copy all" in the header for the
+                  whole list joined by newlines (paste-friendly for tickets). */}
+              <div className="px-3 pt-3 pb-3 -mx-3 mb-3 border-b border-line">
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-ink-3">
+                      Selected
+                    </span>
+                    <span className="inline-flex items-center justify-center min-w-[20px] h-[18px] px-1.5 rounded-full bg-brand/10 text-brand text-[10.5px] font-bold tabular-nums ring-1 ring-brand/20">
+                      {selectedOrders.length}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const all = selectedOrders
+                        .map((o) => o.orderNumber ?? `#${o.orderId}`)
+                        .sort()
+                        .join('\n')
+                      void navigator.clipboard.writeText(all).then(() => {
+                        setCopiedAll(true)
+                        window.setTimeout(() => setCopiedAll(false), 1200)
+                      })
+                    }}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10.5px] font-semibold text-ink-2 hover:text-brand bg-surface-2 hover:bg-brand/5 ring-1 ring-line hover:ring-brand/30 transition"
+                    title="Copy all order numbers to clipboard (newline-separated)"
+                  >
+                    <AnimatePresence mode="wait" initial={false}>
+                      {copiedAll ? (
+                        <motion.span
+                          key="copied"
+                          initial={{ scale: 0.6, opacity: 0 }}
+                          animate={{ scale: 1, opacity: 1 }}
+                          exit={{ scale: 0.6, opacity: 0 }}
+                          transition={{ duration: 0.18 }}
+                          className="inline-flex items-center gap-1 text-emerald-600"
+                        >
+                          <CheckIcon size={11} strokeWidth={3} />
+                          Copied
+                        </motion.span>
+                      ) : (
+                        <motion.span
+                          key="copy"
+                          initial={{ scale: 0.6, opacity: 0 }}
+                          animate={{ scale: 1, opacity: 1 }}
+                          exit={{ scale: 0.6, opacity: 0 }}
+                          transition={{ duration: 0.18 }}
+                          className="inline-flex items-center gap-1"
+                        >
+                          <CopyIcon size={11} strokeWidth={2.5} />
+                          Copy all
+                        </motion.span>
+                      )}
+                    </AnimatePresence>
+                  </button>
+                </div>
+                {/* Scrollable pill tray. max-height fits ~4-5 rows of pills
+                    before scroll kicks in; far fewer cognitive bumps than
+                    word-broken IDs spilling across full width. Empty-state
+                    safety net even though parent only renders this section
+                    when selection > 0. */}
+                <div
+                  className="flex flex-wrap gap-1.5 max-h-[148px] overflow-y-auto pr-0.5"
+                  role="list"
+                  aria-label={`${selectedOrders.length} selected orders`}
+                >
+                  {selectedOrders.length === 0 ? (
+                    <span className="text-[11px] italic text-ink-3 py-1">No orders selected</span>
+                  ) : (
+                    selectedOrders
+                      .map((o) => o.orderNumber ?? `#${o.orderId}`)
+                      .sort()
+                      .map((orderNum) => {
+                        const wasCopied = copiedOrderNum === orderNum
+                        return (
+                          <button
+                            key={orderNum}
+                            type="button"
+                            role="listitem"
+                            onClick={() => {
+                              void navigator.clipboard.writeText(orderNum).then(() => {
+                                setCopiedOrderNum(orderNum)
+                                window.setTimeout(() => {
+                                  setCopiedOrderNum((current) => (current === orderNum ? null : current))
+                                }, 1100)
+                              })
+                            }}
+                            title={`Click to copy ${orderNum}`}
+                            className={`group/pill inline-flex items-center gap-1 px-2 py-1 rounded-md font-mono text-[10.5px] font-semibold tabular-nums ring-1 transition ${
+                              wasCopied
+                                ? 'bg-emerald-50 text-emerald-700 ring-emerald-300 shadow-sm'
+                                : 'bg-surface-2 text-ink-2 ring-line hover:ring-brand/40 hover:bg-brand/5 hover:text-brand'
+                            }`}
+                          >
+                            <span className="truncate max-w-[180px]">{orderNum}</span>
+                            <AnimatePresence mode="wait" initial={false}>
+                              {wasCopied ? (
+                                <motion.span
+                                  key="check"
+                                  initial={{ scale: 0, rotate: -90 }}
+                                  animate={{ scale: 1, rotate: 0 }}
+                                  exit={{ scale: 0, rotate: 90 }}
+                                  transition={{ duration: 0.18 }}
+                                  className="inline-flex"
+                                >
+                                  <CheckIcon size={10} strokeWidth={3} />
+                                </motion.span>
+                              ) : (
+                                <motion.span
+                                  key="copy"
+                                  initial={{ scale: 0, opacity: 0 }}
+                                  animate={{ scale: 1, opacity: 1 }}
+                                  exit={{ scale: 0, opacity: 0 }}
+                                  transition={{ duration: 0.18 }}
+                                  className="inline-flex opacity-0 group-hover/pill:opacity-100 transition-opacity"
+                                >
+                                  <CopyIcon size={10} strokeWidth={2.5} />
+                                </motion.span>
+                              )}
+                            </AnimatePresence>
+                          </button>
+                        )
+                      })
+                  )}
                 </div>
               </div>
 
