@@ -258,8 +258,8 @@ export default function SidebarTemplated({ spec, ...props }: Props) {
       {/* Logo */}
       <div className={`relative px-4 pt-4 pb-3.5 border-b ${softBorder}`}>
         <div className="flex items-center gap-2.5">
-          <div className={`relative w-9 h-9 ${rIcon} flex items-center justify-center flex-shrink-0 overflow-hidden ${spec.brandGradient ? `bg-gradient-to-br ${spec.brandGradient}` : `bg-${a}-${spec.mode === 'dark' ? '500/20' : '100'}`} ${spec.mode === 'dark' ? `ring-1 ring-${a}-400/30` : `ring-1 ring-${a}-200`}`}>
-            <BrandLogo size={26} />
+          <div className={`relative w-10 h-10 ${rIcon} flex items-center justify-center flex-shrink-0 overflow-hidden ${spec.brandGradient ? `bg-gradient-to-br ${spec.brandGradient}` : `bg-${a}-${spec.mode === 'dark' ? '500/20' : '100'}`} ${spec.mode === 'dark' ? `ring-1 ring-${a}-400/30` : `ring-1 ring-${a}-200`}`}>
+            <BrandLogo size={50} />
           </div>
           <div className="flex-1 min-w-0">
             <div className={logoTitle}>PrepShip</div>

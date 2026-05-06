@@ -1096,8 +1096,49 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
               {groupedRows.map((group) => (
                 <div key={group.clientId} style={{ marginBottom: 18 }}>
                   <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 6 }}>{group.clientName}</div>
-                  <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-                    <table className="inv-table" style={{ margin: 0, tableLayout: 'fixed' }}>
+                  {/* Tailwind-only table — see below for the full styling
+                      story.
+
+                      * NO overflow:hidden on this wrapper. Any overflow value
+                        other than `visible` becomes the sticky element's
+                        scroll container and silently breaks `position: sticky`
+                        on the <th> cells.
+                      * Wrapper provides bg + border + radius. The table inside
+                        uses border-separate so individual cell sticky works
+                        (border-collapse:collapse silently disables sticky on
+                        <th> in all major browsers — known bug since 2017). */}
+                  <div className="bg-surface ring-1 ring-line rounded-lg">
+                    <table
+                      className={[
+                        // Layout
+                        'w-full m-0 table-fixed border-separate border-spacing-0',
+
+                        // ─── Header cells (sticky + styled) ───────────────
+                        // top:-1px slides the 2px bottom border flush to the
+                        // scroll-area top. z-10 sits above tbody but below
+                        // modal overlays (which use z-[3000]+).
+                        '[&_thead_th]:sticky [&_thead_th]:top-[-1px] [&_thead_th]:z-10',
+                        '[&_thead_th]:bg-surface-2 [&_thead_th]:text-ink-3',
+                        '[&_thead_th]:text-[10px] [&_thead_th]:font-extrabold [&_thead_th]:uppercase [&_thead_th]:tracking-[0.4px]',
+                        '[&_thead_th]:text-left [&_thead_th]:px-2.5 [&_thead_th]:py-2',
+                        '[&_thead_th]:border-b-2 [&_thead_th]:border-line [&_thead_th]:whitespace-nowrap',
+                        // Subtle 1px shadow under the sticky header so rows
+                        // scrolling underneath have a visual separator.
+                        '[&_thead_th]:shadow-[0_1px_0_var(--border)]',
+
+                        // ─── Body cells ──────────────────────────────────
+                        '[&_tbody_td]:px-2.5 [&_tbody_td]:py-2 [&_tbody_td]:text-[12px]',
+                        '[&_tbody_td]:border-b [&_tbody_td]:border-line [&_tbody_td]:align-middle',
+                        '[&_tbody_td]:overflow-hidden [&_tbody_td]:text-ellipsis',
+
+                        // Last row: drop the bottom border so it doesn't
+                        // double up against the wrapper's ring.
+                        '[&_tbody_tr:last-child_td]:border-b-0',
+
+                        // Hover state on body rows
+                        '[&_tbody_tr:hover_td]:bg-surface-2',
+                      ].join(' ')}
+                    >
                       {/* colgroup pins column widths so EVERY client's table
                           renders the same layout — auto-sizing was the cause
                           of the visual drift between groups. */}
@@ -1238,7 +1279,22 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
                                   <span style={{ color: 'var(--text4)' }}>—</span>
                                 )}
                               </td>
-                              <td style={{ fontSize: 11.5 }}>{row.packageName || <span style={{ color: 'var(--text4)' }}>—</span>}</td>
+                              {/* Package column — falls back to the L×W×H
+                                  dimensions when no named package is assigned.
+                                  Previously showed "—" which left the cell
+                                  empty even though the row already had usable
+                                  dim data in the Dims column. */}
+                              <td style={{ fontSize: 11.5 }}>
+                                {row.packageName ? (
+                                  row.packageName
+                                ) : (row.packageLength > 0 || row.packageWidth > 0 || row.packageHeight > 0) ? (
+                                  <span style={{ fontFamily: 'monospace', color: 'var(--text3)' }} title="No named package — showing product dims (L×W×H)">
+                                    {row.packageLength}×{row.packageWidth}×{row.packageHeight}
+                                  </span>
+                                ) : (
+                                  <span style={{ color: 'var(--text4)' }}>—</span>
+                                )}
+                              </td>
                               <td style={{ textAlign: 'center', fontWeight: 700, fontSize: 13, color: row.currentStock <= 0 ? 'var(--red)' : 'var(--text)' }}>{row.currentStock}</td>
                               <td style={{ textAlign: 'center', fontWeight: 700, fontSize: 12, color: (row.soldLast30Days ?? 0) > 0 ? 'var(--ss-blue)' : 'var(--text3)' }}>{row.soldLast30Days ?? 0}</td>
                               <td style={{ textAlign: 'center', fontSize: 12, color: 'var(--text3)' }}>
@@ -1448,9 +1504,98 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
                     ))}
                   </select>
                 </div>
+                {/* Chip-style storeIds editor — replaces the previous
+                    comma-separated text input with individually-removable
+                    chips so users can drop a single store ID without
+                    counting commas. The underlying value is still stored
+                    as a comma-separated string in clientForm.storeIds (so
+                    handleSaveClient's existing parse logic still works);
+                    this is purely a UI-layer transformation. */}
                 <div style={{ gridColumn: '1 / -1' }}>
-                  <label style={{ fontSize: 11, color: 'var(--text3)' }}>ShipStation Store IDs (comma-separated)</label>
-                  <input type="text" className="ship-select" style={{ width: '100%' }} placeholder="e.g. 356678, 356679" value={clientForm.storeIds} onChange={(event) => setClientForm((current) => ({ ...current, storeIds: event.target.value }))} />
+                  <label style={{ fontSize: 11, color: 'var(--text3)' }}>ShipStation Store IDs</label>
+                  {(() => {
+                    const ids = clientForm.storeIds
+                      .split(',')
+                      .map((s) => s.trim())
+                      .filter((s) => s.length > 0 && /^\d+$/.test(s))
+                    const removeId = (target: string) => {
+                      const next = ids.filter((id) => id !== target).join(', ')
+                      setClientForm((current) => ({ ...current, storeIds: next }))
+                    }
+                    const addIdFromKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+                      if (e.key !== 'Enter' && e.key !== ',' && e.key !== ' ') return
+                      e.preventDefault()
+                      const raw = (e.currentTarget.value ?? '').trim()
+                      if (!raw || !/^\d+$/.test(raw) || ids.includes(raw)) {
+                        e.currentTarget.value = ''
+                        return
+                      }
+                      const next = [...ids, raw].join(', ')
+                      setClientForm((current) => ({ ...current, storeIds: next }))
+                      e.currentTarget.value = ''
+                    }
+                    return (
+                      <div className="flex flex-wrap items-center gap-1.5 px-2 py-1.5 rounded-md ring-1 ring-line bg-surface min-h-[36px]">
+                        {ids.length === 0 ? (
+                          <span className="text-[11px] italic text-ink-3 px-1">No store IDs yet — type below to add</span>
+                        ) : (
+                          ids.map((id) => {
+                            const storeName = storeNameMap.get(Number(id))
+                            return (
+                              <span
+                                key={id}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-brand/10 text-brand text-[11.5px] font-mono font-semibold ring-1 ring-brand/20"
+                                title={storeName ? `Store: ${storeName}` : 'Unrecognized store ID'}
+                              >
+                                #{id}
+                                {storeName ? (
+                                  <span className="text-[10px] font-sans font-normal text-ink-3 not-italic">({storeName})</span>
+                                ) : null}
+                                <button
+                                  type="button"
+                                  onClick={() => removeId(id)}
+                                  className="ml-0.5 inline-flex items-center justify-center w-4 h-4 rounded text-brand hover:text-white hover:bg-brand transition"
+                                  aria-label={`Remove store ID ${id}`}
+                                  title={`Remove ${id}`}
+                                >
+                                  ×
+                                </button>
+                              </span>
+                            )
+                          })
+                        )}
+                        <input
+                          type="text"
+                          inputMode="numeric"
+                          pattern="\d*"
+                          placeholder={ids.length === 0 ? 'e.g. 356678' : '+ add another'}
+                          onKeyDown={addIdFromKey}
+                          onBlur={(e) => {
+                            const raw = e.currentTarget.value.trim()
+                            if (raw && /^\d+$/.test(raw) && !ids.includes(raw)) {
+                              setClientForm((current) => ({ ...current, storeIds: [...ids, raw].join(', ') }))
+                            }
+                            e.currentTarget.value = ''
+                          }}
+                          className="flex-1 min-w-[100px] px-1 py-0.5 text-[12px] bg-transparent border-0 outline-none text-ink placeholder:text-ink-3"
+                        />
+                      </div>
+                    )
+                  })()}
+                  {/* Multi-store warning — explains the merge semantics so
+                      users intentionally adding 2+ IDs know what they're
+                      doing (and users who see 2+ existing IDs understand
+                      why). */}
+                  {clientForm.storeIds.split(',').filter((s) => s.trim()).length > 1 ? (
+                    <div className="mt-1.5 text-[10.5px] text-ink-3 leading-snug">
+                      <span className="font-semibold text-amber-700">⚠ Multi-store client:</span>{' '}
+                      Orders from all listed stores will roll up under this single client for billing, analytics, and reporting. Press <kbd className="px-1 py-0.5 rounded bg-surface-2 ring-1 ring-line text-[10px] font-mono">Enter</kbd> or <kbd className="px-1 py-0.5 rounded bg-surface-2 ring-1 ring-line text-[10px] font-mono">,</kbd> to add an ID; click <kbd className="px-1 py-0.5 rounded bg-surface-2 ring-1 ring-line text-[10px] font-mono">×</kbd> to remove one.
+                    </div>
+                  ) : (
+                    <div className="mt-1.5 text-[10.5px] text-ink-3 leading-snug">
+                      Press <kbd className="px-1 py-0.5 rounded bg-surface-2 ring-1 ring-line text-[10px] font-mono">Enter</kbd> or <kbd className="px-1 py-0.5 rounded bg-surface-2 ring-1 ring-line text-[10px] font-mono">,</kbd> to add a store ID.
+                    </div>
+                  )}
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
@@ -1472,25 +1617,121 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
               <button className="btn btn-primary btn-sm" type="button" onClick={() => void handleSyncClients()}>↻ Import from ShipStation Stores</button>
             </div>
           ) : (
-            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-              <table className="inv-table" style={{ margin: 0 }}>
+            // Tailwind-only Clients table — sticky headers, theme-aware,
+            // border-separate so sticky on <th> works (border-collapse:collapse
+            // silently disables sticky in all major browsers).
+            <div className="bg-surface ring-1 ring-line rounded-lg">
+              <table
+                className={[
+                  'w-full m-0 border-separate border-spacing-0',
+                  '[&_thead_th]:sticky [&_thead_th]:top-[-1px] [&_thead_th]:z-10',
+                  '[&_thead_th]:bg-surface-2 [&_thead_th]:text-ink-3',
+                  '[&_thead_th]:text-[10px] [&_thead_th]:font-extrabold [&_thead_th]:uppercase [&_thead_th]:tracking-[0.4px]',
+                  '[&_thead_th]:text-left [&_thead_th]:px-2.5 [&_thead_th]:py-2',
+                  '[&_thead_th]:border-b-2 [&_thead_th]:border-line [&_thead_th]:whitespace-nowrap',
+                  '[&_thead_th]:shadow-[0_1px_0_var(--border)]',
+                  '[&_tbody_td]:px-2.5 [&_tbody_td]:py-2 [&_tbody_td]:text-[12px]',
+                  '[&_tbody_td]:border-b [&_tbody_td]:border-line [&_tbody_td]:align-middle',
+                  '[&_tbody_tr:last-child_td]:border-b-0',
+                  '[&_tbody_tr:hover_td]:bg-surface-2',
+                ].join(' ')}
+              >
                 <thead>
-                  <tr><th>Name</th><th>Contact</th><th>Email</th><th>ShipStation Stores</th><th>Rate Source</th><th style={{ textAlign: 'center', width: 70 }}>Active</th><th /></tr>
+                  <tr>
+                    <th>Name</th>
+                    <th>Contact</th>
+                    <th>Email</th>
+                    <th>Store ID</th>
+                    <th>Source</th>
+                    <th>Rate Source</th>
+                    <th style={{ textAlign: 'center', width: 70 }}>Active</th>
+                    <th />
+                  </tr>
                 </thead>
                 <tbody>
                   {clients.map((client) => {
                     const override = clientActiveOverrides[client.clientId]
                     const isActive = override !== undefined ? override : (client.active ?? true)
                     const isPending = pendingClientToggleId === client.clientId
+
+                    // Source detection — infers the integration channel from
+                    // the client name (matches our STORE_PROVIDERS naming
+                    // convention) and falls back to "ShipStation" if storeIds
+                    // exist (came from ShipStation sync) or "Manual" if neither
+                    // a name pattern nor ShipStation IDs exist (added by hand).
+                    // Color-coded badge so sources are scannable at a glance.
+                    const lowerName = (client.name ?? '').toLowerCase()
+                    const sourceInfo: { label: string; cls: string } = lowerName.includes('walmart')
+                      ? { label: 'Walmart', cls: 'bg-blue-50 text-blue-700 ring-blue-200' }
+                      : lowerName.includes('ebay')
+                        ? { label: 'eBay', cls: 'bg-rose-50 text-rose-700 ring-rose-200' }
+                        : lowerName.includes('amazon')
+                          ? { label: 'Amazon', cls: 'bg-amber-50 text-amber-700 ring-amber-200' }
+                          : lowerName.includes('shopify')
+                            ? { label: 'Shopify', cls: 'bg-emerald-50 text-emerald-700 ring-emerald-200' }
+                            : lowerName.includes('etsy')
+                              ? { label: 'Etsy', cls: 'bg-orange-50 text-orange-700 ring-orange-200' }
+                              : lowerName.includes('tiktok')
+                                ? { label: 'TikTok Shop', cls: 'bg-pink-50 text-pink-700 ring-pink-200' }
+                                : lowerName.includes('woo') || lowerName.includes('woocomm')
+                                  ? { label: 'WooCommerce', cls: 'bg-violet-50 text-violet-700 ring-violet-200' }
+                                  : lowerName.includes('bigcomm') || lowerName.includes('bigcommerce')
+                                    ? { label: 'BigCommerce', cls: 'bg-cyan-50 text-cyan-700 ring-cyan-200' }
+                                    : client.storeIds.length > 0
+                                      ? { label: 'ShipStation', cls: 'bg-indigo-50 text-indigo-700 ring-indigo-200' }
+                                      : { label: 'Manual', cls: 'bg-slate-100 text-slate-600 ring-slate-200' }
+
                     return (
                     <tr key={client.clientId} style={{ opacity: isActive ? 1 : 0.55, transition: 'opacity .28s ease' }}>
                       <td style={{ fontWeight: 600 }}>{client.name}</td>
                       <td style={{ fontSize: 12 }}>{client.contactName || '—'}</td>
                       <td style={{ fontSize: 12 }}>{client.email || '—'}</td>
-                      <td style={{ fontSize: 12 }}>
-                        {client.storeIds.length
-                          ? client.storeIds.map((storeId) => storeNameMap.get(storeId) ?? `#${storeId}`).join(', ')
-                          : '—'}
+                      {/* Store ID — each ID rendered as a small chip with
+                          the resolved ShipStation store name in the tooltip
+                          (so admins can hover to see what each ID maps to
+                          without leaving the table). When 2+ IDs are
+                          present, a small amber count badge flags the row
+                          as a "merged multi-store client" — click Edit on
+                          such a row to see / remove individual IDs in the
+                          form's chip editor. */}
+                      <td>
+                        {client.storeIds.length === 0 ? (
+                          <span style={{ color: 'var(--text4)' }}>—</span>
+                        ) : (
+                          <div className="flex flex-wrap items-center gap-1">
+                            {client.storeIds.map((id) => {
+                              const storeName = storeNameMap.get(id)
+                              return (
+                                <span
+                                  key={id}
+                                  className="inline-flex items-center px-1.5 py-px rounded bg-surface-2 text-ink-2 text-[11px] font-mono font-semibold ring-1 ring-line/70"
+                                  title={storeName ? `${storeName}` : 'Unrecognized store'}
+                                >
+                                  #{id}
+                                </span>
+                              )
+                            })}
+                            {client.storeIds.length > 1 ? (
+                              <span
+                                className="inline-flex items-center px-1.5 py-px rounded bg-amber-50 text-amber-700 text-[10px] font-bold uppercase tracking-wide ring-1 ring-amber-200"
+                                title={`Merged client — orders from all ${client.storeIds.length} stores roll up here. Click Edit to view or remove individual IDs.`}
+                              >
+                                {client.storeIds.length}× merged
+                              </span>
+                            ) : null}
+                          </div>
+                        )}
+                      </td>
+                      {/* Source — colored badge inferred from client name +
+                          presence of storeIds. See sourceInfo computation
+                          above. */}
+                      <td>
+                        <span
+                          className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10.5px] font-bold uppercase tracking-wide ring-1 ${sourceInfo.cls}`}
+                          title={`Inferred from client name${client.storeIds.length ? ' + ShipStation store IDs' : ''}`}
+                        >
+                          {sourceInfo.label}
+                        </span>
                       </td>
                       <td style={{ fontSize: 12, fontWeight: 500 }}>{client.rateSourceName || 'DR PREPPER'}</td>
                       <td style={{ textAlign: 'center' }}>
@@ -1562,8 +1803,29 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
           ) : (
             <div id="inv-history-content">
               <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', marginBottom: 8 }}>Recent Movements</div>
-              <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-                <table className="inv-table" style={{ margin: 0, fontSize: 11.5 }}>
+              {/* Tailwind-only History table — same sticky pattern as
+                  Stock Levels and Alerts above. NO overflow:hidden on the
+                  wrapper (would silently disable sticky on the th cells),
+                  table uses border-separate (border-collapse:collapse
+                  silently disables sticky on th in all major browsers). */}
+              <div className="bg-surface ring-1 ring-line rounded-lg">
+                <table
+                  className={[
+                    'w-full m-0 border-separate border-spacing-0 text-[11.5px]',
+                    // Sticky header cells
+                    '[&_thead_th]:sticky [&_thead_th]:top-[-1px] [&_thead_th]:z-10',
+                    '[&_thead_th]:bg-surface-2 [&_thead_th]:text-ink-3',
+                    '[&_thead_th]:text-[10px] [&_thead_th]:font-extrabold [&_thead_th]:uppercase [&_thead_th]:tracking-[0.4px]',
+                    '[&_thead_th]:text-left [&_thead_th]:px-2.5 [&_thead_th]:py-2',
+                    '[&_thead_th]:border-b-2 [&_thead_th]:border-line [&_thead_th]:whitespace-nowrap',
+                    '[&_thead_th]:shadow-[0_1px_0_var(--border)]',
+                    // Body cells
+                    '[&_tbody_td]:px-2.5 [&_tbody_td]:py-2',
+                    '[&_tbody_td]:border-b [&_tbody_td]:border-line [&_tbody_td]:align-middle',
+                    '[&_tbody_tr:last-child_td]:border-b-0',
+                    '[&_tbody_tr:hover_td]:bg-surface-2',
+                  ].join(' ')}
+                >
                   <thead>
                     <tr><th>Date</th><th>SKU</th><th>Type</th><th style={{ textAlign: 'right' }}>Qty</th><th>Note</th><th>Source</th></tr>
                   </thead>
@@ -1616,8 +1878,31 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
               <div>All stocked — no low/out SKUs.</div>
             </div>
           ) : (
-            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
-              <table className="inv-table" style={{ margin: 0 }}>
+            // Tailwind-only Alerts table — same sticky pattern as Stock
+            // Levels above. Wrapper has NO overflow:hidden (would disable
+            // sticky on the th cells), and the table uses border-separate
+            // because border-collapse:collapse silently disables sticky on
+            // th in all major browsers (known bug since 2017).
+            <div className="bg-surface ring-1 ring-line rounded-lg">
+              <table
+                className={[
+                  'w-full m-0 border-separate border-spacing-0',
+                  // Sticky header cells
+                  '[&_thead_th]:sticky [&_thead_th]:top-[-1px] [&_thead_th]:z-10',
+                  '[&_thead_th]:bg-surface-2 [&_thead_th]:text-ink-3',
+                  '[&_thead_th]:text-[10px] [&_thead_th]:font-extrabold [&_thead_th]:uppercase [&_thead_th]:tracking-[0.4px]',
+                  '[&_thead_th]:text-left [&_thead_th]:px-2.5 [&_thead_th]:py-2',
+                  '[&_thead_th]:border-b-2 [&_thead_th]:border-line [&_thead_th]:whitespace-nowrap',
+                  '[&_thead_th]:shadow-[0_1px_0_var(--border)]',
+                  // Body cells
+                  '[&_tbody_td]:px-2.5 [&_tbody_td]:py-2 [&_tbody_td]:text-[12px]',
+                  '[&_tbody_td]:border-b [&_tbody_td]:border-line [&_tbody_td]:align-middle',
+                  // Drop bottom border on last row so it doesn't double up
+                  '[&_tbody_tr:last-child_td]:border-b-0',
+                  // Hover
+                  '[&_tbody_tr:hover_td]:bg-surface-2',
+                ].join(' ')}
+              >
                 <thead>
                   <tr>
                     <th>SKU</th>

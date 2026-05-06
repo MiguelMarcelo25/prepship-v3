@@ -257,7 +257,15 @@ export default function Home() {
 
     const handleClick = (event: MouseEvent) => {
       const target = event.target as HTMLElement | null
-      if (target?.closest('.react-zoom-wrap')) return
+      // The click-outside selector previously used `.react-zoom-wrap`, a
+      // holdover class name from the v2 codebase that was dropped when the
+      // topbar was rewritten — the actual wrapper now uses `id="zoom-wrap"`
+      // with no matching class. As a result every click was treated as
+      // "outside" the menu (including option clicks INSIDE the menu),
+      // which closed the dropdown before the user could pick a zoom level.
+      // Match against the real id so clicks inside the menu are correctly
+      // recognized as "inside."
+      if (target?.closest('#zoom-wrap')) return
       setZoomMenuOpen(false)
     }
 
@@ -727,26 +735,50 @@ export default function Home() {
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: -6, scale: 0.96 }}
                   transition={{ duration: 0.16, ease: [0.22, 1, 0.36, 1] }}
-                  className="absolute right-0 top-[calc(100%+6px)] bg-surface ring-1 ring-line-2 rounded-xl shadow-xl py-1.5 z-[200] min-w-[160px] overflow-hidden origin-top-right"
+                  // `fixed` so the menu escapes the topbar's backdrop-blur
+                  // stacking context AND .main's overflow:hidden. Position
+                  // anchored to viewport (60px below top so it sits 4px under
+                  // the 56px topbar; right padding mirrors the topbar's
+                  // px-4/sm:px-5 so it aligns under the 100% trigger).
+                  // max-h + overflow-y-auto guards against tiny viewports
+                  // where 6+ options could exceed the screen height — they
+                  // simply scroll inside the menu rather than getting cut off.
+                  className="fixed top-[60px] right-4 sm:right-5 z-[200] flex flex-col bg-surface ring-1 ring-line-2 rounded-xl shadow-xl py-1.5 min-w-[200px] max-h-[calc(100vh-80px)] overflow-y-auto origin-top-right"
                 >
                   <div className="px-3 pt-1.5 pb-2 text-[10px] font-bold uppercase tracking-[0.1em] text-ink-3">Zoom level</div>
-                  {ZOOM_OPTIONS.map((option, idx) => (
-                    <motion.button
-                      key={option.value}
-                      initial={{ opacity: 0, x: -4 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: idx * 0.02, duration: 0.18 }}
-                      className={`zoom-opt${zoomPct === option.value ? ' active' : ''}`}
-                      type="button"
-                      role="menuitem"
-                      onClick={() => {
-                        setZoomPct(option.value)
-                        setZoomMenuOpen(false)
-                      }}
-                    >
-                      {option.label}
-                    </motion.button>
-                  ))}
+                  {ZOOM_OPTIONS.map((option, idx) => {
+                    const isActive = zoomPct === option.value
+                    return (
+                      <motion.button
+                        key={option.value}
+                        initial={{ opacity: 0, x: -4 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: idx * 0.02, duration: 0.18 }}
+                        type="button"
+                        role="menuitem"
+                        onClick={() => {
+                          setZoomPct(option.value)
+                          setZoomMenuOpen(false)
+                        }}
+                        // Pure-Tailwind option button. block + w-full makes the
+                        // hover/active background span the full menu width so
+                        // the active highlight isn't a narrow rectangle around
+                        // the text. font-inherit removes the browser's default
+                        // <button> font so it picks up the menu's typography.
+                        className={[
+                          'block w-full text-left whitespace-nowrap',
+                          'px-3.5 py-1.5 text-[12.5px] font-sans',
+                          'border-0 bg-transparent cursor-pointer',
+                          'transition-colors duration-100',
+                          isActive
+                            ? 'text-brand font-bold bg-brand/10'
+                            : 'text-ink-2 hover:text-ink hover:bg-surface-2',
+                        ].join(' ')}
+                      >
+                        {option.label}
+                      </motion.button>
+                    )
+                  })}
                 </motion.div>
               ) : null}
             </AnimatePresence>

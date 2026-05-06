@@ -1485,14 +1485,62 @@ export const apiClient = {
   },
 
   // ─── Inventory ─────────────────────────────────────────────────────────────
+  // Auto-paginates through all pages so the Inventory main view shows EVERY
+  // SKU instead of just the first 50 (which was the previous bug — the
+  // backend GET /inventory caps pageSize at 200 and defaults to 50, and
+  // there's no infinite-scroll UI on the inventory grid, so without
+  // explicit pagination here, "All Clients" appeared to be missing rows).
+  //
+  // Strategy: fetch page 1 at the maximum pageSize (200), read total/pages
+  // from the response, then fetch remaining pages in parallel up to a hard
+  // cap (PAGE_CAP × 200 = max 10,000 SKUs returned). 10k is well above any
+  // realistic single-tenant catalog; if a customer ever exceeds it, the
+  // backend would need a streaming endpoint or the UI would need infinite
+  // scroll — at which point this helper would change shape.
   fetchInventory(query?: Record<string, unknown>): Promise<any[]> {
     return safe(
       'fetchInventory',
       async () => {
-        const res = await api.get<any>(`/inventory${qs((query ?? {}) as any)}`);
-        if (Array.isArray(res)) return res.map(normalizeInventoryDto);
-        if (Array.isArray(res?.data)) return res.data.map(normalizeInventoryDto);
-        return [];
+        const PAGE_SIZE = 200;
+        const PAGE_CAP = 50; // 200 × 50 = 10,000 SKUs hard cap
+        const baseQ: Record<string, unknown> = { ...(query ?? {}), pageSize: PAGE_SIZE, page: 1 };
+
+        const first: any = await api.get<any>(`/inventory${qs(baseQ as any)}`);
+
+        // Backend response shape can be either a bare array (legacy) or
+        // a paginated envelope { data, total, pages, page, pageSize }.
+        // The paginated case is what triggers the multi-page fetch.
+        if (Array.isArray(first)) {
+          return first.map(normalizeInventoryDto);
+        }
+        const firstData: any[] = Array.isArray(first?.data) ? first.data : [];
+        const totalPages = Number.isFinite(Number(first?.totalPages))
+          ? Math.min(Number(first.totalPages), PAGE_CAP)
+          : Number.isFinite(Number(first?.pages))
+            ? Math.min(Number(first.pages), PAGE_CAP)
+            : 1;
+
+        if (totalPages <= 1) {
+          return firstData.map(normalizeInventoryDto);
+        }
+
+        // Fetch pages 2..N in parallel. If any fails, skip it (we'd rather
+        // show a partial list than throw and show nothing).
+        const remainingPages = Array.from({ length: totalPages - 1 }, (_, i) => i + 2);
+        const remaining = await Promise.all(
+          remainingPages.map((page) =>
+            api
+              .get<any>(`/inventory${qs({ ...(query ?? {}), pageSize: PAGE_SIZE, page } as any)}`)
+              .then((res: any) => (Array.isArray(res?.data) ? res.data : []))
+              .catch((err: unknown) => {
+                console.warn(`[fetchInventory] page ${page} failed:`, err instanceof Error ? err.message : err);
+                return [] as any[];
+              })
+          )
+        );
+
+        const allRows = [...firstData, ...remaining.flat()];
+        return allRows.map(normalizeInventoryDto);
       },
       []
     );

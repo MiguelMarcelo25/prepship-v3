@@ -1,3 +1,8 @@
+/* The Stock Levels table is now Tailwind-only — sticky + styling handled
+   directly via [&_thead_th]:* descendant utilities on the <table> element
+   in InventoryView.tsx. The other inventory tabs (Receive, Alerts, etc.)
+   still use the legacy .inv-table class from app-shell.css. */
+
 .inventory-overlay{
   position:fixed;
   inset:0;
