@@ -44,6 +44,7 @@ function parseDownloadFilename(
 // table. The name list below is a legacy fallback kept for clients that
 // predate the flag and haven't been migrated yet.
 const HIDDEN_CLIENT_NAMES = new Set(['api shipments']);
+const STALE_MOCK_LABEL_HOSTS = new Set(['prepshipv4-api.onrender.com']);
 
 // Populated by fetchStores / fetchCounts when clients are loaded — lets
 // downstream filtering (e.g. byStatusStore emission) drop rows for hidden
@@ -81,6 +82,40 @@ function normalizeSyntheticTestStoreQuery(q: Record<string, unknown>): void {
   if (!Number.isFinite(storeId) || storeId >= 0) return;
   q.clientId = Math.abs(storeId);
   delete q.storeId;
+}
+
+function isMockLabelPath(pathname: string): boolean {
+  return /^\/(?:api\/)?labels\/mock\/-?\d+\/?$/i.test(pathname);
+}
+
+function normalizeMockLabelUrl(value: unknown): unknown {
+  if (typeof value !== 'string' || !value.trim()) return value;
+
+  try {
+    const parsed = new URL(value, API_BASE);
+    if (!isMockLabelPath(parsed.pathname)) return value;
+
+    const apiOrigin = new URL(API_BASE).origin;
+    const shouldRewrite =
+      value.startsWith('/') ||
+      STALE_MOCK_LABEL_HOSTS.has(parsed.hostname) ||
+      parsed.origin !== apiOrigin;
+
+    if (!shouldRewrite) return value;
+    return new URL(`${parsed.pathname}${parsed.search}${parsed.hash}`, apiOrigin).toString();
+  } catch {
+    return value;
+  }
+}
+
+function normalizeLabelResponse<T>(response: T): T {
+  if (!response || typeof response !== 'object') return response;
+  const record = response as Record<string, unknown>;
+  if (!Object.prototype.hasOwnProperty.call(record, 'labelUrl')) return response;
+  return {
+    ...record,
+    labelUrl: normalizeMockLabelUrl(record.labelUrl),
+  } as T;
 }
 
 function parseFiniteNumber(value: unknown): number | null {
@@ -1271,7 +1306,7 @@ export const apiClient = {
   // and keep flow-control semantics intact. Other methods in this file return
   // safe fallbacks, but labels MUST surface errors to the UI.
   createLabel(payload: unknown): Promise<any> {
-    return api.post<any>('/labels', payload);
+    return api.post<any>('/labels', payload).then(normalizeLabelResponse);
   },
 
   createLabelBatch(payload: {
@@ -1296,12 +1331,13 @@ export const apiClient = {
 
   retrieveLabel(orderLookup: number | string, fresh = false): Promise<any> {
     const path = `/labels/${encodeURIComponent(String(orderLookup))}/retrieve${fresh ? '?fresh=true' : ''}`;
-    return api.get<any>(path);
+    return api.get<any>(path).then(normalizeLabelResponse);
   },
 
   async openLabel(url: string): Promise<void> {
     if (!url) return;
-    window.open(url, '_blank', 'noopener,noreferrer');
+    const normalized = normalizeMockLabelUrl(url);
+    window.open(typeof normalized === 'string' ? normalized : url, '_blank', 'noopener,noreferrer');
   },
 
   // ─── Print queue ───────────────────────────────────────────────────────────
