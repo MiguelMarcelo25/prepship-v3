@@ -1,3 +1,10 @@
+// 🔒 AI-LOCKED FILE — Shipped data protection
+// This file is part of the shipped/cancelled lockdown declared in
+// AGENTS.md. AI agents must NOT refactor, "clean up," or rewrite the
+// kill-switch logic (`isInventoryAutoDeductEnabled`,
+// `deductInventoryForOrder`, `deductPackageForShipment`) without the
+// user explicitly typing `unlock shipped data` in the conversation.
+// Read freely — modify only with explicit human override.
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { inventory, inventoryLedger } from '../db/schema/inventory';
@@ -78,6 +85,13 @@ export async function deductPackageForShipment(input: {
   orderId: number;
   orderNumber?: string | null;
 }) {
+  // Lockdown also covers the package_ledger — same env flag governs both
+  // inventory and package auto-deduction so the "shipped orders shouldn't
+  // touch ledger tables" rule is consistent across all on-ship side-effects.
+  if (!isInventoryAutoDeductEnabled()) {
+    return { deducted: false, reason: 'lockdown' as const };
+  }
+
   const packageId = Number.parseInt(String(input.packageId ?? ''), 10);
   if (!Number.isFinite(packageId) || packageId <= 0) {
     return { deducted: false, reason: 'no-package' as const };
@@ -110,10 +124,51 @@ export async function deductPackageForShipment(input: {
   });
 }
 
+// ════════════════════════════════════════════════════════════════════
+// KILL SWITCH for inventory auto-deduction on shipped orders
+// ────────────────────────────────────────────────────────────────────
+// Set INVENTORY_AUTO_DEDUCT=false in env to LOCK DOWN the inventory_ledger
+// table — shipping an order will NOT touch inventory rows or write a
+// `'ship'` ledger entry. Used after the negative-balance audit revealed
+// that auto-deducting against zero-baseline SKUs created a long tail of
+// negative stock counts (every SKU that wasn't manually received first
+// went into the red as soon as it shipped).
+//
+// What still works when disabled:
+//   - Order status transitions (orders can still flip to 'shipped')
+//   - Shipment record creation (shipments table still gets rows)
+//   - Manual Receive entries (the Inventory tab's Receive flow is
+//     untouched — those write to inventory_ledger directly via the
+//     /inventory/:id/movement endpoint)
+//
+// What stops:
+//   - Auto-creation of inventory rows on first ship of an unknown SKU
+//   - All `'ship'` type entries in inventory_ledger
+//   - All stockQty mutations triggered by the label/sync paths
+//
+// Default (unset or any other value) preserves the original behavior so
+// existing deployments aren't surprised. Flip the flag in Vercel/Render
+// env vars + redeploy when you want the lockdown.
+// ════════════════════════════════════════════════════════════════════
+function isInventoryAutoDeductEnabled(): boolean {
+  const raw = (process.env.INVENTORY_AUTO_DEDUCT ?? '').trim().toLowerCase();
+  if (raw === 'false' || raw === '0' || raw === 'off' || raw === 'no') return false;
+  return true;
+}
+
 export async function deductInventoryForOrder(
   order: OrderForDeduction,
   input: { shipmentId?: number; source?: string; createdAt?: Date; skus?: string[] } = {},
 ) {
+  // Lockdown: short-circuit before touching ANY inventory rows or the
+  // ledger. Returns the same shape callers expect (`{deducted, skipped}`)
+  // so existing call sites at src/routes/orders.ts:1761,
+  // src/services/labels.ts:622, and src/services/shipment-sync.ts:478
+  // don't need a single line of changes.
+  if (!isInventoryAutoDeductEnabled()) {
+    return { deducted: 0, skipped: true, lockedDown: true };
+  }
+
   const skuFilter = input.skus?.length
     ? new Set(input.skus.map((sku) => sku.trim().toLowerCase()).filter(Boolean))
     : undefined;

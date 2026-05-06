@@ -1737,6 +1737,18 @@ export default function OrdersView({
   const resolvedColumnPrefsRef = useRef(null)
   const columnPrefsRef = useRef<ColumnPrefs | null>(null)
   const currentStatusRef = useRef(currentStatus)
+
+  // ─── SHIPPED / CANCELLED LOCKDOWN ──────────────────────────────────
+  // Both views are historical records that should never be modified
+  // through the bulk-actions UI. When `isReadOnly` is true:
+  //   • Row + select-all + SKU-group checkboxes hidden (no selection)
+  //   • Batch actions panel suppressed (no Print Labels, Send to Queue)
+  //   • Read-only banner shown at the top of the view
+  // Row click → drawer is still allowed (reading is fine), but the
+  // drawer's modify buttons are governed by their own logic. This stops
+  // the most common "I accidentally re-shipped a label" / "I bulk
+  // deleted shipped orders" footguns.
+  const isReadOnly = currentStatus === 'shipped' || currentStatus === 'cancelled'
   const resizeStateRef = useRef<{ key: TableColumnKey; startX: number; startWidth: number } | null>(null)
   const pendingResizeWidthsRef = useRef<Record<TableColumnKey, number> | null>(null)
   const resizeFrameRef = useRef<number | null>(null)
@@ -4859,6 +4871,10 @@ export default function OrdersView({
 
     switch (column.key) {
       case 'select':
+        // Lockdown — no row selection on Shipped / Cancelled. Cell
+        // renders empty so the column still reserves its width but no
+        // checkbox is interactive.
+        if (isReadOnly) return null
         return (
           <input
             type="checkbox"
@@ -5179,6 +5195,12 @@ export default function OrdersView({
   }
 
   const renderBatchPanel = () => {
+    // Lockdown — Shipped / Cancelled views never show the batch panel
+    // since selection itself is disabled (no orderIds can be in
+    // selectedOrderIds). Returning null here is a belt-and-suspenders
+    // safeguard against any future bug that re-enables selection.
+    if (isReadOnly) return null
+
     const selectedOrders = orders.filter((order) => selectedIdSet.has(order.orderId))
     const firstOrder = selectedOrders[0] ?? null
     const firstDims = firstOrder ? getDimensions(firstOrder, null) : null
@@ -6106,6 +6128,12 @@ export default function OrdersView({
               </div>
             ) : null}
           </div>
+          {/* Lockdown — Select All hidden in Shipped/Cancelled views.
+              Without this, the user could check Select All which would
+              ignore the row-level checkbox lockdown (rows hide their
+              checkboxes, but Select All operates on visibleOrderIds
+              regardless of cell visibility). */}
+          {isReadOnly ? null : (
           <label
             id="btnSelectAll"
             title={
@@ -6146,6 +6174,7 @@ export default function OrdersView({
                 : 'Select All'}
             </span>
           </label>
+          )}
 
           <button
             id="btnSkuSort"
@@ -6610,6 +6639,10 @@ export default function OrdersView({
                             }}
                           >
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                              {/* Lockdown — SKU group select-all also hidden
+                                  on Shipped/Cancelled. Same reason as the
+                                  per-row checkbox: no bulk-modify pathway. */}
+                              {isReadOnly ? null : (
                               <input
                                 type="checkbox"
                                 checked={allGroupSelected}
@@ -6624,6 +6657,7 @@ export default function OrdersView({
                                   toggleSkuGroupSelection(groupOrderIds, event.target.checked)
                                 }}
                               />
+                              )}
                               <span style={{ fontSize: 13 }}>📦</span>
                               <span className="sku-link" style={{ fontSize: 11.5 }} title={group.sku}>{group.sku}</span>
                               <span style={{ fontWeight: 700, color: 'var(--text)' }}>

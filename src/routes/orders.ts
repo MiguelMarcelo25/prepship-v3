@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, desc, eq, gte, ilike, inArray, lte, notInArray, or, sql } from 'drizzle-orm';
@@ -20,6 +20,75 @@ import { EXCLUDED_STORE_IDS, EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
 import { isAdminEmail } from '../lib/admin-emails';
 
 const app = new Hono();
+
+// ════════════════════════════════════════════════════════════════════
+// SHIPPED / CANCELLED LOCKDOWN — backend route guard
+// ────────────────────────────────────────────────────────────────────
+// Once an order's status is 'shipped' or 'cancelled', it's a historical
+// record and must be immutable. Every modification route below calls
+// this guard at the top of its handler — if the target order is locked,
+// the route returns 403 Forbidden BEFORE running any update logic.
+//
+// This protects against:
+//   - Accidental UI edits via the OrderDetailDrawer
+//   - Direct API calls (curl, Postman, third-party clients)
+//   - Future code paths that might forget to add their own UI guard
+//
+// Bypass: an explicit ?force=1 query param + admin email allows the
+// operation to proceed. Designed for one-off corrections; logs a
+// warning so unintended use is visible in monitoring. Non-admins
+// always get 403 regardless of force flag.
+//
+// Returns:
+//   - { ok: true } when the order can be modified
+//   - { ok: false, response } when the order is locked (caller must
+//     return the response immediately to short-circuit the handler)
+// ════════════════════════════════════════════════════════════════════
+const LOCKED_STATUSES = new Set(['shipped', 'cancelled']);
+
+async function assertOrderEditable(
+  c: Context<any, any, any>,
+  orderId: number,
+): Promise<{ ok: true } | { ok: false; response: Response }> {
+  const [row] = await db
+    .select({ id: orders.id, status: orders.orderStatus })
+    .from(orders)
+    .where(eq(orders.id, orderId))
+    .limit(1);
+  if (!row) {
+    return { ok: false, response: c.json({ error: 'Order not found' }, 404) };
+  }
+  const status = String(row.status ?? '').toLowerCase();
+  if (!LOCKED_STATUSES.has(status)) {
+    return { ok: true };
+  }
+  // Optional admin override: ?force=1 + admin email lets the operation
+  // through with a warning logged. Use sparingly; the standard answer
+  // is "create a new order or correction record" rather than mutating
+  // historical data.
+  const forceFlag = c.req.query('force');
+  const callerEmail = c.get('email' as never) as string | undefined;
+  const callerIsAdmin = isAdminEmail(callerEmail);
+  if (forceFlag === '1' && callerIsAdmin) {
+    console.warn(
+      `[orders] LOCKDOWN BYPASS — admin ${callerEmail} forced modification of ${status} order ${orderId}`
+    );
+    return { ok: true };
+  }
+  return {
+    ok: false,
+    response: c.json(
+      {
+        error: `Cannot modify a ${status} order — historical records are locked.`,
+        status,
+        orderId,
+        locked: true,
+        hint: 'Shipped and cancelled orders are immutable. Admins can pass ?force=1 to override (logged).',
+      },
+      403,
+    ),
+  };
+}
 
 const visibleStorePredicate = sql`(
   (${orders.storeId} is not null and ${orders.storeId} not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)}))
@@ -1562,6 +1631,11 @@ app.patch('/:id{[0-9]+}', zValidator('json', patchBody), async (c) => {
   const id = Number(c.req.param('id'));
   const body = c.req.valid('json');
 
+  // Lockdown: shipped/cancelled orders cannot be modified. Returns 403
+  // before any update logic runs.
+  const guard = await assertOrderEditable(c, id);
+  if (!guard.ok) return guard.response;
+
   const [existing] = await db
     .select({ id: orders.id })
     .from(orders)
@@ -1652,6 +1726,8 @@ app.post(
   zValidator('json', z.object({ residential: z.boolean().nullable() })),
   async (c) => {
     const id = Number(c.req.param('id'));
+    const guard = await assertOrderEditable(c, id);
+    if (!guard.ok) return guard.response;
     const row = await applyOverridesPatch(id, { residential: c.req.valid('json').residential });
     if (!row) return c.json({ error: 'Order not found' }, 404);
     return c.json({ data: row });
@@ -1663,6 +1739,8 @@ app.post(
   zValidator('json', z.object({ selectedPid: z.number().int().nullable() })),
   async (c) => {
     const id = Number(c.req.param('id'));
+    const guard = await assertOrderEditable(c, id);
+    if (!guard.ok) return guard.response;
     const row = await applyOverridesPatch(id, { selectedPid: c.req.valid('json').selectedPid });
     if (!row) return c.json({ error: 'Order not found' }, 404);
     return c.json({ data: row });
@@ -1681,6 +1759,8 @@ app.post(
   ),
   async (c) => {
     const id = Number(c.req.param('id'));
+    const guard = await assertOrderEditable(c, id);
+    if (!guard.ok) return guard.response;
     const body = c.req.valid('json');
     const raw = body.packageId ?? body.selectedPid ?? null;
     const selectedPackageId = raw === null ? null : String(raw);
@@ -1701,6 +1781,8 @@ app.post(
   ),
   async (c) => {
     const id = Number(c.req.param('id'));
+    const guard = await assertOrderEditable(c, id);
+    if (!guard.ok) return guard.response;
     const body = c.req.valid('json');
 
     // v2-parity: canonicalize + hard-assert that persisted best rate has
@@ -1738,6 +1820,8 @@ app.post(
   ),
   async (c) => {
     const id = Number(c.req.param('id'));
+    const guard = await assertOrderEditable(c, id);
+    if (!guard.ok) return guard.response;
     const body = c.req.valid('json');
     const flag = body.externallyShipped ?? body.externalShipped ?? true;
 
@@ -1788,6 +1872,8 @@ app.post(
   zValidator('json', saveDimsBody),
   async (c) => {
     const id = Number(c.req.param('id'));
+    const guard = await assertOrderEditable(c, id);
+    if (!guard.ok) return guard.response;
     const body = c.req.valid('json');
 
     const [existing] = await db
