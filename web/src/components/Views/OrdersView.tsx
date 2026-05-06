@@ -6760,9 +6760,12 @@ export default function OrdersView({
                           multiSku ? 'multi-sku-row' : '',
                           getIsException(order) ? 'row-exception' : '',
                           // Transitional state — 5s after Print Label success,
-                          // the row fades + strikes through before refetch
-                          // removes it from the awaiting list.
-                          isTransitioningShipped ? 'opacity-50 [&_td]:line-through transition-opacity duration-700 pointer-events-none' : '',
+                          // the row goes grayscale (desaturated) so it visibly
+                          // "freezes" as a confirmation, then refetch removes
+                          // it from the awaiting list. Per user request:
+                          // grayscale-only (no strikethrough), pointer-events
+                          // off so it can't be re-clicked while transitioning.
+                          isTransitioningShipped ? 'grayscale opacity-70 transition-all duration-500 pointer-events-none' : '',
                         ].filter(Boolean).join(' ')
                         const clientColor = getClientPalette(order.clientName ?? 'Untagged').border
                         const expedited = getExpeditedBadge(order, detail)
