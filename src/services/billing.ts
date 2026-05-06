@@ -130,16 +130,40 @@ export async function generateLineItems(input: GenerateInput) {
   const fromIso = from.toISOString();
   const toIso = to.toISOString();
 
-  // v2 parity: generate for EVERY configured client, including test ones.
-  // v2 bills test clients too (they appear in the Generate & Summary grid).
-  const configs = await db
-    .select()
-    .from(billingConfig)
-    .where(
-      input.clientId !== undefined
-        ? eq(billingConfig.clientId, input.clientId)
-        : eq(billingConfig.active, true)
-    );
+  // Match /billing/config: active clients without a billing_config row still
+  // generate with defaults, otherwise a fresh install has visible clients but
+  // "Generate Invoices" finds no configs and produces an empty summary.
+  const configs = await db.execute<{
+    clientId: number;
+    pickPackFee: string;
+    pickPackMaxUnits: number;
+    additionalUnitFee: string;
+    packageCostMarkup: string;
+    shippingMarkupPct: string;
+    shippingMarkupFlat: string;
+    storageFeePerCuFt: string;
+    billingMode: string;
+    active: boolean;
+  }>(sql`
+    select
+      c.id as "clientId",
+      coalesce(b.pick_pack_fee, '0'::numeric)::text as "pickPackFee",
+      coalesce(b.pick_pack_max_units, 1)::int as "pickPackMaxUnits",
+      coalesce(b.additional_unit_fee, '0'::numeric)::text as "additionalUnitFee",
+      coalesce(b.package_cost_markup, '0'::numeric)::text as "packageCostMarkup",
+      coalesce(b.shipping_markup_pct, '0'::numeric)::text as "shippingMarkupPct",
+      coalesce(b.shipping_markup_flat, '0'::numeric)::text as "shippingMarkupFlat",
+      coalesce(b.storage_fee_per_cu_ft, '0'::numeric)::text as "storageFeePerCuFt",
+      coalesce(b.billing_mode, 'per_shipment') as "billingMode",
+      coalesce(b.active, true) as active
+    from clients c
+    left join billing_config b on b.client_id = c.id
+    where c.active = true
+      and c.name not in ('Manual Orders', 'Rate Browser', 'Api Shipments')
+      and coalesce(b.active, true) = true
+      ${input.clientId !== undefined ? sql`and c.id = ${input.clientId}` : sql``}
+    order by c.name asc
+  `);
   if (!configs.length) {
     return {
       generated: 0,
@@ -245,7 +269,11 @@ export async function generateLineItems(input: GenerateInput) {
   const billableRows: BillableRow[] = orderShipmentRows
     .map((row) => {
       const storeId = rawStoreId(row.orderRaw ?? {}, row.orderStoreId ?? null);
-      const clientId = storeId !== null ? clientByStore.get(storeId) ?? null : null;
+      const clientId =
+        (storeId !== null ? clientByStore.get(storeId) ?? null : null) ??
+        row.orderClientId ??
+        row.shipmentClientId ??
+        null;
       return {
         id: row.shipmentId,
         orderId: row.orderId,
@@ -728,9 +756,9 @@ export async function billingSummary(
   // billing_line_items alone, dropping zero-volume clients entirely and
   // causing the Summary grid to look half-empty vs. v2.
   //
-  // Totals are filtered SUMs per line_type; orderCount is a COUNT(DISTINCT
-  // order_id) on pick_pack lines only (one per order), matching v2's
-  // sqlite-billing-repository.ts listSummary query.
+  // Totals are filtered SUMs per line_type; orderCount counts distinct billed
+  // orders from any order-backed line so clients with $0 pick/pack defaults
+  // still show order volume when shipping lines were generated.
   const rows = await db.execute<{
     client_id: number;
     client_name: string;
@@ -750,7 +778,7 @@ export async function billingSummary(
       coalesce(sum(case when b.line_type = 'package_cost' then b.total_cost else 0 end), 0)::text as package_total,
       coalesce(sum(case when b.line_type = 'shipping' then b.total_cost else 0 end), 0)::text as shipping_total,
       coalesce(sum(case when b.line_type = 'storage' then b.total_cost else 0 end), 0)::text as storage_total,
-      count(distinct case when b.line_type = 'pick_pack' then b.order_id end)::int as order_count,
+      count(distinct b.order_id)::int as order_count,
       coalesce(sum(b.total_cost), 0)::text as grand_total
     from clients c
     left join billing_line_items b

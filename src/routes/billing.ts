@@ -250,7 +250,7 @@ app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
       coalesce(sum(case when line_type in ('package_cost', 'package') then total_cost else 0 end), 0)::text as package_total,
       coalesce(sum(case when line_type = 'shipping' then total_cost else 0 end), 0)::text as shipping_total,
       coalesce(sum(case when line_type = 'storage' then total_cost else 0 end), 0)::text as storage_total,
-      count(distinct case when line_type in ('pick_pack', 'pickpack') then order_id end)::int as order_count,
+      count(distinct order_id)::int as order_count,
       coalesce(sum(total_cost), 0)::text as grand_total
     from billing_line_items
     where client_id = ${clientId}
