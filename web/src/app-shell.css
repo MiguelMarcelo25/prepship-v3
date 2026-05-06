@@ -907,3 +907,94 @@ th.col-drag-over{background:var(--ss-blue-bg)!important;box-shadow:inset 2px 0 0
   .pager{flex-wrap:wrap;gap:4px;font-size:11px;}
   .pager .btn{min-height:32px;padding:4px 8px;}
 }
+
+/* ────────────────────────────────────────────────────────────────────────
+   Print Label transition — boss directive 2026-05-07.
+
+   When the operator clicks "Create + Print Label" on a row, the row
+   stays visible for 30 s with a continuous, visible fade animation
+   (so they SEE the order leaving instead of it just freezing then
+   disappearing). At t=30 s the parent component refetches and the
+   row drops naturally from the awaiting list.
+
+   The animation has 4 keyframe stops so the change is visible
+   throughout — not just at the end:
+     0%   full visible, full color
+     20%  ~85% opacity, slight desaturation, hint of left-shift
+     50%  ~55% opacity, mostly grayscale
+     80%  ~25% opacity, fully grayscale
+     100% 0% opacity, scaled 0.96, slid right ~30px (looks like the
+          row is "leaving" toward the Shipped tab)
+
+   `animation-fill-mode: forwards` keeps the final state after the
+   animation ends so the row stays invisible until the JS refetch
+   removes it from the DOM (avoids a brief reappearance).
+
+   `pointer-events: none` prevents the operator from clicking the
+   row mid-fade. Keyboard focus is dropped via tabindex below.
+   ──────────────────────────────────────────────────────────────────── */
+@keyframes ps-shipping-fade {
+  0% {
+    opacity: 1;
+    filter: grayscale(0) brightness(1);
+    transform: translateX(0) scale(1);
+  }
+  20% {
+    opacity: 0.85;
+    filter: grayscale(0.35) brightness(0.98);
+    transform: translateX(2px) scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    filter: grayscale(0.7) brightness(0.96);
+    transform: translateX(6px) scale(0.998);
+  }
+  80% {
+    opacity: 0.25;
+    filter: grayscale(1) brightness(0.94);
+    transform: translateX(14px) scale(0.99);
+  }
+  100% {
+    opacity: 0;
+    filter: grayscale(1) brightness(0.92);
+    transform: translateX(30px) scale(0.96);
+  }
+}
+
+.ps-shipping-row {
+  animation: ps-shipping-fade 30s ease-out forwards;
+  pointer-events: none;
+  position: relative;
+}
+
+/* The "Shipping…" inline pill — appears inside the row during the
+   transition so the operator has a clear, persistent signal that
+   the order is in flight. Lives inline (no absolute positioning)
+   to avoid <tr> position-context quirks. */
+.ps-shipping-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(34, 197, 94, 0.12);
+  color: rgb(21, 128, 61);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  ring: 1px solid rgba(34, 197, 94, 0.25);
+  animation: ps-shipping-pulse 1.4s ease-in-out infinite;
+}
+.ps-shipping-pill svg {
+  animation: ps-shipping-truck 2s ease-in-out infinite;
+}
+
+@keyframes ps-shipping-pulse {
+  0%, 100% { background-color: rgba(34, 197, 94, 0.12); }
+  50%      { background-color: rgba(34, 197, 94, 0.22); }
+}
+@keyframes ps-shipping-truck {
+  0%, 100% { transform: translateX(0); }
+  50%      { transform: translateX(2px); }
+}
