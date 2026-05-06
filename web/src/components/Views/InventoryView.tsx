@@ -1689,11 +1689,7 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
                       {/* Store ID — each ID rendered as a small chip with
                           the resolved ShipStation store name in the tooltip
                           (so admins can hover to see what each ID maps to
-                          without leaving the table). When 2+ IDs are
-                          present, a small amber count badge flags the row
-                          as a "merged multi-store client" — click Edit on
-                          such a row to see / remove individual IDs in the
-                          form's chip editor. */}
+                          without leaving the table). */}
                       <td>
                         {client.storeIds.length === 0 ? (
                           <span style={{ color: 'var(--text4)' }}>—</span>
@@ -1711,14 +1707,6 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
                                 </span>
                               )
                             })}
-                            {client.storeIds.length > 1 ? (
-                              <span
-                                className="inline-flex items-center px-1.5 py-px rounded bg-amber-50 text-amber-700 text-[10px] font-bold uppercase tracking-wide ring-1 ring-amber-200"
-                                title={`Merged client — orders from all ${client.storeIds.length} stores roll up here. Click Edit to view or remove individual IDs.`}
-                              >
-                                {client.storeIds.length}× merged
-                              </span>
-                            ) : null}
                           </div>
                         )}
                       </td>
