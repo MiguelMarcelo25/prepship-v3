@@ -1755,13 +1755,24 @@ export default function OrdersView({
   const [batchBusy, setBatchBusy] = useState(false)
   const [batchTestMode, setBatchTestMode] = useState(false)
   // Set of orderIds that just successfully shipped — they render with
-  // strikethrough + reduced opacity for ~5s before being refetched out
-  // of the awaiting list. Gives the user clear visual confirmation that
-  // their Print Label click took effect at the data layer (otherwise
-  // the row would just disappear or linger ambiguously).
-  // Per user override `unlock shipped data` on 2026-05-06.
+  // Per-order print-label transition (boss directive 2026-05-07):
+  //   - Phase 1 (0-9.0 s) — STUCK: row goes grayscale at opacity-70
+  //     so the operator sees the row "freeze" as a confirmation that
+  //     their click took effect. pointer-events disabled so they
+  //     can't accidentally re-click during the wait.
+  //   - Phase 2 (9.0-10 s) — FADE-OUT: row animates to opacity-0 with
+  //     a slight scale shrink, giving a smooth "the order is leaving"
+  //     visual cue right before it's actually removed from the
+  //     awaiting list.
+  //   - Phase 3 (10 s) — REFETCH: backend already has the order
+  //     marked 'shipped' (per order-sync race fix in 1afe757). Refetch
+  //     pulls fresh data, the row drops naturally from the list.
+  //
+  // Two state Sets so each phase can be toggled independently. A
+  // single 10s timer manages both transitions so timing stays tight.
   const [transitionalShippedIds, setTransitionalShippedIds] = useState<Set<number>>(new Set())
-  const transitionalTimeoutsRef = useRef<Map<number, number>>(new Map())
+  const [fadingOutShippedIds, setFadingOutShippedIds] = useState<Set<number>>(new Set())
+  const transitionalTimeoutsRef = useRef<Map<number, { stuck: number; fade: number }>>(new Map())
   // Tracks which order# pill in the batch panel was just copied. Set on
   // click, cleared after ~1.2s so the pill flashes a "Copied!" check
   // and reverts. Single string at a time — clicking another pill
@@ -1918,9 +1929,12 @@ export default function OrdersView({
       clearQueueActionProgressTimer()
       clearQueueActionHeartbeatTimer()
       // Clean up any in-flight transitional-shipped timers so they
-      // don't fire after unmount (would update state on a dead component).
-      for (const t of transitionalTimeoutsRef.current.values()) {
-        window.clearTimeout(t)
+      // don't fire after unmount (would update state on a dead
+      // component). Each entry now holds TWO timers (stuck → fade →
+      // refetch); cancel both.
+      for (const pair of transitionalTimeoutsRef.current.values()) {
+        window.clearTimeout(pair.stuck)
+        window.clearTimeout(pair.fade)
       }
       transitionalTimeoutsRef.current.clear()
     }
@@ -4307,26 +4321,63 @@ export default function OrdersView({
         // visually fade + line-through, then refetchOrders below removes
         // it from the awaiting list once the backend confirms 'shipped'.
         if (mode === 'print') {
+          // ─── Two-phase transition (boss directive 2026-05-07) ────
+          // Phase 1 (0-9.0 s): row goes grayscale + opacity-70 (STUCK).
+          // Phase 2 (9.0-10 s): row fades to opacity-0 + scale-down.
+          // Phase 3 (10 s): refetch — backend already has 'shipped'.
+          //
+          // Constants kept in this scope so the visual config is
+          // adjacent to the side-effect that fires it.
+          const STUCK_DURATION_MS = 9_000
+          const FADE_DURATION_MS = 1_000
+          const TOTAL_DURATION_MS = STUCK_DURATION_MS + FADE_DURATION_MS
+
           setTransitionalShippedIds((prev) => {
             const next = new Set(prev)
             next.add(order.orderId)
             return next
           })
-          // Clear any prior timer for this orderId (rare, but safe)
-          const existingTimer = transitionalTimeoutsRef.current.get(order.orderId)
-          if (existingTimer) window.clearTimeout(existingTimer)
-          const timer = window.setTimeout(() => {
+
+          // Clear any prior timers for this orderId (rare, but safe).
+          // Stored as { stuck, fade } pair — both must be cleared.
+          const existing = transitionalTimeoutsRef.current.get(order.orderId)
+          if (existing) {
+            window.clearTimeout(existing.stuck)
+            window.clearTimeout(existing.fade)
+          }
+
+          // Sub-timer at 9 s: flip the order into the fading-out set,
+          // which causes the row's CSS to animate to opacity-0.
+          const fadeTimer = window.setTimeout(() => {
+            setFadingOutShippedIds((prev) => {
+              const next = new Set(prev)
+              next.add(order.orderId)
+              return next
+            })
+          }, STUCK_DURATION_MS)
+
+          // Main timer at 10 s: clean up both sets and refetch. The
+          // refetch removes the row from the awaiting list naturally
+          // (it now has order_status = 'shipped' upstream).
+          const stuckTimer = window.setTimeout(() => {
             setTransitionalShippedIds((prev) => {
               const next = new Set(prev)
               next.delete(order.orderId)
               return next
             })
+            setFadingOutShippedIds((prev) => {
+              const next = new Set(prev)
+              next.delete(order.orderId)
+              return next
+            })
             transitionalTimeoutsRef.current.delete(order.orderId)
-            // Refetch after the visual cue completes — backend has the
-            // order as 'shipped' by now (with the order-sync race fix).
             void refetchOrders()
-          }, 5000)
-          transitionalTimeoutsRef.current.set(order.orderId, timer)
+          }, TOTAL_DURATION_MS)
+
+          transitionalTimeoutsRef.current.set(order.orderId, {
+            stuck: stuckTimer,
+            fade: fadeTimer,
+          })
         }
         if (mode === 'queue') markPersistentQueueJobOrder(queueJobId, order.orderId, false)
         if (mode === 'queue') advanceQueueActionProgress()
@@ -7179,6 +7230,7 @@ export default function OrdersView({
                         const uniqueSkus = new Set(items.map((item) => item.sku).filter(Boolean))
                         const multiSku = uniqueSkus.size > 1
                         const isTransitioningShipped = transitionalShippedIds.has(order.orderId)
+                        const isFadingOutShipped = fadingOutShippedIds.has(order.orderId)
                         const rowClasses = [
                           'order-row',
                           selectedIdSet.has(order.orderId) ? 'row-selected' : '',
@@ -7186,13 +7238,21 @@ export default function OrdersView({
                           kbRowId === order.orderId ? 'row-kb-focus' : '',
                           multiSku ? 'multi-sku-row' : '',
                           getIsException(order) ? 'row-exception' : '',
-                          // Transitional state — 5s after Print Label success,
-                          // the row goes grayscale (desaturated) so it visibly
-                          // "freezes" as a confirmation, then refetch removes
-                          // it from the awaiting list. Per user request:
-                          // grayscale-only (no strikethrough), pointer-events
-                          // off so it can't be re-clicked while transitioning.
-                          isTransitioningShipped ? 'grayscale opacity-70 transition-all duration-500 pointer-events-none' : '',
+                          // Two-phase Print Label transition (10 s total):
+                          //   Phase 1 (0-9 s STUCK): grayscale + 70% opacity —
+                          //     row visibly freezes as a confirmation. pointer-
+                          //     events off so it can't be re-clicked during
+                          //     the wait.
+                          //   Phase 2 (9-10 s FADE-OUT): opacity-0 + scale-95
+                          //     animates the row away smoothly before the
+                          //     refetch removes it from the DOM. ~1 s ease-out
+                          //     transition gives the operator a clear "this
+                          //     order is leaving" cue.
+                          isFadingOutShipped
+                            ? 'grayscale opacity-0 scale-[0.97] transition-all duration-1000 ease-out pointer-events-none origin-left'
+                            : isTransitioningShipped
+                              ? 'grayscale opacity-70 transition-all duration-500 pointer-events-none'
+                              : '',
                         ].filter(Boolean).join(' ')
                         const clientColor = getClientPalette(order.clientName ?? 'Untagged').border
                         const expedited = getExpeditedBadge(order, detail)
