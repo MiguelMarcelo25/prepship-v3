@@ -460,6 +460,84 @@ app.get('/sync/status', async (c) => {
   });
 });
 
+// GET /orders/daily-counts?from=YYYY-MM-DD&to=YYYY-MM-DD
+//
+// Returns one row per day in the range with order counts split by status:
+//   [{ day: '2026-04-15', awaiting: 12, shipped: 34, cancelled: 1, total: 47 }, …]
+//
+// Built specifically for the Dashboard "Orders per Day" chart, which
+// previously paginated through up to 5000 individual order rows just to
+// bucket them client-side — a single GROUP BY here returns ~30 rows
+// (typical 30-day window) instead of megabytes of order JSON. The
+// dashboard load drops from seconds to milliseconds.
+//
+// Honors the same visibility predicates as the list endpoint (excluded
+// stores, test-order opt-out, optional client/store filter, assignee
+// scoping for non-admin callers) so the chart matches what users see in
+// the Orders view.
+const dailyCountsQuery = z.object({
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'from must be YYYY-MM-DD'),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'to must be YYYY-MM-DD'),
+  clientId: z.coerce.number().int().optional(),
+  storeId: z.coerce.number().int().optional(),
+  hideTestOrders: z.coerce.boolean().optional(),
+});
+
+app.get('/daily-counts', zValidator('query', dailyCountsQuery), async (c) => {
+  const q = c.req.valid('query');
+
+  // Same assignee-scoping rules as GET / (admins see all; workers see only
+  // their assigned orders).
+  const callerEmail = c.get('email' as never) as string | undefined;
+  const callerUserId = c.get('userId' as never) as string | undefined;
+  const callerIsAdmin = isAdminEmail(callerEmail);
+  const assigneeFilter = !callerIsAdmin && callerUserId
+    ? eq(orders.assignedToUserId, callerUserId)
+    : undefined;
+
+  // Inclusive date range: to-date covers through 23:59:59.999 of that day so
+  // orders created at the very end of the window aren't dropped.
+  const fromDate = new Date(`${q.from}T00:00:00.000Z`);
+  const toDate = new Date(`${q.to}T23:59:59.999Z`);
+
+  const where = and(
+    ...[
+      assigneeFilter,
+      q.clientId !== undefined ? eq(orders.clientId, q.clientId) : undefined,
+      q.storeId !== undefined ? eq(orders.storeId, q.storeId) : undefined,
+      visibleStorePredicate,
+      q.hideTestOrders === true && q.clientId === undefined && q.storeId === undefined
+        ? sql`not ${testOrderPredicate}`
+        : undefined,
+      gte(orders.orderDate, fromDate),
+      lte(orders.orderDate, toDate),
+    ].filter((p): p is NonNullable<typeof p> => p !== undefined)
+  );
+
+  // Group by day (UTC) then pivot statuses into named columns. FILTER
+  // clauses are the cleanest pivot in Postgres — one pass over the rows.
+  const rows = await db.execute<{
+    day: string;
+    awaiting: number;
+    shipped: number;
+    cancelled: number;
+    total: number;
+  }>(sql`
+    select
+      to_char(date_trunc('day', ${orders.orderDate} at time zone 'UTC'), 'YYYY-MM-DD') as day,
+      count(*) filter (where ${orders.orderStatus} = 'awaiting_shipment')::int as awaiting,
+      count(*) filter (where ${orders.orderStatus} = 'shipped')::int as shipped,
+      count(*) filter (where ${orders.orderStatus} = 'cancelled')::int as cancelled,
+      count(*)::int as total
+    from ${orders}
+    where ${where}
+    group by date_trunc('day', ${orders.orderDate} at time zone 'UTC')
+    order by date_trunc('day', ${orders.orderDate} at time zone 'UTC') asc
+  `);
+
+  return c.json({ data: rows });
+});
+
 app.post('/sync', async (c) => {
   // Optional body lets a caller force a backfill further back than the
   // default watermark. Used by the UI / admin tools to pull a new keyed

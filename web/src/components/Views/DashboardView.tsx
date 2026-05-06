@@ -210,33 +210,10 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         const fromIsoPrior = ago60.toISOString().split('T')[0]
         const toIsoPrior = ago30.toISOString().split('T')[0]
 
-        // Fetch orders for the trend chart. The /orders endpoint caps pageSize
-        // at 200 (validation in src/lib/pagination.ts), so we page through:
-        //  1. First page reveals total page count.
-        //  2. Pull remaining pages in parallel, capped at 25 pages = 5000 rows.
-        const fetchAllOrdersInRange = async () => {
-          const PAGE_SIZE = 200
-          const PAGE_CAP = 25
-          const first = await apiClient
-            .fetchOrders({ dateStart: fromIso, dateEnd: toIso, pageSize: PAGE_SIZE, page: 1 })
-            .catch(() => null)
-          if (!first) return null
-          const allOrders = Array.isArray((first as any).orders) ? [...(first as any).orders] : []
-          const totalPages = Math.min(num((first as any).pages, 1), PAGE_CAP)
-          if (totalPages > 1) {
-            const remaining = await Promise.all(
-              Array.from({ length: totalPages - 1 }, (_, i) => i + 2).map((page) =>
-                apiClient
-                  .fetchOrders({ dateStart: fromIso, dateEnd: toIso, pageSize: PAGE_SIZE, page })
-                  .then((res: any) => (Array.isArray(res?.orders) ? res.orders : []))
-                  .catch(() => []),
-              ),
-            )
-            for (const batch of remaining) allOrders.push(...batch)
-          }
-          return { orders: allOrders, total: num((first as any).total) }
-        }
-
+        // Server-aggregated daily counts replace the previous "paginate
+        // through up to 5000 individual orders" approach. Backend does one
+        // GROUP BY query and returns ~30 rows in a few KB instead of MB.
+        // See src/routes/orders.ts /daily-counts.
         const [countsRes, statsRes, alertsRes, salesRes, priorSalesRes, ordersRes] = await Promise.allSettled([
           apiClient.fetchCounts(),
           apiClient.fetchDailyStats(),
@@ -247,7 +224,9 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           apiClient
             .fetchAnalysisDailySales({ from: fromIsoPrior, to: toIsoPrior, limit: 6 })
             .catch(() => null),
-          fetchAllOrdersInRange(),
+          apiClient
+            .fetchOrdersDailyCounts({ from: fromIso, to: toIso })
+            .catch(() => null),
         ])
 
         if (cancelled) return
@@ -348,14 +327,16 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           setHeatmap({ dates, rows: heatmapRows })
         }
 
-        // Build order trend (real orders per day) — independent of analysis SKU
-        // data. The chart will use this; the SKU-units series stays available
-        // for any future stacked view.
+        // Build order trend (real orders per day) from server-aggregated
+        // counts. The backend already grouped by day + status, so we just
+        // merge the response into a continuous 30-day axis (so days with
+        // zero orders still render as a flat baseline instead of vanishing
+        // from the X-axis).
         if (ordersRes.status === 'fulfilled' && ordersRes.value) {
           const payload: any = ordersRes.value
-          const rows: any[] = Array.isArray(payload?.orders) ? payload.orders : []
+          const aggregatedRows: any[] = Array.isArray(payload?.data) ? payload.data : []
 
-          // Build a continuous 30-day axis so days with zero orders still show.
+          // Continuous 31-day axis (today minus 30 through today inclusive).
           const axis: string[] = []
           for (let i = 0; i < 31; i++) {
             const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 30 + i)
@@ -366,17 +347,16 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             buckets[day] = { day, awaiting: 0, shipped: 0, cancelled: 0, total: 0 }
           })
 
-          for (const order of rows) {
-            const raw = order?.orderDate ?? order?.createDate ?? order?.shipByDate ?? order?.modifyDate
-            if (!raw) continue
-            const day = String(raw).slice(0, 10) // 'YYYY-MM-DD'
+          // Server response is already aggregated — one row per day with
+          // status pivots — so just slot each row into its bucket.
+          for (const row of aggregatedRows) {
+            const day = String(row?.day ?? '').slice(0, 10)
             const bucket = buckets[day]
             if (!bucket) continue
-            const status = String(order?.orderStatus ?? order?.status ?? '').toLowerCase()
-            if (status === 'awaiting_shipment') bucket.awaiting += 1
-            else if (status === 'shipped') bucket.shipped += 1
-            else if (status === 'cancelled') bucket.cancelled += 1
-            bucket.total += 1
+            bucket.awaiting = num(row?.awaiting)
+            bucket.shipped = num(row?.shipped)
+            bucket.cancelled = num(row?.cancelled)
+            bucket.total = num(row?.total)
           }
 
           setOrderTrend(axis.map((day) => buckets[day]))

@@ -2360,6 +2360,32 @@ export const apiClient = {
   },
 
   // ─── Analysis ──────────────────────────────────────────────────────────────
+
+  // Server-aggregated daily order counts split by status. Replaces the
+  // previous Dashboard pattern of paginating through every order in the
+  // 30-day window (up to 5000 rows!) just to bucket them client-side.
+  // Backend does ONE GROUP BY query and returns ~30 rows. See
+  // src/routes/orders.ts /daily-counts.
+  fetchOrdersDailyCounts(query: { from: string; to: string; clientId?: number; storeId?: number; hideTestOrders?: boolean }): Promise<{
+    data: Array<{ day: string; awaiting: number; shipped: number; cancelled: number; total: number }>;
+  }> {
+    return safe(
+      'fetchOrdersDailyCounts',
+      async () => {
+        const q: Record<string, string | number | boolean> = { from: query.from, to: query.to };
+        if (query.clientId !== undefined) q.clientId = query.clientId;
+        if (query.storeId !== undefined) q.storeId = query.storeId;
+        if (query.hideTestOrders) q.hideTestOrders = true;
+        const res: any = await api.get<any>(`/orders/daily-counts${qs(q)}`);
+        const data = Array.isArray(res?.data) ? res.data : [];
+        return { data };
+      },
+      // Fallback returned on error so the dashboard render code can keep
+      // pattern-matching `payload?.data` without an extra null guard.
+      { data: [] as Array<{ day: string; awaiting: number; shipped: number; cancelled: number; total: number }> }
+    );
+  },
+
   fetchAnalysisDailySales(query: Record<string, unknown>): Promise<any> {
     // v2 AnalysisView expects `{dates, topSkus, series: {[sku]: number[]}}`.
     // v4's `/analysis/sku-daily` returns `{topSkus:[{sku,name,total_qty}], days:[{day, [sku]:qty, ...}]}`.
