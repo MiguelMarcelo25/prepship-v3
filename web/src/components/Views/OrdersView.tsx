@@ -6855,168 +6855,125 @@ export default function OrdersView({
 
         <AnimatePresence>
           {dailyStats ? (
+            // ─────────────────────────────────────────────────────────
+            // V2-STYLE COMPACT DAILY STRIP
+            //
+            // Single-row horizontal layout, matching the v2original
+            // boss-approved aesthetic. Replaces the previous 4-card
+            // grid (Total / Need to Ship / Upcoming / Progress) which
+            // took ~80px of vertical space; this version is ~36px.
+            //
+            // Information density preserved end-to-end:
+            //   [📅 date range]  [📦 X Total Orders]  [🚚 X Need to Ship]
+            //   [🔔 X Upcoming]  [X of Y shipped ████ XX%]
+            //
+            // Color semantics carried over from the prior grid:
+            //   • Need to Ship → dailyStripProgress.needToShipColor
+            //     (orange when behind, green when caught up)
+            //   • Upcoming → dailyStripProgress.upcomingColor
+            //   • Progress bar → dailyStripProgress.barColor
+            // ─────────────────────────────────────────────────────────
             <motion.div
               id="daily-strip"
               initial={{ opacity: 0, y: -8 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -8 }}
               transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-              className="bg-gradient-to-b from-page to-surface-2/40 border-b border-line px-4 py-3 font-sans"
+              className="bg-gradient-to-b from-page to-surface-2/40 border-b border-line px-4 py-2 font-sans"
             >
-              <div className="flex items-center justify-between mb-2.5">
-                <div className="flex items-center gap-2 text-tiny text-ink-3">
-                  <span className="inline-flex items-center justify-center w-5 h-5 rounded-md bg-white shadow-sm border border-line">
-                    <Calendar size={11} strokeWidth={2.25} className="text-ink-2" />
-                  </span>
-                  <span className="text-ink font-semibold">{dailyStatsFromLabel}</span>
+              <div className="flex items-center gap-5 flex-wrap">
+                {/* Date range */}
+                <div className="flex items-center gap-1.5 text-[11.5px] shrink-0">
+                  <Calendar size={12} strokeWidth={2.25} className="text-ink-3" />
+                  <span className="text-ink-2 font-semibold">{dailyStatsFromLabel}</span>
                   <span className="text-ink-4">→</span>
-                  <span className="text-ink font-semibold">{dailyStatsToLabel}</span>
-                  <span className="text-ink-4 italic">· shifts 6 PM</span>
+                  <span className="text-ink-2 font-semibold">{dailyStatsToLabel}</span>
+                  <span className="text-ink-4 italic">(shifts at 6 PM)</span>
                 </div>
-                <div className="flex items-center gap-2 text-tiny">
-                  <span className="text-ink-3 font-mono tabular-nums">
-                    {dailyStripProgress?.shipped} / {dailyStats.totalOrders}
+
+                {/* Total Orders — neutral ink */}
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <Package size={14} strokeWidth={2.25} className="text-ink-2" />
+                  <motion.span
+                    key={dailyStats.totalOrders}
+                    initial={{ opacity: 0, y: 3 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="font-bold text-ink tabular-nums text-[16px] leading-none font-mono"
+                  >
+                    {dailyStats.totalOrders}
+                  </motion.span>
+                  <span className="text-ink-3 text-[11.5px]">Total Orders</span>
+                </div>
+
+                {/* Need to Ship — colored by progress urgency */}
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <Truck
+                    size={14}
+                    strokeWidth={2.25}
+                    style={{ color: dailyStripProgress?.needToShipColor }}
+                  />
+                  <motion.span
+                    key={dailyStats.needToShip}
+                    initial={{ opacity: 0, y: 3 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="font-bold tabular-nums text-[16px] leading-none font-mono"
+                    style={{ color: dailyStripProgress?.needToShipColor }}
+                  >
+                    {dailyStats.needToShip}
+                  </motion.span>
+                  <span className="text-ink-3 text-[11.5px]">Need to Ship</span>
+                </div>
+
+                {/* Upcoming — colored by upcoming urgency */}
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <Bell
+                    size={14}
+                    strokeWidth={2.25}
+                    style={{ color: dailyStripProgress?.upcomingColor }}
+                  />
+                  <motion.span
+                    key={dailyStats.upcomingOrders}
+                    initial={{ opacity: 0, y: 3 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="font-bold tabular-nums text-[16px] leading-none font-mono"
+                    style={{ color: dailyStripProgress?.upcomingColor }}
+                  >
+                    {dailyStats.upcomingOrders}
+                  </motion.span>
+                  <span className="text-ink-3 text-[11.5px]">Upcoming</span>
+                </div>
+
+                {/* Progress: text + bar + percentage. Takes remaining
+                    horizontal space via flex-1 so the bar grows on
+                    wider screens. */}
+                <div className="flex items-center gap-2 flex-1 min-w-[180px]">
+                  <span className="text-ink-3 text-[11.5px] shrink-0 tabular-nums">
+                    {dailyStripProgress?.shipped} of {dailyStats.totalOrders} shipped
                   </span>
+                  <div className="flex-1 h-2 bg-line/60 rounded-full overflow-hidden min-w-[80px]">
+                    <motion.div
+                      className="h-full rounded-full"
+                      initial={{ width: 0 }}
+                      animate={{ width: `${dailyStripProgress?.barFill ?? 0}%` }}
+                      transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
+                      style={{
+                        background: `linear-gradient(90deg, ${dailyStripProgress?.barColor}, ${dailyStripProgress?.barColor}dd)`,
+                        boxShadow: `0 0 6px ${dailyStripProgress?.barColor}40`,
+                      }}
+                    />
+                  </div>
                   <motion.span
                     key={dailyStripProgress?.pct}
                     initial={{ scale: 0.85, opacity: 0 }}
                     animate={{ scale: 1, opacity: 1 }}
                     transition={{ type: 'spring', stiffness: 380, damping: 22 }}
-                    className="font-bold tabular-nums px-1.5 py-0.5 rounded-md font-mono text-white"
-                    style={{ background: dailyStripProgress?.barColor }}
+                    className="font-bold tabular-nums text-[12.5px] shrink-0 font-mono"
+                    style={{ color: dailyStripProgress?.barColor }}
                   >
                     {dailyStripProgress?.pct}%
                   </motion.span>
                 </div>
               </div>
-              <motion.div
-                className="grid grid-cols-[repeat(3,minmax(0,1fr))_2fr] gap-2.5"
-                variants={{
-                  hidden: {},
-                  show: { transition: { staggerChildren: 0.06, delayChildren: 0.04 } },
-                }}
-                initial="hidden"
-                animate="show"
-              >
-                {/* Total tile */}
-                <motion.div
-                  variants={{
-                    hidden: { opacity: 0, y: 8 },
-                    show: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 320, damping: 24 } },
-                  }}
-                  whileHover={{ y: -2 }}
-                  className="bg-white rounded-lg border border-line px-3 py-2 shadow-sm hover:shadow-md transition-shadow flex items-center gap-2.5"
-                >
-                  <div className="w-8 h-8 rounded-md bg-gradient-to-br from-slate-50 to-slate-100 ring-1 ring-line flex items-center justify-center">
-                    <Package size={15} strokeWidth={2.25} className="text-ink-2" />
-                  </div>
-                  <div className="min-w-0">
-                    <motion.div
-                      key={dailyStats.totalOrders}
-                      initial={{ opacity: 0, y: 4 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="text-[20px] font-extrabold leading-none tracking-[-0.03em] text-ink font-mono tabular-nums"
-                    >
-                      {dailyStats.totalOrders}
-                    </motion.div>
-                    <div className="text-[10px] text-ink-3 mt-1 uppercase tracking-[0.08em] font-semibold">Total</div>
-                  </div>
-                </motion.div>
-                {/* Need to ship */}
-                <motion.div
-                  variants={{
-                    hidden: { opacity: 0, y: 8 },
-                    show: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 320, damping: 24 } },
-                  }}
-                  whileHover={{ y: -2 }}
-                  className="bg-white rounded-lg border border-line px-3 py-2 shadow-sm hover:shadow-md transition-shadow flex items-center gap-2.5 relative overflow-hidden"
-                >
-                  <div
-                    className="absolute inset-y-0 left-0 w-0.5"
-                    style={{ background: dailyStripProgress?.needToShipColor }}
-                  />
-                  <div
-                    className="w-8 h-8 rounded-md ring-1 flex items-center justify-center"
-                    style={{
-                      background: `linear-gradient(135deg, ${dailyStripProgress?.needToShipColor}15, ${dailyStripProgress?.needToShipColor}25)`,
-                      borderColor: 'transparent',
-                    }}
-                  >
-                    <Truck size={15} strokeWidth={2.25} style={{ color: dailyStripProgress?.needToShipColor }} />
-                  </div>
-                  <div className="min-w-0">
-                    <motion.div
-                      key={dailyStats.needToShip}
-                      initial={{ opacity: 0, y: 4 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="text-[20px] font-extrabold leading-none tracking-[-0.03em] font-mono tabular-nums"
-                      style={{ color: dailyStripProgress?.needToShipColor }}
-                    >
-                      {dailyStats.needToShip}
-                    </motion.div>
-                    <div className="text-[10px] text-ink-3 mt-1 uppercase tracking-[0.08em] font-semibold">Need to Ship</div>
-                  </div>
-                </motion.div>
-                {/* Upcoming */}
-                <motion.div
-                  variants={{
-                    hidden: { opacity: 0, y: 8 },
-                    show: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 320, damping: 24 } },
-                  }}
-                  whileHover={{ y: -2 }}
-                  className="bg-white rounded-lg border border-line px-3 py-2 shadow-sm hover:shadow-md transition-shadow flex items-center gap-2.5 relative overflow-hidden"
-                >
-                  <div
-                    className="absolute inset-y-0 left-0 w-0.5"
-                    style={{ background: dailyStripProgress?.upcomingColor }}
-                  />
-                  <div
-                    className="w-8 h-8 rounded-md ring-1 flex items-center justify-center"
-                    style={{
-                      background: `linear-gradient(135deg, ${dailyStripProgress?.upcomingColor}15, ${dailyStripProgress?.upcomingColor}25)`,
-                      borderColor: 'transparent',
-                    }}
-                  >
-                    <Bell size={15} strokeWidth={2.25} style={{ color: dailyStripProgress?.upcomingColor }} />
-                  </div>
-                  <div className="min-w-0">
-                    <motion.div
-                      key={dailyStats.upcomingOrders}
-                      initial={{ opacity: 0, y: 4 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="text-[20px] font-extrabold leading-none tracking-[-0.03em] font-mono tabular-nums"
-                      style={{ color: dailyStripProgress?.upcomingColor }}
-                    >
-                      {dailyStats.upcomingOrders}
-                    </motion.div>
-                    <div className="text-[10px] text-ink-3 mt-1 uppercase tracking-[0.08em] font-semibold">Upcoming</div>
-                  </div>
-                </motion.div>
-                {/* Progress card */}
-                <motion.div
-                  variants={{
-                    hidden: { opacity: 0, y: 8 },
-                    show: { opacity: 1, y: 0, transition: { type: 'spring', stiffness: 320, damping: 24 } },
-                  }}
-                  className="bg-white rounded-lg border border-line px-3 py-2 shadow-sm flex items-center gap-3"
-                >
-                  <div className="flex-1">
-                    <div className="text-[10px] text-ink-3 uppercase tracking-[0.08em] font-semibold mb-1">Shipping Progress</div>
-                    <div className="h-2 bg-line/60 rounded-full overflow-hidden">
-                      <motion.div
-                        className="h-full rounded-full"
-                        initial={{ width: 0 }}
-                        animate={{ width: `${dailyStripProgress?.barFill ?? 0}%` }}
-                        transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
-                        style={{
-                          background: `linear-gradient(90deg, ${dailyStripProgress?.barColor}, ${dailyStripProgress?.barColor}dd)`,
-                          boxShadow: `0 0 8px ${dailyStripProgress?.barColor}50`,
-                        }}
-                      />
-                    </div>
-                  </div>
-                </motion.div>
-              </motion.div>
             </motion.div>
           ) : null}
         </AnimatePresence>
