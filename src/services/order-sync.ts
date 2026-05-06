@@ -216,7 +216,33 @@ async function upsertOrdersBatch(
       target: orders.externalOrderId,
       set: {
         orderNumber: sql`excluded.order_number`,
-        orderStatus: sql`excluded.order_status`,
+        // ─── SHIPPED-STATUS RACE PROTECTION ─────────────────────────────
+        // Once an order is locally marked 'shipped' or 'cancelled' (via
+        // labels.ts createLabelV2 → markOrderShipped), it must NOT be
+        // downgraded back to 'awaiting_shipment' by a subsequent sync.
+        // Why this matters: when we print a label, our local UPDATE flips
+        // status to 'shipped' instantly, and a background v1 mark-shipped
+        // call tells ShipStation. ShipStation typically takes 30-60
+        // seconds to reflect that change in its read APIs. Any sync run
+        // in that window pulls the order back as 'awaiting_shipment' and
+        // the previous unconditional `excluded.order_status` overwrote
+        // our local 'shipped' — leaving the user looking at a print
+        // queue that won't clear, and causing the inventory ledger to
+        // double-deduct on a repeat print.
+        //
+        // The CASE statement below preserves our local terminal state
+        // when ShipStation reports the order as still awaiting; in every
+        // other transition path (awaiting → shipped via SS, awaiting →
+        // cancelled, or shipped → cancelled), we accept ShipStation's
+        // view as the source of truth.
+        //
+        // Per user override `unlock shipped data` on 2026-05-06.
+        orderStatus: sql`case
+          when ${orders.orderStatus} in ('shipped', 'cancelled')
+            and excluded.order_status = 'awaiting_shipment'
+            then ${orders.orderStatus}
+          else excluded.order_status
+        end`,
         orderDate: sql`excluded.order_date`,
         clientId: sql`excluded.client_id`,
         storeId: sql`excluded.store_id`,

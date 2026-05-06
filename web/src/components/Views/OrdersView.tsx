@@ -1717,6 +1717,14 @@ export default function OrdersView({
   const [extShipMenuOpen, setExtShipMenuOpen] = useState(false)
   const [batchBusy, setBatchBusy] = useState(false)
   const [batchTestMode, setBatchTestMode] = useState(false)
+  // Set of orderIds that just successfully shipped — they render with
+  // strikethrough + reduced opacity for ~5s before being refetched out
+  // of the awaiting list. Gives the user clear visual confirmation that
+  // their Print Label click took effect at the data layer (otherwise
+  // the row would just disappear or linger ambiguously).
+  // Per user override `unlock shipped data` on 2026-05-06.
+  const [transitionalShippedIds, setTransitionalShippedIds] = useState<Set<number>>(new Set())
+  const transitionalTimeoutsRef = useRef<Map<number, number>>(new Map())
   // Tracks which order# pill in the batch panel was just copied. Set on
   // click, cleared after ~1.2s so the pill flashes a "Copied!" check
   // and reverts. Single string at a time — clicking another pill
@@ -1863,6 +1871,12 @@ export default function OrdersView({
     return () => {
       clearQueueActionProgressTimer()
       clearQueueActionHeartbeatTimer()
+      // Clean up any in-flight transitional-shipped timers so they
+      // don't fire after unmount (would update state on a dead component).
+      for (const t of transitionalTimeoutsRef.current.values()) {
+        window.clearTimeout(t)
+      }
+      transitionalTimeoutsRef.current.clear()
     }
   }, [])
 
@@ -4234,6 +4248,31 @@ export default function OrdersView({
           window.open(response.labelUrl, '_blank', 'noopener,noreferrer')
         }
         created += 1
+        // Mark this row for the 5s strikethrough transition. It'll
+        // visually fade + line-through, then refetchOrders below removes
+        // it from the awaiting list once the backend confirms 'shipped'.
+        if (mode === 'print') {
+          setTransitionalShippedIds((prev) => {
+            const next = new Set(prev)
+            next.add(order.orderId)
+            return next
+          })
+          // Clear any prior timer for this orderId (rare, but safe)
+          const existingTimer = transitionalTimeoutsRef.current.get(order.orderId)
+          if (existingTimer) window.clearTimeout(existingTimer)
+          const timer = window.setTimeout(() => {
+            setTransitionalShippedIds((prev) => {
+              const next = new Set(prev)
+              next.delete(order.orderId)
+              return next
+            })
+            transitionalTimeoutsRef.current.delete(order.orderId)
+            // Refetch after the visual cue completes — backend has the
+            // order as 'shipped' by now (with the order-sync race fix).
+            void refetchOrders()
+          }, 5000)
+          transitionalTimeoutsRef.current.set(order.orderId, timer)
+        }
         if (mode === 'queue') markPersistentQueueJobOrder(queueJobId, order.orderId, false)
         if (mode === 'queue') advanceQueueActionProgress()
       } catch {
@@ -4258,7 +4297,13 @@ export default function OrdersView({
       setQueueActionProgressLabel('Refreshing queue')
       await hydrateQueue(true)
     }
-    await refetchOrders()
+    // Print mode skips the immediate refetch — the per-row 5s timer
+    // handles refetching AFTER the strikethrough transition completes.
+    // If we refetch here, the awaiting list updates instantly and the
+    // row disappears before the visual cue plays.
+    if (mode !== 'print' || created === 0) {
+      await refetchOrders()
+    }
     if (mode === 'queue') {
       finishPersistentQueueJob(queueJobId)
       finishQueueActionProgress(created > 0 ? 'Queue updated' : 'Queue checked')
@@ -6706,6 +6751,7 @@ export default function OrdersView({
                         const items = getActiveItems(order, detail)
                         const uniqueSkus = new Set(items.map((item) => item.sku).filter(Boolean))
                         const multiSku = uniqueSkus.size > 1
+                        const isTransitioningShipped = transitionalShippedIds.has(order.orderId)
                         const rowClasses = [
                           'order-row',
                           selectedIdSet.has(order.orderId) ? 'row-selected' : '',
@@ -6713,6 +6759,10 @@ export default function OrdersView({
                           kbRowId === order.orderId ? 'row-kb-focus' : '',
                           multiSku ? 'multi-sku-row' : '',
                           getIsException(order) ? 'row-exception' : '',
+                          // Transitional state — 5s after Print Label success,
+                          // the row fades + strikes through before refetch
+                          // removes it from the awaiting list.
+                          isTransitioningShipped ? 'opacity-50 [&_td]:line-through transition-opacity duration-700 pointer-events-none' : '',
                         ].filter(Boolean).join(' ')
                         const clientColor = getClientPalette(order.clientName ?? 'Untagged').border
                         const expedited = getExpeditedBadge(order, detail)

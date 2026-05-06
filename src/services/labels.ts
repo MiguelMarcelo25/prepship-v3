@@ -864,23 +864,55 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
     source: 'label',
   });
 
-  // Background: v1 enrichment (non-fatal)
+  // Background: v1 mark-shipped — tells ShipStation the order shipped,
+  // which in turn pushes the shipped status to the originating
+  // marketplace (Amazon, eBay, Walmart, etc.). Critical for closing the
+  // loop with the marketplace; without this, marketplaces never learn
+  // the order shipped and customers don't get tracking notifications.
+  //
+  // Retry once on transient failure (network blip, 5xx). If both
+  // attempts fail, log at ERROR level so it's grep-able in Render logs.
+  // The shipment row already has the tracking number locally regardless,
+  // so v4 doesn't lose the data — just the SS-side ack.
+  //
+  // Per user override `unlock shipped data` on 2026-05-06.
   if (creds.apiKey && creds.apiSecret && created.shipmentId && created.trackingNumber) {
     void (async () => {
-      try {
-        await ssMarkOrderShippedV1(
-          {
-            orderId: order.id,
-            carrierCode: created.carrierCode,
-            trackingNumber: created.trackingNumber!,
-            shipDate: created.shipDate,
-          },
-          { apiKey: creds.apiKey!, apiSecret: creds.apiSecret! }
-        );
-      } catch (err) {
-        console.warn('[labels] v1 mark-shipped failed:', (err as Error).message);
+      const tag = `[labels] order=${order.id} ssShipmentId=${created.shipmentId}`;
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        try {
+          await ssMarkOrderShippedV1(
+            {
+              orderId: order.id,
+              carrierCode: created.carrierCode,
+              trackingNumber: created.trackingNumber!,
+              shipDate: created.shipDate,
+            },
+            { apiKey: creds.apiKey!, apiSecret: creds.apiSecret! }
+          );
+          console.info(
+            `${tag} ✅ v1 mark-shipped acked (attempt=${attempt}) — marketplace will be notified by ShipStation`
+          );
+          return;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (attempt === 2) {
+            console.error(
+              `${tag} ❌ v1 mark-shipped FAILED after retry — MARKETPLACE NOT NOTIFIED. ${msg}`
+            );
+          } else {
+            console.warn(`${tag} v1 mark-shipped attempt ${attempt} failed, retrying in 1.5s: ${msg}`);
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+          }
+        }
       }
     })();
+  } else if (created.trackingNumber) {
+    // Tracking exists but credentials don't — log so it's visible. This
+    // happens for clients without configured ShipStation API keys.
+    console.warn(
+      `[labels] order=${order.id} skipping v1 mark-shipped: missing apiKey/apiSecret. Marketplace will NOT be notified by ShipStation.`
+    );
   }
 
   return {
