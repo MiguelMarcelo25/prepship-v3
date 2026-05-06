@@ -287,6 +287,22 @@ export async function ssGetShipmentV1(
   }
 }
 
+/**
+ * Marks an order as shipped on ShipStation v1 with notifySalesChannel:true,
+ * which triggers ShipStation's downstream marketplace notification
+ * (Amazon Confirm-Shipment, eBay Order-Update, Walmart Acknowledge, etc.).
+ *
+ * ⚠️ orderId MUST be the upstream ShipStation orderId (the numeric ID
+ * ShipStation assigns when ingesting from the marketplace), NOT a local
+ * database primary key. Pass parseInt(order.externalOrderId) here.
+ *
+ * Errors are RE-THROWN, not swallowed — the previous swallow-and-return-false
+ * design hid 404s caused by passing the wrong orderId, leaving operators
+ * blind to "labels created but marketplace never notified" failures. The
+ * single caller (services/labels.ts) wraps this in a retry+log block.
+ *
+ * Per user override `unlock shipped data` on 2026-05-07: rethrow on error.
+ */
 export async function ssMarkOrderShippedV1(
   args: {
     orderId: number;
@@ -295,23 +311,18 @@ export async function ssMarkOrderShippedV1(
     shipDate: string;
   },
   opts: { apiKey?: string; apiSecret?: string } = {}
-): Promise<boolean> {
-  try {
-    await ssV1Request('/orders/markasshipped', {
-      method: 'POST',
-      body: {
-        orderId: args.orderId,
-        carrierCode: args.carrierCode,
-        shipDate: args.shipDate,
-        trackingNumber: args.trackingNumber,
-        notifyCustomer: false,
-        notifySalesChannel: true,
-      },
-      apiKey: opts.apiKey,
-      apiSecret: opts.apiSecret,
-    });
-    return true;
-  } catch {
-    return false;
-  }
+): Promise<void> {
+  await ssV1Request('/orders/markasshipped', {
+    method: 'POST',
+    body: {
+      orderId: args.orderId,
+      carrierCode: args.carrierCode,
+      shipDate: args.shipDate,
+      trackingNumber: args.trackingNumber,
+      notifyCustomer: false,
+      notifySalesChannel: true,
+    },
+    apiKey: opts.apiKey,
+    apiSecret: opts.apiSecret,
+  });
 }

@@ -870,20 +870,45 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
   // loop with the marketplace; without this, marketplaces never learn
   // the order shipped and customers don't get tracking notifications.
   //
+  // ⚠️ CRITICAL: ShipStation's /orders/markasshipped endpoint expects
+  // the **upstream ShipStation orderId** (the numeric ID assigned by
+  // ShipStation when they received the order from the marketplace),
+  // NOT our local autoincrement primary key.
+  //
+  // In v4-stable, the orders table splits these:
+  //   • orders.id           — local serial PK  (e.g. 12345)
+  //   • orders.externalOrderId — SS upstream ID (e.g. "1438394566")
+  //
+  // The order-sync stores the SS upstream orderId as text in
+  // externalOrderId (see src/services/order-sync.ts:184). We must
+  // parse it back to a number for the v1 API. Passing order.id
+  // (the local PK) results in 404 from ShipStation, which the inner
+  // ssMarkOrderShippedV1 used to silently swallow — leaving labels
+  // marked shipped locally but the marketplace never notified.
+  //
   // Retry once on transient failure (network blip, 5xx). If both
   // attempts fail, log at ERROR level so it's grep-able in Render logs.
   // The shipment row already has the tracking number locally regardless,
   // so v4 doesn't lose the data — just the SS-side ack.
   //
-  // Per user override `unlock shipped data` on 2026-05-06.
-  if (creds.apiKey && creds.apiSecret && created.shipmentId && created.trackingNumber) {
+  // Per user override `unlock shipped data` on 2026-05-06 (and
+  // re-confirmed on 2026-05-07 for this fix).
+  const ssUpstreamOrderId = order.externalOrderId ? Number(order.externalOrderId) : null;
+  if (
+    creds.apiKey &&
+    creds.apiSecret &&
+    created.shipmentId &&
+    created.trackingNumber &&
+    ssUpstreamOrderId &&
+    Number.isFinite(ssUpstreamOrderId)
+  ) {
     void (async () => {
-      const tag = `[labels] order=${order.id} ssShipmentId=${created.shipmentId}`;
+      const tag = `[labels] localOrderId=${order.id} ssUpstreamOrderId=${ssUpstreamOrderId} ssShipmentId=${created.shipmentId}`;
       for (let attempt = 1; attempt <= 2; attempt += 1) {
         try {
           await ssMarkOrderShippedV1(
             {
-              orderId: order.id,
+              orderId: ssUpstreamOrderId,
               carrierCode: created.carrierCode,
               trackingNumber: created.trackingNumber!,
               shipDate: created.shipDate,
@@ -908,10 +933,17 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
       }
     })();
   } else if (created.trackingNumber) {
-    // Tracking exists but credentials don't — log so it's visible. This
-    // happens for clients without configured ShipStation API keys.
+    // Diagnostic: tracking exists but we can't ack to ShipStation.
+    // Three reasons we skip:
+    //   1. Missing apiKey/apiSecret (client never configured ShipStation)
+    //   2. Missing externalOrderId (manual order with no SS counterpart)
+    //   3. externalOrderId not a valid number (corrupted sync data)
+    const reasons: string[] = [];
+    if (!creds.apiKey || !creds.apiSecret) reasons.push('missing apiKey/apiSecret');
+    if (!ssUpstreamOrderId) reasons.push('missing or invalid externalOrderId');
+    if (!created.shipmentId) reasons.push('missing shipmentId');
     console.warn(
-      `[labels] order=${order.id} skipping v1 mark-shipped: missing apiKey/apiSecret. Marketplace will NOT be notified by ShipStation.`
+      `[labels] order=${order.id} skipping v1 mark-shipped: ${reasons.join(', ')}. Marketplace will NOT be notified by ShipStation.`
     );
   }
 
