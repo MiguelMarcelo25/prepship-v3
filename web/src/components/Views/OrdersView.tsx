@@ -5462,25 +5462,53 @@ export default function OrdersView({
                 </div>
               </div>
 
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <button className="create-label-btn" type="button" style={{ flex: 1 }} onClick={() => void handleBatchAction('print')} disabled={batchBusy}>
-                  🖨️ Create + Print Label
-                </button>
-                <button
-                  className="create-label-btn"
-                  type="button"
-                  style={{ flex: 1, background: '#16a34a' }}
-                  onClick={() => void handleBatchAction('queue')}
-                  disabled={batchBusy}
-                >
-                  📥 Send to Queue
-                </button>
-              </div>
+              {/* Label-creation actions only on awaiting_shipment view.
+                  Shipped/Cancelled views show a read-only banner instead —
+                  these orders already have labels or were cancelled, and
+                  the backend would reject any modify call via
+                  assertOrderEditable() anyway. Showing the buttons disabled
+                  trains operators to feel locked-out when the action is
+                  genuinely inapplicable; hiding them with an explanatory
+                  banner is clearer. The selected-orders pill tray + Copy
+                  All actions above remain available — those are read-only
+                  and useful for any view (audit, export, ticket triage).
+              */}
+              {currentStatus === 'awaiting_shipment' ? (
+                <>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <button className="create-label-btn" type="button" style={{ flex: 1 }} onClick={() => void handleBatchAction('print')} disabled={batchBusy}>
+                      🖨️ Create + Print Label
+                    </button>
+                    <button
+                      className="create-label-btn"
+                      type="button"
+                      style={{ flex: 1, background: '#16a34a' }}
+                      onClick={() => void handleBatchAction('queue')}
+                      disabled={batchBusy}
+                    >
+                      📥 Send to Queue
+                    </button>
+                  </div>
 
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, fontSize: 12, fontWeight: 600 }}>
-                <input type="checkbox" checked={batchTestMode} onChange={(event) => setBatchTestMode(event.target.checked)} />
-                🧪 Test mode (no charges)
-              </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, fontSize: 12, fontWeight: 600 }}>
+                    <input type="checkbox" checked={batchTestMode} onChange={(event) => setBatchTestMode(event.target.checked)} />
+                    🧪 Test mode (no charges)
+                  </label>
+                </>
+              ) : (
+                <div className="rounded-lg bg-surface-2 ring-1 ring-line p-3 text-[11.5px] text-ink-2 leading-relaxed">
+                  <div className="flex items-center gap-1.5 mb-1 font-semibold text-ink">
+                    <CheckIcon size={12} strokeWidth={2.5} className="text-ok" />
+                    {currentStatus === 'shipped' ? 'Shipped orders' : 'Cancelled orders'} — read only
+                  </div>
+                  <p className="text-ink-3">
+                    {currentStatus === 'shipped'
+                      ? 'These orders already have labels. To reprint, open an individual order and use the Print menu in the side panel.'
+                      : 'These orders were cancelled and cannot have labels created.'}
+                    {' '}Selection is enabled for copy/export only.
+                  </p>
+                </div>
+              )}
 
               {callerIsAdmin ? (
                 <div style={{ marginTop: 16, padding: 12, background: 'var(--surface2)', border: '1px solid var(--border)', borderRadius: 6 }}>

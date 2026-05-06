@@ -535,19 +535,31 @@ export default function Home() {
                   </motion.span>{' '}
                   <span className="font-medium opacity-80">selected</span>
                 </span>
-                <div className="w-px h-5 bg-white/20" aria-hidden />
-                <motion.button
-                  type="button"
-                  whileTap={{ scale: 0.94 }}
-                  whileHover={{ y: -1 }}
-                  transition={{ duration: 0.12 }}
-                  className="inline-flex items-center gap-1.5 px-2.5 h-7 rounded-lg bg-white/15 text-white text-[11.5px] font-semibold hover:bg-white/25 transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
-                  onClick={() => setLabelsActionRequestId((value) => value + 1)}
-                  aria-label={`Print labels for ${selectedOrderIds.length} selected orders`}
-                >
-                  <Printer size={12.5} strokeWidth={2.25} />
-                  Print Labels
-                </motion.button>
+                {/* "Print Labels" only makes sense on the awaiting_shipment
+                    view — it creates new labels via the v2 ShipEngine flow.
+                    On Shipped/Cancelled views the action is meaningless
+                    (orders already have labels or were cancelled), and the
+                    backend would reject it via assertOrderEditable() anyway.
+                    We hide the pill rather than showing it disabled because
+                    "show then disable" trains operators to feel locked-out
+                    when the action is genuinely inapplicable. */}
+                {currentStatus === 'awaiting_shipment' ? (
+                  <>
+                    <div className="w-px h-5 bg-white/20" aria-hidden />
+                    <motion.button
+                      type="button"
+                      whileTap={{ scale: 0.94 }}
+                      whileHover={{ y: -1 }}
+                      transition={{ duration: 0.12 }}
+                      className="inline-flex items-center gap-1.5 px-2.5 h-7 rounded-lg bg-white/15 text-white text-[11.5px] font-semibold hover:bg-white/25 transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed"
+                      onClick={() => setLabelsActionRequestId((value) => value + 1)}
+                      aria-label={`Print labels for ${selectedOrderIds.length} selected orders`}
+                    >
+                      <Printer size={12.5} strokeWidth={2.25} />
+                      Print Labels
+                    </motion.button>
+                  </>
+                ) : null}
                 <motion.button
                   type="button"
                   whileTap={{ scale: 0.9 }}
