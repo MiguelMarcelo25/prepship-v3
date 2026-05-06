@@ -6879,12 +6879,12 @@ export default function OrdersView({
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -8 }}
               transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-              className="bg-gradient-to-b from-page to-surface-2/40 border-b border-line px-4 py-2 font-sans"
+              className="bg-gradient-to-b from-page to-surface-2/40 border-b border-line px-5 py-4 font-sans"
             >
-              <div className="flex items-center gap-5 flex-wrap">
+              <div className="flex items-center gap-7 flex-wrap">
                 {/* Date range */}
-                <div className="flex items-center gap-1.5 text-[11.5px] shrink-0">
-                  <Calendar size={12} strokeWidth={2.25} className="text-ink-3" />
+                <div className="flex items-center gap-2 text-[12.5px] shrink-0">
+                  <Calendar size={15} strokeWidth={2.25} className="text-ink-3" />
                   <span className="text-ink-2 font-semibold">{dailyStatsFromLabel}</span>
                   <span className="text-ink-4">→</span>
                   <span className="text-ink-2 font-semibold">{dailyStatsToLabel}</span>
@@ -6892,23 +6892,23 @@ export default function OrdersView({
                 </div>
 
                 {/* Total Orders — neutral ink */}
-                <div className="flex items-center gap-1.5 shrink-0">
-                  <Package size={14} strokeWidth={2.25} className="text-ink-2" />
+                <div className="flex items-center gap-2 shrink-0">
+                  <Package size={18} strokeWidth={2.25} className="text-ink-2" />
                   <motion.span
                     key={dailyStats.totalOrders}
                     initial={{ opacity: 0, y: 3 }}
                     animate={{ opacity: 1, y: 0 }}
-                    className="font-bold text-ink tabular-nums text-[16px] leading-none font-mono"
+                    className="font-bold text-ink tabular-nums text-[22px] leading-none font-mono"
                   >
                     {dailyStats.totalOrders}
                   </motion.span>
-                  <span className="text-ink-3 text-[11.5px]">Total Orders</span>
+                  <span className="text-ink-3 text-[12.5px] font-medium">Total Orders</span>
                 </div>
 
                 {/* Need to Ship — colored by progress urgency */}
-                <div className="flex items-center gap-1.5 shrink-0">
+                <div className="flex items-center gap-2 shrink-0">
                   <Truck
-                    size={14}
+                    size={18}
                     strokeWidth={2.25}
                     style={{ color: dailyStripProgress?.needToShipColor }}
                   />
@@ -6916,18 +6916,18 @@ export default function OrdersView({
                     key={dailyStats.needToShip}
                     initial={{ opacity: 0, y: 3 }}
                     animate={{ opacity: 1, y: 0 }}
-                    className="font-bold tabular-nums text-[16px] leading-none font-mono"
+                    className="font-bold tabular-nums text-[22px] leading-none font-mono"
                     style={{ color: dailyStripProgress?.needToShipColor }}
                   >
                     {dailyStats.needToShip}
                   </motion.span>
-                  <span className="text-ink-3 text-[11.5px]">Need to Ship</span>
+                  <span className="text-ink-3 text-[12.5px] font-medium">Need to Ship</span>
                 </div>
 
                 {/* Upcoming — colored by upcoming urgency */}
-                <div className="flex items-center gap-1.5 shrink-0">
+                <div className="flex items-center gap-2 shrink-0">
                   <Bell
-                    size={14}
+                    size={18}
                     strokeWidth={2.25}
                     style={{ color: dailyStripProgress?.upcomingColor }}
                   />
@@ -6935,22 +6935,22 @@ export default function OrdersView({
                     key={dailyStats.upcomingOrders}
                     initial={{ opacity: 0, y: 3 }}
                     animate={{ opacity: 1, y: 0 }}
-                    className="font-bold tabular-nums text-[16px] leading-none font-mono"
+                    className="font-bold tabular-nums text-[22px] leading-none font-mono"
                     style={{ color: dailyStripProgress?.upcomingColor }}
                   >
                     {dailyStats.upcomingOrders}
                   </motion.span>
-                  <span className="text-ink-3 text-[11.5px]">Upcoming</span>
+                  <span className="text-ink-3 text-[12.5px] font-medium">Upcoming</span>
                 </div>
 
                 {/* Progress: text + bar + percentage. Takes remaining
                     horizontal space via flex-1 so the bar grows on
                     wider screens. */}
-                <div className="flex items-center gap-2 flex-1 min-w-[180px]">
-                  <span className="text-ink-3 text-[11.5px] shrink-0 tabular-nums">
+                <div className="flex items-center gap-3 flex-1 min-w-[200px]">
+                  <span className="text-ink-3 text-[12.5px] shrink-0 tabular-nums font-medium">
                     {dailyStripProgress?.shipped} of {dailyStats.totalOrders} shipped
                   </span>
-                  <div className="flex-1 h-2 bg-line/60 rounded-full overflow-hidden min-w-[80px]">
+                  <div className="flex-1 h-2.5 bg-line/60 rounded-full overflow-hidden min-w-[100px]">
                     <motion.div
                       className="h-full rounded-full"
                       initial={{ width: 0 }}
@@ -6958,7 +6958,7 @@ export default function OrdersView({
                       transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
                       style={{
                         background: `linear-gradient(90deg, ${dailyStripProgress?.barColor}, ${dailyStripProgress?.barColor}dd)`,
-                        boxShadow: `0 0 6px ${dailyStripProgress?.barColor}40`,
+                        boxShadow: `0 0 8px ${dailyStripProgress?.barColor}50`,
                       }}
                     />
                   </div>
@@ -6967,7 +6967,7 @@ export default function OrdersView({
                     initial={{ scale: 0.85, opacity: 0 }}
                     animate={{ scale: 1, opacity: 1 }}
                     transition={{ type: 'spring', stiffness: 380, damping: 22 }}
-                    className="font-bold tabular-nums text-[12.5px] shrink-0 font-mono"
+                    className="font-bold tabular-nums text-[14px] shrink-0 font-mono"
                     style={{ color: dailyStripProgress?.barColor }}
                   >
                     {dailyStripProgress?.pct}%
