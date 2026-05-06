@@ -255,10 +255,21 @@ export default function SidebarTemplated({ spec, ...props }: Props) {
     >
       <AmbientBackdrop spec={spec} />
 
-      {/* Logo */}
-      <div className={`relative px-4 pt-4 pb-3.5 border-b ${softBorder}`}>
+      {/* Logo — clickable, navigates to /orders/awaiting_shipment.
+          Same handler as a status-row click on "Awaiting Shipment", so
+          the URL updates and the orders view re-loads. Visual cues that
+          it's clickable: hover-scale on the logo tile + subtle bg tint
+          on the wrapper. Uses <button> for keyboard + screen-reader
+          accessibility (Tab navigates here, Enter activates). */}
+      <button
+        type="button"
+        onClick={() => c.handleSelectStatus('awaiting_shipment')}
+        aria-label="Go to Awaiting Shipment"
+        title="Go to Awaiting Shipment"
+        className={`group relative w-full text-left px-4 pt-4 pb-3.5 border-b ${softBorder} transition-colors duration-150 ${spec.mode === 'dark' ? 'hover:bg-slate-800/40' : 'hover:bg-slate-100/60'} focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset ${spec.mode === 'dark' ? `focus-visible:ring-${a}-400/40` : `focus-visible:ring-${a}-500/40`}`}
+      >
         <div className="flex items-center gap-2.5">
-          <div className={`relative w-10 h-10 ${rIcon} flex items-center justify-center flex-shrink-0 overflow-hidden ${spec.brandGradient ? `bg-gradient-to-br ${spec.brandGradient}` : `bg-${a}-${spec.mode === 'dark' ? '500/20' : '100'}`} ${spec.mode === 'dark' ? `ring-1 ring-${a}-400/30` : `ring-1 ring-${a}-200`}`}>
+          <div className={`relative w-10 h-10 ${rIcon} flex items-center justify-center flex-shrink-0 overflow-hidden transition-transform duration-150 group-hover:scale-105 group-active:scale-95 ${spec.brandGradient ? `bg-gradient-to-br ${spec.brandGradient}` : `bg-${a}-${spec.mode === 'dark' ? '500/20' : '100'}`} ${spec.mode === 'dark' ? `ring-1 ring-${a}-400/30` : `ring-1 ring-${a}-200`}`}>
             <BrandLogo size={50} />
           </div>
           <div className="flex-1 min-w-0">
@@ -268,7 +279,7 @@ export default function SidebarTemplated({ spec, ...props }: Props) {
             </div>
           </div>
         </div>
-      </div>
+      </button>
 
       {/* Search */}
       <div className="relative px-3 pt-2.5 pb-2">
