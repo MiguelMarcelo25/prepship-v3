@@ -1654,32 +1654,50 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
                     const isActive = override !== undefined ? override : (client.active ?? true)
                     const isPending = pendingClientToggleId === client.clientId
 
-                    // Source detection — infers the integration channel from
-                    // the client name (matches our STORE_PROVIDERS naming
-                    // convention) and falls back to "ShipStation" if storeIds
-                    // exist (came from ShipStation sync) or "Manual" if neither
-                    // a name pattern nor ShipStation IDs exist (added by hand).
-                    // Color-coded badge so sources are scannable at a glance.
+                    // Source detection — infers the integration channel.
+                    //
+                    // Priority order:
+                    //   1. Any storeId in real ShipStation range (1-99999999,
+                    //      excluding the 9_000_000+ synthetic range) →
+                    //      SHIPSTATION. eBay/Walmart marketplace clients
+                    //      whose orders SYNC THROUGH ShipStation get tagged
+                    //      ShipStation here (e.g. "eBay - DJC" with storeId
+                    //      #356678 is a ShipStation store that happens to
+                    //      sell on eBay; the source is still ShipStation).
+                    //   2. Synthetic storeIds (≥ 9_000_000) indicate a
+                    //      direct marketplace integration NOT routed through
+                    //      ShipStation (e.g. "Walmart Store" #9000001 from
+                    //      Jake's direct Walmart Marketplace API). Match
+                    //      those by name pattern to the right marketplace.
+                    //   3. No storeIds AND no name match → MANUAL.
+                    //
+                    // The synthetic-ID threshold of 9_000_000 reflects the
+                    // convention used in this codebase to flag non-ShipStation
+                    // store rows. Real ShipStation store IDs are 6 digits.
+                    const SHIPSTATION_MAX = 9_000_000
+                    const hasShipStationId = client.storeIds.some((id) => id > 0 && id < SHIPSTATION_MAX)
                     const lowerName = (client.name ?? '').toLowerCase()
-                    const sourceInfo: { label: string; cls: string } = lowerName.includes('walmart')
-                      ? { label: 'Walmart', cls: 'bg-blue-50 text-blue-700 ring-blue-200' }
-                      : lowerName.includes('ebay')
-                        ? { label: 'eBay', cls: 'bg-rose-50 text-rose-700 ring-rose-200' }
-                        : lowerName.includes('amazon')
-                          ? { label: 'Amazon', cls: 'bg-amber-50 text-amber-700 ring-amber-200' }
-                          : lowerName.includes('shopify')
-                            ? { label: 'Shopify', cls: 'bg-emerald-50 text-emerald-700 ring-emerald-200' }
-                            : lowerName.includes('etsy')
-                              ? { label: 'Etsy', cls: 'bg-orange-50 text-orange-700 ring-orange-200' }
-                              : lowerName.includes('tiktok')
-                                ? { label: 'TikTok Shop', cls: 'bg-pink-50 text-pink-700 ring-pink-200' }
-                                : lowerName.includes('woo') || lowerName.includes('woocomm')
-                                  ? { label: 'WooCommerce', cls: 'bg-violet-50 text-violet-700 ring-violet-200' }
-                                  : lowerName.includes('bigcomm') || lowerName.includes('bigcommerce')
-                                    ? { label: 'BigCommerce', cls: 'bg-cyan-50 text-cyan-700 ring-cyan-200' }
-                                    : client.storeIds.length > 0
-                                      ? { label: 'ShipStation', cls: 'bg-indigo-50 text-indigo-700 ring-indigo-200' }
-                                      : { label: 'Manual', cls: 'bg-slate-100 text-slate-600 ring-slate-200' }
+                    const sourceInfo: { label: string; cls: string } = hasShipStationId
+                      ? { label: 'ShipStation', cls: 'bg-indigo-50 text-indigo-700 ring-indigo-200' }
+                      : lowerName.includes('walmart')
+                        ? { label: 'Walmart', cls: 'bg-blue-50 text-blue-700 ring-blue-200' }
+                        : lowerName.includes('ebay')
+                          ? { label: 'eBay', cls: 'bg-rose-50 text-rose-700 ring-rose-200' }
+                          : lowerName.includes('amazon')
+                            ? { label: 'Amazon', cls: 'bg-amber-50 text-amber-700 ring-amber-200' }
+                            : lowerName.includes('shopify')
+                              ? { label: 'Shopify', cls: 'bg-emerald-50 text-emerald-700 ring-emerald-200' }
+                              : lowerName.includes('etsy')
+                                ? { label: 'Etsy', cls: 'bg-orange-50 text-orange-700 ring-orange-200' }
+                                : lowerName.includes('tiktok')
+                                  ? { label: 'TikTok Shop', cls: 'bg-pink-50 text-pink-700 ring-pink-200' }
+                                  : lowerName.includes('woo') || lowerName.includes('woocomm')
+                                    ? { label: 'WooCommerce', cls: 'bg-violet-50 text-violet-700 ring-violet-200' }
+                                    : lowerName.includes('bigcomm') || lowerName.includes('bigcommerce')
+                                      ? { label: 'BigCommerce', cls: 'bg-cyan-50 text-cyan-700 ring-cyan-200' }
+                                      : client.storeIds.length > 0
+                                        ? { label: 'Direct', cls: 'bg-violet-50 text-violet-700 ring-violet-200' }
+                                        : { label: 'Manual', cls: 'bg-slate-100 text-slate-600 ring-slate-200' }
 
                     return (
                     <tr key={client.clientId} style={{ opacity: isActive ? 1 : 0.55, transition: 'opacity .28s ease' }}>
