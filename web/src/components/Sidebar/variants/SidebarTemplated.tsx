@@ -197,11 +197,16 @@ function iconWrapClass(spec: SidebarSpec, isActive: boolean): string {
   return `${base} ${r} ${isActive ? `bg-${a}-100 ring-1 ring-${a}-200` : 'bg-slate-100 ring-1 ring-slate-200/60'}`
 }
 function iconColorClass(spec: SidebarSpec, isActive: boolean): string {
+  // Boss directive 2026-05-07: no gray in sidebar. Inactive icons
+  // were slate-400/500 (true gray) which made section icons fade
+  // out next to inactive text. Now matches the slate-900/100 used
+  // for inactive text — uniform near-black for all non-active
+  // icons.
   const a = spec.accent
   if (spec.mode === 'dark') {
-    return isActive ? `text-${a}-300` : 'text-slate-400'
+    return isActive ? `text-${a}-300` : 'text-slate-100'
   }
-  return isActive ? `text-${a}-600` : 'text-slate-500'
+  return isActive ? `text-${a}-600` : 'text-slate-900'
 }
 function activeBarClass(spec: SidebarSpec): string {
   if (spec.activeStyle !== 'bar') return ''
