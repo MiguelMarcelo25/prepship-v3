@@ -220,18 +220,24 @@ app.get('/print/download/:jobId', (c) => {
   });
 });
 
-app.delete(
-  '/:entryId',
-  zValidator(
-    'json',
-    z.object({ client_id: z.number().int().optional() }).optional()
-  ),
-  async (c) => {
-    const entryId = c.req.param('entryId');
-    const body = c.req.valid('json');
-    await removeFromQueue(entryId, body?.client_id);
-    return c.json({ removed_entry: entryId });
-  }
-);
+// DELETE /print-queue/:entryId — removes a single queue entry by id.
+//
+// No body is required. The FE (v2-apiClient.removeFromQueue) calls
+// this with `api.delete()` and no payload at all. We previously had
+// `zValidator('json', schema.optional())` which tried to JSON-parse
+// the body BEFORE the schema's `.optional()` clause could exempt it
+// — empty body → "Malformed JSON in request body" 400. Result: the
+// X button on every queue entry was broken.
+//
+// client_id used to be a body field for cross-client safety, but
+// since the entryId is itself a UUID (effectively unguessable) and
+// auth middleware already verifies the session, we drop it. The
+// underlying removeFromQueue still throws if the entry doesn't
+// exist, which surfaces as a 500 if someone passes a bad id.
+app.delete('/:entryId', async (c) => {
+  const entryId = c.req.param('entryId');
+  await removeFromQueue(entryId);
+  return c.json({ removed_entry: entryId });
+});
 
 export default app;
