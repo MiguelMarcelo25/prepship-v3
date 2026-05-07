@@ -227,13 +227,56 @@ app.post('/seed-test-orders', zValidator('json', seedBody), async (c) => {
   }
 
   const now = Date.now();
+
+  /**
+   * Convert a true-UTC instant into a "naive PT stamped Z" timestamp,
+   * which is the convention v4's SS-sync uses for orders.orderDate
+   * (see src/services/order-sync.ts:parseShipStationDate). The display
+   * helpers (formatNaivePt*) render these with timeZone:'UTC' to
+   * recover the original Pacific wall-clock face.
+   *
+   * Without this conversion, the seeder produced true-UTC timestamps
+   * that displayed 7-8 hours ahead of California time — e.g. an order
+   * seeded at 5 PM CA would display as 12 AM (next day UTC) — visibly
+   * confusing to operators looking at the test orders list.
+   *
+   * The trick: use Intl.DateTimeFormat to extract the California
+   * wall-clock components (Y/M/D/h/m/s) from the real UTC date, then
+   * synthesize an ISO string with those components plus a literal Z
+   * suffix. The resulting Date object's UTC value is "wrong" by the
+   * PT offset, but that's exactly what the naive-PT-stamped-Z
+   * convention requires.
+   */
+  function toNaivePtStampedZ(realUtc: Date): Date {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'America/Los_Angeles',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).formatToParts(realUtc);
+    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '00';
+    // Intl returns "24" for midnight in some locales — normalize to "00".
+    const hour = get('hour') === '24' ? '00' : get('hour');
+    return new Date(
+      `${get('year')}-${get('month')}-${get('day')}T${hour}:${get('minute')}:${get('second')}Z`
+    );
+  }
+
   const rows = Array.from({ length: count }).map((_, i) => {
     const name = pick(SAMPLE_NAMES);
     const city = pick(SAMPLE_CITIES);
     const sku = pick(SAMPLE_SKUS);
     const qty = 1 + Math.floor(Math.random() * 3);
-    const orderDate = new Date(
-      now - Math.floor(Math.random() * 1000 * 60 * 60 * 48)
+    // Spread orders across the last 48 hours of California wall-clock,
+    // then stamp as Z so they match the SS-sync convention. Display
+    // helpers (formatNaivePtDateTime) will render the original CA
+    // wall-clock face the operator expects.
+    const orderDate = toNaivePtStampedZ(
+      new Date(now - Math.floor(Math.random() * 1000 * 60 * 60 * 48))
     );
     const serial = `${Date.now().toString(36).toUpperCase()}-${String(i).padStart(3, '0')}`;
     const externalId = `TEST-ORDER-${serial}`;
