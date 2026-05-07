@@ -470,8 +470,37 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialSearch])
-  const sortKey: AnalysisSortKey = 'qty'
-  const sortDir: AnalysisSortDir = 'desc'
+  // Sort state — persisted to localStorage so the operator's choice
+  // survives reloads (page-size selector follows the same pattern).
+  // Defaults to qty desc which was the previous hard-locked behavior,
+  // so first-time loads look identical to before.
+  const SORT_STORAGE_KEY = 'prepship_analysis_sort'
+  type StoredSort = { key: AnalysisSortKey; dir: AnalysisSortDir }
+  const ALLOWED_SORT_KEYS: AnalysisSortKey[] = [
+    'name', 'sku', 'client', 'orders', 'pending', 'external', 'qty', 'stdOrders', 'expOrders', 'total',
+  ]
+  const [sortKey, setSortKey] = useState<AnalysisSortKey>(() => {
+    if (typeof window === 'undefined') return 'qty'
+    try {
+      const raw = window.localStorage.getItem(SORT_STORAGE_KEY)
+      if (!raw) return 'qty'
+      const parsed = JSON.parse(raw) as StoredSort
+      return ALLOWED_SORT_KEYS.includes(parsed.key) ? parsed.key : 'qty'
+    } catch {
+      return 'qty'
+    }
+  })
+  const [sortDir, setSortDir] = useState<AnalysisSortDir>(() => {
+    if (typeof window === 'undefined') return 'desc'
+    try {
+      const raw = window.localStorage.getItem(SORT_STORAGE_KEY)
+      if (!raw) return 'desc'
+      const parsed = JSON.parse(raw) as StoredSort
+      return parsed.dir === 'asc' ? 'asc' : 'desc'
+    } catch {
+      return 'desc'
+    }
+  })
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(50)
   const [columnSize, setColumnSize] = useState<ColumnSize>(readStoredColumnSize)
@@ -506,7 +535,7 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
   )
   const sortedRows = useMemo(
     () => sortAnalysisRows(filteredRows, sortKey, sortDir),
-    [filteredRows],
+    [filteredRows, sortKey, sortDir],
   )
   const totals = useMemo(() => buildAnalysisTotals(sortedRows), [sortedRows])
   const pagedRows = useMemo(() => {
@@ -740,8 +769,30 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
     setOrderModal((current) => ({ ...current, open: false }))
   }
 
-  function handleSort() {
-    // Analysis rows are intentionally locked to total units sold, highest first.
+  // Click a column header to toggle sort:
+  //   - First click on a NEW column → sort by that column, descending
+  //     (most natural default for numeric columns; alphabetical-Z for
+  //     text columns is unusual but consistent and easy to flip).
+  //   - Subsequent clicks on the SAME column → toggle asc ↔ desc.
+  // Result is persisted to localStorage so the operator's preferred
+  // sort survives reloads. Page resets to 1 so they don't end up on
+  // page 5 of newly-resorted data with a different leading row.
+  function handleSort(key: AnalysisSortKey) {
+    const nextDir: AnalysisSortDir =
+      key === sortKey ? (sortDir === 'asc' ? 'desc' : 'asc') : 'desc'
+    setSortKey(key)
+    setSortDir(nextDir)
+    setPage(1)
+    if (typeof window !== 'undefined') {
+      try {
+        window.localStorage.setItem(
+          SORT_STORAGE_KEY,
+          JSON.stringify({ key, dir: nextDir })
+        )
+      } catch {
+        /* localStorage quota exceeded or disabled — non-fatal */
+      }
+    }
   }
 
   const hasChart =

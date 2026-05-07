@@ -2539,11 +2539,21 @@ export const apiClient = {
           const standardTotalShipping = parseNum(
             r.std_total ?? r.standardTotalShipping ?? r.standardShipTotal
           );
+          // Per-UNIT shipping (boss directive 2026-05-07): qty totals
+          // for std/exp orders so the FE can compute avg-per-unit
+          // instead of avg-per-order. Falls back to ship-count when
+          // the new fields aren't present (older API responses).
+          const standardShipQtyTotal = parseNum(
+            r.std_qty_total ?? r.standardShipQtyTotal ?? standardShipCount
+          );
           const expeditedShipCount = parseNum(
             r.exp_ship_count ?? r.expeditedShipCount ?? r.exp_orders ?? 0
           );
           const expeditedTotalShipping = parseNum(
             r.exp_total ?? r.expeditedTotalShipping ?? r.expeditedShipTotal
+          );
+          const expeditedShipQtyTotal = parseNum(
+            r.exp_qty_total ?? r.expeditedShipQtyTotal ?? expeditedShipCount
           );
           const shipCountWithCost = parseNum(
             r.ship_count_with_cost ?? r.shipCountWithCost ?? standardShipCount + expeditedShipCount
@@ -2566,17 +2576,22 @@ export const apiClient = {
             qty: parseNum(r.total_qty ?? r.qty),
             standardOrders: parseNum(r.std_orders ?? r.standardOrders),
             standardShipCount,
+            standardShipQtyTotal,
+            // Per-UNIT avg: divide total cost by total UNITS shipped via
+            // std (not by order count). For an order with 2 units at
+            // $23 label cost, this yields $11.50/unit instead of $23.
             standardAvgShipping:
-              standardShipCount > 0
-                ? Number((standardTotalShipping / standardShipCount).toFixed(2))
+              standardShipQtyTotal > 0
+                ? Number((standardTotalShipping / standardShipQtyTotal).toFixed(2))
                 : 0,
             standardTotalShipping,
             standardShipTotal: standardTotalShipping,
             expeditedOrders: parseNum(r.exp_orders ?? r.expeditedOrders),
             expeditedShipCount,
+            expeditedShipQtyTotal,
             expeditedAvgShipping:
-              expeditedShipCount > 0
-                ? Number((expeditedTotalShipping / expeditedShipCount).toFixed(2))
+              expeditedShipQtyTotal > 0
+                ? Number((expeditedTotalShipping / expeditedShipQtyTotal).toFixed(2))
                 : 0,
             expeditedTotalShipping,
             expeditedShipTotal: expeditedTotalShipping,

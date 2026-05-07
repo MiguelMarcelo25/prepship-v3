@@ -136,13 +136,24 @@ export function AnalysisDataTable({
             rows.map((row) => {
               const qtyBarWidth = Math.round((row.qty / maxQty) * 80)
               const isClickable = Boolean(row.invSkuId)
+              // Per-UNIT shipping average (boss directive 2026-05-07):
+              // divide by total UNITS shipped via this class, not by
+              // order count. So a 2-unit / $23 order shows $11.50/unit
+              // instead of $23/order. Falls back to ship-count divisor
+              // if qty total is missing (older API response).
+              const stdQtyDivisor =
+                (row as { standardShipQtyTotal?: number }).standardShipQtyTotal ??
+                row.standardShipCount
+              const expQtyDivisor =
+                (row as { expeditedShipQtyTotal?: number }).expeditedShipQtyTotal ??
+                row.expeditedShipCount
               const stdAvg =
-                row.standardShipCount > 0
-                  ? (row.standardShipTotal ?? 0) / row.standardShipCount
+                stdQtyDivisor > 0
+                  ? (row.standardShipTotal ?? 0) / stdQtyDivisor
                   : 0
               const expAvg =
-                row.expeditedShipCount > 0
-                  ? (row.expeditedShipTotal ?? 0) / row.expeditedShipCount
+                expQtyDivisor > 0
+                  ? (row.expeditedShipTotal ?? 0) / expQtyDivisor
                   : 0
 
               const rowClasses = [
