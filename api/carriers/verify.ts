@@ -96,7 +96,8 @@ type ProviderType =
   | 'intelliquick'
   | 'gls'
   | 'stamps_com'
-  | 'endicia';
+  | 'endicia'
+  | 'easypost';
 
 interface VerifyResult {
   ok: boolean;
@@ -121,6 +122,35 @@ const verifySimulator: Verifier = async (creds) => {
     accountLabel: `Demo: ${label}`,
     meta: { mode: 'simulation', note: 'No real API call was made.' },
   };
+};
+
+// ───────── EasyPost (single API key, multi-carrier aggregator) ─────────
+// Auth: HTTP Basic with the API key as username, empty password (the
+// trailing colon matters — without it, EasyPost returns 401).
+// Verify: GET /users/me — returns the seller's EasyPost account info if
+// the key is valid; uses connected carrier count as the success signal.
+const verifyEasyPost: Verifier = async (creds) => {
+  const apiKey = String(creds?.apiKey ?? '').trim();
+  if (!apiKey) return { ok: false, error: 'apiKey is required' };
+  try {
+    const basic = Buffer.from(`${apiKey}:`).toString('base64');
+    const res = await fetch('https://api.easypost.com/v2/users/me', {
+      headers: { Authorization: `Basic ${basic}`, Accept: 'application/json' },
+    });
+    if (!res.ok) {
+      const t = await res.text().then((s) => s.slice(0, 200)).catch(() => '');
+      return { ok: false, error: `EasyPost ${res.status}: ${t || res.statusText}` };
+    }
+    const data = (await res.json()) as { id?: string; email?: string; name?: string };
+    return {
+      ok: true,
+      accountIdentifier: data.id ?? apiKey.slice(0, 12),
+      accountLabel: data.name ?? data.email ?? 'EasyPost',
+      meta: { email: data.email ?? null, userId: data.id ?? null },
+    };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
 };
 
 // ───────── ShipEngine (single API key) ─────────
@@ -765,6 +795,7 @@ const VERIFIERS: Partial<Record<ProviderType, Verifier>> = {
   // endpoint at /api/carriers/ebay/ship).
   ebay_shipping: verifyEbay,
   shipengine: verifyShipEngine,
+  easypost: verifyEasyPost,
   ups: verifyUps,
   fedex: verifyFedEx,
   dhl_express: verifyDhlExpress,

@@ -21,6 +21,25 @@ function isSidebarStatus(value: string): value is SidebarOrderStatus {
   return SIDEBAR_STATUSES.includes(value as SidebarOrderStatus);
 }
 
+// Synthetic store_id ranges issued by api/store-accounts.ts when a
+// marketplace integration is added. When orders show up tagged with one
+// of these synthetic ids before the matching clients row syncs through
+// /clients (or when the clients row was deleted but orders remain), we
+// fall back to a friendly provider name rather than the raw "Store
+// 9000001" placeholder. Keep these ranges in sync with
+// SYNTHETIC_STORE_OFFSETS in api/store-accounts.ts.
+function syntheticStoreFallbackName(storeId: number): string | null {
+  if (storeId >= 9_000_000 && storeId < 9_100_000) return "Walmart Store";
+  if (storeId >= 9_100_000 && storeId < 9_200_000) return "Amazon Store";
+  if (storeId >= 9_200_000 && storeId < 9_300_000) return "Shopify Store";
+  if (storeId >= 9_300_000 && storeId < 9_400_000) return "Etsy Store";
+  if (storeId >= 9_400_000 && storeId < 9_500_000) return "TikTok Shop";
+  if (storeId >= 9_500_000 && storeId < 9_600_000) return "eBay Store";
+  if (storeId >= 9_600_000 && storeId < 9_700_000) return "WooCommerce Store";
+  if (storeId >= 9_700_000 && storeId < 9_800_000) return "BigCommerce Store";
+  return null;
+}
+
 export function buildSidebarSections(
   stores: InitStoreDto[],
   counts: InitCountsDto | null,
@@ -49,7 +68,10 @@ export function buildSidebarSections(
     if (!isSidebarStatus(row.orderStatus) || row.storeId == null) continue;
     sections[row.orderStatus].stores.push({
       storeId: row.storeId,
-      name: storeNameById.get(row.storeId) ?? `Store ${row.storeId}`,
+      name:
+        storeNameById.get(row.storeId) ??
+        syntheticStoreFallbackName(row.storeId) ??
+        `Store ${row.storeId}`,
       cnt: row.cnt,
       isTest: testStoreIds.has(row.storeId),
     });

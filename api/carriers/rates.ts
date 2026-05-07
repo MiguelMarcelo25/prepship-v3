@@ -536,6 +536,13 @@ async function getWalmartAccessTokenForRates(creds: Record<string, unknown>): Pr
   return data.access_token;
 }
 
+// Ship With Walmart "Shipping Estimates" rate quote.
+// Real endpoint: POST /v3/shipping/labels/shipping-estimates
+// Required body fields:
+//   purchaseOrderId, boxDimensions, boxItems[{lineId, sku, quantity}],
+//   fromAddress, toAddress, packageType (e.g. CUSTOMER_SUPPLIED).
+// We pull the line-item shape from store_orders.raw (already has lineNumber +
+// item.sku from the orders pull) so callers don't have to assemble it.
 async function ratesFromWalmartShipping(
   creds: Record<string, unknown>,
   input: {
@@ -544,6 +551,8 @@ async function ratesFromWalmartShipping(
     dimsL?: number;
     dimsW?: number;
     dimsH?: number;
+    fromZip?: string;
+    rawOrder?: any; // optional pre-fetched store_orders.raw payload
   },
 ): Promise<Array<{ service: string; cost: number; days: number; currency: string }>> {
   if (!input.purchaseOrderId) {
@@ -551,86 +560,504 @@ async function ratesFromWalmartShipping(
       'Walmart Shipping Solutions rates require a Walmart purchaseOrderId. Open the Rate Browser on a Walmart-pulled order (orders whose external id starts with walmart-).',
     );
   }
+  if (!input.dimsL || !input.dimsW || !input.dimsH) {
+    throw new Error(
+      'Walmart Shipping Estimates require box dimensions (length, width, height). Set them in the Rate Browser before fetching rates.',
+    );
+  }
   const token = await getWalmartAccessTokenForRates(creds);
   const correlationId = `prepship-${Date.now().toString(36)}`;
   const channelType = String(creds?.channelType ?? '').trim();
+  const partnerId = String(creds?.partnerId ?? creds?.sellerId ?? '').trim();
   const headers: Record<string, string> = {
     'WM_SEC.ACCESS_TOKEN': token,
     'WM_QOS.CORRELATION_ID': correlationId,
     'WM_SVC.NAME': 'Walmart Marketplace',
+    // WM_MARKET is required by some Walmart endpoints (orders, items, returns)
+    // even though shipping-estimates docs are silent on it. Sending it is
+    // harmless when not needed and rules out a missing-header 500.
+    'WM_MARKET': 'us',
     'Content-Type': 'application/json',
     Accept: 'application/json',
   };
   if (channelType) headers['WM_CONSUMER.CHANNEL.TYPE'] = channelType;
+  if (partnerId) headers['WM_PARTNER.ID'] = partnerId;
 
   const weightLb = Math.max(0.1, Math.round((input.weightOz / 16) * 10) / 10);
-  const body: Record<string, unknown> = {
-    purchaseOrderIds: [input.purchaseOrderId],
-    weight: { value: weightLb, unit: 'LB' },
+
+  // Build boxItems from the saved Walmart order's orderLines. Walmart
+  // marketplace orders use `lineNumber` consistently — we use the same
+  // name in our request body since Walmart's shipping APIs (labels,
+  // shipping-estimates, ship-confirm) all key off lineNumber, not lineId.
+  const orderLines = Array.isArray(input.rawOrder?.orderLines?.orderLine)
+    ? input.rawOrder.orderLines.orderLine
+    : [];
+  const boxItems = orderLines.length > 0
+    ? orderLines.map((line: any) => ({
+        lineNumber: String(line?.lineNumber ?? '1'),
+        sku: line?.item?.sku ?? '',
+        quantity: Number(line?.orderLineQuantity?.amount ?? 1) || 1,
+      }))
+    : [{ lineNumber: '1', sku: 'UNKNOWN', quantity: 1 }];
+
+  // Empirical body shape (locked in after multiple iterations):
+  // - Top-level: purchaseOrderId, boxes[], shipFromAddress, shipToAddress,
+  //   packageType. The doc listed boxDimensions/boxItems as field names
+  //   WITHOUT clarifying they live inside boxes[] — and we verified
+  //   empirically that top-level placement returns 400 'missing required
+  //   fields' while the wrapper returns 200/500 (i.e. shape-valid).
+  // - Address field names: addressLine1/stateCode/countryCode (NOT
+  //   address1/state/country) — these passed Walmart's validator when
+  //   the wrapper was in place. Plain names returned 400.
+  // - packageType: CUSTOM_PACKAGE per the boss's handoff doc (was
+  //   CUSTOMER_SUPPLIED in earlier guesses).
+  // - Weight: separate boxWeight inside the box, NOT nested inside
+  //   boxDimensions (Walmart's labels API also uses this split form).
+  //
+  // Ship-from override: Walmart's WSS validates shipFromAddress against
+  // the seller's REGISTERED shipping origin in Seller Center. Mismatches
+  // return a generic 500. Hardcoded Carson CA only used when the user
+  // hasn't pasted their real warehouse on the carrier_account form.
+  const credShipFromZip = String(creds?.shipFromZip ?? '').replace(/[^0-9]/g, '').slice(0, 5);
+  const fromZip = credShipFromZip || (input.fromZip || '90248').replace(/[^0-9]/g, '').slice(0, 5);
+  const fromAddress = {
+    name: String(creds?.shipFromName ?? '').trim() || 'Seller',
+    addressLine1: String(creds?.shipFromAddress1 ?? '').trim() || 'Warehouse',
+    city: String(creds?.shipFromCity ?? '').trim() || 'Carson',
+    stateCode: String(creds?.shipFromState ?? '').trim() || 'CA',
+    postalCode: fromZip,
+    countryCode: 'US',
+    phone: String(creds?.shipFromPhone ?? '').trim() || '0000000000',
   };
-  if (input.dimsL && input.dimsW && input.dimsH) {
-    body.dimensions = {
-      length: input.dimsL,
-      width: input.dimsW,
-      height: input.dimsH,
-      unit: 'IN',
+
+  // Ship-to: Walmart's order payload uses address1/state/country —
+  // translate to the shipping-estimates field names here.
+  const addr = input.rawOrder?.shippingInfo?.postalAddress ?? {};
+  const toAddress = {
+    name: addr?.name ?? 'Buyer',
+    addressLine1: addr?.address1 ?? '',
+    addressLine2: addr?.address2 ?? '',
+    city: addr?.city ?? '',
+    stateCode: addr?.state ?? '',
+    postalCode: addr?.postalCode ?? '',
+    countryCode: addr?.country ?? 'US',
+    phone: input.rawOrder?.shippingInfo?.phone ?? '0000000000',
+  };
+
+  const body = {
+    purchaseOrderId: input.purchaseOrderId,
+    boxes: [
+      {
+        boxDimensions: {
+          length: input.dimsL,
+          width: input.dimsW,
+          height: input.dimsH,
+          uom: 'IN',
+        },
+        boxWeight: { value: weightLb, uom: 'LB' },
+        boxItems,
+        addOns: false,
+        hasBattery: false,
+      },
+    ],
+    shipFromAddress: fromAddress,
+    shipToAddress: toAddress,
+    packageType: 'CUSTOM_PACKAGE',
+  };
+
+  const url = 'https://marketplace.walmartapis.com/v3/shipping/labels/shipping-estimates';
+  const res = await fetch(url, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const t = await res.text().then((s) => s.slice(0, 800)).catch(() => '');
+    // Include a compact summary of what we actually sent — without
+    // sensitive values — so a 400 from Walmart can be diagnosed against
+    // their schema without a redeploy. The full body is too noisy to
+    // include verbatim, so we show a fingerprint of the structure.
+    const sentSummary = {
+      purchaseOrderId: input.purchaseOrderId,
+      packageType: (body as any).packageType,
+      hasBoxes: Array.isArray((body as any).boxes) && (body as any).boxes.length,
+      boxKeys: Object.keys((body as any).boxes?.[0] ?? {}),
+      fromAddressKeys: Object.keys((body as any).shipFromAddress ?? {}),
+      toAddressKeys: Object.keys((body as any).shipToAddress ?? {}),
+      boxItemKeys: Object.keys(boxItems[0] ?? {}),
+      itemCount: boxItems.length,
+      topLevelKeys: Object.keys(body),
+      // Capture the actual values we resolved for ship-from — most likely
+      // place a 500 hides. If the seller's registered origin is e.g.
+      // Phoenix AZ but we sent CA, this will reveal it without leaking
+      // anything sensitive.
+      fromCity: (body as any).shipFromAddress?.city,
+      fromState: (body as any).shipFromAddress?.stateCode,
+      fromZip: (body as any).shipFromAddress?.postalCode,
     };
+    throw new Error(
+      `Walmart Shipping Estimates ${res.status}: ${t || res.statusText} | sent: ${JSON.stringify(sentSummary)}`,
+    );
+  }
+  const data = (await res.json()) as any;
+  // Response shape per Walmart docs: an array of rate options, each with
+  // carrier shortName, serviceType, cost, ETA, addOns. The docs vary on
+  // the wrapper field; we probe a few likely shapes.
+  const rateList: any[] =
+    (Array.isArray(data?.shippingEstimates) && data.shippingEstimates) ||
+    (Array.isArray(data?.rates) && data.rates) ||
+    (Array.isArray(data?.estimates) && data.estimates) ||
+    (Array.isArray(data?.payload) && data.payload) ||
+    (Array.isArray(data) ? data : []);
+
+  return rateList
+    .map((r: any) => {
+      const carrier = String(
+        r?.carrier?.shortName ?? r?.carrierShortName ?? r?.carrierName ?? r?.carrier ?? 'Walmart',
+      );
+      const svcType = String(
+        r?.serviceType ?? r?.carrierServiceType ?? r?.serviceLevel ?? r?.method ?? '',
+      );
+      const service = svcType ? `${carrier} ${svcType}` : carrier;
+      const cost = Number(
+        r?.totalCost?.amount ?? r?.cost?.amount ?? r?.totalCost ?? r?.cost ?? r?.amount ?? 0,
+      );
+      const currency = String(
+        r?.totalCost?.currency ?? r?.cost?.currency ?? r?.currency ?? 'USD',
+      );
+      const days = Number(r?.transitTime?.businessDays ?? r?.transitDays ?? r?.deliveryDays ?? 0) || 0;
+      return { service, cost, days, currency };
+    })
+    .filter((r) => r.cost > 0);
+}
+
+// ───────── EasyPost (multi-carrier aggregator) ─────────
+// Real endpoint: POST https://api.easypost.com/v2/shipments
+// Auth: HTTP Basic with the API key as the username, empty password.
+// One call returns rates from EVERY carrier the user has connected to
+// their EasyPost account (UPS, USPS, FedEx, DHL, etc.) — much simpler
+// than wiring per-carrier integrations. EasyPost handles all the carrier
+// OAuth/credential management on their side.
+async function ratesFromEasyPost(
+  creds: Record<string, unknown>,
+  input: {
+    weightOz: number;
+    toZip?: string;
+    fromZip?: string;
+    dimsL?: number;
+    dimsW?: number;
+    dimsH?: number;
+    rawOrder?: any;
+  },
+): Promise<Array<{ service: string; cost: number; days: number; currency: string }>> {
+  const apiKey = String(creds?.apiKey ?? '').trim();
+  if (!apiKey) {
+    throw new Error('EasyPost requires apiKey on the carrier_account credentials.');
+  }
+  if (!input.dimsL || !input.dimsW || !input.dimsH) {
+    throw new Error('EasyPost rate quotes require box dimensions (length, width, height).');
   }
 
-  // Most common documented endpoint for Sponsored Carrier rate requests.
-  // Variants exist (/v3/shipping/labels/v2/rates, /v3/orders/.../shipping/rates)
-  // and are program-specific. If this 404s, try /v2/ form below.
-  const endpoints = [
-    'https://marketplace.walmartapis.com/v3/shipping/labels/rates',
-    `https://marketplace.walmartapis.com/v3/orders/${encodeURIComponent(
-      input.purchaseOrderId,
-    )}/shipping/labels/rates`,
+  // EasyPost API key as Basic Auth username, empty password (the trailing
+  // colon after the key matters — without it the API returns 401).
+  const basic = Buffer.from(`${apiKey}:`).toString('base64');
+  const headers = {
+    Authorization: `Basic ${basic}`,
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  };
+
+  // Ship-from: prefer per-account override, fall back to a Carson CA
+  // default (matches the convention used by other quoters in this file).
+  const credShipFromZip = String(creds?.shipFromZip ?? '').replace(/[^0-9]/g, '').slice(0, 5);
+  const fromZip = credShipFromZip || (input.fromZip || '90248').replace(/[^0-9]/g, '').slice(0, 5);
+  const fromAddress = {
+    name: String(creds?.shipFromName ?? '').trim() || 'Seller',
+    street1: String(creds?.shipFromAddress1 ?? '').trim() || 'Warehouse',
+    city: String(creds?.shipFromCity ?? '').trim() || 'Carson',
+    state: String(creds?.shipFromState ?? '').trim() || 'CA',
+    zip: fromZip,
+    country: 'US',
+    phone: String(creds?.shipFromPhone ?? '').trim() || '0000000000',
+  };
+
+  // Ship-to: try the saved order address first; fall back to a generic
+  // Oakland CA address keyed off toZip for the Settings demo button.
+  // EasyPost requires a full address — zip alone won't validate.
+  const orderAddr =
+    input.rawOrder?.shippingInfo?.postalAddress ?? // walmart shape
+    input.rawOrder?.fulfillmentStartInstructions?.[0]?.shippingStep?.shipTo?.contactAddress ?? // ebay shape
+    input.rawOrder?.ShippingAddress ?? // amazon shape
+    null;
+  const toAddress = orderAddr
+    ? {
+        name: orderAddr.name ?? orderAddr.fullName ?? orderAddr.Name ?? 'Buyer',
+        street1: orderAddr.address1 ?? orderAddr.addressLine1 ?? orderAddr.AddressLine1 ?? '',
+        street2: orderAddr.address2 ?? orderAddr.addressLine2 ?? orderAddr.AddressLine2 ?? '',
+        city: orderAddr.city ?? orderAddr.City ?? '',
+        state: orderAddr.state ?? orderAddr.stateOrProvince ?? orderAddr.StateOrRegion ?? '',
+        zip: orderAddr.postalCode ?? orderAddr.PostalCode ?? '',
+        country: orderAddr.country ?? orderAddr.countryCode ?? orderAddr.CountryCode ?? 'US',
+        phone: orderAddr.phone ?? orderAddr.Phone ?? '0000000000',
+      }
+    : {
+        name: 'Buyer',
+        street1: '1 Main St',
+        city: 'Oakland',
+        state: 'CA',
+        zip: (input.toZip || '94601').replace(/[^0-9]/g, '').slice(0, 5),
+        country: 'US',
+        phone: '0000000000',
+      };
+
+  // EasyPost's parcel takes weight in OUNCES (despite some carriers
+  // wanting LB internally — EasyPost normalizes). Dimensions in inches.
+  const parcel = {
+    length: input.dimsL,
+    width: input.dimsW,
+    height: input.dimsH,
+    weight: input.weightOz,
+  };
+
+  const body = {
+    shipment: {
+      from_address: fromAddress,
+      to_address: toAddress,
+      parcel,
+    },
+  };
+
+  const res = await fetch('https://api.easypost.com/v2/shipments', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const t = await res.text().then((s) => s.slice(0, 800)).catch(() => '');
+    throw new Error(`EasyPost ${res.status}: ${t || res.statusText}`);
+  }
+  const data = (await res.json()) as any;
+  const rateList: any[] = Array.isArray(data?.rates) ? data.rates : [];
+
+  // Sort by cost ascending so the cheapest rate appears first — matches
+  // user expectation when scanning rate-shopping results.
+  return rateList
+    .map((r: any) => ({
+      service: `${r.carrier ?? 'EasyPost'} ${r.service ?? ''}`.trim(),
+      cost: Number(r.rate ?? 0),
+      days: Number(r.delivery_days ?? r.est_delivery_days ?? 0) || 0,
+      currency: String(r.currency ?? 'USD'),
+    }))
+    .filter((r) => r.cost > 0)
+    .sort((a, b) => a.cost - b.cost);
+}
+
+// ───────── Amazon Buy Shipping (SP-API Shipping v2) ─────────
+// Real endpoint: POST https://sellingpartnerapi-na.amazon.com/shipping/v2/shipments/rates
+// Auth: LWA refresh_token → access_token (no AWS Sigv4 — Amazon dropped that
+// requirement in April 2024; only x-amz-access-token header is needed now).
+//
+// Required body:
+//   shipDate, shipFrom, shipTo, packages[], channelDetails.channelType
+// channelType:
+//   "AMAZON" — for Amazon-marketplace orders (use amazonOrderId in body)
+//   "EXTERNAL" — for any other order (Shopify, eBay, etc., or demo calls)
+//
+// Buy Shipping rates work without a real order, unlike Walmart's
+// shipping-estimates — so the Settings demo button can call this directly
+// with placeholder shipTo and get back genuine quotes.
+async function ratesFromAmazonBuyShipping(
+  creds: Record<string, unknown>,
+  input: {
+    weightOz: number;
+    toZip?: string;
+    fromZip?: string;
+    dimsL?: number;
+    dimsW?: number;
+    dimsH?: number;
+    rawOrder?: any;
+    externalOrderId?: string | null;
+  },
+): Promise<Array<{ service: string; cost: number; days: number; currency: string }>> {
+  const lwaClientId = String(creds?.lwaClientId ?? '').trim();
+  const lwaClientSecret = String(creds?.lwaClientSecret ?? '').trim();
+  const refreshToken = String(creds?.refreshToken ?? '').trim();
+  if (!lwaClientId || !lwaClientSecret || !refreshToken) {
+    throw new Error('Amazon Buy Shipping requires lwaClientId, lwaClientSecret, refreshToken on the carrier_account credentials.');
+  }
+  if (!input.dimsL || !input.dimsW || !input.dimsH) {
+    throw new Error('Amazon Buy Shipping requires box dimensions (length, width, height). Set them in the Rate Browser before fetching rates.');
+  }
+
+  // 1) LWA refresh → access token. Same flow as the verifier.
+  const lwaBody = new URLSearchParams({
+    grant_type: 'refresh_token',
+    refresh_token: refreshToken,
+    client_id: lwaClientId,
+    client_secret: lwaClientSecret,
+  });
+  const lwaRes = await fetch('https://api.amazon.com/auth/o2/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
+    body: lwaBody.toString(),
+  });
+  if (!lwaRes.ok) {
+    const t = await lwaRes.text().then((s) => s.slice(0, 200)).catch(() => '');
+    throw new Error(`Amazon LWA ${lwaRes.status}: ${t || lwaRes.statusText}`);
+  }
+  const lwaJson = (await lwaRes.json()) as { access_token?: string };
+  if (!lwaJson?.access_token) throw new Error('Amazon LWA response missing access_token');
+
+  // 2) Build the rate request. shipFrom uses the seller's configured
+  // origin (we hardcode a CA default, same as the Walmart quoter — Amazon
+  // Buy Shipping rates don't depend on shipFrom matching a registered
+  // address as much as Walmart's WSS does, so a generic LA-area shipper
+  // works for the Settings demo case).
+  const fromZip = (input.fromZip || '90248').replace(/[^0-9]/g, '').slice(0, 5);
+  const shipFrom = {
+    name: 'Seller',
+    addressLine1: 'Warehouse',
+    city: 'Carson',
+    stateOrRegion: 'CA',
+    postalCode: fromZip,
+    countryCode: 'US',
+    phoneNumber: '0000000000',
+  };
+
+  // shipTo: prefer the saved order's address if we have one; fall back
+  // to a generic Oakland CA address keyed off toZip for the Settings
+  // demo button. Amazon's Buy Shipping API requires a full address —
+  // zip alone won't validate.
+  const orderAddr = input.rawOrder?.ShippingAddress ?? input.rawOrder?.shippingAddress ?? null;
+  const shipTo = orderAddr
+    ? {
+        name: orderAddr.Name ?? orderAddr.name ?? 'Buyer',
+        addressLine1: orderAddr.AddressLine1 ?? orderAddr.addressLine1 ?? '',
+        addressLine2: orderAddr.AddressLine2 ?? orderAddr.addressLine2 ?? '',
+        city: orderAddr.City ?? orderAddr.city ?? '',
+        stateOrRegion: orderAddr.StateOrRegion ?? orderAddr.stateOrRegion ?? '',
+        postalCode: orderAddr.PostalCode ?? orderAddr.postalCode ?? '',
+        countryCode: orderAddr.CountryCode ?? orderAddr.countryCode ?? 'US',
+        phoneNumber: orderAddr.Phone ?? orderAddr.phone ?? '0000000000',
+      }
+    : {
+        name: 'Buyer',
+        addressLine1: '1 Main St',
+        city: 'Oakland',
+        stateOrRegion: 'CA',
+        postalCode: (input.toZip || '94601').replace(/[^0-9]/g, '').slice(0, 5),
+        countryCode: 'US',
+        phoneNumber: '0000000000',
+      };
+
+  // Buy Shipping uses INCH/POUND uppercase strings.
+  const weightLb = Math.max(0.1, Math.round((input.weightOz / 16) * 10) / 10);
+  const packages = [
+    {
+      packageClientReferenceId: '1',
+      dimensions: {
+        length: input.dimsL,
+        width: input.dimsW,
+        height: input.dimsH,
+        unit: 'INCH',
+      },
+      weight: { value: weightLb, unit: 'POUND' },
+    },
   ];
 
-  let lastErr: string = '';
-  for (const url of endpoints) {
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-      });
-      if (res.status === 404) {
-        lastErr = `404 from ${url}`;
-        continue; // try next endpoint shape
-      }
-      if (!res.ok) {
-        const t = await res.text().then((s) => s.slice(0, 600)).catch(() => '');
-        throw new Error(`Walmart Shipping rates ${res.status} (${url}): ${t || res.statusText}`);
-      }
-      const data = (await res.json()) as any;
-      // Walmart returns either {rates: [...]} or {payload: {rates: [...]}} depending
-      // on the program. Probe both.
-      const rateList: any[] =
-        (Array.isArray(data?.rates) && data.rates) ||
-        (Array.isArray(data?.payload?.rates) && data.payload.rates) ||
-        (Array.isArray(data?.list?.elements) && data.list.elements) ||
-        [];
-      return rateList
-        .map((r: any) => {
-          const service = String(
-            r?.serviceLevelName ?? r?.serviceLevel ?? r?.carrierName ?? r?.method ?? 'Walmart Service',
-          );
-          const cost = Number(
-            r?.totalCost?.amount ?? r?.cost?.amount ?? r?.amount ?? r?.totalCost ?? r?.cost ?? 0,
-          );
-          const currency = String(
-            r?.totalCost?.currency ?? r?.cost?.currency ?? r?.currency ?? 'USD',
-          );
-          const days = Number(r?.transitDays ?? r?.deliveryDays ?? 0) || 0;
-          return { service, cost, days, currency };
-        })
-        .filter((r) => r.cost > 0);
-    } catch (err) {
-      lastErr = err instanceof Error ? err.message : String(err);
+  // Determine channel: if this is an Amazon order, use AMAZON + amazonOrderId.
+  // Otherwise EXTERNAL (Settings demo, or non-Amazon marketplaces).
+  const ext = input.externalOrderId ?? '';
+  const isAmazonOrder = typeof ext === 'string' && ext.startsWith('amazon-');
+  const amazonOrderId = isAmazonOrder ? ext.slice('amazon-'.length) : null;
+  const channelDetails = isAmazonOrder
+    ? { channelType: 'AMAZON', amazonOrderDetails: { amazonOrderId } }
+    : { channelType: 'EXTERNAL' };
+
+  // Ship date defaults to today; Buy Shipping accepts ISO-8601 with timezone.
+  const shipDate = new Date().toISOString();
+
+  const body = {
+    shipDate,
+    shipFrom,
+    shipTo,
+    packages,
+    channelDetails,
+  };
+
+  // SP-API endpoint host varies by region (NA / EU / FE). Using NA since
+  // marketplaceId ATVPDKIKX0DER (US) is the only one we currently support.
+  // If the seller adds non-NA marketplaces, route on marketplaceId here.
+  const url = 'https://sellingpartnerapi-na.amazon.com/shipping/v2/shipments/rates';
+  const apiRes = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'x-amz-access-token': lwaJson.access_token!,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  if (!apiRes.ok) {
+    const t = await apiRes.text().then((s) => s.slice(0, 800)).catch(() => '');
+    const sentSummary = {
+      hasShipFrom: !!shipFrom,
+      hasShipTo: !!shipTo,
+      packageCount: packages.length,
+      channelType: channelDetails.channelType,
+      shipFromKeys: Object.keys(shipFrom),
+      shipToKeys: Object.keys(shipTo),
+    };
+    throw new Error(
+      `Amazon Buy Shipping ${apiRes.status}: ${t || apiRes.statusText} | sent: ${JSON.stringify(sentSummary)}`,
+    );
+  }
+  const data = (await apiRes.json()) as any;
+
+  // Buy Shipping v2 wraps rates under either `rates` or `rateGroups[].rates`.
+  // Normalize to a flat list.
+  const flat: any[] = [];
+  if (Array.isArray(data?.rates)) flat.push(...data.rates);
+  if (Array.isArray(data?.payload?.rates)) flat.push(...data.payload.rates);
+  if (Array.isArray(data?.rateGroups)) {
+    for (const g of data.rateGroups) {
+      if (Array.isArray(g?.rates)) flat.push(...g.rates);
     }
   }
-  throw new Error(`No Walmart shipping rates endpoint accepted the request. Last error: ${lastErr}`);
+  if (Array.isArray(data?.payload?.rateGroups)) {
+    for (const g of data.payload.rateGroups) {
+      if (Array.isArray(g?.rates)) flat.push(...g.rates);
+    }
+  }
+
+  return flat
+    .map((r: any) => {
+      const carrier = String(r?.carrierName ?? r?.carrier?.name ?? r?.carrier ?? 'Amazon');
+      const svc = String(r?.serviceName ?? r?.service?.name ?? r?.serviceLevel ?? '');
+      const service = svc ? `${carrier} ${svc}` : carrier;
+      const cost = Number(
+        r?.totalCharge?.value ??
+          r?.totalCharge?.amount ??
+          r?.billedWeight?.value ??
+          r?.amount ??
+          0,
+      );
+      const currency = String(
+        r?.totalCharge?.unit ?? r?.totalCharge?.currency ?? r?.currency ?? 'USD',
+      );
+      // Buy Shipping returns deliveryWindow start/end ISO timestamps; convert
+      // to "days from today" for display parity with the other carriers.
+      const promise = r?.promise?.deliveryWindow ?? r?.promise ?? null;
+      const endDate = promise?.end ?? promise?.latest ?? null;
+      const days = endDate
+        ? Math.max(
+            1,
+            Math.round((new Date(endDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24)),
+          )
+        : 0;
+      return { service, cost, days, currency };
+    })
+    .filter((r) => r.cost > 0);
 }
 
 // Synthetic rates for the simulator provider. Three service tiers, prices
@@ -778,25 +1205,176 @@ export default async function handler(req: any, res: any): Promise<void> {
     }
 
     if (provider === 'walmart_shipping') {
-      // Confirmed empirically: the documented Walmart Sponsored Carrier rate
-      // endpoints (/v3/shipping/labels/rates and per-order variants) return
-      // 404 / "No matching handler" for production seller accounts. Walmart's
-      // Marketplace API genuinely doesn't expose a generic rate-shop endpoint.
-      // The credentials remain useful for future label-purchase flows via
-      // /v3/orders/{poId}/shipping (tracking + label) — but for rate-shopping
-      // Walmart orders, point the user at their UPS / USPS / FedEx direct
-      // accounts (which DO have rate APIs) instead.
-      res.status(200).json({
-        ok: false,
-        provider,
-        error: "Walmart's Marketplace API doesn't expose a rate-quote endpoint for this account. Use a real carrier (UPS / USPS / FedEx direct) for rate-shopping; this Walmart Shipping entry is kept around for future label-purchase flows that don't need a pre-purchase rate.",
-      });
+      // Real Walmart "Ship With Walmart" Shipping Estimates endpoint:
+      // POST /v3/shipping/labels/shipping-estimates (different from the
+      // earlier guesses — this is the actual documented path).
+      // Build the request from the order's saved raw payload + the dims
+      // / weight the Rate Browser passes through.
+      let purchaseOrderId: string | null = null;
+      let purchaseOrderSource = 'none';
+      if (typeof body?.purchaseOrderId === 'string' && body.purchaseOrderId) {
+        purchaseOrderId = body.purchaseOrderId;
+        purchaseOrderSource = 'body.purchaseOrderId';
+      } else {
+        const ext = typeof body?.externalOrderId === 'string' ? body.externalOrderId : null;
+        if (ext && ext.startsWith('walmart-')) {
+          purchaseOrderId = ext.slice('walmart-'.length);
+          purchaseOrderSource = 'body.externalOrderId';
+        }
+      }
+      if (!purchaseOrderId) {
+        // Fallback: most-recent walmart row in store_orders (Settings demo).
+        try {
+          const recent = await sql<Array<{ external_order_id: string }>>`
+            SELECT external_order_id FROM store_orders
+            WHERE provider = 'walmart'
+            ORDER BY last_fetched_at DESC
+            LIMIT 1
+          `;
+          if (recent[0]?.external_order_id) {
+            purchaseOrderId = recent[0].external_order_id;
+            purchaseOrderSource = 'store_orders fallback';
+          }
+        } catch { /* non-fatal */ }
+      }
+
+      // Fetch the saved raw payload so we can build boxItems + toAddress.
+      let rawOrder: any = null;
+      if (purchaseOrderId) {
+        try {
+          const orderRows = await sql<Array<{ raw: any }>>`
+            SELECT raw FROM store_orders
+            WHERE provider = 'walmart' AND external_order_id = ${purchaseOrderId}
+            LIMIT 1
+          `;
+          rawOrder = orderRows[0]?.raw ?? null;
+        } catch { /* non-fatal — function will fail with a clear error */ }
+      }
+
+      try {
+        const rates = await ratesFromWalmartShipping(creds, {
+          weightOz,
+          purchaseOrderId,
+          dimsL,
+          dimsW,
+          dimsH,
+          fromZip,
+          rawOrder,
+        });
+        res.status(200).json({
+          ok: true,
+          provider,
+          simulated: false,
+          rates,
+          fetchedAt: new Date().toISOString(),
+          meta: { purchaseOrderId, purchaseOrderSource, hasRawOrder: rawOrder != null },
+        });
+      } catch (err) {
+        res.status(200).json({
+          ok: false,
+          provider,
+          error: err instanceof Error ? err.message : String(err),
+          meta: { purchaseOrderId, purchaseOrderSource, hasRawOrder: rawOrder != null },
+        });
+      }
+      return;
+    }
+
+    if (provider === 'amazon_shipping') {
+      // Amazon Buy Shipping (SP-API Shipping v2). Works for any shipment —
+      // doesn't require the order to be from Amazon — so the Settings demo
+      // button is supported. When the order IS from Amazon we pass the
+      // amazonOrderId for accurate Buy Shipping pricing under channelType
+      // AMAZON; otherwise channelType EXTERNAL with placeholder shipTo.
+      const externalOrderId =
+        typeof body?.externalOrderId === 'string' ? body.externalOrderId : null;
+
+      // If the caller passed an Amazon externalOrderId, fetch the saved
+      // raw payload so shipTo comes from the real customer address. For
+      // EXTERNAL channel calls this is fine to leave null — the quoter
+      // falls back to a placeholder Oakland CA address.
+      let rawOrder: any = null;
+      if (externalOrderId && externalOrderId.startsWith('amazon-')) {
+        try {
+          const amzId = externalOrderId.slice('amazon-'.length);
+          const orderRows = await sql<Array<{ raw: any }>>`
+            SELECT raw FROM store_orders
+            WHERE provider = 'amazon' AND external_order_id = ${amzId}
+            LIMIT 1
+          `;
+          rawOrder = orderRows[0]?.raw ?? null;
+        } catch { /* non-fatal */ }
+      }
+
+      try {
+        const rates = await ratesFromAmazonBuyShipping(creds, {
+          weightOz, toZip, fromZip, dimsL, dimsW, dimsH,
+          rawOrder,
+          externalOrderId,
+        });
+        res.status(200).json({
+          ok: true, provider, simulated: false, rates,
+          fetchedAt: new Date().toISOString(),
+          meta: { externalOrderId, hasRawOrder: rawOrder != null },
+        });
+      } catch (err) {
+        res.status(200).json({
+          ok: false, provider,
+          error: err instanceof Error ? err.message : String(err),
+          meta: { externalOrderId, hasRawOrder: rawOrder != null },
+        });
+      }
+      return;
+    }
+
+    if (provider === 'easypost') {
+      // EasyPost is a multi-carrier aggregator — one API call returns
+      // rates from every carrier the user has connected to their EasyPost
+      // dashboard (UPS, USPS, FedEx, DHL, etc.). Works for any order;
+      // no marketplace-specific data required.
+      const externalOrderId =
+        typeof body?.externalOrderId === 'string' ? body.externalOrderId : null;
+
+      // Look up the saved order to extract the customer ship-to address
+      // when this is a real order from any of our marketplace pullers.
+      // Settings demo calls (no externalOrderId) fall back to placeholder
+      // address inside the quoter.
+      let rawOrder: any = null;
+      if (externalOrderId) {
+        const provIdMatch = externalOrderId.match(/^([a-z_]+)-(.+)$/);
+        if (provIdMatch) {
+          const [, srcProvider, extId] = provIdMatch;
+          try {
+            const orderRows = await sql<Array<{ raw: any }>>`
+              SELECT raw FROM store_orders
+              WHERE provider = ${srcProvider} AND external_order_id = ${extId}
+              LIMIT 1
+            `;
+            rawOrder = orderRows[0]?.raw ?? null;
+          } catch { /* non-fatal */ }
+        }
+      }
+
+      try {
+        const rates = await ratesFromEasyPost(creds, {
+          weightOz, toZip, fromZip, dimsL, dimsW, dimsH, rawOrder,
+        });
+        res.status(200).json({
+          ok: true, provider, simulated: false, rates,
+          fetchedAt: new Date().toISOString(),
+          meta: { externalOrderId, hasRawOrder: rawOrder != null, rateCount: rates.length },
+        });
+      } catch (err) {
+        res.status(200).json({
+          ok: false, provider,
+          error: err instanceof Error ? err.message : String(err),
+          meta: { externalOrderId, hasRawOrder: rawOrder != null },
+        });
+      }
       return;
     }
 
     // Real-carrier rate quoters slot in here as they get implemented:
-    //   case 'fedex':  return ratesFromFedex(creds, body)
-    //   case 'usps':   return ratesFromUspsV3(creds, body)
     //   case 'dhl_express': return ratesFromDhl(creds, body)
     res.status(200).json({
       ok: false,

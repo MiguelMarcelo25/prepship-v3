@@ -426,16 +426,59 @@ export default async function handler(req: any, res: any): Promise<void> {
         res.status(400).json({ error: 'id query parameter is required' });
         return;
       }
+      // Look up provider before deleting so we can compute the matching
+      // synthetic store_id and cascade-delete the auto-created clients row.
+      const existing = await sql<Array<{ provider: string }>>`
+        SELECT provider FROM ${sql(TABLE)} WHERE id = ${id} LIMIT 1
+      `;
+      const provider = existing[0]?.provider ?? null;
+
       const deleted = await sql<Array<{ id: number }>>`
         DELETE FROM ${sql(TABLE)}
         WHERE id = ${id}
         RETURNING id
       `;
       if (deleted.length === 0) {
-        res.status(404).json({ error: `carrier_accounts row #${id} not found` });
+        res.status(404).json({ error: `store_accounts row #${id} not found` });
         return;
       }
-      res.status(200).json({ data: { id: deleted[0].id, deleted: true } });
+
+      // Cascade: remove the auto-created clients row whose store_ids array
+      // is exactly [syntheticStoreId]. We deliberately use equality (not
+      // containment) so we don't damage clients with multiple store_ids
+      // — only the auto-created single-store clients get cleaned up.
+      const SYNTHETIC_STORE_OFFSETS: Record<string, number> = {
+        walmart:      9_000_000,
+        amazon:       9_100_000,
+        shopify:      9_200_000,
+        etsy:         9_300_000,
+        tiktok_shop:  9_400_000,
+        ebay:         9_500_000,
+        woocommerce:  9_600_000,
+        bigcommerce:  9_700_000,
+      };
+      let cascadedClientId: number | null = null;
+      if (provider) {
+        const offset = SYNTHETIC_STORE_OFFSETS[provider] ?? 9_900_000;
+        const syntheticStoreId = offset + id;
+        try {
+          const cascade = await sql<Array<{ id: number }>>`
+            DELETE FROM clients
+            WHERE store_ids = ARRAY[${syntheticStoreId}]::integer[]
+            RETURNING id
+          `;
+          cascadedClientId = cascade[0]?.id ?? null;
+        } catch (cascadeErr) {
+          console.warn(
+            '[store-accounts:DELETE] could not cascade-delete clients row:',
+            cascadeErr instanceof Error ? cascadeErr.message : cascadeErr,
+          );
+        }
+      }
+
+      res.status(200).json({
+        data: { id: deleted[0].id, deleted: true, cascadedClientId },
+      });
       return;
     }
 

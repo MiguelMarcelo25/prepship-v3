@@ -6,8 +6,8 @@
   "installCommand": "npm install",
   "rewrites": [
     {
-      "source": "/api/:path*",
-      "destination": "https://prepshipv4-api-l5xc.onrender.com/:path*"
+      "source": "/api/:path((?!carrier-accounts|carriers/|store-accounts|oauth/|debug-env|migrate-from|admin/).+)",
+      "destination": "https://prepshipv4-api-l5xc.onrender.com/:path"
     },
     {
       "source": "/aws-api/:path*",

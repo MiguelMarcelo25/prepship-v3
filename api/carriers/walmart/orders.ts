@@ -100,6 +100,26 @@ function readBody(req: any): Promise<unknown> {
   });
 }
 
+// Convert a real UTC Date to a Pacific-time wall-clock string stamped with
+// "Z" — matches the convention ShipStation orders use in our orders table
+// (PT clock face stored as if it were UTC, so the FE's UTC-mode renderer
+// reproduces the original clock face). Without this, real UTC timestamps
+// from marketplace pulls render 7-8 hours off compared to ShipStation
+// orders. See OrdersView.tsx:formatDateTime for the matching FE side.
+function toPacificClockfaceZ(d: Date): string {
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  });
+  const parts = fmt.formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '00';
+  // hour can come back as "24" at midnight in some Intl impls; normalize.
+  const hh = get('hour') === '24' ? '00' : get('hour');
+  return `${get('year')}-${get('month')}-${get('day')}T${hh}:${get('minute')}:${get('second')}Z`;
+}
+
 // Mint a fresh OAuth access token. Walmart tokens expire in ~15 minutes —
 // we don't bother caching here since the function is short-lived; each
 // invocation starts a new token.
@@ -480,9 +500,16 @@ export default async function handler(req: any, res: any): Promise<void> {
       const externalOrderId = o?.purchaseOrderId ? String(o.purchaseOrderId) : null;
       if (!externalOrderId) continue;
       const customerOrderId = o?.customerOrderId ? String(o.customerOrderId) : null;
+      // Walmart's orderDate is epoch ms (real UTC). The FE intentionally
+      // renders order dates in UTC mode to reproduce ShipStation's
+      // "PT-wall-clock-stamped-as-Z" convention (see formatDateTime in
+      // OrdersView.tsx). Saving raw UTC here would make Walmart orders
+      // display 7-8 hours off from ShipStation orders. Convert to a
+      // Pacific-time clock-face string stamped with Z so the FE's UTC
+      // rendering produces the correct PT-display time.
       const orderDateMs = o?.orderDate ? Number(o.orderDate) : null;
       const orderDate = orderDateMs && Number.isFinite(orderDateMs)
-        ? new Date(orderDateMs).toISOString()
+        ? toPacificClockfaceZ(new Date(orderDateMs))
         : (typeof o?.orderDate === 'string' ? o.orderDate : null);
       const sourceStatus = extractStatus(o);
       const shipTo = extractShipTo(o);

@@ -79,6 +79,24 @@ function readBody(req: any): Promise<unknown> {
 }
 
 // Refresh-token → access-token. eBay rotates these only when you redo the
+// Convert real UTC Date → Pacific-time wall-clock string stamped with "Z"
+// so the FE's UTC-mode renderer (kept for ShipStation parity — orders
+// stored as PT-clock-face-stamped-Z) displays it correctly. Without this
+// conversion, eBay orders display 7-8 hours offset from ShipStation
+// orders. See OrdersView.tsx:formatDateTime for the matching FE side.
+function toPacificClockfaceZ(d: Date): string {
+  const fmt = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false,
+  });
+  const parts = fmt.formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '00';
+  const hh = get('hour') === '24' ? '00' : get('hour');
+  return `${get('year')}-${get('month')}-${get('day')}T${hh}:${get('minute')}:${get('second')}Z`;
+}
+
 // user-consent flow, so a single refresh-token issue can keep working for
 // 18 months. Scope is restricted to sell.fulfillment which is what
 // /sell/fulfillment/v1/order requires.
@@ -241,8 +259,14 @@ export default async function handler(req: any, res: any): Promise<void> {
     const data = (await ordersRes.json()) as { orders?: any[]; total?: number };
     const elements: any[] = Array.isArray(data?.orders) ? data.orders : [];
 
-    // Pre-fetch SKU → weight_oz from inventory (same as Walmart puller).
+    // Pre-fetch SKU → weight_oz AND SKU → image_url from inventory in one
+    // query. eBay's /sell/fulfillment/v1/order does NOT return product
+    // images (the legacy ShipStation pipeline got them by enriching
+    // against SS's own product DB). Looking them up by SKU from inventory
+    // is the cleanest fix — same lookup the Walmart puller already does
+    // for weights.
     const skuToWeightOz = new Map<string, number>();
+    const skuToImageUrl = new Map<string, string>();
     {
       const allSkus = new Set<string>();
       for (const o of elements) {
@@ -254,17 +278,20 @@ export default async function handler(req: any, res: any): Promise<void> {
       if (allSkus.size > 0) {
         try {
           const skuArr = Array.from(allSkus);
-          const weightRows = await sql<Array<{ sku: string; weight_oz: number | null }>>`
-            SELECT sku, weight_oz FROM inventory
+          const inventoryRows = await sql<Array<{ sku: string; weight_oz: number | null; image_url: string | null }>>`
+            SELECT sku, weight_oz, image_url FROM inventory
             WHERE sku = ANY(${skuArr}::text[])
           `;
-          for (const r of weightRows) {
+          for (const r of inventoryRows) {
             if (!skuToWeightOz.has(r.sku) && r.weight_oz != null) {
               skuToWeightOz.set(r.sku, Number(r.weight_oz));
             }
+            if (!skuToImageUrl.has(r.sku) && r.image_url) {
+              skuToImageUrl.set(r.sku, String(r.image_url));
+            }
           }
         } catch (lookupErr) {
-          console.warn('[carriers/ebay/orders] inventory weight lookup failed:',
+          console.warn('[carriers/ebay/orders] inventory lookup failed:',
             lookupErr instanceof Error ? lookupErr.message : lookupErr);
         }
       }
@@ -325,12 +352,21 @@ export default async function handler(req: any, res: any): Promise<void> {
         const quantity = Number(line?.quantity ?? 1) || 1;
         const lineTotal = Number(line?.lineItemCost?.value ?? 0);
         const unitPrice = quantity > 0 ? Math.round((lineTotal / quantity) * 100) / 100 : lineTotal;
+        const sku = line?.sku ? String(line.sku) : null;
+        // Prefer eBay's response image if it ever returns one (most don't);
+        // fall back to the inventory lookup. Without this, direct-pulled
+        // eBay rows render with no thumbnail while legacy ShipStation rows
+        // for the SAME items show images — confusing for the user.
+        const imageUrl =
+          line?.image?.imageUrl ??
+          (sku ? skuToImageUrl.get(sku) : null) ??
+          null;
         return {
-          sku: line?.sku ?? null,
+          sku,
           name: line?.title ?? null,
           quantity,
           unitPrice,
-          imageUrl: line?.image?.imageUrl ?? null,
+          imageUrl,
           // eBay-specific extras retained for the raw payload.
           lineItemId: line?.lineItemId ?? null,
           legacyItemId: line?.legacyItemId ?? null,
@@ -356,7 +392,15 @@ export default async function handler(req: any, res: any): Promise<void> {
       const externalOrderId = o?.orderId ? String(o.orderId) : null;
       if (!externalOrderId) continue;
       const customerOrderId = o?.legacyOrderId ? String(o.legacyOrderId) : null;
-      const orderDate = typeof o?.creationDate === 'string' ? o.creationDate : null;
+      // eBay's creationDate is real UTC ISO. Convert to Pacific-time
+      // wall-clock-stamped-Z so the FE's UTC-mode renderer (which exists
+      // for ShipStation parity — see OrdersView.tsx:formatDateTime)
+      // displays it as PT instead of 7-8 hours off.
+      const rawCreation = typeof o?.creationDate === 'string' ? o.creationDate : null;
+      const parsedCreation = rawCreation ? new Date(rawCreation) : null;
+      const orderDate = parsedCreation && !Number.isNaN(parsedCreation.getTime())
+        ? toPacificClockfaceZ(parsedCreation)
+        : rawCreation;
       const sourceStatus = extractStatus(o);
       const shipTo = extractShipTo(o);
       const items = extractItems(o);

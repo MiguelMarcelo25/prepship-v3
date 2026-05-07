@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { useEffect, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { callVercelFunction } from '../../lib/vercelFunction'
 import { formatCaDateShort } from '../../lib/ca-time'
 
@@ -32,6 +33,7 @@ type ProviderKey =
   | 'gls'
   | 'stamps_com'
   | 'endicia'
+  | 'easypost'
 
 interface CredentialField {
   name: string
@@ -73,6 +75,24 @@ interface ProviderDef {
    *  in its place so the user isn't tempted to click and get the same
    *  predictable error. */
   noRateQuotes?: boolean
+  /** Setup difficulty / time estimate. Drives the colored badge on the
+   *  Add Integration tile and the sort order in the picker (easiest
+   *  first), so users naturally land on the fastest path to working
+   *  rates. Mirrors the tier system EasyPost uses on its dashboard.
+   *    1 = Instant: paste an API key, ~3 min total including signup.
+   *    2 = Quick:   developer-portal app + paste 2-3 fields, ~10 min.
+   *    3 = OAuth:   browser consent flow, refresh token, ~15-20 min. */
+  setupTier?: 1 | 2 | 3
+  /** Direct deep-link URL where the user can grab the credentials this
+   *  carrier needs. Surfaced as a "Get credentials →" button at the top
+   *  of the Add form so the user doesn't have to hunt for the page. */
+  credentialsUrl?: string
+}
+
+const TIER_META: Record<1 | 2 | 3, { label: string; color: string; bg: string; time: string }> = {
+  1: { label: 'Instant', color: '#0a7d1d', bg: '#dcfce7', time: '~3 min' },
+  2: { label: 'Quick',   color: '#9a3412', bg: '#fed7aa', time: '~10 min' },
+  3: { label: 'OAuth',   color: '#1e40af', bg: '#dbeafe', time: '~15 min' },
 }
 
 // Set of provider keys treated as marketplace stores rather than carriers.
@@ -111,6 +131,36 @@ export const STORE_PROVIDERS: Set<string> = new Set([
 //   Endicia       — Label Server (Account ID + Pass Phrase)
 const PROVIDER_DEFS: ProviderDef[] = [
   {
+    key: 'easypost',
+    category: 'carrier',
+    label: 'EasyPost',
+    blurb: 'Multi-carrier aggregator — one API key gives access to UPS, USPS, FedEx, DHL, GLS, OnTrac, LaserShip, and 100+ other carriers. Pay-per-label pricing, no monthly fee. Recommended for the simplest setup.',
+    badge: 'EZP',
+    badgeColor: '#0c5fa4',
+    setupTier: 1,
+    credentialsUrl: 'https://www.easypost.com/account/api-keys',
+    domain: 'easypost.com',
+    fields: [
+      {
+        name: 'apiKey',
+        label: 'API Key',
+        type: 'password',
+        hint: 'Production or test API key from your EasyPost dashboard → API Keys. Test keys are free and work for getting rate quotes; production keys are required to actually purchase labels.',
+      },
+      // Ship-from override: same pattern as Walmart Shipping. Most users
+      // will set up their default ship-from address inside EasyPost
+      // itself, but for the Settings demo button (no order context) we
+      // need *some* address — these fields let the user paste it
+      // without editing code.
+      { name: 'shipFromName', label: 'Ship-From Name (optional)', required: false, placeholder: 'DR Prepper Warehouse' },
+      { name: 'shipFromAddress1', label: 'Ship-From Street (optional)', required: false, placeholder: '1234 Warehouse Way' },
+      { name: 'shipFromCity', label: 'Ship-From City (optional)', required: false, placeholder: 'Carson' },
+      { name: 'shipFromState', label: 'Ship-From State (optional)', required: false, placeholder: 'CA' },
+      { name: 'shipFromZip', label: 'Ship-From Zip (optional)', required: false, placeholder: '90248' },
+      { name: 'shipFromPhone', label: 'Ship-From Phone (optional)', required: false, placeholder: '5551234567' },
+    ],
+  },
+  {
     key: 'ebay_shipping',
     category: 'carrier',
     noRateQuotes: true,
@@ -118,6 +168,8 @@ const PROVIDER_DEFS: ProviderDef[] = [
     blurb: 'eBay Sell Fulfillment API for tracking-push. Pushes tracking back to eBay when you ship via UPS / USPS / FedEx so the order flips to Shipped on eBay\'s seller dashboard. Same credentials as the eBay store integration. Note: eBay does not expose rate quotes through this API.',
     badge: 'eBayS',
     badgeColor: '#E53238',
+    setupTier: 3,
+    credentialsUrl: 'https://developer.ebay.com/my/keys',
     domain: 'ebay.com',
     simpleIconsSlug: 'ebay',
     fields: [
@@ -131,17 +183,30 @@ const PROVIDER_DEFS: ProviderDef[] = [
   {
     key: 'walmart_shipping',
     category: 'carrier',
-    noRateQuotes: true,
     label: 'Walmart Shipping',
-    blurb: 'Walmart Marketplace shipping for tracking-push back to Walmart after a label is created via UPS / USPS / FedEx. Walmart Marketplace API does NOT expose rate quotes — use real carriers for rate-shopping.',
+    blurb: 'Ship With Walmart — pulls real shipping estimates from Walmart\'s Sponsored Carrier program (POST /v3/shipping/labels/shipping-estimates). Same OAuth credentials as the Walmart Store integration. Per-Walmart-order: rate quotes are scoped to a Walmart purchaseOrderId.',
     badge: 'WMTS',
     badgeColor: '#0071DC',
+    setupTier: 2,
+    credentialsUrl: 'https://developer.walmart.com/account/login',
     domain: 'walmart.com',
     fields: [
       { name: 'clientId', label: 'Client ID', hint: 'Same Client ID used for the Walmart Store integration.' },
       { name: 'clientSecret', label: 'Client Secret', type: 'password' },
       { name: 'partnerId', label: 'Partner ID (Seller ID)', required: false, hint: 'Walmart Seller ID. Required for actually creating labels via Walmart shipping APIs.' },
       { name: 'channelType', label: 'Channel Type (optional)', required: false, placeholder: 'UUID', hint: 'For Solution Provider integrations. Same value as the Store entry.' },
+      // Ship-from override: Walmart's WSS rate service validates the
+      // shipFromAddress against the seller's registered shipping origin in
+      // Seller Center. If our hardcoded default doesn't match, the API
+      // returns the generic "unable to retrieve data" 500. Letting the user
+      // paste their actual registered warehouse address here is the
+      // simplest fix without requiring a Walmart support ticket.
+      { name: 'shipFromName', label: 'Ship-From Name (optional)', required: false, placeholder: 'DR Prepper Warehouse', hint: 'Leave blank to use a default; set this to your registered shipping origin in Seller Center if rates fail with a generic 500.' },
+      { name: 'shipFromAddress1', label: 'Ship-From Street (optional)', required: false, placeholder: '1234 Warehouse Way' },
+      { name: 'shipFromCity', label: 'Ship-From City (optional)', required: false, placeholder: 'Carson' },
+      { name: 'shipFromState', label: 'Ship-From State (optional)', required: false, placeholder: 'CA' },
+      { name: 'shipFromZip', label: 'Ship-From Zip (optional)', required: false, placeholder: '90248' },
+      { name: 'shipFromPhone', label: 'Ship-From Phone (optional)', required: false, placeholder: '5551234567' },
     ],
   },
   {
@@ -151,6 +216,7 @@ const PROVIDER_DEFS: ProviderDef[] = [
     blurb: 'Sandbox carrier for testing the add-carrier → verify → fetch-rates flow without real API credentials. Returns synthetic Standard / Priority / Express rates.',
     badge: 'DEMO',
     badgeColor: '#0F766E',
+    setupTier: 1,
     domain: 'example.com',
     fields: [
       {
@@ -168,6 +234,8 @@ const PROVIDER_DEFS: ProviderDef[] = [
     blurb: 'Multi-carrier rate aggregator. One API key for USPS, UPS, FedEx, DHL.',
     badge: 'SE',
     badgeColor: '#0072CE',
+    setupTier: 1,
+    credentialsUrl: 'https://app.shipengine.com/account/api-management',
     domain: 'shipengine.com',
     fields: [
       { name: 'apiKey', label: 'API Key', type: 'password', placeholder: 'TEST_xxxxxxxx or live_xxxxxxxx' },
@@ -180,6 +248,8 @@ const PROVIDER_DEFS: ProviderDef[] = [
     blurb: 'OAuth 2.0 credentials from the UPS Developer Kit. Required for direct UPS Rating, Shipping & Tracking.',
     badge: 'UPS',
     badgeColor: '#5A1F00',
+    setupTier: 2,
+    credentialsUrl: 'https://developer.ups.com/apps',
     domain: 'ups.com',
     simpleIconsSlug: 'ups',
     fields: [
@@ -195,6 +265,8 @@ const PROVIDER_DEFS: ProviderDef[] = [
     blurb: 'USPS APIs v3 OAuth (developer.usps.com). Replaces the legacy WebTools APIs.',
     badge: 'USPS',
     badgeColor: '#004B87',
+    setupTier: 2,
+    credentialsUrl: 'https://developer.usps.com/apps',
     domain: 'usps.com',
     fields: [
       { name: 'crid', label: 'Customer Registration ID (CRID)' },
@@ -210,6 +282,8 @@ const PROVIDER_DEFS: ProviderDef[] = [
     blurb: 'FedEx Developer Portal REST APIs (Rate, Ship, Track). OAuth 2.0.',
     badge: 'FedEx',
     badgeColor: '#4D148C',
+    setupTier: 2,
+    credentialsUrl: 'https://developer.fedex.com/api/en-us/home.html',
     domain: 'fedex.com',
     simpleIconsSlug: 'fedex',
     fields: [
@@ -225,6 +299,8 @@ const PROVIDER_DEFS: ProviderDef[] = [
     blurb: 'MyDHL API. International parcel rating, shipping, tracking.',
     badge: 'DHL',
     badgeColor: '#D40511',
+    setupTier: 1,
+    credentialsUrl: 'https://developer.dhl.com/user/apps',
     domain: 'dhl.com',
     simpleIconsSlug: 'dhl',
     fields: [
@@ -236,10 +312,12 @@ const PROVIDER_DEFS: ProviderDef[] = [
   {
     key: 'amazon_shipping',
     category: 'carrier',
-    label: 'Amazon Shipping',
-    blurb: 'Amazon Buy Shipping API. Purchase shipping labels at Amazon-negotiated rates for Merchant-Fulfilled Network (FBM) orders. Same SP-API credentials as the Amazon Marketplace store integration.',
+    label: 'Amazon Buy Shipping',
+    blurb: 'Amazon SP-API Shipping v2 — purchase labels at Amazon-negotiated carrier rates (USPS, UPS, FedEx) for Merchant-Fulfilled (FBM) orders, including non-Amazon orders via channelType EXTERNAL. Same SP-API credentials as the Amazon Marketplace store integration.',
     badge: 'AMZ',
     badgeColor: '#FF9900',
+    setupTier: 3,
+    credentialsUrl: 'https://sellercentral.amazon.com/sellingpartner/developerconsole',
     domain: 'amazon.com',
     fields: [
       { name: 'sellerId', label: 'Seller ID' },
@@ -256,6 +334,8 @@ const PROVIDER_DEFS: ProviderDef[] = [
     blurb: 'Walmart Marketplace API (Seller Center). OAuth 2.0 client_credentials issued via developer.walmart.com.',
     badge: 'WMT',
     badgeColor: '#0071DC',
+    setupTier: 2,
+    credentialsUrl: 'https://developer.walmart.com/account/login',
     domain: 'walmart.com',
     fields: [
       {
@@ -291,6 +371,8 @@ const PROVIDER_DEFS: ProviderDef[] = [
     blurb: 'Amazon SP-API. Pull orders, push tracking, fulfillment, FBA reports. Requires Login with Amazon (LWA) OAuth + a registered SP-API app.',
     badge: 'AMZN',
     badgeColor: '#FF9900',
+    setupTier: 3,
+    credentialsUrl: 'https://sellercentral.amazon.com/sellingpartner/developerconsole',
     domain: 'amazon.com',
     simpleIconsSlug: 'amazon',
     fields: [
@@ -309,6 +391,8 @@ const PROVIDER_DEFS: ProviderDef[] = [
     blurb: 'eBay Sell API. Pull orders, push tracking, manage listings. Requires app keyset + user OAuth refresh token.',
     badge: 'eBay',
     badgeColor: '#E53238',
+    setupTier: 3,
+    credentialsUrl: 'https://developer.ebay.com/my/keys',
     domain: 'ebay.com',
     simpleIconsSlug: 'ebay',
     fields: [
@@ -326,6 +410,8 @@ const PROVIDER_DEFS: ProviderDef[] = [
     blurb: 'Shopify Admin API. Pull orders, push fulfillments. Use a Custom App access token from your store admin.',
     badge: 'SHOP',
     badgeColor: '#7AB55C',
+    setupTier: 1,
+    credentialsUrl: 'https://help.shopify.com/en/manual/apps/app-types/custom-apps',
     domain: 'shopify.com',
     simpleIconsSlug: 'shopify',
     fields: [
@@ -341,6 +427,8 @@ const PROVIDER_DEFS: ProviderDef[] = [
     blurb: 'Etsy Open API v3. Pull receipts (orders), push tracking. Requires OAuth 2.0 with PKCE and a refresh token.',
     badge: 'ETSY',
     badgeColor: '#F1641E',
+    setupTier: 3,
+    credentialsUrl: 'https://www.etsy.com/developers/your-apps',
     domain: 'etsy.com',
     simpleIconsSlug: 'etsy',
     fields: [
@@ -357,6 +445,8 @@ const PROVIDER_DEFS: ProviderDef[] = [
     blurb: 'TikTok Shop Partner API. Pull orders, push fulfillment, manage listings. Requires a partner app + shop authorization.',
     badge: 'TTS',
     badgeColor: '#000000',
+    setupTier: 3,
+    credentialsUrl: 'https://partner.tiktokshop.com',
     domain: 'tiktok.com',
     simpleIconsSlug: 'tiktok',
     fields: [
@@ -374,6 +464,8 @@ const PROVIDER_DEFS: ProviderDef[] = [
     blurb: 'WooCommerce REST API for self-hosted WordPress stores. Uses consumer key + consumer secret over Basic Auth (HTTPS only).',
     badge: 'WOO',
     badgeColor: '#7F54B3',
+    setupTier: 1,
+    credentialsUrl: 'https://woocommerce.com/document/woocommerce-rest-api/',
     domain: 'woocommerce.com',
     simpleIconsSlug: 'woocommerce',
     fields: [
@@ -389,6 +481,8 @@ const PROVIDER_DEFS: ProviderDef[] = [
     blurb: 'BigCommerce Stores API V2/V3. Pull orders, push shipments. Uses store hash + access token from a custom store-level API account.',
     badge: 'BIG',
     badgeColor: '#34313F',
+    setupTier: 1,
+    credentialsUrl: 'https://login.bigcommerce.com/login',
     domain: 'bigcommerce.com',
     simpleIconsSlug: 'bigcommerce',
     fields: [
@@ -662,13 +756,41 @@ interface CarrierRatesResult {
 }
 
 async function fetchDemoRates(carrierAccountId: number): Promise<CarrierRatesResult> {
+  // Demo defaults: a small medium-weight box to a CA zip. Dimensions are
+  // included because some quoters (Walmart Shipping Estimates, FedEx for
+  // certain accounts) reject calls without boxDimensions — and including
+  // them is harmless for quoters that don't care (UPS, USPS, Simulator).
+  // For Walmart specifically, the API also requires a purchaseOrderId; the
+  // server-side dispatcher (api/carriers/rates.ts) falls back to the most
+  // recent Walmart store_orders row when none is passed, which is exactly
+  // what we want for a Settings "test the connection" preview.
   return callVercelFunction<CarrierRatesResult>('/carriers/rates', {
     method: 'POST',
-    body: { carrierAccountId, weightOz: 32, toZip: '94601' },
+    body: {
+      carrierAccountId,
+      weightOz: 32,
+      toZip: '94601',
+      dimsL: 12,
+      dimsW: 10,
+      dimsH: 6,
+    },
   })
 }
 
 export function CarrierIntegrationsCard() {
+  // useShippingAccounts (in v2Hooks.ts) caches /api/carrier-accounts results
+  // under ['v2-hooks:carrier-accounts']. The Rate Browser sidebar reads from
+  // that cache. Adding/deleting a carrier here only updates this component's
+  // local `saved` state — without invalidating the React Query cache, the
+  // sidebar still shows the pre-mutation list (e.g. "Simulator (Demo) is
+  // deleted but still appears in Rate Browser"). Same trap for stores via
+  // ['v2-hooks:carriers'] indirectly — invalidate both to be safe.
+  const queryClient = useQueryClient()
+  const refreshAccountsCache = () => {
+    void queryClient.invalidateQueries({ queryKey: ['v2-hooks:carrier-accounts'] })
+    void queryClient.invalidateQueries({ queryKey: ['v2-hooks:carriers'] })
+  }
+
   const [saved, setSaved] = useState<SavedRow[]>([])
   const [openProvider, setOpenProvider] = useState<ProviderKey | null>(null)
   const [formValues, setFormValues] = useState<Record<string, string>>({})
@@ -737,6 +859,10 @@ export function CarrierIntegrationsCard() {
       setTestResults((prev) => { const next = { ...prev }; delete next[d.id]; return next })
       setRateResults((prev) => { const next = { ...prev }; delete next[d.id]; return next })
       setPullResults((prev) => { const next = { ...prev }; delete next[d.id]; return next })
+      // Tell the Rate Browser sidebar (useShippingAccounts) that the cached
+      // carrier list is stale so the deleted row drops out immediately
+      // rather than after the 60s staleTime expires.
+      refreshAccountsCache()
     } catch (err) {
       setListError(err instanceof Error ? err.message : 'Failed to delete')
     } finally {
@@ -828,6 +954,9 @@ export function CarrierIntegrationsCard() {
       setFormLabel('')
       setOpenProvider(null)
       await refresh()
+      // Bump the Rate Browser sidebar cache so a newly-saved carrier
+      // appears without waiting for the 60s staleTime.
+      refreshAccountsCache()
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error'
       setSubmitState({ kind: 'error', message })
@@ -1216,7 +1345,18 @@ export function CarrierIntegrationsCard() {
                     gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
                     gap: 12,
                   }}>
-                    {PROVIDER_DEFS.filter((p) => addCategory == null || p.category === addCategory).map((p) => (
+                    {PROVIDER_DEFS
+                      .filter((p) => addCategory == null || p.category === addCategory)
+                      // Sort by setup tier so the easiest carriers appear
+                      // first — users naturally land on the fastest path
+                      // to working rates. Stable sort within tier preserves
+                      // the original PROVIDER_DEFS ordering.
+                      .slice()
+                      .sort((a, b) => (a.setupTier ?? 99) - (b.setupTier ?? 99))
+                      .map((p) => {
+                      const tier = p.setupTier
+                      const tierMeta = tier ? TIER_META[tier] : null
+                      return (
                       <button
                         key={p.key}
                         type="button"
@@ -1227,6 +1367,7 @@ export function CarrierIntegrationsCard() {
                           setSubmitState({ kind: 'idle' })
                         }}
                         style={{
+                          position: 'relative',
                           display: 'flex',
                           flexDirection: 'column',
                           alignItems: 'center',
@@ -1249,12 +1390,37 @@ export function CarrierIntegrationsCard() {
                           ;(e.currentTarget as HTMLButtonElement).style.boxShadow = 'none'
                         }}
                       >
+                        {tierMeta && (
+                          // Setup-tier badge in the corner — colored by
+                          // difficulty so the user can scan the grid and
+                          // pick whichever fits the time they have. Same
+                          // pattern EasyPost uses on its dashboard.
+                          <div
+                            style={{
+                              position: 'absolute',
+                              top: 4,
+                              right: 4,
+                              fontSize: 9,
+                              fontWeight: 700,
+                              padding: '2px 6px',
+                              borderRadius: 10,
+                              color: tierMeta.color,
+                              background: tierMeta.bg,
+                              letterSpacing: 0.3,
+                              textTransform: 'uppercase',
+                            }}
+                            title={`${tierMeta.label} setup — ${tierMeta.time}`}
+                          >
+                            {tierMeta.time}
+                          </div>
+                        )}
                         <ProviderLogo provider={p} size={64} />
                         <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', textAlign: 'center' }}>
                           {p.label}
                         </div>
                       </button>
-                    ))}
+                      )
+                    })}
                   </div>
                 </>
               ) : (() => {
@@ -1289,6 +1455,64 @@ export function CarrierIntegrationsCard() {
                         ← All providers
                       </button>
                     </div>
+                    {(def.credentialsUrl || def.setupTier) && (
+                      // Setup-help banner: tier indicator + direct link to
+                      // the carrier's developer portal credentials page.
+                      // Eliminates the "where do I get the API key from?"
+                      // question every new user asks. Mirrors how
+                      // EasyPost / Shopify / Stripe surface this on
+                      // their integration setup pages.
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 10,
+                          padding: '8px 12px',
+                          marginBottom: 14,
+                          background: 'var(--surface2)',
+                          border: '1px solid var(--border)',
+                          borderRadius: 4,
+                          fontSize: 11,
+                        }}
+                      >
+                        {def.setupTier && (
+                          <span
+                            style={{
+                              fontWeight: 700,
+                              fontSize: 9,
+                              padding: '3px 7px',
+                              borderRadius: 10,
+                              color: TIER_META[def.setupTier].color,
+                              background: TIER_META[def.setupTier].bg,
+                              letterSpacing: 0.3,
+                              textTransform: 'uppercase',
+                            }}
+                          >
+                            {TIER_META[def.setupTier].label} • {TIER_META[def.setupTier].time}
+                          </span>
+                        )}
+                        {def.credentialsUrl && (
+                          <>
+                            <span style={{ color: 'var(--text3)' }}>
+                              Don't have credentials yet?
+                            </span>
+                            <a
+                              href={def.credentialsUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{
+                                color: 'var(--ss-blue)',
+                                fontWeight: 600,
+                                textDecoration: 'none',
+                                marginLeft: 'auto',
+                              }}
+                            >
+                              Get from {def.label} →
+                            </a>
+                          </>
+                        )}
+                      </div>
+                    )}
                     <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'minmax(200px, 1fr) minmax(200px, 1fr)' }}>
                       <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                         <span style={{ fontSize: 11, color: 'var(--text3)' }}>Display label</span>

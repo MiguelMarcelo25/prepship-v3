@@ -35,7 +35,6 @@ export interface UseOrdersOptions {
   dateStart?: string;
   dateEnd?: string;
   hideTestOrders?: boolean;
-  search?: string;
 }
 
 export interface UseOrdersResult {
@@ -437,7 +436,6 @@ export function useOrders(
     dateStart,
     dateEnd,
     hideTestOrders = false,
-    search,
   } = options;
 
   const [currentPage, setCurrentPage] = useState<number>(page);
@@ -455,7 +453,6 @@ export function useOrders(
 
   const isoFrom = toIsoStart(dateStart);
   const isoTo = toIsoEnd(dateEnd);
-  const searchTerm = search?.trim() || undefined;
 
   // Test clients can appear in the sidebar without a real ShipStation store.
   // /init/stores represents those rows with a negative synthetic store id
@@ -483,7 +480,6 @@ export function useOrders(
       effectiveStoreId,
       excludeClientId,
       hideTestOrders,
-      searchTerm,
       isoFrom,
       isoTo,
     ],
@@ -497,7 +493,6 @@ export function useOrders(
           storeId: effectiveStoreId,
           excludeClientId,
           hideTestOrders: hideTestOrders && effectiveClientId == null && effectiveStoreId == null ? true : undefined,
-          search: searchTerm,
           dateFrom: isoFrom,
           dateTo: isoTo,
         })}`
@@ -738,9 +733,19 @@ async function fetchDirectCarrierAccounts(): Promise<V4DirectCarriersResponse> {
   if (!res.ok) {
     let msg = `${res.status} ${res.statusText}`;
     try { const e = await res.json(); if (e?.error) msg = e.error; } catch { /* ignore */ }
+    // Surface in console too — the merged hook (useShippingAccounts below)
+    // intentionally swallows this error when ShipStation succeeds, so a
+    // failure here is invisible in the UI. That makes "my direct UPS isn't
+    // in the Rate Browser sidebar" near-impossible to diagnose without
+    // poking at Network. Console warn is the cheapest fix.
+    // eslint-disable-next-line no-console
+    console.warn('[useShippingAccounts] direct carrier list failed:', msg);
     throw new Error(msg);
   }
-  return (await res.json()) as V4DirectCarriersResponse;
+  const json = (await res.json()) as V4DirectCarriersResponse;
+  // eslint-disable-next-line no-console
+  console.debug('[useShippingAccounts] direct carriers:', json?.data?.length ?? 0);
+  return json;
 }
 
 export function useShippingAccounts(): UseShippingAccountsResult {
