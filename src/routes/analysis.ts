@@ -297,9 +297,11 @@ type SkuBreakdownRow = {
   std_orders: number;
   std_ship_count: number;
   std_total: string;
+  std_qty_total: number;
   exp_orders: number;
   exp_ship_count: number;
   exp_total: string;
+  exp_qty_total: number;
   ship_count_with_cost: number;
   total_qty: number;
   total_shipping: string;
@@ -400,7 +402,7 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
     allocated as (
       select
         r.*,
-        count(*) over (partition by r.order_id)                              as sku_divisor,
+        sum(qty) over (partition by r.order_id)::int                         as order_qty_total,
         case
           when r.order_status = 'shipped' and r.shipment_order_id is null then true
           else false
@@ -438,21 +440,20 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
       count(*) filter (where is_external)::int                                   as ext_shipped,
       count(*) filter (where not is_external and ship_class = 'std')::int         as std_orders,
       count(*) filter (where not is_external and label_cost > 0 and ship_class = 'std')::int as std_ship_count,
-      coalesce(sum(label_cost / nullif(sku_divisor, 0)) filter (where not is_external and label_cost > 0 and ship_class = 'std'), 0)::text as std_total,
-      -- Per-UNIT shipping average (boss directive 2026-05-07): the
-      -- previous "$X.XX avg" displayed in the SKU table was sum(cost) /
-      -- count(orders), which counted a $23 label as $23 even when the
-      -- order shipped 2 units. Adding std_qty_total = sum of units in
-      -- std orders so the FE can compute per-unit avg = total / qty.
-      -- exp_qty_total mirrors for expedited.
+      coalesce(sum(label_cost * qty / nullif(order_qty_total, 0)) filter (where not is_external and label_cost > 0 and ship_class = 'std'), 0)::text as std_total,
+      -- Per-UNIT shipping average (boss directive 2026-05-07):
+      -- allocate each label by units in the order, then let the FE divide
+      -- by the units for this SKU/service class. A $23 label on two units
+      -- contributes $11.50 per unit; mixed-SKU orders use the same
+      -- per-unit share for every item unit in that order.
       coalesce(sum(qty) filter (where not is_external and label_cost > 0 and ship_class = 'std'), 0)::int as std_qty_total,
       count(*) filter (where not is_external and ship_class = 'exp')::int         as exp_orders,
       count(*) filter (where not is_external and label_cost > 0 and ship_class = 'exp')::int as exp_ship_count,
-      coalesce(sum(label_cost / nullif(sku_divisor, 0)) filter (where not is_external and label_cost > 0 and ship_class = 'exp'), 0)::text as exp_total,
+      coalesce(sum(label_cost * qty / nullif(order_qty_total, 0)) filter (where not is_external and label_cost > 0 and ship_class = 'exp'), 0)::text as exp_total,
       coalesce(sum(qty) filter (where not is_external and label_cost > 0 and ship_class = 'exp'), 0)::int as exp_qty_total,
       count(*) filter (where not is_external and label_cost > 0)::int             as ship_count_with_cost,
       sum(qty)::int                                                              as total_qty,
-      coalesce(sum(label_cost / nullif(sku_divisor, 0)) filter (where not is_external and label_cost > 0), 0)::text as total_shipping
+      coalesce(sum(label_cost * qty / nullif(order_qty_total, 0)) filter (where not is_external and label_cost > 0), 0)::text as total_shipping
     from allocated a
     left join sku_inventory inv on inv.sku_lc = lower(a.sku)
     group by sku_key

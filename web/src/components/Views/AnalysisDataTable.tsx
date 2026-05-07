@@ -139,8 +139,10 @@ export function AnalysisDataTable({
               // Per-UNIT shipping average (boss directive 2026-05-07):
               // divide by total UNITS shipped via this class, not by
               // order count. So a 2-unit / $23 order shows $11.50/unit
-              // instead of $23/order. Falls back to ship-count divisor
-              // if qty total is missing (older API response).
+              // instead of $23/order. The API allocates mixed-SKU label
+              // costs by item units before returning the class totals.
+              // Falls back to ship-count divisor if qty total is missing
+              // (older API response).
               const stdQtyDivisor =
                 (row as { standardShipQtyTotal?: number }).standardShipQtyTotal ??
                 row.standardShipCount

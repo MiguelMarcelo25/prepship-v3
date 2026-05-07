@@ -133,7 +133,7 @@ const ANALYSIS_TABLE_COLUMNS: AnalysisTableColumn[] = [
   { key: 'expOrders', title: 'SS-labeled expedited service orders (count + avg cost)', align: 'right' },
   {
     key: 'total',
-    title: 'Total SS label cost (proportionally allocated across SKUs in multi-item orders)',
+    title: 'Total SS label cost (allocated by item units in multi-item orders)',
     align: 'right',
   },
 ]
