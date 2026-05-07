@@ -164,10 +164,21 @@ function hoverBgClass(spec: SidebarSpec): string {
   return spec.mode === 'dark' ? 'hover:bg-slate-800/60' : 'hover:bg-slate-100/70'
 }
 function inactiveTextClass(spec: SidebarSpec): string {
-  return spec.mode === 'dark' ? 'text-slate-300' : 'text-slate-700'
+  // Boss directive 2026-05-07: sidebar text must be near-black, no
+  // gray gradations across active/inactive. We force the darkest
+  // available color in each mode (slate-900 for light, slate-100 for
+  // dark). The previous slate-700/300 + slate-400/500 split produced
+  // a 3-tier gray hierarchy in the sidebar (active / inactive /
+  // muted) which made low-count clients look "off". Now all text
+  // reads as primary-dark.
+  return spec.mode === 'dark' ? 'text-slate-100' : 'text-slate-900'
 }
 function mutedTextClass(spec: SidebarSpec): string {
-  return spec.mode === 'dark' ? 'text-slate-500' : 'text-slate-400'
+  // Same directive — was slate-400/500 (true gray); now matches
+  // inactiveTextClass to eliminate gray entirely. Used for store
+  // counts, store labels at zero count, search icon, section
+  // chevrons. All collapse to the same near-black for uniformity.
+  return spec.mode === 'dark' ? 'text-slate-100' : 'text-slate-900'
 }
 function borderClass(spec: SidebarSpec): string {
   return spec.mode === 'dark' ? 'border-slate-800' : 'border-slate-200'
