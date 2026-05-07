@@ -6961,92 +6961,81 @@ export default function OrdersView({
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -8 }}
               transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-              className="bg-gradient-to-b from-page to-surface-2/40 border-b border-line px-5 py-3 font-sans"
+              className="bg-surface border-b border-line px-5 py-2.5 font-sans"
             >
-              {/* V2-original-style strip — bigger numbers + stacked
-                  labels (Total / Orders, Need to / Ship), restored
-                  per boss feedback that the compact (17px) version
-                  was too small. Heights ~52-56px; numbers 22px;
-                  labels 12px on 2 lines beside each number. */}
-              <div className="flex items-center gap-7 flex-wrap text-[12.5px]">
+              {/* V2-original daily strip: one tight horizontal row with
+                  emoji marker, compact number/label stacks, and a small
+                  progress bar. */}
+              <div className="flex min-h-[50px] items-center gap-8 overflow-x-auto whitespace-nowrap text-[12px]">
                 {/* Date range */}
-                <div className="flex items-center gap-2 shrink-0">
-                  <Calendar size={15} strokeWidth={2.25} className="text-ink-3" />
+                <div className="flex items-center gap-2 shrink-0 text-[12px]">
+                  <span className="text-[15px] leading-none" aria-hidden="true">📅</span>
                   <span className="text-ink-2 font-semibold">{dailyStatsFromLabel}</span>
                   <span className="text-ink-4">→</span>
                   <span className="text-ink-2 font-semibold">{dailyStatsToLabel}</span>
-                  <span className="text-ink-4 italic text-[12px]">(shifts at 6 PM CA)</span>
+                  <span className="text-ink-4 italic text-[11px]">(shifts at 6 PM CA)</span>
                 </div>
 
-                {/* Total Orders — neutral ink. Label stacked on 2
-                    lines (Total / Orders) — matches v2-original. */}
+                <div className="h-7 w-px shrink-0 bg-line" aria-hidden="true" />
+
+                {/* Total Orders */}
                 <div className="flex items-center gap-2 shrink-0">
-                  <Package size={18} strokeWidth={2.25} className="text-ink-2" />
-                  <motion.span
-                    key={dailyStats.totalOrders}
-                    initial={{ opacity: 0, y: 3 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="font-bold text-ink tabular-nums text-[22px] leading-none font-mono"
-                  >
-                    {dailyStats.totalOrders}
-                  </motion.span>
-                  <div className="flex flex-col leading-[1.1] text-[12px] text-ink-3 font-medium">
-                    <span>Total</span>
-                    <span>Orders</span>
+                  <span className="text-[19px] leading-none" aria-hidden="true">📦</span>
+                  <div className="flex flex-col items-start leading-none">
+                    <motion.span
+                      key={dailyStats.totalOrders}
+                      initial={{ opacity: 0, y: 3 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="font-bold text-ink tabular-nums text-[22px] leading-[22px] font-mono"
+                    >
+                      {dailyStats.totalOrders}
+                    </motion.span>
+                    <span className="text-[10px] leading-[11px] text-ink-3 font-medium">Total Orders</span>
                   </div>
                 </div>
 
-                {/* Need to Ship — colored by progress urgency */}
+                {/* Need to Ship */}
                 <div className="flex items-center gap-2 shrink-0">
-                  <Truck
-                    size={18}
-                    strokeWidth={2.25}
-                    style={{ color: dailyStripProgress?.needToShipColor }}
-                  />
-                  <motion.span
-                    key={dailyStats.needToShip}
-                    initial={{ opacity: 0, y: 3 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="font-bold tabular-nums text-[22px] leading-none font-mono"
-                    style={{ color: dailyStripProgress?.needToShipColor }}
-                  >
-                    {dailyStats.needToShip}
-                  </motion.span>
-                  <div className="flex flex-col leading-[1.1] text-[12px] text-ink-3 font-medium">
-                    <span>Need to</span>
-                    <span>Ship</span>
+                  <span className="text-[19px] leading-none" aria-hidden="true">🚚</span>
+                  <div className="flex flex-col items-start leading-none">
+                    <motion.span
+                      key={dailyStats.needToShip}
+                      initial={{ opacity: 0, y: 3 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="font-bold tabular-nums text-[22px] leading-[22px] font-mono"
+                      style={{ color: dailyStripProgress?.needToShipColor }}
+                    >
+                      {dailyStats.needToShip}
+                    </motion.span>
+                    <span className="text-[10px] leading-[11px] text-ink-3 font-medium">Need to Ship</span>
                   </div>
                 </div>
 
-                {/* Upcoming — single-line label since "Upcoming" is one word */}
+                {/* Upcoming */}
                 <div className="flex items-center gap-2 shrink-0">
-                  <Bell
-                    size={18}
-                    strokeWidth={2.25}
-                    style={{ color: dailyStripProgress?.upcomingColor }}
-                  />
-                  <motion.span
-                    key={dailyStats.upcomingOrders}
-                    initial={{ opacity: 0, y: 3 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="font-bold tabular-nums text-[22px] leading-none font-mono"
-                    style={{ color: dailyStripProgress?.upcomingColor }}
-                  >
-                    {dailyStats.upcomingOrders}
-                  </motion.span>
-                  <span className="text-ink-3 text-[12px] font-medium">Upcoming</span>
+                  <span className="text-[19px] leading-none" aria-hidden="true">🔔</span>
+                  <div className="flex flex-col items-start leading-none">
+                    <motion.span
+                      key={dailyStats.upcomingOrders}
+                      initial={{ opacity: 0, y: 3 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="font-bold tabular-nums text-[22px] leading-[22px] font-mono"
+                      style={{ color: dailyStripProgress?.upcomingColor }}
+                    >
+                      {dailyStats.upcomingOrders}
+                    </motion.span>
+                    <span className="text-[10px] leading-[11px] text-ink-3 font-medium">Upcoming</span>
+                  </div>
                 </div>
 
-                {/* Progress: text + bar + percentage. Takes remaining
-                    horizontal space via flex-1 so the bar grows on
-                    wider screens. */}
-                <div className="flex items-center gap-2.5 flex-1 min-w-[200px]">
-                  <span className="text-ink-3 text-[12px] shrink-0 tabular-nums font-medium">
+                {/* Progress */}
+                <div className="flex items-center gap-2.5 shrink-0 min-w-[285px]">
+                  <span className="text-ink-3 text-[11px] shrink-0 tabular-nums font-medium">
                     {dailyStripProgress?.shipped} of {dailyStats.totalOrders} shipped
                   </span>
-                  <div className="flex-1 h-2 bg-line/60 rounded-full overflow-hidden min-w-[100px]">
+                  <div className="w-[175px] h-[7px] bg-line/70 rounded-sm overflow-hidden">
                     <motion.div
-                      className="h-full rounded-full"
+                      className="h-full rounded-sm"
                       initial={{ width: 0 }}
                       animate={{ width: `${dailyStripProgress?.barFill ?? 0}%` }}
                       transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
@@ -7061,7 +7050,7 @@ export default function OrdersView({
                     initial={{ scale: 0.85, opacity: 0 }}
                     animate={{ scale: 1, opacity: 1 }}
                     transition={{ type: 'spring', stiffness: 380, damping: 22 }}
-                    className="font-bold tabular-nums text-[14px] shrink-0 font-mono"
+                    className="font-bold tabular-nums text-[13px] shrink-0 font-mono"
                     style={{ color: dailyStripProgress?.barColor }}
                   >
                     {dailyStripProgress?.pct}%
