@@ -49,7 +49,7 @@ const DRAWER_ORDERS_COLUMN_DEFAULTS: Record<DrawerOrdersColumnKey, number> = {
   orderNum: 150,
   customer: 200,
   qty: 60,
-  cost: 110,
+  cost: 160,
   status: 110,
   date: 100,
 }
@@ -57,7 +57,7 @@ const DRAWER_ORDERS_COLUMN_MIN: Record<DrawerOrdersColumnKey, number> = {
   orderNum: 90,
   customer: 100,
   qty: 50,
-  cost: 70,
+  cost: 120,
   status: 80,
   date: 80,
 }
@@ -196,6 +196,31 @@ function numberValue(value: unknown) {
 function formatMoneyValue(value: unknown) {
   const num = numberValue(value)
   return num == null ? '-' : `$${num.toFixed(2)}`
+}
+
+function renderDrawerShippingCost(order: Record<string, unknown>) {
+  const qty = Math.max(1, Math.round(numberValue(order.qty) ?? 1))
+  const unitCost = numberValue(order.standardShippingCost) ?? numberValue(order.shippingCost)
+  if (unitCost == null) return '-'
+
+  const totalCost =
+    numberValue(order.standardShippingTotal) ??
+    numberValue(order.shippingTotal) ??
+    unitCost * qty
+
+  if (qty <= 1) {
+    return <span className="analysis-cost-unit">{formatMoneyValue(unitCost)}</span>
+  }
+
+  const title = `${formatMoneyValue(unitCost)} x ${qty} = ${formatMoneyValue(totalCost)}`
+
+  return (
+    <span className="analysis-cost-formula" title={title}>
+      <span className="analysis-cost-unit">{formatMoneyValue(unitCost)}</span>
+      <span className="analysis-cost-multiplier">X{qty}</span>
+      <span className="analysis-cost-total">= {formatMoneyValue(totalCost)}</span>
+    </span>
+  )
 }
 
 function formatStatusText(value: unknown) {
@@ -1327,7 +1352,7 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
                                       EXT
                                     </span>
                                   ) : (
-                                    formatMoneyValue(order.standardShippingCost)
+                                    renderDrawerShippingCost(order)
                                   )}
                                 </td>
                                 <td className="is-center">

@@ -1765,10 +1765,18 @@ export const apiClient = {
             r?.shipping_cost == null && r?.shippingCost == null
               ? null
               : Number(r?.shipping_cost ?? r?.shippingCost),
+          shippingTotal:
+            r?.shipping_total == null && r?.shippingTotal == null
+              ? null
+              : Number(r?.shipping_total ?? r?.shippingTotal),
           standardShippingCost:
             r?.standard_shipping_cost == null && r?.standardShippingCost == null
               ? null
               : Number(r?.standard_shipping_cost ?? r?.standardShippingCost),
+          standardShippingTotal:
+            r?.standard_shipping_total == null && r?.standardShippingTotal == null
+              ? null
+              : Number(r?.standard_shipping_total ?? r?.standardShippingTotal),
           externallyShipped: Boolean(
             r?.is_external_shipped
               ?? r?.isExternalShipped

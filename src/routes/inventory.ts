@@ -369,7 +369,7 @@ app.get(
       allocated as (
         select
           r.*,
-          count(*) over (partition by r.order_id)                              as sku_divisor,
+          sum(qty) over (partition by r.order_id)::int                         as order_qty_total,
           case
             when r.order_status = 'shipped' and r.shipment_order_id is null then true
             else false
@@ -388,18 +388,27 @@ app.get(
             and label_cost > 0
             and ship_class = 'std'
         )::int as standard_ship_count,
-        coalesce(sum(label_cost / nullif(sku_divisor, 0)) filter (
+        coalesce(sum(label_cost * qty / nullif(order_qty_total, 0)) filter (
           where lower(sku) = lower(${row.sku})
             and not is_external
             and label_cost > 0
             and ship_class = 'std'
         ), 0)::text as standard_shipping_total,
-        coalesce(avg(label_cost / nullif(sku_divisor, 0)) filter (
-          where lower(sku) = lower(${row.sku})
-            and not is_external
-            and label_cost > 0
-            and ship_class = 'std'
-        ), 0)::text as avg_standard_shipping_cost
+        coalesce(
+          sum(label_cost * qty / nullif(order_qty_total, 0)) filter (
+            where lower(sku) = lower(${row.sku})
+              and not is_external
+              and label_cost > 0
+              and ship_class = 'std'
+          )
+          / nullif(sum(qty) filter (
+            where lower(sku) = lower(${row.sku})
+              and not is_external
+              and label_cost > 0
+              and ship_class = 'std'
+          ), 0),
+          0
+        )::text as avg_standard_shipping_cost
       from allocated
     `);
 
@@ -415,7 +424,9 @@ app.get(
       unit_price: string | null;
       item_name: string | null;
       shipping_cost: string | null;
+      shipping_total: string | null;
       standard_shipping_cost: string | null;
+      standard_shipping_total: string | null;
       is_external_shipped: boolean;
     }>(sql`
       with matching_order_ids as (
@@ -509,7 +520,7 @@ app.get(
       allocated as (
         select
           r.*,
-          count(*) over (partition by r.order_id)                              as sku_divisor,
+          sum(qty) over (partition by r.order_id)::int                         as order_qty_total,
           case
             when r.order_status = 'shipped' and r.shipment_order_id is null then true
             else false
@@ -533,13 +544,21 @@ app.get(
         unit_price,
         item_name,
         case
-          when not is_external and label_cost > 0 then (label_cost / nullif(sku_divisor, 0))::text
+          when not is_external and label_cost > 0 then (label_cost / nullif(order_qty_total, 0))::text
           else null
         end as shipping_cost,
         case
-          when not is_external and label_cost > 0 and ship_class = 'std' then (label_cost / nullif(sku_divisor, 0))::text
+          when not is_external and label_cost > 0 then (label_cost * qty / nullif(order_qty_total, 0))::text
+          else null
+        end as shipping_total,
+        case
+          when not is_external and label_cost > 0 and ship_class = 'std' then (label_cost / nullif(order_qty_total, 0))::text
           else null
         end as standard_shipping_cost,
+        case
+          when not is_external and label_cost > 0 and ship_class = 'std' then (label_cost * qty / nullif(order_qty_total, 0))::text
+          else null
+        end as standard_shipping_total,
         (is_external or externally_shipped_flag)                               as is_external_shipped
       from allocated
       where lower(sku) = lower(${row.sku})
