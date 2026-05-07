@@ -14,6 +14,7 @@ import { syncOrders } from '../services/order-sync';
 import { syncShipments } from '../services/shipment-sync';
 import { ssMarkOrderShippedV1, asSSUpstreamOrderId } from '../lib/shipstation/labels';
 import { loadClientCredentials } from '../lib/shipstation/credentials';
+import { printQueue } from '../db/schema/print-queue';
 
 const app = new Hono();
 
@@ -726,5 +727,59 @@ app.post(
     });
   }
 );
+
+// ─── /admin/cleanup-stale-queue-entries ────────────────────────────────
+// One-shot housekeeping: scan the print_queue_orders table and delete
+// any entry whose underlying order is already shipped or cancelled.
+// These accumulate over time because (until 2026-05-07) the print
+// queue had no auto-cleanup hook on order-status transitions —
+// operators saw the same orders sitting in the queue panel even after
+// shipping them.
+//
+// The auto-cleanup is now in place at TWO points:
+//   1. labels.ts markOrderShipped — fires on local Print Label flow
+//   2. order-sync.ts updateExistingOrderStatusesBatch — fires when
+//      a sync detects the status flip from upstream
+// So new accumulations should never happen. This endpoint exists
+// for the existing stale entries already in the table.
+//
+// Idempotent: running twice is harmless (second run finds nothing
+// to delete and returns 0).
+//
+// Per user override `unlock shipped data` on 2026-05-07 — touches
+// shipped/cancelled-related state.
+app.post('/cleanup-stale-queue-entries', async (c) => {
+  // Find queue entries pointing at orders that are no longer
+  // awaiting_shipment. We use a join because print_queue.orderId is
+  // text (storing the local order_id stringified) while orders.id is
+  // integer — cast for the comparison.
+  const stale = await db.execute<{ queue_id: string; order_id: number; order_status: string; order_number: string | null }>(sql`
+    select pq.id as queue_id, o.id as order_id, o.order_status, o.order_number
+    from print_queue_orders pq
+    inner join orders o on o.id = pq.order_id::int
+    where o.order_status in ('shipped', 'cancelled')
+  `);
+
+  if (stale.length === 0) {
+    return c.json({ removed: 0, results: [] });
+  }
+
+  const queueIds = stale.map((row) => row.queue_id);
+  await db.delete(printQueue).where(inArray(printQueue.id, queueIds));
+
+  console.info(
+    `[admin/cleanup-stale-queue-entries] removed ${stale.length} stale entries`
+  );
+
+  return c.json({
+    removed: stale.length,
+    results: stale.map((row) => ({
+      queueId: row.queue_id,
+      orderId: row.order_id,
+      orderNumber: row.order_number,
+      orderStatus: row.order_status,
+    })),
+  });
+});
 
 export default app;

@@ -2,6 +2,7 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orders } from '../db/schema/orders';
 import { clients } from '../db/schema/clients';
+import { printQueue } from '../db/schema/print-queue';
 import { ssV1Request } from '../lib/shipstation/v1-client';
 import { getSettingNumber, setSetting } from './settings';
 import { isExcludedStoreId } from '../config/prepship';
@@ -296,6 +297,32 @@ async function updateExistingOrderStatusesBatch(
       )
       .returning({ id: orders.id });
     updated += rows.length;
+
+    // Auto-cleanup print queue: any orders we just flipped to
+    // shipped/cancelled should have their pending queue entries
+    // removed so the queue panel doesn't show stale entries
+    // pointing at orders that no longer need printing.
+    // Fire-and-forget (try/catch) — sync must not fail because of
+    // a queue cleanup hiccup.
+    if (rows.length > 0) {
+      try {
+        const orderIdsForCleanup = rows.map((r) => String(r.id));
+        const removed = await db
+          .delete(printQueue)
+          .where(inArray(printQueue.orderId, orderIdsForCleanup))
+          .returning({ id: printQueue.id });
+        if (removed.length > 0) {
+          console.info(
+            `[order-sync] removed ${removed.length} queue entries for orders flipped to ${orderStatus}`
+          );
+        }
+      } catch (err) {
+        console.warn(
+          `[order-sync] queue cleanup failed (non-fatal):`,
+          err instanceof Error ? err.message : err
+        );
+      }
+    }
   }
 
   return updated;

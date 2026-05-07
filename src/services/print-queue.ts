@@ -378,6 +378,27 @@ export async function clearQueue(clientId?: number) {
   return rows.length;
 }
 
+/**
+ * Remove all queue entries for a given order. Called automatically by
+ * markOrderShipped (services/labels.ts) when an order moves to
+ * 'shipped' or 'cancelled' so the queue doesn't accumulate orphaned
+ * entries pointing at orders that no longer need printing.
+ *
+ * Fire-and-forget safe: failures here must not roll back the
+ * order-status update or the label creation. The caller wraps this
+ * in a try/catch so any DB hiccup just logs and moves on.
+ *
+ * orderId is stringified because print_queue_orders.orderId is text
+ * (mirror of how addToQueue stores it via String(order.orderId)).
+ */
+export async function removeQueueEntriesForOrder(orderId: number): Promise<number> {
+  const rows = await db
+    .delete(printQueue)
+    .where(eq(printQueue.orderId, String(orderId)))
+    .returning({ id: printQueue.id });
+  return rows.length;
+}
+
 // ─── PDF MERGE ────────────────────────────────────────────────────────
 
 export async function startPrintJob(input: {

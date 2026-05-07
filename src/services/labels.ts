@@ -26,6 +26,7 @@ import {
   type MockLabelData,
 } from './mock-label-generator';
 import { deductInventoryForOrder, deductPackageForShipment } from './fulfillment-deductions';
+import { removeQueueEntriesForOrder } from './print-queue';
 import { packages } from '../db/schema/packages';
 
 // Batch-label callers don't carry a panel-selected package, so customPackageId
@@ -604,6 +605,24 @@ async function markOrderShipped(orderId: number, trackingNumber: string | null):
         target: orderOverrides.orderId,
         set: { trackingNumber, updatedAt: new Date() },
       });
+  }
+
+  // Auto-cleanup print queue: remove any pending queue entries for
+  // this order. Without this, "Send to Queue" entries stayed in the
+  // queue panel forever even after the order shipped — operators
+  // saw stale entries cluttering the queue. Fire-and-forget: a queue
+  // cleanup failure must NOT roll back the shipped-status update or
+  // the label creation that triggered it.
+  try {
+    const removed = await removeQueueEntriesForOrder(orderId);
+    if (removed > 0) {
+      console.info(`[labels] markOrderShipped: removed ${removed} queue entries for orderId=${orderId}`);
+    }
+  } catch (err) {
+    console.warn(
+      `[labels] markOrderShipped: queue cleanup failed for orderId=${orderId} (non-fatal):`,
+      err instanceof Error ? err.message : err
+    );
   }
 }
 
