@@ -470,37 +470,14 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialSearch])
-  // Sort state — persisted to localStorage so the operator's choice
-  // survives reloads (page-size selector follows the same pattern).
-  // Defaults to qty desc which was the previous hard-locked behavior,
-  // so first-time loads look identical to before.
-  const SORT_STORAGE_KEY = 'prepship_analysis_sort'
-  type StoredSort = { key: AnalysisSortKey; dir: AnalysisSortDir }
-  const ALLOWED_SORT_KEYS: AnalysisSortKey[] = [
-    'name', 'sku', 'client', 'orders', 'pending', 'external', 'qty', 'stdOrders', 'expOrders', 'total',
-  ]
-  const [sortKey, setSortKey] = useState<AnalysisSortKey>(() => {
-    if (typeof window === 'undefined') return 'qty'
-    try {
-      const raw = window.localStorage.getItem(SORT_STORAGE_KEY)
-      if (!raw) return 'qty'
-      const parsed = JSON.parse(raw) as StoredSort
-      return ALLOWED_SORT_KEYS.includes(parsed.key) ? parsed.key : 'qty'
-    } catch {
-      return 'qty'
-    }
-  })
-  const [sortDir, setSortDir] = useState<AnalysisSortDir>(() => {
-    if (typeof window === 'undefined') return 'desc'
-    try {
-      const raw = window.localStorage.getItem(SORT_STORAGE_KEY)
-      if (!raw) return 'desc'
-      const parsed = JSON.parse(raw) as StoredSort
-      return parsed.dir === 'asc' ? 'asc' : 'desc'
-    } catch {
-      return 'desc'
-    }
-  })
+  // Sort state — session-only, NOT persisted (boss directive
+  // 2026-05-07): every page refresh resets to qty/desc. Within a
+  // session the operator can click any column header to re-sort and
+  // toggle direction; on reload it always snaps back to "Total Qty,
+  // largest first" so the dashboard tells the same story on first
+  // glance every time.
+  const [sortKey, setSortKey] = useState<AnalysisSortKey>('qty')
+  const [sortDir, setSortDir] = useState<AnalysisSortDir>('desc')
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(50)
   const [columnSize, setColumnSize] = useState<ColumnSize>(readStoredColumnSize)
@@ -769,30 +746,29 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
     setOrderModal((current) => ({ ...current, open: false }))
   }
 
-  // Click a column header to toggle sort:
+  // One-shot cleanup: previous version persisted sort preference
+  // to localStorage. Per boss directive 2026-05-07 the analysis
+  // sort is now session-only, so wipe any leftover preference
+  // from the older implementation on first mount. removeItem on a
+  // missing key is a safe no-op.
+  useEffect(() => {
+    try { window.localStorage.removeItem('prepship_analysis_sort') } catch { /* ignore */ }
+  }, [])
+
+  // Click a column header to toggle sort (session-only, no
+  // persistence):
   //   - First click on a NEW column → sort by that column, descending
-  //     (most natural default for numeric columns; alphabetical-Z for
-  //     text columns is unusual but consistent and easy to flip).
-  //   - Subsequent clicks on the SAME column → toggle asc ↔ desc.
-  // Result is persisted to localStorage so the operator's preferred
-  // sort survives reloads. Page resets to 1 so they don't end up on
-  // page 5 of newly-resorted data with a different leading row.
+  //   - Subsequent clicks on the SAME column → toggle asc ↔ desc
+  //   - Page resets to 1 so the leading row stays visible after sort
+  //   - On page refresh, sort snaps back to qty/desc (the default).
+  //     The operator's session-time sort choice is intentionally
+  //     ephemeral — the dashboard always opens with the same view.
   function handleSort(key: AnalysisSortKey) {
     const nextDir: AnalysisSortDir =
       key === sortKey ? (sortDir === 'asc' ? 'desc' : 'asc') : 'desc'
     setSortKey(key)
     setSortDir(nextDir)
     setPage(1)
-    if (typeof window !== 'undefined') {
-      try {
-        window.localStorage.setItem(
-          SORT_STORAGE_KEY,
-          JSON.stringify({ key, dir: nextDir })
-        )
-      } catch {
-        /* localStorage quota exceeded or disabled — non-fatal */
-      }
-    }
   }
 
   const hasChart =
