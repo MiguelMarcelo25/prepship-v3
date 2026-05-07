@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { motion } from 'framer-motion'
-import { Box, CalendarPlus, Plus, RefreshCw, Ruler, Search, X } from 'lucide-react'
+import { Box, CalendarClock, CalendarPlus, Plus, RefreshCw, Ruler, Search, X } from 'lucide-react'
 import { apiClient } from '../../api/client'
 import { ToastContext } from '../../contexts/ToastContext'
 import type {
@@ -25,6 +25,8 @@ import {
   PackagesDataTable,
   type PackagesColumnKey,
   type PackagesColumnWidths,
+  type PackagesSortKey,
+  type PackagesSortState,
 } from './PackagesDataTable'
 import { AnalysisPagination } from './AnalysisPagination'
 import { LowStockBanner } from './LowStockBanner'
@@ -50,6 +52,47 @@ function sortPackagesWithCompleteDimsFirst(packages: PackageDto[]): PackageDto[]
     const bComplete = hasCompletePackageDimensions(b)
     if (aComplete !== bComplete) return aComplete ? -1 : 1
     return 0
+  })
+}
+
+function compareText(a: unknown, b: unknown): number {
+  return String(a ?? '').localeCompare(String(b ?? ''), undefined, { numeric: true, sensitivity: 'base' })
+}
+
+function getPackageSortValue(
+  pkg: PackageDto,
+  key: PackagesSortKey,
+  usageByPackageId: Record<number, number | null>,
+): string | number | null {
+  if (key === 'package') return pkg.name ?? ''
+  if (key === 'stock') return Number(pkg.stockQty ?? 0)
+  if (key === 'usage30') return usageByPackageId[pkg.packageId] ?? null
+  if (key === 'reorder') return Number(pkg.reorderLevel ?? 10)
+  if (key === 'cost') return pkg.unitCost == null ? null : Number(pkg.unitCost)
+  return null
+}
+
+function sortPackages(
+  packages: PackageDto[],
+  sortState: PackagesSortState | null,
+  usageByPackageId: Record<number, number | null>,
+): PackageDto[] {
+  if (!sortState) return packages
+  const direction = sortState.direction === 'asc' ? 1 : -1
+  return [...packages].sort((a, b) => {
+    const aValue = getPackageSortValue(a, sortState.key, usageByPackageId)
+    const bValue = getPackageSortValue(b, sortState.key, usageByPackageId)
+    const aMissing = aValue === null || (typeof aValue === 'number' && Number.isNaN(aValue))
+    const bMissing = bValue === null || (typeof bValue === 'number' && Number.isNaN(bValue))
+    if (aMissing !== bMissing) return aMissing ? 1 : -1
+
+    let result = 0
+    if (typeof aValue === 'number' && typeof bValue === 'number') {
+      result = aValue - bValue
+    } else {
+      result = compareText(aValue, bValue)
+    }
+    return result === 0 ? compareText(a.name, b.name) : result * direction
   })
 }
 
@@ -344,6 +387,7 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
   const [saving, setSaving] = useState(false)
   const [syncing, setSyncing] = useState(false)
   const [importingStandardDims, setImportingStandardDims] = useState(false)
+  const [backfillingStartDate, setBackfillingStartDate] = useState(false)
   const [ledgerByPackageId, setLedgerByPackageId] = useState<Record<number, LedgerState>>({})
   const [reorderInputs, setReorderInputs] = useState<Record<number, string>>({})
   const [receiveModal, setReceiveModal] = useState<ReceiveModalState | null>(null)
@@ -360,6 +404,7 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
   const [showRecentlyAdded, setShowRecentlyAdded] = useState(false)
   const [usageByPackageId, setUsageByPackageId] = useState<Record<number, number | null>>({})
   const [usageLoading, setUsageLoading] = useState(false)
+  const [sortState, setSortState] = useState<PackagesSortState | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -466,6 +511,15 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
     })
   }
 
+  function handleSortPackages(key: PackagesSortKey) {
+    setSortState((current) => {
+      if (current?.key === key) {
+        return { key, direction: current.direction === 'asc' ? 'desc' : 'asc' }
+      }
+      return { key, direction: key === 'package' ? 'asc' : 'desc' }
+    })
+  }
+
   useEffect(() => {
     if (!formOpen && !receiveModal && !adjustModal && !billingDefaultModal) return
 
@@ -538,19 +592,22 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
       return fields.some((field) => String(field ?? '').toLowerCase().includes(term))
     })
   }, [orderedCustomPackages, recentlyAddedPackages, search, showRecentlyAdded])
+  const sortedPackages = useMemo(() => {
+    return sortPackages(filteredPackages, sortState, usageByPackageId)
+  }, [filteredPackages, sortState, usageByPackageId])
   const pagedPackages = useMemo(() => {
     const start = (page - 1) * pageSize
-    return filteredPackages.slice(start, start + pageSize)
-  }, [filteredPackages, page, pageSize])
+    return sortedPackages.slice(start, start + pageSize)
+  }, [page, pageSize, sortedPackages])
 
   useEffect(() => {
     setPage(1)
-  }, [search, showRecentlyAdded])
+  }, [search, showRecentlyAdded, sortState])
 
   useEffect(() => {
-    const maxPage = Math.max(1, Math.ceil(filteredPackages.length / pageSize))
+    const maxPage = Math.max(1, Math.ceil(sortedPackages.length / pageSize))
     setPage((current) => Math.min(current, maxPage))
-  }, [filteredPackages.length, pageSize])
+  }, [pageSize, sortedPackages.length])
   const contentState = getPackagesContentState({ loading, error, packages })
 
   const handleFormChange = <K extends keyof PackageFormState>(field: K, value: PackageFormState[K]) => {
@@ -652,6 +709,23 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
       showToast(`Failed to add dimensions: ${importError instanceof Error ? importError.message : 'Import failed'}`, 'error')
     } finally {
       setImportingStandardDims(false)
+    }
+  }
+
+  const handleBackfillPackageStartDate = async () => {
+    if (backfillingStartDate) return
+    setBackfillingStartDate(true)
+
+    try {
+      const result = await apiClient.backfillPackageStartDate()
+      await refreshPackages()
+      setShowRecentlyAdded(false)
+      const updated = Number(result?.updated ?? 0)
+      showToast(`Package start dates set to 04/01/2026 (${updated} updated)`, 'success')
+    } catch (backfillError) {
+      showToast(`Failed to backfill start dates: ${backfillError instanceof Error ? backfillError.message : 'Backfill failed'}`, 'error')
+    } finally {
+      setBackfillingStartDate(false)
     }
   }
 
@@ -854,6 +928,10 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
               <Ruler size={14} strokeWidth={2.2} />
               {importingStandardDims ? 'Adding...' : 'Add Dims'}
             </button>
+            <button className="btn btn-outline btn-sm pkg-header-btn" type="button" onClick={() => void handleBackfillPackageStartDate()} disabled={backfillingStartDate}>
+              <CalendarClock size={14} strokeWidth={2.2} />
+              {backfillingStartDate ? 'Backfilling...' : 'Backfill Start'}
+            </button>
             <button
               className={`btn ${showRecentlyAdded ? 'btn-primary' : 'btn-outline'} btn-sm pkg-header-btn`}
               type="button"
@@ -986,12 +1064,14 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
                   onResetColumn={handleResetPackageColumn}
                   usageByPackageId={usageByPackageId}
                   usageLoading={usageLoading}
+                  sortState={sortState}
+                  onSortChange={handleSortPackages}
                 />
                 <AnalysisPagination
                   page={page}
                   pageSize={pageSize}
                   pageSizeOptions={PACKAGES_PAGE_SIZE_OPTIONS}
-                  totalItems={filteredPackages.length}
+                  totalItems={sortedPackages.length}
                   onPageChange={setPage}
                   onPageSizeChange={(nextSize) => {
                     setPageSize(nextSize)

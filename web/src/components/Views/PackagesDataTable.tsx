@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { Fragment, useRef, type MutableRefObject, type ReactNode } from 'react'
-import { BadgeDollarSign, PackagePlus, PencilLine, SlidersHorizontal, Trash2 } from 'lucide-react'
+import { ArrowUpDown, BadgeDollarSign, ChevronDown, ChevronUp, PackagePlus, PencilLine, SlidersHorizontal, Trash2 } from 'lucide-react'
 import type { PackageDto, PackageLedgerEntryDto } from '../../types/api'
 import {
   formatPackageDimensionsText,
@@ -10,6 +10,12 @@ import {
 import { ColumnResizeHandle } from './ColumnResizeHandle'
 
 export type PackagesColumnKey = 'package' | 'stock' | 'usage30' | 'reorder' | 'cost' | 'actions'
+export type PackagesSortKey = Exclude<PackagesColumnKey, 'actions'>
+export type PackagesSortDirection = 'asc' | 'desc'
+export interface PackagesSortState {
+  key: PackagesSortKey
+  direction: PackagesSortDirection
+}
 export type PackagesColumnWidths = Partial<Record<PackagesColumnKey, number>>
 
 const PACKAGES_COLUMNS_ORDER: PackagesColumnKey[] = ['package', 'stock', 'usage30', 'reorder', 'cost', 'actions']
@@ -51,6 +57,8 @@ interface PackagesDataTableProps {
   onResetColumn?: (key: PackagesColumnKey) => void
   usageByPackageId?: Record<number, number | null>
   usageLoading?: boolean
+  sortState?: PackagesSortState | null
+  onSortChange?: (key: PackagesSortKey) => void
 }
 
 function cn(...parts: Array<string | false | null | undefined>) {
@@ -69,6 +77,12 @@ function alignClass(align: 'left' | 'center' | 'right') {
   if (align === 'center') return 'text-center'
   if (align === 'right') return 'text-right'
   return 'text-left'
+}
+
+function justifyClass(align: 'left' | 'center' | 'right') {
+  if (align === 'center') return 'justify-center'
+  if (align === 'right') return 'justify-end'
+  return 'justify-start'
 }
 
 function renderUsageValue(value: number | null | undefined, loading?: boolean) {
@@ -146,6 +160,8 @@ export function PackagesDataTable({
   onResetColumn,
   usageByPackageId,
   usageLoading,
+  sortState,
+  onSortChange,
 }: PackagesDataTableProps) {
   const thRefs = useRef<Partial<Record<PackagesColumnKey, HTMLTableCellElement | null>>>({})
 
@@ -166,11 +182,20 @@ export function PackagesDataTable({
   ) => {
     const isLast = key === PACKAGES_COLUMNS_ORDER[PACKAGES_COLUMNS_ORDER.length - 1]
     const overrideWidth = columnWidths?.[key]
+    const sortable = key !== 'actions' && Boolean(onSortChange)
+    const sortKey = key as PackagesSortKey
+    const isSorted = sortable && sortState?.key === sortKey
+    const SortIcon = isSorted
+      ? sortState?.direction === 'asc'
+        ? ChevronUp
+        : ChevronDown
+      : ArrowUpDown
 
     return (
       <th
         ref={(node) => { thRefs.current[key] = node }}
         scope="col"
+        aria-sort={isSorted ? (sortState?.direction === 'asc' ? 'ascending' : 'descending') : undefined}
         style={columnStyle(key)}
         className={cn(
           '!sticky !top-9 !z-[70] !bg-surface-3',
@@ -179,7 +204,22 @@ export function PackagesDataTable({
           alignClass(align),
         )}
       >
-        <span>{label}</span>
+        {sortable ? (
+          <button
+            type="button"
+            className={cn(
+              'inline-flex w-full items-center gap-1.5 rounded-[6px] text-2xs font-extrabold uppercase tracking-[0.05em] transition',
+              'text-ink-3 hover:text-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/25',
+              justifyClass(align),
+            )}
+            onClick={() => onSortChange?.(sortKey)}
+          >
+            <span>{label}</span>
+            <SortIcon size={12} strokeWidth={2.4} className={isSorted ? 'text-brand' : 'text-ink-4'} />
+          </button>
+        ) : (
+          <span>{label}</span>
+        )}
         {!isLast && onResizeColumn ? (
           <ColumnResizeHandle
             getStartWidth={() => {

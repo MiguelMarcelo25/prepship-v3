@@ -10,6 +10,7 @@ import type { CarriersResponse } from '../lib/shipstation/types';
 import { importStandardPackageDimensions } from '../services/package-dimension-importer';
 
 const app = new Hono();
+const PACKAGE_START_BACKFILL_DATE = new Date('2026-04-01T00:00:00.000Z');
 
 const body = z.object({
   name: z.string().min(1),
@@ -113,6 +114,20 @@ app.post('/sync', async (c) => {
     inserted,
     skipped,
     message: `Synced ${inserted} new packages from ShipStation (${skipped} already existed)`,
+  });
+});
+
+app.post('/backfill-start-date', async (c) => {
+  const rows = await db
+    .update(packages)
+    .set({ createdAt: PACKAGE_START_BACKFILL_DATE })
+    .where(sql`${packages.createdAt} is distinct from ${PACKAGE_START_BACKFILL_DATE}::timestamptz`)
+    .returning({ id: packages.id });
+
+  return c.json({
+    updated: rows.length,
+    startDate: PACKAGE_START_BACKFILL_DATE.toISOString(),
+    message: `Backfilled ${rows.length} packages to start 2026-04-01`,
   });
 });
 

@@ -120,6 +120,16 @@ function formatDateOnly(value: string | null | undefined) {
   return formatNaivePtDateLong(value)
 }
 
+function getClientRateSourceFormValue(client?: ClientDto | null) {
+  if (!client) return ''
+  if (client.rateSourceClientId != null) return String(client.rateSourceClientId)
+  return client.hasOwnAccount ? String(client.clientId) : ''
+}
+
+function getClientRateSourceLabel(client: ClientDto) {
+  return client.rateSourceName || (client.hasOwnAccount ? client.name : 'DR PREPPER')
+}
+
 function createClientFormState(client?: ClientDto | null): ClientFormState {
   return {
     clientId: client ? String(client.clientId) : '',
@@ -128,7 +138,7 @@ function createClientFormState(client?: ClientDto | null): ClientFormState {
     email: client?.email ?? '',
     phone: client?.phone ?? '',
     storeIds: client?.storeIds?.join(', ') ?? '',
-    rateSourceClientId: client?.rateSourceClientId ? String(client.rateSourceClientId) : '',
+    rateSourceClientId: getClientRateSourceFormValue(client),
   }
 }
 
@@ -378,15 +388,13 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
     return nextMap
   }, [stores])
   const rateSourceOptions = useMemo(() => {
-    const currentClientId = Number.parseInt(clientForm.clientId, 10)
     const selectedRateSourceId = Number.parseInt(clientForm.rateSourceClientId, 10)
     return clients
       .filter((client) => {
-        if (Number.isFinite(currentClientId) && client.clientId === currentClientId) return false
         return client.hasOwnAccount || client.clientId === selectedRateSourceId
       })
       .sort((left, right) => left.name.localeCompare(right.name))
-  }, [clientForm.clientId, clientForm.rateSourceClientId, clients])
+  }, [clientForm.rateSourceClientId, clients])
 
   useEffect(() => {
     let active = true
@@ -821,8 +829,12 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
   }
 
   async function handleSaveClient() {
-    const rateSourceClientId = clientForm.rateSourceClientId ? Number.parseInt(clientForm.rateSourceClientId, 10) : null
+    const selectedRateSourceClientId = clientForm.rateSourceClientId ? Number.parseInt(clientForm.rateSourceClientId, 10) : null
     const currentClientId = clientForm.clientId ? Number.parseInt(clientForm.clientId, 10) : null
+    const rateSourceClientId =
+      selectedRateSourceClientId != null && currentClientId != null && selectedRateSourceClientId === currentClientId
+        ? null
+        : selectedRateSourceClientId
     const payload: UpdateClientInput = {
       name: clientForm.name.trim(),
       contactName: clientForm.contactName.trim(),
@@ -837,10 +849,6 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
 
     if (!payload.name) {
       toastContext?.addToast('Client name is required', 'error')
-      return
-    }
-    if (rateSourceClientId != null && currentClientId != null && rateSourceClientId === currentClientId) {
-      toastContext?.addToast('Rate source must be a different client account', 'error')
       return
     }
 
@@ -1755,7 +1763,7 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
                           {sourceInfo.label}
                         </span>
                       </td>
-                      <td style={{ fontSize: 12, fontWeight: 500 }}>{client.rateSourceName || 'DR PREPPER'}</td>
+                      <td style={{ fontSize: 12, fontWeight: 500 }}>{getClientRateSourceLabel(client)}</td>
                       <td style={{ textAlign: 'center' }}>
                         <button
                           type="button"

@@ -273,6 +273,10 @@ function normalizeClientDtoRows(rows: any[]): any[] {
     const rateSourceClientId = parseFiniteNumber(
       row?.rateSourceClientId ?? row?.rate_source_client_id
     );
+    const hasOwnAccount = Boolean(
+      ((row?.ssApiKey ?? row?.ss_api_key) && (row?.ssApiSecret ?? row?.ss_api_secret)) ||
+        (row?.ssApiKeyV2 ?? row?.ss_api_key_v2)
+    );
     const storeIds = Array.isArray(row?.storeIds)
       ? row.storeIds.map((value: unknown) => Number(value)).filter(Number.isFinite)
       : [];
@@ -285,9 +289,14 @@ function normalizeClientDtoRows(rows: any[]): any[] {
       email: row?.email ?? '',
       phone: row?.phone ?? '',
       active: row?.active ?? true,
-      hasOwnAccount: Boolean((row?.ssApiKey && row?.ssApiSecret) || row?.ssApiKeyV2),
+      hasOwnAccount,
       rateSourceClientId,
-      rateSourceName: rateSourceClientId != null ? namesById.get(rateSourceClientId) ?? '' : '',
+      rateSourceName:
+        rateSourceClientId != null
+          ? namesById.get(rateSourceClientId) ?? ''
+          : hasOwnAccount
+            ? row?.name ?? ''
+            : '',
     };
   });
 }
@@ -2194,6 +2203,18 @@ export const apiClient = {
   },
 
   // ─── Billing ───────────────────────────────────────────────────────────────
+  backfillPackageStartDate(): Promise<any> {
+    return safe(
+      'backfillPackageStartDate',
+      () => api.post<any>('/packages/backfill-start-date', {}),
+      {
+        updated: 0,
+        startDate: '2026-04-01T00:00:00.000Z',
+        message: '',
+      }
+    );
+  },
+
   importStandardPackageDimensions(): Promise<any> {
     return safe(
       'importStandardPackageDimensions',
