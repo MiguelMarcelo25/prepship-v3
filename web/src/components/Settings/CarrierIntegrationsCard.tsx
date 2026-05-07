@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { useEffect, useState } from 'react'
 import { callVercelFunction } from '../../lib/vercelFunction'
+import { formatCaDateShort } from '../../lib/ca-time'
 
 // Phase 2 frontend stub. Each provider declares the credential fields its
 // "Add integration" form needs. When the backend route POST /carrier-accounts
@@ -886,7 +887,7 @@ export function CarrierIntegrationsCard() {
           <span style={{ flex: 1, color: 'var(--text3)', fontFamily: 'monospace', fontSize: 11 }}>
             {d.accountIdentifier ?? '—'}
           </span>
-          <span style={{ fontSize: 10, color: 'var(--text3)' }}>{new Date(d.createdAt).toLocaleDateString()}</span>
+          <span style={{ fontSize: 10, color: 'var(--text3)' }}>{formatCaDateShort(d.createdAt)}</span>
           <button
             type="button"
             onClick={() => runTest(d)}
