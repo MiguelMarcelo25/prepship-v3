@@ -196,6 +196,14 @@ async function getSkuDaily(q: SkuDailyQuery) {
         and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
         and (${cid}::int is null or o.client_id = ${cid}::int)
         and coalesce((item->>'adjustment')::boolean, false) = false
+        -- Hide disabled clients (boss directive 2026-05-07)
+        and (
+          o.client_id is null
+          or exists (
+            select 1 from clients c
+            where c.id = o.client_id and coalesce(c.active, true) = true
+          )
+        )
     )
     select
       sku,
@@ -233,6 +241,14 @@ async function getSkuDaily(q: SkuDailyQuery) {
       and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
       and (${cid}::int is null or o.client_id = ${cid}::int)
       and coalesce((item->>'adjustment')::boolean, false) = false
+      -- Hide disabled clients (boss directive 2026-05-07)
+      and (
+        o.client_id is null
+        or exists (
+          select 1 from clients c
+          where c.id = o.client_id and coalesce(c.active, true) = true
+        )
+      )
       and (
         case
           when nullif(item->>'sku', '') is not null then item->>'sku'
@@ -352,6 +368,16 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
         and (${cid}::int is null or o.client_id = ${cid}::int)
         and coalesce((item->>'adjustment')::boolean, false) = false
         and coalesce((item->>'quantity')::int, 1) > 0
+        -- Hide disabled clients from analysis (boss directive
+        -- 2026-05-07). Matches the orders.ts predicate exactly:
+        -- coalesce(active, true) keeps legacy clients with null
+        -- active flag visible (no behavior change for existing
+        -- data) while explicitly inactive clients (e.g. Api
+        -- Shipments toggled off in Inventory > Clients) drop
+        -- their orders from the SKU breakdown. Orders with no
+        -- client_id at all still pass through (test/orphan
+        -- orders) — same lenient policy as the main orders list.
+        and (o.client_id is null or coalesce(c.active, true) = true)
     ),
     order_sku_rows as (
       select
@@ -440,6 +466,14 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
       and o.order_date >= ${fromIso}::timestamptz
       and o.order_date <= ${toIso}::timestamptz
       and (${cid}::int is null or o.client_id = ${cid}::int)
+      -- Hide disabled clients (boss directive 2026-05-07)
+      and (
+        o.client_id is null
+        or exists (
+          select 1 from clients c
+          where c.id = o.client_id and coalesce(c.active, true) = true
+        )
+      )
   `);
 
   return {
