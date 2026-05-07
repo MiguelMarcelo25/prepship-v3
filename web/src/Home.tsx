@@ -690,15 +690,11 @@ export default function Home() {
                   <span className="hidden sm:inline">Columns</span>
                 </button>
 
-                <button
-                  type="button"
-                  aria-label="Print labels"
-                  className="inline-flex items-center gap-1.5 h-8 px-3 rounded-lg bg-gradient-to-br from-brand to-indigo-600 text-white shadow-[0_2px_8px_-2px_rgba(99,102,241,0.5)] hover:shadow-[0_4px_14px_-3px_rgba(99,102,241,0.6)] hover:-translate-y-px active:translate-y-0 active:scale-95 transition-all duration-150 text-[12px] font-bold focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/50 focus-visible:ring-offset-1"
-                  onClick={() => setLabelsActionRequestId((value) => value + 1)}
-                >
-                  <Printer size={13} strokeWidth={2.5} />
-                  Labels
-                </button>
+                {/* "Labels" topbar button removed per user request 2026-05-07.
+                    Operators trigger label creation via the per-row Create +
+                    Print Label action (side panel) or the in-row "Print Labels"
+                    pill that appears when ≥1 order is selected. The standalone
+                    Labels topbar button was a redundant entry point. */}
 
                 <button
                   id="pq-toggle-btn"
