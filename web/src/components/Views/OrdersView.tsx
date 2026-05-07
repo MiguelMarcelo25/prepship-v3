@@ -1703,6 +1703,32 @@ export default function OrdersView({
     return () => { cancelled = true }
   }, [callerIsAdmin])
   const [page, setPage] = useState(1)
+  // Page-size selector — operator picks how many rows per page from a
+  // small set. Persisted to localStorage so it survives reloads. The
+  // value is read once on first render and clamped to the allowed
+  // options (defends against a stale localStorage value if we ever
+  // change the option set). 50 is the default, matching the prior
+  // hardcoded behavior so no operator sees a sudden density change.
+  const ALLOWED_PAGE_SIZES = [25, 50, 100, 200] as const
+  const PAGE_SIZE_STORAGE_KEY = 'prepship_orders_page_size'
+  const [pageSize, setPageSize] = useState<number>(() => {
+    if (typeof window === 'undefined') return 50
+    const raw = window.localStorage.getItem(PAGE_SIZE_STORAGE_KEY)
+    const parsed = Number(raw)
+    return ALLOWED_PAGE_SIZES.includes(parsed as (typeof ALLOWED_PAGE_SIZES)[number])
+      ? parsed
+      : 50
+  })
+  // When operator changes page size, reset to page 1. Without this they
+  // could pick "200" while sitting on page 4 of a 50-per-page list and
+  // end up out-of-bounds (page 4 of a 1-page result = empty list).
+  const updatePageSize = (size: number) => {
+    setPageSize(size)
+    setPage(1)
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(PAGE_SIZE_STORAGE_KEY, String(size))
+    }
+  }
   const [skuFilter, setSkuFilter] = useState('')
   const [customDateFrom, setCustomDateFrom] = useState('')
   const [customDateTo, setCustomDateTo] = useState('')
@@ -1975,7 +2001,7 @@ export default function OrdersView({
 
   const { orders, total, pages, currentPage, loading, error, refetch: refetchOrders } = useOrders(currentStatus, {
     page,
-    pageSize: 50,
+    pageSize,
     storeId: activeStore ?? undefined,
     dateStart: dateRange.start,
     dateEnd: dateRange.end,
@@ -7381,6 +7407,42 @@ export default function OrdersView({
         <span id="totalInfo" className="text-tiny text-ink-3 font-mono tabular-nums">
           <span className="font-semibold text-ink-2">{total.toLocaleString()}</span> total
         </span>
+
+        {/* Page-size selector — operator picks 25/50/100/200 rows per
+            page. Choice persists to localStorage. Sits in the
+            pagination bar between "total" and "Next →" so it's visible
+            without being in the way of the primary nav controls. */}
+        <span className="w-px h-4 bg-line-2 ml-2" aria-hidden />
+        <label className="inline-flex items-center gap-1.5 text-tiny text-ink-3 font-medium">
+          <span className="hidden sm:inline">Per page:</span>
+          <span className="relative inline-flex items-center">
+            <select
+              value={pageSize}
+              onChange={(event) => updatePageSize(Number(event.target.value))}
+              aria-label="Rows per page"
+              className="
+                appearance-none cursor-pointer
+                h-7 pl-2.5 pr-6
+                rounded-md
+                bg-surface ring-1 ring-line
+                text-[12px] font-semibold text-ink-2 tabular-nums
+                hover:text-ink hover:ring-line-2
+                focus:bg-surface focus:ring-2 focus:ring-brand/40
+                focus:outline-none
+                transition-all duration-150
+              "
+            >
+              {ALLOWED_PAGE_SIZES.map((size) => (
+                <option key={size} value={size}>{size}</option>
+              ))}
+            </select>
+            <span
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 text-ink-3 text-[8px] pointer-events-none"
+              aria-hidden
+            >▼</span>
+          </span>
+        </label>
+
         <button
           className="btn btn-outline btn-sm !ml-auto !transition-all !duration-150 hover:!shadow-sm hover:!-translate-y-px active:!translate-y-0 active:!scale-95 disabled:!opacity-40 disabled:hover:!translate-y-0 disabled:hover:!shadow-none disabled:!cursor-not-allowed"
           type="button"
