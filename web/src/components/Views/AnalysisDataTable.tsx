@@ -188,11 +188,48 @@ export function AnalysisDataTable({
                     isClickable ? () => onRowClick(row.invSkuId as number) : undefined
                   }
                 >
+                  {/* Item Name cell with thumbnail to the LEFT.
+                    The imageUrl is already plumbed through from the
+                    backend (analysis.ts:332 → v2-apiClient line 3076)
+                    so we just render it. When missing, a small grey
+                    placeholder square keeps the row alignment stable
+                    so name text doesn't reflow between rows that have
+                    images and rows that don't. lazy-loading the imgs
+                    means scrolling 100+ rows doesn't fire 100+ network
+                    requests upfront — only as they enter viewport. */}
                   <td
-                    className={`${cellPadding} ${nameMaxWidth} overflow-hidden text-ellipsis whitespace-nowrap font-medium text-ink ${TD_BASE}`}
+                    className={`${cellPadding} ${nameMaxWidth} font-medium text-ink ${TD_BASE}`}
                     title={row.name}
                   >
-                    {row.name}
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span
+                        className="flex-shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-md ring-1 ring-line bg-surface-2 overflow-hidden"
+                        aria-hidden
+                      >
+                        {row.imageUrl ? (
+                          <img
+                            src={row.imageUrl}
+                            alt=""
+                            loading="lazy"
+                            decoding="async"
+                            referrerPolicy="no-referrer"
+                            className="w-full h-full object-cover"
+                            onError={(e) => {
+                              // Marketplace image URLs sometimes 403/404
+                              // (Amazon CDN signed-URL expiry, etc).
+                              // Hide the broken-image icon instead of
+                              // showing a torn-page glyph in the row.
+                              (e.currentTarget as HTMLImageElement).style.display = 'none'
+                            }}
+                          />
+                        ) : (
+                          <span className="text-[9px] font-semibold text-ink-3 uppercase tracking-wider">—</span>
+                        )}
+                      </span>
+                      <span className="overflow-hidden text-ellipsis whitespace-nowrap min-w-0">
+                        {row.name}
+                      </span>
+                    </div>
                   </td>
                   <td className={skuClassesFor(columnSize, isClickable)}>
                     {row.sku || <span className="text-line-2">—</span>}
