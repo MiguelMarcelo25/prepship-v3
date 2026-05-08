@@ -6986,7 +6986,7 @@ export default function OrdersView({
                       key={dailyStats.totalOrders}
                       initial={{ opacity: 0, y: 3 }}
                       animate={{ opacity: 1, y: 0 }}
-                      className="font-bold text-ink tabular-nums text-[22px] leading-[22px] font-mono"
+                      className="font-bold text-ink tabular-nums text-[26px] leading-[22px] font-mono"
                     >
                       {dailyStats.totalOrders}
                     </motion.span>
@@ -7002,7 +7002,7 @@ export default function OrdersView({
                       key={dailyStats.needToShip}
                       initial={{ opacity: 0, y: 3 }}
                       animate={{ opacity: 1, y: 0 }}
-                      className="font-bold tabular-nums text-[22px] leading-[22px] font-mono"
+                      className="font-bold tabular-nums text-[26px] leading-[22px] font-mono"
                       style={{ color: dailyStripProgress?.needToShipColor }}
                     >
                       {dailyStats.needToShip}
@@ -7019,7 +7019,7 @@ export default function OrdersView({
                       key={dailyStats.upcomingOrders}
                       initial={{ opacity: 0, y: 3 }}
                       animate={{ opacity: 1, y: 0 }}
-                      className="font-bold tabular-nums text-[22px] leading-[22px] font-mono"
+                      className="font-bold tabular-nums text-[26px] leading-[22px] font-mono"
                       style={{ color: dailyStripProgress?.upcomingColor }}
                     >
                       {dailyStats.upcomingOrders}
@@ -7028,33 +7028,38 @@ export default function OrdersView({
                   </div>
                 </div>
 
-                {/* Progress */}
-                <div className="flex items-center gap-2.5 shrink-0 min-w-[285px]">
-                  <span className="text-ink-3 text-[11px] shrink-0 tabular-nums font-medium">
+                {/* Progress — text on top, bar+% on the row below.
+                    Vertical layout per boss directive 2026-05-08:
+                    "58 of 63 shipped" sits on top, bar + percentage
+                    on the bottom row. */}
+                <div className="flex flex-col gap-1 shrink-0 min-w-[285px]">
+                  <span className="text-ink-3 text-[11px] tabular-nums font-medium">
                     {dailyStripProgress?.shipped} of {dailyStats.totalOrders} shipped
                   </span>
-                  <div className="w-[175px] h-[7px] bg-line/70 rounded-sm overflow-hidden">
-                    <motion.div
-                      className="h-full rounded-sm"
-                      initial={{ width: 0 }}
-                      animate={{ width: `${dailyStripProgress?.barFill ?? 0}%` }}
-                      transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
-                      style={{
-                        background: `linear-gradient(90deg, ${dailyStripProgress?.barColor}, ${dailyStripProgress?.barColor}dd)`,
-                        boxShadow: `0 0 6px ${dailyStripProgress?.barColor}40`,
-                      }}
-                    />
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-[210px] h-[7px] bg-line/70 rounded-sm overflow-hidden">
+                      <motion.div
+                        className="h-full rounded-sm"
+                        initial={{ width: 0 }}
+                        animate={{ width: `${dailyStripProgress?.barFill ?? 0}%` }}
+                        transition={{ duration: 0.7, ease: [0.22, 1, 0.36, 1] }}
+                        style={{
+                          background: `linear-gradient(90deg, ${dailyStripProgress?.barColor}, ${dailyStripProgress?.barColor}dd)`,
+                          boxShadow: `0 0 6px ${dailyStripProgress?.barColor}40`,
+                        }}
+                      />
+                    </div>
+                    <motion.span
+                      key={dailyStripProgress?.pct}
+                      initial={{ scale: 0.85, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      transition={{ type: 'spring', stiffness: 380, damping: 22 }}
+                      className="font-bold tabular-nums text-[13px] shrink-0 font-mono"
+                      style={{ color: dailyStripProgress?.barColor }}
+                    >
+                      {dailyStripProgress?.pct}%
+                    </motion.span>
                   </div>
-                  <motion.span
-                    key={dailyStripProgress?.pct}
-                    initial={{ scale: 0.85, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    transition={{ type: 'spring', stiffness: 380, damping: 22 }}
-                    className="font-bold tabular-nums text-[13px] shrink-0 font-mono"
-                    style={{ color: dailyStripProgress?.barColor }}
-                  >
-                    {dailyStripProgress?.pct}%
-                  </motion.span>
                 </div>
               </div>
             </motion.div>
