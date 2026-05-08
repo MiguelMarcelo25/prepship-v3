@@ -401,6 +401,41 @@ export default function Login() {
         @media (prefers-reduced-motion: reduce) {
           .card-enter { animation: none; }
         }
+
+        /* Chrome / Edge / Safari autofill repaint:
+         *
+         * When the browser autofills an <input>, it stamps its own
+         * pale-yellow (or near-white) background and dark text on the
+         * field — overriding any \`bg-transparent\` / inline color. On
+         * this dark Network Globe layout that produces the white-pill
+         * effect screenshotted by the user.
+         *
+         * There is no CSS property to set the autofill background
+         * directly. The canonical workaround is a HUGE inset
+         * \`-webkit-box-shadow\` painted in the field's actual parent
+         * color — it covers the autofill background pixel-for-pixel
+         * without touching the input value. \`-webkit-text-fill-color\`
+         * forces the autofilled text back to the dark-theme text color
+         * (regular \`color:\` is ignored when autofill is active).
+         *
+         * The 9999s transition delay on \`background-color\` defers the
+         * autofill style change essentially forever, so even momentary
+         * focus/blur transitions don't re-flash the pale background.
+         */
+        input:-webkit-autofill,
+        input:-webkit-autofill:hover,
+        input:-webkit-autofill:focus,
+        input:-webkit-autofill:active {
+          /* rgba(0,0,0,0.25) matches the DarkField parent's background,
+             so the inset shadow blends invisibly into the surrounding pill. */
+          -webkit-box-shadow: 0 0 0 1000px rgba(0, 0, 0, 0.25) inset !important;
+          -webkit-text-fill-color: #eef1f6 !important;
+          caret-color: #eef1f6 !important;
+          transition: background-color 9999s ease-out, color 9999s ease-out !important;
+          /* Some Chromium builds also stamp font on autofill — pin it
+             so the autofilled text matches the rest of the form. */
+          font: inherit !important;
+        }
       `}</style>
     </main>
   );

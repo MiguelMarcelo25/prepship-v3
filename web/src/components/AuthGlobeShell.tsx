@@ -230,6 +230,24 @@ export function AuthGlobeShell({ title, subtitle, children, footer }: AuthGlobeS
         @media (prefers-reduced-motion: reduce) {
           .card-enter { animation: none; }
         }
+
+        /* Chrome / Edge / Safari autofill repaint — see Login.tsx for
+         * the full rationale. Mirrored here so Signup + ForgotPassword
+         * (which mount this shell instead of inlining the layout) get
+         * the same dark-theme autofill behavior. The 1000px inset
+         * shadow paints over the browser's pale autofill background;
+         * -webkit-text-fill-color keeps the autofilled value readable
+         * on the dark surface. */
+        input:-webkit-autofill,
+        input:-webkit-autofill:hover,
+        input:-webkit-autofill:focus,
+        input:-webkit-autofill:active {
+          -webkit-box-shadow: 0 0 0 1000px rgba(0, 0, 0, 0.25) inset !important;
+          -webkit-text-fill-color: #eef1f6 !important;
+          caret-color: #eef1f6 !important;
+          transition: background-color 9999s ease-out, color 9999s ease-out !important;
+          font: inherit !important;
+        }
       `}</style>
     </main>
   );
