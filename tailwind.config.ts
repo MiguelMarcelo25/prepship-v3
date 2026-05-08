@@ -76,24 +76,33 @@ export default {
           2: 'rgb(var(--border-2-rgb, 200 205 213) / <alpha-value>)',
         },
       },
+      // Boss directive 2026-05-08: match v2-original font feel.
+      // v2-original uses NO custom webfont — just the browser system
+      // stack (`-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`).
+      // Drops Geist + Bricolage Grotesque to render the same
+      // characters v2 did. Mono keeps a system-mono stack for tabular
+      // numbers — v2 didn't define a custom mono either, but
+      // `ui-monospace` is the modern best-practice fallback that
+      // matches v2's behavior on Chrome/Windows where the user's
+      // boss is testing.
       fontFamily: {
         display: [
-          '"Bricolage Grotesque"',
-          '-apple-system',
-          'BlinkMacSystemFont',
-          'system-ui',
-          'sans-serif',
-        ],
-        sans: [
-          '"Geist"',
           '-apple-system',
           'BlinkMacSystemFont',
           '"Segoe UI"',
           'Roboto',
+          'system-ui',
+          'sans-serif',
+        ],
+        sans: [
+          '-apple-system',
+          'BlinkMacSystemFont',
+          '"Segoe UI"',
+          'Roboto',
+          'system-ui',
           'sans-serif',
         ],
         mono: [
-          '"Geist Mono"',
           'ui-monospace',
           'SFMono-Regular',
           'Menlo',
