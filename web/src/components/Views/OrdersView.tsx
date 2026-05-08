@@ -6733,7 +6733,7 @@ export default function OrdersView({
               placeholder="Search orders, SKUs, names…"
               value={searchQuery}
               onChange={(event) => onSearchQueryChange?.(event.target.value)}
-              className="
+              className={`
                 w-full h-8 pl-8 pr-7
                 rounded-lg
                 bg-surface-2 ring-1 ring-line
@@ -6741,7 +6741,9 @@ export default function OrdersView({
                 focus:bg-surface focus:ring-2 focus:ring-brand/40
                 focus:outline-none
                 transition-all duration-150
-              "
+                ${searchQuery.trim() ? 'ring-brand/60 bg-brand-bg/40' : ''}
+              `}
+              title={searchQuery.trim() ? 'Global search — looking across all statuses & stores' : undefined}
             />
             {searchQuery ? (
               <button
@@ -6755,6 +6757,19 @@ export default function OrdersView({
               </button>
             ) : null}
           </div>
+
+          {/* Global-search hint pill — only appears while a search is
+              active. Tells the operator the search is scanning every
+              status + store, not just the currently-active tab, so a
+              hit in 'Shipped' isn't a surprise when they're on
+              'Awaiting'. The pill is muted enough to not steal focus
+              but explicit enough to set the right mental model. */}
+          {searchQuery.trim() ? (
+            <div className="inline-flex items-center gap-1 h-7 px-2 rounded-full bg-brand-bg ring-1 ring-brand/40 text-brand text-[10.5px] font-semibold whitespace-nowrap">
+              <span aria-hidden>🌐</span>
+              <span>Searching all orders</span>
+            </div>
+          ) : null}
 
           {/* SKU filter dropdown */}
           <div className="relative inline-flex items-center">

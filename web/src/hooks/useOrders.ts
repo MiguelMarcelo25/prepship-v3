@@ -10,6 +10,16 @@ export interface UseOrdersOptions {
   clientId?: number;
   dateStart?: string;
   dateEnd?: string;
+  hideTestOrders?: boolean;
+  /**
+   * Free-text search applied server-side across orderNumber, customer
+   * name/email, ship-to fields, SKUs, item names, and tracking numbers.
+   * When non-empty, status + storeId filters are bypassed so the search
+   * is GLOBAL — looking across awaiting / shipped / cancelled / every
+   * store at once. This matches the user's mental model when they type
+   * into the search bar at the top of /orders.
+   */
+  search?: string;
 }
 
 export interface UseOrdersResult {
@@ -24,7 +34,7 @@ export interface UseOrdersResult {
 }
 
 export function useOrders(status: string, options: UseOrdersOptions = {}): UseOrdersResult {
-  const { page = 1, pageSize = 50, storeId, clientId, dateStart, dateEnd } = options;
+  const { page = 1, pageSize = 50, storeId, clientId, dateStart, dateEnd, hideTestOrders, search } = options;
 
   const [orders, setOrders] = useState<OrderSummaryDto[]>([]);
   const [total, setTotal] = useState(0);
@@ -38,14 +48,36 @@ export function useOrders(status: string, options: UseOrdersOptions = {}): UseOr
     setError(null);
 
     try {
+      // GLOBAL SEARCH MODE: when the user has typed something into the
+      // search box, bypass the status + storeId filters so the query
+      // hits EVERY order in the DB (awaiting + shipped + cancelled,
+      // across all stores). This matches user intent — a search box
+      // at the top of /orders should find your stuff regardless of
+      // which tab/store you happen to be looking at.
+      //
+      // Date range still applies: most operators only want to find
+      // RECENT matches; bypassing date too would scan years of history
+      // and timeout on big DBs.
+      //
+      // Empty search → behave like before: scoped to status + store.
+      const trimmedSearch = (search ?? '').trim();
+      const isGlobal = trimmedSearch.length > 0;
+
       const response = await apiClient.listOrders({
         page: pageNum,
         pageSize,
-        orderStatus: status,
-        storeId,
-        clientId,
+        // Drop status + store filters when search is active.
+        ...(isGlobal
+          ? {} // global: no status/store filter
+          : { orderStatus: status, storeId, clientId }),
         dateStart,
         dateEnd,
+        hideTestOrders,
+        // Forward search to backend so the SQL ilike runs server-side
+        // across orderNumber, name, email, ship-to, items, tracking, etc.
+        // Previously this was silently dropped here, so search was a
+        // client-side-only filter limited to the current page.
+        ...(isGlobal ? { search: trimmedSearch } : {}),
       });
 
       setOrders(response.orders);
@@ -59,7 +91,7 @@ export function useOrders(status: string, options: UseOrdersOptions = {}): UseOr
     } finally {
       setLoading(false);
     }
-  }, [status, pageSize, storeId, clientId, dateStart, dateEnd]);
+  }, [status, pageSize, storeId, clientId, dateStart, dateEnd, hideTestOrders, search]);
 
   useEffect(() => {
     void fetchOrders(page);
