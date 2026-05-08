@@ -527,6 +527,8 @@ type DirectCarrierRatesResult = {
 
 export type DirectCarrierRateError = {
   accountId: number;
+  shippingProviderId?: number;
+  sourceTable?: DirectAccountRef['sourceTable'];
   provider: string;
   label: string;
   message: string;
@@ -760,6 +762,7 @@ async function fetchDirectCarrierRates(
           dimsW: body.dimsW,
           dimsH: body.dimsH,
           externalOrderId: body.externalOrderId ?? body.orderNumber,
+          orderNumber: body.orderNumber,
           purchaseOrderId: body.purchaseOrderId,
         },
       });
@@ -776,6 +779,8 @@ async function fetchDirectCarrierRates(
           rates: [],
           errors: [{
             accountId: ref.accountId,
+            shippingProviderId: directProviderIdFromAccount(account),
+            sourceTable: ref.sourceTable,
             provider: normalizeProviderKey(res.provider ?? account.provider),
             label,
             message,
@@ -803,6 +808,8 @@ async function fetchDirectCarrierRates(
         rates: [],
         errors: [{
           accountId: ref.accountId,
+          shippingProviderId: directProviderIdFromAccount(account),
+          sourceTable: ref.sourceTable,
           provider: normalizeProviderKey(account.provider),
           label,
           message,

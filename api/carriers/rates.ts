@@ -900,21 +900,45 @@ function ebayShipToContact(rawOrder: any) {
     : null;
   const addr = ship?.contactAddress ?? {};
   const postalCode = String(addr?.postalCode ?? '').trim();
-  if (!postalCode) return null;
+  if (postalCode) {
+    return {
+      fullName: String(ship?.fullName ?? 'Buyer'),
+      companyName: ship?.companyName ?? null,
+      contactAddress: {
+        addressLine1: String(addr?.addressLine1 ?? 'Address unavailable'),
+        addressLine2: addr?.addressLine2 ?? null,
+        city: String(addr?.city ?? ''),
+        stateOrProvince: String(addr?.stateOrProvince ?? ''),
+        postalCode,
+        countryCode: String(addr?.countryCode ?? 'US'),
+        county: String(addr?.county ?? ''),
+      },
+      primaryPhone: {
+        phoneNumber: String(ship?.primaryPhone?.phoneNumber ?? '0000000000'),
+      },
+    };
+  }
+
+  // ShipStation-synced orders store address data as raw.shipTo. This lets
+  // eBay Logistics quote an eBay order even when it came through ShipStation
+  // before the eBay store poller saved a store_orders copy.
+  const ssShipTo = rawOrder?.shipTo ?? rawOrder?.ship_to ?? null;
+  const ssPostalCode = String(ssShipTo?.postalCode ?? ssShipTo?.postal_code ?? '').trim();
+  if (!ssPostalCode) return null;
   return {
-    fullName: String(ship?.fullName ?? 'Buyer'),
-    companyName: ship?.companyName ?? null,
+    fullName: String(ssShipTo?.name ?? 'Buyer'),
+    companyName: ssShipTo?.company ?? null,
     contactAddress: {
-      addressLine1: String(addr?.addressLine1 ?? 'Address unavailable'),
-      addressLine2: addr?.addressLine2 ?? null,
-      city: String(addr?.city ?? ''),
-      stateOrProvince: String(addr?.stateOrProvince ?? ''),
-      postalCode,
-      countryCode: String(addr?.countryCode ?? 'US'),
-      county: String(addr?.county ?? ''),
+      addressLine1: String(ssShipTo?.street1 ?? ssShipTo?.addressLine1 ?? 'Address unavailable'),
+      addressLine2: ssShipTo?.street2 ?? ssShipTo?.addressLine2 ?? null,
+      city: String(ssShipTo?.city ?? ''),
+      stateOrProvince: String(ssShipTo?.state ?? ssShipTo?.stateOrProvince ?? ''),
+      postalCode: ssPostalCode,
+      countryCode: String(ssShipTo?.country ?? ssShipTo?.countryCode ?? 'US'),
+      county: String(ssShipTo?.county ?? ''),
     },
     primaryPhone: {
-      phoneNumber: String(ship?.primaryPhone?.phoneNumber ?? '0000000000'),
+      phoneNumber: String(ssShipTo?.phone ?? ssShipTo?.primaryPhone?.phoneNumber ?? '0000000000'),
     },
   };
 }
@@ -1397,21 +1421,52 @@ export default async function handler(req: any, res: any): Promise<void> {
       // / weight the Rate Browser passes through.
       let purchaseOrderId: string | null = null;
       let purchaseOrderSource = 'none';
+      const externalOrderId = typeof body?.externalOrderId === 'string' ? body.externalOrderId : null;
+      const orderNumber = typeof body?.orderNumber === 'string' ? body.orderNumber : null;
       if (typeof body?.purchaseOrderId === 'string' && body.purchaseOrderId) {
         purchaseOrderId = body.purchaseOrderId;
         purchaseOrderSource = 'body.purchaseOrderId';
-      } else {
-        const ext = typeof body?.externalOrderId === 'string' ? body.externalOrderId : null;
-        if (ext && ext.startsWith('walmart-')) {
-          purchaseOrderId = ext.slice('walmart-'.length);
-          purchaseOrderSource = 'body.externalOrderId';
-        }
+      } else if (externalOrderId && externalOrderId.startsWith('walmart-')) {
+        purchaseOrderId = externalOrderId.slice('walmart-'.length);
+        purchaseOrderSource = 'body.externalOrderId';
       }
+
+      // Fetch the saved raw payload so we can build boxItems + toAddress.
+      // Walmart's visible order number is often customerOrderId (starts with
+      // 2000...), while the shipping API requires purchaseOrderId. Resolve both.
+      let rawOrder: any = null;
+      const lookupA = purchaseOrderId ?? '';
+      const lookupB = externalOrderId?.startsWith('walmart-')
+        ? externalOrderId.slice('walmart-'.length)
+        : externalOrderId ?? '';
+      const lookupC = orderNumber ?? '';
+      if (lookupA || lookupB || lookupC) {
+        try {
+          const orderRows = await sql<Array<{ external_order_id: string; raw: any }>>`
+            SELECT external_order_id, raw FROM store_orders
+            WHERE provider = 'walmart'
+              AND (
+                external_order_id IN (${lookupA}, ${lookupB}, ${lookupC})
+                OR customer_order_id IN (${lookupA}, ${lookupB}, ${lookupC})
+              )
+            ORDER BY last_fetched_at DESC NULLS LAST
+            LIMIT 1
+          `;
+          if (orderRows[0]) {
+            purchaseOrderId = orderRows[0].external_order_id;
+            purchaseOrderSource = purchaseOrderSource === 'none'
+              ? 'store_orders lookup'
+              : purchaseOrderSource;
+            rawOrder = orderRows[0].raw ?? null;
+          }
+        } catch { /* non-fatal */ }
+      }
+
       if (!purchaseOrderId) {
         // Fallback: most-recent walmart row in store_orders (Settings demo).
         try {
-          const recent = await sql<Array<{ external_order_id: string }>>`
-            SELECT external_order_id FROM store_orders
+          const recent = await sql<Array<{ external_order_id: string; raw: any }>>`
+            SELECT external_order_id, raw FROM store_orders
             WHERE provider = 'walmart'
             ORDER BY last_fetched_at DESC
             LIMIT 1
@@ -1419,13 +1474,12 @@ export default async function handler(req: any, res: any): Promise<void> {
           if (recent[0]?.external_order_id) {
             purchaseOrderId = recent[0].external_order_id;
             purchaseOrderSource = 'store_orders fallback';
+            rawOrder = recent[0].raw ?? null;
           }
         } catch { /* non-fatal */ }
       }
 
-      // Fetch the saved raw payload so we can build boxItems + toAddress.
-      let rawOrder: any = null;
-      if (purchaseOrderId) {
+      if (purchaseOrderId && !rawOrder) {
         try {
           const orderRows = await sql<Array<{ raw: any }>>`
             SELECT raw FROM store_orders
@@ -1515,14 +1569,36 @@ export default async function handler(req: any, res: any): Promise<void> {
     if (provider === 'ebay_shipping') {
       const externalOrderId =
         typeof body?.externalOrderId === 'string' ? body.externalOrderId : null;
-      const ebayOrderId = ebayOrderIdFrom(externalOrderId);
+      const orderNumber =
+        typeof body?.orderNumber === 'string' ? body.orderNumber : null;
+      const ebayOrderId = ebayOrderIdFrom(orderNumber) ?? ebayOrderIdFrom(externalOrderId);
 
       let rawOrder: any = null;
-      if (ebayOrderId) {
+      const lookupA = ebayOrderId ?? '';
+      const lookupB = orderNumber ?? '';
+      const lookupC = externalOrderId ?? '';
+      if (lookupA || lookupB || lookupC) {
         try {
           const orderRows = await sql<Array<{ raw: any }>>`
             SELECT raw FROM store_orders
-            WHERE provider = 'ebay' AND external_order_id = ${ebayOrderId}
+            WHERE provider = 'ebay'
+              AND (
+                external_order_id IN (${lookupA}, ${lookupB}, ${lookupC})
+                OR customer_order_id IN (${lookupA}, ${lookupB}, ${lookupC})
+              )
+            ORDER BY last_fetched_at DESC NULLS LAST
+            LIMIT 1
+          `;
+          rawOrder = orderRows[0]?.raw ?? null;
+        } catch { /* non-fatal; quoter will produce a clear error */ }
+      }
+      if (!rawOrder && (lookupA || lookupB || lookupC)) {
+        try {
+          const orderRows = await sql<Array<{ raw: any }>>`
+            SELECT raw FROM orders
+            WHERE order_number IN (${lookupA}, ${lookupB}, ${lookupC})
+              OR external_order_id IN (${lookupA}, ${lookupB}, ${lookupC})
+            ORDER BY id DESC
             LIMIT 1
           `;
           rawOrder = orderRows[0]?.raw ?? null;
@@ -1545,14 +1621,14 @@ export default async function handler(req: any, res: any): Promise<void> {
           simulated: false,
           rates,
           fetchedAt: new Date().toISOString(),
-          meta: { externalOrderId, ebayOrderId, hasRawOrder: rawOrder != null },
+          meta: { externalOrderId, orderNumber, ebayOrderId, hasRawOrder: rawOrder != null },
         });
       } catch (err) {
         res.status(200).json({
           ok: false,
           provider,
           error: err instanceof Error ? err.message : String(err),
-          meta: { externalOrderId, ebayOrderId, hasRawOrder: rawOrder != null },
+          meta: { externalOrderId, orderNumber, ebayOrderId, hasRawOrder: rawOrder != null },
         });
       }
       return;

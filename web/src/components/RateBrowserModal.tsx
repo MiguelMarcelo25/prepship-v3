@@ -101,6 +101,13 @@ type RateRow = {
   raw?: any;
 };
 
+type DirectCarrierRateError = {
+  shippingProviderId?: number | string | null;
+  provider?: string | null;
+  label?: string | null;
+  message?: string | null;
+};
+
 const scopedCarrierAccountsCache = new Map<string, RbCarrierAccountDto[]>();
 
 function carrierAccountScopeKey(order: RbOrderSummaryDto | null): string {
@@ -634,6 +641,7 @@ export default function RateBrowserModal({
 
   // ── Rates state ────────────────────────────────────────────────────────────
   const [ratesByPid, setRatesByPid] = useState<Record<string, RateRow[]>>({});
+  const [rateErrorsByPid, setRateErrorsByPid] = useState<Record<string, string>>({});
   const [pendingPids, setPendingPids] = useState<Set<number>>(new Set());
   const [selectedPid, setSelectedPid] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<'all' | 'carriers'>('all');
@@ -752,6 +760,7 @@ export default function RateBrowserModal({
           ? { [String(seededBestRate.shippingProviderId)]: [seededBestRate] }
           : {}
     );
+    setRateErrorsByPid({});
     // `locations` is intentionally not in deps — it doesn't change per-order
     // and we only want to re-hydrate when the modal opens or the order changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -872,6 +881,7 @@ export default function RateBrowserModal({
           ? { [String(seededPid)]: [seededBestRate] }
           : {}
     );
+    setRateErrorsByPid({});
     if (seededPid != null) {
       setSelectedPid((current) => current ?? seededPid);
     }
@@ -923,6 +933,7 @@ export default function RateBrowserModal({
         carrierIds: carrierIds.length ? carrierIds : undefined,
         storeId: order?.storeId ?? undefined,
         clientId: order?.clientId ?? undefined,
+        orderNumber: toOptionalString(order?.orderNumber) ?? undefined,
         externalOrderId:
           toOptionalString(order?.externalOrderId) ??
           toOptionalString(order?.external_order_id) ??
@@ -930,6 +941,17 @@ export default function RateBrowserModal({
           undefined,
         forceRefresh: false,
       })) as RateRow[];
+
+      const directErrors = Array.isArray((raw as any)?.directCarrierErrors)
+        ? ((raw as any).directCarrierErrors as DirectCarrierRateError[])
+        : [];
+      const nextErrorsByPid: Record<string, string> = {};
+      for (const err of directErrors) {
+        const pid = toFiniteNumber(err.shippingProviderId);
+        const message = toOptionalString(err.message);
+        if (pid != null && message) nextErrorsByPid[String(pid)] = message;
+      }
+      setRateErrorsByPid(nextErrorsByPid);
 
       liveFetchedRates = (raw ?? [])
         .map((r) => {
@@ -967,6 +989,7 @@ export default function RateBrowserModal({
       }
       setRatesByPid(nextRatesByPid);
     } catch {
+      setRateErrorsByPid({});
       setRatesByPid(
         seededBestRate && seededPid != null
           ? { [String(seededPid)]: [seededBestRate] }
@@ -1396,6 +1419,7 @@ export default function RateBrowserModal({
       );
     }
     const acct = rateShippingAccounts.find((c) => c.shippingProviderId === selectedPid);
+    const carrierError = rateErrorsByPid[String(selectedPid)];
     const all = ratesByPid[String(selectedPid)] ?? [];
     const filtered = filterBySvcClass(all);
     const displayed = hideUnavail
@@ -1418,6 +1442,19 @@ export default function RateBrowserModal({
           }}
         >
           No rates available for <b>{formatAccountDisplay(acct, 'this account')}</b>
+          {carrierError ? (
+            <div
+              style={{
+                maxWidth: 520,
+                margin: '10px auto 0',
+                color: 'var(--red)',
+                fontSize: 11.5,
+                lineHeight: 1.5,
+              }}
+            >
+              {carrierError}
+            </div>
+          ) : null}
         </div>
       );
     }
@@ -1892,6 +1929,7 @@ export default function RateBrowserModal({
             {rateShippingAccounts.map((c) => {
               const isSel = c.shippingProviderId === selectedPid;
               const rates = ratesByPid[String(c.shippingProviderId)];
+              const carrierError = rateErrorsByPid[String(c.shippingProviderId)];
               const count =
                 rates != null
                   ? hideUnavail
@@ -1962,7 +2000,23 @@ export default function RateBrowserModal({
                   >
                     {formatAccountDisplay(c)}
                   </span>
-                  {count != null ? (
+                  {carrierError ? (
+                    <span
+                      title={carrierError}
+                      style={{
+                        background: isSel ? 'rgba(255,255,255,.3)' : 'var(--red)',
+                        color: '#fff',
+                        borderRadius: 10,
+                        padding: '1px 7px',
+                        fontSize: 10,
+                        fontWeight: 800,
+                        minWidth: 22,
+                        textAlign: 'center',
+                      }}
+                    >
+                      !
+                    </span>
+                  ) : count != null ? (
                     <span
                       style={{
                         background: isSel ? 'rgba(255,255,255,.3)' : 'var(--ss-blue)',
