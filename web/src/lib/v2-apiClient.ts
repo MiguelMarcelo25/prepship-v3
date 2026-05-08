@@ -506,6 +506,8 @@ function translateRateToV2Shape(r: unknown): Record<string, unknown> {
       serviceName: obj.service_type ?? null,
       carrierNickname: obj.carrier_nickname ?? null,
       shippingProviderId: toProviderAccountId(obj.carrier_id),
+      sourceClientId: obj.source_client_id ?? obj.sourceClientId ?? null,
+      sourceClientName: obj.source_client_name ?? obj.sourceClientName ?? null,
       amount: shipmentCost + otherCost,
       shipmentCost,
       otherCost,

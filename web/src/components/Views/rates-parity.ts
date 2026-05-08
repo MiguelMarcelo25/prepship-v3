@@ -22,6 +22,8 @@ export interface RateRowView {
   carrierLabel: string
   carrierBadgeLabel: string
   carrierNickname: string | null
+  rateSourceLabel: string
+  rateSourceDetail: string | null
   carrierCode: string
   serviceLabel: string
   baseCost: number
@@ -29,6 +31,17 @@ export interface RateRowView {
   profit: number
   isBest: boolean
   rate: RateDto
+}
+
+export interface RateSourceAccount {
+  carrierId?: string | null
+  shippingProviderId?: number | string | null
+  sourceClientName?: string | null
+  clientId?: number | null
+  nickname?: string | null
+  _label?: string | null
+  code?: string | null
+  carrierCode?: string | null
 }
 
 export function parseRatesNumber(value: string): number {
@@ -109,17 +122,151 @@ export function getCarrierNickname(rate: RateDto): string | null {
   return typeof nickname === 'string' && nickname.trim() ? nickname.trim() : null
 }
 
+function cleanRateSource(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function toProviderAccountId(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  if (typeof value !== 'string') return null
+  const match = value.match(/^se-(\d+)$/i)
+  const parsed = Number.parseInt(match?.[1] ?? value, 10)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function getRateProviderId(rate: RateDto): number | null {
+  const raw = (rate as any)?.raw ?? {}
+  return toProviderAccountId(
+    (rate as any)?.shippingProviderId ??
+      (rate as any)?.providerAccountId ??
+      (rate as any)?.carrierId ??
+      raw.carrier_id ??
+      raw.carrierId
+  )
+}
+
+function findRateSourceAccount(rate: RateDto, accounts: RateSourceAccount[]): RateSourceAccount | null {
+  const providerId = getRateProviderId(rate)
+  if (providerId != null) {
+    const byProvider = accounts.find((account) =>
+      toProviderAccountId(account.shippingProviderId ?? account.carrierId) === providerId
+    )
+    if (byProvider) return byProvider
+  }
+
+  const raw = (rate as any)?.raw ?? {}
+  const carrierId = cleanRateSource((rate as any)?.carrierId ?? raw.carrier_id ?? raw.carrierId)
+  if (carrierId) {
+    const byCarrierId = accounts.find((account) =>
+      cleanRateSource(account.carrierId)?.toLowerCase() === carrierId.toLowerCase()
+    )
+    if (byCarrierId) return byCarrierId
+  }
+
+  const carrierCode = cleanRateSource((rate as any)?.carrierCode ?? raw.carrier_code ?? raw.carrierCode)
+  const nickname = getCarrierNickname(rate)
+  if (!carrierCode || !nickname) return null
+
+  return accounts.find((account) =>
+    cleanRateSource(account.carrierCode ?? account.code)?.toLowerCase() === carrierCode.toLowerCase() &&
+    cleanRateSource(account.nickname ?? account._label)?.toLowerCase() === nickname.toLowerCase()
+  ) ?? null
+}
+
+const DIRECT_PROVIDER_LABELS: Record<string, string> = {
+  amazon_shipping: 'Amazon Shipping',
+  ebay_shipping: 'eBay Shipping',
+  easypost: 'EasyPost',
+  fedex: 'FedEx Direct',
+  gls: 'GLS Direct',
+  shipengine: 'ShipEngine',
+  simulator: 'Simulator',
+  stamps_com: 'Stamps.com Direct',
+  ups: 'UPS Direct',
+  usps: 'USPS Direct',
+  walmart_shipping: 'Walmart Shipping',
+}
+
+function normalizeProviderKey(value: unknown): string | null {
+  const cleaned = cleanRateSource(value)
+  return cleaned ? cleaned.toLowerCase().replace(/[\s-]+/g, '_') : null
+}
+
+function getDirectProviderLabel(value: unknown): string | null {
+  const key = normalizeProviderKey(value)
+  return key ? DIRECT_PROVIDER_LABELS[key] ?? null : null
+}
+
+export function getRateSourceLabel(
+  rate: RateDto,
+  accounts: RateSourceAccount[] = [],
+): { label: string; detail: string | null } {
+  const raw = (rate as any)?.raw ?? {}
+  const account = findRateSourceAccount(rate, accounts)
+  const providerKey =
+    normalizeProviderKey(account?.code ?? account?.carrierCode) ??
+    normalizeProviderKey((rate as any)?.provider ?? raw.provider) ??
+    normalizeProviderKey((rate as any)?.source ?? raw.source) ??
+    normalizeProviderKey((rate as any)?.carrierCode ?? raw.carrier_code ?? raw.carrierCode)
+  const accountSource = cleanRateSource(account?.sourceClientName)
+  const accountSourceKey = normalizeProviderKey(accountSource)
+  const rawSourceKey = normalizeProviderKey((rate as any)?.source ?? raw.source)
+  const directProviderLabel = getDirectProviderLabel(providerKey) ?? getDirectProviderLabel(rawSourceKey)
+  const providerId = getRateProviderId(rate)
+  const isSyntheticDirectProvider = providerId != null && providerId >= 10_000_000
+  const isDirectAccount =
+    accountSourceKey === 'direct_carrier_accounts' ||
+    rawSourceKey === 'direct' ||
+    rawSourceKey === 'carrier_accounts' ||
+    isSyntheticDirectProvider
+  const label = isDirectAccount
+    ? directProviderLabel ?? 'Direct Carrier'
+    : directProviderLabel && rawSourceKey && rawSourceKey !== 'shipstation'
+      ? directProviderLabel
+      : 'ShipStation'
+
+  const sourceClientId =
+    (rate as any)?.sourceClientId ??
+    (rate as any)?.source_client_id ??
+    raw.sourceClientId ??
+    raw.source_client_id ??
+    account?.clientId ??
+    null
+  const detailParts: string[] = []
+  if (!isDirectAccount && accountSource && accountSourceKey !== 'direct_carrier_accounts') {
+    detailParts.push(accountSource)
+  }
+  if (isDirectAccount) {
+    const accountLabel = cleanRateSource(account?._label ?? account?.nickname)
+    if (accountLabel && accountLabel !== label) detailParts.push(accountLabel)
+  }
+  if (sourceClientId != null) detailParts.push(`Client #${sourceClientId}`)
+  if (providerId != null) detailParts.push(`Provider #${providerId}`)
+
+  return {
+    label,
+    detail: detailParts.length ? detailParts.join(' | ') : null,
+  }
+}
+
 export function getServiceLabel(rate: RateDto): string {
   return rate.serviceName || rate.serviceCode || '—'
 }
 
-export function buildRateRows(rates: RateDto[], markupValue: number): RateRowView[] {
+export function buildRateRows(
+  rates: RateDto[],
+  markupValue: number,
+  sourceAccounts: RateSourceAccount[] = [],
+): RateRowView[] {
   return rates.map((rate, index) => {
     const baseCost = (rate.shipmentCost || 0) + (rate.otherCost || 0)
+    const rateSource = getRateSourceLabel(rate, sourceAccounts)
     return {
       carrierLabel: getCarrierLabel(rate),
       carrierBadgeLabel: getCarrierLabel(rate),
       carrierNickname: getCarrierNickname(rate),
+      rateSourceLabel: rateSource.label,
+      rateSourceDetail: rateSource.detail,
       carrierCode: rate.carrierCode,
       serviceLabel: getServiceLabel(rate),
       baseCost,

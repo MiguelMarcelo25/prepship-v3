@@ -15,6 +15,7 @@ import {
 import type { RateDto } from '@prepshipv2/contracts/rates/contracts'
 import { apiClient } from '../../api/client'
 import { ToastContext } from '../../contexts/ToastContext'
+import { useShippingAccounts } from '../../hooks'
 import {
   buildLiveRatesPayload,
   buildRateRows,
@@ -61,9 +62,12 @@ export default function RatesView() {
   const toastContext = useContext(ToastContext)
   const [form, setForm] = useState<RatesFormState>(DEFAULT_FORM)
   const [resultState, setResultState] = useState<RatesResultState>({ kind: 'idle' })
+  const { accounts: shippingAccounts } = useShippingAccounts()
 
   const markupValue = parseRatesNumber(form.markup)
-  const rows = resultState.kind === 'table' ? buildRateRows(resultState.rates, markupValue) : []
+  const rows = resultState.kind === 'table'
+    ? buildRateRows(resultState.rates, markupValue, shippingAccounts)
+    : []
 
   async function fetchRates() {
     const validation = getRatesValidationState(form)
@@ -312,6 +316,7 @@ export default function RatesView() {
                     <tr className="bg-page/50 text-ink-3">
                       <th className="text-left px-3 py-2 font-bold uppercase tracking-wider text-2xs">Carrier</th>
                       <th className="text-left px-3 py-2 font-bold uppercase tracking-wider text-2xs">Account</th>
+                      <th className="text-left px-3 py-2 font-bold uppercase tracking-wider text-2xs">Rate Source</th>
                       <th className="text-left px-3 py-2 font-bold uppercase tracking-wider text-2xs">Service</th>
                       <th className="text-right px-3 py-2 font-bold uppercase tracking-wider text-2xs">Base</th>
                       <th className="text-right px-3 py-2 font-bold uppercase tracking-wider text-2xs">Your Price</th>
@@ -335,6 +340,14 @@ export default function RatesView() {
                         </td>
                         <td className={`px-3 py-2.5 ${row.carrierNickname ? 'text-ink-2 font-semibold' : 'text-ink-4'}`}>
                           {row.carrierNickname || '—'}
+                        </td>
+                        <td className="px-3 py-2.5 min-w-[150px]">
+                          <div className="text-[11.5px] font-semibold text-ink-2">{row.rateSourceLabel}</div>
+                          {row.rateSourceDetail ? (
+                            <div className="mt-0.5 text-[10.5px] text-ink-3 whitespace-nowrap">
+                              {row.rateSourceDetail}
+                            </div>
+                          ) : null}
                         </td>
                         <td className="px-3 py-2.5 text-ink">
                           <span>{row.serviceLabel}</span>
