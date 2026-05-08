@@ -20,6 +20,15 @@ export interface UseOrdersOptions {
    * into the search bar at the top of /orders.
    */
   search?: string;
+  /**
+   * Exact-match SKU filter applied server-side. When set, the backend
+   * returns only orders whose items[] contains a matching SKU. Lives
+   * separate from `search` because the user picks it from a dropdown
+   * (so the value is always exact, not a substring). Pagination works
+   * correctly — picking a SKU returns its actual orders across all
+   * pages, not just whatever happens to be on page 1.
+   */
+  sku?: string;
 }
 
 export interface UseOrdersResult {
@@ -34,7 +43,7 @@ export interface UseOrdersResult {
 }
 
 export function useOrders(status: string, options: UseOrdersOptions = {}): UseOrdersResult {
-  const { page = 1, pageSize = 50, storeId, clientId, dateStart, dateEnd, hideTestOrders, search } = options;
+  const { page = 1, pageSize = 50, storeId, clientId, dateStart, dateEnd, hideTestOrders, search, sku } = options;
 
   const [orders, setOrders] = useState<OrderSummaryDto[]>([]);
   const [total, setTotal] = useState(0);
@@ -61,6 +70,7 @@ export function useOrders(status: string, options: UseOrdersOptions = {}): UseOr
       //
       // Empty search → behave like before: scoped to status + store.
       const trimmedSearch = (search ?? '').trim();
+      const trimmedSku = (sku ?? '').trim();
       const isGlobal = trimmedSearch.length > 0;
 
       const response = await apiClient.listOrders({
@@ -78,6 +88,10 @@ export function useOrders(status: string, options: UseOrdersOptions = {}): UseOr
         // Previously this was silently dropped here, so search was a
         // client-side-only filter limited to the current page.
         ...(isGlobal ? { search: trimmedSearch } : {}),
+        // Forward exact-match SKU filter to backend. Empty string is
+        // omitted entirely so the backend treats 'no filter' the same
+        // as no parameter.
+        ...(trimmedSku ? { sku: trimmedSku } : {}),
       });
 
       setOrders(response.orders);
@@ -91,7 +105,7 @@ export function useOrders(status: string, options: UseOrdersOptions = {}): UseOr
     } finally {
       setLoading(false);
     }
-  }, [status, pageSize, storeId, clientId, dateStart, dateEnd, hideTestOrders, search]);
+  }, [status, pageSize, storeId, clientId, dateStart, dateEnd, hideTestOrders, search, sku]);
 
   useEffect(() => {
     void fetchOrders(page);

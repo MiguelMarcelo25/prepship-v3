@@ -650,6 +650,13 @@ const listQuery = paginationSchema.extend({
   dateFrom: z.string().datetime().optional(),
   dateTo: z.string().datetime().optional(),
   search: z.string().optional(),
+  // Filter to orders containing at least one items[] entry whose
+  // sku exactly matches. The FE used to apply this client-side over
+  // the in-memory page, which silently broke pagination — picking
+  // a SKU that wasn't on page 1 returned 'no orders match' even
+  // though dozens of matches existed on later pages. Pushing the
+  // filter to SQL makes it work across the whole result set.
+  sku: z.string().optional(),
 });
 
 const orderListSelect = {
@@ -745,6 +752,20 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         : undefined,
       q.dateFrom ? gte(orders.orderDate, new Date(q.dateFrom)) : undefined,
       q.dateTo ? lte(orders.orderDate, new Date(q.dateTo)) : undefined,
+      // Server-side SKU filter — matches orders where any items[] entry
+      // has sku === ${q.sku}. Adjustment rows are excluded so that a
+      // discount / fee / shipping line never shows up as a match. This
+      // replaces the old client-side filter that ran AFTER pagination
+      // and was therefore broken whenever the filtered SKU's orders
+      // weren't on page 1.
+      q.sku
+        ? sql`exists (
+            select 1
+            from jsonb_array_elements(${orders.items}) item
+            where item->>'sku' = ${q.sku}
+              and coalesce((item->>'adjustment')::boolean, false) = false
+          )`
+        : undefined,
       searchPattern
         ? or(
             ilike(orders.orderNumber, searchPattern),

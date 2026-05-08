@@ -2020,6 +2020,10 @@ export default function OrdersView({
     dateEnd: dateRange.end,
     hideTestOrders: hideTestOrdersInAllAwaiting,
     search: searchQuery,
+    // Forwarded so the backend filters by SKU exactly. Replaces the
+    // old client-side filter (now removed below) which only ran over
+    // the current paginated page and missed matches on later pages.
+    sku: skuFilter,
   })
 
   useEffect(() => {
@@ -2121,13 +2125,15 @@ export default function OrdersView({
       const detail = orderDetailsById.get(order.orderId) ?? null
       if (hideTestOrdersInAllAwaiting && isTestOrder(order, detail)) return false
       if (query && !buildSearchText(order, detail).includes(query)) return false
-      if (skuFilter) {
-        const items = getActiveItems(order, detail)
-        if (!items.some((item) => item.sku === skuFilter)) return false
-      }
+      // SKU filter is now applied SERVER-SIDE via useOrders → backend
+      // listQuery.sku → SQL exists() against items[]. Removing the
+      // client-side filter here so picking a SKU returns its real
+      // orders across every page (the previous client-side filter
+      // only saw the current 100 orders, missing matches on other
+      // pages and producing 'no orders match' false negatives).
       return true
     })
-  }, [orders, orderDetailsById, hideTestOrdersInAllAwaiting, searchQuery, skuFilter])
+  }, [orders, orderDetailsById, hideTestOrdersInAllAwaiting, searchQuery])
 
   const orderedFilteredOrders = useMemo(() => {
     const next = [...searchedOrders]
