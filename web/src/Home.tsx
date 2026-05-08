@@ -88,22 +88,47 @@ const VIEW_PATHS: Record<Exclude<ViewType, 'orders'>, string> = {
 const VALID_STATUSES: OrderStatus[] = ['awaiting_shipment', 'shipped', 'cancelled']
 const TEST_ORDERS_VISIBILITY_KEY = 'prepship_show_test_orders'
 
-function pathToRoute(pathname: string): { view: ViewType; status: OrderStatus | null } {
+// Parses URLs of the form:
+//   /orders                           → awaiting_shipment, no order
+//   /orders/awaiting_shipment         → awaiting_shipment, no order
+//   /orders/awaiting_shipment/12345   → awaiting_shipment, drawer open on order 12345
+//   /orders/shipped/87765             → shipped, drawer open on order 87765
+//   /inventory                        → inventory tool, no order
+//
+// The orderId capture is optional — when present, Home.tsx opens the
+// OrderDetailDrawer for that order on mount, and the URL stays in
+// sync as the user navigates around.
+function pathToRoute(pathname: string): {
+  view: ViewType
+  status: OrderStatus | null
+  orderId: number | null
+} {
   if (pathname === '/' || pathname === '/orders' || pathname === '/orders/') {
-    return { view: 'orders', status: 'awaiting_shipment' }
+    return { view: 'orders', status: 'awaiting_shipment', orderId: null }
   }
-  const ordersMatch = pathname.match(/^\/orders\/([^/]+)/)
+  // /orders/:status/:orderId? — orderId is optional and must be all digits.
+  // Anything else after the status (e.g. /orders/awaiting_shipment/foo) is
+  // ignored and treated as if the orderId weren't there.
+  const ordersMatch = pathname.match(/^\/orders\/([^/]+)(?:\/(\d+))?\/?$/)
   if (ordersMatch) {
     const candidate = ordersMatch[1] as OrderStatus
-    if (VALID_STATUSES.includes(candidate)) return { view: 'orders', status: candidate }
-    return { view: 'orders', status: 'awaiting_shipment' }
+    const status: OrderStatus = VALID_STATUSES.includes(candidate)
+      ? candidate
+      : 'awaiting_shipment'
+    const idStr = ordersMatch[2]
+    const orderId = idStr ? Number.parseInt(idStr, 10) : null
+    return {
+      view: 'orders',
+      status,
+      orderId: Number.isFinite(orderId) && (orderId ?? 0) > 0 ? orderId : null,
+    }
   }
   for (const [view, path] of Object.entries(VIEW_PATHS) as [Exclude<ViewType, 'orders'>, string][]) {
     if (pathname === path || pathname.startsWith(path + '/')) {
-      return { view, status: null }
+      return { view, status: null, orderId: null }
     }
   }
-  return { view: 'orders', status: 'awaiting_shipment' }
+  return { view: 'orders', status: 'awaiting_shipment', orderId: null }
 }
 
 function PlaceholderView({ title }: { title: string }) {
@@ -132,11 +157,26 @@ export default function Home() {
     initialRoute.status ?? 'awaiting_shipment',
   )
 
-  // Sync URL → state when the user navigates via back/forward or a Link.
+  // Sync URL → state when the user navigates via back/forward, a Link,
+  // or a pasted deep-link such as /orders/awaiting_shipment/12345.
+  // Both the status AND the optional active order ID are reflected
+  // here, so a refresh on a deep-linked URL re-opens the drawer.
   useEffect(() => {
     const next = pathToRoute(location.pathname)
     setCurrentView(next.view)
     if (next.status) setCurrentStatus(next.status)
+    // Only push the URL's orderId into state when the URL has one.
+    // When the URL is a plain /orders/:status (no ID), we DON'T clear
+    // activeOrderId here — the drawer-close handler does that, and
+    // letting it ride avoids a render-cycle race when the URL change
+    // is the SAME tick as the user closing the drawer.
+    if (next.orderId != null) {
+      setActiveOrderId(next.orderId)
+    } else if (next.view === 'orders') {
+      // Coming back to a bare /orders/:status URL — drop the drawer
+      // so deep-link → back-button cleanly returns to the list.
+      setActiveOrderId(null)
+    }
   }, [location.pathname])
   const [mobileMenuOpen, setMobileMenuOpen] = useState(() => {
     if (typeof window === 'undefined') return true
@@ -159,7 +199,10 @@ export default function Home() {
     () => getResolvedDateRange('last-30'),
   )
   const [selectedOrderIds, setSelectedOrderIds] = useState<number[]>([])
-  const [activeOrderId, setActiveOrderId] = useState<number | null>(null)
+  // Initial value pulled from URL so a deep-link like
+  // /orders/awaiting_shipment/12345 opens the drawer immediately on
+  // first render (no flash of the list, then the drawer popping in).
+  const [activeOrderId, setActiveOrderId] = useState<number | null>(initialRoute.orderId)
   const pendingOpenOrderIdRef = useRef<number | null>(null)
   const [externalOpenOrderVersion, setExternalOpenOrderVersion] = useState(0)
   const [columnMenuRequestId, setColumnMenuRequestId] = useState(0)
@@ -833,7 +876,28 @@ export default function Home() {
                 selectedOrderIds={selectedOrderIds}
                 onSelectedOrderIdsChange={setSelectedOrderIds}
                 activeOrderId={activeOrderId}
-                onActiveOrderIdChange={setActiveOrderId}
+                onActiveOrderIdChange={(nextId) => {
+                  // Mirror the change into the URL so the active order
+                  // is shareable / bookmarkable / refresh-survivable.
+                  // We use replace=true on close (so back-button doesn't
+                  // ping-pong inside one viewing session) and push on
+                  // open (so back-button takes you OUT of the drawer
+                  // back to the list — natural mobile-app behavior).
+                  const currentPath = `/orders/${currentStatus}${activeOrderId != null ? `/${activeOrderId}` : ''}`
+                  if (nextId == null) {
+                    // Closing the drawer: navigate to the list URL.
+                    if (currentPath !== `/orders/${currentStatus}`) {
+                      navigate(`/orders/${currentStatus}`, { replace: true })
+                    }
+                  } else if (nextId !== activeOrderId) {
+                    // Opening (or switching) the drawer: push so back works.
+                    navigate(`/orders/${currentStatus}/${nextId}`)
+                  }
+                  // Always update local state too — useEffect re-derives
+                  // from URL but immediate local update keeps the UI
+                  // responsive without waiting for the route round-trip.
+                  setActiveOrderId(nextId)
+                }}
                 onNavigateView={(view) => {
                   if (view === 'orders') navigate(`/orders/${currentStatus}`)
                   else navigate(VIEW_PATHS[view as Exclude<ViewType, 'orders'>] ?? '/')
