@@ -1578,6 +1578,38 @@ app.get('/picklist', zValidator('query', picklistQuery), async (c) => {
   });
 });
 
+// GET /orders/by-number/:orderNumber  → { id, orderNumber, orderStatus }
+//
+// Lightweight lookup that resolves a marketplace-facing orderNumber
+// (text — Amazon "111-XXX-XXX", eBay "10-XXX-XXX", PrepShip "TESTING-…",
+// Shopify "#1234", etc.) to the local autoincrement PK. Used by the
+// Packages page when a user clicks the order number embedded inside
+// a package_ledger note ("Shipment XXX for order YYY") — the ledger
+// table only stores the orderNumber as text, so the FE needs an
+// explicit lookup before it can call onOpenOrder(localId).
+//
+// Route is mounted ABOVE the numeric-id catch-all so the literal
+// `/by-number/...` segment matches first. Returns 404 if no row exists
+// (e.g. the order was purged), letting the caller show a friendly
+// "order no longer exists" toast instead of opening the drawer with
+// stale data.
+app.get('/by-number/:orderNumber', async (c) => {
+  // Decode in case the orderNumber contains URL-special characters
+  // (unlikely for marketplace IDs, but defensive against a stray
+  // "TESTING-" with a slash one day).
+  const orderNumber = decodeURIComponent(c.req.param('orderNumber'));
+  if (!orderNumber || orderNumber.length > 200) {
+    return c.json({ error: 'Invalid orderNumber' }, 400);
+  }
+  const [row] = await db
+    .select({ id: orders.id, orderNumber: orders.orderNumber, orderStatus: orders.orderStatus })
+    .from(orders)
+    .where(eq(orders.orderNumber, orderNumber))
+    .limit(1);
+  if (!row) return c.json({ error: 'Order not found' }, 404);
+  return c.json(row);
+});
+
 app.get('/:id{[0-9]+}', async (c) => {
   const id = Number(c.req.param('id'));
   const [order] = await db.select().from(orders).where(eq(orders.id, id)).limit(1);

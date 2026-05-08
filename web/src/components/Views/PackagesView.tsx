@@ -822,6 +822,46 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
     }
   }
 
+  // Open the OrderDetailDrawer when a user clicks an order number
+  // embedded in a package_ledger reason ("Shipment XXX for order YYY").
+  // The ledger only stores the orderNumber as text — no FK — so we
+  // resolve number → local PK first, then call the parent's onOpenOrder
+  // callback with the numeric ID.
+  //
+  // Three failure modes worth handling distinctly:
+  //   1. Parent didn't pass onOpenOrder — show an info toast, don't lookup
+  //      (saves a wasted API call).
+  //   2. Order was purged (e.g. test order) — show "no longer exists".
+  //   3. Network / 5xx — show the underlying error.
+  // A small in-flight set guards against rapid double-clicks while the
+  // lookup is pending.
+  const orderLookupInflight = useRef<Set<string>>(new Set())
+  const handleOpenOrderByNumber = async (orderNumber: string) => {
+    const trimmed = String(orderNumber ?? '').trim()
+    if (!trimmed) return
+    if (!onOpenOrder) {
+      showToast('ℹ️ Order drawer is not available on this view', 'info')
+      return
+    }
+    if (orderLookupInflight.current.has(trimmed)) return
+    orderLookupInflight.current.add(trimmed)
+    try {
+      const found = await apiClient.findOrderByNumber(trimmed)
+      if (!found) {
+        showToast(`⚠ Order ${trimmed} no longer exists (may have been purged)`, 'error')
+        return
+      }
+      onOpenOrder(found.id)
+    } catch (lookupError) {
+      showToast(
+        `❌ Could not open order ${trimmed}: ${lookupError instanceof Error ? lookupError.message : 'Lookup failed'}`,
+        'error'
+      )
+    } finally {
+      orderLookupInflight.current.delete(trimmed)
+    }
+  }
+
   const handleBackfillPackageStartDate = async () => {
     if (backfillingStartDate) return
     setBackfillingStartDate(true)
@@ -1191,6 +1231,7 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
                   onSetBillingDefault={(pkg) => setBillingDefaultModal({ packageId: pkg.packageId, packageName: pkg.name, price: pkg.unitCost != null ? pkg.unitCost.toFixed(2) : '' })}
                   onDelete={(packageId) => void handleDelete(packageId)}
                   onOpenOrder={onOpenOrder}
+                  onOpenOrderByNumber={(orderNumber) => void handleOpenOrderByNumber(orderNumber)}
                   columnWidths={columnWidths}
                   onResizeColumn={handleResizePackageColumn}
                   onResetColumn={handleResetPackageColumn}

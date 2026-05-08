@@ -1088,6 +1088,33 @@ export const apiClient = {
     );
   },
 
+  // Resolve a marketplace-facing orderNumber (text) → local PK (number).
+  // Used by the Packages ledger view to make order numbers embedded
+  // inside reason text clickable. Returns null if the order was purged
+  // or never existed — caller should show a "order no longer exists"
+  // toast instead of opening a drawer with stale data.
+  findOrderByNumber(orderNumber: string): Promise<{ id: number; orderNumber: string; orderStatus: string | null } | null> {
+    return safe(
+      'findOrderByNumber',
+      async () => {
+        const trimmed = String(orderNumber ?? '').trim()
+        if (!trimmed) return null
+        // Encode in case the number contains characters URL routers
+        // care about ('+', '#', '/', etc.). Marketplace IDs rarely
+        // do, but PrepShip's "TESTING-…" + custom client formats are
+        // controlled by humans, so be defensive.
+        const res = await api.get<any>(`/orders/by-number/${encodeURIComponent(trimmed)}`)
+        if (!res || typeof res.id !== 'number') return null
+        return {
+          id: res.id,
+          orderNumber: String(res.orderNumber ?? trimmed),
+          orderStatus: res.orderStatus ?? null,
+        }
+      },
+      null
+    )
+  },
+
   updateOrder(orderId: number, data: Record<string, unknown>): Promise<any> {
     return safe(
       'updateOrder',

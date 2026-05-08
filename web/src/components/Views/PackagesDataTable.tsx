@@ -51,6 +51,7 @@ interface PackagesDataTableProps {
   onSetBillingDefault: (pkg: PackageDto) => void
   onDelete: (packageId: number) => void
   onOpenOrder?: (orderId: number) => void
+  onOpenOrderByNumber?: (orderNumber: string) => void
   sectionTitle?: string
   columnWidths?: PackagesColumnWidths
   onResizeColumn?: (key: PackagesColumnKey, width: number) => void
@@ -139,6 +140,57 @@ function ActionButton({
   )
 }
 
+// The package_ledger.note column stores the reason text. The two
+// patterns the backend writes are:
+//   "Shipment <id> for order <orderNumber>"   (label deduction)
+//   "Order <orderNumber> / shipment <id>"     (manifest-side accounting)
+// In both cases the orderNumber follows the literal "order " token and
+// continues until whitespace. Marketplace IDs have no spaces inside,
+// so a simple `\S+` is reliable.
+//
+// We split the reason text on the first match and wrap the captured
+// orderNumber in a clickable link styled to look like a normal anchor
+// (blue, underlined). Click invokes `onOpenOrderByNumber(orderNumber)`
+// — the handler does the lookup → openOrder(localId) hop. Falls back
+// to plain text when no order pattern is present (e.g. manual notes
+// like "received from supplier").
+const ORDER_REF_RE = /\border\s+(\S+)/i
+
+function renderLedgerReason(
+  reason: string | null | undefined,
+  onOpenOrderByNumber: ((orderNumber: string) => void) | undefined,
+): ReactNode {
+  if (!reason) return '-'
+  if (!onOpenOrderByNumber) return reason
+  const match = ORDER_REF_RE.exec(reason)
+  if (!match || typeof match.index !== 'number') return reason
+  const orderNumber = match[1]
+  // Strip a trailing period or comma if present — note text could be
+  // something like "...for order 12345.". We keep the punctuation in
+  // the `after` slice so the visible text is unchanged.
+  const cleanedNumber = orderNumber.replace(/[.,;:]+$/, '')
+  if (!cleanedNumber) return reason
+  const numberStart = match.index + match[0].length - orderNumber.length
+  const before = reason.slice(0, numberStart)
+  const after = reason.slice(numberStart + cleanedNumber.length)
+  return (
+    <>
+      {before}
+      <button
+        type="button"
+        // Match the existing #orderId link styling on the right column
+        // so the two link targets feel consistent.
+        className="font-semibold text-brand underline decoration-line underline-offset-2 hover:text-brand-dark"
+        onClick={() => onOpenOrderByNumber(cleanedNumber)}
+        title={`Open order ${cleanedNumber}`}
+      >
+        {cleanedNumber}
+      </button>
+      {after}
+    </>
+  )
+}
+
 export function PackagesDataTable({
   packages,
   ledgerByPackageId,
@@ -154,6 +206,7 @@ export function PackagesDataTable({
   onSetBillingDefault,
   onDelete,
   onOpenOrder,
+  onOpenOrderByNumber,
   sectionTitle = 'Custom Packages',
   columnWidths,
   onResizeColumn,
@@ -267,7 +320,9 @@ export function PackagesDataTable({
                     {row.delta}
                   </div>
                   <div className="text-right font-mono text-ink-3">{formatPackageUnitCost(row.unitCost)}</div>
-                  <div className="pl-4">{row.reason || '-'}</div>
+                  <div className="pl-4">
+                    {renderLedgerReason(row.reason, onOpenOrderByNumber)}
+                  </div>
                   <div>
                     {row.orderId ? (
                       <button
