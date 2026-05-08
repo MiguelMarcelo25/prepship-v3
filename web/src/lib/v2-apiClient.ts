@@ -47,6 +47,7 @@ function parseDownloadFilename(
 const HIDDEN_CLIENT_NAMES = new Set(['api shipments']);
 const STALE_MOCK_LABEL_HOSTS = new Set(['prepshipv4-api.onrender.com']);
 const DIRECT_CARRIER_PROVIDER_ID_OFFSET = 10_000_000;
+const DIRECT_STORE_PROVIDER_ID_OFFSET = 20_000_000;
 const STORE_PROVIDER_KEYS = new Set([
   'walmart',
   'amazon',
@@ -512,6 +513,7 @@ type DirectCarrierAccountRow = {
   label?: string | null;
   accountIdentifier?: string | null;
   active?: boolean;
+  sourceTable?: 'carrier_accounts' | 'store_accounts';
 };
 
 type DirectCarrierRatesResult = {
@@ -538,23 +540,42 @@ function isStoreProvider(provider: unknown): boolean {
   return STORE_PROVIDER_KEYS.has(normalizeProviderKey(provider));
 }
 
-function directProviderIdFromAccountId(accountId: number): number {
-  return DIRECT_CARRIER_PROVIDER_ID_OFFSET + accountId;
+type DirectAccountRef = {
+  accountId: number;
+  sourceTable: 'carrier_accounts' | 'store_accounts';
+};
+
+function directProviderIdFromAccount(account: Pick<DirectCarrierAccountRow, 'id' | 'sourceTable'>): number {
+  const offset = account.sourceTable === 'store_accounts'
+    ? DIRECT_STORE_PROVIDER_ID_OFFSET
+    : DIRECT_CARRIER_PROVIDER_ID_OFFSET;
+  return offset + account.id;
 }
 
-function directCarrierAccountIdFromProviderId(providerId: number | null): number | null {
-  if (providerId == null || providerId < DIRECT_CARRIER_PROVIDER_ID_OFFSET) return null;
-  const accountId = providerId - DIRECT_CARRIER_PROVIDER_ID_OFFSET;
-  return Number.isFinite(accountId) && accountId > 0 ? accountId : null;
+function directAccountRefFromProviderId(providerId: number | null): DirectAccountRef | null {
+  if (providerId == null) return null;
+  if (providerId >= DIRECT_STORE_PROVIDER_ID_OFFSET) {
+    const accountId = providerId - DIRECT_STORE_PROVIDER_ID_OFFSET;
+    return Number.isFinite(accountId) && accountId > 0
+      ? { accountId, sourceTable: 'store_accounts' }
+      : null;
+  }
+  if (providerId >= DIRECT_CARRIER_PROVIDER_ID_OFFSET) {
+    const accountId = providerId - DIRECT_CARRIER_PROVIDER_ID_OFFSET;
+    return Number.isFinite(accountId) && accountId > 0
+      ? { accountId, sourceTable: 'carrier_accounts' }
+      : null;
+  }
+  return null;
 }
 
 function isDirectCarrierId(value: unknown): boolean {
-  return directCarrierAccountIdFromProviderId(toProviderAccountId(value)) != null;
+  return directAccountRefFromProviderId(toProviderAccountId(value)) != null;
 }
 
 function normalizeDirectCarrierAccountDto(row: DirectCarrierAccountRow): any {
   const provider = normalizeProviderKey(row.provider);
-  const shippingProviderId = directProviderIdFromAccountId(row.id);
+  const shippingProviderId = directProviderIdFromAccount(row);
   const label = row.label || row.accountIdentifier || provider;
   return {
     id: row.id,
@@ -568,16 +589,40 @@ function normalizeDirectCarrierAccountDto(row: DirectCarrierAccountRow): any {
     code: provider,
     _label: label,
     source: 'carrier_accounts',
+    sourceTable: row.sourceTable ?? 'carrier_accounts',
     sourceClientName: 'Direct carrier accounts',
   };
 }
 
 async function fetchDirectCarrierAccountRows(): Promise<DirectCarrierAccountRow[]> {
-  const res = await callVercelFunction<{ data?: DirectCarrierAccountRow[] }>('/carrier-accounts?source=admin');
-  return (res.data ?? [])
+  const [carrierRes, storeRes] = await Promise.all([
+    callVercelFunction<{ data?: DirectCarrierAccountRow[] }>('/carrier-accounts?source=admin'),
+    callVercelFunction<{ data?: DirectCarrierAccountRow[] }>('/store-accounts?source=admin').catch((err) => {
+      console.warn(
+        '[v2-apiClient] store account lookup for carrier rates failed:',
+        err instanceof Error ? err.message : err
+      );
+      return { data: [] as DirectCarrierAccountRow[] };
+    }),
+  ]);
+  const carriers = (carrierRes.data ?? [])
     .filter((row) => row && row.active !== false && row.provider)
     .filter((row) => !isStoreProvider(row.provider))
-    .map((row) => ({ ...row, provider: normalizeProviderKey(row.provider) }));
+    .map((row) => ({
+      ...row,
+      provider: normalizeProviderKey(row.provider),
+      sourceTable: 'carrier_accounts' as const,
+    }));
+  const derivedFromStores = (storeRes.data ?? [])
+    .filter((row) => row && row.active !== false && row.provider)
+    .filter((row) => normalizeProviderKey(row.provider) === 'ebay')
+    .map((row) => ({
+      ...row,
+      provider: 'ebay_shipping',
+      label: row.label ? `eBay Shipping - ${row.label}` : 'eBay Shipping',
+      sourceTable: 'store_accounts' as const,
+    }));
+  return [...carriers, ...derivedFromStores];
 }
 
 function inferCarrierCodeForDirectRate(provider: string, service: string): string {
@@ -606,7 +651,7 @@ function translateDirectRateToV2Shape(
   account: DirectCarrierAccountRow
 ): Record<string, unknown> {
   const provider = normalizeProviderKey(account.provider);
-  const shippingProviderId = directProviderIdFromAccountId(account.id);
+  const shippingProviderId = directProviderIdFromAccount(account);
   const serviceName = String(rate.service || provider || 'Direct carrier');
   const serviceCode = `${provider}_${slugRateService(serviceName)}`;
   const carrierCode = inferCarrierCodeForDirectRate(provider, serviceName);
@@ -649,7 +694,12 @@ function directCarrierErrorMessage(provider: string, message: string): string {
     return 'Walmart Shipping rates require opening Browse Rates from a Walmart order. The generic Rate Calculator does not have a Walmart purchaseOrderId.';
   }
   if (providerKey === 'ebay_shipping') {
-    return 'eBay does not expose shipping rate quotes through this API. Use EasyPost, UPS, USPS, FedEx, or another carrier for eBay order rates.';
+    if (/order/i.test(message) || /externalOrderId/i.test(message)) {
+      return 'eBay Shipping rates require opening Browse Rates from an eBay order. The generic Rate Calculator does not have an eBay order id.';
+    }
+    if (/sell\.logistics|scope|OAuth/i.test(message)) {
+      return 'eBay Shipping needs an eBay OAuth refresh token that includes the sell.logistics scope.';
+    }
   }
   return message;
 }
@@ -658,18 +708,24 @@ async function fetchDirectCarrierRates(
   body: Record<string, unknown>,
   carrierIds: string[]
 ): Promise<{ rates: Record<string, unknown>[]; errors: DirectCarrierRateError[] }> {
-  const accountIds = [...new Set(
+  const refs = [...new Map(
     carrierIds
-      .map((carrierId) => directCarrierAccountIdFromProviderId(toProviderAccountId(carrierId)))
-      .filter((id): id is number => id != null)
-  )];
-  if (!accountIds.length) return { rates: [], errors: [] };
+      .map((carrierId) => directAccountRefFromProviderId(toProviderAccountId(carrierId)))
+      .filter((ref): ref is DirectAccountRef => ref != null)
+      .map((ref) => [`${ref.sourceTable}:${ref.accountId}`, ref])
+  ).values()];
+  if (!refs.length) return { rates: [], errors: [] };
 
   let rows: DirectCarrierAccountRow[] = [];
   try {
     const allRows = await fetchDirectCarrierAccountRows();
-    rows = accountIds
-      .map((id) => allRows.find((row) => row.id === id) ?? null)
+    rows = refs
+      .map((ref) =>
+        allRows.find((row) =>
+          row.id === ref.accountId &&
+          (row.sourceTable ?? 'carrier_accounts') === ref.sourceTable
+        ) ?? null
+      )
       .filter((row): row is DirectCarrierAccountRow => row != null);
   } catch (err) {
     console.warn(
@@ -678,20 +734,25 @@ async function fetchDirectCarrierRates(
     );
   }
 
-  const rowById = new Map(rows.map((row) => [row.id, row]));
-  const calls = accountIds.map(async (accountId) => {
-    const account = rowById.get(accountId) ?? {
-      id: accountId,
+  const rowByKey = new Map(rows.map((row) => [`${row.sourceTable ?? 'carrier_accounts'}:${row.id}`, row]));
+  const calls = refs.map(async (ref) => {
+    const accountKey = `${ref.sourceTable}:${ref.accountId}`;
+    const account = rowByKey.get(accountKey) ?? {
+      id: ref.accountId,
       provider: 'direct_carrier',
-      label: `Direct Carrier #${accountId}`,
+      label: `Direct Carrier #${ref.accountId}`,
       active: true,
+      sourceTable: ref.sourceTable,
     };
     const label = account.label || account.accountIdentifier || account.provider;
     try {
       const res = await callVercelFunction<DirectCarrierRatesResult>('/carriers/rates', {
         method: 'POST',
         body: {
-          carrierAccountId: accountId,
+          ...(ref.sourceTable === 'store_accounts'
+            ? { storeAccountId: ref.accountId }
+            : { carrierAccountId: ref.accountId }),
+          provider: account.provider,
           weightOz: body.weightOz,
           fromZip: body.fromZip,
           toZip: body.toZip,
@@ -714,7 +775,7 @@ async function fetchDirectCarrierRates(
         return {
           rates: [],
           errors: [{
-            accountId,
+            accountId: ref.accountId,
             provider: normalizeProviderKey(res.provider ?? account.provider),
             label,
             message,
@@ -735,13 +796,13 @@ async function fetchDirectCarrierRates(
         err instanceof Error ? err.message : String(err)
       );
       console.warn(
-        `[v2-apiClient] direct carrier #${accountId} rates failed:`,
+        `[v2-apiClient] direct carrier #${ref.accountId} rates failed:`,
         message
       );
       return {
         rates: [],
         errors: [{
-          accountId,
+          accountId: ref.accountId,
           provider: normalizeProviderKey(account.provider),
           label,
           message,

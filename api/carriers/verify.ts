@@ -732,7 +732,11 @@ const verifyEndicia: Verifier = async (creds) => {
 // REST OAuth flow but is preserved on the row for legacy Trading API
 // calls. Scope is set to sell.fulfillment which is what we'll need for
 // orders pull / tracking push.
-const verifyEbay: Verifier = async (creds) => {
+async function verifyEbayScope(
+  creds: Record<string, unknown>,
+  scope: string,
+  label: string,
+): Promise<VerifyResult> {
   const appId = String(creds?.appId ?? '').trim();
   const certId = String(creds?.certId ?? '').trim();
   const refreshToken = String(creds?.refreshToken ?? '').trim();
@@ -744,11 +748,6 @@ const verifyEbay: Verifier = async (creds) => {
     ? 'https://api.sandbox.ebay.com/identity/v1/oauth2/token'
     : 'https://api.ebay.com/identity/v1/oauth2/token';
   const basic = Buffer.from(`${appId}:${certId}`).toString('base64');
-  // Comprehensive sell-side scope set so the same refresh token can drive
-  // orders, fulfillment, inventory, and account reads later. eBay rejects
-  // the request if any scope isn't authorized on the saved refresh token,
-  // so we stick to the broad sell.fulfillment scope for verification only.
-  const scope = 'https://api.ebay.com/oauth/api_scope/sell.fulfillment';
   const body = new URLSearchParams({
     grant_type: 'refresh_token',
     refresh_token: refreshToken,
@@ -773,17 +772,32 @@ const verifyEbay: Verifier = async (creds) => {
     return {
       ok: true,
       accountIdentifier: appId.split('-').slice(0, 2).join('-'), // app-prefix surrogate
-      accountLabel: useSandbox ? 'eBay (Sandbox)' : 'eBay (Production)',
+      accountLabel: useSandbox ? `${label} (Sandbox)` : `${label} (Production)`,
       meta: {
         tokenExpiresIn: data.expires_in ?? null,
         tokenType: data.token_type ?? null,
+        scope,
         environment: useSandbox ? 'sandbox' : 'production',
       },
     };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
-};
+}
+
+const verifyEbay: Verifier = (creds) =>
+  verifyEbayScope(
+    creds,
+    'https://api.ebay.com/oauth/api_scope/sell.fulfillment',
+    'eBay',
+  );
+
+const verifyEbayShipping: Verifier = (creds) =>
+  verifyEbayScope(
+    creds,
+    'https://api.ebay.com/oauth/api_scope/sell.logistics',
+    'eBay Shipping',
+  );
 
 const STUBBED_NOTES: Record<string, string> = {
   shipstation: 'Already integrated via /api/rates/multi.ts.',
@@ -801,7 +815,7 @@ const VERIFIERS: Partial<Record<ProviderType, Verifier>> = {
   // eBay store integration. Separate key only so it appears under the
   // Carriers section in Settings (paired with the future tracking-push
   // endpoint at /api/carriers/ebay/ship).
-  ebay_shipping: verifyEbay,
+  ebay_shipping: verifyEbayShipping,
   shipengine: verifyShipEngine,
   easypost: verifyEasyPost,
   ups: verifyUps,
