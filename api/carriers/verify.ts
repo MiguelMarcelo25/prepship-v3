@@ -127,26 +127,34 @@ const verifySimulator: Verifier = async (creds) => {
 // ───────── EasyPost (single API key, multi-carrier aggregator) ─────────
 // Auth: HTTP Basic with the API key as username, empty password (the
 // trailing colon matters — without it, EasyPost returns 401).
-// Verify: GET /users/me — returns the seller's EasyPost account info if
-// the key is valid; uses connected carrier count as the success signal.
+// Verify with a harmless shipments list ping. EasyPost's documented User
+// endpoint is /users/:id, so /users/me returns "expected a user ID" even for a
+// valid API key. Listing shipments validates auth for both test and production
+// keys without creating postage or requiring a production-only Users API call.
 const verifyEasyPost: Verifier = async (creds) => {
   const apiKey = String(creds?.apiKey ?? '').trim();
   if (!apiKey) return { ok: false, error: 'apiKey is required' };
   try {
     const basic = Buffer.from(`${apiKey}:`).toString('base64');
-    const res = await fetch('https://api.easypost.com/v2/users/me', {
+    const res = await fetch('https://api.easypost.com/v2/shipments?page_size=1', {
       headers: { Authorization: `Basic ${basic}`, Accept: 'application/json' },
     });
     if (!res.ok) {
       const t = await res.text().then((s) => s.slice(0, 200)).catch(() => '');
       return { ok: false, error: `EasyPost ${res.status}: ${t || res.statusText}` };
     }
-    const data = (await res.json()) as { id?: string; email?: string; name?: string };
+    const data = (await res.json()) as { shipments?: unknown[]; has_more?: boolean };
+    const mode = apiKey.startsWith('EZTK') ? 'test' : 'production';
     return {
       ok: true,
-      accountIdentifier: data.id ?? apiKey.slice(0, 12),
-      accountLabel: data.name ?? data.email ?? 'EasyPost',
-      meta: { email: data.email ?? null, userId: data.id ?? null },
+      accountIdentifier: `${mode}:${apiKey.slice(0, 8)}`,
+      accountLabel: `EasyPost (${mode})`,
+      meta: {
+        mode,
+        shipmentListReachable: true,
+        sampleCount: Array.isArray(data.shipments) ? data.shipments.length : null,
+        hasMore: data.has_more ?? null,
+      },
     };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };

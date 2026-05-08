@@ -523,6 +523,13 @@ type DirectCarrierRatesResult = {
   meta?: Record<string, unknown>;
 };
 
+export type DirectCarrierRateError = {
+  accountId: number;
+  provider: string;
+  label: string;
+  message: string;
+};
+
 function normalizeProviderKey(value: unknown): string {
   return String(value ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
 }
@@ -636,16 +643,27 @@ function translateDirectRateToV2Shape(
   };
 }
 
+function directCarrierErrorMessage(provider: string, message: string): string {
+  const providerKey = normalizeProviderKey(provider);
+  if (providerKey === 'walmart_shipping' && /purchaseOrderId/i.test(message)) {
+    return 'Walmart Shipping rates require opening Browse Rates from a Walmart order. The generic Rate Calculator does not have a Walmart purchaseOrderId.';
+  }
+  if (providerKey === 'ebay_shipping') {
+    return 'eBay does not expose shipping rate quotes through this API. Use EasyPost, UPS, USPS, FedEx, or another carrier for eBay order rates.';
+  }
+  return message;
+}
+
 async function fetchDirectCarrierRates(
   body: Record<string, unknown>,
   carrierIds: string[]
-): Promise<Record<string, unknown>[]> {
+): Promise<{ rates: Record<string, unknown>[]; errors: DirectCarrierRateError[] }> {
   const accountIds = [...new Set(
     carrierIds
       .map((carrierId) => directCarrierAccountIdFromProviderId(toProviderAccountId(carrierId)))
       .filter((id): id is number => id != null)
   )];
-  if (!accountIds.length) return [];
+  if (!accountIds.length) return { rates: [], errors: [] };
 
   let rows: DirectCarrierAccountRow[] = [];
   try {
@@ -668,6 +686,7 @@ async function fetchDirectCarrierRates(
       label: `Direct Carrier #${accountId}`,
       active: true,
     };
+    const label = account.label || account.accountIdentifier || account.provider;
     try {
       const res = await callVercelFunction<DirectCarrierRatesResult>('/carriers/rates', {
         method: 'POST',
@@ -684,29 +703,58 @@ async function fetchDirectCarrierRates(
         },
       });
       if (!res.ok) {
+        const message = directCarrierErrorMessage(
+          res.provider ?? account.provider,
+          res.error ?? 'No rates returned'
+        );
         console.warn(
           `[v2-apiClient] direct carrier ${account.provider} returned no rates:`,
-          res.error ?? 'unknown error'
+          message
         );
-        return [];
+        return {
+          rates: [],
+          errors: [{
+            accountId,
+            provider: normalizeProviderKey(res.provider ?? account.provider),
+            label,
+            message,
+          }],
+        };
       }
       const accountForRates = {
         ...account,
         provider: normalizeProviderKey(res.provider ?? account.provider),
       };
-      return (res.rates ?? [])
+      const rates = (res.rates ?? [])
         .filter((rate) => Number(rate.cost ?? 0) > 0)
         .map((rate) => translateDirectRateToV2Shape(rate, accountForRates));
+      return { rates, errors: [] };
     } catch (err) {
+      const message = directCarrierErrorMessage(
+        account.provider,
+        err instanceof Error ? err.message : String(err)
+      );
       console.warn(
         `[v2-apiClient] direct carrier #${accountId} rates failed:`,
-        err instanceof Error ? err.message : err
+        message
       );
-      return [];
+      return {
+        rates: [],
+        errors: [{
+          accountId,
+          provider: normalizeProviderKey(account.provider),
+          label,
+          message,
+        }],
+      };
     }
   });
 
-  return (await Promise.all(calls)).flat();
+  const settled = await Promise.all(calls);
+  return {
+    rates: settled.flatMap((item) => item.rates),
+    errors: settled.flatMap((item) => item.errors),
+  };
 }
 
 // Maps v4's ShipStation-v2-passthrough rate object to the v2-legacy shape
@@ -2813,16 +2861,21 @@ export const apiClient = {
             : Promise.resolve([]),
           directCarrierIds.length
             ? fetchDirectCarrierRates(body, directCarrierIds)
-            : Promise.resolve([]),
+            : Promise.resolve({ rates: [], errors: [] }),
         ]);
 
-        return [...shipStationRates, ...directRates].sort((left, right) => {
+        const combined = [...shipStationRates, ...directRates.rates].sort((left, right) => {
           const leftAmount = Number((left as any).shipmentCost ?? (left as any).amount ?? 0) +
             Number((left as any).otherCost ?? 0);
           const rightAmount = Number((right as any).shipmentCost ?? (right as any).amount ?? 0) +
             Number((right as any).otherCost ?? 0);
           return leftAmount - rightAmount;
         });
+        Object.defineProperty(combined, 'directCarrierErrors', {
+          value: directRates.errors,
+          enumerable: false,
+        });
+        return combined;
       },
       []
     );

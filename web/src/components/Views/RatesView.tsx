@@ -16,6 +16,7 @@ import type { RateDto } from '@prepshipv2/contracts/rates/contracts'
 import { apiClient } from '../../api/client'
 import { ToastContext } from '../../contexts/ToastContext'
 import { useShippingAccounts } from '../../hooks'
+import type { DirectCarrierRateError } from '../../lib/v2-apiClient'
 import {
   buildLiveRatesPayload,
   buildRateRows,
@@ -50,9 +51,9 @@ const DEFAULT_FORM: RatesFormState = {
 type RatesResultState =
   | { kind: 'idle' }
   | { kind: 'loading' }
-  | { kind: 'empty'; empty: RatesEmptyState }
+  | { kind: 'empty'; empty: RatesEmptyState; directCarrierErrors?: DirectCarrierRateError[] }
   | { kind: 'error'; message: string }
-  | { kind: 'table'; rates: RateDto[] }
+  | { kind: 'table'; rates: RateDto[]; directCarrierErrors?: DirectCarrierRateError[] }
 
 function formatMoney(amount: number) {
   return `$${amount.toFixed(2)}`
@@ -64,6 +65,27 @@ const inputCls =
   'font-mono tabular-nums'
 
 const labelCls = 'flex items-center gap-1.5 text-tiny font-bold uppercase tracking-[0.08em] text-ink-3 mb-1.5'
+
+function getDirectCarrierErrors(rates: unknown): DirectCarrierRateError[] {
+  const errors = (rates as { directCarrierErrors?: DirectCarrierRateError[] } | null)?.directCarrierErrors
+  return Array.isArray(errors) ? errors : []
+}
+
+function DirectCarrierWarnings({ errors }: { errors?: DirectCarrierRateError[] }) {
+  if (!errors?.length) return null
+  return (
+    <div className="mx-4 mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11.5px] text-amber-900">
+      <div className="font-bold mb-1">Some direct carriers did not return rates</div>
+      <ul className="space-y-1">
+        {errors.map((error) => (
+          <li key={`${error.accountId}-${error.provider}`}>
+            <span className="font-semibold">{error.label}</span>: {error.message}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
 
 export default function RatesView() {
   const toastContext = useContext(ToastContext)
@@ -93,18 +115,19 @@ export default function RatesView() {
         ...buildLiveRatesPayload(form),
         ...(carrierIds.length ? { carrierIds } : {}),
       })
+      const directCarrierErrors = getDirectCarrierErrors(allRates)
       if (!Array.isArray(allRates) || allRates.length === 0) {
-        setResultState({ kind: 'empty', empty: { icon: '📭', message: 'No rates returned.' } })
+        setResultState({ kind: 'empty', empty: { icon: '📭', message: 'No rates returned.' }, directCarrierErrors })
         return
       }
 
       const availableRates = getAvailableRates(allRates)
       if (availableRates.length === 0) {
-        setResultState({ kind: 'empty', empty: { icon: '📭', message: 'No available rates returned.' } })
+        setResultState({ kind: 'empty', empty: { icon: '📭', message: 'No available rates returned.' }, directCarrierErrors })
         return
       }
 
-      setResultState({ kind: 'table', rates: availableRates })
+      setResultState({ kind: 'table', rates: availableRates, directCarrierErrors })
     } catch (error) {
       setResultState({ kind: 'error', message: error instanceof Error ? error.message : 'Unknown error' })
     }
@@ -185,14 +208,23 @@ export default function RatesView() {
                   lb
                 </span>
               </div>
+              {/* OZ matches ShipStation exactly:
+                    • step=0.1 — accepts decimals like '8.5 oz' for
+                      sub-ounce precision (USPS rates are weight-
+                      sensitive in 0.1 oz increments).
+                    • no max — letting operators type 'lb=0 oz=20'
+                      is valid; totalWeightOz() rolls it correctly
+                      to 20 oz total. ShipStation does the same.
+                    • inputMode='decimal' — surfaces the decimal
+                      keyboard on mobile (vs the digits-only pad
+                      that 'numeric' produces). */}
               <div className="relative flex-1 min-w-0">
                 <input
                   id="rWeightOz"
                   type="number"
                   min="0"
-                  max="15"
-                  step="1"
-                  inputMode="numeric"
+                  step="0.1"
+                  inputMode="decimal"
                   value={form.weightOz}
                   onChange={(event) =>
                     setForm((current) => ({ ...current, weightOz: event.target.value }))
@@ -339,6 +371,9 @@ export default function RatesView() {
                 <Inbox size={26} strokeWidth={2} className="text-ink-3" />
               </motion.div>
               <div className="text-sm font-semibold text-ink font-display tracking-tight">{resultState.empty.message}</div>
+              <div className="w-full max-w-2xl">
+                <DirectCarrierWarnings errors={resultState.directCarrierErrors} />
+              </div>
             </motion.div>
           ) : resultState.kind === 'error' ? (
             <motion.div
@@ -374,6 +409,7 @@ export default function RatesView() {
                   <div className="text-tiny text-ink-3 mt-0.5">{buildRatesMetaLabel(form)}</div>
                 </div>
               </div>
+              <DirectCarrierWarnings errors={resultState.directCarrierErrors} />
               <div className="overflow-x-auto">
                 <table className="rates-table w-full text-[12.5px]">
                   <thead>
