@@ -4,6 +4,11 @@ import type { Rate } from '../../types/orders.ts'
 import { isBlockedRate } from '../../utils/markups.ts'
 
 export interface RatesFormState {
+  // Weight is split into pounds + ounces in the UI so operators can
+  // type natural shipping weight ('2 lb 8 oz' instead of mentally
+  // converting to '40 oz'). The backend still receives total ounces;
+  // the conversion happens in buildLiveRatesPayload.
+  weightLb: string
   weightOz: string
   lengthIn: string
   widthIn: string
@@ -49,8 +54,17 @@ export function parseRatesNumber(value: string): number {
   return Number.isFinite(parsed) ? parsed : 0
 }
 
+// Returns total weight in ounces given the lb + oz form fields.
+// Single source of truth so validation, payload build, and display
+// label all derive from the same number.
+export function totalWeightOz(form: RatesFormState): number {
+  const lb = parseRatesNumber(form.weightLb)
+  const oz = parseRatesNumber(form.weightOz)
+  return lb * 16 + oz
+}
+
 export function getRatesValidationState(form: RatesFormState): RatesEmptyState | null {
-  if (!parseRatesNumber(form.weightOz)) {
+  if (totalWeightOz(form) <= 0) {
     return { icon: '⚖️', message: 'Enter weight to get rates' }
   }
 
@@ -67,7 +81,9 @@ export function buildLiveRatesPayload(form: RatesFormState): LiveRatesRequestDto
     toPostalCode: form.toZip.trim(),
     toCountry: 'US',
     weight: {
-      value: parseRatesNumber(form.weightOz),
+      // Backend wants total ounces — combine lb + oz at the boundary
+      // so server-side code stays unchanged.
+      value: totalWeightOz(form),
       units: 'ounces',
     },
     dimensions: {
@@ -283,13 +299,21 @@ export function buildRatesSummary(form: RatesFormState, count: number): string {
 }
 
 export function buildRatesMetaLabel(form: RatesFormState): string {
-  const weightOz = parseRatesNumber(form.weightOz)
+  const lb = parseRatesNumber(form.weightLb)
+  const oz = parseRatesNumber(form.weightOz)
   const length = parseRatesNumber(form.lengthIn)
   const width = parseRatesNumber(form.widthIn)
   const height = parseRatesNumber(form.heightIn)
   const fromZip = form.fromZip.trim() || '90248'
   const toZip = form.toZip.trim()
-  return `${weightOz}oz · ${length}×${width}×${height}" · ${fromZip}→${toZip}`
+  // Display the weight in the same lb + oz form the operator typed,
+  // so the meta label confirms what was sent (no surprise unit
+  // conversions like '36 oz' for someone who wrote '2 lb 4 oz').
+  // When lb is 0 we omit the 'lb' segment for cleanliness.
+  const weightLabel = lb > 0
+    ? (oz > 0 ? `${lb} lb ${oz} oz` : `${lb} lb`)
+    : `${oz} oz`
+  return `${weightLabel} · ${length}×${width}×${height}" · ${fromZip}→${toZip}`
 }
 
 export function buildRateSelectionToast(row: RateRowView): string {

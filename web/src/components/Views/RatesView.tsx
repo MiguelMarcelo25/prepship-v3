@@ -31,13 +31,20 @@ import {
 } from './rates-parity'
 
 const DEFAULT_FORM: RatesFormState = {
-  weightOz: '16',
+  // Default 1 lb 0 oz (was 16 oz — same total, just expressed in the
+  // natural shipping-weight unit pair so operators don't see a number
+  // shift on first paint).
+  weightLb: '1',
+  weightOz: '0',
   lengthIn: '12',
   widthIn: '9',
   heightIn: '4',
   fromZip: '90248',
   toZip: '',
-  markup: '1.00',
+  // Default markup is $0.00 — operators set their own per use. The
+  // previous $1.00 default surprised users who didn't notice it and
+  // got rates with an unexplained dollar tacked on.
+  markup: '0.00',
 }
 
 type RatesResultState =
@@ -132,18 +139,53 @@ export default function RatesView() {
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          {/* Weight is split into two side-by-side inputs (lb + oz)
+              that share one grid cell. Operators type the natural
+              shipping unit pair instead of converting in their head.
+              The pair is grouped with a single shared icon-label and
+              two compact inputs separated by 'lb' / 'oz' suffixes for
+              clarity; both feed into totalWeightOz() at submit time. */}
           <div>
-            <label htmlFor="rWeight" className={labelCls}>
-              <Scale size={11} strokeWidth={2.5} /> Weight (oz)
+            <label className={labelCls}>
+              <Scale size={11} strokeWidth={2.5} /> Weight
             </label>
-            <input
-              id="rWeight"
-              type="number"
-              min="1"
-              value={form.weightOz}
-              onChange={(event) => setForm((current) => ({ ...current, weightOz: event.target.value }))}
-              className={inputCls}
-            />
+            <div className="flex items-center gap-1.5">
+              <div className="relative flex-1 min-w-0">
+                <input
+                  id="rWeightLb"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={form.weightLb}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, weightLb: event.target.value }))
+                  }
+                  className={inputCls + ' pr-9'}
+                  aria-label="Weight pounds"
+                />
+                <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-bold uppercase tracking-wider text-ink-3 pointer-events-none">
+                  lb
+                </span>
+              </div>
+              <div className="relative flex-1 min-w-0">
+                <input
+                  id="rWeightOz"
+                  type="number"
+                  min="0"
+                  max="15"
+                  step="1"
+                  value={form.weightOz}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, weightOz: event.target.value }))
+                  }
+                  className={inputCls + ' pr-9'}
+                  aria-label="Weight ounces"
+                />
+                <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-bold uppercase tracking-wider text-ink-3 pointer-events-none">
+                  oz
+                </span>
+              </div>
+            </div>
           </div>
           <div>
             <label htmlFor="rLength" className={labelCls}>
