@@ -2125,15 +2125,28 @@ export default function OrdersView({
       const detail = orderDetailsById.get(order.orderId) ?? null
       if (hideTestOrdersInAllAwaiting && isTestOrder(order, detail)) return false
       if (query && !buildSearchText(order, detail).includes(query)) return false
-      // SKU filter is now applied SERVER-SIDE via useOrders → backend
-      // listQuery.sku → SQL exists() against items[]. Removing the
-      // client-side filter here so picking a SKU returns its real
-      // orders across every page (the previous client-side filter
-      // only saw the current 100 orders, missing matches on other
-      // pages and producing 'no orders match' false negatives).
+      // SKU filter — primary work happens SERVER-SIDE via useOrders →
+      // backend listQuery.sku → SQL exists() against items[]. We ALSO
+      // re-apply the same predicate client-side as a defense-in-depth
+      // safety net for two scenarios:
+      //   1. Backend deploy lag — when the server hasn't yet got the
+      //      new sku param, it'd ignore it and return all awaiting
+      //      orders. The client-side filter then narrows to orders
+      //      that actually contain the SKU so the operator sees a
+      //      correct result instead of "filter selected but full
+      //      list shown."
+      //   2. Edge case where /distinct-skus returned a SKU that was
+      //      since deleted from a specific order — backend would
+      //      include it (stale row), client filter wouldn't.
+      // When the backend IS doing its job, this filter is a no-op
+      // (every order already passes), so it's free.
+      if (skuFilter) {
+        const items = getActiveItems(order, detail)
+        if (!items.some((item) => item.sku === skuFilter)) return false
+      }
       return true
     })
-  }, [orders, orderDetailsById, hideTestOrdersInAllAwaiting, searchQuery])
+  }, [orders, orderDetailsById, hideTestOrdersInAllAwaiting, searchQuery, skuFilter])
 
   const orderedFilteredOrders = useMemo(() => {
     const next = [...searchedOrders]
@@ -5147,7 +5160,17 @@ export default function OrdersView({
     const detail = orderDetailsById.get(order.orderId) ?? null
     const items = getActiveItems(order, detail)
     const mergedItems = getMergedItems(order, detail)
-    const primaryItem = items[0] ?? null
+    // When the SKU filter is active, the row's "primary" displayed
+    // item should be the one matching the filter — not just whatever
+    // happens to be first in the array. Without this swap, an order
+    // matching the filter via a non-first item would display the
+    // unrelated first item, making the filter LOOK broken even when
+    // it correctly narrowed the result set. This was the user's
+    // confusion in the screenshot — pick 'B-6', see 7 rows, none
+    // showing B-6 because the rendering grabbed items[0].
+    const primaryItem = (skuFilter
+      ? items.find((item) => item.sku === skuFilter)
+      : items[0]) ?? items[0] ?? null
     const multiSku = new Set(items.map((item) => item.sku).filter(Boolean)).size > 1
     const expedited = getExpeditedBadge(order, detail)
     const shipTo = getShipTo(order, detail)
