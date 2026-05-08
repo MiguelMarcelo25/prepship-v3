@@ -80,7 +80,7 @@ export default function SidebarA(props: SidebarVariantProps) {
       </div>
 
       {/* Search */}
-      <div className="px-3 pt-3 pb-2">
+      {/* <div className="px-3 pt-3 pb-2">
         <div className="relative">
           <SearchIcon size={13} strokeWidth={2} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-900 pointer-events-none" aria-hidden />
           <input
@@ -97,6 +97,9 @@ export default function SidebarA(props: SidebarVariantProps) {
             </button>
           ) : null}
         </div>
+      </div> */}
+      <div className="px-3 pt-3 pb-2">
+
       </div>
 
       {/* Nav */}
