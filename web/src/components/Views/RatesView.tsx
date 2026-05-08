@@ -69,7 +69,7 @@ export default function RatesView() {
   const toastContext = useContext(ToastContext)
   const [form, setForm] = useState<RatesFormState>(DEFAULT_FORM)
   const [resultState, setResultState] = useState<RatesResultState>({ kind: 'idle' })
-  const { accounts: shippingAccounts } = useShippingAccounts()
+  const { accounts: shippingAccounts, isLoading: accountsLoading } = useShippingAccounts()
 
   const markupValue = parseRatesNumber(form.markup)
   const rows = resultState.kind === 'table'
@@ -86,7 +86,13 @@ export default function RatesView() {
     setResultState({ kind: 'loading' })
 
     try {
-      const allRates = await apiClient.fetchRates(buildLiveRatesPayload(form))
+      const carrierIds = shippingAccounts
+        .map((account) => account.carrierId)
+        .filter((carrierId): carrierId is string => Boolean(carrierId))
+      const allRates = await apiClient.fetchRates({
+        ...buildLiveRatesPayload(form),
+        ...(carrierIds.length ? { carrierIds } : {}),
+      })
       if (!Array.isArray(allRates) || allRates.length === 0) {
         setResultState({ kind: 'empty', empty: { icon: '📭', message: 'No rates returned.' } })
         return
@@ -138,17 +144,25 @@ export default function RatesView() {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
           {/* Weight is split into two side-by-side inputs (lb + oz)
-              that share one grid cell. Operators type the natural
-              shipping unit pair instead of converting in their head.
-              The pair is grouped with a single shared icon-label and
-              two compact inputs separated by 'lb' / 'oz' suffixes for
-              clarity; both feed into totalWeightOz() at submit time. */}
-          <div>
+              that share TWO grid cells (col-span-2 on lg screens).
+              The previous version crammed both inputs into a single
+              cell which made each input ~70px wide — after the
+              browser's spinner controls (~16px) and the absolute
+              'lb'/'oz' suffix (~36px padding) there was almost no
+              room left for the digit, and clicking landed on the
+              spinner instead of giving focus to type. Doubling the
+              cell width (and hiding the spinner) gives operators a
+              real text-input target. */}
+          <div className="lg:col-span-2">
             <label className={labelCls}>
               <Scale size={11} strokeWidth={2.5} /> Weight
             </label>
+            {/* Spinner controls hidden via appearance-none on both
+                webkit (Chrome/Edge/Safari) and Firefox so the entire
+                input area is a typeable target — clicks always land
+                on the input field, never on a spinner button. */}
             <div className="flex items-center gap-1.5">
               <div className="relative flex-1 min-w-0">
                 <input
@@ -156,11 +170,15 @@ export default function RatesView() {
                   type="number"
                   min="0"
                   step="1"
+                  inputMode="numeric"
                   value={form.weightLb}
                   onChange={(event) =>
                     setForm((current) => ({ ...current, weightLb: event.target.value }))
                   }
-                  className={inputCls + ' pr-9'}
+                  className={
+                    inputCls +
+                    ' pr-8 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none'
+                  }
                   aria-label="Weight pounds"
                 />
                 <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-bold uppercase tracking-wider text-ink-3 pointer-events-none">
@@ -174,11 +192,15 @@ export default function RatesView() {
                   min="0"
                   max="15"
                   step="1"
+                  inputMode="numeric"
                   value={form.weightOz}
                   onChange={(event) =>
                     setForm((current) => ({ ...current, weightOz: event.target.value }))
                   }
-                  className={inputCls + ' pr-9'}
+                  className={
+                    inputCls +
+                    ' pr-8 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none'
+                  }
                   aria-label="Weight ounces"
                 />
                 <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-bold uppercase tracking-wider text-ink-3 pointer-events-none">
@@ -258,7 +280,7 @@ export default function RatesView() {
             type="submit"
             whileHover={{ y: -1 }}
             whileTap={{ scale: 0.96 }}
-            disabled={resultState.kind === 'loading'}
+            disabled={resultState.kind === 'loading' || accountsLoading}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-[13px] font-semibold text-white bg-gradient-to-br from-brand to-indigo-600 shadow-md hover:shadow-lg disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-150 focus-visible:ring-2 focus-visible:ring-brand/40 focus-visible:ring-offset-2 outline-none"
           >
             {resultState.kind === 'loading' ? (
@@ -266,7 +288,7 @@ export default function RatesView() {
             ) : (
               <SearchIcon size={14} strokeWidth={2.5} />
             )}
-            {resultState.kind === 'loading' ? 'Fetching…' : 'Get Live Rates'}
+            {accountsLoading ? 'Loading carriers…' : resultState.kind === 'loading' ? 'Fetching…' : 'Get Live Rates'}
           </motion.button>
 
           <label className="inline-flex items-center gap-2 text-[12.5px] text-ink-2 font-medium">
