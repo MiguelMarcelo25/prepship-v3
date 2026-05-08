@@ -4,9 +4,9 @@ import { z } from 'zod';
 import { and, eq, inArray, desc, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { clients } from '../db/schema/clients';
-import { orders } from '../db/schema/orders';
+import { orders, orderOverrides } from '../db/schema/orders';
 import { shipments } from '../db/schema/shipments';
-import { inventoryLedger } from '../db/schema/inventory';
+import { inventory, inventoryLedger } from '../db/schema/inventory';
 import { billingLineItems } from '../db/schema/billing';
 import { products } from '../db/schema/products';
 import { settings } from '../db/schema/settings';
@@ -38,9 +38,16 @@ app.patch(
   }
 );
 
-// Delete every order (+ dependent shipments / ledger / billing lines) that
-// belongs to a test-flagged client. Intended as a one-time cleanup after
-// flipping a legacy store to is_test=true.
+// Delete every order (+ dependent shipments / ledger / billing lines /
+// overrides / queue entries) AND every test inventory SKU (+ its ledger
+// entries) that belongs to a test-flagged client. Intended as a one-touch
+// "make sandbox clean again" button — same behavior as the
+// scripts/purge-test-data.ts CLI script, exposed over HTTP so the
+// Inventory page can offer a 🧹 Purge Test Data button.
+//
+// Response keeps the legacy `deleted.{orders,shipments,ledger,billing}`
+// shape (SettingsView reads exactly those keys) and adds new keys for
+// the extra surfaces. Older callers that ignore the new keys keep working.
 app.post('/purge-test-orders', async (c) => {
   const testClients = await db
     .select({ id: clients.id, name: clients.name })
@@ -48,54 +55,139 @@ app.post('/purge-test-orders', async (c) => {
     .where(eq(clients.isTest, true));
   if (!testClients.length) {
     return c.json({
-      deleted: { orders: 0, shipments: 0, ledger: 0, billing: 0 },
+      deleted: {
+        orders: 0,
+        shipments: 0,
+        ledger: 0,
+        billing: 0,
+        inventory: 0,
+        ledgerByInventory: 0,
+        orderOverrides: 0,
+        printQueue: 0,
+      },
       message: 'No clients flagged is_test=true — nothing to purge.',
     });
   }
   const ids = testClients.map((c) => c.id);
 
-  // Collect order IDs first so we can cascade cleanly.
+  // Collect order + inventory IDs upfront so we can cascade cleanly.
   const orderRows = await db
     .select({ id: orders.id })
     .from(orders)
     .where(inArray(orders.clientId, ids));
   const orderIds = orderRows.map((r) => r.id);
 
-  let deletedBilling = 0;
-  let deletedLedger = 0;
-  let deletedShipments = 0;
-  if (orderIds.length) {
-    const billingDel = await db
-      .delete(billingLineItems)
-      .where(inArray(billingLineItems.orderId, orderIds))
-      .returning({ id: billingLineItems.id });
-    deletedBilling = billingDel.length;
+  const inventoryRows = await db
+    .select({ id: inventory.id })
+    .from(inventory)
+    .where(inArray(inventory.clientId, ids));
+  const inventoryIds = inventoryRows.map((r) => r.id);
 
-    const ledgerDel = await db
-      .delete(inventoryLedger)
-      .where(inArray(inventoryLedger.orderId, orderIds))
-      .returning({ id: inventoryLedger.id });
-    deletedLedger = ledgerDel.length;
+  // Wrap all deletes in a single transaction so a mid-run failure
+  // rolls everything back. Order respects FK constraints (children first).
+  const result = await db.transaction(async (tx) => {
+    let billing = 0;
+    let ledgerByOrder = 0;
+    let ledgerByInventory = 0;
+    let overridesDeleted = 0;
+    let shipmentsDeleted = 0;
+    let queueEntries = 0;
+    let ordersDeleted = 0;
+    let inventoryDeleted = 0;
 
-    const shipmentsDel = await db
-      .delete(shipments)
-      .where(inArray(shipments.orderId, orderIds))
-      .returning({ id: shipments.id });
-    deletedShipments = shipmentsDel.length;
-  }
+    if (orderIds.length) {
+      const billingDel = await tx
+        .delete(billingLineItems)
+        .where(inArray(billingLineItems.orderId, orderIds))
+        .returning({ id: billingLineItems.id });
+      billing = billingDel.length;
 
-  const ordersDel = await db
-    .delete(orders)
-    .where(inArray(orders.clientId, ids))
-    .returning({ id: orders.id });
+      const ledgerByOrderDel = await tx
+        .delete(inventoryLedger)
+        .where(inArray(inventoryLedger.orderId, orderIds))
+        .returning({ id: inventoryLedger.id });
+      ledgerByOrder = ledgerByOrderDel.length;
+
+      const overridesDel = await tx
+        .delete(orderOverrides)
+        .where(inArray(orderOverrides.orderId, orderIds))
+        .returning({ orderId: orderOverrides.orderId });
+      overridesDeleted = overridesDel.length;
+
+      const shipmentsDel = await tx
+        .delete(shipments)
+        .where(inArray(shipments.orderId, orderIds))
+        .returning({ id: shipments.id });
+      shipmentsDeleted = shipmentsDel.length;
+
+      // print_queue_orders.orderId is text(stringified order id)
+      const queueByOrderDel = await tx
+        .delete(printQueue)
+        .where(inArray(printQueue.orderId, orderIds.map(String)))
+        .returning({ id: printQueue.id });
+      queueEntries += queueByOrderDel.length;
+    }
+
+    // Belt-and-suspenders: nuke any queue rows whose client_id IS the
+    // test client (in case a queue row was added via a different code
+    // path that didn't set order_id correctly).
+    const queueByClientDel = await tx
+      .delete(printQueue)
+      .where(inArray(printQueue.clientId, ids))
+      .returning({ id: printQueue.id });
+    queueEntries += queueByClientDel.length;
+
+    // Inventory ledger rows that reference test inventory SKUs (separate
+    // from order-linked ledger rows we already deleted above).
+    if (inventoryIds.length) {
+      const ledgerByInvDel = await tx
+        .delete(inventoryLedger)
+        .where(inArray(inventoryLedger.inventoryId, inventoryIds))
+        .returning({ id: inventoryLedger.id });
+      ledgerByInventory = ledgerByInvDel.length;
+    }
+
+    if (orderIds.length) {
+      const ordersDel = await tx
+        .delete(orders)
+        .where(inArray(orders.clientId, ids))
+        .returning({ id: orders.id });
+      ordersDeleted = ordersDel.length;
+    }
+
+    if (inventoryIds.length) {
+      const inventoryDel = await tx
+        .delete(inventory)
+        .where(inArray(inventory.clientId, ids))
+        .returning({ id: inventory.id });
+      inventoryDeleted = inventoryDel.length;
+    }
+
+    return {
+      billing,
+      ledgerByOrder,
+      ledgerByInventory,
+      overridesDeleted,
+      shipmentsDeleted,
+      queueEntries,
+      ordersDeleted,
+      inventoryDeleted,
+    };
+  });
 
   return c.json({
     clients: testClients,
     deleted: {
-      orders: ordersDel.length,
-      shipments: deletedShipments,
-      ledger: deletedLedger,
-      billing: deletedBilling,
+      // Legacy keys — SettingsView reads these by name. Don't rename.
+      orders: result.ordersDeleted,
+      shipments: result.shipmentsDeleted,
+      ledger: result.ledgerByOrder,
+      billing: result.billing,
+      // New keys — surfaced on the Inventory page button.
+      inventory: result.inventoryDeleted,
+      ledgerByInventory: result.ledgerByInventory,
+      orderOverrides: result.overridesDeleted,
+      printQueue: result.queueEntries,
     },
   });
 });

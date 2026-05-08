@@ -3,6 +3,7 @@ import { useContext, useEffect, useMemo, useRef, useState, type MouseEvent as Re
 import { motion } from 'framer-motion'
 import { Boxes } from 'lucide-react'
 import { apiClient, ApiError } from '../../api/client'
+import { api } from '../../lib/api'
 import { ToastContext } from '../../contexts/ToastContext'
 import { useInitStores } from '../../hooks'
 import OrderDetailDrawer from '../OrderDetailDrawer'
@@ -632,6 +633,79 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
     }
   }
 
+  // 🧹 Purge Test Data — calls the same /admin/purge-test-orders endpoint
+  // SettingsView uses, but surfaces ALL the new counts (inventory rows,
+  // print queue, overrides) since the Inventory page is where you'd
+  // actually want to confirm test SKUs and ledger entries got cleared.
+  // Single window.confirm matches the SettingsView UX (no double-confirm)
+  // but the prompt text spells out exactly what happens so an accidental
+  // click on a real client doesn't wipe data — the endpoint only ever
+  // touches rows belonging to clients flagged is_test=true, so a real
+  // client with no test flag is safe even if confirm gets miss-clicked.
+  const [purgeBusy, setPurgeBusy] = useState(false)
+  async function handlePurgeTestData() {
+    if (purgeBusy) return
+    if (
+      !window.confirm(
+        '🧹 Purge ALL data belonging to clients flagged is_test=true?\n\n' +
+          'This deletes their orders, shipments, billing line items, ' +
+          'inventory ledger entries, order overrides, print queue rows, ' +
+          'AND the test SKUs themselves.\n\n' +
+          'Real (non-test) clients are NOT touched. This cannot be undone.'
+      )
+    ) {
+      return
+    }
+    setPurgeBusy(true)
+    toastContext?.addToast('🧹 Purging test data…')
+    try {
+      const res = await api.post<{
+        clients?: Array<{ id: number; name: string }>
+        deleted: {
+          orders: number
+          shipments: number
+          ledger: number
+          billing: number
+          inventory: number
+          ledgerByInventory: number
+          orderOverrides: number
+          printQueue: number
+        }
+        message?: string
+      }>('/admin/purge-test-orders', {})
+
+      const d = res.deleted
+      const total =
+        d.orders +
+        d.shipments +
+        d.ledger +
+        d.billing +
+        d.inventory +
+        d.ledgerByInventory +
+        d.orderOverrides +
+        d.printQueue
+
+      if (total === 0) {
+        toastContext?.addToast(res.message ?? '✓ Already clean — nothing to purge', 'success')
+      } else {
+        toastContext?.addToast(
+          `✅ Purged: ${d.orders} orders, ${d.shipments} shipments, ` +
+            `${d.inventory} test SKUs, ${d.ledger + d.ledgerByInventory} ledger, ` +
+            `${d.billing} billing, ${d.orderOverrides} overrides, ${d.printQueue} queue`,
+          'success'
+        )
+      }
+      await refreshInventoryView()
+      // Notify Sidebar / OrdersView that test data is gone so their
+      // counts refresh (same pattern handlePopulateInventory uses).
+      window.dispatchEvent(new CustomEvent('prepship:client-active-changed'))
+    } catch (error) {
+      toastContext?.addToast(error instanceof Error ? error.message : 'Purge failed', 'error')
+    } finally {
+      setPurgeBusy(false)
+    }
+  }
+
   async function handleImportDims() {
     toastContext?.addToast('📐 Importing weight & dims from ShipStation…')
     try {
@@ -1069,6 +1143,21 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
           style={bulkEditMode ? { background: 'var(--ss-blue)', color: '#fff', borderColor: 'var(--ss-blue)' } : undefined}
         >
           {bulkEditMode ? '✕ Exit Bulk' : '✏️ Bulk Edit'}
+        </button>
+        <button
+          className="btn btn-outline btn-sm"
+          type="button"
+          onClick={() => void handlePurgeTestData()}
+          disabled={purgeBusy}
+          title="Delete every order, shipment, inventory SKU, and ledger entry that belongs to a client flagged is_test=true. Does NOT touch real clients."
+          style={{
+            color: 'var(--red, #dc2626)',
+            borderColor: 'var(--red, #dc2626)',
+            opacity: purgeBusy ? 0.6 : 1,
+            cursor: purgeBusy ? 'wait' : 'pointer',
+          }}
+        >
+          {purgeBusy ? '🧹 Purging…' : '🧹 Purge Test Data'}
         </button>
         <button className="btn btn-outline btn-sm" type="button" onClick={() => void refreshInventoryView()}>↻ Refresh</button>
       </motion.div>
