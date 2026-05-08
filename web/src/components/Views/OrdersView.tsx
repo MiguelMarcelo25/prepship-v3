@@ -2143,28 +2143,36 @@ export default function OrdersView({
 
   const searchedOrders = useMemo(() => {
     const query = searchQuery.trim().toLowerCase()
+    const skuNeedle = skuFilter.trim().toLowerCase()
     return orders.filter((order) => {
       const detail = orderDetailsById.get(order.orderId) ?? null
       if (hideTestOrdersInAllAwaiting && isTestOrder(order, detail)) return false
       if (query && !buildSearchText(order, detail).includes(query)) return false
-      // SKU filter — primary work happens SERVER-SIDE via useOrders →
-      // backend listQuery.sku → SQL exists() against items[]. We ALSO
-      // re-apply the same predicate client-side as a defense-in-depth
-      // safety net for two scenarios:
-      //   1. Backend deploy lag — when the server hasn't yet got the
-      //      new sku param, it'd ignore it and return all awaiting
-      //      orders. The client-side filter then narrows to orders
-      //      that actually contain the SKU so the operator sees a
-      //      correct result instead of "filter selected but full
-      //      list shown."
-      //   2. Edge case where /distinct-skus returned a SKU that was
-      //      since deleted from a specific order — backend would
-      //      include it (stale row), client filter wouldn't.
-      // When the backend IS doing its job, this filter is a no-op
-      // (every order already passes), so it's free.
-      if (skuFilter) {
+      // SKU filter — primary work happens SERVER-SIDE via useOrders.
+      // The client-side check was previously REJECTING server-confirmed
+      // matches because of subtle string differences between what the
+      // dropdown captured (from /distinct-skus) and what's in
+      // order.items[].sku in the list payload (different jsonb
+      // serialization paths). User saw '1,653 total' in pagination
+      // but 'No orders match' in the table.
+      //
+      // Two-rail safer behavior:
+      //   1. Trust the backend by default — if the order is in the
+      //      response, assume it matches. (Previously this filter was
+      //      a strict gate; now it's a soft cross-check.)
+      //   2. ONLY reject if we have non-empty local items AND we're
+      //      certain none match (normalized compare). Empty / missing
+      //      items array → keep the order (the backend already
+      //      verified the SKU server-side via SQL).
+      if (skuNeedle) {
         const items = getActiveItems(order, detail)
-        if (!items.some((item) => item.sku === skuFilter)) return false
+        if (items.length > 0) {
+          const hit = items.some((item) =>
+            (item.sku ?? '').trim().toLowerCase() === skuNeedle
+          )
+          if (!hit) return false
+        }
+        // items missing/empty → trust backend, don't reject
       }
       return true
     })
@@ -5202,11 +5210,14 @@ export default function OrdersView({
     // happens to be first in the array. Without this swap, an order
     // matching the filter via a non-first item would display the
     // unrelated first item, making the filter LOOK broken even when
-    // it correctly narrowed the result set. This was the user's
-    // confusion in the screenshot — pick 'B-6', see 7 rows, none
-    // showing B-6 because the rendering grabbed items[0].
-    const primaryItem = (skuFilter
-      ? items.find((item) => item.sku === skuFilter)
+    // it correctly narrowed the result set.
+    //
+    // Normalized (trim + lowercase) compare matches the searchedOrders
+    // memo above, so the row display is consistent with the filter
+    // gate — both treat 'B-6' / 'b-6 ' / ' B-6' as the same SKU.
+    const skuNeedleForRow = skuFilter.trim().toLowerCase()
+    const primaryItem = (skuNeedleForRow
+      ? items.find((item) => (item.sku ?? '').trim().toLowerCase() === skuNeedleForRow)
       : items[0]) ?? items[0] ?? null
     const multiSku = new Set(items.map((item) => item.sku).filter(Boolean)).size > 1
     const expedited = getExpeditedBadge(order, detail)
