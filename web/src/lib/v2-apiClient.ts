@@ -1131,10 +1131,30 @@ export const apiClient = {
     );
   },
 
-  markOrderShippedExternal(orderId: number, source: string): Promise<any> {
+  // Mark an order as shipped externally (no label was bought through
+  // PrepShip). The 2-arg signature is preserved for callers that just
+  // want the local flip; the 3-arg variant lets the side-panel popover
+  // pass through tracking + notify toggles. None of the new fields are
+  // required — when omitted the backend skips the optional ShipStation
+  // notification call and behaves like the historical flow.
+  markOrderShippedExternal(
+    orderId: number,
+    source: string,
+    extras?: {
+      trackingNumber?: string | null
+      carrierCode?: string | null
+      notifyCustomer?: boolean
+      notifyMarketplace?: boolean
+    }
+  ): Promise<any> {
+    const body: Record<string, unknown> = { source }
+    if (extras?.trackingNumber != null) body.trackingNumber = extras.trackingNumber
+    if (extras?.carrierCode != null) body.carrierCode = extras.carrierCode
+    if (extras?.notifyCustomer != null) body.notifyCustomer = extras.notifyCustomer
+    if (extras?.notifyMarketplace != null) body.notifyMarketplace = extras.notifyMarketplace
     return safe(
       'markOrderShippedExternal',
-      () => api.post<any>(`/orders/${orderId}/shipped-external`, { source }),
+      () => api.post<any>(`/orders/${orderId}/shipped-external`, body),
       { ok: false }
     );
   },

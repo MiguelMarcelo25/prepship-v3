@@ -1778,6 +1778,19 @@ export default function OrdersView({
   const [printMenuOpen, setPrintMenuOpen] = useState(false)
   const [batchMenuOpen, setBatchMenuOpen] = useState(false)
   const [extShipMenuOpen, setExtShipMenuOpen] = useState(false)
+  // External-shipped popover form state. The popover is a small inline
+  // form (toggles + tracking) instead of the previous bare list of
+  // marketplaces, so the user can opt into Notify Customer / Notify
+  // Marketplace at the same moment they pick the marketplace.
+  //
+  // Defaults match what most operators want: notify the marketplace
+  // (so Amazon/eBay close the loop) but DON'T email the customer
+  // (the marketplace's own status email gets there first and an
+  // extra one looks redundant).
+  const [extShipNotifyCustomer, setExtShipNotifyCustomer] = useState(false)
+  const [extShipNotifyMarketplace, setExtShipNotifyMarketplace] = useState(true)
+  const [extShipTracking, setExtShipTracking] = useState('')
+  const [extShipBusy, setExtShipBusy] = useState(false)
   const [batchBusy, setBatchBusy] = useState(false)
   const [batchTestMode, setBatchTestMode] = useState(false)
   // Set of orderIds that just successfully shipped — they render with
@@ -3898,15 +3911,50 @@ export default function OrdersView({
   }
 
   async function markOrderShippedExternal(source: string) {
-    if (!panelOrder) return
+    if (!panelOrder || extShipBusy) return
 
+    setExtShipBusy(true)
     try {
-      await apiClient.markOrderShippedExternal(panelOrder.orderId, source)
-      showToast(`✅ Marked shipped via ${source}`, 'success')
+      const trimmedTracking = extShipTracking.trim()
+      const wantNotify = extShipNotifyCustomer || extShipNotifyMarketplace
+      const result = await apiClient.markOrderShippedExternal(panelOrder.orderId, source, {
+        trackingNumber: trimmedTracking || null,
+        carrierCode: null, // future: dropdown for carrier when notify is on
+        notifyCustomer: extShipNotifyCustomer,
+        notifyMarketplace: extShipNotifyMarketplace,
+      })
+
+      // Compose a toast that tells the user EXACTLY which side-effects
+      // happened — a generic "marked shipped" toast hides whether the
+      // notification fired and whether it succeeded. Operators want
+      // explicit confirmation when they opted into notification.
+      let summary = `✅ Marked shipped via ${source}`
+      if (wantNotify) {
+        const channels: string[] = []
+        if (extShipNotifyCustomer) channels.push('customer')
+        if (extShipNotifyMarketplace) channels.push('marketplace')
+        if (result?.notify?.ok) {
+          summary += ` · notified ${channels.join(' + ')}`
+        } else {
+          // Local flip succeeded but ShipStation call failed — surface
+          // the reason so the user knows to retry or fix the issue.
+          summary += ` · ⚠ notify ${channels.join(' + ')} failed: ${result?.notify?.reason ?? 'unknown'}`
+        }
+      }
+      const tone: 'success' | 'error' = (wantNotify && result?.notify?.ok === false) ? 'error' : 'success'
+      showToast(summary, tone)
+
+      // Reset the popover form so the next open starts fresh — except
+      // the marketplace toggle which we keep at "on" for next time.
+      setExtShipTracking('')
+      setExtShipNotifyCustomer(false)
+      setExtShipNotifyMarketplace(true)
       clearSelection()
       await refetchOrders()
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Failed to mark shipped', 'error')
+    } finally {
+      setExtShipBusy(false)
     }
   }
 
@@ -5903,17 +5951,110 @@ export default function OrdersView({
                     <ChevronDown size={8} strokeWidth={2.5} className="opacity-60" />
                   </button>
                   {extShipMenuOpen ? (
-                    <div className="absolute top-[calc(100%+4px)] right-0 z-30 min-w-[150px] rounded-lg bg-surface ring-1 ring-line shadow-lg py-1 text-[12px] overflow-hidden">
-                      {['Shopify', 'Amazon', 'Walmart', 'eBay', 'Etsy', 'Other'].map((source) => (
-                        <button
-                          key={source}
-                          type="button"
-                          className="w-full text-left px-3 py-1.5 text-ink-2 hover:text-ink hover:bg-surface-2 transition"
-                          onClick={() => { setExtShipMenuOpen(false); void markOrderShippedExternal(source) }}
+                    <div className="absolute top-[calc(100%+4px)] right-0 z-30 w-[260px] rounded-lg bg-surface ring-1 ring-line shadow-lg overflow-hidden text-[12px]">
+                      {/* Header */}
+                      <div className="px-3 py-2 bg-surface-2 border-b border-line">
+                        <div className="font-semibold text-ink text-[12px]">Mark as Shipped</div>
+                        <div className="text-ink-3 text-[10.5px] mt-0.5">
+                          Closes the order locally. Optional notify:
+                        </div>
+                      </div>
+
+                      {/* Notify Customer toggle */}
+                      <label className="flex items-center justify-between gap-2 px-3 py-2 hover:bg-surface-2 cursor-pointer">
+                        <div className="flex flex-col">
+                          <span className="font-medium text-ink-2 text-[11.5px]">Notify customer</span>
+                          <span className="text-ink-3 text-[10px]">Email shipping confirmation via ShipStation</span>
+                        </div>
+                        {/* Compact iOS-style toggle — visible on/off state without a checkbox icon */}
+                        <span
+                          className={`relative inline-flex w-8 h-4 rounded-full transition-colors duration-150 flex-shrink-0 ${extShipNotifyCustomer ? 'bg-emerald-500' : 'bg-line'}`}
+                          aria-hidden
                         >
-                          {source}
-                        </button>
-                      ))}
+                          <span
+                            className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow-sm transition-transform duration-150 ${extShipNotifyCustomer ? 'translate-x-[18px]' : 'translate-x-0.5'}`}
+                            aria-hidden
+                          />
+                        </span>
+                        <input
+                          type="checkbox"
+                          className="sr-only"
+                          checked={extShipNotifyCustomer}
+                          onChange={(e) => setExtShipNotifyCustomer(e.target.checked)}
+                        />
+                      </label>
+
+                      {/* Notify Marketplace toggle */}
+                      <label className="flex items-center justify-between gap-2 px-3 py-2 hover:bg-surface-2 cursor-pointer border-b border-line">
+                        <div className="flex flex-col">
+                          <span className="font-medium text-ink-2 text-[11.5px]">Notify marketplace</span>
+                          <span className="text-ink-3 text-[10px]">Push shipped status to Amazon/eBay/etc.</span>
+                        </div>
+                        <span
+                          className={`relative inline-flex w-8 h-4 rounded-full transition-colors duration-150 flex-shrink-0 ${extShipNotifyMarketplace ? 'bg-emerald-500' : 'bg-line'}`}
+                          aria-hidden
+                        >
+                          <span
+                            className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow-sm transition-transform duration-150 ${extShipNotifyMarketplace ? 'translate-x-[18px]' : 'translate-x-0.5'}`}
+                            aria-hidden
+                          />
+                        </span>
+                        <input
+                          type="checkbox"
+                          className="sr-only"
+                          checked={extShipNotifyMarketplace}
+                          onChange={(e) => setExtShipNotifyMarketplace(e.target.checked)}
+                        />
+                      </label>
+
+                      {/* Tracking number input — only really useful when
+                          a notify toggle is on (the notification email
+                          embeds the tracking link). We render it always
+                          so power-users can record tracking even without
+                          notification, but show a hint below it. */}
+                      <div className="px-3 py-2 border-b border-line">
+                        <label className="text-[10.5px] font-semibold uppercase tracking-wide text-ink-3 block mb-1">
+                          Tracking # <span className="font-normal lowercase tracking-normal text-ink-4">(optional)</span>
+                        </label>
+                        <input
+                          type="text"
+                          value={extShipTracking}
+                          onChange={(e) => setExtShipTracking(e.target.value)}
+                          placeholder="e.g. 1Z999AA10123456784"
+                          className="w-full h-7 px-2 rounded ring-1 ring-line bg-surface text-[11.5px] text-ink-2 placeholder:text-ink-4 focus:ring-brand outline-none transition"
+                        />
+                        {(extShipNotifyCustomer || extShipNotifyMarketplace) && !extShipTracking.trim() ? (
+                          <div className="text-[10px] text-amber-700 mt-1 flex items-center gap-1">
+                            <span aria-hidden>⚠</span>
+                            <span>Notify will send empty tracking — recipient sees "tracking pending"</span>
+                          </div>
+                        ) : null}
+                      </div>
+
+                      {/* Marketplace picker — clicking submits the action.
+                          The picked marketplace is stored as the
+                          externallyShippedSource override (existing
+                          behavior). Disabled while a request is in flight
+                          so a double-click doesn't double-fire. */}
+                      <div className="px-2 py-1.5">
+                        <div className="text-[10px] font-semibold uppercase tracking-wide text-ink-3 px-1 pb-1">
+                          Source marketplace
+                        </div>
+                        {['Shopify', 'Amazon', 'Walmart', 'eBay', 'Etsy', 'Other'].map((source) => (
+                          <button
+                            key={source}
+                            type="button"
+                            disabled={extShipBusy}
+                            className="w-full text-left px-2 py-1.5 rounded text-ink-2 hover:text-ink hover:bg-surface-2 transition disabled:opacity-50 disabled:cursor-wait text-[11.5px]"
+                            onClick={() => {
+                              setExtShipMenuOpen(false)
+                              void markOrderShippedExternal(source)
+                            }}
+                          >
+                            {extShipBusy ? `Working… (${source})` : source}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   ) : null}
                 </div>

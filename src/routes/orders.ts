@@ -10,6 +10,8 @@ import { shipments } from '../db/schema/shipments';
 import { offsetOf, paginated, paginationSchema } from '../lib/pagination';
 import { getSyncStatus, syncOrders } from '../services/order-sync';
 import { deductInventoryForOrder } from '../services/fulfillment-deductions';
+import { ssMarkOrderShippedV1, asSSUpstreamOrderId } from '../lib/shipstation/labels';
+import { loadClientCredentials } from '../lib/shipstation/credentials';
 import {
   InputValidationError,
   assertPersistedOrderBestRateDto,
@@ -1862,6 +1864,15 @@ app.post(
       externalShipped: z.boolean().optional(),
       externallyShipped: z.boolean().optional(),
       source: z.string().nullable().optional(),
+      // NEW — optional fields for the "notify customer / notify
+      // marketplace" toggles added to the side-panel popover. None of
+      // these are required; when all of them are absent the route
+      // behaves exactly like before (local DB flip + inventory
+      // deduction, no ShipStation call). Backward compatible.
+      trackingNumber: z.string().nullable().optional(),
+      carrierCode: z.string().nullable().optional(),
+      notifyCustomer: z.boolean().optional(),
+      notifyMarketplace: z.boolean().optional(),
     })
   ),
   async (c) => {
@@ -1895,7 +1906,60 @@ app.post(
         console.warn('[orders] external shipped inventory deduction failed:', err);
       }
     }
-    return c.json({ data: row });
+
+    // Optional ShipStation v1 markasshipped call.
+    //
+    // We only invoke ShipStation when the user explicitly opted into
+    // at least one notify channel — most "Mark as Shipped" usage is
+    // pure local-state tracking ("I already shipped this somewhere
+    // else, just close the loop in PrepShip") and shouldn't generate
+    // duplicate marketplace pings. The frontend popover's Notify
+    // Customer / Notify Marketplace toggles drive this.
+    //
+    // Failure to notify is logged but does NOT fail the request — the
+    // local flag is already flipped, the inventory is already deducted,
+    // and re-running the call would just create a duplicate ack. Better
+    // to surface the warning in Render logs than to leave the order
+    // in a half-marked state on retry.
+    const shouldNotify =
+      flag && (body.notifyCustomer === true || body.notifyMarketplace === true);
+    let notifyResult: { ok: boolean; reason?: string } = { ok: false, reason: 'not requested' };
+
+    if (shouldNotify) {
+      const ssUpstreamOrderId = asSSUpstreamOrderId(existing.externalOrderId);
+      if (!ssUpstreamOrderId) {
+        notifyResult = { ok: false, reason: 'order has no upstream ShipStation ID — sync may be incomplete' };
+      } else {
+        try {
+          const creds = await loadClientCredentials(existing.clientId);
+          const shipDate = new Date().toISOString().slice(0, 10);
+          await ssMarkOrderShippedV1(
+            {
+              orderId: ssUpstreamOrderId,
+              carrierCode: body.carrierCode ?? null,
+              trackingNumber: body.trackingNumber ?? '',
+              shipDate,
+              notifyCustomer: body.notifyCustomer === true,
+              notifySalesChannel: body.notifyMarketplace === true,
+            },
+            { apiKey: creds.apiKey ?? undefined, apiSecret: creds.apiSecret ?? undefined }
+          );
+          notifyResult = { ok: true };
+          console.info(
+            `[orders] shipped-external notify ok orderId=${id} ssOrderId=${ssUpstreamOrderId} ` +
+              `customer=${body.notifyCustomer === true} marketplace=${body.notifyMarketplace === true}`
+          );
+        } catch (notifyErr) {
+          const msg = notifyErr instanceof Error ? notifyErr.message : String(notifyErr);
+          notifyResult = { ok: false, reason: msg };
+          console.warn(
+            `[orders] shipped-external notify FAILED orderId=${id} reason=${msg}`
+          );
+        }
+      }
+    }
+
+    return c.json({ data: row, notify: notifyResult });
   }
 );
 

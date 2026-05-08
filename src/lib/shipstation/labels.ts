@@ -353,6 +353,15 @@ export async function ssMarkOrderShippedV1(
     carrierCode: string | null;
     trackingNumber: string;
     shipDate: string;
+    /** Whether ShipStation should email the customer with the tracking
+     *  link. Default: false — historical PrepShip behavior; the
+     *  marketplace's own notification email usually beats us to it. */
+    notifyCustomer?: boolean;
+    /** Whether ShipStation should push the shipped status back to the
+     *  originating marketplace (Amazon / eBay / Walmart / etc.).
+     *  Default: true — almost always desired; this is what closes the
+     *  loop with the upstream sales channel. */
+    notifySalesChannel?: boolean;
   },
   opts: { apiKey?: string; apiSecret?: string } = {}
 ): Promise<void> {
@@ -363,8 +372,8 @@ export async function ssMarkOrderShippedV1(
       carrierCode: args.carrierCode,
       shipDate: args.shipDate,
       trackingNumber: args.trackingNumber,
-      notifyCustomer: false,
-      notifySalesChannel: true,
+      notifyCustomer: args.notifyCustomer ?? false,
+      notifySalesChannel: args.notifySalesChannel ?? true,
     },
     apiKey: opts.apiKey,
     apiSecret: opts.apiSecret,
