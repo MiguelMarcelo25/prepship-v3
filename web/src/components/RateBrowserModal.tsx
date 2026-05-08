@@ -21,6 +21,14 @@ import { useMarkups, type Markup } from '../contexts/MarkupsContext';
 export type RbLocationDto = {
   locationId: number;
   name: string;
+  company?: string | null;
+  street1?: string | null;
+  street2?: string | null;
+  city?: string | null;
+  state?: string | null;
+  postalCode?: string | null;
+  country?: string | null;
+  phone?: string | null;
   isDefault?: boolean;
 };
 
@@ -910,6 +918,19 @@ export default function RateBrowserModal({
     }
 
     try {
+      const selectedLocation = locations.find((l) => String(l.locationId) === locationId);
+      const shipFrom = selectedLocation
+        ? {
+            name: selectedLocation.company || selectedLocation.name,
+            addressLine1: selectedLocation.street1,
+            addressLine2: selectedLocation.street2,
+            city: selectedLocation.city,
+            state: selectedLocation.state,
+            postalCode: selectedLocation.postalCode,
+            country: selectedLocation.country || 'US',
+            phone: selectedLocation.phone,
+          }
+        : undefined;
       const accountByPid = new Map(
         rateShippingAccounts.map((acct) => [acct.shippingProviderId, acct])
       );
@@ -920,8 +941,10 @@ export default function RateBrowserModal({
       );
       const carrierIds = [...new Set([...accountByCarrierId.keys()])];
       const raw = (await apiClient.fetchRates({
+        fromPostalCode: selectedLocation?.postalCode?.slice(0, 5) ?? undefined,
         toPostalCode: zip,
         toCountry: 'US',
+        shipFrom,
         weight: { value: totalOz, units: 'ounces' },
         dimensions: {
           units: 'inches',

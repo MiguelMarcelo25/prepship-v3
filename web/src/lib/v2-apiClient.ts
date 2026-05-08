@@ -450,6 +450,7 @@ function translateRatePayloadToV4(
   if (Array.isArray(input.carrierIds)) out.carrierIds = input.carrierIds;
   if (typeof input.storeId === 'number') out.storeId = input.storeId;
   if (typeof input.clientId === 'number') out.clientId = input.clientId;
+  if (input.shipFrom && typeof input.shipFrom === 'object') out.shipFrom = input.shipFrom;
 
   // dims: v4 uses flat dimsL/W/H; v2 wraps them under `dimensions`.
   const dims = input.dimensions as
@@ -764,6 +765,7 @@ async function fetchDirectCarrierRates(
           externalOrderId: body.externalOrderId ?? body.orderNumber,
           orderNumber: body.orderNumber,
           purchaseOrderId: body.purchaseOrderId,
+          shipFrom: body.shipFrom,
         },
       });
       if (!res.ok) {

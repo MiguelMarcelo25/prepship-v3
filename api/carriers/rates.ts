@@ -552,6 +552,7 @@ async function ratesFromWalmartShipping(
     dimsW?: number;
     dimsH?: number;
     fromZip?: string;
+    shipFrom?: any;
     rawOrder?: any; // optional pre-fetched store_orders.raw payload
   },
 ): Promise<Array<{ service: string; cost: number; days: number; currency: string }>> {
@@ -619,15 +620,17 @@ async function ratesFromWalmartShipping(
   // return a generic 500. Hardcoded Carson CA only used when the user
   // hasn't pasted their real warehouse on the carrier_account form.
   const credShipFromZip = String(creds?.shipFromZip ?? '').replace(/[^0-9]/g, '').slice(0, 5);
-  const fromZip = credShipFromZip || (input.fromZip || '90248').replace(/[^0-9]/g, '').slice(0, 5);
+  const shipFromInput = input.shipFrom && typeof input.shipFrom === 'object' ? input.shipFrom : {};
+  const fromZip = credShipFromZip ||
+    String(shipFromInput?.postalCode ?? input.fromZip ?? '90248').replace(/[^0-9]/g, '').slice(0, 5);
   const fromAddress = {
-    name: String(creds?.shipFromName ?? '').trim() || 'Seller',
-    addressLine1: String(creds?.shipFromAddress1 ?? '').trim() || 'Warehouse',
-    city: String(creds?.shipFromCity ?? '').trim() || 'Carson',
-    stateCode: String(creds?.shipFromState ?? '').trim() || 'CA',
+    name: String(creds?.shipFromName ?? shipFromInput?.name ?? '').trim() || 'Seller',
+    addressLine1: String(creds?.shipFromAddress1 ?? shipFromInput?.addressLine1 ?? shipFromInput?.street1 ?? '').trim() || 'Warehouse',
+    city: String(creds?.shipFromCity ?? shipFromInput?.city ?? '').trim() || 'Carson',
+    stateCode: String(creds?.shipFromState ?? shipFromInput?.state ?? '').trim() || 'CA',
     postalCode: fromZip,
-    countryCode: 'US',
-    phone: String(creds?.shipFromPhone ?? '').trim() || '0000000000',
+    countryCode: String(shipFromInput?.country ?? 'US').trim() || 'US',
+    phone: String(creds?.shipFromPhone ?? shipFromInput?.phone ?? '').trim() || '0000000000',
   };
 
   // Ship-to: Walmart's order payload uses address1/state/country —
@@ -952,6 +955,7 @@ async function ratesFromEbayShipping(
     dimsW?: number;
     dimsH?: number;
     fromZip?: string;
+    shipFrom?: any;
     rawOrder?: any;
   },
 ): Promise<Array<{ service: string; cost: number; days: number; currency: string }>> {
@@ -971,21 +975,22 @@ async function ratesFromEbayShipping(
   const useSandbox = String(creds?.environment ?? '').toLowerCase() === 'sandbox';
   const apiBase = useSandbox ? 'https://api.sandbox.ebay.com' : 'https://api.ebay.com';
   const marketplaceId = String(creds?.marketplaceId ?? 'EBAY_US').trim() || 'EBAY_US';
-  const fromZip = String(creds?.shipFromZip ?? input.fromZip ?? '90248').replace(/[^0-9]/g, '').slice(0, 5);
+  const shipFromInput = input.shipFrom && typeof input.shipFrom === 'object' ? input.shipFrom : {};
+  const fromZip = String(creds?.shipFromZip ?? shipFromInput?.postalCode ?? input.fromZip ?? '90248').replace(/[^0-9]/g, '').slice(0, 5);
   const shipFrom = {
-    fullName: String(creds?.shipFromName ?? 'Seller'),
-    companyName: String(creds?.shipFromCompany ?? creds?.shipFromName ?? 'Seller'),
+    fullName: String(creds?.shipFromName ?? shipFromInput?.name ?? 'Seller'),
+    companyName: String(creds?.shipFromCompany ?? creds?.shipFromName ?? shipFromInput?.name ?? 'Seller'),
     contactAddress: {
-      addressLine1: String(creds?.shipFromAddress1 ?? 'Warehouse'),
-      addressLine2: String(creds?.shipFromAddress2 ?? ''),
-      city: String(creds?.shipFromCity ?? 'Carson'),
-      stateOrProvince: String(creds?.shipFromState ?? 'CA'),
+      addressLine1: String(creds?.shipFromAddress1 ?? shipFromInput?.addressLine1 ?? shipFromInput?.street1 ?? 'Warehouse'),
+      addressLine2: String(creds?.shipFromAddress2 ?? shipFromInput?.addressLine2 ?? shipFromInput?.street2 ?? ''),
+      city: String(creds?.shipFromCity ?? shipFromInput?.city ?? 'Carson'),
+      stateOrProvince: String(creds?.shipFromState ?? shipFromInput?.state ?? 'CA'),
       postalCode: fromZip,
-      countryCode: 'US',
+      countryCode: String(shipFromInput?.country ?? 'US') || 'US',
       county: String(creds?.shipFromCounty ?? ''),
     },
     primaryPhone: {
-      phoneNumber: String(creds?.shipFromPhone ?? '0000000000'),
+      phoneNumber: String(creds?.shipFromPhone ?? shipFromInput?.phone ?? '0000000000'),
     },
   };
 
@@ -1498,6 +1503,7 @@ export default async function handler(req: any, res: any): Promise<void> {
           dimsW,
           dimsH,
           fromZip,
+          shipFrom: body?.shipFrom,
           rawOrder,
         });
         res.status(200).json({
@@ -1613,6 +1619,7 @@ export default async function handler(req: any, res: any): Promise<void> {
           dimsL,
           dimsW,
           dimsH,
+          shipFrom: body?.shipFrom,
           rawOrder,
         });
         res.status(200).json({
