@@ -1595,6 +1595,62 @@ app.get('/picklist', zValidator('query', picklistQuery), async (c) => {
 // (e.g. the order was purged), letting the caller show a friendly
 // "order no longer exists" toast instead of opening the drawer with
 // stale data.
+// GET /orders/distinct-skus
+//
+// Returns every distinct SKU that appears anywhere in the orders.items
+// JSON arrays — across all statuses, all stores, all dates by default.
+// Used to populate the global SKU filter dropdown on /orders so the
+// list isn't capped by whatever fits on the current page (the previous
+// behavior derived dropdown options from the in-memory orders array,
+// so users only ever saw SKUs from the ~50 orders on page 1).
+//
+// Optional query params let callers narrow the set when needed:
+//   ?status=awaiting_shipment   — only SKUs from awaiting orders
+//   ?clientId=12                — only SKUs from this client
+//   ?storeId=4                  — only SKUs from this store
+//   ?dateFrom / ?dateTo         — bound by order_date range
+//
+// All filters are independent; omitting them returns the full universe.
+//
+// Excludes adjustment items (where item.adjustment is truthy) since
+// those aren't real SKUs — they're discounts, fees, etc.
+app.get('/distinct-skus', async (c) => {
+  const status = c.req.query('status') ?? null;
+  const clientIdRaw = c.req.query('clientId');
+  const storeIdRaw = c.req.query('storeId');
+  const dateFrom = c.req.query('dateFrom') ?? null;
+  const dateTo = c.req.query('dateTo') ?? null;
+  const cid = clientIdRaw ? Number.parseInt(clientIdRaw, 10) : null;
+  const sid = storeIdRaw ? Number.parseInt(storeIdRaw, 10) : null;
+
+  const rows = await db.execute<{ sku: string }>(sql`
+    select distinct item->>'sku' as sku
+    from orders o,
+         jsonb_array_elements(o.items) item
+    where item->>'sku' is not null
+      and item->>'sku' <> ''
+      and coalesce((item->>'adjustment')::boolean, false) = false
+      and (
+        (o.store_id is not null and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)}))
+        or exists (select 1 from clients c where c.id = o.client_id and c.is_test = true)
+      )
+      and (${status}::text is null or o.order_status = ${status}::text)
+      and (${cid}::int is null or o.client_id = ${cid}::int)
+      and (${sid}::int is null or o.store_id = ${sid}::int)
+      and (${dateFrom}::timestamptz is null or o.order_date >= ${dateFrom}::timestamptz)
+      and (${dateTo}::timestamptz is null or o.order_date <= ${dateTo}::timestamptz)
+    order by sku asc
+  `);
+
+  // Drizzle execute() returns either array or { rows } depending on driver.
+  const list = Array.isArray(rows) ? rows : (rows as any).rows ?? [];
+  const skus = list
+    .map((r: { sku: string }) => r.sku)
+    .filter((s: unknown): s is string => typeof s === 'string' && s.length > 0);
+
+  return c.json({ skus, count: skus.length });
+});
+
 app.get('/by-number/:orderNumber', async (c) => {
   // Decode in case the orderNumber contains URL-special characters
   // (unlikely for marketplace IDs, but defensive against a stray

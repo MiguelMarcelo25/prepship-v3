@@ -1088,6 +1088,35 @@ export const apiClient = {
     );
   },
 
+  // Returns every distinct SKU that appears in orders.items. Used by the
+  // OrdersView SKU filter dropdown so the list shows ALL SKUs in the
+  // system rather than only the ones present on the current paginated
+  // page (~50 orders). Backend filters out adjustment-rows and excluded
+  // stores so the result matches what the dropdown would otherwise show
+  // — just over the full universe instead of the visible slice.
+  fetchDistinctSkus(filters: {
+    status?: string
+    clientId?: number
+    storeId?: number
+    dateFrom?: string
+    dateTo?: string
+  } = {}): Promise<string[]> {
+    return safe(
+      'fetchDistinctSkus',
+      async () => {
+        const q: Record<string, string> = {}
+        if (filters.status) q.status = filters.status
+        if (filters.clientId != null) q.clientId = String(filters.clientId)
+        if (filters.storeId != null) q.storeId = String(filters.storeId)
+        if (filters.dateFrom) q.dateFrom = filters.dateFrom
+        if (filters.dateTo) q.dateTo = filters.dateTo
+        const res = await api.get<{ skus: string[] }>(`/orders/distinct-skus${qs(q)}`)
+        return Array.isArray(res?.skus) ? res.skus : []
+      },
+      []
+    )
+  },
+
   // Resolve a marketplace-facing orderNumber (text) → local PK (number).
   // Used by the Packages ledger view to make order numbers embedded
   // inside reason text clickable. Returns null if the order was purged

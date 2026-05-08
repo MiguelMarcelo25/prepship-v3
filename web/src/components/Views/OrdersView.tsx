@@ -2062,7 +2062,49 @@ export default function OrdersView({
   columnPrefsRef.current = columnPrefs
   currentStatusRef.current = currentStatus
 
+  // GLOBAL SKU dropdown — was previously derived from the in-memory
+  // `orders` array, so it only ever showed SKUs from the ~50 orders on
+  // the current page. Now backed by a /orders/distinct-skus call that
+  // returns every SKU across the entire orders table (filtered by the
+  // currently-visible status + store so the dropdown still feels
+  // contextual when no search is active).
+  //
+  // The fetch fires once per status+store change (and once on mount).
+  // Returning to a previous status re-uses the in-flight cache via the
+  // useEffect dep change cycle — perfectly fine for this dropdown
+  // because it's hidden until the user clicks it.
+  const [globalSkus, setGlobalSkus] = useState<string[]>([])
+  useEffect(() => {
+    let cancelled = false
+    void apiClient
+      .fetchDistinctSkus({
+        // When no specific store is selected, leave clientId/storeId
+        // unset so the dropdown shows EVERY SKU. When a store is
+        // active, narrow to that store so the list isn't visually
+        // overwhelming with SKUs that don't apply.
+        status: currentStatus,
+        storeId: activeStore ?? undefined,
+        dateFrom: dateRange.start,
+        dateTo: dateRange.end,
+      })
+      .then((skus) => {
+        if (cancelled) return
+        setGlobalSkus(skus)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [currentStatus, activeStore, dateRange.start, dateRange.end])
+
+  // Fall back to the in-memory derivation if the global fetch is empty
+  // or hasn't returned yet — keeps the dropdown populated on first
+  // render instead of going blank for the network round-trip.
   const skuOptions = useMemo(() => {
+    if (globalSkus.length > 0) {
+      // Trust the backend list (already sorted ASC, already filtered
+      // for adjustments + excluded stores).
+      return globalSkus
+    }
     const skus = new Set<string>()
     for (const order of orders) {
       for (const item of normalizeItems(order.items)) {
@@ -2071,7 +2113,7 @@ export default function OrdersView({
       }
     }
     return [...skus].sort((left, right) => left.localeCompare(right))
-  }, [orders])
+  }, [globalSkus, orders])
 
   const searchedOrders = useMemo(() => {
     const query = searchQuery.trim().toLowerCase()
