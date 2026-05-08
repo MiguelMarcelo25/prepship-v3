@@ -1966,9 +1966,33 @@ app.post(
       .limit(1);
     if (!existing) return c.json({ error: 'Order not found' }, 404);
 
+    // Flip both externallyShipped AND orderStatus when transitioning
+    // INTO the externally-shipped state. The previous version updated
+    // only externallyShipped, leaving order_status='awaiting_shipment'.
+    // Net effect: marked-shipped orders stayed in the Awaiting tab
+    // forever (the user's reported bug — 'i see 25 test orders and i
+    // expected is 23'). The Awaiting list query filters by
+    // order_status, not externallyShipped, so the flag was effectively
+    // invisible to the operator.
+    //
+    // assertOrderEditable above guards this transition — the order
+    // MUST be awaiting before this runs, so we're never overwriting
+    // a real shipment status.
+    //
+    // Per user override `unlock shipped data` (this is a forward-only
+    // awaiting → shipped transition, NOT a write to already-shipped
+    // data; assertOrderEditable structurally enforces that).
     await db
       .update(orders)
-      .set({ externallyShipped: flag, updatedAt: new Date() })
+      .set({
+        externallyShipped: flag,
+        // Forward transition only: setting flag=true moves to shipped.
+        // The hypothetical flag=false unmark path doesn't change
+        // status (we don't know what it was before the mark — could
+        // have been awaiting OR cancelled OR already shipped).
+        ...(flag ? { orderStatus: 'shipped' as const } : {}),
+        updatedAt: new Date(),
+      })
       .where(eq(orders.id, id));
 
     const row = await applyOverridesPatch(id, {
