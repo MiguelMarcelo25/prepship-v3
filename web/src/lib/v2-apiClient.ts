@@ -2202,6 +2202,28 @@ export const apiClient = {
     );
   },
 
+  // SQL-side aggregate that replaces the old N+1 fan-out
+  // (one fetchPackageLedger per package on every PackagesView mount).
+  // Returns one entry per package that had ANY shipment activity in the
+  // window. Packages with zero usage are omitted from the response and
+  // should be treated as 0 by callers — this keeps the payload tiny.
+  fetchPackagesUsageSummary(days = 30): Promise<{ packageId: number; used: number }[]> {
+    return safe(
+      'fetchPackagesUsageSummary',
+      async () => {
+        const res = await api.get<any>(`/packages/usage-summary?days=${days}`);
+        if (Array.isArray(res?.data)) {
+          return res.data.map((r: any) => ({
+            packageId: Number(r?.packageId ?? r?.package_id ?? 0),
+            used: Number(r?.used ?? 0) || 0,
+          }));
+        }
+        return [];
+      },
+      []
+    );
+  },
+
   syncCarrierPackages(): Promise<any> {
     return safe(
       'syncCarrierPackages',

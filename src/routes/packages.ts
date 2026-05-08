@@ -240,6 +240,47 @@ app.get('/:id{[0-9]+}/ledger', async (c) => {
   return c.json({ data: rows });
 });
 
+// GET /packages/usage-summary?days=30
+//
+// Returns one row per package with the sum of |qty_delta| over negative
+// ledger entries in the last N days. Replaces the N+1 fan-out the
+// PackagesView used to do on every mount (one fetchPackageLedger per
+// package, then sum client-side). With ~500 packages, that was 500
+// round-trips and ~50,000 ledger rows transferred per page visit just
+// to compute one number per row. This single SQL aggregate runs in
+// one trip and returns ~500 small {packageId, used} pairs.
+//
+// Defaults to 30 days, capped at 365 to keep the index scan bounded.
+// Packages with zero usage in the window are EXCLUDED from the result
+// (the FE treats missing entries as 0) — keeps the payload small on
+// fresh DBs where most packages haven't shipped anything recently.
+app.get('/usage-summary', async (c) => {
+  const rawDays = Number(c.req.query('days'));
+  const days = Number.isFinite(rawDays) && rawDays > 0
+    ? Math.min(Math.floor(rawDays), 365)
+    : 30;
+
+  const rows = await db.execute<{ package_id: number; used: string }>(sql`
+    select
+      package_id,
+      coalesce(sum(case when qty_delta < 0 then -qty_delta else 0 end), 0)::text as used
+    from package_ledger
+    where created_at >= now() - (interval '1 day' * ${days})
+    group by package_id
+    having coalesce(sum(case when qty_delta < 0 then -qty_delta else 0 end), 0) > 0
+  `);
+
+  // db.execute() returns slightly different shapes across drivers
+  // (postgres-js has `.rows` synthesized). Normalize either form.
+  const list = Array.isArray(rows) ? rows : (rows as any).rows ?? [];
+  const data = list.map((r: { package_id: number; used: string }) => ({
+    packageId: Number(r.package_id),
+    used: Number(r.used) || 0,
+  }));
+
+  return c.json({ days, data });
+});
+
 // v2-parity: PUT /packages/:id — alias for PATCH. v2 apiClient sends PUT.
 app.put('/:id{[0-9]+}', zValidator('json', body.partial()), async (c) => {
   const id = Number(c.req.param('id'));

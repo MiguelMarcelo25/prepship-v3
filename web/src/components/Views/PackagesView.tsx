@@ -37,6 +37,21 @@ const PACKAGES_PAGE_SIZE_OPTIONS = [25, 50, 100]
 const PACKAGES_DEFAULT_PAGE_SIZE = 50
 const RECENT_PACKAGE_DAYS = 30
 
+// Module-scope cache for the /packages/usage-summary aggregate.
+// Surviving unmount/remount means re-visiting /packages within 30s
+// (e.g. flipping tabs, closing a drawer) skips even the single backend
+// request. Keyed by the `days` window so future filter UIs can vary
+// the window without invalidating each other. The TTL is short enough
+// that fresh-shipped data still appears on a normal page reload, but
+// long enough that nav-pop / drawer-close / settings-tab-bounce feels
+// instant. Mutations (adjust, receive, sync, purge) call
+// `clearPackagesUsageCache()` so the next read is fresh.
+const USAGE_CACHE_TTL_MS = 30_000
+const USAGE_CACHE = new Map<number, { byPackageId: Record<number, number | null>; fetchedAt: number }>()
+function clearPackagesUsageCache(): void {
+  USAGE_CACHE.clear()
+}
+
 function wasPackageCreatedWithinDays(pkg: PackageDto, days: number): boolean {
   const created = Date.parse(String(pkg.createdAt ?? ''))
   if (!Number.isFinite(created)) return false
@@ -458,44 +473,55 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
     window.localStorage.setItem('packages_page_size', String(pageSize))
   }, [pageSize])
 
-  // Compute "Last 30 days used" per package by parallel-fetching ledgers and
-  // summing negative deltas in the past 30 days. Backend has no aggregate
-  // endpoint, so we fan out one request per package — fine for typical sizes.
+  // Compute "Last 30 days used" per package via a SINGLE backend
+  // aggregate (GET /packages/usage-summary?days=30). Replaces the old
+  // N+1 fan-out (one fetchPackageLedger per package on every mount)
+  // — with ~500 packages that was 500 round-trips and ~50K ledger
+  // rows transferred just to fill in one column. The new path is one
+  // request, ~500 small {packageId, used} entries (and only for packages
+  // with non-zero usage in the window — empties are omitted server-side).
+  //
+  // Module-level 30-second cache (USAGE_CACHE) survives unmount/remount
+  // (e.g. tab navigation, drawer close + reopen) so re-visiting /packages
+  // within 30s reuses the in-memory result and skips even the one
+  // remaining request. Cache is keyed by `days` so future filter UIs
+  // can vary the window without colliding.
   useEffect(() => {
     if (packages.length === 0) {
       setUsageByPackageId({})
       return
     }
     let cancelled = false
-    setUsageLoading(true)
-    const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000
-    const work = packages.map(async (pkg) => {
-      try {
-        const rows = await apiClient.fetchPackageLedger(pkg.packageId)
-        const used = (rows ?? []).reduce((sum, row) => {
-          const delta = Number(row?.delta ?? 0)
-          if (!Number.isFinite(delta) || delta >= 0) return sum
-          const created = Date.parse(String(row?.createdAt ?? ''))
-          if (!Number.isFinite(created) || created < cutoff) return sum
-          return sum + Math.abs(delta)
-        }, 0)
-        return [pkg.packageId, used] as const
-      } catch {
-        return [pkg.packageId, null] as const
-      }
-    })
-    void Promise.allSettled(work).then((results) => {
-      if (cancelled) return
-      const next: Record<number, number | null> = {}
-      for (const result of results) {
-        if (result.status === 'fulfilled') {
-          const [id, value] = result.value
-          next[id] = value
-        }
-      }
-      setUsageByPackageId(next)
+    const days = 30
+
+    const cached = USAGE_CACHE.get(days)
+    const now = Date.now()
+    if (cached && now - cached.fetchedAt < USAGE_CACHE_TTL_MS) {
+      // Hydrate from cache instantly — no flash, no spinner.
+      setUsageByPackageId(cached.byPackageId)
       setUsageLoading(false)
-    })
+      return
+    }
+
+    setUsageLoading(true)
+    void (async () => {
+      try {
+        const rows = await apiClient.fetchPackagesUsageSummary(days)
+        if (cancelled) return
+        const next: Record<number, number | null> = {}
+        for (const row of rows ?? []) {
+          if (typeof row?.packageId === 'number') {
+            next[row.packageId] = Number(row.used) || 0
+          }
+        }
+        USAGE_CACHE.set(days, { byPackageId: next, fetchedAt: Date.now() })
+        setUsageByPackageId(next)
+      } catch {
+        if (!cancelled) setUsageByPackageId({})
+      } finally {
+        if (!cancelled) setUsageLoading(false)
+      }
+    })()
     return () => { cancelled = true }
   }, [packages])
 
@@ -762,6 +788,10 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
           'success'
         )
       }
+      // Purge wipes test ledger rows AND restores stock — both invalidate
+      // the cached 30-day usage numbers. Without this clear, the column
+      // would still show the pre-purge "USED" totals until the TTL.
+      clearPackagesUsageCache()
       await refreshPackages()
       window.dispatchEvent(new CustomEvent('prepship:client-active-changed'))
     } catch (purgeError) {
@@ -892,6 +922,11 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
       if (!result?.package) throw new Error('Receive failed')
       setReceiveModal(null)
       showToast(`✅ Received ${payload.qty} units. New total: ${result.package?.stockQty ?? '?'}`)
+      // Receive creates a positive ledger row — usage-summary only
+      // counts negatives, so technically nothing to invalidate, but
+      // future windowed views may diff stock-in vs stock-out, so we
+      // bust the cache to be safe + it forces a fresh aggregate.
+      clearPackagesUsageCache()
       await refreshPackages()
     } catch (receiveError) {
       showToast(`❌ ${receiveError instanceof Error ? receiveError.message : 'Receive failed'}`, 'error')
@@ -917,6 +952,8 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
       if (!result?.package) throw new Error('Adjust failed')
       setAdjustModal(null)
       showToast(`✅ Adjusted. New total: ${result.package?.stockQty ?? '?'}`)
+      // Adjust can be positive OR negative — negatives change usage-30d.
+      clearPackagesUsageCache()
       await refreshPackages()
     } catch (adjustError) {
       showToast(`❌ ${adjustError instanceof Error ? adjustError.message : 'Adjust failed'}`, 'error')
