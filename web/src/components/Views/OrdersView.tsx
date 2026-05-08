@@ -7032,12 +7032,12 @@ export default function OrdersView({
                     Vertical layout per boss directive 2026-05-08:
                     "58 of 63 shipped" sits on top, bar + percentage
                     on the bottom row. */}
-                <div className="flex flex-col gap-1 shrink-0 min-w-[285px]">
-                  <span className="text-ink-3 text-[11px] tabular-nums font-medium">
+                <div className="flex flex-col shrink-0 min-w-[285px]">
+                  <span className="text-ink-3 text-[13px] tabular-nums font-medium">
                     {dailyStripProgress?.shipped} of {dailyStats.totalOrders} shipped
                   </span>
                   <div className="flex items-center gap-2.5">
-                    <div className="w-[210px] h-[7px] bg-line/70 rounded-sm overflow-hidden">
+                    <div className="w-[210px] h-[9px] bg-line/70 rounded-sm overflow-hidden">
                       <motion.div
                         className="h-full rounded-sm"
                         initial={{ width: 0 }}
