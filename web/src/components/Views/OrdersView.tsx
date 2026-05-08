@@ -1800,6 +1800,12 @@ export default function OrdersView({
   const [printMenuOpen, setPrintMenuOpen] = useState(false)
   const [batchMenuOpen, setBatchMenuOpen] = useState(false)
   const [extShipMenuOpen, setExtShipMenuOpen] = useState(false)
+  // Separate open-state for the BATCH Mark-as-Shipped popover (in the
+  // batch panel that appears when 2+ orders are selected). Reuses the
+  // same notify toggles + tracking state below as the single-order
+  // popover, but its visibility is independent so opening one doesn't
+  // close the other.
+  const [batchExtShipMenuOpen, setBatchExtShipMenuOpen] = useState(false)
   // External-shipped popover form state. The popover is a small inline
   // form (toggles + tracking) instead of the previous bare list of
   // marketplaces, so the user can opt into Notify Customer / Notify
@@ -4576,6 +4582,72 @@ export default function OrdersView({
     }
   }
 
+  // Batch Mark-as-Shipped — flips externallyShipped=true on every
+  // selected order in one go, optionally pushing notify-customer +
+  // notify-marketplace through to ShipStation v1 markasshipped for
+  // each. Mirrors the single-order popover (state lives in a parallel
+  // set of useState hooks below) so behavior is consistent: same
+  // toggles, same source picker, same per-order failure handling.
+  //
+  // We process orders sequentially (not Promise.all) for two reasons:
+  //   1. The /shipped-external endpoint runs ssMarkOrderShippedV1
+  //      under the hood, which hits ShipStation's rate-limited v1 API.
+  //      Parallel calls trigger 429s.
+  //   2. Surfacing partial-failure stats ('5 ok, 2 failed') is much
+  //      cleaner with a sequential loop + ok/failed counters.
+  async function handleBatchMarkAsShipped(source: string) {
+    const batchOrders = orders.filter((order) => selectedIdSet.has(order.orderId))
+    if (batchOrders.length === 0) {
+      showToast('No orders selected', 'error')
+      return
+    }
+    if (extShipBusy) return
+    setExtShipBusy(true)
+    showToast(`📦 Marking ${batchOrders.length} order${batchOrders.length === 1 ? '' : 's'} shipped via ${source}…`)
+
+    let ok = 0
+    let failed = 0
+    const notifyChannels: string[] = []
+    if (extShipNotifyCustomer) notifyChannels.push('customer')
+    if (extShipNotifyMarketplace) notifyChannels.push('marketplace')
+
+    for (const order of batchOrders) {
+      try {
+        await apiClient.markOrderShippedExternal(order.orderId, source, {
+          // Tracking is per-order in single mode; in batch mode we
+          // omit it (an operator can't paste 50 different tracking
+          // numbers in one popover). The notification email/marketplace
+          // status update still goes out — just without a tracking
+          // link inside it.
+          trackingNumber: null,
+          carrierCode: null,
+          notifyCustomer: extShipNotifyCustomer,
+          notifyMarketplace: extShipNotifyMarketplace,
+        })
+        ok += 1
+      } catch (err) {
+        failed += 1
+        console.warn(`[batch mark-shipped] order ${order.orderId} failed:`, err)
+      }
+    }
+
+    setExtShipBusy(false)
+    clearSelection()
+    await refetchOrders()
+
+    // Compose summary toast — explicit about notify channels and
+    // partial failure so operators know exactly what landed.
+    let summary = `✅ Marked ${ok}/${batchOrders.length} shipped via ${source}`
+    if (notifyChannels.length > 0) summary += ` · notified ${notifyChannels.join(' + ')}`
+    if (failed > 0) summary += ` · ⚠ ${failed} failed`
+    showToast(summary, failed > 0 ? 'error' : 'success')
+
+    // Reset popover form for the next batch.
+    setExtShipNotifyCustomer(false)
+    setExtShipNotifyMarketplace(true)
+    setBatchExtShipMenuOpen(false)
+  }
+
   async function resumePersistentQueueJob(job: PersistentQueueJob) {
     if (resumePersistentQueueJobIdRef.current === job.id) return
 
@@ -5737,6 +5809,118 @@ export default function OrdersView({
                     >
                       📥 Send to Queue
                     </button>
+                  </div>
+
+                  {/* Batch Mark-as-Shipped — appears below the two
+                      label-buy buttons. Different button color (amber)
+                      so operators don't confuse 'I already shipped this
+                      elsewhere' with 'buy a new label'. The popover
+                      mirrors the single-order Mark-as-Shipped UI:
+                      notify toggles + marketplace picker. Tracking is
+                      omitted in batch mode (50 orders → 50 different
+                      tracking numbers, can't paste them in one box). */}
+                  <div style={{ position: 'relative', marginTop: 8 }}>
+                    <button
+                      type="button"
+                      className="create-label-btn"
+                      onClick={() => setBatchExtShipMenuOpen((open) => !open)}
+                      disabled={extShipBusy || selectedOrderIds.length === 0}
+                      title="Mark every selected order as shipped externally (no label purchase)"
+                      style={{
+                        width: '100%',
+                        background: '#f59e0b',
+                        color: '#fff',
+                        opacity: extShipBusy ? 0.7 : 1,
+                      }}
+                    >
+                      <BadgeCheck size={13} strokeWidth={2.5} style={{ marginRight: 6, verticalAlign: 'middle' }} />
+                      {extShipBusy
+                        ? `Marking ${selectedOrderIds.length}…`
+                        : `📦 Mark ${selectedOrderIds.length} as Shipped`}
+                    </button>
+                    {batchExtShipMenuOpen ? (
+                      <div className="absolute right-0 z-30 w-full rounded-lg bg-surface ring-1 ring-line shadow-lg overflow-hidden text-[12px]" style={{ top: 'calc(100% + 4px)' }}>
+                        <div className="px-3 py-2 bg-surface-2 border-b border-line">
+                          <div className="font-semibold text-ink text-[12px]">
+                            Mark {selectedOrderIds.length} order{selectedOrderIds.length === 1 ? '' : 's'} as Shipped
+                          </div>
+                          <div className="text-ink-3 text-[10.5px] mt-0.5">
+                            Closes the orders locally. Optional notify:
+                          </div>
+                        </div>
+
+                        {/* Notify Customer toggle — shared state with single popover */}
+                        <label className="flex items-center justify-between gap-2 px-3 py-2 hover:bg-surface-2 cursor-pointer">
+                          <div className="flex flex-col">
+                            <span className="font-medium text-ink-2 text-[11.5px]">Notify customer</span>
+                            <span className="text-ink-3 text-[10px]">Email shipping confirmation via ShipStation</span>
+                          </div>
+                          <span
+                            className={`relative inline-flex w-8 h-4 rounded-full transition-colors duration-150 flex-shrink-0 ${extShipNotifyCustomer ? 'bg-emerald-500' : 'bg-line'}`}
+                            aria-hidden
+                          >
+                            <span
+                              className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow-sm transition-transform duration-150 ${extShipNotifyCustomer ? 'translate-x-[18px]' : 'translate-x-0.5'}`}
+                              aria-hidden
+                            />
+                          </span>
+                          <input
+                            type="checkbox"
+                            className="sr-only"
+                            checked={extShipNotifyCustomer}
+                            onChange={(e) => setExtShipNotifyCustomer(e.target.checked)}
+                          />
+                        </label>
+
+                        <label className="flex items-center justify-between gap-2 px-3 py-2 hover:bg-surface-2 cursor-pointer border-b border-line">
+                          <div className="flex flex-col">
+                            <span className="font-medium text-ink-2 text-[11.5px]">Notify marketplace</span>
+                            <span className="text-ink-3 text-[10px]">Push shipped status to Amazon/eBay/etc.</span>
+                          </div>
+                          <span
+                            className={`relative inline-flex w-8 h-4 rounded-full transition-colors duration-150 flex-shrink-0 ${extShipNotifyMarketplace ? 'bg-emerald-500' : 'bg-line'}`}
+                            aria-hidden
+                          >
+                            <span
+                              className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow-sm transition-transform duration-150 ${extShipNotifyMarketplace ? 'translate-x-[18px]' : 'translate-x-0.5'}`}
+                              aria-hidden
+                            />
+                          </span>
+                          <input
+                            type="checkbox"
+                            className="sr-only"
+                            checked={extShipNotifyMarketplace}
+                            onChange={(e) => setExtShipNotifyMarketplace(e.target.checked)}
+                          />
+                        </label>
+
+                        {/* Hint when notify is on but tracking will be empty */}
+                        {(extShipNotifyCustomer || extShipNotifyMarketplace) ? (
+                          <div className="px-3 py-1.5 bg-amber-50 border-b border-line text-[10px] text-amber-700 flex items-start gap-1">
+                            <span aria-hidden>⚠</span>
+                            <span>Batch mode sends notifications without tracking numbers (use single-order popover if you have tracking).</span>
+                          </div>
+                        ) : null}
+
+                        {/* Marketplace picker — clicking submits the batch action */}
+                        <div className="px-2 py-1.5">
+                          <div className="text-[10px] font-semibold uppercase tracking-wide text-ink-3 px-1 pb-1">
+                            Source marketplace
+                          </div>
+                          {['Shopify', 'Amazon', 'Walmart', 'eBay', 'Etsy', 'Other'].map((source) => (
+                            <button
+                              key={source}
+                              type="button"
+                              disabled={extShipBusy}
+                              className="w-full text-left px-2 py-1.5 rounded text-ink-2 hover:text-ink hover:bg-surface-2 transition disabled:opacity-50 disabled:cursor-wait text-[11.5px]"
+                              onClick={() => void handleBatchMarkAsShipped(source)}
+                            >
+                              {extShipBusy ? `Working… (${source})` : source}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
                   </div>
 
                   <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12, fontSize: 12, fontWeight: 600 }}>
