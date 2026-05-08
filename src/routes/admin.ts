@@ -7,6 +7,8 @@ import { clients } from '../db/schema/clients';
 import { orders, orderOverrides } from '../db/schema/orders';
 import { shipments } from '../db/schema/shipments';
 import { inventory, inventoryLedger } from '../db/schema/inventory';
+import { packages } from '../db/schema/packages';
+import { packageLedger } from '../db/schema/package-ledger';
 import { billingLineItems } from '../db/schema/billing';
 import { products } from '../db/schema/products';
 import { settings } from '../db/schema/settings';
@@ -54,6 +56,44 @@ app.post('/purge-test-orders', async (c) => {
     .from(clients)
     .where(eq(clients.isTest, true));
   if (!testClients.length) {
+    // Even when there are no test CLIENTS, there may still be orphan
+    // test ledger rows in package_ledger from a previous incomplete
+    // purge (back when this endpoint didn't clean them). Run the
+    // package-ledger sweep anyway so those orphans + their negative
+    // stock impact get cleaned up.
+    const orphanResult = await db.transaction(async (tx) => {
+      let pkgLedgerDeleted = 0;
+      let pkgStockRestored = 0;
+      let pkgsAffected = 0;
+
+      const orphanRows = await tx
+        .select({ id: packageLedger.id, packageId: packageLedger.packageId, qtyDelta: packageLedger.qtyDelta })
+        .from(packageLedger)
+        .where(sql`${packageLedger.note} ILIKE ${'%for order TESTING-%'}`);
+
+      if (orphanRows.length) {
+        const restoreByPkg = new Map<number, number>();
+        for (const r of orphanRows) {
+          restoreByPkg.set(r.packageId, (restoreByPkg.get(r.packageId) ?? 0) + r.qtyDelta);
+        }
+        for (const [packageId, sumDelta] of restoreByPkg.entries()) {
+          await tx
+            .update(packages)
+            .set({ stockQty: sql`${packages.stockQty} - ${sumDelta}`, updatedAt: new Date() })
+            .where(eq(packages.id, packageId));
+          pkgStockRestored += Math.abs(sumDelta);
+          pkgsAffected += 1;
+        }
+        const del = await tx
+          .delete(packageLedger)
+          .where(sql`${packageLedger.note} ILIKE ${'%for order TESTING-%'}`)
+          .returning({ id: packageLedger.id });
+        pkgLedgerDeleted = del.length;
+      }
+
+      return { pkgLedgerDeleted, pkgStockRestored, pkgsAffected };
+    });
+
     return c.json({
       deleted: {
         orders: 0,
@@ -64,8 +104,14 @@ app.post('/purge-test-orders', async (c) => {
         ledgerByInventory: 0,
         orderOverrides: 0,
         printQueue: 0,
+        pkgLedger: orphanResult.pkgLedgerDeleted,
+        pkgStockRestored: orphanResult.pkgStockRestored,
+        pkgsAffected: orphanResult.pkgsAffected,
       },
-      message: 'No clients flagged is_test=true — nothing to purge.',
+      message:
+        orphanResult.pkgLedgerDeleted > 0
+          ? `No test clients, but cleaned ${orphanResult.pkgLedgerDeleted} orphan test ledger rows and restored ${orphanResult.pkgStockRestored} units across ${orphanResult.pkgsAffected} package(s).`
+          : 'No clients flagged is_test=true — nothing to purge.',
     });
   }
   const ids = testClients.map((c) => c.id);
@@ -94,6 +140,9 @@ app.post('/purge-test-orders', async (c) => {
     let queueEntries = 0;
     let ordersDeleted = 0;
     let inventoryDeleted = 0;
+    let pkgLedgerDeleted = 0;
+    let pkgStockRestored = 0; // sum of |qtyDelta| added back
+    let pkgsAffected = 0;
 
     if (orderIds.length) {
       const billingDel = await tx
@@ -163,6 +212,58 @@ app.post('/purge-test-orders', async (c) => {
       inventoryDeleted = inventoryDel.length;
     }
 
+    // Package-ledger purge — the package_ledger table references orders
+    // ONLY via free-text in the `note` column ("Shipment XXX for order
+    // TESTING-XXX-XXX"). It has no client_id of its own.
+    //
+    // Test orders ALWAYS use orderNumber prefix `TESTING-` (set by
+    // /admin/seed-test-orders, line ~376) — that prefix is unique to
+    // PrepShip's test seeder; no real marketplace order ever starts
+    // with `TESTING-`. So `note ILIKE '%for order TESTING-%'` is a
+    // safe, unambiguous match — no risk of wiping a real customer's
+    // ledger entry by accident.
+    //
+    // Two-step: (1) sum the negative qtyDelta per packageId so we can
+    // restore each box's stockQty to its pre-test value, then (2)
+    // delete the rows. Without step 1, deleting alone leaves stockQty
+    // negative on every box that handled a test shipment (visible in
+    // the screenshot — 10x8x4 → -4 stock from 4 test shipments).
+    const testNoteRows = await tx
+      .select({ id: packageLedger.id, packageId: packageLedger.packageId, qtyDelta: packageLedger.qtyDelta })
+      .from(packageLedger)
+      .where(sql`${packageLedger.note} ILIKE ${'%for order TESTING-%'}`);
+
+    if (testNoteRows.length) {
+      // Group by packageId, sum qtyDelta (these are negative numbers
+      // for shipments → so the sum is also negative).
+      const restoreByPkg = new Map<number, number>();
+      for (const row of testNoteRows) {
+        restoreByPkg.set(row.packageId, (restoreByPkg.get(row.packageId) ?? 0) + row.qtyDelta);
+      }
+
+      // Restore each affected package's stockQty by adding back the
+      // absolute value of the (negative) sum. SQL: stockQty = stockQty - sumDelta
+      // where sumDelta is negative → effectively stockQty += |sumDelta|.
+      for (const [packageId, sumDelta] of restoreByPkg.entries()) {
+        await tx
+          .update(packages)
+          .set({
+            stockQty: sql`${packages.stockQty} - ${sumDelta}`,
+            updatedAt: new Date(),
+          })
+          .where(eq(packages.id, packageId));
+        pkgStockRestored += Math.abs(sumDelta);
+        pkgsAffected += 1;
+      }
+
+      // Now delete the matched ledger rows.
+      const pkgLedgerDel = await tx
+        .delete(packageLedger)
+        .where(sql`${packageLedger.note} ILIKE ${'%for order TESTING-%'}`)
+        .returning({ id: packageLedger.id });
+      pkgLedgerDeleted = pkgLedgerDel.length;
+    }
+
     return {
       billing,
       ledgerByOrder,
@@ -172,6 +273,9 @@ app.post('/purge-test-orders', async (c) => {
       queueEntries,
       ordersDeleted,
       inventoryDeleted,
+      pkgLedgerDeleted,
+      pkgStockRestored,
+      pkgsAffected,
     };
   });
 
@@ -188,6 +292,13 @@ app.post('/purge-test-orders', async (c) => {
       ledgerByInventory: result.ledgerByInventory,
       orderOverrides: result.overridesDeleted,
       printQueue: result.queueEntries,
+      // New keys — surfaced on the Packages page button. The packages
+      // themselves are NOT deleted (they're global, shared across all
+      // clients) — only their test-order ledger entries get wiped, and
+      // each affected package's stockQty is restored by +|qtyDelta|.
+      pkgLedger: result.pkgLedgerDeleted,
+      pkgStockRestored: result.pkgStockRestored,
+      pkgsAffected: result.pkgsAffected,
     },
   });
 });

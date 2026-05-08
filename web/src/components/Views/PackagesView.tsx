@@ -3,6 +3,7 @@ import { useContext, useEffect, useMemo, useRef, useState, type FormEvent, type 
 import { motion } from 'framer-motion'
 import { Box, CalendarClock, CalendarPlus, Plus, RefreshCw, Ruler, Search, X } from 'lucide-react'
 import { apiClient } from '../../api/client'
+import { api } from '../../lib/api'
 import { ToastContext } from '../../contexts/ToastContext'
 import type {
   PackageDto,
@@ -694,6 +695,85 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
     }
   }
 
+  // 🧹 Purge Test Data — same /admin/purge-test-orders endpoint the
+  // Inventory + Settings pages call. Adds a Packages-page-specific
+  // confirmation prompt that calls out exactly what changes here:
+  // • test-tagged ledger rows ("...for order TESTING-...") are deleted
+  // • each affected package's stockQty is restored by +|qtyDelta|
+  // • the package rows themselves are NOT deleted (packages are global,
+  //   shared across clients — they have no client_id, so deleting them
+  //   would affect real fulfillment).
+  // The endpoint is idempotent: rerunning on a clean DB returns 0s.
+  const [purgingTest, setPurgingTest] = useState(false)
+  const handlePurgeTestData = async () => {
+    if (purgingTest) return
+    if (
+      !window.confirm(
+        '🧹 Purge ALL test data?\n\n' +
+          'This will:\n' +
+          '  • Delete every package_ledger row tagged "for order TESTING-…"\n' +
+          '  • Restore each affected package\'s stock by adding back the deducted qty\n' +
+          '  • Also clean orders, shipments, billing, inventory & queue rows for is_test clients\n\n' +
+          'Real packages and real customer ledger rows are NOT touched.\n' +
+          'This cannot be undone.'
+      )
+    ) {
+      return
+    }
+    setPurgingTest(true)
+    showToast('🧹 Purging test data…')
+    try {
+      const res = await api.post<{
+        deleted: {
+          orders: number
+          shipments: number
+          ledger: number
+          billing: number
+          inventory: number
+          ledgerByInventory: number
+          orderOverrides: number
+          printQueue: number
+          pkgLedger: number
+          pkgStockRestored: number
+          pkgsAffected: number
+        }
+        message?: string
+      }>('/admin/purge-test-orders', {})
+      const d = res.deleted
+      const total =
+        d.orders +
+        d.shipments +
+        d.ledger +
+        d.billing +
+        d.inventory +
+        d.ledgerByInventory +
+        d.orderOverrides +
+        d.printQueue +
+        d.pkgLedger
+
+      if (total === 0) {
+        showToast(res.message ?? '✓ Already clean — nothing to purge', 'success')
+      } else {
+        // Packages-centric summary first, then full breakdown.
+        showToast(
+          `✅ Cleaned ${d.pkgLedger} pkg-ledger row(s) across ${d.pkgsAffected} pkg(s) ` +
+            `(+${d.pkgStockRestored} stock restored). Plus ${d.orders} orders, ${d.shipments} shipments, ` +
+            `${d.inventory} test SKUs, ${d.ledger + d.ledgerByInventory} inv-ledger, ${d.billing} billing.`,
+          'success'
+        )
+      }
+      await refreshPackages()
+      window.dispatchEvent(new CustomEvent('prepship:client-active-changed'))
+    } catch (purgeError) {
+      showToast(
+        `❌ Purge failed: ${purgeError instanceof Error ? purgeError.message : 'Unknown error'}`,
+        'error'
+      )
+    } finally {
+      setPurgingTest(false)
+    }
+  }
+
   const handleImportStandardDimensions = async () => {
     if (importingStandardDims) return
     setImportingStandardDims(true)
@@ -941,6 +1021,21 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
             >
               <CalendarPlus size={14} strokeWidth={2.2} />
               30d Added ({recentlyAddedPackages.length})
+            </button>
+            <button
+              className="btn btn-outline btn-sm pkg-header-btn"
+              type="button"
+              onClick={() => void handlePurgeTestData()}
+              disabled={purgingTest}
+              title="Delete test-order ledger rows ('Shipment XXX for order TESTING-…') and restore each package's stockQty. Real packages + real customer ledger rows are NOT touched."
+              style={{
+                color: 'var(--red, #dc2626)',
+                borderColor: 'var(--red, #dc2626)',
+                opacity: purgingTest ? 0.6 : 1,
+                cursor: purgingTest ? 'wait' : 'pointer',
+              }}
+            >
+              {purgingTest ? '🧹 Purging…' : '🧹 Purge Test Data'}
             </button>
             <button className="btn btn-primary btn-sm pkg-header-btn" type="button" onClick={handleShowAdd}>
               <Plus size={14} strokeWidth={2.5} />

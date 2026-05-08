@@ -670,6 +670,9 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
           ledgerByInventory: number
           orderOverrides: number
           printQueue: number
+          pkgLedger: number
+          pkgStockRestored: number
+          pkgsAffected: number
         }
         message?: string
       }>('/admin/purge-test-orders', {})
@@ -683,7 +686,8 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
         d.inventory +
         d.ledgerByInventory +
         d.orderOverrides +
-        d.printQueue
+        d.printQueue +
+        d.pkgLedger
 
       if (total === 0) {
         toastContext?.addToast(res.message ?? '✓ Already clean — nothing to purge', 'success')
@@ -691,7 +695,8 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
         toastContext?.addToast(
           `✅ Purged: ${d.orders} orders, ${d.shipments} shipments, ` +
             `${d.inventory} test SKUs, ${d.ledger + d.ledgerByInventory} ledger, ` +
-            `${d.billing} billing, ${d.orderOverrides} overrides, ${d.printQueue} queue`,
+            `${d.billing} billing, ${d.orderOverrides} overrides, ${d.printQueue} queue, ` +
+            `${d.pkgLedger} pkg-ledger (+${d.pkgStockRestored} stock restored)`,
           'success'
         )
       }
