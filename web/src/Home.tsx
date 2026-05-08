@@ -190,6 +190,20 @@ export default function Home() {
   }
   const [activeStore, setActiveStore] = useState<number | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
+  // Bumped every time the user navigates via the sidebar (status click,
+  // store click, etc). OrdersView watches this counter and clears its
+  // own local filters (skuFilter, customDateFrom, customDateTo) so the
+  // user gets a 'fresh start' in the new view. Search + dateFilter
+  // live up here in Home and are reset directly on the same nav event.
+  // Counter is preferred over a boolean reset signal because it's
+  // idempotent across rapid clicks — every click produces a distinct
+  // value, so the OrdersView useEffect never misses an event.
+  const [filterResetVersion, setFilterResetVersion] = useState(0)
+  const resetAllOrdersFilters = () => {
+    setSearchQuery('')
+    setDateFilter('last-30')
+    setFilterResetVersion((v) => v + 1)
+  }
   // Separate slot for SKU pre-fills coming from Dashboard clicks. Routed into
   // AnalysisView's `initialSearch` prop so we don't pollute the orders/global
   // search box with a SKU that's only meaningful on the Analysis screen.
@@ -477,7 +491,12 @@ export default function Home() {
         currentView={displayView}
         stores={sidebarStores}
         onSelectStatus={(status) => {
+          // Sidebar navigation = fresh-start contract. Clearing the
+          // active store + all 3 orders filters (search, sku, date)
+          // means clicking 'Shipped' from a heavily filtered Awaiting
+          // view doesn't carry stale filters into a brand-new context.
           setActiveStore(null)
+          resetAllOrdersFilters()
           navigate(`/orders/${status}`)
           closeMobileMenu()
         }}
@@ -493,7 +512,12 @@ export default function Home() {
           if (query.trim()) navigate(`/orders/${currentStatus}`)
         }}
         onSelectStore={(storeId, statusOverride) => {
+          // Same fresh-start contract as onSelectStatus — clicking a
+          // client/store in the sidebar resets all 3 filters so the
+          // operator sees the full set of orders for that store, not
+          // an unintentionally-narrowed slice from a previous filter.
           setActiveStore(storeId)
+          resetAllOrdersFilters()
           navigate(`/orders/${statusOverride ?? currentStatus}`)
           closeMobileMenu()
         }}
@@ -873,6 +897,11 @@ export default function Home() {
                 dateFilter={dateFilter}
                 onDateFilterChange={setDateFilter}
                 onResolvedDateRangeChange={setOrdersDateRange}
+                // Counter from Home — bumps every time the user clicks
+                // a sidebar entry. OrdersView watches this and clears
+                // its local filters (sku, custom date range) so each
+                // sidebar nav starts with a clean filter slate.
+                filterResetVersion={filterResetVersion}
                 selectedOrderIds={selectedOrderIds}
                 onSelectedOrderIdsChange={setSelectedOrderIds}
                 activeOrderId={activeOrderId}

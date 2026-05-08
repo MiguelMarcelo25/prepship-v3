@@ -311,6 +311,18 @@ interface OrdersViewProps {
   queueToggleRequestId?: number
   onQueueStateChange?: (state: { count: number; isOpen: boolean }) => void
   refreshVersion?: number
+  /**
+   * Counter from Home — increments every time the user clicks a
+   * sidebar entry (status or store). When it changes, OrdersView
+   * clears its locally-owned filters (skuFilter + customDateFrom +
+   * customDateTo). search + dateFilter are reset by Home directly
+   * since they live in Home state.
+   *
+   * Counter (not boolean) so rapid clicks each produce a distinct
+   * value — the watching useEffect can't miss an event due to
+   * batching or a same-value setState skipping the dep change.
+   */
+  filterResetVersion?: number
   showTestOrders?: boolean
   // User preference (from localStorage in Home.tsx) — when true, the
   // right-side order detail panel is hidden when no order is selected.
@@ -1675,6 +1687,7 @@ export default function OrdersView({
   queueToggleRequestId = 0,
   onQueueStateChange,
   refreshVersion = 0,
+  filterResetVersion = 0,
   showTestOrders = true,
   hideEmptyPanel = false,
   onHideEmptyPanelChange,
@@ -2359,6 +2372,21 @@ export default function OrdersView({
     if (refreshVersion === 0) return
     void refetchOrders()
   }, [refreshVersion, refetchOrders])
+
+  // Sidebar nav resets — Home bumps `filterResetVersion` whenever the
+  // user clicks a sidebar entry. We clear all OrdersView-local filters
+  // (sku + custom date inputs) so the new view starts with a clean
+  // slate. Search + dateFilter live in Home and are reset there
+  // directly. Skip on initial mount (filterResetVersion=0) so a
+  // bookmarked /orders/awaiting_shipment URL doesn't lose pre-filled
+  // filter state on first render.
+  useEffect(() => {
+    if (filterResetVersion === 0) return
+    setSkuFilter('')
+    setCustomDateFrom('')
+    setCustomDateTo('')
+    setPage(1)
+  }, [filterResetVersion])
 
   useEffect(() => {
     if (columnMenuRequestId === 0) return
