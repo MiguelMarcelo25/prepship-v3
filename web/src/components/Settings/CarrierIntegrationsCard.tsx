@@ -244,6 +244,13 @@ const PROVIDER_DEFS: ProviderDef[] = [
     domain: 'shipengine.com',
     fields: [
       { name: 'apiKey', label: 'API Key', type: 'password', placeholder: 'TEST_xxxxxxxx or live_xxxxxxxx' },
+      { name: 'carrierIds', label: 'Carrier IDs (optional)', required: false, placeholder: 'se-123890, se-456789', hint: 'Leave blank to rate with every connected ShipEngine carrier returned by /v1/carriers.' },
+      { name: 'shipFromName', label: 'Ship-From Name (optional)', required: false, placeholder: 'DR Prepper Warehouse' },
+      { name: 'shipFromAddress1', label: 'Ship-From Street (optional)', required: false, placeholder: '1234 Warehouse Way' },
+      { name: 'shipFromCity', label: 'Ship-From City (optional)', required: false, placeholder: 'Carson' },
+      { name: 'shipFromState', label: 'Ship-From State (optional)', required: false, placeholder: 'CA' },
+      { name: 'shipFromZip', label: 'Ship-From Zip (optional)', required: false, placeholder: '90248' },
+      { name: 'shipFromPhone', label: 'Ship-From Phone (optional)', required: false, placeholder: '5551234567' },
     ],
   },
   {
