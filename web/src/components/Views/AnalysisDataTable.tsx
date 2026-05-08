@@ -1,4 +1,5 @@
 // @ts-nocheck
+import { useEffect, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import type { AnalysisSkuDto } from '@prepshipv2/contracts/analysis/contracts'
 import {
   AnalysisTableHeader,
@@ -12,6 +13,41 @@ import {
   type AnalysisTotals,
 } from './analysis-parity'
 import './AnalysisDataTable.css'
+
+// Hover-zoom thumbnail preview state, ported from InventoryView so the
+// /analysis SKU table behaves identically to /inventory: hovering a
+// product image pops a 170px square preview that follows the cursor.
+//
+// State shape mirrors InventoryView's ThumbnailPreviewState — keeps the
+// behavior uniform across pages without lifting state into a context
+// (the two views' lifecycles are independent enough that a shared
+// context would just add coupling for no real benefit).
+interface ThumbnailPreviewState {
+  src: string
+  left: number
+  top: number
+  zoom: number
+}
+
+function positionThumbnailPreview(cursorX: number, cursorY: number) {
+  const zoom = (Number.parseFloat(document.body.style.zoom) || 100) / 100
+  const width = 170
+  const height = 170
+  const gap = 14
+  const viewportWidth = window.innerWidth
+  const viewportHeight = window.innerHeight
+  // Flip the preview to the LEFT/UP edge when it would overflow the
+  // viewport on the right/bottom — keeps it always on-screen even
+  // for items in the last column or last row.
+  const rawLeft = cursorX + gap + width > viewportWidth ? cursorX - width - gap : cursorX + gap
+  const rawTop = cursorY + gap + height > viewportHeight ? cursorY - height - gap : cursorY + gap
+
+  return {
+    left: rawLeft / zoom,
+    top: rawTop / zoom,
+    zoom: 1 / zoom,
+  }
+}
 
 const TABLE_COLUMN_COUNT = 10
 
@@ -105,6 +141,37 @@ export function AnalysisDataTable({
   const cellPadding = cellPaddingFor(columnSize)
   const nameMaxWidth = nameMaxWidthFor(columnSize)
   const pillSize = pillSizeFor(columnSize)
+
+  // Hover-zoom preview: tracks cursor + image src while hovered. The
+  // mousemove listener is only registered while a preview is active
+  // (gated by the `if (!thumbnailPreview) return` early-out) so we
+  // don't leak handlers across the entire app when nothing is hovered.
+  const [thumbnailPreview, setThumbnailPreview] = useState<ThumbnailPreviewState | null>(null)
+  useEffect(() => {
+    if (!thumbnailPreview) return
+    const handleMove = (event: MouseEvent) => {
+      setThumbnailPreview((current) => {
+        if (!current) return current
+        return {
+          ...current,
+          ...positionThumbnailPreview(event.clientX, event.clientY),
+        }
+      })
+    }
+    document.addEventListener('mousemove', handleMove)
+    return () => document.removeEventListener('mousemove', handleMove)
+  }, [thumbnailPreview])
+
+  function showThumbnailPreview(src: string, event: ReactMouseEvent<HTMLImageElement>) {
+    if (!src) return
+    setThumbnailPreview({
+      src,
+      ...positionThumbnailPreview(event.clientX, event.clientY),
+    })
+  }
+  function hideThumbnailPreview() {
+    setThumbnailPreview(null)
+  }
 
   return (
     <div className={SHELL_CLASSES}>
@@ -213,7 +280,9 @@ export function AnalysisDataTable({
                             loading="lazy"
                             decoding="async"
                             referrerPolicy="no-referrer"
-                            className="w-full h-full object-cover"
+                            className="w-full h-full object-cover cursor-zoom-in"
+                            onMouseEnter={(e) => showThumbnailPreview(row.imageUrl as string, e)}
+                            onMouseLeave={hideThumbnailPreview}
                             onError={(e) => {
                               // Marketplace image URLs sometimes 403/404
                               // (Amazon CDN signed-URL expiry, etc).
@@ -349,6 +418,26 @@ export function AnalysisDataTable({
           ) : null}
         </tfoot>
       </table>
+
+      {/* Hover-zoom preview overlay — fixed-position floating panel
+          that follows the cursor while hovering a thumbnail. Reuses
+          the .inventory-thumb-preview CSS class from InventoryView
+          so the visual treatment is identical (170px square, white
+          card, soft shadow). pointer-events:none in the CSS lets
+          subsequent mousemoves keep firing on the underlying img
+          for smooth cursor tracking. */}
+      {thumbnailPreview ? (
+        <div
+          className="inventory-thumb-preview"
+          style={{
+            left: `${thumbnailPreview.left}px`,
+            top: `${thumbnailPreview.top}px`,
+            zoom: String(thumbnailPreview.zoom),
+          }}
+        >
+          <img src={thumbnailPreview.src} alt="" />
+        </div>
+      ) : null}
     </div>
   )
 }

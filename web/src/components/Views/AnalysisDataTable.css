@@ -198,3 +198,33 @@
   background: rgba(217, 119, 6, .14);
   color: #b45309;
 }
+
+/* ─── Hover-zoom thumbnail preview ─────────────────────────────
+ * Mirrors .inventory-thumb-preview from InventoryView.css so the
+ * /analysis SKU table behaves identically to /inventory. Lives
+ * here (not imported from InventoryView.css) so the analysis
+ * page stays self-contained — the user shouldn't need to have
+ * visited /inventory first for hover-zoom to work.
+ *
+ * pointer-events: none is critical: without it, the floating
+ * preview captures mouse events and breaks cursor tracking
+ * (mousemove fires on the preview itself, then bounces wildly).
+ */
+.inventory-thumb-preview {
+  position: fixed;
+  z-index: 99999;
+  background: var(--bg, #fff);
+  border: 1px solid var(--border, #ddd);
+  border-radius: 8px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, .22);
+  padding: 5px;
+  pointer-events: none;
+}
+
+.inventory-thumb-preview img {
+  width: 160px;
+  height: 160px;
+  object-fit: contain;
+  border-radius: 5px;
+  display: block;
+}
