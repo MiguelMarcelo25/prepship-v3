@@ -120,10 +120,16 @@ export function getCarrierBadgeClass(carrierCode: string | null | undefined) {
 }
 
 export function getCarrierLabel(rate: RateDto): string {
-  const carrierCode = rate.carrierCode || ''
-  if (carrierCode === 'stamps_com') return 'USPS'
-  if (carrierCode.startsWith('fedex')) return 'FedEx'
-  return 'UPS'
+  const carrierCode = (rate.carrierCode || '').toLowerCase()
+  if (carrierCode.includes('stamps') || carrierCode.includes('usps')) return 'USPS'
+  if (carrierCode.includes('fedex')) return 'FedEx'
+  if (carrierCode.includes('dhl')) return 'DHL'
+  if (carrierCode.includes('walmart')) return 'Walmart'
+  if (carrierCode.includes('easypost')) return 'EasyPost'
+  if (carrierCode.includes('amazon')) return 'Amazon'
+  if (carrierCode.includes('ebay')) return 'eBay'
+  if (carrierCode.includes('ups')) return 'UPS'
+  return carrierCode ? carrierCode.replace(/_/g, ' ').toUpperCase() : '—'
 }
 
 export function getCarrierNickname(rate: RateDto): string | null {

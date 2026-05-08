@@ -14,6 +14,7 @@
 import { api, qs } from './api';
 import { API_BASE } from './api-base';
 import { supabase } from './supabase';
+import { callVercelFunction } from './vercelFunction';
 
 async function authHeaders(): Promise<Record<string, string>> {
   const {
@@ -45,6 +46,17 @@ function parseDownloadFilename(
 // predate the flag and haven't been migrated yet.
 const HIDDEN_CLIENT_NAMES = new Set(['api shipments']);
 const STALE_MOCK_LABEL_HOSTS = new Set(['prepshipv4-api.onrender.com']);
+const DIRECT_CARRIER_PROVIDER_ID_OFFSET = 10_000_000;
+const STORE_PROVIDER_KEYS = new Set([
+  'walmart',
+  'amazon',
+  'ebay',
+  'shopify',
+  'etsy',
+  'tiktok_shop',
+  'woocommerce',
+  'bigcommerce',
+]);
 
 // Populated by fetchStores / fetchCounts when clients are loaded — lets
 // downstream filtering (e.g. byStatusStore emission) drop rows for hidden
@@ -421,10 +433,15 @@ function translateRatePayloadToV4(
     out.toZip = input.toPostalCode;
   }
 
-  // string passthroughs (names match across v2/v4).
-  for (const k of ['toCountry', 'toState', 'toCity', 'toAddress', 'toName'] as const) {
+  // string passthroughs (names match across v2/v4, plus a few direct-carrier
+  // hints that the Vercel carrier quoter can use).
+  for (const k of ['toCountry', 'toState', 'toCity', 'toAddress', 'toName', 'externalOrderId', 'purchaseOrderId', 'orderNumber'] as const) {
     const v = input[k];
     if (typeof v === 'string' && v.length > 0) out[k] = v;
+  }
+  const fromPostalCode = input.fromPostalCode ?? input.fromZip;
+  if (typeof fromPostalCode === 'string' && fromPostalCode.trim()) {
+    out.fromZip = fromPostalCode.trim();
   }
 
   if (typeof input.residential === 'boolean') out.residential = input.residential;
@@ -486,6 +503,210 @@ function normalizeCarrierAccountDto(c: any, index = 0): any {
     _label: label,
     sourceClientName: c?.source_client_name ?? c?.sourceClientName,
   };
+}
+
+type DirectCarrierAccountRow = {
+  id: number;
+  clientId?: number | null;
+  provider: string;
+  label?: string | null;
+  accountIdentifier?: string | null;
+  active?: boolean;
+};
+
+type DirectCarrierRatesResult = {
+  ok: boolean;
+  provider?: string;
+  simulated?: boolean;
+  rates?: Array<{ service: string; cost: number; days?: number; currency?: string }>;
+  error?: string;
+  meta?: Record<string, unknown>;
+};
+
+function normalizeProviderKey(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+function isStoreProvider(provider: unknown): boolean {
+  return STORE_PROVIDER_KEYS.has(normalizeProviderKey(provider));
+}
+
+function directProviderIdFromAccountId(accountId: number): number {
+  return DIRECT_CARRIER_PROVIDER_ID_OFFSET + accountId;
+}
+
+function directCarrierAccountIdFromProviderId(providerId: number | null): number | null {
+  if (providerId == null || providerId < DIRECT_CARRIER_PROVIDER_ID_OFFSET) return null;
+  const accountId = providerId - DIRECT_CARRIER_PROVIDER_ID_OFFSET;
+  return Number.isFinite(accountId) && accountId > 0 ? accountId : null;
+}
+
+function isDirectCarrierId(value: unknown): boolean {
+  return directCarrierAccountIdFromProviderId(toProviderAccountId(value)) != null;
+}
+
+function normalizeDirectCarrierAccountDto(row: DirectCarrierAccountRow): any {
+  const provider = normalizeProviderKey(row.provider);
+  const shippingProviderId = directProviderIdFromAccountId(row.id);
+  const label = row.label || row.accountIdentifier || provider;
+  return {
+    id: row.id,
+    directCarrierAccountId: row.id,
+    carrierId: `se-${shippingProviderId}`,
+    carrierCode: provider,
+    shippingProviderId,
+    nickname: label,
+    accountNumber: row.accountIdentifier ?? null,
+    clientId: row.clientId ?? null,
+    code: provider,
+    _label: label,
+    source: 'carrier_accounts',
+    sourceClientName: 'Direct carrier accounts',
+  };
+}
+
+async function fetchDirectCarrierAccountRows(): Promise<DirectCarrierAccountRow[]> {
+  const res = await callVercelFunction<{ data?: DirectCarrierAccountRow[] }>('/carrier-accounts?source=admin');
+  return (res.data ?? [])
+    .filter((row) => row && row.active !== false && row.provider)
+    .filter((row) => !isStoreProvider(row.provider))
+    .map((row) => ({ ...row, provider: normalizeProviderKey(row.provider) }));
+}
+
+function inferCarrierCodeForDirectRate(provider: string, service: string): string {
+  const p = normalizeProviderKey(provider);
+  const s = service.toLowerCase();
+  if (s.includes('usps') || s.includes('postal')) return 'stamps_com';
+  if (s.includes('fedex')) return 'fedex';
+  if (s.includes('ups')) return 'ups';
+  if (s.includes('dhl')) return 'dhl_express';
+  if (p === 'usps') return 'stamps_com';
+  if (p === 'fedex') return 'fedex';
+  if (p === 'ups') return 'ups';
+  return p || 'direct_carrier';
+}
+
+function slugRateService(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 80) || 'rate';
+}
+
+function translateDirectRateToV2Shape(
+  rate: { service: string; cost: number; days?: number; currency?: string },
+  account: DirectCarrierAccountRow
+): Record<string, unknown> {
+  const provider = normalizeProviderKey(account.provider);
+  const shippingProviderId = directProviderIdFromAccountId(account.id);
+  const serviceName = String(rate.service || provider || 'Direct carrier');
+  const serviceCode = `${provider}_${slugRateService(serviceName)}`;
+  const carrierCode = inferCarrierCodeForDirectRate(provider, serviceName);
+  const amount = Number(rate.cost ?? 0);
+  const currency = String(rate.currency ?? 'USD').toLowerCase();
+  const accountLabel = account.label || account.accountIdentifier || provider;
+  const raw = {
+    provider,
+    source: 'carrier_accounts',
+    carrier_id: `se-${shippingProviderId}`,
+    carrier_code: carrierCode,
+    carrier_nickname: accountLabel,
+    service_code: serviceCode,
+    service_type: serviceName,
+    shipping_amount: { amount, currency },
+    other_amount: { amount: 0, currency },
+    delivery_days: Number(rate.days ?? 0) || null,
+  };
+  return {
+    carrierCode,
+    serviceCode,
+    serviceName,
+    carrierNickname: accountLabel,
+    shippingProviderId,
+    sourceClientId: account.clientId ?? null,
+    sourceClientName: 'Direct carrier accounts',
+    provider,
+    source: 'carrier_accounts',
+    amount,
+    shipmentCost: amount,
+    otherCost: 0,
+    deliveryDays: raw.delivery_days,
+    raw,
+  };
+}
+
+async function fetchDirectCarrierRates(
+  body: Record<string, unknown>,
+  carrierIds: string[]
+): Promise<Record<string, unknown>[]> {
+  const accountIds = [...new Set(
+    carrierIds
+      .map((carrierId) => directCarrierAccountIdFromProviderId(toProviderAccountId(carrierId)))
+      .filter((id): id is number => id != null)
+  )];
+  if (!accountIds.length) return [];
+
+  let rows: DirectCarrierAccountRow[] = [];
+  try {
+    const allRows = await fetchDirectCarrierAccountRows();
+    rows = accountIds
+      .map((id) => allRows.find((row) => row.id === id) ?? null)
+      .filter((row): row is DirectCarrierAccountRow => row != null);
+  } catch (err) {
+    console.warn(
+      '[v2-apiClient] direct carrier account lookup failed:',
+      err instanceof Error ? err.message : err
+    );
+  }
+
+  const rowById = new Map(rows.map((row) => [row.id, row]));
+  const calls = accountIds.map(async (accountId) => {
+    const account = rowById.get(accountId) ?? {
+      id: accountId,
+      provider: 'direct_carrier',
+      label: `Direct Carrier #${accountId}`,
+      active: true,
+    };
+    try {
+      const res = await callVercelFunction<DirectCarrierRatesResult>('/carriers/rates', {
+        method: 'POST',
+        body: {
+          carrierAccountId: accountId,
+          weightOz: body.weightOz,
+          fromZip: body.fromZip,
+          toZip: body.toZip,
+          dimsL: body.dimsL,
+          dimsW: body.dimsW,
+          dimsH: body.dimsH,
+          externalOrderId: body.externalOrderId ?? body.orderNumber,
+          purchaseOrderId: body.purchaseOrderId,
+        },
+      });
+      if (!res.ok) {
+        console.warn(
+          `[v2-apiClient] direct carrier ${account.provider} returned no rates:`,
+          res.error ?? 'unknown error'
+        );
+        return [];
+      }
+      const accountForRates = {
+        ...account,
+        provider: normalizeProviderKey(res.provider ?? account.provider),
+      };
+      return (res.rates ?? [])
+        .filter((rate) => Number(rate.cost ?? 0) > 0)
+        .map((rate) => translateDirectRateToV2Shape(rate, accountForRates));
+    } catch (err) {
+      console.warn(
+        `[v2-apiClient] direct carrier #${accountId} rates failed:`,
+        err instanceof Error ? err.message : err
+      );
+      return [];
+    }
+  });
+
+  return (await Promise.all(calls)).flat();
 }
 
 // Maps v4's ShipStation-v2-passthrough rate object to the v2-legacy shape
@@ -913,12 +1134,21 @@ export const apiClient = {
     return safe(
       'fetchCarriersForStore',
       async () => {
-        const res = await api.get<any>(
-          `/rates/carriers-for-store${qs({
-            storeId: storeId ?? undefined,
-            clientId: clientId ?? undefined,
-          })}`
-        );
+        const [res, directRows] = await Promise.all([
+          api.get<any>(
+            `/rates/carriers-for-store${qs({
+              storeId: storeId ?? undefined,
+              clientId: clientId ?? undefined,
+            })}`
+          ),
+          fetchDirectCarrierAccountRows().catch((err) => {
+            console.warn(
+              '[v2-apiClient] fetchCarriersForStore direct accounts failed:',
+              err instanceof Error ? err.message : err
+            );
+            return [] as DirectCarrierAccountRow[];
+          }),
+        ]);
         const raw = Array.isArray(res?.carriers)
           ? res.carriers
           : Array.isArray(res?.data)
@@ -926,7 +1156,12 @@ export const apiClient = {
             : Array.isArray(res)
               ? res
               : [];
-        return { carriers: raw.map(normalizeCarrierAccountDto) };
+        return {
+          carriers: [
+            ...raw.map(normalizeCarrierAccountDto),
+            ...directRows.map(normalizeDirectCarrierAccountDto),
+          ],
+        };
       },
       { carriers: [] }
     );
@@ -2549,13 +2784,45 @@ export const apiClient = {
       'fetchRates',
       async () => {
         const body = translateRatePayloadToV4(data);
-        const res = await api.post<any>('/rates', body);
-        const rawRates = Array.isArray(res)
-          ? res
-          : Array.isArray(res?.rates)
-            ? res.rates
-            : [];
-        return rawRates.map(translateRateToV2Shape);
+        const requestedCarrierIds = Array.isArray(body.carrierIds)
+          ? body.carrierIds.map((value) => String(value)).filter(Boolean)
+          : null;
+        const shipStationCarrierIds = requestedCarrierIds
+          ? requestedCarrierIds.filter((carrierId) => !isDirectCarrierId(carrierId))
+          : null;
+        const directCarrierIds = requestedCarrierIds?.filter(isDirectCarrierId) ?? [];
+
+        const shouldFetchShipStation =
+          requestedCarrierIds == null || (shipStationCarrierIds?.length ?? 0) > 0;
+
+        const [shipStationRates, directRates] = await Promise.all([
+          shouldFetchShipStation
+            ? api.post<any>('/rates', {
+                ...body,
+                ...(shipStationCarrierIds
+                  ? { carrierIds: shipStationCarrierIds }
+                  : {}),
+              }).then((res) => {
+                const rawRates = Array.isArray(res)
+                  ? res
+                  : Array.isArray(res?.rates)
+                    ? res.rates
+                    : [];
+                return rawRates.map(translateRateToV2Shape);
+              })
+            : Promise.resolve([]),
+          directCarrierIds.length
+            ? fetchDirectCarrierRates(body, directCarrierIds)
+            : Promise.resolve([]),
+        ]);
+
+        return [...shipStationRates, ...directRates].sort((left, right) => {
+          const leftAmount = Number((left as any).shipmentCost ?? (left as any).amount ?? 0) +
+            Number((left as any).otherCost ?? 0);
+          const rightAmount = Number((right as any).shipmentCost ?? (right as any).amount ?? 0) +
+            Number((right as any).otherCost ?? 0);
+          return leftAmount - rightAmount;
+        });
       },
       []
     );

@@ -43,10 +43,16 @@ export type RbCarrierAccountDto = {
   accountNumber?: string | null;
   name?: string | null;
   _label?: string | null;
+  source?: string | null;
+  sourceClientName?: string | null;
+  directCarrierAccountId?: number | null;
 };
 
 export type RbOrderSummaryDto = {
   orderId: number;
+  orderNumber?: string | null;
+  externalOrderId?: string | null;
+  external_order_id?: string | null;
   storeId?: number | null;
   clientId?: number | null;
   bestRate?: Record<string, unknown> | null;
@@ -117,8 +123,28 @@ const CARRIER_NAMES: Record<string, string> = {
   ontrac: 'OnTrac',
   lasership: 'LaserShip',
   amazon_swa: 'Amazon',
+  amazon_shipping: 'Amazon',
+  ebay_shipping: 'eBay',
+  easypost: 'EasyPost',
   globegistics: 'Globegistics',
+  walmart_shipping: 'Walmart',
 };
+
+const DIRECT_PROVIDER_LABELS: Record<string, string> = {
+  amazon_shipping: 'Amazon Shipping',
+  ebay_shipping: 'eBay Shipping',
+  easypost: 'EasyPost',
+  fedex: 'FedEx Direct',
+  simulator: 'Simulator',
+  stamps_com: 'Stamps.com Direct',
+  ups: 'UPS Direct',
+  usps: 'USPS Direct',
+  walmart_shipping: 'Walmart Shipping',
+};
+
+function normalizeProviderKey(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
 
 function toDisplayLabel(value: unknown): string | null {
   return typeof value === 'string' && value.trim() && !value.trim().startsWith('se-')
@@ -311,6 +337,33 @@ function toFiniteNumber(value: unknown): number | null {
 
 function toOptionalString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value : null;
+}
+
+function getModalRateSourceLabel(
+  rate: RateRow,
+  accounts: RbCarrierAccountDto[]
+): string {
+  const pid = toFiniteNumber(rate.shippingProviderId);
+  const account = pid != null
+    ? accounts.find((candidate) => candidate.shippingProviderId === pid)
+    : null;
+  const raw = rate.raw ?? {};
+  const providerKey =
+    normalizeProviderKey(account?.code) ||
+    normalizeProviderKey(raw.provider) ||
+    normalizeProviderKey(raw.source) ||
+    normalizeProviderKey(rate.carrierCode);
+  const sourceKey =
+    normalizeProviderKey(account?.source) ||
+    normalizeProviderKey(account?.sourceClientName) ||
+    normalizeProviderKey(raw.source);
+  const isDirect =
+    (pid != null && pid >= 10_000_000) ||
+    sourceKey === 'carrier_accounts' ||
+    sourceKey === 'direct_carrier_accounts';
+
+  if (isDirect) return DIRECT_PROVIDER_LABELS[providerKey] ?? 'Direct Carrier';
+  return 'ShipStation';
 }
 
 function buildOrderBestRateSeed(
@@ -870,6 +923,11 @@ export default function RateBrowserModal({
         carrierIds: carrierIds.length ? carrierIds : undefined,
         storeId: order?.storeId ?? undefined,
         clientId: order?.clientId ?? undefined,
+        externalOrderId:
+          toOptionalString(order?.externalOrderId) ??
+          toOptionalString(order?.external_order_id) ??
+          toOptionalString(order?.orderNumber) ??
+          undefined,
         forceRefresh: false,
       })) as RateRow[];
 
@@ -1055,6 +1113,7 @@ export default function RateBrowserModal({
     const eta = formatEta(r);
     const primaryText = showCarrier ? acctName : svcName;
     const secondaryText = showCarrier ? svcName : '';
+    const sourceText = getModalRateSourceLabel(r, rateShippingAccounts);
 
     const detailsArr: any[] = (r.raw?.rate_details ?? r.raw?.rateDetails ?? []) as any[];
     const surcharges = detailsArr.filter(
@@ -1133,6 +1192,9 @@ export default function RateBrowserModal({
               {secondaryText}
             </div>
           )}
+          <div style={{ fontSize: 10.5, color: 'var(--text3)', lineHeight: 1.4 }}>
+            Rate Source: {sourceText}
+          </div>
           {surcharges.length > 0 && (
             <div style={{ fontSize: 10, color: 'var(--text3)', marginTop: 2, lineHeight: 1.5 }}>
               {surcharges.map((d: any, i: number) => (
