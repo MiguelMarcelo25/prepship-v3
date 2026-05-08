@@ -6,24 +6,31 @@ import { BrandLogo } from '../../BrandLogo'
 import {
   Search as SearchIcon,
   X as XIcon,
-  Boxes,
-  Building2,
-  Ruler,
-  DollarSign,
-  BarChart3,
-  Settings as SettingsIcon,
-  Receipt,
-  ClipboardList,
   Box,
   ChevronDown,
   ChevronRight,
   LogOut,
-  LayoutDashboard,
-  Inbox,
-  CheckCircle2,
-  XCircle,
   Circle,
 } from 'lucide-react'
+// Tinted react-icons for the sidebar — each item gets its own intrinsic
+// color rather than the previous uniform `text-slate-900`. Material
+// Design (`md`) has the cleanest filled variants for a colored-icon
+// sidebar; we mix in `bs` (Bootstrap) for the package shape since BsBox
+// reads as "shipping box" more clearly than MdInventory.
+import {
+  MdDashboard,
+  MdInventory2,
+  MdLocationOn,
+  MdAttachMoney,
+  MdInsights,
+  MdSettings,
+  MdReceiptLong,
+  MdAssignment,
+  MdInbox,
+  MdCheckCircle,
+  MdCancel,
+} from 'react-icons/md'
+import { BsBoxSeam } from 'react-icons/bs'
 import { useSidebarController, type SidebarVariantProps, type SidebarViewType } from './useSidebarController'
 
 const STATUS_LABELS = {
@@ -32,22 +39,26 @@ const STATUS_LABELS = {
   cancelled: 'Cancelled',
 } as const
 
-const STATUS_ICON = {
-  awaiting_shipment: Inbox,
-  shipped: CheckCircle2,
-  cancelled: XCircle,
+// Each status carries its own brand color in `tint` — applied via inline
+// `style.color` because intrinsic SVG fill on react-icons honors the
+// CSS `color` property (they paint with `currentColor`). That means the
+// surrounding Tailwind `text-slate-900` no longer washes them out.
+const STATUS_ICON: Record<string, { Icon: any; tint: string }> = {
+  awaiting_shipment: { Icon: MdInbox, tint: '#f59e0b' },     // amber-500
+  shipped: { Icon: MdCheckCircle, tint: '#10b981' },          // emerald-500
+  cancelled: { Icon: MdCancel, tint: '#f43f5e' },             // rose-500
 }
 
-const TOOL_ITEMS: Array<{ view: SidebarViewType; Icon: any; label: string }> = [
-  { view: 'dashboard', Icon: LayoutDashboard, label: 'Dashboard' },
-  { view: 'inventory', Icon: Boxes, label: 'Inventory' },
-  { view: 'locations', Icon: Building2, label: 'Locations' },
-  { view: 'packages', Icon: Ruler, label: 'Packages' },
-  { view: 'rates', Icon: DollarSign, label: 'Rate Shop' },
-  { view: 'analysis', Icon: BarChart3, label: 'Analysis' },
-  { view: 'settings', Icon: SettingsIcon, label: 'Settings' },
-  { view: 'billing', Icon: Receipt, label: 'Billing' },
-  { view: 'manifests', Icon: ClipboardList, label: 'Manifests' },
+const TOOL_ITEMS: Array<{ view: SidebarViewType; Icon: any; label: string; tint: string }> = [
+  { view: 'dashboard', Icon: MdDashboard,    label: 'Dashboard', tint: '#6366f1' }, // indigo-500
+  { view: 'inventory', Icon: MdInventory2,   label: 'Inventory', tint: '#f97316' }, // orange-500
+  { view: 'locations', Icon: MdLocationOn,   label: 'Locations', tint: '#f43f5e' }, // rose-500
+  { view: 'packages',  Icon: BsBoxSeam,      label: 'Packages',  tint: '#8b5cf6' }, // violet-500
+  { view: 'rates',     Icon: MdAttachMoney,  label: 'Rate Shop', tint: '#10b981' }, // emerald-500
+  { view: 'analysis',  Icon: MdInsights,     label: 'Analysis',  tint: '#3b82f6' }, // blue-500
+  { view: 'settings',  Icon: MdSettings,     label: 'Settings',  tint: '#64748b' }, // slate-500
+  { view: 'billing',   Icon: MdReceiptLong,  label: 'Billing',   tint: '#0ea5e9' }, // sky-500
+  { view: 'manifests', Icon: MdAssignment,   label: 'Manifests', tint: '#14b8a6' }, // teal-500
 ]
 
 export default function SidebarA(props: SidebarVariantProps) {
@@ -106,7 +117,7 @@ export default function SidebarA(props: SidebarVariantProps) {
       <nav className="flex-1 overflow-y-auto px-2 pb-3">
         <div className="px-1.5 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-900">Orders</div>
         {c.SIDEBAR_STATUSES.map((status) => {
-          const StatusIcon = STATUS_ICON[status]
+          const { Icon: StatusIcon, tint: statusTint } = STATUS_ICON[status]
           const isActive = c.currentView === 'orders' && c.currentStatus === status && c.activeStore == null
           const isExpanded = c.expandedSections.has(status)
           const total = c.counts ? c.sidebarSections[status].total : null
@@ -125,7 +136,16 @@ export default function SidebarA(props: SidebarVariantProps) {
                 >
                   <ChevronDown size={11} strokeWidth={2.25} />
                 </button>
-                <StatusIcon size={13} strokeWidth={2} className="mr-2 text-slate-900" />
+                {/* react-icons paint via SVG `fill` (uses currentColor),
+                    so the inline `color` here drives the icon hue. Slight
+                    drop-shadow makes the colored fill read on white
+                    without looking gaudy. */}
+                <StatusIcon
+                  size={15}
+                  className="mr-2 shrink-0"
+                  style={{ color: statusTint, filter: 'drop-shadow(0 1px 0 rgba(0,0,0,0.04))' }}
+                  aria-hidden
+                />
                 <span className="flex-1 truncate">{STATUS_LABELS[status]}</span>
                 <span className={`ml-2 text-[10.5px] font-mono tabular-nums text-slate-900 ${isActive ? 'font-semibold' : ''}`}>
                   {total != null ? total.toLocaleString() : '—'}
@@ -185,7 +205,17 @@ export default function SidebarA(props: SidebarVariantProps) {
               className={`relative flex items-center h-8 px-3 rounded-md cursor-pointer text-[12.5px] font-medium select-none transition-colors duration-100 text-slate-900 ${active ? 'bg-indigo-50' : 'hover:bg-slate-50'}`}
             >
               {active ? <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-r bg-indigo-600" aria-hidden /> : null}
-              <ToolIcon size={14} strokeWidth={2} className="mr-2.5 text-slate-900" />
+              {/* Same color-via-currentColor trick as the status icons —
+                  each tool's `tint` is its brand hue. We keep the size
+                  a hair bigger (15px) than the original lucide stroke
+                  icons because filled material icons read smaller at
+                  the same px count. */}
+              <ToolIcon
+                size={15}
+                className="mr-2.5 shrink-0"
+                style={{ color: tool.tint, filter: 'drop-shadow(0 1px 0 rgba(0,0,0,0.04))' }}
+                aria-hidden
+              />
               <span className="flex-1 truncate">{tool.label}</span>
               {active ? <ChevronRight size={11} strokeWidth={2.5} className="text-indigo-500 ml-1" /> : null}
             </div>
