@@ -4026,48 +4026,64 @@ export default function OrdersView({
     if (!panelOrder || extShipBusy) return
 
     setExtShipBusy(true)
-    try {
-      const trimmedTracking = extShipTracking.trim()
-      const wantNotify = extShipNotifyCustomer || extShipNotifyMarketplace
-      const result = await apiClient.markOrderShippedExternal(panelOrder.orderId, source, {
-        trackingNumber: trimmedTracking || null,
-        carrierCode: null, // future: dropdown for carrier when notify is on
-        notifyCustomer: extShipNotifyCustomer,
-        notifyMarketplace: extShipNotifyMarketplace,
-      })
+    const trimmedTracking = extShipTracking.trim()
+    const wantNotify = extShipNotifyCustomer || extShipNotifyMarketplace
+    const channels: string[] = []
+    if (extShipNotifyCustomer) channels.push('customer')
+    if (extShipNotifyMarketplace) channels.push('marketplace')
 
-      // Compose a toast that tells the user EXACTLY which side-effects
-      // happened — a generic "marked shipped" toast hides whether the
-      // notification fired and whether it succeeded. Operators want
-      // explicit confirmation when they opted into notification.
-      let summary = `✅ Marked shipped via ${source}`
-      if (wantNotify) {
-        const channels: string[] = []
-        if (extShipNotifyCustomer) channels.push('customer')
-        if (extShipNotifyMarketplace) channels.push('marketplace')
-        if (result?.notify?.ok) {
-          summary += ` · notified ${channels.join(' + ')}`
-        } else {
-          // Local flip succeeded but ShipStation call failed — surface
-          // the reason so the user knows to retry or fix the issue.
-          summary += ` · ⚠ notify ${channels.join(' + ')} failed: ${result?.notify?.reason ?? 'unknown'}`
-        }
-      }
-      const tone: 'success' | 'error' = (wantNotify && result?.notify?.ok === false) ? 'error' : 'success'
-      showToast(summary, tone)
+    // apiClient.markOrderShippedExternal is wrapped by safe() — it
+    // CATCHES errors and returns { ok: false } instead of re-throwing.
+    // So a try/catch here cannot detect failure; we must inspect the
+    // result shape: success → { data, notify }, failure → { ok: false }.
+    // The previous version showed a green '✅ Marked shipped' toast
+    // even when the API call failed because the catch block never fired.
+    const result = (await apiClient.markOrderShippedExternal(panelOrder.orderId, source, {
+      trackingNumber: trimmedTracking || null,
+      carrierCode: null, // future: dropdown for carrier when notify is on
+      notifyCustomer: extShipNotifyCustomer,
+      notifyMarketplace: extShipNotifyMarketplace,
+    })) as
+      | { data: unknown; notify?: { ok: boolean; reason?: string } }
+      | { ok: false }
 
-      // Reset the popover form so the next open starts fresh — except
-      // the marketplace toggle which we keep at "on" for next time.
-      setExtShipTracking('')
-      setExtShipNotifyCustomer(false)
-      setExtShipNotifyMarketplace(true)
-      clearSelection()
-      await refetchOrders()
-    } catch (error) {
-      showToast(error instanceof Error ? error.message : 'Failed to mark shipped', 'error')
-    } finally {
-      setExtShipBusy(false)
+    setExtShipBusy(false)
+
+    // Detect API-level failure first — if the local DB flip didn't
+    // happen, no point continuing to talk about notify status.
+    const apiCallFailed = (result as { ok?: unknown })?.ok === false
+    if (apiCallFailed) {
+      showToast(`❌ Failed to mark shipped via ${source} — check Render logs`, 'error')
+      return
     }
+
+    // Local flip succeeded. Now inspect notify status to compose the
+    // toast. Three outcomes:
+    //   1. Didn't request notify → simple success toast
+    //   2. Requested notify, succeeded → success with channel list
+    //   3. Requested notify, failed → warning with reason (local DB
+    //      already flipped — operator can retry the notify side
+    //      separately if needed)
+    let summary = `✅ Marked shipped via ${source}`
+    let tone: 'success' | 'error' = 'success'
+    if (wantNotify) {
+      const notify = (result as { notify?: { ok: boolean; reason?: string } }).notify
+      if (notify?.ok === true) {
+        summary += ` · notified ${channels.join(' + ')}`
+      } else {
+        summary += ` · ⚠ notify ${channels.join(' + ')} failed: ${notify?.reason ?? 'unknown'}`
+        tone = 'error'
+      }
+    }
+    showToast(summary, tone)
+
+    // Reset the popover form so the next open starts fresh — except
+    // the marketplace toggle which we keep at "on" for next time.
+    setExtShipTracking('')
+    setExtShipNotifyCustomer(false)
+    setExtShipNotifyMarketplace(true)
+    clearSelection()
+    await refetchOrders()
   }
 
   async function reprintLabel() {
@@ -4595,6 +4611,16 @@ export default function OrdersView({
   //      Parallel calls trigger 429s.
   //   2. Surfacing partial-failure stats ('5 ok, 2 failed') is much
   //      cleaner with a sequential loop + ok/failed counters.
+  //
+  // CRITICAL detail on error detection:
+  //   apiClient.markOrderShippedExternal is wrapped by safe() which
+  //   catches any thrown error and returns the fallback { ok: false }
+  //   instead of re-throwing. That means a try/catch around the call
+  //   would NEVER fire — every iteration would land in the success
+  //   branch even when the backend 500'd. We instead inspect the
+  //   returned shape: success → { data, notify }; failure → { ok: false }.
+  //   Detecting result?.ok === false is the only reliable way to count
+  //   failures correctly.
   async function handleBatchMarkAsShipped(source: string) {
     const batchOrders = orders.filter((order) => selectedIdSet.has(order.orderId))
     if (batchOrders.length === 0) {
@@ -4607,27 +4633,57 @@ export default function OrdersView({
 
     let ok = 0
     let failed = 0
+    let notifyOk = 0
+    let notifyFailed = 0
+    const failureReasons: string[] = []
     const notifyChannels: string[] = []
     if (extShipNotifyCustomer) notifyChannels.push('customer')
     if (extShipNotifyMarketplace) notifyChannels.push('marketplace')
+    const wantNotify = notifyChannels.length > 0
 
     for (const order of batchOrders) {
-      try {
-        await apiClient.markOrderShippedExternal(order.orderId, source, {
-          // Tracking is per-order in single mode; in batch mode we
-          // omit it (an operator can't paste 50 different tracking
-          // numbers in one popover). The notification email/marketplace
-          // status update still goes out — just without a tracking
-          // link inside it.
-          trackingNumber: null,
-          carrierCode: null,
-          notifyCustomer: extShipNotifyCustomer,
-          notifyMarketplace: extShipNotifyMarketplace,
-        })
-        ok += 1
-      } catch (err) {
+      // Note the explicit unknown-cast: the apiClient method returns
+      // any (legacy v2-compat type), which would let bugs through
+      // without typecheck noticing. Forcing inspection through a
+      // narrowed local removes the any-blob.
+      const result = (await apiClient.markOrderShippedExternal(order.orderId, source, {
+        trackingNumber: null,
+        carrierCode: null,
+        notifyCustomer: extShipNotifyCustomer,
+        notifyMarketplace: extShipNotifyMarketplace,
+      })) as
+        | { data: unknown; notify?: { ok: boolean; reason?: string } }
+        | { ok: false }
+
+      // safe() returns { ok: false } on any thrown error. The successful
+      // backend response is shaped { data: row, notify: {...} } and
+      // never has an `ok` field at the top level. So an `ok === false`
+      // means the API call itself failed (network, 5xx, validation).
+      const apiCallFailed = (result as { ok?: unknown })?.ok === false
+      if (apiCallFailed) {
         failed += 1
-        console.warn(`[batch mark-shipped] order ${order.orderId} failed:`, err)
+        failureReasons.push(`#${order.orderNumber ?? order.orderId}`)
+        console.warn(`[batch mark-shipped] order ${order.orderId} api call failed`)
+        continue
+      }
+
+      ok += 1
+
+      // Notify result is per-order. The local DB flip already succeeded
+      // (because we got `data` back). The optional ShipStation v1 call
+      // may have failed independently — track that separately so a
+      // 'marked locally but not notified' partial state surfaces in
+      // the toast instead of being silently swallowed.
+      if (wantNotify) {
+        const notify = (result as { notify?: { ok: boolean; reason?: string } }).notify
+        if (notify?.ok === true) {
+          notifyOk += 1
+        } else {
+          notifyFailed += 1
+          if (notify?.reason) {
+            console.warn(`[batch mark-shipped] order ${order.orderId} notify failed: ${notify.reason}`)
+          }
+        }
       }
     }
 
@@ -4635,12 +4691,25 @@ export default function OrdersView({
     clearSelection()
     await refetchOrders()
 
-    // Compose summary toast — explicit about notify channels and
-    // partial failure so operators know exactly what landed.
-    let summary = `✅ Marked ${ok}/${batchOrders.length} shipped via ${source}`
-    if (notifyChannels.length > 0) summary += ` · notified ${notifyChannels.join(' + ')}`
-    if (failed > 0) summary += ` · ⚠ ${failed} failed`
-    showToast(summary, failed > 0 ? 'error' : 'success')
+    // Compose summary toast — explicit about THREE outcomes:
+    //   1. Local DB flip count (ok/total)
+    //   2. Notify success count (when notify was requested)
+    //   3. Failure breakdown (with order numbers if 1-3 failed)
+    const tone: 'success' | 'error' = failed > 0 ? 'error' : 'success'
+    let summary = `${failed === 0 ? '✅' : '⚠'} Marked ${ok}/${batchOrders.length} shipped via ${source}`
+    if (wantNotify) {
+      if (notifyFailed === 0) {
+        summary += ` · notified ${notifyChannels.join(' + ')}`
+      } else {
+        summary += ` · notified ${notifyOk}/${ok} (${notifyFailed} notify failed)`
+      }
+    }
+    if (failed > 0) {
+      const sample = failureReasons.slice(0, 3).join(', ')
+      const more = failureReasons.length > 3 ? ` +${failureReasons.length - 3} more` : ''
+      summary += ` · failures: ${sample}${more}`
+    }
+    showToast(summary, tone)
 
     // Reset popover form for the next batch.
     setExtShipNotifyCustomer(false)
