@@ -20,18 +20,26 @@
   }
 
   /* ── Backdrop when sidebar is open ────────────────────────────────────── *
-   * NOTE: deliberately NO backdrop-filter here. The blur version was
-   * confusing on mobile because operators glance at the visible page
-   * sliver to confirm they're in the right view before tapping a
-   * sidebar entry — a blurred sliver defeats that. Solid dim only:
-   * darkens the un-overlaid page so the sidebar reads as elevated
-   * without obscuring it. Bonus: skipping backdrop-filter avoids
-   * a GPU compositing pass on every scroll on older iPhones. */
+   * Sits BELOW the sidebar in the stacking order and is mostly opaque,
+   * so when the drawer is open the page underneath is fully obscured
+   * (no peek-through, no overlap with sidebar text) AND clicks on the
+   * sidebar register correctly.
+   *
+   * z-index is intentionally 30 (below Tailwind's `z-40` used by every
+   * sidebar variant). The legacy `.sidebar-backdrop` z=599 was paired
+   * with a legacy `.sidebar { z=600 }`, but the new variants only use
+   * Tailwind `z-40` — at z=599 the backdrop ended up ON TOP of the
+   * sidebar and swallowed every tap inside the drawer.
+   *
+   * No backdrop-filter on purpose (see commit 8934ce4): operators
+   * glance at the visible page sliver to confirm context, and a
+   * blurred sliver defeats the check. Bonus: skipping backdrop-filter
+   * avoids a GPU compositing pass on every scroll on older iPhones. */
   .mobile-sidebar-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(15, 22, 41, 0.6);
-    z-index: 599;
+    background: rgba(8, 12, 24, 0.88);
+    z-index: 30;
     animation: mobileFadeIn 180ms ease-out;
   }
   @keyframes mobileFadeIn {
@@ -68,6 +76,20 @@
     box-shadow: 4px 0 24px rgba(0, 0, 0, 0.18);
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
+  }
+
+  /* ── New sidebar variants (A–Y): widen on mobile so the dim backdrop
+   *    strip on the right is barely a sliver — kills the "page peeks
+   *    through next to the sidebar" overlap the operator complained
+   *    about. All 6 variants (SidebarA–E + SidebarTemplated) render
+   *    a root <aside class="fixed ... z-40 ..."> at 252–260 px wide.
+   *    On a 393 px iPhone that leaves ~140 px of visible page strip;
+   *    bumping to 88 vw (≤ 340 px) shrinks the strip to ~50 px AND
+   *    keeps a tap-area for closing the drawer. */
+  aside.fixed.z-40 {
+    width: 88vw !important;
+    max-width: 340px !important;
+    box-shadow: 4px 0 28px rgba(0, 0, 0, 0.35);
   }
 
   /* The footer block we added (user email + Sign out button) needs to be
