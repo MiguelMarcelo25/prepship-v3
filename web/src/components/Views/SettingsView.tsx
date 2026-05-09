@@ -317,13 +317,25 @@ export default function SettingsView() {
   >({ kind: 'idle' })
   const [seedCount, setSeedCount] = useState<string>('25')
 
+  // Hide noisy bookkeeping clients from the Sandbox display. 'Manual
+  // Orders' is a placeholder bucket the backend creates for legacy
+  // adjustments, not a real seed-able test client — operators don't
+  // want to see it in the Active Test Clients list. Add more names
+  // to this set as needed.
+  const HIDDEN_TEST_CLIENT_NAMES = new Set(['Manual Orders'])
+
   const refreshTestClients = useCallback(async () => {
     setTestClientsLoading(true)
     try {
       const res = await api.get<{
         data: Array<{ id: number; name: string; order_count: number }>
       }>('/admin/test-clients')
-      setTestClients(res.data ?? [])
+      // Filter at the source so every downstream consumer (render
+      // + Seed/Purge button enabled checks) sees the same clean list.
+      const filtered = (res.data ?? []).filter(
+        (c) => !HIDDEN_TEST_CLIENT_NAMES.has(c.name?.trim() ?? ''),
+      )
+      setTestClients(filtered)
     } catch (err) {
       setSandboxState({
         kind: 'error',
