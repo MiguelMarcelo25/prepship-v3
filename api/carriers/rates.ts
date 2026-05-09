@@ -1710,8 +1710,25 @@ export default async function handler(req: any, res: any): Promise<void> {
       // / weight the Rate Browser passes through.
       let purchaseOrderId: string | null = null;
       let purchaseOrderSource = 'none';
-      const externalOrderId = typeof body?.externalOrderId === 'string' ? body.externalOrderId : null;
-      const orderNumber = typeof body?.orderNumber === 'string' ? body.orderNumber : null;
+      let externalOrderId = typeof body?.externalOrderId === 'string' ? body.externalOrderId : null;
+      let orderNumber = typeof body?.orderNumber === 'string' ? body.orderNumber : null;
+      const orderId = typeof body?.orderId === 'number' && Number.isFinite(body.orderId)
+        ? Math.trunc(body.orderId)
+        : null;
+      if (orderId) {
+        try {
+          const localRows = await sql<Array<{ external_order_id: string | null; order_number: string | null }>>`
+            SELECT external_order_id, order_number
+            FROM orders
+            WHERE id = ${orderId}
+            LIMIT 1
+          `;
+          if (localRows[0]) {
+            externalOrderId = externalOrderId ?? localRows[0].external_order_id ?? null;
+            orderNumber = orderNumber ?? localRows[0].order_number ?? null;
+          }
+        } catch { /* non-fatal; fall back to request-provided ids */ }
+      }
       if (typeof body?.purchaseOrderId === 'string' && body.purchaseOrderId) {
         purchaseOrderId = body.purchaseOrderId;
         purchaseOrderSource = 'body.purchaseOrderId';
@@ -1796,14 +1813,14 @@ export default async function handler(req: any, res: any): Promise<void> {
           simulated: false,
           rates,
           fetchedAt: new Date().toISOString(),
-          meta: { purchaseOrderId, purchaseOrderSource, hasRawOrder: rawOrder != null },
+          meta: { orderId, externalOrderId, orderNumber, purchaseOrderId, purchaseOrderSource, hasRawOrder: rawOrder != null },
         });
       } catch (err) {
         res.status(200).json({
           ok: false,
           provider,
           error: err instanceof Error ? err.message : String(err),
-          meta: { purchaseOrderId, purchaseOrderSource, hasRawOrder: rawOrder != null },
+          meta: { orderId, externalOrderId, orderNumber, purchaseOrderId, purchaseOrderSource, hasRawOrder: rawOrder != null },
         });
       }
       return;

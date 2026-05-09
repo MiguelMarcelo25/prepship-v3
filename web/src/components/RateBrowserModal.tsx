@@ -958,6 +958,7 @@ export default function RateBrowserModal({
         carrierIds: carrierIds.length ? carrierIds : undefined,
         storeId: order?.storeId ?? undefined,
         clientId: order?.clientId ?? undefined,
+        orderId: order?.orderId ?? undefined,
         orderNumber: toOptionalString(order?.orderNumber) ?? undefined,
         externalOrderId:
           toOptionalString(order?.externalOrderId) ??

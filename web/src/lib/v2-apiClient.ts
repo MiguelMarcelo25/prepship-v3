@@ -448,6 +448,7 @@ function translateRatePayloadToV4(
   if (typeof input.residential === 'boolean') out.residential = input.residential;
   if (typeof input.forceRefresh === 'boolean') out.forceRefresh = input.forceRefresh;
   if (Array.isArray(input.carrierIds)) out.carrierIds = input.carrierIds;
+  if (typeof input.orderId === 'number') out.orderId = input.orderId;
   if (typeof input.storeId === 'number') out.storeId = input.storeId;
   if (typeof input.clientId === 'number') out.clientId = input.clientId;
   if (input.shipFrom && typeof input.shipFrom === 'object') out.shipFrom = input.shipFrom;
@@ -694,7 +695,7 @@ function translateDirectRateToV2Shape(
 function directCarrierErrorMessage(provider: string, message: string): string {
   const providerKey = normalizeProviderKey(provider);
   if (providerKey === 'walmart_shipping' && /purchaseOrderId/i.test(message)) {
-    return 'Walmart Shipping rates require opening Browse Rates from a Walmart order. The generic Rate Calculator does not have a Walmart purchaseOrderId.';
+    return 'Walmart Shipping could not resolve the Walmart purchaseOrderId for this request. Refresh the order after Pull Orders, then reopen Browse Rates from that Walmart order.';
   }
   if (providerKey === 'ebay_shipping') {
     if (/order/i.test(message) || /externalOrderId/i.test(message)) {
