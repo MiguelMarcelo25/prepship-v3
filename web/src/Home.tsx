@@ -663,9 +663,18 @@ export default function Home() {
           {/* Spacer pushes the right cluster to the edge */}
           <div className="flex-1 min-w-0" />
 
-          {/* Right cluster — only on /orders */}
+          {/* Right cluster — only on /orders. On mobile, when the user
+              is in selection mode (≥1 row checked), this whole cluster
+              hides so the gradient batch bar gets the full width to
+              show "X selected · Print Labels · Clear" cleanly. Same
+              UX pattern as iOS Mail / Linear / Gmail: selection mode
+              suppresses browse-mode chrome. Desktop (md+) keeps both
+              visible since there's plenty of horizontal space. */}
           {displayView === 'orders' ? (
-            <div className="flex items-center gap-2 flex-shrink-0" id="topbarActions">
+            <div
+              className={`items-center gap-2 flex-shrink-0 ${selectedOrderIds.length > 0 ? 'hidden md:flex' : 'flex'}`}
+              id="topbarActions"
+            >
               {/* Sync status pill */}
               <div
                 className={`hidden md:inline-flex items-center gap-1.5 h-8 pl-2.5 pr-3 rounded-full text-[11.5px] font-medium font-mono tabular-nums whitespace-nowrap transition-colors ${syncPill.className}`}
@@ -822,7 +831,10 @@ export default function Home() {
               }
               onClick={() => setHideEmptyPanel((open) => !open)}
               className={[
-                'inline-flex items-center justify-center h-8 w-8 rounded-lg ring-1 transition-all duration-150 active:scale-95',
+                // Hide on mobile during selection mode (matches the rest
+                // of the right cluster) — keep visible on desktop.
+                selectedOrderIds.length > 0 ? 'hidden md:inline-flex' : 'inline-flex',
+                'items-center justify-center h-8 w-8 rounded-lg ring-1 transition-all duration-150 active:scale-95',
                 hideEmptyPanel
                   ? 'bg-brand/10 text-brand ring-brand/30 hover:bg-brand/15'
                   : 'bg-surface text-ink-2 ring-line hover:text-ink hover:ring-line-2 hover:bg-surface-2',
@@ -839,8 +851,13 @@ export default function Home() {
           {/* Zoom trigger — pure Tailwind. The dropdown menu itself is
               rendered separately via React Portal at the bottom of the
               component (see <ZoomMenuPortal/> below) so it lives at
-              document.body and can't be clipped by ANY ancestor. */}
-          <div className="relative" id="zoom-wrap">
+              document.body and can't be clipped by ANY ancestor.
+              Hidden on mobile during orders-selection mode (consistent
+              with the rest of the right cluster). */}
+          <div
+            className={`relative ${displayView === 'orders' && selectedOrderIds.length > 0 ? 'hidden md:block' : ''}`}
+            id="zoom-wrap"
+          >
             <button
               id="zoomBtn"
               ref={zoomBtnRef}
