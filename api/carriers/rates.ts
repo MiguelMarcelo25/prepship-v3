@@ -1804,6 +1804,40 @@ export default async function handler(req: any, res: any): Promise<void> {
         } catch { /* non-fatal — function will fail with a clear error */ }
       }
 
+      let shipFromForRates = body?.shipFrom;
+      if (!shipFromForRates || typeof shipFromForRates !== 'object') {
+        try {
+          const locationRows = await sql<Array<{
+            name: string | null;
+            street1: string | null;
+            street2: string | null;
+            city: string | null;
+            state: string | null;
+            postal_code: string | null;
+            country: string | null;
+            phone: string | null;
+          }>>`
+            SELECT name, street1, street2, city, state, postal_code, country, phone
+            FROM locations
+            ORDER BY is_default DESC NULLS LAST, id ASC
+            LIMIT 1
+          `;
+          const loc = locationRows[0];
+          if (loc) {
+            shipFromForRates = {
+              name: loc.name,
+              street1: loc.street1,
+              street2: loc.street2,
+              city: loc.city,
+              state: loc.state,
+              postalCode: loc.postal_code,
+              country: loc.country,
+              phone: loc.phone,
+            };
+          }
+        } catch { /* non-fatal; ratesFromWalmartShipping has a fallback */ }
+      }
+
       try {
         const rates = await ratesFromWalmartShipping(creds, {
           weightOz,
@@ -1812,7 +1846,7 @@ export default async function handler(req: any, res: any): Promise<void> {
           dimsW,
           dimsH,
           fromZip,
-          shipFrom: body?.shipFrom,
+          shipFrom: shipFromForRates,
           rawOrder,
         });
         res.status(200).json({
