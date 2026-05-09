@@ -93,6 +93,108 @@ interface ThumbnailPreviewState {
   zoom: number
 }
 
+type InventorySortDirection = 'asc' | 'desc'
+type InventorySortKey =
+  | 'sku'
+  | 'name'
+  | 'store'
+  | 'weight'
+  | 'length'
+  | 'width'
+  | 'height'
+  | 'dims'
+  | 'cuFt'
+  | 'package'
+  | 'stock'
+  | 'sold30'
+  | 'unitsPerPack'
+  | 'totalUnits'
+  | 'min'
+  | 'status'
+
+interface InventorySortState {
+  key: InventorySortKey
+  direction: InventorySortDirection
+}
+
+const inventorySortCollator = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: 'base',
+})
+
+const inventoryStatusRank: Record<string, number> = {
+  out: 0,
+  low: 1,
+  ok: 2,
+}
+
+function toSortNumber(value: unknown) {
+  const nextValue = Number(value)
+  return Number.isFinite(nextValue) ? nextValue : 0
+}
+
+function getInventoryPackageSortLabel(row: InventoryItemDto) {
+  if (row.packageName) return row.packageName
+  if (row.packageLength > 0 || row.packageWidth > 0 || row.packageHeight > 0) {
+    return `${row.packageLength}x${row.packageWidth}x${row.packageHeight}`
+  }
+  return ''
+}
+
+function getInventorySortValue(row: InventoryItemDto, key: InventorySortKey) {
+  switch (key) {
+    case 'sku':
+      return row.sku || ''
+    case 'name':
+      return row.name || ''
+    case 'store':
+      return row.clientName || ''
+    case 'weight':
+      return toSortNumber(row.weightOz)
+    case 'length':
+      return toSortNumber(row.productLength || row.packageLength)
+    case 'width':
+      return toSortNumber(row.productWidth || row.packageWidth)
+    case 'height':
+      return toSortNumber(row.productHeight || row.packageHeight)
+    case 'dims':
+      return toSortNumber(row.packageLength) * toSortNumber(row.packageWidth) * toSortNumber(row.packageHeight)
+    case 'cuFt':
+      return getInventoryCuFt(row)
+    case 'package':
+      return getInventoryPackageSortLabel(row)
+    case 'stock':
+      return toSortNumber(row.currentStock)
+    case 'sold30':
+      return toSortNumber(row.soldLast30Days)
+    case 'unitsPerPack':
+      return toSortNumber(row.units_per_pack)
+    case 'totalUnits':
+      return toSortNumber(row.currentStock) * Math.max(1, toSortNumber(row.units_per_pack))
+    case 'min':
+      return toSortNumber(row.minStock)
+    case 'status':
+      return inventoryStatusRank[row.status] ?? 99
+    default:
+      return ''
+  }
+}
+
+function compareInventoryRows(left: InventoryItemDto, right: InventoryItemDto, sort: InventorySortState) {
+  const leftValue = getInventorySortValue(left, sort.key)
+  const rightValue = getInventorySortValue(right, sort.key)
+  const direction = sort.direction === 'asc' ? 1 : -1
+  const comparison =
+    typeof leftValue === 'number' && typeof rightValue === 'number'
+      ? leftValue - rightValue
+      : inventorySortCollator.compare(String(leftValue ?? ''), String(rightValue ?? ''))
+
+  if (comparison !== 0) return comparison * direction
+  const fallback = inventorySortCollator.compare(left.sku || '', right.sku || '')
+  if (fallback !== 0) return fallback
+  return toSortNumber(left.id) - toSortNumber(right.id)
+}
+
 function formatWeight(ounces: number | null | undefined) {
   if (!ounces) return '—'
   const pounds = Math.floor(ounces / 16)
@@ -299,6 +401,7 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
   const [stockSearch, setStockSearch] = useState('')
   const [stockClientId, setStockClientId] = useState('')
   const [alertOnly, setAlertOnly] = useState(false)
+  const [stockSort, setStockSort] = useState<InventorySortState | null>(null)
   const [bulkEditMode, setBulkEditMode] = useState(false)
   const [bulkDrafts, setBulkDrafts] = useState<Record<number, { weightOz: string; productLength: string; productWidth: string; productHeight: string }>>({})
   const [receiveClientId, setReceiveClientId] = useState('')
@@ -380,7 +483,12 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
     })
   }, [alertOnly, items, stockClientId, stockSearch])
 
-  const groupedRows = useMemo(() => groupInventoryRowsByClient(filteredRows), [filteredRows])
+  const sortedRows = useMemo(() => {
+    if (!stockSort) return filteredRows
+    return [...filteredRows].sort((left, right) => compareInventoryRows(left, right, stockSort))
+  }, [filteredRows, stockSort])
+
+  const groupedRows = useMemo(() => groupInventoryRowsByClient(sortedRows), [sortedRows])
   const storeNameMap = useMemo(() => {
     const nextMap = new Map<number, string>()
     for (const store of stores) {
@@ -396,6 +504,49 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
       })
       .sort((left, right) => left.name.localeCompare(right.name))
   }, [clientForm.rateSourceClientId, clients])
+
+  function handleStockSort(key: InventorySortKey) {
+    setStockSort((current) => {
+      if (current?.key === key) {
+        return {
+          key,
+          direction: current.direction === 'asc' ? 'desc' : 'asc',
+        }
+      }
+      return { key, direction: 'asc' }
+    })
+  }
+
+  function renderStockSortHeader(
+    key: InventorySortKey,
+    label: string,
+    options: { align?: 'left' | 'center' | 'right'; title?: string } = {},
+  ) {
+    const isActive = stockSort?.key === key
+    const directionLabel = isActive && stockSort.direction === 'asc' ? 'descending' : 'ascending'
+    const alignClass = options.align ? `inventory-sort-header--${options.align}` : ''
+    const className = ['inventory-sort-header', alignClass, isActive ? 'is-active' : '']
+      .filter(Boolean)
+      .join(' ')
+
+    return (
+      <th
+        aria-sort={isActive ? (stockSort.direction === 'asc' ? 'ascending' : 'descending') : 'none'}
+        style={options.align ? { textAlign: options.align } : undefined}
+        title={options.title}
+      >
+        <button
+          type="button"
+          className={className}
+          onClick={() => handleStockSort(key)}
+          title={`Sort by ${label} ${directionLabel}`}
+        >
+          <span>{label}</span>
+          <span className="inventory-sort-indicator">{isActive ? (stockSort.direction === 'asc' ? '^' : 'v') : ''}</span>
+        </button>
+      </th>
+    )
+  }
 
   useEffect(() => {
     let active = true
@@ -1265,6 +1416,7 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
                           <col style={{ width: 140 }} />
                           <col style={{ width: 48 }} />
                           <col />
+                          <col style={{ width: 130 }} />
                           <col style={{ width: 90 }} />
                           <col style={{ width: 72 }} />
                           <col style={{ width: 72 }} />
@@ -1278,6 +1430,8 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
                           <col style={{ width: 56 }} />
                           {/* Name (flex) */}
                           <col />
+                          {/* Store */}
+                          <col style={{ width: 125 }} />
                           {/* Weight */}
                           <col style={{ width: 90 }} />
                           {/* Dims */}
@@ -1305,29 +1459,31 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
                       <thead>
                         {bulkEditMode ? (
                           <tr>
-                            <th>SKU</th>
+                            {renderStockSortHeader('sku', 'SKU')}
                             <th />
-                            <th>Name</th>
-                            <th>Wt (oz)</th>
-                            <th>L (in)</th>
-                            <th>W (in)</th>
-                            <th>H (in)</th>
+                            {renderStockSortHeader('name', 'Name')}
+                            {renderStockSortHeader('store', 'Store')}
+                            {renderStockSortHeader('weight', 'Wt (oz)', { align: 'right' })}
+                            {renderStockSortHeader('length', 'L (in)', { align: 'right' })}
+                            {renderStockSortHeader('width', 'W (in)', { align: 'right' })}
+                            {renderStockSortHeader('height', 'H (in)', { align: 'right' })}
                           </tr>
                         ) : (
                           <tr>
-                            <th>SKU</th>
+                            {renderStockSortHeader('sku', 'SKU')}
                             <th />
-                            <th>Name</th>
-                            <th style={{ textAlign: 'right' }}>Weight</th>
-                            <th style={{ textAlign: 'center' }}>Dims (L×W×H)</th>
-                            <th style={{ textAlign: 'center' }} title="Cubic footage per unit (used for storage fee billing). Auto-computed from dims or manually overridden.">Cu Ft/Unit</th>
-                            <th>Package</th>
-                            <th style={{ textAlign: 'center' }}>Stock</th>
-                            <th style={{ textAlign: 'center' }} title="Units sold in the last 30 days">Sold 30d</th>
-                            <th style={{ textAlign: 'center' }}>Units/Pack</th>
-                            <th style={{ textAlign: 'center' }}>Total Units</th>
-                            <th style={{ textAlign: 'center' }}>Min</th>
-                            <th style={{ textAlign: 'center' }}>Status</th>
+                            {renderStockSortHeader('name', 'Name')}
+                            {renderStockSortHeader('store', 'Store')}
+                            {renderStockSortHeader('weight', 'Weight', { align: 'right' })}
+                            {renderStockSortHeader('dims', 'Dims (LxWxH)', { align: 'center' })}
+                            {renderStockSortHeader('cuFt', 'Cu Ft/Unit', { align: 'center', title: 'Cubic footage per unit (used for storage fee billing). Auto-computed from dims or manually overridden.' })}
+                            {renderStockSortHeader('package', 'Package')}
+                            {renderStockSortHeader('stock', 'Stock', { align: 'center' })}
+                            {renderStockSortHeader('sold30', 'Sold 30d', { align: 'center', title: 'Units sold in the last 30 days' })}
+                            {renderStockSortHeader('unitsPerPack', 'Units/Pack', { align: 'center' })}
+                            {renderStockSortHeader('totalUnits', 'Total Units', { align: 'center' })}
+                            {renderStockSortHeader('min', 'Min', { align: 'center' })}
+                            {renderStockSortHeader('status', 'Status', { align: 'center' })}
                             <th />
                           </tr>
                         )}
@@ -1352,6 +1508,9 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
                                   )}
                                 </td>
                                 <td style={{ fontSize: 11.5, maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{row.name || '—'}</td>
+                                <td style={{ fontSize: 11.5, color: 'var(--text2)', whiteSpace: 'nowrap' }} title={row.clientName || undefined}>
+                                  {row.clientName || <span style={{ color: 'var(--text4)' }}>&mdash;</span>}
+                                </td>
                                 <td><input type="number" step="0.1" min="0" value={draft.weightOz} onChange={(event) => setBulkDrafts((current) => ({ ...current, [row.id]: { ...draft, weightOz: event.target.value } }))} style={{ padding: '3px 5px', border: '1px solid var(--border2)', borderRadius: 4, background: 'var(--surface2)', color: 'var(--text)', fontSize: 11.5, width: '100%', boxSizing: 'border-box' }} /></td>
                                 <td><input type="number" step="0.1" min="0" value={draft.productLength} onChange={(event) => setBulkDrafts((current) => ({ ...current, [row.id]: { ...draft, productLength: event.target.value } }))} style={{ padding: '3px 5px', border: '1px solid var(--border2)', borderRadius: 4, background: 'var(--surface2)', color: 'var(--text)', fontSize: 11.5, width: '100%', boxSizing: 'border-box' }} /></td>
                                 <td><input type="number" step="0.1" min="0" value={draft.productWidth} onChange={(event) => setBulkDrafts((current) => ({ ...current, [row.id]: { ...draft, productWidth: event.target.value } }))} style={{ padding: '3px 5px', border: '1px solid var(--border2)', borderRadius: 4, background: 'var(--surface2)', color: 'var(--text)', fontSize: 11.5, width: '100%', boxSizing: 'border-box' }} /></td>
@@ -1385,6 +1544,9 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
                               </td>
                               <td style={{ fontSize: 12, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                 <button type="button" className="inventory-inline-button" onClick={() => void openSkuDrawer(row.id)} title="View orders & sales trend">{row.name || <span style={{ color: 'var(--text3)' }}>—</span>}</button>
+                              </td>
+                              <td style={{ fontSize: 11.5, color: 'var(--text2)', whiteSpace: 'nowrap' }} title={row.clientName || undefined}>
+                                {row.clientName || <span style={{ color: 'var(--text4)' }}>&mdash;</span>}
                               </td>
                               <td style={{ textAlign: 'right', fontSize: 11.5 }}>{row.weightOz > 0 ? formatWeight(row.weightOz) : <span style={{ color: 'var(--text4)' }}>—</span>}</td>
                               <td style={{ textAlign: 'center', fontSize: 11.5, fontFamily: 'monospace' }}>{row.packageLength > 0 || row.packageWidth > 0 || row.packageHeight > 0 ? `${row.packageLength}×${row.packageWidth}×${row.packageHeight}` : <span style={{ color: 'var(--text4)' }}>—</span>}</td>

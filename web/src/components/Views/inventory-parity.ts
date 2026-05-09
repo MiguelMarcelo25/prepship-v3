@@ -52,7 +52,7 @@ export function filterInventoryRows(rows: InventoryItemDto[], filters: Inventory
   const search = filters.search.trim().toLowerCase()
   return rows.filter((row) => {
     if (filters.clientId && String(row.clientId) !== String(filters.clientId)) return false
-    if (search && !`${row.sku}${row.name}`.toLowerCase().includes(search)) return false
+    if (search && !`${row.sku}${row.name}${row.clientName}`.toLowerCase().includes(search)) return false
     if (filters.alertOnly && row.status === 'ok') return false
     return true
   })

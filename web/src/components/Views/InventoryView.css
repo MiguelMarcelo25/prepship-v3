@@ -115,6 +115,42 @@
   word-break:break-word;
 }
 
+.inventory-sort-header{
+  align-items:center;
+  background:none;
+  border:0;
+  color:inherit;
+  cursor:pointer;
+  display:inline-flex;
+  font:inherit;
+  gap:4px;
+  justify-content:flex-start;
+  letter-spacing:inherit;
+  padding:0;
+  text-align:inherit;
+  text-transform:inherit;
+  width:100%;
+}
+
+.inventory-sort-header--center{
+  justify-content:center;
+}
+
+.inventory-sort-header--right{
+  justify-content:flex-end;
+}
+
+.inventory-sort-header:hover{
+  color:var(--text);
+}
+
+.inventory-sort-indicator{
+  color:var(--ss-blue);
+  font-size:9px;
+  line-height:1;
+  min-width:7px;
+}
+
 .inventory-recv-row{
   display:flex;
   flex-direction:column;

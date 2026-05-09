@@ -237,7 +237,7 @@ function inventoryStatus(stockQty: number, reorderLevel: number): 'ok' | 'low' |
   return 'ok';
 }
 
-function normalizeInventoryDto(row: any): any {
+function normalizeInventoryDto(row: any, clientNamesById?: Map<number, string>): any {
   if (!row || typeof row !== 'object') return row;
   const currentStock = parseFiniteNumber(row.currentStock ?? row.stockQty) ?? 0;
   const minStock = parseFiniteNumber(row.minStock ?? row.reorderLevel) ?? 0;
@@ -246,10 +246,17 @@ function normalizeInventoryDto(row: any): any {
   const width = parseFiniteNumber(row.packageWidth ?? row.width) ?? 0;
   const height = parseFiniteNumber(row.packageHeight ?? row.height) ?? 0;
   const soldLast30Days = parseFiniteNumber(row.soldLast30Days ?? row.last30DaysSold) ?? 0;
+  const clientId = parseFiniteNumber(row.clientId ?? row.client_id) ?? 0;
+  const clientName =
+    row.clientName ??
+    row.client_name ??
+    (clientId ? clientNamesById?.get(clientId) : undefined) ??
+    (clientId ? `Client #${clientId}` : 'Shared Catalog');
 
   return {
     ...row,
-    clientId: parseFiniteNumber(row.clientId) ?? 0,
+    clientId,
+    clientName,
     minStock,
     currentStock,
     stockQty: currentStock,
@@ -2004,13 +2011,19 @@ export const apiClient = {
         const PAGE_CAP = 50; // 200 × 50 = 10,000 SKUs hard cap
         const baseQ: Record<string, unknown> = { ...(query ?? {}), pageSize: PAGE_SIZE, page: 1 };
 
-        const first: any = await api.get<any>(`/inventory${qs(baseQ as any)}`);
+        const [first, clientRows]: [any, any[]] = await Promise.all([
+          api.get<any>(`/inventory${qs(baseQ as any)}`),
+          apiClient.fetchClients().catch(() => []),
+        ]);
+        const clientNamesById = new Map<number, string>(
+          clientRows.map((client: any) => [Number(client.clientId ?? client.id), String(client.name ?? '')])
+        );
 
         // Backend response shape can be either a bare array (legacy) or
         // a paginated envelope { data, total, pages, page, pageSize }.
         // The paginated case is what triggers the multi-page fetch.
         if (Array.isArray(first)) {
-          return first.map(normalizeInventoryDto);
+          return first.map((row) => normalizeInventoryDto(row, clientNamesById));
         }
         const firstData: any[] = Array.isArray(first?.data) ? first.data : [];
         const totalPages = Number.isFinite(Number(first?.totalPages))
@@ -2020,7 +2033,7 @@ export const apiClient = {
             : 1;
 
         if (totalPages <= 1) {
-          return firstData.map(normalizeInventoryDto);
+          return firstData.map((row) => normalizeInventoryDto(row, clientNamesById));
         }
 
         // Fetch pages 2..N in parallel. If any fails, skip it (we'd rather
@@ -2039,7 +2052,7 @@ export const apiClient = {
         );
 
         const allRows = [...firstData, ...remaining.flat()];
-        return allRows.map(normalizeInventoryDto);
+        return allRows.map((row) => normalizeInventoryDto(row, clientNamesById));
       },
       []
     );
