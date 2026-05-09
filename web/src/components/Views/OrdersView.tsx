@@ -2088,67 +2088,26 @@ export default function OrdersView({
     [currentStatus, columnPrefs],
   )
 
-  // Track viewport width so the table can collapse to a 4-column compact
-  // mobile layout (matches the v2-original mobile experience: select +
-  // Order # + Item Name + Best Rate, all visible without horizontal
-  // scroll on a 390px iPhone). Listens to matchMedia changes so rotating
-  // the device or resizing the browser flips layouts live.
-  const [isMobileViewport, setIsMobileViewport] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false
-    return window.matchMedia('(max-width: 639px)').matches
-  })
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    const mql = window.matchMedia('(max-width: 639px)')
-    const handler = (e: MediaQueryListEvent) => setIsMobileViewport(e.matches)
-    // Older Safari uses addListener; modern browsers expose addEventListener.
-    if (mql.addEventListener) {
-      mql.addEventListener('change', handler)
-      return () => mql.removeEventListener('change', handler)
-    }
-    mql.addListener(handler)
-    return () => mql.removeListener(handler)
-  }, [])
-
-  // Mobile column whitelist + tighter widths. Total = 354px so the
-  // table fits comfortably in a 360-390px viewport with 0px horizontal
-  // scroll. Order matters — render order matches array order.
-  const MOBILE_COLUMN_WIDTHS: Record<string, number> = {
-    select: 30,
-    orderNum: 88,
-    itemname: 148,
-    bestrate: 88,
-  }
-  const MOBILE_COLUMN_KEYS = ['select', 'orderNum', 'itemname', 'bestrate']
-
-  const visibleColumns = useMemo(() => {
-    const desktopColumns = resolvedColumnPrefs.orderedColumns
+  // Mobile shows the FULL desktop column set (per operator request
+  // 2026-05-09: "i want to see fully the columns... where is the
+  // others"). The table scrolls horizontally inside .orders-wrap on
+  // narrow viewports — same data, same layout, just swipe-able.
+  // The previous mobile-trim-to-4-columns approach hid too much info
+  // for operators who use phones in the warehouse.
+  const visibleColumns = useMemo(
+    () => resolvedColumnPrefs.orderedColumns
       .filter((column) => !resolvedColumnPrefs.hiddenColumns.has(column.key))
       .map((column) => (
         column.key === 'bestrate' && currentStatus !== 'awaiting_shipment'
           ? { ...TABLE_COLUMNS.find((candidate) => candidate.key === column.key)!, label: 'Selected Rate', width: resolvedColumnPrefs.widths[column.key] }
           : { ...TABLE_COLUMNS.find((candidate) => candidate.key === column.key)!, width: resolvedColumnPrefs.widths[column.key] }
-      ))
-    if (!isMobileViewport) return desktopColumns
-    // On mobile: forcibly trim to the 4-column compact set, in fixed
-    // order, ignoring any user column-pref reorders so the layout stays
-    // predictable. Widths are overridden to the mobile values.
-    return MOBILE_COLUMN_KEYS
-      .map((key) => {
-        const base = TABLE_COLUMNS.find((c) => c.key === key)
-        if (!base) return null
-        const label = key === 'bestrate' && currentStatus !== 'awaiting_shipment' ? 'Selected Rate' : base.label
-        return { ...base, label, width: MOBILE_COLUMN_WIDTHS[key] ?? base.width }
-      })
-      .filter((column): column is NonNullable<typeof column> => column != null)
-  }, [currentStatus, resolvedColumnPrefs, isMobileViewport])
-
-  const tableWidth = useMemo(() => {
-    const sum = visibleColumns.reduce((totalWidth, column) => totalWidth + column.width, 0)
-    // Drop the 800px floor on mobile so the compact 4-column table can
-    // shrink to fit the iPhone viewport without horizontal scroll.
-    return isMobileViewport ? sum : Math.max(800, sum)
-  }, [visibleColumns, isMobileViewport])
+      )),
+    [currentStatus, resolvedColumnPrefs],
+  )
+  const tableWidth = useMemo(
+    () => Math.max(800, visibleColumns.reduce((totalWidth, column) => totalWidth + column.width, 0)),
+    [visibleColumns],
+  )
   resolvedColumnPrefsRef.current = resolvedColumnPrefs
   columnPrefsRef.current = columnPrefs
   currentStatusRef.current = currentStatus
