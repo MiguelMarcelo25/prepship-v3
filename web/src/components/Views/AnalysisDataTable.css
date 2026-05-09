@@ -46,15 +46,66 @@
 }
 
 .analysis-orders-table th {
-  padding: 11px 12px;
+  /* padding lives on the inner sort-button so the click target spans
+   * the whole header cell (including padding). The th still owns the
+   * border, alignment, and white-space rules. */
+  padding: 0;
   text-align: left;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+/* Sort-button inside each .analysis-orders-table <th>. Visually
+ * inherits the legacy header typography so swapping plain text → button
+ * is invisible at rest; only the sort indicator pill and hover bg
+ * are new. Mirrors the pattern in AnalysisTableHeader.tsx so the
+ * SKU-drawer table feels like the same control as the main grid. */
+.analysis-orders-sort-btn {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  padding: 11px 12px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
   font-size: 10px;
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: .05em;
   color: var(--text3);
-  border-bottom: 1px solid var(--border);
-  white-space: nowrap;
+  transition: background .15s ease, color .15s ease;
+}
+.analysis-orders-sort-btn:hover {
+  background: rgba(42, 91, 215, .08);
+  color: var(--ss-blue);
+}
+.analysis-orders-sort-btn.is-active {
+  color: var(--ss-blue);
+}
+.analysis-orders-sort-btn.is-center {
+  justify-content: center;
+}
+
+.analysis-orders-sort-ind {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  font-size: 11px;
+  line-height: 1;
+  flex: none;
+  background: rgba(148, 163, 184, .18);
+  color: var(--text3);
+  transition: background .15s ease, color .15s ease;
+}
+.analysis-orders-sort-ind.is-active {
+  background: var(--ss-blue);
+  color: #fff;
 }
 
 .analysis-orders-table th.is-center {

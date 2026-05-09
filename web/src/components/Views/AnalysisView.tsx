@@ -51,7 +51,7 @@ const DRAWER_ORDERS_COLUMN_DEFAULTS: Record<DrawerOrdersColumnKey, number> = {
   qty: 60,
   cost: 160,
   status: 110,
-  date: 100,
+  date: 170,
 }
 const DRAWER_ORDERS_COLUMN_MIN: Record<DrawerOrdersColumnKey, number> = {
   orderNum: 90,
@@ -59,9 +59,18 @@ const DRAWER_ORDERS_COLUMN_MIN: Record<DrawerOrdersColumnKey, number> = {
   qty: 50,
   cost: 120,
   status: 80,
-  date: 80,
+  date: 140,
 }
 const DRAWER_ORDERS_STORAGE_KEY = 'analysis_sku_drawer_widths'
+
+// Sort state for the SKU-drawer "Recent Orders" table. Mirrors the main
+// analysis grid's pattern (session-only, not persisted): operators can
+// re-sort during a session, but a page refresh snaps back to the default
+// (date / desc → newest first). Defaulting to desc on a NEW column click
+// matches AnalysisView.handleSort behavior so muscle memory carries over.
+type DrawerOrdersSortDir = 'asc' | 'desc'
+const DEFAULT_DRAWER_ORDERS_SORT_KEY: DrawerOrdersColumnKey = 'date'
+const DEFAULT_DRAWER_ORDERS_SORT_DIR: DrawerOrdersSortDir = 'desc'
 
 function readStoredDrawerOrderWidths(): Partial<Record<DrawerOrdersColumnKey, number>> {
   if (typeof window === 'undefined') return {}
@@ -78,7 +87,12 @@ function readStoredDrawerOrderWidths(): Partial<Record<DrawerOrdersColumnKey, nu
         && Number.isFinite(value)
         && value > 0
       ) {
-        cleaned[key as DrawerOrdersColumnKey] = value
+        // Clamp persisted widths up to the current MIN. This handles the
+        // 2026-05-09 change where the Date column moved to the leftmost
+        // position and now shows a timestamp — returning users had
+        // date:100 saved, which is too narrow for "May 8, 2026, 3:45 PM".
+        const min = DRAWER_ORDERS_COLUMN_MIN[key as DrawerOrdersColumnKey]
+        cleaned[key as DrawerOrdersColumnKey] = Math.max(value, min)
       }
     }
     return cleaned
@@ -196,6 +210,70 @@ function numberValue(value: unknown) {
 function formatMoneyValue(value: unknown) {
   const num = numberValue(value)
   return num == null ? '-' : `$${num.toFixed(2)}`
+}
+
+// Extract a comparable value for the SKU-drawer "Recent Orders" sort.
+// Returns null when the field is missing — those rows always sort last
+// regardless of direction (predictable UX; matches industry standard).
+function drawerOrderSortValue(
+  order: Record<string, unknown>,
+  key: DrawerOrdersColumnKey,
+): number | string | null {
+  switch (key) {
+    case 'date': {
+      const raw = order.orderDate
+      if (typeof raw !== 'string' || !raw.trim()) return null
+      // Same Z-normalization formatDateTime uses, so dates without
+      // an explicit offset still parse as UTC (then PT-displayed).
+      const normalized = /(?:z|[+-]\d{2}:?\d{2})$/i.test(raw) ? raw : `${raw}Z`
+      const t = Date.parse(normalized)
+      return Number.isFinite(t) ? t : null
+    }
+    case 'orderNum': {
+      // Sort by displayed value: orderNumber if present, else orderId.
+      // Lowercase so the sort is case-insensitive (e.g. SP6197 vs sp6197).
+      if (typeof order.orderNumber === 'string' && order.orderNumber.trim()) {
+        return order.orderNumber.toLowerCase()
+      }
+      return order.orderId != null ? String(order.orderId) : null
+    }
+    case 'customer': {
+      const v = order.shipToName
+      return typeof v === 'string' && v.trim() ? v.toLowerCase() : null
+    }
+    case 'qty': return numberValue(order.qty) ?? 1
+    case 'cost': {
+      // EXT rows have no shipping-cost number — treat as null so they
+      // group at the bottom regardless of asc/desc.
+      if (order.externallyShipped) return null
+      return numberValue(order.standardShippingCost)
+        ?? numberValue(order.shippingCost)
+    }
+    case 'status': {
+      const v = order.orderStatus
+      return typeof v === 'string' && v.trim() ? v.toLowerCase() : null
+    }
+  }
+}
+
+function compareDrawerOrders(
+  a: Record<string, unknown>,
+  b: Record<string, unknown>,
+  key: DrawerOrdersColumnKey,
+  dir: DrawerOrdersSortDir,
+): number {
+  const av = drawerOrderSortValue(a, key)
+  const bv = drawerOrderSortValue(b, key)
+  if (av == null && bv == null) return 0
+  if (av == null) return 1
+  if (bv == null) return -1
+  let cmp: number
+  if (typeof av === 'number' && typeof bv === 'number') {
+    cmp = av - bv
+  } else {
+    cmp = String(av).localeCompare(String(bv))
+  }
+  return dir === 'asc' ? cmp : -cmp
 }
 
 function renderDrawerShippingCost(order: Record<string, unknown>) {
@@ -523,6 +601,13 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
   const [skuDrawerError, setSkuDrawerError] = useState<string | null>(null)
   const [skuDrawerOpen, setSkuDrawerOpen] = useState(false)
   const [skuDrawerLoading, setSkuDrawerLoading] = useState(false)
+  // Sort for the drawer's "Recent Orders" table. Persists across drawer
+  // opens within the session (so the operator's sort choice survives
+  // jumping between SKUs), resets on page refresh.
+  const [drawerOrdersSortKey, setDrawerOrdersSortKey] =
+    useState<DrawerOrdersColumnKey>(DEFAULT_DRAWER_ORDERS_SORT_KEY)
+  const [drawerOrdersSortDir, setDrawerOrdersSortDir] =
+    useState<DrawerOrdersSortDir>(DEFAULT_DRAWER_ORDERS_SORT_DIR)
   const [orderDetailDrawer, setOrderDetailDrawer] = useState<{ orderId: number; status?: string | null } | null>(null)
   const [orderModal, setOrderModal] = useState({
     open: false,
@@ -564,6 +649,21 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
     () => numberValue(skuDrawer?.avgStandardShippingCost) ?? 0,
     [skuDrawer],
   )
+  // Apply the current sort to a copy of skuDrawer.orders. The DTO's
+  // `orders` array isn't mutated (toSorted would also work, but spread
+  // + sort is broadly polyfilled).
+  const sortedDrawerOrders = useMemo(() => {
+    if (!skuDrawer) return [] as InventorySkuOrdersDto['orders']
+    const orders = skuDrawer.orders ?? []
+    return [...orders].sort((a, b) =>
+      compareDrawerOrders(
+        a as Record<string, unknown>,
+        b as Record<string, unknown>,
+        drawerOrdersSortKey,
+        drawerOrdersSortDir,
+      ),
+    )
+  }, [skuDrawer, drawerOrdersSortKey, drawerOrdersSortDir])
 
   // Load clients once for the filter dropdown.
   useEffect(() => {
@@ -612,6 +712,18 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
   }
   function handleResizeDrawerOrderColumn(key: DrawerOrdersColumnKey, width: number) {
     setDrawerOrderWidths((current) => ({ ...current, [key]: width }))
+  }
+  // Toggle sort: clicking a NEW column starts at desc (highest values
+  // / newest dates first), clicking the SAME column flips direction.
+  // Mirrors handleSort for the main analysis grid (line ~796) so the
+  // two tables feel like the same control.
+  function handleSortDrawerOrders(key: DrawerOrdersColumnKey) {
+    if (key === drawerOrdersSortKey) {
+      setDrawerOrdersSortDir((dir) => (dir === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setDrawerOrdersSortKey(key)
+      setDrawerOrdersSortDir('desc')
+    }
   }
   function handleResetDrawerOrderColumn(key: DrawerOrdersColumnKey) {
     setDrawerOrderWidths((current) => {
@@ -1248,73 +1360,72 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
                     <div className="analysis-orders-table-wrap">
                       <table className="analysis-orders-table" style={{ tableLayout: 'fixed' }}>
                         <colgroup>
+                          <col style={{ width: getDrawerOrderColumnWidth('date') }} />
                           <col style={{ width: getDrawerOrderColumnWidth('orderNum') }} />
                           <col style={{ width: getDrawerOrderColumnWidth('customer') }} />
                           <col style={{ width: getDrawerOrderColumnWidth('qty') }} />
                           <col style={{ width: getDrawerOrderColumnWidth('cost') }} />
                           <col style={{ width: getDrawerOrderColumnWidth('status') }} />
-                          <col style={{ width: getDrawerOrderColumnWidth('date') }} />
                         </colgroup>
                         <thead>
                           <tr>
-                            <th style={{ position: 'relative' }}>
-                              Order #
-                              <ColumnResizeHandle
-                                getStartWidth={() => getDrawerOrderColumnWidth('orderNum')}
-                                onChange={(w) => handleResizeDrawerOrderColumn('orderNum', w)}
-                                onReset={() => handleResetDrawerOrderColumn('orderNum')}
-                                minWidth={DRAWER_ORDERS_COLUMN_MIN.orderNum}
-                              />
-                            </th>
-                            <th className="is-center" style={{ position: 'relative' }}>
-                              Customer
-                              <ColumnResizeHandle
-                                getStartWidth={() => getDrawerOrderColumnWidth('customer')}
-                                onChange={(w) => handleResizeDrawerOrderColumn('customer', w)}
-                                onReset={() => handleResetDrawerOrderColumn('customer')}
-                                minWidth={DRAWER_ORDERS_COLUMN_MIN.customer}
-                              />
-                            </th>
-                            <th className="is-center" style={{ position: 'relative' }}>
-                              Qty
-                              <ColumnResizeHandle
-                                getStartWidth={() => getDrawerOrderColumnWidth('qty')}
-                                onChange={(w) => handleResizeDrawerOrderColumn('qty', w)}
-                                onReset={() => handleResetDrawerOrderColumn('qty')}
-                                minWidth={DRAWER_ORDERS_COLUMN_MIN.qty}
-                              />
-                            </th>
-                            <th className="is-center" style={{ position: 'relative' }}>
-                              Cost
-                              <ColumnResizeHandle
-                                getStartWidth={() => getDrawerOrderColumnWidth('cost')}
-                                onChange={(w) => handleResizeDrawerOrderColumn('cost', w)}
-                                onReset={() => handleResetDrawerOrderColumn('cost')}
-                                minWidth={DRAWER_ORDERS_COLUMN_MIN.cost}
-                              />
-                            </th>
-                            <th className="is-center" style={{ position: 'relative' }}>
-                              Status
-                              <ColumnResizeHandle
-                                getStartWidth={() => getDrawerOrderColumnWidth('status')}
-                                onChange={(w) => handleResizeDrawerOrderColumn('status', w)}
-                                onReset={() => handleResetDrawerOrderColumn('status')}
-                                minWidth={DRAWER_ORDERS_COLUMN_MIN.status}
-                              />
-                            </th>
-                            <th style={{ position: 'relative' }}>
-                              Date
-                              <ColumnResizeHandle
-                                getStartWidth={() => getDrawerOrderColumnWidth('date')}
-                                onChange={(w) => handleResizeDrawerOrderColumn('date', w)}
-                                onReset={() => handleResetDrawerOrderColumn('date')}
-                                minWidth={DRAWER_ORDERS_COLUMN_MIN.date}
-                              />
-                            </th>
+                            {([
+                              { key: 'date', label: 'Date', center: false },
+                              { key: 'orderNum', label: 'Order #', center: false },
+                              { key: 'customer', label: 'Customer', center: true },
+                              { key: 'qty', label: 'Qty', center: true },
+                              { key: 'cost', label: 'Cost', center: true },
+                              { key: 'status', label: 'Status', center: true },
+                            ] as Array<{
+                              key: DrawerOrdersColumnKey
+                              label: string
+                              center: boolean
+                            }>).map(({ key, label, center }) => {
+                              const active = drawerOrdersSortKey === key
+                              const indicator = !active
+                                ? '↕'
+                                : drawerOrdersSortDir === 'asc' ? '↑' : '↓'
+                              const ariaSort: 'ascending' | 'descending' | 'none' =
+                                active
+                                  ? drawerOrdersSortDir === 'asc' ? 'ascending' : 'descending'
+                                  : 'none'
+                              return (
+                                <th
+                                  key={key}
+                                  className={center ? 'is-center' : undefined}
+                                  style={{ position: 'relative', padding: 0 }}
+                                  aria-sort={ariaSort}
+                                >
+                                  <button
+                                    type="button"
+                                    className={`analysis-orders-sort-btn${
+                                      center ? ' is-center' : ''
+                                    }${active ? ' is-active' : ''}`}
+                                    onClick={() => handleSortDrawerOrders(key)}
+                                  >
+                                    <span>{label}</span>
+                                    <span
+                                      className={`analysis-orders-sort-ind${
+                                        active ? ' is-active' : ''
+                                      }`}
+                                      aria-hidden="true"
+                                    >
+                                      {indicator}
+                                    </span>
+                                  </button>
+                                  <ColumnResizeHandle
+                                    getStartWidth={() => getDrawerOrderColumnWidth(key)}
+                                    onChange={(w) => handleResizeDrawerOrderColumn(key, w)}
+                                    onReset={() => handleResetDrawerOrderColumn(key)}
+                                    minWidth={DRAWER_ORDERS_COLUMN_MIN[key]}
+                                  />
+                                </th>
+                              )
+                            })}
                           </tr>
                         </thead>
                         <tbody>
-                          {skuDrawer.orders.map((order) => {
+                          {sortedDrawerOrders.map((order) => {
                             const orderStatus = displayText(order.orderStatus, '').trim()
                             const statusClass =
                               orderStatus === 'shipped'
@@ -1328,6 +1439,7 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
 
                             return (
                               <tr key={order.orderId}>
+                                <td className="col-date">{formatDateTime(order.orderDate)}</td>
                                 <td className="col-order-num">
                                   <button
                                     type="button"
@@ -1360,7 +1472,6 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
                                     {statusLabel}
                                   </span>
                                 </td>
-                                <td className="col-date">{formatDateOnly(order.orderDate)}</td>
                               </tr>
                             )
                           })}
