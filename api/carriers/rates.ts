@@ -601,19 +601,10 @@ async function ratesFromWalmartShipping(
       }))
     : [{ lineNumber: '1', sku: 'UNKNOWN', quantity: 1 }];
 
-  // Walmart's current Shipping Estimates docs use top-level request fields.
-  // - Top-level: purchaseOrderId, boxes[], shipFromAddress, shipToAddress,
-  //   packageType. The doc listed boxDimensions/boxItems as field names
-  //   WITHOUT clarifying they live inside boxes[] — and we verified
-  //   empirically that top-level placement returns 400 'missing required
-  //   fields' while the wrapper returns 200/500 (i.e. shape-valid).
-  // - Address field names: addressLine1/stateCode/countryCode (NOT
-  //   address1/state/country) — these passed Walmart's validator when
-  //   the wrapper was in place. Plain names returned 400.
-  // - packageType: CUSTOM_PACKAGE per the boss's handoff doc (was
-  //   CUSTOMER_SUPPLIED in earlier guesses).
-  // - Weight: separate boxWeight inside the box, NOT nested inside
-  //   boxDimensions (Walmart's labels API also uses this split form).
+  // Walmart's current Shipping Estimates API expects top-level request
+  // fields. The important names are not the generic package names used by
+  // other carriers: boxWeight/boxLength/boxWidth/boxHeight live inside
+  // boxDimensions, and addresses use addressLines[] + state.
   //
   // Ship-from override: Walmart's WSS validates shipFromAddress against
   // the seller's REGISTERED shipping origin in Seller Center. Mismatches
@@ -625,9 +616,12 @@ async function ratesFromWalmartShipping(
     String(shipFromInput?.postalCode ?? input.fromZip ?? '90248').replace(/[^0-9]/g, '').slice(0, 5);
   const fromAddress = {
     name: String(creds?.shipFromName ?? shipFromInput?.name ?? '').trim() || 'Seller',
-    addressLine1: String(creds?.shipFromAddress1 ?? shipFromInput?.addressLine1 ?? shipFromInput?.street1 ?? '').trim() || 'Warehouse',
+    addressLines: [
+      String(creds?.shipFromAddress1 ?? shipFromInput?.addressLine1 ?? shipFromInput?.street1 ?? '').trim() || 'Warehouse',
+      String(creds?.shipFromAddress2 ?? shipFromInput?.addressLine2 ?? shipFromInput?.street2 ?? '').trim(),
+    ].filter(Boolean),
     city: String(creds?.shipFromCity ?? shipFromInput?.city ?? '').trim() || 'Carson',
-    stateCode: String(creds?.shipFromState ?? shipFromInput?.state ?? '').trim() || 'CA',
+    state: String(creds?.shipFromState ?? shipFromInput?.state ?? '').trim() || 'CA',
     postalCode: fromZip,
     countryCode: String(shipFromInput?.country ?? 'US').trim() || 'US',
     phone: String(creds?.shipFromPhone ?? shipFromInput?.phone ?? '').trim() || '0000000000',
@@ -638,34 +632,48 @@ async function ratesFromWalmartShipping(
   const addr = input.rawOrder?.shippingInfo?.postalAddress ?? {};
   const toAddress = {
     name: addr?.name ?? 'Buyer',
-    addressLine1: addr?.address1 ?? '',
-    addressLine2: addr?.address2 ?? '',
+    addressLines: [addr?.address1 ?? '', addr?.address2 ?? ''].filter(Boolean),
     city: addr?.city ?? '',
-    stateCode: addr?.state ?? '',
+    state: addr?.state ?? '',
     postalCode: addr?.postalCode ?? '',
     countryCode: addr?.country ?? 'US',
     phone: input.rawOrder?.shippingInfo?.phone ?? '0000000000',
   };
 
+  const toWalmartIsoDate = (value: unknown, fallbackDays: number): string => {
+    if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString();
+    if (typeof value === 'number' && Number.isFinite(value)) return new Date(value).toISOString();
+    if (typeof value === 'string' && value.trim()) {
+      const numeric = Number(value);
+      if (Number.isFinite(numeric) && numeric > 0) return new Date(numeric).toISOString();
+      const parsed = new Date(value);
+      if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+    }
+    return new Date(Date.now() + fallbackDays * 24 * 60 * 60 * 1000).toISOString();
+  };
+
+  const shipByDate = toWalmartIsoDate(input.rawOrder?.shippingInfo?.estimatedShipDate, 1);
+  const deliverByDate = toWalmartIsoDate(input.rawOrder?.shippingInfo?.estimatedDeliveryDate, 5);
+
   const body = {
     purchaseOrderId: input.purchaseOrderId,
-    boxes: [
-      {
-        boxDimensions: {
-          length: input.dimsL,
-          width: input.dimsW,
-          height: input.dimsH,
-          uom: 'IN',
-        },
-        boxWeight: { value: weightLb, uom: 'LB' },
-        boxItems,
-        addOns: false,
-        hasBattery: false,
-      },
-    ],
-    shipFromAddress: fromAddress,
-    shipToAddress: toAddress,
+    boxDimensions: {
+      boxWeight: weightLb,
+      boxWeightUnit: 'LB',
+      boxLength: input.dimsL,
+      boxWidth: input.dimsW,
+      boxHeight: input.dimsH,
+      boxDimensionUnit: 'IN',
+    },
+    fromAddress,
+    toAddress,
     packageType: 'CUSTOM_PACKAGE',
+    shipByDate,
+    deliverByDate,
+    includeServicesNotMeetingDeliveryPromise: true,
+    boxItems,
+    addOns: false,
+    hasBattery: false,
   };
 
   const url = 'https://marketplace.walmartapis.com/v3/shipping/labels/shipping-estimates';
@@ -691,10 +699,9 @@ async function ratesFromWalmartShipping(
     const sentSummary = {
       purchaseOrderId: input.purchaseOrderId,
       packageType: (body as any).packageType,
-      hasBoxes: Array.isArray((body as any).boxes) && (body as any).boxes.length,
-      boxKeys: Object.keys((body as any).boxes?.[0] ?? {}),
-      fromAddressKeys: Object.keys((body as any).shipFromAddress ?? {}),
-      toAddressKeys: Object.keys((body as any).shipToAddress ?? {}),
+      boxDimensionKeys: Object.keys((body as any).boxDimensions ?? {}),
+      fromAddressKeys: Object.keys((body as any).fromAddress ?? {}),
+      toAddressKeys: Object.keys((body as any).toAddress ?? {}),
       boxItemKeys: Object.keys(boxItems[0] ?? {}),
       itemCount: boxItems.length,
       topLevelKeys: Object.keys(body),
@@ -702,9 +709,9 @@ async function ratesFromWalmartShipping(
       // place a 500 hides. If the seller's registered origin is e.g.
       // Phoenix AZ but we sent CA, this will reveal it without leaking
       // anything sensitive.
-      fromCity: (body as any).shipFromAddress?.city,
-      fromState: (body as any).shipFromAddress?.stateCode,
-      fromZip: (body as any).shipFromAddress?.postalCode,
+      fromCity: (body as any).fromAddress?.city,
+      fromState: (body as any).fromAddress?.state,
+      fromZip: (body as any).fromAddress?.postalCode,
     };
     throw new Error(
       `Walmart Shipping Estimates ${res.status}: ${walmartMessage} | sent: ${JSON.stringify(sentSummary)}`,
@@ -715,6 +722,7 @@ async function ratesFromWalmartShipping(
   // carrier shortName, serviceType, cost, ETA, addOns. The docs vary on
   // the wrapper field; we probe a few likely shapes.
   const rateList: any[] =
+    (Array.isArray(data?.data?.estimates) && data.data.estimates) ||
     (Array.isArray(data?.shippingEstimates) && data.shippingEstimates) ||
     (Array.isArray(data?.rates) && data.rates) ||
     (Array.isArray(data?.estimates) && data.estimates) ||
@@ -724,17 +732,17 @@ async function ratesFromWalmartShipping(
   return rateList
     .map((r: any) => {
       const carrier = String(
-        r?.carrier?.shortName ?? r?.carrierShortName ?? r?.carrierName ?? r?.carrier ?? 'Walmart',
+        r?.carrierDisplayName ?? r?.carrier?.shortName ?? r?.carrierShortName ?? r?.carrierName ?? r?.carrier ?? 'Walmart',
       );
       const svcType = String(
-        r?.serviceType ?? r?.carrierServiceType ?? r?.serviceLevel ?? r?.method ?? '',
+        r?.displayName ?? r?.name ?? r?.serviceType ?? r?.carrierServiceType ?? r?.serviceLevel ?? r?.method ?? '',
       );
       const service = svcType ? `${carrier} ${svcType}` : carrier;
       const cost = Number(
-        r?.totalCost?.amount ?? r?.cost?.amount ?? r?.totalCost ?? r?.cost ?? r?.amount ?? 0,
+        r?.estimatedRate?.amount ?? r?.totalCost?.amount ?? r?.cost?.amount ?? r?.totalCost ?? r?.cost ?? r?.amount ?? 0,
       );
       const currency = String(
-        r?.totalCost?.currency ?? r?.cost?.currency ?? r?.currency ?? 'USD',
+        r?.estimatedRate?.currency ?? r?.totalCost?.currency ?? r?.cost?.currency ?? r?.currency ?? 'USD',
       );
       const days = Number(r?.transitTime?.businessDays ?? r?.transitDays ?? r?.deliveryDays ?? 0) || 0;
       return { service, cost, days, currency };
