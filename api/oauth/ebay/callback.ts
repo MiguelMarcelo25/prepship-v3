@@ -127,10 +127,25 @@ export default async function handler(req: any, res: any): Promise<void> {
       ? 'https://api.sandbox.ebay.com/identity/v1/oauth2/token'
       : 'https://api.ebay.com/identity/v1/oauth2/token';
 
-    // The redirect_uri sent in the exchange MUST exactly match what's
-    // registered on eBay's RuName. This URL is what we sent the user to,
-    // so it's by definition the correct value.
-    const redirectUri = `https://${req.headers?.host}${url.pathname}`;
+    // eBay's OAuth exchange wants redirect_uri to be the RuName, not the
+    // callback URL. The RuName itself points eBay to our accept/decline URLs.
+    const redirectUri = String(
+      creds?.ruName ??
+      creds?.runame ??
+      process.env.EBAY_PRODUCTION_RUNAME ??
+      process.env.EBAY_RUNAME ??
+      'DrprepperUSA-Drpreppe-Prepsh-qoumohks'
+    ).trim();
+    if (!redirectUri) {
+      res.status(400).end(htmlPage(
+        'Missing eBay RuName',
+        `<h1 class="error">Saved eBay row is missing the RuName</h1>
+         <p>Open eBay Developer Portal -> User Tokens and copy the value under
+            <strong>RuName (eBay Redirect URL name)</strong>, then save it in
+            PrepShip Settings on the eBay store row.</p>`,
+      ));
+      return;
+    }
 
     const basic = Buffer.from(`${appId}:${certId}`).toString('base64');
     const tokenRes = await fetch(tokenUrl, {
@@ -153,13 +168,13 @@ export default async function handler(req: any, res: any): Promise<void> {
         `<h1 class="error">eBay rejected the authorization code</h1>
          <p>HTTP ${tokenRes.status}: <code>${escapeHtml(t)}</code></p>
          <p>Common causes: the App ID / Cert ID saved in PrepShip don't match the
-            keyset used to start the sign-in, or this redirect URL doesn't match
-            the one registered on the keyset's RuName.</p>
+            keyset used to start the sign-in, or this RuName doesn't match
+            the keyset used by the consent page.</p>
          <div class="box">
            <strong>What I tried:</strong><br>
            <code>POST ${escapeHtml(tokenUrl)}</code><br>
            <code>App ID: ${escapeHtml(appId.slice(0, 24))}…</code><br>
-           <code>redirect_uri: ${escapeHtml(redirectUri)}</code>
+           <code>redirect_uri/RuName: ${escapeHtml(redirectUri)}</code>
          </div>`,
       ));
       return;
@@ -201,7 +216,7 @@ export default async function handler(req: any, res: any): Promise<void> {
        </div>
        <p>Close this tab and go back to PrepShip Settings. <strong>Test Connection</strong>
           on the eBay row should now return ✅.</p>
-       <p><a class="cta" href="https://prepship-eta.vercel.app/">Open PrepShip</a></p>`,
+       <p><a class="cta" href="https://prepshipv4.vercel.app/">Open PrepShip</a></p>`,
     ));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
