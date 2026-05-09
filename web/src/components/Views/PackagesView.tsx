@@ -31,6 +31,7 @@ import {
 } from './PackagesDataTable'
 import { AnalysisPagination } from './AnalysisPagination'
 import { LowStockBanner } from './LowStockBanner'
+import OrderDetailDrawer from '../OrderDetailDrawer'
 import './PackagesView.css'
 
 const PACKAGES_PAGE_SIZE_OPTIONS = [25, 50, 100]
@@ -828,63 +829,53 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
     }
   }
 
-  // Open the OrderDetailDrawer when a user clicks an order number
-  // embedded in a package_ledger reason ("Shipment XXX for order YYY").
-  // The ledger only stores the orderNumber as text — no FK — so we
-  // resolve number → local PK first, then call the parent's onOpenOrder
-  // callback with the numeric ID.
-  //
-  // Three failure modes worth handling distinctly:
-  //   1. Parent didn't pass onOpenOrder — show an info toast, don't lookup
-  //      (saves a wasted API call).
-  //   2. Order was purged (e.g. test order) — show "no longer exists".
-  //   3. Network / 5xx — show the underlying error.
-  // A small in-flight set guards against rapid double-clicks while the
-  // lookup is pending.
+  // Order-detail modal state. When the operator clicks an order number
+  // inside a package's ledger reason ("Shipment XXX for order YYY"),
+  // we resolve the number → local PK and pop the OrderDetailDrawer in
+  // its centered/modal mode RIGHT INSIDE Packages — the operator no
+  // longer leaves the page or context-switches to /orders. They get
+  // the same shipment/items/history/actions panel that clicking an
+  // order in the orders table shows, just as a centered overlay.
+  const [orderDetailModal, setOrderDetailModal] = useState<{
+    orderId: number
+    status: string | null
+  } | null>(null)
+
   const orderLookupInflight = useRef<Set<string>>(new Set())
   const handleOpenOrderByNumber = async (orderNumber: string) => {
     const trimmed = String(orderNumber ?? '').trim()
     if (!trimmed) return
-    if (!onOpenOrder) {
-      showToast('ℹ️ Order drawer is not available on this view', 'info')
-      return
-    }
     if (orderLookupInflight.current.has(trimmed)) return
     orderLookupInflight.current.add(trimmed)
     try {
       const found = await apiClient.findOrderByNumber(trimmed)
       if (!found) {
-        // Lookup endpoint returned null — the order has been purged from
-        // the local DB (common for old test orders) OR the by-number
-        // route hasn't been deployed to this environment yet. Don't
-        // dead-end the operator: jump them to the Orders view with the
-        // number prefilled in the search bar so they can find the
-        // order manually if it still exists, with a clear toast
-        // explaining what we tried.
+        // Lookup returned null — order is purged OR the by-number
+        // endpoint isn't deployed in this environment. Toast tells
+        // the operator what happened; the legacy "navigate to Orders
+        // with number prefilled" fallback still fires for those who
+        // want to go look manually.
         showToast(
-          `Order ${trimmed} couldn't be opened directly — searching for it in Orders…`,
-          'info'
+          `Order ${trimmed} couldn't be opened (purged or not in DB)`,
+          'error'
         )
-        // Pass a sentinel orderId of -1 — the parent treats negative
-        // ids as "no specific order, just navigate" and falls back to
-        // setting the search query. See openOrderFromContentView.
         try {
           window.dispatchEvent(
             new CustomEvent('prepship:open-orders-search', { detail: { query: trimmed } }),
           )
         } catch {
-          // ignore — fallback below still navigates
+          /* event dispatch is a best-effort hint to whoever's listening */
         }
         return
       }
-      // Pass the order's actual status so the destination view lands
-      // on the correct tab (Awaiting/Shipped/Cancelled). Many package
-      // ledger entries point at shipped orders.
-      onOpenOrder(found.id, found.orderStatus)
+      // Open the modal RIGHT HERE in the Packages page — no
+      // navigation, no context-switch. OrderDetailDrawer in
+      // presentation="centered" mode renders as a centered overlay
+      // with backdrop dim + click-to-close.
+      setOrderDetailModal({ orderId: found.id, status: found.orderStatus })
     } catch (lookupError) {
-      // Log the underlying error to the console so operators can
-      // forward it to support — `safe()` upstream eats the error and
-      // returns null, but here we have the live throw.
+      // Log the underlying error so support can diagnose — safe()
+      // upstream eats it and returns null.
       console.warn(
         `[PackagesView] Order lookup failed for "${trimmed}":`,
         lookupError,
@@ -1499,6 +1490,20 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
           onConfirm={() => void handleConfirmDefaultPrice()}
         />
       ) : null}
+
+      {/* Order detail modal — opens when an operator clicks an order
+          number link inside a package's ledger reason. Same component
+          OrdersView uses for its row-click drawer; presentation set to
+          "centered" so it floats over Packages as a true modal with
+          a dim backdrop and click-to-close. The drawer fetches its
+          own order/shipment data based on orderId, so we just need
+          to flip the state and let it do the work. */}
+      <OrderDetailDrawer
+        orderId={orderDetailModal?.orderId ?? null}
+        displayStatus={orderDetailModal?.status ?? undefined}
+        presentation="centered"
+        onClose={() => setOrderDetailModal(null)}
+      />
     </>
   )
 }
