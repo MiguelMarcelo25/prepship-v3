@@ -527,57 +527,65 @@ export default function SettingsView() {
       }}
     >
       {/* ─────────────────────────────────────────────────────────────
-          REFINED OPERATOR CONSOLE — drawer-rail layout
+          REFINED OPERATOR CONSOLE — horizontal drawer-rail layout
 
-          Two-column on desktop:
-            • LEFT: 84px vertical icon rail (sticky, full-height)
-            • RIGHT: animated content panel with the active section
+          Single column, top-to-bottom:
+            • TOP: full-width sticky horizontal icon rail
+            • BELOW: animated content panel with the active section
 
-          On mobile (<sm) the rail collapses to a horizontal pill bar
-          at the top, scrolling horizontally if there are more icons
-          than fit. Same DOM, different orientation via flex-direction.
+          The rail is a horizontal pill-strip with the brand mark on
+          the left and the section icons spread to the right. On
+          narrow viewports the icons can scroll horizontally inside
+          the rail without wrapping the whole page.
           ───────────────────────────────────────────────────────────── */}
-      <div className="flex flex-col sm:flex-row min-h-full w-full">
+      <div className="flex flex-col min-h-full w-full">
 
-        {/* ─── ICON RAIL ─────────────────────────────────────────────
-            Sticky vertical strip on desktop, horizontal scroll on mobile.
-            Each icon is a 56x56 button with its own brand-tinted active
-            state and an animated indicator bar on the left edge that
-            slides between sections (Linear-style "you-are-here" marker).
-
-            Tooltips on hover (using `title` for free, native UX). */}
+        {/* ─── HORIZONTAL ICON RAIL ──────────────────────────────────
+            Sticky strip across the top of the panel. Brand mark on
+            the left, then a horizontally-laid-out tab list of section
+            icons. The active indicator bar sits on the BOTTOM edge of
+            the active icon and morphs between positions via Framer's
+            layoutId — same Linear-style "you-are-here" marker as
+            before, just rotated 90° to fit the horizontal orientation. */}
         <aside
           className="
-            relative flex-shrink-0
-            w-full sm:w-[84px]
-            border-b sm:border-b-0 sm:border-r border-line
+            flex-shrink-0
+            w-full
+            border-b border-line
             bg-gradient-to-b from-surface-2 to-surface
-            sm:sticky sm:top-0 sm:h-screen sm:overflow-y-auto
+            sticky top-0
             z-10
           "
           aria-label="Settings sections"
         >
-          {/* Brand mark on the rail — same gradient tile from the old
-              header, but compressed into the rail's footprint so the
-              drawer feels self-contained. Hidden on mobile (no room). */}
-          <motion.div
-            initial={{ rotate: -90, scale: 0.5, opacity: 0 }}
-            animate={{ rotate: 0, scale: 1, opacity: 1 }}
-            transition={{ type: 'spring', stiffness: 240, damping: 20, delay: 0.1 }}
-            className="hidden sm:flex w-11 h-11 mx-auto mt-4 mb-3 rounded-xl bg-gradient-to-br from-brand to-indigo-600 items-center justify-center shadow-md ring-1 ring-brand/30"
-            title="Settings"
-          >
-            <SettingsIcon size={20} strokeWidth={2.25} className="text-white" />
-          </motion.div>
-
           <div
             className="
-              flex sm:flex-col items-center gap-2 sm:gap-1
-              px-3 sm:px-2 py-3 sm:py-2
-              overflow-x-auto sm:overflow-x-visible
+              flex flex-row items-center gap-2
+              px-3 sm:px-5 py-3
+              overflow-x-auto
             "
             role="tablist"
           >
+            {/* Brand mark — leads the rail, doubles as a "back to
+                default section" affordance (clicks reset to Markups). */}
+            <motion.button
+              type="button"
+              initial={{ rotate: -90, scale: 0.5, opacity: 0 }}
+              animate={{ rotate: 0, scale: 1, opacity: 1 }}
+              transition={{ type: 'spring', stiffness: 240, damping: 20, delay: 0.05 }}
+              whileHover={{ scale: 1.04 }}
+              whileTap={{ scale: 0.94 }}
+              onClick={() => setActiveSection('markups')}
+              className="flex w-10 h-10 sm:w-11 sm:h-11 mr-2 rounded-xl bg-gradient-to-br from-brand to-indigo-600 items-center justify-center shadow-md ring-1 ring-brand/30 flex-shrink-0"
+              title="Settings — back to start"
+              aria-label="Reset to default section"
+            >
+              <SettingsIcon size={18} strokeWidth={2.25} className="text-white" />
+            </motion.button>
+
+            {/* Hairline divider between brand mark and tab list */}
+            <div className="hidden sm:block w-px h-7 bg-line/80 mr-1 flex-shrink-0" aria-hidden />
+
             {DRAWER_SECTIONS.map((section, idx) => {
               const Icon = section.icon
               const isActive = activeSection === section.id
@@ -592,8 +600,8 @@ export default function SettingsView() {
                   aria-controls={`settings-panel-${section.id}`}
                   id={`settings-tab-${section.id}`}
                   onClick={() => setActiveSection(section.id)}
-                  initial={{ opacity: 0, x: -8 }}
-                  animate={{ opacity: 1, x: 0 }}
+                  initial={{ opacity: 0, y: -6 }}
+                  animate={{ opacity: 1, y: 0 }}
                   transition={{
                     duration: 0.32,
                     delay: 0.08 + idx * 0.04,
@@ -604,8 +612,8 @@ export default function SettingsView() {
                   title={section.label}
                   className={`
                     relative group
-                    flex items-center justify-center
-                    w-12 h-12 sm:w-14 sm:h-14
+                    inline-flex items-center justify-center gap-2
+                    h-11 px-3 sm:px-3.5
                     rounded-xl flex-shrink-0
                     transition-colors duration-200
                     focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/50
@@ -614,28 +622,41 @@ export default function SettingsView() {
                       : 'hover:bg-surface-2 ring-1 ring-transparent hover:ring-line'}
                   `}
                 >
-                  {/* Active indicator bar — slides between sections via
-                      Framer's layoutId so the bar morphs from one icon
-                      to the next instead of fading. Vertical on desktop
-                      (left edge), horizontal on mobile (bottom edge). */}
+                  {/* Active indicator bar — sits on the BOTTOM edge of
+                      the active icon and morphs between positions via
+                      Framer's layoutId. Reads as a "currently selected
+                      tab" underline, same idiom as macOS / iOS tab bars. */}
                   {isActive ? (
                     <motion.span
                       layoutId="settings-active-indicator"
                       transition={{ type: 'spring', stiffness: 380, damping: 30 }}
                       className={`
-                        absolute
-                        sm:left-[-9px] sm:top-2 sm:bottom-2 sm:w-[3px] sm:h-auto
-                        bottom-[-9px] left-2 right-2 h-[3px] w-auto
-                        rounded-full bg-gradient-to-b ${ACCENT_GRADIENT[section.tone]}
+                        absolute bottom-[-9px] left-3 right-3
+                        h-[3px] rounded-full
+                        bg-gradient-to-r ${ACCENT_GRADIENT[section.tone]}
                       `}
                       aria-hidden
                     />
                   ) : null}
                   <Icon
-                    size={20}
+                    size={18}
                     strokeWidth={isActive ? 2.5 : 2.0}
                     className={`transition-colors duration-200 ${isActive ? accentText : 'text-ink-3 group-hover:text-ink-2'}`}
                   />
+                  {/* Inline section label — hidden on very narrow
+                      viewports to keep the rail scannable, visible on
+                      sm+ where there's room. Active section always
+                      shows the label so the operator gets a written
+                      confirmation of where they are. */}
+                  <span
+                    className={`
+                      hidden sm:inline text-[12.5px] font-bold tracking-tight whitespace-nowrap
+                      transition-colors duration-200
+                      ${isActive ? accentText : 'text-ink-3 group-hover:text-ink-2'}
+                    `}
+                  >
+                    {section.short}
+                  </span>
                 </motion.button>
               )
             })}
