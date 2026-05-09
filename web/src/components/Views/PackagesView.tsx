@@ -139,7 +139,13 @@ function readStoredPackageColumnWidths(): PackagesColumnWidths {
 }
 
 interface PackagesViewProps {
-  onOpenOrder?: (orderId: number) => void
+  // Accepts an optional orderStatus so package-ledger order links can
+  // route operators to the correct status tab (Awaiting / Shipped /
+  // Cancelled) — many ledger entries point at shipped orders, and
+  // navigating to the default Awaiting view would otherwise mean the
+  // detail drawer opens but the surrounding list doesn't show the
+  // selected row in context.
+  onOpenOrder?: (orderId: number, orderStatus?: string | null) => void
 }
 
 interface LedgerState {
@@ -848,11 +854,41 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
     try {
       const found = await apiClient.findOrderByNumber(trimmed)
       if (!found) {
-        showToast(`⚠ Order ${trimmed} no longer exists (may have been purged)`, 'error')
+        // Lookup endpoint returned null — the order has been purged from
+        // the local DB (common for old test orders) OR the by-number
+        // route hasn't been deployed to this environment yet. Don't
+        // dead-end the operator: jump them to the Orders view with the
+        // number prefilled in the search bar so they can find the
+        // order manually if it still exists, with a clear toast
+        // explaining what we tried.
+        showToast(
+          `Order ${trimmed} couldn't be opened directly — searching for it in Orders…`,
+          'info'
+        )
+        // Pass a sentinel orderId of -1 — the parent treats negative
+        // ids as "no specific order, just navigate" and falls back to
+        // setting the search query. See openOrderFromContentView.
+        try {
+          window.dispatchEvent(
+            new CustomEvent('prepship:open-orders-search', { detail: { query: trimmed } }),
+          )
+        } catch {
+          // ignore — fallback below still navigates
+        }
         return
       }
-      onOpenOrder(found.id)
+      // Pass the order's actual status so the destination view lands
+      // on the correct tab (Awaiting/Shipped/Cancelled). Many package
+      // ledger entries point at shipped orders.
+      onOpenOrder(found.id, found.orderStatus)
     } catch (lookupError) {
+      // Log the underlying error to the console so operators can
+      // forward it to support — `safe()` upstream eats the error and
+      // returns null, but here we have the live throw.
+      console.warn(
+        `[PackagesView] Order lookup failed for "${trimmed}":`,
+        lookupError,
+      )
       showToast(
         `❌ Could not open order ${trimmed}: ${lookupError instanceof Error ? lookupError.message : 'Lookup failed'}`,
         'error'

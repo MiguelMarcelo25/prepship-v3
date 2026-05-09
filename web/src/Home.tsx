@@ -366,6 +366,28 @@ export default function Home() {
     navigate(`/orders/${targetStatus}`)
   }
 
+  // Fallback path for content-view links (PackagesView, InventoryView)
+  // when a direct id-lookup fails — e.g. the by-number endpoint isn't
+  // deployed, or the order was purged. Listens for the custom event
+  // dispatched by handleOpenOrderByNumber and routes the operator to
+  // the orders list with the order number prefilled in search, so they
+  // can find the row manually instead of dead-ending on an error toast.
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ query?: string }>).detail
+      const query = (detail?.query ?? '').trim()
+      if (!query) return
+      setSearchQuery(query)
+      // Try every status one at a time — the order could be in any of
+      // the three. Default to awaiting_shipment, but if the user is
+      // already on /orders/X navigation to the same path is a no-op
+      // and the search-query change alone re-runs the orders fetch.
+      navigate(`/orders/${currentStatus}`)
+    }
+    window.addEventListener('prepship:open-orders-search', handler as EventListener)
+    return () => window.removeEventListener('prepship:open-orders-search', handler as EventListener)
+  }, [navigate, currentStatus])
+
   useEffect(() => {
     if (displayView !== 'orders') return
 
