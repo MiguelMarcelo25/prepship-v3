@@ -251,13 +251,22 @@ export function buildDailyStripProgress(stats: OrdersDailyStatsDto): DailyStripP
   const shipped = Math.max(0, stats.totalOrders - stats.needToShip)
   const pct = stats.totalOrders > 0 ? Math.round((shipped / stats.totalOrders) * 100) : 0
 
+  // Color palette per operator request 2026-05-09: every blue/green
+  // accent in the daily strip should be #03A9F4 (Material Light Blue
+  // 500) instead of the previous emerald/indigo mix. Orange (warn)
+  // is preserved for the in-progress 50–99% state — that one is
+  // semantically meaningful ("running behind") and the operator only
+  // asked to drop blue and green, not warn-orange.
+  const BRAND_BLUE = '#03A9F4'
   return {
     shipped,
     pct,
     barFill: Math.min(100, pct),
-    barColor: pct >= 100 ? '#16a34a' : pct >= 50 ? '#e07a00' : '#2a5bd7',
+    // 100% complete → brand blue (was emerald). 50–99% → orange (warn,
+    // unchanged). <50% → brand blue (was indigo).
+    barColor: pct >= 100 ? BRAND_BLUE : pct >= 50 ? '#e07a00' : BRAND_BLUE,
     needToShipColor: stats.needToShip > 0 ? '#e07a00' : 'var(--text3)',
-    upcomingColor: stats.upcomingOrders > 0 ? '#2a5bd7' : 'var(--text3)',
+    upcomingColor: stats.upcomingOrders > 0 ? BRAND_BLUE : 'var(--text3)',
   }
 }
 
