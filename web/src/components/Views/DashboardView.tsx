@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   LayoutDashboard,
@@ -15,6 +15,7 @@ import {
   Inbox,
   ArrowUpRight,
   ArrowDownRight,
+  Users,
 } from 'lucide-react'
 import {
   ResponsiveContainer,
@@ -195,11 +196,64 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
+  // Client filter — null means "All Clients" (no filter applied). Selecting
+  // a client refetches the chart + Top SKUs panels (and the heatmap, which
+  // is derived from the same Top SKUs response). KPI cards and inventory
+  // alerts intentionally stay global so the dashboard's "north-star" tiles
+  // don't quietly reframe under the user.
+  const [selectedClientId, setSelectedClientId] = useState<number | null>(null)
+  const [clients, setClients] = useState<Array<{ clientId: number; name: string }>>([])
+  const [filterRefetching, setFilterRefetching] = useState(false)
+  // Track whether the next data load is the very first one. Subsequent loads
+  // (triggered by a client filter change) shouldn't trip the full-page
+  // skeleton — they update the affected panels in place via stale-while-
+  // revalidate behavior.
+  const isFirstLoad = useRef(true)
+
+  // Selected client name (for the chart's filter chip + tooltips).
+  const selectedClient = useMemo(
+    () => (selectedClientId == null ? null : clients.find((c) => c.clientId === selectedClientId) ?? null),
+    [selectedClientId, clients],
+  )
+
+  // Fetch clients once on mount. The filter list is sorted alphabetically
+  // ("All Clients" pinned to the top in the JSX).
+  useEffect(() => {
+    let cancelled = false
+    void apiClient
+      .listClients()
+      .then((rows: any[]) => {
+        if (cancelled) return
+        const list = (Array.isArray(rows) ? rows : [])
+          .map((r: any) => ({
+            clientId: Number(r?.clientId ?? r?.id) || 0,
+            name: String(r?.name ?? '').trim(),
+          }))
+          .filter((c) => c.clientId > 0 && c.name.length > 0)
+          .sort((a, b) => a.name.localeCompare(b.name))
+        setClients(list)
+      })
+      .catch(() => {
+        // Silent fallback: client list stays empty, the filter just shows
+        // "All Clients" alone.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   useEffect(() => {
     let cancelled = false
 
     async function load() {
-      setLoading(true)
+      // Only flash the full-page skeleton on the very first load. On a
+      // client-filter change, keep the current data visible so the page
+      // doesn't visibly tear apart — show a small refetching pill instead.
+      if (isFirstLoad.current) {
+        setLoading(true)
+      } else {
+        setFilterRefetching(true)
+      }
       setError(null)
       try {
         const today = new Date()
@@ -214,18 +268,23 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         // through up to 5000 individual orders" approach. Backend does one
         // GROUP BY query and returns ~30 rows in a few KB instead of MB.
         // See src/routes/orders.ts /daily-counts.
+        // selectedClientId is forwarded to the two endpoints that accept
+        // a client filter (`/analysis/sku-daily` and `/orders/daily-counts`).
+        // The remaining endpoints stay global by design — see the
+        // `selectedClientId` state declaration for rationale.
+        const cid = selectedClientId ?? undefined
         const [countsRes, statsRes, alertsRes, salesRes, priorSalesRes, ordersRes] = await Promise.allSettled([
           apiClient.fetchCounts(),
           apiClient.fetchDailyStats(),
           apiClient.fetchInventoryAlerts().catch(() => []),
           apiClient
-            .fetchAnalysisDailySales({ from: fromIso, to: toIso, limit: 6 })
+            .fetchAnalysisDailySales({ from: fromIso, to: toIso, limit: 6, clientId: cid })
             .catch(() => null),
           apiClient
-            .fetchAnalysisDailySales({ from: fromIsoPrior, to: toIsoPrior, limit: 6 })
+            .fetchAnalysisDailySales({ from: fromIsoPrior, to: toIsoPrior, limit: 6, clientId: cid })
             .catch(() => null),
           apiClient
-            .fetchOrdersDailyCounts({ from: fromIso, to: toIso })
+            .fetchOrdersDailyCounts({ from: fromIso, to: toIso, clientId: cid })
             .catch(() => null),
         ])
 
@@ -365,7 +424,11 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         if (cancelled) return
         setError(loadError instanceof Error ? loadError.message : 'Failed to load dashboard')
       } finally {
-        if (!cancelled) setLoading(false)
+        if (!cancelled) {
+          setLoading(false)
+          setFilterRefetching(false)
+          isFirstLoad.current = false
+        }
       }
     }
 
@@ -373,7 +436,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [selectedClientId])
 
   const orderTrendStats = useMemo(() => {
     if (!orderTrend.length) return { sum: 0, current: 0, prior: 0, change: { pct: 0, direction: 'flat' as const } }
@@ -693,7 +756,10 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             )}
           </motion.div>
 
-          {/* Sales trend (full width, 2/3) + Top SKUs (1/3) */}
+          {/* Sales trend (full width, 2/3) + Top SKUs (1/3). The client
+           * filter lives inside the Orders-per-Day card as a right-side
+           * sidebar — picking a client refetches the chart, the heatmap,
+           * and Top SKUs (KPIs stay global). */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-4">
             <motion.div
               initial={{ opacity: 0, y: 8 }}
@@ -704,7 +770,11 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               <div className="flex items-start justify-between gap-3 mb-3">
                 <SectionHeader
                   title="Orders per Day"
-                  subtitle="Last 30 days · real orders by created date · split by current status"
+                  subtitle={
+                    selectedClient
+                      ? `Last 30 days · filtered to ${selectedClient.name}`
+                      : 'Last 30 days · real orders by created date · split by current status'
+                  }
                 />
                 <div className="text-right flex-shrink-0">
                   <div className="text-[20px] font-extrabold text-ink font-mono tabular-nums tracking-[-0.02em] leading-none">
@@ -717,109 +787,178 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                   </div>
                 </div>
               </div>
-              {orderTrend.length > 0 && orderTrendStats.sum > 0 ? (
-                <div className="h-[220px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={orderTrend} margin={{ top: 6, right: 6, left: -16, bottom: 0 }}>
-                      <defs>
-                        <linearGradient id="dashShippedFill" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#16a34a" stopOpacity={0.4} />
-                          <stop offset="100%" stopColor="#16a34a" stopOpacity={0} />
-                        </linearGradient>
-                        <linearGradient id="dashAwaitingFill" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#2a5bd7" stopOpacity={0.32} />
-                          <stop offset="100%" stopColor="#2a5bd7" stopOpacity={0} />
-                        </linearGradient>
-                        <linearGradient id="dashCancelledFill" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#dc2626" stopOpacity={0.28} />
-                          <stop offset="100%" stopColor="#dc2626" stopOpacity={0} />
-                        </linearGradient>
-                      </defs>
-                      <CartesianGrid stroke="#eef0f4" strokeDasharray="3 3" vertical={false} />
-                      <XAxis
-                        dataKey="day"
-                        tickFormatter={formatDayLabel}
-                        tick={{ fill: '#8a95a3', fontSize: 10 }}
-                        axisLine={{ stroke: '#e1e4e8' }}
-                        tickLine={false}
-                        minTickGap={20}
-                      />
-                      <YAxis
-                        tick={{ fill: '#8a95a3', fontSize: 10 }}
-                        axisLine={false}
-                        tickLine={false}
-                        width={32}
-                        allowDecimals={false}
-                      />
-                      <Tooltip
-                        cursor={{ stroke: '#c8cdd5', strokeDasharray: '3 3' }}
-                        contentStyle={{
-                          background: '#fff',
-                          border: '1px solid #e1e4e8',
-                          borderRadius: 8,
-                          fontSize: 12,
-                          fontFamily: 'Geist, system-ui, sans-serif',
-                          boxShadow: '0 4px 16px -4px rgba(15,23,42,0.08)',
-                        }}
-                        labelFormatter={formatDayLabel}
-                        formatter={(value: number, name: string) => [formatInt(num(value)), name]}
-                      />
-                      <Area
-                        type="monotone"
-                        dataKey="shipped"
-                        name="Shipped"
-                        stackId="orders"
-                        stroke="#16a34a"
-                        strokeWidth={1.5}
-                        fill="url(#dashShippedFill)"
-                        activeDot={{ r: 4, strokeWidth: 2, stroke: '#fff' }}
-                      />
-                      <Area
-                        type="monotone"
-                        dataKey="awaiting"
-                        name="Awaiting"
-                        stackId="orders"
-                        stroke="#2a5bd7"
-                        strokeWidth={1.5}
-                        fill="url(#dashAwaitingFill)"
-                        activeDot={{ r: 4, strokeWidth: 2, stroke: '#fff' }}
-                      />
-                      <Area
-                        type="monotone"
-                        dataKey="cancelled"
-                        name="Cancelled"
-                        stackId="orders"
-                        stroke="#dc2626"
-                        strokeWidth={1.5}
-                        fill="url(#dashCancelledFill)"
-                        activeDot={{ r: 4, strokeWidth: 2, stroke: '#fff' }}
-                      />
-                    </AreaChart>
-                  </ResponsiveContainer>
+              {/* Chart + embedded client filter, side by side. The chart
+               * takes the remaining flex space; the filter is a fixed
+               * 176px (w-44) right-side sidebar so the chart isn't
+               * crowded. Stacks vertically on smaller screens. */}
+              <div className="flex flex-col sm:flex-row gap-3">
+                <div className="flex-1 min-w-0">
+                  {orderTrend.length > 0 && orderTrendStats.sum > 0 ? (
+                    <div className="h-[220px]">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={orderTrend} margin={{ top: 6, right: 6, left: -16, bottom: 0 }}>
+                          <defs>
+                            <linearGradient id="dashShippedFill" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor="#16a34a" stopOpacity={0.4} />
+                              <stop offset="100%" stopColor="#16a34a" stopOpacity={0} />
+                            </linearGradient>
+                            <linearGradient id="dashAwaitingFill" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor="#2a5bd7" stopOpacity={0.32} />
+                              <stop offset="100%" stopColor="#2a5bd7" stopOpacity={0} />
+                            </linearGradient>
+                            <linearGradient id="dashCancelledFill" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor="#dc2626" stopOpacity={0.28} />
+                              <stop offset="100%" stopColor="#dc2626" stopOpacity={0} />
+                            </linearGradient>
+                          </defs>
+                          <CartesianGrid stroke="#eef0f4" strokeDasharray="3 3" vertical={false} />
+                          <XAxis
+                            dataKey="day"
+                            tickFormatter={formatDayLabel}
+                            tick={{ fill: '#8a95a3', fontSize: 10 }}
+                            axisLine={{ stroke: '#e1e4e8' }}
+                            tickLine={false}
+                            minTickGap={20}
+                          />
+                          <YAxis
+                            tick={{ fill: '#8a95a3', fontSize: 10 }}
+                            axisLine={false}
+                            tickLine={false}
+                            width={32}
+                            allowDecimals={false}
+                          />
+                          <Tooltip
+                            cursor={{ stroke: '#c8cdd5', strokeDasharray: '3 3' }}
+                            contentStyle={{
+                              background: '#fff',
+                              border: '1px solid #e1e4e8',
+                              borderRadius: 8,
+                              fontSize: 12,
+                              fontFamily: 'Geist, system-ui, sans-serif',
+                              boxShadow: '0 4px 16px -4px rgba(15,23,42,0.08)',
+                            }}
+                            labelFormatter={formatDayLabel}
+                            formatter={(value: number, name: string) => [formatInt(num(value)), name]}
+                          />
+                          <Area
+                            type="monotone"
+                            dataKey="shipped"
+                            name="Shipped"
+                            stackId="orders"
+                            stroke="#16a34a"
+                            strokeWidth={1.5}
+                            fill="url(#dashShippedFill)"
+                            activeDot={{ r: 4, strokeWidth: 2, stroke: '#fff' }}
+                          />
+                          <Area
+                            type="monotone"
+                            dataKey="awaiting"
+                            name="Awaiting"
+                            stackId="orders"
+                            stroke="#2a5bd7"
+                            strokeWidth={1.5}
+                            fill="url(#dashAwaitingFill)"
+                            activeDot={{ r: 4, strokeWidth: 2, stroke: '#fff' }}
+                          />
+                          <Area
+                            type="monotone"
+                            dataKey="cancelled"
+                            name="Cancelled"
+                            stackId="orders"
+                            stroke="#dc2626"
+                            strokeWidth={1.5}
+                            fill="url(#dashCancelledFill)"
+                            activeDot={{ r: 4, strokeWidth: 2, stroke: '#fff' }}
+                          />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    </div>
+                  ) : (
+                    <div className="h-[220px] flex flex-col items-center justify-center gap-2">
+                      <Inbox size={28} strokeWidth={2} className="text-ink-4" />
+                      <div className="text-tiny text-ink-3">No orders in the last 30 days.</div>
+                    </div>
+                  )}
+                  {/* Legend chips */}
+                  {orderTrend.length > 0 && orderTrendStats.sum > 0 ? (
+                    <div className="flex items-center gap-x-4 gap-y-1 mt-3 pt-3 border-t border-line text-tiny flex-wrap">
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="w-3 h-3 rounded-sm bg-emerald-600/80 ring-1 ring-emerald-700/30" />
+                        <span className="text-ink-2 font-medium">Shipped</span>
+                      </span>
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="w-3 h-3 rounded-sm bg-brand/70 ring-1 ring-brand/30" />
+                        <span className="text-ink-2 font-medium">Awaiting</span>
+                      </span>
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className="w-3 h-3 rounded-sm bg-rose-600/70 ring-1 ring-rose-700/30" />
+                        <span className="text-ink-2 font-medium">Cancelled</span>
+                      </span>
+                    </div>
+                  ) : null}
                 </div>
-              ) : (
-                <div className="h-[220px] flex flex-col items-center justify-center gap-2">
-                  <Inbox size={28} strokeWidth={2} className="text-ink-4" />
-                  <div className="text-tiny text-ink-3">No orders in the last 30 days.</div>
-                </div>
-              )}
-              {/* Legend chips */}
-              {orderTrend.length > 0 && orderTrendStats.sum > 0 ? (
-                <div className="flex items-center gap-x-4 gap-y-1 mt-3 pt-3 border-t border-line text-tiny flex-wrap">
-                  <span className="inline-flex items-center gap-1.5">
-                    <span className="w-3 h-3 rounded-sm bg-emerald-600/80 ring-1 ring-emerald-700/30" />
-                    <span className="text-ink-2 font-medium">Shipped</span>
-                  </span>
-                  <span className="inline-flex items-center gap-1.5">
-                    <span className="w-3 h-3 rounded-sm bg-brand/70 ring-1 ring-brand/30" />
-                    <span className="text-ink-2 font-medium">Awaiting</span>
-                  </span>
-                  <span className="inline-flex items-center gap-1.5">
-                    <span className="w-3 h-3 rounded-sm bg-rose-600/70 ring-1 ring-rose-700/30" />
-                    <span className="text-ink-2 font-medium">Cancelled</span>
-                  </span>
-                </div>
-              ) : null}
+
+                {/* Embedded client filter — vertical scrollable list. The
+                 * left border separates it visually from the chart so it
+                 * reads as a sidebar control rather than overlapping
+                 * chart space. Width is fixed (w-44 ≈ 176px) so the
+                 * chart doesn't reflow as the parent grid resizes. */}
+                <aside
+                  className="sm:w-44 sm:flex-none sm:border-l sm:border-line sm:pl-3 flex flex-col"
+                  aria-label="Filter by client"
+                >
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <div className="text-tiny font-bold text-ink-2 uppercase tracking-[0.05em] inline-flex items-center gap-1.5">
+                      <Users size={11} strokeWidth={2.5} className="text-ink-3" />
+                      Client
+                    </div>
+                    {filterRefetching ? (
+                      <span
+                        className="inline-flex items-center gap-1 text-tiny text-brand font-medium"
+                        aria-live="polite"
+                      >
+                        <Loader2 size={10} strokeWidth={2.5} className="animate-spin" />
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="overflow-y-auto pr-1 -mr-1 flex-1 min-h-0 max-h-[244px] space-y-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedClientId(null)}
+                      className={`w-full text-left px-2.5 py-1.5 rounded-md text-tiny font-semibold transition-colors duration-150 ${
+                        selectedClientId === null
+                          ? 'bg-brand text-white shadow-sm ring-1 ring-brand/40'
+                          : 'text-ink-2 hover:bg-brand-bg/40 hover:text-brand'
+                      }`}
+                      aria-pressed={selectedClientId === null}
+                    >
+                      All Clients
+                    </button>
+                    {clients.length === 0 && !loading ? (
+                      <div className="text-tiny text-ink-3 px-2.5 py-1.5">No clients available.</div>
+                    ) : null}
+                    {clients.map((client) => {
+                      const active = selectedClientId === client.clientId
+                      return (
+                        <button
+                          key={client.clientId}
+                          type="button"
+                          onClick={() => setSelectedClientId(client.clientId)}
+                          title={client.name}
+                          aria-pressed={active}
+                          className={`w-full text-left px-2.5 py-1 rounded-md text-tiny transition-colors duration-150 ${
+                            active
+                              ? 'bg-brand text-white font-semibold shadow-sm ring-1 ring-brand/40'
+                              : 'text-ink-2 hover:bg-brand-bg/40 hover:text-brand'
+                          }`}
+                        >
+                          <span className="block truncate">{client.name}</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </aside>
+              </div>
             </motion.div>
 
             {/* Top SKUs */}
@@ -829,7 +968,14 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               transition={{ delay: 0.22, duration: 0.3 }}
               className="bg-surface rounded-2xl border border-line shadow-sm p-4 flex flex-col"
             >
-              <SectionHeader title="Top SKUs (30d)" subtitle="By total units sold" />
+              <SectionHeader
+                title="Top SKUs (30d)"
+                subtitle={
+                  selectedClient
+                    ? `By total units sold · ${selectedClient.name}`
+                    : 'By total units sold'
+                }
+              />
               {topSkus.length === 0 ? (
                 <div className="flex-1 flex flex-col items-center justify-center gap-2 py-6">
                   <Package size={26} strokeWidth={2} className="text-ink-4" />
