@@ -15,6 +15,8 @@ import {
 import type { RateDto } from '@prepshipv2/contracts/rates/contracts'
 import { apiClient } from '../../api/client'
 import { ToastContext } from '../../contexts/ToastContext'
+// Shared carrier badge — official UPS/USPS SVG logos with fallback pills.
+import CarrierBadge from '../CarrierBadge'
 import { useShippingAccounts } from '../../hooks'
 import type { DirectCarrierRateError } from '../../lib/v2-apiClient'
 import {
@@ -434,9 +436,7 @@ export default function RatesView() {
                         className={`border-t border-line transition-colors hover:bg-brand-bg/30 ${row.isBest ? 'bg-emerald-50/40' : ''}`}
                       >
                         <td className="px-3 py-2.5">
-                          <span className={`carrier-badge ${getCarrierBadgeClass(row.carrierCode)} !text-2xs !px-1.5 !py-0.5 !rounded-md`}>
-                            {row.carrierBadgeLabel}
-                          </span>
+                          <CarrierBadge code={row.carrierCode} size="sm" />
                         </td>
                         <td className={`px-3 py-2.5 ${row.carrierNickname ? 'text-ink-2 font-semibold' : 'text-ink-4'}`}>
                           {row.carrierNickname || '—'}

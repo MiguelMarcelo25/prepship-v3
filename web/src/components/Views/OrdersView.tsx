@@ -41,10 +41,16 @@ import {
   ClipboardList,
   PackageCheck,
   Tag,
+  Plus,
 } from 'lucide-react'
 import OrderDetailDrawer from '../OrderDetailDrawer'
 import TrackingModal from '../TrackingModal'
 import HoverImage from '../HoverImage'
+import NewOrderModal, { type NewOrderPayload } from '../NewOrderModal'
+// Shared carrier badge — renders official UPS/USPS SVG logos plus
+// fallback pills for FedEx/DHL/etc. Replaces the previous text-only
+// carrier-badge spans throughout the orders table + side panel.
+import CarrierBadge from '../CarrierBadge'
 import { apiClient } from '../../api/client'
 import { TEST_CLIENT_IDS } from '../../lib/v2-apiClient'
 const RateBrowserModal = lazy(() => import('../RateBrowserModal'))
@@ -1768,6 +1774,11 @@ export default function OrdersView({
   const [dailyStats, setDailyStats] = useState<OrdersDailyStatsDto | null>(null)
   const [columnPrefs, setColumnPrefs] = useState<ColumnPrefs | null>(null)
   const [columnMenuOpen, setColumnMenuOpen] = useState(false)
+  // New manual-order modal — opens via the +New Order button beside
+  // Export CSV. Backend route /orders/manual is pending; the save
+  // handler currently shows a stub success toast so the UI flow is
+  // reviewable in isolation.
+  const [newOrderOpen, setNewOrderOpen] = useState(false)
   const [columnMenuPos, setColumnMenuPos] = useState<{ top: number; right: number } | null>(null)
   const [dragColumnKey, setDragColumnKey] = useState<TableColumnKey | null>(null)
   const [dragOverColumnKey, setDragOverColumnKey] = useState<TableColumnKey | null>(null)
@@ -5059,9 +5070,7 @@ export default function OrdersView({
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {selectedRateCarrierCode ? (
-            <span className={`carrier-badge ${getCarrierClass(selectedRateCarrierCode)}`} style={{ fontSize: 9.5, padding: '1px 5px' }}>
-              {formatCarrierCode(selectedRateCarrierCode)}
-            </span>
+            <CarrierBadge code={selectedRateCarrierCode} size="sm" />
           ) : null}
           {renderRateAmountWithMarkup(selectedRateBase, displayMarked)}
         </div>
@@ -5092,9 +5101,7 @@ export default function OrdersView({
 
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span className={`carrier-badge ${getCarrierClass(order.bestRate.carrierCode)}`} style={{ fontSize: 9.5, padding: '1px 5px' }}>
-          {formatCarrierCode(order.bestRate.carrierCode)}
-        </span>
+        <CarrierBadge code={order.bestRate.carrierCode ?? ''} size="sm" />
         {renderRateAmountWithMarkup(bestRateBaseCost, markedAmount)}
       </div>
     )
@@ -5167,7 +5174,7 @@ export default function OrdersView({
 
       return (
         <div style={{ display: 'flex', alignItems: 'center', lineHeight: 1.3 }}>
-          <span className={`carrier-badge ${getCarrierClass(carrierCode)}`}>{formatCarrierCode(carrierCode)}</span>
+          <CarrierBadge code={carrierCode} size="sm" />
         </div>
       )
     }
@@ -5182,7 +5189,7 @@ export default function OrdersView({
 
     return (
       <div style={{ display: 'flex', alignItems: 'center', lineHeight: 1.3 }}>
-        <span className={`carrier-badge ${getCarrierClass(getCarrierCodeForDisplay(order))}`}>{formatCarrierCode(getCarrierCodeForDisplay(order))}</span>
+        <CarrierBadge code={getCarrierCodeForDisplay(order) ?? ''} size="sm" />
       </div>
     )
   }
@@ -7373,6 +7380,28 @@ export default function OrdersView({
             <span className="hidden sm:inline">Export CSV</span>
           </button>
 
+          {/* + New Order — opens the manual-order modal. Lives right
+              after Export CSV per user request. Brand-blue gradient
+              fill (vs Export's outline) telegraphs primary action. */}
+          <button
+            id="newOrderBtn"
+            type="button"
+            title="Create a new manual order"
+            onClick={() => setNewOrderOpen(true)}
+            className="
+              inline-flex items-center gap-1.5
+              h-8 px-3 rounded-lg
+              text-[12px] font-bold text-white
+              bg-gradient-to-br from-brand to-indigo-600
+              shadow-md hover:shadow-lg active:scale-95
+              ring-1 ring-brand/30
+              transition-all duration-150
+            "
+          >
+            <Plus size={12.5} strokeWidth={2.75} />
+            <span className="hidden sm:inline">New Order</span>
+          </button>
+
           {/* Density toggle — segmented control */}
           <div
             role="group"
@@ -8277,6 +8306,26 @@ export default function OrdersView({
         trackingNumber={trackingModal?.tracking ?? null}
         carrierCode={trackingModal?.carrierCode ?? null}
         onClose={() => setTrackingModal(null)}
+      />
+
+      {/* Manual order creation modal. Save handler is currently a
+          stub — wires onClose + toast once the backend route is
+          added. The modal already produces a complete NewOrderPayload
+          shaped to the future POST /orders/manual endpoint. */}
+      <NewOrderModal
+        open={newOrderOpen}
+        onClose={() => setNewOrderOpen(false)}
+        onSave={async (payload: NewOrderPayload) => {
+          // Backend route not yet wired — show the structured payload
+          // in the console so the operator (and reviewer) can verify
+          // the form captures every field correctly before we wire
+          // the API. Once /orders/manual exists this becomes a real
+          // apiClient.createManualOrder(payload) call.
+          console.info('[NewOrderModal] save payload (stub):', payload)
+          showToast('🚧 Saved (stub) — backend route /orders/manual pending. Payload logged to console.', 'info')
+          setNewOrderOpen(false)
+          return true
+        }}
       />
 
       {rateBrowserOpen ? (

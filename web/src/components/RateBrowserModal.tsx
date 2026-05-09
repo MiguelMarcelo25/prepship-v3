@@ -16,6 +16,9 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { apiClient } from '../lib/v2-apiClient';
 import { useMarkups, type Markup } from '../contexts/MarkupsContext';
+// Shared carrier badge — official UPS/USPS SVG logos with fallback
+// pills for FedEx/etc. Replaces the local carrier-class switch below.
+import CarrierBadge from './CarrierBadge';
 
 // ── Types (structural, minimal — mirrors what OrdersView actually passes) ────
 export type RbLocationDto = {
@@ -239,9 +242,12 @@ const SERVICE_NAMES: Record<string, string> = {
   fedex_first_overnight: 'FedEx First Overnight',
 };
 
-// 40×40 colored badge from v2's rbCarrierLogo. Kept inline instead of using
-// the existing <span class="carrier-badge"> pattern because the rate row
-// wants a bold solid-color badge, not the subtle inline chip.
+// Rate-row carrier badge — the prominent mark next to the price.
+// Now delegates to the shared <CarrierBadge> component so UPS/USPS/
+// FedEx render as official SVG logos (matching every other badge
+// surface in the app). The special-case `prepship_test` mark stays
+// inline because it's a PrepShip-internal indicator, not a real
+// carrier — falls outside the carrier-logo dispatcher.
 function carrierBadgeLarge(code: string | null | undefined): ReactNode {
   if (code === 'prepship_test') {
     return (
@@ -262,43 +268,10 @@ function carrierBadgeLarge(code: string | null | undefined): ReactNode {
       </div>
     );
   }
-  const styles: Record<string, { bg: string; fg: string }> = {
-    ups: { bg: '#351c15', fg: '#ffb500' },
-    ups_walleted: { bg: '#351c15', fg: '#ffb500' },
-    stamps_com: { bg: '#215eb6', fg: '#fff' },
-    fedex: { bg: '#4d148c', fg: '#ff6200' },
-    fedex_walleted: { bg: '#4d148c', fg: '#ff6200' },
-  };
-  const labels: Record<string, string> = {
-    ups: 'UPS',
-    ups_walleted: 'UPS',
-    stamps_com: 'USPS',
-    fedex: 'FedEx',
-    fedex_walleted: 'FedEx',
-  };
-  const cc = code || '';
-  const s = styles[cc] ?? { bg: 'var(--border2)', fg: 'var(--text2)' };
-  const l = labels[cc] ?? (cc || '?').toUpperCase().slice(0, 4);
-  return (
-    <div
-      style={{
-        width: 40,
-        height: 40,
-        borderRadius: 6,
-        background: s.bg,
-        color: s.fg,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        fontWeight: 900,
-        fontSize: 10,
-        flexShrink: 0,
-        letterSpacing: 0,
-      }}
-    >
-      {l}
-    </div>
-  );
+  // md size matches the rate-row's prominence — same scale as the
+  // New Order modal's rate preview pane. Single source of truth for
+  // carrier branding across the app.
+  return <CarrierBadge code={code ?? ''} size="md" />;
 }
 
 function formatCarrierDisplay(rate: {
@@ -1998,21 +1971,7 @@ export default function RateBrowserModal({
                       <img src="/prepship-test-logo.svg" alt="" style={{ width: 20, height: 20, display: 'block' }} />
                     </span>
                   ) : (
-                    <span
-                      className={`carrier-badge ${
-                        c.code?.includes('ups')
-                          ? 'carrier-ups'
-                          : c.code?.includes('fedex')
-                            ? 'carrier-fedex'
-                            : c.code?.includes('stamps') || c.code?.includes('usps')
-                              ? 'carrier-usps'
-                              : 'carrier-other'
-                      }`}
-                      style={{ fontSize: 9.5, padding: '1px 5px' }}
-                    >
-                      {CARRIER_NAMES[c.code] ??
-                        (c.code || '?').toUpperCase().slice(0, 4)}
-                    </span>
+                    <CarrierBadge code={c.code ?? ''} size="sm" />
                   )}
                   <span
                     style={{
