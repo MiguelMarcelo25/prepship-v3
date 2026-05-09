@@ -154,14 +154,25 @@ function buildVars(s: ThemeSpec): Record<string, string> {
 
 const SPECS: ThemeSpec[] = [
   // ─── 01 Indigo (default — current product) ──────────────────────
+  // Recolored 2026-05-09 per operator request: every button color
+  // should be #03A9F4 (Material Light Blue 500 / 0xFF03A9F4) — no
+  // more emerald-green success states, no more indigo brand blue.
+  // Both `brand` and `ok` (the two color families that drive
+  // button backgrounds via theme tokens) point to the same Light
+  // Blue palette so success buttons no longer read as green.
+  // The id stays 'indigo' so existing localStorage settings still
+  // resolve — `tagline` and `swatches` reflect the new look.
   {
-    id: 'indigo', name: 'Indigo', tagline: 'Default · clean · brand blue', mode: 'light',
-    swatches: ['#f0f2f5', '#2a5bd7', '#0f172a'],
+    id: 'indigo', name: 'Sky Blue', tagline: 'Default · single-color · Material Light Blue 500', mode: 'light',
+    swatches: ['#f0f2f5', '#03A9F4', '#0f172a'],
     bg: '#f0f2f5', surface: '#ffffff', surface2: '#f8f9fb', surface3: '#eef0f4',
     border: '#e1e4e8', border2: '#c8cdd5',
     text: '#1a1f2e', text2: '#4a5568', text3: '#8a95a3', text4: '#b0b8c4',
-    brand: '#2a5bd7', brand2: '#1a48c0', brandBg: '#eef2ff', brandBorder: '#c3d0f5',
-    ok: '#16a34a', okDark: '#15803d', okBg: '#f0fdf4', okBorder: '#bbf7d0',
+    // Brand: Material Light Blue 500 with 700 for hover/active.
+    brand: '#03A9F4', brand2: '#0288D1', brandBg: '#E1F5FE', brandBorder: '#81D4FA',
+    // OK: same Light Blue palette so 'success' buttons read as the
+    // brand color, not green. Operator wanted no green anywhere.
+    ok: '#03A9F4', okDark: '#0288D1', okBg: '#E1F5FE', okBorder: '#81D4FA',
     warn: '#d97706', warnBg: '#fffbeb',
     danger: '#dc2626', dangerBg: '#fef2f2',
     orange: '#e8650a', orangeBg: '#fff5ee',
