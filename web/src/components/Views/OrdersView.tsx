@@ -2087,20 +2087,68 @@ export default function OrdersView({
     () => resolveColumnPrefs(TABLE_COLUMNS.map((column) => ({ key: column.key, label: column.label, width: column.width })), currentStatus, columnPrefs),
     [currentStatus, columnPrefs],
   )
-  const visibleColumns = useMemo(
-    () => resolvedColumnPrefs.orderedColumns
+
+  // Track viewport width so the table can collapse to a 4-column compact
+  // mobile layout (matches the v2-original mobile experience: select +
+  // Order # + Item Name + Best Rate, all visible without horizontal
+  // scroll on a 390px iPhone). Listens to matchMedia changes so rotating
+  // the device or resizing the browser flips layouts live.
+  const [isMobileViewport, setIsMobileViewport] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false
+    return window.matchMedia('(max-width: 639px)').matches
+  })
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const mql = window.matchMedia('(max-width: 639px)')
+    const handler = (e: MediaQueryListEvent) => setIsMobileViewport(e.matches)
+    // Older Safari uses addListener; modern browsers expose addEventListener.
+    if (mql.addEventListener) {
+      mql.addEventListener('change', handler)
+      return () => mql.removeEventListener('change', handler)
+    }
+    mql.addListener(handler)
+    return () => mql.removeListener(handler)
+  }, [])
+
+  // Mobile column whitelist + tighter widths. Total = 354px so the
+  // table fits comfortably in a 360-390px viewport with 0px horizontal
+  // scroll. Order matters — render order matches array order.
+  const MOBILE_COLUMN_WIDTHS: Record<string, number> = {
+    select: 30,
+    orderNum: 88,
+    itemname: 148,
+    bestrate: 88,
+  }
+  const MOBILE_COLUMN_KEYS = ['select', 'orderNum', 'itemname', 'bestrate']
+
+  const visibleColumns = useMemo(() => {
+    const desktopColumns = resolvedColumnPrefs.orderedColumns
       .filter((column) => !resolvedColumnPrefs.hiddenColumns.has(column.key))
       .map((column) => (
         column.key === 'bestrate' && currentStatus !== 'awaiting_shipment'
           ? { ...TABLE_COLUMNS.find((candidate) => candidate.key === column.key)!, label: 'Selected Rate', width: resolvedColumnPrefs.widths[column.key] }
           : { ...TABLE_COLUMNS.find((candidate) => candidate.key === column.key)!, width: resolvedColumnPrefs.widths[column.key] }
-      )),
-    [currentStatus, resolvedColumnPrefs],
-  )
-  const tableWidth = useMemo(
-    () => Math.max(800, visibleColumns.reduce((totalWidth, column) => totalWidth + column.width, 0)),
-    [visibleColumns],
-  )
+      ))
+    if (!isMobileViewport) return desktopColumns
+    // On mobile: forcibly trim to the 4-column compact set, in fixed
+    // order, ignoring any user column-pref reorders so the layout stays
+    // predictable. Widths are overridden to the mobile values.
+    return MOBILE_COLUMN_KEYS
+      .map((key) => {
+        const base = TABLE_COLUMNS.find((c) => c.key === key)
+        if (!base) return null
+        const label = key === 'bestrate' && currentStatus !== 'awaiting_shipment' ? 'Selected Rate' : base.label
+        return { ...base, label, width: MOBILE_COLUMN_WIDTHS[key] ?? base.width }
+      })
+      .filter((column): column is NonNullable<typeof column> => column != null)
+  }, [currentStatus, resolvedColumnPrefs, isMobileViewport])
+
+  const tableWidth = useMemo(() => {
+    const sum = visibleColumns.reduce((totalWidth, column) => totalWidth + column.width, 0)
+    // Drop the 800px floor on mobile so the compact 4-column table can
+    // shrink to fit the iPhone viewport without horizontal scroll.
+    return isMobileViewport ? sum : Math.max(800, sum)
+  }, [visibleColumns, isMobileViewport])
   resolvedColumnPrefsRef.current = resolvedColumnPrefs
   columnPrefsRef.current = columnPrefs
   currentStatusRef.current = currentStatus
@@ -7522,83 +7570,93 @@ export default function OrdersView({
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -8 }}
               transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-              className="bg-surface border-b border-line px-5 py-2.5 font-sans"
+              className="bg-surface border-b border-line px-3 sm:px-5 py-2.5 font-sans"
             >
-              {/* V2-original daily strip: one tight horizontal row with
-                  emoji marker, compact number/label stacks, and a small
-                  progress bar. */}
-              <div className="flex min-h-[50px] items-center gap-8 overflow-x-auto whitespace-nowrap text-[12px]">
-                {/* Date range */}
-                <div className="flex items-center gap-2 shrink-0 text-[12px]">
-                  <span className="text-[15px] leading-none" aria-hidden="true">📅</span>
-                  <span className="text-ink-2 font-semibold">{dailyStatsFromLabel}</span>
+              {/* Daily strip — desktop keeps the original boss-approved
+                  one-row layout. Mobile (<sm) reflows into:
+                    Row 1: 📅 date range (compact, no italics)
+                    Row 2: 3 stat tiles spread evenly across the width
+                    Row 3: progress bar full-width
+                  Achieved with `flex-wrap` + per-section `w-full sm:w-auto`
+                  so the same DOM serves both viewports — no JS branching. */}
+              <div className="flex flex-wrap min-h-[50px] items-center gap-y-2 gap-x-4 sm:gap-x-8 text-[12px]">
+                {/* Date range — full width on mobile so stats can spread below */}
+                <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 text-[11.5px] sm:text-[12px] w-full sm:w-auto min-w-0">
+                  <span className="text-[14px] sm:text-[15px] leading-none" aria-hidden="true">📅</span>
+                  <span className="text-ink-2 font-semibold truncate">{dailyStatsFromLabel}</span>
                   <span className="text-ink-4">→</span>
-                  <span className="text-ink-2 font-semibold">{dailyStatsToLabel}</span>
-                  <span className="text-ink-4 italic text-[11px]">(shifts at 6 PM CA)</span>
+                  <span className="text-ink-2 font-semibold truncate">{dailyStatsToLabel}</span>
+                  <span className="hidden sm:inline text-ink-4 italic text-[11px]">(shifts at 6 PM CA)</span>
                 </div>
 
-                <div className="h-7 w-px shrink-0 bg-line" aria-hidden="true" />
+                <div className="hidden sm:block h-7 w-px shrink-0 bg-line" aria-hidden="true" />
 
-                {/* Total Orders */}
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-[19px] leading-none" aria-hidden="true">📦</span>
-                  <div className="flex flex-col items-start leading-none">
-                    <motion.span
-                      key={dailyStats.totalOrders}
-                      initial={{ opacity: 0, y: 3 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="font-bold text-ink tabular-nums text-[26px] leading-[22px] font-mono"
-                    >
-                      {dailyStats.totalOrders}
-                    </motion.span>
-                    <span className="text-[10px] leading-[11px] text-ink-3 font-medium">Total Orders</span>
+                {/* Stats group — equal-width tiles on mobile so all three
+                    numbers stay on screen together; collapses to inline
+                    flex on desktop to preserve the original strip look. */}
+                <div className="flex items-center justify-around sm:justify-start gap-3 sm:gap-8 w-full sm:w-auto">
+                  {/* Total Orders */}
+                  <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 min-w-0">
+                    <span className="text-[17px] sm:text-[19px] leading-none" aria-hidden="true">📦</span>
+                    <div className="flex flex-col items-start leading-none">
+                      <motion.span
+                        key={dailyStats.totalOrders}
+                        initial={{ opacity: 0, y: 3 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="font-bold text-ink tabular-nums text-[22px] sm:text-[26px] leading-[20px] sm:leading-[22px] font-mono"
+                      >
+                        {dailyStats.totalOrders}
+                      </motion.span>
+                      <span className="text-[10px] leading-[11px] text-ink-3 font-medium whitespace-nowrap">Total Orders</span>
+                    </div>
+                  </div>
+
+                  {/* Need to Ship */}
+                  <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 min-w-0">
+                    <span className="text-[17px] sm:text-[19px] leading-none" aria-hidden="true">🚚</span>
+                    <div className="flex flex-col items-start leading-none">
+                      <motion.span
+                        key={dailyStats.needToShip}
+                        initial={{ opacity: 0, y: 3 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="font-bold tabular-nums text-[22px] sm:text-[26px] leading-[20px] sm:leading-[22px] font-mono"
+                        style={{ color: dailyStripProgress?.needToShipColor }}
+                      >
+                        {dailyStats.needToShip}
+                      </motion.span>
+                      <span className="text-[10px] leading-[11px] text-ink-3 font-medium whitespace-nowrap">Need to Ship</span>
+                    </div>
+                  </div>
+
+                  {/* Upcoming */}
+                  <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 min-w-0">
+                    <span className="text-[17px] sm:text-[19px] leading-none" aria-hidden="true">🔔</span>
+                    <div className="flex flex-col items-start leading-none">
+                      <motion.span
+                        key={dailyStats.upcomingOrders}
+                        initial={{ opacity: 0, y: 3 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        className="font-bold tabular-nums text-[22px] sm:text-[26px] leading-[20px] sm:leading-[22px] font-mono"
+                        style={{ color: dailyStripProgress?.upcomingColor }}
+                      >
+                        {dailyStats.upcomingOrders}
+                      </motion.span>
+                      <span className="text-[10px] leading-[11px] text-ink-3 font-medium whitespace-nowrap">Upcoming</span>
+                    </div>
                   </div>
                 </div>
 
-                {/* Need to Ship */}
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-[19px] leading-none" aria-hidden="true">🚚</span>
-                  <div className="flex flex-col items-start leading-none">
-                    <motion.span
-                      key={dailyStats.needToShip}
-                      initial={{ opacity: 0, y: 3 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="font-bold tabular-nums text-[26px] leading-[22px] font-mono"
-                      style={{ color: dailyStripProgress?.needToShipColor }}
-                    >
-                      {dailyStats.needToShip}
-                    </motion.span>
-                    <span className="text-[10px] leading-[11px] text-ink-3 font-medium">Need to Ship</span>
-                  </div>
-                </div>
-
-                {/* Upcoming */}
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-[19px] leading-none" aria-hidden="true">🔔</span>
-                  <div className="flex flex-col items-start leading-none">
-                    <motion.span
-                      key={dailyStats.upcomingOrders}
-                      initial={{ opacity: 0, y: 3 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      className="font-bold tabular-nums text-[26px] leading-[22px] font-mono"
-                      style={{ color: dailyStripProgress?.upcomingColor }}
-                    >
-                      {dailyStats.upcomingOrders}
-                    </motion.span>
-                    <span className="text-[10px] leading-[11px] text-ink-3 font-medium">Upcoming</span>
-                  </div>
-                </div>
-
-                {/* Progress — text on top, bar+% on the row below.
+                {/* Progress — full width on mobile (third row), inline
+                    on desktop with min-w to match prior layout.
                     Vertical layout per boss directive 2026-05-08:
                     "58 of 63 shipped" sits on top, bar + percentage
                     on the bottom row. */}
-                <div className="flex flex-col shrink-0 min-w-[285px]">
-                  <span className="text-ink-3 text-[13px] tabular-nums font-medium">
+                <div className="flex flex-col w-full sm:w-auto sm:shrink-0 sm:min-w-[285px]">
+                  <span className="text-ink-3 text-[12px] sm:text-[13px] tabular-nums font-medium">
                     {dailyStripProgress?.shipped} of {dailyStats.totalOrders} shipped
                   </span>
                   <div className="flex items-center gap-2.5">
-                    <div className="w-[210px] h-[9px] bg-line/70 rounded-sm overflow-hidden">
+                    <div className="flex-1 sm:flex-none sm:w-[210px] h-[9px] bg-line/70 rounded-sm overflow-hidden">
                       <motion.div
                         className="h-full rounded-sm"
                         initial={{ width: 0 }}
