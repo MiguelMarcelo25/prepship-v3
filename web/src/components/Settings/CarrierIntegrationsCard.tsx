@@ -1,9 +1,10 @@
 // @ts-nocheck
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'framer-motion'
 import { callVercelFunction } from '../../lib/vercelFunction'
 import { formatCaDateShort } from '../../lib/ca-time'
+import { useClients } from '../../hooks'
 
 // Phase 2 frontend stub. Each provider declares the credential fields its
 // "Add integration" form needs. When the backend route POST /carrier-accounts
@@ -694,6 +695,14 @@ interface SavedRow {
   source: string
   active: boolean
   createdAt: string
+  /**
+   * Many-to-many: which client(s) can use this carrier account.
+   * The legacy single-client `clientId` above stays as a backward-
+   * compat anchor; this array is the authoritative source going
+   * forward. Empty array = unassigned (admin-global). Populated via
+   * the new `Assign Clients` popover on each saved row.
+   */
+  assignedClientIds: number[]
 }
 
 // Stores live in /api/store-accounts, carriers in /api/carrier-accounts.
@@ -861,6 +870,23 @@ export function CarrierIntegrationsCard() {
   const [pulling, setPulling] = useState<Record<number, boolean>>({})
   const [pullResults, setPullResults] = useState<Record<number, WalmartOrdersResult>>({})
   const [rating, setRating] = useState<Record<number, boolean>>({})
+  // Per-row "Assign Clients" popover state. Only one popover is open
+  // at a time — `assignOpenForId` holds the SavedRow.id (or null).
+  // `assignDraft` is the in-progress checkbox set inside the open
+  // popover; on Save we PUT to backend and merge into `saved` state.
+  const [assignOpenForId, setAssignOpenForId] = useState<number | null>(null)
+  const [assignDraft, setAssignDraft] = useState<Set<number>>(new Set())
+  const [assignSaving, setAssignSaving] = useState(false)
+  const { clients: allClients } = useClients()
+  // Index clients by id for fast name lookup when rendering chips.
+  const clientById = useMemo(() => {
+    const m = new Map<number, { id: number; name: string }>()
+    for (const c of allClients ?? []) {
+      const id = (c as any).clientId ?? (c as any).id
+      if (typeof id === 'number') m.set(id, { id, name: c.name ?? `#${id}` })
+    }
+    return m
+  }, [allClients])
   const [rateResults, setRateResults] = useState<Record<number, CarrierRatesResult>>({})
   // Tracks which category we're adding (store vs carrier) so the Add modal
   // can filter its provider tiles to only the relevant integrations.
@@ -905,6 +931,60 @@ export function CarrierIntegrationsCard() {
       }))
     } finally {
       setPulling((prev) => ({ ...prev, [d.id]: false }))
+    }
+  }
+
+  // Open the assign popover for a row; seed the draft from the row's
+  // current assignedClientIds so the operator sees the existing
+  // assignments and can adjust without re-typing.
+  const openAssignPopover = (d: SavedRow) => {
+    setAssignDraft(new Set(d.assignedClientIds ?? []))
+    setAssignOpenForId(d.id)
+  }
+  const closeAssignPopover = () => {
+    setAssignOpenForId(null)
+    setAssignDraft(new Set())
+  }
+  // Toggle one client in the draft Set (immutable replace — React
+  // doesn't track Set mutations, only reference changes).
+  const toggleAssignClient = (clientId: number) => {
+    setAssignDraft((prev) => {
+      const next = new Set(prev)
+      if (next.has(clientId)) next.delete(clientId)
+      else next.add(clientId)
+      return next
+    })
+  }
+  // PUT the new assignment list to the backend, merge the response
+  // into local `saved` state so the chip display updates without a
+  // full refresh round-trip.
+  const saveAssignments = async (d: SavedRow) => {
+    if (d.kind !== 'carrier') {
+      // Stores route through a different table that doesn't yet have
+      // a junction. Surface a clear message instead of silently no-op.
+      alert('Multi-client assignment is currently carrier-only. Stores assignment is coming soon.')
+      return
+    }
+    setAssignSaving(true)
+    try {
+      const ids = Array.from(assignDraft)
+      const res = await callVercelFunction<{
+        data: { id: number; assignedClientIds: number[] }
+      }>(`/carrier-accounts?id=${d.accountId}`, {
+        method: 'PUT',
+        body: { clientIds: ids },
+      })
+      const fresh = res?.data?.assignedClientIds ?? ids
+      setSaved((prev) =>
+        prev.map((row) =>
+          row.id === d.id ? { ...row, assignedClientIds: fresh } : row,
+        ),
+      )
+      closeAssignPopover()
+    } catch (err) {
+      alert(`Failed to save assignments: ${err instanceof Error ? err.message : 'Unknown error'}`)
+    } finally {
+      setAssignSaving(false)
     }
   }
 
@@ -968,12 +1048,25 @@ export function CarrierIntegrationsCard() {
         ...r,
         accountId: r.id,
         kind: 'carrier' as const,
+        // Backend may return assignedClientIds as null on legacy rows
+        // before the junction table existed. Normalize to [] so the
+        // FE can always do `.length` / `.map` without null-checks.
+        assignedClientIds: Array.isArray((r as any).assignedClientIds)
+          ? ((r as any).assignedClientIds as number[])
+          : [],
       }))
       const stores: SavedRow[] = (storesRes?.data ?? []).map((r) => ({
         ...r,
         accountId: r.id,
         id: r.id + STORE_DISPLAY_OFFSET,
         kind: 'store' as const,
+        // Stores don't currently support multi-client assignment
+        // (separate table, separate junction needed). Keep the
+        // field present for type uniformity; renderSavedRow checks
+        // `kind` before showing the assign UI so this stays inert.
+        assignedClientIds: Array.isArray((r as any).assignedClientIds)
+          ? ((r as any).assignedClientIds as number[])
+          : [],
       }))
       setSaved([...carriers, ...stores])
       setListError(null)
@@ -1132,6 +1225,25 @@ export function CarrierIntegrationsCard() {
               {rating[d.id] ? 'Fetching…' : 'Get Rates'}
             </button>
           ) : null}
+          {d.kind === 'carrier' ? (
+            <button
+              type="button"
+              onClick={() => openAssignPopover(d)}
+              title="Assign this carrier account to one or more clients"
+              style={{
+                padding: '3px 10px',
+                border: '1px solid rgb(var(--brand-rgb, 42 91 215) / 0.3)',
+                borderRadius: 3,
+                background: 'rgb(var(--brand-rgb, 42 91 215) / 0.08)',
+                color: 'rgb(var(--brand-rgb, 42 91 215))',
+                fontSize: 11,
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              👥 Assign{d.assignedClientIds.length > 0 ? ` (${d.assignedClientIds.length})` : ''}
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={() => runDelete(d)}
@@ -1151,6 +1263,215 @@ export function CarrierIntegrationsCard() {
             {deleting[d.id] ? 'Deleting…' : 'Delete'}
           </button>
         </div>
+
+        {/* Assigned-client chips — inline summary of which clients
+            currently have access to this carrier account. Empty
+            state nudges operators toward assigning. Carriers only;
+            stores hide it (separate table without junction yet). */}
+        {d.kind === 'carrier' ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', paddingLeft: 4, marginTop: 2 }}>
+            <span style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 700 }}>
+              Assigned to:
+            </span>
+            {d.assignedClientIds.length === 0 ? (
+              <span style={{ fontSize: 11, color: 'var(--text3)', fontStyle: 'italic' }}>
+                No clients yet — click Assign to add
+              </span>
+            ) : (
+              d.assignedClientIds.map((cid) => {
+                const client = clientById.get(cid)
+                return (
+                  <span
+                    key={cid}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 3,
+                      padding: '2px 7px',
+                      borderRadius: 10,
+                      background: 'rgb(var(--brand-rgb, 42 91 215) / 0.1)',
+                      color: 'rgb(var(--brand-rgb, 42 91 215))',
+                      fontSize: 10.5,
+                      fontWeight: 700,
+                      lineHeight: 1.3,
+                    }}
+                  >
+                    {client?.name ?? `#${cid}`}
+                  </span>
+                )
+              })
+            )}
+          </div>
+        ) : null}
+
+        {/* Assign-clients popover — anchored modal-style overlay.
+            AnimatePresence handles enter/exit; backdrop click +
+            Cancel button + Escape (via input handlers) all close it.
+            Renders ALL clients with checkboxes; saves on click. */}
+        <AnimatePresence>
+          {assignOpenForId === d.id ? (
+            <motion.div
+              key="assignBackdrop"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
+              onClick={(e) => {
+                if (e.target === e.currentTarget && !assignSaving) closeAssignPopover()
+              }}
+              style={{
+                position: 'fixed',
+                inset: 0,
+                background: 'rgba(15, 23, 42, 0.5)',
+                backdropFilter: 'blur(4px)',
+                WebkitBackdropFilter: 'blur(4px)',
+                zIndex: 9998,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: 24,
+              }}
+            >
+              <motion.div
+                key="assignPanel"
+                initial={{ opacity: 0, y: 12, scale: 0.97 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 8, scale: 0.97 }}
+                transition={{ type: 'spring', stiffness: 380, damping: 28 }}
+                style={{
+                  background: 'var(--surface)',
+                  borderRadius: 12,
+                  width: 'min(440px, 100%)',
+                  maxHeight: '80vh',
+                  overflow: 'hidden',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  boxShadow:
+                    '0 20px 60px -12px rgba(15, 23, 42, 0.35), 0 8px 24px -8px rgba(15, 23, 42, 0.18)',
+                }}
+              >
+                <div
+                  style={{
+                    padding: '14px 18px',
+                    borderBottom: '1px solid var(--border)',
+                    background:
+                      'linear-gradient(135deg, rgb(var(--brand-rgb, 42 91 215) / 0.06), transparent)',
+                  }}
+                >
+                  <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text)' }}>
+                    Assign clients · {d.provider.toUpperCase()}
+                  </div>
+                  <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 2, lineHeight: 1.4 }}>
+                    Select which client(s) can use this carrier account for rate shopping and label purchase.
+                  </div>
+                </div>
+
+                <div style={{ overflowY: 'auto', padding: '8px 4px', flex: 1, minHeight: 0 }}>
+                  {(allClients ?? []).length === 0 ? (
+                    <div style={{ padding: '12px 16px', fontSize: 12, color: 'var(--text3)', textAlign: 'center' }}>
+                      No clients available. Add clients in the Inventory → Clients tab first.
+                    </div>
+                  ) : (
+                    (allClients ?? []).map((c) => {
+                      const cid = (c as any).clientId ?? (c as any).id
+                      if (typeof cid !== 'number') return null
+                      const checked = assignDraft.has(cid)
+                      return (
+                        <label
+                          key={cid}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 10,
+                            padding: '8px 14px',
+                            cursor: 'pointer',
+                            transition: 'background 100ms',
+                            background: checked ? 'rgb(var(--brand-rgb, 42 91 215) / 0.08)' : 'transparent',
+                          }}
+                          onMouseEnter={(e) => {
+                            if (!checked) e.currentTarget.style.background = 'var(--surface2)'
+                          }}
+                          onMouseLeave={(e) => {
+                            if (!checked) e.currentTarget.style.background = 'transparent'
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleAssignClient(cid)}
+                            disabled={assignSaving}
+                            style={{ accentColor: 'rgb(var(--brand-rgb, 42 91 215))', width: 14, height: 14 }}
+                          />
+                          <span
+                            style={{
+                              flex: 1,
+                              fontSize: 13,
+                              fontWeight: checked ? 700 : 500,
+                              color: checked ? 'rgb(var(--brand-rgb, 42 91 215))' : 'var(--text)',
+                            }}
+                          >
+                            {c.name}
+                          </span>
+                          <span style={{ fontSize: 10, color: 'var(--text3)', fontFamily: 'monospace' }}>#{cid}</span>
+                        </label>
+                      )
+                    })
+                  )}
+                </div>
+
+                <div
+                  style={{
+                    padding: '12px 16px',
+                    borderTop: '1px solid var(--border)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    background: 'var(--surface2)',
+                  }}
+                >
+                  <span style={{ flex: 1, fontSize: 11.5, color: 'var(--text3)' }}>
+                    {assignDraft.size} selected
+                  </span>
+                  <button
+                    type="button"
+                    onClick={closeAssignPopover}
+                    disabled={assignSaving}
+                    style={{
+                      padding: '6px 12px',
+                      border: '1px solid var(--border)',
+                      borderRadius: 5,
+                      background: 'var(--surface)',
+                      color: 'var(--text2)',
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: assignSaving ? 'wait' : 'pointer',
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void saveAssignments(d)}
+                    disabled={assignSaving}
+                    style={{
+                      padding: '6px 14px',
+                      border: 'none',
+                      borderRadius: 5,
+                      background: 'rgb(var(--brand-rgb, 42 91 215))',
+                      color: '#fff',
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: assignSaving ? 'wait' : 'pointer',
+                      opacity: assignSaving ? 0.7 : 1,
+                    }}
+                  >
+                    {assignSaving ? 'Saving…' : 'Save Assignments'}
+                  </button>
+                </div>
+              </motion.div>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
         {result ? (
           <div style={{
             fontSize: 11,

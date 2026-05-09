@@ -1,9 +1,11 @@
 import { sql } from 'drizzle-orm';
 import {
   boolean,
+  index,
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   serial,
   text,
   timestamp,
@@ -33,5 +35,27 @@ export const carrierAccounts = pgTable(
   ],
 );
 
+// Many-to-many junction: a carrier account can be assigned to
+// multiple clients (operators reuse the same UPS/USPS/FedEx
+// credentials across several DR Prepper sub-stores). The legacy
+// carrierAccounts.clientId stays as a backward-compat anchor;
+// this junction is the authoritative source going forward.
+export const carrierAccountClients = pgTable(
+  'carrier_account_clients',
+  {
+    carrierAccountId: integer('carrier_account_id')
+      .notNull()
+      .references(() => carrierAccounts.id, { onDelete: 'cascade' }),
+    clientId: integer('client_id').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.carrierAccountId, t.clientId] }),
+    index('carrier_account_clients_client_idx').on(t.clientId),
+  ],
+);
+
 export type CarrierAccount = typeof carrierAccounts.$inferSelect;
 export type NewCarrierAccount = typeof carrierAccounts.$inferInsert;
+export type CarrierAccountClient = typeof carrierAccountClients.$inferSelect;
+export type NewCarrierAccountClient = typeof carrierAccountClients.$inferInsert;
