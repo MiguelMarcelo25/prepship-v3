@@ -601,7 +601,7 @@ async function ratesFromWalmartShipping(
       }))
     : [{ lineNumber: '1', sku: 'UNKNOWN', quantity: 1 }];
 
-  // Empirical body shape (locked in after multiple iterations):
+  // Walmart's current Shipping Estimates docs use top-level request fields.
   // - Top-level: purchaseOrderId, boxes[], shipFromAddress, shipToAddress,
   //   packageType. The doc listed boxDimensions/boxItems as field names
   //   WITHOUT clarifying they live inside boxes[] — and we verified
@@ -623,49 +623,46 @@ async function ratesFromWalmartShipping(
   const shipFromInput = input.shipFrom && typeof input.shipFrom === 'object' ? input.shipFrom : {};
   const fromZip = credShipFromZip ||
     String(shipFromInput?.postalCode ?? input.fromZip ?? '90248').replace(/[^0-9]/g, '').slice(0, 5);
+  const fromAddressLine2 = String(creds?.shipFromAddress2 ?? shipFromInput?.addressLine2 ?? shipFromInput?.street2 ?? '').trim();
   const fromAddress = {
-    name: String(creds?.shipFromName ?? shipFromInput?.name ?? '').trim() || 'Seller',
-    addressLine1: String(creds?.shipFromAddress1 ?? shipFromInput?.addressLine1 ?? shipFromInput?.street1 ?? '').trim() || 'Warehouse',
+    addressLines: [
+      String(creds?.shipFromAddress1 ?? shipFromInput?.addressLine1 ?? shipFromInput?.street1 ?? '').trim() || 'Warehouse',
+      fromAddressLine2,
+    ].filter(Boolean),
     city: String(creds?.shipFromCity ?? shipFromInput?.city ?? '').trim() || 'Carson',
-    stateCode: String(creds?.shipFromState ?? shipFromInput?.state ?? '').trim() || 'CA',
+    state: String(creds?.shipFromState ?? shipFromInput?.state ?? '').trim() || 'CA',
     postalCode: fromZip,
     countryCode: String(shipFromInput?.country ?? 'US').trim() || 'US',
-    phone: String(creds?.shipFromPhone ?? shipFromInput?.phone ?? '').trim() || '0000000000',
   };
 
   // Ship-to: Walmart's order payload uses address1/state/country —
   // translate to the shipping-estimates field names here.
   const addr = input.rawOrder?.shippingInfo?.postalAddress ?? {};
   const toAddress = {
-    name: addr?.name ?? 'Buyer',
-    addressLine1: addr?.address1 ?? '',
-    addressLine2: addr?.address2 ?? '',
+    addressLines: [String(addr?.address1 ?? '').trim(), String(addr?.address2 ?? '').trim()].filter(Boolean),
     city: addr?.city ?? '',
-    stateCode: addr?.state ?? '',
+    state: addr?.state ?? '',
     postalCode: addr?.postalCode ?? '',
     countryCode: addr?.country ?? 'US',
-    phone: input.rawOrder?.shippingInfo?.phone ?? '0000000000',
   };
 
   const body = {
     purchaseOrderId: input.purchaseOrderId,
-    boxes: [
-      {
-        boxDimensions: {
-          length: input.dimsL,
-          width: input.dimsW,
-          height: input.dimsH,
-          uom: 'IN',
-        },
-        boxWeight: { value: weightLb, uom: 'LB' },
-        boxItems,
-        addOns: false,
-        hasBattery: false,
-      },
-    ],
-    shipFromAddress: fromAddress,
-    shipToAddress: toAddress,
     packageType: 'CUSTOM_PACKAGE',
+    boxDimensions: {
+      boxWeightUnit: 'LB',
+      boxWeight: weightLb,
+      boxDimensionUnit: 'IN',
+      boxLength: input.dimsL,
+      boxWidth: input.dimsW,
+      boxHeight: input.dimsH,
+    },
+    fromAddress,
+    toAddress,
+    boxItems,
+    includeServicesNotMeetingDeliveryPromise: true,
+    addOns: false,
+    hasBattery: false,
   };
 
   const url = 'https://marketplace.walmartapis.com/v3/shipping/labels/shipping-estimates';
@@ -680,13 +677,20 @@ async function ratesFromWalmartShipping(
     // sensitive values — so a 400 from Walmart can be diagnosed against
     // their schema without a redeploy. The full body is too noisy to
     // include verbatim, so we show a fingerprint of the structure.
+    let walmartMessage = t || res.statusText;
+    try {
+      const parsed = JSON.parse(t) as { errors?: Array<{ info?: string; code?: string; description?: string }> };
+      const first = parsed.errors?.[0];
+      walmartMessage = first?.info || first?.description || first?.code || walmartMessage;
+    } catch {
+      // Keep Walmart's raw text fallback when it is not JSON.
+    }
     const sentSummary = {
       purchaseOrderId: input.purchaseOrderId,
       packageType: (body as any).packageType,
-      hasBoxes: Array.isArray((body as any).boxes) && (body as any).boxes.length,
-      boxKeys: Object.keys((body as any).boxes?.[0] ?? {}),
-      fromAddressKeys: Object.keys((body as any).shipFromAddress ?? {}),
-      toAddressKeys: Object.keys((body as any).shipToAddress ?? {}),
+      boxDimensionKeys: Object.keys((body as any).boxDimensions ?? {}),
+      fromAddressKeys: Object.keys((body as any).fromAddress ?? {}),
+      toAddressKeys: Object.keys((body as any).toAddress ?? {}),
       boxItemKeys: Object.keys(boxItems[0] ?? {}),
       itemCount: boxItems.length,
       topLevelKeys: Object.keys(body),
@@ -694,12 +698,12 @@ async function ratesFromWalmartShipping(
       // place a 500 hides. If the seller's registered origin is e.g.
       // Phoenix AZ but we sent CA, this will reveal it without leaking
       // anything sensitive.
-      fromCity: (body as any).shipFromAddress?.city,
-      fromState: (body as any).shipFromAddress?.stateCode,
-      fromZip: (body as any).shipFromAddress?.postalCode,
+      fromCity: (body as any).fromAddress?.city,
+      fromState: (body as any).fromAddress?.state,
+      fromZip: (body as any).fromAddress?.postalCode,
     };
     throw new Error(
-      `Walmart Shipping Estimates ${res.status}: ${t || res.statusText} | sent: ${JSON.stringify(sentSummary)}`,
+      `Walmart Shipping Estimates ${res.status}: ${walmartMessage} | sent: ${JSON.stringify(sentSummary)}`,
     );
   }
   const data = (await res.json()) as any;

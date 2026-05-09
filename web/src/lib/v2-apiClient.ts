@@ -697,6 +697,9 @@ function directCarrierErrorMessage(provider: string, message: string): string {
   if (providerKey === 'walmart_shipping' && /purchaseOrderId/i.test(message)) {
     return 'Walmart Shipping could not resolve the Walmart purchaseOrderId for this request. Refresh the order after Pull Orders, then reopen Browse Rates from that Walmart order.';
   }
+  if (providerKey === 'walmart_shipping' && /Walmart Shipping Estimates|unable to retrieve data|technical issue/i.test(message)) {
+    return 'Walmart Shipping reached Walmart, but Walmart did not return rates. Confirm Ship With Walmart is enabled and the carrier ship-from address matches the Seller Center origin.';
+  }
   if (providerKey === 'ebay_shipping') {
     if (/order/i.test(message) || /externalOrderId/i.test(message)) {
       return 'eBay Shipping rates require opening Browse Rates from an eBay order. The generic Rate Calculator does not have an eBay order id.';
