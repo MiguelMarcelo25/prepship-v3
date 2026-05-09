@@ -766,6 +766,7 @@ async function fetchDirectCarrierRates(
           dimsL: body.dimsL,
           dimsW: body.dimsW,
           dimsH: body.dimsH,
+          orderId: body.orderId,
           externalOrderId: body.externalOrderId ?? body.orderNumber,
           orderNumber: body.orderNumber,
           purchaseOrderId: body.purchaseOrderId,
