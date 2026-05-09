@@ -448,9 +448,24 @@ function translateRatePayloadToV4(
   if (typeof input.residential === 'boolean') out.residential = input.residential;
   if (typeof input.forceRefresh === 'boolean') out.forceRefresh = input.forceRefresh;
   if (Array.isArray(input.carrierIds)) out.carrierIds = input.carrierIds;
-  if (typeof input.orderId === 'number') out.orderId = input.orderId;
-  if (typeof input.storeId === 'number') out.storeId = input.storeId;
-  if (typeof input.clientId === 'number') out.clientId = input.clientId;
+  const numericOrderId = typeof input.orderId === 'number'
+    ? input.orderId
+    : typeof input.orderId === 'string'
+      ? Number.parseInt(input.orderId, 10)
+      : NaN;
+  const numericStoreId = typeof input.storeId === 'number'
+    ? input.storeId
+    : typeof input.storeId === 'string'
+      ? Number.parseInt(input.storeId, 10)
+      : NaN;
+  const numericClientId = typeof input.clientId === 'number'
+    ? input.clientId
+    : typeof input.clientId === 'string'
+      ? Number.parseInt(input.clientId, 10)
+      : NaN;
+  if (Number.isFinite(numericOrderId)) out.orderId = numericOrderId;
+  if (Number.isFinite(numericStoreId)) out.storeId = numericStoreId;
+  if (Number.isFinite(numericClientId)) out.clientId = numericClientId;
   if (input.shipFrom && typeof input.shipFrom === 'object') out.shipFrom = input.shipFrom;
 
   // dims: v4 uses flat dimsL/W/H; v2 wraps them under `dimensions`.
@@ -694,11 +709,11 @@ function translateDirectRateToV2Shape(
 
 function directCarrierErrorMessage(provider: string, message: string): string {
   const providerKey = normalizeProviderKey(provider);
-  if (providerKey === 'walmart_shipping' && /purchaseOrderId/i.test(message)) {
-    return 'Walmart Shipping could not resolve the Walmart purchaseOrderId for this request. Refresh the order after Pull Orders, then reopen Browse Rates from that Walmart order.';
-  }
-  if (providerKey === 'walmart_shipping' && /Walmart Shipping Estimates|unable to retrieve data|technical issue/i.test(message)) {
+  if (providerKey === 'walmart_shipping' && /Walmart Shipping Estimates|unable to retrieve data|technical issue|required fields/i.test(message)) {
     return 'Walmart Shipping reached Walmart, but Walmart did not return rates. Confirm Ship With Walmart is enabled and the carrier ship-from address matches the Seller Center origin.';
+  }
+  if (providerKey === 'walmart_shipping' && /requires a Walmart purchaseOrderId|could not resolve.*purchaseOrderId|purchaseOrderId.*required/i.test(message)) {
+    return 'Walmart Shipping could not resolve the Walmart purchaseOrderId for this request. Refresh the order after Pull Orders, then reopen Browse Rates from that Walmart order.';
   }
   if (providerKey === 'ebay_shipping') {
     if (/order/i.test(message) || /externalOrderId/i.test(message)) {

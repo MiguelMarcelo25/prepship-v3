@@ -824,6 +824,17 @@ async function fetchDemoRates(carrierAccountId: number): Promise<CarrierRatesRes
   })
 }
 
+function carrierRateErrorMessage(provider: string, error?: string): string {
+  const message = error ?? 'Rate fetch failed'
+  if (
+    provider === 'walmart_shipping' &&
+    /Walmart Shipping Estimates|unable to retrieve data|technical issue|required fields/i.test(message)
+  ) {
+    return 'Walmart Shipping reached Walmart, but Walmart did not return rates. Confirm Ship With Walmart is enabled and the ship-from origin matches Seller Center.'
+  }
+  return message
+}
+
 export function CarrierIntegrationsCard() {
   // useShippingAccounts (in v2Hooks.ts) caches /api/carrier-accounts results
   // under ['v2-hooks:carrier-accounts']. The Rate Browser sidebar reads from
@@ -1199,7 +1210,7 @@ export function CarrierIntegrationsCard() {
           }}>
             {(() => {
               const r = rateResults[d.id]
-              if (!r.ok) return `❌ ${r.error ?? 'Rate fetch failed'}`
+              if (!r.ok) return `❌ ${carrierRateErrorMessage(d.provider, r.error)}`
               const tag = r.simulated ? '🧪 Simulated' : '💰 Live'
               const ratesText = (r.rates ?? [])
                 .map((rt) => `${rt.service} $${rt.cost.toFixed(2)} (${rt.days}d)`)

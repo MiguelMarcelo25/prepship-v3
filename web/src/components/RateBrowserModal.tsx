@@ -929,10 +929,13 @@ export default function RateBrowserModal({
         },
         residential: true,
         carrierIds: carrierIds.length ? carrierIds : undefined,
-        storeId: order?.storeId ?? undefined,
-        clientId: order?.clientId ?? undefined,
-        orderId: order?.orderId ?? undefined,
-        orderNumber: toOptionalString(order?.orderNumber) ?? undefined,
+        storeId: toFiniteNumber(order?.storeId) ?? undefined,
+        clientId: toFiniteNumber(order?.clientId) ?? undefined,
+        orderId: toFiniteNumber(order?.orderId ?? (order as Record<string, unknown> | null)?.id) ?? undefined,
+        orderNumber:
+          toOptionalString(order?.orderNumber) ??
+          toOptionalString((order as Record<string, unknown> | null)?.order_number) ??
+          undefined,
         externalOrderId:
           toOptionalString(order?.externalOrderId) ??
           toOptionalString(order?.external_order_id) ??

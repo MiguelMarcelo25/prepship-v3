@@ -623,46 +623,49 @@ async function ratesFromWalmartShipping(
   const shipFromInput = input.shipFrom && typeof input.shipFrom === 'object' ? input.shipFrom : {};
   const fromZip = credShipFromZip ||
     String(shipFromInput?.postalCode ?? input.fromZip ?? '90248').replace(/[^0-9]/g, '').slice(0, 5);
-  const fromAddressLine2 = String(creds?.shipFromAddress2 ?? shipFromInput?.addressLine2 ?? shipFromInput?.street2 ?? '').trim();
   const fromAddress = {
-    addressLines: [
-      String(creds?.shipFromAddress1 ?? shipFromInput?.addressLine1 ?? shipFromInput?.street1 ?? '').trim() || 'Warehouse',
-      fromAddressLine2,
-    ].filter(Boolean),
+    name: String(creds?.shipFromName ?? shipFromInput?.name ?? '').trim() || 'Seller',
+    addressLine1: String(creds?.shipFromAddress1 ?? shipFromInput?.addressLine1 ?? shipFromInput?.street1 ?? '').trim() || 'Warehouse',
     city: String(creds?.shipFromCity ?? shipFromInput?.city ?? '').trim() || 'Carson',
-    state: String(creds?.shipFromState ?? shipFromInput?.state ?? '').trim() || 'CA',
+    stateCode: String(creds?.shipFromState ?? shipFromInput?.state ?? '').trim() || 'CA',
     postalCode: fromZip,
     countryCode: String(shipFromInput?.country ?? 'US').trim() || 'US',
+    phone: String(creds?.shipFromPhone ?? shipFromInput?.phone ?? '').trim() || '0000000000',
   };
 
   // Ship-to: Walmart's order payload uses address1/state/country —
   // translate to the shipping-estimates field names here.
   const addr = input.rawOrder?.shippingInfo?.postalAddress ?? {};
   const toAddress = {
-    addressLines: [String(addr?.address1 ?? '').trim(), String(addr?.address2 ?? '').trim()].filter(Boolean),
+    name: addr?.name ?? 'Buyer',
+    addressLine1: addr?.address1 ?? '',
+    addressLine2: addr?.address2 ?? '',
     city: addr?.city ?? '',
-    state: addr?.state ?? '',
+    stateCode: addr?.state ?? '',
     postalCode: addr?.postalCode ?? '',
     countryCode: addr?.country ?? 'US',
+    phone: input.rawOrder?.shippingInfo?.phone ?? '0000000000',
   };
 
   const body = {
     purchaseOrderId: input.purchaseOrderId,
+    boxes: [
+      {
+        boxDimensions: {
+          length: input.dimsL,
+          width: input.dimsW,
+          height: input.dimsH,
+          uom: 'IN',
+        },
+        boxWeight: { value: weightLb, uom: 'LB' },
+        boxItems,
+        addOns: false,
+        hasBattery: false,
+      },
+    ],
+    shipFromAddress: fromAddress,
+    shipToAddress: toAddress,
     packageType: 'CUSTOM_PACKAGE',
-    boxDimensions: {
-      boxWeightUnit: 'LB',
-      boxWeight: weightLb,
-      boxDimensionUnit: 'IN',
-      boxLength: input.dimsL,
-      boxWidth: input.dimsW,
-      boxHeight: input.dimsH,
-    },
-    fromAddress,
-    toAddress,
-    boxItems,
-    includeServicesNotMeetingDeliveryPromise: true,
-    addOns: false,
-    hasBattery: false,
   };
 
   const url = 'https://marketplace.walmartapis.com/v3/shipping/labels/shipping-estimates';
@@ -688,9 +691,10 @@ async function ratesFromWalmartShipping(
     const sentSummary = {
       purchaseOrderId: input.purchaseOrderId,
       packageType: (body as any).packageType,
-      boxDimensionKeys: Object.keys((body as any).boxDimensions ?? {}),
-      fromAddressKeys: Object.keys((body as any).fromAddress ?? {}),
-      toAddressKeys: Object.keys((body as any).toAddress ?? {}),
+      hasBoxes: Array.isArray((body as any).boxes) && (body as any).boxes.length,
+      boxKeys: Object.keys((body as any).boxes?.[0] ?? {}),
+      fromAddressKeys: Object.keys((body as any).shipFromAddress ?? {}),
+      toAddressKeys: Object.keys((body as any).shipToAddress ?? {}),
       boxItemKeys: Object.keys(boxItems[0] ?? {}),
       itemCount: boxItems.length,
       topLevelKeys: Object.keys(body),
@@ -698,9 +702,9 @@ async function ratesFromWalmartShipping(
       // place a 500 hides. If the seller's registered origin is e.g.
       // Phoenix AZ but we sent CA, this will reveal it without leaking
       // anything sensitive.
-      fromCity: (body as any).fromAddress?.city,
-      fromState: (body as any).fromAddress?.state,
-      fromZip: (body as any).fromAddress?.postalCode,
+      fromCity: (body as any).shipFromAddress?.city,
+      fromState: (body as any).shipFromAddress?.stateCode,
+      fromZip: (body as any).shipFromAddress?.postalCode,
     };
     throw new Error(
       `Walmart Shipping Estimates ${res.status}: ${walmartMessage} | sent: ${JSON.stringify(sentSummary)}`,
