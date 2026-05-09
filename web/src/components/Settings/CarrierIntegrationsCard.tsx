@@ -2,9 +2,183 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'framer-motion'
+import {
+  Store,
+  Truck,
+  Wifi,
+  Receipt,
+  Users2,
+  Trash2,
+  PackageSearch,
+  Plus,
+  Check as CheckIcon,
+  X as XIcon,
+  Loader2,
+  AlertCircle,
+} from 'lucide-react'
 import { callVercelFunction } from '../../lib/vercelFunction'
 import { formatCaDateShort } from '../../lib/ca-time'
 import { useClients } from '../../hooks'
+
+// Modern animated checkbox — used in the Assign-Clients popover.
+// Native <input type="checkbox"> hidden with sr-only; the visual is
+// a div with brand-blue fill + tick path animated via spring physics.
+// Tick draws via SVG strokeDasharray so it has a satisfying "draw on"
+// motion when toggling. Designed to match the rest of the PrepShip
+// brand vocabulary (brand-blue fill, soft ring, clean geometry).
+function ModernCheckbox({
+  checked,
+  onChange,
+  disabled,
+}: {
+  checked: boolean
+  onChange: () => void
+  disabled?: boolean
+}) {
+  return (
+    <span
+      className={`relative inline-flex items-center justify-center w-[18px] h-[18px] flex-shrink-0 cursor-pointer transition-all duration-150 ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+      role="presentation"
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={onChange}
+        disabled={disabled}
+        className="sr-only"
+      />
+      <motion.span
+        aria-hidden
+        animate={{
+          backgroundColor: checked
+            ? 'rgb(var(--brand-rgb, 42 91 215))'
+            : 'rgb(var(--surface-rgb, 255 255 255))',
+          borderColor: checked
+            ? 'rgb(var(--brand-rgb, 42 91 215))'
+            : 'rgb(var(--border-rgb, 225 228 232))',
+          scale: checked ? 1.05 : 1,
+        }}
+        whileTap={disabled ? undefined : { scale: 0.9 }}
+        transition={{ type: 'spring', stiffness: 500, damping: 28 }}
+        className="absolute inset-0 rounded-[5px] border-2"
+        style={{
+          boxShadow: checked
+            ? '0 2px 6px -1px rgb(var(--brand-rgb, 42 91 215) / 0.4), inset 0 1px 0 0 rgba(255,255,255,0.18)'
+            : 'inset 0 1px 2px rgba(15, 23, 42, 0.04)',
+        }}
+      />
+      {/* Tick path with stroke-draw animation — pathLength=1 lets us
+          animate from 0 (invisible) to 1 (fully drawn) on toggle. */}
+      <svg
+        aria-hidden
+        viewBox="0 0 18 18"
+        className="relative w-[12px] h-[12px] pointer-events-none"
+        style={{ zIndex: 1 }}
+      >
+        <motion.path
+          d="M 4 9 L 8 13 L 14 5"
+          fill="none"
+          stroke="#fff"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          initial={false}
+          animate={{
+            pathLength: checked ? 1 : 0,
+            opacity: checked ? 1 : 0,
+          }}
+          transition={{
+            pathLength: { duration: 0.2, ease: [0.65, 0, 0.35, 1] },
+            opacity: { duration: 0.1 },
+          }}
+        />
+      </svg>
+    </span>
+  )
+}
+
+// Action button — icon + label combo with hover lift + active scale.
+// Three variants:
+//   default: outline-style, neutral
+//   primary: brand-blue tinted background
+//   danger:  rose-tinted text
+type ActionVariant = 'default' | 'primary' | 'danger'
+
+function ActionButton({
+  icon,
+  label,
+  loadingLabel,
+  loading,
+  disabled,
+  onClick,
+  variant = 'default',
+  title,
+}: {
+  icon: React.ReactNode
+  label: string
+  loadingLabel?: string
+  loading?: boolean
+  disabled?: boolean
+  onClick: () => void
+  variant?: ActionVariant
+  title?: string
+}) {
+  const styles: Record<ActionVariant, React.CSSProperties> = {
+    default: {
+      background: 'var(--surface)',
+      color: 'var(--text)',
+      borderColor: 'var(--border)',
+    },
+    primary: {
+      background: 'rgb(var(--brand-rgb, 42 91 215) / 0.1)',
+      color: 'rgb(var(--brand-rgb, 42 91 215))',
+      borderColor: 'rgb(var(--brand-rgb, 42 91 215) / 0.3)',
+    },
+    danger: {
+      background: 'rgb(244 63 94 / 0.06)',
+      color: 'rgb(190 18 60)',
+      borderColor: 'rgb(244 63 94 / 0.25)',
+    },
+  }
+  return (
+    <motion.button
+      type="button"
+      whileHover={!disabled && !loading ? { y: -1 } : undefined}
+      whileTap={!disabled && !loading ? { scale: 0.96 } : undefined}
+      transition={{ type: 'spring', stiffness: 400, damping: 22 }}
+      onClick={onClick}
+      disabled={!!(disabled || loading)}
+      title={title}
+      style={{
+        ...styles[variant],
+        padding: '5px 10px',
+        border: '1px solid',
+        borderRadius: 6,
+        fontSize: 11,
+        fontWeight: 700,
+        cursor: loading ? 'wait' : disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled && !loading ? 0.5 : 1,
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 5,
+        whiteSpace: 'nowrap',
+        boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)',
+        transition: 'box-shadow 150ms, background 100ms, color 100ms',
+      }}
+      onMouseEnter={(e) => {
+        if (!disabled && !loading) {
+          e.currentTarget.style.boxShadow = '0 4px 8px -2px rgba(15, 23, 42, 0.12), 0 2px 4px -1px rgba(15, 23, 42, 0.06)'
+        }
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.boxShadow = '0 1px 2px rgba(15, 23, 42, 0.04)'
+      }}
+    >
+      {loading ? <Loader2 size={11} strokeWidth={2.5} className="animate-spin" /> : icon}
+      <span>{loading && loadingLabel ? loadingLabel : label}</span>
+    </motion.button>
+  )
+}
 
 // Phase 2 frontend stub. Each provider declares the credential fields its
 // "Add integration" form needs. When the backend route POST /carrier-accounts
@@ -1142,23 +1316,45 @@ export function CarrierIntegrationsCard() {
 
   // Renders one saved-row line item — extracted so we can call it from both
   // the Stores section and the Carriers section without duplicating markup.
-  const renderSavedRow = (d: SavedRow) => {
+  // `index` drives the stagger entrance: rows fade+slide in 40ms after the
+  // one above. `motion.li` also gets a subtle hover lift so rows feel like
+  // tappable cards rather than table rows.
+  const renderSavedRow = (d: SavedRow, index: number) => {
     const result = testResults[d.id]
     const isTesting = !!testing[d.id]
     const isStore = STORE_PROVIDERS.has(d.provider)
     return (
-      <li
+      <motion.li
         key={d.id}
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{
+          duration: 0.32,
+          delay: Math.min(index, 12) * 0.04,
+          ease: [0.22, 1, 0.36, 1],
+        }}
+        whileHover={{ y: -1 }}
         style={{
           display: 'flex',
           flexDirection: 'column',
           gap: 4,
-          padding: '8px 10px',
+          padding: '10px 12px',
           background: 'var(--surface)',
           border: '1px solid var(--border)',
-          borderRadius: 4,
-          marginBottom: 4,
+          borderRadius: 8,
+          marginBottom: 6,
           fontSize: 12,
+          boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)',
+          transition: 'box-shadow 200ms, border-color 200ms',
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.boxShadow =
+            '0 6px 14px -4px rgba(15, 23, 42, 0.10), 0 2px 4px -2px rgba(15, 23, 42, 0.06)'
+          e.currentTarget.style.borderColor = 'rgb(var(--brand-rgb, 42 91 215) / 0.25)'
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.boxShadow = '0 1px 2px rgba(15, 23, 42, 0.04)'
+          e.currentTarget.style.borderColor = 'var(--border)'
         }}
       >
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -1168,100 +1364,52 @@ export function CarrierIntegrationsCard() {
             {d.accountIdentifier ?? '—'}
           </span>
           <span style={{ fontSize: 10, color: 'var(--text3)' }}>{formatCaDateShort(d.createdAt)}</span>
-          <button
-            type="button"
+          <ActionButton
+            icon={<Wifi size={11} strokeWidth={2.5} />}
+            label="Test Connection"
+            loadingLabel="Testing…"
+            loading={isTesting}
             onClick={() => runTest(d)}
-            disabled={isTesting}
-            style={{
-              padding: '3px 10px',
-              border: '1px solid var(--border)',
-              borderRadius: 3,
-              background: 'var(--surface2)',
-              color: 'var(--text)',
-              fontSize: 11,
-              fontWeight: 600,
-              cursor: isTesting ? 'wait' : 'pointer',
-            }}
-          >
-            {isTesting ? 'Testing…' : 'Test Connection'}
-          </button>
+            title="Verify credentials with the carrier API"
+          />
           {isStore && STORE_PULLERS[d.provider] ? (
-            <button
-              type="button"
+            <ActionButton
+              icon={<PackageSearch size={11} strokeWidth={2.5} />}
+              label="Pull Orders"
+              loadingLabel="Pulling…"
+              loading={!!pulling[d.id]}
               onClick={() => runPullOrders(d)}
-              disabled={!!pulling[d.id]}
               title={`Pull recent ${d.provider} orders`}
-              style={{
-                padding: '3px 10px',
-                border: '1px solid var(--border)',
-                borderRadius: 3,
-                background: 'var(--surface2)',
-                color: 'var(--text)',
-                fontSize: 11,
-                fontWeight: 600,
-                cursor: pulling[d.id] ? 'wait' : 'pointer',
-              }}
-            >
-              {pulling[d.id] ? 'Pulling…' : 'Pull Orders'}
-            </button>
+            />
           ) : null}
           {!isStore && !PROVIDER_DEFS.find((p) => p.key === d.provider)?.noRateQuotes ? (
-            <button
-              type="button"
+            <ActionButton
+              icon={<Receipt size={11} strokeWidth={2.5} />}
+              label="Get Rates"
+              loadingLabel="Fetching…"
+              loading={!!rating[d.id]}
               onClick={() => runFetchRates(d)}
-              disabled={!!rating[d.id]}
               title="Fetch a sample shipping rate for this carrier"
-              style={{
-                padding: '3px 10px',
-                border: '1px solid var(--border)',
-                borderRadius: 3,
-                background: 'var(--surface2)',
-                color: 'var(--text)',
-                fontSize: 11,
-                fontWeight: 600,
-                cursor: rating[d.id] ? 'wait' : 'pointer',
-              }}
-            >
-              {rating[d.id] ? 'Fetching…' : 'Get Rates'}
-            </button>
+            />
           ) : null}
           {d.kind === 'carrier' ? (
-            <button
-              type="button"
+            <ActionButton
+              icon={<Users2 size={11} strokeWidth={2.5} />}
+              label={`Assign${d.assignedClientIds.length > 0 ? ` (${d.assignedClientIds.length})` : ''}`}
+              variant="primary"
               onClick={() => openAssignPopover(d)}
               title="Assign this carrier account to one or more clients"
-              style={{
-                padding: '3px 10px',
-                border: '1px solid rgb(var(--brand-rgb, 42 91 215) / 0.3)',
-                borderRadius: 3,
-                background: 'rgb(var(--brand-rgb, 42 91 215) / 0.08)',
-                color: 'rgb(var(--brand-rgb, 42 91 215))',
-                fontSize: 11,
-                fontWeight: 700,
-                cursor: 'pointer',
-              }}
-            >
-              👥 Assign{d.assignedClientIds.length > 0 ? ` (${d.assignedClientIds.length})` : ''}
-            </button>
+            />
           ) : null}
-          <button
-            type="button"
+          <ActionButton
+            icon={<Trash2 size={11} strokeWidth={2.25} />}
+            label="Delete"
+            loadingLabel="Deleting…"
+            loading={!!deleting[d.id]}
+            variant="danger"
             onClick={() => runDelete(d)}
-            disabled={!!deleting[d.id]}
             title="Delete integration"
-            style={{
-              padding: '3px 10px',
-              border: '1px solid var(--border)',
-              borderRadius: 3,
-              background: 'var(--surface2)',
-              color: 'var(--red)',
-              fontSize: 11,
-              fontWeight: 600,
-              cursor: deleting[d.id] ? 'wait' : 'pointer',
-            }}
-          >
-            {deleting[d.id] ? 'Deleting…' : 'Delete'}
-          </button>
+          />
         </div>
 
         {/* Assigned-client chips — inline summary of which clients
@@ -1352,17 +1500,42 @@ export function CarrierIntegrationsCard() {
               >
                 <div
                   style={{
-                    padding: '14px 18px',
+                    padding: '16px 18px',
                     borderBottom: '1px solid var(--border)',
                     background:
-                      'linear-gradient(135deg, rgb(var(--brand-rgb, 42 91 215) / 0.06), transparent)',
+                      'linear-gradient(135deg, rgb(var(--brand-rgb, 42 91 215) / 0.08), transparent)',
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 12,
                   }}
                 >
-                  <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text)' }}>
-                    Assign clients · {d.provider.toUpperCase()}
-                  </div>
-                  <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 2, lineHeight: 1.4 }}>
-                    Select which client(s) can use this carrier account for rate shopping and label purchase.
+                  <motion.div
+                    initial={{ scale: 0.6, opacity: 0, rotate: -8 }}
+                    animate={{ scale: 1, opacity: 1, rotate: 0 }}
+                    transition={{ type: 'spring', stiffness: 320, damping: 18, delay: 0.05 }}
+                    style={{
+                      width: 36,
+                      height: 36,
+                      borderRadius: 10,
+                      flexShrink: 0,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      background:
+                        'linear-gradient(135deg, rgb(var(--brand-rgb, 42 91 215) / 0.18), rgb(var(--brand-rgb, 42 91 215) / 0.05))',
+                      boxShadow: 'inset 0 0 0 1px rgb(var(--brand-rgb, 42 91 215) / 0.22)',
+                      color: 'rgb(var(--brand-rgb, 42 91 215))',
+                    }}
+                  >
+                    <Users2 size={18} strokeWidth={2.25} />
+                  </motion.div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text)', letterSpacing: '-0.01em' }}>
+                      Assign clients · {d.provider.toUpperCase()}
+                    </div>
+                    <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 3, lineHeight: 1.45 }}>
+                      Select which client(s) can use this carrier account for rate shopping and label purchase.
+                    </div>
                   </div>
                 </div>
 
@@ -1372,21 +1545,32 @@ export function CarrierIntegrationsCard() {
                       No clients available. Add clients in the Inventory → Clients tab first.
                     </div>
                   ) : (
-                    (allClients ?? []).map((c) => {
+                    (allClients ?? []).map((c, idx) => {
                       const cid = (c as any).clientId ?? (c as any).id
                       if (typeof cid !== 'number') return null
                       const checked = assignDraft.has(cid)
                       return (
-                        <label
+                        <motion.label
                           key={cid}
+                          initial={{ opacity: 0, x: -6 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          transition={{
+                            duration: 0.22,
+                            delay: Math.min(idx, 10) * 0.025,
+                            ease: [0.22, 1, 0.36, 1],
+                          }}
                           style={{
                             display: 'flex',
                             alignItems: 'center',
-                            gap: 10,
-                            padding: '8px 14px',
-                            cursor: 'pointer',
-                            transition: 'background 100ms',
-                            background: checked ? 'rgb(var(--brand-rgb, 42 91 215) / 0.08)' : 'transparent',
+                            gap: 12,
+                            padding: '10px 14px',
+                            cursor: assignSaving ? 'wait' : 'pointer',
+                            transition: 'background 120ms',
+                            borderRadius: 6,
+                            margin: '2px 6px',
+                            background: checked
+                              ? 'rgb(var(--brand-rgb, 42 91 215) / 0.10)'
+                              : 'transparent',
                           }}
                           onMouseEnter={(e) => {
                             if (!checked) e.currentTarget.style.background = 'var(--surface2)'
@@ -1395,12 +1579,10 @@ export function CarrierIntegrationsCard() {
                             if (!checked) e.currentTarget.style.background = 'transparent'
                           }}
                         >
-                          <input
-                            type="checkbox"
+                          <ModernCheckbox
                             checked={checked}
                             onChange={() => toggleAssignClient(cid)}
                             disabled={assignSaving}
-                            style={{ accentColor: 'rgb(var(--brand-rgb, 42 91 215))', width: 14, height: 14 }}
                           />
                           <span
                             style={{
@@ -1408,12 +1590,24 @@ export function CarrierIntegrationsCard() {
                               fontSize: 13,
                               fontWeight: checked ? 700 : 500,
                               color: checked ? 'rgb(var(--brand-rgb, 42 91 215))' : 'var(--text)',
+                              transition: 'color 150ms, font-weight 150ms',
                             }}
                           >
                             {c.name}
                           </span>
-                          <span style={{ fontSize: 10, color: 'var(--text3)', fontFamily: 'monospace' }}>#{cid}</span>
-                        </label>
+                          <span
+                            style={{
+                              fontSize: 10,
+                              color: 'var(--text3)',
+                              fontFamily: 'monospace',
+                              padding: '2px 6px',
+                              borderRadius: 4,
+                              background: 'var(--surface2)',
+                            }}
+                          >
+                            #{cid}
+                          </span>
+                        </motion.label>
                       )
                     })
                   )}
@@ -1432,41 +1626,62 @@ export function CarrierIntegrationsCard() {
                   <span style={{ flex: 1, fontSize: 11.5, color: 'var(--text3)' }}>
                     {assignDraft.size} selected
                   </span>
-                  <button
+                  <motion.button
                     type="button"
                     onClick={closeAssignPopover}
                     disabled={assignSaving}
+                    whileHover={!assignSaving ? { y: -1 } : undefined}
+                    whileTap={!assignSaving ? { scale: 0.96 } : undefined}
+                    transition={{ type: 'spring', stiffness: 400, damping: 22 }}
                     style={{
-                      padding: '6px 12px',
+                      padding: '7px 14px',
                       border: '1px solid var(--border)',
-                      borderRadius: 5,
+                      borderRadius: 7,
                       background: 'var(--surface)',
                       color: 'var(--text2)',
                       fontSize: 12,
-                      fontWeight: 600,
+                      fontWeight: 700,
                       cursor: assignSaving ? 'wait' : 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
                     }}
                   >
+                    <XIcon size={12} strokeWidth={2.5} />
                     Cancel
-                  </button>
-                  <button
+                  </motion.button>
+                  <motion.button
                     type="button"
                     onClick={() => void saveAssignments(d)}
                     disabled={assignSaving}
+                    whileHover={!assignSaving ? { y: -1 } : undefined}
+                    whileTap={!assignSaving ? { scale: 0.96 } : undefined}
+                    transition={{ type: 'spring', stiffness: 400, damping: 22 }}
                     style={{
-                      padding: '6px 14px',
+                      padding: '7px 16px',
                       border: 'none',
-                      borderRadius: 5,
-                      background: 'rgb(var(--brand-rgb, 42 91 215))',
+                      borderRadius: 7,
+                      background:
+                        'linear-gradient(135deg, rgb(var(--brand-rgb, 42 91 215)), rgb(79 70 229))',
                       color: '#fff',
                       fontSize: 12,
-                      fontWeight: 700,
+                      fontWeight: 800,
                       cursor: assignSaving ? 'wait' : 'pointer',
                       opacity: assignSaving ? 0.7 : 1,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      boxShadow:
+                        '0 4px 10px -2px rgb(var(--brand-rgb, 42 91 215) / 0.4), inset 0 1px 0 0 rgba(255, 255, 255, 0.18)',
                     }}
                   >
+                    {assignSaving ? (
+                      <Loader2 size={12} strokeWidth={2.5} className="animate-spin" />
+                    ) : (
+                      <CheckIcon size={12} strokeWidth={2.75} />
+                    )}
                     {assignSaving ? 'Saving…' : 'Save Assignments'}
-                  </button>
+                  </motion.button>
                 </div>
               </motion.div>
             </motion.div>
@@ -1540,52 +1755,80 @@ export function CarrierIntegrationsCard() {
             })()}
           </div>
         ) : null}
-      </li>
+      </motion.li>
     )
   }
 
   // Section header + add button used for both Stores and Carriers. Centralized
   // here so styling stays consistent and we only have one button definition.
+  // Section header — replaces the emoji-prefix pattern with a proper
+  // lucide icon in a soft brand-tinted circular badge. Pairs the icon
+  // with a clean two-line text block (title + blurb) and a refined
+  // "Add" button on the right featuring an icon, gradient background,
+  // and hover lift. Animated entrance per section so the header
+  // settles into place rather than appearing flat.
   const renderSectionHeader = (
-    icon: string,
+    Icon: React.ComponentType<{ size?: number; strokeWidth?: number; className?: string }>,
     title: string,
     blurb: string,
     addLabel: string,
     category: ProviderCategory,
   ) => (
-    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-      <div>
-        <h3 style={{ margin: 0 }}>{icon} {title}</h3>
-        <p style={{ fontSize: 11.5, color: 'var(--text3)', margin: '4px 0 0' }}>{blurb}</p>
+    <motion.div
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+      className="flex items-center justify-between gap-3"
+    >
+      <div className="flex items-center gap-3 min-w-0">
+        <motion.div
+          initial={{ scale: 0.6, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          transition={{ type: 'spring', stiffness: 280, damping: 18, delay: 0.05 }}
+          className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
+          style={{
+            background:
+              'linear-gradient(135deg, rgb(var(--brand-rgb, 42 91 215) / 0.14), rgb(var(--brand-rgb, 42 91 215) / 0.04))',
+            boxShadow: 'inset 0 0 0 1px rgb(var(--brand-rgb, 42 91 215) / 0.18)',
+          }}
+        >
+          <Icon size={16} strokeWidth={2.25} className="text-brand" />
+        </motion.div>
+        <div className="min-w-0">
+          <h3 className="m-0 text-[14px] font-extrabold tracking-tight text-ink font-display">
+            {title}
+          </h3>
+          <p className="text-[11px] text-ink-3 mt-0.5 leading-snug">{blurb}</p>
+        </div>
       </div>
-      <button
+      <motion.button
         type="button"
+        whileHover={{ y: -1 }}
+        whileTap={{ scale: 0.96 }}
+        transition={{ type: 'spring', stiffness: 400, damping: 24 }}
         onClick={() => openAddModal(category)}
+        className="inline-flex items-center gap-1.5 h-8 px-3.5 rounded-lg text-[12px] font-bold text-white whitespace-nowrap"
         style={{
-          padding: '7px 14px',
-          border: 'none',
-          borderRadius: 4,
-          background: 'rgb(var(--brand-rgb, 42 91 215))',
-          color: '#fff',
-          fontSize: 12,
-          fontWeight: 700,
-          cursor: 'pointer',
-          whiteSpace: 'nowrap',
+          background:
+            'linear-gradient(135deg, rgb(var(--brand-rgb, 42 91 215)), rgb(79 70 229))',
+          boxShadow:
+            '0 4px 10px -2px rgb(var(--brand-rgb, 42 91 215) / 0.4), inset 0 1px 0 0 rgba(255, 255, 255, 0.18)',
         }}
       >
+        <Plus size={13} strokeWidth={2.75} />
         {addLabel}
-      </button>
-    </div>
+      </motion.button>
+    </motion.div>
   )
 
   return (
     <div className="markup-card" style={{ marginTop: 16 }}>
       {/* ── Stores: marketplace order sources (Walmart, Amazon) ──────────── */}
       {renderSectionHeader(
-        '🏪',
+        Store,
         'Your Stores',
         'Marketplace order sources. Use these to pull orders into PrepShip and push tracking back. Stores do not return shipping rates.',
-        '+ Add Store',
+        'Add Store',
         'store',
       )}
       <div style={{ height: 12 }} />
@@ -1623,10 +1866,10 @@ export function CarrierIntegrationsCard() {
 
       {/* ── Carriers: actual shipping carriers (UPS, USPS, FedEx, …) ─────── */}
       {renderSectionHeader(
-        '🚚',
+        Truck,
         'Your Carriers',
         'Direct shipping carriers — used for rate shopping and label purchase. These appear in the Rate Browser sidebar.',
-        '+ Add Carrier',
+        'Add Carrier',
         'carrier',
       )}
       <div style={{ height: 12 }} />
