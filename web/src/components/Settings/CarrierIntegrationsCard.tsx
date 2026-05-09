@@ -1019,7 +1019,13 @@ function carrierRateErrorMessage(provider: string, error?: string): string {
   return message
 }
 
-export function CarrierIntegrationsCard() {
+// View prop lets the parent (SettingsView drawer) render just the
+// Stores section or just the Carriers section in isolation. Default
+// is 'all' so existing call sites (no prop) keep the original
+// two-section layout.
+export type CarrierIntegrationsView = 'all' | 'stores' | 'carriers'
+
+export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegrationsView } = {}) {
   // useShippingAccounts (in v2Hooks.ts) caches /api/carrier-accounts results
   // under ['v2-hooks:carrier-accounts']. The Rate Browser sidebar reads from
   // that cache. Adding/deleting a carrier here only updates this component's
@@ -1836,75 +1842,86 @@ export function CarrierIntegrationsCard() {
     </motion.div>
   )
 
+  const showStores = view === 'all' || view === 'stores'
+  const showCarriers = view === 'all' || view === 'carriers'
+
   return (
     <div className="markup-card" style={{ marginTop: 16 }}>
       {/* ── Stores: marketplace order sources (Walmart, Amazon) ──────────── */}
-      {renderSectionHeader(
-        Store,
-        'Your Stores',
-        'Marketplace order sources. Use these to pull orders into PrepShip and push tracking back. Stores do not return shipping rates.',
-        'Add Store',
-        'store',
-      )}
-      <div style={{ height: 12 }} />
-      {listError && saved.length > 0 ? (
-        <div style={{
-          background: 'var(--surface2)',
-          border: '1px dashed var(--red)',
-          borderRadius: 4,
-          padding: '6px 10px',
-          fontSize: 11,
-          color: 'var(--red)',
-          marginBottom: 12,
-        }}>
-          ⚠ Couldn't refresh integrations: {listError}
-        </div>
+      {showStores ? (
+        <>
+          {renderSectionHeader(
+            Store,
+            'Your Stores',
+            'Marketplace order sources. Use these to pull orders into PrepShip and push tracking back. Stores do not return shipping rates.',
+            'Add Store',
+            'store',
+          )}
+          <div style={{ height: 12 }} />
+          {listError && saved.length > 0 ? (
+            <div style={{
+              background: 'var(--surface2)',
+              border: '1px dashed var(--red)',
+              borderRadius: 4,
+              padding: '6px 10px',
+              fontSize: 11,
+              color: 'var(--red)',
+              marginBottom: 12,
+            }}>
+              ⚠ Couldn't refresh integrations: {listError}
+            </div>
+          ) : null}
+          {savedByCategory.stores.length > 0 ? (
+            <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 16px' }}>
+              {savedByCategory.stores.map(renderSavedRow)}
+            </ul>
+          ) : (
+            <div style={{
+              fontSize: 12,
+              color: 'var(--text3)',
+              background: 'var(--surface)',
+              border: '1px dashed var(--border2)',
+              borderRadius: 4,
+              padding: '12px',
+              textAlign: 'center',
+              marginBottom: 16,
+            }}>
+              No stores connected yet. Click <b>+ Add Store</b> to connect a marketplace.
+            </div>
+          )}
+        </>
       ) : null}
-      {savedByCategory.stores.length > 0 ? (
-        <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 16px' }}>
-          {savedByCategory.stores.map(renderSavedRow)}
-        </ul>
-      ) : (
-        <div style={{
-          fontSize: 12,
-          color: 'var(--text3)',
-          background: 'var(--surface)',
-          border: '1px dashed var(--border2)',
-          borderRadius: 4,
-          padding: '12px',
-          textAlign: 'center',
-          marginBottom: 16,
-        }}>
-          No stores connected yet. Click <b>+ Add Store</b> to connect a marketplace.
-        </div>
-      )}
 
       {/* ── Carriers: actual shipping carriers (UPS, USPS, FedEx, …) ─────── */}
-      {renderSectionHeader(
-        Truck,
-        'Your Carriers',
-        'Direct shipping carriers — used for rate shopping and label purchase. These appear in the Rate Browser sidebar.',
-        'Add Carrier',
-        'carrier',
-      )}
-      <div style={{ height: 12 }} />
-      {savedByCategory.carriers.length > 0 ? (
-        <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 12px' }}>
-          {savedByCategory.carriers.map(renderSavedRow)}
-        </ul>
-      ) : (
-        <div style={{
-          fontSize: 12,
-          color: 'var(--text3)',
-          background: 'var(--surface)',
-          border: '1px dashed var(--border2)',
-          borderRadius: 4,
-          padding: '12px',
-          textAlign: 'center',
-        }}>
-          No carriers connected yet. Click <b>+ Add Carrier</b> to connect one (UPS, USPS, FedEx, etc.).
-        </div>
-      )}
+      {showCarriers ? (
+        <>
+          {renderSectionHeader(
+            Truck,
+            'Your Carriers',
+            'Direct shipping carriers — used for rate shopping and label purchase. These appear in the Rate Browser sidebar.',
+            'Add Carrier',
+            'carrier',
+          )}
+          <div style={{ height: 12 }} />
+          {savedByCategory.carriers.length > 0 ? (
+            <ul style={{ listStyle: 'none', padding: 0, margin: '0 0 12px' }}>
+              {savedByCategory.carriers.map(renderSavedRow)}
+            </ul>
+          ) : (
+            <div style={{
+              fontSize: 12,
+              color: 'var(--text3)',
+              background: 'var(--surface)',
+              border: '1px dashed var(--border2)',
+              borderRadius: 4,
+              padding: '12px',
+              textAlign: 'center',
+            }}>
+              No carriers connected yet. Click <b>+ Add Carrier</b> to connect one (UPS, USPS, FedEx, etc.).
+            </div>
+          )}
+        </>
+      ) : null}
 
 
       <AnimatePresence>

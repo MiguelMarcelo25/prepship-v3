@@ -25,7 +25,7 @@
  */
 
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { motion } from 'framer-motion'
+import { AnimatePresence, motion } from 'framer-motion'
 import {
   Settings as SettingsIcon,
   ChevronDown,
@@ -39,6 +39,9 @@ import {
   XCircle,
   Trash2,
   Plus,
+  Store,
+  Truck,
+  Hourglass,
 } from 'lucide-react'
 import { apiClient } from '../../api/client'
 import { api } from '../../lib/api'
@@ -57,6 +60,12 @@ import {
 } from './settings-parity'
 import { CarrierIntegrationsCard } from '../Settings/CarrierIntegrationsCard'
 import { PendingClientIntegrationsCard } from '../Settings/PendingClientIntegrationsCard'
+
+// Drawer sections — each represents one icon on the rail and one
+// content panel. Order here = rendering order on the rail.
+type DrawerSectionId = 'markups' | 'stores' | 'carriers' | 'pending' | 'sandbox' | 'cache'
+
+const DRAWER_SECTION_KEY = 'settings:active-drawer-section'
 
 const COLLAPSE_STORAGE_KEY = 'settings:carrier-groups:collapsed'
 
@@ -407,7 +416,102 @@ export default function SettingsView() {
   const sandboxBusy = sandboxState.kind === 'loading'
   const isSeeding = sandboxBusy && sandboxState.op === 'seed'
   const isPurging = sandboxBusy && sandboxState.op === 'purge'
+
+  // Active drawer section. Persists in localStorage so an operator
+  // that lands on a deep section (e.g. Sandbox) sees the same panel
+  // when they come back. Defaults to 'markups' on first visit.
+  const [activeSection, setActiveSection] = useState<DrawerSectionId>(() => {
+    if (typeof window === 'undefined') return 'markups'
+    try {
+      const stored = window.localStorage.getItem(DRAWER_SECTION_KEY) as DrawerSectionId | null
+      if (stored && ['markups', 'stores', 'carriers', 'pending', 'sandbox', 'cache'].includes(stored)) {
+        return stored
+      }
+    } catch {
+      /* localStorage blocked — use default */
+    }
+    return 'markups'
+  })
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(DRAWER_SECTION_KEY, activeSection)
+    } catch {
+      /* non-fatal */
+    }
+  }, [activeSection])
   const isRefetching = refetchState.kind === 'loading'
+
+  // ─── Drawer manifest ──────────────────────────────────────────────
+  // Single source of truth for the rail. Each entry maps an id to a
+  // visual identity (icon + tone) plus the descriptive copy that
+  // becomes the panel header. Adding a new drawer section is a
+  // one-line entry here + a case in the renderActiveSection switch.
+  const DRAWER_SECTIONS: Array<{
+    id: DrawerSectionId
+    label: string
+    short: string
+    description: string
+    icon: typeof SettingsIcon
+    tone: AccentTone
+  }> = [
+    {
+      id: 'markups',
+      label: 'Rate Browser — Account Markups',
+      short: 'Markups',
+      description:
+        '$ or % markup added per carrier account. Applied to displayed rates in the Rate Browser; useful for billing clients above cost.',
+      icon: Sparkles,
+      tone: 'brand',
+    },
+    {
+      id: 'stores',
+      label: 'Your Stores',
+      short: 'Stores',
+      description:
+        'Marketplace order sources (Walmart, Amazon, eBay, Shopify…). Use these to pull orders into PrepShip and push tracking back. Stores do not return shipping rates.',
+      icon: Store,
+      tone: 'emerald',
+    },
+    {
+      id: 'carriers',
+      label: 'Your Carriers',
+      short: 'Carriers',
+      description:
+        'Direct shipping carriers (UPS, USPS, FedEx, DHL, EasyPost…). Used for rate shopping and label purchase. These appear in the Rate Browser sidebar.',
+      icon: Truck,
+      tone: 'brand',
+    },
+    {
+      id: 'pending',
+      label: 'Pending Client Integrations',
+      short: 'Pending',
+      description:
+        'Carrier credentials submitted by clients via the client portal that haven\'t been reviewed yet. Approve or reject from this panel.',
+      icon: Hourglass,
+      tone: 'amber',
+    },
+    {
+      id: 'sandbox',
+      label: 'Sandbox — Test Orders',
+      short: 'Sandbox',
+      description:
+        'Clients flagged is_test=true are isolated: their orders never sync from ShipStation, never create real postage, never bill, and never touch inventory.',
+      icon: Beaker,
+      tone: 'rose',
+    },
+    {
+      id: 'cache',
+      label: 'Cache Management',
+      short: 'Cache',
+      description:
+        'Clear the rate cache and refetch all rates for awaiting_shipment orders. Used after carrier credential changes or markup-rule updates.',
+      icon: Database,
+      tone: 'violet',
+    },
+  ]
+
+  const activeMeta = DRAWER_SECTIONS.find((s) => s.id === activeSection) ?? DRAWER_SECTIONS[0]
+  const ActiveIcon = activeMeta.icon
 
   return (
     <div
@@ -422,266 +526,413 @@ export default function SettingsView() {
           'radial-gradient(900px 500px at 8% 0%, rgb(var(--brand-rgb, 42 91 215) / 0.05), transparent 60%), radial-gradient(700px 400px at 100% 100%, rgb(var(--brand-rgb, 42 91 215) / 0.04), transparent 65%), rgb(var(--bg-rgb, 240 242 245))',
       }}
     >
-      <div className="px-5 py-5 w-full">
-        {/* Page header — full width banner. Animated drop-in
-            announces the page; the content below cascades after. */}
-        <motion.div
-          initial={{ opacity: 0, y: -8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
-          className="flex items-center gap-3 mb-5"
+      {/* ─────────────────────────────────────────────────────────────
+          REFINED OPERATOR CONSOLE — drawer-rail layout
+
+          Two-column on desktop:
+            • LEFT: 84px vertical icon rail (sticky, full-height)
+            • RIGHT: animated content panel with the active section
+
+          On mobile (<sm) the rail collapses to a horizontal pill bar
+          at the top, scrolling horizontally if there are more icons
+          than fit. Same DOM, different orientation via flex-direction.
+          ───────────────────────────────────────────────────────────── */}
+      <div className="flex flex-col sm:flex-row min-h-full w-full">
+
+        {/* ─── ICON RAIL ─────────────────────────────────────────────
+            Sticky vertical strip on desktop, horizontal scroll on mobile.
+            Each icon is a 56x56 button with its own brand-tinted active
+            state and an animated indicator bar on the left edge that
+            slides between sections (Linear-style "you-are-here" marker).
+
+            Tooltips on hover (using `title` for free, native UX). */}
+        <aside
+          className="
+            relative flex-shrink-0
+            w-full sm:w-[84px]
+            border-b sm:border-b-0 sm:border-r border-line
+            bg-gradient-to-b from-surface-2 to-surface
+            sm:sticky sm:top-0 sm:h-screen sm:overflow-y-auto
+            z-10
+          "
+          aria-label="Settings sections"
         >
+          {/* Brand mark on the rail — same gradient tile from the old
+              header, but compressed into the rail's footprint so the
+              drawer feels self-contained. Hidden on mobile (no room). */}
           <motion.div
-            initial={{ rotate: -90, scale: 0.6 }}
-            animate={{ rotate: 0, scale: 1 }}
-            transition={{ type: 'spring', stiffness: 220, damping: 18, delay: 0.05 }}
-            className="w-11 h-11 rounded-xl bg-gradient-to-br from-brand to-indigo-600 flex items-center justify-center shadow-md ring-1 ring-brand/30"
+            initial={{ rotate: -90, scale: 0.5, opacity: 0 }}
+            animate={{ rotate: 0, scale: 1, opacity: 1 }}
+            transition={{ type: 'spring', stiffness: 240, damping: 20, delay: 0.1 }}
+            className="hidden sm:flex w-11 h-11 mx-auto mt-4 mb-3 rounded-xl bg-gradient-to-br from-brand to-indigo-600 items-center justify-center shadow-md ring-1 ring-brand/30"
+            title="Settings"
           >
             <SettingsIcon size={20} strokeWidth={2.25} className="text-white" />
           </motion.div>
-          <div className="flex-1 min-w-0">
-            <h2 className="text-[20px] font-extrabold text-ink font-display tracking-[-0.02em] m-0">
-              Settings
-            </h2>
-            <p className="text-[12px] text-ink-3 mt-0.5 leading-snug">
-              Markup rules, carrier integrations, sandbox tools, and cache management.
-            </p>
-          </div>
-        </motion.div>
 
-        {/* ───────────── Markup Settings ───────────── */}
-        <SectionCard
-          tone="brand"
-          delay={0.04}
-          icon={<Sparkles size={16} strokeWidth={2.25} />}
-          title="Rate Browser — Account Markups"
-          subtitle="$ or % markup added per carrier account. Applied to displayed rates in the Rate Browser; useful for billing clients above cost."
-        >
-          {accountsLoading || markupsLoading ? (
-            <SkeletonStack rows={5} />
-          ) : markupGroups.length === 0 ? (
-            <div className="text-[12px] text-ink-3 italic px-1 py-2">
-              {getSettingsMarkupEmptyMessage()}
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {markupGroups.map((group) => {
-                const collapsed = !!collapsedGroups[group.key]
-                return (
-                  <div key={group.key} className="rounded-lg ring-1 ring-line bg-surface overflow-hidden">
-                    <button
-                      type="button"
-                      onClick={() => toggleGroup(group.key)}
-                      aria-expanded={!collapsed}
-                      aria-controls={`markup-group-${group.key}`}
-                      className="w-full flex items-center gap-2 px-3 py-2 bg-surface-2 hover:bg-line/40 transition text-left"
-                    >
-                      <ChevronDown
-                        size={12}
-                        strokeWidth={2.5}
-                        className={`text-ink-3 transition-transform duration-150 ${collapsed ? '-rotate-90' : 'rotate-0'}`}
-                      />
-                      <span className="flex-1 text-[12.5px] font-bold text-ink">{group.label}</span>
-                      <span className="text-[10.5px] text-ink-3 tabular-nums">
-                        {group.rows.length} {group.rows.length === 1 ? 'carrier' : 'carriers'}
-                      </span>
-                    </button>
-                    {!collapsed ? (
-                      <div id={`markup-group-${group.key}`} className="divide-y divide-line">
-                        {group.rows.length === 0 ? (
-                          <div className="px-3 py-2.5 text-[11px] text-ink-3 italic bg-amber-50/50 border-t border-amber-200/60">
-                            ℹ No carriers yet — backend fan-out for this account is pending.
-                          </div>
-                        ) : null}
-                        {group.rows.map((row) => (
-                          <div
-                            key={row.shippingProviderId}
-                            className="flex items-center gap-2 px-3 py-2 hover:bg-brand-bg/30 transition"
-                          >
-                            <span className="flex-1 text-[12.5px] text-ink truncate" title={row.label}>
-                              {row.label}
-                            </span>
-                            <select
-                              value={row.type}
-                              onChange={(event) => handleMarkupChange(row.shippingProviderId, event.target.value as MarkupType, row.inputValue)}
-                              className="h-7 px-1.5 rounded ring-1 ring-line bg-surface text-[12px] text-ink focus:ring-brand/40 focus:ring-2 outline-none transition"
-                              aria-label={`${row.label} markup type`}
-                            >
-                              <option value="flat">$</option>
-                              <option value="pct">%</option>
-                            </select>
-                            <input
-                              type="number"
-                              min="0"
-                              step="0.25"
-                              value={row.inputValue}
-                              placeholder="0"
-                              onChange={(event) => handleMarkupChange(row.shippingProviderId, row.type, event.target.value)}
-                              aria-label={`${row.label} markup value`}
-                              className="w-[70px] h-7 px-2 text-center rounded ring-1 ring-line bg-surface text-[12px] tabular-nums text-ink focus:ring-brand/40 focus:ring-2 outline-none transition [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                            />
-                            <span className="text-[12px] font-bold text-emerald-600 tabular-nums min-w-[80px] text-right">
-                              {row.preview}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                )
-              })}
-            </div>
-          )}
-          {accountsError ? (
-            <StatusLine kind="error" message={`Unable to refresh carrier accounts: ${accountsError.message}`} />
-          ) : null}
-        </SectionCard>
-
-        {/* ───────────── Carrier Integrations (admin) ───────────── */}
-        {/* The CarrierIntegrationsCard + PendingClientIntegrationsCard
-            are existing self-contained components — they manage their
-            own headers and styling. Wrapping them in a div with the
-            same staggered animation keeps the page rhythm consistent. */}
-        <motion.div
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.32, delay: 0.08, ease: [0.22, 1, 0.36, 1] }}
-        >
-          <CarrierIntegrationsCard />
-        </motion.div>
-
-        <motion.div
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.32, delay: 0.12, ease: [0.22, 1, 0.36, 1] }}
-        >
-          <PendingClientIntegrationsCard />
-        </motion.div>
-
-        {/* ───────────── Sandbox / Test Orders ───────────── */}
-        <SectionCard
-          tone="rose"
-          delay={0.16}
-          icon={<Beaker size={16} strokeWidth={2.25} />}
-          title="Sandbox — Test Orders"
-          subtitle={
-            'Clients flagged is_test=true are isolated: their orders never sync from ShipStation, never create real postage, never bill, and never touch inventory.'
-          }
-        >
-          {testClientsLoading ? (
-            <SkeletonStack rows={3} />
-          ) : testClients.length === 0 ? (
-            <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-amber-50 ring-1 ring-amber-200 mb-4">
-              <AlertTriangle size={14} strokeWidth={2.5} className="text-amber-600 flex-shrink-0 mt-0.5" />
-              <div className="text-[11.5px] text-amber-900 leading-relaxed">
-                <strong>No test clients found.</strong> Run the purge SQL in the Supabase editor first — see{' '}
-                <code className="px-1 py-0.5 rounded bg-amber-100/70 ring-1 ring-amber-200 text-[10.5px] font-mono text-amber-800">
-                  drizzle/apply-test-client-purge.sql
-                </code>
-                .
-              </div>
-            </div>
-          ) : (
-            <div className="mb-4">
-              <div className="text-[11px] uppercase tracking-wider font-bold text-ink-3 mb-2">
-                Active test clients
-              </div>
-              <ul className="space-y-1">
-                {testClients.map((c) => (
-                  <li
-                    key={c.id}
-                    className="flex items-center justify-between px-2.5 py-1.5 rounded-md bg-surface-2 ring-1 ring-line"
-                  >
-                    <span className="text-[12.5px] font-semibold text-ink">{c.name}</span>
-                    <span className="text-[10.5px] text-ink-3 tabular-nums">
-                      {c.order_count} order{c.order_count === 1 ? '' : 's'}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {/* Action row */}
-          <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-line">
-            <label className="inline-flex items-center gap-1.5 text-[11.5px] text-ink-2 font-medium">
-              Count:
-              <input
-                type="number"
-                min="1"
-                max="200"
-                value={seedCount}
-                onChange={(e) => setSeedCount(e.target.value)}
-                className="w-[70px] h-8 px-2 rounded-md ring-1 ring-line bg-surface text-[12.5px] tabular-nums text-ink focus:ring-brand/40 focus:ring-2 outline-none transition"
-              />
-            </label>
-
-            <button
-              type="button"
-              onClick={() => void handleSeedTestOrders()}
-              disabled={sandboxBusy || testClients.length === 0}
-              className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md text-[12px] font-semibold text-white bg-amber-600 hover:bg-amber-700 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-150"
-            >
-              {isSeeding ? <ButtonSpinner /> : <Plus size={13} strokeWidth={2.5} />}
-              {isSeeding ? 'Seeding…' : 'Seed Test Orders'}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => void handlePurgeTestOrders()}
-              disabled={sandboxBusy || testClients.length === 0}
-              className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md text-[12px] font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 ring-1 ring-rose-200 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-150"
-            >
-              {isPurging ? <ButtonSpinner /> : <Trash2 size={13} strokeWidth={2.25} />}
-              {isPurging ? 'Purging…' : 'Purge Test Orders'}
-            </button>
-          </div>
-
-          {sandboxState.kind === 'loading' ? (
-            <StatusLine kind="info" message={
-              sandboxState.op === 'seed' ? 'Seeding test orders…'
-              : sandboxState.op === 'purge' ? 'Purging test orders…'
-              : 'Working…'
-            } />
-          ) : sandboxState.kind === 'success' ? (
-            <StatusLine kind="success" message={sandboxState.message} />
-          ) : sandboxState.kind === 'error' ? (
-            <StatusLine kind="error" message={sandboxState.message} />
-          ) : null}
-        </SectionCard>
-
-        {/* ───────────── Cache Management ───────────── */}
-        <SectionCard
-          tone="violet"
-          delay={0.2}
-          icon={<Database size={16} strokeWidth={2.25} />}
-          title="Cache Management"
-          subtitle="Clear the rate cache and refetch all rates for awaiting_shipment orders. Used after carrier credential changes or markup-rule updates."
-        >
-          <button
-            type="button"
-            onClick={() => void handleRefetchAllRates()}
-            disabled={isRefetching}
-            className="inline-flex items-center gap-1.5 h-9 px-4 rounded-md text-[12.5px] font-semibold text-white bg-gradient-to-br from-violet-600 to-violet-700 hover:shadow-md active:scale-95 disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-150"
+          <div
+            className="
+              flex sm:flex-col items-center gap-2 sm:gap-1
+              px-3 sm:px-2 py-3 sm:py-2
+              overflow-x-auto sm:overflow-x-visible
+            "
+            role="tablist"
           >
-            {isRefetching ? <ButtonSpinner /> : <RefreshCcw size={13} strokeWidth={2.25} />}
-            {isRefetching ? 'Refetching…' : 'Refetch All Rates & Clear Cache'}
-          </button>
+            {DRAWER_SECTIONS.map((section, idx) => {
+              const Icon = section.icon
+              const isActive = activeSection === section.id
+              const accentText = ACCENT_ICON_COLOR[section.tone]
+              const accentBg = ACCENT_ICON_BG[section.tone]
+              return (
+                <motion.button
+                  key={section.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  aria-controls={`settings-panel-${section.id}`}
+                  id={`settings-tab-${section.id}`}
+                  onClick={() => setActiveSection(section.id)}
+                  initial={{ opacity: 0, x: -8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{
+                    duration: 0.32,
+                    delay: 0.08 + idx * 0.04,
+                    ease: [0.22, 1, 0.36, 1],
+                  }}
+                  whileHover={{ scale: isActive ? 1.0 : 1.06 }}
+                  whileTap={{ scale: 0.94 }}
+                  title={section.label}
+                  className={`
+                    relative group
+                    flex items-center justify-center
+                    w-12 h-12 sm:w-14 sm:h-14
+                    rounded-xl flex-shrink-0
+                    transition-colors duration-200
+                    focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/50
+                    ${isActive
+                      ? `bg-gradient-to-br ${accentBg} ring-1`
+                      : 'hover:bg-surface-2 ring-1 ring-transparent hover:ring-line'}
+                  `}
+                >
+                  {/* Active indicator bar — slides between sections via
+                      Framer's layoutId so the bar morphs from one icon
+                      to the next instead of fading. Vertical on desktop
+                      (left edge), horizontal on mobile (bottom edge). */}
+                  {isActive ? (
+                    <motion.span
+                      layoutId="settings-active-indicator"
+                      transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+                      className={`
+                        absolute
+                        sm:left-[-9px] sm:top-2 sm:bottom-2 sm:w-[3px] sm:h-auto
+                        bottom-[-9px] left-2 right-2 h-[3px] w-auto
+                        rounded-full bg-gradient-to-b ${ACCENT_GRADIENT[section.tone]}
+                      `}
+                      aria-hidden
+                    />
+                  ) : null}
+                  <Icon
+                    size={20}
+                    strokeWidth={isActive ? 2.5 : 2.0}
+                    className={`transition-colors duration-200 ${isActive ? accentText : 'text-ink-3 group-hover:text-ink-2'}`}
+                  />
+                </motion.button>
+              )
+            })}
+          </div>
+        </aside>
 
-          {refetchStatus.visible ? (
-            <StatusLine
-              kind={
-                refetchState.kind === 'loading' ? 'info' :
-                refetchState.kind === 'error' ? 'error' :
-                refetchState.kind === 'success' ? 'success' : 'info'
-              }
-              message={refetchStatus.text}
-            />
-          ) : null}
-        </SectionCard>
+        {/* ─── CONTENT PANEL ─────────────────────────────────────────
+            Animated header (icon + title + description) + a content
+            area that swaps between sections via AnimatePresence with
+            a horizontal-slide cross-fade. The wait mode ensures the
+            outgoing section finishes before the new one arrives so
+            there's no visual clobber. */}
+        <main className="flex-1 min-w-0 px-4 sm:px-8 py-5 sm:py-7">
 
-        {/* Bottom breathing room */}
-        <div className="h-12" />
+          {/* Section header — animates per active section change.
+              Key on activeSection so AnimatePresence treats every
+              switch as a fresh enter/exit sequence. */}
+          <AnimatePresence mode="wait">
+            <motion.header
+              key={activeMeta.id}
+              initial={{ opacity: 0, y: -6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+              className="flex items-start gap-4 mb-6 sm:mb-7"
+            >
+              <motion.div
+                initial={{ scale: 0.6, rotate: -8, opacity: 0 }}
+                animate={{ scale: 1, rotate: 0, opacity: 1 }}
+                transition={{ type: 'spring', stiffness: 280, damping: 18, delay: 0.05 }}
+                className={`
+                  w-12 h-12 sm:w-14 sm:h-14 rounded-2xl flex-shrink-0
+                  bg-gradient-to-br ${ACCENT_ICON_BG[activeMeta.tone]} ring-1
+                  flex items-center justify-center
+                  shadow-sm
+                `}
+              >
+                <ActiveIcon
+                  size={22}
+                  strokeWidth={2.25}
+                  className={ACCENT_ICON_COLOR[activeMeta.tone]}
+                />
+              </motion.div>
+              <div className="flex-1 min-w-0 pt-0.5">
+                <h2 className="text-[22px] sm:text-[26px] font-extrabold text-ink font-display tracking-[-0.022em] leading-tight m-0">
+                  {activeMeta.label}
+                </h2>
+                <p className="text-[12.5px] sm:text-[13px] text-ink-3 mt-1.5 leading-relaxed max-w-3xl">
+                  {activeMeta.description}
+                </p>
+              </div>
+            </motion.header>
+          </AnimatePresence>
+
+          {/* Section content — AnimatePresence handles the swap.
+              Each section is wrapped in a motion.div with its own
+              key so React unmounts the old one and mounts the new
+              one cleanly (preserves component lifecycle for stateful
+              children like CarrierIntegrationsCard). */}
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={activeMeta.id}
+              id={`settings-panel-${activeMeta.id}`}
+              role="tabpanel"
+              aria-labelledby={`settings-tab-${activeMeta.id}`}
+              initial={{ opacity: 0, x: 12 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -8 }}
+              transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
+              className="max-w-5xl"
+            >
+
+              {/* ─── MARKUPS panel ─────────────────────────────── */}
+              {activeSection === 'markups' ? (
+                <div>
+                  {accountsLoading || markupsLoading ? (
+                    <SkeletonStack rows={5} />
+                  ) : markupGroups.length === 0 ? (
+                    <div className="text-[13px] text-ink-3 italic px-1 py-2">
+                      {getSettingsMarkupEmptyMessage()}
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {markupGroups.map((group) => {
+                        const collapsed = !!collapsedGroups[group.key]
+                        return (
+                          <div key={group.key} className="rounded-xl ring-1 ring-line bg-surface overflow-hidden shadow-sm">
+                            <button
+                              type="button"
+                              onClick={() => toggleGroup(group.key)}
+                              aria-expanded={!collapsed}
+                              aria-controls={`markup-group-${group.key}`}
+                              className="w-full flex items-center gap-2 px-4 py-2.5 bg-surface-2 hover:bg-line/40 transition text-left"
+                            >
+                              <ChevronDown
+                                size={13}
+                                strokeWidth={2.5}
+                                className={`text-ink-3 transition-transform duration-150 ${collapsed ? '-rotate-90' : 'rotate-0'}`}
+                              />
+                              <span className="flex-1 text-[13px] font-bold text-ink">{group.label}</span>
+                              <span className="text-[11px] text-ink-3 tabular-nums">
+                                {group.rows.length} {group.rows.length === 1 ? 'carrier' : 'carriers'}
+                              </span>
+                            </button>
+                            {!collapsed ? (
+                              <div id={`markup-group-${group.key}`} className="divide-y divide-line">
+                                {group.rows.length === 0 ? (
+                                  <div className="px-3 py-2.5 text-[11.5px] text-ink-3 italic bg-amber-50/50 border-t border-amber-200/60">
+                                    ℹ No carriers yet — backend fan-out for this account is pending.
+                                  </div>
+                                ) : null}
+                                {group.rows.map((row) => (
+                                  <div
+                                    key={row.shippingProviderId}
+                                    className="flex items-center gap-2 px-4 py-2 hover:bg-brand-bg/30 transition"
+                                  >
+                                    <span className="flex-1 text-[12.5px] text-ink truncate" title={row.label}>
+                                      {row.label}
+                                    </span>
+                                    <select
+                                      value={row.type}
+                                      onChange={(event) => handleMarkupChange(row.shippingProviderId, event.target.value as MarkupType, row.inputValue)}
+                                      className="h-7 px-1.5 rounded ring-1 ring-line bg-surface text-[12px] text-ink focus:ring-brand/40 focus:ring-2 outline-none transition"
+                                      aria-label={`${row.label} markup type`}
+                                    >
+                                      <option value="flat">$</option>
+                                      <option value="pct">%</option>
+                                    </select>
+                                    <input
+                                      type="number"
+                                      min="0"
+                                      step="0.25"
+                                      value={row.inputValue}
+                                      placeholder="0"
+                                      onChange={(event) => handleMarkupChange(row.shippingProviderId, row.type, event.target.value)}
+                                      aria-label={`${row.label} markup value`}
+                                      className="w-[70px] h-7 px-2 text-center rounded ring-1 ring-line bg-surface text-[12px] tabular-nums text-ink focus:ring-brand/40 focus:ring-2 outline-none transition [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                                    />
+                                    <span className="text-[12px] font-bold text-emerald-600 tabular-nums min-w-[80px] text-right">
+                                      {row.preview}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                  {accountsError ? (
+                    <StatusLine kind="error" message={`Unable to refresh carrier accounts: ${accountsError.message}`} />
+                  ) : null}
+                </div>
+              ) : null}
+
+              {/* ─── STORES panel ──────────────────────────────── */}
+              {activeSection === 'stores' ? (
+                <CarrierIntegrationsCard view="stores" />
+              ) : null}
+
+              {/* ─── CARRIERS panel ────────────────────────────── */}
+              {activeSection === 'carriers' ? (
+                <CarrierIntegrationsCard view="carriers" />
+              ) : null}
+
+              {/* ─── PENDING panel ─────────────────────────────── */}
+              {activeSection === 'pending' ? (
+                <PendingClientIntegrationsCard />
+              ) : null}
+
+              {/* ─── SANDBOX panel ─────────────────────────────── */}
+              {activeSection === 'sandbox' ? (
+                <div>
+                  {testClientsLoading ? (
+                    <SkeletonStack rows={3} />
+                  ) : testClients.length === 0 ? (
+                    <div className="flex items-start gap-2 px-3 py-2.5 rounded-lg bg-amber-50 ring-1 ring-amber-200 mb-4">
+                      <AlertTriangle size={14} strokeWidth={2.5} className="text-amber-600 flex-shrink-0 mt-0.5" />
+                      <div className="text-[11.5px] text-amber-900 leading-relaxed">
+                        <strong>No test clients found.</strong> Run the purge SQL in the Supabase editor first — see{' '}
+                        <code className="px-1 py-0.5 rounded bg-amber-100/70 ring-1 ring-amber-200 text-[10.5px] font-mono text-amber-800">
+                          drizzle/apply-test-client-purge.sql
+                        </code>
+                        .
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mb-4">
+                      <div className="text-[11px] uppercase tracking-wider font-bold text-ink-3 mb-2">
+                        Active test clients
+                      </div>
+                      <ul className="space-y-1">
+                        {testClients.map((c) => (
+                          <li
+                            key={c.id}
+                            className="flex items-center justify-between px-3 py-2 rounded-lg bg-surface ring-1 ring-line shadow-sm"
+                          >
+                            <span className="text-[13px] font-semibold text-ink">{c.name}</span>
+                            <span className="text-[11px] text-ink-3 tabular-nums">
+                              {c.order_count} order{c.order_count === 1 ? '' : 's'}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Action row */}
+                  <div className="flex flex-wrap items-center gap-2 pt-3 border-t border-line">
+                    <label className="inline-flex items-center gap-1.5 text-[12px] text-ink-2 font-medium">
+                      Count:
+                      <input
+                        type="number"
+                        min="1"
+                        max="200"
+                        value={seedCount}
+                        onChange={(e) => setSeedCount(e.target.value)}
+                        className="w-[70px] h-8 px-2 rounded-md ring-1 ring-line bg-surface text-[12.5px] tabular-nums text-ink focus:ring-brand/40 focus:ring-2 outline-none transition"
+                      />
+                    </label>
+
+                    <motion.button
+                      type="button"
+                      onClick={() => void handleSeedTestOrders()}
+                      disabled={sandboxBusy || testClients.length === 0}
+                      whileHover={!sandboxBusy && testClients.length > 0 ? { y: -1 } : undefined}
+                      whileTap={!sandboxBusy && testClients.length > 0 ? { scale: 0.96 } : undefined}
+                      transition={{ type: 'spring', stiffness: 400, damping: 22 }}
+                      className="inline-flex items-center gap-1.5 h-8 px-3.5 rounded-lg text-[12px] font-semibold text-white bg-gradient-to-br from-amber-500 to-amber-600 shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed transition-shadow duration-150"
+                    >
+                      {isSeeding ? <ButtonSpinner /> : <Plus size={13} strokeWidth={2.5} />}
+                      {isSeeding ? 'Seeding…' : 'Seed Test Orders'}
+                    </motion.button>
+
+                    <motion.button
+                      type="button"
+                      onClick={() => void handlePurgeTestOrders()}
+                      disabled={sandboxBusy || testClients.length === 0}
+                      whileHover={!sandboxBusy && testClients.length > 0 ? { y: -1 } : undefined}
+                      whileTap={!sandboxBusy && testClients.length > 0 ? { scale: 0.96 } : undefined}
+                      transition={{ type: 'spring', stiffness: 400, damping: 22 }}
+                      className="inline-flex items-center gap-1.5 h-8 px-3.5 rounded-lg text-[12px] font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 ring-1 ring-rose-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-150"
+                    >
+                      {isPurging ? <ButtonSpinner /> : <Trash2 size={13} strokeWidth={2.25} />}
+                      {isPurging ? 'Purging…' : 'Purge Test Orders'}
+                    </motion.button>
+                  </div>
+
+                  {sandboxState.kind === 'loading' ? (
+                    <StatusLine kind="info" message={
+                      sandboxState.op === 'seed' ? 'Seeding test orders…'
+                      : sandboxState.op === 'purge' ? 'Purging test orders…'
+                      : 'Working…'
+                    } />
+                  ) : sandboxState.kind === 'success' ? (
+                    <StatusLine kind="success" message={sandboxState.message} />
+                  ) : sandboxState.kind === 'error' ? (
+                    <StatusLine kind="error" message={sandboxState.message} />
+                  ) : null}
+                </div>
+              ) : null}
+
+              {/* ─── CACHE panel ───────────────────────────────── */}
+              {activeSection === 'cache' ? (
+                <div>
+                  <motion.button
+                    type="button"
+                    onClick={() => void handleRefetchAllRates()}
+                    disabled={isRefetching}
+                    whileHover={!isRefetching ? { y: -1 } : undefined}
+                    whileTap={!isRefetching ? { scale: 0.96 } : undefined}
+                    transition={{ type: 'spring', stiffness: 400, damping: 22 }}
+                    className="inline-flex items-center gap-2 h-10 px-5 rounded-lg text-[13px] font-bold text-white bg-gradient-to-br from-violet-600 to-violet-700 shadow-md hover:shadow-lg disabled:opacity-60 disabled:cursor-not-allowed transition-shadow duration-150"
+                  >
+                    {isRefetching ? <ButtonSpinner /> : <RefreshCcw size={14} strokeWidth={2.25} />}
+                    {isRefetching ? 'Refetching…' : 'Refetch All Rates & Clear Cache'}
+                  </motion.button>
+
+                  {refetchStatus.visible ? (
+                    <StatusLine
+                      kind={
+                        refetchState.kind === 'loading' ? 'info' :
+                        refetchState.kind === 'error' ? 'error' :
+                        refetchState.kind === 'success' ? 'success' : 'info'
+                      }
+                      message={refetchStatus.text}
+                    />
+                  ) : null}
+                </div>
+              ) : null}
+
+              {/* Bottom breathing room */}
+              <div className="h-12" />
+            </motion.div>
+          </AnimatePresence>
+        </main>
       </div>
     </div>
   )
