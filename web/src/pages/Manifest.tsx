@@ -6,6 +6,12 @@ import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Card } from '../components/ui/Card';
 import { api, qs } from '../lib/api';
+import {
+  SortableHeader,
+  nextSortState,
+  sortRows,
+  type SortState,
+} from '../components/SortableTable';
 
 type ShipmentRow = {
   id: number;
@@ -25,6 +31,8 @@ type ManifestResult = {
   generatedAt: string;
   count: number;
 };
+
+type ManifestSortKey = 'date' | 'tracking' | 'carrier' | 'service' | 'order' | 'weight' | 'cost';
 
 function todayStartIso() {
   const d = new Date();
@@ -85,6 +93,7 @@ export default function Manifest() {
   const [dateFrom, setDateFrom] = useState(toDateInput(todayStartIso()));
   const [dateTo, setDateTo] = useState(toDateInput(todayEndIso()));
   const [carrier, setCarrier] = useState('');
+  const [sortState, setSortState] = useState<SortState<ManifestSortKey>>(null);
 
   const queryString = useMemo(
     () =>
@@ -101,6 +110,35 @@ export default function Manifest() {
   });
 
   const rows = fetchManifest.data?.data ?? [];
+  const sortedRows = useMemo(
+    () =>
+      sortRows(
+        rows,
+        sortState,
+        (row, key) => {
+          switch (key) {
+            case 'date':
+              return row.shipDate ? new Date(row.shipDate) : null;
+            case 'tracking':
+              return row.trackingNumber;
+            case 'carrier':
+              return row.carrierCode;
+            case 'service':
+              return row.serviceCode;
+            case 'order':
+              return row.orderNumber ?? row.orderId;
+            case 'weight':
+              return row.weightOz;
+            case 'cost':
+              return Number(row.labelCost ?? 0);
+            default:
+              return '';
+          }
+        },
+        (row) => row.id
+      ),
+    [rows, sortState]
+  );
 
   const totalCost = rows.reduce((sum, r) => sum + Number(r.labelCost ?? 0), 0);
 
@@ -212,17 +250,17 @@ export default function Manifest() {
               <table className="w-full text-sm2 border-collapse">
                 <thead className="bg-surface-2">
                   <tr>
-                    <Th>Ship date</Th>
-                    <Th>Tracking</Th>
-                    <Th>Carrier</Th>
-                    <Th>Service</Th>
-                    <Th>Order #</Th>
-                    <Th className="text-right">Weight</Th>
-                    <Th className="text-right">Cost</Th>
+                    <SortableHeader sortKey="date" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="text-left px-3 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Ship date</SortableHeader>
+                    <SortableHeader sortKey="tracking" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="text-left px-3 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Tracking</SortableHeader>
+                    <SortableHeader sortKey="carrier" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="text-left px-3 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Carrier</SortableHeader>
+                    <SortableHeader sortKey="service" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="text-left px-3 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Service</SortableHeader>
+                    <SortableHeader sortKey="order" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="text-left px-3 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Order #</SortableHeader>
+                    <SortableHeader sortKey="weight" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="text-right px-3 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Weight</SortableHeader>
+                    <SortableHeader sortKey="cost" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="text-right px-3 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Cost</SortableHeader>
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((r, i) => (
+                  {sortedRows.map((r, i) => (
                     <tr
                       key={r.id}
                       className={`border-b border-line ${i % 2 === 1 ? 'bg-surface-2' : 'bg-white'}`}

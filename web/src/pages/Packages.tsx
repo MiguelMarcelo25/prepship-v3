@@ -4,6 +4,12 @@ import { AlertTriangle, PackagePlus, Pencil, Plus, RefreshCw, Trash2 } from 'luc
 import Topbar from '../components/Topbar';
 import { Button } from '../components/ui/Button';
 import { api } from '../lib/api';
+import {
+  SortableHeader,
+  nextSortState,
+  sortRows,
+  type SortState,
+} from '../components/SortableTable';
 
 const PackageModal = lazy(() => import('../components/PackageModal'));
 const PackageReceiveModal = lazy(() => import('../components/PackageReceiveModal'));
@@ -30,6 +36,8 @@ type Pkg = {
   isDefault: boolean;
   source: string;
 };
+
+type PackageSortKey = 'package' | 'stock' | 'reorder' | 'cost';
 
 function dimsLabel(p: Pkg) {
   if (p.length > 0 && p.width > 0 && p.height > 0) {
@@ -253,6 +261,31 @@ function PackageSection({
   onDelete: (id: number) => void;
   onReorderChange: (id: number, n: number) => void;
 }) {
+  const [sortState, setSortState] = useState<SortState<PackageSortKey>>(null);
+  const sortedRows = useMemo(
+    () =>
+      sortRows(
+        rows,
+        sortState,
+        (row, key) => {
+          switch (key) {
+            case 'package':
+              return row.name;
+            case 'stock':
+              return row.stockQty;
+            case 'reorder':
+              return row.reorderLevel;
+            case 'cost':
+              return Number(row.unitCost ?? 0);
+            default:
+              return '';
+          }
+        },
+        (row) => row.name
+      ),
+    [rows, sortState]
+  );
+
   return (
     <div className="bg-surface border border-line rounded-card overflow-hidden">
       <div className="bg-surface-2 px-3 py-2 text-[11px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b border-line">
@@ -261,15 +294,15 @@ function PackageSection({
       <table className="w-full border-collapse">
         <thead>
           <tr className="bg-surface-2 border-b border-line">
-            <Th className="text-left max-w-[280px]">Package</Th>
-            <Th className="text-center w-[60px]">Stock</Th>
-            <Th className="text-center w-[75px]">Reorder</Th>
-            <Th className="text-right w-[70px]">Cost</Th>
+            <SortableHeader sortKey="package" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="text-left max-w-[280px] px-2 py-1.5 text-[10px] font-bold uppercase tracking-[0.3px] text-ink-3">Package</SortableHeader>
+            <SortableHeader sortKey="stock" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="center" className="text-center w-[60px] px-2 py-1.5 text-[10px] font-bold uppercase tracking-[0.3px] text-ink-3">Stock</SortableHeader>
+            <SortableHeader sortKey="reorder" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="center" className="text-center w-[75px] px-2 py-1.5 text-[10px] font-bold uppercase tracking-[0.3px] text-ink-3">Reorder</SortableHeader>
+            <SortableHeader sortKey="cost" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="text-right w-[70px] px-2 py-1.5 text-[10px] font-bold uppercase tracking-[0.3px] text-ink-3">Cost</SortableHeader>
             <Th className="text-right">Actions</Th>
           </tr>
         </thead>
         <tbody>
-          {rows.map((p) => (
+          {sortedRows.map((p) => (
             <PackageRow
               key={p.id}
               row={p}

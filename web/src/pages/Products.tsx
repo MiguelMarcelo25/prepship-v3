@@ -12,6 +12,12 @@ import { Input } from '../components/ui/Input';
 import { Button } from '../components/ui/Button';
 import { SkeletonRow } from '../components/ui/Skeleton';
 import { api, qs, type Paginated } from '../lib/api';
+import {
+  SortableHeader,
+  nextSortState,
+  sortRows,
+  type SortState,
+} from '../components/SortableTable';
 
 const ProductModal = lazy(() => import('../components/ProductModal'));
 
@@ -27,6 +33,8 @@ type Product = {
   defaultPackageCode: string | null;
   updatedAt: string;
 };
+
+type ProductSortKey = 'sku' | 'name' | 'weight' | 'dims' | 'package';
 
 function formatWeight(oz: number) {
   if (!oz || oz <= 0) return '—';
@@ -48,6 +56,7 @@ export default function Products() {
   const [page, setPage] = useState(1);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<Product | null>(null);
+  const [sortState, setSortState] = useState<SortState<ProductSortKey>>(null);
   const pageSize = 100;
 
   const queryString = useMemo(
@@ -66,6 +75,31 @@ export default function Products() {
   });
 
   const rows = data?.data ?? [];
+  const sortedRows = useMemo(
+    () =>
+      sortRows(
+        rows,
+        sortState,
+        (product, key) => {
+          switch (key) {
+            case 'sku':
+              return product.sku;
+            case 'name':
+              return product.name;
+            case 'weight':
+              return product.weightOz;
+            case 'dims':
+              return product.length * product.width * product.height;
+            case 'package':
+              return product.defaultPackageCode;
+            default:
+              return '';
+          }
+        },
+        (product) => product.sku ?? product.id
+      ),
+    [rows, sortState]
+  );
   const total = data?.pagination.total ?? 0;
   const totalPages = data?.pagination.totalPages ?? 1;
 
@@ -110,11 +144,11 @@ export default function Products() {
           <thead className="sticky top-0 z-10 bg-surface-2">
             <tr>
               <Th className="w-[44px]"></Th>
-              <Th className="w-[160px]">SKU</Th>
-              <Th>Name</Th>
-              <Th className="w-[110px]">Weight</Th>
-              <Th className="w-[110px]">Dims (L×W×H)</Th>
-              <Th className="w-[180px]">Default package</Th>
+              <SortableHeader sortKey="sku" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="w-[160px] text-left px-2 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">SKU</SortableHeader>
+              <SortableHeader sortKey="name" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="text-left px-2 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Name</SortableHeader>
+              <SortableHeader sortKey="weight" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="w-[110px] text-left px-2 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Weight</SortableHeader>
+              <SortableHeader sortKey="dims" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="w-[110px] text-left px-2 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Dims (LxWxH)</SortableHeader>
+              <SortableHeader sortKey="package" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="w-[180px] text-left px-2 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Default package</SortableHeader>
               <Th className="w-[80px]"></Th>
             </tr>
           </thead>
@@ -135,7 +169,7 @@ export default function Products() {
                 </td>
               </tr>
             )}
-            {rows.map((p, i) => (
+            {sortedRows.map((p, i) => (
               <tr
                 key={p.id}
                 className={`border-b border-line ${

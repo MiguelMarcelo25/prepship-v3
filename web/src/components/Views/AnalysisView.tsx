@@ -36,6 +36,7 @@ import { AnalysisPagination } from './AnalysisPagination'
 import type { AnalysisTableColumn, ColumnWidths } from './AnalysisTableHeader'
 import { AnalysisTopSkusChart } from './AnalysisTopSkusChart'
 import OrderDetailDrawer from '../OrderDetailDrawer'
+import { SortableHeader, nextSortState, sortRows } from '../SortableTable'
 import { ColumnResizeHandle } from './ColumnResizeHandle'
 import './InventoryView.css'
 import './AnalysisView.css'
@@ -608,6 +609,9 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
     useState<DrawerOrdersColumnKey>(DEFAULT_DRAWER_ORDERS_SORT_KEY)
   const [drawerOrdersSortDir, setDrawerOrdersSortDir] =
     useState<DrawerOrdersSortDir>(DEFAULT_DRAWER_ORDERS_SORT_DIR)
+  const [modalItemsSort, setModalItemsSort] = useState(null)
+  const [modalAdjustmentsSort, setModalAdjustmentsSort] = useState(null)
+  const [modalShipmentsSort, setModalShipmentsSort] = useState(null)
   const [orderDetailDrawer, setOrderDetailDrawer] = useState<{ orderId: number; status?: string | null } | null>(null)
   const [orderModal, setOrderModal] = useState({
     open: false,
@@ -921,6 +925,83 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
   const modalShipments = asArray(asRecord(modalOrder).shipments)
   const modalItemsTotal = getItemsTotal(modalItems)
   const modalShipmentTotal = getShipmentsTotal(modalShipments)
+  const sortedModalItems = useMemo(() => sortRows(
+    modalItems,
+    modalItemsSort,
+    (item, key) => {
+      const itemRecord = asRecord(item)
+      switch (key) {
+        case 'sku':
+          return itemRecord.sku
+        case 'product':
+          return itemRecord.name
+        case 'qty':
+          return getItemQty(item)
+        case 'unit':
+          return getItemUnitPrice(item)
+        case 'total':
+          return getItemTotal(item)
+        default:
+          return ''
+      }
+    },
+    (item) => asRecord(item).sku ?? asRecord(item).name,
+  ), [modalItems, modalItemsSort])
+  const sortedModalAdjustments = useMemo(() => sortRows(
+    modalAdjustments,
+    modalAdjustmentsSort,
+    (item, key) => {
+      const itemRecord = asRecord(item)
+      const adjustmentCode =
+        displayText(itemRecord.sku, '').trim()
+        || displayText(itemRecord.code, '').trim()
+        || displayText(itemRecord.name, '').trim()
+        || 'Discount'
+      const adjustmentDescription =
+        displayText(itemRecord.description, '').trim()
+        || (adjustmentCode === 'Discount' ? 'Adjustment' : 'Discount')
+
+      switch (key) {
+        case 'code':
+          return adjustmentCode
+        case 'description':
+          return adjustmentDescription
+        case 'qty':
+          return getItemQty(item)
+        case 'unit':
+          return getItemUnitPrice(item)
+        case 'total':
+          return getItemTotal(item)
+        default:
+          return ''
+      }
+    },
+    (item) => asRecord(item).sku ?? asRecord(item).name,
+  ), [modalAdjustments, modalAdjustmentsSort])
+  const sortedModalShipments = useMemo(() => sortRows(
+    modalShipments,
+    modalShipmentsSort,
+    (shipment, key) => {
+      const shipmentRecord = asRecord(shipment)
+      switch (key) {
+        case 'tracking':
+          return shipmentRecord.trackingNumber
+        case 'carrier':
+          return shipmentRecord.carrierCode
+        case 'service':
+          return shipmentRecord.serviceCode
+        case 'cost':
+          return getShipmentCost(shipment)
+        case 'shipDate':
+          return shipmentRecord.shipDate || shipmentRecord.labelShipDate
+            ? new Date(String(shipmentRecord.shipDate ?? shipmentRecord.labelShipDate))
+            : null
+        default:
+          return ''
+      }
+    },
+    (shipment) => asRecord(shipment).trackingNumber,
+  ), [modalShipments, modalShipmentsSort])
 
   return (
     <div className="view-content" id="view-analysis">
@@ -1597,15 +1678,15 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
                         <table>
                           <thead>
                             <tr>
-                              <th>SKU</th>
-                              <th>Product</th>
-                              <th>Qty</th>
-                              <th>Unit</th>
-                              <th>Total</th>
+                              <SortableHeader sortKey="sku" sortState={modalItemsSort} onSort={(key) => setModalItemsSort((current) => nextSortState(current, key))}>SKU</SortableHeader>
+                              <SortableHeader sortKey="product" sortState={modalItemsSort} onSort={(key) => setModalItemsSort((current) => nextSortState(current, key))}>Product</SortableHeader>
+                              <SortableHeader sortKey="qty" sortState={modalItemsSort} onSort={(key) => setModalItemsSort((current) => nextSortState(current, key))}>Qty</SortableHeader>
+                              <SortableHeader sortKey="unit" sortState={modalItemsSort} onSort={(key) => setModalItemsSort((current) => nextSortState(current, key))}>Unit</SortableHeader>
+                              <SortableHeader sortKey="total" sortState={modalItemsSort} onSort={(key) => setModalItemsSort((current) => nextSortState(current, key))}>Total</SortableHeader>
                             </tr>
                           </thead>
                           <tbody>
-                            {modalItems.map((item, index) => {
+                            {sortedModalItems.map((item, index) => {
                               const itemRecord = asRecord(item)
                               return (
                                 <tr key={`${displayText(itemRecord.sku, 'item')}-${index}`}>
@@ -1632,15 +1713,15 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
                         <table>
                           <thead>
                             <tr>
-                              <th>Code</th>
-                              <th>Description</th>
-                              <th>Qty</th>
-                              <th>Unit</th>
-                              <th>Total</th>
+                              <SortableHeader sortKey="code" sortState={modalAdjustmentsSort} onSort={(key) => setModalAdjustmentsSort((current) => nextSortState(current, key))}>Code</SortableHeader>
+                              <SortableHeader sortKey="description" sortState={modalAdjustmentsSort} onSort={(key) => setModalAdjustmentsSort((current) => nextSortState(current, key))}>Description</SortableHeader>
+                              <SortableHeader sortKey="qty" sortState={modalAdjustmentsSort} onSort={(key) => setModalAdjustmentsSort((current) => nextSortState(current, key))}>Qty</SortableHeader>
+                              <SortableHeader sortKey="unit" sortState={modalAdjustmentsSort} onSort={(key) => setModalAdjustmentsSort((current) => nextSortState(current, key))}>Unit</SortableHeader>
+                              <SortableHeader sortKey="total" sortState={modalAdjustmentsSort} onSort={(key) => setModalAdjustmentsSort((current) => nextSortState(current, key))}>Total</SortableHeader>
                             </tr>
                           </thead>
                           <tbody>
-                            {modalAdjustments.map((item, index) => {
+                            {sortedModalAdjustments.map((item, index) => {
                               const itemRecord = asRecord(item)
                               const adjustmentCode =
                                 displayText(itemRecord.sku, '').trim()
@@ -1673,15 +1754,15 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
                         <table>
                           <thead>
                             <tr>
-                              <th>Tracking</th>
-                              <th>Carrier</th>
-                              <th>Service</th>
-                              <th>Cost</th>
-                              <th>Ship Date</th>
+                              <SortableHeader sortKey="tracking" sortState={modalShipmentsSort} onSort={(key) => setModalShipmentsSort((current) => nextSortState(current, key))}>Tracking</SortableHeader>
+                              <SortableHeader sortKey="carrier" sortState={modalShipmentsSort} onSort={(key) => setModalShipmentsSort((current) => nextSortState(current, key))}>Carrier</SortableHeader>
+                              <SortableHeader sortKey="service" sortState={modalShipmentsSort} onSort={(key) => setModalShipmentsSort((current) => nextSortState(current, key))}>Service</SortableHeader>
+                              <SortableHeader sortKey="cost" sortState={modalShipmentsSort} onSort={(key) => setModalShipmentsSort((current) => nextSortState(current, key))}>Cost</SortableHeader>
+                              <SortableHeader sortKey="shipDate" sortState={modalShipmentsSort} onSort={(key) => setModalShipmentsSort((current) => nextSortState(current, key))}>Ship Date</SortableHeader>
                             </tr>
                           </thead>
                           <tbody>
-                            {modalShipments.map((shipment, index) => {
+                            {sortedModalShipments.map((shipment, index) => {
                               const shipmentRecord = asRecord(shipment)
                               return (
                                 <tr key={`${displayText(shipmentRecord.trackingNumber, 'shipment')}-${index}`}>

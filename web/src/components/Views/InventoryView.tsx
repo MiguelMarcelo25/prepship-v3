@@ -7,6 +7,7 @@ import { api } from '../../lib/api'
 import { ToastContext } from '../../contexts/ToastContext'
 import { useInitStores } from '../../hooks'
 import OrderDetailDrawer from '../OrderDetailDrawer'
+import { SortableHeader, nextSortState, sortRows } from '../SortableTable'
 import type {
   ClientDto,
   CreateParentSkuResult,
@@ -233,6 +234,23 @@ function getClientRateSourceLabel(client: ClientDto) {
   return client.rateSourceName || (client.hasOwnAccount ? client.name : 'DR PREPPER')
 }
 
+function getClientSourceSortLabel(client: ClientDto) {
+  const hasShipStationId = client.storeIds.some((id) => id > 0 && id < 9_000_000)
+  const lowerName = (client.name ?? '').toLowerCase()
+
+  if (hasShipStationId) return 'ShipStation'
+  if (lowerName.includes('walmart')) return 'Walmart'
+  if (lowerName.includes('ebay')) return 'eBay'
+  if (lowerName.includes('amazon')) return 'Amazon'
+  if (lowerName.includes('shopify')) return 'Shopify'
+  if (lowerName.includes('etsy')) return 'Etsy'
+  if (lowerName.includes('tiktok')) return 'TikTok Shop'
+  if (lowerName.includes('woo') || lowerName.includes('woocomm')) return 'WooCommerce'
+  if (lowerName.includes('bigcomm') || lowerName.includes('bigcommerce')) return 'BigCommerce'
+  if (client.storeIds.length > 0) return 'Direct'
+  return 'Manual'
+}
+
 function createClientFormState(client?: ClientDto | null): ClientFormState {
   return {
     clientId: client ? String(client.clientId) : '',
@@ -402,6 +420,11 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
   const [stockClientId, setStockClientId] = useState('')
   const [alertOnly, setAlertOnly] = useState(false)
   const [stockSort, setStockSort] = useState<InventorySortState | null>(null)
+  const [clientsSort, setClientsSort] = useState(null)
+  const [historySort, setHistorySort] = useState(null)
+  const [alertsSort, setAlertsSort] = useState(null)
+  const [parentsSort, setParentsSort] = useState(null)
+  const [skuOrdersSort, setSkuOrdersSort] = useState(null)
   const [bulkEditMode, setBulkEditMode] = useState(false)
   const [bulkDrafts, setBulkDrafts] = useState<Record<number, { weightOz: string; productLength: string; productWidth: string; productHeight: string }>>({})
   const [receiveClientId, setReceiveClientId] = useState('')
@@ -504,6 +527,151 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
       })
       .sort((left, right) => left.name.localeCompare(right.name))
   }, [clientForm.rateSourceClientId, clients])
+  const sortedClients = useMemo(() => sortRows(
+    clients,
+    clientsSort,
+    (client, key) => {
+      const override = clientActiveOverrides[client.clientId]
+      const isActive = override !== undefined ? override : (client.active ?? true)
+
+      switch (key) {
+        case 'name':
+          return client.name
+        case 'contact':
+          return client.contactName
+        case 'email':
+          return client.email
+        case 'storeId':
+          return client.storeIds.join(', ')
+        case 'source':
+          return getClientSourceSortLabel(client)
+        case 'rateSource':
+          return getClientRateSourceLabel(client)
+        case 'active':
+          return isActive
+        default:
+          return ''
+      }
+    },
+    (client) => client.name,
+  ), [clientActiveOverrides, clients, clientsSort])
+  const sortedLedger = useMemo(() => sortRows(
+    ledger,
+    historySort,
+    (entry, key) => {
+      switch (key) {
+        case 'date':
+          return entry.createdAt ? new Date(entry.createdAt) : null
+        case 'sku':
+          return entry.sku
+        case 'type':
+          return entry.type
+        case 'qty':
+          return entry.qty
+        case 'note':
+          return entry.note
+        case 'source':
+          return entry.createdBy
+        default:
+          return ''
+      }
+    },
+    (entry) => entry.id,
+  ), [historySort, ledger])
+  const filteredAlerts = useMemo(() => (
+    alertsClientId
+      ? alerts.filter((alert: any) => String(alert?.clientId ?? '') === alertsClientId)
+      : alerts
+  ), [alerts, alertsClientId])
+  const sortedAlerts = useMemo(() => sortRows(
+    filteredAlerts,
+    alertsSort,
+    (alert: any, key) => {
+      const stock = alert?.currentStock ?? alert?.stockQty ?? 0
+      const minStock = alert?.minStock ?? 0
+      const clientName = alert?.clientName
+        ?? clients.find((client) => client.clientId === alert?.clientId)?.name
+        ?? ''
+
+      switch (key) {
+        case 'sku':
+          return alert?.sku
+        case 'name':
+          return alert?.name
+        case 'client':
+          return clientName
+        case 'stock':
+          return stock
+        case 'min':
+          return minStock
+        case 'status':
+          return stock <= 0 ? 0 : minStock > 0 && stock <= minStock ? 1 : 2
+        default:
+          return ''
+      }
+    },
+    (alert: any) => alert?.sku ?? alert?.id,
+  ), [alertsSort, clients, filteredAlerts])
+  const sortedParentsList = useMemo(() => sortRows(
+    parentsList,
+    parentsSort,
+    (parent: any, key) => {
+      switch (key) {
+        case 'name':
+          return parent?.name
+        case 'sku':
+          return parent?.sku
+        case 'client':
+          return clients.find((client) => client.clientId === parent?.clientId)?.name ?? ''
+        case 'baseUnitQty':
+          return parent?.baseUnitQty ?? 1
+        default:
+          return ''
+      }
+    },
+    (parent: any) => parent?.name ?? parent?.parentSkuId ?? parent?.id,
+  ), [clients, parentsList, parentsSort])
+  const sortedSkuOrders = useMemo(() => sortRows(
+    skuDrawer?.orders ?? [],
+    skuOrdersSort,
+    (order, key) => {
+      switch (key) {
+        case 'order':
+          return order.orderNumber || order.orderId
+        case 'customer':
+          return order.shipToName
+        case 'qty':
+          return order.qty || 1
+        case 'status':
+          return order.orderStatus
+        case 'date':
+          return order.orderDate ? new Date(order.orderDate) : null
+        default:
+          return ''
+      }
+    },
+    (order) => order.orderNumber || order.orderId,
+  ), [skuDrawer?.orders, skuOrdersSort])
+
+  function handleClientsSort(key: string) {
+    setClientsSort((current) => nextSortState(current, key))
+  }
+
+  function handleHistorySort(key: string) {
+    setHistorySort((current) => nextSortState(current, key))
+  }
+
+  function handleAlertsSort(key: string) {
+    setAlertsSort((current) => nextSortState(current, key))
+  }
+
+  function handleParentsSort(key: string) {
+    setParentsSort((current) => nextSortState(current, key))
+  }
+
+  function handleSkuOrdersSort(key: string) {
+    setSkuOrdersSort((current) => nextSortState(current, key))
+  }
 
   function handleStockSort(key: InventorySortKey) {
     setStockSort((current) => {
@@ -1918,18 +2086,18 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
               >
                 <thead>
                   <tr>
-                    <th>Name</th>
-                    <th>Contact</th>
-                    <th>Email</th>
-                    <th>Store ID</th>
-                    <th>Source</th>
-                    <th>Rate Source</th>
-                    <th style={{ textAlign: 'center', width: 70 }}>Active</th>
+                    <SortableHeader sortKey="name" sortState={clientsSort} onSort={handleClientsSort}>Name</SortableHeader>
+                    <SortableHeader sortKey="contact" sortState={clientsSort} onSort={handleClientsSort}>Contact</SortableHeader>
+                    <SortableHeader sortKey="email" sortState={clientsSort} onSort={handleClientsSort}>Email</SortableHeader>
+                    <SortableHeader sortKey="storeId" sortState={clientsSort} onSort={handleClientsSort}>Store ID</SortableHeader>
+                    <SortableHeader sortKey="source" sortState={clientsSort} onSort={handleClientsSort}>Source</SortableHeader>
+                    <SortableHeader sortKey="rateSource" sortState={clientsSort} onSort={handleClientsSort}>Rate Source</SortableHeader>
+                    <SortableHeader sortKey="active" sortState={clientsSort} onSort={handleClientsSort} align="center" style={{ textAlign: 'center', width: 70 }}>Active</SortableHeader>
                     <th />
                   </tr>
                 </thead>
                 <tbody>
-                  {clients.map((client) => {
+                  {sortedClients.map((client) => {
                     const override = clientActiveOverrides[client.clientId]
                     const isActive = override !== undefined ? override : (client.active ?? true)
                     const isPending = pendingClientToggleId === client.clientId
@@ -2113,10 +2281,17 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
                   ].join(' ')}
                 >
                   <thead>
-                    <tr><th>Date</th><th>SKU</th><th>Type</th><th style={{ textAlign: 'right' }}>Qty</th><th>Note</th><th>Source</th></tr>
+                    <tr>
+                      <SortableHeader sortKey="date" sortState={historySort} onSort={handleHistorySort}>Date</SortableHeader>
+                      <SortableHeader sortKey="sku" sortState={historySort} onSort={handleHistorySort}>SKU</SortableHeader>
+                      <SortableHeader sortKey="type" sortState={historySort} onSort={handleHistorySort}>Type</SortableHeader>
+                      <SortableHeader sortKey="qty" sortState={historySort} onSort={handleHistorySort} align="right" style={{ textAlign: 'right' }}>Qty</SortableHeader>
+                      <SortableHeader sortKey="note" sortState={historySort} onSort={handleHistorySort}>Note</SortableHeader>
+                      <SortableHeader sortKey="source" sortState={historySort} onSort={handleHistorySort}>Source</SortableHeader>
+                    </tr>
                   </thead>
                   <tbody>
-                    {ledger.map((entry) => {
+                    {sortedLedger.map((entry) => {
                       const typeColor = entry.type === 'receive' ? 'var(--green)' : entry.type === 'adjust' ? 'var(--ss-blue)' : entry.type === 'ship' ? 'var(--red)' : entry.type === 'return' ? 'var(--yellow)' : entry.type === 'damage' ? 'var(--red)' : 'var(--text3)'
                       return (
                         <tr key={entry.id}>
@@ -2148,17 +2323,14 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
             </select>
             <span style={{ fontSize: 11.5, color: 'var(--text3)' }}>
               {(() => {
-                const filtered = alertsClientId
-                  ? alerts.filter((a: any) => String(a?.clientId ?? '') === alertsClientId)
-                  : alerts
-                const out = filtered.filter((a: any) => (a?.currentStock ?? a?.stockQty ?? 0) <= 0).length
-                const low = filtered.length - out
+                const out = filteredAlerts.filter((a: any) => (a?.currentStock ?? a?.stockQty ?? 0) <= 0).length
+                const low = filteredAlerts.length - out
                 return `${out} out of stock • ${low} low`
               })()}
             </span>
           </div>
 
-          {alerts.length === 0 ? (
+          {filteredAlerts.length === 0 ? (
             <div className="empty-state">
               <div className="empty-icon">✅</div>
               <div>All stocked — no low/out SKUs.</div>
@@ -2191,20 +2363,17 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
               >
                 <thead>
                   <tr>
-                    <th>SKU</th>
-                    <th>Name</th>
-                    <th>Client</th>
-                    <th style={{ textAlign: 'center' }}>Current Stock</th>
-                    <th style={{ textAlign: 'center' }}>Min Stock</th>
-                    <th style={{ textAlign: 'center' }}>Status</th>
+                    <SortableHeader sortKey="sku" sortState={alertsSort} onSort={handleAlertsSort}>SKU</SortableHeader>
+                    <SortableHeader sortKey="name" sortState={alertsSort} onSort={handleAlertsSort}>Name</SortableHeader>
+                    <SortableHeader sortKey="client" sortState={alertsSort} onSort={handleAlertsSort}>Client</SortableHeader>
+                    <SortableHeader sortKey="stock" sortState={alertsSort} onSort={handleAlertsSort} align="center" style={{ textAlign: 'center' }}>Current Stock</SortableHeader>
+                    <SortableHeader sortKey="min" sortState={alertsSort} onSort={handleAlertsSort} align="center" style={{ textAlign: 'center' }}>Min Stock</SortableHeader>
+                    <SortableHeader sortKey="status" sortState={alertsSort} onSort={handleAlertsSort} align="center" style={{ textAlign: 'center' }}>Status</SortableHeader>
                     <th />
                   </tr>
                 </thead>
                 <tbody>
-                  {(alertsClientId
-                    ? alerts.filter((a: any) => String(a?.clientId ?? '') === alertsClientId)
-                    : alerts
-                  ).map((alert: any) => {
+                  {sortedAlerts.map((alert: any) => {
                     const stock = alert?.currentStock ?? alert?.stockQty ?? 0
                     const minStock = alert?.minStock ?? 0
                     const isOut = stock <= 0
@@ -2354,14 +2523,14 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
               <table className="inv-table" style={{ margin: 0 }}>
                 <thead>
                   <tr>
-                    <th>Name</th>
-                    <th>SKU</th>
-                    <th>Client</th>
-                    <th style={{ textAlign: 'center' }}>Base Unit Qty</th>
+                    <SortableHeader sortKey="name" sortState={parentsSort} onSort={handleParentsSort}>Name</SortableHeader>
+                    <SortableHeader sortKey="sku" sortState={parentsSort} onSort={handleParentsSort}>SKU</SortableHeader>
+                    <SortableHeader sortKey="client" sortState={parentsSort} onSort={handleParentsSort}>Client</SortableHeader>
+                    <SortableHeader sortKey="baseUnitQty" sortState={parentsSort} onSort={handleParentsSort} align="center" style={{ textAlign: 'center' }}>Base Unit Qty</SortableHeader>
                   </tr>
                 </thead>
                 <tbody>
-                  {parentsList.map((parent: any) => {
+                  {sortedParentsList.map((parent: any) => {
                     const clientName = clients.find((c) => c.clientId === parent?.clientId)?.name ?? '—'
                     return (
                       <tr key={parent?.parentSkuId ?? parent?.id}>
@@ -2608,15 +2777,15 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
                       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                         <thead>
                           <tr style={{ background: 'var(--surface2)', borderBottom: '1px solid var(--border)' }}>
-                            <th style={{ padding: '7px 10px', textAlign: 'left', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--text3)' }}>Order #</th>
-                            <th style={{ padding: '7px 10px', textAlign: 'left', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--text3)' }}>Customer</th>
-                            <th style={{ padding: '7px 6px', textAlign: 'center', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--text3)' }}>Qty</th>
-                            <th style={{ padding: '7px 10px', textAlign: 'left', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--text3)' }}>Status</th>
-                            <th style={{ padding: '7px 10px', textAlign: 'left', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--text3)' }}>Date</th>
+                            <SortableHeader sortKey="order" sortState={skuOrdersSort} onSort={handleSkuOrdersSort} style={{ padding: '7px 10px', textAlign: 'left', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--text3)' }}>Order #</SortableHeader>
+                            <SortableHeader sortKey="customer" sortState={skuOrdersSort} onSort={handleSkuOrdersSort} style={{ padding: '7px 10px', textAlign: 'left', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--text3)' }}>Customer</SortableHeader>
+                            <SortableHeader sortKey="qty" sortState={skuOrdersSort} onSort={handleSkuOrdersSort} align="center" style={{ padding: '7px 6px', textAlign: 'center', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--text3)' }}>Qty</SortableHeader>
+                            <SortableHeader sortKey="status" sortState={skuOrdersSort} onSort={handleSkuOrdersSort} style={{ padding: '7px 10px', textAlign: 'left', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--text3)' }}>Status</SortableHeader>
+                            <SortableHeader sortKey="date" sortState={skuOrdersSort} onSort={handleSkuOrdersSort} style={{ padding: '7px 10px', textAlign: 'left', fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.4px', color: 'var(--text3)' }}>Date</SortableHeader>
                           </tr>
                         </thead>
                         <tbody>
-                          {skuDrawer.orders.map((order, index) => {
+                          {sortedSkuOrders.map((order, index) => {
                             const statusColor = order.orderStatus === 'shipped' ? 'var(--green)' : order.orderStatus === 'awaiting_shipment' ? 'var(--ss-blue)' : 'var(--text3)'
                             return (
                               <tr key={order.orderId} style={{ borderTop: '1px solid var(--border)', background: index % 2 === 0 ? '' : 'var(--surface2)' }}>

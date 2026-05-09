@@ -17,6 +17,12 @@ import { Select } from '../components/ui/Select';
 import { Card } from '../components/ui/Card';
 import { ClientBadge } from '../components/ui/Badge';
 import { api, qs } from '../lib/api';
+import {
+  SortableHeader,
+  nextSortState,
+  sortRows,
+  type SortState,
+} from '../components/SortableTable';
 
 type Overview = {
   ordersToday: number;
@@ -56,6 +62,17 @@ type SkuDailyResp = {
 };
 
 type Client = { id: number; name: string };
+type AnalysisPageSortKey =
+  | 'item'
+  | 'sku'
+  | 'client'
+  | 'orders'
+  | 'pending'
+  | 'extShipped'
+  | 'qty'
+  | 'standard'
+  | 'expedited'
+  | 'shipping';
 
 const LINE_COLORS = [
   '#2a5bd7',
@@ -107,6 +124,7 @@ export default function Analysis() {
   const [dateTo, setDateTo] = useState(toDateInput(isoEndOfToday()));
   const [search, setSearch] = useState('');
   const [clientFilter, setClientFilter] = useState<string>('');
+  const [sortState, setSortState] = useState<SortState<AnalysisPageSortKey>>(null);
 
   const setRange = (id: typeof RANGES[number]['id']) => {
     setActiveRange(id);
@@ -160,8 +178,43 @@ export default function Analysis() {
         (r.name ?? '').toLowerCase().includes(q)
     );
   }, [breakdown.data, search]);
+  const sortedFiltered = useMemo(
+    () =>
+      sortRows(
+        filtered,
+        sortState,
+        (row, key) => {
+          switch (key) {
+            case 'item':
+              return row.name;
+            case 'sku':
+              return row.sku;
+            case 'client':
+              return row.client_id == null ? '' : clientsById.get(row.client_id);
+            case 'orders':
+              return row.orders;
+            case 'pending':
+              return row.pending;
+            case 'extShipped':
+              return row.ext_shipped;
+            case 'qty':
+              return row.total_qty;
+            case 'standard':
+              return row.std_orders;
+            case 'expedited':
+              return row.exp_orders;
+            case 'shipping':
+              return Number(row.total_shipping);
+            default:
+              return '';
+          }
+        },
+        (row) => row.sku
+      ),
+    [clientsById, filtered, sortState]
+  );
 
-  const maxQty = Math.max(1, ...filtered.map((r) => r.total_qty));
+  const maxQty = Math.max(1, ...sortedFiltered.map((r) => r.total_qty));
 
   return (
     <>
@@ -316,20 +369,20 @@ export default function Analysis() {
               <table className="w-full text-sm2 border-collapse min-w-[1200px]">
                 <thead className="bg-surface-2">
                   <tr>
-                    <Th>Item Name</Th>
-                    <Th className="w-[160px]">SKU</Th>
-                    <Th className="w-[150px]">Client</Th>
-                    <Th className="text-right w-[80px]">Orders</Th>
-                    <Th className="text-right w-[90px]">Pending</Th>
-                    <Th className="text-right w-[100px]">Ext. Shipped</Th>
-                    <Th className="text-right w-[160px]">Total Qty</Th>
-                    <Th className="text-right w-[120px]">Std Orders</Th>
-                    <Th className="text-right w-[120px]">Exp Orders</Th>
-                    <Th className="text-right w-[120px]">Total Shipping</Th>
+                    <SortableHeader sortKey="item" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="text-left px-2 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Item Name</SortableHeader>
+                    <SortableHeader sortKey="sku" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="w-[160px] text-left px-2 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">SKU</SortableHeader>
+                    <SortableHeader sortKey="client" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="w-[150px] text-left px-2 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Client</SortableHeader>
+                    <SortableHeader sortKey="orders" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="text-right w-[80px] px-2 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Orders</SortableHeader>
+                    <SortableHeader sortKey="pending" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="text-right w-[90px] px-2 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Pending</SortableHeader>
+                    <SortableHeader sortKey="extShipped" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="text-right w-[100px] px-2 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Ext. Shipped</SortableHeader>
+                    <SortableHeader sortKey="qty" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="text-right w-[160px] px-2 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Total Qty</SortableHeader>
+                    <SortableHeader sortKey="standard" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="text-right w-[120px] px-2 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Std Orders</SortableHeader>
+                    <SortableHeader sortKey="expedited" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="text-right w-[120px] px-2 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Exp Orders</SortableHeader>
+                    <SortableHeader sortKey="shipping" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="text-right w-[120px] px-2 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Total Shipping</SortableHeader>
                   </tr>
                 </thead>
                 <tbody>
-                  {filtered.map((r, i) => (
+                  {sortedFiltered.map((r, i) => (
                     <tr
                       key={`${r.sku}-${r.client_id ?? 'none'}`}
                       className={`border-b border-line ${i % 2 === 1 ? 'bg-surface-2' : 'bg-white'}`}

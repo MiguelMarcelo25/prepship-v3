@@ -38,6 +38,7 @@ import {
 } from './billing-parity'
 import { AnalysisPagination } from './AnalysisPagination'
 import OrderDetailDrawer from '../OrderDetailDrawer'
+import { SortableHeader, nextSortState, sortRows } from '../SortableTable'
 import './BillingView.css'
 
 interface BillingDetailState {
@@ -86,6 +87,10 @@ export default function BillingView() {
   const [from, setFrom] = useState(initialRange.from)
   const [to, setTo] = useState(initialRange.to)
   const [summaryRows, setSummaryRows] = useState<BillingSummaryDto[]>([])
+  const [configSort, setConfigSort] = useState(null)
+  const [packagePricingSort, setPackagePricingSort] = useState(null)
+  const [summarySort, setSummarySort] = useState(null)
+  const [detailSort, setDetailSort] = useState(null)
   const [summaryPage, setSummaryPage] = useState(1)
   const [summaryPageSize, setSummaryPageSize] = useState(25)
   const [summaryLoading, setSummaryLoading] = useState(true)
@@ -115,22 +120,148 @@ export default function BillingView() {
     () => buildBillingPackagePriceRows(packages, savedPackagePrices, packagePriceDrafts),
     [packages, savedPackagePrices, packagePriceDrafts],
   )
+  const sortedConfigs = useMemo(() => sortRows(
+    configs,
+    configSort,
+    (config, key) => {
+      const draft = configDrafts[config.clientId]
+
+      switch (key) {
+        case 'client':
+          return config.clientName
+        case 'pickPack':
+          return Number(draft?.pickPackFee ?? config.pickPackFee ?? 0)
+        case 'additional':
+          return Number(draft?.additionalUnitFee ?? config.additionalUnitFee ?? 0)
+        case 'packageMarkup':
+          return Number(draft?.packageCostMarkup ?? config.packageCostMarkup ?? 0)
+        case 'shipPct':
+          return Number(draft?.shippingMarkupPct ?? config.shippingMarkupPct ?? 0)
+        case 'shipFlat':
+          return Number(draft?.shippingMarkupFlat ?? config.shippingMarkupFlat ?? 0)
+        case 'storage':
+          return Number(draft?.storageFeePerCuFt ?? config.storageFeePerCuFt ?? 0)
+        case 'maxUnits':
+          return Number(draft?.pickPackMaxUnits ?? config.pickPackMaxUnits ?? 0)
+        case 'mode':
+          return draft?.billingMode ?? config.billingMode ?? ''
+        case 'active':
+          return draft?.active ?? config.active ?? true
+        default:
+          return ''
+      }
+    },
+    (config) => config.clientName,
+  ), [configDrafts, configSort, configs])
+  const sortedPackagePricingRows = useMemo(() => sortRows(
+    packagePricingRows,
+    packagePricingSort,
+    (row, key) => {
+      switch (key) {
+        case 'box':
+          return row.name
+        case 'dims':
+          return row.dimsText
+        case 'cost':
+          return row.ourCost
+        case 'charge':
+          return Number(packagePriceDrafts[row.packageId] ?? row.charge ?? 0)
+        case 'margin':
+          return row.marginPct
+        default:
+          return ''
+      }
+    },
+    (row) => row.name,
+  ), [packagePriceDrafts, packagePricingRows, packagePricingSort])
+  const sortedSummaryRows = useMemo(() => sortRows(
+    summaryRows,
+    summarySort,
+    (row, key) => {
+      switch (key) {
+        case 'client':
+          return row.clientName
+        case 'orders':
+          return row.orderCount
+        case 'pickPack':
+          return row.pickPackTotal
+        case 'additional':
+          return row.additionalTotal
+        case 'package':
+          return row.packageTotal
+        case 'storage':
+          return row.storageTotal
+        case 'shipping':
+          return row.shippingTotal
+        case 'total':
+          return row.grandTotal
+        default:
+          return ''
+      }
+    },
+    (row) => row.clientName,
+  ), [summaryRows, summarySort])
 
   const summaryTotals = useMemo(() => buildBillingSummaryTotals(summaryRows), [summaryRows])
   const visibleDetailColumns = useMemo(() => getVisibleBillingDetailColumns(detailColumnIds), [detailColumnIds])
-  const summaryPageCount = Math.max(1, Math.ceil(summaryRows.length / summaryPageSize))
+  const sortedDetailRows = useMemo(() => sortRows(
+    detailState.rows,
+    detailSort,
+    (row, key) => {
+      const metrics = computeBillingDetailMetrics(row)
+
+      switch (key) {
+        case 'orderNumber':
+          return row.orderNumber || row.orderId
+        case 'shipDate':
+          return row.shipDate ? new Date(row.shipDate) : null
+        case 'carrierNickname':
+          return row.carrierNickname || row.providerAccountNickname || row.carrier_nickname || row.provider_account_nickname || row.carrierCode || row.carrier_code || ''
+        case 'itemNames':
+          return row.itemNames || row.description
+        case 'itemSkus':
+          return row.itemSkus
+        case 'totalQty':
+          return row.totalQty || row.qty
+        case 'pickpack':
+          return metrics.pickPack
+        case 'additional':
+          return metrics.additional
+        case 'packageCost':
+          return metrics.packageCost
+        case 'packageName':
+          return row.packageName
+        case 'bestRate':
+          return row.actualLabelCost
+        case 'upsss':
+          return row.ref_ups_rate
+        case 'uspsss':
+          return row.ref_usps_rate
+        case 'shipping':
+          return metrics.shipping
+        case 'total':
+          return metrics.total
+        case 'margin':
+          return metrics.margin
+        default:
+          return ''
+      }
+    },
+    (row) => row.orderNumber || row.id,
+  ), [detailSort, detailState.rows])
+  const summaryPageCount = Math.max(1, Math.ceil(sortedSummaryRows.length / summaryPageSize))
   const currentSummaryPage = Math.min(Math.max(summaryPage, 1), summaryPageCount)
   const pagedSummaryRows = useMemo(() => {
     const start = (currentSummaryPage - 1) * summaryPageSize
-    return summaryRows.slice(start, start + summaryPageSize)
-  }, [currentSummaryPage, summaryPageSize, summaryRows])
-  const detailPageCount = Math.max(1, Math.ceil(detailState.rows.length / detailPageSize))
+    return sortedSummaryRows.slice(start, start + summaryPageSize)
+  }, [currentSummaryPage, sortedSummaryRows, summaryPageSize])
+  const detailPageCount = Math.max(1, Math.ceil(sortedDetailRows.length / detailPageSize))
   const currentDetailPage = Math.min(Math.max(detailPage, 1), detailPageCount)
   const detailRowOffset = (currentDetailPage - 1) * detailPageSize
   const pagedDetailRows = useMemo(() => {
     const start = (currentDetailPage - 1) * detailPageSize
-    return detailState.rows.slice(start, start + detailPageSize)
-  }, [currentDetailPage, detailPageSize, detailState.rows])
+    return sortedDetailRows.slice(start, start + detailPageSize)
+  }, [currentDetailPage, detailPageSize, sortedDetailRows])
   const detailTotals = useMemo(() => {
     return detailState.rows.reduce((acc, row) => {
       const metrics = computeBillingDetailMetrics(row)
@@ -161,14 +292,40 @@ export default function BillingView() {
   }, [from, to])
 
   useEffect(() => {
-    const maxPage = Math.max(1, Math.ceil(summaryRows.length / summaryPageSize))
+    const maxPage = Math.max(1, Math.ceil(sortedSummaryRows.length / summaryPageSize))
     setSummaryPage((current) => Math.min(current, maxPage))
-  }, [summaryRows.length, summaryPageSize])
+  }, [sortedSummaryRows.length, summaryPageSize])
 
   useEffect(() => {
-    const maxPage = Math.max(1, Math.ceil(detailState.rows.length / detailPageSize))
+    const maxPage = Math.max(1, Math.ceil(sortedDetailRows.length / detailPageSize))
     setDetailPage((current) => Math.min(current, maxPage))
-  }, [detailState.rows.length, detailPageSize])
+  }, [sortedDetailRows.length, detailPageSize])
+
+  useEffect(() => {
+    setSummaryPage(1)
+  }, [summarySort])
+
+  useEffect(() => {
+    setDetailPage(1)
+  }, [detailSort])
+
+  function handleConfigSort(key: string) {
+    setConfigSort((current) => nextSortState(current, key))
+  }
+
+  function handlePackagePricingSort(key: string) {
+    setPackagePricingSort((current) => nextSortState(current, key))
+  }
+
+  function handleSummarySort(key: string) {
+    setSummaryPage(1)
+    setSummarySort((current) => nextSortState(current, key))
+  }
+
+  function handleDetailSort(key: BillingDetailColumnId) {
+    setDetailPage(1)
+    setDetailSort((current) => nextSortState(current, key))
+  }
 
   useEffect(() => {
     let active = true
@@ -483,25 +640,25 @@ export default function BillingView() {
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
               <thead>
                 <tr style={{ background: 'var(--surface2)', borderBottom: '2px solid var(--border)' }}>
-                  <th style={{ padding: '5px 8px', textAlign: 'left', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Client</th>
-                  <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Pick&amp;Pack</th>
-                  <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Addl Unit</th>
-                  <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }} title="Markup applied to package cost line items (percent on top of the base package price)">Pkg %</th>
-                  <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Ship %</th>
-                  <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Ship $</th>
-                  <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }} title="Storage fee in dollars per cubic-foot per month (applied to on-hand inventory)">Storage $/cuft</th>
-                  <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }} title="Max units included in the Pick & Pack base fee — orders at or below this count pay only pickPackFee; excess units are billed at additionalUnitFee">Max Units</th>
-                  <th style={{ padding: '5px 8px', textAlign: 'center', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Mode</th>
-                  <th style={{ padding: '5px 8px', textAlign: 'center', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }} title="Disable billing for this client (line items won't be generated)">Active</th>
+                  <SortableHeader sortKey="client" sortState={configSort} onSort={handleConfigSort} style={{ padding: '5px 8px', textAlign: 'left', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Client</SortableHeader>
+                  <SortableHeader sortKey="pickPack" sortState={configSort} onSort={handleConfigSort} align="right" style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Pick&amp;Pack</SortableHeader>
+                  <SortableHeader sortKey="additional" sortState={configSort} onSort={handleConfigSort} align="right" style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Addl Unit</SortableHeader>
+                  <SortableHeader sortKey="packageMarkup" sortState={configSort} onSort={handleConfigSort} align="right" style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }} title="Markup applied to package cost line items (percent on top of the base package price)">Pkg %</SortableHeader>
+                  <SortableHeader sortKey="shipPct" sortState={configSort} onSort={handleConfigSort} align="right" style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Ship %</SortableHeader>
+                  <SortableHeader sortKey="shipFlat" sortState={configSort} onSort={handleConfigSort} align="right" style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Ship $</SortableHeader>
+                  <SortableHeader sortKey="storage" sortState={configSort} onSort={handleConfigSort} align="right" style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }} title="Storage fee in dollars per cubic-foot per month (applied to on-hand inventory)">Storage $/cuft</SortableHeader>
+                  <SortableHeader sortKey="maxUnits" sortState={configSort} onSort={handleConfigSort} align="right" style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }} title="Max units included in the Pick & Pack base fee — orders at or below this count pay only pickPackFee; excess units are billed at additionalUnitFee">Max Units</SortableHeader>
+                  <SortableHeader sortKey="mode" sortState={configSort} onSort={handleConfigSort} align="center" style={{ padding: '5px 8px', textAlign: 'center', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Mode</SortableHeader>
+                  <SortableHeader sortKey="active" sortState={configSort} onSort={handleConfigSort} align="center" style={{ padding: '5px 8px', textAlign: 'center', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }} title="Disable billing for this client (line items won't be generated)">Active</SortableHeader>
                   <th style={{ padding: '5px 4px', textAlign: 'center', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)' }} />
                 </tr>
               </thead>
               <tbody>
                 {configsLoading ? (
                   <tr><td colSpan={11} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>Loading…</td></tr>
-                ) : configs.length === 0 ? (
+                ) : sortedConfigs.length === 0 ? (
                   <tr><td colSpan={11} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No clients found.</td></tr>
-                ) : configs.map((config) => {
+                ) : sortedConfigs.map((config) => {
                   const draft = configDrafts[config.clientId]
 
                   return (
@@ -666,21 +823,21 @@ export default function BillingView() {
               <div style={{ padding: 16, textAlign: 'center', color: 'var(--text3)', fontSize: 12 }}>Loading…</div>
             ) : packagePricingError ? (
               <div style={{ padding: 16, textAlign: 'center', color: 'var(--red)', fontSize: 12 }}>{packagePricingError}</div>
-            ) : packagePricingRows.length === 0 ? (
+            ) : sortedPackagePricingRows.length === 0 ? (
               <div style={{ padding: 24, textAlign: 'center', color: 'var(--text3)', fontSize: 12 }}>No custom packages found</div>
             ) : (
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead>
                   <tr style={{ background: 'var(--surface2)', borderBottom: '2px solid var(--border)' }}>
-                    <th style={{ padding: '5px 8px', textAlign: 'left', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px', whiteSpace: 'nowrap' }}>Box</th>
-                    <th style={{ padding: '5px 8px', textAlign: 'center', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px', whiteSpace: 'nowrap' }}>Dims</th>
-                    <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px', whiteSpace: 'nowrap' }}>Our Cost</th>
-                    <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px', whiteSpace: 'nowrap' }}>Charge</th>
-                    <th style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px', whiteSpace: 'nowrap' }}>Margin</th>
+                    <SortableHeader sortKey="box" sortState={packagePricingSort} onSort={handlePackagePricingSort} style={{ padding: '5px 8px', textAlign: 'left', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px', whiteSpace: 'nowrap' }}>Box</SortableHeader>
+                    <SortableHeader sortKey="dims" sortState={packagePricingSort} onSort={handlePackagePricingSort} align="center" style={{ padding: '5px 8px', textAlign: 'center', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px', whiteSpace: 'nowrap' }}>Dims</SortableHeader>
+                    <SortableHeader sortKey="cost" sortState={packagePricingSort} onSort={handlePackagePricingSort} align="right" style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px', whiteSpace: 'nowrap' }}>Our Cost</SortableHeader>
+                    <SortableHeader sortKey="charge" sortState={packagePricingSort} onSort={handlePackagePricingSort} align="right" style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px', whiteSpace: 'nowrap' }}>Charge</SortableHeader>
+                    <SortableHeader sortKey="margin" sortState={packagePricingSort} onSort={handlePackagePricingSort} align="right" style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px', whiteSpace: 'nowrap' }}>Margin</SortableHeader>
                   </tr>
                 </thead>
                 <tbody>
-                  {packagePricingRows.map((row) => (
+                  {sortedPackagePricingRows.map((row) => (
                     <tr key={row.packageId} style={{ borderBottom: '1px solid var(--border)' }}>
                       <td style={{ padding: '5px 8px', fontWeight: 600, fontSize: 12 }}>
                         {row.name}
@@ -781,14 +938,14 @@ export default function BillingView() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
             <thead>
               <tr style={{ background: 'var(--surface2)', borderBottom: '2px solid var(--border)' }}>
-                <th style={{ padding: '7px 10px', textAlign: 'left', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Client</th>
-                <th style={{ padding: '7px 10px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Orders</th>
-                <th style={{ padding: '7px 10px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Pick &amp; Pack</th>
-                <th style={{ padding: '7px 10px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Addl Units</th>
-                <th style={{ padding: '7px 10px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Box Cost</th>
-                <th style={{ padding: '7px 10px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Storage</th>
-                <th style={{ padding: '7px 10px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Shipping</th>
-                <th style={{ padding: '7px 10px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Total</th>
+                <SortableHeader sortKey="client" sortState={summarySort} onSort={handleSummarySort} style={{ padding: '7px 10px', textAlign: 'left', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Client</SortableHeader>
+                <SortableHeader sortKey="orders" sortState={summarySort} onSort={handleSummarySort} align="right" style={{ padding: '7px 10px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Orders</SortableHeader>
+                <SortableHeader sortKey="pickPack" sortState={summarySort} onSort={handleSummarySort} align="right" style={{ padding: '7px 10px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Pick &amp; Pack</SortableHeader>
+                <SortableHeader sortKey="additional" sortState={summarySort} onSort={handleSummarySort} align="right" style={{ padding: '7px 10px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Addl Units</SortableHeader>
+                <SortableHeader sortKey="package" sortState={summarySort} onSort={handleSummarySort} align="right" style={{ padding: '7px 10px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Box Cost</SortableHeader>
+                <SortableHeader sortKey="storage" sortState={summarySort} onSort={handleSummarySort} align="right" style={{ padding: '7px 10px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Storage</SortableHeader>
+                <SortableHeader sortKey="shipping" sortState={summarySort} onSort={handleSummarySort} align="right" style={{ padding: '7px 10px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Shipping</SortableHeader>
+                <SortableHeader sortKey="total" sortState={summarySort} onSort={handleSummarySort} align="right" style={{ padding: '7px 10px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Total</SortableHeader>
               </tr>
             </thead>
             <tbody>
@@ -796,7 +953,7 @@ export default function BillingView() {
                 <tr><td colSpan={SUMMARY_COL_COUNT} style={{ padding: 20, textAlign: 'center', color: 'var(--text3)' }}>Loading…</td></tr>
               ) : summaryError ? (
                 <tr><td colSpan={SUMMARY_COL_COUNT} style={{ padding: 24, textAlign: 'center', color: 'var(--red)' }}>{summaryError}</td></tr>
-              ) : summaryRows.length === 0 ? (
+              ) : sortedSummaryRows.length === 0 ? (
                 <tr><td colSpan={SUMMARY_COL_COUNT} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No billing data. Generate invoices first.</td></tr>
               ) : (
                 <>
@@ -887,8 +1044,12 @@ export default function BillingView() {
                 <thead>
                   <tr>
                     {visibleDetailColumns.map((column) => (
-                      <th
+                      <SortableHeader
                         key={column.id}
+                        sortKey={column.id}
+                        sortState={detailSort}
+                        onSort={handleDetailSort}
+                        align={column.align}
                         style={{
                           fontSize: 10,
                           fontWeight: 700,
@@ -902,7 +1063,7 @@ export default function BillingView() {
                         }}
                       >
                         {column.label}
-                      </th>
+                      </SortableHeader>
                     ))}
                   </tr>
                 </thead>

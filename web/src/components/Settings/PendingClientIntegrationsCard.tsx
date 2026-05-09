@@ -1,8 +1,9 @@
 // @ts-nocheck
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { callVercelFunction } from '../../lib/vercelFunction'
 import { api } from '../../lib/api'
 import { formatCaDateShort, formatCaTimeOnly } from '../../lib/ca-time'
+import { SortableHeader, nextSortState, sortRows } from '../SortableTable'
 
 interface PendingIntegration {
   id: number
@@ -28,6 +29,30 @@ export function PendingClientIntegrationsCard() {
   const [state, setState] = useState<{ kind: 'idle' | 'loading' | 'error'; message?: string }>({ kind: 'idle' })
   const [removing, setRemoving] = useState<Record<number, boolean>>({})
   const [actionError, setActionError] = useState<string | null>(null)
+  const [sortState, setSortState] = useState(null)
+  const sortedItems = useMemo(() => sortRows(
+    items,
+    sortState,
+    (item, key) => {
+      switch (key) {
+        case 'provider':
+          return item.provider
+        case 'label':
+          return item.label
+        case 'client':
+          return item.clientId
+        case 'account':
+          return item.accountIdentifier
+        case 'source':
+          return item.source
+        case 'submitted':
+          return item.createdAt ? new Date(item.createdAt) : null
+        default:
+          return ''
+      }
+    },
+    (item) => item.id,
+  ), [items, sortState])
 
   const refresh = async () => {
     setState({ kind: 'loading' })
@@ -152,17 +177,17 @@ export function PendingClientIntegrationsCard() {
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
           <thead>
             <tr style={{ background: 'var(--surface2)', borderBottom: '1px solid var(--border)' }}>
-              <th style={th}>Provider</th>
-              <th style={th}>Label</th>
-              <th style={th}>Client</th>
-              <th style={th}>Account ID</th>
-              <th style={th}>Source</th>
-              <th style={{ ...th, textAlign: 'right' }}>Submitted</th>
+              <SortableHeader sortKey="provider" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} style={th}>Provider</SortableHeader>
+              <SortableHeader sortKey="label" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} style={th}>Label</SortableHeader>
+              <SortableHeader sortKey="client" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} style={th}>Client</SortableHeader>
+              <SortableHeader sortKey="account" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} style={th}>Account ID</SortableHeader>
+              <SortableHeader sortKey="source" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} style={th}>Source</SortableHeader>
+              <SortableHeader sortKey="submitted" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" style={{ ...th, textAlign: 'right' }}>Submitted</SortableHeader>
               <th style={{ ...th, textAlign: 'right' }}>Action</th>
             </tr>
           </thead>
           <tbody>
-            {items.map((item) => (
+            {sortedItems.map((item) => (
               <tr key={item.id} style={{ borderBottom: '1px solid var(--border)' }}>
                 <td style={td}><b>{item.provider.toUpperCase()}</b></td>
                 <td style={td}>{item.label ?? <span style={{ color: 'var(--text3)' }}>—</span>}</td>

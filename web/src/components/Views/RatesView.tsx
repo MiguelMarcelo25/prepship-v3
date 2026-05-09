@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useContext, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useContext, useMemo, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   DollarSign,
@@ -17,6 +17,7 @@ import { apiClient } from '../../api/client'
 import { ToastContext } from '../../contexts/ToastContext'
 // Shared carrier badge — official UPS/USPS SVG logos with fallback pills.
 import CarrierBadge from '../CarrierBadge'
+import { SortableHeader, nextSortState, sortRows } from '../SortableTable'
 import { useShippingAccounts } from '../../hooks'
 import type { DirectCarrierRateError } from '../../lib/v2-apiClient'
 import {
@@ -93,12 +94,42 @@ export default function RatesView() {
   const toastContext = useContext(ToastContext)
   const [form, setForm] = useState<RatesFormState>(DEFAULT_FORM)
   const [resultState, setResultState] = useState<RatesResultState>({ kind: 'idle' })
+  const [rateSort, setRateSort] = useState(null)
   const { accounts: shippingAccounts, isLoading: accountsLoading } = useShippingAccounts()
 
   const markupValue = parseRatesNumber(form.markup)
   const rows = resultState.kind === 'table'
     ? buildRateRows(resultState.rates, markupValue, shippingAccounts)
     : []
+  const sortedRows = useMemo(() => sortRows(
+    rows,
+    rateSort,
+    (row, key) => {
+      switch (key) {
+        case 'carrier':
+          return row.carrierCode
+        case 'account':
+          return row.carrierNickname
+        case 'source':
+          return `${row.rateSourceLabel} ${row.rateSourceDetail ?? ''}`
+        case 'service':
+          return row.serviceLabel
+        case 'base':
+          return row.baseCost
+        case 'price':
+          return row.yourPrice
+        case 'profit':
+          return row.profit
+        default:
+          return ''
+      }
+    },
+    (row) => `${row.carrierCode}-${row.carrierNickname ?? ''}-${row.serviceLabel}`,
+  ), [rateSort, rows])
+
+  const handleRateSort = (key) => {
+    setRateSort((current) => nextSortState(current, key, ['base', 'price', 'profit'].includes(key) ? 'asc' : 'asc'))
+  }
 
   async function fetchRates() {
     const validation = getRatesValidationState(form)
@@ -416,18 +447,18 @@ export default function RatesView() {
                 <table className="rates-table w-full text-[12.5px]">
                   <thead>
                     <tr className="bg-page/50 text-ink-3">
-                      <th className="text-left px-3 py-2 font-bold uppercase tracking-wider text-2xs">Carrier</th>
-                      <th className="text-left px-3 py-2 font-bold uppercase tracking-wider text-2xs">Account</th>
-                      <th className="text-left px-3 py-2 font-bold uppercase tracking-wider text-2xs">Rate Source</th>
-                      <th className="text-left px-3 py-2 font-bold uppercase tracking-wider text-2xs">Service</th>
-                      <th className="text-right px-3 py-2 font-bold uppercase tracking-wider text-2xs">Base</th>
-                      <th className="text-right px-3 py-2 font-bold uppercase tracking-wider text-2xs">Your Price</th>
-                      <th className="text-right px-3 py-2 font-bold uppercase tracking-wider text-2xs">Profit</th>
+                      <SortableHeader sortKey="carrier" sortState={rateSort} onSort={handleRateSort} className="text-left px-3 py-2 font-bold uppercase tracking-wider text-2xs">Carrier</SortableHeader>
+                      <SortableHeader sortKey="account" sortState={rateSort} onSort={handleRateSort} className="text-left px-3 py-2 font-bold uppercase tracking-wider text-2xs">Account</SortableHeader>
+                      <SortableHeader sortKey="source" sortState={rateSort} onSort={handleRateSort} className="text-left px-3 py-2 font-bold uppercase tracking-wider text-2xs">Rate Source</SortableHeader>
+                      <SortableHeader sortKey="service" sortState={rateSort} onSort={handleRateSort} className="text-left px-3 py-2 font-bold uppercase tracking-wider text-2xs">Service</SortableHeader>
+                      <SortableHeader sortKey="base" sortState={rateSort} onSort={handleRateSort} align="right" className="text-right px-3 py-2 font-bold uppercase tracking-wider text-2xs">Base</SortableHeader>
+                      <SortableHeader sortKey="price" sortState={rateSort} onSort={handleRateSort} align="right" className="text-right px-3 py-2 font-bold uppercase tracking-wider text-2xs">Your Price</SortableHeader>
+                      <SortableHeader sortKey="profit" sortState={rateSort} onSort={handleRateSort} align="right" className="text-right px-3 py-2 font-bold uppercase tracking-wider text-2xs">Profit</SortableHeader>
                       <th className="px-3 py-2" />
                     </tr>
                   </thead>
                   <tbody>
-                    {rows.map((row, idx) => (
+                    {sortedRows.map((row, idx) => (
                       <motion.tr
                         key={`${row.rate.carrierCode}-${row.rate.shippingProviderId ?? 'na'}-${row.rate.serviceCode}`}
                         initial={{ opacity: 0, y: 4 }}

@@ -5,6 +5,12 @@ import { ArrowLeft, Package as PackageIcon, Printer } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Select } from '../components/ui/Select';
 import { api, qs } from '../lib/api';
+import {
+  SortableHeader,
+  nextSortState,
+  sortRows,
+  type SortState,
+} from '../components/SortableTable';
 
 type SkuRow = {
   client_id: number | null;
@@ -22,6 +28,8 @@ type PicklistResponse = {
   totalUnits: number;
 };
 
+type PicklistSortKey = 'sku' | 'item' | 'qty' | 'orders';
+
 const STATUS_OPTIONS = [
   { value: 'awaiting_shipment', label: 'Awaiting Shipment' },
   { value: 'on_hold', label: 'On Hold' },
@@ -35,6 +43,7 @@ export default function Picklist() {
   const clientId = clientIdParam ? Number(clientIdParam) : undefined;
 
   const [printedAt] = useState(() => new Date());
+  const [sortState, setSortState] = useState<SortState<PicklistSortKey>>(null);
 
   const queryString = useMemo(
     () => qs({ status, clientId }),
@@ -61,8 +70,31 @@ export default function Picklist() {
       arr.push(r);
       map.set(key, arr);
     }
-    return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [data]);
+    return [...map.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([name, rows]) => [
+        name,
+        sortRows(
+          rows,
+          sortState,
+          (row, key) => {
+            switch (key) {
+              case 'sku':
+                return row.sku;
+              case 'item':
+                return row.name;
+              case 'qty':
+                return row.total_qty;
+              case 'orders':
+                return row.order_count;
+              default:
+                return '';
+            }
+          },
+          (row) => row.sku
+        ),
+      ] as [string, SkuRow[]]);
+  }, [data, sortState]);
 
   return (
     <div className="h-full w-full flex flex-col bg-white print:bg-white">
@@ -162,10 +194,10 @@ export default function Picklist() {
                   <thead>
                     <tr className="bg-surface-2 print:bg-white print:border-b print:border-line-2">
                       <Th className="w-[42px]"></Th>
-                      <Th className="w-[160px]">SKU</Th>
-                      <Th>Item</Th>
-                      <Th className="text-right w-[80px]">Qty</Th>
-                      <Th className="text-right w-[80px]">Orders</Th>
+                      <SortableHeader sortKey="sku" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="w-[160px] text-left px-2 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line whitespace-nowrap">SKU</SortableHeader>
+                      <SortableHeader sortKey="item" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="text-left px-2 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line whitespace-nowrap">Item</SortableHeader>
+                      <SortableHeader sortKey="qty" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="text-right w-[80px] px-2 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line whitespace-nowrap">Qty</SortableHeader>
+                      <SortableHeader sortKey="orders" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="text-right w-[80px] px-2 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line whitespace-nowrap">Orders</SortableHeader>
                       <Th className="w-[60px]">Picked</Th>
                     </tr>
                   </thead>

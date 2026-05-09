@@ -15,6 +15,12 @@ import { Select } from '../components/ui/Select';
 import { Button } from '../components/ui/Button';
 import { Skeleton } from '../components/ui/Skeleton';
 import { api, qs, type Paginated } from '../lib/api';
+import {
+  SortableHeader,
+  nextSortState,
+  sortRows,
+  type SortState,
+} from '../components/SortableTable';
 
 const InventoryDrawer = lazy(() => import('../components/InventoryDrawer'));
 const NewInventoryModal = lazy(() => import('../components/NewInventoryModal'));
@@ -36,6 +42,7 @@ type Item = {
 };
 
 type Client = { id: number; name: string };
+type InventoryPageSortKey = 'sku' | 'name' | 'weight' | 'dims' | 'cuFt' | 'stock' | 'min' | 'status';
 
 function formatWeight(oz: number | null) {
   if (oz === null || oz <= 0) return '—';
@@ -88,6 +95,7 @@ export default function Inventory() {
   const [clientFilter, setClientFilter] = useState<string>('');
   const [page, setPage] = useState(1);
   const [creating, setCreating] = useState(false);
+  const [sortState, setSortState] = useState<SortState<InventoryPageSortKey>>(null);
   const pageSize = 200;
   const openId = id ? Number(id) : null;
 
@@ -156,8 +164,39 @@ export default function Inventory() {
       arr.push(it);
       map.set(key, arr);
     }
-    return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [rows, clientsById]);
+    return [...map.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([clientName, clientItems]) => [
+        clientName,
+        sortRows(
+          clientItems,
+          sortState,
+          (item, key) => {
+            switch (key) {
+              case 'sku':
+                return item.sku;
+              case 'name':
+                return item.name;
+              case 'weight':
+                return item.weightOz;
+              case 'dims':
+                return (item.length ?? 0) * (item.width ?? 0) * (item.height ?? 0);
+              case 'cuFt':
+                return cuFtPerUnit(item.length, item.width, item.height);
+              case 'stock':
+                return item.stockQty;
+              case 'min':
+                return item.reorderLevel;
+              case 'status':
+                return item.stockQty <= 0 ? 0 : item.stockQty <= item.reorderLevel ? 1 : 2;
+              default:
+                return '';
+            }
+          },
+          (item) => item.sku
+        ),
+      ] as [string, Item[]]);
+  }, [rows, clientsById, sortState]);
 
   return (
     <>
@@ -277,15 +316,15 @@ export default function Inventory() {
                 <table className="w-full text-sm2 border-collapse min-w-[1100px]">
                   <thead>
                     <tr className="bg-surface-2 border-b border-line">
-                      <Th className="w-[140px]">SKU</Th>
+                      <SortableHeader sortKey="sku" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="w-[140px] text-left px-2 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">SKU</SortableHeader>
                       <Th className="w-[44px]"></Th>
-                      <Th>Name</Th>
-                      <Th className="text-right w-[110px]">Weight</Th>
-                      <Th className="text-center w-[110px]">Dims (L×W×H)</Th>
-                      <Th className="text-center w-[90px]">Cu Ft/Unit</Th>
-                      <Th className="text-center w-[80px]">Stock</Th>
-                      <Th className="text-center w-[60px]">Min</Th>
-                      <Th className="text-center w-[70px]">Status</Th>
+                      <SortableHeader sortKey="name" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="text-left px-2 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Name</SortableHeader>
+                      <SortableHeader sortKey="weight" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="text-right w-[110px] px-2 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Weight</SortableHeader>
+                      <SortableHeader sortKey="dims" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="center" className="text-center w-[110px] px-2 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Dims (LxWxH)</SortableHeader>
+                      <SortableHeader sortKey="cuFt" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="center" className="text-center w-[90px] px-2 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Cu Ft/Unit</SortableHeader>
+                      <SortableHeader sortKey="stock" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="center" className="text-center w-[80px] px-2 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Stock</SortableHeader>
+                      <SortableHeader sortKey="min" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="center" className="text-center w-[60px] px-2 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Min</SortableHeader>
+                      <SortableHeader sortKey="status" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="center" className="text-center w-[70px] px-2 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Status</SortableHeader>
                       <Th className="text-right w-[70px]"></Th>
                     </tr>
                   </thead>

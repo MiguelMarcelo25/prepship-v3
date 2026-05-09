@@ -6,6 +6,12 @@ import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Card, Field } from '../components/ui/Card';
 import { api, qs } from '../lib/api';
+import {
+  SortableHeader,
+  nextSortState,
+  sortRows,
+  type SortState,
+} from '../components/SortableTable';
 
 type Client = { id: number; name: string; active: boolean };
 
@@ -36,6 +42,8 @@ type GenerateResult = {
   message: string;
 };
 
+type BillingSummarySortKey = 'client' | 'lines' | 'pickPack' | 'shipping' | 'total';
+
 function startOfMonthIso(d = new Date()) {
   const s = new Date(d.getFullYear(), d.getMonth(), 1);
   return s.toISOString();
@@ -58,6 +66,7 @@ export default function Billing() {
   const queryClient = useQueryClient();
   const [dateFrom, setDateFrom] = useState(toDateInput(startOfMonthIso()));
   const [dateTo, setDateTo] = useState(toDateInput(endOfMonthIso()));
+  const [summarySort, setSummarySort] = useState<SortState<BillingSummarySortKey>>(null);
 
   const clients = useQuery({
     queryKey: ['clients'],
@@ -105,6 +114,31 @@ export default function Billing() {
     for (const c of clients.data ?? []) m.set(c.id, c);
     return m;
   }, [clients.data]);
+  const sortedSummaryClients = useMemo(
+    () =>
+      sortRows(
+        summary.data?.clients ?? [],
+        summarySort,
+        (row, key) => {
+          switch (key) {
+            case 'client':
+              return clientById.get(row.clientId)?.name ?? `Client #${row.clientId}`;
+            case 'lines':
+              return row.count;
+            case 'pickPack':
+              return row.byType.pick_pack ?? 0;
+            case 'shipping':
+              return row.byType.shipping ?? 0;
+            case 'total':
+              return row.total;
+            default:
+              return '';
+          }
+        },
+        (row) => row.clientId
+      ),
+    [clientById, summary.data?.clients, summarySort]
+  );
 
   return (
     <>
@@ -186,15 +220,15 @@ export default function Billing() {
             <table className="w-full text-sm2 border-collapse">
               <thead className="bg-surface-2">
                 <tr>
-                  <Th>Client</Th>
-                  <Th className="text-right">Lines</Th>
-                  <Th className="text-right">Pick/pack</Th>
-                  <Th className="text-right">Shipping</Th>
-                  <Th className="text-right">Total</Th>
+                  <SortableHeader sortKey="client" sortState={summarySort} onSort={(key) => setSummarySort((current) => nextSortState(current, key))} className="text-left px-3 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Client</SortableHeader>
+                  <SortableHeader sortKey="lines" sortState={summarySort} onSort={(key) => setSummarySort((current) => nextSortState(current, key))} align="right" className="text-right px-3 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Lines</SortableHeader>
+                  <SortableHeader sortKey="pickPack" sortState={summarySort} onSort={(key) => setSummarySort((current) => nextSortState(current, key))} align="right" className="text-right px-3 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Pick/pack</SortableHeader>
+                  <SortableHeader sortKey="shipping" sortState={summarySort} onSort={(key) => setSummarySort((current) => nextSortState(current, key))} align="right" className="text-right px-3 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Shipping</SortableHeader>
+                  <SortableHeader sortKey="total" sortState={summarySort} onSort={(key) => setSummarySort((current) => nextSortState(current, key))} align="right" className="text-right px-3 py-1.5 text-[10.5px] font-bold uppercase tracking-[0.4px] text-ink-3 border-b-2 border-line bg-surface-2 whitespace-nowrap">Total</SortableHeader>
                 </tr>
               </thead>
               <tbody>
-                {summary.data.clients.map((c) => (
+                {sortedSummaryClients.map((c) => (
                   <tr key={c.clientId} className="border-b border-line">
                     <Td>
                       <span className="font-semibold">

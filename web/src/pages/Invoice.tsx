@@ -6,6 +6,12 @@ import { Button } from '../components/ui/Button';
 import { Input } from '../components/ui/Input';
 import { Select } from '../components/ui/Select';
 import { api, qs } from '../lib/api';
+import {
+  SortableHeader,
+  nextSortState,
+  sortRows,
+  type SortState,
+} from '../components/SortableTable';
 
 type LineItem = {
   id: number;
@@ -27,6 +33,16 @@ type Client = {
   email: string | null;
   phone: string | null;
 };
+
+type InvoiceSummarySortKey = 'category' | 'amount';
+type InvoiceLineSortKey =
+  | 'date'
+  | 'order'
+  | 'type'
+  | 'description'
+  | 'qty'
+  | 'unit'
+  | 'total';
 
 function fmtMoney(s: string | number) {
   const n = Number(s);
@@ -58,6 +74,8 @@ export default function Invoice() {
   const dateTo = searchParams.get('dateTo') ?? toDateInput(endOfMonthIso());
 
   const [issuedAt] = useState(() => new Date());
+  const [summarySort, setSummarySort] = useState<SortState<InvoiceSummarySortKey>>(null);
+  const [lineSort, setLineSort] = useState<SortState<InvoiceLineSortKey>>(null);
 
   const update = (k: string, v: string) => {
     const next = new URLSearchParams(searchParams);
@@ -92,10 +110,48 @@ export default function Invoice() {
 
   const lines = details.data?.data ?? [];
   const grand = lines.reduce((s, l) => s + Number(l.totalCost), 0);
-  const byType = lines.reduce<Record<string, number>>((acc, l) => {
-    acc[l.lineType] = (acc[l.lineType] ?? 0) + Number(l.totalCost);
-    return acc;
-  }, {});
+  const summaryRows = useMemo(() => {
+    const byType = lines.reduce<Record<string, number>>((acc, l) => {
+      acc[l.lineType] = (acc[l.lineType] ?? 0) + Number(l.totalCost);
+      return acc;
+    }, {});
+
+    return sortRows(
+      Object.entries(byType).map(([type, amount]) => ({ type, amount })),
+      summarySort,
+      (row, key) => (key === 'amount' ? row.amount : row.type),
+      (row) => row.type
+    );
+  }, [lines, summarySort]);
+  const sortedLines = useMemo(
+    () =>
+      sortRows(
+        lines,
+        lineSort,
+        (line, key) => {
+          switch (key) {
+            case 'date':
+              return line.shipDate ? new Date(line.shipDate) : null;
+            case 'order':
+              return line.orderNumber ?? line.orderId;
+            case 'type':
+              return line.lineType;
+            case 'description':
+              return line.description;
+            case 'qty':
+              return Number(line.qty);
+            case 'unit':
+              return Number(line.unitCost);
+            case 'total':
+              return Number(line.totalCost);
+            default:
+              return '';
+          }
+        },
+        (line) => line.id
+      ),
+    [lineSort, lines]
+  );
 
   return (
     <div className="h-full w-full flex flex-col bg-white">
@@ -198,26 +254,26 @@ export default function Invoice() {
               </div>
 
               {/* Summary by type */}
-              {Object.keys(byType).length > 0 && (
+              {summaryRows.length > 0 && (
                 <table className="w-full text-sm2 border-collapse mb-4">
                   <thead>
                     <tr className="border-b border-ink">
-                      <th className="text-left py-1.5 text-tiny font-bold uppercase tracking-wide text-ink-3">
+                      <SortableHeader sortKey="category" sortState={summarySort} onSort={(key) => setSummarySort((current) => nextSortState(current, key))} className="text-left py-1.5 text-tiny font-bold uppercase tracking-wide text-ink-3">
                         Category
-                      </th>
-                      <th className="text-right py-1.5 text-tiny font-bold uppercase tracking-wide text-ink-3">
+                      </SortableHeader>
+                      <SortableHeader sortKey="amount" sortState={summarySort} onSort={(key) => setSummarySort((current) => nextSortState(current, key))} align="right" className="text-right py-1.5 text-tiny font-bold uppercase tracking-wide text-ink-3">
                         Amount
-                      </th>
+                      </SortableHeader>
                     </tr>
                   </thead>
                   <tbody>
-                    {Object.entries(byType).map(([type, amt]) => (
-                      <tr key={type} className="border-b border-line">
+                    {summaryRows.map((row) => (
+                      <tr key={row.type} className="border-b border-line">
                         <td className="py-1.5 capitalize">
-                          {type.replace(/_/g, ' ')}
+                          {row.type.replace(/_/g, ' ')}
                         </td>
                         <td className="py-1.5 text-right font-mono">
-                          {fmtMoney(amt)}
+                          {fmtMoney(row.amount)}
                         </td>
                       </tr>
                     ))}
@@ -236,27 +292,27 @@ export default function Invoice() {
               <table className="w-full text-tiny border-collapse">
                 <thead className="border-b border-ink">
                   <tr>
-                    <th className="text-left py-1.5 font-bold uppercase tracking-wide text-ink-3">
+                    <SortableHeader sortKey="date" sortState={lineSort} onSort={(key) => setLineSort((current) => nextSortState(current, key))} className="text-left py-1.5 font-bold uppercase tracking-wide text-ink-3">
                       Date
-                    </th>
-                    <th className="text-left py-1.5 font-bold uppercase tracking-wide text-ink-3">
+                    </SortableHeader>
+                    <SortableHeader sortKey="order" sortState={lineSort} onSort={(key) => setLineSort((current) => nextSortState(current, key))} className="text-left py-1.5 font-bold uppercase tracking-wide text-ink-3">
                       Order
-                    </th>
-                    <th className="text-left py-1.5 font-bold uppercase tracking-wide text-ink-3">
+                    </SortableHeader>
+                    <SortableHeader sortKey="type" sortState={lineSort} onSort={(key) => setLineSort((current) => nextSortState(current, key))} className="text-left py-1.5 font-bold uppercase tracking-wide text-ink-3">
                       Type
-                    </th>
-                    <th className="text-left py-1.5 font-bold uppercase tracking-wide text-ink-3">
+                    </SortableHeader>
+                    <SortableHeader sortKey="description" sortState={lineSort} onSort={(key) => setLineSort((current) => nextSortState(current, key))} className="text-left py-1.5 font-bold uppercase tracking-wide text-ink-3">
                       Description
-                    </th>
-                    <th className="text-right py-1.5 font-bold uppercase tracking-wide text-ink-3">
+                    </SortableHeader>
+                    <SortableHeader sortKey="qty" sortState={lineSort} onSort={(key) => setLineSort((current) => nextSortState(current, key))} align="right" className="text-right py-1.5 font-bold uppercase tracking-wide text-ink-3">
                       Qty
-                    </th>
-                    <th className="text-right py-1.5 font-bold uppercase tracking-wide text-ink-3">
+                    </SortableHeader>
+                    <SortableHeader sortKey="unit" sortState={lineSort} onSort={(key) => setLineSort((current) => nextSortState(current, key))} align="right" className="text-right py-1.5 font-bold uppercase tracking-wide text-ink-3">
                       Unit
-                    </th>
-                    <th className="text-right py-1.5 font-bold uppercase tracking-wide text-ink-3">
+                    </SortableHeader>
+                    <SortableHeader sortKey="total" sortState={lineSort} onSort={(key) => setLineSort((current) => nextSortState(current, key))} align="right" className="text-right py-1.5 font-bold uppercase tracking-wide text-ink-3">
                       Total
-                    </th>
+                    </SortableHeader>
                   </tr>
                 </thead>
                 <tbody>
@@ -268,7 +324,7 @@ export default function Invoice() {
                       </td>
                     </tr>
                   )}
-                  {lines.map((l) => (
+                  {sortedLines.map((l) => (
                     <tr key={l.id} className="border-b border-line">
                       <td className="py-1 text-ink-2 whitespace-nowrap">
                         {l.shipDate
