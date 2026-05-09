@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
@@ -1455,7 +1456,19 @@ export function CarrierIntegrationsCard() {
         {/* Assign-clients popover — anchored modal-style overlay.
             AnimatePresence handles enter/exit; backdrop click +
             Cancel button + Escape (via input handlers) all close it.
-            Renders ALL clients with checkboxes; saves on click. */}
+            Renders ALL clients with checkboxes; saves on click.
+
+            CRITICAL: rendered through createPortal to document.body
+            so position: fixed actually anchors to the viewport. The
+            parent <motion.li> has whileHover={{ y: -1 }}, which
+            applies a transform to the row. Any ancestor with
+            transform makes position: fixed re-anchor to that
+            ancestor (well-known CSS quirk dating to the original
+            CSS Transforms spec) — without the portal, the modal
+            slides off-screen on hover and the Save Assignments
+            button ends up unreachable. The portal escapes the
+            transformed ancestor entirely. */}
+        {createPortal(
         <AnimatePresence>
           {assignOpenForId === d.id ? (
             <motion.div
@@ -1686,7 +1699,9 @@ export function CarrierIntegrationsCard() {
               </motion.div>
             </motion.div>
           ) : null}
-        </AnimatePresence>
+        </AnimatePresence>,
+        document.body,
+        )}
         {result ? (
           <div style={{
             fontSize: 11,

@@ -2094,14 +2094,32 @@ export default function OrdersView({
   // narrow viewports — same data, same layout, just swipe-able.
   // The previous mobile-trim-to-4-columns approach hid too much info
   // for operators who use phones in the warehouse.
+  //
+  // Width fallback chain (defensive — was the source of a thead/tbody
+  // misalignment bug 2026-05-09):
+  //   1. resolvedColumnPrefs.widths[key]   — user's resized width
+  //   2. base.width                         — TABLE_COLUMNS default
+  //   3. 80                                 — last-resort sane minimum
+  // The previous code did `width: resolvedColumnPrefs.widths[key]`
+  // with no fallback, so any missing pref key produced
+  // `width: undefined`. With table-layout: fixed + a <colgroup>,
+  // an undefined col width meant the browser auto-distributed for
+  // that column while the <th> still had an explicit width — making
+  // header and body misalign.
   const visibleColumns = useMemo(
     () => resolvedColumnPrefs.orderedColumns
       .filter((column) => !resolvedColumnPrefs.hiddenColumns.has(column.key))
-      .map((column) => (
-        column.key === 'bestrate' && currentStatus !== 'awaiting_shipment'
-          ? { ...TABLE_COLUMNS.find((candidate) => candidate.key === column.key)!, label: 'Selected Rate', width: resolvedColumnPrefs.widths[column.key] }
-          : { ...TABLE_COLUMNS.find((candidate) => candidate.key === column.key)!, width: resolvedColumnPrefs.widths[column.key] }
-      )),
+      .map((column) => {
+        const base = TABLE_COLUMNS.find((candidate) => candidate.key === column.key)!
+        const storedWidth = resolvedColumnPrefs.widths[column.key]
+        const safeWidth = (typeof storedWidth === 'number' && storedWidth > 0)
+          ? storedWidth
+          : (base.width || 80)
+        const label = column.key === 'bestrate' && currentStatus !== 'awaiting_shipment'
+          ? 'Selected Rate'
+          : base.label
+        return { ...base, label, width: safeWidth }
+      }),
     [currentStatus, resolvedColumnPrefs],
   )
   const tableWidth = useMemo(
@@ -7859,6 +7877,10 @@ export default function OrdersView({
                               <td
                                 key={column.key}
                                 data-col={column.key}
+                                // See twin <td> below — explicit width
+                                // mirrors colgroup + thead so browsers can't
+                                // drift body content out of column alignment.
+                                style={{ width: column.width, maxWidth: column.width }}
                                 title={column.key === 'select' ? 'Use checkbox for multi-select' : 'Select only this order and view details'}
                               >
                                 {renderTableCell(order, column)}
@@ -7899,6 +7921,17 @@ export default function OrdersView({
                             <td
                               key={column.key}
                               data-col={column.key}
+                              // Explicit width on the body cell mirrors the
+                              // colgroup + thead width so browsers never
+                              // misalign header vs body — even when an inner
+                              // cell renderer (e.g. cell-itemname's
+                              // maxWidth: column.width + 90 hover-preview
+                              // trick) tries to grow content past the
+                              // declared cell width. With table-layout:
+                              // fixed the colgroup wins anyway, but the
+                              // explicit td width is a belt-and-braces
+                              // guard for subpixel rendering edge cases.
+                              style={{ width: column.width, maxWidth: column.width }}
                               title={column.key === 'select' ? 'Use checkbox for multi-select' : 'Select only this order and view details'}
                             >
                               {renderTableCell(order, column)}
