@@ -140,6 +140,7 @@ const CARRIER_NAMES: Record<string, string> = {
   amazon_swa: 'Amazon',
   amazon_shipping: 'Amazon',
   ebay_shipping: 'eBay',
+  ehub: 'eHub',
   easypost: 'EasyPost',
   globegistics: 'Globegistics',
   walmart_shipping: 'Walmart',
@@ -148,6 +149,7 @@ const CARRIER_NAMES: Record<string, string> = {
 const DIRECT_PROVIDER_LABELS: Record<string, string> = {
   amazon_shipping: 'Amazon Shipping',
   ebay_shipping: 'eBay Shipping',
+  ehub: 'eHub',
   easypost: 'EasyPost',
   fedex: 'FedEx Direct',
   simulator: 'Simulator',

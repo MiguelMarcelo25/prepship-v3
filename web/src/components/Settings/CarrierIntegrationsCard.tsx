@@ -12,6 +12,7 @@ import { formatCaDateShort } from '../../lib/ca-time'
 type ProviderKey =
   | 'simulator'
   | 'shipengine'
+  | 'ehub'
   | 'ups'
   | 'usps'
   | 'fedex'
@@ -62,6 +63,8 @@ interface ProviderDef {
   domain: string
   /** simpleicons.org slug, when the brand has a SVG entry there. */
   simpleIconsSlug?: string
+  /** Exact logo asset to try before CDN/favicon fallbacks. */
+  logoUrl?: string
   fields: CredentialField[]
   /** 'store' = marketplace order source (Walmart, Amazon). 'carrier' = real
    *  shipping carrier (UPS, USPS, FedEx, DHL, etc.). Drives which Settings
@@ -245,6 +248,34 @@ const PROVIDER_DEFS: ProviderDef[] = [
     fields: [
       { name: 'apiKey', label: 'API Key', type: 'password', placeholder: 'TEST_xxxxxxxx or live_xxxxxxxx' },
       { name: 'carrierIds', label: 'Carrier IDs (optional)', required: false, placeholder: 'se-123890, se-456789', hint: 'Leave blank to rate with every connected ShipEngine carrier returned by /v1/carriers.' },
+      { name: 'shipFromName', label: 'Ship-From Name (optional)', required: false, placeholder: 'DR Prepper Warehouse' },
+      { name: 'shipFromAddress1', label: 'Ship-From Street (optional)', required: false, placeholder: '1234 Warehouse Way' },
+      { name: 'shipFromCity', label: 'Ship-From City (optional)', required: false, placeholder: 'Carson' },
+      { name: 'shipFromState', label: 'Ship-From State (optional)', required: false, placeholder: 'CA' },
+      { name: 'shipFromZip', label: 'Ship-From Zip (optional)', required: false, placeholder: '90248' },
+      { name: 'shipFromPhone', label: 'Ship-From Phone (optional)', required: false, placeholder: '5551234567' },
+    ],
+  },
+  {
+    key: 'ehub',
+    category: 'carrier',
+    label: 'eHub',
+    blurb: 'eHub shipping API for rate shopping and label workflows. Add the API token and base URL from the eHub portal; live rates need eHub API endpoint access before quotes can be returned.',
+    badge: 'eHub',
+    badgeColor: '#F47B20',
+    setupTier: 2,
+    credentialsUrl: 'https://docs.ehub.com/',
+    domain: 'ehub.com',
+    logoUrl: 'https://knowledge.ehub.com/hs-fs/hubfs/eHub-Logo-FullColor-May-15-2024-07-27-43-6708-PM.png',
+    fields: [
+      {
+        name: 'apiKey',
+        label: 'API Key / Token',
+        type: 'password',
+        hint: 'Paste the API credential from the eHub docs/API Explorer token area. Live verification and rates require the exact eHub API base URL and rate endpoint contract.',
+      },
+      { name: 'baseUrl', label: 'API Base URL (optional)', required: false, placeholder: 'https://api.ehub.com' },
+      { name: 'accountId', label: 'Account ID (optional)', required: false },
       { name: 'shipFromName', label: 'Ship-From Name (optional)', required: false, placeholder: 'DR Prepper Warehouse' },
       { name: 'shipFromAddress1', label: 'Ship-From Street (optional)', required: false, placeholder: '1234 Warehouse Way' },
       { name: 'shipFromCity', label: 'Ship-From City (optional)', required: false, placeholder: 'Carson' },
@@ -595,6 +626,7 @@ const PROVIDER_DEFS: ProviderDef[] = [
 //                          serve some brands as of late 2024)
 function ProviderLogo({ provider, size }: { provider: ProviderDef; size: number }) {
   const sources: string[] = []
+  if (provider.logoUrl) sources.push(provider.logoUrl)
   if (provider.simpleIconsSlug) {
     sources.push(`https://cdn.simpleicons.org/${provider.simpleIconsSlug}/${provider.badgeColor.replace('#', '')}`)
   }

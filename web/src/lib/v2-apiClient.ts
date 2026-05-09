@@ -704,6 +704,9 @@ function directCarrierErrorMessage(provider: string, message: string): string {
       return 'eBay Shipping needs an eBay OAuth refresh token that includes the sell.logistics scope.';
     }
   }
+  if (providerKey === 'ehub') {
+    return 'eHub is in Settings now, but live rates need the eHub API base URL and rate endpoint docs before quotes can be returned.';
+  }
   return message;
 }
 

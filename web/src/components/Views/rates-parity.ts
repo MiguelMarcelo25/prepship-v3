@@ -125,6 +125,7 @@ export function getCarrierLabel(rate: RateDto): string {
   if (carrierCode.includes('fedex')) return 'FedEx'
   if (carrierCode.includes('dhl')) return 'DHL'
   if (carrierCode.includes('walmart')) return 'Walmart'
+  if (carrierCode.includes('ehub')) return 'eHub'
   if (carrierCode.includes('easypost')) return 'EasyPost'
   if (carrierCode.includes('amazon')) return 'Amazon'
   if (carrierCode.includes('ebay')) return 'eBay'
@@ -198,6 +199,7 @@ function findRateSourceAccount(rate: RateDto, accounts: RateSourceAccount[]): Ra
 const DIRECT_PROVIDER_LABELS: Record<string, string> = {
   amazon_shipping: 'Amazon Shipping',
   ebay_shipping: 'eBay Shipping',
+  ehub: 'eHub',
   easypost: 'EasyPost',
   fedex: 'FedEx Direct',
   gls: 'GLS Direct',

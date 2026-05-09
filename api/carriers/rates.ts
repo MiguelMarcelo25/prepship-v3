@@ -1972,6 +1972,19 @@ export default async function handler(req: any, res: any): Promise<void> {
       return;
     }
 
+    if (provider === 'ehub') {
+      res.status(200).json({
+        ok: false,
+        provider,
+        error: 'eHub is available in Settings, but the live rate quoter still needs the eHub API base URL and rate endpoint contract from the eHub docs/API Explorer.',
+        meta: {
+          hasApiKey: typeof creds?.apiKey === 'string' && creds.apiKey.trim().length > 0,
+          hasBaseUrl: typeof creds?.baseUrl === 'string' && creds.baseUrl.trim().length > 0,
+        },
+      });
+      return;
+    }
+
     // Real-carrier rate quoters slot in here as they get implemented:
     //   case 'dhl_express': return ratesFromDhl(creds, body)
     res.status(200).json({

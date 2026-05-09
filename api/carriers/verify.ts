@@ -82,6 +82,7 @@ type ProviderType =
   | 'simulator'
   | 'shipstation'
   | 'shipengine'
+  | 'ehub'
   | 'ups'
   | 'usps'
   | 'fedex'
@@ -187,6 +188,25 @@ const verifyShipEngine: Verifier = async (creds) => {
 };
 
 // ───────── UPS (OAuth 2.0 client_credentials) ─────────
+// eHub: credential capture is ready, but we need the account's private API
+// docs/API Explorer details before making a live verification call.
+const verifyEhub: Verifier = async (creds) => {
+  const apiKey = String(creds?.apiKey ?? '').trim();
+  const baseUrl = String(creds?.baseUrl ?? '').trim();
+  if (!apiKey) return { ok: false, error: 'apiKey is required' };
+  return {
+    ok: false,
+    accountIdentifier: baseUrl ? baseUrl.replace(/^https?:\/\//, '').replace(/\/+$/, '') : 'ehub',
+    accountLabel: 'eHub',
+    error: 'eHub credentials are saved, but live verification needs the exact API base URL plus the verification/rates endpoint contract from eHub docs/API Explorer.',
+    meta: {
+      hasApiKey: true,
+      hasBaseUrl: Boolean(baseUrl),
+      nextStep: 'Open eHub docs/API Explorer with the account token and confirm the base URL, auth header format, and rate endpoint path.',
+    },
+  };
+};
+
 const verifyUps: Verifier = async (creds) => {
   const accountNumber = String(creds?.accountNumber ?? '').trim();
   const clientId = String(creds?.clientId ?? '').trim();
@@ -801,6 +821,7 @@ const verifyEbayShipping: Verifier = (creds) =>
 
 const STUBBED_NOTES: Record<string, string> = {
   shipstation: 'Already integrated via /api/rates/multi.ts.',
+  ehub: 'eHub credential capture is available in Settings, but live verification needs the eHub API base URL and verification endpoint from the private eHub docs/API Explorer.',
 };
 
 const VERIFIERS: Partial<Record<ProviderType, Verifier>> = {
@@ -817,6 +838,7 @@ const VERIFIERS: Partial<Record<ProviderType, Verifier>> = {
   // endpoint at /api/carriers/ebay/ship).
   ebay_shipping: verifyEbayShipping,
   shipengine: verifyShipEngine,
+  ehub: verifyEhub,
   easypost: verifyEasyPost,
   ups: verifyUps,
   fedex: verifyFedEx,
