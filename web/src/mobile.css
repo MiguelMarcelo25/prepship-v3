@@ -20,26 +20,27 @@
   }
 
   /* ── Backdrop when sidebar is open ────────────────────────────────────── *
-   * Sits BELOW the sidebar in the stacking order and is mostly opaque,
-   * so when the drawer is open the page underneath is fully obscured
-   * (no peek-through, no overlap with sidebar text) AND clicks on the
-   * sidebar register correctly.
+   * Stacking order on mobile when the drawer is open:
+   *   page content (sticky table header z=100, dropdowns z=100, etc.)
+   *   ↑
+   *   .mobile-sidebar-backdrop  z = 599
+   *   ↑
+   *   aside (sidebar variant)   z = 600  (forced via override below)
    *
-   * z-index is intentionally 30 (below Tailwind's `z-40` used by every
-   * sidebar variant). The legacy `.sidebar-backdrop` z=599 was paired
-   * with a legacy `.sidebar { z=600 }`, but the new variants only use
-   * Tailwind `z-40` — at z=599 the backdrop ended up ON TOP of the
-   * sidebar and swallowed every tap inside the drawer.
+   * Both drawer layers MUST be above the page's max z-index (100) so
+   * the sticky table header doesn't punch through and overlap the
+   * sidebar contents. Sidebar must be above its own backdrop so taps
+   * inside the drawer register (the backdrop's onClick closes the menu).
    *
    * No backdrop-filter on purpose (see commit 8934ce4): operators
-   * glance at the visible page sliver to confirm context, and a
-   * blurred sliver defeats the check. Bonus: skipping backdrop-filter
-   * avoids a GPU compositing pass on every scroll on older iPhones. */
+   * glance at the visible edge to confirm context, and a blurred
+   * sliver defeats the check. Bonus: skipping backdrop-filter avoids
+   * a GPU compositing pass on every scroll on older iPhones. */
   .mobile-sidebar-backdrop {
     position: fixed;
     inset: 0;
     background: rgba(8, 12, 24, 0.88);
-    z-index: 30;
+    z-index: 599;
     animation: mobileFadeIn 180ms ease-out;
   }
   @keyframes mobileFadeIn {
@@ -85,10 +86,20 @@
    *    a root <aside class="fixed ... z-40 ..."> at 252–260 px wide.
    *    On a 393 px iPhone that leaves ~140 px of visible page strip;
    *    bumping to 88 vw (≤ 340 px) shrinks the strip to ~50 px AND
-   *    keeps a tap-area for closing the drawer. */
+   *    keeps a tap-area for closing the drawer.
+   *
+   *    z-index override (CRITICAL): Tailwind's `z-40` (z-index: 40)
+   *    on the variants is BELOW the page's sticky table-header
+   *    (z-index: 100 from .orders-table thead). Without this override,
+   *    the sticky 'ORDER # / ITEM NAME / BEST RATE' header punches
+   *    through the open drawer. Lift the sidebar to z=600 so it sits
+   *    above all page chrome. Backdrop above is z=599, so the
+   *    sidebar-on-top-of-backdrop hierarchy needed for click-through
+   *    is preserved (600 > 599 > 100). */
   aside.fixed.z-40 {
     width: 88vw !important;
     max-width: 340px !important;
+    z-index: 600 !important;
     box-shadow: 4px 0 28px rgba(0, 0, 0, 0.35);
   }
 
