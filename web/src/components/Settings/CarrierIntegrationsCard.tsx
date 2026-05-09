@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { useEffect, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { AnimatePresence, motion } from 'framer-motion'
 import { callVercelFunction } from '../../lib/vercelFunction'
 import { formatCaDateShort } from '../../lib/ca-time'
 
@@ -1232,7 +1233,7 @@ export function CarrierIntegrationsCard() {
           padding: '7px 14px',
           border: 'none',
           borderRadius: 4,
-          background: 'var(--green)',
+          background: 'rgb(var(--brand-rgb, 42 91 215))',
           color: '#fff',
           fontSize: 12,
           fontWeight: 700,
@@ -1316,10 +1317,16 @@ export function CarrierIntegrationsCard() {
       )}
 
 
+      <AnimatePresence>
       {modalOpen ? (
-        <div
+        <motion.div
+          key="addModalBackdrop"
           role="dialog"
           aria-modal="true"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.18 }}
           onClick={(e) => {
             if (e.target === e.currentTarget) {
               setModalOpen(false)
@@ -1329,7 +1336,11 @@ export function CarrierIntegrationsCard() {
           style={{
             position: 'fixed',
             inset: 0,
-            background: 'rgba(0,0,0,0.4)',
+            // Slightly darker tint + backdrop blur so the modal pops
+            // off the page instead of feeling like a flat overlay.
+            background: 'rgba(15, 23, 42, 0.55)',
+            backdropFilter: 'blur(6px)',
+            WebkitBackdropFilter: 'blur(6px)',
             zIndex: 9999,
             display: 'flex',
             alignItems: 'center',
@@ -1337,16 +1348,28 @@ export function CarrierIntegrationsCard() {
             padding: 24,
           }}
         >
-          <div style={{
-            background: 'var(--surface)',
-            border: '1px solid var(--border)',
-            borderRadius: 8,
-            width: '100%',
-            maxWidth: 760,
-            maxHeight: '88vh',
-            overflow: 'auto',
-            boxShadow: '0 12px 40px rgba(0,0,0,0.25)',
-          }}>
+          <motion.div
+            key="addModalPanel"
+            initial={{ opacity: 0, y: 16, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 12, scale: 0.97 }}
+            transition={{ type: 'spring', stiffness: 360, damping: 28 }}
+            style={{
+              background: 'var(--surface)',
+              border: '1px solid var(--border)',
+              borderRadius: 12,
+              width: '100%',
+              maxWidth: 760,
+              maxHeight: '88vh',
+              overflow: 'auto',
+              // Stronger shadow + soft brand glow on the top edge —
+              // matches the "Calm Command Center" tone of the new
+              // settings page; the modal feels like a deliberate
+              // elevation, not a basic dialog.
+              boxShadow:
+                '0 20px 60px -12px rgba(15, 23, 42, 0.35), 0 8px 24px -8px rgba(15, 23, 42, 0.18), inset 0 1px 0 0 rgba(255, 255, 255, 0.6)',
+            }}
+          >
             <div style={{
               padding: '14px 18px',
               borderBottom: '1px solid var(--border)',
@@ -1617,7 +1640,7 @@ export function CarrierIntegrationsCard() {
                           padding: '7px 14px',
                           border: 'none',
                           borderRadius: 3,
-                          background: 'var(--green)',
+                          background: 'rgb(var(--brand-rgb, 42 91 215))',
                           color: '#fff',
                           fontSize: 12,
                           fontWeight: 700,
@@ -1652,9 +1675,10 @@ export function CarrierIntegrationsCard() {
                 )
               })()}
             </div>
-          </div>
-        </div>
+          </motion.div>
+        </motion.div>
       ) : null}
+      </AnimatePresence>
 
       {submitState.kind === 'success' ? (
         <div style={{
