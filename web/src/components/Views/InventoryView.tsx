@@ -400,14 +400,33 @@ function positionThumbnailPreview(cursorX: number, cursorY: number) {
 interface InventoryViewProps {
   searchQuery?: string
   onOpenOrder?: (orderId: number, status?: string | null) => void
+  /**
+   * Optional initial tab. Defaults to 'stock'. When set, the user can
+   * still freely switch tabs (unless hideTabs is true).
+   * Used by ClientsView so the top-level /clients route lands directly
+   * on the Clients tab.
+   */
+  initialTab?: InventoryTab | 'alerts' | 'parents'
+  /**
+   * When true the inventory tab strip is suppressed AND the page
+   * header reads from `viewTitle` instead of "Inventory". The action
+   * buttons (Import SKUs, Bulk Edit, Refresh, etc.) are also hidden
+   * since they're irrelevant to a single-tab embed. Used by ClientsView.
+   */
+  hideTabs?: boolean
+  /**
+   * Optional title override shown next to the box icon when
+   * hideTabs is true. Defaults to 'Inventory'.
+   */
+  viewTitle?: string
 }
 
-export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) {
+export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewTitle }: InventoryViewProps = {}) {
   const toastContext = useContext(ToastContext)
   const { stores } = useInitStores()
   const historyDefaults = useMemo(() => getInventoryDateRangePreset(), [])
   // Extend InventoryTab union locally to include ported v2 tabs (alerts, parents)
-  const [activeTab, setActiveTab] = useState<InventoryTab | 'alerts' | 'parents'>('stock')
+  const [activeTab, setActiveTab] = useState<InventoryTab | 'alerts' | 'parents'>(initialTab ?? 'stock')
   const [clients, setClients] = useState<ClientDto[]>([])
   const [packages, setPackages] = useState<PackageDto[]>([])
   const [items, setItems] = useState<InventoryItemDto[]>([])
@@ -1417,28 +1436,35 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
           <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-sky-500 to-sky-600 flex items-center justify-center shadow-md ring-1 ring-sky-400/20">
             <Boxes size={20} strokeWidth={2.25} className="text-white" />
           </div>
-          <h2 className="text-[16px] font-extrabold text-ink font-display tracking-tight m-0">Inventory</h2>
+          <h2 className="text-[16px] font-extrabold text-ink font-display tracking-tight m-0">{viewTitle ?? 'Inventory'}</h2>
         </div>
-        <div style={{ display: 'flex', gap: 3 }}>
-          {([
-            ['stock', 'Stock Levels'],
-            ['receive', 'Receive'],
-            ['alerts', alerts.length > 0 ? `Alerts (${alerts.length})` : 'Alerts'],
-            ['parents', 'Parent SKUs'],
-            ['clients', 'Clients'],
-            ['history', 'History'],
-          ] as Array<[InventoryTab | 'alerts' | 'parents', string]>).map(([tab, label]) => (
-            <button
-              key={tab}
-              type="button"
-              className={`inv-tab${activeTab === tab ? ' active' : ''}`}
-              onClick={() => setActiveTab(tab)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        {alerts.length > 0 ? (
+        {!hideTabs ? (
+          <div style={{ display: 'flex', gap: 3 }}>
+            {([
+              // 'clients' was removed from this tab strip on 2026-05-10:
+              // Clients are now a top-level sidebar destination (/clients)
+              // that mounts InventoryView with initialTab="clients"
+              // hideTabs={true}. Keeping the tab here would have given
+              // operators two paths to the same data, with the embedded
+              // one looking like it lived under Inventory — confusing.
+              ['stock', 'Stock Levels'],
+              ['receive', 'Receive'],
+              ['alerts', alerts.length > 0 ? `Alerts (${alerts.length})` : 'Alerts'],
+              ['parents', 'Parent SKUs'],
+              ['history', 'History'],
+            ] as Array<[InventoryTab | 'alerts' | 'parents', string]>).map(([tab, label]) => (
+              <button
+                key={tab}
+                type="button"
+                className={`inv-tab${activeTab === tab ? ' active' : ''}`}
+                onClick={() => setActiveTab(tab)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        {!hideTabs && alerts.length > 0 ? (
           <button
             type="button"
             onClick={() => {
@@ -1451,38 +1477,42 @@ export default function InventoryView({ onOpenOrder }: InventoryViewProps = {}) 
           </button>
         ) : null}
         <div style={{ flex: 1 }} />
-        <button className="btn btn-outline btn-sm" type="button" onClick={handlePopulateInventory}>📥 Import SKUs from Orders</button>
-        <button className="btn btn-outline btn-sm" type="button" onClick={handleImportDims} title="Pull weight & dims from ShipStation product catalog into inventory SKUs">📐 Import Dims from SS</button>
-        <button
-          className="btn btn-outline btn-sm"
-          type="button"
-          onClick={() => {
-            if (bulkEditMode) {
-              setBulkEditMode(false)
-              return
-            }
-            initializeBulkDrafts()
-            setBulkEditMode(true)
-          }}
-          style={bulkEditMode ? { background: 'var(--ss-blue)', color: '#fff', borderColor: 'var(--ss-blue)' } : undefined}
-        >
-          {bulkEditMode ? '✕ Exit Bulk' : '✏️ Bulk Edit'}
-        </button>
-        <button
-          className="btn btn-outline btn-sm"
-          type="button"
-          onClick={() => void handlePurgeTestData()}
-          disabled={purgeBusy}
-          title="Delete every order, shipment, inventory SKU, and ledger entry that belongs to a client flagged is_test=true. Does NOT touch real clients."
-          style={{
-            color: 'var(--red, #dc2626)',
-            borderColor: 'var(--red, #dc2626)',
-            opacity: purgeBusy ? 0.6 : 1,
-            cursor: purgeBusy ? 'wait' : 'pointer',
-          }}
-        >
-          {purgeBusy ? '🧹 Purging…' : '🧹 Purge Test Data'}
-        </button>
+        {!hideTabs ? (
+          <>
+            <button className="btn btn-outline btn-sm" type="button" onClick={handlePopulateInventory}>📥 Import SKUs from Orders</button>
+            <button className="btn btn-outline btn-sm" type="button" onClick={handleImportDims} title="Pull weight & dims from ShipStation product catalog into inventory SKUs">📐 Import Dims from SS</button>
+            <button
+              className="btn btn-outline btn-sm"
+              type="button"
+              onClick={() => {
+                if (bulkEditMode) {
+                  setBulkEditMode(false)
+                  return
+                }
+                initializeBulkDrafts()
+                setBulkEditMode(true)
+              }}
+              style={bulkEditMode ? { background: 'var(--ss-blue)', color: '#fff', borderColor: 'var(--ss-blue)' } : undefined}
+            >
+              {bulkEditMode ? '✕ Exit Bulk' : '✏️ Bulk Edit'}
+            </button>
+            <button
+              className="btn btn-outline btn-sm"
+              type="button"
+              onClick={() => void handlePurgeTestData()}
+              disabled={purgeBusy}
+              title="Delete every order, shipment, inventory SKU, and ledger entry that belongs to a client flagged is_test=true. Does NOT touch real clients."
+              style={{
+                color: 'var(--red, #dc2626)',
+                borderColor: 'var(--red, #dc2626)',
+                opacity: purgeBusy ? 0.6 : 1,
+                cursor: purgeBusy ? 'wait' : 'pointer',
+              }}
+            >
+              {purgeBusy ? '🧹 Purging…' : '🧹 Purge Test Data'}
+            </button>
+          </>
+        ) : null}
         <button className="btn btn-outline btn-sm" type="button" onClick={() => void refreshInventoryView()}>↻ Refresh</button>
       </motion.div>
 

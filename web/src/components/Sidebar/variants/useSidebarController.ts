@@ -14,6 +14,7 @@ export type SidebarViewType =
   | 'orders'
   | 'dashboard'
   | 'inventory'
+  | 'clients'
   | 'locations'
   | 'packages'
   | 'rates'

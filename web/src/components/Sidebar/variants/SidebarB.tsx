@@ -21,6 +21,7 @@ import {
   Truck,
   Ban,
   Zap,
+  Users,
 } from 'lucide-react'
 import { useSidebarController, type SidebarVariantProps, type SidebarViewType } from './useSidebarController'
 
@@ -35,6 +36,7 @@ const STATUS_THEME = {
 const TOOL_ITEMS: Array<{ view: SidebarViewType; Icon: any; label: string; hint: string }> = [
   { view: 'dashboard', Icon: Sparkles,    label: 'Dashboard',  hint: 'Live overview' },
   { view: 'inventory', Icon: Boxes,        label: 'Inventory',  hint: 'Stock & SKUs' },
+  { view: 'clients',   Icon: Users,         label: 'Clients',    hint: 'Brands & stores' },
   { view: 'locations', Icon: Building2,    label: 'Locations',  hint: 'Warehouses' },
   { view: 'packages',  Icon: PackageOpen,  label: 'Packages',   hint: 'Box library' },
   { view: 'rates',     Icon: Wallet,       label: 'Rate Shop',  hint: 'Compare carriers' },

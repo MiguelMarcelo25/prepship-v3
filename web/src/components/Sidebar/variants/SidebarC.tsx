@@ -21,6 +21,7 @@ import {
   CheckCircle2,
   XOctagon,
   Diamond,
+  Users,
 } from 'lucide-react'
 import { useSidebarController, type SidebarVariantProps, type SidebarViewType } from './useSidebarController'
 
@@ -31,6 +32,7 @@ const STATUS_DOT = { awaiting_shipment: 'bg-amber-500', shipped: 'bg-emerald-500
 const TOOL_ITEMS: Array<{ view: SidebarViewType; Icon: any; label: string }> = [
   { view: 'dashboard', Icon: LayoutDashboard, label: 'Dashboard' },
   { view: 'inventory', Icon: Boxes, label: 'Inventory' },
+  { view: 'clients', Icon: Users, label: 'Clients' },
   { view: 'locations', Icon: Building2, label: 'Locations' },
   { view: 'packages', Icon: Package, label: 'Packages' },
   { view: 'rates', Icon: Wallet, label: 'Rate Shop' },

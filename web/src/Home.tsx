@@ -23,6 +23,7 @@ import Sidebar from './components/Sidebar/Sidebar'
 import OrdersView from './components/Views/OrdersView'
 import DashboardView from './components/Views/DashboardView'
 import InventoryView from './components/Views/InventoryView'
+import ClientsView from './components/Views/ClientsView'
 import LocationsView from './components/Views/LocationsView'
 import PackagesView from './components/Views/PackagesView'
 import RatesView from './components/Views/RatesView'
@@ -33,7 +34,7 @@ import ManifestsView from './components/Views/ManifestsView'
 import { formatSyncPill } from './components/Views/orders-parity'
 import { getOrdersDateRange } from './components/Views/orders-view-filters'
 
-type ViewType = 'orders' | 'dashboard' | 'inventory' | 'locations' | 'packages' | 'rates' | 'analysis' | 'settings' | 'billing' | 'manifests'
+type ViewType = 'orders' | 'dashboard' | 'inventory' | 'clients' | 'locations' | 'packages' | 'rates' | 'analysis' | 'settings' | 'billing' | 'manifests'
 type ContentView = Exclude<ViewType, 'manifests'>
 type OrderStatus = 'awaiting_shipment' | 'shipped' | 'cancelled'
 type OrdersDateFilter = '' | 'this-month' | 'last-month' | 'last-30' | 'last-90' | 'custom'
@@ -65,6 +66,7 @@ function getResolvedDateRange(filter: OrdersDateFilter) {
 const VIEW_LABELS: Record<Exclude<ViewType, 'orders' | 'manifests'>, string> = {
   dashboard: 'Dashboard',
   inventory: 'Inventory',
+  clients: 'Clients',
   locations: 'Locations',
   packages: 'Packages',
   rates: 'Rates',
@@ -76,6 +78,7 @@ const VIEW_LABELS: Record<Exclude<ViewType, 'orders' | 'manifests'>, string> = {
 const VIEW_PATHS: Record<Exclude<ViewType, 'orders'>, string> = {
   dashboard: '/dashboard',
   inventory: '/inventory',
+  clients: '/clients',
   locations: '/locations',
   packages: '/packages',
   rates: '/rates',
@@ -985,6 +988,8 @@ export default function Home() {
               />
             ) : displayView === 'inventory' ? (
               <InventoryView searchQuery={searchQuery} onOpenOrder={openOrderFromContentView} />
+            ) : displayView === 'clients' ? (
+              <ClientsView onOpenOrder={openOrderFromContentView} />
             ) : displayView === 'locations' ? (
               <LocationsView />
             ) : displayView === 'packages' ? (
