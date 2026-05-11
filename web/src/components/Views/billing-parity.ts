@@ -107,7 +107,11 @@ export const BILLING_DETAIL_COLUMNS: BillingDetailColumn[] = [
   { id: 'margin', label: 'Shipping Margin', align: 'right', always: false },
 ]
 
-const BILLING_DETAIL_COLS_KEY = 'billing_detail_cols_v2'
+// v3 (2026-05-12): defaults now include the Box Cost column AND the
+// stored array doubles as the display order (drag-to-reorder support).
+// Bumping the storage key resets returning users to the new default
+// order; if they had custom toggles, they re-pick them once.
+const BILLING_DETAIL_COLS_KEY = 'billing_detail_cols_v3'
 
 const DEFAULT_BILLING_DETAIL_COLUMN_IDS: BillingDetailColumnId[] = [
   'orderNumber',
@@ -118,6 +122,7 @@ const DEFAULT_BILLING_DETAIL_COLUMN_IDS: BillingDetailColumnId[] = [
   'totalQty',
   'pickpack',
   'additional',
+  'packageCost',
   'shipping',
   'total',
 ]
@@ -264,9 +269,179 @@ export function toggleBillingDetailColumnIds(columnIds: BillingDetailColumnId[],
     : [...columnIds, columnId]
 }
 
+// Drag-to-reorder helper: pulls `fromId` out of its current slot and
+// drops it before `toId`. Returning the same array (unchanged) when
+// either id is missing keeps callers' useEffect-on-change idempotent.
+export function reorderBillingDetailColumnIds(
+  columnIds: BillingDetailColumnId[],
+  fromId: BillingDetailColumnId,
+  toId: BillingDetailColumnId,
+): BillingDetailColumnId[] {
+  if (fromId === toId) return columnIds
+  const fromIndex = columnIds.indexOf(fromId)
+  if (fromIndex < 0) return columnIds
+  const without = columnIds.filter((value) => value !== fromId)
+  const toIndex = without.indexOf(toId)
+  if (toIndex < 0) return columnIds
+  return [...without.slice(0, toIndex), fromId, ...without.slice(toIndex)]
+}
+
 export function getVisibleBillingDetailColumns(columnIds: BillingDetailColumnId[]) {
-  const visible = new Set(columnIds)
-  return BILLING_DETAIL_COLUMNS.filter((column) => column.always || visible.has(column.id))
+  // Render order = user's stored order. We iterate `columnIds` (not
+  // the static BILLING_DETAIL_COLUMNS) so drag-to-reorder takes effect
+  // visually. Always-on columns get auto-appended at the end if a
+  // user somehow stripped them from their saved list (shouldn't
+  // happen via the UI, but guards against corrupted localStorage).
+  const byId = new Map<BillingDetailColumnId, BillingDetailColumn>(
+    BILLING_DETAIL_COLUMNS.map((column) => [column.id, column]),
+  )
+  const result: BillingDetailColumn[] = []
+  const seen = new Set<BillingDetailColumnId>()
+  for (const id of columnIds) {
+    const column = byId.get(id)
+    if (column && !seen.has(id)) {
+      result.push(column)
+      seen.add(id)
+    }
+  }
+  for (const column of BILLING_DETAIL_COLUMNS) {
+    if (column.always && !seen.has(column.id)) {
+      result.push(column)
+      seen.add(column.id)
+    }
+  }
+  return result
+}
+
+// Collapse per-lineType rows into one row per order. The generator
+// emits a separate BillingDetailDto for each fee type (pick_pack,
+// additional_unit, package_cost, shipping, storage) which would
+// otherwise show as multiple rows for the same order in the UI. After
+// this pass each merged row carries explicit *Total fields, which
+// `computeBillingDetailMetrics` prefers over the lineType fallback —
+// so the downstream rendering and sorting code needs no changes.
+//
+// Aggregation key is `orderId`. Storage rows (no orderId) fall back
+// to their description so each storage line stays distinct.
+export function aggregateBillingDetailRowsByOrder(rows: BillingDetailDto[]): BillingDetailDto[] {
+  const byKey = new Map<string, BillingDetailDto & Record<string, unknown>>()
+  const order: string[] = []
+
+  const num = (value: unknown) => {
+    if (value == null) return 0
+    const parsed = typeof value === 'number' ? value : Number(value)
+    return Number.isFinite(parsed) ? parsed : 0
+  }
+
+  for (const row of rows) {
+    const orderId = (row as { orderId?: unknown }).orderId
+    const description = (row as { description?: unknown }).description
+    const lineType = (row as { lineType?: unknown }).lineType
+    const key =
+      orderId != null && orderId !== ''
+        ? `order:${orderId}`
+        : `storage:${String(description ?? '')}:${String(lineType ?? '')}`
+
+    const metrics = computeBillingDetailMetrics(row)
+
+    if (!byKey.has(key)) {
+      // Seed merged row with this lineType's contribution. Reset
+      // totalCost so the *Total fallback never re-applies the same
+      // dollars (lineType becomes 'merged' as a tripwire).
+      byKey.set(key, {
+        ...(row as Record<string, unknown>),
+        lineType: 'merged',
+        line_type: 'merged',
+        pickpackTotal: metrics.pickPack,
+        pick_pack_total: metrics.pickPack,
+        additionalTotal: metrics.additional,
+        additional_total: metrics.additional,
+        packageTotal: metrics.packageCost,
+        package_total: metrics.packageCost,
+        shippingTotal: metrics.shipping,
+        shipping_total: metrics.shipping,
+        storageTotal: num((row as { storageTotal?: unknown; storage_total?: unknown }).storageTotal
+          ?? (row as { storage_total?: unknown }).storage_total
+          ?? (lineType === 'storage' ? metrics.total : 0)),
+        storage_total: num((row as { storageTotal?: unknown; storage_total?: unknown }).storageTotal
+          ?? (row as { storage_total?: unknown }).storage_total
+          ?? (lineType === 'storage' ? metrics.total : 0)),
+        grandTotal: metrics.total,
+        grand_total: metrics.total,
+        totalCost: 0,
+        total_cost: 0,
+      } as BillingDetailDto & Record<string, unknown>)
+      order.push(key)
+      continue
+    }
+
+    const existing = byKey.get(key)!
+    existing.pickpackTotal = num(existing.pickpackTotal) + metrics.pickPack
+    existing.pick_pack_total = existing.pickpackTotal
+    existing.additionalTotal = num(existing.additionalTotal) + metrics.additional
+    existing.additional_total = existing.additionalTotal
+    existing.packageTotal = num(existing.packageTotal) + metrics.packageCost
+    existing.package_total = existing.packageTotal
+    existing.shippingTotal = num(existing.shippingTotal) + metrics.shipping
+    existing.shipping_total = existing.shippingTotal
+    existing.grandTotal = num(existing.grandTotal) + metrics.total
+    existing.grand_total = existing.grandTotal
+
+    // First-wins for the non-monetary fields. The shipping row is
+    // usually richer (carrier, ref rates, ship date, actual label
+    // cost) than the pick_pack row, so we backfill from later rows
+    // any time the seed row had a null.
+    const carryString = (
+      ours: string | null | undefined,
+      theirs: string | null | undefined,
+    ) => (ours && String(ours).trim() ? ours : theirs)
+    const carryNullable = (ours: unknown, theirs: unknown) => (ours != null && ours !== '' ? ours : theirs)
+
+    existing.shipDate = carryString(
+      existing.shipDate as string | null | undefined,
+      (row as { shipDate?: string | null }).shipDate,
+    )
+    existing.carrierCode = carryString(
+      existing.carrierCode as string | null | undefined,
+      (row as { carrierCode?: string | null }).carrierCode,
+    )
+    existing.carrierNickname = carryString(
+      existing.carrierNickname as string | null | undefined,
+      (row as { carrierNickname?: string | null }).carrierNickname,
+    )
+    existing.providerAccountNickname = carryString(
+      existing.providerAccountNickname as string | null | undefined,
+      (row as { providerAccountNickname?: string | null }).providerAccountNickname,
+    )
+    existing.itemNames = carryString(
+      existing.itemNames as string | null | undefined,
+      (row as { itemNames?: string | null }).itemNames,
+    )
+    existing.itemSkus = carryString(
+      existing.itemSkus as string | null | undefined,
+      (row as { itemSkus?: string | null }).itemSkus,
+    )
+    existing.packageName = carryString(
+      existing.packageName as string | null | undefined,
+      (row as { packageName?: string | null }).packageName,
+    )
+
+    existing.totalQty = carryNullable(existing.totalQty, (row as { totalQty?: unknown }).totalQty)
+    existing.actualLabelCost = carryNullable(
+      existing.actualLabelCost,
+      (row as { actualLabelCost?: unknown }).actualLabelCost,
+    )
+    existing.ref_ups_rate = carryNullable(
+      existing.ref_ups_rate,
+      (row as { ref_ups_rate?: unknown }).ref_ups_rate,
+    )
+    existing.ref_usps_rate = carryNullable(
+      existing.ref_usps_rate,
+      (row as { ref_usps_rate?: unknown }).ref_usps_rate,
+    )
+  }
+
+  return order.map((key) => byKey.get(key) as BillingDetailDto)
 }
 
 export function computeBillingDetailMetrics(detail: BillingDetailDto): BillingDetailMetrics {

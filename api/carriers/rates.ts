@@ -536,6 +536,86 @@ async function getWalmartAccessTokenForRates(creds: Record<string, unknown>): Pr
   return data.access_token;
 }
 
+// Fix 4 (2026-05-12): on-demand Walmart Marketplace lookup of a single
+// order by its customer order number. The Shipping Estimates API requires
+// `purchaseOrderId` (Walmart's short internal id) but our `orders` table
+// often only has the customer-facing `customerOrderNumber` (the long
+// 2000… number that the buyer sees) — especially when the order was
+// ingested via ShipStation instead of via the direct Marketplace pull.
+//
+// Returns { purchaseOrderId, rawOrder } on success, or null on any failure
+// (no match, network/auth error, missing creds, etc). Caller falls back
+// to the existing error path so a flaky lookup never breaks the request.
+async function lookupWalmartOrderByCustomerOrderId(
+  creds: Record<string, unknown>,
+  customerOrderId: string,
+): Promise<{ purchaseOrderId: string; rawOrder: any } | null> {
+  const clientId = String(creds?.clientId ?? '').trim();
+  const clientSecret = String(creds?.clientSecret ?? '').trim();
+  if (!clientId || !clientSecret) return null;
+  // Only attempt this for things that *look* like a Walmart customer
+  // order number (long, all digits). Avoids burning OAuth tokens on
+  // ShipStation order numbers, eBay ids, etc.
+  const trimmed = customerOrderId.trim();
+  if (!/^\d{8,}$/.test(trimmed)) return null;
+
+  let token: string;
+  try {
+    token = await getWalmartAccessTokenForRates(creds);
+  } catch (err) {
+    console.warn('[carriers/rates] walmart token (lookup) failed:', err instanceof Error ? err.message : err);
+    return null;
+  }
+
+  const channelType = String(creds?.channelType ?? '').trim();
+  const partnerId = String(creds?.partnerId ?? creds?.sellerId ?? '').trim();
+  const correlationId = `prepship-lookup-${Date.now().toString(36)}`;
+  const headers: Record<string, string> = {
+    'WM_SEC.ACCESS_TOKEN': token,
+    'WM_QOS.CORRELATION_ID': correlationId,
+    'WM_SVC.NAME': 'Walmart Marketplace',
+    'WM_MARKET': 'us',
+    Accept: 'application/json',
+  };
+  if (channelType) headers['WM_CONSUMER.CHANNEL.TYPE'] = channelType;
+  if (partnerId) headers['WM_PARTNER.ID'] = partnerId;
+
+  // Walmart's /v3/orders accepts `customerOrderId` as a query filter.
+  // productInfo=true keeps the response rich enough to use as `rawOrder`
+  // (item names, addresses, shipping info) so the Shipping Estimates
+  // call right after has everything it needs to build the request body.
+  const url = new URL('https://marketplace.walmartapis.com/v3/orders');
+  url.searchParams.set('customerOrderId', trimmed);
+  url.searchParams.set('productInfo', 'true');
+
+  try {
+    const res = await fetch(url.toString(), { headers });
+    if (!res.ok) {
+      const t = await res.text().then((s) => s.slice(0, 200)).catch(() => '');
+      console.warn(`[carriers/rates] walmart /v3/orders lookup ${res.status}: ${t || res.statusText}`);
+      return null;
+    }
+    const data = (await res.json()) as { list?: { elements?: { order?: unknown[] | unknown } } };
+    const elementsRaw = (data?.list?.elements as { order?: unknown[] | unknown } | undefined)?.order;
+    const elements = Array.isArray(elementsRaw)
+      ? elementsRaw
+      : elementsRaw
+        ? [elementsRaw]
+        : [];
+    const match = elements.find((o) => {
+      const recordedCust = (o as { customerOrderId?: unknown })?.customerOrderId;
+      return recordedCust != null && String(recordedCust) === trimmed;
+    }) ?? elements[0];
+    if (!match) return null;
+    const purchaseOrderId = (match as { purchaseOrderId?: unknown })?.purchaseOrderId;
+    if (purchaseOrderId == null || String(purchaseOrderId).trim() === '') return null;
+    return { purchaseOrderId: String(purchaseOrderId), rawOrder: match };
+  } catch (err) {
+    console.warn('[carriers/rates] walmart /v3/orders lookup error:', err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
 // Ship With Walmart "Shipping Estimates" rate quote.
 // Real endpoint: POST /v3/shipping/labels/shipping-estimates
 // Required body fields:
@@ -1784,7 +1864,38 @@ export default async function handler(req: any, res: any): Promise<void> {
         } catch { /* non-fatal */ }
       }
 
+      // Fix 4 (2026-05-12): if store_orders had no match, try resolving
+      // the purchaseOrderId by calling Walmart's Marketplace API directly
+      // with the customer order number. This rescues ShipStation-pulled
+      // Walmart orders (no `store_orders` row, but we still have the
+      // customerOrderNumber on `orders.order_number`). One-shot lookup,
+      // any failure silently falls through to the existing error path.
       if (!purchaseOrderId) {
+        const candidateCustomerOrderId = (() => {
+          if (lookupC && /^\d{8,}$/.test(lookupC.trim())) return lookupC.trim();
+          if (lookupB && /^\d{8,}$/.test(lookupB.trim())) return lookupB.trim();
+          if (lookupA && /^\d{8,}$/.test(lookupA.trim())) return lookupA.trim();
+          return null;
+        })();
+        if (candidateCustomerOrderId) {
+          const looked = await lookupWalmartOrderByCustomerOrderId(creds, candidateCustomerOrderId);
+          if (looked) {
+            purchaseOrderId = looked.purchaseOrderId;
+            purchaseOrderSource = 'walmart_marketplace_api';
+            rawOrder = looked.rawOrder ?? rawOrder;
+          }
+        }
+      }
+
+      // Fix 1 (2026-05-12): the "most-recent walmart row" fallback is
+      // ONLY for the Settings-page demo button (no real order context).
+      // Real order rate-browsing (orderId present) MUST NOT silently
+      // borrow a different order's purchaseOrderId — that produced the
+      // "rate browser shows zero rates for the wrong reason" bug we're
+      // fixing here. When orderId is set and we got this far without a
+      // match, fall through to the clean "could not resolve" error so
+      // the operator sees what's actually wrong.
+      if (!purchaseOrderId && !orderId) {
         // Fallback: most-recent walmart row in store_orders (Settings demo).
         try {
           const recent = await sql<Array<{ external_order_id: string; raw: any }>>`
@@ -1795,7 +1906,7 @@ export default async function handler(req: any, res: any): Promise<void> {
           `;
           if (recent[0]?.external_order_id) {
             purchaseOrderId = recent[0].external_order_id;
-            purchaseOrderSource = 'store_orders fallback';
+            purchaseOrderSource = 'store_orders fallback (settings demo)';
             rawOrder = recent[0].raw ?? null;
           }
         } catch { /* non-fatal */ }
@@ -1857,13 +1968,29 @@ export default async function handler(req: any, res: any): Promise<void> {
           shipFrom: shipFromForRates,
           rawOrder,
         });
+        // Fix 2 (2026-05-12): Walmart sometimes returns 200 OK with an
+        // empty rate array — e.g. the order isn't eligible for Walmart
+        // Shipping, the dims/weight fall outside any sponsored carrier's
+        // box, or the seller isn't enrolled. Silent success hides the
+        // reason and the operator just sees a blank Rate Browser. Flip
+        // to ok=false with a clear hint so the FE error overlay fires.
+        if (!Array.isArray(rates) || rates.length === 0) {
+          res.status(200).json({
+            ok: false,
+            provider,
+            error:
+              'Walmart returned 0 rates for this order. The order may not be eligible for Walmart Shipping, or the box dimensions/weight fall outside any sponsored carrier limit. Confirm Ship With Walmart is enabled in Seller Center and try a different package size.',
+            meta: { orderId, externalOrderId, orderNumber, purchaseOrderId, purchaseOrderSource, hasRawOrder: rawOrder != null, rateCount: 0 },
+          });
+          return;
+        }
         res.status(200).json({
           ok: true,
           provider,
           simulated: false,
           rates,
           fetchedAt: new Date().toISOString(),
-          meta: { orderId, externalOrderId, orderNumber, purchaseOrderId, purchaseOrderSource, hasRawOrder: rawOrder != null },
+          meta: { orderId, externalOrderId, orderNumber, purchaseOrderId, purchaseOrderSource, hasRawOrder: rawOrder != null, rateCount: rates.length },
         });
       } catch (err) {
         res.status(200).json({

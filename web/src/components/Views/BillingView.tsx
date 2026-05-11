@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { useContext, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
 import { motion } from 'framer-motion'
 import { Receipt } from 'lucide-react'
 import { apiClient } from '../../api/client'
@@ -13,6 +13,7 @@ import type {
 } from '../../types/api'
 import {
   BILLING_DETAIL_COLUMNS,
+  aggregateBillingDetailRowsByOrder,
   buildBackfillRefRatesToast,
   buildBillingConfigInput,
   buildBillingPackagePriceRows,
@@ -31,6 +32,7 @@ import {
   getBillingPresetRange,
   getVisibleBillingDetailColumns,
   readBillingDetailColumnIds,
+  reorderBillingDetailColumnIds,
   toggleBillingDetailColumnIds,
   type BillingConfigDraft,
   type BillingDetailColumnId,
@@ -115,6 +117,45 @@ export default function BillingView() {
     if (typeof window === 'undefined') return readBillingDetailColumnIds()
     return readBillingDetailColumnIds(window.localStorage)
   })
+  // Drag-to-reorder state: tracks which column the user grabbed so we
+  // can highlight the drop target and commit the swap on dragend.
+  // Stored as refs (instead of state) for two reasons: (a) the drag
+  // payload survives re-renders during the dragover stream, and (b) we
+  // don't want re-renders firing on every mousemove during a drag.
+  const dragColumnIdRef = useRef<BillingDetailColumnId | null>(null)
+  const [dragOverColumnId, setDragOverColumnId] = useState<BillingDetailColumnId | null>(null)
+
+  function handleColumnDragStart(columnId: BillingDetailColumnId, event: ReactDragEvent) {
+    dragColumnIdRef.current = columnId
+    // Setting a payload + 'move' effect activates the native drag
+    // cursor. The data string is unused by us — only React tracks it.
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', columnId)
+  }
+
+  function handleColumnDragOver(columnId: BillingDetailColumnId, event: ReactDragEvent) {
+    // preventDefault is required to allow drop. Without it, browsers
+    // reject the drop with the no-entry cursor.
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+    if (dragColumnIdRef.current && dragColumnIdRef.current !== columnId) {
+      setDragOverColumnId(columnId)
+    }
+  }
+
+  function handleColumnDrop(columnId: BillingDetailColumnId, event: ReactDragEvent) {
+    event.preventDefault()
+    const fromId = dragColumnIdRef.current
+    dragColumnIdRef.current = null
+    setDragOverColumnId(null)
+    if (!fromId || fromId === columnId) return
+    setDetailColumnIds((current) => reorderBillingDetailColumnIds(current, fromId, columnId))
+  }
+
+  function handleColumnDragEnd() {
+    dragColumnIdRef.current = null
+    setDragOverColumnId(null)
+  }
 
   const packagePricingRows = useMemo(
     () => buildBillingPackagePriceRows(packages, savedPackagePrices, packagePriceDrafts),
@@ -204,8 +245,15 @@ export default function BillingView() {
 
   const summaryTotals = useMemo(() => buildBillingSummaryTotals(summaryRows), [summaryRows])
   const visibleDetailColumns = useMemo(() => getVisibleBillingDetailColumns(detailColumnIds), [detailColumnIds])
+  // Collapse per-lineType API rows into one row per order. Without this
+  // the same order shows up 2-5 times in the table — once per fee type
+  // — which is what we're fixing here.
+  const mergedDetailRows = useMemo(
+    () => aggregateBillingDetailRowsByOrder(detailState.rows),
+    [detailState.rows],
+  )
   const sortedDetailRows = useMemo(() => sortRows(
-    detailState.rows,
+    mergedDetailRows,
     detailSort,
     (row, key) => {
       const metrics = computeBillingDetailMetrics(row)
@@ -248,7 +296,7 @@ export default function BillingView() {
       }
     },
     (row) => row.orderNumber || row.id,
-  ), [detailSort, detailState.rows])
+  ), [detailSort, mergedDetailRows])
   const summaryPageCount = Math.max(1, Math.ceil(sortedSummaryRows.length / summaryPageSize))
   const currentSummaryPage = Math.min(Math.max(summaryPage, 1), summaryPageCount)
   const pagedSummaryRows = useMemo(() => {
@@ -263,7 +311,10 @@ export default function BillingView() {
     return sortedDetailRows.slice(start, start + detailPageSize)
   }, [currentDetailPage, detailPageSize, sortedDetailRows])
   const detailTotals = useMemo(() => {
-    return detailState.rows.reduce((acc, row) => {
+    // Totals iterate the merged rows so we don't double-count an order
+    // whose pick_pack and shipping arrived as separate API rows. Each
+    // merged row holds the per-lineType subtotals on a single object.
+    return mergedDetailRows.reduce((acc, row) => {
       const metrics = computeBillingDetailMetrics(row)
       return {
         pickPack: acc.pickPack + metrics.pickPack,
@@ -274,7 +325,7 @@ export default function BillingView() {
         margin: acc.margin + metrics.margin,
       }
     }, { pickPack: 0, additional: 0, packageCost: 0, shipping: 0, total: 0, margin: 0 })
-  }, [detailState.rows])
+  }, [mergedDetailRows])
 
   useEffect(() => {
     return () => {
@@ -1043,28 +1094,44 @@ export default function BillingView() {
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
                 <thead>
                   <tr>
-                    {visibleDetailColumns.map((column) => (
-                      <SortableHeader
-                        key={column.id}
-                        sortKey={column.id}
-                        sortState={detailSort}
-                        onSort={handleDetailSort}
-                        align={column.align}
-                        style={{
-                          fontSize: 10,
-                          fontWeight: 700,
-                          color: 'var(--text3)',
-                          textTransform: 'uppercase',
-                          letterSpacing: '.4px',
-                          padding: '6px 10px',
-                          background: 'var(--surface2)',
-                          borderBottom: '2px solid var(--border)',
-                          textAlign: column.align,
-                        }}
-                      >
-                        {column.label}
-                      </SortableHeader>
-                    ))}
+                    {visibleDetailColumns.map((column) => {
+                      // Drag-over highlight: a 2px brand-blue left
+                      // border previews where the dragged column will
+                      // land. Drop semantics are "insert BEFORE this
+                      // target," so the border lives on the left edge.
+                      const isDropTarget = dragOverColumnId === column.id
+                      return (
+                        <SortableHeader
+                          key={column.id}
+                          sortKey={column.id}
+                          sortState={detailSort}
+                          onSort={handleDetailSort}
+                          align={column.align}
+                          draggable
+                          onDragStart={(event) => handleColumnDragStart(column.id, event)}
+                          onDragOver={(event) => handleColumnDragOver(column.id, event)}
+                          onDrop={(event) => handleColumnDrop(column.id, event)}
+                          onDragEnd={handleColumnDragEnd}
+                          title={`${column.label} — drag to reorder, click to sort`}
+                          style={{
+                            fontSize: 10,
+                            fontWeight: 700,
+                            color: 'var(--text3)',
+                            textTransform: 'uppercase',
+                            letterSpacing: '.4px',
+                            padding: '6px 10px',
+                            background: 'var(--surface2)',
+                            borderBottom: '2px solid var(--border)',
+                            borderLeft: isDropTarget ? '2px solid var(--ss-blue)' : '2px solid transparent',
+                            textAlign: column.align,
+                            cursor: 'grab',
+                            userSelect: 'none',
+                          }}
+                        >
+                          {column.label}
+                        </SortableHeader>
+                      )
+                    })}
                   </tr>
                 </thead>
                 <tbody>

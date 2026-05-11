@@ -556,6 +556,22 @@ export type DirectCarrierRateError = {
   provider: string;
   label: string;
   message: string;
+  // Resolution hint from the backend (e.g. 'store_orders lookup',
+  // 'walmart_marketplace_api', 'store_orders fallback (settings demo)').
+  // Surfaces under the rate browser cell so operators can tell whether
+  // the rates came from their actual order vs. a fallback path.
+  meta?: Record<string, unknown> | null;
+};
+
+// Per-carrier metadata returned alongside successful (or empty) rate
+// fetches. Right now this is purely informational — the FE shows
+// `purchaseOrderSource` as a subtle hint under the rate list.
+export type DirectCarrierRateMeta = {
+  accountId: number;
+  shippingProviderId?: number;
+  sourceTable?: DirectAccountRef['sourceTable'];
+  provider: string;
+  meta: Record<string, unknown>;
 };
 
 function normalizeProviderKey(value: unknown): string {
@@ -739,14 +755,14 @@ function directCarrierErrorMessage(provider: string, message: string): string {
 async function fetchDirectCarrierRates(
   body: Record<string, unknown>,
   carrierIds: string[]
-): Promise<{ rates: Record<string, unknown>[]; errors: DirectCarrierRateError[] }> {
+): Promise<{ rates: Record<string, unknown>[]; errors: DirectCarrierRateError[]; metas: DirectCarrierRateMeta[] }> {
   const refs = [...new Map(
     carrierIds
       .map((carrierId) => directAccountRefFromProviderId(toProviderAccountId(carrierId)))
       .filter((ref): ref is DirectAccountRef => ref != null)
       .map((ref) => [`${ref.sourceTable}:${ref.accountId}`, ref])
   ).values()];
-  if (!refs.length) return { rates: [], errors: [] };
+  if (!refs.length) return { rates: [], errors: [], metas: [] };
 
   let rows: DirectCarrierAccountRow[] = [];
   try {
@@ -798,6 +814,22 @@ async function fetchDirectCarrierRates(
           shipFrom: body.shipFrom,
         },
       });
+      // Fix 3 (2026-05-12): thread the backend's meta object back into
+      // the FE result. The Rate Browser renders `meta.purchaseOrderSource`
+      // as a small hint under the rate list so operators can tell whether
+      // rates came from their actual order, a marketplace lookup, or a
+      // settings-demo fallback.
+      const backendMeta = res.meta && typeof res.meta === 'object' ? (res.meta as Record<string, unknown>) : null;
+      const metaEntry: DirectCarrierRateMeta | null = backendMeta
+        ? {
+            accountId: ref.accountId,
+            shippingProviderId: directProviderIdFromAccount(account),
+            sourceTable: ref.sourceTable,
+            provider: normalizeProviderKey(res.provider ?? account.provider),
+            meta: backendMeta,
+          }
+        : null;
+
       if (!res.ok) {
         const message = directCarrierErrorMessage(
           res.provider ?? account.provider,
@@ -816,7 +848,9 @@ async function fetchDirectCarrierRates(
             provider: normalizeProviderKey(res.provider ?? account.provider),
             label,
             message,
+            meta: backendMeta,
           }],
+          metas: metaEntry ? [metaEntry] : [],
         };
       }
       const accountForRates = {
@@ -826,7 +860,7 @@ async function fetchDirectCarrierRates(
       const rates = (res.rates ?? [])
         .filter((rate) => Number(rate.cost ?? 0) > 0)
         .map((rate) => translateDirectRateToV2Shape(rate, accountForRates));
-      return { rates, errors: [] };
+      return { rates, errors: [], metas: metaEntry ? [metaEntry] : [] };
     } catch (err) {
       const message = directCarrierErrorMessage(
         account.provider,
@@ -845,7 +879,9 @@ async function fetchDirectCarrierRates(
           provider: normalizeProviderKey(account.provider),
           label,
           message,
+          meta: null,
         }],
+        metas: [] as DirectCarrierRateMeta[],
       };
     }
   });
@@ -854,6 +890,7 @@ async function fetchDirectCarrierRates(
   return {
     rates: settled.flatMap((item) => item.rates),
     errors: settled.flatMap((item) => item.errors),
+    metas: settled.flatMap((item) => item.metas ?? []),
   };
 }
 
@@ -2967,7 +3004,7 @@ export const apiClient = {
             : Promise.resolve([]),
           directCarrierIds.length
             ? fetchDirectCarrierRates(body, directCarrierIds)
-            : Promise.resolve({ rates: [], errors: [] }),
+            : Promise.resolve({ rates: [], errors: [], metas: [] }),
         ]);
 
         const combined = [...shipStationRates, ...directRates.rates].sort((left, right) => {
@@ -2979,6 +3016,14 @@ export const apiClient = {
         });
         Object.defineProperty(combined, 'directCarrierErrors', {
           value: directRates.errors,
+          enumerable: false,
+        });
+        // Fix 3 (2026-05-12): direct-carrier meta (e.g. purchaseOrderSource)
+        // is attached to the combined array the same way as errors. The
+        // Rate Browser pulls it via (raw as any).directCarrierMetas to
+        // render the "where did these rates come from" hint per carrier.
+        Object.defineProperty(combined, 'directCarrierMetas', {
+          value: directRates.metas,
           enumerable: false,
         });
         return combined;

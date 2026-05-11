@@ -625,6 +625,11 @@ export default function RateBrowserModal({
   // ── Rates state ────────────────────────────────────────────────────────────
   const [ratesByPid, setRatesByPid] = useState<Record<string, RateRow[]>>({});
   const [rateErrorsByPid, setRateErrorsByPid] = useState<Record<string, string>>({});
+  // Per-carrier resolution metadata from the direct-carrier path. Used to
+  // render the "rates came from X" hint under Walmart / Amazon / eBay
+  // shipping panels so operators can tell whether the quote came from
+  // their actual order or a fallback path.
+  const [rateMetaByPid, setRateMetaByPid] = useState<Record<string, Record<string, unknown>>>({});
   const [pendingPids, setPendingPids] = useState<Set<number>>(new Set());
   const [selectedPid, setSelectedPid] = useState<number | null>(null);
   const [viewMode, setViewMode] = useState<'all' | 'carriers'>('all');
@@ -744,6 +749,7 @@ export default function RateBrowserModal({
           : {}
     );
     setRateErrorsByPid({});
+    setRateMetaByPid({});
     // `locations` is intentionally not in deps — it doesn't change per-order
     // and we only want to re-hydrate when the modal opens or the order changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -865,6 +871,7 @@ export default function RateBrowserModal({
           : {}
     );
     setRateErrorsByPid({});
+    setRateMetaByPid({});
     if (seededPid != null) {
       setSelectedPid((current) => current ?? seededPid);
     }
@@ -955,6 +962,25 @@ export default function RateBrowserModal({
       }
       setRateErrorsByPid(nextErrorsByPid);
 
+      // Fix 3 (2026-05-12): capture per-carrier resolution meta so the
+      // rate panel can render the "rates came from X" hint. Walmart in
+      // particular benefits — operators can tell at a glance whether
+      // their quote came from the order's own Walmart purchaseOrderId
+      // (`'body.externalOrderId'` / `'store_orders lookup'`), from an
+      // on-demand Marketplace API lookup (`'walmart_marketplace_api'`),
+      // or from the settings-demo fallback path.
+      const directMetas = Array.isArray((raw as any)?.directCarrierMetas)
+        ? ((raw as any).directCarrierMetas as Array<{ shippingProviderId?: number; meta: Record<string, unknown> }>)
+        : [];
+      const nextMetaByPid: Record<string, Record<string, unknown>> = {};
+      for (const m of directMetas) {
+        const pid = toFiniteNumber(m.shippingProviderId);
+        if (pid != null && m.meta && typeof m.meta === 'object') {
+          nextMetaByPid[String(pid)] = m.meta;
+        }
+      }
+      setRateMetaByPid(nextMetaByPid);
+
       liveFetchedRates = (raw ?? [])
         .map((r) => {
           const pid =
@@ -992,6 +1018,7 @@ export default function RateBrowserModal({
       setRatesByPid(nextRatesByPid);
     } catch {
       setRateErrorsByPid({});
+      setRateMetaByPid({});
       setRatesByPid(
         seededBestRate && seededPid != null
           ? { [String(seededPid)]: [seededBestRate] }
@@ -1422,6 +1449,30 @@ export default function RateBrowserModal({
     }
     const acct = rateShippingAccounts.find((c) => c.shippingProviderId === selectedPid);
     const carrierError = rateErrorsByPid[String(selectedPid)];
+    const carrierMeta = rateMetaByPid[String(selectedPid)] ?? null;
+    // Resolution-source hint for direct carriers (Walmart / Amazon / eBay
+    // shipping). The backend sets `purchaseOrderSource` to one of:
+    //   'body.purchaseOrderId' / 'body.externalOrderId' → quote scoped to
+    //     the operator's actual order.
+    //   'store_orders lookup' → matched the order via the marketplace
+    //     pull table — also scoped correctly.
+    //   'walmart_marketplace_api' → Fix 4 path: backend asked Walmart to
+    //     translate the customer order number to a purchaseOrderId on
+    //     the fly. Best-effort and slightly slower, but accurate.
+    //   'store_orders fallback (settings demo)' → DEMO-ONLY: the quote
+    //     is for an UNRELATED Walmart order. Operators must know this.
+    const purchaseOrderSource = carrierMeta && typeof carrierMeta.purchaseOrderSource === 'string'
+      ? (carrierMeta.purchaseOrderSource as string)
+      : null;
+    const sourceLabel = (() => {
+      if (!purchaseOrderSource || purchaseOrderSource === 'none') return null;
+      if (purchaseOrderSource === 'body.purchaseOrderId') return { text: 'Scoped to this order (purchaseOrderId)', danger: false };
+      if (purchaseOrderSource === 'body.externalOrderId') return { text: 'Scoped to this order', danger: false };
+      if (purchaseOrderSource === 'store_orders lookup') return { text: 'Scoped via Walmart Marketplace pull', danger: false };
+      if (purchaseOrderSource === 'walmart_marketplace_api') return { text: 'Resolved on-the-fly via Walmart Marketplace API', danger: false };
+      if (purchaseOrderSource.includes('settings demo')) return { text: 'DEMO RATES — borrowed from an unrelated Walmart order', danger: true };
+      return { text: `Source: ${purchaseOrderSource}`, danger: false };
+    })();
     const all = ratesByPid[String(selectedPid)] ?? [];
     const filtered = filterBySvcClass(all);
     const displayed = hideUnavail
@@ -1457,6 +1508,21 @@ export default function RateBrowserModal({
               {carrierError}
             </div>
           ) : null}
+          {sourceLabel ? (
+            <div
+              style={{
+                maxWidth: 520,
+                margin: '8px auto 0',
+                color: sourceLabel.danger ? 'var(--red)' : 'var(--text3)',
+                fontSize: 10.5,
+                fontStyle: 'italic',
+                lineHeight: 1.4,
+              }}
+              title="purchaseOrderSource from the backend rate response"
+            >
+              {sourceLabel.text}
+            </div>
+          ) : null}
         </div>
       );
     }
@@ -1484,6 +1550,21 @@ export default function RateBrowserModal({
             </span>
             <span style={{ fontSize: 11, color: 'var(--text3)' }}>{countLabel}</span>
           </div>
+          {sourceLabel ? (
+            <div
+              style={{
+                marginTop: 4,
+                color: sourceLabel.danger ? 'var(--red)' : 'var(--text3)',
+                fontSize: 10.5,
+                fontStyle: sourceLabel.danger ? 'normal' : 'italic',
+                fontWeight: sourceLabel.danger ? 700 : 400,
+                lineHeight: 1.4,
+              }}
+              title="purchaseOrderSource from the backend rate response"
+            >
+              {sourceLabel.text}
+            </div>
+          ) : null}
         </div>
         <div style={{ overflowY: 'auto', flex: 1, paddingBottom: 16 }}>
           {displayed.map((r, i) => renderRateRow(r, i, false, i === firstOk))}
