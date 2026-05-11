@@ -8,7 +8,6 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  CheckCircle2,
   CircleX,
   Columns3,
   Filter,
@@ -1281,28 +1280,30 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                       </span>
                     </button>
                   </td>
-                  <td className="px-3 py-2 text-xs text-ink-2">{row.client}</td>
-                  <td className="px-3 py-2 text-right font-mono text-xs text-ink">{formatMoney(row.revenue)}</td>
-                  <td className="px-3 py-2 text-right font-mono text-xs text-ink-2">{formatMoneySmall(row.avgPrice)}</td>
-                  <td className="px-3 py-2 text-right font-mono text-xs text-ink-2">{formatMoneySmall(row.avgShipping)}</td>
-                  <td className="px-3 py-2"><StatusBadge status={row.status} /></td>
-                  <td className="px-3 py-2 text-right font-mono text-xs text-ink-2">{row.daysSupply == null ? '-' : formatInt(row.daysSupply)}</td>
-                  <td className="px-3 py-2 text-right font-mono text-xs text-ink-2">{formatInt(row.restockQty)}</td>
-                  <td className="px-3 py-2 text-right font-mono text-xs text-ink-2">{formatInt(row.units7)}</td>
-                  <td className="px-3 py-2 text-right font-mono text-xs font-semibold text-ink">{formatInt(row.units30)}</td>
-                  <td className="px-3 py-2 text-right font-mono text-xs text-ink-2">{formatInt(row.priorAvg)}</td>
-                  <td className="px-3 py-2 text-right">
-                    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-2xs font-bold ${row.changePct >= 0 ? 'bg-ok/10 text-ok' : 'bg-danger/10 text-danger'}`}>
-                      {row.changePct >= 0 ? <ArrowUpRight size={11} strokeWidth={2.5} /> : <ArrowDownRight size={11} strokeWidth={2.5} />}
-                      {formatPct(row.changePct)}
-                    </span>
-                  </td>
+                  {visibleColumns.store ? <td className="px-3 py-2 text-xs text-ink-2">{row.client}</td> : null}
+                  {visibleColumns.revenue ? <td className="px-3 py-2 text-right font-mono text-xs text-ink">{formatMoney(row.revenue)}</td> : null}
+                  {visibleColumns.avgPrice ? <td className="px-3 py-2 text-right font-mono text-xs text-ink-2">{formatMoneySmall(row.avgPrice)}</td> : null}
+                  {visibleColumns.avgShipping ? <td className="px-3 py-2 text-right font-mono text-xs text-ink-2">{formatMoneySmall(row.avgShipping)}</td> : null}
+                  {visibleColumns.stockStatus ? <td className="px-3 py-2"><StatusBadge status={row.status} /></td> : null}
+                  {visibleColumns.daysSupply ? <td className="px-3 py-2 text-right font-mono text-xs text-ink-2">{row.daysSupply == null ? '-' : formatInt(row.daysSupply)}</td> : null}
+                  {visibleColumns.restockQty ? <td className="px-3 py-2 text-right font-mono text-xs text-ink-2">{formatInt(row.restockQty)}</td> : null}
+                  {visibleColumns.units7 ? <td className="px-3 py-2 text-right font-mono text-xs text-ink-2">{formatInt(row.units7)}</td> : null}
+                  {visibleColumns.units30 ? <td className="px-3 py-2 text-right font-mono text-xs font-semibold text-ink">{formatInt(row.units30)}</td> : null}
+                  {visibleColumns.priorAvg ? <td className="px-3 py-2 text-right font-mono text-xs text-ink-2">{formatInt(row.priorAvg)}</td> : null}
+                  {visibleColumns.changePct ? (
+                    <td className="px-3 py-2 text-right">
+                      <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-2xs font-bold ${row.changePct >= 0 ? 'bg-ok/10 text-ok' : 'bg-danger/10 text-danger'}`}>
+                        {row.changePct >= 0 ? <ArrowUpRight size={11} strokeWidth={2.5} /> : <ArrowDownRight size={11} strokeWidth={2.5} />}
+                        {formatPct(row.changePct)}
+                      </span>
+                    </td>
+                  ) : null}
                   <td className="px-3 py-2"><TinyTrend values={last(row.trend, 12)} negative={row.changePct < 0} /></td>
                 </tr>
               ))}
               {pageRows.length === 0 ? (
                 <tr>
-                  <td colSpan={15} className="px-3 py-10 text-center text-sm text-ink-3">
+                  <td colSpan={visibleColumnCount} className="px-3 py-10 text-center text-sm text-ink-3">
                     No SKU performance data for this filter.
                   </td>
                 </tr>
@@ -1313,27 +1314,55 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line px-4 py-3 text-tiny text-ink-3">
           <div>
-            Showing {sortedSkuRows.length === 0 ? 0 : (page - 1) * TABLE_PAGE_SIZE + 1} to {Math.min(page * TABLE_PAGE_SIZE, sortedSkuRows.length)} of {formatInt(sortedSkuRows.length)} SKUs
+            Showing {sortedSkuRows.length === 0 ? 0 : (page - 1) * pageSize + 1} to {Math.min(page * pageSize, sortedSkuRows.length)} of {formatInt(sortedSkuRows.length)} SKUs
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex flex-wrap items-center gap-1.5">
             <button
               type="button"
               onClick={() => setPage((current) => Math.max(1, current - 1))}
               disabled={page <= 1}
-              className="h-8 rounded-card border border-line bg-surface px-3 font-semibold text-ink-2 disabled:opacity-40"
+              className="grid h-8 w-8 place-items-center rounded-card border border-line bg-surface font-semibold text-ink-2 hover:bg-surface-2 disabled:opacity-40"
+              aria-label="Previous page"
             >
-              Prev
+              <ChevronLeft size={14} strokeWidth={2.25} />
             </button>
-            <span className="rounded-card border border-line bg-brand px-3 py-1.5 font-bold text-white">{page}</span>
+            {paginationItems.map((item, index) =>
+              item === 'ellipsis' ? (
+                <span key={`ellipsis-${index}`} className="px-2 text-ink-3">...</span>
+              ) : (
+                <button
+                  key={item}
+                  type="button"
+                  onClick={() => setPage(item)}
+                  className={`grid h-8 min-w-8 place-items-center rounded-card border px-2 font-bold ${
+                    item === page
+                      ? 'border-brand bg-brand-bg text-brand ring-1 ring-brand/30'
+                      : 'border-line bg-surface text-ink-2 hover:bg-surface-2'
+                  }`}
+                >
+                  {item}
+                </button>
+              ),
+            )}
             <button
               type="button"
               onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
               disabled={page >= totalPages}
-              className="h-8 rounded-card border border-line bg-surface px-3 font-semibold text-ink-2 disabled:opacity-40"
+              className="grid h-8 w-8 place-items-center rounded-card border border-line bg-surface font-semibold text-ink-2 hover:bg-surface-2 disabled:opacity-40"
+              aria-label="Next page"
             >
-              Next
+              <ChevronRight size={14} strokeWidth={2.25} />
             </button>
-            <span className="ml-2 font-semibold text-ink-2">10 / page</span>
+            <select
+              value={pageSize}
+              onChange={(event) => setPageSize(Number(event.target.value))}
+              className="ml-2 h-8 rounded-card border border-line bg-surface px-3 font-semibold text-ink-2 outline-none hover:bg-surface-2"
+              aria-label="Rows per page"
+            >
+              <option value={10}>10 / page</option>
+              <option value={25}>25 / page</option>
+              <option value={50}>50 / page</option>
+            </select>
           </div>
         </div>
       </section>
