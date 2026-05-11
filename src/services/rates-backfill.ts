@@ -141,6 +141,7 @@ async function runBackfill(
     const rows = await db
       .select({
         id: orders.id,
+        orderNumber: orders.orderNumber,
         clientId: orders.clientId,
         storeId: orders.storeId,
         weightOz: orders.weightOz,
@@ -228,6 +229,11 @@ async function runBackfill(
 
         if (!best) {
           job.skipped++;
+          if (job.failureSamples.length < 5) {
+            job.failureSamples.push(
+              `order ${row.id} (${row.orderNumber}, w=${row.weightOz}, ${row.shipToCity}, ${row.shipToState} ${row.shipToPostalCode}): no rates returned`
+            );
+          }
         } else {
           const now = new Date();
           await db

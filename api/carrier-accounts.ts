@@ -68,7 +68,7 @@ function corsHeaders(origin: string | null): Record<string, string> {
   const allow = origin && allowed.has(origin) ? origin : '';
   const headers: Record<string, string> = {
     'Vary': 'Origin',
-    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Authorization, Content-Type',
   };
   if (allow) headers['Access-Control-Allow-Origin'] = allow;
@@ -103,7 +103,18 @@ async function ensureTable(sql: ReturnType<typeof postgres>): Promise<void> {
         provider,
         COALESCE(account_identifier, '')
       )`,
+    `CREATE TABLE IF NOT EXISTS carrier_account_clients (
+      carrier_account_id INTEGER NOT NULL,
+      client_id INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (carrier_account_id, client_id),
+      CONSTRAINT carrier_account_clients_account_fk
+        FOREIGN KEY (carrier_account_id) REFERENCES ${TABLE}(id) ON DELETE CASCADE
+    )`,
+    `CREATE INDEX IF NOT EXISTS carrier_account_clients_client_idx
+      ON carrier_account_clients(client_id)`,
     `ALTER TABLE ${TABLE} ENABLE ROW LEVEL SECURITY`,
+    `ALTER TABLE carrier_account_clients ENABLE ROW LEVEL SECURITY`,
   ];
   for (const stmt of stmts) {
     try {
@@ -215,18 +226,38 @@ export default async function handler(req: any, res: any): Promise<void> {
       const wantSource = source && ALLOWED_SOURCES.has(source) ? source : null;
       const rows = wantSource
         ? await sql<Array<Record<string, unknown>>>`
-            SELECT id, client_id AS "clientId", provider, label, account_identifier AS "accountIdentifier",
-                   source, active, created_at AS "createdAt"
-            FROM ${sql(TABLE)}
-            WHERE source = ${wantSource}
-            ORDER BY created_at DESC
+            SELECT
+              ca.id, ca.client_id AS "clientId", ca.provider, ca.label,
+              ca.account_identifier AS "accountIdentifier",
+              ca.source, ca.active, ca.created_at AS "createdAt",
+              COALESCE(
+                (
+                  SELECT array_agg(cac.client_id ORDER BY cac.client_id)
+                  FROM carrier_account_clients cac
+                  WHERE cac.carrier_account_id = ca.id
+                ),
+                '{}'::int[]
+              ) AS "assignedClientIds"
+            FROM ${sql(TABLE)} ca
+            WHERE ca.source = ${wantSource}
+            ORDER BY ca.created_at DESC
             LIMIT 200
           `
         : await sql<Array<Record<string, unknown>>>`
-            SELECT id, client_id AS "clientId", provider, label, account_identifier AS "accountIdentifier",
-                   source, active, created_at AS "createdAt"
-            FROM ${sql(TABLE)}
-            ORDER BY created_at DESC
+            SELECT
+              ca.id, ca.client_id AS "clientId", ca.provider, ca.label,
+              ca.account_identifier AS "accountIdentifier",
+              ca.source, ca.active, ca.created_at AS "createdAt",
+              COALESCE(
+                (
+                  SELECT array_agg(cac.client_id ORDER BY cac.client_id)
+                  FROM carrier_account_clients cac
+                  WHERE cac.carrier_account_id = ca.id
+                ),
+                '{}'::int[]
+              ) AS "assignedClientIds"
+            FROM ${sql(TABLE)} ca
+            ORDER BY ca.created_at DESC
             LIMIT 200
           `;
       res.status(200).json({ data: rows, pending: pending === '1' });
@@ -309,6 +340,58 @@ export default async function handler(req: any, res: any): Promise<void> {
       }
 
       res.status(200).json({ data: inserted[0] ?? null });
+      return;
+    }
+
+    if (req.method === 'PUT') {
+      const url = new URL(req.url ?? '', 'http://x');
+      const idStr = url.searchParams.get('id');
+      const id = idStr != null ? Number(idStr) : NaN;
+      if (!Number.isFinite(id) || id <= 0) {
+        res.status(400).json({ error: 'id query parameter is required' });
+        return;
+      }
+
+      const body = (await readBody(req)) as Record<string, unknown>;
+      const rawIds = Array.isArray(body?.clientIds) ? body.clientIds : [];
+      const clientIds = Array.from(
+        new Set(
+          rawIds
+            .map((v) => Number(v))
+            .filter((n) => Number.isFinite(n) && n > 0)
+        )
+      ) as number[];
+
+      const exists = await sql<Array<{ id: number }>>`
+        SELECT id FROM ${sql(TABLE)} WHERE id = ${id} LIMIT 1
+      `;
+      if (exists.length === 0) {
+        res.status(404).json({ error: `carrier_accounts row #${id} not found` });
+        return;
+      }
+
+      await sql.begin(async (trx) => {
+        await trx`DELETE FROM carrier_account_clients WHERE carrier_account_id = ${id}`;
+        if (clientIds.length > 0) {
+          await trx`
+            INSERT INTO carrier_account_clients (carrier_account_id, client_id)
+            SELECT ${id}, unnest(${clientIds}::int[])
+            ON CONFLICT (carrier_account_id, client_id) DO NOTHING
+          `;
+        }
+      });
+
+      const refreshed = await sql<Array<{ client_id: number }>>`
+        SELECT client_id FROM carrier_account_clients
+        WHERE carrier_account_id = ${id}
+        ORDER BY client_id
+      `;
+      res.status(200).json({
+        data: {
+          id,
+          assignedClientIds: refreshed.map((r) => r.client_id),
+        },
+      });
       return;
     }
 

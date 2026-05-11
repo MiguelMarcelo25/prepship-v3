@@ -9,6 +9,7 @@ import { rateCache } from '../db/schema/rates';
 import { shipments } from '../db/schema/shipments';
 import { offsetOf, paginated, paginationSchema } from '../lib/pagination';
 import { getSyncStatus, syncOrders } from '../services/order-sync';
+import { getActiveBackfillJob, startBackfillBestRates } from '../services/rates-backfill';
 import { deductInventoryForOrder } from '../services/fulfillment-deductions';
 import { ssMarkOrderShippedV1, asSSUpstreamOrderId } from '../lib/shipstation/labels';
 import { loadClientCredentials } from '../lib/shipstation/credentials';
@@ -519,6 +520,7 @@ function buildCanonicalOrderModel(
 // safe defaults while `lastSyncAt` is kept as an alias for back-compat.
 app.get('/sync/status', async (c) => {
   const status = await getSyncStatus();
+  const activeRateJob = getActiveBackfillJob();
   const [rateCount] = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(rateCache);
@@ -539,7 +541,20 @@ app.get('/sync/status', async (c) => {
     count: 0,
     lastSync,
     ratesCached: rateCount?.count ?? 0,
-    ratePrefetchRunning: false,
+    ratePrefetchRunning: activeRateJob?.status === 'running',
+    ratePrefetchJob: activeRateJob
+      ? {
+          jobId: activeRateJob.jobId,
+          status: activeRateJob.status,
+          total: activeRateJob.total,
+          processed: activeRateJob.processed,
+          updated: activeRateJob.updated,
+          skipped: activeRateJob.skipped,
+          failed: activeRateJob.failed,
+          message: activeRateJob.message,
+          failureSamples: activeRateJob.failureSamples,
+        }
+      : null,
     // Back-compat alias: some v2 callers read `lastSyncAt` (no "ed").
     lastSyncAt: status.lastSyncedAt,
   });
@@ -638,7 +653,14 @@ app.post('/sync', async (c) => {
     // empty / no body — run with defaults
   }
   const result = await syncOrders({ sinceMs });
-  return c.json(result);
+  const shouldBackfillRates = sinceMs === 0 || result.synced > 0;
+  const rateBackfillJob = shouldBackfillRates
+    ? (() => {
+        const job = startBackfillBestRates({ limit: 1000 });
+        return { jobId: job.jobId, status: job.status };
+      })()
+    : null;
+  return c.json({ ...result, rateBackfillJob });
 });
 
 const listQuery = paginationSchema.extend({
