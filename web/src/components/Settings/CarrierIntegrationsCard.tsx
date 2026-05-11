@@ -862,7 +862,15 @@ interface SavedRow {
   accountId: number
   // Which table this row came from. Drives endpoint selection and id-param
   // naming (storeAccountId vs carrierAccountId).
-  kind: 'store' | 'carrier'
+  //
+  // 'shipstation' rows are *synthesized* on the client side from the
+  // `clients` table (each client row carrying ssApiKey/ssApiSecret/
+  // ssApiKeyV2 columns is rendered as one read-only carrier row). They
+  // exist purely so operators can see the legacy ShipStation accounts
+  // in the same list as the new direct carriers — all mutating actions
+  // (Test/Rates/Assign/Delete) are disabled because the underlying
+  // credentials are managed via the Clients tab, not /carrier-accounts.
+  kind: 'store' | 'carrier' | 'shipstation'
   clientId: number | null
   provider: string
   label: string | null
@@ -1309,12 +1317,54 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
     setSubmitState({ kind: 'idle' })
   }
 
+  // Synthesize one ShipStation "carrier" row per client that has ShipStation
+  // credentials stored on its row in the `clients` table (legacy 1:1 model
+  // — ssApiKey/ssApiSecret/ssApiKeyV2 columns). useClients() ships a
+  // derived `hasOwnAccount: boolean` instead of the raw creds, which is why
+  // these rows are display-only: the FE cannot mutate creds it can't see.
+  // Inactive clients are hidden to match the rest of the carriers list.
+  //
+  // The 2_000_000_000 offset matches the STORE_DISPLAY_OFFSET pattern so
+  // the per-row state dicts (testResults, deleting, …) keyed on `id` can
+  // never collide across the three sources (carrier_accounts ids 1…N,
+  // store_accounts ids 1B+…, shipstation virtual ids 2B+…).
+  const SHIPSTATION_DISPLAY_OFFSET = 2_000_000_000
+  const shipstationRows = useMemo<SavedRow[]>(() => {
+    return (allClients ?? [])
+      .filter((c) => c.active && c.hasOwnAccount)
+      .map((c) => ({
+        id: c.clientId + SHIPSTATION_DISPLAY_OFFSET,
+        accountId: c.clientId,
+        kind: 'shipstation' as const,
+        clientId: c.clientId,
+        provider: 'shipstation',
+        label: `ShipStation ${c.name}`,
+        accountIdentifier: null,
+        source: 'legacy',
+        active: c.active,
+        // Synthesized rows have no real creation timestamp; use epoch
+        // so they sort to the bottom of "newest first" lists if anyone
+        // ever sorts by date. The UI hides the date for shipstation
+        // rows specifically (see renderSavedRow).
+        createdAt: new Date(0).toISOString(),
+        // Implicit assignment: a ShipStation account on client X is
+        // by definition only usable for client X. We populate the
+        // array so the legacy hasAssignments visualizations don't
+        // render an "unassigned" empty state.
+        assignedClientIds: [c.clientId],
+      }))
+  }, [allClients])
+
   // Group saved rows by category so we can render each section against its
   // own slice. Unknown providers default to 'carrier' rather than disappearing.
+  // ShipStation synthesized rows fall into 'carriers' (provider='shipstation'
+  // is not in STORE_PROVIDERS) — which matches operator mental model: it's
+  // a shipping API, even if legacy.
   const savedByCategory = (() => {
     const stores: SavedRow[] = []
     const carriers: SavedRow[] = []
-    for (const row of saved) {
+    const merged = [...saved, ...shipstationRows]
+    for (const row of merged) {
       if (STORE_PROVIDERS.has(row.provider)) stores.push(row)
       else carriers.push(row)
     }
@@ -1330,6 +1380,14 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
     const result = testResults[d.id]
     const isTesting = !!testing[d.id]
     const isStore = STORE_PROVIDERS.has(d.provider)
+    // ShipStation rows are synthesized from clients.ssApi* and are
+    // read-only here — credentials are managed in the Clients tab,
+    // not via /carrier-accounts. All four action buttons (Test, Rates,
+    // Assign, Delete) are rendered but disabled with tooltips so the
+    // surface looks consistent with real carrier rows.
+    const isShipStation = d.kind === 'shipstation'
+    const SHIPSTATION_MANAGE_HINT =
+      'Managed via Settings → Clients · credentials live on the client record'
     return (
       <motion.li
         key={d.id}
@@ -1370,14 +1428,38 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
           <span style={{ flex: 1, color: 'var(--text3)', fontFamily: 'monospace', fontSize: 11 }}>
             {d.accountIdentifier ?? '—'}
           </span>
-          <span style={{ fontSize: 10, color: 'var(--text3)' }}>{formatCaDateShort(d.createdAt)}</span>
+          {/* Hide the date pill on synthesized ShipStation rows — they
+              have no real creation timestamp (epoch placeholder). A
+              "LEGACY" badge takes its place so operators see why the
+              actions are disabled. */}
+          {isShipStation ? (
+            <span
+              style={{
+                fontSize: 9,
+                fontWeight: 800,
+                letterSpacing: '0.06em',
+                textTransform: 'uppercase',
+                color: 'rgb(180 83 9)',
+                background: 'rgb(254 243 199)',
+                padding: '2px 6px',
+                borderRadius: 4,
+                border: '1px solid rgb(252 211 77)',
+              }}
+              title={SHIPSTATION_MANAGE_HINT}
+            >
+              Legacy
+            </span>
+          ) : (
+            <span style={{ fontSize: 10, color: 'var(--text3)' }}>{formatCaDateShort(d.createdAt)}</span>
+          )}
           <ActionButton
             icon={<Wifi size={11} strokeWidth={2.5} />}
             label="Test Connection"
             loadingLabel="Testing…"
             loading={isTesting}
+            disabled={isShipStation}
             onClick={() => runTest(d)}
-            title="Verify credentials with the carrier API"
+            title={isShipStation ? SHIPSTATION_MANAGE_HINT : 'Verify credentials with the carrier API'}
           />
           {isStore && STORE_PULLERS[d.provider] ? (
             <ActionButton
@@ -1395,17 +1477,27 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
               label="Get Rates"
               loadingLabel="Fetching…"
               loading={!!rating[d.id]}
+              disabled={isShipStation}
               onClick={() => runFetchRates(d)}
-              title="Fetch a sample shipping rate for this carrier"
+              title={isShipStation ? SHIPSTATION_MANAGE_HINT : 'Fetch a sample shipping rate for this carrier'}
             />
           ) : null}
-          {d.kind === 'carrier' ? (
+          {d.kind === 'carrier' || isShipStation ? (
             <ActionButton
               icon={<Users2 size={11} strokeWidth={2.5} />}
-              label={`Assign${d.assignedClientIds.length > 0 ? ` (${d.assignedClientIds.length})` : ''}`}
+              label={
+                isShipStation
+                  ? 'Assign'
+                  : `Assign${d.assignedClientIds.length > 0 ? ` (${d.assignedClientIds.length})` : ''}`
+              }
               variant="primary"
+              disabled={isShipStation}
               onClick={() => openAssignPopover(d)}
-              title="Assign this carrier account to one or more clients"
+              title={
+                isShipStation
+                  ? `Implicitly assigned to ${d.label?.replace(/^ShipStation /, '') ?? 'one client'} · ${SHIPSTATION_MANAGE_HINT}`
+                  : 'Assign this carrier account to one or more clients'
+              }
             />
           ) : null}
           <ActionButton
@@ -1414,16 +1506,20 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
             loadingLabel="Deleting…"
             loading={!!deleting[d.id]}
             variant="danger"
+            disabled={isShipStation}
             onClick={() => runDelete(d)}
-            title="Delete integration"
+            title={isShipStation ? `Clear credentials in Clients tab to remove · ${SHIPSTATION_MANAGE_HINT}` : 'Delete integration'}
           />
         </div>
 
         {/* Assigned-client chips — inline summary of which clients
             currently have access to this carrier account. Empty
             state nudges operators toward assigning. Carriers only;
-            stores hide it (separate table without junction yet). */}
-        {d.kind === 'carrier' ? (
+            stores hide it (separate table without junction yet).
+            ShipStation synthesized rows also render this strip — the
+            assignment is implicit (creds live ON the client row) so
+            the chip just confirms which client owns these creds. */}
+        {d.kind === 'carrier' || d.kind === 'shipstation' ? (
           <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', paddingLeft: 4, marginTop: 2 }}>
             <span style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 700 }}>
               Assigned to:

@@ -5,15 +5,17 @@ import {
   AlertTriangle,
   ArrowDownRight,
   ArrowUpRight,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   CheckCircle2,
   CircleX,
+  Columns3,
   Filter,
-  LayoutDashboard,
   Loader2,
   Package,
   RefreshCw,
   Star,
-  TrendingUp,
 } from 'lucide-react'
 import {
   CartesianGrid,
@@ -95,6 +97,8 @@ type DashboardSkuRow = {
   sku: string
   product: string
   client: string
+  category: string
+  brand: string
   imageUrl?: string | null
   revenue: number
   avgPrice: number
@@ -132,6 +136,27 @@ interface DashboardViewProps {
 }
 
 const TABLE_PAGE_SIZE = 10
+
+const COLUMN_OPTIONS = [
+  { key: 'store', label: 'Store' },
+  { key: 'revenue', label: 'Revenue' },
+  { key: 'avgPrice', label: 'Avg. Price' },
+  { key: 'avgShipping', label: 'Avg. Shipping' },
+  { key: 'stockStatus', label: 'Stock Status' },
+  { key: 'daysSupply', label: 'Days Supply' },
+  { key: 'restockQty', label: 'Restock Qty' },
+  { key: 'units7', label: '7-Day Units' },
+  { key: 'units30', label: '30-Day Units' },
+  { key: 'priorAvg', label: '30-Day Avg.' },
+  { key: 'changePct', label: 'vs Prior 30 Days' },
+] as const
+
+type ColumnKey = typeof COLUMN_OPTIONS[number]['key']
+
+const DEFAULT_VISIBLE_COLUMNS = COLUMN_OPTIONS.reduce(
+  (acc, option) => ({ ...acc, [option.key]: true }),
+  {} as Record<ColumnKey, boolean>,
+)
 
 function num(value: unknown, fallback = 0) {
   const parsed = typeof value === 'number' ? value : Number(value)
@@ -407,17 +432,21 @@ function MiniSparkline({ values, positive = true }: { values: number[]; positive
 function KpiCard({
   title,
   value,
+  suffix,
   helper,
   tone,
   icon,
   spark,
+  progress,
 }: {
   title: string
   value: string
+  suffix?: string
   helper: React.ReactNode
   tone?: 'green' | 'orange' | 'red' | 'blue'
   icon?: React.ReactNode
   spark?: number[]
+  progress?: number
 }) {
   const toneClass =
     tone === 'green'
@@ -427,18 +456,35 @@ function KpiCard({
         : tone === 'red'
           ? 'text-danger bg-danger/10 ring-danger/20'
           : 'text-brand bg-brand-bg ring-brand/20'
+  const titleClass =
+    tone === 'green'
+      ? 'text-ok'
+      : tone === 'orange'
+        ? 'text-warn'
+        : tone === 'red'
+          ? 'text-danger'
+          : 'text-ink-2'
+  const progressClass =
+    tone === 'green'
+      ? 'bg-ok'
+      : tone === 'orange'
+        ? 'bg-warn'
+        : tone === 'red'
+          ? 'bg-danger'
+          : 'bg-brand'
 
   return (
     <motion.div
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      className="rounded-card border border-line bg-surface px-4 py-3 shadow-sm"
+      className="flex min-h-[118px] flex-col justify-between rounded-card border border-line bg-surface px-4 py-3 shadow-sm"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-2xs font-semibold uppercase tracking-[0.05em] text-ink-3">{title}</div>
-          <div className="mt-2 text-[26px] font-extrabold leading-none tracking-[-0.02em] text-ink font-mono tabular-nums">
+          <div className={`text-xs font-semibold ${titleClass}`}>{title}</div>
+          <div className="mt-3 flex items-end gap-1.5 text-[26px] font-extrabold leading-none tracking-[-0.02em] text-ink font-mono tabular-nums">
             {value}
+            {suffix ? <span className="pb-0.5 text-xs font-bold tracking-normal text-ink-2">{suffix}</span> : null}
           </div>
           <div className="mt-2 text-tiny">{helper}</div>
         </div>
@@ -447,17 +493,22 @@ function KpiCard({
           {spark ? <MiniSparkline values={spark} positive={tone !== 'red'} /> : null}
         </div>
       </div>
+      {typeof progress === 'number' ? (
+        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-line/70">
+          <div className={`h-full rounded-full ${progressClass}`} style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} />
+        </div>
+      ) : null}
     </motion.div>
   )
 }
 
-function ChangeText({ pct, inverse = false }: { pct: number; inverse?: boolean }) {
+function ChangeText({ pct, inverse = false, label = 'prior 30 days' }: { pct: number; inverse?: boolean; label?: string }) {
   const isGood = inverse ? pct <= 0 : pct >= 0
   const flat = Math.abs(pct) < 0.1
   return (
     <span className={`inline-flex items-center gap-1 font-semibold ${flat ? 'text-ink-3' : isGood ? 'text-ok' : 'text-danger'}`}>
       {flat ? null : pct >= 0 ? <ArrowUpRight size={12} strokeWidth={2.5} /> : <ArrowDownRight size={12} strokeWidth={2.5} />}
-      {formatPct(pct)} <span className="font-normal text-ink-3">vs prior 30 days</span>
+      {formatPct(pct)} <span className="font-normal text-ink-3">vs {label}</span>
     </span>
   )
 }
@@ -495,6 +546,12 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   const [error, setError] = useState<string | null>(null)
   const [sortState, setSortState] = useState<SortState<DashboardSortKey>>({ key: 'units30', direction: 'desc' })
   const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(TABLE_PAGE_SIZE)
+  const [categoryFilter, setCategoryFilter] = useState('')
+  const [brandFilter, setBrandFilter] = useState('')
+  const [showFilters, setShowFilters] = useState(false)
+  const [showColumns, setShowColumns] = useState(false)
+  const [visibleColumns, setVisibleColumns] = useState<Record<ColumnKey, boolean>>(DEFAULT_VISIBLE_COLUMNS)
 
   const selectedClient = useMemo(
     () => (selectedClientId == null ? null : clients.find((client) => client.clientId === selectedClientId) ?? null),
@@ -524,8 +581,8 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         priorOrdersRes,
       ] = await Promise.all([
         apiClient.listClients().catch(() => []),
-        apiClient.fetchAnalysisDailySales({ from: currentFrom, to: currentTo, topN: 8, clientId: cid }),
-        apiClient.fetchAnalysisDailySales({ from: priorFrom, to: priorTo, topN: 8, clientId: cid }),
+        apiClient.fetchAnalysisDailySales({ from: currentFrom, to: currentTo, topN: 30, clientId: cid }),
+        apiClient.fetchAnalysisDailySales({ from: priorFrom, to: priorTo, topN: 30, clientId: cid }),
         apiClient.fetchInventory({ ...(cid ? { clientId: cid } : {}) }).catch(() => []),
         apiClient.fetchAnalysisSkus({ from: currentFrom, to: currentTo, limit: 200, clientId: cid }).catch(() => ({ skus: [] })),
         fetchOrdersWindow({ from: currentFrom, to: currentTo, clientId: cid }),
@@ -644,11 +701,17 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           num(analysis?.standardAvgShipping) ||
           num(analysis?.expeditedAvgShipping) ||
           (units30 > 0 ? totalShipping / units30 : 0)
+        const product = String(analysis?.name ?? top?.name ?? inventory?.name ?? sku)
+        const client = String(analysis?.clientName ?? inventory?.clientName ?? selectedClient?.name ?? 'All Clients')
+        const category = productFamily(product, sku)
+        const brand = product.split(/\s+/).find(Boolean)?.replace(/[^\w&-]/g, '') || 'Other'
 
         return {
           sku,
-          product: String(analysis?.name ?? top?.name ?? inventory?.name ?? sku),
-          client: String(analysis?.clientName ?? inventory?.clientName ?? selectedClient?.name ?? 'All Clients'),
+          product,
+          client,
+          category,
+          brand,
           imageUrl: analysis?.imageUrl ?? inventory?.imageUrl ?? null,
           revenue,
           avgPrice: units30 > 0 ? revenue / units30 : 0,
@@ -679,12 +742,32 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     selectedClient,
     unitsBySku7,
     unitsBySku30,
-  ])
+      ])
+
+  const categories = useMemo(
+    () => [...new Set(skuRows.map((row) => row.category).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    [skuRows],
+  )
+
+  const brands = useMemo(
+    () => [...new Set(skuRows.map((row) => row.brand).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    [skuRows],
+  )
+
+  const filteredSkuRows = useMemo(
+    () =>
+      skuRows.filter((row) => {
+        if (categoryFilter && row.category !== categoryFilter) return false
+        if (brandFilter && row.brand !== brandFilter) return false
+        return true
+      }),
+    [brandFilter, categoryFilter, skuRows],
+  )
 
   const sortedSkuRows = useMemo(
     () =>
       sortRows(
-        skuRows,
+        filteredSkuRows,
         sortState,
         (row, key) => {
           switch (key) {
@@ -720,11 +803,37 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         },
         (row) => row.sku,
       ),
-    [skuRows, sortState],
+    [filteredSkuRows, sortState],
   )
 
-  const totalPages = Math.max(1, Math.ceil(sortedSkuRows.length / TABLE_PAGE_SIZE))
-  const pageRows = sortedSkuRows.slice((page - 1) * TABLE_PAGE_SIZE, page * TABLE_PAGE_SIZE)
+  const totalPages = Math.max(1, Math.ceil(sortedSkuRows.length / pageSize))
+  const pageRows = sortedSkuRows.slice((page - 1) * pageSize, page * pageSize)
+
+  const topSkuRows = useMemo(
+    () => [...skuRows].sort((left, right) => right.units30 - left.units30).slice(0, 5),
+    [skuRows],
+  )
+
+  useEffect(() => {
+    setPage(1)
+  }, [brandFilter, categoryFilter, pageSize, selectedClientId, sortState.direction, sortState.key])
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, totalPages))
+  }, [totalPages])
+
+  const paginationItems = useMemo(() => {
+    const pages = new Set([1, totalPages, page - 1, page, page + 1].filter((value) => value >= 1 && value <= totalPages))
+    const sorted = [...pages].sort((a, b) => a - b)
+    const items: Array<number | 'ellipsis'> = []
+    sorted.forEach((value, index) => {
+      if (index > 0 && value - sorted[index - 1] > 1) items.push('ellipsis')
+      items.push(value)
+    })
+    return items
+  }, [page, totalPages])
+
+  const visibleColumnCount = 4 + COLUMN_OPTIONS.filter((option) => visibleColumns[option.key]).length
 
   const kpis = useMemo(() => {
     const currentUnits30 = sumValues(trend.map((point) => point.current))
@@ -758,7 +867,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     }
   }, [currentAgg.revenue, inventoryRows, priorAgg.revenue, trend])
 
-  const maxTopSku = Math.max(...skuRows.slice(0, 10).map((row) => row.units30), 1)
+  const maxTopSku = Math.max(...topSkuRows.map((row) => row.units30), 1)
 
   if (loading) {
     return (
@@ -781,50 +890,101 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   }
 
   return (
-    <div id="view-dashboard" className="view-content !overflow-y-auto !bg-page !p-5">
+    <div id="view-dashboard" className="view-content !overflow-y-auto !bg-page !p-4 sm:!p-5">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="flex items-center gap-2">
-            <div className="grid h-9 w-9 place-items-center rounded-card bg-brand text-white shadow-sm">
-              <LayoutDashboard size={18} strokeWidth={2.5} />
-            </div>
-            <div>
-              <h2 className="text-[20px] font-extrabold tracking-[-0.02em] text-ink">
-                Inventory & Stockout Prevention
-              </h2>
-              <p className="text-tiny text-ink-3">
-                Monitor inventory health, days of supply, and take action to prevent stockouts
-              </p>
-            </div>
-          </div>
+          <h1 className="text-[24px] font-extrabold leading-tight tracking-[-0.02em] text-ink">
+            Inventory & Stockout Prevention
+          </h1>
+          <p className="mt-0.5 text-xs text-ink-3">
+            Monitor inventory health, days of supply, and take action to prevent stockouts
+          </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="text-tiny font-medium text-ink-3">Data as of {formatDataTimestamp()}</div>
+        <div className="relative flex flex-wrap items-center gap-3">
+          <div className="text-xs font-medium text-ink-3">Data as of {formatDataTimestamp()}</div>
           <button
             type="button"
             onClick={() => loadDashboard('refresh')}
-            className="inline-flex h-9 items-center gap-1.5 rounded-card border border-line bg-surface px-3 text-tiny font-semibold text-ink-2 shadow-sm hover:bg-surface-2"
+            className="grid h-9 w-9 place-items-center rounded-card text-ink-2 hover:bg-surface-2 hover:text-brand"
+            aria-label="Refresh dashboard"
+            title="Refresh dashboard"
           >
-            <RefreshCw size={13} strokeWidth={2.5} className={refreshing ? 'animate-spin' : ''} />
-            Refresh
+            <RefreshCw size={16} strokeWidth={2.25} className={refreshing ? 'animate-spin' : ''} />
           </button>
-          <label className="inline-flex h-9 items-center gap-2 rounded-card border border-line bg-surface px-3 shadow-sm">
-            <Filter size={13} strokeWidth={2.5} className="text-ink-3" />
-            <select
-              value={selectedClientId ?? ''}
-              onChange={(event) => setSelectedClientId(event.target.value ? Number(event.target.value) : null)}
-              className="bg-transparent text-tiny font-semibold text-ink outline-none"
-              aria-label="Filter dashboard by client"
-            >
-              <option value="">All Clients</option>
-              {clients.map((client) => (
-                <option key={client.clientId} value={client.clientId}>
-                  {client.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          <button
+            type="button"
+            onClick={() => setShowFilters((open) => !open)}
+            className="inline-flex h-10 items-center gap-2 rounded-card border border-line bg-surface px-4 text-sm2 font-semibold text-ink shadow-sm hover:bg-surface-2"
+            aria-expanded={showFilters}
+          >
+            <Filter size={15} strokeWidth={2.25} className="text-ink-3" />
+            Filters
+          </button>
+          {showFilters ? (
+            <div className="absolute right-0 top-12 z-20 w-72 rounded-card border border-line bg-surface p-3 shadow-lg">
+              <div className="mb-2 text-xs font-extrabold text-ink">Dashboard Filters</div>
+              <label className="mb-2 block">
+                <span className="mb-1 block text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Client</span>
+                <select
+                  value={selectedClientId ?? ''}
+                  onChange={(event) => setSelectedClientId(event.target.value ? Number(event.target.value) : null)}
+                  className="h-9 w-full rounded-card border border-line bg-surface px-3 text-sm2 font-semibold text-ink outline-none"
+                  aria-label="Filter dashboard by client"
+                >
+                  <option value="">All Clients</option>
+                  {clients.map((client) => (
+                    <option key={client.clientId} value={client.clientId}>
+                      {client.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="mb-2 block">
+                <span className="mb-1 block text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Category</span>
+                <select
+                  value={categoryFilter}
+                  onChange={(event) => setCategoryFilter(event.target.value)}
+                  className="h-9 w-full rounded-card border border-line bg-surface px-3 text-sm2 font-semibold text-ink outline-none"
+                  aria-label="Filter dashboard by category"
+                >
+                  <option value="">All Categories</option>
+                  {categories.map((category) => (
+                    <option key={category} value={category}>
+                      {category}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Brand</span>
+                <select
+                  value={brandFilter}
+                  onChange={(event) => setBrandFilter(event.target.value)}
+                  className="h-9 w-full rounded-card border border-line bg-surface px-3 text-sm2 font-semibold text-ink outline-none"
+                  aria-label="Filter dashboard by brand"
+                >
+                  <option value="">All Brands</option>
+                  {brands.map((brand) => (
+                    <option key={brand} value={brand}>
+                      {brand}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedClientId(null)
+                  setCategoryFilter('')
+                  setBrandFilter('')
+                }}
+                className="mt-3 h-9 w-full rounded-card border border-line bg-surface-2 text-sm2 font-semibold text-ink-2 hover:bg-surface-3"
+              >
+                Reset filters
+              </button>
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -838,7 +998,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         <KpiCard
           title="Total 7-Day Units"
           value={formatInt(kpis.currentUnits7)}
-          helper={<ChangeText pct={relativePct(kpis.currentUnits7, kpis.priorUnits7)} />}
+          helper={<ChangeText pct={relativePct(kpis.currentUnits7, kpis.priorUnits7)} label="prior 7 days" />}
           spark={last(trend.map((point) => point.current), 10)}
         />
         <KpiCard
@@ -850,29 +1010,35 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         <KpiCard
           title="Total Revenue"
           value={formatMoney(kpis.revenue30)}
-          helper={<ChangeText pct={relativePct(kpis.revenue30, kpis.priorRevenue30)} />}
+          helper={<ChangeText pct={relativePct(kpis.revenue30, kpis.priorRevenue30)} label="prior 30 days" />}
           spark={trend.map((point) => point.current)}
         />
         <KpiCard
           title="In Stock"
-          value={`${formatInt(kpis.inStock)} SKUs`}
+          value={formatInt(kpis.inStock)}
+          suffix="SKUs"
           tone="green"
-          icon={<CheckCircle2 size={18} strokeWidth={2.25} />}
+          icon={<Package size={18} strokeWidth={2.25} />}
           helper={<span className="text-ink-3">{Math.round((kpis.inStock / kpis.totalStockSkus) * 100)}% of total SKUs</span>}
+          progress={(kpis.inStock / kpis.totalStockSkus) * 100}
         />
         <KpiCard
           title="Low Stock"
-          value={`${formatInt(kpis.lowStock)} SKUs`}
+          value={formatInt(kpis.lowStock)}
+          suffix="SKUs"
           tone="orange"
           icon={<AlertTriangle size={18} strokeWidth={2.25} />}
           helper={<span className="text-ink-3">{Math.round((kpis.lowStock / kpis.totalStockSkus) * 100)}% of total SKUs</span>}
+          progress={(kpis.lowStock / kpis.totalStockSkus) * 100}
         />
         <KpiCard
           title="Out of Stock"
-          value={`${formatInt(kpis.outStock)} SKUs`}
+          value={formatInt(kpis.outStock)}
+          suffix="SKUs"
           tone="red"
           icon={<CircleX size={18} strokeWidth={2.25} />}
           helper={<span className="text-ink-3">{Math.round((kpis.outStock / kpis.totalStockSkus) * 100)}% of total SKUs</span>}
+          progress={(kpis.outStock / kpis.totalStockSkus) * 100}
         />
       </div>
 
@@ -926,7 +1092,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           <h3 className="text-sm font-extrabold text-ink">Top SKUs (30d)</h3>
           <p className="mb-3 text-tiny text-ink-3">By total units sold</p>
           <div className="space-y-3">
-            {sortedSkuRows.slice(0, 5).map((row, index) => (
+            {topSkuRows.map((row, index) => (
               <button
                 key={row.sku}
                 type="button"
@@ -944,7 +1110,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                 <div className="pt-0.5 text-right text-xs font-bold text-ink font-mono tabular-nums">{formatInt(row.units30)}</div>
               </button>
             ))}
-            {sortedSkuRows.length === 0 ? (
+            {topSkuRows.length === 0 ? (
               <div className="grid h-40 place-items-center text-tiny text-ink-3">No SKU data available.</div>
             ) : null}
           </div>
@@ -956,13 +1122,6 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           <div>
             <h3 className="text-sm font-extrabold text-ink">Sales Performance Heatmap by SKU Family</h3>
             <p className="text-tiny text-ink-3">Performance vs prior 30 days</p>
-          </div>
-          <div className="flex flex-wrap items-center gap-3 text-2xs text-ink-3">
-            <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-ok" /> at least +20%</span>
-            <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-ok/40" /> +10% to +20%</span>
-            <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-warn/35" /> -10% to +10%</span>
-            <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-warn" /> -10% to -20%</span>
-            <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-danger" /> below -20%</span>
           </div>
         </div>
         <div className="overflow-x-auto">
@@ -1000,6 +1159,14 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             {heatmap.length === 0 ? (
               <div className="grid h-32 place-items-center text-tiny text-ink-3">No heatmap data available.</div>
             ) : null}
+            <div className="flex flex-wrap items-center justify-center gap-5 pt-2 text-2xs text-ink-3">
+              <span className="mr-1">Performance vs prior 30 days</span>
+              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-ok" /> &ge; +20%</span>
+              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-ok/40" /> +10% to +20%</span>
+              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-warn/20" /> -10% to +10%</span>
+              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-warn" /> -10% to -20%</span>
+              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-danger" /> &le; -20%</span>
+            </div>
           </div>
         </div>
       </section>
@@ -1010,13 +1177,63 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             <h3 className="text-sm font-extrabold text-ink">SKU Performance Summary</h3>
             <p className="text-tiny text-ink-3">Revenue, velocity, stock status, and restock signals</p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-card border border-line bg-surface-2 px-3 py-1.5 text-tiny font-semibold text-ink-2">
-              {selectedClient?.name ?? 'All Clients'}
-            </span>
-            <span className="rounded-card border border-line bg-surface-2 px-3 py-1.5 text-tiny font-semibold text-ink-2">
-              {formatInt(sortedSkuRows.length)} SKUs
-            </span>
+          <div className="relative flex flex-wrap items-center gap-2">
+            <select
+              value={categoryFilter}
+              onChange={(event) => setCategoryFilter(event.target.value)}
+              className="h-9 rounded-card border border-line bg-surface px-3 text-tiny font-semibold text-ink-2 outline-none hover:bg-surface-2"
+              aria-label="Filter SKU table by category"
+            >
+              <option value="">All Categories</option>
+              {categories.map((category) => (
+                <option key={category} value={category}>
+                  {category}
+                </option>
+              ))}
+            </select>
+            <select
+              value={brandFilter}
+              onChange={(event) => setBrandFilter(event.target.value)}
+              className="h-9 rounded-card border border-line bg-surface px-3 text-tiny font-semibold text-ink-2 outline-none hover:bg-surface-2"
+              aria-label="Filter SKU table by brand"
+            >
+              <option value="">All Brands</option>
+              {brands.map((brand) => (
+                <option key={brand} value={brand}>
+                  {brand}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => setShowColumns((open) => !open)}
+              className="inline-flex h-9 items-center gap-2 rounded-card border border-line bg-surface px-3 text-tiny font-semibold text-ink-2 hover:bg-surface-2"
+              aria-expanded={showColumns}
+            >
+              <Columns3 size={14} strokeWidth={2.25} />
+              Columns
+              <ChevronDown size={13} strokeWidth={2.25} />
+            </button>
+            {showColumns ? (
+              <div className="absolute right-0 top-10 z-20 w-56 rounded-card border border-line bg-surface p-2 shadow-lg">
+                {COLUMN_OPTIONS.map((column) => (
+                  <label key={column.key} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs font-semibold text-ink-2 hover:bg-surface-2">
+                    <input
+                      type="checkbox"
+                      checked={visibleColumns[column.key]}
+                      onChange={(event) =>
+                        setVisibleColumns((current) => ({
+                          ...current,
+                          [column.key]: event.target.checked,
+                        }))
+                      }
+                      className="h-3.5 w-3.5 rounded border-line"
+                    />
+                    {column.label}
+                  </label>
+                ))}
+              </div>
+            ) : null}
           </div>
         </div>
 
@@ -1027,17 +1244,17 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                 <th className="w-9 border-b-2 border-line px-3 py-2" />
                 <SortableHeader sortKey="sku" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="border-b-2 border-line px-3 py-2 text-left text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">SKU</SortableHeader>
                 <SortableHeader sortKey="product" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="border-b-2 border-line px-3 py-2 text-left text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Product</SortableHeader>
-                <SortableHeader sortKey="client" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="border-b-2 border-line px-3 py-2 text-left text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Store</SortableHeader>
-                <SortableHeader sortKey="revenue" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="border-b-2 border-line px-3 py-2 text-right text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Revenue</SortableHeader>
-                <SortableHeader sortKey="avgPrice" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="border-b-2 border-line px-3 py-2 text-right text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Avg. Price</SortableHeader>
-                <SortableHeader sortKey="avgShipping" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="border-b-2 border-line px-3 py-2 text-right text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Avg. Shipping</SortableHeader>
-                <SortableHeader sortKey="status" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="border-b-2 border-line px-3 py-2 text-left text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Stock Status</SortableHeader>
-                <SortableHeader sortKey="daysSupply" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="border-b-2 border-line px-3 py-2 text-right text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Days Supply</SortableHeader>
-                <SortableHeader sortKey="restockQty" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="border-b-2 border-line px-3 py-2 text-right text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Restock Qty</SortableHeader>
-                <SortableHeader sortKey="units7" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="border-b-2 border-line px-3 py-2 text-right text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">7-Day Units</SortableHeader>
-                <SortableHeader sortKey="units30" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="border-b-2 border-line px-3 py-2 text-right text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">30-Day Units</SortableHeader>
-                <SortableHeader sortKey="priorAvg" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="border-b-2 border-line px-3 py-2 text-right text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">30-Day Avg.</SortableHeader>
-                <SortableHeader sortKey="changePct" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="border-b-2 border-line px-3 py-2 text-right text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">vs Prior 30 Days</SortableHeader>
+                {visibleColumns.store ? <SortableHeader sortKey="client" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="border-b-2 border-line px-3 py-2 text-left text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Store</SortableHeader> : null}
+                {visibleColumns.revenue ? <SortableHeader sortKey="revenue" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="border-b-2 border-line px-3 py-2 text-right text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Revenue</SortableHeader> : null}
+                {visibleColumns.avgPrice ? <SortableHeader sortKey="avgPrice" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="border-b-2 border-line px-3 py-2 text-right text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Avg. Price</SortableHeader> : null}
+                {visibleColumns.avgShipping ? <SortableHeader sortKey="avgShipping" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="border-b-2 border-line px-3 py-2 text-right text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Avg. Shipping</SortableHeader> : null}
+                {visibleColumns.stockStatus ? <SortableHeader sortKey="status" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="border-b-2 border-line px-3 py-2 text-left text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Stock Status</SortableHeader> : null}
+                {visibleColumns.daysSupply ? <SortableHeader sortKey="daysSupply" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="border-b-2 border-line px-3 py-2 text-right text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Days Supply</SortableHeader> : null}
+                {visibleColumns.restockQty ? <SortableHeader sortKey="restockQty" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="border-b-2 border-line px-3 py-2 text-right text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Restock Qty</SortableHeader> : null}
+                {visibleColumns.units7 ? <SortableHeader sortKey="units7" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="border-b-2 border-line px-3 py-2 text-right text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">7-Day Units</SortableHeader> : null}
+                {visibleColumns.units30 ? <SortableHeader sortKey="units30" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="border-b-2 border-line px-3 py-2 text-right text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">30-Day Units</SortableHeader> : null}
+                {visibleColumns.priorAvg ? <SortableHeader sortKey="priorAvg" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="border-b-2 border-line px-3 py-2 text-right text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">30-Day Avg.</SortableHeader> : null}
+                {visibleColumns.changePct ? <SortableHeader sortKey="changePct" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="border-b-2 border-line px-3 py-2 text-right text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">vs Prior 30 Days</SortableHeader> : null}
                 <th className="border-b-2 border-line px-3 py-2 text-left text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Trend</th>
               </tr>
             </thead>

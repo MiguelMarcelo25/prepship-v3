@@ -3115,6 +3115,18 @@ export const apiClient = {
           );
           const totalShipping = parseNum(r.total_shipping ?? r.totalShipping);
 
+          // Units-trend sparkline source: aligned [units/day] array,
+          // one slot per date bucket in the selected range. Empty/missing
+          // → empty array so AnalysisDataTable just renders a flat baseline.
+          const dailyQtyRaw = r.daily_qty ?? r.dailyQty ?? [];
+          const dailyQty: number[] = Array.isArray(dailyQtyRaw)
+            ? dailyQtyRaw.map((value: unknown) => {
+                if (typeof value === 'number' && Number.isFinite(value)) return value;
+                const parsed = Number(value);
+                return Number.isFinite(parsed) ? parsed : 0;
+              })
+            : [];
+
           return {
             sku: r.sku,
             name: r.name ?? '',
@@ -3125,6 +3137,7 @@ export const apiClient = {
               r.client_name ??
               r.clientName ??
               (r.client_id != null ? nameById.get(r.client_id) ?? '' : ''),
+            dailyQty,
             orders: parseNum(r.orders),
             pendingOrders: parseNum(r.pending ?? r.pendingOrders),
             externalOrders: parseNum(r.ext_shipped ?? r.externalOrders),

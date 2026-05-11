@@ -305,6 +305,12 @@ type SkuBreakdownRow = {
   ship_count_with_cost: number;
   total_qty: number;
   total_shipping: string;
+  // Per-day unit map: { 'YYYY-MM-DD': units } for each day this SKU had
+  // activity in the selected range. The route pads this to a dense
+  // aligned array (one slot per day in the range, zeros for quiet days)
+  // before returning to clients so the FE can render a sparkline
+  // without any further math. See `daily_qty_map` in the SQL below.
+  daily_qty_map: Record<string, number> | null;
 };
 
 async function getSkuBreakdown(q: SkuBreakdownQuery) {
@@ -421,6 +427,24 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
       from inventory inv
       where inv.sku is not null and inv.sku <> ''
       order by lower(inv.sku), inv.id
+    ),
+    -- Per-SKU per-day unit totals feed the "Units Trend" sparkline in
+    -- the analysis grid. Aggregated here once (post-allocation) so each
+    -- (sku, day) pair is a single row, then collapsed into a JSON map
+    -- so the SELECT below stays one-row-per-SKU. The FE / route handler
+    -- pads this against the date buckets to produce an aligned array.
+    sku_day_agg as (
+      select
+        a.sku_key,
+        to_char(a.order_date at time zone 'UTC', 'YYYY-MM-DD') as day,
+        sum(a.qty)::int as qty
+      from allocated a
+      group by a.sku_key, to_char(a.order_date at time zone 'UTC', 'YYYY-MM-DD')
+    ),
+    sku_daily_json as (
+      select sku_key, jsonb_object_agg(day, qty) as daily_qty_map
+      from sku_day_agg
+      group by sku_key
     )
     select
       max(sku)                                                                 as sku,
@@ -453,10 +477,18 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
       coalesce(sum(qty) filter (where not is_external and label_cost > 0 and ship_class = 'exp'), 0)::int as exp_qty_total,
       count(*) filter (where not is_external and label_cost > 0)::int             as ship_count_with_cost,
       sum(qty)::int                                                              as total_qty,
-      coalesce(sum(label_cost * qty / nullif(order_qty_total, 0)) filter (where not is_external and label_cost > 0), 0)::text as total_shipping
+      coalesce(sum(label_cost * qty / nullif(order_qty_total, 0)) filter (where not is_external and label_cost > 0), 0)::text as total_shipping,
+      -- Daily unit counts as { 'YYYY-MM-DD': units }. Every row in the
+      -- group shares the same sdj.daily_qty_map (it's joined 1:1 on
+      -- sku_key), so array_agg+[1] is just a no-op dedup that lets us
+      -- pass a non-aggregated column through GROUP BY sku_key.
+      (array_agg(sdj.daily_qty_map))[1]                                          as daily_qty_map
     from allocated a
     left join sku_inventory inv on inv.sku_lc = lower(a.sku)
-    group by sku_key
+    left join sku_daily_json sdj on sdj.sku_key = a.sku_key
+    -- Qualify to allocated: sku_daily_json also carries sku_key, so an
+    -- unqualified GROUP BY would trip PG's ambiguous-reference check.
+    group by a.sku_key
     order by total_qty desc
     limit ${q.limit}
   `);
@@ -477,9 +509,30 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
       )
   `);
 
+  // Pad each SKU's sparse day→qty map into a dense aligned array. One
+  // value per day in the selected range, zeros for days the SKU had no
+  // activity. The FE renders this directly as a sparkline and computes
+  // the trend score (latest-half avg vs earliest-half avg, normalized
+  // by the joint mean) for sorting + line color.
+  const dateBuckets = buildDateBuckets(fromIso, toIso);
+  const enrichedRows = rows.map((r) => {
+    const map = (r.daily_qty_map ?? {}) as Record<string, number>;
+    const dailyQty = dateBuckets.map((day) => {
+      const value = map[day];
+      return typeof value === 'number' ? value : Number(value ?? 0) || 0;
+    });
+    // Strip the raw map from the response — the FE only needs the
+    // aligned array, and sending both wastes bytes on long ranges.
+    const { daily_qty_map: _omit, ...rest } = r as SkuBreakdownRow & {
+      daily_qty_map?: unknown;
+    };
+    return { ...rest, daily_qty: dailyQty };
+  });
+
   return {
-    rows,
-    totalSkus: rows.length,
+    rows: enrichedRows,
+    dateBuckets,
+    totalSkus: enrichedRows.length,
     totalOrders: totalOrders[0]?.count ?? 0,
   };
 }
@@ -488,6 +541,7 @@ app.get('/sku-breakdown', zValidator('query', skuBreakdownQuery), async (c) => {
   const result = await getSkuBreakdown(c.req.valid('query'));
   return c.json({
     data: result.rows,
+    dateBuckets: result.dateBuckets,
     totalSkus: result.totalSkus,
     totalOrders: result.totalOrders,
   });
@@ -528,6 +582,7 @@ app.get('/skus', zValidator('query', skuBreakdownQuery), async (c) => {
   const result = await getSkuBreakdown(c.req.valid('query'));
   return c.json({
     data: result.rows,
+    dateBuckets: result.dateBuckets,
     totalSkus: result.totalSkus,
     totalOrders: result.totalOrders,
   });

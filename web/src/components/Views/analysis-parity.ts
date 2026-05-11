@@ -12,6 +12,7 @@ export type AnalysisSortKey =
   | 'pending'
   | 'external'
   | 'qty'
+  | 'trend'
   | 'stdOrders'
   | 'expOrders'
   | 'total'
@@ -45,9 +46,63 @@ export const ANALYSIS_SORT_LABELS: Record<AnalysisSortKey, string> = {
   pending: 'Pending',
   external: 'Ext. Shipped',
   qty: 'Total Qty',
+  trend: 'Units Trend',
   stdOrders: 'Std Orders',
   expOrders: 'Exp Orders',
   total: 'Total Shipping',
+}
+
+// Trend score = (lastHalfAvg - firstHalfAvg) / max(jointMean, 1).
+//
+// Rationale: a SKU whose daily units grew 1→2 and one that grew 100→200
+// should sort to the same trend strength — both doubled. Dividing the
+// half-period delta by the joint mean (clamped ≥1 so 0-volume SKUs
+// don't NaN) makes the score unit-free and bounded in roughly [-2, +2].
+//
+// The 5% deadband on `direction` keeps near-flat SKUs from flickering
+// green/red on tiny noise — anything within ±5% of the joint mean is
+// reported as 'flat' so the sparkline renders in muted grey.
+//
+// `series` is the aligned daily-units array returned by the analysis
+// API (one entry per day in the selected range, zeros for quiet days).
+export interface UnitsTrendResult {
+  direction: 'up' | 'down' | 'flat'
+  /** Normalized half-period delta, ≈ [-2, +2]. */
+  strength: number
+  firstAvg: number
+  lastAvg: number
+  total: number
+}
+
+const TREND_FLAT_DEADBAND = 0.05
+
+export function computeUnitsTrend(series: number[] | null | undefined): UnitsTrendResult {
+  if (!Array.isArray(series) || series.length < 2) {
+    return { direction: 'flat', strength: 0, firstAvg: 0, lastAvg: 0, total: 0 }
+  }
+
+  const total = series.reduce((acc, value) => acc + (Number.isFinite(value) ? value : 0), 0)
+  // Half-window: split the series in two. We slice from the start /
+  // from the end so an odd-length series shares the middle sample
+  // between halves (less brittle than dropping it).
+  const half = Math.floor(series.length / 2)
+  if (half === 0) {
+    return { direction: 'flat', strength: 0, firstAvg: 0, lastAvg: 0, total }
+  }
+  const firstHalf = series.slice(0, half)
+  const lastHalf = series.slice(series.length - half)
+  const avg = (arr: number[]) =>
+    arr.reduce((acc, value) => acc + (Number.isFinite(value) ? value : 0), 0) / Math.max(arr.length, 1)
+  const firstAvg = avg(firstHalf)
+  const lastAvg = avg(lastHalf)
+  const jointMean = Math.max((firstAvg + lastAvg) / 2, 1)
+  const strength = (lastAvg - firstAvg) / jointMean
+
+  let direction: UnitsTrendResult['direction'] = 'flat'
+  if (strength > TREND_FLAT_DEADBAND) direction = 'up'
+  else if (strength < -TREND_FLAT_DEADBAND) direction = 'down'
+
+  return { direction, strength, firstAvg, lastAvg, total }
 }
 
 export function formatAnalysisDate(date: Date): string {
@@ -119,6 +174,7 @@ const NUMERIC_ANALYSIS_SORT_KEYS = new Set<AnalysisSortKey>([
   'pending',
   'external',
   'qty',
+  'trend',
   'stdOrders',
   'expOrders',
   'total',
@@ -151,6 +207,10 @@ function getSortValue(row: AnalysisSkuDto, key: AnalysisSortKey) {
       return row.externalOrders
     case 'qty':
       return row.qty
+    case 'trend':
+      // Sort by the same normalized strength score the cell displays.
+      // SKUs with no series (no daily array yet) sort as flat (0).
+      return computeUnitsTrend((row as { dailyQty?: number[] }).dailyQty ?? []).strength
     case 'stdOrders':
       return row.standardShipCount
     case 'expOrders':

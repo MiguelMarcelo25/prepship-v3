@@ -12,6 +12,7 @@ import {
   type AnalysisSortKey,
   type AnalysisTotals,
 } from './analysis-parity'
+import { UnitsTrendSparkline } from './UnitsTrendSparkline'
 import './AnalysisDataTable.css'
 
 // Hover-zoom thumbnail preview state, ported from InventoryView so the
@@ -49,7 +50,7 @@ function positionThumbnailPreview(cursorX: number, cursorY: number) {
   }
 }
 
-const TABLE_COLUMN_COUNT = 10
+const TABLE_COLUMN_COUNT = 11
 
 export type AnalysisColumnSize = 'narrow' | 'medium' | 'wide'
 
@@ -344,6 +345,18 @@ export function AnalysisDataTable({
                       </span>
                     </span>
                   </td>
+                  {/* Units-trend sparkline cell — daily units over the
+                      selected date range. Series comes pre-aligned from
+                      the backend (one slot per day, zeros for quiet
+                      days), so the component does no further math
+                      beyond computing the up/down/flat color. */}
+                  <td className={`${cellPadding} whitespace-nowrap align-middle text-center ${TD_BASE}`}>
+                    <span className="inline-flex items-center justify-center">
+                      <UnitsTrendSparkline
+                        series={(row as { dailyQty?: number[] }).dailyQty ?? []}
+                      />
+                    </span>
+                  </td>
                   <td className={`${cellPadding} text-right whitespace-nowrap tabular-nums ${TD_BASE}`}>
                     {row.standardShipCount > 0 ? (
                       <>
@@ -404,6 +417,13 @@ export function AnalysisDataTable({
               </td>
               <td className={`${cellPadding} text-right text-[14px] border-t-2 border-line text-ink tabular-nums`}>
                 {totals.totalQty.toLocaleString()}
+              </td>
+              {/* Trend column has no meaningful aggregate (averaging
+                  trend scores across SKUs would be misleading), so the
+                  footer cell stays blank but keeps the column alignment
+                  honest. */}
+              <td className={`${cellPadding} text-center text-[14px] border-t-2 border-line text-ink-3`}>
+                <span className="text-line-2">—</span>
               </td>
               <td className={`${cellPadding} text-right text-[14px] border-t-2 border-line text-ink tabular-nums`}>
                 {totals.totalStdCount > 0 ? totals.totalStdCount.toLocaleString() : '—'}

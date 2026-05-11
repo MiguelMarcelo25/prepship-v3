@@ -37,14 +37,62 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
-    supabase.auth.getSession().then(({ data }) => {
-      if (cancelled) return;
-      setSession(data.session);
-      setLoading(false);
-    });
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => {
+
+    // Wipes the stale refresh-token entry from localStorage without
+    // hitting /auth/v1/logout. We use this when we know the token the
+    // browser is holding is already invalid — calling the server to
+    // revoke an already-invalid token would just produce another 4xx.
+    async function clearLocalSession() {
+      try {
+        await supabase.auth.signOut({ scope: 'local' });
+      } catch {
+        // The local-scope signOut is best-effort; if it fails we just
+        // leave localStorage alone — the next session refresh attempt
+        // will retry the same recovery path.
+      }
+    }
+
+    async function loadInitialSession() {
+      try {
+        const { data, error } = await supabase.auth.getSession();
+        if (cancelled) return;
+        if (error) {
+          // localStorage holds a session Supabase no longer recognizes
+          // (typical causes: project key rotation, server-side session
+          // cleanup, signed out on another device, dev DB reset).
+          // Clear it locally so the background autoRefresh loop doesn't
+          // keep hitting the 400 on every page load.
+          console.warn('[auth] Stored session invalid, clearing:', error.message);
+          await clearLocalSession();
+          setSession(null);
+        } else {
+          setSession(data.session);
+        }
+      } catch (err) {
+        if (cancelled) return;
+        // getSession itself shouldn't throw (it just reads localStorage),
+        // but a hard catch is cheap insurance against SDK changes.
+        console.warn('[auth] getSession threw:', err);
+        await clearLocalSession();
+        setSession(null);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    void loadInitialSession();
+
+    const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
+      // Supabase emits SIGNED_OUT with s=null when a background token
+      // refresh fails — the existing setSession(s) call covers that.
+      // We additionally clear localStorage on a hard sign-out so a
+      // stale refresh token isn't left behind for the next page load.
+      if (event === 'SIGNED_OUT' && !s) {
+        void clearLocalSession();
+      }
       setSession(s);
     });
+
     return () => {
       cancelled = true;
       sub.subscription.unsubscribe();

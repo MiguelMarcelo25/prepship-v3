@@ -102,7 +102,7 @@ function readStoredDrawerOrderWidths(): Partial<Record<DrawerOrdersColumnKey, nu
   }
 }
 
-const TABLE_COLUMN_COUNT = 10
+const TABLE_COLUMN_COUNT = 11
 const ANALYSIS_PAGE_SIZE_OPTIONS = [25, 50, 100]
 
 const COLUMN_SIZES = ['narrow', 'medium', 'wide'] as const
@@ -144,6 +144,12 @@ const ANALYSIS_TABLE_COLUMNS: AnalysisTableColumn[] = [
   { key: 'pending', title: 'Awaiting shipment - not yet labeled', align: 'right' },
   { key: 'external', title: 'Orders shipped externally (no ShipStation label)', align: 'right' },
   { key: 'qty', align: 'right' },
+  {
+    key: 'trend',
+    title:
+      'Daily-units trend across the selected range. Green when the latest half outpaces the earliest half, red when the latest half drops below. Click to sort by trend strength.',
+    align: 'center',
+  },
   { key: 'stdOrders', title: 'SS-labeled standard service orders (count + avg cost)', align: 'right' },
   { key: 'expOrders', title: 'SS-labeled expedited service orders (count + avg cost)', align: 'right' },
   {
