@@ -6720,7 +6720,7 @@ export default function OrdersView({
 
               For shipped orders, just shows the locked rate.
               For test orders, shows the mock rate.
-              For awaiting orders, shows live rate calc + scout link.
+              For awaiting orders, shows live rate calc + refresh link.
               ───────────────────────────────────────────────────────── */}
           <div className="px-3 py-3">
             <div className="rounded-xl bg-surface ring-1 ring-line shadow-[0_1px_2px_rgba(15,23,42,0.04)] overflow-hidden">
@@ -6785,7 +6785,11 @@ export default function OrdersView({
                   )}
                 </div>
 
-                {/* Scout review — only when awaiting a label */}
+                {/* Refresh button — only when awaiting a label.
+                    Opens the Rate Browser modal so the operator can
+                    re-fetch / compare rates across carriers. Renamed
+                    from "Scout" 2026-05-12 — the icon was already
+                    RefreshCcw, the visible label now matches. */}
                 {!panelIsTestOrder && !shipped ? (
                   <button
                     type="button"
@@ -6794,7 +6798,7 @@ export default function OrdersView({
                     className="shrink-0 inline-flex items-center gap-1 h-7 px-2 rounded-md text-[10.5px] font-semibold text-ink-3 hover:text-brand hover:bg-brand/5 transition"
                   >
                     <RefreshCcw size={11} strokeWidth={2.5} />
-                    <span className="hidden sm:inline">Scout</span>
+                    <span className="hidden sm:inline">Refresh</span>
                   </button>
                 ) : null}
               </div>
