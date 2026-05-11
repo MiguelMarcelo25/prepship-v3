@@ -1,9 +1,15 @@
 import { lazy, Suspense, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Pencil, Trash2, Wand2, RefreshCw } from 'lucide-react';
-import Topbar from '../components/Topbar';
+import { Plus, Pencil, Trash2, Wand2, RefreshCw, Users } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { api } from '../lib/api';
+
+// Clients page is mounted INSIDE Home.tsx's app shell (sidebar +
+// topbar) — see Home.tsx displayView === 'clients' and the routing
+// comment in App.tsx. We deliberately don't render `<Topbar>` from
+// this file anymore; Home's topbar already provides the app chrome.
+// The Sync stores + New client buttons live in a page sub-header
+// just above the cards, similar to other in-shell pages.
 
 const ClientModal = lazy(() => import('../components/ClientModal'));
 
@@ -80,35 +86,46 @@ export default function Clients() {
   const rows = data ?? [];
 
   return (
-    <>
-      <Topbar
-        title="Clients"
-        right={
-          <>
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={sync.isPending}
-              onClick={() => sync.mutate()}
-              title="Pull stores from ShipStation as clients"
-            >
-              <RefreshCw
-                size={12}
-                className={sync.isPending ? 'animate-spin' : ''}
-              />
-              {sync.isPending ? 'Syncing…' : 'Sync stores'}
-            </Button>
-            <Button
-              variant="primary"
-              size="sm"
-              onClick={() => setCreating(true)}
-            >
-              <Plus size={12} />
-              New client
-            </Button>
-          </>
-        }
-      />
+    <div id="view-clients" className="view-content !p-0 !overflow-y-auto flex flex-col">
+      {/* Sub-header inside the page — sits below Home's topbar and
+       * gives the page its own title row plus the Sync / New-client
+       * actions. Same visual treatment as Home's topbar (white bg,
+       * border-b, h matches Home's h-14) so the two stack as a
+       * cohesive multi-level header instead of looking redundant. */}
+      <div className="flex items-center gap-3 px-5 h-14 bg-surface border-b border-line flex-shrink-0">
+        <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-brand to-brand-dark flex items-center justify-center shadow-sm ring-1 ring-brand/30 flex-shrink-0">
+          <Users size={16} strokeWidth={2.25} className="text-white" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <h2 className="text-[15px] font-extrabold text-ink font-display tracking-tight m-0 leading-none">
+            Clients
+          </h2>
+          <p className="text-[11px] text-ink-3 mt-1 leading-none">
+            Brands &amp; stores · per-tenant billing &amp; ShipStation isolation
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={sync.isPending}
+          onClick={() => sync.mutate()}
+          title="Pull stores from ShipStation as clients"
+        >
+          <RefreshCw
+            size={12}
+            className={sync.isPending ? 'animate-spin' : ''}
+          />
+          {sync.isPending ? 'Syncing…' : 'Sync stores'}
+        </Button>
+        <Button
+          variant="primary"
+          size="sm"
+          onClick={() => setCreating(true)}
+        >
+          <Plus size={12} />
+          New client
+        </Button>
+      </div>
 
       <div className="flex-1 min-h-0 overflow-auto p-4">
         {isLoading ? (
@@ -278,7 +295,7 @@ export default function Clients() {
           />
         </Suspense>
       )}
-    </>
+    </div>
   );
 }
 

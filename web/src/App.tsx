@@ -10,7 +10,10 @@ const ResetPassword = lazy(() => import('./pages/ResetPassword'));
 const PromptLibrary = lazy(() => import('./pages/PromptLibrary'));
 const Home = lazy(() => import('./Home'));
 const Picklist = lazy(() => import('./pages/Picklist'));
-const Clients = lazy(() => import('./pages/Clients'));
+// Clients is no longer a standalone route — Home.tsx lazy-imports
+// ./pages/Clients itself and mounts it inside the app shell so the
+// sidebar renders alongside. See the comment above the /clients
+// fallthrough in the Routes block below.
 const Products = lazy(() => import('./pages/Products'));
 const Invoice = lazy(() => import('./pages/Invoice'));
 
@@ -51,14 +54,13 @@ export default function App() {
             </ProtectedRoute>
           }
         />
-        <Route
-          path="/clients"
-          element={
-            <ProtectedRoute>
-              <Clients />
-            </ProtectedRoute>
-          }
-        />
+        {/* /clients is intentionally NOT a standalone route. It falls
+         * through to the /* catch-all below so Home.tsx mounts and the
+         * sidebar renders alongside the Clients page. See Home.tsx's
+         * displayView === 'clients' branch which renders <Clients />
+         * (lazy-imported from ./pages/Clients) inside Home's content
+         * area. Routing through the shell ensures consistent sidebar +
+         * topbar chrome across every destination. */}
         <Route
           path="/products"
           element={

@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, lazy, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
@@ -23,7 +23,13 @@ import Sidebar from './components/Sidebar/Sidebar'
 import OrdersView from './components/Views/OrdersView'
 import DashboardView from './components/Views/DashboardView'
 import InventoryView from './components/Views/InventoryView'
-import ClientsView from './components/Views/ClientsView'
+// Clients is the modern card-based page from ./pages/Clients (previously
+// mounted as a standalone /clients route in App.tsx). It's lazy-loaded
+// here so /inventory and the orders views don't pay its bundle cost on
+// initial app boot — only operators who navigate to Clients fetch the
+// chunk. Mounted inside Home's shell so the sidebar + topbar render
+// alongside the cards.
+const ClientsPage = lazy(() => import('./pages/Clients'))
 import LocationsView from './components/Views/LocationsView'
 import PackagesView from './components/Views/PackagesView'
 import RatesView from './components/Views/RatesView'
@@ -989,7 +995,22 @@ export default function Home() {
             ) : displayView === 'inventory' ? (
               <InventoryView searchQuery={searchQuery} onOpenOrder={openOrderFromContentView} />
             ) : displayView === 'clients' ? (
-              <ClientsView onOpenOrder={openOrderFromContentView} />
+              // The Clients destination is the modern card-based UI from
+              // pages/Clients.tsx — lazy-loaded, wrapped in Suspense so
+              // the first navigation shows a small loader while the chunk
+              // arrives. See the ClientsPage comment above for details.
+              <Suspense
+                fallback={
+                  <div className="flex-1 min-h-0 flex items-center justify-center bg-page">
+                    <div className="flex flex-col items-center gap-2 text-ink-3 text-tiny font-sans uppercase tracking-wide">
+                      <div className="w-7 h-7 rounded-full border-2 border-line border-t-brand animate-spinSlow" />
+                      Loading clients
+                    </div>
+                  </div>
+                }
+              >
+                <ClientsPage />
+              </Suspense>
             ) : displayView === 'locations' ? (
               <LocationsView />
             ) : displayView === 'packages' ? (

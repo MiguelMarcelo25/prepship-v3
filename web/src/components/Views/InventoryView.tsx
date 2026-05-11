@@ -403,15 +403,19 @@ interface InventoryViewProps {
   /**
    * Optional initial tab. Defaults to 'stock'. When set, the user can
    * still freely switch tabs (unless hideTabs is true).
-   * Used by ClientsView so the top-level /clients route lands directly
-   * on the Clients tab.
+   *
+   * Currently unused (the Clients destination now uses the
+   * card-based pages/Clients.tsx instead of an InventoryView embed)
+   * but kept as a public surface for future single-tab embed use cases.
    */
   initialTab?: InventoryTab | 'alerts' | 'parents'
   /**
-   * When true the inventory tab strip is suppressed AND the page
-   * header reads from `viewTitle` instead of "Inventory". The action
-   * buttons (Import SKUs, Bulk Edit, Refresh, etc.) are also hidden
-   * since they're irrelevant to a single-tab embed. Used by ClientsView.
+   * When true the inventory tab strip is suppressed AND the action
+   * buttons (Import SKUs, Bulk Edit, Refresh, etc.) are hidden so
+   * the view reads as a single-tab embed. Pair with `viewTitle` to
+   * replace the "Inventory" header label.
+   *
+   * Currently unused — see `initialTab` note.
    */
   hideTabs?: boolean
   /**
