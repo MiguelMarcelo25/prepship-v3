@@ -215,6 +215,15 @@ export default function ClientModal({
             Active
           </label>
 
+          {/* HIDDEN PER USER REQUEST (2026-05-09): "Carrier credentials
+              (advanced)" section is commented out of the UI. The state
+              variables (ssApiKey, ssApiSecret, ssApiKeyV2,
+              rateSourceClientId) are intentionally KEPT so that the save
+              handler at the bottom of this file still passes the existing
+              credentials through unchanged when an operator edits other
+              fields — nulling them out would silently wipe creds on every
+              save. Re-enable this section by deleting the two comment
+              markers wrapping the <div>.
           <div className="border border-line rounded-md">
             <button
               type="button"
@@ -299,6 +308,7 @@ export default function ClientModal({
               </div>
             ) : null}
           </div>
+          */}
 
           {mutation.isError && (
             <div className="text-danger text-tiny py-1">
