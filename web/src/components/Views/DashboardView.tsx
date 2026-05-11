@@ -580,8 +580,8 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         priorOrdersRes,
       ] = await Promise.all([
         apiClient.listClients().catch(() => []),
-        apiClient.fetchAnalysisDailySales({ from: currentFrom, to: currentTo, topN: 30, clientId: cid }),
-        apiClient.fetchAnalysisDailySales({ from: priorFrom, to: priorTo, topN: 30, clientId: cid }),
+        apiClient.fetchAnalysisDailySales({ from: currentFrom, to: currentTo, topN: 15, clientId: cid }),
+        apiClient.fetchAnalysisDailySales({ from: priorFrom, to: priorTo, topN: 15, clientId: cid }),
         apiClient.fetchInventory({ ...(cid ? { clientId: cid } : {}) }).catch(() => []),
         apiClient.fetchAnalysisSkus({ from: currentFrom, to: currentTo, limit: 200, clientId: cid }).catch(() => ({ skus: [] })),
         fetchOrdersWindow({ from: currentFrom, to: currentTo, clientId: cid }),
