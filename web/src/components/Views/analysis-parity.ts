@@ -52,6 +52,108 @@ export const ANALYSIS_SORT_LABELS: Record<AnalysisSortKey, string> = {
   total: 'Total Shipping',
 }
 
+// ──────────────────────────────────────────────────────────────────
+// Column layout: visibility + order. Persisted per-browser via
+// localStorage so each operator can shape the table to fit their
+// workflow (e.g. an inventory operator might hide Std/Exp Orders;
+// a billing operator hides Pending/Ext.Shipped). The 'name' column
+// is intentionally NOT toggleable — without it rows are unidentifiable.
+// ──────────────────────────────────────────────────────────────────
+
+export const DEFAULT_COLUMN_ORDER: AnalysisSortKey[] = [
+  'name',
+  'sku',
+  'client',
+  'orders',
+  'pending',
+  'external',
+  'qty',
+  'trend',
+  'stdOrders',
+  'expOrders',
+  'total',
+]
+
+// Columns the operator cannot hide via the toggle UI. Without 'name'
+// (which renders the thumbnail too) rows have no identity, so it's
+// pinned visible. Drag-reorder still works on it.
+export const REQUIRED_COLUMNS = new Set<AnalysisSortKey>(['name'])
+
+export interface AnalysisColumnLayout {
+  order: AnalysisSortKey[]
+  hidden: AnalysisSortKey[]
+}
+
+const COLUMN_LAYOUT_STORAGE_KEY = 'analysis_column_layout'
+
+const ALL_KEYS = new Set<AnalysisSortKey>(DEFAULT_COLUMN_ORDER)
+
+function isKnownKey(value: unknown): value is AnalysisSortKey {
+  return typeof value === 'string' && ALL_KEYS.has(value as AnalysisSortKey)
+}
+
+// Read + sanitize a persisted layout. Defensive against:
+//   - JSON that's not an object
+//   - unknown keys (e.g. a future-removed column still in storage)
+//   - missing keys (e.g. a new column added since the layout was saved
+//     — those get appended to the end so the operator sees them)
+//   - duplicate entries (we de-dupe by key)
+export function readStoredColumnLayout(): AnalysisColumnLayout {
+  if (typeof window === 'undefined') {
+    return { order: [...DEFAULT_COLUMN_ORDER], hidden: [] }
+  }
+  try {
+    const raw = window.localStorage.getItem(COLUMN_LAYOUT_STORAGE_KEY)
+    if (!raw) return { order: [...DEFAULT_COLUMN_ORDER], hidden: [] }
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') {
+      return { order: [...DEFAULT_COLUMN_ORDER], hidden: [] }
+    }
+    const rawOrder = Array.isArray(parsed.order) ? parsed.order : []
+    const rawHidden = Array.isArray(parsed.hidden) ? parsed.hidden : []
+    const seen = new Set<AnalysisSortKey>()
+    const cleanOrder: AnalysisSortKey[] = []
+    for (const k of rawOrder) {
+      if (isKnownKey(k) && !seen.has(k)) {
+        cleanOrder.push(k)
+        seen.add(k)
+      }
+    }
+    // Append any DEFAULT_COLUMN_ORDER keys missing from storage so a
+    // freshly added column shows up by default for returning users.
+    for (const k of DEFAULT_COLUMN_ORDER) {
+      if (!seen.has(k)) {
+        cleanOrder.push(k)
+        seen.add(k)
+      }
+    }
+    const cleanHidden: AnalysisSortKey[] = []
+    const hiddenSeen = new Set<AnalysisSortKey>()
+    for (const k of rawHidden) {
+      if (isKnownKey(k) && !REQUIRED_COLUMNS.has(k) && !hiddenSeen.has(k)) {
+        cleanHidden.push(k)
+        hiddenSeen.add(k)
+      }
+    }
+    return { order: cleanOrder, hidden: cleanHidden }
+  } catch {
+    return { order: [...DEFAULT_COLUMN_ORDER], hidden: [] }
+  }
+}
+
+export function writeStoredColumnLayout(layout: AnalysisColumnLayout): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(
+      COLUMN_LAYOUT_STORAGE_KEY,
+      JSON.stringify({ order: layout.order, hidden: layout.hidden }),
+    )
+  } catch {
+    // localStorage can throw in private-browsing / quota-exceeded modes.
+    // Layout reverts to in-memory default on next mount; not fatal.
+  }
+}
+
 // Trend score = (lastHalfAvg - firstHalfAvg) / max(jointMean, 1).
 //
 // Rationale: a SKU whose daily units grew 1→2 and one that grew 100→200

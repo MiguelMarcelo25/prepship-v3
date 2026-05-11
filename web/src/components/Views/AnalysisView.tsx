@@ -30,6 +30,12 @@ import {
   buildAnalysisTotals,
   type AnalysisSortDir,
   type AnalysisSortKey,
+  DEFAULT_COLUMN_ORDER,
+  REQUIRED_COLUMNS,
+  readStoredColumnLayout,
+  writeStoredColumnLayout,
+  ANALYSIS_SORT_LABELS,
+  type AnalysisColumnLayout,
 } from './analysis-parity'
 import { AnalysisDataTable } from './AnalysisDataTable'
 import { AnalysisPagination } from './AnalysisPagination'
@@ -592,6 +598,12 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
   const [pageSize, setPageSize] = useState(50)
   const [columnSize, setColumnSize] = useState<ColumnSize>(readStoredColumnSize)
   const [columnWidths, setColumnWidths] = useState<ColumnWidths>(readStoredColumnWidths)
+  // Per-operator column layout: order + hidden set. Drag a header
+  // to reorder; click the "Columns" button (top of the table panel)
+  // to toggle visibility. Persisted to localStorage on every change
+  // so the layout survives reloads and tab moves.
+  const [columnLayout, setColumnLayout] = useState<AnalysisColumnLayout>(readStoredColumnLayout)
+  const [columnsMenuOpen, setColumnsMenuOpen] = useState(false)
   const [drawerOrderWidths, setDrawerOrderWidths] = useState<Partial<Record<DrawerOrdersColumnKey, number>>>(
     readStoredDrawerOrderWidths
   )
@@ -674,6 +686,83 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
       ),
     )
   }, [skuDrawer, drawerOrdersSortKey, drawerOrdersSortDir])
+
+  // Derive the columns array we actually pass to <AnalysisDataTable>:
+  //   1. Start from ANALYSIS_TABLE_COLUMNS (which carries align/title meta)
+  //   2. Project them in `columnLayout.order` sequence
+  //   3. Drop any column listed in `columnLayout.hidden`
+  // Falls back to the original ANALYSIS_TABLE_COLUMNS array if the
+  // projection ends up empty (defense against malformed storage).
+  const displayColumns = useMemo<AnalysisTableColumn[]>(() => {
+    const byKey = new Map<AnalysisSortKey, AnalysisTableColumn>()
+    for (const col of ANALYSIS_TABLE_COLUMNS) byKey.set(col.key, col)
+    const hiddenSet = new Set(columnLayout.hidden)
+    const projected: AnalysisTableColumn[] = []
+    for (const key of columnLayout.order) {
+      if (hiddenSet.has(key)) continue
+      const meta = byKey.get(key)
+      if (meta) projected.push(meta)
+    }
+    return projected.length > 0 ? projected : ANALYSIS_TABLE_COLUMNS
+  }, [columnLayout])
+
+  // Drag-reorder: insert `fromKey` immediately BEFORE `toKey` in the
+  // saved order. Standard spreadsheet semantics — dragging A onto C
+  // puts A right before C (A,B,C,D → B,A,C,D when A is dropped on C).
+  // The hidden-set is untouched; a reorder doesn't change visibility.
+  function handleReorderColumns(fromKey: AnalysisSortKey, toKey: AnalysisSortKey) {
+    setColumnLayout((current) => {
+      const next = current.order.filter((k) => k !== fromKey)
+      const dropIdx = next.indexOf(toKey)
+      if (dropIdx < 0) {
+        // Defensive: shouldn't happen, but fall back to append-end.
+        next.push(fromKey)
+      } else {
+        next.splice(dropIdx, 0, fromKey)
+      }
+      return { ...current, order: next }
+    })
+  }
+
+  // Toggle a column's visibility. REQUIRED_COLUMNS (currently just
+  // 'name') can never be hidden — the operator would lose row identity.
+  function handleToggleColumnVisibility(key: AnalysisSortKey) {
+    if (REQUIRED_COLUMNS.has(key)) return
+    setColumnLayout((current) => {
+      const hiddenSet = new Set(current.hidden)
+      if (hiddenSet.has(key)) hiddenSet.delete(key)
+      else hiddenSet.add(key)
+      return { ...current, hidden: Array.from(hiddenSet) }
+    })
+  }
+
+  // "Reset" button in the Columns popover — restore the factory
+  // default layout. Doesn't touch sort/widths/sizes; only the column
+  // visibility + order. Saves immediately via the persistence effect.
+  function handleResetColumnLayout() {
+    setColumnLayout({ order: [...DEFAULT_COLUMN_ORDER], hidden: [] })
+  }
+
+  // Persist layout on every change. Cheap (one localStorage.setItem
+  // per state update; the JSON is ~150 bytes) and ensures the layout
+  // survives a hard reload mid-session.
+  useEffect(() => {
+    writeStoredColumnLayout(columnLayout)
+  }, [columnLayout])
+
+  // Click-outside dismisses the Columns popover so it behaves like
+  // every other dropdown in the app (date preset menu, etc.).
+  useEffect(() => {
+    if (!columnsMenuOpen) return
+    function handleClickOutside(event: MouseEvent) {
+      const target = event.target as HTMLElement | null
+      if (target?.closest('[data-columns-menu]')) return
+      if (target?.closest('[data-columns-trigger]')) return
+      setColumnsMenuOpen(false)
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [columnsMenuOpen])
 
   // Load clients once for the filter dropdown.
   useEffect(() => {
@@ -1156,6 +1245,98 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
               ▶
             </button>
           </div>
+          {/* Columns button — opens a checklist popover so the operator
+              can toggle individual columns on/off. The 'name' column is
+              shown as a disabled checkmark (REQUIRED_COLUMNS) so it
+              can't be hidden. Click anywhere outside the popover to
+              close (see handleClickOutside in the effect). */}
+          <div className="relative ml-2">
+            <button
+              type="button"
+              data-columns-trigger
+              onClick={() => setColumnsMenuOpen((v) => !v)}
+              aria-haspopup="true"
+              aria-expanded={columnsMenuOpen}
+              className="inline-flex items-center gap-1.5 h-7 px-2.5 border border-line-2 rounded-md bg-surface text-[10.5px] font-bold uppercase tracking-[0.05em] text-ink-2 cursor-pointer transition-colors duration-150 hover:bg-[rgba(42,91,215,.08)] hover:text-brand hover:border-brand/30"
+              title="Show or hide columns · drag column headers to reorder"
+            >
+              <svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <rect x="1.5" y="2.5" width="3.5" height="11" rx="0.7" stroke="currentColor" strokeWidth="1.4" />
+                <rect x="6.25" y="2.5" width="3.5" height="11" rx="0.7" stroke="currentColor" strokeWidth="1.4" />
+                <rect x="11" y="2.5" width="3.5" height="11" rx="0.7" stroke="currentColor" strokeWidth="1.4" />
+              </svg>
+              Columns
+              <span className="text-ink-3 font-mono tabular-nums">
+                ({displayColumns.length}/{DEFAULT_COLUMN_ORDER.length})
+              </span>
+            </button>
+            {columnsMenuOpen ? (
+              <div
+                data-columns-menu
+                role="menu"
+                className="absolute right-0 top-[calc(100%+4px)] z-50 min-w-[230px] bg-surface border border-line rounded-md shadow-[0_8px_24px_-6px_rgba(15,23,42,.18),0_2px_6px_-2px_rgba(15,23,42,.10)] p-1.5"
+              >
+                <div className="px-2 py-1 text-[9px] uppercase tracking-[0.08em] font-extrabold text-ink-3 flex items-center justify-between">
+                  <span>Visible columns</span>
+                  <button
+                    type="button"
+                    onClick={handleResetColumnLayout}
+                    className="appearance-none border-0 bg-transparent text-[9.5px] font-bold text-brand cursor-pointer hover:underline"
+                    title="Restore the factory default column order and show all columns"
+                  >
+                    Reset
+                  </button>
+                </div>
+                {/* List in the operator's CURRENT order so they see
+                    exactly how reordering has shifted things since
+                    factory default. Hidden columns are listed at the
+                    bottom (grayed) so they're easy to find and re-enable. */}
+                {(() => {
+                  const hiddenSet = new Set(columnLayout.hidden)
+                  const visibleKeys = columnLayout.order.filter((k) => !hiddenSet.has(k))
+                  const hiddenKeys = columnLayout.order.filter((k) => hiddenSet.has(k))
+                  return [...visibleKeys, ...hiddenKeys].map((key) => {
+                    const isHidden = hiddenSet.has(key)
+                    const isRequired = REQUIRED_COLUMNS.has(key)
+                    return (
+                      <label
+                        key={key}
+                        className={`flex items-center gap-2 px-2 py-1.5 rounded-[5px] text-[12px] transition-colors duration-100 ${
+                          isRequired
+                            ? 'text-ink-3 cursor-not-allowed'
+                            : 'text-ink cursor-pointer hover:bg-[rgba(42,91,215,.08)]'
+                        } ${isHidden ? 'opacity-60' : ''}`}
+                        title={
+                          isRequired
+                            ? 'Item Name is always visible — rows have no identity without it'
+                            : isHidden
+                              ? 'Hidden · click to show'
+                              : 'Visible · click to hide'
+                        }
+                      >
+                        <input
+                          type="checkbox"
+                          checked={!isHidden}
+                          disabled={isRequired}
+                          onChange={() => handleToggleColumnVisibility(key)}
+                          className="accent-brand cursor-pointer disabled:cursor-not-allowed"
+                        />
+                        <span className="flex-1">{ANALYSIS_SORT_LABELS[key]}</span>
+                        {isRequired ? (
+                          <span className="text-[9px] uppercase tracking-[0.04em] text-ink-3 font-semibold">
+                            required
+                          </span>
+                        ) : null}
+                      </label>
+                    )
+                  })
+                })()}
+                <div className="border-t border-line mt-1 pt-1.5 px-2 pb-1 text-[10.5px] text-ink-3 leading-snug">
+                  Drag a column header to reorder.
+                </div>
+              </div>
+            ) : null}
+          </div>
         </div>
 
         {hasChart ? (
@@ -1173,7 +1354,7 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
       ) : null}
 
       <AnalysisDataTable
-        columns={ANALYSIS_TABLE_COLUMNS}
+        columns={displayColumns}
         sortKey={sortKey}
         sortDir={sortDir}
         onSort={handleSort}
@@ -1188,6 +1369,7 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
         error={dataState.error}
         emptyMessage={getAnalysisEmptyMessage(search)}
         onRowClick={(invSkuId) => void openSkuDrawer(invSkuId)}
+        onReorder={handleReorderColumns}
       />
 
       {!dataState.loading && !dataState.error && sortedRows.length > 0 ? (

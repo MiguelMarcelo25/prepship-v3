@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import {
   ANALYSIS_SORT_LABELS,
   type AnalysisSortDir,
@@ -23,6 +23,15 @@ interface AnalysisTableHeaderProps {
   onResizeColumn?: (key: AnalysisSortKey, width: number) => void
   onResetColumn?: (key: AnalysisSortKey) => void
   columnSize?: 'narrow' | 'medium' | 'wide'
+  /**
+   * Called when the user drops a header onto a different position.
+   * `fromKey` is the column being dragged, `toKey` is the column it was
+   * dropped on. The parent decides how to translate this into a new
+   * ordering (typically: insert `fromKey` immediately before `toKey`
+   * in the columns array). Optional — if omitted, drag-reorder is
+   * disabled and the headers behave exactly as before.
+   */
+  onReorder?: (fromKey: AnalysisSortKey, toKey: AnalysisSortKey) => void
 }
 
 const MIN_COLUMN_WIDTH = 60
@@ -56,9 +65,18 @@ export function AnalysisTableHeader({
   onResizeColumn,
   onResetColumn,
   columnSize,
+  onReorder,
 }: AnalysisTableHeaderProps) {
   const thRefs = useRef<Partial<Record<AnalysisSortKey, HTMLTableCellElement | null>>>({})
   const sortBtnPad = sortButtonPaddingFor(columnSize)
+  // Tracks which column is being dragged (for visual feedback) and
+  // which column is currently being hovered over as a drop target.
+  // Both reset on dragend/drop. Using state (not refs) so React
+  // re-renders to show the dashed drop-indicator line.
+  const [draggingKey, setDraggingKey] = useState<AnalysisSortKey | null>(null)
+  const [dragOverKey, setDragOverKey] = useState<AnalysisSortKey | null>(null)
+
+  const reorderEnabled = Boolean(onReorder)
 
   return (
     <thead className="bg-gradient-to-b from-[#f8fafc] to-[#eef3f8] border-b border-line">
@@ -69,6 +87,8 @@ export function AnalysisTableHeader({
           const explicitWidth = widths?.[column.key]
           const isLast = columnIndex === columns.length - 1
           const aligns = alignClasses(column.align)
+          const isDragging = draggingKey === column.key
+          const isDragOver = dragOverKey === column.key && draggingKey !== null && draggingKey !== column.key
 
           return (
             <th
@@ -78,8 +98,80 @@ export function AnalysisTableHeader({
               }}
               title={column.title}
               aria-sort={ariaSort}
-              className={`${TH_BASE_CLASSES} ${aligns.th}`}
-              style={explicitWidth ? { width: explicitWidth, minWidth: explicitWidth } : undefined}
+              // HTML5 drag-and-drop. We make the whole th draggable
+              // (not just a handle) so the user can grab anywhere on
+              // the header — matches the muscle memory of every
+              // major spreadsheet app. The native resize-handle on the
+              // right edge stops propagation in its own mousedown so
+              // resizing doesn't trigger a drag.
+              draggable={reorderEnabled}
+              onDragStart={
+                reorderEnabled
+                  ? (e) => {
+                      setDraggingKey(column.key)
+                      // setData is mandatory in Firefox or the
+                      // drag operation silently no-ops. The payload
+                      // itself is unused — we read draggingKey from
+                      // React state instead because dataTransfer is
+                      // protected during dragover for security.
+                      e.dataTransfer.effectAllowed = 'move'
+                      try {
+                        e.dataTransfer.setData('text/plain', column.key)
+                      } catch {
+                        // dataTransfer.setData can throw in some
+                        // sandboxed iframes; safe to ignore — the
+                        // React state path still works.
+                      }
+                    }
+                  : undefined
+              }
+              onDragOver={
+                reorderEnabled
+                  ? (e) => {
+                      // preventDefault is REQUIRED to mark this
+                      // element as a valid drop target — without it,
+                      // the drop event never fires.
+                      e.preventDefault()
+                      e.dataTransfer.dropEffect = 'move'
+                      if (dragOverKey !== column.key) {
+                        setDragOverKey(column.key)
+                      }
+                    }
+                  : undefined
+              }
+              onDragLeave={
+                reorderEnabled
+                  ? () => {
+                      if (dragOverKey === column.key) setDragOverKey(null)
+                    }
+                  : undefined
+              }
+              onDrop={
+                reorderEnabled
+                  ? (e) => {
+                      e.preventDefault()
+                      const fromKey = draggingKey
+                      setDraggingKey(null)
+                      setDragOverKey(null)
+                      if (fromKey && fromKey !== column.key && onReorder) {
+                        onReorder(fromKey, column.key)
+                      }
+                    }
+                  : undefined
+              }
+              onDragEnd={
+                reorderEnabled
+                  ? () => {
+                      setDraggingKey(null)
+                      setDragOverKey(null)
+                    }
+                  : undefined
+              }
+              className={`${TH_BASE_CLASSES} ${aligns.th} ${isDragging ? 'opacity-40' : ''} ${isDragOver ? 'shadow-[inset_3px_0_0_var(--ss-blue)]' : ''}`}
+              style={{
+                ...(explicitWidth ? { width: explicitWidth, minWidth: explicitWidth } : {}),
+                ...(reorderEnabled ? { cursor: isDragging ? 'grabbing' : 'grab' } : {}),
+              }}
             >
               <button
                 type="button"

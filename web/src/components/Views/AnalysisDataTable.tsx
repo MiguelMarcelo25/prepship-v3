@@ -50,8 +50,6 @@ function positionThumbnailPreview(cursorX: number, cursorY: number) {
   }
 }
 
-const TABLE_COLUMN_COUNT = 11
-
 export type AnalysisColumnSize = 'narrow' | 'medium' | 'wide'
 
 interface AnalysisDataTableProps {
@@ -70,6 +68,11 @@ interface AnalysisDataTableProps {
   error: string | null
   emptyMessage: string
   onRowClick: (invSkuId: number) => void
+  /**
+   * Pipe-through for the header's drag-reorder callback. Passed
+   * verbatim — see AnalysisTableHeader.onReorder for semantics.
+   */
+  onReorder?: (fromKey: AnalysisSortKey, toKey: AnalysisSortKey) => void
 }
 
 const SHELL_CLASSES =
@@ -135,6 +138,7 @@ export function AnalysisDataTable({
   error,
   emptyMessage,
   onRowClick,
+  onReorder,
 }: AnalysisDataTableProps) {
   const showRows = !loading && !error && rows.length > 0
   const showEmpty = !loading && !error && rows.length === 0
@@ -186,17 +190,18 @@ export function AnalysisDataTable({
           onResizeColumn={onResizeColumn}
           onResetColumn={onResetColumn}
           columnSize={columnSize}
+          onReorder={onReorder}
         />
         <tbody id="analysis-tbody">
           {error ? (
             <tr>
-              <td colSpan={TABLE_COLUMN_COUNT} className="px-5 py-12 text-center text-danger text-[13px] font-semibold">
+              <td colSpan={columns.length} className="px-5 py-12 text-center text-danger text-[13px] font-semibold">
                 Error: {error}
               </td>
             </tr>
           ) : showEmpty ? (
             <tr>
-              <td colSpan={TABLE_COLUMN_COUNT} className="px-5 py-12 text-center text-ink-3 text-[13px]">
+              <td colSpan={columns.length} className="px-5 py-12 text-center text-ink-3 text-[13px]">
                 {emptyMessage}
               </td>
             </tr>
@@ -256,142 +261,170 @@ export function AnalysisDataTable({
                     isClickable ? () => onRowClick(row.invSkuId as number) : undefined
                   }
                 >
-                  {/* Item Name cell with thumbnail to the LEFT.
-                    The imageUrl is already plumbed through from the
-                    backend (analysis.ts:332 → v2-apiClient line 3076)
-                    so we just render it. When missing, a small grey
-                    placeholder square keeps the row alignment stable
-                    so name text doesn't reflow between rows that have
-                    images and rows that don't. lazy-loading the imgs
-                    means scrolling 100+ rows doesn't fire 100+ network
-                    requests upfront — only as they enter viewport. */}
-                  <td
-                    className={`${cellPadding} ${nameMaxWidth} font-medium text-ink ${TD_BASE}`}
-                    title={row.name}
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span
-                        className="flex-shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-md ring-1 ring-line bg-surface-2 overflow-hidden"
-                        aria-hidden
-                      >
-                        {row.imageUrl ? (
-                          <img
-                            src={row.imageUrl}
-                            alt=""
-                            loading="lazy"
-                            decoding="async"
-                            referrerPolicy="no-referrer"
-                            className="w-full h-full object-cover cursor-zoom-in"
-                            onMouseEnter={(e) => showThumbnailPreview(row.imageUrl as string, e)}
-                            onMouseLeave={hideThumbnailPreview}
-                            onError={(e) => {
-                              // Marketplace image URLs sometimes 403/404
-                              // (Amazon CDN signed-URL expiry, etc).
-                              // Hide the broken-image icon instead of
-                              // showing a torn-page glyph in the row.
-                              (e.currentTarget as HTMLImageElement).style.display = 'none'
-                            }}
-                          />
-                        ) : (
-                          <span className="text-[9px] font-semibold text-ink-3 uppercase tracking-wider">—</span>
-                        )}
-                      </span>
-                      <span className="overflow-hidden text-ellipsis whitespace-nowrap min-w-0">
-                        {row.name}
-                      </span>
-                    </div>
-                  </td>
-                  <td className={skuClassesFor(columnSize, isClickable)}>
-                    {row.sku || <span className="text-line-2">—</span>}
-                  </td>
-                  <td className={clientClassesFor(columnSize)}>
-                    {row.clientName || '—'}
-                  </td>
-                  <td className={`${cellPadding} text-right whitespace-nowrap tabular-nums font-bold ${TD_BASE}`}>
-                    {row.orders}
-                  </td>
-                  <td className={`${cellPadding} text-right whitespace-nowrap tabular-nums ${TD_BASE}`}>
-                    {row.pendingOrders > 0 ? (
-                      <span
-                        className={`inline-flex items-center gap-1 ${pillSize} rounded-full font-bold leading-snug tabular-nums bg-[rgba(224,122,0,.12)] text-[#b86200]`}
-                      >
-                        {row.pendingOrders}
-                        <span className="text-[9px] font-semibold opacity-75">pend</span>
-                      </span>
-                    ) : (
-                      <span className="text-line-2">—</span>
-                    )}
-                  </td>
-                  <td className={`${cellPadding} text-right whitespace-nowrap tabular-nums ${TD_BASE}`}>
-                    {row.externalOrders > 0 ? (
-                      <span
-                        className={`inline-flex items-center gap-1 ${pillSize} rounded-full font-bold leading-snug tabular-nums bg-[rgba(138,149,163,.16)] text-ink-2`}
-                      >
-                        {row.externalOrders}
-                        <span className="text-[9px] font-semibold opacity-75">ext</span>
-                      </span>
-                    ) : (
-                      <span className="text-line-2">—</span>
-                    )}
-                  </td>
-                  <td className={`${cellPadding} text-right whitespace-nowrap tabular-nums ${TD_BASE}`}>
-                    <span className="inline-flex items-center justify-end gap-[7px]">
-                      <span
-                        className="h-1.5 rounded-[3px] opacity-65 min-w-[1px] bg-gradient-to-r from-brand to-[#5b8def]"
-                        style={{ width: qtyBarWidth }}
-                      />
-                      <span className="font-semibold text-[14px] min-w-[36px] text-right tabular-nums">
-                        {row.qty.toLocaleString()}
-                      </span>
-                    </span>
-                  </td>
-                  {/* Units-trend sparkline cell — daily units over the
-                      selected date range. Series comes pre-aligned from
-                      the backend (one slot per day, zeros for quiet
-                      days), so the component does no further math
-                      beyond computing the up/down/flat color. */}
-                  <td className={`${cellPadding} whitespace-nowrap align-middle text-center ${TD_BASE}`}>
-                    <span className="inline-flex items-center justify-center">
-                      <UnitsTrendSparkline
-                        series={(row as { dailyQty?: number[] }).dailyQty ?? []}
-                      />
-                    </span>
-                  </td>
-                  <td className={`${cellPadding} text-right whitespace-nowrap tabular-nums ${TD_BASE}`}>
-                    {row.standardShipCount > 0 ? (
-                      <>
-                        <span className="font-bold">{row.standardShipCount}</span>
-                        <span className="ml-1.5 text-[10.5px] font-semibold tabular-nums text-ok">
-                          {formatAnalysisMoney(stdAvg)}
-                        </span>
-                      </>
-                    ) : (
-                      <span className="text-line-2">—</span>
-                    )}
-                  </td>
-                  <td className={`${cellPadding} text-right whitespace-nowrap tabular-nums ${TD_BASE}`}>
-                    {row.expeditedShipCount > 0 ? (
-                      <>
-                        <span
-                          className={`inline-flex items-center gap-1 ${pillSize} rounded-full font-bold leading-snug tabular-nums bg-[rgba(224,122,0,.12)] text-[#b86200]`}
-                        >
-                          {row.expeditedShipCount}
-                        </span>
-                        <span className="ml-1.5 text-[10.5px] font-semibold tabular-nums text-ink-3">
-                          {formatAnalysisMoney(expAvg)}
-                        </span>
-                      </>
-                    ) : (
-                      <span className="text-line-2">—</span>
-                    )}
-                  </td>
-                  <td className={`${cellPadding} text-right whitespace-nowrap tabular-nums font-extrabold text-[14px] text-ink ${TD_BASE}`}>
-                    {row.totalShipping > 0 ? (
-                      formatAnalysisMoney(row.totalShipping)
-                    ) : (
-                      <span className="text-ink-3">—</span>
-                    )}
-                  </td>
+                  {/* Cells render dynamically from the `columns` prop so
+                      the user's chosen ORDER and VISIBILITY (drag-reorder
+                      + show/hide toggle controls in AnalysisView) are
+                      honored without duplicating JSX. Each renderer
+                      below produces the exact same markup the hardcoded
+                      version produced — only the dispatch is data-driven. */}
+                  {columns.map((col) => {
+                    switch (col.key) {
+                      case 'name':
+                        return (
+                          <td
+                            key="name"
+                            className={`${cellPadding} ${nameMaxWidth} font-medium text-ink ${TD_BASE}`}
+                            title={row.name}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span
+                                className="flex-shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-md ring-1 ring-line bg-surface-2 overflow-hidden"
+                                aria-hidden
+                              >
+                                {row.imageUrl ? (
+                                  <img
+                                    src={row.imageUrl}
+                                    alt=""
+                                    loading="lazy"
+                                    decoding="async"
+                                    referrerPolicy="no-referrer"
+                                    className="w-full h-full object-cover cursor-zoom-in"
+                                    onMouseEnter={(e) => showThumbnailPreview(row.imageUrl as string, e)}
+                                    onMouseLeave={hideThumbnailPreview}
+                                    onError={(e) => {
+                                      (e.currentTarget as HTMLImageElement).style.display = 'none'
+                                    }}
+                                  />
+                                ) : (
+                                  <span className="text-[9px] font-semibold text-ink-3 uppercase tracking-wider">—</span>
+                                )}
+                              </span>
+                              <span className="overflow-hidden text-ellipsis whitespace-nowrap min-w-0">
+                                {row.name}
+                              </span>
+                            </div>
+                          </td>
+                        )
+                      case 'sku':
+                        return (
+                          <td key="sku" className={skuClassesFor(columnSize, isClickable)}>
+                            {row.sku || <span className="text-line-2">—</span>}
+                          </td>
+                        )
+                      case 'client':
+                        return (
+                          <td key="client" className={clientClassesFor(columnSize)}>
+                            {row.clientName || '—'}
+                          </td>
+                        )
+                      case 'orders':
+                        return (
+                          <td key="orders" className={`${cellPadding} text-right whitespace-nowrap tabular-nums font-bold ${TD_BASE}`}>
+                            {row.orders}
+                          </td>
+                        )
+                      case 'pending':
+                        return (
+                          <td key="pending" className={`${cellPadding} text-right whitespace-nowrap tabular-nums ${TD_BASE}`}>
+                            {row.pendingOrders > 0 ? (
+                              <span
+                                className={`inline-flex items-center gap-1 ${pillSize} rounded-full font-bold leading-snug tabular-nums bg-[rgba(224,122,0,.12)] text-[#b86200]`}
+                              >
+                                {row.pendingOrders}
+                                <span className="text-[9px] font-semibold opacity-75">pend</span>
+                              </span>
+                            ) : (
+                              <span className="text-line-2">—</span>
+                            )}
+                          </td>
+                        )
+                      case 'external':
+                        return (
+                          <td key="external" className={`${cellPadding} text-right whitespace-nowrap tabular-nums ${TD_BASE}`}>
+                            {row.externalOrders > 0 ? (
+                              <span
+                                className={`inline-flex items-center gap-1 ${pillSize} rounded-full font-bold leading-snug tabular-nums bg-[rgba(138,149,163,.16)] text-ink-2`}
+                              >
+                                {row.externalOrders}
+                                <span className="text-[9px] font-semibold opacity-75">ext</span>
+                              </span>
+                            ) : (
+                              <span className="text-line-2">—</span>
+                            )}
+                          </td>
+                        )
+                      case 'qty':
+                        return (
+                          <td key="qty" className={`${cellPadding} text-right whitespace-nowrap tabular-nums ${TD_BASE}`}>
+                            <span className="inline-flex items-center justify-end gap-[7px]">
+                              <span
+                                className="h-1.5 rounded-[3px] opacity-65 min-w-[1px] bg-gradient-to-r from-brand to-[#5b8def]"
+                                style={{ width: qtyBarWidth }}
+                              />
+                              <span className="font-semibold text-[14px] min-w-[36px] text-right tabular-nums">
+                                {row.qty.toLocaleString()}
+                              </span>
+                            </span>
+                          </td>
+                        )
+                      case 'trend':
+                        return (
+                          <td key="trend" className={`${cellPadding} whitespace-nowrap align-middle text-center ${TD_BASE}`}>
+                            <span className="inline-flex items-center justify-center">
+                              <UnitsTrendSparkline
+                                series={(row as { dailyQty?: number[] }).dailyQty ?? []}
+                              />
+                            </span>
+                          </td>
+                        )
+                      case 'stdOrders':
+                        return (
+                          <td key="stdOrders" className={`${cellPadding} text-right whitespace-nowrap tabular-nums ${TD_BASE}`}>
+                            {row.standardShipCount > 0 ? (
+                              <>
+                                <span className="font-bold">{row.standardShipCount}</span>
+                                <span className="ml-1.5 text-[10.5px] font-semibold tabular-nums text-ok">
+                                  {formatAnalysisMoney(stdAvg)}
+                                </span>
+                              </>
+                            ) : (
+                              <span className="text-line-2">—</span>
+                            )}
+                          </td>
+                        )
+                      case 'expOrders':
+                        return (
+                          <td key="expOrders" className={`${cellPadding} text-right whitespace-nowrap tabular-nums ${TD_BASE}`}>
+                            {row.expeditedShipCount > 0 ? (
+                              <>
+                                <span
+                                  className={`inline-flex items-center gap-1 ${pillSize} rounded-full font-bold leading-snug tabular-nums bg-[rgba(224,122,0,.12)] text-[#b86200]`}
+                                >
+                                  {row.expeditedShipCount}
+                                </span>
+                                <span className="ml-1.5 text-[10.5px] font-semibold tabular-nums text-ink-3">
+                                  {formatAnalysisMoney(expAvg)}
+                                </span>
+                              </>
+                            ) : (
+                              <span className="text-line-2">—</span>
+                            )}
+                          </td>
+                        )
+                      case 'total':
+                        return (
+                          <td key="total" className={`${cellPadding} text-right whitespace-nowrap tabular-nums font-extrabold text-[14px] text-ink ${TD_BASE}`}>
+                            {row.totalShipping > 0 ? (
+                              formatAnalysisMoney(row.totalShipping)
+                            ) : (
+                              <span className="text-ink-3">—</span>
+                            )}
+                          </td>
+                        )
+                      default:
+                        return null
+                    }
+                  })}
                 </tr>
               )
             })
@@ -400,40 +433,98 @@ export function AnalysisDataTable({
         <tfoot id="analysis-tfoot">
           {showRows ? (
             <tr className="bg-gradient-to-b from-[#f8fafc] to-[#eef3f8] border-t-2 border-line font-bold">
-              <td colSpan={3} className={`${cellPadding} text-[14px] border-t-2 border-line text-ink tabular-nums`}>
-                <span className="text-ink-3 font-extrabold text-[10px] uppercase tracking-[0.06em] mr-2.5">
-                  TOTALS
-                </span>
-                {totals.skuCount.toLocaleString()} SKUs
-              </td>
-              <td className={`${cellPadding} text-right text-[14px] border-t-2 border-line text-ink tabular-nums`}>
-                {totals.totalOrders.toLocaleString()}
-              </td>
-              <td className={`${cellPadding} text-right text-[14px] border-t-2 border-line text-[#b86200] tabular-nums`}>
-                {totals.totalPending > 0 ? totals.totalPending.toLocaleString() : '—'}
-              </td>
-              <td className={`${cellPadding} text-right text-[14px] border-t-2 border-line text-ink-3 tabular-nums`}>
-                {totals.totalExternal > 0 ? totals.totalExternal.toLocaleString() : '—'}
-              </td>
-              <td className={`${cellPadding} text-right text-[14px] border-t-2 border-line text-ink tabular-nums`}>
-                {totals.totalQty.toLocaleString()}
-              </td>
-              {/* Trend column has no meaningful aggregate (averaging
-                  trend scores across SKUs would be misleading), so the
-                  footer cell stays blank but keeps the column alignment
-                  honest. */}
-              <td className={`${cellPadding} text-center text-[14px] border-t-2 border-line text-ink-3`}>
-                <span className="text-line-2">—</span>
-              </td>
-              <td className={`${cellPadding} text-right text-[14px] border-t-2 border-line text-ink tabular-nums`}>
-                {totals.totalStdCount > 0 ? totals.totalStdCount.toLocaleString() : '—'}
-              </td>
-              <td className={`${cellPadding} text-right text-[14px] border-t-2 border-line text-[#b86200] tabular-nums`}>
-                {totals.totalExpCount > 0 ? totals.totalExpCount.toLocaleString() : '—'}
-              </td>
-              <td className={`${cellPadding} text-right text-[13px] border-t-2 border-line text-ink font-extrabold tabular-nums`}>
-                {totals.totalShipping > 0 ? formatAnalysisMoney(totals.totalShipping) : '—'}
-              </td>
+              {/* Footer cells render in the same dynamic order as the
+                  body. The previous version used colSpan={3} to merge
+                  name+sku+client into one "TOTALS X SKUs" cell — that
+                  trick doesn't compose with reorder/hide, so we now
+                  show the "TOTALS X SKUs" badge in the FIRST visible
+                  column instead. Other columns render their aggregate
+                  (or '—' for those without one, like trend). */}
+              {columns.map((col, idx) => {
+                const isFirstVisible = idx === 0
+                const footerTotalsBadge = isFirstVisible ? (
+                  <>
+                    <span className="text-ink-3 font-extrabold text-[10px] uppercase tracking-[0.06em] mr-2.5">
+                      TOTALS
+                    </span>
+                    {totals.skuCount.toLocaleString()} SKUs
+                  </>
+                ) : null
+                const ftBase = `${cellPadding} border-t-2 border-line tabular-nums`
+                switch (col.key) {
+                  case 'name':
+                  case 'sku':
+                  case 'client':
+                    // Identity columns get the TOTALS badge if they're
+                    // the first visible column, otherwise stay empty.
+                    return (
+                      <td key={col.key} className={`${ftBase} text-[14px] text-ink`}>
+                        {footerTotalsBadge}
+                      </td>
+                    )
+                  case 'orders':
+                    return (
+                      <td key="orders" className={`${ftBase} text-right text-[14px] text-ink`}>
+                        {isFirstVisible ? footerTotalsBadge : null}
+                        {totals.totalOrders.toLocaleString()}
+                      </td>
+                    )
+                  case 'pending':
+                    return (
+                      <td key="pending" className={`${ftBase} text-right text-[14px] text-[#b86200]`}>
+                        {isFirstVisible ? footerTotalsBadge : null}
+                        {totals.totalPending > 0 ? totals.totalPending.toLocaleString() : '—'}
+                      </td>
+                    )
+                  case 'external':
+                    return (
+                      <td key="external" className={`${ftBase} text-right text-[14px] text-ink-3`}>
+                        {isFirstVisible ? footerTotalsBadge : null}
+                        {totals.totalExternal > 0 ? totals.totalExternal.toLocaleString() : '—'}
+                      </td>
+                    )
+                  case 'qty':
+                    return (
+                      <td key="qty" className={`${ftBase} text-right text-[14px] text-ink`}>
+                        {isFirstVisible ? footerTotalsBadge : null}
+                        {totals.totalQty.toLocaleString()}
+                      </td>
+                    )
+                  case 'trend':
+                    // Trend has no meaningful aggregate (averaging
+                    // trend scores across SKUs is misleading), so the
+                    // footer cell stays blank.
+                    return (
+                      <td key="trend" className={`${ftBase} text-center text-[14px] text-ink-3`}>
+                        {isFirstVisible ? footerTotalsBadge : null}
+                        <span className="text-line-2">—</span>
+                      </td>
+                    )
+                  case 'stdOrders':
+                    return (
+                      <td key="stdOrders" className={`${ftBase} text-right text-[14px] text-ink`}>
+                        {isFirstVisible ? footerTotalsBadge : null}
+                        {totals.totalStdCount > 0 ? totals.totalStdCount.toLocaleString() : '—'}
+                      </td>
+                    )
+                  case 'expOrders':
+                    return (
+                      <td key="expOrders" className={`${ftBase} text-right text-[14px] text-[#b86200]`}>
+                        {isFirstVisible ? footerTotalsBadge : null}
+                        {totals.totalExpCount > 0 ? totals.totalExpCount.toLocaleString() : '—'}
+                      </td>
+                    )
+                  case 'total':
+                    return (
+                      <td key="total" className={`${ftBase} text-right text-[13px] text-ink font-extrabold`}>
+                        {isFirstVisible ? footerTotalsBadge : null}
+                        {totals.totalShipping > 0 ? formatAnalysisMoney(totals.totalShipping) : '—'}
+                      </td>
+                    )
+                  default:
+                    return null
+                }
+              })}
             </tr>
           ) : null}
         </tfoot>
