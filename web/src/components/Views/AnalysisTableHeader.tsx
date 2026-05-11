@@ -170,11 +170,20 @@ export function AnalysisTableHeader({
               className={`${TH_BASE_CLASSES} ${aligns.th} ${isDragging ? 'opacity-40' : ''} ${isDragOver ? 'shadow-[inset_3px_0_0_var(--ss-blue)]' : ''}`}
               style={{
                 ...(explicitWidth ? { width: explicitWidth, minWidth: explicitWidth } : {}),
-                ...(reorderEnabled ? { cursor: isDragging ? 'grabbing' : 'grab' } : {}),
+                ...(reorderEnabled ? { cursor: isDragging ? 'grabbing' : 'grab', userSelect: 'none' } : {}),
               }}
             >
               <button
                 type="button"
+                // The <th> is `draggable={true}`, but a child <button>
+                // captures mousedown and prevents the parent's drag
+                // from initiating (HTML5 DnD §6.7.5). The fix is to
+                // promote the button to also be a drag source — drag
+                // events bubble up to the <th>'s handlers, while
+                // onClick still fires on a plain click (browsers only
+                // emit dragstart after a movement threshold).
+                draggable={reorderEnabled}
+                style={reorderEnabled ? { cursor: isDragging ? 'grabbing' : 'grab' } : undefined}
                 className={`w-full min-h-[34px] inline-flex items-center gap-1.5 ${sortBtnPad} py-[7px] border-0 bg-transparent cursor-pointer font-inherit text-[10px] font-extrabold uppercase tracking-[0.04em] transition-colors duration-150 ${aligns.btn} ${
                   active
                     ? 'text-brand'
