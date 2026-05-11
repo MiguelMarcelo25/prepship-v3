@@ -2,6 +2,12 @@ import { env } from './env';
 import type { Address } from './shipstation/types';
 import { getDefaultLocation } from '../services/locations';
 
+const FALLBACK_SHIP_FROM_PHONE = '3103295555';
+
+function fallbackPhone(): string {
+  return env.SHIP_FROM_PHONE || FALLBACK_SHIP_FROM_PHONE;
+}
+
 function fromEnv(): Address {
   const e = env;
   const missing: string[] = [];
@@ -10,7 +16,6 @@ function fromEnv(): Address {
   if (!e.SHIP_FROM_CITY) missing.push('SHIP_FROM_CITY');
   if (!e.SHIP_FROM_STATE) missing.push('SHIP_FROM_STATE');
   if (!e.SHIP_FROM_POSTAL_CODE) missing.push('SHIP_FROM_POSTAL_CODE');
-  if (!e.SHIP_FROM_PHONE) missing.push('SHIP_FROM_PHONE');
   if (missing.length) {
     throw new Error(
       `Default ship-from address is not configured. Set a default Location in the UI, or set env vars: ${missing.join(', ')}`
@@ -19,7 +24,7 @@ function fromEnv(): Address {
   return {
     name: e.SHIP_FROM_NAME!,
     company_name: e.SHIP_FROM_COMPANY || undefined,
-    phone: e.SHIP_FROM_PHONE!,
+    phone: fallbackPhone(),
     address_line1: e.SHIP_FROM_STREET1!,
     address_line2: e.SHIP_FROM_STREET2 || undefined,
     city_locality: e.SHIP_FROM_CITY!,
@@ -38,7 +43,6 @@ export async function getDefaultShipFrom(): Promise<Address> {
       if (!loc.city) missing.push('city');
       if (!loc.state) missing.push('state');
       if (!loc.postalCode) missing.push('postalCode');
-      if (!loc.phone) missing.push('phone');
       if (missing.length) {
         throw new Error(
           `Default location "${loc.name}" is missing required fields: ${missing.join(', ')}`
@@ -47,7 +51,7 @@ export async function getDefaultShipFrom(): Promise<Address> {
       return {
         name: loc.name,
         company_name: loc.company ?? undefined,
-        phone: loc.phone!,
+        phone: loc.phone || fallbackPhone(),
         address_line1: loc.street1!,
         address_line2: loc.street2 ?? undefined,
         city_locality: loc.city!,
