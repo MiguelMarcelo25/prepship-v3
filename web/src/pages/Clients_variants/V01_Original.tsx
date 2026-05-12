@@ -14,7 +14,7 @@ const ClientModal = lazy(() => import('../../components/ClientModal'))
 export default function ClientsV01_Original() {
   const navigate = useNavigate()
   const [editing, setEditing] = useState<Client | null>(null)
-  const { clients, statsByClient, isLoading, sync, remove, toggleActive, backfill } = useClientsData()
+  const { clients, statsByClient, isLoading, sync, remove, toggleActive, backfill, openClientOrders, confirmActiveToggleDialog } = useClientsData()
   const rows = clients
 
   return (
@@ -92,9 +92,9 @@ export default function ClientsV01_Original() {
                     <div className="text-tiny text-ink-3 italic">No orders assigned</div>
                   ) : (
                     <div className="flex items-center gap-1.5 flex-wrap text-tiny">
-                      <CountPill label="Awaiting" value={s.awaiting} bg="bg-warn-bg" text="text-[#92400e]" />
-                      <CountPill label="Shipped" value={s.shipped} bg="bg-ok-bg" text="text-ok-dark" />
-                      <CountPill label="Cancelled" value={s.cancelled} bg="bg-danger-bg" text="text-[#991b1b]" />
+                      <CountPill label="Awaiting" value={s.awaiting} bg="bg-warn-bg" text="text-[#92400e]" onClick={() => openClientOrders(c, 'awaiting_shipment')} />
+                      <CountPill label="Shipped" value={s.shipped} bg="bg-ok-bg" text="text-ok-dark" onClick={() => openClientOrders(c, 'shipped')} />
+                      <CountPill label="Cancelled" value={s.cancelled} bg="bg-danger-bg" text="text-[#991b1b]" onClick={() => openClientOrders(c, 'cancelled')} />
                       {s.onHold > 0 && <CountPill label="On hold" value={s.onHold} bg="bg-surface-3" text="text-ink-2" />}
                       <span className="text-ink-3 ml-auto">{s.total.toLocaleString()} total</span>
                     </div>
@@ -148,13 +148,24 @@ export default function ClientsV01_Original() {
           <ClientModal existing={editing} onClose={() => setEditing(null)} />
         </Suspense>
       ) : null}
+
+      {confirmActiveToggleDialog}
     </div>
   )
 }
 
-function CountPill({ label, value, bg, text }: { label: string; value: number; bg: string; text: string }) {
+function CountPill({ label, value, bg, text, onClick }: { label: string; value: number; bg: string; text: string; onClick?: () => void }) {
+  const className = `inline-flex items-center gap-1 px-1.5 py-0.5 rounded ${bg} ${text} font-semibold`
+  if (onClick && value > 0) {
+    return (
+      <button type="button" onClick={onClick} className={`${className} hover:ring-1 hover:ring-current/25 transition`} title={`Open ${label.toLowerCase()} orders`}>
+        <span className="font-mono">{value.toLocaleString()}</span>
+        <span className="opacity-70">{label.toLowerCase()}</span>
+      </button>
+    )
+  }
   return (
-    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded ${bg} ${text} font-semibold`} title={label}>
+    <span className={className} title={label}>
       <span className="font-mono">{value.toLocaleString()}</span>
       <span className="opacity-70">{label.toLowerCase()}</span>
     </span>

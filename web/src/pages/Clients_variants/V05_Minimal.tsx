@@ -12,7 +12,7 @@ const ClientModal = lazy(() => import('../../components/ClientModal'))
 export default function ClientsV05_Minimal() {
   const navigate = useNavigate()
   const [editing, setEditing] = useState<Client | null>(null)
-  const { clients, statsByClient, isLoading, sync, remove, toggleActive, backfill } = useClientsData()
+  const { clients, statsByClient, isLoading, sync, remove, toggleActive, backfill, confirmActiveToggleDialog } = useClientsData()
 
   return (
     <div id="view-clients" className="view-content !p-0 !overflow-y-auto flex flex-col bg-white">
@@ -82,6 +82,8 @@ export default function ClientsV05_Minimal() {
           <ClientModal existing={editing} onClose={() => setEditing(null)} />
         </Suspense>
       ) : null}
+
+      {confirmActiveToggleDialog}
     </div>
   )
 }

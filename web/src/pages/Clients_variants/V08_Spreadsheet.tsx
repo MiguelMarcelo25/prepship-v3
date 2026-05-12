@@ -12,7 +12,7 @@ const ClientModal = lazy(() => import('../../components/ClientModal'))
 export default function ClientsV08_Spreadsheet() {
   const navigate = useNavigate()
   const [editing, setEditing] = useState<Client | null>(null)
-  const { clients, statsByClient, isLoading, sync, remove, toggleActive, backfill } = useClientsData()
+  const { clients, statsByClient, isLoading, sync, remove, toggleActive, backfill, confirmActiveToggleDialog } = useClientsData()
 
   return (
     <div id="view-clients" className="view-content !p-0 !overflow-y-auto flex flex-col bg-[#f9fafb]">
@@ -112,6 +112,8 @@ export default function ClientsV08_Spreadsheet() {
           <ClientModal existing={editing} onClose={() => setEditing(null)} />
         </Suspense>
       ) : null}
+
+      {confirmActiveToggleDialog}
     </div>
   )
 }

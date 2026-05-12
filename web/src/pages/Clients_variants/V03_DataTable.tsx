@@ -17,7 +17,7 @@ export default function ClientsV03_DataTable() {
   const [editing, setEditing] = useState<Client | null>(null)
   const [sortKey, setSortKey] = useState<SortKey>('total')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
-  const { clients, statsByClient, isLoading, sync, remove, toggleActive, backfill } = useClientsData()
+  const { clients, statsByClient, isLoading, sync, remove, toggleActive, backfill, confirmActiveToggleDialog } = useClientsData()
 
   const sortedRows = useMemo(() => {
     const out = [...clients]
@@ -127,6 +127,8 @@ export default function ClientsV03_DataTable() {
           <ClientModal existing={editing} onClose={() => setEditing(null)} />
         </Suspense>
       ) : null}
+
+      {confirmActiveToggleDialog}
     </div>
   )
 }

@@ -13,7 +13,7 @@ const ClientModal = lazy(() => import('../../components/ClientModal'))
 export default function ClientsV04_DarkGlass() {
   const navigate = useNavigate()
   const [editing, setEditing] = useState<Client | null>(null)
-  const { clients, statsByClient, isLoading, sync, remove, toggleActive, backfill } = useClientsData()
+  const { clients, statsByClient, isLoading, sync, remove, toggleActive, backfill, confirmActiveToggleDialog } = useClientsData()
 
   return (
     <div
@@ -135,6 +135,8 @@ export default function ClientsV04_DarkGlass() {
           <ClientModal existing={editing} onClose={() => setEditing(null)} />
         </Suspense>
       ) : null}
+
+      {confirmActiveToggleDialog}
     </div>
   )
 }

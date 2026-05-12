@@ -13,7 +13,7 @@ const ClientModal = lazy(() => import('../../components/ClientModal'))
 export default function ClientsV07_Mosaic() {
   const navigate = useNavigate()
   const [editing, setEditing] = useState<Client | null>(null)
-  const { clients, statsByClient, isLoading, sync, remove, toggleActive, backfill } = useClientsData()
+  const { clients, statsByClient, isLoading, sync, remove, toggleActive, backfill, confirmActiveToggleDialog } = useClientsData()
 
   // Hero = client with highest total order count. Falls back to
   // first client if no stats yet.
@@ -136,6 +136,8 @@ export default function ClientsV07_Mosaic() {
           <ClientModal existing={editing} onClose={() => setEditing(null)} />
         </Suspense>
       ) : null}
+
+      {confirmActiveToggleDialog}
     </div>
   )
 }

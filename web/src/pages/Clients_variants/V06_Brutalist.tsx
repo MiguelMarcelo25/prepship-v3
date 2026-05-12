@@ -12,7 +12,7 @@ const ClientModal = lazy(() => import('../../components/ClientModal'))
 export default function ClientsV06_Brutalist() {
   const navigate = useNavigate()
   const [editing, setEditing] = useState<Client | null>(null)
-  const { clients, statsByClient, isLoading, sync, remove, toggleActive, backfill } = useClientsData()
+  const { clients, statsByClient, isLoading, sync, remove, toggleActive, backfill, confirmActiveToggleDialog } = useClientsData()
 
   return (
     <div id="view-clients" className="view-content !p-0 !overflow-y-auto flex flex-col" style={{ background: '#f5f3ed', fontFamily: 'ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Monaco, monospace' }}>
@@ -92,6 +92,8 @@ export default function ClientsV06_Brutalist() {
           <ClientModal existing={editing} onClose={() => setEditing(null)} />
         </Suspense>
       ) : null}
+
+      {confirmActiveToggleDialog}
     </div>
   )
 }

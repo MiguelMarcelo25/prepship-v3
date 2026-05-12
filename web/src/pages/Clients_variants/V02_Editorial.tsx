@@ -8,7 +8,7 @@ import { useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Plus, Pencil, Trash2, Wand2, RefreshCw, Search, Users, Building2 } from 'lucide-react'
 import { Button } from '../../components/ui/Button'
-import { useClientsData, type Client, type ClientStats } from './useClientsData'
+import { useClientsData, type Client, type ClientStats, type OrderStatus } from './useClientsData'
 
 const ClientModal = lazy(() => import('../../components/ClientModal'))
 
@@ -48,7 +48,7 @@ export default function ClientsV02_Editorial() {
   const [editing, setEditing] = useState<Client | null>(null)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all')
-  const { clients: rows, statsByClient, isLoading, sync, remove, toggleActive, backfill } = useClientsData()
+  const { clients: rows, statsByClient, isLoading, sync, remove, toggleActive, backfill, openClientOrders, confirmActiveToggleDialog } = useClientsData()
 
   const kpis = useMemo(() => {
     const totalClients = rows.length
@@ -216,6 +216,7 @@ export default function ClientsV02_Editorial() {
                   stats={statsByClient.get(c.id)}
                   onEdit={() => setEditing(c)}
                   onToggleActive={() => toggleActive.mutate({ id: c.id, active: !c.active })}
+                  onOpenOrders={(status) => openClientOrders(c, status)}
                   togglePending={toggleActive.isPending}
                   onBackfill={() =>
                     backfill.mutate(
@@ -243,6 +244,8 @@ export default function ClientsV02_Editorial() {
           <ClientModal existing={editing} onClose={() => setEditing(null)} />
         </Suspense>
       ) : null}
+
+      {confirmActiveToggleDialog}
     </div>
   )
 }
@@ -258,18 +261,18 @@ function KpiCell({ label, value, sublabel, divider, valueTone }: { label: string
   )
 }
 
-function ClientCard({ client, index, stats, onEdit, onToggleActive, togglePending, onBackfill, backfillPending, onDelete, removePending }: {
+function ClientCard({ client, index, stats, onEdit, onToggleActive, onOpenOrders, togglePending, onBackfill, backfillPending, onDelete, removePending }: {
   client: Client; index: number; stats: ClientStats | undefined;
-  onEdit: () => void; onToggleActive: () => void; togglePending: boolean;
+  onEdit: () => void; onToggleActive: () => void; onOpenOrders: (status: OrderStatus) => void; togglePending: boolean;
   onBackfill: () => void; backfillPending: boolean; onDelete: () => void; removePending: boolean
 }) {
   const m = monogramFor(client.name)
   const total = stats?.total ?? 0
   const segments = stats
     ? [
-        { key: 'awaiting' as const, count: stats.awaiting, color: '#d97706', label: 'Awaiting' },
-        { key: 'shipped' as const, count: stats.shipped, color: '#16a34a', label: 'Shipped' },
-        { key: 'cancelled' as const, count: stats.cancelled, color: '#dc2626', label: 'Cancelled' },
+        { key: 'awaiting' as const, count: stats.awaiting, color: '#d97706', label: 'Awaiting', status: 'awaiting_shipment' as OrderStatus },
+        { key: 'shipped' as const, count: stats.shipped, color: '#16a34a', label: 'Shipped', status: 'shipped' as OrderStatus },
+        { key: 'cancelled' as const, count: stats.cancelled, color: '#dc2626', label: 'Cancelled', status: 'cancelled' as OrderStatus },
         { key: 'onHold' as const, count: stats.onHold, color: '#64748b', label: 'On hold' },
       ].filter((s) => s.count > 0)
     : []
@@ -360,12 +363,29 @@ function ClientCard({ client, index, stats, onEdit, onToggleActive, togglePendin
                 ))}
               </div>
               <div className="mt-2 flex items-center gap-3 flex-wrap text-[10.5px]">
-                {segments.map((s) => (
-                  <span key={s.key} className="inline-flex items-center gap-1.5 text-ink-2 font-mono tabular-nums">
-                    <span className="inline-block w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: s.color }} aria-hidden />
-                    <span>{s.count.toLocaleString()} <span className="text-ink-3 font-sans normal-case">{s.label.toLowerCase()}</span></span>
-                  </span>
-                ))}
+                {segments.map((s) => {
+                  const content = (
+                    <>
+                      <span className="inline-block w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: s.color }} aria-hidden />
+                      <span>{s.count.toLocaleString()} <span className="text-ink-3 font-sans normal-case">{s.label.toLowerCase()}</span></span>
+                    </>
+                  )
+                  return 'status' in s ? (
+                    <button
+                      key={s.key}
+                      type="button"
+                      onClick={() => onOpenOrders(s.status)}
+                      className="inline-flex items-center gap-1.5 text-ink-2 font-mono tabular-nums rounded px-1 py-0.5 -mx-1 hover:bg-brand/8 hover:text-brand transition"
+                      title={`Open ${s.label.toLowerCase()} orders for ${client.name}`}
+                    >
+                      {content}
+                    </button>
+                  ) : (
+                    <span key={s.key} className="inline-flex items-center gap-1.5 text-ink-2 font-mono tabular-nums">
+                      {content}
+                    </span>
+                  )
+                })}
               </div>
             </>
           )}

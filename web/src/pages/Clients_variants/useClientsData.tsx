@@ -5,8 +5,14 @@
 // stay purely presentational. Adding a new variant becomes ~150 LOC
 // of JSX, not 150 + a copy of every mutation handler.
 
+import { useCallback, useMemo, useState, type ReactNode } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../../lib/api'
+import {
+  ConfirmActiveToggleDialog,
+  type ConfirmActiveTogglePending,
+} from '../../components/ConfirmActiveToggleDialog'
 
 export type Client = {
   id: number
@@ -29,19 +35,43 @@ export type ClientStats = {
 }
 
 export type BackfillResult = { updated: number; message?: string }
+export type OrderStatus = 'awaiting_shipment' | 'shipped' | 'cancelled'
 
 export interface ClientsDataResult {
   clients: Client[]
   statsByClient: Map<number, ClientStats>
   isLoading: boolean
+  openClientOrders: (client: Client, status: OrderStatus) => void
   sync: ReturnType<typeof useMutation<{ inserted: number; updated: number; message: string }, Error, void>>
   remove: ReturnType<typeof useMutation<unknown, Error, number>>
+  // toggleActive's `.mutate({id, active})` no longer fires the
+  // mutation directly — it opens a confirmation dialog first and only
+  // mutates on confirm. From a caller's perspective the call signature
+  // is identical to a vanilla useMutation result, so the existing 11
+  // Clients-page variants don't need to change anything. The dialog
+  // node lives at `confirmActiveToggleDialog` below and must be
+  // rendered somewhere in the variant tree (one line per variant).
   toggleActive: ReturnType<typeof useMutation<Client, Error, { id: number; active: boolean }, { previous?: Client[] }>>
   backfill: ReturnType<typeof useMutation<BackfillResult, Error, { id: number; overwrite: boolean }>>
+  // Drop this somewhere in the variant's JSX — it's a portal so it
+  // can render anywhere and still float above the rest of the page.
+  confirmActiveToggleDialog: ReactNode
 }
 
 export function useClientsData(): ClientsDataResult {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
+  const openClientOrders = useCallback(
+    (client: Client, status: OrderStatus) => {
+      const params = new URLSearchParams({
+        clientId: String(client.id),
+        includeInactiveClients: 'true',
+        clientName: client.name,
+      })
+      navigate(`/orders/${status}?${params.toString()}`)
+    },
+    [navigate],
+  )
 
   const { data, isLoading } = useQuery({
     queryKey: ['clients', 'admin'],
@@ -133,13 +163,69 @@ export function useClientsData(): ClientsDataResult {
     },
   })
 
+  // Confirmation gate over the real toggleActive mutation.
+  //
+  // Each variant calls `toggleActive.mutate({id, active})` as before,
+  // but instead of immediately PATCHing the client we stash the
+  // intent in `pendingToggle` state and the ConfirmActiveToggleDialog
+  // mounts. Only when the operator clicks "Yes" does the mutation
+  // actually run. Cancel/ESC/backdrop drops the pending intent.
+  //
+  // The mutation object's other fields (isPending, error, reset, …)
+  // forward through unchanged so variants that read e.g.
+  // `toggleActive.isPending` for spinner state still work.
+  const [pendingToggle, setPendingToggle] = useState<ConfirmActiveTogglePending | null>(null)
+
+  const requestToggle = useCallback(
+    ({ id, active }: { id: number; active: boolean }) => {
+      const client = (data ?? []).find((c) => c.id === id)
+      setPendingToggle({
+        clientId: id,
+        clientName: client?.name ?? `Client #${id}`,
+        nextActive: active,
+      })
+    },
+    [data],
+  )
+
+  const cancelToggle = useCallback(() => setPendingToggle(null), [])
+  const confirmToggle = useCallback(() => {
+    if (!pendingToggle) return
+    toggleActive.mutate({ id: pendingToggle.clientId, active: pendingToggle.nextActive })
+    setPendingToggle(null)
+  }, [pendingToggle, toggleActive])
+
+  // Proxy object — same shape as a useMutation return value, but with
+  // .mutate() intercepted to open the confirm dialog instead of
+  // firing immediately. useMemo prevents identity churn (referential
+  // stability matters for any variant that lists toggleActive in
+  // useCallback / useEffect deps).
+  const gatedToggleActive = useMemo(
+    () => ({
+      ...toggleActive,
+      mutate: requestToggle,
+    }),
+    [toggleActive, requestToggle],
+  ) as typeof toggleActive
+
+  const confirmActiveToggleDialog = (
+    <ConfirmActiveToggleDialog
+      pending={pendingToggle}
+      onConfirm={confirmToggle}
+      onCancel={cancelToggle}
+      isPending={toggleActive.isPending}
+    />
+  )
+
   return {
     clients: data ?? [],
     statsByClient,
     isLoading,
+    openClientOrders,
     sync,
     remove,
-    toggleActive,
+    toggleActive: gatedToggleActive,
     backfill,
+    confirmActiveToggleDialog,
   }
 }

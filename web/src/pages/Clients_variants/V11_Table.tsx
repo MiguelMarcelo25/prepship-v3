@@ -29,7 +29,7 @@ import {
 } from 'lucide-react'
 import { Button } from '../../components/ui/Button'
 import { Table, type TableColumn } from '../../components/ui/Table'
-import { useClientsData, type Client, type ClientStats } from './useClientsData'
+import { useClientsData, type Client, type ClientStats, type OrderStatus } from './useClientsData'
 
 const ClientModal = lazy(() => import('../../components/ClientModal'))
 
@@ -44,7 +44,7 @@ export default function ClientsV11_Table() {
   const [editing, setEditing] = useState<Client | null>(null)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all')
-  const { clients, statsByClient, isLoading, sync, remove, toggleActive, backfill } = useClientsData()
+  const { clients, statsByClient, isLoading, sync, remove, toggleActive, backfill, openClientOrders, confirmActiveToggleDialog } = useClientsData()
 
   // Pre-flatten stats so each row is self-contained for the Table.
   const rows: Row[] = useMemo(
@@ -68,6 +68,25 @@ export default function ClientsV11_Table() {
       )
     })
   }, [rows, search, statusFilter])
+
+  const orderCountCell = (row: Row, value: number, status: OrderStatus, toneClass: string) => {
+    if (value <= 0) {
+      return <span className="font-mono tabular-nums text-ink-3">{value.toLocaleString()}</span>
+    }
+    return (
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation()
+          openClientOrders(row, status)
+        }}
+        className={`font-mono tabular-nums font-semibold rounded px-1.5 py-0.5 -mr-1 hover:bg-brand/8 hover:text-brand transition ${toneClass}`}
+        title={`Open ${status.replace('_', ' ')} orders for ${row.name}`}
+      >
+        {value.toLocaleString()}
+      </button>
+    )
+  }
 
   // ─── Column definitions ────────────────────────────────────────
   // Order = render order. Operator-resizable via the column edges;
@@ -170,11 +189,7 @@ export default function ClientsV11_Table() {
       sortValue: (row) => row.stats?.awaiting ?? 0,
       render: (row) => {
         const v = row.stats?.awaiting ?? 0
-        return (
-          <span className={`font-mono tabular-nums ${v > 0 ? 'text-amber-700 font-semibold' : 'text-ink-3'}`}>
-            {v.toLocaleString()}
-          </span>
-        )
+        return orderCountCell(row, v, 'awaiting_shipment', 'text-amber-700')
       },
     },
     {
@@ -187,11 +202,7 @@ export default function ClientsV11_Table() {
       sortValue: (row) => row.stats?.shipped ?? 0,
       render: (row) => {
         const v = row.stats?.shipped ?? 0
-        return (
-          <span className={`font-mono tabular-nums ${v > 0 ? 'text-ok-dark' : 'text-ink-3'}`}>
-            {v.toLocaleString()}
-          </span>
-        )
+        return orderCountCell(row, v, 'shipped', 'text-ok-dark')
       },
     },
     {
@@ -204,11 +215,7 @@ export default function ClientsV11_Table() {
       sortValue: (row) => row.stats?.cancelled ?? 0,
       render: (row) => {
         const v = row.stats?.cancelled ?? 0
-        return (
-          <span className={`font-mono tabular-nums ${v > 0 ? 'text-rose-700' : 'text-ink-3'}`}>
-            {v.toLocaleString()}
-          </span>
-        )
+        return orderCountCell(row, v, 'cancelled', 'text-rose-700')
       },
     },
     {
@@ -361,6 +368,8 @@ export default function ClientsV11_Table() {
           <ClientModal existing={editing} onClose={() => setEditing(null)} />
         </Suspense>
       ) : null}
+
+      {confirmActiveToggleDialog}
     </div>
   )
 }

@@ -14,7 +14,7 @@ const ClientModal = lazy(() => import('../../components/ClientModal'))
 export default function ClientsV09_Kanban() {
   const navigate = useNavigate()
   const [editing, setEditing] = useState<Client | null>(null)
-  const { clients, statsByClient, isLoading, sync, remove, toggleActive, backfill } = useClientsData()
+  const { clients, statsByClient, isLoading, sync, remove, toggleActive, backfill, confirmActiveToggleDialog } = useClientsData()
 
   const active = clients.filter((c) => c.active)
   const inactive = clients.filter((c) => !c.active)
@@ -114,6 +114,8 @@ export default function ClientsV09_Kanban() {
           <ClientModal existing={editing} onClose={() => setEditing(null)} />
         </Suspense>
       ) : null}
+
+      {confirmActiveToggleDialog}
     </div>
   )
 }

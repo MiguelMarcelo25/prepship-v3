@@ -5,6 +5,10 @@ import { useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import { Boxes } from 'lucide-react'
 import { apiClient, ApiError } from '../../api/client'
+import {
+  ConfirmActiveToggleDialog,
+  type ConfirmActiveTogglePending,
+} from '../ConfirmActiveToggleDialog'
 import { api } from '../../lib/api'
 import { ToastContext } from '../../contexts/ToastContext'
 import { useInitStores } from '../../hooks'
@@ -205,9 +209,9 @@ const INVENTORY_SORTABLE_KEYS = new Set<InventoryColumnKey>([
 // verbatim, so a resize on one column moves only that column.
 // columnWidths overrides take precedence on a per-key basis.
 const INVENTORY_COLUMN_DEFAULT_WIDTHS: Partial<Record<InventoryColumnKey, number>> = {
-  sku: 150,
+  sku: 140,
   thumbnail: 56,
-  // name: undefined → flex-fill
+  name: 360,
   store: 125,
   weight: 90,
   dims: 100,
@@ -219,10 +223,31 @@ const INVENTORY_COLUMN_DEFAULT_WIDTHS: Partial<Record<InventoryColumnKey, number
   totalUnits: 90,
   min: 55,
   status: 70,
-  actions: 200,
+  actions: 128,
 }
 
 const INVENTORY_COLUMN_MIN_WIDTH = 50
+const INVENTORY_COLUMN_MIN_WIDTHS: Partial<Record<InventoryColumnKey, number>> = {
+  sku: 112,
+  thumbnail: 56,
+  name: 260,
+  store: 112,
+  weight: 84,
+  dims: 96,
+  cuFt: 78,
+  package: 104,
+  stock: 62,
+  sold30: 72,
+  unitsPerPack: 82,
+  totalUnits: 88,
+  min: 54,
+  status: 70,
+  actions: 118,
+}
+
+function getInventoryColumnMinWidth(key: InventoryColumnKey): number {
+  return INVENTORY_COLUMN_MIN_WIDTHS[key] ?? INVENTORY_COLUMN_MIN_WIDTH
+}
 
 type InventoryColumnWidths = Partial<Record<InventoryColumnKey, number>>
 
@@ -301,9 +326,10 @@ function readStoredInventoryColumnWidths(): InventoryColumnWidths {
         isInventoryColumnKey(key)
         && typeof value === 'number'
         && Number.isFinite(value)
-        && value >= INVENTORY_COLUMN_MIN_WIDTH
+        && value >= getInventoryColumnMinWidth(key as InventoryColumnKey)
       ) {
-        cleaned[key as InventoryColumnKey] = value
+        const columnKey = key as InventoryColumnKey
+        cleaned[columnKey] = Math.max(getInventoryColumnMinWidth(columnKey), value)
       }
     }
     return cleaned
@@ -734,7 +760,10 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
     useState<InventoryColumnWidths>(readStoredInventoryColumnWidths)
 
   function handleInventoryResizeColumn(key: InventoryColumnKey, width: number) {
-    setInventoryColumnWidths((current) => ({ ...current, [key]: Math.round(width) }))
+    setInventoryColumnWidths((current) => ({
+      ...current,
+      [key]: Math.max(getInventoryColumnMinWidth(key), Math.round(width)),
+    }))
   }
 
   function handleInventoryResetColumn(key: InventoryColumnKey) {
@@ -750,12 +779,18 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
   // the th's actual DOM width would also work but reading state is
   // cheaper and avoids a layout-thrash on every drag start.
   function getInventoryColumnWidth(key: InventoryColumnKey): number {
-    return (
+    return Math.max(
+      getInventoryColumnMinWidth(key),
       inventoryColumnWidths[key]
       ?? INVENTORY_COLUMN_DEFAULT_WIDTHS[key]
       ?? INVENTORY_COLUMN_MIN_WIDTH
     )
   }
+
+  const inventoryTableMinWidth = useMemo(
+    () => effectiveInventoryColumns.reduce((sum, key) => sum + getInventoryColumnWidth(key), 0),
+    [effectiveInventoryColumns, inventoryColumnWidths],
+  )
 
   useEffect(() => {
     writeStoredInventoryColumnWidths(inventoryColumnWidths)
@@ -1258,7 +1293,7 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
         getStartWidth={() => getInventoryColumnWidth(columnKey)}
         onChange={(width) => handleInventoryResizeColumn(columnKey, Math.round(width))}
         onReset={() => handleInventoryResetColumn(columnKey)}
-        minWidth={INVENTORY_COLUMN_MIN_WIDTH}
+        minWidth={getInventoryColumnMinWidth(columnKey)}
       />
     )
 
@@ -1898,6 +1933,42 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
   // (pendingClientToggleId) so the user sees the slide animation right away
   // without waiting for the API round-trip. If the PATCH fails the override
   // is dropped (toggle snaps back) and a toast explains why.
+  // 2026-05-12 confirmation gate: clicking the toggle no longer
+  // mutates immediately — instead it stages the change in
+  // `pendingActiveToggle` and ConfirmActiveToggleDialog appears. The
+  // operator must explicitly confirm before the PATCH actually fires.
+  // Prevents accidental disable-cascades since enable/disable now
+  // propagates instantly across the whole app (per 60344e2/0fc5e14).
+  const [pendingActiveToggle, setPendingActiveToggle] = useState<
+    (ConfirmActiveTogglePending & { client: ClientDto }) | null
+  >(null)
+  const [confirmInFlight, setConfirmInFlight] = useState(false)
+
+  function requestToggleClientActive(client: ClientDto) {
+    if (pendingClientToggleId === client.clientId) return
+    const next = !(client.active ?? true)
+    setPendingActiveToggle({
+      clientId: client.clientId,
+      clientName: client.name ?? `Client #${client.clientId}`,
+      nextActive: next,
+      client,
+    })
+  }
+  function cancelToggleClientActive() {
+    setPendingActiveToggle(null)
+  }
+  async function confirmToggleClientActive() {
+    const pending = pendingActiveToggle
+    if (!pending) return
+    setConfirmInFlight(true)
+    try {
+      await handleToggleClientActive(pending.client)
+    } finally {
+      setConfirmInFlight(false)
+      setPendingActiveToggle(null)
+    }
+  }
+
   async function handleToggleClientActive(client: ClientDto) {
     if (pendingClientToggleId === client.clientId) return // ignore double-click while pending
     const next = !(client.active ?? true)
@@ -2254,6 +2325,7 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                       className={[
                         // Layout
                         'w-full m-0 table-fixed border-separate border-spacing-0',
+                        'inventory-stock-table',
 
                         // ─── Section title row (brand-colored client name) ───
                         // Sticky at top:0 so the title pins above column
@@ -2294,6 +2366,7 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                         '[&_tbody_tr:nth-child(odd)]:bg-white [&_tbody_tr:nth-child(even)]:bg-surface-2',
                         '[&_tbody_tr:hover_td]:bg-brand-bg/60',
                       ].join(' ')}
+                      style={bulkEditMode ? { minWidth: 860 } : { minWidth: inventoryTableMinWidth }}
                     >
                       {/* colgroup pins column widths so EVERY client's table
                           renders the same layout — auto-sizing was the cause
@@ -2414,8 +2487,8 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                                 switch (columnKey) {
                                   case 'sku':
                                     return (
-                                      <td key="sku" style={{ fontFamily: 'monospace', fontSize: 11.5 }}>
-                                        <button type="button" className="inventory-inline-button" style={{ color: 'var(--ss-blue)' }} onClick={() => void openSkuDrawer(row.id)} title="View orders & sales trend">{row.sku}</button>
+                                      <td key="sku" style={{ fontFamily: 'monospace', fontSize: 11.5, minWidth: 0 }}>
+                                        <button type="button" className="inventory-inline-button inventory-cell-link--nowrap" style={{ color: 'var(--ss-blue)' }} onClick={() => void openSkuDrawer(row.id)} title={`${row.sku} - view orders & sales trend`}>{row.sku}</button>
                                       </td>
                                     )
                                   case 'thumbnail':
@@ -2435,8 +2508,8 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                                     )
                                   case 'name':
                                     return (
-                                      <td key="name" style={{ fontSize: 12, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                        <button type="button" className="inventory-inline-button" onClick={() => void openSkuDrawer(row.id)} title="View orders & sales trend">{row.name || <span style={{ color: 'var(--text3)' }}>—</span>}</button>
+                                      <td key="name" style={{ fontSize: 12, minWidth: 0 }}>
+                                        <button type="button" className="inventory-inline-button inventory-cell-link--clamp" onClick={() => void openSkuDrawer(row.id)} title={`${row.name || row.sku || 'SKU'} - view orders & sales trend`}>{row.name || <span style={{ color: 'var(--text3)' }}>—</span>}</button>
                                       </td>
                                     )
                                   case 'store':
@@ -3032,7 +3105,7 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                           aria-label={isActive ? `Disable ${client.name}` : `Enable ${client.name}`}
                           aria-busy={isPending}
                           title={isPending ? 'Saving…' : isActive ? `Disable ${client.name} (hide from sidebar + views)` : `Enable ${client.name}`}
-                          onClick={() => void handleToggleClientActive(client)}
+                          onClick={() => requestToggleClientActive(client)}
                           disabled={isPending}
                         >
                           <span className="ss-test-toggle-knob" />
@@ -3402,8 +3475,8 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                 top: inventoryColumnsMenuRect.top,
                 right: inventoryColumnsMenuRect.right,
                 zIndex: 9999,
-                minWidth: 240,
-                maxHeight: 'min(480px, 80vh)',
+                width: 'min(320px, calc(100vw - 16px))',
+                maxHeight: 'min(520px, calc(100vh - 24px))',
                 background: 'var(--surface)',
                 border: '1px solid var(--border)',
                 borderRadius: 6,
@@ -3424,11 +3497,9 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                   Reset
                 </button>
               </div>
-              {/* Scrollable list — flex-1 + min-h-0 (overflow-y auto)
-                  lets the middle region claim leftover space and
-                  scroll independently while header/footer stay
-                  pinned inside the popover. */}
-              <div style={{ flex: '1 1 0', minHeight: 0, overflowY: 'auto', padding: 6, overscrollBehavior: 'contain' }}>
+              {/* Scrollable list with a real max height so the checkbox
+                  region cannot collapse between the header and footer. */}
+              <div style={{ maxHeight: 'min(390px, calc(100vh - 140px))', overflowY: 'auto', padding: 6, overscrollBehavior: 'contain', flexShrink: 1 }}>
                 {(() => {
                   const hiddenSet = new Set(inventoryColumnLayout.hidden)
                   const visibleKeys = inventoryColumnLayout.order.filter((k) => !hiddenSet.has(k))
@@ -3838,6 +3909,18 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
           <img src={thumbnailPreview.src} alt="" />
         </div>
       ) : null}
+
+      {/* Confirmation modal — fires when an operator clicks the
+          Active/Inactive toggle. Portal-rendered to document.body so
+          it floats above the Inventory page regardless of where the
+          toggle sits in the table. Cancel/ESC/backdrop drops the
+          intent without mutating anything. */}
+      <ConfirmActiveToggleDialog
+        pending={pendingActiveToggle}
+        onConfirm={() => void confirmToggleClientActive()}
+        onCancel={cancelToggleClientActive}
+        isPending={confirmInFlight}
+      />
     </div>
   )
 }
