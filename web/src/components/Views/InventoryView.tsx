@@ -575,6 +575,20 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
   const [stockSearch, setStockSearch] = useState('')
   const [stockClientId, setStockClientId] = useState('')
   const [alertOnly, setAlertOnly] = useState(false)
+  // "Active only" toggle — defaults to ON so deactivated/archived
+  // SKUs don't clutter the day-to-day view. Persisted to localStorage
+  // so the operator's choice survives reloads (consistent with the
+  // column-layout, column-widths, etc. persistence pattern).
+  const [activeOnly, setActiveOnly] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true
+    const raw = window.localStorage.getItem('inventory_active_only')
+    // Default to ON if nothing is stored. Explicit 'false' turns it off.
+    return raw === null ? true : raw !== 'false'
+  })
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem('inventory_active_only', String(activeOnly))
+  }, [activeOnly])
   const [stockSort, setStockSort] = useState<InventorySortState | null>(null)
   // Operator-controlled column layout for the Stock Levels table.
   // Drag a header to reorder, use the Columns popover to toggle
@@ -743,8 +757,9 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
       search: stockSearch,
       clientId: stockClientId,
       alertOnly,
+      activeOnly,
     })
-  }, [alertOnly, items, stockClientId, stockSearch])
+  }, [alertOnly, activeOnly, items, stockClientId, stockSearch])
 
   const sortedRows = useMemo(() => {
     if (!stockSort) return filteredRows
@@ -1962,6 +1977,31 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
             <label style={{ fontSize: 12, color: 'var(--text2)', display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
               <input type="checkbox" checked={alertOnly} onChange={(event) => setAlertOnly(event.target.checked)} /> Low/Out only
             </label>
+            {/* Active toggle — pill-style switch matching the Test
+                Orders toggle in the sidebar (SidebarA.tsx:171-179)
+                so operators get a consistent control vocabulary.
+                ON = hide deactivated SKUs (the default day-to-day
+                view); OFF = show everything including archives. */}
+            <button
+              type="button"
+              role="switch"
+              aria-checked={activeOnly}
+              aria-label={activeOnly ? 'Active SKUs only — click to show all' : 'Showing all SKUs — click to hide inactive'}
+              onClick={() => setActiveOnly((v) => !v)}
+              title={activeOnly ? 'Showing active SKUs only · click to include deactivated' : 'Showing all SKUs · click to hide deactivated'}
+              className="inline-flex items-center gap-2 cursor-pointer"
+              style={{ background: 'none', border: 0, padding: 0, fontSize: 12, color: 'var(--text2)' }}
+            >
+              <span
+                className={`relative inline-flex items-center w-7 h-3.5 rounded-full transition-colors duration-150 ${activeOnly ? 'bg-emerald-500' : 'bg-slate-300'}`}
+                aria-hidden="true"
+              >
+                <span
+                  className={`absolute top-0.5 w-2.5 h-2.5 rounded-full bg-white shadow-sm transition-transform duration-150 ${activeOnly ? 'translate-x-[14px]' : 'translate-x-0.5'}`}
+                />
+              </span>
+              Active only
+            </button>
           </div>
 
           {bulkEditMode ? (
@@ -1983,36 +2023,43 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
             <div id="inv-stock-content">
               {groupedRows.map((group) => (
                 <div key={group.clientId} style={{ marginBottom: 18 }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.5px', marginBottom: 6 }}>{group.clientName}</div>
-                  {/* Tailwind-only table — see below for the full styling
-                      story.
-
-                      * NO overflow:hidden on this wrapper. Any overflow value
-                        other than `visible` becomes the sticky element's
-                        scroll container and silently breaks `position: sticky`
-                        on the <th> cells.
-                      * Wrapper provides bg + border + radius. The table inside
-                        uses border-separate so individual cell sticky works
-                        (border-collapse:collapse silently disables sticky on
-                        <th> in all major browsers — known bug since 2017). */}
-                  <div className="bg-surface ring-1 ring-line rounded-lg">
+                  {/* Wrapper now mirrors the Packages card (PackagesDataTable
+                      line 454): rounded-card + border + bg-white + shadow-sm
+                      so both tables share the same visual treatment. The
+                      client name moves INSIDE the thead as a brand-bg
+                      colspan title row (replacing the floating caption that
+                      used to sit above each table). Hover-row striping
+                      added on the tbody to match Packages' polish. */}
+                  <div className="relative rounded-card border border-line bg-white shadow-sm">
                     <table
                       className={[
                         // Layout
                         'w-full m-0 table-fixed border-separate border-spacing-0',
 
-                        // ─── Header cells (sticky + styled) ───────────────
-                        // top:-1px slides the 2px bottom border flush to the
-                        // scroll-area top. z-10 sits above tbody but below
-                        // modal overlays (which use z-[3000]+).
-                        '[&_thead_th]:sticky [&_thead_th]:top-[-1px] [&_thead_th]:z-10',
-                        '[&_thead_th]:bg-surface-2 [&_thead_th]:text-ink-3',
-                        '[&_thead_th]:text-[10px] [&_thead_th]:font-extrabold [&_thead_th]:uppercase [&_thead_th]:tracking-[0.4px]',
-                        '[&_thead_th]:text-left [&_thead_th]:px-2.5 [&_thead_th]:py-2',
-                        '[&_thead_th]:border-b-2 [&_thead_th]:border-line [&_thead_th]:whitespace-nowrap',
-                        // Subtle 1px shadow under the sticky header so rows
-                        // scrolling underneath have a visual separator.
-                        '[&_thead_th]:shadow-[0_1px_0_var(--border)]',
+                        // ─── Section title row (brand-colored client name) ───
+                        // Sticky at top:0 so the title pins above column
+                        // headers when scrolling long lists. z-[80] sits
+                        // above column-header z-[70] but below modal overlays.
+                        '[&_thead_tr:first-child_th]:sticky [&_thead_tr:first-child_th]:top-0 [&_thead_tr:first-child_th]:z-[80]',
+                        '[&_thead_tr:first-child_th]:h-9 [&_thead_tr:first-child_th]:rounded-t-card',
+                        '[&_thead_tr:first-child_th]:!bg-brand-bg [&_thead_tr:first-child_th]:text-ink-3',
+                        '[&_thead_tr:first-child_th]:border-b [&_thead_tr:first-child_th]:border-line',
+                        '[&_thead_tr:first-child_th]:px-4 [&_thead_tr:first-child_th]:text-left',
+                        '[&_thead_tr:first-child_th]:text-2xs [&_thead_tr:first-child_th]:font-extrabold',
+                        '[&_thead_tr:first-child_th]:uppercase [&_thead_tr:first-child_th]:tracking-[0.05em]',
+                        '[&_thead_tr:first-child_th]:shadow-[0_1px_0_rgba(225,228,232,1)]',
+
+                        // ─── Column header row (sortable + draggable headers) ─
+                        // Sticky at top-9 so it sits directly below the
+                        // section-title row above. The :not() selector
+                        // excludes the title row's th from these styles —
+                        // first-child rules above own that one.
+                        '[&_thead_tr:not(:first-child)_th]:sticky [&_thead_tr:not(:first-child)_th]:top-9 [&_thead_tr:not(:first-child)_th]:z-[70]',
+                        '[&_thead_tr:not(:first-child)_th]:bg-surface-2 [&_thead_tr:not(:first-child)_th]:text-ink-3',
+                        '[&_thead_tr:not(:first-child)_th]:text-[10px] [&_thead_tr:not(:first-child)_th]:font-extrabold [&_thead_tr:not(:first-child)_th]:uppercase [&_thead_tr:not(:first-child)_th]:tracking-[0.4px]',
+                        '[&_thead_tr:not(:first-child)_th]:text-left [&_thead_tr:not(:first-child)_th]:px-2.5 [&_thead_tr:not(:first-child)_th]:py-2',
+                        '[&_thead_tr:not(:first-child)_th]:border-b-2 [&_thead_tr:not(:first-child)_th]:border-line [&_thead_tr:not(:first-child)_th]:whitespace-nowrap',
+                        '[&_thead_tr:not(:first-child)_th]:shadow-[0_1px_0_var(--border)]',
 
                         // ─── Body cells ──────────────────────────────────
                         '[&_tbody_td]:px-2.5 [&_tbody_td]:py-2 [&_tbody_td]:text-[12px]',
@@ -2020,11 +2067,13 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                         '[&_tbody_td]:overflow-hidden [&_tbody_td]:text-ellipsis',
 
                         // Last row: drop the bottom border so it doesn't
-                        // double up against the wrapper's ring.
+                        // double up against the wrapper's bottom border.
                         '[&_tbody_tr:last-child_td]:border-b-0',
 
-                        // Hover state on body rows
-                        '[&_tbody_tr:hover_td]:bg-surface-2',
+                        // Zebra striping + hover state on body rows —
+                        // matches the Packages table's row polish.
+                        '[&_tbody_tr:nth-child(odd)]:bg-white [&_tbody_tr:nth-child(even)]:bg-surface-2',
+                        '[&_tbody_tr:hover_td]:bg-brand-bg/60',
                       ].join(' ')}
                     >
                       {/* colgroup pins column widths so EVERY client's table
@@ -2078,6 +2127,21 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                         </colgroup>
                       )}
                       <thead>
+                        {/* Section title row — brand-bg colspan cell
+                            showing the client name. Sticky at top:0
+                            so it pins above the column headers when
+                            scrolling. The colSpan tracks bulk-edit vs
+                            normal column count so the bar always spans
+                            the full table. Mirrors PackagesDataTable's
+                            section-title-inside-thead pattern. */}
+                        <tr>
+                          <th
+                            colSpan={bulkEditMode ? 8 : effectiveInventoryColumns.length}
+                            scope="colgroup"
+                          >
+                            {group.clientName}
+                          </th>
+                        </tr>
                         {bulkEditMode ? (
                           <tr>
                             {renderStockSortHeader('sku', 'SKU')}

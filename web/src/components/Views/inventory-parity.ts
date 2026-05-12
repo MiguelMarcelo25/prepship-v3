@@ -11,6 +11,13 @@ export interface InventoryStockFilters {
   search: string
   clientId: string
   alertOnly: boolean
+  /**
+   * When true, hide SKUs whose `active` flag is false. Defaults to
+   * true in the view (only active SKUs visible) — deactivated SKUs
+   * are usually archived items operators don't need to see day-to-day.
+   * Operators can flip the toolbar toggle off to surface everything.
+   */
+  activeOnly: boolean
 }
 
 export interface ReceiveSkuLookup {
@@ -54,6 +61,10 @@ export function filterInventoryRows(rows: InventoryItemDto[], filters: Inventory
     if (filters.clientId && String(row.clientId) !== String(filters.clientId)) return false
     if (search && !`${row.sku}${row.name}${row.clientName}`.toLowerCase().includes(search)) return false
     if (filters.alertOnly && row.status === 'ok') return false
+    // `active` is a tri-state on the wire: true / false / null. We
+    // treat null as "active" so legacy rows with no flag set don't
+    // disappear when the toggle is on — only explicit `false` is hidden.
+    if (filters.activeOnly && row.active === false) return false
     return true
   })
 }
