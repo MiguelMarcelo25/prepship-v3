@@ -557,25 +557,48 @@ function groupRatesByProviderId(rates: RateRow[]): Record<string, RateRow[]> {
   }, {});
 }
 
-function applyRbMarkupFn(
-  markups: Record<string, Markup>,
-  pidOrCc: number | string | null,
-  base: number
-): number {
-  if (pidOrCc == null) return base;
-  const m = markups[String(pidOrCc)];
-  if (!m || !m.value) return base;
-  return m.type === 'pct' || m.type === 'percent'
-    ? base * (1 + m.value / 100)
-    : base + m.value;
+function rbMarkupKeyFromCarrierId(value: unknown): string | null {
+  const text = String(value ?? '').trim();
+  if (!text) return null;
+  const match = text.match(/^se-(\d+)$/i);
+  return match?.[1] ?? (/^\d+$/.test(text) ? text : null);
+}
+
+function rbMarkupForRate(markups: Record<string, Markup>, rate: RateRow): Markup | null {
+  const raw = rate.raw ?? {};
+  const candidateKeys = [
+    rate.shippingProviderId,
+    raw?.shippingProviderId,
+    rbMarkupKeyFromCarrierId(raw?.carrier_id),
+    raw?.carrier_id,
+    rate.carrierCode,
+    raw?.carrier_code,
+  ];
+
+  for (const candidate of candidateKeys) {
+    const key = String(candidate ?? '').trim();
+    if (!key) continue;
+    const markup = markups[key];
+    if (markup) return markup;
+  }
+  return null;
 }
 
 function rateBaseTotal(rate: RateRow): number {
-  return (Number(rate.shipmentCost) || 0) + (Number(rate.otherCost) || 0);
+  const rawOriginalShipping = Number(rate.raw?.original_amount?.amount);
+  const shipmentCost = Number.isFinite(rawOriginalShipping)
+    ? rawOriginalShipping
+    : Number(rate.shipmentCost) || 0;
+  return shipmentCost + (Number(rate.otherCost) || 0);
 }
 
 function rateDisplayTotal(rate: RateRow, markups: Record<string, Markup>): number {
-  return applyRbMarkupFn(markups, rate.shippingProviderId, rateBaseTotal(rate));
+  const base = rateBaseTotal(rate);
+  const markup = rbMarkupForRate(markups, rate);
+  if (!markup?.value) return base;
+  return markup.type === 'pct' || markup.type === 'percent'
+    ? base * (1 + markup.value / 100)
+    : base + markup.value;
 }
 
 function priceDisplay(
@@ -1184,7 +1207,7 @@ export default function RateBrowserModal({
       typeof r.shippingProviderId === 'number'
         ? r.shippingProviderId
         : Number(r.shippingProviderId);
-    const marked = applyRbMarkupFn(markups, Number.isFinite(pid) ? pid : null, base);
+    const marked = rateDisplayTotal(r, markups);
     const svcName =
       r.serviceName ||
       SERVICE_NAMES[r.serviceCode] ||

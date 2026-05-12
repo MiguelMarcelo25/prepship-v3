@@ -15,6 +15,7 @@ import {
 import type { RateDto } from '@prepshipv2/contracts/rates/contracts'
 import { apiClient } from '../../api/client'
 import { ToastContext } from '../../contexts/ToastContext'
+import { useMarkups } from '../../contexts/MarkupsContext'
 // Shared carrier badge — official UPS/USPS SVG logos with fallback pills.
 import CarrierBadge from '../CarrierBadge'
 import { SortableHeader, nextSortState, sortRows } from '../SortableTable'
@@ -96,10 +97,11 @@ export default function RatesView() {
   const [resultState, setResultState] = useState<RatesResultState>({ kind: 'idle' })
   const [rateSort, setRateSort] = useState(null)
   const { accounts: shippingAccounts, isLoading: accountsLoading } = useShippingAccounts()
+  const { markups } = useMarkups()
 
-  const markupValue = parseRatesNumber(form.markup)
+  const manualMarkupValue = parseRatesNumber(form.markup)
   const rows = resultState.kind === 'table'
-    ? buildRateRows(resultState.rates, markupValue, shippingAccounts)
+    ? buildRateRows(resultState.rates, manualMarkupValue, shippingAccounts, markups)
     : []
   const sortedRows = useMemo(() => sortRows(
     rows,
@@ -358,7 +360,7 @@ export default function RatesView() {
           </motion.button>
 
           <label className="inline-flex items-center gap-2 text-[12.5px] text-ink-2 font-medium">
-            Markup $
+            Extra Markup $
             <input
               id="globalMarkup"
               type="number"

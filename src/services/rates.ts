@@ -28,12 +28,12 @@ async function loadCarrierMarkups(): Promise<Map<string, Markup>> {
     const id = row.key.slice('markup.'.length);
     try {
       const p = JSON.parse(row.value);
-      if (
-        (p.type === 'amount' || p.type === 'percent') &&
-        typeof p.value === 'number' &&
-        p.value !== 0
-      ) {
-        m.set(id, p as Markup);
+      const value = Number(p.value);
+      if (!Number.isFinite(value) || value === 0) continue;
+      if (p.type === 'amount' || p.type === 'flat') {
+        m.set(id, { type: 'amount', value });
+      } else if (p.type === 'percent' || p.type === 'pct') {
+        m.set(id, { type: 'percent', value });
       }
     } catch {
       // ignore unparseable values
@@ -105,7 +105,8 @@ export function isBlockedRate(
 function applyMarkups(rates: Rate[], markups: Map<string, Markup>): Rate[] {
   if (!markups.size) return rates;
   return rates.map((r) => {
-    const m = markups.get(r.carrier_id);
+    const providerId = String(r.carrier_id ?? '').match(/^se-(\d+)$/i)?.[1];
+    const m = markups.get(String(r.carrier_id ?? '')) ?? (providerId ? markups.get(providerId) : undefined);
     if (!m) return r;
     const orig = r.shipping_amount.amount;
     const newAmount =

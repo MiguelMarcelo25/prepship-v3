@@ -49,6 +49,9 @@ export interface RateSourceAccount {
   carrierCode?: string | null
 }
 
+type RateMarkup = { type?: string; value?: number }
+type RateMarkupsMap = Record<string, RateMarkup | undefined>
+
 export function parseRatesNumber(value: string): number {
   const parsed = Number.parseFloat(value)
   return Number.isFinite(parsed) ? parsed : 0
@@ -203,6 +206,7 @@ const DIRECT_PROVIDER_LABELS: Record<string, string> = {
   easypost: 'EasyPost',
   fedex: 'FedEx Direct',
   gls: 'GLS Direct',
+  shipp: 'Shipp',
   shipengine: 'ShipEngine',
   simulator: 'Simulator',
   stamps_com: 'Stamps.com Direct',
@@ -277,13 +281,63 @@ export function getServiceLabel(rate: RateDto): string {
   return rate.serviceName || rate.serviceCode || '—'
 }
 
+function finiteNumber(value: unknown): number | null {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function providerIdFromCarrierId(value: unknown): string | null {
+  const text = String(value ?? '').trim()
+  if (!text) return null
+  const match = text.match(/^se-(\d+)$/i)
+  return match?.[1] ?? (/^\d+$/.test(text) ? text : null)
+}
+
+function getRateBaseCost(rate: RateDto): number {
+  const raw = (rate as any)?.raw ?? {}
+  const originalShipping = finiteNumber(raw?.original_amount?.amount)
+  const shipmentCost = originalShipping ?? finiteNumber((rate as any)?.shipmentCost) ?? 0
+  return shipmentCost + (finiteNumber((rate as any)?.otherCost) ?? 0)
+}
+
+function getRateMarkup(rate: RateDto, markups: RateMarkupsMap): RateMarkup | null {
+  const raw = (rate as any)?.raw ?? {}
+  const candidateKeys = [
+    (rate as any)?.shippingProviderId,
+    raw?.shippingProviderId,
+    providerIdFromCarrierId(raw?.carrier_id),
+    raw?.carrier_id,
+    (rate as any)?.carrierCode,
+    raw?.carrier_code,
+  ]
+
+  for (const candidate of candidateKeys) {
+    const key = String(candidate ?? '').trim()
+    if (!key) continue
+    const markup = markups[key]
+    if (markup) return markup
+  }
+  return null
+}
+
+function getMarkupAmount(baseCost: number, markup: RateMarkup | null): number {
+  const value = Number(markup?.value ?? 0)
+  if (!Number.isFinite(value) || value <= 0) return 0
+  return markup?.type === 'pct' || markup?.type === 'percent'
+    ? baseCost * (value / 100)
+    : value
+}
+
 export function buildRateRows(
   rates: RateDto[],
-  markupValue: number,
+  manualMarkupValue: number,
   sourceAccounts: RateSourceAccount[] = [],
+  markups: RateMarkupsMap = {},
 ): RateRowView[] {
-  return rates.map((rate, index) => {
-    const baseCost = (rate.shipmentCost || 0) + (rate.otherCost || 0)
+  const rows = rates.map((rate) => {
+    const baseCost = getRateBaseCost(rate)
+    const savedMarkupAmount = getMarkupAmount(baseCost, getRateMarkup(rate, markups))
+    const profit = savedMarkupAmount + manualMarkupValue
     const rateSource = getRateSourceLabel(rate, sourceAccounts)
     return {
       carrierLabel: getCarrierLabel(rate),
@@ -294,12 +348,19 @@ export function buildRateRows(
       carrierCode: rate.carrierCode,
       serviceLabel: getServiceLabel(rate),
       baseCost,
-      yourPrice: baseCost + markupValue,
-      profit: markupValue,
-      isBest: index === 0,
+      yourPrice: baseCost + profit,
+      profit,
+      isBest: false,
       rate,
     }
   })
+
+  const cheapest = rows.reduce<number | null>((bestIndex, row, index) => {
+    if (bestIndex == null) return index
+    return row.yourPrice < rows[bestIndex].yourPrice ? index : bestIndex
+  }, null)
+  if (cheapest != null) rows[cheapest].isBest = true
+  return rows
 }
 
 export function buildRatesSummary(form: RatesFormState, count: number): string {

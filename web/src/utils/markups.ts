@@ -75,7 +75,7 @@ export function applyCarrierMarkup(
 
   if (!markup || !markup.value) return baseCost;
 
-  return markup.type === 'pct'
+  return markup.type === 'pct' || markup.type === 'percent'
     ? baseCost * (1 + markup.value / 100)
     : baseCost + markup.value;
 }
@@ -153,7 +153,7 @@ export function priceDisplay(
 
   let markupAmount = 0;
   if (markup && markup.value) {
-    markupAmount = markup.type === 'pct'
+    markupAmount = markup.type === 'pct' || markup.type === 'percent'
       ? basePrice * (markup.value / 100)
       : markup.value;
   }
