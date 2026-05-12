@@ -271,6 +271,26 @@ app.get(
       ${until ? sql`and o.order_date <= ${until}::timestamptz` : sql``}
     `;
 
+    // 2026-05-13 visibility hardening: this endpoint matches orders by
+    // SKU STRING (not by client_id), so when two clients share a SKU
+    // string and one is disabled, the disabled client's orders mix
+    // into the SKU drawer's daily-sales chart and shipping-cost
+    // averages. Filtering by `coalesce(c.active, true) = true` excludes
+    // disabled clients' orders from the three CTEs below while keeping
+    // cross-client SKU analytics intact for ACTIVE clients. Orders
+    // with NULL client_id (test/orphan) still pass through, matching
+    // the same lenient policy as activeOrderClientPredicate in orders.ts.
+    const activeClientOrderFilter = sql`
+      and (
+        o.client_id is null
+        or exists (
+          select 1 from clients c
+          where c.id = o.client_id
+            and coalesce(c.active, true) = true
+        )
+      )
+    `;
+
     const dailyRows = since || until
       ? await db.execute<{ day: string; units: number }>(sql`
           select
@@ -284,6 +304,7 @@ app.get(
             and coalesce(o.order_status, '') <> 'cancelled'
             and coalesce((item->>'adjustment')::boolean, false) = false
             and coalesce((item->>'quantity')::int, 1) > 0
+            ${activeClientOrderFilter}
           group by date_trunc('day', o.order_date)
           order by date_trunc('day', o.order_date) asc
         `)
@@ -322,6 +343,7 @@ app.get(
           and coalesce(o.order_status, '') <> 'cancelled'
           and coalesce((item->>'adjustment')::boolean, false) = false
           and coalesce((item->>'quantity')::int, 1) > 0
+          ${activeClientOrderFilter}
       ),
       item_rows as (
         select
@@ -460,6 +482,7 @@ app.get(
           and coalesce(o.order_status, '') <> 'cancelled'
           and coalesce((item->>'adjustment')::boolean, false) = false
           and coalesce((item->>'quantity')::int, 1) > 0
+          ${activeClientOrderFilter}
       ),
       item_rows as (
         select

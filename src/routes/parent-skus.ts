@@ -1,23 +1,52 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { asc, eq } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { parentSkus } from '../db/schema/parent-skus';
 import { inventory } from '../db/schema/inventory';
+import { clients } from '../db/schema/clients';
 
 const app = new Hono();
 
 const listQ = z.object({
   clientId: z.coerce.number().int().optional(),
+  // Admin escape hatch — when true, returns parent SKUs from
+  // disabled clients too. Default behavior (omitted/false) keeps
+  // operators in dropdowns + assignment flows from ever seeing a
+  // parent SKU whose owning client is disabled.
+  includeInactive: z.coerce.boolean().optional(),
 });
 
+// 2026-05-13 visibility hardening: parent_skus has a clientId column
+// but the original list query never filtered on the owning client's
+// `active` flag — so disabled clients' parent SKUs were leaking into
+// the "Assign parent SKU" dropdown on the Inventory page. Filter via
+// EXISTS against the clients table, mirroring the predicate used by
+// activeInventoryClientPredicate in routes/inventory.ts. Rows with
+// NULL client_id stay visible (legacy / unassigned), same lenient
+// policy as the rest of the codebase.
+const activeParentSkuClientPredicate = sql`(
+  ${parentSkus.clientId} is null
+  or exists (
+    select 1 from ${clients} owner_client
+    where owner_client.id = ${parentSkus.clientId}
+      and coalesce(owner_client.active, true) = true
+  )
+)`;
+
 app.get('/', zValidator('query', listQ), async (c) => {
-  const { clientId } = c.req.valid('query');
+  const { clientId, includeInactive } = c.req.valid('query');
+  const where = and(
+    ...[
+      clientId !== undefined ? eq(parentSkus.clientId, clientId) : undefined,
+      includeInactive ? undefined : activeParentSkuClientPredicate,
+    ].filter(<T>(x: T | undefined): x is T => x !== undefined)
+  );
   const rows = await db
     .select()
     .from(parentSkus)
-    .where(clientId !== undefined ? eq(parentSkus.clientId, clientId) : undefined)
+    .where(where)
     .orderBy(asc(parentSkus.name));
   return c.json({ data: rows });
 });

@@ -614,7 +614,19 @@ app.get('/top-skus', zValidator('query', topSkusQuery), async (c) => {
       and item ? 'sku'
       and item->>'sku' is not null
       and item->>'sku' <> ''
-      and not exists (select 1 from clients c where c.id = o.client_id and c.is_test = true)
+      -- 2026-05-13 visibility hardening: original NOT EXISTS only
+      -- filtered test clients, so disabled (non-test) clients orders
+      -- still contributed to top-SKU rankings on the Dashboard widget.
+      -- Adding coalesce(c.active, true) = false to the exclusion
+      -- matches the predicate used everywhere else (sku-breakdown,
+      -- daily-shipments, overview, orders). Orders with NULL client_id
+      -- still pass through (no matching row in clients implies the
+      -- NOT EXISTS is true), same lenient policy as other analysis routes.
+      and not exists (
+        select 1 from clients c
+        where c.id = o.client_id
+          and (c.is_test = true or coalesce(c.active, true) = false)
+      )
     group by item->>'sku'
     order by total_qty desc
     limit ${q.limit}
