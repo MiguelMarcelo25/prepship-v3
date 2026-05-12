@@ -740,6 +740,41 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     try { window.localStorage.setItem(COLUMN_WIDTHS_STORAGE_KEY, JSON.stringify(columnWidths)) } catch { /* non-fatal */ }
   }, [columnWidths])
 
+  // Favorited SKUs — the leftmost ☆ icon in each row toggles
+  // membership in this Set. Favorited rows render with a filled
+  // amber star AND float to the top of the table (within each sort
+  // group) so the operator can pin SKUs they want to monitor.
+  // SKU is the stable identifier (not row index): survives reorder,
+  // sort changes, and pagination. Persisted to localStorage so the
+  // pinned set sticks across reloads.
+  const FAVORITES_STORAGE_KEY = 'dashboard:sku:favorites'
+  const [favoriteSkus, setFavoriteSkus] = useState<Set<string>>(() => {
+    if (typeof window === 'undefined') return new Set()
+    try {
+      const raw = window.localStorage.getItem(FAVORITES_STORAGE_KEY)
+      if (!raw) return new Set()
+      const parsed = JSON.parse(raw) as unknown
+      if (!Array.isArray(parsed)) return new Set()
+      return new Set(parsed.filter((s): s is string => typeof s === 'string'))
+    } catch {
+      return new Set()
+    }
+  })
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(FAVORITES_STORAGE_KEY, JSON.stringify(Array.from(favoriteSkus)))
+    } catch { /* non-fatal */ }
+  }, [favoriteSkus])
+  const toggleFavoriteSku = (sku: string) => {
+    if (!sku) return
+    setFavoriteSkus((prev) => {
+      const next = new Set(prev)
+      if (next.has(sku)) next.delete(sku)
+      else next.add(sku)
+      return next
+    })
+  }
+
   // Drag-reorder state: which column is being dragged and which is
   // currently being hovered over as a drop target. UI uses these for
   // visual feedback (opacity-40 on the source, inset shadow on the
@@ -1081,8 +1116,26 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     [filteredSkuRows, sortState],
   )
 
-  const totalPages = Math.max(1, Math.ceil(sortedSkuRows.length / pageSize))
-  const pageRows = sortedSkuRows.slice((page - 1) * pageSize, page * pageSize)
+  // Favorites bubble to the top of the sorted result. The .sort()
+  // callback returns +1/-1 only when favorite-status differs — when
+  // both rows are favorited (or both not), it returns 0 so the
+  // original sortRows order is preserved within each group. This is
+  // a STABLE sort partition, not a re-sort: favorites stay in their
+  // pre-sort order at the top, non-favorites stay in their pre-sort
+  // order below. Array#sort is guaranteed stable in V8/JavaScriptCore
+  // (ES2019+).
+  const favoritesFirstRows = useMemo(() => {
+    if (favoriteSkus.size === 0) return sortedSkuRows
+    return [...sortedSkuRows].sort((a, b) => {
+      const aFav = favoriteSkus.has(a.sku)
+      const bFav = favoriteSkus.has(b.sku)
+      if (aFav === bFav) return 0
+      return aFav ? -1 : 1
+    })
+  }, [sortedSkuRows, favoriteSkus])
+
+  const totalPages = Math.max(1, Math.ceil(favoritesFirstRows.length / pageSize))
+  const pageRows = favoritesFirstRows.slice((page - 1) * pageSize, page * pageSize)
 
   const topSkuRows = useMemo(
     () => [...skuRows].sort((left, right) => right.units30 - left.units30).slice(0, 5),
@@ -1716,7 +1769,37 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             <tbody>
               {pageRows.map((row) => (
                 <tr key={row.sku} className="border-b border-line last:border-b-0 hover:bg-brand-bg/30">
-                  <td className="px-3 py-2 text-ink-3 overflow-hidden"><Star size={13} strokeWidth={2} /></td>
+                  {/* Favorite toggle — filled amber star when the
+                      SKU is in favoriteSkus, outline ink-3 otherwise.
+                      stopPropagation on the click prevents the row's
+                      hover/select behaviour from interpreting a star
+                      click as a row click. */}
+                  <td className="px-3 py-2 overflow-hidden">
+                    {(() => {
+                      const isFavorite = favoriteSkus.has(row.sku)
+                      return (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            toggleFavoriteSku(row.sku)
+                          }}
+                          title={isFavorite ? 'Remove from favorites' : 'Mark as favorite'}
+                          aria-pressed={isFavorite}
+                          aria-label={isFavorite ? `Unfavorite ${row.sku}` : `Favorite ${row.sku}`}
+                          className={`inline-flex items-center justify-center w-6 h-6 rounded transition-all duration-150 hover:bg-amber-100/60 active:scale-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-400/50 ${
+                            isFavorite ? 'text-amber-400' : 'text-ink-3 hover:text-amber-400'
+                          }`}
+                        >
+                          <Star
+                            size={14}
+                            strokeWidth={2.25}
+                            fill={isFavorite ? 'currentColor' : 'none'}
+                          />
+                        </button>
+                      )
+                    })()}
+                  </td>
                   {/* SKU cell — overflow-hidden + block truncate.
                       Wrapping in a div with block + truncate makes
                       the truncation engage inside the table-fixed
