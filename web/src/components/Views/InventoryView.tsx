@@ -3467,6 +3467,21 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
           menu never overflows the viewport on small screens. */}
       {inventoryColumnsMenuOpen && inventoryColumnsMenuRect && typeof document !== 'undefined'
         ? createPortal(
+            // Popover layout (redesigned 2026-05-12 to fix empty-body bug):
+            //   • Wrapper uses plain block flow — NO flex column. The
+            //     previous flex column + child flex-basis 0 collapsed the
+            //     body to 0 in auto-height parents. The auto-commit fix
+            //     using `maxHeight + flexShrink: 1` was theoretically
+            //     sound but still produced reports of "empty popover" in
+            //     production — most likely a browser-specific edge case
+            //     with how flex interacts with maxHeight + auto height.
+            //   • Block flow + body's own maxHeight + overflow-y: auto
+            //     gives the same "scrolls when tall, fits when short"
+            //     behavior with zero flex algorithm complexity. Body
+            //     ALWAYS renders its content height up to the cap.
+            //   • Wrapper's overflow:hidden trims the corner radius so
+            //     the body's scrollbar doesn't poke out of the rounded
+            //     border.
             <div
               data-inventory-columns-menu
               role="menu"
@@ -3476,17 +3491,14 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                 right: inventoryColumnsMenuRect.right,
                 zIndex: 9999,
                 width: 'min(320px, calc(100vw - 16px))',
-                maxHeight: 'min(520px, calc(100vh - 24px))',
                 background: 'var(--surface)',
                 border: '1px solid var(--border)',
                 borderRadius: 6,
                 boxShadow: '0 8px 24px -6px rgba(15,23,42,.18), 0 2px 6px -2px rgba(15,23,42,.10)',
-                display: 'flex',
-                flexDirection: 'column',
                 overflow: 'hidden',
               }}
             >
-              <div style={{ flexShrink: 0, padding: '6px 8px', fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 800, color: 'var(--text3)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border)', background: 'var(--surface-2, rgba(248,250,252,.6))' }}>
+              <div style={{ padding: '6px 8px', fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 800, color: 'var(--text3)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border)', background: 'var(--surface-2, rgba(248,250,252,.6))' }}>
                 <span>Visible columns</span>
                 <button
                   type="button"
@@ -3497,13 +3509,21 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                   Reset
                 </button>
               </div>
-              {/* Scrollable list with a real max height so the checkbox
-                  region cannot collapse between the header and footer. */}
-              <div style={{ maxHeight: 'min(390px, calc(100vh - 140px))', overflowY: 'auto', padding: 6, overscrollBehavior: 'contain', flexShrink: 1 }}>
+              {/* Body — plain block, own max-height + scroll. Renders
+                  from inventoryColumnLayout.order with a defensive
+                  fallback to INVENTORY_DEFAULT_COLUMN_ORDER if order
+                  is ever observed empty (paranoid coding — the reader
+                  should never let this happen, but if a future migration
+                  or storage quirk lands an empty order in state, the
+                  operator still sees the default 15 columns). */}
+              <div style={{ maxHeight: 'min(420px, calc(100vh - 140px))', overflowY: 'auto', padding: 6, overscrollBehavior: 'contain' }}>
                 {(() => {
+                  const sourceOrder = inventoryColumnLayout.order.length > 0
+                    ? inventoryColumnLayout.order
+                    : INVENTORY_DEFAULT_COLUMN_ORDER
                   const hiddenSet = new Set(inventoryColumnLayout.hidden)
-                  const visibleKeys = inventoryColumnLayout.order.filter((k) => !hiddenSet.has(k))
-                  const hiddenKeys = inventoryColumnLayout.order.filter((k) => hiddenSet.has(k))
+                  const visibleKeys = sourceOrder.filter((k) => !hiddenSet.has(k))
+                  const hiddenKeys = sourceOrder.filter((k) => hiddenSet.has(k))
                   return [...visibleKeys, ...hiddenKeys].map((key) => {
                     const isHidden = hiddenSet.has(key)
                     const isRequired = INVENTORY_REQUIRED_COLUMNS.has(key)
@@ -3540,7 +3560,7 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                   })
                 })()}
               </div>
-              <div style={{ flexShrink: 0, borderTop: '1px solid var(--border)', padding: '6px 8px 5px', fontSize: 10.5, color: 'var(--text3)', lineHeight: 1.4, background: 'var(--surface-2, rgba(248,250,252,.6))', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <div style={{ borderTop: '1px solid var(--border)', padding: '6px 8px 5px', fontSize: 10.5, color: 'var(--text3)', lineHeight: 1.4, background: 'var(--surface-2, rgba(248,250,252,.6))', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
                 <span>Drag a column header to reorder.</span>
                 <span style={{ fontFamily: 'monospace', opacity: 0.75 }}>
                   {INVENTORY_DEFAULT_COLUMN_ORDER.length} columns
