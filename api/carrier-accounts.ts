@@ -501,6 +501,18 @@ export default async function handler(req: any, res: any): Promise<void> {
         }
       }
 
+      // Pre-fetch the OLD label so the rename-propagation step
+      // (below) can target the right snapshots. Same query also
+      // verifies the row exists — saves a roundtrip.
+      const beforeRows = (await sql<Array<{ label: string | null; source: string }>>`
+        SELECT label, source FROM ${sql(TABLE)} WHERE id = ${id} LIMIT 1
+      `) as Array<{ label: string | null; source: string }>;
+      if (beforeRows.length === 0) {
+        res.status(404).json({ error: `carrier_accounts row #${id} not found` });
+        return;
+      }
+      const oldLabel = beforeRows[0].label;
+
       // Compose the SET clause dynamically based on which fields
       // arrived. updated_at always bumps so anyone watching the row
       // (e.g. cache layer) sees a fresh timestamp.
@@ -540,7 +552,84 @@ export default async function handler(req: any, res: any): Promise<void> {
         res.status(404).json({ error: `carrier_accounts row #${id} not found` });
         return;
       }
-      res.status(200).json({ data: updated[0] });
+
+      // ── Rename propagation to AWAITING order snapshots ─────────
+      // The orders table's display nickname comes from one of two
+      // JSON fields inside order_overrides.best_rate_json:
+      //   - providerAccountNickname  (preferred when present)
+      //   - carrierNickname          (legacy fallback)
+      //
+      // When a rate is calculated, the carrier label gets snapshotted
+      // into those fields. Renaming the master label later without
+      // touching the snapshots leaves awaiting orders displaying the
+      // OLD label — which is what the 2026-05-12 follow-up audit
+      // reported ("i see wm ship even i edit the walmart").
+      //
+      // Scope: ONLY awaiting orders. Shipped + cancelled snapshots
+      // stay frozen for audit-trail correctness AND because the
+      // shipments table is under the lockdown (AGENTS.md). The two
+      // UPDATEs are run in separate statements so each touches only
+      // the field that actually matched the old label — otherwise a
+      // bulk jsonb_set would overwrite the OTHER field with the new
+      // label even when it didn't match, leaking the rename into
+      // unrelated snapshots.
+      let ordersUpdated = 0;
+      if (
+        hasLabel &&
+        oldLabel != null &&
+        oldLabel.length > 0 &&
+        !labelGoesNull &&
+        validatedLabel != null &&
+        validatedLabel !== oldLabel
+      ) {
+        try {
+          const r1 = (await sql`
+            UPDATE order_overrides ovr
+            SET best_rate_json = jsonb_set(
+              best_rate_json,
+              '{providerAccountNickname}',
+              to_jsonb(${validatedLabel}::text)
+            )
+            FROM orders o
+            WHERE ovr.order_id = o.id
+              AND o.order_status = 'awaiting_shipment'
+              AND ovr.best_rate_json->>'providerAccountNickname' = ${oldLabel}
+          `) as unknown as { count?: number };
+          const r2 = (await sql`
+            UPDATE order_overrides ovr
+            SET best_rate_json = jsonb_set(
+              best_rate_json,
+              '{carrierNickname}',
+              to_jsonb(${validatedLabel}::text)
+            )
+            FROM orders o
+            WHERE ovr.order_id = o.id
+              AND o.order_status = 'awaiting_shipment'
+              AND ovr.best_rate_json->>'carrierNickname' = ${oldLabel}
+          `) as unknown as { count?: number };
+          ordersUpdated = Math.max(
+            typeof r1.count === 'number' ? r1.count : 0,
+            typeof r2.count === 'number' ? r2.count : 0,
+          );
+        } catch (err) {
+          // Backfill failures don't fail the rename itself — the
+          // master label updated cleanly. Surface in logs only so
+          // the operator's request succeeds even if backfill hit a
+          // transient DB issue.
+          console.warn(
+            '[carrier-accounts:PATCH] awaiting-snapshot backfill failed:',
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
+
+      res.status(200).json({
+        data: updated[0],
+        // ordersUpdated: how many awaiting orders' display nicknames
+        // were refreshed by this rename. UI uses this to confirm
+        // ("Renamed + refreshed 12 awaiting orders").
+        ordersUpdated,
+      });
       return;
     }
 

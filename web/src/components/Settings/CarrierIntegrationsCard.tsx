@@ -1016,18 +1016,34 @@ async function approveCarrierIntegration(rowId: number): Promise<void> {
 // the FE can sync local state without a full refetch. Carriers
 // only — store_accounts uses a different table; if you need that
 // too, mirror this pattern in store-accounts.ts.
+//
+// The backend also backfills awaiting-order snapshots (the
+// `providerAccountNickname` / `carrierNickname` inside
+// order_overrides.best_rate_json) when the label changes, so any
+// awaiting orders that were displaying the OLD label update
+// immediately. `ordersUpdated` reports how many were refreshed —
+// useful for an operator-facing "renamed + updated 12 awaiting
+// orders" confirmation.
+interface RenameResult {
+  label: string | null
+  ordersUpdated: number
+}
 async function renameCarrierIntegration(
   rowId: number,
   label: string,
-): Promise<{ label: string | null } | null> {
-  const res = await callVercelFunction<{ data: { label: string | null } | null }>(
-    `/carrier-accounts?id=${rowId}`,
-    {
-      method: 'PATCH',
-      body: { label },
-    },
-  )
-  return res?.data ?? null
+): Promise<RenameResult | null> {
+  const res = await callVercelFunction<{
+    data: { label: string | null } | null
+    ordersUpdated?: number
+  }>(`/carrier-accounts?id=${rowId}`, {
+    method: 'PATCH',
+    body: { label },
+  })
+  if (!res?.data) return null
+  return {
+    label: res.data.label ?? null,
+    ordersUpdated: typeof res.ordersUpdated === 'number' ? res.ordersUpdated : 0,
+  }
 }
 
 interface WalmartOrdersResult {
@@ -1149,6 +1165,12 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
   const [renamingForId, setRenamingForId] = useState<number | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
   const [renameSaving, setRenameSaving] = useState(false)
+  // Brief post-rename confirmation. Shows alongside the row in the
+  // list ("✓ renamed · refreshed N awaiting orders") and auto-
+  // clears after ~6 seconds so it doesn't linger forever.
+  const [renameSuccessNote, setRenameSuccessNote] = useState<
+    { rowId: number; message: string } | null
+  >(null)
   // Per-row "Assign Clients" popover state. Only one popover is open
   // at a time — `assignOpenForId` holds the SavedRow.id (or null).
   // `assignDraft` is the in-progress checkbox set inside the open
@@ -1333,6 +1355,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
     try {
       const result = await renameCarrierIntegration(d.accountId, next)
       const persistedLabel = result?.label ?? (next.length > 0 ? next : null)
+      const ordersUpdated = result?.ordersUpdated ?? 0
       setSaved((prev) =>
         prev.map((row) =>
           row.id === d.id ? { ...row, label: persistedLabel } : row,
@@ -1341,6 +1364,29 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
       // The Rate Browser sidebar caches account labels — bust it so
       // the new name shows up everywhere without a 60s wait.
       refreshAccountsCache()
+      // Also invalidate the orders cache so when the operator
+      // navigates back to /orders the rows show the refreshed
+      // snapshots without a hard reload. Best-effort — if the
+      // QueryClient hasn't seeded these keys yet (e.g. operator
+      // started on Settings) it's a harmless no-op.
+      try {
+        queryClient.invalidateQueries({ queryKey: ['orders'] })
+        queryClient.invalidateQueries({ queryKey: ['v2-hooks:orders'] })
+      } catch {
+        /* non-fatal */
+      }
+      // Inline confirmation that auto-clears. Wording adapts to
+      // whether any awaiting orders were touched.
+      setRenameSuccessNote({
+        rowId: d.id,
+        message:
+          ordersUpdated > 0
+            ? `✓ Renamed to "${persistedLabel ?? next}" · refreshed ${ordersUpdated} awaiting order${ordersUpdated === 1 ? '' : 's'}`
+            : `✓ Renamed to "${persistedLabel ?? next}"`,
+      })
+      window.setTimeout(() => {
+        setRenameSuccessNote((current) => (current?.rowId === d.id ? null : current))
+      }, 6000)
       setRenamingForId(null)
       setRenameDraft('')
     } catch (err) {
@@ -2439,6 +2485,31 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
         </AnimatePresence>,
         document.body,
         )}
+        {/* Inline rename-success note. Auto-clears after ~6s
+            (setTimeout in runRename) so it doesn't linger. Sits at
+            the top of the per-row feedback stack so it's the first
+            thing the operator sees after Save closes the modal. */}
+        {renameSuccessNote?.rowId === d.id ? (
+          <motion.div
+            initial={{ opacity: 0, y: -4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.18 }}
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              color: 'rgb(22 101 52)',
+              background: 'rgb(220 252 231)',
+              border: '1px solid rgb(134 239 172)',
+              borderRadius: 6,
+              padding: '4px 8px',
+              marginTop: 2,
+              display: 'inline-block',
+            }}
+          >
+            {renameSuccessNote.message}
+          </motion.div>
+        ) : null}
         {result ? (
           <div style={{
             fontSize: 11,
