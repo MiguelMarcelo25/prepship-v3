@@ -100,14 +100,16 @@ async function assertOrderEditable(
 // the main /orders list still returned their rows — desync between the
 // parent count and the visible list. coalesce(active, true) defaults
 // legacy null rows to visible.
-const visibleStorePredicate = sql`(
+const visibleStoreBasePredicate = sql`(
   (${orders.storeId} is not null and ${orders.storeId} not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)}))
   or exists (
     select 1 from ${clients} test_client
     where test_client.id = ${orders.clientId}
       and test_client.is_test = true
   )
-) and (
+)`;
+
+const activeOrderClientPredicate = sql`(
   ${orders.clientId} is null
   or exists (
     select 1 from ${clients} owner_client
@@ -115,6 +117,8 @@ const visibleStorePredicate = sql`(
       and coalesce(owner_client.active, true) = true
   )
 )`;
+
+const visibleStorePredicate = sql`${visibleStoreBasePredicate} and ${activeOrderClientPredicate}`;
 
 const testOrderPredicate = sql`(
   exists (
@@ -581,6 +585,8 @@ const dailyCountsQuery = z.object({
   clientId: z.coerce.number().int().optional(),
   storeId: z.coerce.number().int().optional(),
   hideTestOrders: z.coerce.boolean().optional(),
+  includeInactive: z.coerce.boolean().optional(),
+  includeInactiveClients: z.coerce.boolean().optional(),
 });
 
 app.get('/daily-counts', zValidator('query', dailyCountsQuery), async (c) => {
@@ -599,13 +605,14 @@ app.get('/daily-counts', zValidator('query', dailyCountsQuery), async (c) => {
   // orders created at the very end of the window aren't dropped.
   const fromDate = new Date(`${q.from}T00:00:00.000Z`);
   const toDate = new Date(`${q.to}T23:59:59.999Z`);
+  const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
 
   const where = and(
     ...[
       assigneeFilter,
       q.clientId !== undefined ? eq(orders.clientId, q.clientId) : undefined,
       q.storeId !== undefined ? eq(orders.storeId, q.storeId) : undefined,
-      visibleStorePredicate,
+      includeInactiveClients ? visibleStoreBasePredicate : visibleStorePredicate,
       q.hideTestOrders === true && q.clientId === undefined && q.storeId === undefined
         ? sql`not ${testOrderPredicate}`
         : undefined,
@@ -669,6 +676,8 @@ const listQuery = paginationSchema.extend({
   storeId: z.coerce.number().int().optional(),
   excludeClientId: z.string().optional(),
   hideTestOrders: z.coerce.boolean().optional(),
+  includeInactive: z.coerce.boolean().optional(),
+  includeInactiveClients: z.coerce.boolean().optional(),
   dateFrom: z.string().datetime().optional(),
   dateTo: z.string().datetime().optional(),
   search: z.string().optional(),
@@ -726,6 +735,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   const q = c.req.valid('query');
   const search = q.search?.trim();
   const searchPattern = search ? `%${search}%` : null;
+  const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
 
   // Order assignment scoping. Admins see every order. Non-admin callers see
   // only orders whose assigned_to_user_id matches their Supabase UUID. An
@@ -765,7 +775,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       assigneeFilter,
       q.clientId !== undefined ? eq(orders.clientId, q.clientId) : undefined,
       q.storeId !== undefined ? eq(orders.storeId, q.storeId) : undefined,
-      visibleStorePredicate,
+      includeInactiveClients ? visibleStoreBasePredicate : visibleStorePredicate,
       excludeIds.length > 0 && q.clientId === undefined
         ? notInArray(orders.clientId, excludeIds)
         : undefined,
@@ -1663,6 +1673,9 @@ app.get('/distinct-skus', async (c) => {
   const storeIdRaw = c.req.query('storeId');
   const dateFrom = c.req.query('dateFrom') ?? null;
   const dateTo = c.req.query('dateTo') ?? null;
+  const includeInactiveRaw =
+    c.req.query('includeInactiveClients') ?? c.req.query('includeInactive') ?? 'false';
+  const includeInactiveClients = ['1', 'true', 'yes'].includes(includeInactiveRaw.toLowerCase());
   const cid = clientIdRaw ? Number.parseInt(clientIdRaw, 10) : null;
   const sid = storeIdRaw ? Number.parseInt(storeIdRaw, 10) : null;
 
@@ -1676,6 +1689,16 @@ app.get('/distinct-skus', async (c) => {
       and (
         (o.store_id is not null and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)}))
         or exists (select 1 from clients c where c.id = o.client_id and c.is_test = true)
+      )
+      and (
+        ${includeInactiveClients}::boolean = true
+        or o.client_id is null
+        or exists (
+          select 1
+          from clients owner_client
+          where owner_client.id = o.client_id
+            and coalesce(owner_client.active, true) = true
+        )
       )
       and (${status}::text is null or o.order_status = ${status}::text)
       and (${cid}::int is null or o.client_id = ${cid}::int)

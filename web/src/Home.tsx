@@ -198,6 +198,27 @@ export default function Home() {
     if (isMobileViewport()) setMobileMenuOpen(false)
   }
   const [activeStore, setActiveStore] = useState<number | null>(null)
+  const includeInactiveOrders = useMemo(() => {
+    const params = new URLSearchParams(location.search)
+    const raw = params.get('includeInactiveClients') ?? params.get('includeInactive')
+    return raw === '1' || raw === 'true' || raw === 'yes'
+  }, [location.search])
+  const activeRouteClientName = useMemo(() => {
+    const params = new URLSearchParams(location.search)
+    return params.get('clientName') || null
+  }, [location.search])
+  useEffect(() => {
+    const route = pathToRoute(location.pathname)
+    if (route.view !== 'orders') return
+    const params = new URLSearchParams(location.search)
+    const clientId = Number.parseInt(params.get('clientId') ?? '', 10)
+    const storeId = Number.parseInt(params.get('storeId') ?? '', 10)
+    if (Number.isFinite(clientId) && clientId > 0) {
+      setActiveStore(-clientId)
+    } else if (Number.isFinite(storeId)) {
+      setActiveStore(storeId)
+    }
+  }, [location.pathname, location.search])
   const [searchQuery, setSearchQuery] = useState('')
   // Bumped every time the user navigates via the sidebar (status click,
   // store click, etc). OrdersView watches this counter and clears its
@@ -293,8 +314,10 @@ export default function Home() {
   }
 
   const activeStoreName = useMemo(
-    () => sidebarStores.find((store) => store.storeId === activeStore)?.storeName ?? null,
-    [sidebarStores, activeStore],
+    () =>
+      sidebarStores.find((store) => store.storeId === activeStore)?.storeName ??
+      (activeStore != null && activeStore < 0 ? activeRouteClientName : null),
+    [sidebarStores, activeStore, activeRouteClientName],
   )
 
   useEffect(() => {
@@ -989,6 +1012,7 @@ export default function Home() {
                 }}
                 refreshVersion={ordersRefreshVersion}
                 showTestOrders={showTestOrders}
+                includeInactiveClients={includeInactiveOrders}
                 hideEmptyPanel={hideEmptyPanel}
                 onHideEmptyPanelChange={setHideEmptyPanel}
               />

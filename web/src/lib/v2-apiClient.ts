@@ -1622,6 +1622,7 @@ export const apiClient = {
     storeId?: number
     dateFrom?: string
     dateTo?: string
+    includeInactiveClients?: boolean
   } = {}): Promise<string[]> {
     return safe(
       'fetchDistinctSkus',
@@ -1629,9 +1630,13 @@ export const apiClient = {
         const q: Record<string, string> = {}
         if (filters.status) q.status = filters.status
         if (filters.clientId != null) q.clientId = String(filters.clientId)
-        if (filters.storeId != null) q.storeId = String(filters.storeId)
+        if (filters.storeId != null) {
+          if (filters.storeId < 0 && filters.clientId == null) q.clientId = String(Math.abs(filters.storeId))
+          else q.storeId = String(filters.storeId)
+        }
         if (filters.dateFrom) q.dateFrom = filters.dateFrom
         if (filters.dateTo) q.dateTo = filters.dateTo
+        if (filters.includeInactiveClients) q.includeInactiveClients = 'true'
         const res = await api.get<{ skus: string[] }>(`/orders/distinct-skus${qs(q)}`)
         return Array.isArray(res?.skus) ? res.skus : []
       },

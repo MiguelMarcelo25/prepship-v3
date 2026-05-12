@@ -35,6 +35,7 @@ export interface UseOrdersOptions {
   dateStart?: string;
   dateEnd?: string;
   hideTestOrders?: boolean;
+  includeInactiveClients?: boolean;
 }
 
 export interface UseOrdersResult {
@@ -436,6 +437,7 @@ export function useOrders(
     dateStart,
     dateEnd,
     hideTestOrders = false,
+    includeInactiveClients = false,
   } = options;
 
   const [currentPage, setCurrentPage] = useState<number>(page);
@@ -482,6 +484,7 @@ export function useOrders(
       effectiveStoreId,
       excludeClientId,
       hideTestOrders,
+      includeInactiveClients,
       isoFrom,
       isoTo,
     ],
@@ -495,6 +498,7 @@ export function useOrders(
           storeId: effectiveStoreId,
           excludeClientId,
           hideTestOrders: hideTestOrders && effectiveClientId == null && effectiveStoreId == null ? true : undefined,
+          includeInactiveClients,
           dateFrom: isoFrom,
           dateTo: isoTo,
         })}`

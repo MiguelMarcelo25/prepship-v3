@@ -115,6 +115,29 @@
   word-break:break-word;
 }
 
+.inventory-inline-button.inventory-cell-link--nowrap{
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  word-break:normal;
+}
+
+.inventory-inline-button.inventory-cell-link--clamp{
+  min-width:0;
+  overflow:hidden;
+  display:-webkit-box;
+  -webkit-box-orient:vertical;
+  -webkit-line-clamp:2;
+  white-space:normal;
+  word-break:normal;
+  line-height:1.28;
+}
+
+.inventory-stock-table tbody tr{
+  height:58px;
+}
+
 .inventory-sort-header{
   align-items:center;
   background:none;

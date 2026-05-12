@@ -342,6 +342,7 @@ interface OrdersViewProps {
    */
   filterResetVersion?: number
   showTestOrders?: boolean
+  includeInactiveClients?: boolean
   // User preference (from localStorage in Home.tsx) — when true, the
   // right-side order detail panel is hidden when no order is selected.
   // The panel still appears the moment a row is clicked (showing details).
@@ -1707,6 +1708,7 @@ export default function OrdersView({
   refreshVersion = 0,
   filterResetVersion = 0,
   showTestOrders = true,
+  includeInactiveClients = false,
   hideEmptyPanel = false,
   onHideEmptyPanelChange,
   stores = [],
@@ -2071,6 +2073,7 @@ export default function OrdersView({
     dateStart: dateRange.start,
     dateEnd: dateRange.end,
     hideTestOrders: hideTestOrdersInAllAwaiting,
+    includeInactiveClients,
     search: searchQuery,
     // Forwarded so the backend filters by SKU exactly. Replaces the
     // old client-side filter (now removed below) which only ran over
@@ -2167,6 +2170,7 @@ export default function OrdersView({
         storeId: activeStore ?? undefined,
         dateFrom: dateRange.start,
         dateTo: dateRange.end,
+        includeInactiveClients,
       })
       .then((skus) => {
         if (cancelled) return
@@ -2175,7 +2179,7 @@ export default function OrdersView({
     return () => {
       cancelled = true
     }
-  }, [currentStatus, activeStore, dateRange.start, dateRange.end])
+  }, [currentStatus, activeStore, dateRange.start, dateRange.end, includeInactiveClients])
 
   // Fall back to the in-memory derivation if the global fetch is empty
   // or hasn't returned yet — keeps the dropdown populated on first

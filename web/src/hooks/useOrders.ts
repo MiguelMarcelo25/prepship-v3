@@ -11,6 +11,7 @@ export interface UseOrdersOptions {
   dateStart?: string;
   dateEnd?: string;
   hideTestOrders?: boolean;
+  includeInactiveClients?: boolean;
   /**
    * Free-text search applied server-side across orderNumber, customer
    * name/email, ship-to fields, SKUs, item names, and tracking numbers.
@@ -43,7 +44,7 @@ export interface UseOrdersResult {
 }
 
 export function useOrders(status: string, options: UseOrdersOptions = {}): UseOrdersResult {
-  const { page = 1, pageSize = 50, storeId, clientId, dateStart, dateEnd, hideTestOrders, search, sku } = options;
+  const { page = 1, pageSize = 50, storeId, clientId, dateStart, dateEnd, hideTestOrders, includeInactiveClients, search, sku } = options;
 
   const [orders, setOrders] = useState<OrderSummaryDto[]>([]);
   const [total, setTotal] = useState(0);
@@ -83,6 +84,7 @@ export function useOrders(status: string, options: UseOrdersOptions = {}): UseOr
         dateStart,
         dateEnd,
         hideTestOrders,
+        includeInactiveClients,
         // Forward search to backend so the SQL ilike runs server-side
         // across orderNumber, name, email, ship-to, items, tracking, etc.
         // Previously this was silently dropped here, so search was a
@@ -105,7 +107,7 @@ export function useOrders(status: string, options: UseOrdersOptions = {}): UseOr
     } finally {
       setLoading(false);
     }
-  }, [status, pageSize, storeId, clientId, dateStart, dateEnd, hideTestOrders, search, sku]);
+  }, [status, pageSize, storeId, clientId, dateStart, dateEnd, hideTestOrders, includeInactiveClients, search, sku]);
 
   useEffect(() => {
     void fetchOrders(page);
