@@ -196,16 +196,33 @@ export default function Clients() {
                     type="button"
                     aria-pressed={c.active}
                     disabled={toggleActive.isPending}
-                    title={c.active ? 'Turn this client off' : 'Turn this client on'}
+                    aria-label={`${c.active ? 'Deactivate' : 'Activate'} ${c.name}`}
+                    title={c.active ? 'Deactivate client' : 'Activate client'}
                     onClick={() => toggleActive.mutate({ id: c.id, active: !c.active })}
-                    className={`inline-flex items-center gap-1 text-2xs font-bold px-1.5 py-0.5 rounded-full shrink-0 ring-1 transition ${
+                    className={`inline-flex items-center gap-2 rounded-full shrink-0 ring-1 px-1.5 py-1 pr-2.5 text-[10px] font-extrabold uppercase transition shadow-sm ${
                       c.active
-                        ? 'bg-ok-bg text-ok-dark ring-line hover:bg-ok-bg/80'
+                        ? 'bg-ok-bg text-ok-dark ring-ok/25 hover:bg-ok-bg/80'
                         : 'bg-surface-3 text-ink-3 ring-line hover:text-ink-2 hover:bg-surface-2'
                     } disabled:opacity-60 disabled:cursor-wait`}
                   >
-                    <Power size={9} strokeWidth={2.4} />
-                    {c.active ? 'ACTIVE' : 'INACTIVE'}
+                    <span
+                      className={`relative inline-flex h-5 w-9 items-center rounded-full transition ${
+                        c.active ? 'bg-ok' : 'bg-line-2'
+                      }`}
+                    >
+                      <span
+                        className={`inline-flex h-4 w-4 items-center justify-center rounded-full bg-white shadow-sm transition ${
+                          c.active ? 'translate-x-4' : 'translate-x-0.5'
+                        }`}
+                      >
+                        <Power
+                          size={9}
+                          strokeWidth={2.6}
+                          className={c.active ? 'text-ok-dark' : 'text-ink-3'}
+                        />
+                      </span>
+                    </span>
+                    <span>{c.active ? 'ON Active' : 'OFF Inactive'}</span>
                   </button>
                 </div>
 
