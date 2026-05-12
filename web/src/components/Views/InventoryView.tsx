@@ -1777,55 +1777,27 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
           </button>
         ) : null}
         <div style={{ flex: 1 }} />
-        {!hideTabs ? (
-          <>
-            <button className="btn btn-outline btn-sm" type="button" onClick={handlePopulateInventory}>📥 Import SKUs from Orders</button>
-            <button className="btn btn-outline btn-sm" type="button" onClick={handleImportDims} title="Pull weight & dims from ShipStation product catalog into inventory SKUs">📐 Import Dims from SS</button>
-            <button
-              className="btn btn-outline btn-sm"
-              type="button"
-              onClick={() => {
-                if (bulkEditMode) {
-                  setBulkEditMode(false)
-                  return
-                }
-                initializeBulkDrafts()
-                setBulkEditMode(true)
-              }}
-              style={bulkEditMode ? { background: 'var(--ss-blue)', color: '#fff', borderColor: 'var(--ss-blue)' } : undefined}
-            >
-              {bulkEditMode ? '✕ Exit Bulk' : '✏️ Bulk Edit'}
-            </button>
-            <button
-              className="btn btn-outline btn-sm"
-              type="button"
-              onClick={() => void handlePurgeTestData()}
-              disabled={purgeBusy}
-              title="Delete every order, shipment, inventory SKU, and ledger entry that belongs to a client flagged is_test=true. Does NOT touch real clients."
-              style={{
-                color: 'var(--red, #dc2626)',
-                borderColor: 'var(--red, #dc2626)',
-                opacity: purgeBusy ? 0.6 : 1,
-                cursor: purgeBusy ? 'wait' : 'pointer',
-              }}
-            >
-              {purgeBusy ? '🧹 Purging…' : '🧹 Purge Test Data'}
-            </button>
-          </>
-        ) : null}
-        {/* Columns popover — toggle visibility + a Reset link.
-            Drag column headers in the Stock Levels table to reorder.
-            Hidden from bulk-edit mode where reorder doesn't apply. */}
+        {/* Ticket 2 (2026-05-12): promoted to the FIRST right-side
+            toolbar slot so operators see it before scanning past the
+            other action buttons. Was buried between "Purge Test Data"
+            and "Refresh" — easily missed at 115% zoom or on narrow
+            viewports where buttons wrap. */}
         {!hideTabs && activeTab === 'stock' && !bulkEditMode ? (
           <div style={{ position: 'relative' }}>
             <button
               type="button"
               data-inventory-columns-trigger
               onClick={() => setInventoryColumnsMenuOpen((v) => !v)}
-              className="btn btn-outline btn-sm"
+              className="btn btn-sm"
               aria-haspopup="true"
               aria-expanded={inventoryColumnsMenuOpen}
-              title="Show or hide columns · drag column headers to reorder"
+              title="Show or hide columns · drag column headers to reorder · click a header to sort"
+              style={{
+                background: inventoryColumnsMenuOpen ? 'var(--ss-blue)' : 'rgba(42,91,215,0.10)',
+                color: inventoryColumnsMenuOpen ? '#fff' : 'var(--ss-blue)',
+                border: `1px solid var(--ss-blue)`,
+                fontWeight: 700,
+              }}
             >
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true" style={{ display: 'inline-block', verticalAlign: '-2px', marginRight: 4 }}>
                 <rect x="1.5" y="2.5" width="3.5" height="11" rx="0.7" stroke="currentColor" strokeWidth="1.4" />
@@ -1833,7 +1805,7 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                 <rect x="11" y="2.5" width="3.5" height="11" rx="0.7" stroke="currentColor" strokeWidth="1.4" />
               </svg>
               Columns
-              <span style={{ marginLeft: 4, fontSize: 11, color: 'var(--text3)', fontFamily: 'monospace' }}>
+              <span style={{ marginLeft: 4, fontSize: 11, fontFamily: 'monospace', opacity: 0.75 }}>
                 ({INVENTORY_DEFAULT_COLUMN_ORDER.length - inventoryColumnLayout.hidden.length}/{INVENTORY_DEFAULT_COLUMN_ORDER.length})
               </span>
             </button>
@@ -1899,11 +1871,47 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                   })
                 })()}
                 <div style={{ borderTop: '1px solid var(--border)', marginTop: 4, paddingTop: 6, padding: '6px 8px 4px', fontSize: 10.5, color: 'var(--text3)', lineHeight: 1.4 }}>
-                  Drag a column header to reorder.
+                  Tips: drag column headers to reorder · click a header to sort · check/uncheck above to toggle.
                 </div>
               </div>
             ) : null}
           </div>
+        ) : null}
+        {!hideTabs ? (
+          <>
+            <button className="btn btn-outline btn-sm" type="button" onClick={handlePopulateInventory}>📥 Import SKUs from Orders</button>
+            <button className="btn btn-outline btn-sm" type="button" onClick={handleImportDims} title="Pull weight & dims from ShipStation product catalog into inventory SKUs">📐 Import Dims from SS</button>
+            <button
+              className="btn btn-outline btn-sm"
+              type="button"
+              onClick={() => {
+                if (bulkEditMode) {
+                  setBulkEditMode(false)
+                  return
+                }
+                initializeBulkDrafts()
+                setBulkEditMode(true)
+              }}
+              style={bulkEditMode ? { background: 'var(--ss-blue)', color: '#fff', borderColor: 'var(--ss-blue)' } : undefined}
+            >
+              {bulkEditMode ? '✕ Exit Bulk' : '✏️ Bulk Edit'}
+            </button>
+            <button
+              className="btn btn-outline btn-sm"
+              type="button"
+              onClick={() => void handlePurgeTestData()}
+              disabled={purgeBusy}
+              title="Delete every order, shipment, inventory SKU, and ledger entry that belongs to a client flagged is_test=true. Does NOT touch real clients."
+              style={{
+                color: 'var(--red, #dc2626)',
+                borderColor: 'var(--red, #dc2626)',
+                opacity: purgeBusy ? 0.6 : 1,
+                cursor: purgeBusy ? 'wait' : 'pointer',
+              }}
+            >
+              {purgeBusy ? '🧹 Purging…' : '🧹 Purge Test Data'}
+            </button>
+          </>
         ) : null}
         <button className="btn btn-outline btn-sm" type="button" onClick={() => void refreshInventoryView()}>↻ Refresh</button>
       </motion.div>
@@ -2233,8 +2241,14 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                                         >
                                           🔗
                                         </button>
+                                        {/* Ticket 1 (2026-05-12): replace the tiny "+" with a
+                                            clearly-labeled Adjust pill button. The modal it
+                                            opens already supports both ADD and REMOVE via
+                                            the Direction toggle (+ Add / − Remove) — so a
+                                            single entry point covers both ops. Inline
+                                            label avoids the previous "what does + mean?"
+                                            discoverability problem. */}
                                         <button
-                                          className="btn btn-ghost btn-xs"
                                           type="button"
                                           onClick={() => setAdjustModal({
                                             invSkuId: row.id,
@@ -2242,13 +2256,29 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                                             qty: '1',
                                             note: '',
                                             date: new Date().toISOString().slice(0, 10),
-                                            type: 'receive',
+                                            type: 'adjust',
                                             sign: 1,
                                           })}
-                                          title="Add / Remove Stock"
-                                          style={{ fontSize: 13, fontWeight: 700, color: 'var(--ss-blue)' }}
+                                          title="Adjust stock — add or remove units"
+                                          style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: 3,
+                                            marginLeft: 4,
+                                            padding: '3px 9px',
+                                            border: '1px solid var(--ss-blue)',
+                                            borderRadius: 999,
+                                            background: 'rgba(42,91,215,0.08)',
+                                            color: 'var(--ss-blue)',
+                                            fontSize: 11,
+                                            fontWeight: 700,
+                                            cursor: 'pointer',
+                                            lineHeight: 1.2,
+                                            whiteSpace: 'nowrap',
+                                          }}
                                         >
-                                          +
+                                          <span aria-hidden="true" style={{ fontSize: 12, fontWeight: 800 }}>±</span>
+                                          Adjust
                                         </button>
                                         {inlineParentRowId === row.id ? (
                                           <div style={{ display: 'inline-flex', gap: 4, marginLeft: 6, alignItems: 'center' }}>
