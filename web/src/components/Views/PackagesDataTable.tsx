@@ -414,21 +414,23 @@ export function PackagesDataTable({
   ]
 
   return (
-    // 2026-05-12 sticky fix: was `overflow-hidden`, which establishes
-    // a scroll context just like `overflow-x: auto` does — meaning
-    // the inner <Table>'s sticky thead pinned to THIS wrapper instead
-    // of the page-level view-content. Switching to `overflow-clip`
-    // preserves the rounded-corner clipping (the only reason overflow
-    // was set here in the first place) but does NOT create a scroll
-    // context, so sticky now resolves up to the page scroll where
-    // operators actually want it. Same fix pattern as Table.tsx:705
-    // and InventoryView.tsx:2638 from commit 3064460.
-    <div className="rounded-card border border-line bg-white shadow-sm overflow-clip">
-      {/* Sticky section title — "Custom Packages" / "Carrier Packages".
-          Sits OUTSIDE the Table so the table's own thead can be sticky
-          independently. */}
+    // 2026-05-12 sticky fix (v2): wrapper is overflow-clip (not
+    // hidden) so sticky descendants resolve up to view-packages'
+    // overflow-y:auto. The Tailwind arbitrary selector below targets
+    // the inner <Table>'s thead and pushes its sticky top from 0 to
+    // 36px (top-9), so the section-title bar can pin at top:0 and
+    // the column headers pin directly below it without overlap.
+    // Without this offset both stickies would compete for top:0 and
+    // the higher z-index would cover the other.
+    <div className="rounded-card border border-line bg-white shadow-sm overflow-clip [&_thead]:!top-9">
+      {/* Section title bar — 'Custom Packages' / 'Carrier Packages'.
+          Now ALSO sticky at top:0 of view-packages so operators always
+          know which section's data they're looking at while scrolling.
+          z-[80] sits above the column-header row (Table's thead has
+          z-10) so the section title visually stacks ON TOP of the
+          headers when both are pinned. */}
       {sectionTitle ? (
-        <div className="h-9 bg-brand-bg border-b border-line flex items-center px-4 text-2xs font-extrabold uppercase tracking-[0.05em] text-ink-3">
+        <div className="sticky top-0 z-[80] h-9 bg-brand-bg border-b border-line flex items-center px-4 text-2xs font-extrabold uppercase tracking-[0.05em] text-ink-3">
           {sectionTitle}
         </div>
       ) : null}
