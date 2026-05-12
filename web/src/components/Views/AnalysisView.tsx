@@ -1745,9 +1745,17 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
                               center: boolean
                             }>).map(({ key, label, center }) => {
                               const active = drawerOrdersSortKey === key
-                              const indicator = !active
-                                ? '↕'
-                                : drawerOrdersSortDir === 'asc' ? '↑' : '↓'
+                              // Operator preference (2026-05-12): render the
+                              // directional arrow ONLY when this column is the
+                              // active sort. The neutral up-down "↕" on every
+                              // header competes with the label for attention
+                              // and adds noise; dropping it makes the active
+                              // sort signal much louder (one arrow on the
+                              // screen instead of N). Clicking the title still
+                              // triggers sort.
+                              const indicator = active
+                                ? drawerOrdersSortDir === 'asc' ? '↑' : '↓'
+                                : null
                               const ariaSort: 'ascending' | 'descending' | 'none' =
                                 active
                                   ? drawerOrdersSortDir === 'asc' ? 'ascending' : 'descending'
@@ -1767,14 +1775,14 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
                                     onClick={() => handleSortDrawerOrders(key)}
                                   >
                                     <span>{label}</span>
-                                    <span
-                                      className={`analysis-orders-sort-ind${
-                                        active ? ' is-active' : ''
-                                      }`}
-                                      aria-hidden="true"
-                                    >
-                                      {indicator}
-                                    </span>
+                                    {indicator ? (
+                                      <span
+                                        className="analysis-orders-sort-ind is-active"
+                                        aria-hidden="true"
+                                      >
+                                        {indicator}
+                                      </span>
+                                    ) : null}
                                   </button>
                                   <ColumnResizeHandle
                                     getStartWidth={() => getDrawerOrderColumnWidth(key)}
