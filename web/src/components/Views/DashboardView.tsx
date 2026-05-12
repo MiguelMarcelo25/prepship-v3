@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { motion } from 'framer-motion'
 import {
   AlertTriangle,
@@ -156,6 +156,143 @@ const DEFAULT_VISIBLE_COLUMNS = COLUMN_OPTIONS.reduce(
   (acc, option) => ({ ...acc, [option.key]: true }),
   {} as Record<ColumnKey, boolean>,
 )
+
+// ──────────────────────────────────────────────────────────────────
+// Column metadata — single source of truth for the SKU Performance
+// Summary table. Each entry maps a ColumnKey to:
+//   sortKey    — DashboardSortKey to drive the SortableHeader
+//   label      — column header text
+//   align      — 'left' for text columns, 'right' for numeric
+//   width      — default column width in px
+//   minWidth   — floor enforced during resize so a column can't
+//                collapse to 0 and disappear
+//   renderCell — pure function: (row) → JSX for the cell body
+//
+// Both `<thead>` and `<tbody>` map over the operator's columnOrder
+// state and look up metadata here, so reorder + resize affect
+// header AND body together in one pass.
+// ──────────────────────────────────────────────────────────────────
+type ColumnAlign = 'left' | 'right'
+interface SkuColumnMeta {
+  sortKey: DashboardSortKey
+  label: string
+  align: ColumnAlign
+  width: number
+  minWidth: number
+  renderCell: (row: DashboardSkuRow) => ReactNode
+}
+
+const SKU_COLUMNS: Record<ColumnKey, SkuColumnMeta> = {
+  store: {
+    sortKey: 'client', label: 'Store', align: 'left', width: 140, minWidth: 90,
+    renderCell: (row) => <span className="text-xs text-ink-2 truncate block">{row.client}</span>,
+  },
+  revenue: {
+    sortKey: 'revenue', label: 'Revenue', align: 'right', width: 110, minWidth: 80,
+    renderCell: (row) => <span className="text-right font-mono text-xs text-ink">{formatMoney(row.revenue)}</span>,
+  },
+  avgPrice: {
+    sortKey: 'avgPrice', label: 'Avg. Price', align: 'right', width: 110, minWidth: 80,
+    renderCell: (row) => <span className="text-right font-mono text-xs text-ink-2">{formatMoneySmall(row.avgPrice)}</span>,
+  },
+  avgShipping: {
+    sortKey: 'avgShipping', label: 'Avg. Shipping', align: 'right', width: 120, minWidth: 90,
+    renderCell: (row) => <span className="text-right font-mono text-xs text-ink-2">{formatMoneySmall(row.avgShipping)}</span>,
+  },
+  stockStatus: {
+    sortKey: 'status', label: 'Stock Status', align: 'left', width: 130, minWidth: 100,
+    renderCell: (row) => <StatusBadge status={row.status} />,
+  },
+  daysSupply: {
+    sortKey: 'daysSupply', label: 'Days Supply', align: 'right', width: 100, minWidth: 80,
+    renderCell: (row) => <span className="text-right font-mono text-xs text-ink-2">{row.daysSupply == null ? '-' : formatInt(row.daysSupply)}</span>,
+  },
+  restockQty: {
+    sortKey: 'restockQty', label: 'Restock Qty', align: 'right', width: 100, minWidth: 80,
+    renderCell: (row) => <span className="text-right font-mono text-xs text-ink-2">{formatInt(row.restockQty)}</span>,
+  },
+  units7: {
+    sortKey: 'units7', label: '7-Day Units', align: 'right', width: 100, minWidth: 80,
+    renderCell: (row) => <span className="text-right font-mono text-xs text-ink-2">{formatInt(row.units7)}</span>,
+  },
+  units30: {
+    sortKey: 'units30', label: '30-Day Units', align: 'right', width: 110, minWidth: 80,
+    renderCell: (row) => <span className="text-right font-mono text-xs font-semibold text-ink">{formatInt(row.units30)}</span>,
+  },
+  priorAvg: {
+    sortKey: 'priorAvg', label: '30-Day Avg.', align: 'right', width: 110, minWidth: 80,
+    renderCell: (row) => <span className="text-right font-mono text-xs text-ink-2">{formatInt(row.priorAvg)}</span>,
+  },
+  changePct: {
+    sortKey: 'changePct', label: 'vs Prior 30 Days', align: 'right', width: 140, minWidth: 110,
+    renderCell: (row) => (
+      <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-2xs font-bold ${row.changePct >= 0 ? 'bg-ok/10 text-ok' : 'bg-danger/10 text-danger'}`}>
+        {row.changePct >= 0 ? <ArrowUpRight size={11} strokeWidth={2.5} /> : <ArrowDownRight size={11} strokeWidth={2.5} />}
+        {formatPct(row.changePct)}
+      </span>
+    ),
+  },
+}
+
+const DEFAULT_COLUMN_ORDER: ColumnKey[] = COLUMN_OPTIONS.map((c) => c.key)
+const COLUMN_ORDER_STORAGE_KEY = 'dashboard:sku:column-order'
+const COLUMN_WIDTHS_STORAGE_KEY = 'dashboard:sku:column-widths'
+
+// Defensive migration: drop unknown keys (so a stale localStorage
+// entry doesn't crash render-time mapping) and append any newly-added
+// columns at the end (so returning operators auto-see new columns
+// without a manual reset). Same pattern as Inventory + Packages
+// column prefs.
+function readStoredColumnOrder(): ColumnKey[] {
+  if (typeof window === 'undefined') return [...DEFAULT_COLUMN_ORDER]
+  try {
+    const raw = window.localStorage.getItem(COLUMN_ORDER_STORAGE_KEY)
+    if (!raw) return [...DEFAULT_COLUMN_ORDER]
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return [...DEFAULT_COLUMN_ORDER]
+    const known = new Set<ColumnKey>(DEFAULT_COLUMN_ORDER)
+    const seen = new Set<ColumnKey>()
+    const out: ColumnKey[] = []
+    for (const k of parsed) {
+      if (typeof k === 'string' && known.has(k as ColumnKey) && !seen.has(k as ColumnKey)) {
+        out.push(k as ColumnKey)
+        seen.add(k as ColumnKey)
+      }
+    }
+    // Append any missing keys (new columns shipped after the
+    // operator's last save) at the end in default order so they're
+    // discoverable but don't jump to the front uninvited.
+    for (const k of DEFAULT_COLUMN_ORDER) {
+      if (!seen.has(k)) out.push(k)
+    }
+    return out
+  } catch {
+    return [...DEFAULT_COLUMN_ORDER]
+  }
+}
+
+function readStoredColumnWidths(): Partial<Record<ColumnKey, number>> {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = window.localStorage.getItem(COLUMN_WIDTHS_STORAGE_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== 'object') return {}
+    const out: Partial<Record<ColumnKey, number>> = {}
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+      if (DEFAULT_COLUMN_ORDER.includes(k as ColumnKey) && typeof v === 'number' && v > 0) {
+        // Clamp persisted widths up to the column's MIN so a stale
+        // narrow width from an older defaults table doesn't make a
+        // column unreadable. Cap at 600px so a runaway resize can't
+        // produce a layout-busting cell.
+        out[k as ColumnKey] = Math.max(SKU_COLUMNS[k as ColumnKey].minWidth, Math.min(600, v))
+      }
+    }
+    return out
+  } catch {
+    return {}
+  }
+}
 
 function num(value: unknown, fallback = 0) {
   const parsed = typeof value === 'number' ? value : Number(value)
@@ -551,6 +688,104 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   const [showFilters, setShowFilters] = useState(false)
   const [showColumns, setShowColumns] = useState(false)
   const [visibleColumns, setVisibleColumns] = useState<Record<ColumnKey, boolean>>(DEFAULT_VISIBLE_COLUMNS)
+
+  // Operator-defined column order + widths for the SKU Performance
+  // Summary table. Persisted to localStorage so each browser remembers
+  // its own layout. Defensive migrations (readStored*) drop unknown
+  // keys + append newly-added columns at the end.
+  const [columnOrder, setColumnOrder] = useState<ColumnKey[]>(() => readStoredColumnOrder())
+  const [columnWidths, setColumnWidths] = useState<Partial<Record<ColumnKey, number>>>(() => readStoredColumnWidths())
+  useEffect(() => {
+    try { window.localStorage.setItem(COLUMN_ORDER_STORAGE_KEY, JSON.stringify(columnOrder)) } catch { /* localStorage full / private mode — non-fatal */ }
+  }, [columnOrder])
+  useEffect(() => {
+    try { window.localStorage.setItem(COLUMN_WIDTHS_STORAGE_KEY, JSON.stringify(columnWidths)) } catch { /* non-fatal */ }
+  }, [columnWidths])
+
+  // Drag-reorder state: which column is being dragged and which is
+  // currently being hovered over as a drop target. UI uses these for
+  // visual feedback (opacity-40 on the source, inset shadow on the
+  // target) and the actual reorder fires on onDrop.
+  const [draggingColumn, setDraggingColumn] = useState<ColumnKey | null>(null)
+  const [dragOverColumn, setDragOverColumn] = useState<ColumnKey | null>(null)
+  const handleColumnDragStart = (key: ColumnKey) => (event: React.DragEvent<HTMLTableCellElement>) => {
+    setDraggingColumn(key)
+    // dataTransfer.setData is required to start a drag in Firefox;
+    // the value itself doesn't matter — we read state, not the
+    // payload, on drop.
+    event.dataTransfer.setData('text/plain', key)
+    event.dataTransfer.effectAllowed = 'move'
+  }
+  const handleColumnDragOver = (key: ColumnKey) => (event: React.DragEvent<HTMLTableCellElement>) => {
+    if (draggingColumn == null || draggingColumn === key) return
+    event.preventDefault() // required to enable drop
+    event.dataTransfer.dropEffect = 'move'
+    if (dragOverColumn !== key) setDragOverColumn(key)
+  }
+  const handleColumnDrop = (key: ColumnKey) => (event: React.DragEvent<HTMLTableCellElement>) => {
+    event.preventDefault()
+    const from = draggingColumn
+    setDraggingColumn(null)
+    setDragOverColumn(null)
+    if (!from || from === key) return
+    setColumnOrder((prev) => {
+      const fromIdx = prev.indexOf(from)
+      const toIdx = prev.indexOf(key)
+      if (fromIdx === -1 || toIdx === -1) return prev
+      const next = [...prev]
+      next.splice(fromIdx, 1)
+      next.splice(toIdx, 0, from)
+      return next
+    })
+  }
+  const handleColumnDragEnd = () => {
+    setDraggingColumn(null)
+    setDragOverColumn(null)
+  }
+
+  // Resize: mousedown on the right-edge handle captures the starting
+  // X and the column's current width, then mousemove updates the
+  // width based on the X delta. The handlers are registered on
+  // window (not the handle) so the drag continues even if the cursor
+  // moves outside the cell — same pattern as standard browser column
+  // resizing in CSV viewers.
+  const resizingRef = useRef<{ key: ColumnKey; startX: number; startWidth: number } | null>(null)
+  const handleColumnResizeStart = (key: ColumnKey) => (event: React.MouseEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    event.stopPropagation()
+    const startWidth = columnWidths[key] ?? SKU_COLUMNS[key].width
+    resizingRef.current = { key, startX: event.clientX, startWidth }
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    const onMove = (e: MouseEvent) => {
+      const ctx = resizingRef.current
+      if (!ctx) return
+      const delta = e.clientX - ctx.startX
+      const min = SKU_COLUMNS[ctx.key].minWidth
+      const next = Math.max(min, Math.min(600, ctx.startWidth + delta))
+      setColumnWidths((prev) => ({ ...prev, [ctx.key]: next }))
+    }
+    const onUp = () => {
+      resizingRef.current = null
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }
+  const handleResetColumnLayout = () => {
+    setColumnOrder([...DEFAULT_COLUMN_ORDER])
+    setColumnWidths({})
+  }
+
+  // The list of currently-visible columns in their operator-defined
+  // order — used to drive thead, tbody, and colgroup in a single pass.
+  const visibleColumnOrder = useMemo(
+    () => columnOrder.filter((k) => visibleColumns[k]),
+    [columnOrder, visibleColumns],
+  )
 
   const selectedClient = useMemo(
     () => (selectedClientId == null ? null : clients.find((client) => client.clientId === selectedClientId) ?? null),
@@ -1214,46 +1449,139 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               <ChevronDown size={13} strokeWidth={2.25} />
             </button>
             {showColumns ? (
-              <div className="absolute right-0 top-10 z-20 w-56 rounded-card border border-line bg-surface p-2 shadow-lg">
-                {COLUMN_OPTIONS.map((column) => (
-                  <label key={column.key} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs font-semibold text-ink-2 hover:bg-surface-2">
-                    <input
-                      type="checkbox"
-                      checked={visibleColumns[column.key]}
-                      onChange={(event) =>
-                        setVisibleColumns((current) => ({
-                          ...current,
-                          [column.key]: event.target.checked,
-                        }))
-                      }
-                      className="h-3.5 w-3.5 rounded border-line"
-                    />
-                    {column.label}
-                  </label>
-                ))}
+              <div className="absolute right-0 top-10 z-20 w-60 rounded-card border border-line bg-surface shadow-lg overflow-hidden flex flex-col" style={{ maxHeight: 'min(420px, 70vh)' }}>
+                {/* Sticky header with Reset action — pinned visible
+                    so an operator who's shuffled columns into a mess
+                    can recover without scrolling to find the button. */}
+                <div className="flex items-center justify-between border-b border-line bg-surface-2/50 px-3 py-2 flex-shrink-0">
+                  <span className="text-2xs font-extrabold uppercase tracking-[0.05em] text-ink-3">Columns</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleResetColumnLayout()
+                      setVisibleColumns(DEFAULT_VISIBLE_COLUMNS)
+                    }}
+                    className="text-2xs font-bold text-brand hover:underline"
+                    title="Restore default column order, widths, and visibility"
+                  >
+                    Reset
+                  </button>
+                </div>
+                {/* List rendered in operator's CURRENT order so it
+                    mirrors the table visually — hidden columns float
+                    to the bottom (greyed) for easy re-enable. */}
+                <div className="flex-1 min-h-0 overflow-y-auto p-2" style={{ overscrollBehavior: 'contain' }}>
+                  {(() => {
+                    const visible = columnOrder.filter((k) => visibleColumns[k])
+                    const hidden = columnOrder.filter((k) => !visibleColumns[k])
+                    return [...visible, ...hidden].map((key) => {
+                      const column = COLUMN_OPTIONS.find((c) => c.key === key)!
+                      const isHidden = !visibleColumns[key]
+                      return (
+                        <label key={key} className={`flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-xs font-semibold hover:bg-surface-2 ${isHidden ? 'text-ink-3 opacity-70' : 'text-ink-2'}`}>
+                          <input
+                            type="checkbox"
+                            checked={!isHidden}
+                            onChange={(event) =>
+                              setVisibleColumns((current) => ({
+                                ...current,
+                                [column.key]: event.target.checked,
+                              }))
+                            }
+                            className="h-3.5 w-3.5 rounded border-line"
+                          />
+                          {column.label}
+                        </label>
+                      )
+                    })
+                  })()}
+                </div>
+                <div className="border-t border-line bg-surface-2/50 px-3 py-1.5 text-[10.5px] text-ink-3 leading-snug flex-shrink-0">
+                  Drag a column header to reorder · drag the right edge to resize.
+                </div>
               </div>
             ) : null}
           </div>
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[1320px] border-collapse text-sm2">
+          {/* table-fixed + <colgroup> is the duo that makes column
+              widths actually obey our colWidths state. Without
+              table-fixed the browser uses content-derived auto-widths
+              and ignores <col width>. The 1320px min-width preserves
+              the legacy "comfy density" feel when no resize has
+              happened yet; resize state overrides this naturally. */}
+          <table className="w-full min-w-[1320px] table-fixed border-collapse text-sm2">
+            <colgroup>
+              {/* Fixed anchor columns (star + sku + product + trend) — operators can't reorder/hide these so they don't carry resize handles */}
+              <col style={{ width: 36 }} />
+              <col style={{ width: 110 }} />
+              <col style={{ width: 280 }} />
+              {visibleColumnOrder.map((key) => (
+                <col key={key} style={{ width: columnWidths[key] ?? SKU_COLUMNS[key].width }} />
+              ))}
+              <col style={{ width: 80 }} />
+            </colgroup>
             <thead className="bg-surface-2">
               <tr>
-                <th className="w-9 border-b-2 border-line px-3 py-2" />
+                <th className="border-b-2 border-line px-3 py-2" />
                 <SortableHeader sortKey="sku" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="border-b-2 border-line px-3 py-2 text-left text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">SKU</SortableHeader>
                 <SortableHeader sortKey="product" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="border-b-2 border-line px-3 py-2 text-left text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Product</SortableHeader>
-                {visibleColumns.store ? <SortableHeader sortKey="client" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="border-b-2 border-line px-3 py-2 text-left text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Store</SortableHeader> : null}
-                {visibleColumns.revenue ? <SortableHeader sortKey="revenue" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="border-b-2 border-line px-3 py-2 text-right text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Revenue</SortableHeader> : null}
-                {visibleColumns.avgPrice ? <SortableHeader sortKey="avgPrice" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="border-b-2 border-line px-3 py-2 text-right text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Avg. Price</SortableHeader> : null}
-                {visibleColumns.avgShipping ? <SortableHeader sortKey="avgShipping" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="border-b-2 border-line px-3 py-2 text-right text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Avg. Shipping</SortableHeader> : null}
-                {visibleColumns.stockStatus ? <SortableHeader sortKey="status" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="border-b-2 border-line px-3 py-2 text-left text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Stock Status</SortableHeader> : null}
-                {visibleColumns.daysSupply ? <SortableHeader sortKey="daysSupply" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="border-b-2 border-line px-3 py-2 text-right text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Days Supply</SortableHeader> : null}
-                {visibleColumns.restockQty ? <SortableHeader sortKey="restockQty" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="border-b-2 border-line px-3 py-2 text-right text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Restock Qty</SortableHeader> : null}
-                {visibleColumns.units7 ? <SortableHeader sortKey="units7" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="border-b-2 border-line px-3 py-2 text-right text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">7-Day Units</SortableHeader> : null}
-                {visibleColumns.units30 ? <SortableHeader sortKey="units30" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="border-b-2 border-line px-3 py-2 text-right text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">30-Day Units</SortableHeader> : null}
-                {visibleColumns.priorAvg ? <SortableHeader sortKey="priorAvg" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="border-b-2 border-line px-3 py-2 text-right text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">30-Day Avg.</SortableHeader> : null}
-                {visibleColumns.changePct ? <SortableHeader sortKey="changePct" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} align="right" className="border-b-2 border-line px-3 py-2 text-right text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">vs Prior 30 Days</SortableHeader> : null}
+                {/* Toggleable columns rendered via the operator's
+                    columnOrder. Each <th> is HTML5-draggable for
+                    reorder and carries a resize handle on its right
+                    edge. Sort still works via the inner button (DnD
+                    only fires on movement-threshold; a plain click
+                    is left alone). */}
+                {visibleColumnOrder.map((key) => {
+                  const meta = SKU_COLUMNS[key]
+                  const isDragging = draggingColumn === key
+                  const isDragOver = dragOverColumn === key && draggingColumn !== key
+                  const padX = meta.align === 'right' ? 'pr-4 pl-3' : 'px-3'
+                  return (
+                    <th
+                      key={key}
+                      draggable
+                      onDragStart={handleColumnDragStart(key)}
+                      onDragOver={handleColumnDragOver(key)}
+                      onDrop={handleColumnDrop(key)}
+                      onDragEnd={handleColumnDragEnd}
+                      style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
+                      className={`relative select-none border-b-2 border-line ${padX} py-2 ${meta.align === 'right' ? 'text-right' : 'text-left'} text-2xs font-bold uppercase tracking-[0.04em] text-ink-3 transition-colors duration-150 ${
+                        isDragging ? 'opacity-40' : ''
+                      } ${isDragOver ? 'bg-brand-bg shadow-[inset_3px_0_0_0_var(--brand)]' : ''}`}
+                      title={`${meta.label} · drag to reorder · drag right edge to resize`}
+                    >
+                      {/* SortableHeader is the inner click target —
+                          rendering it as a borderless <span> so the
+                          parent <th> owns sizing/drag while sort
+                          clicks still fire on a non-drag click. */}
+                      <SortableHeader
+                        sortKey={meta.sortKey}
+                        sortState={sortState}
+                        onSort={(k) => setSortState((current) => nextSortState(current, k))}
+                        align={meta.align}
+                        className="block p-0 border-0 bg-transparent w-full"
+                      >
+                        {meta.label}
+                      </SortableHeader>
+                      {/* Resize handle — 6px hot zone on the right
+                          edge, picks up col-resize cursor on hover.
+                          Drag updates columnWidths[key] live via the
+                          window-level mousemove handler. */}
+                      <div
+                        role="separator"
+                        aria-orientation="vertical"
+                        aria-label={`Resize ${meta.label}`}
+                        onMouseDown={handleColumnResizeStart(key)}
+                        onClick={(e) => e.stopPropagation()}
+                        onDragStart={(e) => e.stopPropagation()}
+                        className="absolute top-0 right-0 h-full w-[6px] cursor-col-resize hover:bg-brand/40 active:bg-brand transition-colors"
+                        style={{ touchAction: 'none' }}
+                      />
+                    </th>
+                  )
+                })}
                 <th className="border-b-2 border-line px-3 py-2 text-left text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Trend</th>
               </tr>
             </thead>
@@ -1261,7 +1589,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               {pageRows.map((row) => (
                 <tr key={row.sku} className="border-b border-line last:border-b-0 hover:bg-brand-bg/30">
                   <td className="px-3 py-2 text-ink-3"><Star size={13} strokeWidth={2} /></td>
-                  <td className="px-3 py-2 font-mono text-xs font-semibold text-brand">{row.sku}</td>
+                  <td className="px-3 py-2 font-mono text-xs font-semibold text-brand truncate">{row.sku}</td>
                   <td className="px-3 py-2">
                     <button
                       type="button"
@@ -1280,24 +1608,23 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                       </span>
                     </button>
                   </td>
-                  {visibleColumns.store ? <td className="px-3 py-2 text-xs text-ink-2">{row.client}</td> : null}
-                  {visibleColumns.revenue ? <td className="px-3 py-2 text-right font-mono text-xs text-ink">{formatMoney(row.revenue)}</td> : null}
-                  {visibleColumns.avgPrice ? <td className="px-3 py-2 text-right font-mono text-xs text-ink-2">{formatMoneySmall(row.avgPrice)}</td> : null}
-                  {visibleColumns.avgShipping ? <td className="px-3 py-2 text-right font-mono text-xs text-ink-2">{formatMoneySmall(row.avgShipping)}</td> : null}
-                  {visibleColumns.stockStatus ? <td className="px-3 py-2"><StatusBadge status={row.status} /></td> : null}
-                  {visibleColumns.daysSupply ? <td className="px-3 py-2 text-right font-mono text-xs text-ink-2">{row.daysSupply == null ? '-' : formatInt(row.daysSupply)}</td> : null}
-                  {visibleColumns.restockQty ? <td className="px-3 py-2 text-right font-mono text-xs text-ink-2">{formatInt(row.restockQty)}</td> : null}
-                  {visibleColumns.units7 ? <td className="px-3 py-2 text-right font-mono text-xs text-ink-2">{formatInt(row.units7)}</td> : null}
-                  {visibleColumns.units30 ? <td className="px-3 py-2 text-right font-mono text-xs font-semibold text-ink">{formatInt(row.units30)}</td> : null}
-                  {visibleColumns.priorAvg ? <td className="px-3 py-2 text-right font-mono text-xs text-ink-2">{formatInt(row.priorAvg)}</td> : null}
-                  {visibleColumns.changePct ? (
-                    <td className="px-3 py-2 text-right">
-                      <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-2xs font-bold ${row.changePct >= 0 ? 'bg-ok/10 text-ok' : 'bg-danger/10 text-danger'}`}>
-                        {row.changePct >= 0 ? <ArrowUpRight size={11} strokeWidth={2.5} /> : <ArrowDownRight size={11} strokeWidth={2.5} />}
-                        {formatPct(row.changePct)}
-                      </span>
-                    </td>
-                  ) : null}
+                  {/* Body cells map over the same visibleColumnOrder
+                      as the header, so reorder + visibility changes
+                      flow through in a single pass. Each cell's
+                      content comes from the column's renderCell()
+                      defined in SKU_COLUMNS — no per-column
+                      conditional left to drift. */}
+                  {visibleColumnOrder.map((key) => {
+                    const meta = SKU_COLUMNS[key]
+                    return (
+                      <td
+                        key={key}
+                        className={`${meta.align === 'right' ? 'pr-4 pl-3 text-right' : 'px-3 text-left'} py-2 overflow-hidden`}
+                      >
+                        {meta.renderCell(row)}
+                      </td>
+                    )
+                  })}
                   <td className="px-3 py-2"><TinyTrend values={last(row.trend, 12)} negative={row.changePct < 0} /></td>
                 </tr>
               ))}
