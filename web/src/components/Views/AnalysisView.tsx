@@ -1271,12 +1271,22 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
               </span>
             </button>
             {columnsMenuOpen ? (
+              // Three-region menu (header + scrollable body + footer):
+              //   - max-h-[70vh] caps the menu so it can't overflow the
+              //     viewport bottom regardless of how many columns the
+              //     operator has registered or where the trigger sits.
+              //   - flex flex-col is the layout primitive that lets the
+              //     middle region claim the leftover space (flex-1) and
+              //     scroll independently while header/footer stay pinned.
+              //   - overflow-hidden on the outer container keeps the
+              //     rounded corners + shadow looking clean — the inner
+              //     scrolling region handles its own overflow-y.
               <div
                 data-columns-menu
                 role="menu"
-                className="absolute right-0 top-[calc(100%+4px)] z-50 min-w-[230px] bg-surface border border-line rounded-md shadow-[0_8px_24px_-6px_rgba(15,23,42,.18),0_2px_6px_-2px_rgba(15,23,42,.10)] p-1.5"
+                className="absolute right-0 top-[calc(100%+4px)] z-50 min-w-[230px] max-h-[70vh] bg-surface border border-line rounded-md shadow-[0_8px_24px_-6px_rgba(15,23,42,.18),0_2px_6px_-2px_rgba(15,23,42,.10)] flex flex-col overflow-hidden"
               >
-                <div className="px-2 py-1 text-[9px] uppercase tracking-[0.08em] font-extrabold text-ink-3 flex items-center justify-between">
+                <div className="px-2 py-1.5 text-[9px] uppercase tracking-[0.08em] font-extrabold text-ink-3 flex items-center justify-between flex-shrink-0 border-b border-line bg-surface-2/40">
                   <span>Visible columns</span>
                   <button
                     type="button"
@@ -1287,51 +1297,58 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
                     Reset
                   </button>
                 </div>
-                {/* List in the operator's CURRENT order so they see
-                    exactly how reordering has shifted things since
-                    factory default. Hidden columns are listed at the
-                    bottom (grayed) so they're easy to find and re-enable. */}
-                {(() => {
-                  const hiddenSet = new Set(columnLayout.hidden)
-                  const visibleKeys = columnLayout.order.filter((k) => !hiddenSet.has(k))
-                  const hiddenKeys = columnLayout.order.filter((k) => hiddenSet.has(k))
-                  return [...visibleKeys, ...hiddenKeys].map((key) => {
-                    const isHidden = hiddenSet.has(key)
-                    const isRequired = REQUIRED_COLUMNS.has(key)
-                    return (
-                      <label
-                        key={key}
-                        className={`flex items-center gap-2 px-2 py-1.5 rounded-[5px] text-[12px] transition-colors duration-100 ${
-                          isRequired
-                            ? 'text-ink-3 cursor-not-allowed'
-                            : 'text-ink cursor-pointer hover:bg-[rgba(42,91,215,.08)]'
-                        } ${isHidden ? 'opacity-60' : ''}`}
-                        title={
-                          isRequired
-                            ? 'Item Name is always visible — rows have no identity without it'
-                            : isHidden
-                              ? 'Hidden · click to show'
-                              : 'Visible · click to hide'
-                        }
-                      >
-                        <input
-                          type="checkbox"
-                          checked={!isHidden}
-                          disabled={isRequired}
-                          onChange={() => handleToggleColumnVisibility(key)}
-                          className="accent-brand cursor-pointer disabled:cursor-not-allowed"
-                        />
-                        <span className="flex-1">{ANALYSIS_SORT_LABELS[key]}</span>
-                        {isRequired ? (
-                          <span className="text-[9px] uppercase tracking-[0.04em] text-ink-3 font-semibold">
-                            required
-                          </span>
-                        ) : null}
-                      </label>
-                    )
-                  })
-                })()}
-                <div className="border-t border-line mt-1 pt-1.5 px-2 pb-1 text-[10.5px] text-ink-3 leading-snug">
+                {/* Scrollable list region. flex-1 + min-h-0 is the
+                    canonical 'allow this flex child to shrink and
+                    overflow' incantation — without min-h-0 the flex
+                    child would refuse to shrink below content height
+                    and the overflow-y-auto would never engage. */}
+                <div className="flex-1 min-h-0 overflow-y-auto p-1.5">
+                  {/* List in the operator's CURRENT order so they see
+                      exactly how reordering has shifted things since
+                      factory default. Hidden columns are listed at the
+                      bottom (grayed) so they're easy to find + re-enable. */}
+                  {(() => {
+                    const hiddenSet = new Set(columnLayout.hidden)
+                    const visibleKeys = columnLayout.order.filter((k) => !hiddenSet.has(k))
+                    const hiddenKeys = columnLayout.order.filter((k) => hiddenSet.has(k))
+                    return [...visibleKeys, ...hiddenKeys].map((key) => {
+                      const isHidden = hiddenSet.has(key)
+                      const isRequired = REQUIRED_COLUMNS.has(key)
+                      return (
+                        <label
+                          key={key}
+                          className={`flex items-center gap-2 px-2 py-1.5 rounded-[5px] text-[12px] transition-colors duration-100 ${
+                            isRequired
+                              ? 'text-ink-3 cursor-not-allowed'
+                              : 'text-ink cursor-pointer hover:bg-[rgba(42,91,215,.08)]'
+                          } ${isHidden ? 'opacity-60' : ''}`}
+                          title={
+                            isRequired
+                              ? 'Item Name is always visible — rows have no identity without it'
+                              : isHidden
+                                ? 'Hidden · click to show'
+                                : 'Visible · click to hide'
+                          }
+                        >
+                          <input
+                            type="checkbox"
+                            checked={!isHidden}
+                            disabled={isRequired}
+                            onChange={() => handleToggleColumnVisibility(key)}
+                            className="accent-brand cursor-pointer disabled:cursor-not-allowed"
+                          />
+                          <span className="flex-1">{ANALYSIS_SORT_LABELS[key]}</span>
+                          {isRequired ? (
+                            <span className="text-[9px] uppercase tracking-[0.04em] text-ink-3 font-semibold">
+                              required
+                            </span>
+                          ) : null}
+                        </label>
+                      )
+                    })
+                  })()}
+                </div>
+                <div className="border-t border-line px-2 py-1.5 text-[10.5px] text-ink-3 leading-snug flex-shrink-0 bg-surface-2/40">
                   Drag a column header to reorder.
                 </div>
               </div>
