@@ -282,7 +282,12 @@ export function PackagesDataTable({
   onDelete,
   onOpenOrder,
   onOpenOrderByNumber,
-  sectionTitle = 'Custom Packages',
+  // 2026-05-12: was defaulted to 'Custom Packages' so the bar
+  // rendered automatically. Operator asked to remove the bar — leave
+  // the prop as an opt-in (no default) so callers that explicitly
+  // want a label can still pass one; otherwise the cell starts with
+  // the column-header row directly.
+  sectionTitle,
   usageByPackageId,
   usageLoading,
   paginated = true,
@@ -414,15 +419,15 @@ export function PackagesDataTable({
   ]
 
   return (
-    // 2026-05-12 sticky fix (v2): wrapper is overflow-clip (not
+    // 2026-05-12 sticky fix (v3): wrapper is overflow-clip (not
     // hidden) so sticky descendants resolve up to view-packages'
-    // overflow-y:auto. The Tailwind arbitrary selector below targets
-    // the inner <Table>'s thead and pushes its sticky top from 0 to
-    // 36px (top-9), so the section-title bar can pin at top:0 and
-    // the column headers pin directly below it without overlap.
-    // Without this offset both stickies would compete for top:0 and
-    // the higher z-index would cover the other.
-    <div className="rounded-card border border-line bg-white shadow-sm overflow-clip [&_thead]:!top-9">
+    // overflow-y:auto. When a sectionTitle is rendered, the
+    // [&_thead]:!top-9 arbitrary selector pushes the inner <Table>'s
+    // thead 36px down so the section title can pin at top:0 and the
+    // column headers pin below it without overlap. When there's no
+    // section title (default), the offset is removed so the column
+    // headers pin at top:0 directly.
+    <div className={`rounded-card border border-line bg-white shadow-sm overflow-clip${sectionTitle ? ' [&_thead]:!top-9' : ''}`}>
       {/* Section title bar — 'Custom Packages' / 'Carrier Packages'.
           Now ALSO sticky at top:0 of view-packages so operators always
           know which section's data they're looking at while scrolling.
