@@ -1511,7 +1511,23 @@ function formatPtLabel(d: Date): string {
 }
 
 // Daily stats for the Orders page throughput strip.
-// V2 parity: the three counts only apply the configured excluded store IDs.
+// Audit alignment with /init/counts (2026-05-12): operator reported the
+// sidebar "Awaiting Shipment" count (65) and the strip "Need to Ship"
+// count (67) disagreed. Root cause: the sidebar applies a fuller
+// visibility predicate (active clients + non-hidden buckets) that the
+// daily-stats query was missing. We now share the same predicate so
+// the two numbers reflect the same conceptual set of operational work.
+//
+// Filters now applied here (matching /init/counts):
+//   1. coalesce(c.active, true) = true     ← drops orders from a
+//                                            disabled client
+//   2. clients.name != 'api shipments'     ← drops the hidden internal
+//                                            bucket (a technical client
+//                                            used for sync plumbing)
+//   3. store_id not in (excluded)          ← OR is a test-client order
+//                                            (store_id is null + c.is_test)
+// Previously the route applied only #3, so disabled-client / hidden-
+// bucket orders inflated the strip without showing in the sidebar.
 app.get(
   '/daily-stats',
   zValidator(
@@ -1531,35 +1547,57 @@ app.get(
     const fromIso = fromDate.toISOString();
     const toIso = toDate.toISOString();
 
+    // Shared visibility predicate — identical shape to /init/counts so
+    // sidebar and strip both count the same conceptual set. Inline
+    // here (not extracted to a helper) so the SQL stays grep-friendly.
+    // Inactive clients fall out; the 'api shipments' technical bucket
+    // falls out; test-client orders (store_id is null + is_test) flow
+    // through alongside real-store orders.
+    const visibleOrderPredicate = sql`(
+      (coalesce(c.is_test, false) = true and o.client_id is not null)
+      or (
+        o.store_id is not null
+        and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+      )
+    ) and coalesce(c.active, true) = true
+    and not exists (
+      select 1 from clients hidden_client
+      where hidden_client.id = o.client_id
+        and lower(hidden_client.name) = 'api shipments'
+    )`;
+
     // totalOrders: all non-cancelled orders received inside the current
     // fulfillment intake window. The strip derives shipped as
     // totalOrders - needToShip, matching v2 daily-strip.js.
     const windowedRows = await db.execute<{
       total_orders: number;
     }>(sql`
-      select
-        count(*) filter (where order_status <> 'cancelled')::int as total_orders
-      from orders
-      where order_date >= ${fromIso}::timestamptz
-        and order_date <= ${toIso}::timestamptz
-        and store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+      select count(*)::int as total_orders
+      from orders o
+      left join clients c on c.id = o.client_id
+      where o.order_status <> 'cancelled'
+        and o.order_date >= ${fromIso}::timestamptz
+        and o.order_date <= ${toIso}::timestamptz
+        and ${visibleOrderPredicate}
     `);
     // needToShip: remaining same-day fulfillment work inside the intake
     // window. Bucket/external-shipped rules stay in the order list query.
     const backlogRows = await db.execute<{ need_to_ship: number }>(sql`
       select count(*)::int as need_to_ship
       from orders o
+      left join clients c on c.id = o.client_id
       where o.order_status = 'awaiting_shipment'
-        and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
         and o.order_date >= ${fromIso}::timestamptz
         and o.order_date <= ${toIso}::timestamptz
+        and ${visibleOrderPredicate}
     `);
     const upcomingRows = await db.execute<{ upcoming_orders: number }>(sql`
       select count(*)::int as upcoming_orders
-      from orders
-      where order_date > ${toIso}::timestamptz
-        and order_status <> 'cancelled'
-        and store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+      from orders o
+      left join clients c on c.id = o.client_id
+      where o.order_date > ${toIso}::timestamptz
+        and o.order_status <> 'cancelled'
+        and ${visibleOrderPredicate}
     `);
     const w = windowedRows[0];
     const b = backlogRows[0];
