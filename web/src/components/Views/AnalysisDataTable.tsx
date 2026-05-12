@@ -459,68 +459,41 @@ export function AnalysisDataTable({
                           </td>
                         )
                       case 'stdOrders':
+                        // 2026-05-12 (v2): cell shows ONLY the std subtotal
+                        // ($) — the dollar value of all standard-class labels
+                        // allocated to this SKU. Order count, unit count,
+                        // and per-unit avg moved into the hover tooltip so
+                        // the cell stays scannable. Math now reads cleanly:
+                        // (std cell) + (exp cell) = (total cell).
                         return (
                           <td
                             key="stdOrders"
-                            className={`${cellPadding} text-right whitespace-nowrap tabular-nums ${TD_BASE}`}
-                            // 2026-05-12 clarification: tooltip spells out the
-                            // math so operators reconciling totals don't try
-                            // to multiply order-count × per-unit price (the
-                            // old reading that produced apparent mismatches
-                            // like 16 × $5.80 ≠ row total).
+                            className={`${cellPadding} text-right whitespace-nowrap tabular-nums font-semibold text-[14px] text-ok ${TD_BASE}`}
                             title={
                               row.standardShipCount > 0
-                                ? `${row.standardShipCount} std orders · ${row.standardShipQtyTotal ?? 0} units · ${stdAvg ? formatAnalysisMoney(stdAvg) : '$0.00'}/unit = ${formatAnalysisMoney((row.standardShipQtyTotal ?? 0) * stdAvg)} (Std subtotal)`
+                                ? `Standard shipping subtotal: ${formatAnalysisMoney(row.standardShipTotal)}\n${row.standardShipCount} orders · ${row.standardShipQtyTotal ?? 0} units · ${stdAvg ? formatAnalysisMoney(stdAvg) : '$0.00'}/unit`
                                 : 'No std-class shipments'
                             }
                           >
-                            {row.standardShipCount > 0 ? (
-                              <span className="inline-flex items-baseline gap-1.5">
-                                <span className="font-bold">{row.standardShipCount}</span>
-                                <span className="text-[9px] font-semibold uppercase tracking-wider text-ink-3">ord</span>
-                                <span className="text-line-2 px-0.5">·</span>
-                                <span className="font-semibold text-ink-2">{row.standardShipQtyTotal ?? 0}</span>
-                                <span className="text-[9px] font-semibold uppercase tracking-wider text-ink-3">u</span>
-                                <span className="ml-0.5 text-[10.5px] font-semibold tabular-nums text-ok">
-                                  {formatAnalysisMoney(stdAvg)}
-                                  <span className="text-ink-3 font-normal">/u</span>
-                                </span>
-                              </span>
-                            ) : (
-                              <span className="text-line-2">—</span>
-                            )}
+                            {row.standardShipCount > 0
+                              ? formatAnalysisMoney(row.standardShipTotal)
+                              : <span className="text-line-2">—</span>}
                           </td>
                         )
                       case 'expOrders':
                         return (
                           <td
                             key="expOrders"
-                            className={`${cellPadding} text-right whitespace-nowrap tabular-nums ${TD_BASE}`}
+                            className={`${cellPadding} text-right whitespace-nowrap tabular-nums font-semibold text-[14px] text-[#b86200] ${TD_BASE}`}
                             title={
                               row.expeditedShipCount > 0
-                                ? `${row.expeditedShipCount} exp orders · ${row.expeditedShipQtyTotal ?? 0} units · ${expAvg ? formatAnalysisMoney(expAvg) : '$0.00'}/unit = ${formatAnalysisMoney((row.expeditedShipQtyTotal ?? 0) * expAvg)} (Exp subtotal)`
+                                ? `Expedited shipping subtotal: ${formatAnalysisMoney(row.expeditedShipTotal)}\n${row.expeditedShipCount} orders · ${row.expeditedShipQtyTotal ?? 0} units · ${expAvg ? formatAnalysisMoney(expAvg) : '$0.00'}/unit`
                                 : 'No exp-class shipments'
                             }
                           >
-                            {row.expeditedShipCount > 0 ? (
-                              <span className="inline-flex items-baseline gap-1.5">
-                                <span
-                                  className={`inline-flex items-center gap-1 ${pillSize} rounded-full font-bold leading-snug tabular-nums bg-[rgba(224,122,0,.12)] text-[#b86200]`}
-                                >
-                                  {row.expeditedShipCount}
-                                </span>
-                                <span className="text-[9px] font-semibold uppercase tracking-wider text-ink-3">ord</span>
-                                <span className="text-line-2 px-0.5">·</span>
-                                <span className="font-semibold text-ink-2">{row.expeditedShipQtyTotal ?? 0}</span>
-                                <span className="text-[9px] font-semibold uppercase tracking-wider text-ink-3">u</span>
-                                <span className="ml-0.5 text-[10.5px] font-semibold tabular-nums text-ink-3">
-                                  {formatAnalysisMoney(expAvg)}
-                                  <span className="text-ink-3 font-normal">/u</span>
-                                </span>
-                              </span>
-                            ) : (
-                              <span className="text-line-2">—</span>
-                            )}
+                            {row.expeditedShipCount > 0
+                              ? formatAnalysisMoney(row.expeditedShipTotal)
+                              : <span className="text-line-2">—</span>}
                           </td>
                         )
                       case 'total':
@@ -616,46 +589,34 @@ export function AnalysisDataTable({
                     return (
                       <td
                         key="stdOrders"
-                        className={`${ftBase} text-right text-[14px] text-ink`}
+                        className={`${ftBase} text-right text-[14px] font-semibold text-ok`}
                         title={
                           totals.totalStdCount > 0
-                            ? `${totals.totalStdCount} std orders across ${totals.totalStdQty} units`
+                            ? `Std subtotal across all SKUs: ${formatAnalysisMoney(totals.totalStdShipping)}\n${totals.totalStdCount} orders · ${totals.totalStdQty} units`
                             : 'No std-class shipments'
                         }
                       >
                         {isFirstVisible ? footerTotalsBadge : null}
-                        {totals.totalStdCount > 0 ? (
-                          <span className="inline-flex items-baseline gap-1.5">
-                            <span>{totals.totalStdCount.toLocaleString()}</span>
-                            <span className="text-[9px] font-semibold uppercase tracking-wider text-ink-3">ord</span>
-                            <span className="text-line-2">·</span>
-                            <span className="text-ink-2 font-semibold">{totals.totalStdQty.toLocaleString()}</span>
-                            <span className="text-[9px] font-semibold uppercase tracking-wider text-ink-3">u</span>
-                          </span>
-                        ) : '—'}
+                        {totals.totalStdShipping > 0
+                          ? formatAnalysisMoney(totals.totalStdShipping)
+                          : '—'}
                       </td>
                     )
                   case 'expOrders':
                     return (
                       <td
                         key="expOrders"
-                        className={`${ftBase} text-right text-[14px] text-[#b86200]`}
+                        className={`${ftBase} text-right text-[14px] font-semibold text-[#b86200]`}
                         title={
                           totals.totalExpCount > 0
-                            ? `${totals.totalExpCount} exp orders across ${totals.totalExpQty} units`
+                            ? `Exp subtotal across all SKUs: ${formatAnalysisMoney(totals.totalExpShipping)}\n${totals.totalExpCount} orders · ${totals.totalExpQty} units`
                             : 'No exp-class shipments'
                         }
                       >
                         {isFirstVisible ? footerTotalsBadge : null}
-                        {totals.totalExpCount > 0 ? (
-                          <span className="inline-flex items-baseline gap-1.5">
-                            <span>{totals.totalExpCount.toLocaleString()}</span>
-                            <span className="text-[9px] font-semibold uppercase tracking-wider text-ink-3">ord</span>
-                            <span className="text-line-2">·</span>
-                            <span className="text-ink-2 font-semibold">{totals.totalExpQty.toLocaleString()}</span>
-                            <span className="text-[9px] font-semibold uppercase tracking-wider text-ink-3">u</span>
-                          </span>
-                        ) : '—'}
+                        {totals.totalExpShipping > 0
+                          ? formatAnalysisMoney(totals.totalExpShipping)
+                          : '—'}
                       </td>
                     )
                   case 'total':

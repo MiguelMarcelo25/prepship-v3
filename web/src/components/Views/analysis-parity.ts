@@ -40,6 +40,14 @@ export interface AnalysisTotals {
   // does NOT multiply to the subtotal in mixed-pack-size catalogs.
   totalStdQty: number
   totalExpQty: number
+  // 2026-05-12 (v2): the Std / Exp cells now show ONLY the dollar
+  // subtotal per class (the order/unit breakdown moved to a tooltip),
+  // so the footer needs running sums of the per-class dollar subtotals.
+  // Source: row.standardShipTotal / row.expeditedShipTotal — the raw
+  // SUM(label_cost × qty / order_qty_total) FILTER (...) values from
+  // the backend.
+  totalStdShipping: number
+  totalExpShipping: number
   totalShipping: number
 }
 
@@ -368,6 +376,12 @@ export function buildAnalysisTotals(rows: AnalysisSkuDto[]): AnalysisTotals {
     totalExpQty:
       totals.totalExpQty
       + toAnalysisNumber((row as { expeditedShipQtyTotal?: number }).expeditedShipQtyTotal),
+    totalStdShipping:
+      totals.totalStdShipping
+      + toAnalysisNumber((row as { standardShipTotal?: number }).standardShipTotal),
+    totalExpShipping:
+      totals.totalExpShipping
+      + toAnalysisNumber((row as { expeditedShipTotal?: number }).expeditedShipTotal),
     totalShipping: totals.totalShipping + toAnalysisNumber(row.totalShipping),
   }), {
     skuCount: 0,
@@ -379,6 +393,8 @@ export function buildAnalysisTotals(rows: AnalysisSkuDto[]): AnalysisTotals {
     totalExpCount: 0,
     totalStdQty: 0,
     totalExpQty: 0,
+    totalStdShipping: 0,
+    totalExpShipping: 0,
     totalShipping: 0,
   })
 }
