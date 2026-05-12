@@ -135,7 +135,13 @@ export function readStoredColumnLayout(): AnalysisColumnLayout {
   }
   try {
     const raw = window.localStorage.getItem(COLUMN_LAYOUT_STORAGE_KEY)
-    if (!raw) return { order: [...DEFAULT_COLUMN_ORDER], hidden: [] }
+    if (!raw) {
+      try {
+        // eslint-disable-next-line no-console
+        console.debug('[analysis-column-layout] read: no saved layout, using defaults')
+      } catch { /* console locked down */ }
+      return { order: [...DEFAULT_COLUMN_ORDER], hidden: [] }
+    }
     const parsed = JSON.parse(raw)
     if (!parsed || typeof parsed !== 'object') {
       return { order: [...DEFAULT_COLUMN_ORDER], hidden: [] }
@@ -166,7 +172,12 @@ export function readStoredColumnLayout(): AnalysisColumnLayout {
         hiddenSeen.add(k)
       }
     }
-    return { order: cleanOrder, hidden: cleanHidden }
+    const result = { order: cleanOrder, hidden: cleanHidden }
+    try {
+      // eslint-disable-next-line no-console
+      console.debug('[analysis-column-layout] read', result)
+    } catch { /* console locked down */ }
+    return result
   } catch {
     return { order: [...DEFAULT_COLUMN_ORDER], hidden: [] }
   }
@@ -175,13 +186,30 @@ export function readStoredColumnLayout(): AnalysisColumnLayout {
 export function writeStoredColumnLayout(layout: AnalysisColumnLayout): void {
   if (typeof window === 'undefined') return
   try {
-    window.localStorage.setItem(
-      COLUMN_LAYOUT_STORAGE_KEY,
-      JSON.stringify({ order: layout.order, hidden: layout.hidden }),
-    )
-  } catch {
+    const serialized = JSON.stringify({ order: layout.order, hidden: layout.hidden })
+    window.localStorage.setItem(COLUMN_LAYOUT_STORAGE_KEY, serialized)
+    // Sanity-check the write actually round-trips. Some browsers
+    // (Safari private mode in particular) accept setItem silently but
+    // discard the value across navigations. If the readback differs,
+    // log a warning so operators can flag the environment.
+    const verify = window.localStorage.getItem(COLUMN_LAYOUT_STORAGE_KEY)
+    if (verify !== serialized) {
+      try {
+        // eslint-disable-next-line no-console
+        console.warn(
+          '[analysis-column-layout] localStorage readback mismatch — layout may not persist across reloads',
+          { wrote: serialized, readBack: verify },
+        )
+      } catch { /* console locked down */ }
+    }
+  } catch (err) {
     // localStorage can throw in private-browsing / quota-exceeded modes.
-    // Layout reverts to in-memory default on next mount; not fatal.
+    // Layout reverts to in-memory default on next mount; not fatal — but
+    // surface the failure so operators can diagnose.
+    try {
+      // eslint-disable-next-line no-console
+      console.warn('[analysis-column-layout] localStorage write failed', err)
+    } catch { /* console locked down */ }
   }
 }
 

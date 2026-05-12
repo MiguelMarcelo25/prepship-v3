@@ -752,12 +752,45 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
     return projected.length > 0 ? projected : ANALYSIS_TABLE_COLUMNS
   }, [columnLayout])
 
+  // Drag-reorder + visibility + reset: persistence now happens
+  // INLINE with each setter (not via a downstream useEffect) so the
+  // localStorage write is synchronous with the state update.
+  //
+  // Why this matters: the previous pattern was
+  //   setColumnLayout(...) → re-render → useEffect([columnLayout])
+  //   → writeStoredColumnLayout()
+  // which works most of the time but had a few failure modes:
+  //   1. React strict-mode double-mount could fire the effect with
+  //      the previous-render layout, masking the new value.
+  //   2. If the component unmounted between setState and the next
+  //      paint (e.g. operator navigates away mid-drag), the effect
+  //      cleanup-then-run sequence could skip the write entirely.
+  //   3. Any error inside an unrelated effect could halt the effect
+  //      flush queue before our write effect ran.
+  // Writing directly inside the setter callback means: state update
+  // and localStorage write happen in the same tick, no indirection.
+  //
+  // The console.debug line gives operators a verifiable signal in
+  // DevTools that the write actually fired. Remove once we've
+  // confirmed the boss-reported persistence bug stays fixed.
+  function persistAndSetLayout(producer: (current: AnalysisColumnLayout) => AnalysisColumnLayout) {
+    setColumnLayout((current) => {
+      const next = producer(current)
+      writeStoredColumnLayout(next)
+      try {
+        // eslint-disable-next-line no-console
+        console.debug('[analysis-column-layout] persisted', next)
+      } catch { /* console may be locked down */ }
+      return next
+    })
+  }
+
   // Drag-reorder: insert `fromKey` immediately BEFORE `toKey` in the
   // saved order. Standard spreadsheet semantics — dragging A onto C
   // puts A right before C (A,B,C,D → B,A,C,D when A is dropped on C).
   // The hidden-set is untouched; a reorder doesn't change visibility.
   function handleReorderColumns(fromKey: AnalysisSortKey, toKey: AnalysisSortKey) {
-    setColumnLayout((current) => {
+    persistAndSetLayout((current) => {
       const next = current.order.filter((k) => k !== fromKey)
       const dropIdx = next.indexOf(toKey)
       if (dropIdx < 0) {
@@ -774,7 +807,7 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
   // 'name') can never be hidden — the operator would lose row identity.
   function handleToggleColumnVisibility(key: AnalysisSortKey) {
     if (REQUIRED_COLUMNS.has(key)) return
-    setColumnLayout((current) => {
+    persistAndSetLayout((current) => {
       const hiddenSet = new Set(current.hidden)
       if (hiddenSet.has(key)) hiddenSet.delete(key)
       else hiddenSet.add(key)
@@ -784,17 +817,12 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
 
   // "Reset" button in the Columns popover — restore the factory
   // default layout. Doesn't touch sort/widths/sizes; only the column
-  // visibility + order. Saves immediately via the persistence effect.
+  // visibility + order. Persisted inline via persistAndSetLayout so
+  // the reset survives a reload immediately (no waiting on a
+  // downstream effect to run).
   function handleResetColumnLayout() {
-    setColumnLayout({ order: [...DEFAULT_COLUMN_ORDER], hidden: [] })
+    persistAndSetLayout(() => ({ order: [...DEFAULT_COLUMN_ORDER], hidden: [] }))
   }
-
-  // Persist layout on every change. Cheap (one localStorage.setItem
-  // per state update; the JSON is ~150 bytes) and ensures the layout
-  // survives a hard reload mid-session.
-  useEffect(() => {
-    writeStoredColumnLayout(columnLayout)
-  }, [columnLayout])
 
   // Click-outside dismisses the Columns popover so it behaves like
   // every other dropdown in the app (date preset menu, etc.). Because
