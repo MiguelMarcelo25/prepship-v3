@@ -368,6 +368,25 @@ export default async function handler(req: any, res: any): Promise<void> {
   });
 
   try {
+    // Self-heal the selling_fee columns. Idempotent — ADD COLUMN IF
+    // NOT EXISTS is near-free when the column already exists. Same
+    // belt-and-suspenders pattern that src/routes/analysis.ts uses,
+    // applied here so a fresh deploy doesn't fail this endpoint when
+    // the formal migration (drizzle/0019_selling_fees.sql) hasn't
+    // been applied yet. Wrapped in try/catch so a permission error
+    // surfaces the original SQL message downstream rather than a
+    // bootstrap-side red herring.
+    try {
+      await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS selling_fee NUMERIC(10, 2) NOT NULL DEFAULT 0`;
+      await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS selling_fee_breakdown JSONB NOT NULL DEFAULT '{}'::jsonb`;
+      await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS selling_fee_synced_at TIMESTAMPTZ`;
+      await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS selling_fee_source TEXT`;
+      await sql`CREATE INDEX IF NOT EXISTS orders_selling_fee_source_idx ON orders (selling_fee_source) WHERE selling_fee_source IS NOT NULL`;
+    } catch (err) {
+      console.warn('[walmart/fees] selling_fee column bootstrap failed:',
+        err instanceof Error ? err.message : err);
+    }
+
     // Look up the store account row (credentials + provider check).
     const acctRows = await sql<Array<{ id: number; provider: string; credentials: Record<string, unknown> | null }>>`
       SELECT id, provider, credentials
