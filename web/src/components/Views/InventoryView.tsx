@@ -1,5 +1,6 @@
 // @ts-nocheck
-import { useContext, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
 import { Boxes } from 'lucide-react'
 import { apiClient, ApiError } from '../../api/client'
@@ -714,6 +715,17 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
   // ─── Inline-parent-assign state (per inventory row) ────────────────────────
   const [inlineParentRowId, setInlineParentRowId] = useState<number | null>(null)
   const [inlineParentSaving, setInlineParentSaving] = useState(false)
+  // The chain-link button that was clicked to open the popover —
+  // captured so we can compute its viewport rect and position the
+  // popover via Portal (escaping the td's overflow:hidden which
+  // would otherwise clip the dropdown). One state for both row
+  // anchor + computed rect; recomputed on scroll/resize.
+  const [parentPopoverAnchor, setParentPopoverAnchor] = useState<HTMLElement | null>(null)
+  const [parentPopoverRect, setParentPopoverRect] = useState<{ top: number; left: number; minWidth: number } | null>(null)
+  // Set of SKU ids currently saving an active-toggle. Drives spinner
+  // / disabled state on the per-row toggle pill. Cleared on success
+  // or failure so the next click re-engages.
+  const [togglingActiveIds, setTogglingActiveIds] = useState<Set<number>>(new Set())
 
   // Auto-close the parent-SKU popover when the operator clicks anywhere
   // outside it. Matches the columns-menu pattern in the toolbar so the
@@ -734,6 +746,69 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [inlineParentRowId])
+
+  // Recompute the portal'd parent-SKU popover's viewport coords
+  // whenever it opens, or when the page scrolls/resizes. Capture-
+  // phase scroll listener catches scrolls in nested containers
+  // (the inventory view-content scrolls). useLayoutEffect runs
+  // before paint so there's no one-frame flash at (0,0) before
+  // measurement lands.
+  useLayoutEffect(() => {
+    if (inlineParentRowId == null || !parentPopoverAnchor) {
+      setParentPopoverRect(null)
+      return
+    }
+    function update() {
+      if (!parentPopoverAnchor) return
+      const rect = parentPopoverAnchor.getBoundingClientRect()
+      setParentPopoverRect({
+        top: rect.bottom + 4,
+        // Align popover's left edge with the trigger's left edge,
+        // but clamp ≥ 8px so it never butts the viewport wall.
+        left: Math.max(8, rect.left),
+        // minWidth at least 240 (popover's preferred width) or the
+        // trigger button's width if the trigger is wider somehow.
+        minWidth: Math.max(240, rect.width),
+      })
+    }
+    update()
+    window.addEventListener('resize', update)
+    window.addEventListener('scroll', update, true)
+    return () => {
+      window.removeEventListener('resize', update)
+      window.removeEventListener('scroll', update, true)
+    }
+  }, [inlineParentRowId, parentPopoverAnchor])
+
+  // Toggle a single SKU's active flag. Optimistic update: flip the
+  // local `items` row immediately so the pill UI snaps to its new
+  // state, then PATCH the server. On failure, roll back + toast.
+  async function handleToggleRowActive(row: InventoryItemDto) {
+    if (togglingActiveIds.has(row.id)) return
+    const nextActive = !(row.active !== false) // null/true → false, false → true
+    setTogglingActiveIds((current) => {
+      const next = new Set(current)
+      next.add(row.id)
+      return next
+    })
+    setItems((prev) => prev.map((r) => (r.id === row.id ? { ...r, active: nextActive } : r)))
+    try {
+      await apiClient.updateInventoryItem(row.id, { active: nextActive })
+    } catch (error) {
+      // Roll back — server didn't accept the change.
+      setItems((prev) => prev.map((r) => (r.id === row.id ? { ...r, active: !nextActive } : r)))
+      toastContext?.addToast(
+        error instanceof Error ? error.message : `Failed to ${nextActive ? 'activate' : 'deactivate'} SKU`,
+        'error',
+      )
+    } finally {
+      setTogglingActiveIds((current) => {
+        const next = new Set(current)
+        next.delete(row.id)
+        return next
+      })
+    }
+  }
 
   useEffect(() => {
     if (!thumbnailPreview) return
@@ -2314,21 +2389,14 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                                       </td>
                                     )
                                   case 'actions':
+                                    // Action cell — pencil edit, chain-link
+                                    // parent SKU (popover via Portal so it
+                                    // escapes td's overflow:hidden), icon-only
+                                    // ± stock-adjust button, and a per-row
+                                    // Active pill toggle that optimistically
+                                    // PATCHes the SKU's active flag.
                                     return (
-                                      // Action cell layout (2026-05-12):
-                                      // explicit flex row with `gap` + every
-                                      // button gets `flex-shrink: 0` so the
-                                      // pencil / chain-link / Adjust trio
-                                      // can never overflow into each other's
-                                      // hit area. The parent-SKU dropdown is
-                                      // now a popover positioned BELOW the
-                                      // chain-link button (was crammed inline
-                                      // next to the icons, where it spilled
-                                      // outside the cell). stopPropagation on
-                                      // every onClick guards against a near-
-                                      // miss click bubbling into the wrong
-                                      // handler.
-                                      <td key="actions" style={{ whiteSpace: 'nowrap', padding: '4px 8px', position: 'relative' }}>
+                                      <td key="actions" style={{ whiteSpace: 'nowrap', padding: '4px 8px' }}>
                                         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                                           <button
                                             className="btn btn-ghost btn-xs"
@@ -2339,86 +2407,43 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                                           >
                                             ✏️
                                           </button>
-                                          {/* Chain-link + popover anchor. The
-                                              popover is position:absolute and
-                                              anchored to THIS wrapper (not the
-                                              cell) so it drops directly below
-                                              the icon. */}
-                                          <div style={{ position: 'relative', flex: '0 0 auto' }}>
-                                            <button
-                                              className="btn btn-ghost btn-xs"
-                                              type="button"
-                                              title={row.parentSkuId ? 'Change parent SKU' : 'Assign parent SKU'}
-                                              onClick={async (event) => {
-                                                event.stopPropagation()
-                                                try {
-                                                  await loadParentOptions(row.clientId)
-                                                  setInlineParentRowId((current) => (current === row.id ? null : row.id))
-                                                } catch (error) {
-                                                  toastContext?.addToast(error instanceof Error ? error.message : 'Failed to load parents', 'error')
-                                                }
-                                              }}
-                                              style={{ fontSize: 12, color: row.parentSkuId ? 'var(--ss-blue)' : 'var(--text3)' }}
-                                            >
-                                              🔗
-                                            </button>
-                                            {inlineParentRowId === row.id ? (
-                                              <div
-                                                role="dialog"
-                                                aria-label="Assign parent SKU"
-                                                data-inventory-parent-popover
-                                                onClick={(event) => event.stopPropagation()}
-                                                style={{
-                                                  position: 'absolute',
-                                                  top: 'calc(100% + 4px)',
-                                                  left: 0,
-                                                  zIndex: 200,
-                                                  background: 'var(--surface)',
-                                                  border: '1px solid var(--border)',
-                                                  borderRadius: 6,
-                                                  boxShadow: '0 8px 24px -6px rgba(15,23,42,.18), 0 2px 6px -2px rgba(15,23,42,.10)',
-                                                  padding: 8,
-                                                  minWidth: 240,
-                                                  display: 'flex',
-                                                  flexDirection: 'column',
-                                                  gap: 6,
-                                                }}
-                                              >
-                                                <div style={{ fontSize: 9.5, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text3)' }}>
-                                                  {row.parentSkuId ? 'Change parent SKU' : 'Assign parent SKU'}
-                                                </div>
-                                                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                                                  <select
-                                                    className="ship-select"
-                                                    style={{ flex: 1, fontSize: 12, padding: '4px 6px' }}
-                                                    defaultValue={row.parentSkuId ? String(row.parentSkuId) : ''}
-                                                    disabled={inlineParentSaving}
-                                                    onChange={(event) => { event.stopPropagation(); void handleInlineParentChange(row, event.target.value) }}
-                                                    onClick={(event) => event.stopPropagation()}
-                                                  >
-                                                    <option value="">— No Parent —</option>
-                                                    {(parentSkuOptions[row.clientId] ?? []).map((option) => (
-                                                      <option key={option.parentSkuId} value={option.parentSkuId}>{option.name}</option>
-                                                    ))}
-                                                  </select>
-                                                  <button
-                                                    className="btn btn-ghost btn-xs"
-                                                    type="button"
-                                                    onClick={(event) => { event.stopPropagation(); setInlineParentRowId(null) }}
-                                                    title="Close"
-                                                    style={{ flex: '0 0 auto' }}
-                                                  >
-                                                    ✕
-                                                  </button>
-                                                </div>
-                                              </div>
-                                            ) : null}
-                                          </div>
-                                          {/* Adjust pill — opens the inventory entry modal
-                                              which supports both ADD and REMOVE via the
-                                              Direction toggle. flex-shrink: 0 prevents
-                                              the pill from clipping into the chain-link
-                                              button when the column is narrow. */}
+                                          {/* Chain-link → opens the parent SKU
+                                              popover. Captures `event.currentTarget`
+                                              as the popover anchor so the
+                                              portal'd popover (rendered at the
+                                              bottom of this component) can
+                                              compute its viewport coords from
+                                              the trigger's bounding rect. */}
+                                          <button
+                                            className="btn btn-ghost btn-xs"
+                                            type="button"
+                                            title={row.parentSkuId ? 'Change parent SKU' : 'Assign parent SKU'}
+                                            onClick={async (event) => {
+                                              event.stopPropagation()
+                                              // Snapshot the trigger element BEFORE awaiting
+                                              // anything — React event objects get pooled and
+                                              // currentTarget becomes null after the await.
+                                              const triggerEl = event.currentTarget as HTMLElement
+                                              try {
+                                                await loadParentOptions(row.clientId)
+                                                setInlineParentRowId((current) => {
+                                                  const next = current === row.id ? null : row.id
+                                                  setParentPopoverAnchor(next == null ? null : triggerEl)
+                                                  return next
+                                                })
+                                              } catch (error) {
+                                                toastContext?.addToast(error instanceof Error ? error.message : 'Failed to load parents', 'error')
+                                              }
+                                            }}
+                                            style={{ fontSize: 12, color: row.parentSkuId ? 'var(--ss-blue)' : 'var(--text3)', flex: '0 0 auto' }}
+                                          >
+                                            🔗
+                                          </button>
+                                          {/* Icon-only ± Adjust button. Square
+                                              pill, no text — operators asked for
+                                              less horizontal clutter. The button's
+                                              title attribute keeps the affordance
+                                              discoverable on hover. */}
                                           <button
                                             type="button"
                                             onClick={(event) => {
@@ -2434,25 +2459,59 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                                               })
                                             }}
                                             title="Adjust stock — add or remove units"
+                                            aria-label="Adjust stock"
                                             style={{
                                               display: 'inline-flex',
                                               alignItems: 'center',
-                                              gap: 3,
-                                              padding: '3px 10px',
+                                              justifyContent: 'center',
+                                              width: 22,
+                                              height: 22,
+                                              padding: 0,
                                               border: '1px solid var(--ss-blue)',
                                               borderRadius: 999,
                                               background: 'rgba(42,91,215,0.08)',
                                               color: 'var(--ss-blue)',
-                                              fontSize: 11,
-                                              fontWeight: 700,
+                                              fontSize: 12,
+                                              fontWeight: 800,
                                               cursor: 'pointer',
-                                              lineHeight: 1.2,
-                                              whiteSpace: 'nowrap',
+                                              lineHeight: 1,
                                               flex: '0 0 auto',
                                             }}
                                           >
-                                            <span aria-hidden="true" style={{ fontSize: 12, fontWeight: 800 }}>±</span>
-                                            Adjust
+                                            ±
+                                          </button>
+                                          {/* Per-row Active toggle. Same pill
+                                              vocabulary as the toolbar's "Active
+                                              only" filter — green ON, slate OFF,
+                                              white pip translating 14px. Clicking
+                                              fires handleToggleRowActive which
+                                              optimistically flips the local
+                                              `items` row and PATCHes the server. */}
+                                          <button
+                                            type="button"
+                                            role="switch"
+                                            aria-checked={row.active !== false}
+                                            aria-label={row.active !== false ? `Deactivate ${row.sku}` : `Activate ${row.sku}`}
+                                            onClick={(event) => { event.stopPropagation(); void handleToggleRowActive(row) }}
+                                            disabled={togglingActiveIds.has(row.id)}
+                                            title={row.active !== false ? 'Active · click to deactivate' : 'Inactive · click to activate'}
+                                            style={{
+                                              background: 'none',
+                                              border: 0,
+                                              padding: 0,
+                                              cursor: togglingActiveIds.has(row.id) ? 'wait' : 'pointer',
+                                              opacity: togglingActiveIds.has(row.id) ? 0.5 : 1,
+                                              flex: '0 0 auto',
+                                            }}
+                                          >
+                                            <span
+                                              className={`relative inline-flex items-center w-7 h-3.5 rounded-full transition-colors duration-150 ${row.active !== false ? 'bg-emerald-500' : 'bg-slate-300'}`}
+                                              aria-hidden="true"
+                                            >
+                                              <span
+                                                className={`absolute top-0.5 w-2.5 h-2.5 rounded-full bg-white shadow-sm transition-transform duration-150 ${row.active !== false ? 'translate-x-[14px]' : 'translate-x-0.5'}`}
+                                              />
+                                            </span>
                                           </button>
                                         </div>
                                       </td>
@@ -3200,6 +3259,74 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
           )}
         </div>
       ) : null}
+
+      {/* Portal'd parent-SKU popover. Rendered into document.body
+          (via createPortal) so it escapes the table cell's
+          overflow:hidden — previously the dropdown was clipped at
+          the cell boundary and the operator couldn't see it. The
+          chain-link button's onClick captures the trigger element
+          and stores it in `parentPopoverAnchor`; the useLayoutEffect
+          above computes viewport coords + recomputes on scroll/resize.
+          We re-anchor a referenced row from items so deletes/refreshes
+          don't strand the popover with stale data. */}
+      {inlineParentRowId != null && parentPopoverRect && typeof document !== 'undefined'
+        ? (() => {
+            const row = items.find((r) => r.id === inlineParentRowId)
+            if (!row) return null
+            return createPortal(
+              <div
+                role="dialog"
+                aria-label="Assign parent SKU"
+                data-inventory-parent-popover
+                onClick={(event) => event.stopPropagation()}
+                style={{
+                  position: 'fixed',
+                  top: parentPopoverRect.top,
+                  left: parentPopoverRect.left,
+                  zIndex: 9999,
+                  background: 'var(--surface)',
+                  border: '1px solid var(--border)',
+                  borderRadius: 6,
+                  boxShadow: '0 8px 24px -6px rgba(15,23,42,.18), 0 2px 6px -2px rgba(15,23,42,.10)',
+                  padding: 8,
+                  minWidth: parentPopoverRect.minWidth,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 6,
+                }}
+              >
+                <div style={{ fontSize: 9.5, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.06em', color: 'var(--text3)' }}>
+                  {row.parentSkuId ? 'Change parent SKU' : 'Assign parent SKU'}
+                </div>
+                <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                  <select
+                    className="ship-select"
+                    style={{ flex: 1, fontSize: 12, padding: '4px 6px' }}
+                    defaultValue={row.parentSkuId ? String(row.parentSkuId) : ''}
+                    disabled={inlineParentSaving}
+                    onChange={(event) => { event.stopPropagation(); void handleInlineParentChange(row, event.target.value) }}
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <option value="">— No Parent —</option>
+                    {(parentSkuOptions[row.clientId] ?? []).map((option) => (
+                      <option key={option.parentSkuId} value={option.parentSkuId}>{option.name}</option>
+                    ))}
+                  </select>
+                  <button
+                    className="btn btn-ghost btn-xs"
+                    type="button"
+                    onClick={(event) => { event.stopPropagation(); setInlineParentRowId(null); setParentPopoverAnchor(null) }}
+                    title="Close"
+                    style={{ flex: '0 0 auto' }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>,
+              document.body,
+            )
+          })()
+        : null}
 
       {editSkuForm ? (
         <div className="inventory-overlay" onClick={() => setEditSkuForm(null)}>
