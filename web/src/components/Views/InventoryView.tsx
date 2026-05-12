@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
+import { useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import { Boxes } from 'lucide-react'
 import { apiClient, ApiError } from '../../api/client'
@@ -627,6 +628,13 @@ interface InventoryViewProps {
 
 export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewTitle }: InventoryViewProps = {}) {
   const toastContext = useContext(ToastContext)
+  // 2026-05-12 visibility hardening: needed so handleToggleClientActive
+  // below can invalidate React Query caches across the app (Sidebar,
+  // Dashboard, Analysis, Billing, Inventory) when an operator
+  // enables/disables a client from this view. Without it, re-enabling
+  // a client wouldn't show up elsewhere until the next 60s staleTime
+  // tick or a manual refresh.
+  const queryClient = useQueryClient()
   const { stores } = useInitStores()
   const historyDefaults = useMemo(() => getInventoryDateRangePreset(), [])
   // Extend InventoryTab union locally to include ported v2 tabs (alerts, parents)
@@ -1912,6 +1920,23 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
       window.dispatchEvent(new CustomEvent('prepship:client-active-changed', {
         detail: { clientId: client.clientId, active: next }
       }))
+      // 2026-05-12: full React Query cache flush across every surface
+      // that reads client-keyed data. Mirrors pages/Clients.tsx so a
+      // toggle from THIS view propagates exactly the same way as a
+      // toggle from the admin Clients page — sidebar, dashboard,
+      // analysis, billing, inventory all repaint within ms instead of
+      // waiting for the 60s staleTime tick. Re-enable case especially:
+      // toggling a client back ON immediately surfaces them everywhere.
+      queryClient.invalidateQueries({ queryKey: ['clients'] })
+      queryClient.invalidateQueries({ queryKey: ['clients-order-stats'] })
+      queryClient.invalidateQueries({ queryKey: ['orders-count'] })
+      queryClient.invalidateQueries({ queryKey: ['v2-hooks:clients'] })
+      queryClient.invalidateQueries({ queryKey: ['v2-hooks:orders'] })
+      queryClient.invalidateQueries({ queryKey: ['inventory'] })
+      queryClient.invalidateQueries({ queryKey: ['billing-config'] })
+      queryClient.invalidateQueries({ queryKey: ['billing-summary'] })
+      queryClient.invalidateQueries({ queryKey: ['analysis-sku-breakdown'] })
+      queryClient.invalidateQueries({ queryKey: ['analysis-sku-daily'] })
       await refreshInventoryView()
       // Drop the override — fresh server data is now authoritative.
       setClientActiveOverrides((current) => {
