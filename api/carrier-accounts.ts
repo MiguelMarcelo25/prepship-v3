@@ -5,8 +5,19 @@
 // back to the Render backend is a noop.
 //
 // Endpoints (all under the same path, dispatched on req.method):
-//   GET  /api/carrier-accounts            → list (filterable by source/pending)
-//   POST /api/carrier-accounts            → upsert by (clientId, provider, accountIdentifier)
+//   GET    /api/carrier-accounts            → list (filterable by source/pending)
+//   POST   /api/carrier-accounts            → upsert by (clientId, provider, accountIdentifier)
+//   PUT    /api/carrier-accounts?id=N       → replace the carrier's client-assignment
+//                                             list. Body: { clientIds: number[] }
+//                                             Side-effect: auto-promotes source
+//                                             from 'portal' → 'admin' on the
+//                                             same transaction (Option A,
+//                                             2026-05-12 audit).
+//   PATCH  /api/carrier-accounts?id=N       → flip source between 'admin' and
+//                                             'portal' (explicit approval flow,
+//                                             Option B). Body: { source: 'admin' }
+//   DELETE /api/carrier-accounts?id=N       → delete the carrier_accounts row
+//                                             (cascades to carrier_account_clients)
 //
 // Auth: Supabase JWT in Authorization: Bearer <token>.
 
@@ -68,7 +79,7 @@ function corsHeaders(origin: string | null): Record<string, string> {
   const allow = origin && allowed.has(origin) ? origin : '';
   const headers: Record<string, string> = {
     'Vary': 'Origin',
-    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Authorization, Content-Type',
   };
   if (allow) headers['Access-Control-Allow-Origin'] = allow;
@@ -362,13 +373,17 @@ export default async function handler(req: any, res: any): Promise<void> {
         )
       ) as number[];
 
-      const exists = await sql<Array<{ id: number }>>`
-        SELECT id FROM ${sql(TABLE)} WHERE id = ${id} LIMIT 1
+      // Pre-read: we need the current `source` so we can return whether
+      // this save also promoted the carrier (FE may want to celebrate it
+      // with a toast).
+      const existsRows = await sql<Array<{ id: number; source: string }>>`
+        SELECT id, source FROM ${sql(TABLE)} WHERE id = ${id} LIMIT 1
       `;
-      if (exists.length === 0) {
+      if (existsRows.length === 0) {
         res.status(404).json({ error: `carrier_accounts row #${id} not found` });
         return;
       }
+      const wasPortal = existsRows[0].source === 'portal';
 
       await sql.begin(async (trx) => {
         await trx`DELETE FROM carrier_account_clients WHERE carrier_account_id = ${id}`;
@@ -379,6 +394,19 @@ export default async function handler(req: any, res: any): Promise<void> {
             ON CONFLICT (carrier_account_id, client_id) DO NOTHING
           `;
         }
+        // Option A — implicit approval. Assigning clients to a
+        // portal-source carrier is an explicit operator review action,
+        // so we treat it as approval and promote source → 'admin'.
+        // This is what makes the carrier reachable by downstream
+        // consumers (rate-shop, useShippingAccounts) which filter
+        // ?source=admin. Without this promotion the assignment would
+        // be a DB write that nothing reads — see Phase 1 audit
+        // 2026-05-12. Filtered to only fire when source=portal so a
+        // re-save on an already-admin row stays a no-op.
+        await trx`
+          UPDATE ${trx(TABLE)} SET source = 'admin', updated_at = NOW()
+          WHERE id = ${id} AND source = 'portal'
+        `;
       });
 
       const refreshed = await sql<Array<{ client_id: number }>>`
@@ -390,8 +418,56 @@ export default async function handler(req: any, res: any): Promise<void> {
         data: {
           id,
           assignedClientIds: refreshed.map((r) => r.client_id),
+          // promotedFromPortal: true means "this Save also flipped
+          // source from portal → admin" so the FE can show a
+          // confirmation toast ("✓ Approved and assigned").
+          promotedFromPortal: wasPortal,
+          source: wasPortal ? 'admin' : existsRows[0].source,
         },
       });
+      return;
+    }
+
+    if (req.method === 'PATCH') {
+      // Option B — explicit source flip. Used by the "Approve" button
+      // in the Pending Client Integrations card and on portal-source
+      // rows in the main Settings list. Lets the operator promote a
+      // submitted carrier without immediately assigning any clients
+      // (the legacy `clientId` fallback in v2-apiClient.ts is still in
+      // play, so the original-owner client retains access).
+      //
+      // URL: PATCH /api/carrier-accounts?id={carrierAccountId}
+      // Body: { source: 'admin' | 'portal' }   ← only `source` is supported
+      const url = new URL(req.url ?? '', 'http://x');
+      const idStr = url.searchParams.get('id');
+      const id = idStr != null ? Number(idStr) : NaN;
+      if (!Number.isFinite(id) || id <= 0) {
+        res.status(400).json({ error: 'id query parameter is required' });
+        return;
+      }
+
+      const body = (await readBody(req)) as Record<string, unknown>;
+      const rawSource = body?.source != null ? String(body.source) : '';
+      if (!ALLOWED_SOURCES.has(rawSource)) {
+        res.status(400).json({
+          error: `source must be one of: ${[...ALLOWED_SOURCES].join(', ')}`,
+        });
+        return;
+      }
+
+      const updated = await sql<Array<Record<string, unknown>>>`
+        UPDATE ${sql(TABLE)}
+        SET source = ${rawSource}, updated_at = NOW()
+        WHERE id = ${id}
+        RETURNING id, client_id AS "clientId", provider, label,
+                  account_identifier AS "accountIdentifier",
+                  source, active, created_at AS "createdAt"
+      `;
+      if (updated.length === 0) {
+        res.status(404).json({ error: `carrier_accounts row #${id} not found` });
+        return;
+      }
+      res.status(200).json({ data: updated[0] });
       return;
     }
 

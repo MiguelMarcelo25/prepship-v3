@@ -992,6 +992,23 @@ async function deleteIntegration(rowId: number, provider: string): Promise<void>
   })
 }
 
+// PATCH /carrier-accounts?id=N { source: 'admin' } — flips a portal
+// submission to admin source. Implemented backend-side in
+// api/carrier-accounts.ts. This is Option B of the 2026-05-12 audit
+// — an explicit approval action distinct from the implicit promote
+// that happens when an operator saves the assignment popover.
+// Carriers only (store_accounts uses a separate table without the
+// source field's pending/active distinction).
+async function approveCarrierIntegration(rowId: number): Promise<void> {
+  await callVercelFunction<{ data: Record<string, unknown> | null }>(
+    `/carrier-accounts?id=${rowId}`,
+    {
+      method: 'PATCH',
+      body: { source: 'admin' },
+    },
+  )
+}
+
 interface WalmartOrdersResult {
   ok: boolean
   fetched?: number
@@ -1100,6 +1117,10 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
   const [pulling, setPulling] = useState<Record<number, boolean>>({})
   const [pullResults, setPullResults] = useState<Record<number, WalmartOrdersResult>>({})
   const [rating, setRating] = useState<Record<number, boolean>>({})
+  // Tracks per-row "Approve" button in-flight state for portal-source
+  // rows. Separate from `deleting` / `testing` so the three actions
+  // can coexist without their loading labels colliding.
+  const [approving, setApproving] = useState<Record<number, boolean>>({})
   // Per-row "Assign Clients" popover state. Only one popover is open
   // at a time — `assignOpenForId` holds the SavedRow.id (or null).
   // `assignDraft` is the in-progress checkbox set inside the open
@@ -1214,22 +1235,74 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
     try {
       const ids = Array.from(assignDraft)
       const res = await callVercelFunction<{
-        data: { id: number; assignedClientIds: number[] }
+        data: {
+          id: number
+          assignedClientIds: number[]
+          // Option A — backend reports whether THIS save also flipped
+          // source from 'portal' → 'admin'. FE uses this to update the
+          // local row's `source` field (so the PORTAL badge disappears
+          // and the Approve button hides) AND to refresh the Rate
+          // Browser cache (so the now-admin carrier appears in
+          // OrdersView pickers immediately).
+          promotedFromPortal?: boolean
+          source?: string
+        }
       }>(`/carrier-accounts?id=${d.accountId}`, {
         method: 'PUT',
         body: { clientIds: ids },
       })
       const fresh = res?.data?.assignedClientIds ?? ids
+      const newSource = res?.data?.source ?? d.source
+      const promoted = !!res?.data?.promotedFromPortal
       setSaved((prev) =>
         prev.map((row) =>
-          row.id === d.id ? { ...row, assignedClientIds: fresh } : row,
+          row.id === d.id
+            ? { ...row, assignedClientIds: fresh, source: newSource }
+            : row,
         ),
       )
+      if (promoted) {
+        // Bust the carrier-list cache so the just-promoted row appears
+        // in rate-shop pickers (which read useShippingAccounts) without
+        // waiting for the 60s staleTime.
+        refreshAccountsCache()
+      }
       closeAssignPopover()
     } catch (err) {
       alert(`Failed to save assignments: ${err instanceof Error ? err.message : 'Unknown error'}`)
     } finally {
       setAssignSaving(false)
+    }
+  }
+
+  // Approve a portal-source carrier — promote it to admin source so
+  // the rate-shop pipeline and OrdersView pickers (which both filter
+  // ?source=admin) see it. Optimistic local update: we flip
+  // d.source to 'admin' immediately on success so the PORTAL badge
+  // disappears and the Approve button hides. Carriers only — store
+  // rows don't have an approval flow.
+  const runApprove = async (d: SavedRow) => {
+    if (d.kind !== 'carrier' || d.source !== 'portal') return
+    if (!confirm(
+      `Approve "${d.label ?? d.accountIdentifier ?? `submission #${d.accountId}`}"?\n\n` +
+      `This promotes the carrier to admin source — it becomes available for rate-shop ` +
+      `and you can multi-assign it to additional clients from the assignment popover.`
+    )) return
+    setApproving((prev) => ({ ...prev, [d.id]: true }))
+    try {
+      await approveCarrierIntegration(d.accountId)
+      setSaved((prev) =>
+        prev.map((row) =>
+          row.id === d.id ? { ...row, source: 'admin' } : row,
+        ),
+      )
+      // Refresh the Rate Browser cache so the newly-admin carrier
+      // appears in pickers without waiting for the 60s staleTime.
+      refreshAccountsCache()
+    } catch (err) {
+      setListError(err instanceof Error ? err.message : 'Failed to approve')
+    } finally {
+      setApproving((prev) => ({ ...prev, [d.id]: false }))
     }
   }
 
@@ -1641,6 +1714,22 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
               title={isShipStation ? SHIPSTATION_MANAGE_HINT : 'Fetch a sample shipping rate for this carrier'}
             />
           ) : null}
+          {/* Approve — only rendered for portal-source carrier rows.
+              Promotes the row to admin source so rate-shop and other
+              downstream consumers (which filter ?source=admin) can see
+              it. Sits before Assign so the operator's eye lands on the
+              gating action first. Option B of the 2026-05-12 audit. */}
+          {d.kind === 'carrier' && d.source === 'portal' ? (
+            <ActionButton
+              icon={<CheckIcon size={11} strokeWidth={2.5} />}
+              label="Approve"
+              loadingLabel="Approving…"
+              loading={!!approving[d.id]}
+              variant="primary"
+              onClick={() => runApprove(d)}
+              title="Promote portal submission → admin · makes the carrier usable for rate-shop and label purchase"
+            />
+          ) : null}
           {d.kind === 'carrier' || isShipStation ? (
             <ActionButton
               icon={<Users2 size={11} strokeWidth={2.5} />}
@@ -1649,7 +1738,10 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
                   ? 'Assign'
                   : `Assign${d.assignedClientIds.length > 0 ? ` (${d.assignedClientIds.length})` : ''}`
               }
-              variant="primary"
+              // Quiet the Assign button on portal rows so Approve is the
+              // emphasized action; once approved (source becomes 'admin')
+              // Assign goes back to its primary visual treatment.
+              variant={d.kind === 'carrier' && d.source === 'portal' ? 'subtle' : 'primary'}
               disabled={isShipStation}
               onClick={() => openAssignPopover(d)}
               title={
@@ -1661,7 +1753,12 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
                   // The practical workflow is: add the same keys to the
                   // other client's row in Settings → Clients.
                   ? `ShipStation API keys are tied 1:1 to ${d.label?.replace(/^ShipStation /, '') ?? 'this client'} by upstream design. To use ShipStation for another client, add credentials to that client's row in Settings → Clients.`
-                  : `Assign this ${d.source === 'portal' ? '(portal-submitted) ' : ''}carrier account to one or more clients · multi-select supported`
+                  : d.source === 'portal'
+                    // Surface the implicit-approval behavior so the
+                    // operator knows clicking Save here ALSO promotes
+                    // the carrier (Option A). No surprise.
+                    ? 'Assign this (portal-submitted) carrier to one or more clients · saving also promotes the carrier to admin source so rate-shop can use it'
+                    : 'Assign this carrier account to one or more clients · multi-select supported'
               }
             />
           ) : null}

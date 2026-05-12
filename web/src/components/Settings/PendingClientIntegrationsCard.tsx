@@ -20,6 +20,19 @@ async function deleteIntegration(id: number): Promise<void> {
   await api.delete(`/carrier-accounts?id=${id}`)
 }
 
+// PATCH /carrier-accounts?id=N { source: 'admin' } — flips a portal
+// submission to admin source so it becomes a fully-active carrier
+// account: visible to rate-shop, listed in OrdersView pickers,
+// assignable to multiple clients via the main Settings list. This
+// is Option B of the 2026-05-12 audit. The endpoint also auto-
+// promotes on assignment save (Option A) — this button is for
+// operators who want to approve a submission without immediately
+// assigning specific clients (the legacy `clientId` foreign key
+// keeps the original-owner client wired up either way).
+async function approveIntegration(id: number): Promise<void> {
+  await api.patch(`/carrier-accounts?id=${id}`, { source: 'admin' })
+}
+
 // Lists carrier_accounts rows with source='portal'. The natural-key index on
 // (client_id, provider, account_identifier) means duplicates against existing
 // admin-added rows simply won't insert — sync becomes idempotent. Admin can
@@ -28,6 +41,9 @@ export function PendingClientIntegrationsCard() {
   const [items, setItems] = useState<PendingIntegration[]>([])
   const [state, setState] = useState<{ kind: 'idle' | 'loading' | 'error'; message?: string }>({ kind: 'idle' })
   const [removing, setRemoving] = useState<Record<number, boolean>>({})
+  // Track per-row approval state independently from removal so the
+  // two buttons can show distinct loading labels without colliding.
+  const [approving, setApproving] = useState<Record<number, boolean>>({})
   const [actionError, setActionError] = useState<string | null>(null)
   const [sortState, setSortState] = useState(null)
   const sortedItems = useMemo(() => sortRows(
@@ -96,6 +112,33 @@ export function PendingClientIntegrationsCard() {
       setActionError(err instanceof Error ? err.message : String(err))
     } finally {
       setRemoving((prev) => ({ ...prev, [id]: false }))
+    }
+  }
+
+  // Promote a portal-source submission to admin source. After approval
+  // the row drops out of THIS list (its filter is source=portal) and
+  // becomes a fully functional carrier in the main Settings list. The
+  // confirm dialog spells out the downstream consequence — once
+  // approved, the carrier is reachable by rate-shop for any client it's
+  // assigned to (or its original-owner client via the legacy clientId
+  // fallback).
+  const handleApprove = async (id: number, label: string | null) => {
+    const friendly = label ?? `submission #${id}`
+    if (!window.confirm(
+      `Approve "${friendly}"?\n\nThis promotes it to an admin-source carrier — it becomes available for rate-shop and label purchase, and you can multi-assign it to clients from the main Carrier Integrations list.`
+    )) return
+    setActionError(null)
+    setApproving((prev) => ({ ...prev, [id]: true }))
+    try {
+      await approveIntegration(id)
+      // Optimistic: drop it from the pending list. The next refresh
+      // confirms by no longer returning it (its source is now 'admin'
+      // so the source=portal filter excludes it).
+      setItems((prev) => prev.filter((it) => it.id !== id))
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setApproving((prev) => ({ ...prev, [id]: false }))
     }
   }
 
@@ -216,23 +259,49 @@ export function PendingClientIntegrationsCard() {
                   <span style={{ fontSize: 10 }}>{formatCaTimeOnly(item.createdAt)} CA</span>
                 </td>
                 <td style={{ ...td, textAlign: 'right' }}>
-                  <button
-                    type="button"
-                    onClick={() => handleRemove(item.id)}
-                    disabled={!!removing[item.id]}
-                    style={{
-                      padding: '3px 10px',
-                      border: '1px solid var(--red)',
-                      borderRadius: 3,
-                      background: 'transparent',
-                      color: 'var(--red)',
-                      fontSize: 11,
-                      fontWeight: 600,
-                      cursor: removing[item.id] ? 'wait' : 'pointer',
-                    }}
-                  >
-                    {removing[item.id] ? 'Removing…' : 'Remove'}
-                  </button>
+                  <div style={{ display: 'inline-flex', gap: 6, justifyContent: 'flex-end' }}>
+                    {/* Approve — promote source='portal' → 'admin'.
+                        Primary action (filled brand color) because it's
+                        the typical happy path for an inbound submission. */}
+                    <button
+                      type="button"
+                      onClick={() => handleApprove(item.id, item.label)}
+                      disabled={!!approving[item.id] || !!removing[item.id]}
+                      title="Promote to admin · makes this carrier usable for rate-shop and assignable to multiple clients"
+                      style={{
+                        padding: '3px 10px',
+                        border: '1px solid rgb(var(--brand-rgb, 42 91 215))',
+                        borderRadius: 3,
+                        background: 'rgb(var(--brand-rgb, 42 91 215))',
+                        color: '#fff',
+                        fontSize: 11,
+                        fontWeight: 700,
+                        cursor: approving[item.id] ? 'wait' : 'pointer',
+                        opacity: approving[item.id] || removing[item.id] ? 0.65 : 1,
+                      }}
+                    >
+                      {approving[item.id] ? 'Approving…' : '✓ Approve'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleRemove(item.id)}
+                      disabled={!!removing[item.id] || !!approving[item.id]}
+                      title="Permanently delete this submission"
+                      style={{
+                        padding: '3px 10px',
+                        border: '1px solid var(--red)',
+                        borderRadius: 3,
+                        background: 'transparent',
+                        color: 'var(--red)',
+                        fontSize: 11,
+                        fontWeight: 600,
+                        cursor: removing[item.id] ? 'wait' : 'pointer',
+                        opacity: approving[item.id] || removing[item.id] ? 0.65 : 1,
+                      }}
+                    >
+                      {removing[item.id] ? 'Removing…' : 'Remove'}
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
