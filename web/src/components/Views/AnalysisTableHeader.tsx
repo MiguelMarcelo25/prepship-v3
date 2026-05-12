@@ -194,14 +194,20 @@ export function AnalysisTableHeader({
                 <span className="overflow-hidden text-ellipsis">
                   {ANALYSIS_SORT_LABELS[column.key]}
                 </span>
-                <span
-                  className={`w-[18px] h-[18px] rounded-full inline-flex items-center justify-center flex-none text-[11px] leading-none ${
-                    active ? 'bg-brand text-white' : 'bg-[rgba(148,163,184,.18)] text-ink-3'
-                  }`}
-                  aria-hidden="true"
-                >
-                  {getSortIndicator(active, sortDir)}
-                </span>
+                {/* Sort indicator pill — ONLY rendered when this column
+                    is actively sorted. Previously the unsorted state
+                    showed a faded ↕ placeholder; operators preferred
+                    the cleaner state where only the active column
+                    carries a visible indicator (↑/↓). The title
+                    attribute on the <th> still hints at sortability. */}
+                {active ? (
+                  <span
+                    className="w-[18px] h-[18px] rounded-full inline-flex items-center justify-center flex-none text-[11px] leading-none bg-brand text-white"
+                    aria-hidden="true"
+                  >
+                    {getSortIndicator(active, sortDir)}
+                  </span>
+                ) : null}
               </button>
               {!isLast && onResizeColumn ? (
                 <ColumnResizeHandle

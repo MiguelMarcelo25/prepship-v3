@@ -726,11 +726,14 @@ export function Table<Row>({
                     aria-sort={isActive ? (sort!.direction === 'asc' ? 'ascending' : 'descending') : 'none'}
                     title={reorderable ? `${col.label} — click to sort, drag to reorder, drag right edge to resize, double-click edge to auto-fit` : col.label}
                   >
-                    {/* Drag-grip affordance — 6 dots (2×3) on the left
-                        edge of the header. Always at low opacity so
-                        it's discoverable but not noisy; brightens to
-                        the brand color on hover so the operator gets
-                        a clear "you can grab me" signal. */}
+                    {/* HIDDEN PER USER REQUEST 2026-05-12: drag-grip
+                        affordance — 6 dots (2×3) on the left edge of
+                        the header. Operators preferred the cleaner
+                        header without the always-visible grip. The
+                        `title` attribute on each <th> still advertises
+                        "drag to reorder" so the affordance survives
+                        at the tooltip level. Uncomment to restore. */}
+                    {/*
                     {reorderable ? (
                       <span
                         aria-hidden
@@ -744,17 +747,20 @@ export function Table<Row>({
                         <span className="block h-[3px] w-[3px] rounded-full bg-current" />
                       </span>
                     ) : null}
+                    */}
 
                     <span className={`inline-flex items-center gap-1 ${justify} w-full ${isActive ? 'text-brand' : ''}`}>
                       <span className="truncate">{col.label}</span>
-                      {col.sortable ? (
-                        isActive ? (
-                          sort!.direction === 'asc'
-                            ? <ArrowUp size={10} strokeWidth={2.5} className="flex-shrink-0" />
-                            : <ArrowDown size={10} strokeWidth={2.5} className="flex-shrink-0" />
-                        ) : (
-                          <ArrowUpDown size={10} strokeWidth={2} className="flex-shrink-0 opacity-30" />
-                        )
+                      {/* Sort indicator: ↑/↓ ONLY when actively sorted.
+                          The previous always-visible ↕ placeholder on
+                          unsorted-but-sortable columns was removed
+                          2026-05-12 per operator preference. Title
+                          attribute on the header still hints at
+                          sortability for new users. */}
+                      {col.sortable && isActive ? (
+                        sort!.direction === 'asc'
+                          ? <ArrowUp size={10} strokeWidth={2.5} className="flex-shrink-0" />
+                          : <ArrowDown size={10} strokeWidth={2.5} className="flex-shrink-0" />
                       ) : null}
                     </span>
 
