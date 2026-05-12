@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Clients — Design Explorations</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300..900&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#0a0a0c;
+    --panel:#16161a;
+    --line:#2a2a30;
+    --ink:#e8e8ea;
+    --ink-2:#9a9aa3;
+    --ink-3:#5a5a63;
+    --accent:#ff5c2b;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:"Geist",sans-serif;
+    min-height:100vh;
+    padding:64px 56px 120px;
+    background-image:
+      radial-gradient(rgba(255,255,255,0.02) 1px,transparent 1px);
+    background-size:32px 32px;
+  }
+  .head{max-width:1200px;margin:0 auto 56px}
+  .head .label{font-family:"Geist Mono",monospace;font-size:11px;color:var(--accent);letter-spacing:0.3em;text-transform:uppercase;margin-bottom:18px}
+  .head h1{font-size:80px;line-height:0.9;letter-spacing:-0.04em;font-weight:300;margin-bottom:14px}
+  .head h1 b{font-weight:800;color:var(--accent)}
+  .head p{font-size:18px;color:var(--ink-2);max-width:760px;line-height:1.5}
+  .head .meta{margin-top:18px;font-family:"Geist Mono",monospace;font-size:12px;color:var(--ink-3);letter-spacing:0.05em}
+
+  .grid{
+    max-width:1200px;margin:0 auto;
+    display:grid;grid-template-columns:repeat(2,1fr);gap:24px;
+  }
+  @media (max-width:760px){.grid{grid-template-columns:1fr}}
+
+  .card{
+    background:var(--panel);
+    border:1px solid var(--line);
+    padding:0;
+    display:flex;flex-direction:column;
+    position:relative;overflow:hidden;
+    text-decoration:none;color:var(--ink);
+    transition:border-color 200ms,transform 200ms;
+  }
+  .card:hover{border-color:var(--accent);transform:translateY(-2px)}
+  .card .num{
+    position:absolute;top:18px;right:22px;
+    font-family:"Geist Mono",monospace;font-size:11px;color:var(--ink-3);letter-spacing:0.15em;z-index:2;
+  }
+  .card .preview{
+    height:160px;
+    background-size:cover;background-position:center;
+    border-bottom:1px solid var(--line);
+    position:relative;
+    display:flex;align-items:center;justify-content:center;
+    font-family:"Geist",sans-serif;font-weight:600;font-size:36px;
+    overflow:hidden;
+  }
+  .card .body{padding:20px 22px}
+  .card h3{font-size:22px;font-weight:600;letter-spacing:-0.02em;margin-bottom:4px}
+  .card .tag{font-family:"Geist Mono",monospace;font-size:10px;color:var(--ink-3);letter-spacing:0.15em;text-transform:uppercase;margin-bottom:10px}
+  .card .desc{font-size:13.5px;color:var(--ink-2);line-height:1.45}
+  .card .open{
+    margin-top:14px;display:inline-flex;align-items:center;gap:6px;
+    font-family:"Geist Mono",monospace;font-size:11px;letter-spacing:0.1em;
+    color:var(--accent);text-transform:uppercase;
+  }
+  .card .open::after{content:"→";transition:transform 200ms}
+  .card:hover .open::after{transform:translateX(4px)}
+
+  /* unique preview backgrounds per card */
+  .p1{background:linear-gradient(180deg,#f4ede2 0%,#ece4d4 100%);color:#1a1612;font-family:Georgia,serif;font-style:italic}
+  .p2{background:#d6d4cd;color:#1a1a1a;font-family:"Anton",sans-serif;text-transform:uppercase}
+  .p3{background:#06140c;color:#48ff85;font-family:monospace;text-shadow:0 0 6px #48ff85}
+  .p4{background:linear-gradient(180deg,#0e1b32,#152544);color:#c79850;font-family:serif;letter-spacing:0.15em}
+  .p5{background:#fafaf9;color:#0a0a0a;font-weight:200;letter-spacing:-0.04em;font-size:44px}
+  .p6{background:linear-gradient(135deg,#080013,#0e0224);color:#00f0ff;text-shadow:0 0 12px #ff2bd6;font-family:monospace}
+  .p7{background:radial-gradient(circle at 30% 30%,#fff1e0,#ffe2c5);color:#5e3450;font-style:italic;font-family:serif}
+  .p8{background:#1c2129;color:#ffb000;font-family:"Anton",sans-serif;text-transform:uppercase;letter-spacing:-0.01em}
+  .p9{background:linear-gradient(135deg,#0c0c0d,#16161a);color:#c8a85a;font-family:serif;font-style:italic;letter-spacing:0.05em}
+  .p10{background:#fff8f0;color:#0a0a18;text-shadow:4px 4px 0 #ff3d8a,8px 8px 0 #1f4cff;text-transform:uppercase}
+
+  .legend{
+    max-width:1200px;margin:64px auto 0;
+    border-top:1px solid var(--line);padding-top:32px;
+    font-family:"Geist Mono",monospace;font-size:11px;color:var(--ink-3);letter-spacing:0.1em;
+    display:flex;justify-content:space-between;flex-wrap:wrap;gap:18px;
+  }
+</style>
+</head>
+<body>
+  <div class="head">
+    <div class="label">design explorations · clients page</div>
+    <h1>Ten directions, <b>one decision</b></h1>
+    <p>Each tile below is a fully-built static prototype of the Clients page in a different aesthetic register. Pick the direction that fits how you want the operator to feel, and we'll port it into the React app.</p>
+    <div class="meta">prepship · v4 · 2026-05-12 · all data identical · pick one and ship</div>
+  </div>
+
+  <div class="grid">
+
+    <a class="card" href="01-editorial-gazette.html">
+      <span class="num">01</span>
+      <div class="preview p1">The Clientèle</div>
+      <div class="body">
+        <h3>Editorial Gazette</h3>
+        <div class="tag">Fraunces · EB Garamond · Cream · Newspaper grid</div>
+        <p class="desc">A 3-column broadsheet ledger. Each client is an article, complete with drop-caps and bylines. Calm, expensive, made for slow reading.</p>
+        <span class="open">View live</span>
+      </div>
+    </a>
+
+    <a class="card" href="02-brutalist-concrete.html">
+      <span class="num">02</span>
+      <div class="preview p2">CLIENT REGISTER</div>
+      <div class="body">
+        <h3>Brutalist Concrete</h3>
+        <div class="tag">Anton · Space Mono · Heavy borders · Orange flash</div>
+        <p class="desc">Raw, blocky, unapologetic. Black slab header, 2px black grid, hot-orange accents. Looks like a warehouse work order.</p>
+        <span class="open">View live</span>
+      </div>
+    </a>
+
+    <a class="card" href="03-phosphor-terminal.html">
+      <span class="num">03</span>
+      <div class="preview p3">> CLIENTS_</div>
+      <div class="body">
+        <h3>Phosphor Terminal</h3>
+        <div class="tag">VT323 · CRT scanlines · Green phosphor on black</div>
+        <p class="desc">A retro CRT operator terminal. Glowing green text, scan-line overlay, blinking cursor. ASCII separators, function-key hints.</p>
+        <span class="open">View live</span>
+      </div>
+    </a>
+
+    <a class="card" href="04-art-deco-vault.html">
+      <span class="num">04</span>
+      <div class="preview p4">CLIENTÈLE</div>
+      <div class="body">
+        <h3>Art Deco Vault</h3>
+        <div class="tag">Cinzel · Cormorant · Navy + gold · Geometric ornaments</div>
+        <p class="desc">A 1925 vault register. Symmetric, gold-foiled, ceremonial. Each client gets a Roman numeral seal and a ledger panel.</p>
+        <span class="open">View live</span>
+      </div>
+    </a>
+
+    <a class="card" href="05-swiss-discipline.html">
+      <span class="num">05</span>
+      <div class="preview p5">Clients¹⁴</div>
+      <div class="body">
+        <h3>Swiss Discipline</h3>
+        <div class="tag">Geist · 12-col grid · One accent · Ruthless restraint</div>
+        <p class="desc">Vercel-flavored Swiss. Strict grid, hairline rules, monospace metadata, one orange accent. Information density without noise.</p>
+        <span class="open">View live</span>
+      </div>
+    </a>
+
+    <a class="card" href="06-cyber-neon.html">
+      <span class="num">06</span>
+      <div class="preview p6">// CLIENTS</div>
+      <div class="body">
+        <h3>Cyber Neon</h3>
+        <div class="tag">Orbitron · Share Tech Mono · Cyan + magenta · Glow</div>
+        <p class="desc">Deep-purple grid, scanning gradient strip, glowing cyan/magenta data nodes. Reads like an ops terminal in a cyberpunk command room.</p>
+        <span class="open">View live</span>
+      </div>
+    </a>
+
+    <a class="card" href="07-soft-sanctuary.html">
+      <span class="num">07</span>
+      <div class="preview p7">our clients</div>
+      <div class="body">
+        <h3>Soft Sanctuary</h3>
+        <div class="tag">DM Serif · Caveat · Warm peach + sage · Organic shapes</div>
+        <p class="desc">Cottagecore for ops. Tilted cards, handwritten labels, blob backgrounds. Friendly, slightly imperfect, feels like a journal.</p>
+        <span class="open">View live</span>
+      </div>
+    </a>
+
+    <a class="card" href="08-industrial-ops.html">
+      <span class="num">08</span>
+      <div class="preview p8">BAY 04</div>
+      <div class="body">
+        <h3>Industrial Ops</h3>
+        <div class="tag">Anton · JetBrains Mono · Steel + amber · Hazard tape</div>
+        <p class="desc">A working warehouse control panel. Hazard stripe, gauge readouts, color-coded unit bays. Built to be glanced at across a noisy floor.</p>
+        <span class="open">View live</span>
+      </div>
+    </a>
+
+    <a class="card" href="09-atelier-noir.html">
+      <span class="num">09</span>
+      <div class="preview p9">Clientèle</div>
+      <div class="body">
+        <h3>Atelier Noir</h3>
+        <div class="tag">Bodoni Moda · Cormorant · Black + brushed gold · Marble</div>
+        <p class="desc">Hushed luxury — black marble, gold rules, italic Bodoni at scale. Each client is a "Maison" with a Roman-numeral plate.</p>
+        <span class="open">View live</span>
+      </div>
+    </a>
+
+    <a class="card" href="10-memphis-maximalist.html">
+      <span class="num">10</span>
+      <div class="preview p10">CLIENTS!!</div>
+      <div class="body">
+        <h3>Memphis Maximalist</h3>
+        <div class="tag">Bungee · Pacifico · Hot pink + cobalt + lemon · Shapes everywhere</div>
+        <p class="desc">A loud party. Tilted cards with hard offset shadows, color-blocked stats, scattered squiggles and dots. Joyful, slightly chaotic.</p>
+        <span class="open">View live</span>
+      </div>
+    </a>
+
+  </div>
+
+  <div class="legend">
+    <span>10 prototypes · static HTML · same data across all</span>
+    <span>recommended viewing: 1440 × 900</span>
+    <span>chosen direction → port into React via Tailwind tokens</span>
+  </div>
+</body>
+</html>

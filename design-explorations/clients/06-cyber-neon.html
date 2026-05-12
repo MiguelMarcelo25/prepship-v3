@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>CLIENTS // GRID 04</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Share+Tech+Mono&display=swap" rel="stylesheet" />
+<style>
+  :root{
+    --bg:#080013;
+    --bg-2:#0e0224;
+    --grid:rgba(255,0,200,0.06);
+    --cyan:#00f0ff;
+    --magenta:#ff2bd6;
+    --violet:#7c3aff;
+    --lime:#aeff2b;
+    --warn:#ffaa00;
+    --red:#ff3060;
+    --ink:#d8d2ff;
+    --ink-2:#8870b8;
+    --ink-3:#4f3f7a;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:"Share Tech Mono",monospace;
+    min-height:100vh;
+    padding:32px 36px 80px;
+    background-image:
+      linear-gradient(180deg,rgba(124,58,255,0.10),transparent 600px),
+      radial-gradient(circle at 80% 20%,rgba(255,43,214,0.18),transparent 50%),
+      radial-gradient(circle at 10% 90%,rgba(0,240,255,0.12),transparent 50%);
+    position:relative;
+    overflow-x:hidden;
+  }
+  body::before{
+    content:"";position:fixed;inset:0;pointer-events:none;
+    background:
+      linear-gradient(rgba(255,0,200,0.04) 1px,transparent 1px),
+      linear-gradient(90deg,rgba(0,240,255,0.04) 1px,transparent 1px);
+    background-size:48px 48px;
+    z-index:0;
+  }
+  .container{position:relative;z-index:1;max-width:1500px;margin:0 auto}
+
+  .hero{
+    border:1px solid var(--violet);
+    background:linear-gradient(135deg,rgba(124,58,255,0.10),rgba(0,240,255,0.04));
+    padding:28px 36px;
+    margin-bottom:24px;
+    position:relative;
+    clip-path:polygon(0 0,calc(100% - 18px) 0,100% 18px,100% 100%,18px 100%,0 calc(100% - 18px));
+  }
+  .hero::before{
+    content:"";position:absolute;top:0;left:0;right:0;height:2px;
+    background:linear-gradient(90deg,var(--cyan),var(--magenta),var(--violet),var(--cyan));
+    background-size:300% 100%;
+    animation:scan 8s linear infinite;
+  }
+  @keyframes scan{0%{background-position:0 0}100%{background-position:300% 0}}
+  .hero .tag{
+    font-size:10px;letter-spacing:0.3em;color:var(--cyan);
+    margin-bottom:14px;display:flex;justify-content:space-between;
+  }
+  .hero .tag span::before{content:"[";color:var(--magenta);padding-right:4px}
+  .hero .tag span::after{content:"]";color:var(--magenta);padding-left:4px}
+  .hero h1{
+    font-family:"Orbitron",sans-serif;
+    font-weight:900;
+    font-size:84px;
+    line-height:0.9;
+    letter-spacing:-0.02em;
+    background:linear-gradient(90deg,var(--cyan),var(--magenta) 60%,var(--violet));
+    -webkit-background-clip:text;background-clip:text;color:transparent;
+    text-shadow:0 0 30px rgba(255,43,214,0.4);
+    margin-bottom:6px;
+  }
+  .hero .subtitle{
+    font-family:"Share Tech Mono",monospace;
+    font-size:15px;color:var(--ink-2);max-width:680px;
+  }
+  .hero .meta-strip{
+    margin-top:22px;padding-top:18px;
+    border-top:1px solid rgba(124,58,255,0.4);
+    display:grid;grid-template-columns:repeat(4,1fr);gap:20px;
+  }
+  .hero .meta-strip > div{display:flex;justify-content:space-between;align-items:baseline;padding-right:20px;border-right:1px dashed rgba(124,58,255,0.4)}
+  .hero .meta-strip > div:last-child{border-right:none}
+  .hero .meta-strip .l{font-size:10px;color:var(--ink-2);letter-spacing:0.2em}
+  .hero .meta-strip .v{font-family:"Orbitron",sans-serif;font-weight:700;font-size:28px;color:var(--cyan)}
+  .hero .meta-strip .v.mag{color:var(--magenta)}
+  .hero .meta-strip .v.warn{color:var(--warn)}
+
+  .toolbar{
+    display:flex;justify-content:space-between;align-items:center;
+    margin-bottom:20px;
+    font-size:11px;letter-spacing:0.2em;
+  }
+  .toolbar .filters{display:flex;gap:8px}
+  .toolbar .filters span{
+    padding:6px 12px;border:1px solid var(--ink-3);color:var(--ink-2);
+    cursor:pointer;text-transform:uppercase;
+  }
+  .toolbar .filters span.active{
+    background:rgba(0,240,255,0.10);color:var(--cyan);border-color:var(--cyan);
+    box-shadow:0 0 12px rgba(0,240,255,0.4),inset 0 0 12px rgba(0,240,255,0.1);
+  }
+  .toolbar button{
+    font-family:inherit;font-size:11px;letter-spacing:0.2em;text-transform:uppercase;
+    background:transparent;color:var(--magenta);border:1px solid var(--magenta);
+    padding:8px 16px;cursor:pointer;
+    box-shadow:0 0 0 rgba(255,43,214,0);transition:all 200ms;
+  }
+  .toolbar button:hover{box-shadow:0 0 14px rgba(255,43,214,0.6),inset 0 0 10px rgba(255,43,214,0.2)}
+  .toolbar button.primary{background:linear-gradient(90deg,var(--magenta),var(--violet));color:#fff;border:none;font-weight:700}
+  .toolbar button.primary:hover{filter:brightness(1.2)}
+
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  @media (max-width:1100px){.grid{grid-template-columns:repeat(2,1fr)}}
+  @media (max-width:680px){.grid{grid-template-columns:1fr}}
+
+  .node{
+    background:linear-gradient(180deg,rgba(124,58,255,0.10),rgba(8,0,19,0.8));
+    border:1px solid rgba(124,58,255,0.5);
+    padding:0;
+    position:relative;
+    clip-path:polygon(0 0,calc(100% - 14px) 0,100% 14px,100% 100%,14px 100%,0 calc(100% - 14px));
+    transition:transform 200ms,box-shadow 200ms;
+  }
+  .node:hover{transform:translateY(-2px);box-shadow:0 0 20px rgba(255,43,214,0.4)}
+  .node.off{opacity:0.5;filter:saturate(0.4)}
+  .node-head{
+    padding:10px 16px;
+    border-bottom:1px solid rgba(124,58,255,0.4);
+    display:flex;justify-content:space-between;align-items:center;
+    font-size:10px;letter-spacing:0.2em;color:var(--ink-2);
+  }
+  .node-head .uid{color:var(--cyan)}
+  .node-head .status{display:flex;align-items:center;gap:6px;color:var(--lime)}
+  .node-head .status::before{
+    content:"";width:7px;height:7px;border-radius:50%;background:var(--lime);
+    box-shadow:0 0 8px var(--lime);
+    animation:pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse{50%{opacity:0.4}}
+  .node.off .node-head .status{color:var(--ink-3)}
+  .node.off .node-head .status::before{background:var(--ink-3);box-shadow:none;animation:none}
+
+  .node-body{padding:18px 18px 10px}
+  .node-body h2{
+    font-family:"Orbitron",sans-serif;font-weight:700;font-size:24px;
+    letter-spacing:-0.01em;line-height:1;color:#fff;
+    text-shadow:0 0 12px rgba(0,240,255,0.4);
+    margin-bottom:6px;
+  }
+  .node-body .uri{font-size:11px;color:var(--ink-2);letter-spacing:0.1em}
+  .node-body .uri b{color:var(--magenta)}
+
+  .node-data{
+    display:grid;grid-template-columns:repeat(2,1fr);gap:8px;
+    padding:14px 18px 10px;
+  }
+  .data-cell{
+    background:rgba(0,240,255,0.03);
+    border:1px solid rgba(124,58,255,0.3);
+    padding:8px 10px;
+  }
+  .data-cell .l{font-size:9px;letter-spacing:0.2em;color:var(--ink-2);text-transform:uppercase;margin-bottom:4px}
+  .data-cell .v{font-family:"Orbitron",sans-serif;font-weight:700;font-size:24px;line-height:1;color:#fff}
+  .data-cell .v.cyan{color:var(--cyan);text-shadow:0 0 8px rgba(0,240,255,0.5)}
+  .data-cell .v.mag{color:var(--magenta);text-shadow:0 0 8px rgba(255,43,214,0.5)}
+  .data-cell .v.lime{color:var(--lime);text-shadow:0 0 8px rgba(174,255,43,0.5)}
+  .data-cell .v.red{color:var(--red);text-shadow:0 0 8px rgba(255,48,96,0.5)}
+  .data-cell .v.dim{color:var(--ink-3)}
+
+  .node-foot{
+    padding:12px 16px;display:flex;justify-content:space-between;align-items:center;
+    border-top:1px solid rgba(124,58,255,0.3);
+  }
+  .node-foot .switch{
+    display:flex;align-items:center;gap:8px;
+    font-size:10px;letter-spacing:0.2em;color:var(--lime);
+  }
+  .node.off .node-foot .switch{color:var(--ink-3)}
+  .node-foot .switch .led{
+    width:6px;height:6px;background:var(--lime);box-shadow:0 0 6px var(--lime);
+    transform:rotate(45deg);
+  }
+  .node.off .node-foot .switch .led{background:var(--ink-3);box-shadow:none}
+  .node-foot .ops{display:flex;gap:4px}
+  .node-foot button{
+    font-family:"Share Tech Mono",monospace;font-size:10px;letter-spacing:0.15em;
+    text-transform:uppercase;background:transparent;border:1px solid rgba(124,58,255,0.4);
+    color:var(--ink);padding:4px 8px;cursor:pointer;
+  }
+  .node-foot button:hover{background:rgba(0,240,255,0.10);color:var(--cyan);border-color:var(--cyan);box-shadow:0 0 8px rgba(0,240,255,0.3)}
+  .node-foot button.del:hover{background:rgba(255,48,96,0.10);color:var(--red);border-color:var(--red);box-shadow:0 0 8px rgba(255,48,96,0.3)}
+</style>
+</head>
+<body>
+  <div class="container">
+
+    <section class="hero">
+      <div class="tag">
+        <span>NODE_GRID · 04</span>
+        <span>SHIPSTATION ISOLATED</span>
+        <span>SYS.TIME 09:45:21 PT</span>
+      </div>
+      <h1>// CLIENTS</h1>
+      <div class="subtitle">Per-tenant brand + store grid. Each node is its own isolated fulfillment context with credentials, billing, and routing locks.</div>
+      <div class="meta-strip">
+        <div><span class="l">TOTAL</span><span class="v">14</span></div>
+        <div><span class="l">LIVE</span><span class="v">08</span></div>
+        <div><span class="l">DORMANT</span><span class="v mag">06</span></div>
+        <div><span class="l">QUEUE</span><span class="v warn">22</span></div>
+      </div>
+    </section>
+
+    <div class="toolbar">
+      <div class="filters">
+        <span class="active">ALL</span><span>LIVE</span><span>DORMANT</span><span>OPEN ORDERS</span>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button>↻ SYNC.STORES</button>
+        <button class="primary">+ NEW.CLIENT</button>
+      </div>
+    </div>
+
+    <div class="grid">
+
+      <article class="node">
+        <div class="node-head"><span class="uid">UID.KFG.0001</span><span class="status">LIVE</span></div>
+        <div class="node-body">
+          <h2>KF GOODS</h2>
+          <div class="uri">store://<b>277422</b></div>
+        </div>
+        <div class="node-data">
+          <div class="data-cell"><div class="l">AWAITING</div><div class="v mag">4</div></div>
+          <div class="data-cell"><div class="l">SHIPPED</div><div class="v lime">19,871</div></div>
+          <div class="data-cell"><div class="l">CANCELLED</div><div class="v red">178</div></div>
+          <div class="data-cell"><div class="l">TOTAL</div><div class="v cyan">20,053</div></div>
+        </div>
+        <div class="node-foot">
+          <span class="switch"><span class="led"></span>ENABLED</span>
+          <div class="ops"><button>EDIT</button><button>BACKFILL</button><button class="del">×</button></div>
+        </div>
+      </article>
+
+      <article class="node">
+        <div class="node-head"><span class="uid">UID.EBY.0002</span><span class="status">LIVE</span></div>
+        <div class="node-body">
+          <h2>EBAY · DJC</h2>
+          <div class="uri">store://<b>356678</b></div>
+        </div>
+        <div class="node-data">
+          <div class="data-cell"><div class="l">AWAITING</div><div class="v mag">1</div></div>
+          <div class="data-cell"><div class="l">SHIPPED</div><div class="v lime">4,190</div></div>
+          <div class="data-cell"><div class="l">CANCELLED</div><div class="v red">67</div></div>
+          <div class="data-cell"><div class="l">TOTAL</div><div class="v cyan">4,258</div></div>
+        </div>
+        <div class="node-foot">
+          <span class="switch"><span class="led"></span>ENABLED</span>
+          <div class="ops"><button>EDIT</button><button>BACKFILL</button><button class="del">×</button></div>
+        </div>
+      </article>
+
+      <article class="node">
+        <div class="node-head"><span class="uid">UID.HKP.0003</span><span class="status">LIVE</span></div>
+        <div class="node-body">
+          <h2>HERITAGE KIDS</h2>
+          <div class="uri">store://<b>376759</b></div>
+        </div>
+        <div class="node-data">
+          <div class="data-cell"><div class="l">AWAITING</div><div class="v mag">7</div></div>
+          <div class="data-cell"><div class="l">SHIPPED</div><div class="v lime">692</div></div>
+          <div class="data-cell"><div class="l">CANCELLED</div><div class="v red">8</div></div>
+          <div class="data-cell"><div class="l">TOTAL</div><div class="v cyan">708</div></div>
+        </div>
+        <div class="node-foot">
+          <span class="switch"><span class="led"></span>ENABLED</span>
+          <div class="ops"><button>EDIT</button><button>BACKFILL</button><button class="del">×</button></div>
+        </div>
+      </article>
+
+      <article class="node">
+        <div class="node-head"><span class="uid">UID.TRA.0004</span><span class="status">LIVE</span></div>
+        <div class="node-body">
+          <h2>TRAN AGENCY</h2>
+          <div class="uri">store://<b>363392</b></div>
+        </div>
+        <div class="node-data">
+          <div class="data-cell"><div class="l">AWAITING</div><div class="v mag">2</div></div>
+          <div class="data-cell"><div class="l">SHIPPED</div><div class="v lime">6,829</div></div>
+          <div class="data-cell"><div class="l">CANCELLED</div><div class="v red">38</div></div>
+          <div class="data-cell"><div class="l">TOTAL</div><div class="v cyan">6,869</div></div>
+        </div>
+        <div class="node-foot">
+          <span class="switch"><span class="led"></span>ENABLED</span>
+          <div class="ops"><button>EDIT</button><button>BACKFILL</button><button class="del">×</button></div>
+        </div>
+      </article>
+
+      <article class="node">
+        <div class="node-head"><span class="uid">UID.KLP.0005</span><span class="status">LIVE</span></div>
+        <div class="node-body">
+          <h2>KIMLYPARC</h2>
+          <div class="uri">store://<b>361691</b></div>
+        </div>
+        <div class="node-data">
+          <div class="data-cell"><div class="l">AWAITING</div><div class="v dim">0</div></div>
+          <div class="data-cell"><div class="l">SHIPPED</div><div class="v lime">2,127</div></div>
+          <div class="data-cell"><div class="l">CANCELLED</div><div class="v red">498</div></div>
+          <div class="data-cell"><div class="l">TOTAL</div><div class="v cyan">2,625</div></div>
+        </div>
+        <div class="node-foot">
+          <span class="switch"><span class="led"></span>ENABLED</span>
+          <div class="ops"><button>EDIT</button><button>BACKFILL</button><button class="del">×</button></div>
+        </div>
+      </article>
+
+      <article class="node">
+        <div class="node-head"><span class="uid">UID.TCT.0006</span><span class="status">LIVE</span></div>
+        <div class="node-body">
+          <h2>TECHTOK</h2>
+          <div class="uri">store://<b>367706</b></div>
+        </div>
+        <div class="node-data">
+          <div class="data-cell"><div class="l">AWAITING</div><div class="v dim">0</div></div>
+          <div class="data-cell"><div class="l">SHIPPED</div><div class="v lime">311</div></div>
+          <div class="data-cell"><div class="l">CANCELLED</div><div class="v red">20</div></div>
+          <div class="data-cell"><div class="l">TOTAL</div><div class="v cyan">331</div></div>
+        </div>
+        <div class="node-foot">
+          <span class="switch"><span class="led"></span>ENABLED</span>
+          <div class="ops"><button>EDIT</button><button>BACKFILL</button><button class="del">×</button></div>
+        </div>
+      </article>
+
+      <article class="node off">
+        <div class="node-head"><span class="uid">UID.TST.0007</span><span class="status">OFFLINE</span></div>
+        <div class="node-body">
+          <h2>TEST ORDERS</h2>
+          <div class="uri">store://<b>—</b></div>
+        </div>
+        <div class="node-data">
+          <div class="data-cell"><div class="l">AWAITING</div><div class="v dim">—</div></div>
+          <div class="data-cell"><div class="l">SHIPPED</div><div class="v dim">—</div></div>
+          <div class="data-cell"><div class="l">CANCELLED</div><div class="v dim">—</div></div>
+          <div class="data-cell"><div class="l">TOTAL</div><div class="v dim">—</div></div>
+        </div>
+        <div class="node-foot">
+          <span class="switch"><span class="led"></span>DISABLED</span>
+          <div class="ops"><button>EDIT</button><button>BACKFILL</button><button class="del">×</button></div>
+        </div>
+      </article>
+
+      <article class="node off">
+        <div class="node-head"><span class="uid">UID.WMT.0008</span><span class="status">OFFLINE</span></div>
+        <div class="node-body">
+          <h2>WALMART STORE</h2>
+          <div class="uri">store://<b>9000001</b></div>
+        </div>
+        <div class="node-data">
+          <div class="data-cell"><div class="l">AWAITING</div><div class="v mag">6</div></div>
+          <div class="data-cell"><div class="l">SHIPPED</div><div class="v lime">113</div></div>
+          <div class="data-cell"><div class="l">CANCELLED</div><div class="v dim">0</div></div>
+          <div class="data-cell"><div class="l">TOTAL</div><div class="v cyan">119</div></div>
+        </div>
+        <div class="node-foot">
+          <span class="switch"><span class="led"></span>DISABLED</span>
+          <div class="ops"><button>EDIT</button><button>BACKFILL</button><button class="del">×</button></div>
+        </div>
+      </article>
+
+      <article class="node off">
+        <div class="node-head"><span class="uid">UID.EBT.0009</span><span class="status">OFFLINE</span></div>
+        <div class="node-body">
+          <h2>EBAY TEST</h2>
+          <div class="uri">store://<b>9500002</b></div>
+        </div>
+        <div class="node-data">
+          <div class="data-cell"><div class="l">AWAITING</div><div class="v dim">0</div></div>
+          <div class="data-cell"><div class="l">SHIPPED</div><div class="v lime">65</div></div>
+          <div class="data-cell"><div class="l">CANCELLED</div><div class="v dim">0</div></div>
+          <div class="data-cell"><div class="l">TOTAL</div><div class="v cyan">65</div></div>
+        </div>
+        <div class="node-foot">
+          <span class="switch"><span class="led"></span>DISABLED</span>
+          <div class="ops"><button>EDIT</button><button>BACKFILL</button><button class="del">×</button></div>
+        </div>
+      </article>
+
+    </div>
+  </div>
+</body>
+</html>
