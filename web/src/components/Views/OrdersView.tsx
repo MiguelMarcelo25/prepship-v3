@@ -5145,9 +5145,16 @@ export default function OrdersView({
       carrierNickname: getBestRateCarrierNickname(order),
     }, markups)
 
+    // Operator request (2026-05-12, under `unlock shipped data`
+    // override): drop the per-carrier SVG badge from the Best Rate
+    // cell across awaiting / shipped / cancelled views. The amount
+    // (with markup) carries enough information on its own; the
+    // carrier identity is already redundantly visible in the
+    // dedicated Carrier column on the same row. CarrierBadge import
+    // stays — the badge is still rendered by other cells (selected
+    // rate, carrier column).
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <CarrierBadge code={order.bestRate.carrierCode ?? ''} size="sm" />
         {renderRateAmountWithMarkup(bestRateBaseCost, markedAmount)}
       </div>
     )
