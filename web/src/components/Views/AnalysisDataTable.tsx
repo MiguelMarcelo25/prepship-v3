@@ -506,6 +506,54 @@ export function AnalysisDataTable({
                             )}
                           </td>
                         )
+                      case 'revenue': {
+                        // 2026-05-12 boss-requested column: dollar revenue per
+                        // SKU = SUM(unit_price × qty) server-side. Tooltip
+                        // exposes the underlying units × avg breakdown so
+                        // operators reconciling against Walmart / eBay
+                        // payout reports can sanity-check the math without
+                        // opening the SKU drawer.
+                        const revenue = (row as { totalRevenue?: number }).totalRevenue ?? 0
+                        const avg = (row as { avgSellingPrice?: number }).avgSellingPrice ?? 0
+                        return (
+                          <td
+                            key="revenue"
+                            className={`${cellPadding} text-right whitespace-nowrap tabular-nums font-bold text-[14px] text-ink ${TD_BASE}`}
+                            title={
+                              revenue > 0
+                                ? `Total revenue: ${formatAnalysisMoney(revenue)}\n${row.qty.toLocaleString()} units · ${formatAnalysisMoney(avg)}/unit avg`
+                                : 'No revenue recorded for this SKU'
+                            }
+                          >
+                            {revenue > 0
+                              ? formatAnalysisMoney(revenue)
+                              : <span className="text-line-2">—</span>}
+                          </td>
+                        )
+                      }
+                      case 'avgPrice': {
+                        // Per-unit average selling price. Computed FE-side
+                        // as revenue / units so the value always matches
+                        // the revenue cell's tooltip. Italic to signal
+                        // "derived" (not a server aggregate the operator
+                        // can cross-check against an invoice line item).
+                        const avg = (row as { avgSellingPrice?: number }).avgSellingPrice ?? 0
+                        return (
+                          <td
+                            key="avgPrice"
+                            className={`${cellPadding} text-right whitespace-nowrap tabular-nums font-semibold text-[13px] italic text-ink-2 ${TD_BASE}`}
+                            title={
+                              avg > 0
+                                ? `${formatAnalysisMoney(avg)} avg per unit (revenue ÷ units)`
+                                : 'No unit price data on this SKU'
+                            }
+                          >
+                            {avg > 0
+                              ? formatAnalysisMoney(avg)
+                              : <span className="text-line-2">—</span>}
+                          </td>
+                        )
+                      }
                       default:
                         return null
                     }
@@ -626,6 +674,46 @@ export function AnalysisDataTable({
                         {totals.totalShipping > 0 ? formatAnalysisMoney(totals.totalShipping) : '—'}
                       </td>
                     )
+                  case 'revenue':
+                    return (
+                      <td
+                        key="revenue"
+                        className={`${ftBase} text-right text-[13px] text-ink font-extrabold`}
+                        title={
+                          totals.totalRevenue > 0
+                            ? `Total revenue across all SKUs: ${formatAnalysisMoney(totals.totalRevenue)}\n${totals.totalQty.toLocaleString()} units`
+                            : 'No revenue recorded'
+                        }
+                      >
+                        {isFirstVisible ? footerTotalsBadge : null}
+                        {totals.totalRevenue > 0 ? formatAnalysisMoney(totals.totalRevenue) : '—'}
+                      </td>
+                    )
+                  case 'avgPrice': {
+                    // Footer avgPrice = totalRevenue / totalQty across ALL
+                    // visible SKUs. This is the weighted-by-units average
+                    // selling price for the entire visible set, NOT the
+                    // arithmetic mean of per-row averages (which would
+                    // double-count low-volume SKUs).
+                    const footerAvg =
+                      totals.totalQty > 0 && totals.totalRevenue > 0
+                        ? totals.totalRevenue / totals.totalQty
+                        : 0
+                    return (
+                      <td
+                        key="avgPrice"
+                        className={`${ftBase} text-right text-[13px] italic font-bold text-ink-2`}
+                        title={
+                          footerAvg > 0
+                            ? `Weighted avg across all SKUs: ${formatAnalysisMoney(footerAvg)}/unit\n${formatAnalysisMoney(totals.totalRevenue)} ÷ ${totals.totalQty.toLocaleString()} units`
+                            : 'No unit price data'
+                        }
+                      >
+                        {isFirstVisible ? footerTotalsBadge : null}
+                        {footerAvg > 0 ? formatAnalysisMoney(footerAvg) : '—'}
+                      </td>
+                    )
+                  }
                   default:
                     return null
                 }

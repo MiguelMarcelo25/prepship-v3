@@ -16,6 +16,8 @@ export type AnalysisSortKey =
   | 'stdOrders'
   | 'expOrders'
   | 'total'
+  | 'revenue'
+  | 'avgPrice'
 
 export type AnalysisSortDir = 'asc' | 'desc'
 
@@ -48,6 +50,11 @@ export interface AnalysisTotals {
   // the backend.
   totalStdShipping: number
   totalExpShipping: number
+  // 2026-05-12: footer accumulators for the new revenue / avg-price
+  // columns. totalRevenue sums the per-SKU revenue across visible
+  // rows; avgPrice is computed FE-side from totalRevenue / totalQty
+  // (we don't sum avg prices — that's mathematically meaningless).
+  totalRevenue: number
   totalShipping: number
 }
 
@@ -65,6 +72,8 @@ export const ANALYSIS_SORT_LABELS: Record<AnalysisSortKey, string> = {
   stdOrders: 'Std Orders',
   expOrders: 'Exp Orders',
   total: 'Total Shipping',
+  revenue: 'Total Revenue',
+  avgPrice: 'Avg Sell Price',
 }
 
 // ──────────────────────────────────────────────────────────────────
@@ -84,6 +93,8 @@ export const DEFAULT_COLUMN_ORDER: AnalysisSortKey[] = [
   'external',
   'qty',
   'trend',
+  'avgPrice',
+  'revenue',
   'stdOrders',
   'expOrders',
   'total',
@@ -295,6 +306,8 @@ const NUMERIC_ANALYSIS_SORT_KEYS = new Set<AnalysisSortKey>([
   'stdOrders',
   'expOrders',
   'total',
+  'revenue',
+  'avgPrice',
 ])
 
 function toAnalysisNumber(value: unknown) {
@@ -334,6 +347,10 @@ function getSortValue(row: AnalysisSkuDto, key: AnalysisSortKey) {
       return row.expeditedShipCount
     case 'total':
       return row.totalShipping
+    case 'revenue':
+      return (row as { totalRevenue?: number }).totalRevenue ?? 0
+    case 'avgPrice':
+      return (row as { avgSellingPrice?: number }).avgSellingPrice ?? 0
   }
 }
 
@@ -383,6 +400,9 @@ export function buildAnalysisTotals(rows: AnalysisSkuDto[]): AnalysisTotals {
       totals.totalExpShipping
       + toAnalysisNumber((row as { expeditedShipTotal?: number }).expeditedShipTotal),
     totalShipping: totals.totalShipping + toAnalysisNumber(row.totalShipping),
+    totalRevenue:
+      totals.totalRevenue
+      + toAnalysisNumber((row as { totalRevenue?: number }).totalRevenue),
   }), {
     skuCount: 0,
     totalOrders: 0,
@@ -396,6 +416,7 @@ export function buildAnalysisTotals(rows: AnalysisSkuDto[]): AnalysisTotals {
     totalStdShipping: 0,
     totalExpShipping: 0,
     totalShipping: 0,
+    totalRevenue: 0,
   })
 }
 

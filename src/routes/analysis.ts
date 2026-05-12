@@ -315,6 +315,16 @@ type SkuBreakdownRow = {
   ship_count_with_cost: number;
   total_qty: number;
   total_shipping: string;
+  // 2026-05-12: revenue + avg-selling-price feed the Analysis page's
+  // new "Total Revenue" and "Avg Selling Price" columns. total_revenue
+  // is summed server-side as SUM(unit_price × qty) across every non-
+  // cancelled order containing this SKU. avg_selling_price is derived
+  // on the FE as total_revenue / total_qty (units, not orders) so we
+  // don't ship two numbers when one suffices. unit_price comes from
+  // orders.items.unitPrice (camel) or orders.items.unit_price (snake)
+  // — both shapes appear depending on the marketplace integration that
+  // ingested the order.
+  total_revenue: string;
   // Per-day unit map: { 'YYYY-MM-DD': units } for each day this SKU had
   // activity in the selected range. The route pads this to a dense
   // aligned array (one slot per day in the range, zeros for quiet days)
@@ -346,7 +356,18 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
         end                                                                as sku_key,
         coalesce(nullif(item->>'name', ''), '—')                            as name,
         nullif(item->>'imageUrl', '')                                       as image_url,
-        coalesce((item->>'quantity')::int, 1)                               as qty
+        coalesce((item->>'quantity')::int, 1)                               as qty,
+        -- 2026-05-12: unit_price feeds the new Total Revenue + Avg
+        -- Selling Price columns. Some marketplaces ship the field as
+        -- unitPrice (camelCase, ShipStation v2/ebay/walmart), others
+        -- as unit_price (snake_case, internal migrations); the
+        -- coalesce handles both. Casts via nullif so blank strings
+        -- become NULL then 0 instead of raising a numeric-format error.
+        coalesce(
+          nullif(item->>'unitPrice', '')::numeric,
+          nullif(item->>'unit_price', '')::numeric,
+          0
+        )::numeric                                                          as unit_price
       from orders o
       cross join lateral jsonb_array_elements(o.items) item
       left join clients c on c.id = o.client_id
@@ -411,7 +432,15 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
         max(sku)                                                             as sku,
         (array_agg(name order by length(name) desc))[1]                      as name,
         max(image_url)                                                       as image_url,
-        sum(qty)::int                                                        as qty
+        sum(qty)::int                                                        as qty,
+        -- 2026-05-12: revenue per (order, sku) line = SUM(unit_price * qty)
+        -- across whatever item rows belong to this SKU in this order.
+        -- Same SKU appearing as separate line items in one order
+        -- (e.g. seller stacked them) sum into a single revenue
+        -- figure here. max(unit_price) is the per-unit price for
+        -- display / sanity-check; line_revenue is the dollar truth.
+        max(unit_price)::numeric                                             as unit_price,
+        sum(unit_price * qty)::numeric                                       as line_revenue
       from item_rows
       group by order_id, sku_key
     ),
@@ -488,6 +517,14 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
       count(*) filter (where not is_external and label_cost > 0)::int             as ship_count_with_cost,
       sum(qty)::int                                                              as total_qty,
       coalesce(sum(label_cost * qty / nullif(order_qty_total, 0)) filter (where not is_external and label_cost > 0), 0)::text as total_shipping,
+      -- 2026-05-12 boss-requested column: per-SKU revenue across the
+      -- selected date range. Sums line_revenue (= unit_price × qty)
+      -- across every order containing this SKU. Already excludes
+      -- cancelled orders (outer WHERE) and disabled clients (active
+      -- predicate above). FE computes avg selling price as
+      -- total_revenue / total_qty, so a separate aggregate isn't
+      -- shipped — keeps the wire payload lean.
+      coalesce(sum(line_revenue), 0)::text                                       as total_revenue,
       -- Daily unit counts as { 'YYYY-MM-DD': units }. Every row in the
       -- group shares the same sdj.daily_qty_map (it's joined 1:1 on
       -- sku_key), so array_agg+[1] is just a no-op dedup that lets us

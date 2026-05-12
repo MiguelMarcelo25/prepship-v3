@@ -3278,6 +3278,17 @@ export const apiClient = {
             r.ship_count_with_cost ?? r.shipCountWithCost ?? standardShipCount + expeditedShipCount
           );
           const totalShipping = parseNum(r.total_shipping ?? r.totalShipping);
+          // 2026-05-12 new columns: revenue + avg selling price.
+          // total_revenue is the server-side SUM(unit_price × qty);
+          // avg selling price = revenue / units (computed FE-side so
+          // we don't ship two numbers when one suffices). Falls back
+          // to 0 when the SKU has no unit_price set on its line items.
+          const totalRevenue = parseNum(r.total_revenue ?? r.totalRevenue);
+          const totalQty = parseNum(r.total_qty ?? r.qty);
+          const avgSellingPrice =
+            totalQty > 0 && totalRevenue > 0
+              ? Number((totalRevenue / totalQty).toFixed(2))
+              : 0;
 
           // Units-trend sparkline source: aligned [units/day] array,
           // one slot per date bucket in the selected range. Empty/missing
@@ -3331,6 +3342,8 @@ export const apiClient = {
             blendedAvgShipping:
               shipCountWithCost > 0 ? Number((totalShipping / shipCountWithCost).toFixed(2)) : 0,
             totalShipping,
+            totalRevenue,
+            avgSellingPrice,
           };
         });
         return {

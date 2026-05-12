@@ -116,7 +116,7 @@ function readStoredDrawerOrderWidths(): Partial<Record<DrawerOrdersColumnKey, nu
   }
 }
 
-const TABLE_COLUMN_COUNT = 11
+const TABLE_COLUMN_COUNT = 13
 const ANALYSIS_PAGE_SIZE_OPTIONS = [25, 50, 100]
 
 const COLUMN_SIZES = ['narrow', 'medium', 'wide'] as const
@@ -163,6 +163,22 @@ const ANALYSIS_TABLE_COLUMNS: AnalysisTableColumn[] = [
     title:
       'Daily-units trend across the selected range. Green when the latest half outpaces the earliest half, red when the latest half drops below. Click to sort by trend strength.',
     align: 'center',
+  },
+  // 2026-05-12 boss-requested columns. Avg Sell Price comes first so
+  // operators reading left-to-right see the per-unit price before the
+  // bulk revenue figure. Revenue = SUM(unit_price × qty) per SKU;
+  // Avg Sell Price = revenue / total_qty (units, not orders).
+  {
+    key: 'avgPrice',
+    title:
+      'Average selling price per unit = total revenue ÷ total units. Derived from orders.items.unitPrice (camel) or unit_price (snake) — both shapes accepted depending on the marketplace integration that ingested the order.',
+    align: 'right',
+  },
+  {
+    key: 'revenue',
+    title:
+      'Total revenue for this SKU across the selected date range. Sum of (unit_price × qty) over every non-cancelled order. Excludes orders from disabled clients.',
+    align: 'right',
   },
   { key: 'stdOrders', title: 'SS-labeled standard service orders (count + avg cost)', align: 'right' },
   { key: 'expOrders', title: 'SS-labeled expedited service orders (count + avg cost)', align: 'right' },
