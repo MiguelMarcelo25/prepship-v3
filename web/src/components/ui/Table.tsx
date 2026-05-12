@@ -75,8 +75,9 @@ export interface TableColumn<Row> {
   sortValue?: (row: Row) => string | number | boolean | Date | null | undefined
   /** Cell content. Defaults to `String(row[key] ?? '')`. */
   render?: (row: Row) => ReactNode
-  /** When true the column is pinned to the left and isn't
-   *  resizable (use for row identity / star / select columns). */
+  /** When true the column is pinned to its position and isn't
+   *  resizable or reorderable (use for row identity / action
+   *  columns where stability matters more than tweakability). */
   pinned?: boolean
   /** Optional CSS class added to every cell in this column. */
   className?: string
@@ -141,6 +142,17 @@ function readStoredWidths(storageKey: string | undefined): Record<string, number
   } catch { /* non-fatal */ return {} }
 }
 
+function readStoredOrder(storageKey: string | undefined): string[] | null {
+  if (!storageKey || typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(`${storageKey}:order`)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return null
+    return parsed.filter((k): k is string => typeof k === 'string')
+  } catch { /* non-fatal */ return null }
+}
+
 // Comparable extractor — strings get lowercased so sort is
 // case-insensitive (default behavior expected by operators looking
 // for "amazon" + "Amazon" to land together).
@@ -203,6 +215,92 @@ export function Table<Row>({
     if (!storageKey) return
     try { window.localStorage.setItem(`${storageKey}:widths`, JSON.stringify(widths)) } catch { /* non-fatal */ }
   }, [widths, storageKey])
+
+  // Column ORDER state. Defensive migration on read:
+  //   - filter out unknown keys (stale localStorage from removed cols)
+  //   - append any keys that are NEW since the operator's last save
+  //     so newly-shipped columns auto-appear at the end
+  // Pinned columns are forced back to their declared positions on
+  // every render (they're non-reorderable by contract).
+  const initialOrderKeys = columns.map((c) => c.key)
+  const [orderKeys, setOrderKeys] = useState<string[]>(() => {
+    const stored = readStoredOrder(storageKey)
+    if (!stored) return initialOrderKeys
+    const known = new Set(initialOrderKeys)
+    const seen = new Set<string>()
+    const cleaned: string[] = []
+    for (const k of stored) {
+      if (known.has(k) && !seen.has(k)) { cleaned.push(k); seen.add(k) }
+    }
+    for (const k of initialOrderKeys) {
+      if (!seen.has(k)) cleaned.push(k)
+    }
+    return cleaned
+  })
+  useEffect(() => {
+    if (!storageKey) return
+    try { window.localStorage.setItem(`${storageKey}:order`, JSON.stringify(orderKeys)) } catch { /* non-fatal */ }
+  }, [orderKeys, storageKey])
+
+  // Resolve column metadata in the operator's chosen order. Pinned
+  // columns are KEPT at their declared positions even if orderKeys
+  // moved them — pinned means "this column does not move."
+  const orderedColumns = useMemo<TableColumn<Row>[]>(() => {
+    const byKey = new Map(columns.map((c) => [c.key, c]))
+    // Step 1: pinned columns stay at their declared indexes
+    const pinnedAt: { col: TableColumn<Row>; index: number }[] = []
+    columns.forEach((c, i) => { if (c.pinned) pinnedAt.push({ col: c, index: i }) })
+    // Step 2: reorderable columns sorted by orderKeys
+    const reorderable = orderKeys
+      .map((k) => byKey.get(k))
+      .filter((c): c is TableColumn<Row> => !!c && !c.pinned)
+    // Step 3: stitch: insert pinned at their original indexes
+    const result: TableColumn<Row>[] = [...reorderable]
+    pinnedAt.forEach(({ col, index }) => result.splice(index, 0, col))
+    return result
+  }, [columns, orderKeys])
+
+  // Drag-reorder state — which key is being dragged, which is the
+  // current drop target. Used for visual feedback (faded source,
+  // inset shadow on target).
+  const [draggingKey, setDraggingKey] = useState<string | null>(null)
+  const [dragOverKey, setDragOverKey] = useState<string | null>(null)
+  const handleDragStart = (col: TableColumn<Row>) => (event: React.DragEvent<HTMLTableCellElement>) => {
+    if (col.pinned) {
+      event.preventDefault()
+      return
+    }
+    setDraggingKey(col.key)
+    // setData required by Firefox to actually initiate the drag
+    event.dataTransfer.setData('text/plain', col.key)
+    event.dataTransfer.effectAllowed = 'move'
+  }
+  const handleDragOver = (col: TableColumn<Row>) => (event: React.DragEvent<HTMLTableCellElement>) => {
+    if (col.pinned || !draggingKey || draggingKey === col.key) return
+    event.preventDefault() // required to enable drop
+    event.dataTransfer.dropEffect = 'move'
+    if (dragOverKey !== col.key) setDragOverKey(col.key)
+  }
+  const handleDrop = (col: TableColumn<Row>) => (event: React.DragEvent<HTMLTableCellElement>) => {
+    event.preventDefault()
+    const from = draggingKey
+    setDraggingKey(null)
+    setDragOverKey(null)
+    if (col.pinned || !from || from === col.key) return
+    setOrderKeys((prev) => {
+      const fromIdx = prev.indexOf(from)
+      const toIdx = prev.indexOf(col.key)
+      if (fromIdx === -1 || toIdx === -1) return prev
+      const next = [...prev]
+      next.splice(fromIdx, 1)
+      next.splice(toIdx, 0, from)
+      return next
+    })
+  }
+  const handleDragEnd = () => {
+    setDraggingKey(null)
+    setDragOverKey(null)
+  }
 
   const toggleSort = (col: TableColumn<Row>) => {
     if (!col.sortable) return
@@ -269,24 +367,58 @@ export function Table<Row>({
       <div className="overflow-x-auto">
         <table className="w-full border-collapse table-fixed" style={{ minWidth: 480 }}>
           <colgroup>
-            {columns.map((col) => (
+            {orderedColumns.map((col) => (
               <col key={col.key} style={{ width: widths[col.key] ?? col.width }} />
             ))}
           </colgroup>
 
           <thead className="bg-surface-2 sticky top-0 z-10">
             <tr>
-              {columns.map((col) => {
+              {orderedColumns.map((col) => {
                 const isActive = sort?.key === col.key
                 const align = col.align ?? 'left'
                 const justify = align === 'right' ? 'justify-end' : align === 'center' ? 'justify-center' : 'justify-start'
+                const isDragging = draggingKey === col.key
+                const isDragTarget = dragOverKey === col.key && draggingKey !== null && draggingKey !== col.key
+                const reorderable = !col.pinned
                 return (
                   <th
                     key={col.key}
-                    className={`relative border-b-2 border-line ${headerPadding} text-[10.5px] font-extrabold uppercase tracking-[0.05em] text-ink-3 ${col.sortable ? 'cursor-pointer select-none hover:bg-line/40' : ''} ${align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left'} transition-colors`}
+                    // Note: draggable lives on the <th> itself so the
+                    // whole header is a drop target. The visible grab
+                    // affordance is rendered on the LEFT edge so it
+                    // doesn't collide visually with the resize handle
+                    // on the right edge.
+                    draggable={reorderable}
+                    onDragStart={reorderable ? handleDragStart(col) : undefined}
+                    onDragOver={reorderable ? handleDragOver(col) : undefined}
+                    onDragLeave={reorderable ? () => setDragOverKey((k) => (k === col.key ? null : k)) : undefined}
+                    onDrop={reorderable ? handleDrop(col) : undefined}
+                    onDragEnd={reorderable ? handleDragEnd : undefined}
+                    className={`group/th relative border-b-2 border-line ${headerPadding} ${reorderable ? 'pl-5' : ''} text-[10.5px] font-extrabold uppercase tracking-[0.05em] text-ink-3 ${col.sortable ? 'cursor-pointer select-none hover:bg-line/40' : ''} ${align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left'} ${isDragging ? 'opacity-40' : ''} ${isDragTarget ? 'bg-brand-bg shadow-[inset_3px_0_0_0_var(--brand)]' : ''} transition-colors`}
                     onClick={() => toggleSort(col)}
                     aria-sort={isActive ? (sort!.direction === 'asc' ? 'ascending' : 'descending') : 'none'}
+                    title={reorderable ? `${col.label} — click to sort, drag to reorder` : col.label}
                   >
+                    {/* Drag-grip affordance — 6 dots (2×3) on the left
+                        edge of the header. Always at low opacity so
+                        it's discoverable but not noisy; brightens to
+                        the brand color on hover so the operator gets
+                        a clear "you can grab me" signal. */}
+                    {reorderable ? (
+                      <span
+                        aria-hidden
+                        className="absolute left-1 top-1/2 -translate-y-1/2 grid grid-cols-2 gap-[2px] text-ink-3/40 group-hover/th:text-brand transition-colors pointer-events-none"
+                      >
+                        <span className="block h-[3px] w-[3px] rounded-full bg-current" />
+                        <span className="block h-[3px] w-[3px] rounded-full bg-current" />
+                        <span className="block h-[3px] w-[3px] rounded-full bg-current" />
+                        <span className="block h-[3px] w-[3px] rounded-full bg-current" />
+                        <span className="block h-[3px] w-[3px] rounded-full bg-current" />
+                        <span className="block h-[3px] w-[3px] rounded-full bg-current" />
+                      </span>
+                    ) : null}
+
                     <span className={`inline-flex items-center gap-1 ${justify} w-full ${isActive ? 'text-brand' : ''}`}>
                       <span className="truncate">{col.label}</span>
                       {col.sortable ? (
@@ -300,10 +432,14 @@ export function Table<Row>({
                       ) : null}
                     </span>
 
-                    {/* Resize handle — 10px hot zone on right edge.
-                        Visible 1.5px vertical line at rest, widens
-                        and turns brand-blue on hover. Skipped for
-                        pinned columns. */}
+                    {/* Resize handle — 12px hot zone on right edge.
+                        Visible 2px vertical line at rest (full
+                        opacity so operators can see it without
+                        hovering), widens to 3px and turns brand-blue
+                        on hover. Skipped for pinned columns.
+                        draggable=false on the inner span so grabbing
+                        the resize bar doesn't accidentally start a
+                        reorder drag. */}
                     {!col.pinned ? (
                       <div
                         role="separator"
@@ -311,10 +447,12 @@ export function Table<Row>({
                         aria-label={`Resize ${col.label}`}
                         onMouseDown={startResize(col)}
                         onClick={(e) => e.stopPropagation()}
-                        className="absolute top-1 bottom-1 -right-[5px] w-[10px] cursor-col-resize z-20 group/handle flex items-center justify-center"
+                        draggable={false}
+                        onDragStart={(e) => { e.preventDefault(); e.stopPropagation() }}
+                        className="absolute top-1 bottom-1 -right-[6px] w-[12px] cursor-col-resize z-20 group/handle flex items-center justify-center"
                         style={{ touchAction: 'none' }}
                       >
-                        <span className="block w-[1.5px] h-full rounded bg-line-2/60 group-hover/handle:bg-brand group-hover/handle:w-[2.5px] transition-all duration-150" />
+                        <span className="block w-[2px] h-full rounded bg-line-2 group-hover/handle:bg-brand group-hover/handle:w-[3px] transition-all duration-150" />
                       </div>
                     ) : null}
                   </th>
@@ -326,7 +464,7 @@ export function Table<Row>({
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={columns.length} className="text-center py-12 text-ink-3">
+                <td colSpan={orderedColumns.length} className="text-center py-12 text-ink-3">
                   <span className="inline-flex items-center gap-2 text-[12px]">
                     <span className="w-3 h-3 rounded-full border-2 border-line border-t-brand animate-spin" />
                     Loading…
@@ -335,7 +473,7 @@ export function Table<Row>({
               </tr>
             ) : sortedRows.length === 0 ? (
               <tr>
-                <td colSpan={columns.length} className="text-center py-12 text-ink-3 italic text-[13px]">
+                <td colSpan={orderedColumns.length} className="text-center py-12 text-ink-3 italic text-[13px]">
                   {emptyMessage}
                 </td>
               </tr>
@@ -347,7 +485,7 @@ export function Table<Row>({
                   className={`group border-b border-line/70 last:border-b-0 transition-colors ${onRowClick ? 'cursor-pointer hover:bg-brand-bg/40' : 'hover:bg-surface-2/60'}`}
                   onClick={onRowClick ? () => onRowClick(row) : undefined}
                 >
-                  {columns.map((col) => {
+                  {orderedColumns.map((col) => {
                     const align = col.align ?? 'left'
                     const alignCls = align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left'
                     const content = col.render
