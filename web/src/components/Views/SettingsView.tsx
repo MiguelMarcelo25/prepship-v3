@@ -25,7 +25,7 @@
  */
 
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
-import { useLocation } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   Settings as SettingsIcon,
@@ -430,13 +430,25 @@ export default function SettingsView() {
   const isSeeding = sandboxBusy && sandboxState.op === 'seed'
   const isPurging = sandboxBusy && sandboxState.op === 'purge'
 
-  // URL → activeSection mapping. /settings (bare) falls through to
-  // the localStorage default. Deep links like /settings/store or
+  // URL ↔ activeSection two-way binding.
+  //
+  // INCOMING (URL → section, mounted below as a useEffect on
+  // location.pathname): /settings (bare) falls through to
+  // localStorage default. Deep links like /settings/store or
   // /settings/markups jump directly to that section, so an operator
   // who's sent a link goes to the right panel on first paint.
   // The trailing pluralization is forgiving — /settings/store and
   // /settings/stores both resolve to 'stores'.
+  //
+  // OUTGOING (section → URL, mounted below as a useEffect on
+  // activeSection): clicking a rail icon updates the URL so the
+  // address bar always reflects "what am I looking at?" — copy/paste
+  // the URL and a colleague lands on the same section. We use
+  // navigate(..., { replace: true }) so changing sections doesn't
+  // pollute history — Back still takes you to wherever you came
+  // from before Settings, not through every section you clicked.
   const location = useLocation()
+  const navigate = useNavigate()
   const sectionFromPath = (pathname: string): DrawerSectionId | null => {
     const slug = pathname.replace(/^\/settings\/?/, '').split('/')[0]?.toLowerCase().trim()
     if (!slug) return null
@@ -452,6 +464,19 @@ export default function SettingsView() {
       cache: 'cache',
     }
     return aliases[slug] ?? null
+  }
+  // Canonical path slug per section — single source of truth for
+  // outgoing navigation. Distinct from sectionFromPath's alias map
+  // (which is read-only and forgiving on plurals); this map writes
+  // ONE canonical form to the URL so we don't accidentally generate
+  // /settings/markup and /settings/markups on different clicks.
+  const SECTION_PATH: Record<DrawerSectionId, string> = {
+    markups: '/settings/markups',
+    stores: '/settings/stores',
+    carriers: '/settings/carriers',
+    pending: '/settings/pending',
+    sandbox: '/settings/sandbox',
+    cache: '/settings/cache',
   }
 
   // Active drawer section. Resolution order:
@@ -489,6 +514,31 @@ export default function SettingsView() {
     // to fire on pathname change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname])
+
+  // Outgoing sync: when the operator clicks a rail icon (which
+  // changes activeSection), update the URL so the address bar
+  // reflects what they're looking at. `replace: true` avoids
+  // polluting history with one entry per click. We compare against
+  // the current path FIRST so we don't navigate to a path that's
+  // already current — that would be a no-op router call but also
+  // creates extra React Router internal work.
+  useEffect(() => {
+    const targetPath = SECTION_PATH[activeSection]
+    // Skip if URL already matches canonical OR matches an alias for
+    // this section (e.g. /settings/store is alias for stores). The
+    // alias check uses sectionFromPath so we don't fight an incoming
+    // URL like /settings/store with an immediate replace to
+    // /settings/stores — both resolve to the same section.
+    const currentSection = sectionFromPath(location.pathname)
+    if (currentSection === activeSection) return
+    // Bare /settings is also acceptable for any section — only
+    // upgrade to a canonical path if we're either on bare /settings
+    // OR on a path that resolves to a DIFFERENT section.
+    if (location.pathname !== targetPath) {
+      navigate(targetPath, { replace: true })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSection])
   useEffect(() => {
     try {
       window.localStorage.setItem(DRAWER_SECTION_KEY, activeSection)
