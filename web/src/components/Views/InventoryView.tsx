@@ -36,6 +36,7 @@ import {
   type ReceiveDraftRow,
   type ReceiveSkuLookup,
 } from './inventory-parity'
+import { ColumnResizeHandle } from './ColumnResizeHandle'
 import './InventoryView.css'
 
 type AdjustType = 'receive' | 'return' | 'damage' | 'adjust'
@@ -196,6 +197,34 @@ const INVENTORY_SORTABLE_KEYS = new Set<InventoryColumnKey>([
   'stock', 'sold30', 'unitsPerPack', 'totalUnits', 'min', 'status',
 ])
 
+// Per-column default widths used by both the <colgroup> and the
+// resize-handle "start width" computation. 'name' deliberately has
+// no default (undefined → flex-fills remaining table width) so long
+// product names stay readable. table-fixed honors these widths
+// verbatim, so a resize on one column moves only that column.
+// columnWidths overrides take precedence on a per-key basis.
+const INVENTORY_COLUMN_DEFAULT_WIDTHS: Partial<Record<InventoryColumnKey, number>> = {
+  sku: 150,
+  thumbnail: 56,
+  // name: undefined → flex-fill
+  store: 125,
+  weight: 90,
+  dims: 100,
+  cuFt: 80,
+  package: 110,
+  stock: 70,
+  sold30: 75,
+  unitsPerPack: 85,
+  totalUnits: 90,
+  min: 55,
+  status: 70,
+  actions: 200,
+}
+
+const INVENTORY_COLUMN_MIN_WIDTH = 50
+
+type InventoryColumnWidths = Partial<Record<InventoryColumnKey, number>>
+
 interface InventoryColumnLayout {
   order: InventoryColumnKey[]
   hidden: InventoryColumnKey[]
@@ -249,6 +278,43 @@ function writeStoredInventoryColumnLayout(layout: InventoryColumnLayout): void {
       INVENTORY_COLUMN_LAYOUT_KEY,
       JSON.stringify({ order: layout.order, hidden: layout.hidden }),
     )
+  } catch { /* best-effort */ }
+}
+
+// Per-column resize widths. Sparse map — only contains keys the
+// operator has dragged. Missing keys fall back to
+// INVENTORY_COLUMN_DEFAULT_WIDTHS at render time. Reader is defensive:
+// strips unknown keys, drops anything not a positive finite number.
+const INVENTORY_COLUMN_WIDTHS_KEY = 'inventory_column_widths'
+
+function readStoredInventoryColumnWidths(): InventoryColumnWidths {
+  if (typeof window === 'undefined') return {}
+  try {
+    const raw = window.localStorage.getItem(INVENTORY_COLUMN_WIDTHS_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return {}
+    const cleaned: InventoryColumnWidths = {}
+    for (const [key, value] of Object.entries(parsed)) {
+      if (
+        isInventoryColumnKey(key)
+        && typeof value === 'number'
+        && Number.isFinite(value)
+        && value >= INVENTORY_COLUMN_MIN_WIDTH
+      ) {
+        cleaned[key as InventoryColumnKey] = value
+      }
+    }
+    return cleaned
+  } catch {
+    return {}
+  }
+}
+
+function writeStoredInventoryColumnWidths(widths: InventoryColumnWidths): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(INVENTORY_COLUMN_WIDTHS_KEY, JSON.stringify(widths))
   } catch { /* best-effort */ }
 }
 
@@ -642,6 +708,43 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
   useEffect(() => {
     writeStoredInventoryColumnLayout(inventoryColumnLayout)
   }, [inventoryColumnLayout])
+
+  // ─── Per-column resize state ───────────────────────────────────────────────
+  // Operators drag the resize handle on the right edge of any header
+  // to set that column's width. Persists per-browser; cleared per-key
+  // by double-clicking the same handle. Bulk-edit mode shares this
+  // state but uses its own legacy <colgroup> so the widths there
+  // don't apply.
+  const [inventoryColumnWidths, setInventoryColumnWidths] =
+    useState<InventoryColumnWidths>(readStoredInventoryColumnWidths)
+
+  function handleInventoryResizeColumn(key: InventoryColumnKey, width: number) {
+    setInventoryColumnWidths((current) => ({ ...current, [key]: Math.round(width) }))
+  }
+
+  function handleInventoryResetColumn(key: InventoryColumnKey) {
+    setInventoryColumnWidths((current) => {
+      if (!(key in current)) return current
+      const { [key]: _removed, ...rest } = current
+      return rest
+    })
+  }
+
+  // Helper used by ColumnResizeHandle.getStartWidth — returns the
+  // currently-effective width (override > default > min). Measuring
+  // the th's actual DOM width would also work but reading state is
+  // cheaper and avoids a layout-thrash on every drag start.
+  function getInventoryColumnWidth(key: InventoryColumnKey): number {
+    return (
+      inventoryColumnWidths[key]
+      ?? INVENTORY_COLUMN_DEFAULT_WIDTHS[key]
+      ?? INVENTORY_COLUMN_MIN_WIDTH
+    )
+  }
+
+  useEffect(() => {
+    writeStoredInventoryColumnWidths(inventoryColumnWidths)
+  }, [inventoryColumnWidths])
 
   useEffect(() => {
     if (!inventoryColumnsMenuOpen) return
@@ -1095,10 +1198,23 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
       cursor: isDragging ? 'grabbing' : 'grab',
       opacity: isDragging ? 0.4 : 1,
       boxShadow: isDragOver ? 'inset 3px 0 0 var(--ss-blue, #2a5bd7)' : undefined,
-      // Tooltip-only metadata for non-sortable columns can use the
-      // browser-native title attribute; sortable ones already convey
-      // intent via the sort indicator.
+      // position:relative anchors the absolute ColumnResizeHandle on
+      // the th's right edge (handle uses `position: absolute; right: -1px`).
+      position: 'relative',
     }
+
+    // Reusable resize-handle element rendered on every column except
+    // the last (no neighbor to push against). Stops propagation at
+    // the source (in ColumnResizeHandle's onMouseDown) so dragging
+    // the handle doesn't accidentally fire the column-drag dragstart.
+    const resizeHandle = (
+      <ColumnResizeHandle
+        getStartWidth={() => getInventoryColumnWidth(columnKey)}
+        onChange={(width) => handleInventoryResizeColumn(columnKey, Math.round(width))}
+        onReset={() => handleInventoryResetColumn(columnKey)}
+        minWidth={INVENTORY_COLUMN_MIN_WIDTH}
+      />
+    )
 
     // Non-sortable columns (thumbnail, actions) render a plain label.
     if (!sortable) {
@@ -1110,6 +1226,7 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
           >
             {columnKey === 'thumbnail' ? '' : label}
           </span>
+          {resizeHandle}
         </th>
       )
     }
@@ -1142,6 +1259,7 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
             {isActive ? (stockSort?.direction === 'asc' ? '^' : 'v') : ''}
           </span>
         </button>
+        {resizeHandle}
       </th>
     )
   }
@@ -2182,37 +2300,18 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                           <col style={{ width: 72 }} />
                         </colgroup>
                       ) : (
-                        // Colgroup widths track effectiveInventoryColumns so
-                        // a reorder/hide doesn't misalign columns. 'name'
-                        // gets no width (flex-fill); every other column
-                        // keeps its previous fixed width.
+                        // Colgroup iterates effectiveInventoryColumns so
+                        // reorder/hide preserves alignment. Per-column
+                        // width resolution: operator drag > INVENTORY_
+                        // COLUMN_DEFAULT_WIDTHS > flex-fill (only 'name'
+                        // is intentionally undefined → flex-fill). Under
+                        // table-fixed these widths are authoritative —
+                        // a resize on one column moves only that column.
                         <colgroup>
                           {effectiveInventoryColumns.map((key) => {
-                            const widthByKey: Partial<Record<InventoryColumnKey, number>> = {
-                              sku: 150,
-                              thumbnail: 56,
-                              // name: undefined → flex-fill
-                              store: 125,
-                              weight: 90,
-                              dims: 100,
-                              cuFt: 80,
-                              package: 110,
-                              stock: 70,
-                              sold30: 75,
-                              unitsPerPack: 85,
-                              totalUnits: 90,
-                              min: 55,
-                              status: 70,
-                              // Ticket follow-up (2026-05-12): bumped from 110
-                              // to 200 so the "± Adjust" pill no longer gets
-                              // clipped and falls back onto the chain-link
-                              // button's hit area. With pencil + chain-link +
-                              // Adjust pill + flex gaps we need ~170px, 200
-                              // leaves a little slack for the inline parent-
-                              // SKU select that pops in beside the icons.
-                              actions: 200,
-                            }
-                            const w = widthByKey[key]
+                            const explicit = inventoryColumnWidths[key]
+                            const fallback = INVENTORY_COLUMN_DEFAULT_WIDTHS[key]
+                            const w = explicit ?? fallback
                             return <col key={key} style={w ? { width: w } : undefined} />
                           })}
                         </colgroup>
