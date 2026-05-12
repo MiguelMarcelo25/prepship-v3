@@ -30,7 +30,14 @@
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;
-  overflow: hidden;
+  /* Was `overflow: hidden`, which silently CLIPPED any column past
+   * the drawer's right edge whenever the operator resized columns
+   * wider than the 820-px panel (or any time the column-width sum
+   * exceeded the panel content area). Switching to `auto` adds a
+   * horizontal scrollbar exactly when needed so the Status column
+   * is reachable instead of invisible. Rounded corners still clip
+   * content because the wrap owns the border-radius. */
+  overflow: auto;
   box-shadow: 0 1px 3px rgba(15, 23, 42, .05), 0 1px 2px rgba(15, 23, 42, .03);
 }
 

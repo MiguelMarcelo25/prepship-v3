@@ -53,21 +53,28 @@ import './AnalysisView.css'
 // roughly match the previous fixed-CSS layout; no <colgroup> means the table
 // stays auto-sized until the user drags a handle.
 type DrawerOrdersColumnKey = 'orderNum' | 'customer' | 'qty' | 'cost' | 'status' | 'date'
+// Defaults tuned for the 820-px analysis-sku-drawer-panel — the
+// content area is ~770 px after panel + table-wrap padding/borders.
+// Previous totals (850 px) blew past that and pushed Status off the
+// right edge under the old `overflow: hidden` wrap. New totals
+// (770 px) fit exactly in the drawer, and the wrap now allows
+// horizontal scroll if an operator drags any column wider via
+// the resize handles.
 const DRAWER_ORDERS_COLUMN_DEFAULTS: Record<DrawerOrdersColumnKey, number> = {
-  orderNum: 150,
-  customer: 200,
-  qty: 60,
+  date: 140,
+  orderNum: 140,
+  customer: 180,
+  qty: 50,
   cost: 160,
-  status: 110,
-  date: 170,
+  status: 100,
 }
 const DRAWER_ORDERS_COLUMN_MIN: Record<DrawerOrdersColumnKey, number> = {
+  date: 120,
   orderNum: 90,
   customer: 100,
-  qty: 50,
-  cost: 120,
-  status: 80,
-  date: 140,
+  qty: 44,
+  cost: 110,
+  status: 70,
 }
 const DRAWER_ORDERS_STORAGE_KEY = 'analysis_sku_drawer_widths'
 
