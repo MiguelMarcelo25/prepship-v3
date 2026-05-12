@@ -82,9 +82,30 @@ export type RbAppliedRate = {
   shipmentCost: number;
   otherCost: number;
   carrierNickname?: string;
+  confirmation?: RateConfirmation;
   weight?: { lb: number; oz: number };
   dims?: { length: number; width: number; height: number };
 };
+
+type RateConfirmation =
+  | 'delivery'
+  | 'signature'
+  | 'adult_signature'
+  | 'direct_signature';
+
+const CONFIRMATION_OPTIONS: Array<{ value: RateConfirmation; label: string }> = [
+  { value: 'delivery', label: 'Delivery' },
+  { value: 'signature', label: 'Signature' },
+  { value: 'adult_signature', label: 'Adult Signature' },
+  { value: 'direct_signature', label: 'Direct Signature' },
+];
+
+function normalizeConfirmationForRates(value?: string | null): RateConfirmation {
+  const normalized = String(value ?? '').trim().toLowerCase();
+  return CONFIRMATION_OPTIONS.some((option) => option.value === normalized)
+    ? (normalized as RateConfirmation)
+    : 'delivery';
+}
 
 export type RateBrowserModalProps = {
   open: boolean;
@@ -94,6 +115,7 @@ export type RateBrowserModalProps = {
   shippingAccounts: RbCarrierAccountDto[];
   initialDims?: { length?: number; width?: number; height?: number };
   initialWeight?: { lb?: number; oz?: number };
+  initialConfirmation?: string;
   testMode?: boolean;
   onClose: () => void;
   onApplyRate: (rate: RbAppliedRate) => void;
@@ -603,6 +625,7 @@ export default function RateBrowserModal({
   shippingAccounts,
   initialDims,
   initialWeight,
+  initialConfirmation,
   testMode = false,
   onClose,
   onApplyRate,
@@ -619,7 +642,7 @@ export default function RateBrowserModal({
   const [lenStr, setLen] = useState('0');
   const [widStr, setWid] = useState('0');
   const [hgtStr, setHgt] = useState('0');
-  const [signature, setSignature] = useState<'none' | 'signature' | 'adult_signature'>('none');
+  const [confirmation, setConfirmation] = useState<RateConfirmation>('delivery');
   const [svcClass, setSvcClass] = useState<'' | 'ground' | 'express'>('');
 
   // ── Rates state ────────────────────────────────────────────────────────────
@@ -719,7 +742,7 @@ export default function RateBrowserModal({
     const defaultLoc = locations.find((l) => l.isDefault) ?? locations[0];
     setLocationId(defaultLoc ? String(defaultLoc.locationId) : '');
     setPackageId('');
-    setSignature('none');
+    setConfirmation(normalizeConfirmationForRates(initialConfirmation));
     setSvcClass('');
     setViewMode('all');
     const initialTotalOz =
@@ -843,11 +866,12 @@ export default function RateBrowserModal({
   // Fetch all scoped carrier accounts in one UI request. The backend still calls
   // ShipStation per carrier, but it does that work in parallel and returns one
   // grouped result set for the modal.
-  async function browseRates(): Promise<void> {
+  async function browseRates(confirmationOverride?: RateConfirmation): Promise<void> {
     if (!zip || zip.length < 5 || !hasWeight || !hasDims) return;
     if (!testMode && !rateShippingAccounts.length) return;
 
     const totalOz = lbNum * 16 + ozNum;
+    const rateConfirmation = normalizeConfirmationForRates(confirmationOverride ?? confirmation);
     setBrowsing(true);
     const seededTestRates = testMode
       ? buildTestMockRateSeeds(rateShippingAccounts, {
@@ -938,6 +962,7 @@ export default function RateBrowserModal({
         carrierIds: carrierIds.length ? carrierIds : undefined,
         storeId: toFiniteNumber(order?.storeId) ?? undefined,
         clientId: toFiniteNumber(order?.clientId) ?? undefined,
+        confirmation: rateConfirmation,
         orderId: toFiniteNumber(order?.orderId ?? (order as Record<string, unknown> | null)?.id) ?? undefined,
         orderNumber:
           toOptionalString(order?.orderNumber) ??
@@ -1119,6 +1144,7 @@ export default function RateBrowserModal({
       shipmentCost: r.shipmentCost,
       otherCost: r.otherCost,
       carrierNickname: r.carrierNickname ?? undefined,
+      confirmation: normalizeConfirmationForRates(confirmation),
       weight: { lb: lbNum, oz: ozNum },
       dims: { length: lenNum, width: widNum, height: hgtNum },
     });
@@ -1139,6 +1165,7 @@ export default function RateBrowserModal({
       shipmentCost: r.shipmentCost,
       otherCost: r.otherCost,
       carrierNickname: r.carrierNickname ?? undefined,
+      confirmation: normalizeConfirmationForRates(confirmation),
       weight: { lb: lbNum, oz: ozNum },
       dims: { length: lenNum, width: widNum, height: hgtNum },
     };
@@ -1917,16 +1944,18 @@ export default function RateBrowserModal({
                   </span>
                 </div>
                 <select
-                  value={signature}
-                  onChange={(e) =>
-                    setSignature(e.target.value as 'none' | 'signature' | 'adult_signature')
-                  }
+                  value={confirmation}
+                  onChange={(e) => {
+                    const next = normalizeConfirmationForRates(e.target.value);
+                    setConfirmation(next);
+                    if (anyFetched && !browsing) void browseRates(next);
+                  }}
                   className="ship-select"
                   style={{ width: '100%', marginBottom: 10 }}
                 >
-                  <option value="none">No Signature Required</option>
-                  <option value="signature">Signature Required</option>
-                  <option value="adult_signature">Adult Signature Required</option>
+                  {CONFIRMATION_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
                 </select>
 
                 <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 3 }}>

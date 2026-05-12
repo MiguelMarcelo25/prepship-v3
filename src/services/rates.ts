@@ -125,6 +125,17 @@ function applyMarkups(rates: Rate[], markups: Map<string, Markup>): Rate[] {
 const CACHE_TTL_MS = 1000 * 60 * 60 * 6; // 6 hours
 const CARRIER_CACHE_MS = 1000 * 60 * 15; // 15 min
 const RATE_CACHE_VERSION = 'ground-saver-v1';
+const RATE_CONFIRMATIONS = new Set([
+  'none',
+  'delivery',
+  'signature',
+  'adult_signature',
+  'direct_signature',
+  'delivery_mailed',
+  'verbal_confirmation',
+  'delivery_code',
+  'age_verification_16_plus',
+]);
 const RATEABLE_CARRIER_CODES = new Set([
   'usps',
   'ups',
@@ -186,6 +197,7 @@ export type RateInput = {
   clientId?: number | null;
   sourceClientId?: number | null;
   apiKeyV2?: string | null;
+  confirmation?: string | null;
 };
 
 function normalizeZip(zip: string): string {
@@ -196,6 +208,12 @@ function normalizeZip(zip: string): string {
 function apiKeyCacheKey(apiKeyV2?: string | null): string {
   if (!apiKeyV2) return 'env';
   return createHash('sha256').update(apiKeyV2).digest('hex').slice(0, 16);
+}
+
+function normalizeRateConfirmation(value?: string | null): string | undefined {
+  if (!value) return undefined;
+  const normalized = value.trim().toLowerCase();
+  return RATE_CONFIRMATIONS.has(normalized) ? normalized : undefined;
 }
 
 async function resolveClientIdForStoreId(storeId?: number | null): Promise<number | null> {
@@ -240,6 +258,8 @@ export function rateCacheKey(input: RateInput): string {
   if (input.dimsL) parts.push(`l=${Math.round(input.dimsL * 10)}`);
   if (input.dimsW) parts.push(`dw=${Math.round(input.dimsW * 10)}`);
   if (input.dimsH) parts.push(`h=${Math.round(input.dimsH * 10)}`);
+  const confirmation = normalizeRateConfirmation(input.confirmation);
+  if (confirmation) parts.push(`cf=${confirmation}`);
   if (input.carrierIds?.length) {
     parts.push(`c=${[...input.carrierIds].sort().join(',')}`);
   }
@@ -247,7 +267,11 @@ export function rateCacheKey(input: RateInput): string {
 }
 
 function rateTotal(rate: Rate): number {
-  return Number(rate.shipping_amount?.amount ?? 0) + Number(rate.other_amount?.amount ?? 0);
+  return (
+    Number(rate.shipping_amount?.amount ?? 0) +
+    Number(rate.confirmation_amount?.amount ?? 0) +
+    Number(rate.other_amount?.amount ?? 0)
+  );
 }
 
 function pickBestRate(rates: Rate[]): Rate | null {
@@ -473,6 +497,8 @@ async function fetchEstimateForCarrier(
       unit: 'inch',
     };
   }
+  const confirmation = normalizeRateConfirmation(input.confirmation);
+  if (confirmation) body.confirmation = confirmation;
   try {
     const payload = await ssRequest<EstimateRate[] | { rates?: EstimateRate[] }>(
       '/v2/rates/estimate',

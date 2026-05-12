@@ -34,13 +34,18 @@ const rateBody = z.object({
   carrierIds: z.array(z.string()).optional(),
   storeId: z.number().int().nullable().optional(),
   clientId: z.number().int().nullable().optional(),
+  confirmation: z.string().nullable().optional(),
+  signature: z.string().nullable().optional(),
   forceRefresh: z.boolean().optional(),
 });
 
 app.post('/', zValidator('json', rateBody), async (c) => {
   const body = c.req.valid('json');
-  const { forceRefresh, ...input } = body;
-  const result = await getRates(input, { forceRefresh });
+  const { forceRefresh, signature, confirmation, ...input } = body;
+  const result = await getRates(
+    { ...input, confirmation: confirmation ?? signature ?? null },
+    { forceRefresh }
+  );
   return c.json(result);
 });
 
@@ -50,9 +55,9 @@ const browseBody = rateBody
 
 app.post('/browse', zValidator('json', browseBody), async (c) => {
   const body = c.req.valid('json');
-  const { forceRefresh, carrierId, ...rest } = body;
+  const { forceRefresh, carrierId, signature, confirmation, ...rest } = body;
   const result = await getRates(
-    { ...rest, carrierIds: [carrierId] },
+    { ...rest, confirmation: confirmation ?? signature ?? null, carrierIds: [carrierId] },
     { forceRefresh }
   );
   const filtered = result.rates.filter((r) => r.carrier_id === carrierId);

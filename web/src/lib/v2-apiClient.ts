@@ -467,9 +467,12 @@ function translateRatePayloadToV4(
 
   // string passthroughs (names match across v2/v4, plus a few direct-carrier
   // hints that the Vercel carrier quoter can use).
-  for (const k of ['toCountry', 'toState', 'toCity', 'toAddress', 'toName', 'externalOrderId', 'purchaseOrderId', 'orderNumber'] as const) {
+  for (const k of ['toCountry', 'toState', 'toCity', 'toAddress', 'toName', 'externalOrderId', 'purchaseOrderId', 'orderNumber', 'confirmation', 'signature'] as const) {
     const v = input[k];
-    if (typeof v === 'string' && v.length > 0) out[k] = v;
+    if (typeof v === 'string' && v.length > 0) {
+      if (k === 'signature') out.confirmation ??= v;
+      else out[k] = v;
+    }
   }
   const fromPostalCode = input.fromPostalCode ?? input.fromZip;
   if (typeof fromPostalCode === 'string' && fromPostalCode.trim()) {
@@ -900,6 +903,7 @@ async function fetchDirectCarrierRates(
           externalOrderId: body.externalOrderId ?? body.orderNumber,
           orderNumber: body.orderNumber,
           purchaseOrderId: body.purchaseOrderId,
+          confirmation: body.confirmation,
           shipFrom: body.shipFrom,
         },
       });
@@ -992,9 +996,12 @@ function translateRateToV2Shape(r: unknown): Record<string, unknown> {
     if ('amount' in obj && 'carrierCode' in obj) return obj;
     const shipping = obj.shipping_amount as { amount?: unknown } | undefined;
     const other = obj.other_amount as { amount?: unknown } | undefined;
+    const confirmation = obj.confirmation_amount as { amount?: unknown } | undefined;
     const shipmentCost =
       typeof shipping?.amount === 'number' ? shipping.amount : 0;
-    const otherCost = typeof other?.amount === 'number' ? other.amount : 0;
+    const otherCost =
+      (typeof other?.amount === 'number' ? other.amount : 0) +
+      (typeof confirmation?.amount === 'number' ? confirmation.amount : 0);
     return {
       carrierCode: obj.carrier_code ?? null,
       serviceCode: obj.service_code ?? null,

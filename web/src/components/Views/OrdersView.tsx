@@ -297,6 +297,18 @@ interface PanelFormState {
   insuranceValue: string
 }
 
+const CONFIRMATION_OPTIONS = [
+  { value: 'delivery', label: 'Delivery' },
+  { value: 'signature', label: 'Signature' },
+  { value: 'adult_signature', label: 'Adult Signature' },
+  { value: 'direct_signature', label: 'Direct Signature' },
+] as const
+
+function normalizeConfirmationForRates(value: string | null | undefined) {
+  const normalized = (value ?? '').trim().toLowerCase()
+  return normalized && normalized !== 'none' ? normalized : 'delivery'
+}
+
 type ShipmentDims = { length: number; width: number; height: number }
 
 interface OrdersViewProps {
@@ -3890,9 +3902,10 @@ export default function OrdersView({
     order: OrderSummaryDto
     dims: { length: number; width: number; height: number }
     weightOz: number
+    confirmation?: string
     silent?: boolean
   }) {
-    const { order, dims, weightOz, silent = false } = options
+    const { order, dims, weightOz, confirmation, silent = false } = options
     if (!hasCompleteDims(dims) || weightOz <= 0) return null
     const orderDetail = orderDetailsById.get(order.orderId) ?? panelDetail
 
@@ -3929,6 +3942,7 @@ export default function OrdersView({
         residential: Boolean(order.residential ?? order.sourceResidential),
         storeId: order.storeId,
         clientId: order.clientId,
+        confirmation: normalizeConfirmationForRates(confirmation ?? panelForm.confirmation),
         forceRefresh: true,
       }) as Array<Record<string, unknown>>
 
@@ -4180,12 +4194,14 @@ export default function OrdersView({
         residential: Boolean(panelOrder.residential ?? panelOrder.sourceResidential),
         storeId: panelOrder.storeId,
         clientId: panelOrder.clientId,
+        confirmation: normalizeConfirmationForRates(panelForm.confirmation),
         forceRefresh: true,
       })
       // Remap ShipStation v2 rate shape → v2-legacy shape the panel expects.
       const rates = (rawRates ?? []).map((r: any) => {
         const shipmentCost = r.shipmentCost ?? r.shipping_amount?.amount ?? 0
-        const otherCost = r.otherCost ?? r.other_amount?.amount ?? 0
+        const confirmationCost = r.confirmationAmount ?? r.confirmation_amount?.amount ?? 0
+        const otherCost = (r.otherCost ?? r.other_amount?.amount ?? 0) + confirmationCost
         return {
           carrierCode: r.carrierCode ?? r.carrier_code ?? null,
           serviceCode: r.serviceCode ?? r.service_code ?? null,
@@ -6661,9 +6677,30 @@ export default function OrdersView({
               <div className="ship-field-row">
                 <span className="ship-field-label">Confirmation</span>
                 <div className="ship-field-value">
-                  <select className="ship-select" value={panelForm.confirmation} disabled={shipped} onChange={(event) => setPanelForm((current) => ({ ...current, confirmation: event.target.value }))}>
-                    {['none', 'delivery', 'signature', 'adult_signature', 'direct_signature'].map((option) => (
-                      <option key={option} value={option}>{option.replace(/_/g, ' ')}</option>
+                  <select
+                    className="ship-select"
+                    value={normalizeConfirmationForRates(panelForm.confirmation)}
+                    disabled={shipped}
+                    onChange={(event) => {
+                      const confirmation = event.target.value
+                      setPanelForm((current) => ({ ...current, confirmation }))
+                      if (panelOrder?.orderStatus === 'awaiting_shipment') {
+                        const dims = getPanelDims()
+                        const weightOz = getPanelWeightOz()
+                        if (hasCompleteDims(dims) && weightOz > 0) {
+                          void refreshPanelBestRate({
+                            order: panelOrder,
+                            dims,
+                            weightOz,
+                            confirmation,
+                            silent: true,
+                          })
+                        }
+                      }
+                    }}
+                  >
+                    {CONFIRMATION_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
                     ))}
                   </select>
                 </div>
@@ -8402,6 +8439,7 @@ export default function OrdersView({
               lb: Number.parseFloat(panelForm.weightLb) || 0,
               oz: Number.parseFloat(panelForm.weightOz) || 0,
             }}
+            initialConfirmation={panelForm.confirmation}
             onClose={() => setRateBrowserOpen(false)}
             onBestRateResolved={(best) => {
               if (!panelOrderId) return
@@ -8433,6 +8471,7 @@ export default function OrdersView({
                   ...current,
                   shipAccountId: String(shippingProviderId),
                   serviceCode,
+                  confirmation: normalizeConfirmationForRates(best.confirmation ?? current.confirmation),
                   weightLb: best.weight ? String(best.weight.lb ?? current.weightLb) : current.weightLb,
                   weightOz: best.weight ? String(best.weight.oz ?? current.weightOz) : current.weightOz,
                   length: best.dims ? String(best.dims.length ?? current.length) : current.length,
@@ -8459,6 +8498,7 @@ export default function OrdersView({
               if (applied.weight) {
                 setPanelForm((current) => ({
                   ...current,
+                  confirmation: normalizeConfirmationForRates(applied.confirmation ?? current.confirmation),
                   weightLb: String(applied.weight?.lb ?? current.weightLb),
                   weightOz: String(applied.weight?.oz ?? current.weightOz),
                 }))
@@ -8466,6 +8506,7 @@ export default function OrdersView({
               if (applied.dims) {
                 setPanelForm((current) => ({
                   ...current,
+                  confirmation: normalizeConfirmationForRates(applied.confirmation ?? current.confirmation),
                   length: String(applied.dims?.length ?? current.length),
                   width: String(applied.dims?.width ?? current.width),
                   height: String(applied.dims?.height ?? current.height),
