@@ -2429,7 +2429,16 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-        className="flex items-center gap-4 mb-4 flex-wrap"
+        // 2026-05-12: sticky at top:0 of the view-content scroll
+        // container so the operator always sees the page title, tabs,
+        // and action buttons even when scrolling through hundreds of
+        // SKU rows. z-[90] sits ABOVE the table thead (z-[70..80] in
+        // <Table>) so the bar covers the column headers as they slide
+        // under it. bg-page is the same color as the parent so the
+        // sticky bar reads continuously when locked. The bottom
+        // shadow draws a clean visual line between the sticky title
+        // and the scrolling content underneath.
+        className="sticky top-0 z-[90] bg-page py-3 mb-4 flex items-center gap-4 flex-wrap shadow-[0_1px_0_var(--border)]"
       >
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-sky-500 to-sky-600 flex items-center justify-center shadow-md ring-1 ring-sky-400/20">
