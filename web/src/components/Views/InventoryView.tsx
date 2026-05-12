@@ -42,7 +42,26 @@ import {
   type ReceiveSkuLookup,
 } from './inventory-parity'
 import { ColumnResizeHandle } from './ColumnResizeHandle'
+import { AnalysisPagination } from './AnalysisPagination'
 import './InventoryView.css'
+
+// Pagination page-size options — operator-requested 2026-05-12.
+// 10 / 20 / 50 / 100 / 200. Default 50 balances "see enough at a
+// glance" with "page doesn't take forever to render on slower
+// machines." Persisted per-browser so each operator's preferred
+// density sticks across reloads.
+const INVENTORY_PAGE_SIZE_OPTIONS = [10, 20, 50, 100, 200] as const
+const INVENTORY_DEFAULT_PAGE_SIZE = 50
+const INVENTORY_PAGE_SIZE_KEY = 'inventory_page_size'
+
+function readStoredInventoryPageSize(): number {
+  if (typeof window === 'undefined') return INVENTORY_DEFAULT_PAGE_SIZE
+  const raw = window.localStorage.getItem(INVENTORY_PAGE_SIZE_KEY)
+  const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN
+  return (INVENTORY_PAGE_SIZE_OPTIONS as readonly number[]).includes(parsed)
+    ? parsed
+    : INVENTORY_DEFAULT_PAGE_SIZE
+}
 
 type AdjustType = 'receive' | 'return' | 'damage' | 'adjust'
 type AdjustSign = 1 | -1
@@ -1025,7 +1044,41 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
     return [...filteredRows].sort((left, right) => compareInventoryRows(left, right, stockSort))
   }, [filteredRows, stockSort])
 
-  const groupedRows = useMemo(() => groupInventoryRowsByClient(sortedRows), [sortedRows])
+  // ─── Pagination (Stock Levels tab) ────────────────────────────────────────
+  // Operator-requested 2026-05-12: pageSize options 10/20/50/100/200.
+  // pageSize persists per-browser; page resets to 1 on any filter/sort
+  // change to keep the operator anchored at the top of the new result set.
+  const [stockPage, setStockPage] = useState(1)
+  const [stockPageSize, setStockPageSize] = useState<number>(readStoredInventoryPageSize)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(INVENTORY_PAGE_SIZE_KEY, String(stockPageSize))
+  }, [stockPageSize])
+
+  // Reset to page 1 whenever the filter/sort/active inputs change so
+  // operators don't land on page 7 of a fresh result that only has
+  // 2 pages. Mirrors how Packages/Analysis paging hooks behave.
+  useEffect(() => {
+    setStockPage(1)
+  }, [stockSearch, stockClientId, alertOnly, activeOnly, stockPageSize, stockSort])
+
+  // Clamp page when total shrinks (e.g., operator narrows the filter
+  // and the previous last-page becomes invalid).
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(sortedRows.length / stockPageSize))
+    if (stockPage > maxPage) setStockPage(maxPage)
+  }, [sortedRows.length, stockPageSize, stockPage])
+
+  // Slice the sorted/filtered list to just the current page. Grouping
+  // happens AFTER pagination so each rendered page shows up to
+  // pageSize rows total across all clients (not pageSize per group).
+  const pagedRows = useMemo(() => {
+    const start = (stockPage - 1) * stockPageSize
+    return sortedRows.slice(start, start + stockPageSize)
+  }, [sortedRows, stockPage, stockPageSize])
+
+  const groupedRows = useMemo(() => groupInventoryRowsByClient(pagedRows), [pagedRows])
   const storeNameMap = useMemo(() => {
     const nextMap = new Map<number, string>()
     for (const store of stores) {
@@ -2726,6 +2779,31 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                   </div>
                 </div>
               ))}
+              {/* Pagination — operator-controlled page size + page nav.
+                  Renders below the inventory tables. Reuses
+                  AnalysisPagination so all paginated lists in the app
+                  share the same visual + behavior vocabulary
+                  (Packages, Analysis SKU grid, now Inventory). The
+                  totalItems counter reflects the full sortedRows length,
+                  not just the current page's worth, so operators see
+                  the real result count of their filters. */}
+              {sortedRows.length > 0 ? (
+                <div style={{ marginTop: 12 }}>
+                  <AnalysisPagination
+                    page={stockPage}
+                    pageSize={stockPageSize}
+                    pageSizeOptions={[...INVENTORY_PAGE_SIZE_OPTIONS]}
+                    totalItems={sortedRows.length}
+                    onPageChange={setStockPage}
+                    onPageSizeChange={(nextSize) => {
+                      setStockPageSize(nextSize)
+                      setStockPage(1)
+                    }}
+                    unitLabel="SKUs"
+                    ariaLabel="Inventory pagination"
+                  />
+                </div>
+              ) : null}
             </div>
           )}
         </div>
