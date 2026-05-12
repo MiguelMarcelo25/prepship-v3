@@ -1773,9 +1773,21 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
           e.currentTarget.style.borderColor = 'var(--border)'
         }}
       >
-        <div className="settings-integration-main" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <span style={{ fontWeight: 700 }}>{d.provider.toUpperCase()}</span>
-          <span style={{ color: 'var(--text2)' }}>{d.label ?? '—'}</span>
+        {/* flexWrap added 2026-05-12: at desktop width, very long
+            accountIdentifier strings (EasyPost API keys are 60+ chars;
+            Walmart credentials are UUIDs) combined with 5-6 action
+            buttons can overflow the card's right edge. Wrapping lets
+            the buttons spill to a second line gracefully instead of
+            extending the row. minWidth:0 lets flex children actually
+            shrink below their intrinsic content width — without it,
+            the accountIdentifier span (further down) refuses to
+            truncate. mobile.css already had this fix; desktop didn't. */}
+        <div
+          className="settings-integration-main"
+          style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', minWidth: 0 }}
+        >
+          <span style={{ fontWeight: 700, flexShrink: 0 }}>{d.provider.toUpperCase()}</span>
+          <span style={{ color: 'var(--text2)', flexShrink: 0 }}>{d.label ?? '—'}</span>
           {/* "Portal" badge — flags carriers submitted via the client
               portal vs admin-added ones. Same Settings list now covers
               both sources (audit fix gap #2, 2026-05-12) so the origin
@@ -1799,7 +1811,34 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
               Portal
             </span>
           ) : null}
-          <span style={{ flex: 1, color: 'var(--text3)', fontFamily: 'monospace', fontSize: 11 }}>
+          {/* accountIdentifier — operator-set string that can be
+              ANYTHING: a short nickname, a 60-char EasyPost API key,
+              a Walmart UUID, etc. We:
+                - cap it with maxWidth so a long key can't dominate
+                  the row (the date pill + action buttons stay
+                  reachable)
+                - minWidth:0 + truncate-with-ellipsis so flex math
+                  actually allows shrinking past the intrinsic
+                  monospace content width
+                - title attribute exposes the full value on hover
+                  for operators who need to copy/verify it
+              `flex: 1 1 auto` keeps it as the row's main grow-take
+              column when there's slack, but it now stops growing at
+              maxWidth so long keys can't push siblings off-screen. */}
+          <span
+            title={d.accountIdentifier ?? undefined}
+            style={{
+              flex: '1 1 auto',
+              minWidth: 0,
+              maxWidth: 360,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              color: 'var(--text3)',
+              fontFamily: 'monospace',
+              fontSize: 11,
+            }}
+          >
             {d.accountIdentifier ?? '—'}
           </span>
           {/* Hide the date pill on synthesized ShipStation rows — they
