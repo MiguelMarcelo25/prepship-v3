@@ -1,4 +1,5 @@
 import { lazy, Suspense, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, Pencil, Trash2, Wand2, RefreshCw, Users, Power } from 'lucide-react';
 import { Button } from '../components/ui/Button';
@@ -36,6 +37,7 @@ type ClientStats = {
 type BackfillResult = { updated: number; message?: string };
 
 export default function Clients() {
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState<Client | null>(null);
   const [creating, setCreating] = useState(false);
@@ -161,10 +163,19 @@ export default function Clients() {
           />
           {sync.isPending ? 'Syncing…' : 'Sync stores'}
         </Button>
+        {/* + New client routes to Settings → Stores per operator
+            workflow (2026-05-12): a "new client" in PrepShip's model
+            starts with a marketplace store integration, and the
+            Stores tab in Settings is where those integrations live.
+            Routing here instead of opening the in-page modal puts
+            the operator in the same place they'd configure the
+            integration anyway. The ClientModal is still mounted
+            below for the per-row "Edit" action which doesn't need
+            store integration setup. */}
         <Button
           variant="primary"
           size="sm"
-          onClick={() => setCreating(true)}
+          onClick={() => navigate('/settings/store')}
         >
           <Plus size={12} />
           New client

@@ -25,6 +25,7 @@
  */
 
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   Settings as SettingsIcon,
@@ -429,11 +430,39 @@ export default function SettingsView() {
   const isSeeding = sandboxBusy && sandboxState.op === 'seed'
   const isPurging = sandboxBusy && sandboxState.op === 'purge'
 
-  // Active drawer section. Persists in localStorage so an operator
-  // that lands on a deep section (e.g. Sandbox) sees the same panel
-  // when they come back. Defaults to 'markups' on first visit.
+  // URL → activeSection mapping. /settings (bare) falls through to
+  // the localStorage default. Deep links like /settings/store or
+  // /settings/markups jump directly to that section, so an operator
+  // who's sent a link goes to the right panel on first paint.
+  // The trailing pluralization is forgiving — /settings/store and
+  // /settings/stores both resolve to 'stores'.
+  const location = useLocation()
+  const sectionFromPath = (pathname: string): DrawerSectionId | null => {
+    const slug = pathname.replace(/^\/settings\/?/, '').split('/')[0]?.toLowerCase().trim()
+    if (!slug) return null
+    const aliases: Record<string, DrawerSectionId> = {
+      markup: 'markups',
+      markups: 'markups',
+      store: 'stores',
+      stores: 'stores',
+      carrier: 'carriers',
+      carriers: 'carriers',
+      pending: 'pending',
+      sandbox: 'sandbox',
+      cache: 'cache',
+    }
+    return aliases[slug] ?? null
+  }
+
+  // Active drawer section. Resolution order:
+  //   1. URL slug (so /settings/store deep-links into Stores)
+  //   2. localStorage (so an operator that opened Sandbox last time
+  //      returns to Sandbox on revisit)
+  //   3. 'markups' default
   const [activeSection, setActiveSection] = useState<DrawerSectionId>(() => {
     if (typeof window === 'undefined') return 'markups'
+    const fromUrl = sectionFromPath(window.location.pathname)
+    if (fromUrl) return fromUrl
     try {
       const stored = window.localStorage.getItem(DRAWER_SECTION_KEY) as DrawerSectionId | null
       if (stored && ['markups', 'stores', 'carriers', 'pending', 'sandbox', 'cache'].includes(stored)) {
@@ -444,6 +473,22 @@ export default function SettingsView() {
     }
     return 'markups'
   })
+  // Keep activeSection in sync when the URL changes mid-session
+  // (e.g. the operator clicks a link that does
+  // `navigate('/settings/store')`). Without this effect the initial
+  // state above would fire once on mount and never react to
+  // subsequent path changes.
+  useEffect(() => {
+    const fromUrl = sectionFromPath(location.pathname)
+    if (fromUrl && fromUrl !== activeSection) {
+      setActiveSection(fromUrl)
+    }
+    // activeSection is intentionally NOT a dep — including it would
+    // re-fire this effect every time the user clicks a rail icon and
+    // bounce them back to the URL-derived section. We only want this
+    // to fire on pathname change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.pathname])
   useEffect(() => {
     try {
       window.localStorage.setItem(DRAWER_SECTION_KEY, activeSection)
