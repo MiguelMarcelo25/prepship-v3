@@ -2429,16 +2429,7 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-        // 2026-05-12: sticky at top:0 of the view-content scroll
-        // container so the operator always sees the page title, tabs,
-        // and action buttons even when scrolling through hundreds of
-        // SKU rows. z-[90] sits ABOVE the table thead (z-[70..80] in
-        // <Table>) so the bar covers the column headers as they slide
-        // under it. bg-page is the same color as the parent so the
-        // sticky bar reads continuously when locked. The bottom
-        // shadow draws a clean visual line between the sticky title
-        // and the scrolling content underneath.
-        className="sticky top-0 z-[90] bg-page py-3 mb-4 flex items-center gap-4 flex-wrap shadow-[0_1px_0_var(--border)]"
+        className="flex items-center gap-4 mb-4 flex-wrap"
       >
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-sky-500 to-sky-600 flex items-center justify-center shadow-md ring-1 ring-sky-400/20">
@@ -2631,20 +2622,20 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
             <div id="inv-stock-content">
               {groupedRows.map((group) => (
                 <div key={group.clientId} style={{ marginBottom: 18 }}>
-                  {/* Wrapper mirrors the Packages card (rounded-card +
-                      border + bg-white + shadow-sm) plus overflow-x:auto
-                      so the table scrolls horizontally inside the card
-                      when the operator drags columns wider than the
-                      viewport or works on a narrow screen. The
-                      scrollbar sits inside the rounded boundary which
-                      looks intentional (matches the Analysis table's
-                      SHELL_CLASSES). Trade-off: sticky <thead> stops
-                      pinning during vertical page-scroll because the
-                      wrapper is now the nearest overflow ancestor for
-                      sticky resolution. The Columns popover gives
-                      operators the mobile escape hatch (hide columns
-                      they don't need on small screens). */}
-                  <div className="relative rounded-card border border-line bg-white shadow-sm overflow-x-auto">
+                  {/* 2026-05-12: switched the wrapper from overflow-x:auto
+                      to overflow-x:clip — same trade-off the prior comment
+                      identified, but flipped per operator request. With
+                      overflow-x:auto the wrapper was the nearest overflow
+                      ancestor for sticky resolution, so the thead never
+                      stuck during page-level vertical scroll. With
+                      overflow-x:clip the wrapper still clips wide tables
+                      (visually identical until you'd scroll horizontally)
+                      but does NOT establish a scroll context — so the
+                      sticky thead now correctly pins to view-content's
+                      vertical scroll. Operators hide columns via the
+                      Columns popover instead of scrolling horizontally
+                      on narrow screens. */}
+                  <div className="relative rounded-card border border-line bg-white shadow-sm overflow-x-clip">
                     <table
                       className={[
                         // Layout

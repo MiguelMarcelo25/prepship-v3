@@ -702,7 +702,19 @@ export function Table<Row>({
         </div>
       </div>
 
-      <div className="overflow-x-auto">
+      {/* 2026-05-12: switched from overflow-x-auto to overflow-x-clip
+          so the wrapper no longer establishes a scroll-context that
+          would trap position:sticky inside it. With overflow-x-auto,
+          the sticky <thead> below pinned to THIS wrapper instead of
+          the page-level scroll container — meaning the column headers
+          never stuck during normal vertical page scroll. `clip` is
+          a modern CSS value (Chrome 90+ / FF 81+ / Safari 15.4+) that
+          clips overflow WITHOUT creating a scroll container, so
+          sticky correctly resolves to the next outer scroll ancestor
+          (typically a view-content with overflow-y: auto). Trade-off:
+          tables wider than the wrapper no longer scroll horizontally
+          — operators hide columns via the Columns popover instead. */}
+      <div className="overflow-x-clip">
         <table className="w-full border-collapse table-fixed" style={{ minWidth: 480 }}>
           <colgroup>
             {orderedColumns.map((col) => (
