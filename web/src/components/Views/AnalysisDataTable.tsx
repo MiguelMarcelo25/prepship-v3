@@ -147,6 +147,15 @@ const ANALYSIS_COLUMN_DEFAULT_WIDTHS: Partial<Record<AnalysisSortKey, number>> =
   external: 95,
   qty: 110,
   trend: 85,
+  // avgPrice + revenue shipped 2026-05-12 (per-SKU revenue / avg unit
+  // price). They were added to DEFAULT_COLUMN_ORDER + the render switch
+  // but their widths were missed here — table-fixed gives a column
+  // with no <col width> a ZERO share, so the cells collapsed to near
+  // nothing and their `whitespace-nowrap` content bled visually into
+  // the adjacent stdOrders / total cells. Operator reported the result
+  // as "overlapping in the table" (2026-05-13).
+  avgPrice: 110,   // "$1,234.56" + a little padding
+  revenue: 130,    // "$12,345.67" + a little padding (sum across SKU, can be 6-7 digits)
   stdOrders: 110,
   expOrders: 110,
   total: 115,
