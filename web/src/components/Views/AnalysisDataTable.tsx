@@ -460,14 +460,32 @@ export function AnalysisDataTable({
                         )
                       case 'stdOrders':
                         return (
-                          <td key="stdOrders" className={`${cellPadding} text-right whitespace-nowrap tabular-nums ${TD_BASE}`}>
+                          <td
+                            key="stdOrders"
+                            className={`${cellPadding} text-right whitespace-nowrap tabular-nums ${TD_BASE}`}
+                            // 2026-05-12 clarification: tooltip spells out the
+                            // math so operators reconciling totals don't try
+                            // to multiply order-count × per-unit price (the
+                            // old reading that produced apparent mismatches
+                            // like 16 × $5.80 ≠ row total).
+                            title={
+                              row.standardShipCount > 0
+                                ? `${row.standardShipCount} std orders · ${row.standardShipQtyTotal ?? 0} units · ${stdAvg ? formatAnalysisMoney(stdAvg) : '$0.00'}/unit = ${formatAnalysisMoney((row.standardShipQtyTotal ?? 0) * stdAvg)} (Std subtotal)`
+                                : 'No std-class shipments'
+                            }
+                          >
                             {row.standardShipCount > 0 ? (
-                              <>
+                              <span className="inline-flex items-baseline gap-1.5">
                                 <span className="font-bold">{row.standardShipCount}</span>
-                                <span className="ml-1.5 text-[10.5px] font-semibold tabular-nums text-ok">
+                                <span className="text-[9px] font-semibold uppercase tracking-wider text-ink-3">ord</span>
+                                <span className="text-line-2 px-0.5">·</span>
+                                <span className="font-semibold text-ink-2">{row.standardShipQtyTotal ?? 0}</span>
+                                <span className="text-[9px] font-semibold uppercase tracking-wider text-ink-3">u</span>
+                                <span className="ml-0.5 text-[10.5px] font-semibold tabular-nums text-ok">
                                   {formatAnalysisMoney(stdAvg)}
+                                  <span className="text-ink-3 font-normal">/u</span>
                                 </span>
-                              </>
+                              </span>
                             ) : (
                               <span className="text-line-2">—</span>
                             )}
@@ -475,18 +493,31 @@ export function AnalysisDataTable({
                         )
                       case 'expOrders':
                         return (
-                          <td key="expOrders" className={`${cellPadding} text-right whitespace-nowrap tabular-nums ${TD_BASE}`}>
+                          <td
+                            key="expOrders"
+                            className={`${cellPadding} text-right whitespace-nowrap tabular-nums ${TD_BASE}`}
+                            title={
+                              row.expeditedShipCount > 0
+                                ? `${row.expeditedShipCount} exp orders · ${row.expeditedShipQtyTotal ?? 0} units · ${expAvg ? formatAnalysisMoney(expAvg) : '$0.00'}/unit = ${formatAnalysisMoney((row.expeditedShipQtyTotal ?? 0) * expAvg)} (Exp subtotal)`
+                                : 'No exp-class shipments'
+                            }
+                          >
                             {row.expeditedShipCount > 0 ? (
-                              <>
+                              <span className="inline-flex items-baseline gap-1.5">
                                 <span
                                   className={`inline-flex items-center gap-1 ${pillSize} rounded-full font-bold leading-snug tabular-nums bg-[rgba(224,122,0,.12)] text-[#b86200]`}
                                 >
                                   {row.expeditedShipCount}
                                 </span>
-                                <span className="ml-1.5 text-[10.5px] font-semibold tabular-nums text-ink-3">
+                                <span className="text-[9px] font-semibold uppercase tracking-wider text-ink-3">ord</span>
+                                <span className="text-line-2 px-0.5">·</span>
+                                <span className="font-semibold text-ink-2">{row.expeditedShipQtyTotal ?? 0}</span>
+                                <span className="text-[9px] font-semibold uppercase tracking-wider text-ink-3">u</span>
+                                <span className="ml-0.5 text-[10.5px] font-semibold tabular-nums text-ink-3">
                                   {formatAnalysisMoney(expAvg)}
+                                  <span className="text-ink-3 font-normal">/u</span>
                                 </span>
-                              </>
+                              </span>
                             ) : (
                               <span className="text-line-2">—</span>
                             )}
@@ -583,16 +614,48 @@ export function AnalysisDataTable({
                     )
                   case 'stdOrders':
                     return (
-                      <td key="stdOrders" className={`${ftBase} text-right text-[14px] text-ink`}>
+                      <td
+                        key="stdOrders"
+                        className={`${ftBase} text-right text-[14px] text-ink`}
+                        title={
+                          totals.totalStdCount > 0
+                            ? `${totals.totalStdCount} std orders across ${totals.totalStdQty} units`
+                            : 'No std-class shipments'
+                        }
+                      >
                         {isFirstVisible ? footerTotalsBadge : null}
-                        {totals.totalStdCount > 0 ? totals.totalStdCount.toLocaleString() : '—'}
+                        {totals.totalStdCount > 0 ? (
+                          <span className="inline-flex items-baseline gap-1.5">
+                            <span>{totals.totalStdCount.toLocaleString()}</span>
+                            <span className="text-[9px] font-semibold uppercase tracking-wider text-ink-3">ord</span>
+                            <span className="text-line-2">·</span>
+                            <span className="text-ink-2 font-semibold">{totals.totalStdQty.toLocaleString()}</span>
+                            <span className="text-[9px] font-semibold uppercase tracking-wider text-ink-3">u</span>
+                          </span>
+                        ) : '—'}
                       </td>
                     )
                   case 'expOrders':
                     return (
-                      <td key="expOrders" className={`${ftBase} text-right text-[14px] text-[#b86200]`}>
+                      <td
+                        key="expOrders"
+                        className={`${ftBase} text-right text-[14px] text-[#b86200]`}
+                        title={
+                          totals.totalExpCount > 0
+                            ? `${totals.totalExpCount} exp orders across ${totals.totalExpQty} units`
+                            : 'No exp-class shipments'
+                        }
+                      >
                         {isFirstVisible ? footerTotalsBadge : null}
-                        {totals.totalExpCount > 0 ? totals.totalExpCount.toLocaleString() : '—'}
+                        {totals.totalExpCount > 0 ? (
+                          <span className="inline-flex items-baseline gap-1.5">
+                            <span>{totals.totalExpCount.toLocaleString()}</span>
+                            <span className="text-[9px] font-semibold uppercase tracking-wider text-ink-3">ord</span>
+                            <span className="text-line-2">·</span>
+                            <span className="text-ink-2 font-semibold">{totals.totalExpQty.toLocaleString()}</span>
+                            <span className="text-[9px] font-semibold uppercase tracking-wider text-ink-3">u</span>
+                          </span>
+                        ) : '—'}
                       </td>
                     )
                   case 'total':

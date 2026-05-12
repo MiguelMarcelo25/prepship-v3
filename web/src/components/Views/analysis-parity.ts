@@ -33,6 +33,13 @@ export interface AnalysisTotals {
   totalQty: number
   totalStdCount: number
   totalExpCount: number
+  // 2026-05-12: also sum the UNIT totals per service class. The Std /
+  // Exp columns display per-unit average pricing (boss directive
+  // 2026-05-07), so the math `units × $/unit = class total` only
+  // works if we can show both. Order count alone vs per-unit avg
+  // does NOT multiply to the subtotal in mixed-pack-size catalogs.
+  totalStdQty: number
+  totalExpQty: number
   totalShipping: number
 }
 
@@ -352,6 +359,15 @@ export function buildAnalysisTotals(rows: AnalysisSkuDto[]): AnalysisTotals {
     totalQty: totals.totalQty + toAnalysisNumber(row.qty),
     totalStdCount: totals.totalStdCount + toAnalysisNumber(row.standardShipCount),
     totalExpCount: totals.totalExpCount + toAnalysisNumber(row.expeditedShipCount),
+    // Per-class UNIT totals. The API ships these as standardShipQtyTotal
+    // / expeditedShipQtyTotal (see v2-apiClient.ts) — populated by the
+    // backend's std_qty_total / exp_qty_total SUM(qty) FILTER queries.
+    totalStdQty:
+      totals.totalStdQty
+      + toAnalysisNumber((row as { standardShipQtyTotal?: number }).standardShipQtyTotal),
+    totalExpQty:
+      totals.totalExpQty
+      + toAnalysisNumber((row as { expeditedShipQtyTotal?: number }).expeditedShipQtyTotal),
     totalShipping: totals.totalShipping + toAnalysisNumber(row.totalShipping),
   }), {
     skuCount: 0,
@@ -361,6 +377,8 @@ export function buildAnalysisTotals(rows: AnalysisSkuDto[]): AnalysisTotals {
     totalQty: 0,
     totalStdCount: 0,
     totalExpCount: 0,
+    totalStdQty: 0,
+    totalExpQty: 0,
     totalShipping: 0,
   })
 }
