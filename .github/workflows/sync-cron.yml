@@ -3,9 +3,10 @@ name: Sync ShipStation orders + shipments
 on:
   # Backup safety-net sync. The primary sync lives in-process on the API
   # (src/services/sync-scheduler.ts) and fires every 3 minutes while Render
-  # is awake. This workflow catches gaps when Render spins down.
+  # is awake. This workflow catches gaps when Render spins down; the separate
+  # render-keepalive workflow is responsible for keeping the service warm.
   schedule:
-    - cron: '*/5 * * * *'
+    - cron: '*/10 * * * *'
   workflow_dispatch:
     inputs:
       mode:
@@ -27,6 +28,7 @@ jobs:
   sync:
     name: POST Render sync endpoint
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Hit Render sync endpoint
         env:
@@ -36,8 +38,8 @@ jobs:
           SINCE_DAYS: ${{ github.event.inputs.since_days || '0' }}
         run: |
           if [ -z "$CRON_SECRET" ]; then
-            echo "::error::CRON_SECRET GitHub secret is not set - add it under Settings -> Secrets and variables -> Actions."
-            exit 1
+            echo "::warning::CRON_SECRET GitHub secret is not set - keepalive still runs in render-keepalive.yml, but protected sync is skipped."
+            exit 0
           fi
 
           case "$MODE" in
@@ -58,14 +60,29 @@ jobs:
 
           echo "POST $API_URL$endpoint"
           echo "mode=$MODE since_days=$SINCE_DAYS"
+          set +e
           response=$(curl -s -o /tmp/body -w "%{http_code}" \
             -X POST "$API_URL$endpoint" \
             -H "x-cron-secret: $CRON_SECRET" \
             -H "Content-Type: application/json" \
+            --connect-timeout 10 \
+            --max-time 600 \
+            --retry 1 \
+            --retry-delay 10 \
+            --retry-all-errors \
             --data "$body")
+          curl_exit=$?
+          set -e
+          response="${response:-000}"
           echo "HTTP $response"
-          cat /tmp/body
+          if [ -f /tmp/body ]; then
+            cat /tmp/body
+          fi
           echo ""
+          if [ "$curl_exit" -ne 0 ]; then
+            echo "::error::Sync endpoint curl failed with exit code $curl_exit"
+            exit "$curl_exit"
+          fi
           if [ "$response" -lt 200 ] || [ "$response" -ge 300 ]; then
             echo "::error::Sync endpoint returned $response"
             exit 1
