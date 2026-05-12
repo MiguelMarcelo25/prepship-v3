@@ -1,6 +1,6 @@
 import { lazy, Suspense, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Pencil, Trash2, Wand2, RefreshCw, Users } from 'lucide-react';
+import { Plus, Pencil, Trash2, Wand2, RefreshCw, Users, Power } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { api } from '../lib/api';
 
@@ -41,13 +41,13 @@ export default function Clients() {
   const [creating, setCreating] = useState(false);
 
   const { data, isLoading } = useQuery({
-    queryKey: ['clients'],
-    queryFn: () => api.get<Client[]>('/clients'),
+    queryKey: ['clients', 'admin'],
+    queryFn: () => api.get<Client[]>('/clients?includeInactive=true'),
   });
 
   const stats = useQuery({
-    queryKey: ['clients-order-stats'],
-    queryFn: () => api.get<{ data: ClientStats[] }>('/clients/order-stats'),
+    queryKey: ['clients-order-stats', 'admin'],
+    queryFn: () => api.get<{ data: ClientStats[] }>('/clients/order-stats?includeInactive=true'),
   });
   const statsByClient = new Map<number, ClientStats>(
     (stats.data?.data ?? []).map((s) => [s.clientId, s])
@@ -55,7 +55,51 @@ export default function Clients() {
 
   const remove = useMutation({
     mutationFn: (id: number) => api.delete(`/clients/${id}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['clients'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['clients'] });
+      queryClient.invalidateQueries({ queryKey: ['clients', 'admin'] });
+    },
+  });
+
+  const toggleActive = useMutation({
+    mutationFn: ({ id, active }: { id: number; active: boolean }) =>
+      api.patch<Client>(`/clients/${id}`, { active }),
+    onMutate: async ({ id, active }) => {
+      await queryClient.cancelQueries({ queryKey: ['clients', 'admin'] });
+      const previous = queryClient.getQueryData<Client[]>(['clients', 'admin']);
+      queryClient.setQueryData<Client[]>(['clients', 'admin'], (current) =>
+        current?.map((client) => (client.id === id ? { ...client, active } : client))
+      );
+      return { previous };
+    },
+    onError: (err, _vars, context) => {
+      const previous = (context as { previous?: Client[] } | undefined)?.previous;
+      if (previous) {
+        queryClient.setQueryData(['clients', 'admin'], previous);
+      }
+      alert(`Active toggle failed: ${(err as Error).message}`);
+    },
+    onSuccess: (client) => {
+      window.dispatchEvent(
+        new CustomEvent('prepship:client-active-changed', {
+          detail: { clientId: client.id, active: client.active },
+        })
+      );
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['clients'] });
+      queryClient.invalidateQueries({ queryKey: ['clients', 'admin'] });
+      queryClient.invalidateQueries({ queryKey: ['clients-order-stats'] });
+      queryClient.invalidateQueries({ queryKey: ['clients-order-stats', 'admin'] });
+      queryClient.invalidateQueries({ queryKey: ['orders-count'] });
+      queryClient.invalidateQueries({ queryKey: ['v2-hooks:clients'] });
+      queryClient.invalidateQueries({ queryKey: ['v2-hooks:orders'] });
+      queryClient.invalidateQueries({ queryKey: ['inventory'] });
+      queryClient.invalidateQueries({ queryKey: ['billing-config'] });
+      queryClient.invalidateQueries({ queryKey: ['billing-summary'] });
+      queryClient.invalidateQueries({ queryKey: ['analysis-sku-breakdown'] });
+      queryClient.invalidateQueries({ queryKey: ['analysis-sku-daily'] });
+    },
   });
 
   const sync = useMutation({
@@ -148,15 +192,21 @@ export default function Clients() {
               >
                 <div className="flex items-center justify-between gap-2">
                   <div className="font-bold text-ink truncate">{c.name}</div>
-                  <span
-                    className={`text-2xs font-bold px-1.5 py-0.5 rounded-full shrink-0 ${
+                  <button
+                    type="button"
+                    aria-pressed={c.active}
+                    disabled={toggleActive.isPending}
+                    title={c.active ? 'Turn this client off' : 'Turn this client on'}
+                    onClick={() => toggleActive.mutate({ id: c.id, active: !c.active })}
+                    className={`inline-flex items-center gap-1 text-2xs font-bold px-1.5 py-0.5 rounded-full shrink-0 ring-1 transition ${
                       c.active
-                        ? 'bg-ok-bg text-ok-dark'
-                        : 'bg-surface-3 text-ink-3'
-                    }`}
+                        ? 'bg-ok-bg text-ok-dark ring-line hover:bg-ok-bg/80'
+                        : 'bg-surface-3 text-ink-3 ring-line hover:text-ink-2 hover:bg-surface-2'
+                    } disabled:opacity-60 disabled:cursor-wait`}
                   >
+                    <Power size={9} strokeWidth={2.4} />
                     {c.active ? 'ACTIVE' : 'INACTIVE'}
-                  </span>
+                  </button>
                 </div>
 
                 <div className="text-tiny text-ink-2 space-y-0.5">

@@ -55,7 +55,6 @@ export default function ClientModal({
   const [contactName, setContactName] = useState(existing?.contactName ?? '');
   const [email, setEmail] = useState(existing?.email ?? '');
   const [phone, setPhone] = useState(existing?.phone ?? '');
-  const [active, setActive] = useState(existing?.active ?? true);
   const [storeIds, setStoreIds] = useState(
     (existing?.storeIds ?? []).join(', ')
   );
@@ -74,7 +73,7 @@ export default function ClientModal({
   const [allClients, setAllClients] = useState<Array<{ id: number; name: string; hasV2: boolean }>>([]);
   useEffect(() => {
     let cancelled = false;
-    void api.get<Client[]>('/clients').then((rows) => {
+    void api.get<Client[]>('/clients?activeOnly=true').then((rows) => {
       if (cancelled) return;
       setAllClients(
         rows
@@ -100,6 +99,8 @@ export default function ClientModal({
         : api.post<Client>('/clients', body),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['clients'] });
+      queryClient.invalidateQueries({ queryKey: ['clients', 'admin'] });
+      queryClient.invalidateQueries({ queryKey: ['v2-hooks:clients'] });
       onClose();
     },
   });
@@ -110,12 +111,11 @@ export default function ClientModal({
     const parsedRateSource = rateSourceClientId.trim()
       ? Number.parseInt(rateSourceClientId, 10)
       : null;
-    mutation.mutate({
+    const payload: Body = {
       name: name.trim(),
       contactName: contactName.trim() || null,
       email: email.trim() || null,
       phone: phone.trim() || null,
-      active,
       storeIds: parseStoreIds(storeIds),
       ssApiKey: ssApiKey.trim() || null,
       ssApiSecret: ssApiSecret.trim() || null,
@@ -124,7 +124,9 @@ export default function ClientModal({
         parsedRateSource != null && Number.isFinite(parsedRateSource) && parsedRateSource > 0
           ? parsedRateSource
           : null,
-    });
+    };
+    if (!isEdit) payload.active = true;
+    mutation.mutate(payload);
   };
 
   return (
@@ -204,16 +206,6 @@ export default function ClientModal({
               client card after saving to re-assign existing orders.
             </div>
           </div>
-
-          <label className="flex items-center gap-2 text-sm2 text-ink-2 cursor-pointer select-none pt-1">
-            <input
-              type="checkbox"
-              checked={active}
-              onChange={(e) => setActive(e.target.checked)}
-              className="accent-brand"
-            />
-            Active
-          </label>
 
           {/* HIDDEN PER USER REQUEST (2026-05-09): "Carrier credentials
               (advanced)" section is commented out of the UI. The state

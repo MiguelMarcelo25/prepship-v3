@@ -24,6 +24,14 @@ const EXPEDITED_SERVICES = [
 ] as const;
 
 const EXPEDITED_SERVICES_SQL = sql`ARRAY[${sql.join(EXPEDITED_SERVICES.map((s) => sql`${s}`), sql`, `)}]::text[]`;
+const activeInventoryClientPredicate = sql`(
+  ${inventory.clientId} is null
+  or exists (
+    select 1 from clients visible_client
+    where visible_client.id = ${inventory.clientId}
+      and coalesce(visible_client.active, true) = true
+  )
+)`;
 
 const listQuery = paginationSchema.extend({
   clientId: z.coerce.number().int().optional(),
@@ -44,6 +52,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         : undefined,
       q.lowStock ? lte(inventory.stockQty, inventory.reorderLevel) : undefined,
       eq(inventory.active, true),
+      activeInventoryClientPredicate,
     ].filter(<T>(x: T | undefined): x is T => x !== undefined)
   );
 
@@ -121,6 +130,7 @@ app.get('/ledger', zValidator('query', ledgerQuery), async (c) => {
       q.type ? eq(inventoryLedger.type, q.type) : undefined,
       dateStart && !Number.isNaN(dateStart.getTime()) ? gte(inventoryLedger.createdAt, dateStart) : undefined,
       dateEnd && !Number.isNaN(dateEnd.getTime()) ? lte(inventoryLedger.createdAt, dateEnd) : undefined,
+      activeInventoryClientPredicate,
     ].filter(<T>(x: T | undefined): x is T => x !== undefined)
   );
 
@@ -189,6 +199,7 @@ app.get(
           ...[
             clientId !== undefined ? eq(inventory.clientId, clientId) : undefined,
             eq(inventory.active, true),
+            activeInventoryClientPredicate,
             lte(inventory.stockQty, inventory.reorderLevel),
           ].filter(<T>(x: T | undefined): x is T => x !== undefined)
         )

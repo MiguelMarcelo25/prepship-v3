@@ -66,7 +66,16 @@ export async function inventoryStats(clientId?: number) {
       count(*) filter (where stock_qty <= 0)::int                                as out_of_stock,
       coalesce(sum(stock_qty), 0)::int                                           as total_units
     from inventory
-    where ${where} and active = true
+    where ${where}
+      and active = true
+      and (
+        client_id is null
+        or exists (
+          select 1 from clients visible_client
+          where visible_client.id = inventory.client_id
+            and coalesce(visible_client.active, true) = true
+        )
+      )
   `);
   return (
     rows[0] ?? { total: 0, low_stock: 0, out_of_stock: 0, total_units: 0 }

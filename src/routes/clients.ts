@@ -10,6 +10,11 @@ import { EXCLUDED_STORE_IDS_SQL, isExcludedStoreId } from '../config/prepship';
 
 const app = new Hono();
 
+function boolQuery(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes';
+}
+
 const body = z.object({
   name: z.string().min(1),
   storeIds: z.array(z.number().int()).optional(),
@@ -28,7 +33,13 @@ const body = z.object({
 });
 
 app.get('/', async (c) => {
-  const rows = await db.select().from(clients);
+  const includeInactive = boolQuery(c.req.query('includeInactive'));
+  const activeOnlyRaw = c.req.query('activeOnly');
+  const activeOnly = activeOnlyRaw === undefined ? !includeInactive : boolQuery(activeOnlyRaw);
+  const rows = await db
+    .select()
+    .from(clients)
+    .where(activeOnly ? eq(clients.active, true) : undefined);
   return c.json(rows);
 });
 
@@ -179,10 +190,21 @@ app.get(
     z.object({
       dateFrom: z.string().datetime().optional(),
       dateTo: z.string().datetime().optional(),
+      includeInactive: z
+        .union([z.boolean(), z.enum(['true', 'false', '1', '0'])])
+        .optional()
+        .transform((v) => v === true || v === 'true' || v === '1'),
     })
   ),
   async (c) => {
     const q = c.req.valid('query');
+    const activeClientFilter = q.includeInactive
+      ? sql``
+      : sql`and exists (
+          select 1 from clients visible_client
+          where visible_client.id = o.client_id
+            and coalesce(visible_client.active, true) = true
+        )`;
     const dateFilter = sql`
       ${q.dateFrom ? sql`and o.order_date >= ${q.dateFrom}::timestamptz` : sql``}
       ${q.dateTo ? sql`and o.order_date <= ${q.dateTo}::timestamptz` : sql``}
@@ -196,6 +218,7 @@ app.get(
       from orders o
       where o.client_id is not null
         and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+        ${activeClientFilter}
         ${dateFilter}
         and not (
           o.order_status = 'awaiting_shipment'

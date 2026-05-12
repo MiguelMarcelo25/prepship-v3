@@ -79,11 +79,19 @@ export const TEST_CLIENT_IDS = new Set<number>();
 
 function isHiddenClient(
   c:
-    | { name?: string | null; id?: number | null; isTest?: boolean | null }
+    | { name?: string | null; id?: number | null; isTest?: boolean | null; active?: boolean | null }
     | null
     | undefined
 ): boolean {
   if (!c) return false;
+  if (typeof c.id === 'number') {
+    HIDDEN_CLIENT_IDS.delete(c.id);
+    TEST_CLIENT_IDS.delete(c.id);
+  }
+  if (c.active === false) {
+    if (typeof c.id === 'number') HIDDEN_CLIENT_IDS.add(c.id);
+    return true;
+  }
   if (c.isTest === true) {
     if (typeof c.id === 'number') {
       TEST_CLIENT_IDS.add(c.id);
@@ -288,6 +296,13 @@ function normalizeInventoryDto(row: any, clientNamesById?: Map<number, string>):
     lastMovement: row.lastMovement ?? null,
     soldLast30Days,
   };
+}
+
+function filterRowsToActiveClients(rows: any[], activeClientIds: Set<number>): any[] {
+  return rows.filter((row) => {
+    const clientId = parseFiniteNumber(row?.clientId ?? row?.client_id);
+    return clientId == null || clientId === 0 || activeClientIds.has(clientId);
+  });
 }
 
 function normalizeClientDtoRows(rows: any[]): any[] {
@@ -1174,7 +1189,7 @@ export const apiClient = {
           api
             .get<any>(`/clients/order-stats${qs({ dateFrom, dateTo })}`)
             .catch(() => ({ data: [] })),
-          api.get<any>('/clients').catch(() => []),
+          api.get<any>('/clients?includeInactive=true').catch(() => []),
         ]);
 
         const clientsArr = Array.isArray(clientsRes) ? clientsRes : [];
@@ -1257,7 +1272,7 @@ export const apiClient = {
       async () => {
         const [storesRes, clientRowsRes] = await Promise.all([
           api.get<any>('/init/stores').catch(() => ({ data: [] })),
-          api.get<any>('/clients').catch(() => []),
+          api.get<any>('/clients?includeInactive=true').catch(() => []),
         ]);
         const clientRows = Array.isArray(clientRowsRes) ? clientRowsRes : [];
         const clientsById = new Map<number, any>();
@@ -1284,7 +1299,7 @@ export const apiClient = {
           })
           .filter((store: any) => Number.isFinite(store.storeId));
 
-        const clients = await api.get<any>('/clients');
+        const clients = await api.get<any>('/clients?includeInactive=true');
         const arr = Array.isArray(clients) ? clients : [];
         // Call isHiddenClient on every client first so HIDDEN_CLIENT_IDS +
         // TEST_CLIENT_IDS get populated as a side-effect (downstream filters
@@ -1316,7 +1331,9 @@ export const apiClient = {
 
   // ─── Clients ────────────────────────────────────────────────────────────────
   fetchClients(): Promise<any[]> {
-    return api.get<any>('/clients').then((res) => normalizeClientDtoRows(Array.isArray(res) ? res : []));
+    return api
+      .get<any>(`/clients${qs({ activeOnly: true })}`)
+      .then((res) => normalizeClientDtoRows(Array.isArray(res) ? res : []));
   },
 
   listClients(): Promise<any[]> {
@@ -2131,12 +2148,19 @@ export const apiClient = {
         const clientNamesById = new Map<number, string>(
           clientRows.map((client: any) => [Number(client.clientId ?? client.id), String(client.name ?? '')])
         );
+        const activeClientIds = new Set<number>(
+          clientRows
+            .map((client: any) => Number(client.clientId ?? client.id))
+            .filter(Number.isFinite)
+        );
 
         // Backend response shape can be either a bare array (legacy) or
         // a paginated envelope { data, total, pages, page, pageSize }.
         // The paginated case is what triggers the multi-page fetch.
         if (Array.isArray(first)) {
-          return first.map((row) => normalizeInventoryDto(row, clientNamesById));
+          return filterRowsToActiveClients(first, activeClientIds).map((row) =>
+            normalizeInventoryDto(row, clientNamesById)
+          );
         }
         const firstData: any[] = Array.isArray(first?.data) ? first.data : [];
         const totalPages = Number.isFinite(Number(first?.totalPages))
@@ -2146,7 +2170,9 @@ export const apiClient = {
             : 1;
 
         if (totalPages <= 1) {
-          return firstData.map((row) => normalizeInventoryDto(row, clientNamesById));
+          return filterRowsToActiveClients(firstData, activeClientIds).map((row) =>
+            normalizeInventoryDto(row, clientNamesById)
+          );
         }
 
         // Fetch pages 2..N in parallel. If any fails, skip it (we'd rather
@@ -2165,7 +2191,9 @@ export const apiClient = {
         );
 
         const allRows = [...firstData, ...remaining.flat()];
-        return allRows.map((row) => normalizeInventoryDto(row, clientNamesById));
+        return filterRowsToActiveClients(allRows, activeClientIds).map((row) =>
+          normalizeInventoryDto(row, clientNamesById)
+        );
       },
       []
     );
@@ -2249,7 +2277,7 @@ export const apiClient = {
           api.get<any>(
             `/inventory${qs({ clientId, lowStock: true, pageSize: 200 } as any)}`
           ),
-          api.get<any>('/clients').catch(() => []),
+          api.get<any>(`/clients${qs({ activeOnly: true })}`).catch(() => []),
         ]);
         const rows = Array.isArray(res)
           ? res
@@ -2261,7 +2289,7 @@ export const apiClient = {
         for (const c of clientsArr) {
           if (c?.id != null) nameById.set(c.id, c?.name ?? '');
         }
-        return rows.map((row: any) => ({
+        return filterRowsToActiveClients(rows, new Set(nameById.keys())).map((row: any) => ({
           ...row,
           clientName:
             row?.clientId != null ? nameById.get(row.clientId) ?? null : null,
@@ -2924,7 +2952,7 @@ export const apiClient = {
       async () => {
         const [res, clientsRes] = await Promise.all([
           api.get<any>(`/billing/summary${qs({ dateFrom, dateTo, clientId })}`),
-          api.get<any>('/clients').catch(() => []),
+          api.get<any>(`/clients${qs({ activeOnly: true })}`).catch(() => []),
         ]);
 
         // Backwards-compat: if server one day changes to a flat array or a
@@ -3187,7 +3215,7 @@ export const apiClient = {
         const q = normalizeAnalysisRange(query);
         const [breakdown, clientsRes] = await Promise.all([
           api.get<any>(`/analysis/sku-breakdown${qs(q)}`),
-          api.get<any>('/clients').catch(() => []),
+          api.get<any>(`/clients${qs({ activeOnly: true })}`).catch(() => []),
         ]);
         const clients = Array.isArray(clientsRes) ? clientsRes : [];
         const nameById = new Map<number, string>();

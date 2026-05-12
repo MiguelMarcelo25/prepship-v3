@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { clients } from '../db/schema/clients';
 import { locations } from '../db/schema/locations';
@@ -13,7 +13,7 @@ const app = new Hono();
 // Single bootstrap call — returns everything needed to render the app shell.
 app.get('/init-data', async (c) => {
   const [clientsRows, locationsRows, packagesRows] = await Promise.all([
-    db.select().from(clients),
+    db.select().from(clients).where(eq(clients.active, true)),
     db.select().from(locations),
     db.select().from(packages),
   ]);
@@ -148,7 +148,19 @@ app.get('/counts', async (c) => {
             )
         ) as on_hold,
         (select count(*)::int from print_queue_orders where status = 'queued') as queue,
-        (select count(*)::int from inventory where active = true) as inventory
+        (
+          select count(*)::int
+          from inventory i
+          where i.active = true
+            and (
+              i.client_id is null
+              or exists (
+                select 1 from clients inventory_client
+                where inventory_client.id = i.client_id
+                  and coalesce(inventory_client.active, true) = true
+              )
+            )
+        ) as inventory
     `),
     db.execute<{ orderStatus: string; cnt: number }>(sql`
       select o.order_status as "orderStatus", count(*)::int as cnt

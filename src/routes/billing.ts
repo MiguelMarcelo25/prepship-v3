@@ -231,7 +231,7 @@ app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
   const { clientId, dateFrom, dateTo } = c.req.valid('query');
 
   const clientRow = await db.execute<{ id: number; name: string }>(
-    sql`select id, name from clients where id = ${clientId} limit 1`
+    sql`select id, name from clients where id = ${clientId} and active = true limit 1`
   );
   if (!clientRow.length) return c.text('Client not found', 404);
 
