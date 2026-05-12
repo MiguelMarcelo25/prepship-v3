@@ -1537,7 +1537,10 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                   const meta = SKU_COLUMNS[key]
                   const isDragging = draggingColumn === key
                   const isDragOver = dragOverColumn === key && draggingColumn !== key
-                  const padX = meta.align === 'right' ? 'pr-4 pl-3' : 'px-3'
+                  // pl-5 reserves room on the left for the drag grip,
+                  // pr-5 reserves room on the right for the resize
+                  // handle so neither overlaps the label text.
+                  const padX = meta.align === 'right' ? 'pr-5 pl-3' : 'pl-5 pr-5'
                   return (
                     <th
                       key={key}
@@ -1547,11 +1550,28 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                       onDrop={handleColumnDrop(key)}
                       onDragEnd={handleColumnDragEnd}
                       style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
-                      className={`relative select-none border-b-2 border-line ${padX} py-2 ${meta.align === 'right' ? 'text-right' : 'text-left'} text-2xs font-bold uppercase tracking-[0.04em] text-ink-3 transition-colors duration-150 ${
+                      className={`group relative select-none border-b-2 border-line ${padX} py-2 ${meta.align === 'right' ? 'text-right' : 'text-left'} text-2xs font-bold uppercase tracking-[0.04em] text-ink-3 transition-colors duration-150 ${
                         isDragging ? 'opacity-40' : ''
                       } ${isDragOver ? 'bg-brand-bg shadow-[inset_3px_0_0_0_var(--brand)]' : ''}`}
                       title={`${meta.label} · drag to reorder · drag right edge to resize`}
                     >
+                      {/* Drag grip indicator — three vertical dots on
+                          the left edge of every toggleable header.
+                          Always faintly visible (text-ink-3/40) so
+                          operators can SEE the column is draggable;
+                          intensifies on header hover so the
+                          affordance is unmistakable when targeting
+                          a column. Sits in the pl-5 padding gutter
+                          so it never overlaps the label text. */}
+                      <span
+                        aria-hidden
+                        className="absolute left-1 top-1/2 -translate-y-1/2 flex flex-col items-center gap-[2px] text-ink-3/40 group-hover:text-brand transition-colors pointer-events-none"
+                        title="Drag to reorder"
+                      >
+                        <span className="block h-[3px] w-[3px] rounded-full bg-current" />
+                        <span className="block h-[3px] w-[3px] rounded-full bg-current" />
+                        <span className="block h-[3px] w-[3px] rounded-full bg-current" />
+                      </span>
                       {/* SortableHeader is the inner click target —
                           rendering it as a borderless <span> so the
                           parent <th> owns sizing/drag while sort
@@ -1565,20 +1585,32 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                       >
                         {meta.label}
                       </SortableHeader>
-                      {/* Resize handle — 6px hot zone on the right
-                          edge, picks up col-resize cursor on hover.
-                          Drag updates columnWidths[key] live via the
-                          window-level mousemove handler. */}
+                      {/* Resize handle — always-visible 1px vertical
+                          line on the right edge so operators can SEE
+                          where to grab. Surrounded by a 10px hot zone
+                          (the outer wrapper) so the click target is
+                          big enough to hit easily. Line intensifies
+                          + widens to 2px on hover, and turns solid
+                          brand-blue while actively resizing.
+                          Stops propagation on click/dragStart so a
+                          click on the line doesn't fire sort or
+                          start a column-reorder drag. */}
                       <div
                         role="separator"
                         aria-orientation="vertical"
                         aria-label={`Resize ${meta.label}`}
                         onMouseDown={handleColumnResizeStart(key)}
                         onClick={(e) => e.stopPropagation()}
-                        onDragStart={(e) => e.stopPropagation()}
-                        className="absolute top-0 right-0 h-full w-[6px] cursor-col-resize hover:bg-brand/40 active:bg-brand transition-colors"
+                        onDragStart={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                        }}
+                        draggable={false}
+                        className="absolute top-1 bottom-1 -right-[5px] w-[10px] cursor-col-resize flex items-center justify-center group/handle"
                         style={{ touchAction: 'none' }}
-                      />
+                      >
+                        <span className="block w-[1.5px] h-full rounded bg-line-2/60 group-hover/handle:bg-brand group-hover/handle:w-[2.5px] group-active/handle:bg-brand transition-all duration-150" />
+                      </div>
                     </th>
                   )
                 })}
