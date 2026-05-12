@@ -1309,6 +1309,18 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
     })
   }, [alertOnly, activeOnly, items, stockClientId, stockSearch])
 
+  // 2026-05-12: Counter for the "Active only" toolbar toggle.
+  // Counts off the full `items` array (NOT filteredRows) because we
+  // want to surface the global deactivated count regardless of what's
+  // currently visible. Tri-state-safe: `null` is treated as active,
+  // only an explicit `false` counts. Mirrors the predicate used by
+  // pinRowToBottom and filterInventoryRows so the three numbers can't
+  // disagree.
+  const inactiveCount = useMemo(
+    () => items.reduce((sum, row) => (row.active === false ? sum + 1 : sum), 0),
+    [items],
+  )
+
   const sortedRows = useMemo(() => {
     if (!stockSort) return filteredRows
     return [...filteredRows].sort((left, right) => compareInventoryRows(left, right, stockSort))
@@ -2578,6 +2590,38 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                 />
               </span>
               Active only
+              {/* 2026-05-12: Inline status badge so operators always
+                  understand what the toggle is doing right now.
+                  - inactiveCount > 0  → shows the count, wording
+                    swaps based on whether the toggle hides them
+                    ("X hidden") or surfaces them ("X deactivated").
+                  - inactiveCount === 0 → italic "no deactivated SKUs"
+                    so flipping the toggle doesn't look broken when
+                    there's genuinely nothing to reveal. */}
+              {inactiveCount > 0 ? (
+                <span
+                  style={{
+                    color: 'var(--text3)',
+                    fontSize: 11,
+                    fontWeight: 500,
+                    marginLeft: 2,
+                  }}
+                >
+                  · {inactiveCount} {activeOnly ? 'hidden' : 'deactivated'}
+                </span>
+              ) : (
+                <span
+                  style={{
+                    color: 'var(--text3)',
+                    fontSize: 11,
+                    fontStyle: 'italic',
+                    marginLeft: 2,
+                  }}
+                  title="No SKUs are currently deactivated — toggling has no effect"
+                >
+                  · no deactivated SKUs
+                </span>
+              )}
             </button>
           </div>
 
@@ -2594,7 +2638,15 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
           ) : sortedRows.length === 0 ? (
             <div className="empty-state">
               <div className="empty-icon">📭</div>
-              <div>{alertOnly ? 'No low/out stock' : 'No SKUs found'}</div>
+              <div>
+                {alertOnly
+                  ? 'No low/out stock'
+                  : activeOnly && inactiveCount === 0
+                    ? 'No SKUs found'
+                    : !activeOnly && inactiveCount === 0
+                      ? 'No SKUs found · no deactivated SKUs to reveal'
+                      : 'No SKUs found'}
+              </div>
             </div>
           ) : !bulkEditMode ? (
             /* 2026-05-12: NORMAL mode now uses the shared <Table>
