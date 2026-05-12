@@ -2270,11 +2270,14 @@ export const apiClient = {
       }
       // Unknown keys dropped to avoid zod 400s.
     }
-    return safe(
-      'updateInventoryItem',
-      () => api.patch<any>(`/inventory/${invSkuId}`, payload),
-      {}
-    );
+    // 2026-05-12: don't wrap in safe() — callers (handleToggleRowActive
+    // in InventoryView, the Edit-SKU save handler) wrap the call in
+    // their own try/catch and ROLL BACK optimistic state on error.
+    // safe()'s "log warning + return {}" swallow turned every PATCH
+    // failure into a silent success, which is why the active toggle
+    // appeared to do nothing for a week before the zod-strip bug was
+    // also found. Let errors propagate so the catch path actually runs.
+    return api.patch<any>(`/inventory/${invSkuId}`, payload);
   },
 
   fetchInventoryAlerts(clientId?: number): Promise<any[]> {

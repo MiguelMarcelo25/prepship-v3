@@ -615,6 +615,12 @@ const createBody = z.object({
   length: z.number().nonnegative().nullable().optional(),
   width: z.number().nonnegative().nullable().optional(),
   height: z.number().nonnegative().nullable().optional(),
+  // 2026-05-12: `active` was missing from this schema, so PATCHes
+  // from the toolbar/per-row toggle had the field silently stripped
+  // by zod's default .strip() mode — the row's updatedAt bumped but
+  // the active column never changed. Adding it here makes the
+  // active-only toggle and the per-row toggle actually persist.
+  active: z.boolean().optional(),
 });
 
 app.post('/', zValidator('json', createBody), async (c) => {
