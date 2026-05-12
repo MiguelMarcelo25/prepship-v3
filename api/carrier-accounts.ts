@@ -13,9 +13,11 @@
 //                                             from 'portal' → 'admin' on the
 //                                             same transaction (Option A,
 //                                             2026-05-12 audit).
-//   PATCH  /api/carrier-accounts?id=N       → flip source between 'admin' and
-//                                             'portal' (explicit approval flow,
-//                                             Option B). Body: { source: 'admin' }
+//   PATCH  /api/carrier-accounts?id=N       → partial update. Body accepts
+//                                             ANY combination of:
+//                                               { source: 'admin'|'portal' }   → flip source (explicit approval flow)
+//                                               { label: string }              → rename the display label
+//                                             Empty body returns 400.
 //   DELETE /api/carrier-accounts?id=N       → delete the carrier_accounts row
 //                                             (cascades to carrier_account_clients)
 //
@@ -429,15 +431,25 @@ export default async function handler(req: any, res: any): Promise<void> {
     }
 
     if (req.method === 'PATCH') {
-      // Option B — explicit source flip. Used by the "Approve" button
-      // in the Pending Client Integrations card and on portal-source
-      // rows in the main Settings list. Lets the operator promote a
-      // submitted carrier without immediately assigning any clients
-      // (the legacy `clientId` fallback in v2-apiClient.ts is still in
-      // play, so the original-owner client retains access).
+      // Partial-update endpoint. Two independent fields are
+      // supported; the body can carry one, the other, or both:
+      //
+      //   { source: 'admin' | 'portal' }
+      //     Source-flip flow (Option B from the 2026-05-12 audit).
+      //     Used by the "Approve" button in the Pending Client
+      //     Integrations card and on portal-source rows in the main
+      //     Settings list. Lets the operator promote a submitted
+      //     carrier without immediately assigning any clients.
+      //
+      //   { label: string }
+      //     Rename flow (2026-05-12). Operator-friendly way to
+      //     change the display name on a carrier account from
+      //     Settings → Carriers. Label is trimmed and capped at 200
+      //     characters to match the POST upsert path's slicing.
+      //     Empty/whitespace-only labels become NULL so the row
+      //     falls back to its account-identifier in the UI.
       //
       // URL: PATCH /api/carrier-accounts?id={carrierAccountId}
-      // Body: { source: 'admin' | 'portal' }   ← only `source` is supported
       const url = new URL(req.url ?? '', 'http://x');
       const idStr = url.searchParams.get('id');
       const id = idStr != null ? Number(idStr) : NaN;
@@ -447,22 +459,83 @@ export default async function handler(req: any, res: any): Promise<void> {
       }
 
       const body = (await readBody(req)) as Record<string, unknown>;
-      const rawSource = body?.source != null ? String(body.source) : '';
-      if (!ALLOWED_SOURCES.has(rawSource)) {
+      const hasSource = body?.source !== undefined;
+      const hasLabel = body?.label !== undefined;
+
+      // Reject empty bodies up-front so the caller gets a clear
+      // error instead of a successful no-op UPDATE.
+      if (!hasSource && !hasLabel) {
         res.status(400).json({
-          error: `source must be one of: ${[...ALLOWED_SOURCES].join(', ')}`,
+          error: 'PATCH body must include at least one of: source, label',
         });
         return;
       }
 
-      const updated = await sql<Array<Record<string, unknown>>>`
-        UPDATE ${sql(TABLE)}
-        SET source = ${rawSource}, updated_at = NOW()
-        WHERE id = ${id}
-        RETURNING id, client_id AS "clientId", provider, label,
-                  account_identifier AS "accountIdentifier",
-                  source, active, created_at AS "createdAt"
-      `;
+      // Validate source if present.
+      let validatedSource: string | null = null;
+      if (hasSource) {
+        const rawSource = body?.source != null ? String(body.source) : '';
+        if (!ALLOWED_SOURCES.has(rawSource)) {
+          res.status(400).json({
+            error: `source must be one of: ${[...ALLOWED_SOURCES].join(', ')}`,
+          });
+          return;
+        }
+        validatedSource = rawSource;
+      }
+
+      // Normalize label if present. Trim + 200-char cap mirror the
+      // POST upsert path so a rename can never produce a label that
+      // POST wouldn't accept. Empty after trim → NULL so the UI's
+      // existing `label ?? accountIdentifier ?? '—'` fallback chain
+      // takes over.
+      let validatedLabel: string | null = null;
+      let labelGoesNull = false;
+      if (hasLabel) {
+        const rawLabel = body?.label == null ? '' : String(body.label);
+        const trimmed = rawLabel.trim().slice(0, 200);
+        if (trimmed.length === 0) {
+          labelGoesNull = true;
+        } else {
+          validatedLabel = trimmed;
+        }
+      }
+
+      // Compose the SET clause dynamically based on which fields
+      // arrived. updated_at always bumps so anyone watching the row
+      // (e.g. cache layer) sees a fresh timestamp.
+      let updated: Array<Record<string, unknown>>;
+      if (hasSource && hasLabel) {
+        updated = (await sql<Array<Record<string, unknown>>>`
+          UPDATE ${sql(TABLE)}
+          SET source = ${validatedSource},
+              label = ${labelGoesNull ? null : validatedLabel},
+              updated_at = NOW()
+          WHERE id = ${id}
+          RETURNING id, client_id AS "clientId", provider, label,
+                    account_identifier AS "accountIdentifier",
+                    source, active, created_at AS "createdAt"
+        `) as Array<Record<string, unknown>>;
+      } else if (hasSource) {
+        updated = (await sql<Array<Record<string, unknown>>>`
+          UPDATE ${sql(TABLE)}
+          SET source = ${validatedSource}, updated_at = NOW()
+          WHERE id = ${id}
+          RETURNING id, client_id AS "clientId", provider, label,
+                    account_identifier AS "accountIdentifier",
+                    source, active, created_at AS "createdAt"
+        `) as Array<Record<string, unknown>>;
+      } else {
+        updated = (await sql<Array<Record<string, unknown>>>`
+          UPDATE ${sql(TABLE)}
+          SET label = ${labelGoesNull ? null : validatedLabel}, updated_at = NOW()
+          WHERE id = ${id}
+          RETURNING id, client_id AS "clientId", provider, label,
+                    account_identifier AS "accountIdentifier",
+                    source, active, created_at AS "createdAt"
+        `) as Array<Record<string, unknown>>;
+      }
+
       if (updated.length === 0) {
         res.status(404).json({ error: `carrier_accounts row #${id} not found` });
         return;

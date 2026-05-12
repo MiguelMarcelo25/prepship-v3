@@ -12,6 +12,7 @@ import {
   Users2,
   Trash2,
   PackageSearch,
+  Pencil,
   Plus,
   Check as CheckIcon,
   X as XIcon,
@@ -1009,6 +1010,26 @@ async function approveCarrierIntegration(rowId: number): Promise<void> {
   )
 }
 
+// PATCH /carrier-accounts?id=N { label: '<new name>' } — rename the
+// carrier account's display label. Backend trims + slices to 200
+// chars to mirror POST's upsert path. Returns the updated row so
+// the FE can sync local state without a full refetch. Carriers
+// only — store_accounts uses a different table; if you need that
+// too, mirror this pattern in store-accounts.ts.
+async function renameCarrierIntegration(
+  rowId: number,
+  label: string,
+): Promise<{ label: string | null } | null> {
+  const res = await callVercelFunction<{ data: { label: string | null } | null }>(
+    `/carrier-accounts?id=${rowId}`,
+    {
+      method: 'PATCH',
+      body: { label },
+    },
+  )
+  return res?.data ?? null
+}
+
 interface WalmartOrdersResult {
   ok: boolean
   fetched?: number
@@ -1121,6 +1142,13 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
   // rows. Separate from `deleting` / `testing` so the three actions
   // can coexist without their loading labels colliding.
   const [approving, setApproving] = useState<Record<number, boolean>>({})
+  // Rename modal state. Only one modal is open at a time;
+  // `renamingForId` holds the SavedRow.id (or null = closed).
+  // `renameDraft` is the working text the operator is typing.
+  // `renameSaving` blocks Save while the PATCH is in flight.
+  const [renamingForId, setRenamingForId] = useState<number | null>(null)
+  const [renameDraft, setRenameDraft] = useState('')
+  const [renameSaving, setRenameSaving] = useState(false)
   // Per-row "Assign Clients" popover state. Only one popover is open
   // at a time — `assignOpenForId` holds the SavedRow.id (or null).
   // `assignDraft` is the in-progress checkbox set inside the open
@@ -1272,6 +1300,53 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
       alert(`Failed to save assignments: ${err instanceof Error ? err.message : 'Unknown error'}`)
     } finally {
       setAssignSaving(false)
+    }
+  }
+
+  // Open the rename modal for a row, seeding the draft with the
+  // current label so the operator just has to edit not re-type.
+  // Carriers only — `store_accounts` rows route through a different
+  // table that doesn't yet have a label-update endpoint.
+  const openRenameModal = (d: SavedRow) => {
+    if (d.kind !== 'carrier') return
+    setRenameDraft(d.label ?? '')
+    setRenamingForId(d.id)
+  }
+  const closeRenameModal = () => {
+    if (renameSaving) return
+    setRenamingForId(null)
+    setRenameDraft('')
+  }
+  // Persist the new label via PATCH. Optimistic local update so the
+  // row text changes the moment the modal closes — the backend
+  // response is the authoritative value but in practice it matches
+  // the trimmed draft (we mirror the backend's trim/cap rules).
+  const runRename = async (d: SavedRow) => {
+    if (d.kind !== 'carrier') return
+    const next = renameDraft.trim().slice(0, 200)
+    if (next === (d.label ?? '')) {
+      // No-op — operator opened the modal but didn't change anything.
+      closeRenameModal()
+      return
+    }
+    setRenameSaving(true)
+    try {
+      const result = await renameCarrierIntegration(d.accountId, next)
+      const persistedLabel = result?.label ?? (next.length > 0 ? next : null)
+      setSaved((prev) =>
+        prev.map((row) =>
+          row.id === d.id ? { ...row, label: persistedLabel } : row,
+        ),
+      )
+      // The Rate Browser sidebar caches account labels — bust it so
+      // the new name shows up everywhere without a 60s wait.
+      refreshAccountsCache()
+      setRenamingForId(null)
+      setRenameDraft('')
+    } catch (err) {
+      alert(`Failed to rename: ${err instanceof Error ? err.message : 'Unknown error'}`)
+    } finally {
+      setRenameSaving(false)
     }
   }
 
@@ -1714,6 +1789,20 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
               title={isShipStation ? SHIPSTATION_MANAGE_HINT : 'Fetch a sample shipping rate for this carrier'}
             />
           ) : null}
+          {/* Edit — rename the carrier's display label. Carriers
+              only (store_accounts rows route through a different
+              table and don't have a label-update endpoint yet).
+              Subtle variant so it doesn't compete with the primary
+              actions (Assign / Approve) for emphasis. */}
+          {d.kind === 'carrier' ? (
+            <ActionButton
+              icon={<Pencil size={11} strokeWidth={2.5} />}
+              label="Edit"
+              variant="subtle"
+              onClick={() => openRenameModal(d)}
+              title="Rename this carrier account"
+            />
+          ) : null}
           {/* Approve — only rendered for portal-source carrier rows.
               Promotes the row to admin source so rate-shop and other
               downstream consumers (which filter ?source=admin) can see
@@ -2112,6 +2201,239 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
                   </motion.button>
                 </div>
               </motion.div>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>,
+        document.body,
+        )}
+        {/* Rename modal — small single-input form. Same portal +
+            transformed-ancestor mitigation as the Assign popover
+            (parent <motion.li> has whileHover transform). Carriers
+            only — d.kind === 'carrier' is enforced at the trigger
+            so this only renders for those rows. */}
+        {createPortal(
+        <AnimatePresence>
+          {renamingForId === d.id ? (
+            <motion.div
+              key="renameBackdrop"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.15 }}
+              onClick={(e) => {
+                if (e.target === e.currentTarget && !renameSaving) closeRenameModal()
+              }}
+              style={{
+                position: 'fixed',
+                inset: 0,
+                background: 'rgba(15, 23, 42, 0.5)',
+                backdropFilter: 'blur(4px)',
+                WebkitBackdropFilter: 'blur(4px)',
+                zIndex: 9998,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: 24,
+              }}
+            >
+              <motion.form
+                key="renamePanel"
+                initial={{ opacity: 0, y: 12, scale: 0.97 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 8, scale: 0.97 }}
+                transition={{ type: 'spring', stiffness: 380, damping: 28 }}
+                onSubmit={(event) => {
+                  // Form-level submit so Enter inside the input fires
+                  // the save without operator having to click. preventDefault
+                  // is critical because this form is INSIDE a wrapping
+                  // <form> for the Add Carrier flow (would otherwise
+                  // also navigate / re-render the parent).
+                  event.preventDefault()
+                  event.stopPropagation()
+                  if (!renameSaving) void runRename(d)
+                }}
+                style={{
+                  background: 'var(--surface)',
+                  borderRadius: 12,
+                  width: 'min(420px, 100%)',
+                  overflow: 'hidden',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  boxShadow:
+                    '0 20px 60px -12px rgba(15, 23, 42, 0.35), 0 8px 24px -8px rgba(15, 23, 42, 0.18)',
+                }}
+              >
+                <div
+                  style={{
+                    padding: '16px 18px',
+                    borderBottom: '1px solid var(--border)',
+                    background:
+                      'linear-gradient(135deg, rgb(var(--brand-rgb, 42 91 215) / 0.08), transparent)',
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: 12,
+                  }}
+                >
+                  <motion.div
+                    initial={{ scale: 0.6, opacity: 0, rotate: -8 }}
+                    animate={{ scale: 1, opacity: 1, rotate: 0 }}
+                    transition={{ type: 'spring', stiffness: 320, damping: 18, delay: 0.05 }}
+                    style={{
+                      width: 36,
+                      height: 36,
+                      borderRadius: 10,
+                      flexShrink: 0,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      background:
+                        'linear-gradient(135deg, rgb(var(--brand-rgb, 42 91 215) / 0.18), rgb(var(--brand-rgb, 42 91 215) / 0.05))',
+                      boxShadow: 'inset 0 0 0 1px rgb(var(--brand-rgb, 42 91 215) / 0.22)',
+                      color: 'rgb(var(--brand-rgb, 42 91 215))',
+                    }}
+                  >
+                    <Pencil size={16} strokeWidth={2.25} />
+                  </motion.div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text)', letterSpacing: '-0.01em' }}>
+                      Rename · {d.provider.toUpperCase()}
+                    </div>
+                    <div style={{ fontSize: 11.5, color: 'var(--text3)', marginTop: 3, lineHeight: 1.45 }}>
+                      The new name shows up in the orders table's
+                      Shipping Account column and anywhere else this
+                      carrier's label appears.
+                    </div>
+                  </div>
+                </div>
+
+                <div style={{ padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <label
+                    htmlFor={`rename-label-${d.id}`}
+                    style={{
+                      fontSize: 10,
+                      fontWeight: 800,
+                      textTransform: 'uppercase',
+                      letterSpacing: '0.06em',
+                      color: 'var(--text3)',
+                    }}
+                  >
+                    Label
+                  </label>
+                  <input
+                    id={`rename-label-${d.id}`}
+                    type="text"
+                    value={renameDraft}
+                    autoFocus
+                    onChange={(event) => setRenameDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Escape' && !renameSaving) {
+                        event.preventDefault()
+                        closeRenameModal()
+                      }
+                    }}
+                    placeholder={d.accountIdentifier ?? 'New label'}
+                    maxLength={200}
+                    disabled={renameSaving}
+                    style={{
+                      padding: '10px 12px',
+                      border: '1px solid var(--border2)',
+                      borderRadius: 8,
+                      background: 'var(--surface)',
+                      color: 'var(--text)',
+                      fontSize: 14,
+                      fontWeight: 600,
+                      outline: 'none',
+                      transition: 'border-color 120ms, box-shadow 120ms',
+                    }}
+                    onFocus={(event) => {
+                      event.currentTarget.style.borderColor = 'rgb(var(--brand-rgb, 42 91 215))'
+                      event.currentTarget.style.boxShadow = '0 0 0 3px rgb(var(--brand-rgb, 42 91 215) / 0.15)'
+                    }}
+                    onBlur={(event) => {
+                      event.currentTarget.style.borderColor = 'var(--border2)'
+                      event.currentTarget.style.boxShadow = 'none'
+                    }}
+                  />
+                  <div style={{ fontSize: 10.5, color: 'var(--text4)', marginTop: 2 }}>
+                    Current: <span style={{ fontWeight: 600 }}>{d.label ?? '—'}</span>
+                    {' · '}Account identifier: <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{d.accountIdentifier ?? '—'}</span>
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    padding: '12px 16px',
+                    borderTop: '1px solid var(--border)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    background: 'var(--surface2)',
+                  }}
+                >
+                  <span style={{ flex: 1, fontSize: 11.5, color: 'var(--text3)' }}>
+                    {renameDraft.trim().length}/200
+                  </span>
+                  <motion.button
+                    type="button"
+                    onClick={closeRenameModal}
+                    disabled={renameSaving}
+                    whileHover={!renameSaving ? { y: -1 } : undefined}
+                    whileTap={!renameSaving ? { scale: 0.96 } : undefined}
+                    transition={{ type: 'spring', stiffness: 400, damping: 22 }}
+                    style={{
+                      padding: '7px 14px',
+                      border: '1px solid var(--border)',
+                      borderRadius: 7,
+                      background: 'var(--surface)',
+                      color: 'var(--text2)',
+                      fontSize: 12,
+                      fontWeight: 700,
+                      cursor: renameSaving ? 'wait' : 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                    }}
+                  >
+                    <XIcon size={12} strokeWidth={2.5} />
+                    Cancel
+                  </motion.button>
+                  <motion.button
+                    type="submit"
+                    disabled={renameSaving || renameDraft.trim().length === 0}
+                    whileHover={!renameSaving && renameDraft.trim().length > 0 ? { y: -1 } : undefined}
+                    whileTap={!renameSaving && renameDraft.trim().length > 0 ? { scale: 0.96 } : undefined}
+                    transition={{ type: 'spring', stiffness: 400, damping: 22 }}
+                    style={{
+                      padding: '7px 14px',
+                      border: 'none',
+                      borderRadius: 7,
+                      background:
+                        renameDraft.trim().length === 0
+                          ? 'rgb(var(--brand-rgb, 42 91 215) / 0.4)'
+                          : 'rgb(var(--brand-rgb, 42 91 215))',
+                      color: '#fff',
+                      fontSize: 12,
+                      fontWeight: 800,
+                      cursor:
+                        renameSaving
+                          ? 'wait'
+                          : renameDraft.trim().length === 0
+                            ? 'not-allowed'
+                            : 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                    }}
+                  >
+                    {renameSaving ? (
+                      <Loader2 size={12} strokeWidth={2.5} className="animate-spin" />
+                    ) : (
+                      <CheckIcon size={12} strokeWidth={2.75} />
+                    )}
+                    {renameSaving ? 'Saving…' : 'Save'}
+                  </motion.button>
+                </div>
+              </motion.form>
             </motion.div>
           ) : null}
         </AnimatePresence>,
