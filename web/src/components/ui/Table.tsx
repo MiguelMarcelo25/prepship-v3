@@ -146,6 +146,17 @@ export interface TableProps<Row> {
    *  status-tinted rows, etc. Receives the row + its index in the
    *  *paginated/sorted* view (not the original data index). */
   rowClassName?: (row: Row, index: number) => string | undefined
+  /** Optional: render an additional row immediately AFTER a given
+   *  row (spanning all visible columns). Return `null` to skip.
+   *  Used for expandable detail rows — e.g. the Packages page
+   *  ledger drawer that unfolds beneath a row when clicked. The
+   *  caller owns expansion state; Table just renders whatever is
+   *  returned. */
+  renderRowExpansion?: (row: Row, index: number) => ReactNode | null
+  /** Optional: ref callback fired for each rendered body `<tr>`.
+   *  Lets the parent grab handles for scroll-to-row, focus
+   *  management, etc. */
+  rowRef?: (row: Row, el: HTMLTableRowElement | null) => void
 }
 
 // localStorage helpers — defensive, never throw.
@@ -267,6 +278,8 @@ export function Table<Row>({
   pageSizeOptions,
   defaultPageSize,
   rowClassName,
+  renderRowExpansion,
+  rowRef,
 }: TableProps<Row>) {
   // Sort state — reads stored value first, falls through to default.
   const [sort, setSort] = useState<SortState | null>(() => readStoredSort(storageKey) ?? defaultSort ?? null)
@@ -815,12 +828,17 @@ export function Table<Row>({
                   {emptyMessage}
                 </td>
               </tr>
-            ) : pagedRows.map((row, rowIndex) => {
+            ) : pagedRows.flatMap((row, rowIndex) => {
               const key = rowKey(row)
               const customRowClass = rowClassName?.(row, rowIndex) ?? ''
-              return (
+              // Expansion content is computed BEFORE rendering so we
+              // can decide whether to emit the trailing <tr>. Falsy
+              // (null/undefined) = no expansion for this row.
+              const expansion = renderRowExpansion ? renderRowExpansion(row, rowIndex) : null
+              const out: ReactNode[] = [
                 <tr
-                  key={key}
+                  key={`row-${key}`}
+                  ref={rowRef ? (el) => rowRef(row, el) : undefined}
                   className={`group border-b border-line/70 last:border-b-0 transition-colors ${onRowClick ? 'cursor-pointer hover:bg-brand-bg/40' : 'hover:bg-surface-2/60'} ${customRowClass}`}
                   onClick={onRowClick ? () => onRowClick(row) : undefined}
                 >
@@ -841,8 +859,18 @@ export function Table<Row>({
                       </td>
                     )
                   })}
-                </tr>
-              )
+                </tr>,
+              ]
+              if (expansion) {
+                out.push(
+                  <tr key={`expand-${key}`} className="border-b border-line/70">
+                    <td colSpan={orderedColumns.length} className="bg-surface-2/40 p-0">
+                      {expansion}
+                    </td>
+                  </tr>,
+                )
+              }
+              return out
             })}
           </tbody>
         </table>

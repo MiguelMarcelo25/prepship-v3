@@ -1454,8 +1454,17 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
               </div>
             ) : (
               <>
+                {/* Migrated 2026-05-12 to the reusable <Table> primitive.
+                    Sort, widths, column order, visibility, AND pagination
+                    are now managed inside the Table under storageKey
+                    'packages-table:*'. The legacy state above (sortState,
+                    columnWidths, columnLayout, page, pageSize) is no
+                    longer threaded in — kept temporarily for any code
+                    that still reads it (e.g. focus restoration), but
+                    can be cleaned up in a follow-up. Pass the full
+                    filteredPackages so Table can sort + paginate. */}
                 <PackagesDataTable
-                  packages={pagedPackages}
+                  packages={filteredPackages}
                   ledgerByPackageId={ledgerByPackageId}
                   reorderInputs={reorderInputs}
                   highlightedPackageId={highlightedPackageId}
@@ -1470,29 +1479,8 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
                   onDelete={(packageId) => void handleDelete(packageId)}
                   onOpenOrder={onOpenOrder}
                   onOpenOrderByNumber={(orderNumber) => void handleOpenOrderByNumber(orderNumber)}
-                  columnWidths={columnWidths}
-                  onResizeColumn={handleResizePackageColumn}
-                  onResetColumn={handleResetPackageColumn}
-                  columnOrder={columnLayout.order}
-                  hiddenColumns={columnLayout.hidden}
-                  onReorderColumn={handleReorderPackageColumn}
                   usageByPackageId={usageByPackageId}
                   usageLoading={usageLoading}
-                  sortState={sortState}
-                  onSortChange={handleSortPackages}
-                />
-                <AnalysisPagination
-                  page={page}
-                  pageSize={pageSize}
-                  pageSizeOptions={PACKAGES_PAGE_SIZE_OPTIONS}
-                  totalItems={sortedPackages.length}
-                  onPageChange={setPage}
-                  onPageSizeChange={(nextSize) => {
-                    setPageSize(nextSize)
-                    setPage(1)
-                  }}
-                  unitLabel="packages"
-                  ariaLabel="Packages table pagination"
                 />
               </>
             )
