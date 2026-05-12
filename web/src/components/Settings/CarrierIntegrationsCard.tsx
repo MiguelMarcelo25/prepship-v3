@@ -99,11 +99,22 @@ function ModernCheckbox({
 }
 
 // Action button — icon + label combo with hover lift + active scale.
-// Three variants:
-//   default: outline-style, neutral
-//   primary: brand-blue tinted background
-//   danger:  rose-tinted text
-type ActionVariant = 'default' | 'primary' | 'danger'
+//
+// Four variants, all share the same pill-shape language so they read
+// as one family — the tint communicates the action's role, not the
+// shape:
+//   subtle:  brand-blue tinted bg + brand-blue text (Test Connection,
+//            Pull Orders, Get Rates — diagnostic/utility actions)
+//   primary: filled brand-blue gradient (Assign — main action)
+//   danger:  rose-tinted bg + rose text (Delete — destructive)
+//   default: neutral surface (reserved for future generic actions)
+//
+// All buttons are 30px tall, 11.5px font, rounded-full (pill), with
+// a 1px ring instead of a border so the hover boxShadow doesn't fight
+// the border thickness. Hover lifts -1px + intensifies the ring; tap
+// scales to 0.95 for tactile feedback. Same micro-interactions as
+// the rest of the v4-stable button family (Sidebar Tools row, etc).
+type ActionVariant = 'subtle' | 'primary' | 'danger' | 'default'
 
 function ActionButton({
   icon,
@@ -112,7 +123,7 @@ function ActionButton({
   loading,
   disabled,
   onClick,
-  variant = 'default',
+  variant = 'subtle',
   title,
 }: {
   icon: React.ReactNode
@@ -124,58 +135,87 @@ function ActionButton({
   variant?: ActionVariant
   title?: string
 }) {
-  const styles: Record<ActionVariant, React.CSSProperties> = {
+  const styles: Record<ActionVariant, { background: string; color: string; ringColor: string; hoverRing: string }> = {
+    // Diagnostic/utility — soft brand-blue tint on the background,
+    // brand-blue text. Same family as primary but quieter so multiple
+    // diagnostic buttons in a row don't visually fight each other.
+    subtle: {
+      background: 'rgb(var(--brand-rgb, 3 169 244) / 0.08)',
+      color: 'rgb(var(--brand-rgb, 3 169 244))',
+      ringColor: 'rgb(var(--brand-rgb, 3 169 244) / 0.25)',
+      hoverRing: 'rgb(var(--brand-rgb, 3 169 244) / 0.5)',
+    },
+    // Filled brand-blue gradient — reserved for "main action" buttons.
+    // Higher visual weight than subtle so it reads as the primary CTA.
+    primary: {
+      background:
+        'linear-gradient(135deg, rgb(var(--brand-rgb, 3 169 244)), rgb(var(--brand-2-rgb, 2 136 209)))',
+      color: '#fff',
+      ringColor: 'rgb(var(--brand-rgb, 3 169 244) / 0.5)',
+      hoverRing: 'rgb(var(--brand-rgb, 3 169 244) / 0.7)',
+    },
+    // Rose tint — destructive. Same softness as subtle but in the
+    // danger color family, so visual weight matches diagnostic
+    // actions while semantics stay unambiguous (red = delete).
+    danger: {
+      background: 'rgb(244 63 94 / 0.08)',
+      color: 'rgb(190 18 60)',
+      ringColor: 'rgb(244 63 94 / 0.25)',
+      hoverRing: 'rgb(244 63 94 / 0.5)',
+    },
+    // Plain neutral surface — kept as an escape hatch for future
+    // actions that should NOT carry a tint (e.g. a generic 'Edit'
+    // button in a row that already has 3 brand-blue buttons).
     default: {
       background: 'var(--surface)',
       color: 'var(--text)',
-      borderColor: 'var(--border)',
-    },
-    primary: {
-      background: 'rgb(var(--brand-rgb, 42 91 215) / 0.1)',
-      color: 'rgb(var(--brand-rgb, 42 91 215))',
-      borderColor: 'rgb(var(--brand-rgb, 42 91 215) / 0.3)',
-    },
-    danger: {
-      background: 'rgb(244 63 94 / 0.06)',
-      color: 'rgb(190 18 60)',
-      borderColor: 'rgb(244 63 94 / 0.25)',
+      ringColor: 'var(--border)',
+      hoverRing: 'var(--border-2)',
     },
   }
+  const v = styles[variant]
   return (
     <motion.button
       type="button"
       whileHover={!disabled && !loading ? { y: -1 } : undefined}
-      whileTap={!disabled && !loading ? { scale: 0.96 } : undefined}
+      whileTap={!disabled && !loading ? { scale: 0.95 } : undefined}
       transition={{ type: 'spring', stiffness: 400, damping: 22 }}
       onClick={onClick}
       disabled={!!(disabled || loading)}
       title={title}
       style={{
-        ...styles[variant],
-        padding: '5px 10px',
-        border: '1px solid',
-        borderRadius: 6,
-        fontSize: 11,
+        background: v.background,
+        color: v.color,
+        // ring (1px inset shadow) instead of border so the hover
+        // boxShadow can stack without fighting border-width math.
+        boxShadow: `inset 0 0 0 1px ${v.ringColor}, 0 1px 2px rgba(15, 23, 42, 0.04)`,
+        // Pill shape — same radius as the Add Store/Add Carrier
+        // header button so the action row reads as a coherent set.
+        borderRadius: 999,
+        padding: '6px 12px',
+        height: 30,
+        fontSize: 11.5,
         fontWeight: 700,
+        letterSpacing: '0.01em',
         cursor: loading ? 'wait' : disabled ? 'not-allowed' : 'pointer',
         opacity: disabled && !loading ? 0.5 : 1,
         display: 'inline-flex',
         alignItems: 'center',
-        gap: 5,
+        gap: 6,
         whiteSpace: 'nowrap',
-        boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)',
-        transition: 'box-shadow 150ms, background 100ms, color 100ms',
+        border: 'none',
+        transition: 'box-shadow 150ms ease-out, background 150ms ease-out',
       }}
       onMouseEnter={(e) => {
         if (!disabled && !loading) {
-          e.currentTarget.style.boxShadow = '0 4px 8px -2px rgba(15, 23, 42, 0.12), 0 2px 4px -1px rgba(15, 23, 42, 0.06)'
+          e.currentTarget.style.boxShadow = `inset 0 0 0 1px ${v.hoverRing}, 0 4px 10px -2px rgba(15, 23, 42, 0.14), 0 2px 4px -1px rgba(15, 23, 42, 0.06)`
         }
       }}
       onMouseLeave={(e) => {
-        e.currentTarget.style.boxShadow = '0 1px 2px rgba(15, 23, 42, 0.04)'
+        e.currentTarget.style.boxShadow = `inset 0 0 0 1px ${v.ringColor}, 0 1px 2px rgba(15, 23, 42, 0.04)`
       }}
     >
-      {loading ? <Loader2 size={11} strokeWidth={2.5} className="animate-spin" /> : icon}
+      {loading ? <Loader2 size={12} strokeWidth={2.5} className="animate-spin" /> : icon}
       <span>{loading && loadingLabel ? loadingLabel : label}</span>
     </motion.button>
   )
