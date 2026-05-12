@@ -833,6 +833,14 @@ function directCarrierErrorMessage(provider: string, message: string): string {
   if (providerKey === 'ehub') {
     return 'eHub is in Settings now, but live rates need the eHub API base URL and rate endpoint docs before quotes can be returned.';
   }
+  if (providerKey === 'shipp') {
+    if (/apiKey|email|password|login|session cookie|Invalid API Key|Forbidden/i.test(message)) {
+      return 'Shipp needs the saved x-api-key, email, and password to log in before PrepShip can request quote rates.';
+    }
+    if (/box dimensions|0 rates|quote/i.test(message)) {
+      return 'Shipp reached the quote API but did not return rates. Confirm the package dimensions, ship-from address, and destination address are valid for your Shipp account.';
+    }
+  }
   return message;
 }
 

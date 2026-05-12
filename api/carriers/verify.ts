@@ -98,7 +98,8 @@ type ProviderType =
   | 'gls'
   | 'stamps_com'
   | 'endicia'
-  | 'easypost';
+  | 'easypost'
+  | 'shipp';
 
 interface VerifyResult {
   ok: boolean;
@@ -155,6 +156,51 @@ const verifyEasyPost: Verifier = async (creds) => {
         shipmentListReachable: true,
         sampleCount: Array.isArray(data.shipments) ? data.shipments.length : null,
         hasMore: data.has_more ?? null,
+      },
+    };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+};
+
+// Shipp.to (private API docs at /api-docs.html). The API requires the
+// saved x-api-key plus a Supabase email/password login; successful login
+// sets the session cookie used by quote/label endpoints.
+const verifyShipp: Verifier = async (creds) => {
+  const apiKey = String(creds?.apiKey ?? '').trim();
+  const email = String(creds?.email ?? '').trim();
+  const password = String(creds?.password ?? '').trim();
+  if (!apiKey || !email || !password) {
+    return { ok: false, error: 'apiKey, email, and password are required' };
+  }
+
+  try {
+    const res = await fetch('https://shipp.to/api/supabase/login', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'x-api-key': apiKey,
+      },
+      body: JSON.stringify({ email, password }),
+    });
+    const text = await res.text().catch(() => '');
+    let data: any = null;
+    try { data = text ? JSON.parse(text) : null; } catch { /* keep text fallback */ }
+    if (!res.ok) {
+      return { ok: false, error: `Shipp login ${res.status}: ${text.slice(0, 300) || res.statusText}` };
+    }
+
+    const userId = data?.user?.id ? String(data.user.id) : null;
+    const role = data?.profile?.role ? String(data.profile.role) : null;
+    return {
+      ok: true,
+      accountIdentifier: userId ?? email,
+      accountLabel: `Shipp ${email}`,
+      meta: {
+        userId,
+        role,
+        hasStripeCustomer: Boolean(data?.profile?.stripe_customer_id),
       },
     };
   } catch (err) {
@@ -840,6 +886,7 @@ const VERIFIERS: Partial<Record<ProviderType, Verifier>> = {
   shipengine: verifyShipEngine,
   ehub: verifyEhub,
   easypost: verifyEasyPost,
+  shipp: verifyShipp,
   ups: verifyUps,
   fedex: verifyFedEx,
   dhl_express: verifyDhlExpress,

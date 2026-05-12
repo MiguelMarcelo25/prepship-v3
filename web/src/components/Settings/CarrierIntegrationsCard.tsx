@@ -254,6 +254,7 @@ type ProviderKey =
   | 'stamps_com'
   | 'endicia'
   | 'easypost'
+  | 'shipp'
 
 interface CredentialField {
   name: string
@@ -380,6 +381,36 @@ const PROVIDER_DEFS: ProviderDef[] = [
       { name: 'shipFromState', label: 'Ship-From State (optional)', required: false, placeholder: 'CA' },
       { name: 'shipFromZip', label: 'Ship-From Zip (optional)', required: false, placeholder: '90248' },
       { name: 'shipFromPhone', label: 'Ship-From Phone (optional)', required: false, placeholder: '5551234567' },
+    ],
+  },
+  {
+    key: 'shipp',
+    category: 'carrier',
+    label: 'Shipp',
+    blurb: 'Shipp.to private quote API for rate shopping across the carriers available in your Shipp account. PrepShip uses this for best-rate quotes only; label purchase stays separate until you approve that flow.',
+    badge: 'SHP',
+    badgeColor: '#111827',
+    setupTier: 1,
+    credentialsUrl: 'https://shipp.to/api-docs.html',
+    domain: 'shipp.to',
+    fields: [
+      {
+        name: 'apiKey',
+        label: 'x-api-key',
+        type: 'password',
+        hint: 'API key required by Shipp.to endpoints. Keep this paired with the Shipp account email/password below.',
+      },
+      { name: 'email', label: 'Shipp Email' },
+      { name: 'password', label: 'Shipp Password', type: 'password' },
+      { name: 'shipFromCompany', label: 'Ship-From Company (optional)', required: false, placeholder: 'DR Prepper' },
+      { name: 'shipFromName', label: 'Ship-From Name (optional)', required: false, placeholder: 'DR Prepper Warehouse' },
+      { name: 'shipFromAddress1', label: 'Ship-From Street 1 (optional)', required: false, placeholder: '1234 Warehouse Way' },
+      { name: 'shipFromAddress2', label: 'Ship-From Street 2 (optional)', required: false, placeholder: 'Suite 100' },
+      { name: 'shipFromCity', label: 'Ship-From City (optional)', required: false, placeholder: 'Carson' },
+      { name: 'shipFromState', label: 'Ship-From State (optional)', required: false, placeholder: 'CA' },
+      { name: 'shipFromZip', label: 'Ship-From Zip (optional)', required: false, placeholder: '90248' },
+      { name: 'shipFromPhone', label: 'Ship-From Phone (optional)', required: false, placeholder: '5551234567' },
+      { name: 'packageDescription', label: 'Package Description (optional)', required: false, placeholder: 'Merchandise' },
     ],
   },
   {

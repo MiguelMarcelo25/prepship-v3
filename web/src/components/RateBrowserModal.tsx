@@ -167,6 +167,7 @@ const CARRIER_NAMES: Record<string, string> = {
   ebay_shipping: 'eBay',
   ehub: 'eHub',
   easypost: 'EasyPost',
+  shipp: 'Shipp',
   globegistics: 'Globegistics',
   walmart_shipping: 'Walmart',
 };
@@ -176,6 +177,7 @@ const DIRECT_PROVIDER_LABELS: Record<string, string> = {
   ebay_shipping: 'eBay Shipping',
   ehub: 'eHub',
   easypost: 'EasyPost',
+  shipp: 'Shipp',
   fedex: 'FedEx Direct',
   simulator: 'Simulator',
   stamps_com: 'Stamps.com Direct',
