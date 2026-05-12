@@ -118,6 +118,139 @@ interface InventorySortState {
   direction: InventorySortDirection
 }
 
+// ──────────────────────────────────────────────────────────────────
+// Column layout for the Stock Levels table. A superset of
+// InventorySortKey — adds 'thumbnail' (image cell, non-sortable) and
+// 'actions' (button group, non-sortable). Drag any header to reorder;
+// the Columns popover toggles visibility. Layout persists per-browser
+// under localStorage.inventory_column_layout.
+// ──────────────────────────────────────────────────────────────────
+type InventoryColumnKey =
+  | 'sku'
+  | 'thumbnail'
+  | 'name'
+  | 'store'
+  | 'weight'
+  | 'dims'
+  | 'cuFt'
+  | 'package'
+  | 'stock'
+  | 'sold30'
+  | 'unitsPerPack'
+  | 'totalUnits'
+  | 'min'
+  | 'status'
+  | 'actions'
+
+const INVENTORY_DEFAULT_COLUMN_ORDER: InventoryColumnKey[] = [
+  'sku', 'thumbnail', 'name', 'store', 'weight', 'dims', 'cuFt', 'package',
+  'stock', 'sold30', 'unitsPerPack', 'totalUnits', 'min', 'status', 'actions',
+]
+
+// Columns the operator cannot hide. Without sku + name, rows lose all
+// identity. The thumbnail is just visual aid (hidable). Actions can be
+// hidden too if an operator only does read-only review.
+const INVENTORY_REQUIRED_COLUMNS = new Set<InventoryColumnKey>(['sku', 'name'])
+
+const INVENTORY_COLUMN_LABELS: Record<InventoryColumnKey, string> = {
+  sku: 'SKU',
+  thumbnail: 'Image',
+  name: 'Name',
+  store: 'Store',
+  weight: 'Weight',
+  dims: 'Dims (LxWxH)',
+  cuFt: 'Cu Ft/Unit',
+  package: 'Package',
+  stock: 'Stock',
+  sold30: 'Sold 30d',
+  unitsPerPack: 'Units/Pack',
+  totalUnits: 'Total Units',
+  min: 'Min',
+  status: 'Status',
+  actions: 'Actions',
+}
+
+const INVENTORY_COLUMN_ALIGN: Record<InventoryColumnKey, 'left' | 'center' | 'right'> = {
+  sku: 'left',
+  thumbnail: 'left',
+  name: 'left',
+  store: 'left',
+  weight: 'right',
+  dims: 'center',
+  cuFt: 'center',
+  package: 'left',
+  stock: 'center',
+  sold30: 'center',
+  unitsPerPack: 'center',
+  totalUnits: 'center',
+  min: 'center',
+  status: 'center',
+  actions: 'left',
+}
+
+// Subset of column keys that are also sortable. Used by header
+// renderer to decide whether to wrap the label in a sort button.
+const INVENTORY_SORTABLE_KEYS = new Set<InventoryColumnKey>([
+  'sku', 'name', 'store', 'weight', 'dims', 'cuFt', 'package',
+  'stock', 'sold30', 'unitsPerPack', 'totalUnits', 'min', 'status',
+])
+
+interface InventoryColumnLayout {
+  order: InventoryColumnKey[]
+  hidden: InventoryColumnKey[]
+}
+
+const INVENTORY_COLUMN_LAYOUT_KEY = 'inventory_column_layout'
+const INVENTORY_COLUMN_KEY_SET = new Set<InventoryColumnKey>(INVENTORY_DEFAULT_COLUMN_ORDER)
+
+function isInventoryColumnKey(value: unknown): value is InventoryColumnKey {
+  return typeof value === 'string' && INVENTORY_COLUMN_KEY_SET.has(value as InventoryColumnKey)
+}
+
+function readStoredInventoryColumnLayout(): InventoryColumnLayout {
+  if (typeof window === 'undefined') {
+    return { order: [...INVENTORY_DEFAULT_COLUMN_ORDER], hidden: [] }
+  }
+  try {
+    const raw = window.localStorage.getItem(INVENTORY_COLUMN_LAYOUT_KEY)
+    if (!raw) return { order: [...INVENTORY_DEFAULT_COLUMN_ORDER], hidden: [] }
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') {
+      return { order: [...INVENTORY_DEFAULT_COLUMN_ORDER], hidden: [] }
+    }
+    const seen = new Set<InventoryColumnKey>()
+    const cleanOrder: InventoryColumnKey[] = []
+    for (const k of Array.isArray(parsed.order) ? parsed.order : []) {
+      if (isInventoryColumnKey(k) && !seen.has(k)) {
+        cleanOrder.push(k); seen.add(k)
+      }
+    }
+    for (const k of INVENTORY_DEFAULT_COLUMN_ORDER) {
+      if (!seen.has(k)) { cleanOrder.push(k); seen.add(k) }
+    }
+    const cleanHidden: InventoryColumnKey[] = []
+    const hiddenSeen = new Set<InventoryColumnKey>()
+    for (const k of Array.isArray(parsed.hidden) ? parsed.hidden : []) {
+      if (isInventoryColumnKey(k) && !INVENTORY_REQUIRED_COLUMNS.has(k) && !hiddenSeen.has(k)) {
+        cleanHidden.push(k); hiddenSeen.add(k)
+      }
+    }
+    return { order: cleanOrder, hidden: cleanHidden }
+  } catch {
+    return { order: [...INVENTORY_DEFAULT_COLUMN_ORDER], hidden: [] }
+  }
+}
+
+function writeStoredInventoryColumnLayout(layout: InventoryColumnLayout): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(
+      INVENTORY_COLUMN_LAYOUT_KEY,
+      JSON.stringify({ order: layout.order, hidden: layout.hidden }),
+    )
+  } catch { /* best-effort */ }
+}
+
 const inventorySortCollator = new Intl.Collator(undefined, {
   numeric: true,
   sensitivity: 'base',
@@ -443,6 +576,69 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
   const [stockClientId, setStockClientId] = useState('')
   const [alertOnly, setAlertOnly] = useState(false)
   const [stockSort, setStockSort] = useState<InventorySortState | null>(null)
+  // Operator-controlled column layout for the Stock Levels table.
+  // Drag a header to reorder, use the Columns popover to toggle
+  // visibility. Persisted to localStorage.inventory_column_layout
+  // so each browser remembers its own shape.
+  const [inventoryColumnLayout, setInventoryColumnLayout] = useState<InventoryColumnLayout>(
+    readStoredInventoryColumnLayout,
+  )
+  const [inventoryColumnsMenuOpen, setInventoryColumnsMenuOpen] = useState(false)
+  // Drag-reorder state — `draggingKey` is the source, `dragOverKey`
+  // is the current hover target (drives the drop-indicator stripe).
+  const [draggingInventoryColumn, setDraggingInventoryColumn] = useState<InventoryColumnKey | null>(null)
+  const [dragOverInventoryColumn, setDragOverInventoryColumn] = useState<InventoryColumnKey | null>(null)
+
+  // Effective column list = order with hidden filtered out. Falls
+  // back to the factory default when the layout has been corrupted
+  // to an empty set.
+  const effectiveInventoryColumns = useMemo<InventoryColumnKey[]>(() => {
+    const hiddenSet = new Set(inventoryColumnLayout.hidden)
+    const filtered = inventoryColumnLayout.order.filter((k) => !hiddenSet.has(k))
+    return filtered.length > 0 ? filtered : INVENTORY_DEFAULT_COLUMN_ORDER
+  }, [inventoryColumnLayout])
+
+  // Drag-reorder: insert `fromKey` immediately before `toKey`.
+  // Identical semantics to the Analysis and Packages tables.
+  function handleInventoryColumnReorder(fromKey: InventoryColumnKey, toKey: InventoryColumnKey) {
+    setInventoryColumnLayout((current) => {
+      const next = current.order.filter((k) => k !== fromKey)
+      const idx = next.indexOf(toKey)
+      if (idx < 0) next.push(fromKey)
+      else next.splice(idx, 0, fromKey)
+      return { ...current, order: next }
+    })
+  }
+
+  function handleInventoryColumnToggle(key: InventoryColumnKey) {
+    if (INVENTORY_REQUIRED_COLUMNS.has(key)) return
+    setInventoryColumnLayout((current) => {
+      const hiddenSet = new Set(current.hidden)
+      if (hiddenSet.has(key)) hiddenSet.delete(key)
+      else hiddenSet.add(key)
+      return { ...current, hidden: Array.from(hiddenSet) }
+    })
+  }
+
+  function handleInventoryColumnLayoutReset() {
+    setInventoryColumnLayout({ order: [...INVENTORY_DEFAULT_COLUMN_ORDER], hidden: [] })
+  }
+
+  useEffect(() => {
+    writeStoredInventoryColumnLayout(inventoryColumnLayout)
+  }, [inventoryColumnLayout])
+
+  useEffect(() => {
+    if (!inventoryColumnsMenuOpen) return
+    function handleClickOutside(event: MouseEvent) {
+      const target = event.target as HTMLElement | null
+      if (target?.closest('[data-inventory-columns-menu]')) return
+      if (target?.closest('[data-inventory-columns-trigger]')) return
+      setInventoryColumnsMenuOpen(false)
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [inventoryColumnsMenuOpen])
   const [clientsSort, setClientsSort] = useState(null)
   const [historySort, setHistorySort] = useState(null)
   const [alertsSort, setAlertsSort] = useState(null)
@@ -734,6 +930,106 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
         >
           <span>{label}</span>
           <span className="inventory-sort-indicator">{isActive ? (stockSort.direction === 'asc' ? '^' : 'v') : ''}</span>
+        </button>
+      </th>
+    )
+  }
+
+  // Drag-aware header for the Stock Levels table — wraps
+  // renderStockSortHeader's logic but also accepts non-sortable
+  // columns (thumbnail, actions) which render as a plain <th>.
+  // draggable={true} on both the <th> AND the inner button avoids
+  // the buttons-eat-mousedown gotcha (HTML5 DnD §6.7.5).
+  function renderInventoryColumnHeader(columnKey: InventoryColumnKey) {
+    const sortable = INVENTORY_SORTABLE_KEYS.has(columnKey)
+    const align = INVENTORY_COLUMN_ALIGN[columnKey]
+    const label = INVENTORY_COLUMN_LABELS[columnKey]
+    const isDragging = draggingInventoryColumn === columnKey
+    const isDragOver =
+      dragOverInventoryColumn === columnKey
+      && draggingInventoryColumn !== null
+      && draggingInventoryColumn !== columnKey
+
+    const dragHandlers = {
+      draggable: true as const,
+      onDragStart: (e: React.DragEvent) => {
+        setDraggingInventoryColumn(columnKey)
+        e.dataTransfer.effectAllowed = 'move'
+        try { e.dataTransfer.setData('text/plain', columnKey) } catch { /* sandbox */ }
+      },
+      onDragOver: (e: React.DragEvent) => {
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'move'
+        if (dragOverInventoryColumn !== columnKey) setDragOverInventoryColumn(columnKey)
+      },
+      onDragLeave: () => {
+        if (dragOverInventoryColumn === columnKey) setDragOverInventoryColumn(null)
+      },
+      onDrop: (e: React.DragEvent) => {
+        e.preventDefault()
+        const fromKey = draggingInventoryColumn
+        setDraggingInventoryColumn(null)
+        setDragOverInventoryColumn(null)
+        if (fromKey && fromKey !== columnKey) handleInventoryColumnReorder(fromKey, columnKey)
+      },
+      onDragEnd: () => {
+        setDraggingInventoryColumn(null)
+        setDragOverInventoryColumn(null)
+      },
+    }
+
+    const thStyle: React.CSSProperties = {
+      textAlign: align,
+      userSelect: 'none',
+      cursor: isDragging ? 'grabbing' : 'grab',
+      opacity: isDragging ? 0.4 : 1,
+      boxShadow: isDragOver ? 'inset 3px 0 0 var(--ss-blue, #2a5bd7)' : undefined,
+      // Tooltip-only metadata for non-sortable columns can use the
+      // browser-native title attribute; sortable ones already convey
+      // intent via the sort indicator.
+    }
+
+    // Non-sortable columns (thumbnail, actions) render a plain label.
+    if (!sortable) {
+      return (
+        <th key={columnKey} {...dragHandlers} style={thStyle}>
+          <span
+            draggable
+            style={{ display: 'inline-block', width: '100%', textAlign: align }}
+          >
+            {columnKey === 'thumbnail' ? '' : label}
+          </span>
+        </th>
+      )
+    }
+
+    const sortKey = columnKey as InventorySortKey
+    const isActive = stockSort?.key === sortKey
+    const directionLabel = isActive && stockSort?.direction === 'asc' ? 'descending' : 'ascending'
+    const alignClass = `inventory-sort-header--${align}`
+    const buttonClassName = ['inventory-sort-header', alignClass, isActive ? 'is-active' : '']
+      .filter(Boolean)
+      .join(' ')
+
+    return (
+      <th
+        key={columnKey}
+        {...dragHandlers}
+        aria-sort={isActive ? (stockSort?.direction === 'asc' ? 'ascending' : 'descending') : 'none'}
+        style={thStyle}
+      >
+        <button
+          type="button"
+          draggable
+          className={buttonClassName}
+          onClick={() => handleStockSort(sortKey)}
+          title={`Sort by ${label} ${directionLabel}`}
+          style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
+        >
+          <span>{label}</span>
+          <span className="inventory-sort-indicator">
+            {isActive ? (stockSort?.direction === 'asc' ? '^' : 'v') : ''}
+          </span>
         </button>
       </th>
     )
@@ -1517,6 +1813,98 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
             </button>
           </>
         ) : null}
+        {/* Columns popover — toggle visibility + a Reset link.
+            Drag column headers in the Stock Levels table to reorder.
+            Hidden from bulk-edit mode where reorder doesn't apply. */}
+        {!hideTabs && activeTab === 'stock' && !bulkEditMode ? (
+          <div style={{ position: 'relative' }}>
+            <button
+              type="button"
+              data-inventory-columns-trigger
+              onClick={() => setInventoryColumnsMenuOpen((v) => !v)}
+              className="btn btn-outline btn-sm"
+              aria-haspopup="true"
+              aria-expanded={inventoryColumnsMenuOpen}
+              title="Show or hide columns · drag column headers to reorder"
+            >
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true" style={{ display: 'inline-block', verticalAlign: '-2px', marginRight: 4 }}>
+                <rect x="1.5" y="2.5" width="3.5" height="11" rx="0.7" stroke="currentColor" strokeWidth="1.4" />
+                <rect x="6.25" y="2.5" width="3.5" height="11" rx="0.7" stroke="currentColor" strokeWidth="1.4" />
+                <rect x="11" y="2.5" width="3.5" height="11" rx="0.7" stroke="currentColor" strokeWidth="1.4" />
+              </svg>
+              Columns
+              <span style={{ marginLeft: 4, fontSize: 11, color: 'var(--text3)', fontFamily: 'monospace' }}>
+                ({INVENTORY_DEFAULT_COLUMN_ORDER.length - inventoryColumnLayout.hidden.length}/{INVENTORY_DEFAULT_COLUMN_ORDER.length})
+              </span>
+            </button>
+            {inventoryColumnsMenuOpen ? (
+              <div
+                data-inventory-columns-menu
+                role="menu"
+                style={{
+                  position: 'absolute', right: 0, top: 'calc(100% + 4px)', zIndex: 50,
+                  minWidth: 240, background: 'var(--surface)', border: '1px solid var(--border)',
+                  borderRadius: 6, boxShadow: '0 8px 24px -6px rgba(15,23,42,.18), 0 2px 6px -2px rgba(15,23,42,.10)',
+                  padding: 6,
+                }}
+              >
+                <div style={{ padding: '4px 8px', fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 800, color: 'var(--text3)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span>Visible columns</span>
+                  <button
+                    type="button"
+                    onClick={handleInventoryColumnLayoutReset}
+                    style={{ background: 'transparent', border: 0, fontSize: 9.5, fontWeight: 700, color: 'var(--ss-blue)', cursor: 'pointer' }}
+                    title="Restore the factory default column order and show all columns"
+                  >
+                    Reset
+                  </button>
+                </div>
+                {(() => {
+                  const hiddenSet = new Set(inventoryColumnLayout.hidden)
+                  const visibleKeys = inventoryColumnLayout.order.filter((k) => !hiddenSet.has(k))
+                  const hiddenKeys = inventoryColumnLayout.order.filter((k) => hiddenSet.has(k))
+                  return [...visibleKeys, ...hiddenKeys].map((key) => {
+                    const isHidden = hiddenSet.has(key)
+                    const isRequired = INVENTORY_REQUIRED_COLUMNS.has(key)
+                    return (
+                      <label
+                        key={key}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px',
+                          borderRadius: 5, fontSize: 12,
+                          color: isRequired ? 'var(--text3)' : 'var(--text)',
+                          cursor: isRequired ? 'not-allowed' : 'pointer',
+                          opacity: isHidden ? 0.6 : 1,
+                        }}
+                        onMouseEnter={(e) => { if (!isRequired) (e.currentTarget as HTMLLabelElement).style.background = 'rgba(42,91,215,.08)' }}
+                        onMouseLeave={(e) => { (e.currentTarget as HTMLLabelElement).style.background = 'transparent' }}
+                        title={isRequired
+                          ? `${INVENTORY_COLUMN_LABELS[key]} is always visible`
+                          : isHidden ? 'Hidden · click to show' : 'Visible · click to hide'
+                        }
+                      >
+                        <input
+                          type="checkbox"
+                          checked={!isHidden}
+                          disabled={isRequired}
+                          onChange={() => handleInventoryColumnToggle(key)}
+                          style={{ accentColor: 'var(--ss-blue)', cursor: isRequired ? 'not-allowed' : 'pointer' }}
+                        />
+                        <span style={{ flex: 1 }}>{INVENTORY_COLUMN_LABELS[key]}</span>
+                        {isRequired ? (
+                          <span style={{ fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text3)', fontWeight: 600 }}>required</span>
+                        ) : null}
+                      </label>
+                    )
+                  })
+                })()}
+                <div style={{ borderTop: '1px solid var(--border)', marginTop: 4, paddingTop: 6, padding: '6px 8px 4px', fontSize: 10.5, color: 'var(--text3)', lineHeight: 1.4 }}>
+                  Drag a column header to reorder.
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
         <button className="btn btn-outline btn-sm" type="button" onClick={() => void refreshInventoryView()}>↻ Refresh</button>
       </motion.div>
 
@@ -1625,37 +2013,32 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                           <col style={{ width: 72 }} />
                         </colgroup>
                       ) : (
+                        // Colgroup widths track effectiveInventoryColumns so
+                        // a reorder/hide doesn't misalign columns. 'name'
+                        // gets no width (flex-fill); every other column
+                        // keeps its previous fixed width.
                         <colgroup>
-                          {/* SKU */}
-                          <col style={{ width: 150 }} />
-                          {/* Image */}
-                          <col style={{ width: 56 }} />
-                          {/* Name (flex) */}
-                          <col />
-                          {/* Store */}
-                          <col style={{ width: 125 }} />
-                          {/* Weight */}
-                          <col style={{ width: 90 }} />
-                          {/* Dims */}
-                          <col style={{ width: 100 }} />
-                          {/* Cu Ft/Unit */}
-                          <col style={{ width: 80 }} />
-                          {/* Package */}
-                          <col style={{ width: 110 }} />
-                          {/* Stock */}
-                          <col style={{ width: 70 }} />
-                          {/* Sold 30d */}
-                          <col style={{ width: 75 }} />
-                          {/* Units/Pack */}
-                          <col style={{ width: 85 }} />
-                          {/* Total Units */}
-                          <col style={{ width: 90 }} />
-                          {/* Min */}
-                          <col style={{ width: 55 }} />
-                          {/* Status */}
-                          <col style={{ width: 70 }} />
-                          {/* Actions */}
-                          <col style={{ width: 110 }} />
+                          {effectiveInventoryColumns.map((key) => {
+                            const widthByKey: Partial<Record<InventoryColumnKey, number>> = {
+                              sku: 150,
+                              thumbnail: 56,
+                              // name: undefined → flex-fill
+                              store: 125,
+                              weight: 90,
+                              dims: 100,
+                              cuFt: 80,
+                              package: 110,
+                              stock: 70,
+                              sold30: 75,
+                              unitsPerPack: 85,
+                              totalUnits: 90,
+                              min: 55,
+                              status: 70,
+                              actions: 110,
+                            }
+                            const w = widthByKey[key]
+                            return <col key={key} style={w ? { width: w } : undefined} />
+                          })}
                         </colgroup>
                       )}
                       <thead>
@@ -1671,22 +2054,15 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                             {renderStockSortHeader('height', 'H (in)', { align: 'right' })}
                           </tr>
                         ) : (
+                          // Headers iterate the operator's chosen
+                          // column order so dragging a header into
+                          // a new position also reorders the body
+                          // cells (which use the same effectiveColumns
+                          // list). Bulk-edit mode above stays on the
+                          // legacy hardcoded layout — it's a different
+                          // 8-column view where reorder doesn't apply.
                           <tr>
-                            {renderStockSortHeader('sku', 'SKU')}
-                            <th />
-                            {renderStockSortHeader('name', 'Name')}
-                            {renderStockSortHeader('store', 'Store')}
-                            {renderStockSortHeader('weight', 'Weight', { align: 'right' })}
-                            {renderStockSortHeader('dims', 'Dims (LxWxH)', { align: 'center' })}
-                            {renderStockSortHeader('cuFt', 'Cu Ft/Unit', { align: 'center', title: 'Cubic footage per unit (used for storage fee billing). Auto-computed from dims or manually overridden.' })}
-                            {renderStockSortHeader('package', 'Package')}
-                            {renderStockSortHeader('stock', 'Stock', { align: 'center' })}
-                            {renderStockSortHeader('sold30', 'Sold 30d', { align: 'center', title: 'Units sold in the last 30 days' })}
-                            {renderStockSortHeader('unitsPerPack', 'Units/Pack', { align: 'center' })}
-                            {renderStockSortHeader('totalUnits', 'Total Units', { align: 'center' })}
-                            {renderStockSortHeader('min', 'Min', { align: 'center' })}
-                            {renderStockSortHeader('status', 'Status', { align: 'center' })}
-                            <th />
+                            {effectiveInventoryColumns.map((key) => renderInventoryColumnHeader(key))}
                           </tr>
                         )}
                       </thead>
@@ -1729,119 +2105,174 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                               ref={(el) => { rowRefs.current[row.id] = el }}
                               style={isFocused ? { background: 'var(--ss-blue-bg)', transition: 'background 1.5s ease' } : undefined}
                             >
-                              <td style={{ fontFamily: 'monospace', fontSize: 11.5 }}>
-                                <button type="button" className="inventory-inline-button" style={{ color: 'var(--ss-blue)' }} onClick={() => void openSkuDrawer(row.id)} title="View orders & sales trend">{row.sku}</button>
-                              </td>
-                              <td style={{ padding: '4px 6px' }}>
-                                {row.imageUrl ? (
-                                  <img
-                                    src={row.imageUrl}
-                                    style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 5, display: 'block', cursor: 'zoom-in' }}
-                                    onMouseEnter={(event) => showThumbnailPreview(row.imageUrl ?? '', event)}
-                                    onMouseLeave={() => setThumbnailPreview(null)}
-                                  />
-                                ) : (
-                                  <div style={{ width: 40, height: 40, background: 'var(--surface3)', border: '1px dashed var(--border)', borderRadius: 5, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, color: 'var(--text4)', textAlign: 'center', lineHeight: 1.2 }}>no<br />img</div>
-                                )}
-                              </td>
-                              <td style={{ fontSize: 12, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                <button type="button" className="inventory-inline-button" onClick={() => void openSkuDrawer(row.id)} title="View orders & sales trend">{row.name || <span style={{ color: 'var(--text3)' }}>—</span>}</button>
-                              </td>
-                              <td style={{ fontSize: 11.5, color: 'var(--text2)', whiteSpace: 'nowrap' }} title={row.clientName || undefined}>
-                                {row.clientName || <span style={{ color: 'var(--text4)' }}>&mdash;</span>}
-                              </td>
-                              <td style={{ textAlign: 'right', fontSize: 11.5 }}>{row.weightOz > 0 ? formatWeight(row.weightOz) : <span style={{ color: 'var(--text4)' }}>—</span>}</td>
-                              <td style={{ textAlign: 'center', fontSize: 11.5, fontFamily: 'monospace' }}>{row.packageLength > 0 || row.packageWidth > 0 || row.packageHeight > 0 ? `${row.packageLength}×${row.packageWidth}×${row.packageHeight}` : <span style={{ color: 'var(--text4)' }}>—</span>}</td>
-                              <td style={{ textAlign: 'center', fontSize: 11, color: 'var(--text3)' }}>
-                                {cuFt > 0 ? (
-                                  <span title={row.cuFtOverride && row.cuFtOverride > 0 ? 'Manual override' : 'Auto-computed from product dims'}>
-                                    {cuFt.toFixed(3)}{row.cuFtOverride && row.cuFtOverride > 0 ? <span style={{ color: 'var(--ss-blue)', fontSize: 9, marginLeft: 2 }}>✎</span> : null}
-                                  </span>
-                                ) : (
-                                  <span style={{ color: 'var(--text4)' }}>—</span>
-                                )}
-                              </td>
-                              {/* Package column — falls back to the L×W×H
-                                  dimensions when no named package is assigned.
-                                  Previously showed "—" which left the cell
-                                  empty even though the row already had usable
-                                  dim data in the Dims column. */}
-                              <td style={{ fontSize: 11.5 }}>
-                                {row.packageName ? (
-                                  row.packageName
-                                ) : (row.packageLength > 0 || row.packageWidth > 0 || row.packageHeight > 0) ? (
-                                  <span style={{ fontFamily: 'monospace', color: 'var(--text3)' }} title="No named package — showing product dims (L×W×H)">
-                                    {row.packageLength}×{row.packageWidth}×{row.packageHeight}
-                                  </span>
-                                ) : (
-                                  <span style={{ color: 'var(--text4)' }}>—</span>
-                                )}
-                              </td>
-                              <td style={{ textAlign: 'center', fontWeight: 700, fontSize: 13, color: row.currentStock <= 0 ? 'var(--red)' : 'var(--text)' }}>{row.currentStock}</td>
-                              <td style={{ textAlign: 'center', fontWeight: 700, fontSize: 12, color: (row.soldLast30Days ?? 0) > 0 ? 'var(--ss-blue)' : 'var(--text3)' }}>{row.soldLast30Days ?? 0}</td>
-                              <td style={{ textAlign: 'center', fontSize: 12, color: 'var(--text3)' }}>
-                                {row.units_per_pack > 1 ? <span style={{ background: 'var(--ss-blue-bg)', color: 'var(--ss-blue)', fontSize: 10.5, fontWeight: 700, padding: '1px 6px', borderRadius: 4 }}>×{row.units_per_pack}</span> : '—'}
-                              </td>
-                              <td style={{ textAlign: 'center', fontSize: 12, color: 'var(--text2)' }}>{row.units_per_pack > 1 ? <span style={{ fontWeight: 700 }}>{row.currentStock * row.units_per_pack}</span> : '—'}</td>
-                              <td style={{ textAlign: 'center', color: 'var(--text3)', fontSize: 12 }}>{row.minStock}</td>
-                              <td style={{ textAlign: 'center' }}>
-                                <span className={`stock-badge ${row.status === 'out' ? 'stock-out' : row.status === 'low' ? 'stock-low' : 'stock-ok'}`}>
-                                  {row.status === 'out' ? 'OUT' : row.status === 'low' ? 'LOW' : 'OK'}
-                                </span>
-                              </td>
-                              <td style={{ whiteSpace: 'nowrap' }}>
-                                <button className="btn btn-ghost btn-xs" type="button" onClick={() => void openEditSku(row)} title="Edit SKU details">✏️</button>
-                                <button
-                                  className="btn btn-ghost btn-xs"
-                                  type="button"
-                                  title={row.parentSkuId ? 'Change parent SKU' : 'Assign parent SKU'}
-                                  onClick={async () => {
-                                    try {
-                                      await loadParentOptions(row.clientId)
-                                      setInlineParentRowId((current) => (current === row.id ? null : row.id))
-                                    } catch (error) {
-                                      toastContext?.addToast(error instanceof Error ? error.message : 'Failed to load parents', 'error')
-                                    }
-                                  }}
-                                  style={{ fontSize: 12, color: row.parentSkuId ? 'var(--ss-blue)' : 'var(--text3)' }}
-                                >
-                                  🔗
-                                </button>
-                                <button
-                                  className="btn btn-ghost btn-xs"
-                                  type="button"
-                                  onClick={() => setAdjustModal({
-                                    invSkuId: row.id,
-                                    sku: row.sku,
-                                    qty: '1',
-                                    note: '',
-                                    date: new Date().toISOString().slice(0, 10),
-                                    type: 'receive',
-                                    sign: 1,
-                                  })}
-                                  title="Add / Remove Stock"
-                                  style={{ fontSize: 13, fontWeight: 700, color: 'var(--ss-blue)' }}
-                                >
-                                  +
-                                </button>
-                                {inlineParentRowId === row.id ? (
-                                  <div style={{ display: 'inline-flex', gap: 4, marginLeft: 6, alignItems: 'center' }}>
-                                    <select
-                                      className="ship-select"
-                                      style={{ fontSize: 11, padding: '2px 4px' }}
-                                      defaultValue={row.parentSkuId ? String(row.parentSkuId) : ''}
-                                      disabled={inlineParentSaving}
-                                      onChange={(event) => void handleInlineParentChange(row, event.target.value)}
-                                    >
-                                      <option value="">— No Parent —</option>
-                                      {(parentSkuOptions[row.clientId] ?? []).map((option) => (
-                                        <option key={option.parentSkuId} value={option.parentSkuId}>{option.name}</option>
-                                      ))}
-                                    </select>
-                                    <button className="btn btn-ghost btn-xs" type="button" onClick={() => setInlineParentRowId(null)} title="Close">✕</button>
-                                  </div>
-                                ) : null}
-                              </td>
+                              {/* Body cells dispatch by column key so they
+                                  render in the operator's chosen order and
+                                  only when the column is visible. Each
+                                  branch produces the same JSX the
+                                  hardcoded version produced. */}
+                              {effectiveInventoryColumns.map((columnKey) => {
+                                switch (columnKey) {
+                                  case 'sku':
+                                    return (
+                                      <td key="sku" style={{ fontFamily: 'monospace', fontSize: 11.5 }}>
+                                        <button type="button" className="inventory-inline-button" style={{ color: 'var(--ss-blue)' }} onClick={() => void openSkuDrawer(row.id)} title="View orders & sales trend">{row.sku}</button>
+                                      </td>
+                                    )
+                                  case 'thumbnail':
+                                    return (
+                                      <td key="thumbnail" style={{ padding: '4px 6px' }}>
+                                        {row.imageUrl ? (
+                                          <img
+                                            src={row.imageUrl}
+                                            style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 5, display: 'block', cursor: 'zoom-in' }}
+                                            onMouseEnter={(event) => showThumbnailPreview(row.imageUrl ?? '', event)}
+                                            onMouseLeave={() => setThumbnailPreview(null)}
+                                          />
+                                        ) : (
+                                          <div style={{ width: 40, height: 40, background: 'var(--surface3)', border: '1px dashed var(--border)', borderRadius: 5, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, color: 'var(--text4)', textAlign: 'center', lineHeight: 1.2 }}>no<br />img</div>
+                                        )}
+                                      </td>
+                                    )
+                                  case 'name':
+                                    return (
+                                      <td key="name" style={{ fontSize: 12, maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                        <button type="button" className="inventory-inline-button" onClick={() => void openSkuDrawer(row.id)} title="View orders & sales trend">{row.name || <span style={{ color: 'var(--text3)' }}>—</span>}</button>
+                                      </td>
+                                    )
+                                  case 'store':
+                                    return (
+                                      <td key="store" style={{ fontSize: 11.5, color: 'var(--text2)', whiteSpace: 'nowrap' }} title={row.clientName || undefined}>
+                                        {row.clientName || <span style={{ color: 'var(--text4)' }}>&mdash;</span>}
+                                      </td>
+                                    )
+                                  case 'weight':
+                                    return (
+                                      <td key="weight" style={{ textAlign: 'right', fontSize: 11.5 }}>{row.weightOz > 0 ? formatWeight(row.weightOz) : <span style={{ color: 'var(--text4)' }}>—</span>}</td>
+                                    )
+                                  case 'dims':
+                                    return (
+                                      <td key="dims" style={{ textAlign: 'center', fontSize: 11.5, fontFamily: 'monospace' }}>{row.packageLength > 0 || row.packageWidth > 0 || row.packageHeight > 0 ? `${row.packageLength}×${row.packageWidth}×${row.packageHeight}` : <span style={{ color: 'var(--text4)' }}>—</span>}</td>
+                                    )
+                                  case 'cuFt':
+                                    return (
+                                      <td key="cuFt" style={{ textAlign: 'center', fontSize: 11, color: 'var(--text3)' }}>
+                                        {cuFt > 0 ? (
+                                          <span title={row.cuFtOverride && row.cuFtOverride > 0 ? 'Manual override' : 'Auto-computed from product dims'}>
+                                            {cuFt.toFixed(3)}{row.cuFtOverride && row.cuFtOverride > 0 ? <span style={{ color: 'var(--ss-blue)', fontSize: 9, marginLeft: 2 }}>✎</span> : null}
+                                          </span>
+                                        ) : (
+                                          <span style={{ color: 'var(--text4)' }}>—</span>
+                                        )}
+                                      </td>
+                                    )
+                                  case 'package':
+                                    // Falls back to L×W×H dimensions when no
+                                    // named package is assigned — previously a
+                                    // bare "—" left the cell empty even when
+                                    // the row carried usable dim data.
+                                    return (
+                                      <td key="package" style={{ fontSize: 11.5 }}>
+                                        {row.packageName ? (
+                                          row.packageName
+                                        ) : (row.packageLength > 0 || row.packageWidth > 0 || row.packageHeight > 0) ? (
+                                          <span style={{ fontFamily: 'monospace', color: 'var(--text3)' }} title="No named package — showing product dims (L×W×H)">
+                                            {row.packageLength}×{row.packageWidth}×{row.packageHeight}
+                                          </span>
+                                        ) : (
+                                          <span style={{ color: 'var(--text4)' }}>—</span>
+                                        )}
+                                      </td>
+                                    )
+                                  case 'stock':
+                                    return (
+                                      <td key="stock" style={{ textAlign: 'center', fontWeight: 700, fontSize: 13, color: row.currentStock <= 0 ? 'var(--red)' : 'var(--text)' }}>{row.currentStock}</td>
+                                    )
+                                  case 'sold30':
+                                    return (
+                                      <td key="sold30" style={{ textAlign: 'center', fontWeight: 700, fontSize: 12, color: (row.soldLast30Days ?? 0) > 0 ? 'var(--ss-blue)' : 'var(--text3)' }}>{row.soldLast30Days ?? 0}</td>
+                                    )
+                                  case 'unitsPerPack':
+                                    return (
+                                      <td key="unitsPerPack" style={{ textAlign: 'center', fontSize: 12, color: 'var(--text3)' }}>
+                                        {row.units_per_pack > 1 ? <span style={{ background: 'var(--ss-blue-bg)', color: 'var(--ss-blue)', fontSize: 10.5, fontWeight: 700, padding: '1px 6px', borderRadius: 4 }}>×{row.units_per_pack}</span> : '—'}
+                                      </td>
+                                    )
+                                  case 'totalUnits':
+                                    return (
+                                      <td key="totalUnits" style={{ textAlign: 'center', fontSize: 12, color: 'var(--text2)' }}>{row.units_per_pack > 1 ? <span style={{ fontWeight: 700 }}>{row.currentStock * row.units_per_pack}</span> : '—'}</td>
+                                    )
+                                  case 'min':
+                                    return (
+                                      <td key="min" style={{ textAlign: 'center', color: 'var(--text3)', fontSize: 12 }}>{row.minStock}</td>
+                                    )
+                                  case 'status':
+                                    return (
+                                      <td key="status" style={{ textAlign: 'center' }}>
+                                        <span className={`stock-badge ${row.status === 'out' ? 'stock-out' : row.status === 'low' ? 'stock-low' : 'stock-ok'}`}>
+                                          {row.status === 'out' ? 'OUT' : row.status === 'low' ? 'LOW' : 'OK'}
+                                        </span>
+                                      </td>
+                                    )
+                                  case 'actions':
+                                    return (
+                                      <td key="actions" style={{ whiteSpace: 'nowrap' }}>
+                                        <button className="btn btn-ghost btn-xs" type="button" onClick={() => void openEditSku(row)} title="Edit SKU details">✏️</button>
+                                        <button
+                                          className="btn btn-ghost btn-xs"
+                                          type="button"
+                                          title={row.parentSkuId ? 'Change parent SKU' : 'Assign parent SKU'}
+                                          onClick={async () => {
+                                            try {
+                                              await loadParentOptions(row.clientId)
+                                              setInlineParentRowId((current) => (current === row.id ? null : row.id))
+                                            } catch (error) {
+                                              toastContext?.addToast(error instanceof Error ? error.message : 'Failed to load parents', 'error')
+                                            }
+                                          }}
+                                          style={{ fontSize: 12, color: row.parentSkuId ? 'var(--ss-blue)' : 'var(--text3)' }}
+                                        >
+                                          🔗
+                                        </button>
+                                        <button
+                                          className="btn btn-ghost btn-xs"
+                                          type="button"
+                                          onClick={() => setAdjustModal({
+                                            invSkuId: row.id,
+                                            sku: row.sku,
+                                            qty: '1',
+                                            note: '',
+                                            date: new Date().toISOString().slice(0, 10),
+                                            type: 'receive',
+                                            sign: 1,
+                                          })}
+                                          title="Add / Remove Stock"
+                                          style={{ fontSize: 13, fontWeight: 700, color: 'var(--ss-blue)' }}
+                                        >
+                                          +
+                                        </button>
+                                        {inlineParentRowId === row.id ? (
+                                          <div style={{ display: 'inline-flex', gap: 4, marginLeft: 6, alignItems: 'center' }}>
+                                            <select
+                                              className="ship-select"
+                                              style={{ fontSize: 11, padding: '2px 4px' }}
+                                              defaultValue={row.parentSkuId ? String(row.parentSkuId) : ''}
+                                              disabled={inlineParentSaving}
+                                              onChange={(event) => void handleInlineParentChange(row, event.target.value)}
+                                            >
+                                              <option value="">— No Parent —</option>
+                                              {(parentSkuOptions[row.clientId] ?? []).map((option) => (
+                                                <option key={option.parentSkuId} value={option.parentSkuId}>{option.name}</option>
+                                              ))}
+                                            </select>
+                                            <button className="btn btn-ghost btn-xs" type="button" onClick={() => setInlineParentRowId(null)} title="Close">✕</button>
+                                          </div>
+                                        ) : null}
+                                      </td>
+                                    )
+                                  default:
+                                    return null
+                                }
+                              })}
                             </tr>
                           )
                         })}
