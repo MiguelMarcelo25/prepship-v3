@@ -47,6 +47,7 @@ import {
   type ReactNode,
   type MouseEvent as ReactMouseEvent,
 } from 'react'
+import { AnalysisPagination } from '../Views/AnalysisPagination'
 import {
   ArrowDown,
   ArrowUp,
@@ -129,6 +130,22 @@ export interface TableProps<Row> {
   /** Optional className applied to the outer shell. Use sparingly —
    *  the default styling is the point. */
   className?: string
+  /** When true, Table internally slices `data` and renders a
+   *  pagination bar below tbody. Page + pageSize state persist to
+   *  `${storageKey}:page` and `${storageKey}:pageSize` if storageKey
+   *  is set. Auto-resets to page 1 when data length shrinks or sort
+   *  changes (so operators don't land on a now-invalid page). */
+  paginated?: boolean
+  /** Page-size options shown in the pagination bar dropdown.
+   *  Defaults to [25, 50, 100]. */
+  pageSizeOptions?: number[]
+  /** Initial page size. Must be one of pageSizeOptions. Defaults to
+   *  50 (or the first option if 50 isn't in the list). */
+  defaultPageSize?: number
+  /** Per-row class name for visual customization — focused rows,
+   *  status-tinted rows, etc. Receives the row + its index in the
+   *  *paginated/sorted* view (not the original data index). */
+  rowClassName?: (row: Row, index: number) => string | undefined
 }
 
 // localStorage helpers — defensive, never throw.
@@ -171,6 +188,26 @@ function readStoredOrder(storageKey: string | undefined): string[] | null {
   } catch { /* non-fatal */ return null }
 }
 
+// Pagination state persistence — page number and chosen page size.
+// Each lives under its own subkey so we can read/write independently.
+function readStoredPage(storageKey: string | undefined): number | null {
+  if (!storageKey || typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(`${storageKey}:page`)
+    const n = raw ? Number.parseInt(raw, 10) : Number.NaN
+    return Number.isFinite(n) && n >= 1 ? n : null
+  } catch { return null }
+}
+
+function readStoredPageSize(storageKey: string | undefined, options: number[]): number | null {
+  if (!storageKey || typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(`${storageKey}:pageSize`)
+    const n = raw ? Number.parseInt(raw, 10) : Number.NaN
+    return options.includes(n) ? n : null
+  } catch { return null }
+}
+
 function readStoredHidden(storageKey: string | undefined): string[] | null {
   // Persisted as an array of column keys that the operator has
   // CHOSEN to hide. Stored as an explicit list so the absence of
@@ -208,6 +245,12 @@ function compareValues(a: ReturnType<typeof comparable>, b: ReturnType<typeof co
   return String(a).localeCompare(String(b))
 }
 
+// Default pagination options when caller doesn't supply pageSizeOptions
+// but does opt into `paginated`. Operators on the Inventory page use
+// [10,20,50,100,200]; this default mirrors the Packages page so most
+// callers don't need to set the array explicitly.
+const DEFAULT_PAGE_SIZE_OPTIONS = [25, 50, 100]
+
 export function Table<Row>({
   data,
   columns,
@@ -220,6 +263,10 @@ export function Table<Row>({
   emptyMessage = 'No data',
   toolbar,
   className,
+  paginated,
+  pageSizeOptions,
+  defaultPageSize,
+  rowClassName,
 }: TableProps<Row>) {
   // Sort state — reads stored value first, falls through to default.
   const [sort, setSort] = useState<SortState | null>(() => readStoredSort(storageKey) ?? defaultSort ?? null)
@@ -474,6 +521,67 @@ export function Table<Row>({
     return sort.direction === 'desc' ? sorted.reverse() : sorted
   }, [data, sort, columns])
 
+  // ─── Pagination state (only used when `paginated` is true) ───────────────
+  // Resolve effective pageSizeOptions + initial page size. Reads stored
+  // pageSize first, then defaultPageSize prop, then falls back to a
+  // sensible default within the options array.
+  const effectivePageSizeOptions = pageSizeOptions ?? DEFAULT_PAGE_SIZE_OPTIONS
+  const initialPageSize = useMemo(() => {
+    if (!paginated) return effectivePageSizeOptions[0] ?? 50
+    const stored = readStoredPageSize(storageKey, effectivePageSizeOptions)
+    if (stored != null) return stored
+    if (defaultPageSize != null && effectivePageSizeOptions.includes(defaultPageSize)) {
+      return defaultPageSize
+    }
+    return effectivePageSizeOptions.includes(50) ? 50 : effectivePageSizeOptions[0] ?? 50
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const [page, setPage] = useState<number>(() => readStoredPage(storageKey) ?? 1)
+  const [pageSize, setPageSize] = useState<number>(initialPageSize)
+
+  // Persist page + pageSize when they change.
+  useEffect(() => {
+    if (!paginated || !storageKey || typeof window === 'undefined') return
+    try { window.localStorage.setItem(`${storageKey}:page`, String(page)) } catch { /* non-fatal */ }
+  }, [page, paginated, storageKey])
+  useEffect(() => {
+    if (!paginated || !storageKey || typeof window === 'undefined') return
+    try { window.localStorage.setItem(`${storageKey}:pageSize`, String(pageSize)) } catch { /* non-fatal */ }
+  }, [pageSize, paginated, storageKey])
+
+  // Reset to page 1 whenever the data length shrinks or the sort
+  // changes — both cases can make the current page invalid. Using
+  // length as a proxy for "the result set meaningfully changed" so
+  // mutation-style row updates don't reset the page.
+  const lastDataLengthRef = useRef(data.length)
+  useEffect(() => {
+    if (!paginated) return
+    if (data.length < lastDataLengthRef.current) setPage(1)
+    lastDataLengthRef.current = data.length
+  }, [data.length, paginated])
+  useEffect(() => {
+    if (paginated) setPage(1)
+  }, [sort?.key, sort?.direction, paginated])
+
+  // Clamp page when total shrinks past the operator's current page —
+  // a defensive second layer for cases the length-change effect misses
+  // (e.g., an externally controlled data array that swaps wholesale
+  // but happens to have the same length, with different rows).
+  useEffect(() => {
+    if (!paginated) return
+    const maxPage = Math.max(1, Math.ceil(sortedRows.length / pageSize))
+    if (page > maxPage) setPage(maxPage)
+  }, [sortedRows.length, pageSize, page, paginated])
+
+  // Slice for the visible page. When pagination is off, hand sortedRows
+  // through unchanged so the rest of the render path is identical.
+  const pagedRows = useMemo(() => {
+    if (!paginated) return sortedRows
+    const start = (page - 1) * pageSize
+    return sortedRows.slice(start, start + pageSize)
+  }, [paginated, sortedRows, page, pageSize])
+
   // Density tokens — picked here once, applied to every cell so
   // the row rhythm stays consistent.
   const padding = density === 'compact' ? 'px-3 py-1.5' : density === 'comfortable' ? 'px-4 py-3.5' : 'px-3 py-2.5'
@@ -701,12 +809,13 @@ export function Table<Row>({
                   {emptyMessage}
                 </td>
               </tr>
-            ) : sortedRows.map((row) => {
+            ) : pagedRows.map((row, rowIndex) => {
               const key = rowKey(row)
+              const customRowClass = rowClassName?.(row, rowIndex) ?? ''
               return (
                 <tr
                   key={key}
-                  className={`group border-b border-line/70 last:border-b-0 transition-colors ${onRowClick ? 'cursor-pointer hover:bg-brand-bg/40' : 'hover:bg-surface-2/60'}`}
+                  className={`group border-b border-line/70 last:border-b-0 transition-colors ${onRowClick ? 'cursor-pointer hover:bg-brand-bg/40' : 'hover:bg-surface-2/60'} ${customRowClass}`}
                   onClick={onRowClick ? () => onRowClick(row) : undefined}
                 >
                   {orderedColumns.map((col) => {
@@ -732,6 +841,37 @@ export function Table<Row>({
           </tbody>
         </table>
       </div>
+      {/* Pagination bar — opt-in via `paginated`. Reuses the
+          AnalysisPagination component so all paginated tables share
+          one control vocabulary (Analysis grid, Packages, Inventory).
+          Only renders when there's at least one row, so empty-state
+          messages stay clean. */}
+      {paginated && !loading && sortedRows.length > 0 ? (
+        <div className="border-t border-line bg-surface-2/40 px-3 py-2">
+          <TablePaginationBar
+            page={page}
+            pageSize={pageSize}
+            pageSizeOptions={effectivePageSizeOptions}
+            totalItems={sortedRows.length}
+            onPageChange={setPage}
+            onPageSizeChange={(nextSize) => { setPageSize(nextSize); setPage(1) }}
+          />
+        </div>
+      ) : null}
     </div>
   )
+}
+
+// Thin wrapper around AnalysisPagination so we only import it (and
+// pull in its bundle weight) when a consumer actually opts into
+// `paginated`. Same API surface, just narrower types.
+function TablePaginationBar(props: {
+  page: number
+  pageSize: number
+  pageSizeOptions: number[]
+  totalItems: number
+  onPageChange: (page: number) => void
+  onPageSizeChange: (pageSize: number) => void
+}) {
+  return <AnalysisPagination {...props} unitLabel="rows" />
 }
