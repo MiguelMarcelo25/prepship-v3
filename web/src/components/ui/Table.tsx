@@ -164,6 +164,21 @@ export interface TableProps<Row> {
    *  deactivated SKUs to the bottom of the list so operators see
    *  active rows first while still having full visibility. */
   pinRowToBottom?: (row: Row) => boolean
+  /** Optional: render a totals/summary row pinned to the bottom of
+   *  the tbody. Receives the CURRENT visible (post-hide) columns in
+   *  their CURRENT order so the caller can align cells with the
+   *  rendered grid. Caller returns React cells (typically `<td>`s);
+   *  Table wraps them in a `<tr>` with a top border + surface-2
+   *  background so the totals visually stand apart. Common shape:
+   *
+   *    footerRow={(cols) => cols.map((c) => (
+   *      <td key={c.key} className="px-3 py-2 text-right font-extrabold">
+   *        {c.key === 'total' ? `$${totals.grand}` : ''}
+   *      </td>
+   *    ))}
+   *
+   *  Returning null/undefined renders no footer. */
+  footerRow?: (visibleColumns: TableColumn<Row>[]) => ReactNode
 }
 
 // localStorage helpers — defensive, never throw.
@@ -288,6 +303,7 @@ export function Table<Row>({
   renderRowExpansion,
   rowRef,
   pinRowToBottom,
+  footerRow,
 }: TableProps<Row>) {
   // Sort state — reads stored value first, falls through to default.
   const [sort, setSort] = useState<SortState | null>(() => readStoredSort(storageKey) ?? defaultSort ?? null)
@@ -915,6 +931,17 @@ export function Table<Row>({
               }
               return out
             })}
+            {/* Footer/totals row — caller-driven via footerRow.
+                Stays attached to the bottom of tbody so it sits with
+                its parent data even as the table scrolls or paginates
+                (callers compute totals from the FULL dataset, not just
+                the paged slice, so the displayed sum is consistent
+                regardless of which page is showing). */}
+            {!loading && footerRow && sortedRows.length > 0 ? (
+              <tr className="border-t-2 border-line bg-surface-2/70 font-extrabold">
+                {footerRow(orderedColumns)}
+              </tr>
+            ) : null}
           </tbody>
         </table>
       </div>

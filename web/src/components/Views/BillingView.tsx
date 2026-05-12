@@ -30,6 +30,7 @@ import {
   getBillingInitialRange,
   getBillingInvoiceUrl,
   getBillingPresetRange,
+  getDefaultBillingDetailColumnIds,
   getVisibleBillingDetailColumns,
   readBillingDetailColumnIds,
   reorderBillingDetailColumnIds,
@@ -41,6 +42,7 @@ import {
 import { AnalysisPagination } from './AnalysisPagination'
 import OrderDetailDrawer from '../OrderDetailDrawer'
 import { SortableHeader, nextSortState, sortRows } from '../SortableTable'
+import { Table, type TableColumn } from '../ui/Table'
 import './BillingView.css'
 
 interface BillingDetailState {
@@ -55,6 +57,60 @@ interface BillingDetailState {
 const SUMMARY_COL_COUNT = 8
 const BILLING_SUMMARY_PAGE_SIZE_OPTIONS = [10, 25, 50, 100]
 const BILLING_DETAIL_PAGE_SIZE_OPTIONS = [25, 50, 100, 250]
+
+// Detail-table column default widths (px). Used by the migrated
+// <Table>-driven detail render. Anything not listed defaults to 110.
+const DETAIL_COLUMN_WIDTHS: Partial<Record<BillingDetailColumnId, number>> = {
+  orderNumber: 130,
+  shipDate: 130,
+  carrierNickname: 110,
+  itemNames: 220,
+  itemSkus: 160,
+  totalQty: 60,
+  pickpack: 100,
+  additional: 100,
+  packageCost: 100,
+  packageName: 110,
+  bestRate: 100,
+  upsss: 90,
+  uspsss: 90,
+  shipping: 110,
+  total: 110,
+  margin: 130,
+}
+
+// Set membership lookup for "is this column shown by default?". The
+// list comes from billing-parity so the canonical defaults stay in
+// one place; we just convert to a Set for O(1) lookup during column
+// definition mapping in the JSX.
+const DEFAULT_BILLING_DETAIL_COLUMN_IDS_SET = new Set<BillingDetailColumnId>(getDefaultBillingDetailColumnIds())
+
+// Pluck the comparable sort value for a detail row by column id.
+// Mirrors the switch in the old sortedDetailRows useMemo (computed
+// once per cell in Table — recomputing metrics is cheap because
+// computeBillingDetailMetrics is pure and small).
+function detailSortValueOf(row: BillingDetailDto, key: BillingDetailColumnId): string | number | Date | null | undefined {
+  const metrics = computeBillingDetailMetrics(row)
+  switch (key) {
+    case 'orderNumber': return row.orderNumber || row.orderId
+    case 'shipDate': return row.shipDate ? new Date(row.shipDate) : null
+    case 'carrierNickname': return row.carrierNickname || row.providerAccountNickname || row.carrier_nickname || row.provider_account_nickname || row.carrierCode || row.carrier_code || ''
+    case 'itemNames': return row.itemNames || row.description
+    case 'itemSkus': return row.itemSkus
+    case 'totalQty': return row.totalQty || row.qty
+    case 'pickpack': return metrics.pickPack
+    case 'additional': return metrics.additional
+    case 'packageCost': return metrics.packageCost
+    case 'packageName': return row.packageName
+    case 'bestRate': return row.actualLabelCost
+    case 'upsss': return row.ref_ups_rate
+    case 'uspsss': return row.ref_usps_rate
+    case 'shipping': return metrics.shipping
+    case 'total': return metrics.total
+    case 'margin': return metrics.margin
+    default: return ''
+  }
+}
 
 function marginColor(value: number) {
   if (value > 0) return 'var(--green)'
@@ -985,87 +1041,91 @@ export default function BillingView() {
           <span style={{ fontSize: 12, color: 'var(--text3)' }}>{generateStatus}</span>
         </div>
 
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
-            <thead>
-              <tr style={{ background: 'var(--surface2)', borderBottom: '2px solid var(--border)' }}>
-                <SortableHeader sortKey="client" sortState={summarySort} onSort={handleSummarySort} style={{ padding: '7px 10px', textAlign: 'left', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Client</SortableHeader>
-                <SortableHeader sortKey="orders" sortState={summarySort} onSort={handleSummarySort} align="right" style={{ padding: '7px 10px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Orders</SortableHeader>
-                <SortableHeader sortKey="pickPack" sortState={summarySort} onSort={handleSummarySort} align="right" style={{ padding: '7px 10px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Pick &amp; Pack</SortableHeader>
-                <SortableHeader sortKey="additional" sortState={summarySort} onSort={handleSummarySort} align="right" style={{ padding: '7px 10px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Addl Units</SortableHeader>
-                <SortableHeader sortKey="package" sortState={summarySort} onSort={handleSummarySort} align="right" style={{ padding: '7px 10px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Box Cost</SortableHeader>
-                <SortableHeader sortKey="storage" sortState={summarySort} onSort={handleSummarySort} align="right" style={{ padding: '7px 10px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Storage</SortableHeader>
-                <SortableHeader sortKey="shipping" sortState={summarySort} onSort={handleSummarySort} align="right" style={{ padding: '7px 10px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Shipping</SortableHeader>
-                <SortableHeader sortKey="total" sortState={summarySort} onSort={handleSummarySort} align="right" style={{ padding: '7px 10px', textAlign: 'right', fontSize: 10, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px' }}>Total</SortableHeader>
-              </tr>
-            </thead>
-            <tbody>
-              {summaryLoading ? (
-                <tr><td colSpan={SUMMARY_COL_COUNT} style={{ padding: 20, textAlign: 'center', color: 'var(--text3)' }}>Loading…</td></tr>
-              ) : summaryError ? (
-                <tr><td colSpan={SUMMARY_COL_COUNT} style={{ padding: 24, textAlign: 'center', color: 'var(--red)' }}>{summaryError}</td></tr>
-              ) : sortedSummaryRows.length === 0 ? (
-                <tr><td colSpan={SUMMARY_COL_COUNT} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No billing data. Generate invoices first.</td></tr>
-              ) : (
-                <>
-                  {pagedSummaryRows.map((row) => (
-                    <tr key={row.clientId} className="billing-summary-row" onClick={() => void handleLoadDetails(row.clientId, row.clientName)}>
-                      <td style={{ padding: '8px 10px', fontWeight: 600, color: 'var(--ss-blue)' }}>
-                        <span className="billing-summary-client-cell">
-                          {row.clientName}
-                          <button
-                            className="btn btn-ghost btn-xs"
-                            type="button"
-                            title="Export invoice as PDF"
-                            style={{ marginLeft: 6, fontSize: 10, padding: '1px 6px', opacity: 0.7 }}
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              handleExportInvoice(row.clientId, row.clientName)
-                            }}
-                          >
-                            📄 Export
-                          </button>
-                        </span>
-                      </td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', color: 'var(--text2)' }}>{row.orderCount || 0}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', color: 'var(--text2)' }}>{formatBillingMoney(row.pickPackTotal || 0)}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', color: 'var(--text2)' }}>{formatBillingMoney(row.additionalTotal || 0)}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', color: 'var(--text2)' }}>{formatBillingMoney(row.packageTotal || 0, { dashIfZero: true })}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', color: 'var(--text2)' }}>{formatBillingMoney(row.storageTotal || 0, { dashIfZero: true })}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', color: 'var(--text2)' }}>{formatBillingMoney(row.shippingTotal || 0)}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700, color: 'var(--green)' }}>{formatBillingMoney(row.grandTotal || 0)}</td>
-                    </tr>
-                  ))}
-                  <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface2)' }}>
-                    <td style={{ padding: '8px 10px', fontWeight: 700 }}>Total</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700 }}>{summaryTotals.orders}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700 }}>{formatBillingMoney(summaryTotals.pickPack)}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700 }}>{formatBillingMoney(summaryTotals.additional)}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700 }}>{formatBillingMoney(summaryTotals.package, { dashIfZero: true })}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700 }}>{formatBillingMoney(summaryTotals.storage, { dashIfZero: true })}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 700 }}>{formatBillingMoney(summaryTotals.shipping)}</td>
-                    <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 800, color: 'var(--green)', fontSize: 13 }}>{formatBillingMoney(summaryTotals.grand)}</td>
-                  </tr>
-                </>
-              )}
-            </tbody>
-          </table>
-        </div>
-        {!summaryLoading && !summaryError && summaryRows.length > 0 ? (
-          <AnalysisPagination
-            page={summaryPage}
-            pageSize={summaryPageSize}
+        {/* Summary table — migrated 2026-05-12 to the reusable <Table>
+            primitive (components/ui/Table.tsx). Operator-controlled
+            sort / column widths / column order / column visibility +
+            pagination, all persisted to 'billing-summary-table:*' in
+            localStorage. The Total row is rendered via Table's
+            footerRow API so it stays pinned to the bottom of tbody
+            and shows the sum of the FULL dataset (not just the page). */}
+        {summaryError ? (
+          <div style={{ padding: 24, textAlign: 'center', color: 'var(--red)' }}>{summaryError}</div>
+        ) : (
+          <Table<BillingSummaryDto>
+            data={sortedSummaryRows}
+            columns={[
+              {
+                key: 'client',
+                label: 'Client',
+                width: 220,
+                minWidth: 140,
+                sortable: true,
+                hideable: false,
+                sortValue: (row) => row.clientName ?? '',
+                render: (row) => (
+                  <span className="billing-summary-client-cell" style={{ fontWeight: 600, color: 'var(--ss-blue)' }}>
+                    {row.clientName}
+                    <button
+                      className="btn btn-ghost btn-xs"
+                      type="button"
+                      title="Export invoice as PDF"
+                      style={{ marginLeft: 6, fontSize: 10, padding: '1px 6px', opacity: 0.7 }}
+                      onClick={(event) => { event.stopPropagation(); handleExportInvoice(row.clientId, row.clientName) }}
+                    >
+                      📄 Export
+                    </button>
+                  </span>
+                ),
+              },
+              { key: 'orders', label: 'Orders', width: 90, minWidth: 70, align: 'right', sortable: true, sortValue: (row) => Number(row.orderCount ?? 0), render: (row) => row.orderCount || 0 },
+              { key: 'pickPack', label: 'Pick & Pack', width: 110, minWidth: 90, align: 'right', sortable: true, sortValue: (row) => Number(row.pickPackTotal ?? 0), render: (row) => formatBillingMoney(row.pickPackTotal || 0) },
+              { key: 'additional', label: 'Addl Units', width: 110, minWidth: 90, align: 'right', sortable: true, sortValue: (row) => Number(row.additionalTotal ?? 0), render: (row) => formatBillingMoney(row.additionalTotal || 0) },
+              { key: 'package', label: 'Box Cost', width: 110, minWidth: 90, align: 'right', sortable: true, sortValue: (row) => Number(row.packageTotal ?? 0), render: (row) => formatBillingMoney(row.packageTotal || 0, { dashIfZero: true }) },
+              { key: 'storage', label: 'Storage', width: 110, minWidth: 90, align: 'right', sortable: true, sortValue: (row) => Number(row.storageTotal ?? 0), render: (row) => formatBillingMoney(row.storageTotal || 0, { dashIfZero: true }) },
+              { key: 'shipping', label: 'Shipping', width: 110, minWidth: 90, align: 'right', sortable: true, sortValue: (row) => Number(row.shippingTotal ?? 0), render: (row) => formatBillingMoney(row.shippingTotal || 0) },
+              {
+                key: 'total',
+                label: 'Total',
+                width: 120,
+                minWidth: 100,
+                align: 'right',
+                sortable: true,
+                hideable: false,
+                sortValue: (row) => Number(row.grandTotal ?? 0),
+                render: (row) => (
+                  <span style={{ fontWeight: 700, color: 'var(--green)' }}>{formatBillingMoney(row.grandTotal || 0)}</span>
+                ),
+              },
+            ]}
+            rowKey={(row) => row.clientId}
+            storageKey="billing-summary-table"
+            defaultSort={{ key: 'total', direction: 'desc' }}
+            paginated
+            defaultPageSize={25}
             pageSizeOptions={BILLING_SUMMARY_PAGE_SIZE_OPTIONS}
-            totalItems={summaryRows.length}
-            onPageChange={setSummaryPage}
-            onPageSizeChange={(nextSize) => {
-              setSummaryPageSize(nextSize)
-              setSummaryPage(1)
-            }}
-            unitLabel="clients"
-            ariaLabel="Billing summary table pagination"
+            loading={summaryLoading}
+            emptyMessage="No billing data. Generate invoices first."
+            onRowClick={(row) => void handleLoadDetails(row.clientId, row.clientName)}
+            // Totals row — sum of the FULL dataset, not just the page.
+            // Caller iterates the visible columns so cell positions
+            // stay aligned after the operator reorders or hides
+            // columns via the picker.
+            footerRow={(cols) => cols.map((c) => {
+              const tdStyle: React.CSSProperties = { padding: '8px 10px', textAlign: c.align === 'right' ? 'right' : c.align === 'center' ? 'center' : 'left', fontWeight: 700 }
+              switch (c.key) {
+                case 'client': return <td key={c.key} style={tdStyle}>Total</td>
+                case 'orders': return <td key={c.key} style={tdStyle}>{summaryTotals.orders}</td>
+                case 'pickPack': return <td key={c.key} style={tdStyle}>{formatBillingMoney(summaryTotals.pickPack)}</td>
+                case 'additional': return <td key={c.key} style={tdStyle}>{formatBillingMoney(summaryTotals.additional)}</td>
+                case 'package': return <td key={c.key} style={tdStyle}>{formatBillingMoney(summaryTotals.package, { dashIfZero: true })}</td>
+                case 'storage': return <td key={c.key} style={tdStyle}>{formatBillingMoney(summaryTotals.storage, { dashIfZero: true })}</td>
+                case 'shipping': return <td key={c.key} style={tdStyle}>{formatBillingMoney(summaryTotals.shipping)}</td>
+                case 'total': return <td key={c.key} style={{ ...tdStyle, fontWeight: 800, color: 'var(--green)', fontSize: 13 }}>{formatBillingMoney(summaryTotals.grand)}</td>
+                default: return <td key={c.key} style={tdStyle} />
+              }
+            })}
           />
-        ) : null}
+        )}
 
         {detailState.open ? (
           <div ref={detailWrapRef} style={{ display: 'block', marginTop: 16, borderTop: '2px solid var(--border)', paddingTop: 14 }}>
@@ -1074,244 +1134,155 @@ export default function BillingView() {
               <button className="btn btn-ghost btn-xs" type="button" onClick={() => setDetailState((current) => ({ ...current, open: false }))}>✕ Close</button>
             </div>
 
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 }}>
-              {BILLING_DETAIL_COLUMNS.filter((column) => !column.always).map((column) => {
-                const active = detailColumnIds.includes(column.id)
-                return (
-                  <button
-                    key={column.id}
-                    type="button"
-                    className={`billing-detail-toggle${active ? ' active' : ''}`}
-                    onClick={() => setDetailColumnIds((current) => toggleBillingDetailColumnIds(current, column.id))}
-                  >
-                    {column.label}
-                  </button>
-                )
-              })}
-            </div>
-
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                <thead>
-                  <tr>
-                    {visibleDetailColumns.map((column) => {
-                      // Drag-over highlight: a 2px brand-blue left
-                      // border previews where the dragged column will
-                      // land. Drop semantics are "insert BEFORE this
-                      // target," so the border lives on the left edge.
-                      const isDropTarget = dragOverColumnId === column.id
-                      return (
-                        <SortableHeader
-                          key={column.id}
-                          sortKey={column.id}
-                          sortState={detailSort}
-                          onSort={handleDetailSort}
-                          align={column.align}
-                          draggable
-                          onDragStart={(event) => handleColumnDragStart(column.id, event)}
-                          onDragOver={(event) => handleColumnDragOver(column.id, event)}
-                          onDrop={(event) => handleColumnDrop(column.id, event)}
-                          onDragEnd={handleColumnDragEnd}
-                          title={`${column.label} — drag to reorder, click to sort`}
-                          style={{
-                            fontSize: 10,
-                            fontWeight: 700,
-                            color: 'var(--text3)',
-                            textTransform: 'uppercase',
-                            letterSpacing: '.4px',
-                            padding: '6px 10px',
-                            background: 'var(--surface2)',
-                            borderBottom: '2px solid var(--border)',
-                            borderLeft: isDropTarget ? '2px solid var(--ss-blue)' : '2px solid transparent',
-                            textAlign: column.align,
-                            cursor: 'grab',
-                            userSelect: 'none',
-                          }}
-                        >
-                          {column.label}
-                        </SortableHeader>
-                      )
-                    })}
-                  </tr>
-                </thead>
-                <tbody>
-                  {detailState.loading ? (
-                    <tr><td colSpan={visibleDetailColumns.length} style={{ padding: 20, textAlign: 'center', color: 'var(--text3)' }}>Loading…</td></tr>
-                  ) : detailState.error ? (
-                    <tr><td colSpan={visibleDetailColumns.length} style={{ padding: 20, textAlign: 'center', color: 'var(--red)' }}>{detailState.error}</td></tr>
-                  ) : detailState.rows.length === 0 ? (
-                    <tr><td colSpan={visibleDetailColumns.length} style={{ padding: 20, textAlign: 'center', color: 'var(--text3)' }}>No line items found.</td></tr>
-                  ) : (
-                    <>
-                      {pagedDetailRows.map((row, pageRowIndex) => {
-                        const rowIndex = detailRowOffset + pageRowIndex
-                        const metrics = computeBillingDetailMetrics(row)
-                        const rowKey = row.id ?? `${row.orderId ?? 'storage'}-${row.lineType ?? 'detail'}-${row.description ?? rowIndex}-${rowIndex}`
-                        const lineLabel = row.itemNames || row.description || ''
-
-                        return (
-                          <tr key={rowKey} style={{ borderBottom: '1px solid var(--border)' }} className={metrics.ssCharged ? 'billing-detail-ss-row' : undefined}>
-                            {visibleDetailColumns.map((column) => {
-                              if (column.id === 'orderNumber') {
-                                return (
-                                  <td key={column.id} style={{ padding: '5px 10px', fontWeight: 600, color: 'var(--ss-blue)' }}>
-                                    {row.orderId ? (
-                                      <button
-                                        type="button"
-                                        className="inventory-inline-button"
-                                        title="Open order detail"
-                                        onClick={() => setOrderDetailModalId(row.orderId)}
-                                      >
-                                        {row.orderNumber}
-                                      </button>
-                                    ) : (
-                                      <span style={{ color: 'var(--text2)' }}>{row.orderNumber || 'Storage'}</span>
-                                    )}
-                                  </td>
-                                )
-                              }
-
-                              if (column.id === 'shipDate') {
-                                return <td key={column.id} style={{ padding: '5px 10px', color: 'var(--text2)', fontSize: 11 }}>{formatBillingDateTime(row.shipDate)}</td>
-                              }
-
-                              if (column.id === 'carrierNickname') {
-                                const carrierText = row.carrierNickname || row.providerAccountNickname || row.carrier_nickname || row.provider_account_nickname || row.carrierCode || row.carrier_code || ''
-                                return (
-                                  <td key={column.id} style={{ padding: '5px 10px', color: carrierText ? 'var(--text)' : 'var(--text4)', fontSize: 11, fontWeight: carrierText ? 600 : 400 }}>
-                                    {carrierText || '-'}
-                                  </td>
-                                )
-                              }
-
-                              if (column.id === 'itemNames') {
-                                return (
-                                  <td key={column.id} style={{ padding: '5px 10px', fontSize: 11, maxWidth: 220 }}>
-                                    <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={lineLabel}>
-                                      {lineLabel ? lineLabel.split(' | ').map((name, index) => (
-                                        <div key={`${rowKey}-name-${index}`} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
-                                      )) : <span style={{ color: 'var(--text4)' }}>—</span>}
-                                    </div>
-                                  </td>
-                                )
-                              }
-
-                              if (column.id === 'itemSkus') {
-                                const skuText = row.itemSkus || ''
-                                return (
-                                  <td key={column.id} style={{ padding: '5px 10px', fontFamily: 'monospace', fontSize: 10.5, color: 'var(--text2)' }}>
-                                    {skuText ? skuText.split(' | ').map((sku, index) => (
-                                      <div key={`${row.orderId}-sku-${index}`}>{sku || '—'}</div>
-                                    )) : <span style={{ color: 'var(--text4)' }}>—</span>}
-                                  </td>
-                                )
-                              }
-
-                              if (column.id === 'totalQty') {
-                                return <td key={column.id} style={{ padding: '5px 10px', textAlign: 'right' }}>{row.totalQty || row.qty || 0}</td>
-                              }
-
-                              if (column.id === 'pickpack') {
-                                return <td key={column.id} style={{ padding: '5px 10px', textAlign: 'right' }}>{formatBillingMoney(metrics.pickPack)}</td>
-                              }
-
-                              if (column.id === 'additional') {
-                                return <td key={column.id} style={{ padding: '5px 10px', textAlign: 'right' }}>{formatBillingMoney(metrics.additional, { dashIfZero: true })}</td>
-                              }
-
-                              if (column.id === 'packageCost') {
-                                return <td key={column.id} style={{ padding: '5px 10px', textAlign: 'right' }}>{formatBillingMoney(metrics.packageCost, { dashIfZero: true })}</td>
-                              }
-
-                              if (column.id === 'packageName') {
-                                return <td key={column.id} style={{ padding: '5px 10px', textAlign: 'center', fontSize: 10.5, color: 'var(--text2)' }}>{row.packageName || '—'}</td>
-                              }
-
-                              if (column.id === 'bestRate') {
-                                return (
-                                  <td key={column.id} style={{ padding: '5px 10px', textAlign: 'right', fontSize: 11 }} className={metrics.chargedRate === 'bestRate' ? 'billing-detail-rate-hit' : undefined}>
-                                    {formatBillingMoney(row.actualLabelCost, { dashIfZero: true })}
-                                  </td>
-                                )
-                              }
-
-                              if (column.id === 'upsss') {
-                                return (
-                                  <td key={column.id} style={{ padding: '5px 10px', textAlign: 'right', fontSize: 11, color: row.ref_ups_rate ? '#2563eb' : undefined }} className={metrics.chargedRate === 'upsss' ? 'billing-detail-rate-hit' : undefined}>
-                                    {formatBillingMoney(row.ref_ups_rate, { dashIfZero: true })}
-                                  </td>
-                                )
-                              }
-
-                              if (column.id === 'uspsss') {
-                                return (
-                                  <td key={column.id} style={{ padding: '5px 10px', textAlign: 'right', fontSize: 11, color: row.ref_usps_rate ? '#16a34a' : undefined }} className={metrics.chargedRate === 'uspsss' ? 'billing-detail-rate-hit' : undefined}>
-                                    {formatBillingMoney(row.ref_usps_rate, { dashIfZero: true })}
-                                  </td>
-                                )
-                              }
-
-                              if (column.id === 'shipping') {
-                                return (
-                                  <td key={column.id} style={{ padding: '5px 10px', textAlign: 'right' }}>
-                                    {metrics.ssCharged ? (
-                                      <>
-                                        <span style={{ color: '#b45309', fontWeight: 600 }}>{formatBillingMoney(metrics.shipping)}</span>
-                                        <span style={{ fontSize: 9, color: 'var(--text3)', marginLeft: 3 }}>↑SS</span>
-                                      </>
-                                    ) : (
-                                      formatBillingMoney(metrics.shipping)
-                                    )}
-                                  </td>
-                                )
-                              }
-
-                              if (column.id === 'total') {
-                                return <td key={column.id} style={{ padding: '5px 10px', textAlign: 'right', fontWeight: 700, color: 'var(--green)' }}>{formatBillingMoney(metrics.total)}</td>
-                              }
-
-                              return (
-                                <td key={column.id} style={{ padding: '5px 10px', textAlign: 'right', fontSize: 11, color: marginColor(metrics.margin), fontWeight: 600 }}>
-                                  {metrics.margin > 0 ? '+' : ''}${metrics.margin.toFixed(2)}
-                                </td>
-                              )
-                            })}
-                          </tr>
-                        )
-                      })}
-
-                      <tr style={{ borderTop: '2px solid var(--border)', background: 'var(--surface2)' }}>
-                        {visibleDetailColumns.map((column) => {
-                          if (column.id === 'orderNumber') return <td key={column.id} style={{ padding: '6px 10px', fontWeight: 700 }}>Total</td>
-                          if (column.id === 'pickpack') return <td key={column.id} style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700 }}>{formatBillingMoney(detailTotals.pickPack)}</td>
-                          if (column.id === 'additional') return <td key={column.id} style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700 }}>{formatBillingMoney(detailTotals.additional, { dashIfZero: true })}</td>
-                          if (column.id === 'packageCost') return <td key={column.id} style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700 }}>{formatBillingMoney(detailTotals.packageCost, { dashIfZero: true })}</td>
-                          if (column.id === 'shipping') return <td key={column.id} style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700 }}>{formatBillingMoney(detailTotals.shipping)}</td>
-                          if (column.id === 'total') return <td key={column.id} style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 800, color: 'var(--green)' }}>{formatBillingMoney(detailTotals.total)}</td>
-                          if (column.id === 'margin') return <td key={column.id} style={{ padding: '6px 10px', textAlign: 'right', fontWeight: 700, color: marginColor(detailTotals.margin) }}>${detailTotals.margin.toFixed(2)}</td>
-                          return <td key={column.id} />
-                        })}
-                      </tr>
-                    </>
-                  )}
-                </tbody>
-              </table>
-            </div>
-            {!detailState.loading && !detailState.error && detailState.rows.length > 0 ? (
-              <AnalysisPagination
-                page={detailPage}
-                pageSize={detailPageSize}
+            {/* Detail table — migrated 2026-05-12 to the reusable
+                <Table> primitive. Sort, widths, column order,
+                column visibility, AND pagination all live inside
+                Table under 'billing-detail-table:*'. The legacy
+                column-toggle pill bar above the table is removed —
+                operators use Table's "Columns ▾" picker instead
+                (top-right of the table toolbar). Totals row goes
+                through Table's footerRow API. */}
+            {detailState.error ? (
+              <div style={{ padding: 20, textAlign: 'center', color: 'var(--red)' }}>{detailState.error}</div>
+            ) : (
+              <Table<BillingDetailDto>
+                data={sortedDetailRows}
+                columns={BILLING_DETAIL_COLUMNS.map((column) => {
+                  const defaultHidden = !DEFAULT_BILLING_DETAIL_COLUMN_IDS_SET.has(column.id)
+                  const baseWidth = DETAIL_COLUMN_WIDTHS[column.id] ?? 110
+                  const tdStyleBase: React.CSSProperties = {
+                    padding: '5px 10px',
+                    textAlign: column.align === 'right' ? 'right' : column.align === 'center' ? 'center' : 'left',
+                  }
+                  return {
+                    key: column.id,
+                    label: column.label,
+                    width: baseWidth,
+                    minWidth: 70,
+                    align: column.align,
+                    sortable: true,
+                    hideable: !column.always,
+                    sortValue: (row) => detailSortValueOf(row, column.id),
+                    render: (row) => {
+                      const metrics = computeBillingDetailMetrics(row)
+                      const lineLabel = row.itemNames || row.description || ''
+                      switch (column.id) {
+                        case 'orderNumber':
+                          return row.orderId ? (
+                            <button
+                              type="button"
+                              className="inventory-inline-button"
+                              title="Open order detail"
+                              onClick={(e) => { e.stopPropagation(); setOrderDetailModalId(row.orderId as number) }}
+                              style={{ fontWeight: 600, color: 'var(--ss-blue)' }}
+                            >
+                              {row.orderNumber}
+                            </button>
+                          ) : (
+                            <span style={{ color: 'var(--text2)' }}>{row.orderNumber || 'Storage'}</span>
+                          )
+                        case 'shipDate':
+                          return <span style={{ color: 'var(--text2)', fontSize: 11 }}>{formatBillingDateTime(row.shipDate)}</span>
+                        case 'carrierNickname': {
+                          const carrierText = row.carrierNickname || row.providerAccountNickname || row.carrier_nickname || row.provider_account_nickname || row.carrierCode || row.carrier_code || ''
+                          return <span style={{ color: carrierText ? 'var(--text)' : 'var(--text4)', fontSize: 11, fontWeight: carrierText ? 600 : 400 }}>{carrierText || '-'}</span>
+                        }
+                        case 'itemNames':
+                          return (
+                            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: 11 }} title={lineLabel}>
+                              {lineLabel ? lineLabel.split(' | ').map((name, index) => (
+                                <div key={`name-${index}`} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</div>
+                              )) : <span style={{ color: 'var(--text4)' }}>—</span>}
+                            </div>
+                          )
+                        case 'itemSkus': {
+                          const skuText = row.itemSkus || ''
+                          return (
+                            <div style={{ fontFamily: 'monospace', fontSize: 10.5, color: 'var(--text2)' }}>
+                              {skuText ? skuText.split(' | ').map((sku, index) => (
+                                <div key={`sku-${index}`}>{sku || '—'}</div>
+                              )) : <span style={{ color: 'var(--text4)' }}>—</span>}
+                            </div>
+                          )
+                        }
+                        case 'totalQty':
+                          return <span>{row.totalQty || row.qty || 0}</span>
+                        case 'pickpack':
+                          return formatBillingMoney(metrics.pickPack)
+                        case 'additional':
+                          return formatBillingMoney(metrics.additional, { dashIfZero: true })
+                        case 'packageCost':
+                          return formatBillingMoney(metrics.packageCost, { dashIfZero: true })
+                        case 'packageName':
+                          return <span style={{ fontSize: 10.5, color: 'var(--text2)' }}>{row.packageName || '—'}</span>
+                        case 'bestRate':
+                          return (
+                            <span style={{ fontSize: 11 }} className={metrics.chargedRate === 'bestRate' ? 'billing-detail-rate-hit' : undefined}>
+                              {formatBillingMoney(row.actualLabelCost, { dashIfZero: true })}
+                            </span>
+                          )
+                        case 'upsss':
+                          return (
+                            <span style={{ fontSize: 11, color: row.ref_ups_rate ? '#2563eb' : undefined }} className={metrics.chargedRate === 'upsss' ? 'billing-detail-rate-hit' : undefined}>
+                              {formatBillingMoney(row.ref_ups_rate, { dashIfZero: true })}
+                            </span>
+                          )
+                        case 'uspsss':
+                          return (
+                            <span style={{ fontSize: 11, color: row.ref_usps_rate ? '#16a34a' : undefined }} className={metrics.chargedRate === 'uspsss' ? 'billing-detail-rate-hit' : undefined}>
+                              {formatBillingMoney(row.ref_usps_rate, { dashIfZero: true })}
+                            </span>
+                          )
+                        case 'shipping':
+                          return metrics.ssCharged ? (
+                            <>
+                              <span style={{ color: '#b45309', fontWeight: 600 }}>{formatBillingMoney(metrics.shipping)}</span>
+                              <span style={{ fontSize: 9, color: 'var(--text3)', marginLeft: 3 }}>↑SS</span>
+                            </>
+                          ) : formatBillingMoney(metrics.shipping)
+                        case 'total':
+                          return <span style={{ fontWeight: 700, color: 'var(--green)' }}>{formatBillingMoney(metrics.total)}</span>
+                        case 'margin':
+                          return (
+                            <span style={{ fontSize: 11, color: marginColor(metrics.margin), fontWeight: 600 }}>
+                              {metrics.margin > 0 ? '+' : ''}${metrics.margin.toFixed(2)}
+                            </span>
+                          )
+                        default:
+                          return null
+                      }
+                    },
+                    defaultHidden,
+                  } satisfies TableColumn<BillingDetailDto>
+                })}
+                rowKey={(row) => row.id ?? `${row.orderId ?? 'storage'}-${row.lineType ?? 'detail'}-${row.description ?? 'row'}`}
+                storageKey="billing-detail-table"
+                defaultSort={{ key: 'shipDate', direction: 'desc' }}
+                paginated
+                defaultPageSize={50}
                 pageSizeOptions={BILLING_DETAIL_PAGE_SIZE_OPTIONS}
-                totalItems={detailState.rows.length}
-                onPageChange={setDetailPage}
-                onPageSizeChange={(nextSize) => {
-                  setDetailPageSize(nextSize)
-                  setDetailPage(1)
-                }}
-                unitLabel="line items"
-                ariaLabel="Billing line items table pagination"
+                loading={detailState.loading}
+                emptyMessage="No line items found."
+                rowClassName={(row) => (computeBillingDetailMetrics(row).ssCharged ? 'billing-detail-ss-row' : undefined)}
+                footerRow={(cols) => cols.map((c) => {
+                  const td: React.CSSProperties = {
+                    padding: '6px 10px',
+                    textAlign: c.align === 'right' ? 'right' : c.align === 'center' ? 'center' : 'left',
+                    fontWeight: 700,
+                  }
+                  switch (c.key) {
+                    case 'orderNumber': return <td key={c.key} style={td}>Total</td>
+                    case 'pickpack': return <td key={c.key} style={td}>{formatBillingMoney(detailTotals.pickPack)}</td>
+                    case 'additional': return <td key={c.key} style={td}>{formatBillingMoney(detailTotals.additional, { dashIfZero: true })}</td>
+                    case 'packageCost': return <td key={c.key} style={td}>{formatBillingMoney(detailTotals.packageCost, { dashIfZero: true })}</td>
+                    case 'shipping': return <td key={c.key} style={td}>{formatBillingMoney(detailTotals.shipping)}</td>
+                    case 'total': return <td key={c.key} style={{ ...td, fontWeight: 800, color: 'var(--green)' }}>{formatBillingMoney(detailTotals.total)}</td>
+                    case 'margin': return <td key={c.key} style={{ ...td, color: marginColor(detailTotals.margin) }}>${detailTotals.margin.toFixed(2)}</td>
+                    default: return <td key={c.key} style={td} />
+                  }
+                })}
               />
-            ) : null}
+            )}
           </div>
         ) : null}
       </div>
