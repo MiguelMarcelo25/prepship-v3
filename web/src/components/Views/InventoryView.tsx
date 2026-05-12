@@ -2717,7 +2717,7 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                       vertical scroll. Operators hide columns via the
                       Columns popover instead of scrolling horizontally
                       on narrow screens. */}
-                  <div className="relative rounded-card border border-line bg-white shadow-sm overflow-x-clip">
+                  <div className="inventory-stock-scroll relative rounded-card border border-line bg-white shadow-sm overflow-x-clip">
                     <table
                       className={[
                         // Layout

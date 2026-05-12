@@ -804,7 +804,7 @@ export function Table<Row>({
           tables can still hide columns via the Columns picker, or
           rely on `.view-content`'s own horizontal scroll once the
           table overflows the viewport. */}
-      <div className={stickyHeader ? 'overflow-x-clip' : 'overflow-x-auto'}>
+      <div className={stickyHeader ? 'ps-data-table-scroll overflow-x-clip' : 'ps-data-table-scroll overflow-x-auto'}>
         <table className="w-full border-collapse table-fixed" style={{ minWidth: 480 }}>
           <colgroup>
             {orderedColumns.map((col) => (

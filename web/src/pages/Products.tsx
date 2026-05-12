@@ -140,7 +140,7 @@ export default function Products() {
 
       {/* Table */}
       <div className="flex-1 min-h-0 overflow-auto bg-white">
-        <table className="w-full text-sm2 border-collapse">
+        <table className="products-mobile-table w-full text-sm2 border-collapse">
           <thead className="sticky top-0 z-10 bg-surface-2">
             <tr>
               <Th className="w-[44px]"></Th>

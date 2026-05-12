@@ -291,7 +291,7 @@ export default function Invoice() {
 
               {/* Detail */}
               <div className="section-label mt-6 mb-1">Line items</div>
-              <table className="w-full text-tiny border-collapse">
+              <table className="invoice-lines-mobile-table w-full text-tiny border-collapse">
                 <thead className="border-b border-ink">
                   <tr>
                     <SortableHeader sortKey="date" sortState={lineSort} onSort={(key) => setLineSort((current) => nextSortState(current, key))} className="text-left py-1.5 font-bold uppercase tracking-wide text-ink-3">

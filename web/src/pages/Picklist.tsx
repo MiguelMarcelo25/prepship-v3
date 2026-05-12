@@ -192,7 +192,7 @@ export default function Picklist() {
                     {rows.length} SKUs · {clientUnits} units
                   </div>
                 </div>
-                <table className="w-full text-sm2 border-collapse">
+                <table className="picklist-mobile-table w-full text-sm2 border-collapse">
                   <thead>
                     <tr className="bg-surface-2 print:bg-white print:border-b print:border-line-2">
                       <Th className="w-[42px]"></Th>
