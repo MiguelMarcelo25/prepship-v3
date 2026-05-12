@@ -58,6 +58,15 @@ const STORE_PROVIDER_KEYS = new Set([
   'woocommerce',
   'bigcommerce',
 ]);
+const STORE_SCOPED_SHIPPING_PROVIDERS = new Set([
+  'walmart_shipping',
+  'ebay_shipping',
+]);
+const SYNTHETIC_STORE_ID_OFFSETS: Record<string, number> = {
+  walmart_shipping: 9_000_000,
+  amazon_shipping: 9_100_000,
+  ebay_shipping: 9_500_000,
+};
 
 // Populated by fetchStores / fetchCounts when clients are loaded — lets
 // downstream filtering (e.g. byStatusStore emission) drop rows for hidden
@@ -538,6 +547,7 @@ type DirectCarrierAccountRow = {
   accountIdentifier?: string | null;
   active?: boolean;
   sourceTable?: 'carrier_accounts' | 'store_accounts';
+  assignedClientIds?: number[];
 };
 
 type DirectCarrierRatesResult = {
@@ -582,6 +592,14 @@ function isStoreProvider(provider: unknown): boolean {
   return STORE_PROVIDER_KEYS.has(normalizeProviderKey(provider));
 }
 
+function normalizeClientIdList(value: unknown): number[] {
+  return Array.isArray(value)
+    ? value
+        .map((item) => parseFiniteNumber(item))
+        .filter((item): item is number => item != null)
+    : [];
+}
+
 type DirectAccountRef = {
   accountId: number;
   sourceTable: 'carrier_accounts' | 'store_accounts';
@@ -615,6 +633,51 @@ function isDirectCarrierId(value: unknown): boolean {
   return directAccountRefFromProviderId(toProviderAccountId(value)) != null;
 }
 
+function directAccountKey(account: Pick<DirectCarrierAccountRow, 'id' | 'sourceTable'>): string {
+  return `${account.sourceTable ?? 'carrier_accounts'}:${account.id}`;
+}
+
+function storeAccountMatchesOrder(
+  row: DirectCarrierAccountRow,
+  context: { storeId?: unknown; clientId?: unknown }
+): boolean {
+  const provider = normalizeProviderKey(row.provider);
+  const storeId = parseFiniteNumber(context.storeId);
+  const offset = SYNTHETIC_STORE_ID_OFFSETS[provider];
+  if (storeId != null && offset != null && storeId === offset + row.id) return true;
+
+  const rowClientId = parseFiniteNumber(row.clientId);
+  const contextClientId = parseFiniteNumber(context.clientId);
+  return rowClientId != null && contextClientId != null && rowClientId === contextClientId;
+}
+
+function directCarrierAccountVisibleForOrder(
+  row: DirectCarrierAccountRow,
+  context: { storeId?: unknown; clientId?: unknown }
+): boolean {
+  const provider = normalizeProviderKey(row.provider);
+  if ((row.sourceTable ?? 'carrier_accounts') === 'store_accounts') {
+    return storeAccountMatchesOrder(row, context);
+  }
+
+  const contextClientId = parseFiniteNumber(context.clientId);
+  const assignedClientIds = normalizeClientIdList(row.assignedClientIds);
+  if (assignedClientIds.length > 0) {
+    return contextClientId != null && assignedClientIds.includes(contextClientId);
+  }
+
+  const rowClientId = parseFiniteNumber(row.clientId);
+  if (rowClientId != null) {
+    return contextClientId != null && rowClientId === contextClientId;
+  }
+
+  // Marketplace-owned shipping APIs are not globally shared carriers. Without
+  // a client/store match they would leak into unrelated clients like KFG.
+  if (STORE_SCOPED_SHIPPING_PROVIDERS.has(provider)) return false;
+
+  return true;
+}
+
 function normalizeDirectCarrierAccountDto(row: DirectCarrierAccountRow): any {
   const provider = normalizeProviderKey(row.provider);
   const shippingProviderId = directProviderIdFromAccount(row);
@@ -632,6 +695,7 @@ function normalizeDirectCarrierAccountDto(row: DirectCarrierAccountRow): any {
     _label: label,
     source: 'carrier_accounts',
     sourceTable: row.sourceTable ?? 'carrier_accounts',
+    assignedClientIds: normalizeClientIdList(row.assignedClientIds),
     sourceClientName: 'Direct carrier accounts',
   };
 }
@@ -654,6 +718,7 @@ async function fetchDirectCarrierAccountRows(): Promise<DirectCarrierAccountRow[
       ...row,
       provider: normalizeProviderKey(row.provider),
       sourceTable: 'carrier_accounts' as const,
+      assignedClientIds: normalizeClientIdList(row.assignedClientIds),
     }));
   const derivedFromStores = (storeRes.data ?? [])
     .filter((row) => row && row.active !== false && row.provider)
@@ -663,6 +728,7 @@ async function fetchDirectCarrierAccountRows(): Promise<DirectCarrierAccountRow[
       provider: 'ebay_shipping',
       label: row.label ? `eBay Shipping - ${row.label}` : 'eBay Shipping',
       sourceTable: 'store_accounts' as const,
+      assignedClientIds: normalizeClientIdList(row.assignedClientIds),
     }));
   return [...carriers, ...derivedFromStores];
 }
@@ -765,8 +831,10 @@ async function fetchDirectCarrierRates(
   if (!refs.length) return { rates: [], errors: [], metas: [] };
 
   let rows: DirectCarrierAccountRow[] = [];
+  let rowLookupSucceeded = false;
   try {
     const allRows = await fetchDirectCarrierAccountRows();
+    rowLookupSucceeded = true;
     rows = refs
       .map((ref) =>
         allRows.find((row) =>
@@ -782,8 +850,14 @@ async function fetchDirectCarrierRates(
     );
   }
 
-  const rowByKey = new Map(rows.map((row) => [`${row.sourceTable ?? 'carrier_accounts'}:${row.id}`, row]));
-  const calls = refs.map(async (ref) => {
+  const rowByKey = new Map(rows.map((row) => [directAccountKey(row), row]));
+  const visibleRefs = rowLookupSucceeded
+    ? refs.filter((ref) => {
+        const row = rowByKey.get(`${ref.sourceTable}:${ref.accountId}`);
+        return row ? directCarrierAccountVisibleForOrder(row, body) : false;
+      })
+    : refs;
+  const calls = visibleRefs.map(async (ref) => {
     const accountKey = `${ref.sourceTable}:${ref.accountId}`;
     const account = rowByKey.get(accountKey) ?? {
       id: ref.accountId,
@@ -1344,7 +1418,9 @@ export const apiClient = {
         return {
           carriers: [
             ...raw.map(normalizeCarrierAccountDto),
-            ...directRows.map(normalizeDirectCarrierAccountDto),
+            ...directRows
+              .filter((row) => directCarrierAccountVisibleForOrder(row, { storeId, clientId }))
+              .map(normalizeDirectCarrierAccountDto),
           ],
         };
       },
