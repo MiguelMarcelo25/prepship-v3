@@ -157,6 +157,13 @@ export interface TableProps<Row> {
    *  Lets the parent grab handles for scroll-to-row, focus
    *  management, etc. */
   rowRef?: (row: Row, el: HTMLTableRowElement | null) => void
+  /** Optional predicate: rows where this returns true are forced
+   *  to render AFTER all rows where it returns false, regardless
+   *  of the operator's sort choice. Within each group, the
+   *  operator's sort still applies. Used by Inventory to pin
+   *  deactivated SKUs to the bottom of the list so operators see
+   *  active rows first while still having full visibility. */
+  pinRowToBottom?: (row: Row) => boolean
 }
 
 // localStorage helpers — defensive, never throw.
@@ -280,6 +287,7 @@ export function Table<Row>({
   rowClassName,
   renderRowExpansion,
   rowRef,
+  pinRowToBottom,
 }: TableProps<Row>) {
   // Sort state — reads stored value first, falls through to default.
   const [sort, setSort] = useState<SortState | null>(() => readStoredSort(storageKey) ?? defaultSort ?? null)
@@ -525,14 +533,37 @@ export function Table<Row>({
   }
 
   // Sorted rows — recomputed when data or sort changes.
+  // If `pinRowToBottom` is provided, the result is stably partitioned
+  // so all pinned rows sort to the END of the list (after the
+  // operator's chosen sort applies WITHIN each group). This lets
+  // consumers like Inventory keep deactivated SKUs visible but
+  // clustered at the bottom regardless of the active sort.
   const sortedRows = useMemo(() => {
-    if (!sort) return data
-    const col = columns.find((c) => c.key === sort.key)
-    if (!col) return data
-    const sortValue = col.sortValue ?? ((row: Row) => (row as Record<string, unknown>)[col.key] as never)
-    const sorted = [...data].sort((a, b) => compareValues(comparable(sortValue(a)), comparable(sortValue(b))))
-    return sort.direction === 'desc' ? sorted.reverse() : sorted
-  }, [data, sort, columns])
+    let result: Row[]
+    if (!sort) {
+      result = data
+    } else {
+      const col = columns.find((c) => c.key === sort.key)
+      if (!col) {
+        result = data
+      } else {
+        const sortValue = col.sortValue ?? ((row: Row) => (row as Record<string, unknown>)[col.key] as never)
+        const sorted = [...data].sort((a, b) => compareValues(comparable(sortValue(a)), comparable(sortValue(b))))
+        result = sort.direction === 'desc' ? sorted.reverse() : sorted
+      }
+    }
+    if (!pinRowToBottom) return result
+    // Stable partition: keep relative order within each group so
+    // the operator's sort is preserved among active rows and among
+    // pinned rows separately.
+    const top: Row[] = []
+    const bottom: Row[] = []
+    for (const row of result) {
+      if (pinRowToBottom(row)) bottom.push(row)
+      else top.push(row)
+    }
+    return [...top, ...bottom]
+  }, [data, sort, columns, pinRowToBottom])
 
   // ─── Pagination state (only used when `paginated` is true) ───────────────
   // Resolve effective pageSizeOptions + initial page size. Reads stored

@@ -696,15 +696,18 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
   const [stockSearch, setStockSearch] = useState('')
   const [stockClientId, setStockClientId] = useState('')
   const [alertOnly, setAlertOnly] = useState(false)
-  // "Active only" toggle — defaults to ON so deactivated/archived
-  // SKUs don't clutter the day-to-day view. Persisted to localStorage
-  // so the operator's choice survives reloads (consistent with the
-  // column-layout, column-widths, etc. persistence pattern).
+  // "Active only" toggle — DEFAULT FLIPPED to OFF 2026-05-12 per
+  // operator request: deactivated SKUs should stay VISIBLE but
+  // greyscale-styled + clustered at the bottom (not hidden). The
+  // <Table>'s pinRowToBottom prop + .inventory-row-inactive CSS
+  // class implement that look. Operators who prefer the old
+  // "hide inactive entirely" behavior can still flip this toggle
+  // ON via the toolbar. Persisted to localStorage.
   const [activeOnly, setActiveOnly] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return true
+    if (typeof window === 'undefined') return false
     const raw = window.localStorage.getItem('inventory_active_only')
-    // Default to ON if nothing is stored. Explicit 'false' turns it off.
-    return raw === null ? true : raw !== 'false'
+    // Default to OFF if nothing is stored. Explicit 'true' turns it on.
+    return raw === null ? false : raw === 'true'
   })
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -2614,7 +2617,23 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
               paginated
               pageSizeOptions={[10, 20, 50, 100, 200]}
               defaultPageSize={50}
-              rowClassName={(row) => focusInvSkuId === row.id ? 'inventory-row-focused' : ''}
+              // Deactivated SKUs are pinned to the bottom of the
+              // sorted result so active rows always appear first.
+              // Operator's chosen sort still orders rows WITHIN each
+              // group (active rows among themselves, inactive among
+              // themselves).
+              pinRowToBottom={(row) => row.active === false}
+              // Row classes: stack two visual treatments:
+              //   • focused-row flash (when navigating from the
+              //     SKU drawer) — soft blue fade
+              //   • inactive-row greyscale — desaturates + dims the
+              //     row so it reads as "paused, not gone"
+              rowClassName={(row) => {
+                const classes: string[] = []
+                if (row.active === false) classes.push('inventory-row-inactive')
+                if (focusInvSkuId === row.id) classes.push('inventory-row-focused')
+                return classes.join(' ') || undefined
+              }}
               loading={stockLoading}
               emptyMessage={alertOnly ? 'No low/out stock' : 'No SKUs found'}
             />

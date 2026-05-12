@@ -414,7 +414,16 @@ export function PackagesDataTable({
   ]
 
   return (
-    <div className="rounded-card border border-line bg-white shadow-sm overflow-hidden">
+    // 2026-05-12 sticky fix: was `overflow-hidden`, which establishes
+    // a scroll context just like `overflow-x: auto` does — meaning
+    // the inner <Table>'s sticky thead pinned to THIS wrapper instead
+    // of the page-level view-content. Switching to `overflow-clip`
+    // preserves the rounded-corner clipping (the only reason overflow
+    // was set here in the first place) but does NOT create a scroll
+    // context, so sticky now resolves up to the page scroll where
+    // operators actually want it. Same fix pattern as Table.tsx:705
+    // and InventoryView.tsx:2638 from commit 3064460.
+    <div className="rounded-card border border-line bg-white shadow-sm overflow-clip">
       {/* Sticky section title — "Custom Packages" / "Carrier Packages".
           Sits OUTSIDE the Table so the table's own thead can be sticky
           independently. */}

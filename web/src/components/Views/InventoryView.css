@@ -224,3 +224,25 @@
   background: var(--ss-blue-bg) !important;
   transition: background 1.5s ease;
 }
+
+/* 2026-05-12 — Inactive-row treatment for the shared <Table>.
+   Applied via rowClassName when row.active === false. CSS filter
+   desaturates the entire row (greyscale + reduced opacity) so
+   operators see at a glance that the SKU is deactivated. Combined
+   with <Table>'s pinRowToBottom prop, these rows cluster at the
+   bottom of the list — visible but visually de-emphasized.
+   filter:grayscale also affects child colors (the SKU link's
+   blue, the stock-badge tint, etc.) which is the desired effect:
+   "this row is paused, not gone." Cells stay clickable so the
+   operator can re-activate via the per-row toggle. */
+.inventory-row-inactive td {
+  filter: grayscale(1);
+  opacity: 0.55;
+  transition: filter 0.2s ease, opacity 0.2s ease;
+}
+.inventory-row-inactive:hover td {
+  /* On hover, lift the desaturation slightly so the operator can
+     actually read the row when they want to inspect it / re-enable. */
+  filter: grayscale(0.6);
+  opacity: 0.85;
+}
