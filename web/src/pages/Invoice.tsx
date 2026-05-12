@@ -84,9 +84,11 @@ export default function Invoice() {
     setSearchParams(next);
   };
 
+  // 2026-05-12: explicit activeOnly=true — invoices for disabled
+  // clients are accessible via the admin Clients tab, not this view.
   const clients = useQuery({
-    queryKey: ['clients'],
-    queryFn: () => api.get<Client[]>('/clients'),
+    queryKey: ['clients', 'active-only'],
+    queryFn: () => api.get<Client[]>('/clients?activeOnly=true'),
     staleTime: 60_000,
   });
   const client = clients.data?.find((c) => c.id === clientId) ?? null;

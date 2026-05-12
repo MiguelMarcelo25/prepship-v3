@@ -55,9 +55,11 @@ export default function Picklist() {
     queryFn: () => api.get<PicklistResponse>(`/orders/picklist${queryString}`),
   });
 
+  // 2026-05-12: explicit activeOnly=true — picklist groups orders by
+  // client, and disabled tenants should never appear as a group header.
   const clients = useQuery({
-    queryKey: ['clients'],
-    queryFn: () => api.get<{ id: number; name: string }[]>('/clients'),
+    queryKey: ['clients', 'active-only'],
+    queryFn: () => api.get<{ id: number; name: string }[]>('/clients?activeOnly=true'),
     staleTime: 60_000,
   });
 

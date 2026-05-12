@@ -57,9 +57,17 @@ async function loadManifest(filters: ManifestFilters) {
         lte(shipments.shipDate, new Date(filters.dateTo)),
         filters.carrierCode ? eq(shipments.carrierCode, filters.carrierCode) : undefined,
         filters.clientId !== undefined ? eq(shipments.clientId, filters.clientId) : undefined,
-        // Drop test-client shipments unless one is explicitly requested.
+        // 2026-05-12 visibility fix: drop shipments owned by test
+        // clients (sandbox data) OR by clients the operator disabled
+        // via Settings → Clients. Previously only the test branch was
+        // filtered, which let inactive clients' shipments slip into
+        // the manifest PDF — annoying for the warehouse since they'd
+        // see clients they thought were retired still showing up at
+        // print time. Only applies when the caller does NOT explicitly
+        // ask for a single client (explicit clientId trusts the
+        // caller — admin/diagnostic flow).
         filters.clientId === undefined
-          ? sql`not exists (select 1 from clients c where c.id = ${shipments.clientId} and c.is_test = true)`
+          ? sql`not exists (select 1 from clients c where c.id = ${shipments.clientId} and (c.is_test = true or coalesce(c.active, true) = false))`
           : undefined
       )
     )

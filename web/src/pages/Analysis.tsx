@@ -158,9 +158,11 @@ export default function Analysis() {
     queryFn: () => api.get<SkuDailyResp>(`/analysis/sku-daily${rangeQs}`),
   });
 
+  // 2026-05-12: explicit activeOnly=true — analysis filters and charts
+  // should never include disabled clients in their dropdowns or totals.
   const clients = useQuery({
-    queryKey: ['clients'],
-    queryFn: () => api.get<Client[]>('/clients'),
+    queryKey: ['clients', 'active-only'],
+    queryFn: () => api.get<Client[]>('/clients?activeOnly=true'),
     staleTime: 60_000,
   });
   const clientsById = useMemo(() => {

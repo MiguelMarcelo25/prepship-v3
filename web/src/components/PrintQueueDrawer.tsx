@@ -105,9 +105,11 @@ export default function PrintQueueDrawer({ onClose }: { onClose: () => void }) {
 
   // Resolve the client's name from the shared clients cache (same query
   // key Sidebar populates). No extra fetch if it's already warm.
+  // 2026-05-12: explicit activeOnly=true matches the Sidebar query so
+  // both share a cache entry — and never surface disabled clients.
   const clients = useQuery({
-    queryKey: ['clients'],
-    queryFn: () => api.get<ClientRow[]>('/clients'),
+    queryKey: ['clients', 'active-only'],
+    queryFn: () => api.get<ClientRow[]>('/clients?activeOnly=true'),
     staleTime: 60_000,
   });
   const clientName = useMemo(() => {

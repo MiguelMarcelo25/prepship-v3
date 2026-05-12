@@ -116,9 +116,10 @@ export default function Inventory() {
     queryFn: () => api.get<Paginated<Item>>(`/inventory${queryString}`),
   });
 
+  // 2026-05-12: explicit activeOnly=true.
   const clients = useQuery({
-    queryKey: ['clients'],
-    queryFn: () => api.get<Client[]>('/clients'),
+    queryKey: ['clients', 'active-only'],
+    queryFn: () => api.get<Client[]>('/clients?activeOnly=true'),
     staleTime: 60_000,
   });
 

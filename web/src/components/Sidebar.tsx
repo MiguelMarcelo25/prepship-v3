@@ -62,13 +62,18 @@ function StatusRow({ status, label }: { status: string; label: string }) {
   const total = useStatusTotal(status);
   const location = useLocation();
 
+  // 2026-05-12 visibility hardening: explicitly request active-only on
+  // both endpoints so the sidebar's per-client breakdown can never
+  // surface disabled tenants. Backend defaults already do this, but
+  // making it explicit at the call site is the structural fix —
+  // protects against future default changes and makes intent clear.
   const clients = useQuery({
-    queryKey: ['clients'],
-    queryFn: () => api.get<Client[]>('/clients'),
+    queryKey: ['clients', 'active-only'],
+    queryFn: () => api.get<Client[]>('/clients?activeOnly=true'),
     staleTime: 60_000,
   });
   const stats = useQuery({
-    queryKey: ['clients-order-stats'],
+    queryKey: ['clients-order-stats', 'active-only'],
     queryFn: () => api.get<{ data: ClientStats[] }>('/clients/order-stats'),
     staleTime: 30_000,
   });

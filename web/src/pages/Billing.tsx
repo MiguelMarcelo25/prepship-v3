@@ -68,9 +68,12 @@ export default function Billing() {
   const [dateTo, setDateTo] = useState(toDateInput(endOfMonthIso()));
   const [summarySort, setSummarySort] = useState<SortState<BillingSummarySortKey>>(null);
 
+  // 2026-05-12: explicit activeOnly=true — billing report should not
+  // surface disabled tenants as a row even if they have stale ledger
+  // entries. Settings → Clients is the management path.
   const clients = useQuery({
-    queryKey: ['clients'],
-    queryFn: () => api.get<Client[]>('/clients'),
+    queryKey: ['clients', 'active-only'],
+    queryFn: () => api.get<Client[]>('/clients?activeOnly=true'),
   });
 
   const configsQ = useQuery({

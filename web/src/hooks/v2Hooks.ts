@@ -445,9 +445,11 @@ export function useOrders(
     setCurrentPage(page);
   }, [page]);
 
+  // 2026-05-12: explicit activeOnly=true so the orders query's client
+  // lookup never includes disabled clients (mirrors useClients() above).
   const clientsQuery = useQuery<V4ClientRow[]>({
-    queryKey: ['v2-hooks:clients'],
-    queryFn: () => api.get<V4ClientRow[]>('/clients'),
+    queryKey: ['v2-hooks:clients', 'active-only'],
+    queryFn: () => api.get<V4ClientRow[]>('/clients?activeOnly=true'),
     staleTime: 60_000,
   });
 
@@ -880,10 +882,49 @@ function transformClientRowV4toV2(
   };
 }
 
+// 2026-05-12 visibility hardening: useClients() now ALWAYS requests
+// active-only clients from the backend. Previously it called bare
+// /clients and relied on the route's `activeOnly=true` default — which
+// works today but is one default-flip away from leaking inactive
+// clients into every consumer (Settings, CarrierIntegrationsCard,
+// future surfaces). Explicit is better than implicit.
+//
+// Admin paths that NEED to see disabled clients should use
+// useAllClients() (below) — that hook explicitly passes
+// includeInactive=true, signaling at the call site that this is a
+// management surface, not a data view.
 export function useClients(): UseClientsResult {
   const query = useQuery<V4ClientFullRow[]>({
-    queryKey: ['v2-hooks:clients'],
-    queryFn: () => api.get<V4ClientFullRow[]>('/clients'),
+    queryKey: ['v2-hooks:clients', 'active-only'],
+    queryFn: () => api.get<V4ClientFullRow[]>('/clients?activeOnly=true'),
+    staleTime: 60_000,
+  });
+
+  const clients = useMemo(() => {
+    const rows = query.data ?? [];
+    const namesById = new Map<number, string>();
+    for (const row of rows) namesById.set(row.id, row.name);
+    return rows.map((row) => transformClientRowV4toV2(row, namesById));
+  }, [query.data]);
+
+  return {
+    clients,
+    isLoading: query.isLoading,
+    error: (query.error as Error | null) ?? null,
+  };
+}
+
+// Admin-only: returns ACTIVE + INACTIVE clients. Use this for the
+// Clients management screen, anywhere the operator needs to re-enable
+// a disabled tenant, or any audit/report that should show the full
+// roster. Separate query key from useClients() so React Query keeps
+// the two caches distinct — toggling a client's active flag
+// invalidates both, but a routine refetch of one doesn't trigger the
+// other.
+export function useAllClients(): UseClientsResult {
+  const query = useQuery<V4ClientFullRow[]>({
+    queryKey: ['v2-hooks:clients', 'include-inactive'],
+    queryFn: () => api.get<V4ClientFullRow[]>('/clients?includeInactive=true'),
     staleTime: 60_000,
   });
 
@@ -1031,9 +1072,11 @@ export function useInventory(
 ): UseInventoryResult {
   const { clientId, search, lowStock, pageSize = 200, page = 1 } = options;
 
+  // 2026-05-12: explicit activeOnly=true so the inventory query's
+  // clientName resolution never picks up disabled clients.
   const clientsQuery = useQuery<V4ClientFullRow[]>({
-    queryKey: ['v2-hooks:clients'],
-    queryFn: () => api.get<V4ClientFullRow[]>('/clients'),
+    queryKey: ['v2-hooks:clients', 'active-only'],
+    queryFn: () => api.get<V4ClientFullRow[]>('/clients?activeOnly=true'),
     staleTime: 60_000,
   });
 

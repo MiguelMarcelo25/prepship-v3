@@ -268,12 +268,23 @@ app.get(
   }
 );
 
-// Orphan report: orders with a storeId not owned by any client
+// Orphan report: orders with a storeId not owned by any active client.
+//
+// 2026-05-12 visibility fix: the LEFT JOIN now only matches ACTIVE
+// clients. Stores owned exclusively by clients the operator disabled
+// in Settings → Clients now show up here as "orphans needing
+// attention," which is the right operator signal — those orders are
+// piling up against a disabled tenant and the operator needs to
+// decide whether to reassign them or reactivate the client. Before
+// this change, disabling a client silently hid their orphan orders
+// instead of flagging them.
 app.get('/unassigned-orphans', async (c) => {
   const rows = await db.execute<{ store_id: number; count: number }>(sql`
     select o.store_id, count(*)::int as count
     from orders o
-    left join clients c on o.store_id = any(c.store_ids)
+    left join clients c
+      on o.store_id = any(c.store_ids)
+      and coalesce(c.active, true) = true
     where o.client_id is null
       and o.store_id is not null
       and c.id is null

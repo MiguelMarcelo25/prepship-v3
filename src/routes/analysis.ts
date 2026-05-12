@@ -25,8 +25,15 @@ const EXPEDITED_SERVICES_SQL = sql`ARRAY[${sql.join(EXPEDITED_SERVICES.map((s) =
 const app = new Hono();
 
 app.get('/overview', async (c) => {
-  // Every sub-query excludes rows tied to is_test clients so sandbox data
-  // never inflates dashboard numbers or the monthly shipping spend metric.
+  // 2026-05-12 visibility fix: every sub-query excludes rows tied to
+  // either (a) is_test clients (sandbox / smoke-test data) or (b)
+  // inactive clients (operator disabled them via Settings → Clients).
+  // Previously only (a) was filtered — which left disabled clients'
+  // KPIs leaking into the Dashboard top cards. Pattern matches the
+  // /orders and /init/counts predicates so visibility is now uniform
+  // across the app. `coalesce(c.active, true) = false` is the right
+  // half of the OR: only EXPLICITLY active=false rows are excluded;
+  // legacy NULL-active rows stay visible (lenient default).
   const rows = await db.execute<{
     orders_today: number;
     orders_week: number;
@@ -39,22 +46,22 @@ app.get('/overview', async (c) => {
     select
       (select count(*)::int from orders o
          where order_date >= date_trunc('day',  now())
-           and not exists (select 1 from clients c where c.id = o.client_id and c.is_test = true)) as orders_today,
+           and not exists (select 1 from clients c where c.id = o.client_id and (c.is_test = true or coalesce(c.active, true) = false))) as orders_today,
       (select count(*)::int from orders o
          where order_date >= date_trunc('week', now())
-           and not exists (select 1 from clients c where c.id = o.client_id and c.is_test = true)) as orders_week,
+           and not exists (select 1 from clients c where c.id = o.client_id and (c.is_test = true or coalesce(c.active, true) = false))) as orders_week,
       (select count(*)::int from orders o
          where order_date >= date_trunc('month',now())
-           and not exists (select 1 from clients c where c.id = o.client_id and c.is_test = true)) as orders_month,
+           and not exists (select 1 from clients c where c.id = o.client_id and (c.is_test = true or coalesce(c.active, true) = false))) as orders_month,
       (select count(*)::int from shipments s
          where s.voided = false and s.ship_date >= date_trunc('day',  now())
-           and not exists (select 1 from clients c where c.id = s.client_id and c.is_test = true)) as shipped_today,
+           and not exists (select 1 from clients c where c.id = s.client_id and (c.is_test = true or coalesce(c.active, true) = false))) as shipped_today,
       (select count(*)::int from shipments s
          where s.voided = false and s.ship_date >= date_trunc('week', now())
-           and not exists (select 1 from clients c where c.id = s.client_id and c.is_test = true)) as shipped_week,
+           and not exists (select 1 from clients c where c.id = s.client_id and (c.is_test = true or coalesce(c.active, true) = false))) as shipped_week,
       (select count(*)::int from shipments s
          where s.voided = false and s.ship_date >= date_trunc('month',now())
-           and not exists (select 1 from clients c where c.id = s.client_id and c.is_test = true)) as shipped_month,
+           and not exists (select 1 from clients c where c.id = s.client_id and (c.is_test = true or coalesce(c.active, true) = false))) as shipped_month,
       (select coalesce(sum(marked_cost),0)::text
          from (
            select
@@ -80,7 +87,7 @@ app.get('/overview', async (c) => {
                end as markup
            ) cost_model
            where s.voided = false and s.ship_date >= date_trunc('month',now())
-             and not exists (select 1 from clients c where c.id = s.client_id and c.is_test = true)
+             and not exists (select 1 from clients c where c.id = s.client_id and (c.is_test = true or coalesce(c.active, true) = false))
          ) shipping_costs) as shipping_cost_month
   `);
   const r = rows[0] ?? {
@@ -146,7 +153,10 @@ app.get('/daily-shipments', zValidator('query', rangeQuery), async (c) => {
     where s.voided = false
       and s.ship_date >= ${fromIso}::timestamptz
       and s.ship_date <= ${toIso}::timestamptz
-      and not exists (select 1 from clients c where c.id = s.client_id and c.is_test = true)
+      -- 2026-05-12 visibility fix: also exclude inactive clients
+      -- (operator disabled them in Settings → Clients) so the timeseries
+      -- chart stops including their historical shipments.
+      and not exists (select 1 from clients c where c.id = s.client_id and (c.is_test = true or coalesce(c.active, true) = false))
     group by date_trunc('day', s.ship_date)
     order by date_trunc('day', s.ship_date) desc
   `);
