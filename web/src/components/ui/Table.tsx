@@ -656,7 +656,18 @@ export function Table<Row>({
   const totalToggleable = pickerColumns.length
 
   return (
-    <div className={`rounded-xl bg-surface ring-1 ring-line shadow-[0_1px_3px_rgba(15,23,42,0.04)] overflow-hidden flex flex-col ${className ?? ''}`}>
+    // 2026-05-12 sticky fix (round 2): outermost wrapper was
+    // `overflow-hidden` which (just like overflow-x:auto and
+    // overflow-hidden anywhere else) establishes a scroll context
+    // and traps position:sticky inside it. The sticky thead below
+    // would pin to THIS wrapper instead of resolving up to the
+    // page's view-content scroll. Switching to `overflow-clip`
+    // preserves the rounded-corner mask (which is the only reason
+    // overflow was set here) but does NOT create a scroll context,
+    // so sticky correctly bubbles up to the page scroll. Same fix
+    // pattern as Table.tsx:705 (inner wrapper) and the various
+    // consumer-side wrappers in InventoryView / PackagesDataTable.
+    <div className={`rounded-xl bg-surface ring-1 ring-line shadow-[0_1px_3px_rgba(15,23,42,0.04)] overflow-clip flex flex-col ${className ?? ''}`}>
       {/* Toolbar — operator's slot content on the left, the
           column-control widget always anchored to the right so
           operators have a discoverable entry point for width /
