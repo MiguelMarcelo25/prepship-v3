@@ -1728,16 +1728,17 @@ export default function OrdersView({
   // options (defends against a stale localStorage value if we ever
   // change the option set). 50 is the default, matching the prior
   // hardcoded behavior so no operator sees a sudden density change.
-  // Page-size options. Higher values let operators see more orders
-  // per page when they want to scan a lot at once (the user reported
-  // 'i only see few even i have a thousand'). 200 was the previous
-  // cap and felt restrictive when the Shipped tab has 30k+ rows.
-  // 500/1000/2000 are reasonable upper limits — beyond ~2000 the
-  // browser starts struggling with DOM size, and the right answer
-  // becomes virtualized scrolling, not a bigger page. Backend cap is
-  // also raised to 2000 (src/lib/pagination.ts) so the request doesn't
-  // get clamped silently.
-  const ALLOWED_PAGE_SIZES = [25, 50, 100, 200, 500, 1000, 2000] as const
+  //
+  // 2026-05-12: trimmed the option set to {5, 20, 50, 100, 200} per
+  // boss directive. The previous high-cap options (500/1000/2000)
+  // were retired — at those sizes the browser struggled with DOM
+  // size and operators rarely needed more than 200 visible at once.
+  // The 5-row option is new and useful for QA/demo flows where a
+  // small page makes screenshots and bulk-action testing easier.
+  // Returning users who had 1000/2000 saved fall back to the 50
+  // default on next load because the clamp below rejects unknown
+  // values.
+  const ALLOWED_PAGE_SIZES = [5, 20, 50, 100, 200] as const
   const PAGE_SIZE_STORAGE_KEY = 'prepship_orders_page_size'
   const [pageSize, setPageSize] = useState<number>(() => {
     if (typeof window === 'undefined') return 50
@@ -8029,10 +8030,11 @@ export default function OrdersView({
           <span className="font-semibold text-ink-2">{total.toLocaleString()}</span> total
         </span>
 
-        {/* Page-size selector — operator picks 25/50/100/200 rows per
-            page. Choice persists to localStorage. Sits in the
-            pagination bar between "total" and "Next →" so it's visible
-            without being in the way of the primary nav controls. */}
+        {/* Page-size selector — operator picks 5/20/50/100/200 rows per
+            page (see ALLOWED_PAGE_SIZES above). Choice persists to
+            localStorage. Sits in the pagination bar between "total"
+            and "Next →" so it's visible without being in the way of
+            the primary nav controls. */}
         <span className="w-px h-4 bg-line-2 ml-2" aria-hidden />
         <label className="inline-flex items-center gap-1.5 text-tiny text-ink-3 font-medium">
           <span className="hidden sm:inline">Per page:</span>
