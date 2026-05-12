@@ -2170,11 +2170,14 @@ export const apiClient = {
           );
         }
         const firstData: any[] = Array.isArray(first?.data) ? first.data : [];
-        const totalPages = Number.isFinite(Number(first?.totalPages))
-          ? Math.min(Number(first.totalPages), PAGE_CAP)
-          : Number.isFinite(Number(first?.pages))
-            ? Math.min(Number(first.pages), PAGE_CAP)
-            : 1;
+        const responseTotalPages =
+          Number(first?.pagination?.totalPages) ||
+          Number(first?.totalPages) ||
+          Number(first?.pages) ||
+          1;
+        const totalPages = Number.isFinite(responseTotalPages)
+          ? Math.min(responseTotalPages, PAGE_CAP)
+          : 1;
 
         if (totalPages <= 1) {
           return filterRowsToActiveClients(firstData, activeClientIds).map((row) =>
