@@ -238,6 +238,18 @@ const DEFAULT_COLUMN_ORDER: ColumnKey[] = COLUMN_OPTIONS.map((c) => c.key)
 const COLUMN_ORDER_STORAGE_KEY = 'dashboard:sku:column-order'
 const COLUMN_WIDTHS_STORAGE_KEY = 'dashboard:sku:column-widths'
 
+// Anchor columns (SKU + Product) — pinned to the left of the data
+// columns, NOT reorderable (operators rely on these as the row's
+// identity anchor and don't want them shuffled), but resizable
+// because product names vary wildly in length. The 'star' and
+// 'trend' anchor columns at either end are too narrow to benefit
+// from resizing so they stay at static widths in the colgroup.
+const ANCHOR_COLUMN_META = {
+  sku: { defaultWidth: 110, minWidth: 80, label: 'SKU' },
+  product: { defaultWidth: 280, minWidth: 180, label: 'Product' },
+} as const
+type AnchorColumnKey = keyof typeof ANCHOR_COLUMN_META
+
 // Defensive migration: drop unknown keys (so a stale localStorage
 // entry doesn't crash render-time mapping) and append any newly-added
 // columns at the end (so returning operators auto-see new columns
@@ -271,21 +283,31 @@ function readStoredColumnOrder(): ColumnKey[] {
   }
 }
 
-function readStoredColumnWidths(): Partial<Record<ColumnKey, number>> {
+// columnWidths now stores widths for both toggleable columns (keys in
+// DEFAULT_COLUMN_ORDER) AND anchor columns (sku, product). The Record
+// type is widened to string keys so anchor entries survive the
+// round-trip through localStorage.
+function readStoredColumnWidths(): Partial<Record<string, number>> {
   if (typeof window === 'undefined') return {}
   try {
     const raw = window.localStorage.getItem(COLUMN_WIDTHS_STORAGE_KEY)
     if (!raw) return {}
     const parsed = JSON.parse(raw) as unknown
     if (!parsed || typeof parsed !== 'object') return {}
-    const out: Partial<Record<ColumnKey, number>> = {}
+    const out: Partial<Record<string, number>> = {}
+    // Allowed keys are the toggleable column keys + the two anchor
+    // column keys. Anything else is dropped as stale state.
+    const known = new Set<string>([...DEFAULT_COLUMN_ORDER, 'sku', 'product'])
     for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-      if (DEFAULT_COLUMN_ORDER.includes(k as ColumnKey) && typeof v === 'number' && v > 0) {
-        // Clamp persisted widths up to the column's MIN so a stale
-        // narrow width from an older defaults table doesn't make a
-        // column unreadable. Cap at 600px so a runaway resize can't
-        // produce a layout-busting cell.
-        out[k as ColumnKey] = Math.max(SKU_COLUMNS[k as ColumnKey].minWidth, Math.min(600, v))
+      if (known.has(k) && typeof v === 'number' && v > 0) {
+        // Each known key has its own min — pull from SKU_COLUMNS for
+        // toggleable, from ANCHOR_COLUMN_META for sku/product. Cap at
+        // 600 so a runaway resize can't break layout.
+        const min =
+          k === 'sku' ? ANCHOR_COLUMN_META.sku.minWidth
+          : k === 'product' ? ANCHOR_COLUMN_META.product.minWidth
+          : SKU_COLUMNS[k as ColumnKey].minWidth
+        out[k] = Math.max(min, Math.min(600, v))
       }
     }
     return out
@@ -694,7 +716,9 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   // its own layout. Defensive migrations (readStored*) drop unknown
   // keys + append newly-added columns at the end.
   const [columnOrder, setColumnOrder] = useState<ColumnKey[]>(() => readStoredColumnOrder())
-  const [columnWidths, setColumnWidths] = useState<Partial<Record<ColumnKey, number>>>(() => readStoredColumnWidths())
+  // Widened to string-key Record so anchor columns ('sku', 'product')
+  // can store their own widths alongside the toggleable column keys.
+  const [columnWidths, setColumnWidths] = useState<Partial<Record<string, number>>>(() => readStoredColumnWidths())
   useEffect(() => {
     try { window.localStorage.setItem(COLUMN_ORDER_STORAGE_KEY, JSON.stringify(columnOrder)) } catch { /* localStorage full / private mode — non-fatal */ }
   }, [columnOrder])
@@ -749,20 +773,23 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   // window (not the handle) so the drag continues even if the cursor
   // moves outside the cell — same pattern as standard browser column
   // resizing in CSV viewers.
-  const resizingRef = useRef<{ key: ColumnKey; startX: number; startWidth: number } | null>(null)
-  const handleColumnResizeStart = (key: ColumnKey) => (event: React.MouseEvent<HTMLDivElement>) => {
+  // Resize handler now takes minWidth + defaultWidth directly instead
+  // of looking them up in SKU_COLUMNS — that way anchor columns (sku,
+  // product) can use the same handler without forcing them into the
+  // SKU_COLUMNS type. `key` is widened to string for the same reason.
+  const resizingRef = useRef<{ key: string; startX: number; startWidth: number; minWidth: number } | null>(null)
+  const handleColumnResizeStart = (key: string, minWidth: number, defaultWidth: number) => (event: React.MouseEvent<HTMLDivElement>) => {
     event.preventDefault()
     event.stopPropagation()
-    const startWidth = columnWidths[key] ?? SKU_COLUMNS[key].width
-    resizingRef.current = { key, startX: event.clientX, startWidth }
+    const startWidth = columnWidths[key as ColumnKey] ?? defaultWidth
+    resizingRef.current = { key, startX: event.clientX, startWidth, minWidth }
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
     const onMove = (e: MouseEvent) => {
       const ctx = resizingRef.current
       if (!ctx) return
       const delta = e.clientX - ctx.startX
-      const min = SKU_COLUMNS[ctx.key].minWidth
-      const next = Math.max(min, Math.min(600, ctx.startWidth + delta))
+      const next = Math.max(ctx.minWidth, Math.min(600, ctx.startWidth + delta))
       setColumnWidths((prev) => ({ ...prev, [ctx.key]: next }))
     }
     const onUp = () => {
@@ -1513,10 +1540,13 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               happened yet; resize state overrides this naturally. */}
           <table className="w-full min-w-[1320px] table-fixed border-collapse text-sm2">
             <colgroup>
-              {/* Fixed anchor columns (star + sku + product + trend) — operators can't reorder/hide these so they don't carry resize handles */}
+              {/* Star + Trend stay at static widths (too narrow to
+                  benefit from resize). SKU + Product are resizable
+                  via the columnWidths map — defaults come from
+                  ANCHOR_COLUMN_META.{sku,product}.defaultWidth. */}
               <col style={{ width: 36 }} />
-              <col style={{ width: 110 }} />
-              <col style={{ width: 280 }} />
+              <col style={{ width: columnWidths.sku ?? ANCHOR_COLUMN_META.sku.defaultWidth }} />
+              <col style={{ width: columnWidths.product ?? ANCHOR_COLUMN_META.product.defaultWidth }} />
               {visibleColumnOrder.map((key) => (
                 <col key={key} style={{ width: columnWidths[key] ?? SKU_COLUMNS[key].width }} />
               ))}
@@ -1525,8 +1555,56 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             <thead className="bg-surface-2">
               <tr>
                 <th className="border-b-2 border-line px-3 py-2" />
-                <SortableHeader sortKey="sku" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="border-b-2 border-line px-3 py-2 text-left text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">SKU</SortableHeader>
-                <SortableHeader sortKey="product" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} className="border-b-2 border-line px-3 py-2 text-left text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Product</SortableHeader>
+                {/* SKU header — sortable + resizable, NOT reorderable.
+                    Resize handle sits on the right edge like the
+                    toggleable headers but the <th> itself is not
+                    draggable (SKU stays anchored to its position so
+                    operators don't lose the row identity column). */}
+                <th className="relative select-none border-b-2 border-line px-3 py-2 text-left text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">
+                  <SortableHeader
+                    sortKey="sku"
+                    sortState={sortState}
+                    onSort={(key) => setSortState((current) => nextSortState(current, key))}
+                    className="block p-0 border-0 bg-transparent w-full"
+                  >
+                    SKU
+                  </SortableHeader>
+                  <div
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label="Resize SKU"
+                    onMouseDown={handleColumnResizeStart('sku', ANCHOR_COLUMN_META.sku.minWidth, ANCHOR_COLUMN_META.sku.defaultWidth)}
+                    onClick={(e) => e.stopPropagation()}
+                    draggable={false}
+                    className="absolute top-1 bottom-1 -right-[5px] w-[10px] cursor-col-resize flex items-center justify-center group/handle"
+                    style={{ touchAction: 'none' }}
+                  >
+                    <span className="block w-[1.5px] h-full rounded bg-line-2/60 group-hover/handle:bg-brand group-hover/handle:w-[2.5px] transition-all duration-150" />
+                  </div>
+                </th>
+                {/* Product header — same pattern as SKU. */}
+                <th className="relative select-none border-b-2 border-line px-3 py-2 text-left text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">
+                  <SortableHeader
+                    sortKey="product"
+                    sortState={sortState}
+                    onSort={(key) => setSortState((current) => nextSortState(current, key))}
+                    className="block p-0 border-0 bg-transparent w-full"
+                  >
+                    Product
+                  </SortableHeader>
+                  <div
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label="Resize Product"
+                    onMouseDown={handleColumnResizeStart('product', ANCHOR_COLUMN_META.product.minWidth, ANCHOR_COLUMN_META.product.defaultWidth)}
+                    onClick={(e) => e.stopPropagation()}
+                    draggable={false}
+                    className="absolute top-1 bottom-1 -right-[5px] w-[10px] cursor-col-resize flex items-center justify-center group/handle"
+                    style={{ touchAction: 'none' }}
+                  >
+                    <span className="block w-[1.5px] h-full rounded bg-line-2/60 group-hover/handle:bg-brand group-hover/handle:w-[2.5px] transition-all duration-150" />
+                  </div>
+                </th>
                 {/* Toggleable columns rendered via the operator's
                     columnOrder. Each <th> is HTML5-draggable for
                     reorder and carries a resize handle on its right
@@ -1599,7 +1677,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                         role="separator"
                         aria-orientation="vertical"
                         aria-label={`Resize ${meta.label}`}
-                        onMouseDown={handleColumnResizeStart(key)}
+                        onMouseDown={handleColumnResizeStart(key, meta.minWidth, meta.width)}
                         onClick={(e) => e.stopPropagation()}
                         onDragStart={(e) => {
                           e.preventDefault()
@@ -1620,13 +1698,30 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             <tbody>
               {pageRows.map((row) => (
                 <tr key={row.sku} className="border-b border-line last:border-b-0 hover:bg-brand-bg/30">
-                  <td className="px-3 py-2 text-ink-3"><Star size={13} strokeWidth={2} /></td>
-                  <td className="px-3 py-2 font-mono text-xs font-semibold text-brand truncate">{row.sku}</td>
-                  <td className="px-3 py-2">
+                  <td className="px-3 py-2 text-ink-3 overflow-hidden"><Star size={13} strokeWidth={2} /></td>
+                  {/* SKU cell — overflow-hidden + block truncate.
+                      Wrapping in a div with block + truncate makes
+                      the truncation engage inside the table-fixed
+                      cell box; long SKUs now ellipsize instead of
+                      bleeding into the Product column. */}
+                  <td className="px-3 py-2 overflow-hidden">
+                    <div className="block truncate font-mono text-xs font-semibold text-brand">{row.sku}</div>
+                  </td>
+                  {/* Product cell — was bleeding into Store because
+                      the inner button had a hardcoded max-w-[320px]
+                      that ignored the actual column width, and the
+                      <td> itself had no overflow-hidden. Two fixes:
+                      (1) overflow-hidden on the <td>, (2) drop the
+                      hardcoded button max-w and let it size to its
+                      flex parent (`w-full min-w-0`). The inner span
+                      with `truncate` already has `min-w-0` on its
+                      flex-parent so it now truncates correctly when
+                      the column is narrow. */}
+                  <td className="px-3 py-2 overflow-hidden">
                     <button
                       type="button"
                       onClick={() => onOpenSku?.(row.sku)}
-                      className="flex max-w-[320px] items-center gap-2 text-left"
+                      className="flex w-full min-w-0 items-center gap-2 text-left"
                     >
                       <span className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-md border border-line bg-surface-2">
                         {row.imageUrl ? (
@@ -1635,7 +1730,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                           <Package size={15} strokeWidth={2.25} className="text-ink-3" />
                         )}
                       </span>
-                      <span className="min-w-0">
+                      <span className="flex-1 min-w-0">
                         <span className="block truncate text-xs font-semibold text-ink hover:text-brand">{row.product}</span>
                       </span>
                     </button>

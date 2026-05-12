@@ -37,6 +37,13 @@ const listQuery = paginationSchema.extend({
   clientId: z.coerce.number().int().optional(),
   search: z.string().optional(),
   lowStock: z.coerce.boolean().optional(),
+  // Opt-in flag — when true, the response includes inventory rows
+  // where active=false. Default behavior (omitted/false) keeps the
+  // legacy "active-only" semantics so the rate browser, order
+  // auto-fulfillment lookups, and Receive tab don't accidentally
+  // start seeing deactivated SKUs. Currently only the Stock Levels
+  // tab sets this when its "Active only" toolbar toggle is off.
+  includeInactive: z.coerce.boolean().optional(),
 });
 
 app.get('/', zValidator('query', listQuery), async (c) => {
@@ -51,7 +58,9 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           )
         : undefined,
       q.lowStock ? lte(inventory.stockQty, inventory.reorderLevel) : undefined,
-      eq(inventory.active, true),
+      // Active filter: applied unless the caller explicitly asks
+      // for everything via ?includeInactive=true.
+      q.includeInactive ? undefined : eq(inventory.active, true),
       activeInventoryClientPredicate,
     ].filter(<T>(x: T | undefined): x is T => x !== undefined)
   );

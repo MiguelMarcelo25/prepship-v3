@@ -1182,7 +1182,17 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
     const loadStock = async () => {
       setStockLoading(true)
       try {
-        const nextItems = await apiClient.fetchInventory(stockClientId ? { clientId: Number.parseInt(stockClientId, 10) } : undefined)
+        // includeInactive=true bypasses the backend's hard-coded
+        // active-only WHERE clause so deactivated SKUs come over
+        // the wire when the toolbar toggle is off. The frontend's
+        // filterInventoryRows still gets the final say — if any
+        // future code paths fetch with includeInactive but want
+        // to hide them locally, the activeOnly client filter
+        // remains as a second layer of defense.
+        const query: Record<string, unknown> = {}
+        if (stockClientId) query.clientId = Number.parseInt(stockClientId, 10)
+        if (!activeOnly) query.includeInactive = true
+        const nextItems = await apiClient.fetchInventory(Object.keys(query).length ? query : undefined)
         if (!active) return
         setItems(nextItems)
       } catch (error) {
@@ -1198,7 +1208,7 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
     return () => {
       active = false
     }
-  }, [stockClientId])
+  }, [stockClientId, activeOnly])
 
   useEffect(() => {
     if (activeTab !== 'history') return
@@ -1329,10 +1339,16 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
 
   async function refreshInventoryView() {
     try {
+      // Mirror the loadStock effect's query construction — pass
+      // includeInactive only when the toolbar Active-only toggle
+      // is OFF so manual refreshes match the current visible filter.
+      const stockQuery: Record<string, unknown> = {}
+      if (stockClientId) stockQuery.clientId = Number.parseInt(stockClientId, 10)
+      if (!activeOnly) stockQuery.includeInactive = true
       const [nextClients, nextAlerts, nextItems] = await Promise.all([
         apiClient.fetchClients(),
         apiClient.fetchInventoryAlerts(),
-        apiClient.fetchInventory(stockClientId ? { clientId: Number.parseInt(stockClientId, 10) } : undefined),
+        apiClient.fetchInventory(Object.keys(stockQuery).length ? stockQuery : undefined),
       ])
       setClients((nextClients ?? []).map((c: any) => ({ ...c, clientId: c?.clientId ?? c?.id })))
       setAlerts(nextAlerts)
