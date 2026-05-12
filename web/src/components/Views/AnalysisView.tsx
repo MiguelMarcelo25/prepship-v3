@@ -180,8 +180,23 @@ const ANALYSIS_TABLE_COLUMNS: AnalysisTableColumn[] = [
       'Total revenue for this SKU across the selected date range. Sum of (unit_price × qty) over every non-cancelled order. Excludes orders from disabled clients.',
     align: 'right',
   },
-  { key: 'stdOrders', title: 'SS-labeled standard service orders (count + avg cost)', align: 'right' },
-  { key: 'expOrders', title: 'SS-labeled expedited service orders (count + avg cost)', align: 'right' },
+  // Cell layout: {units shipped via class} + {avg cost per unit}.
+  // Multiplying the two gives the class subtotal that's also shown in
+  // the tooltip — e.g. "38 units × $5.70/unit = $216.69". Order count
+  // moved into the hover for anyone who needs it for invoice
+  // reconciliation.
+  {
+    key: 'stdOrders',
+    title:
+      'Standard-service SS labels — units shipped + average cost per unit (allocated by item units in multi-item orders). Hover for the orders / units / subtotal breakdown.',
+    align: 'right',
+  },
+  {
+    key: 'expOrders',
+    title:
+      'Expedited-service SS labels — units shipped + average cost per unit. Hover for the orders / units / subtotal breakdown.',
+    align: 'right',
+  },
   {
     key: 'total',
     title: 'Total SS label cost (allocated by item units in multi-item orders)',

@@ -69,8 +69,13 @@ export const ANALYSIS_SORT_LABELS: Record<AnalysisSortKey, string> = {
   external: 'Ext. Shipped',
   qty: 'Total Qty',
   trend: 'Units Trend',
-  stdOrders: 'Std Orders',
-  expOrders: 'Exp Orders',
+  // 2026-05-12 (v3): labels shortened from 'Std Orders' / 'Exp Orders'
+  // because the cell body now shows UNITS (not order count) + per-unit
+  // average shipping cost. Keeping the old label would be misleading
+  // — readers would multiply "orders × per-unit" and get the wrong
+  // number. Short labels + per-column tooltip explains the math.
+  stdOrders: 'Std',
+  expOrders: 'Exp',
   total: 'Total Shipping',
   revenue: 'Total Revenue',
   avgPrice: 'Avg Sell Price',
