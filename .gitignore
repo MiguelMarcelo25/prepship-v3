@@ -17,3 +17,7 @@ outputs/
 # One-off research artifacts (raw API field tables, etc.)
 ShipStation_API_Field_Tables.xlsx
 ShipStation_API_Fieldr.md
+
+# Local dev artifacts
+ruvector.db
+web/ruvector.db
