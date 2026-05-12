@@ -47,7 +47,16 @@ import {
   type ReactNode,
   type MouseEvent as ReactMouseEvent,
 } from 'react'
-import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react'
+import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
+  Columns3,
+  Check,
+  Eye,
+  EyeOff,
+  RotateCcw,
+} from 'lucide-react'
 
 export type SortDirection = 'asc' | 'desc'
 export type ColumnAlign = 'left' | 'right' | 'center'
@@ -79,6 +88,15 @@ export interface TableColumn<Row> {
    *  resizable or reorderable (use for row identity / action
    *  columns where stability matters more than tweakability). */
   pinned?: boolean
+  /** When true (default) the column appears in the "Columns ▾"
+   *  picker and can be hidden by the operator. Set to false for
+   *  required columns (row identity, action column) that must
+   *  always be visible. */
+  hideable?: boolean
+  /** When true the column starts hidden — the operator can opt
+   *  in via the Columns picker. Useful for low-priority columns
+   *  that you want available but not in everyone's face. */
+  defaultHidden?: boolean
   /** Optional CSS class added to every cell in this column. */
   className?: string
 }
@@ -146,6 +164,22 @@ function readStoredOrder(storageKey: string | undefined): string[] | null {
   if (!storageKey || typeof window === 'undefined') return null
   try {
     const raw = window.localStorage.getItem(`${storageKey}:order`)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return null
+    return parsed.filter((k): k is string => typeof k === 'string')
+  } catch { /* non-fatal */ return null }
+}
+
+function readStoredHidden(storageKey: string | undefined): string[] | null {
+  // Persisted as an array of column keys that the operator has
+  // CHOSEN to hide. Stored as an explicit list so the absence of
+  // localStorage cleanly falls back to "everything visible" (or to
+  // the column's defaultHidden flag) instead of erroneously
+  // hiding every column when storage is empty.
+  if (!storageKey || typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(`${storageKey}:hidden`)
     if (!raw) return null
     const parsed = JSON.parse(raw)
     if (!Array.isArray(parsed)) return null
@@ -242,9 +276,31 @@ export function Table<Row>({
     try { window.localStorage.setItem(`${storageKey}:order`, JSON.stringify(orderKeys)) } catch { /* non-fatal */ }
   }, [orderKeys, storageKey])
 
-  // Resolve column metadata in the operator's chosen order. Pinned
-  // columns are KEPT at their declared positions even if orderKeys
-  // moved them — pinned means "this column does not move."
+  // Column HIDDEN state. Stored as a list of keys the operator
+  // has chosen to hide. On first load (no stored value), hide
+  // any columns flagged `defaultHidden`. Once the operator
+  // interacts with the picker, the stored array is authoritative.
+  // Non-hideable columns are always kept visible.
+  const [hiddenKeys, setHiddenKeys] = useState<string[]>(() => {
+    const stored = readStoredHidden(storageKey)
+    if (stored) {
+      const known = new Set(columns.map((c) => c.key))
+      const hideable = new Set(columns.filter((c) => c.hideable !== false).map((c) => c.key))
+      return stored.filter((k) => known.has(k) && hideable.has(k))
+    }
+    return columns.filter((c) => c.defaultHidden && c.hideable !== false).map((c) => c.key)
+  })
+  useEffect(() => {
+    if (!storageKey) return
+    try { window.localStorage.setItem(`${storageKey}:hidden`, JSON.stringify(hiddenKeys)) } catch { /* non-fatal */ }
+  }, [hiddenKeys, storageKey])
+
+  // Resolve column metadata in the operator's chosen order, then
+  // strip out hidden columns. Pinned columns are KEPT at their
+  // declared positions even if orderKeys moved them — pinned means
+  // "this column does not move." Pinned columns CAN still be
+  // hidden via the picker if their `hideable` is not explicitly
+  // false (operators may want to free up screen space).
   const orderedColumns = useMemo<TableColumn<Row>[]>(() => {
     const byKey = new Map(columns.map((c) => [c.key, c]))
     // Step 1: pinned columns stay at their declared indexes
@@ -257,8 +313,38 @@ export function Table<Row>({
     // Step 3: stitch: insert pinned at their original indexes
     const result: TableColumn<Row>[] = [...reorderable]
     pinnedAt.forEach(({ col, index }) => result.splice(index, 0, col))
-    return result
-  }, [columns, orderKeys])
+    // Step 4: filter out hidden columns
+    const hidden = new Set(hiddenKeys)
+    return result.filter((c) => !hidden.has(c.key))
+  }, [columns, orderKeys, hiddenKeys])
+
+  // Columns picker open state — controlled here so the toolbar
+  // trigger button and the dropdown body share the same state.
+  const [columnsPickerOpen, setColumnsPickerOpen] = useState(false)
+  const columnsPickerRef = useRef<HTMLDivElement | null>(null)
+  useEffect(() => {
+    if (!columnsPickerOpen) return
+    const onDown = (e: globalThis.MouseEvent) => {
+      if (!columnsPickerRef.current) return
+      if (e.target instanceof Node && columnsPickerRef.current.contains(e.target)) return
+      setColumnsPickerOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setColumnsPickerOpen(false) }
+    window.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('mousedown', onDown)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [columnsPickerOpen])
+
+  const toggleHidden = (key: string) => {
+    setHiddenKeys((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]))
+  }
+  const resetWidths = () => setWidths({})
+  const resetOrder = () => setOrderKeys(columns.map((c) => c.key))
+  const resetHidden = () => setHiddenKeys(columns.filter((c) => c.defaultHidden && c.hideable !== false).map((c) => c.key))
+  const resetAll = () => { resetWidths(); resetOrder(); resetHidden() }
 
   // Drag-reorder state — which key is being dragged, which is the
   // current drop target. Used for visual feedback (faded source,
@@ -342,6 +428,42 @@ export function Table<Row>({
     window.addEventListener('mouseup', onUp)
   }
 
+  // Auto-fit a column to its content (double-click the resize handle).
+  // Measures the actual rendered text in every visible cell of the
+  // column, finds the widest one, adds a small padding buffer, and
+  // clamps to [minWidth, maxWidth]. Industry-standard Excel/Numbers
+  // gesture — operators expect this to "just work" on double-click.
+  const tbodyRef = useRef<HTMLTableSectionElement | null>(null)
+  const theadRef = useRef<HTMLTableSectionElement | null>(null)
+  const autoFitColumn = (col: TableColumn<Row>) => {
+    if (col.pinned) return
+    const min = col.minWidth ?? 60
+    const max = col.maxWidth ?? 800
+    const PADDING = 28 // px — covers the cell's px-3 (12px each side) + a tiny safety margin
+    const colIndex = orderedColumns.findIndex((c) => c.key === col.key)
+    if (colIndex === -1) return
+    let widest = 0
+    // Measure header label
+    const headerCell = theadRef.current?.querySelector(`th[data-col-key="${col.key}"]`) as HTMLElement | null
+    if (headerCell) {
+      const span = headerCell.querySelector('span.truncate') as HTMLElement | null
+      // scrollWidth = the natural content width, even when truncated
+      if (span) widest = Math.max(widest, span.scrollWidth)
+    }
+    // Measure body cells
+    const cells = tbodyRef.current?.querySelectorAll<HTMLElement>(`td[data-col-key="${col.key}"]`)
+    cells?.forEach((cell) => {
+      // Walk to the deepest single content node — scrollWidth on the
+      // <td> itself is clamped to its own width because of
+      // overflow-hidden, so we look inside.
+      const inner = (cell.firstElementChild as HTMLElement | null) ?? cell
+      widest = Math.max(widest, inner.scrollWidth)
+    })
+    if (widest === 0) return
+    const next = Math.max(min, Math.min(max, widest + PADDING))
+    setWidths((prev) => ({ ...prev, [col.key]: next }))
+  }
+
   // Sorted rows — recomputed when data or sort changes.
   const sortedRows = useMemo(() => {
     if (!sort) return data
@@ -358,11 +480,106 @@ export function Table<Row>({
   const fontSize = density === 'compact' ? 'text-[12px]' : 'text-[13px]'
   const headerPadding = density === 'compact' ? 'px-3 py-2' : 'px-3 py-2.5'
 
+  // Hideable columns surfaced in the picker. Render in the
+  // declared `columns` order (not the operator's reordered order)
+  // so the picker layout stays stable as columns get dragged.
+  const pickerColumns = columns.filter((c) => c.hideable !== false)
+  const visibleCount = orderedColumns.length
+  const totalToggleable = pickerColumns.length
+
   return (
     <div className={`rounded-xl bg-surface ring-1 ring-line shadow-[0_1px_3px_rgba(15,23,42,0.04)] overflow-hidden flex flex-col ${className ?? ''}`}>
-      {toolbar ? (
-        <div className="flex-shrink-0 border-b border-line bg-surface-2/40 px-3 py-2">{toolbar}</div>
-      ) : null}
+      {/* Toolbar — operator's slot content on the left, the
+          column-control widget always anchored to the right so
+          operators have a discoverable entry point for width /
+          visibility management. */}
+      <div className="flex-shrink-0 border-b border-line bg-surface-2/40 px-3 py-2 flex items-center gap-3">
+        {toolbar ? <div className="flex-1 min-w-0">{toolbar}</div> : <div className="flex-1" />}
+        <div className="relative flex-shrink-0" ref={columnsPickerRef}>
+          <button
+            type="button"
+            onClick={() => setColumnsPickerOpen((v) => !v)}
+            className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-md ring-1 text-[11.5px] font-bold transition ${
+              columnsPickerOpen
+                ? 'bg-brand/10 ring-brand/40 text-brand'
+                : 'bg-surface ring-line text-ink-2 hover:text-ink hover:ring-line-2'
+            }`}
+            title="Show/hide columns, reset widths and order"
+          >
+            <Columns3 size={13} strokeWidth={2.25} />
+            <span>Columns</span>
+            <span className="font-mono tabular-nums text-[10px] opacity-70">{visibleCount}/{totalToggleable || orderedColumns.length}</span>
+          </button>
+          {columnsPickerOpen ? (
+            <div
+              role="menu"
+              className="absolute right-0 top-full mt-1.5 z-30 w-[260px] rounded-lg bg-surface ring-1 ring-line shadow-[0_12px_32px_-8px_rgba(15,23,42,0.18)] overflow-hidden"
+            >
+              <div className="px-3 py-2 border-b border-line/70 bg-surface-2/40">
+                <div className="text-[10px] uppercase tracking-[0.18em] font-extrabold text-ink-3">Columns</div>
+                <div className="text-[10.5px] text-ink-3 mt-0.5">Toggle visibility · drag to reorder · drag edge to resize</div>
+              </div>
+              <ul className="max-h-[280px] overflow-y-auto py-1">
+                {pickerColumns.map((col) => {
+                  const isHidden = hiddenKeys.includes(col.key)
+                  return (
+                    <li key={col.key}>
+                      <button
+                        type="button"
+                        onClick={() => toggleHidden(col.key)}
+                        className="w-full flex items-center gap-2.5 px-3 py-1.5 text-left text-[12px] hover:bg-surface-2 transition"
+                      >
+                        <span className={`w-4 h-4 rounded ring-1 inline-flex items-center justify-center transition ${
+                          isHidden ? 'ring-line bg-transparent' : 'ring-brand bg-brand text-white'
+                        }`}>
+                          {!isHidden ? <Check size={10} strokeWidth={3} /> : null}
+                        </span>
+                        <span className={`flex-1 truncate ${isHidden ? 'text-ink-3' : 'text-ink font-medium'}`}>
+                          {col.label || <span className="italic text-ink-3">(no label)</span>}
+                        </span>
+                        {isHidden ? (
+                          <EyeOff size={12} strokeWidth={2} className="flex-shrink-0 text-ink-3" />
+                        ) : (
+                          <Eye size={12} strokeWidth={2} className="flex-shrink-0 text-ink-3" />
+                        )}
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+              <div className="border-t border-line/70 bg-surface-2/40 p-1.5 flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={resetWidths}
+                  className="flex-1 inline-flex items-center justify-center gap-1 h-7 px-2 rounded text-[10.5px] font-bold text-ink-2 hover:text-ink hover:bg-surface transition"
+                  title="Reset all column widths to defaults"
+                >
+                  <RotateCcw size={10} strokeWidth={2.25} />
+                  Widths
+                </button>
+                <button
+                  type="button"
+                  onClick={resetOrder}
+                  className="flex-1 inline-flex items-center justify-center gap-1 h-7 px-2 rounded text-[10.5px] font-bold text-ink-2 hover:text-ink hover:bg-surface transition"
+                  title="Reset column order to defaults"
+                >
+                  <RotateCcw size={10} strokeWidth={2.25} />
+                  Order
+                </button>
+                <button
+                  type="button"
+                  onClick={resetAll}
+                  className="flex-1 inline-flex items-center justify-center gap-1 h-7 px-2 rounded text-[10.5px] font-bold text-brand hover:bg-brand/10 transition"
+                  title="Reset widths, order, and visibility"
+                >
+                  <RotateCcw size={10} strokeWidth={2.25} />
+                  All
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </div>
 
       <div className="overflow-x-auto">
         <table className="w-full border-collapse table-fixed" style={{ minWidth: 480 }}>
@@ -372,7 +589,7 @@ export function Table<Row>({
             ))}
           </colgroup>
 
-          <thead className="bg-surface-2 sticky top-0 z-10">
+          <thead ref={theadRef} className="bg-surface-2 sticky top-0 z-10">
             <tr>
               {orderedColumns.map((col) => {
                 const isActive = sort?.key === col.key
@@ -384,6 +601,7 @@ export function Table<Row>({
                 return (
                   <th
                     key={col.key}
+                    data-col-key={col.key}
                     // Note: draggable lives on the <th> itself so the
                     // whole header is a drop target. The visible grab
                     // affordance is rendered on the LEFT edge so it
@@ -398,7 +616,7 @@ export function Table<Row>({
                     className={`group/th relative border-b-2 border-line ${headerPadding} ${reorderable ? 'pl-5' : ''} text-[10.5px] font-extrabold uppercase tracking-[0.05em] text-ink-3 ${col.sortable ? 'cursor-pointer select-none hover:bg-line/40' : ''} ${align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left'} ${isDragging ? 'opacity-40' : ''} ${isDragTarget ? 'bg-brand-bg shadow-[inset_3px_0_0_0_var(--brand)]' : ''} transition-colors`}
                     onClick={() => toggleSort(col)}
                     aria-sort={isActive ? (sort!.direction === 'asc' ? 'ascending' : 'descending') : 'none'}
-                    title={reorderable ? `${col.label} — click to sort, drag to reorder` : col.label}
+                    title={reorderable ? `${col.label} — click to sort, drag to reorder, drag right edge to resize, double-click edge to auto-fit` : col.label}
                   >
                     {/* Drag-grip affordance — 6 dots (2×3) on the left
                         edge of the header. Always at low opacity so
@@ -432,11 +650,15 @@ export function Table<Row>({
                       ) : null}
                     </span>
 
-                    {/* Resize handle — 12px hot zone on right edge.
-                        Visible 2px vertical line at rest (full
-                        opacity so operators can see it without
-                        hovering), widens to 3px and turns brand-blue
-                        on hover. Skipped for pinned columns.
+                    {/* Resize handle — 14px hot zone on right edge.
+                        Always renders a visible 2px brand-tinted line
+                        at full opacity so operators see it without
+                        hovering. Hover widens to 3px solid brand-blue
+                        AND adds a soft brand-bg vertical strip across
+                        the full header height so the affordance is
+                        impossible to miss. Double-click auto-fits the
+                        column to the widest cell content.
+                        Skipped for pinned columns.
                         draggable=false on the inner span so grabbing
                         the resize bar doesn't accidentally start a
                         reorder drag. */}
@@ -447,12 +669,14 @@ export function Table<Row>({
                         aria-label={`Resize ${col.label}`}
                         onMouseDown={startResize(col)}
                         onClick={(e) => e.stopPropagation()}
+                        onDoubleClick={(e) => { e.stopPropagation(); autoFitColumn(col) }}
                         draggable={false}
                         onDragStart={(e) => { e.preventDefault(); e.stopPropagation() }}
-                        className="absolute top-1 bottom-1 -right-[6px] w-[12px] cursor-col-resize z-20 group/handle flex items-center justify-center"
+                        className="absolute top-0 bottom-0 -right-[7px] w-[14px] cursor-col-resize z-20 group/handle flex items-center justify-center hover:bg-brand/10 transition-colors"
                         style={{ touchAction: 'none' }}
+                        title={`Drag to resize ${col.label} · double-click to auto-fit`}
                       >
-                        <span className="block w-[2px] h-full rounded bg-line-2 group-hover/handle:bg-brand group-hover/handle:w-[3px] transition-all duration-150" />
+                        <span className="block w-[2px] h-3/5 rounded bg-line-2 group-hover/handle:bg-brand group-hover/handle:w-[3px] group-hover/handle:h-full transition-all duration-150" />
                       </div>
                     ) : null}
                   </th>
@@ -461,7 +685,7 @@ export function Table<Row>({
             </tr>
           </thead>
 
-          <tbody>
+          <tbody ref={tbodyRef}>
             {loading ? (
               <tr>
                 <td colSpan={orderedColumns.length} className="text-center py-12 text-ink-3">
@@ -494,6 +718,7 @@ export function Table<Row>({
                     return (
                       <td
                         key={col.key}
+                        data-col-key={col.key}
                         className={`${padding} ${fontSize} ${alignCls} overflow-hidden align-middle text-ink ${col.className ?? ''}`}
                         style={{ width: widths[col.key] ?? col.width, maxWidth: widths[col.key] ?? col.width }}
                       >

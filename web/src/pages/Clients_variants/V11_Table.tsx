@@ -242,6 +242,7 @@ export default function ClientsV11_Table() {
       minWidth: 90,
       align: 'right',
       pinned: true, // not resizable — keeps the action column stable
+      hideable: false, // operators must always see edit/delete
       render: (row) => (
         <div className="inline-flex items-center gap-0">
           <RowAction title="Edit" onClick={(e) => { e.stopPropagation(); setEditing(row) }}>
