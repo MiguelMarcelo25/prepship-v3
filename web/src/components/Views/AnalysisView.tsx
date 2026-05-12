@@ -1272,9 +1272,14 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
             </button>
             {columnsMenuOpen ? (
               // Three-region menu (header + scrollable body + footer):
-              //   - max-h-[70vh] caps the menu so it can't overflow the
-              //     viewport bottom regardless of how many columns the
-              //     operator has registered or where the trigger sits.
+              //   - Inline style maxHeight = min(420px, 70vh) caps the
+              //     menu so it can't overflow viewport regardless of
+              //     where the trigger sits. Using inline style instead
+              //     of a Tailwind arbitrary value (`max-h-[70vh]`)
+              //     because the JIT-generated class wasn't engaging
+              //     reliably on some operator viewports — likely a
+              //     local-dev HMR cache miss. Inline style is always
+              //     applied verbatim, no class generation needed.
               //   - flex flex-col is the layout primitive that lets the
               //     middle region claim the leftover space (flex-1) and
               //     scroll independently while header/footer stay pinned.
@@ -1284,7 +1289,8 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
               <div
                 data-columns-menu
                 role="menu"
-                className="absolute right-0 top-[calc(100%+4px)] z-50 min-w-[230px] max-h-[70vh] bg-surface border border-line rounded-md shadow-[0_8px_24px_-6px_rgba(15,23,42,.18),0_2px_6px_-2px_rgba(15,23,42,.10)] flex flex-col overflow-hidden"
+                style={{ maxHeight: 'min(420px, 70vh)' }}
+                className="absolute right-0 top-[calc(100%+4px)] z-50 min-w-[230px] bg-surface border border-line rounded-md shadow-[0_8px_24px_-6px_rgba(15,23,42,.18),0_2px_6px_-2px_rgba(15,23,42,.10)] flex flex-col overflow-hidden"
               >
                 <div className="px-2 py-1.5 text-[9px] uppercase tracking-[0.08em] font-extrabold text-ink-3 flex items-center justify-between flex-shrink-0 border-b border-line bg-surface-2/40">
                   <span>Visible columns</span>
@@ -1301,8 +1307,14 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
                     canonical 'allow this flex child to shrink and
                     overflow' incantation — without min-h-0 the flex
                     child would refuse to shrink below content height
-                    and the overflow-y-auto would never engage. */}
-                <div className="flex-1 min-h-0 overflow-y-auto p-1.5">
+                    and the overflow-y-auto would never engage.
+                    overscrollBehavior: 'contain' prevents the scroll
+                    from chaining to the page when the operator hits
+                    top/bottom of the list — no surprise jumps. */}
+                <div
+                  className="flex-1 min-h-0 overflow-y-auto p-1.5"
+                  style={{ overscrollBehavior: 'contain' }}
+                >
                   {/* List in the operator's CURRENT order so they see
                       exactly how reordering has shifted things since
                       factory default. Hidden columns are listed at the
@@ -1348,8 +1360,15 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
                     })
                   })()}
                 </div>
-                <div className="border-t border-line px-2 py-1.5 text-[10.5px] text-ink-3 leading-snug flex-shrink-0 bg-surface-2/40">
-                  Drag a column header to reorder.
+                <div className="border-t border-line px-2 py-1.5 text-[10.5px] text-ink-3 leading-snug flex-shrink-0 bg-surface-2/40 flex items-center justify-between">
+                  <span>Drag a column header to reorder.</span>
+                  {/* Item count hint — at-a-glance signal of how many
+                      columns are in the list. If the operator sees
+                      e.g. "11 columns" but only 8 fit on screen, they
+                      know to scroll the body to find the rest. */}
+                  <span className="font-mono tabular-nums text-ink-3/80">
+                    {DEFAULT_COLUMN_ORDER.length} columns
+                  </span>
                 </div>
               </div>
             ) : null}
