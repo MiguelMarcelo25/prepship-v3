@@ -75,8 +75,19 @@ interface AnalysisDataTableProps {
   onReorder?: (fromKey: AnalysisSortKey, toKey: AnalysisSortKey) => void
 }
 
+// Horizontal scroll wrapper for the analysis table. Wide mode pins
+// the table to a 1400px minimum (see tableClassesFor), so on smaller
+// viewports the rightmost columns ("TOTAL SHIP", "EXP ORDERS", …)
+// would clip off the right edge without a way to reach them. By
+// scrolling horizontally inside the shell instead of overflowing the
+// page, the operator can swipe/scroll the table independently while
+// the rest of the page stays put. Vertical sticky `<thead>` still
+// works because vertical sticky resolves against the page-level
+// `view-content` scroll container (a different ancestor); the
+// horizontal scroll axis here doesn't interfere. Use `overflow-x-auto`
+// (not -scroll) so the scrollbar only appears when actually needed.
 const SHELL_CLASSES =
-  'overflow-visible border border-line rounded-[10px] bg-surface shadow-[0_1px_3px_rgba(15,23,42,.05),0_1px_2px_rgba(15,23,42,.03)]'
+  'overflow-x-auto overflow-y-visible border border-line rounded-[10px] bg-surface shadow-[0_1px_3px_rgba(15,23,42,.05),0_1px_2px_rgba(15,23,42,.03)]'
 
 const TABLE_BASE_CLASSES = 'w-full border-separate border-spacing-0'
 
