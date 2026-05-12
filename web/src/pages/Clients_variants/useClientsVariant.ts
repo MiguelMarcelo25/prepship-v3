@@ -19,6 +19,7 @@ export type ClientsVariantKey =
   | '08'
   | '09'
   | '10'
+  | '11'
 
 export interface ClientsVariantMeta {
   key: ClientsVariantKey
@@ -90,13 +91,23 @@ export const CLIENTS_VARIANTS: Record<ClientsVariantKey, ClientsVariantMeta> = {
     tagline: 'Big stats · feature cards',
     swatches: ['#fffbeb', '#7c3aed', '#1e1b4b'],
   },
+  '11': {
+    key: '11',
+    name: 'Reusable Table',
+    tagline: 'Sortable · resizable · the project default',
+    swatches: ['#ffffff', '#03A9F4', '#0f172a'],
+  },
 }
 
 export const CLIENTS_VARIANT_KEYS = Object.keys(CLIENTS_VARIANTS) as ClientsVariantKey[]
 
 const STORAGE_KEY = 'prepship_clients_variant'
 const EVENT_NAME = 'prepship_clients_variant_change'
-const DEFAULT_VARIANT: ClientsVariantKey = '02'
+// Default = V11 Table — operator's pick (2026-05-12) for the
+// reusable table primitive that the rest of the project will
+// adopt. Operators who prefer one of the magazine/dark/etc
+// aesthetics can still pick via the floating design picker.
+const DEFAULT_VARIANT: ClientsVariantKey = '11'
 
 function readStored(): ClientsVariantKey {
   if (typeof window === 'undefined') return DEFAULT_VARIANT

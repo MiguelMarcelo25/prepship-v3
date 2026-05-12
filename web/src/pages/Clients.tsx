@@ -41,6 +41,7 @@ const VARIANTS: Record<ClientsVariantKey, React.LazyExoticComponent<React.Compon
   '08': lazy(() => import('./Clients_variants/V08_Spreadsheet')),
   '09': lazy(() => import('./Clients_variants/V09_Kanban')),
   '10': lazy(() => import('./Clients_variants/V10_Showcase')),
+  '11': lazy(() => import('./Clients_variants/V11_Table')),
 }
 
 export default function Clients() {
