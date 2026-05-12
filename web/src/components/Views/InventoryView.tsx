@@ -640,24 +640,6 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
     return () => document.removeEventListener('mousedown', handleClickOutside)
   }, [inventoryColumnsMenuOpen])
 
-  // Auto-close the parent-SKU popover when the operator clicks anywhere
-  // outside it. Matches the columns-menu pattern above so the two
-  // popovers behave identically. The chain-link button's own onClick
-  // still toggles open/closed without conflict — its handler runs
-  // first via stopPropagation in the action cell.
-  useEffect(() => {
-    if (inlineParentRowId == null) return
-    function handleClickOutside(event: MouseEvent) {
-      const target = event.target as HTMLElement | null
-      if (target?.closest('[data-inventory-parent-popover]')) return
-      // Don't close on a click on the parent-link toggle itself —
-      // that button's own onClick handles open/close state.
-      if (target?.closest('button[title*="parent SKU"]')) return
-      setInlineParentRowId(null)
-    }
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [inlineParentRowId])
   const [clientsSort, setClientsSort] = useState(null)
   const [historySort, setHistorySort] = useState(null)
   const [alertsSort, setAlertsSort] = useState(null)
@@ -718,6 +700,26 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
   // ─── Inline-parent-assign state (per inventory row) ────────────────────────
   const [inlineParentRowId, setInlineParentRowId] = useState<number | null>(null)
   const [inlineParentSaving, setInlineParentSaving] = useState(false)
+
+  // Auto-close the parent-SKU popover when the operator clicks anywhere
+  // outside it. Matches the columns-menu pattern in the toolbar so the
+  // two popovers behave identically. The chain-link button's own
+  // onClick still toggles open/closed without conflict — title-attr
+  // whitelist below stops the click-outside from immediately reopening
+  // it when the toggle itself is clicked. Must live AFTER the state
+  // declarations it reads (`inlineParentRowId`) — moving it above
+  // hit a TDZ when the bundler hoisted the const, hence this spot.
+  useEffect(() => {
+    if (inlineParentRowId == null) return
+    function handleClickOutside(event: MouseEvent) {
+      const target = event.target as HTMLElement | null
+      if (target?.closest('[data-inventory-parent-popover]')) return
+      if (target?.closest('button[title*="parent SKU"]')) return
+      setInlineParentRowId(null)
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [inlineParentRowId])
 
   useEffect(() => {
     if (!thumbnailPreview) return
