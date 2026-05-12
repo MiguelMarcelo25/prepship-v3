@@ -24,6 +24,9 @@ import {
 } from './packages-parity'
 import {
   PackagesDataTable,
+  PACKAGES_COLUMNS_ORDER,
+  PACKAGES_REQUIRED_COLUMNS,
+  PACKAGES_COLUMN_LABELS,
   type PackagesColumnKey,
   type PackagesColumnWidths,
   type PackagesSortKey,
@@ -136,6 +139,78 @@ function readStoredPackageColumnWidths(): PackagesColumnWidths {
     return cleaned
   } catch {
     return {}
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Column layout (order + hidden). Persisted per-browser so each
+// operator can shape the Packages table to fit their workflow.
+// Defensive against malformed storage: unknown keys are dropped,
+// missing keys are appended at the end so a newly added column
+// auto-shows for returning operators.
+// ──────────────────────────────────────────────────────────────────
+interface PackagesColumnLayout {
+  order: PackagesColumnKey[]
+  hidden: PackagesColumnKey[]
+}
+
+const PACKAGES_COLUMN_LAYOUT_KEY = 'packages_column_layout'
+const PACKAGES_COLUMN_KEY_SET = new Set<PackagesColumnKey>(PACKAGES_COLUMNS_ORDER)
+
+function isPackagesColumnKey(value: unknown): value is PackagesColumnKey {
+  return typeof value === 'string' && PACKAGES_COLUMN_KEY_SET.has(value as PackagesColumnKey)
+}
+
+function readStoredPackagesColumnLayout(): PackagesColumnLayout {
+  if (typeof window === 'undefined') {
+    return { order: [...PACKAGES_COLUMNS_ORDER], hidden: [] }
+  }
+  try {
+    const raw = window.localStorage.getItem(PACKAGES_COLUMN_LAYOUT_KEY)
+    if (!raw) return { order: [...PACKAGES_COLUMNS_ORDER], hidden: [] }
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') {
+      return { order: [...PACKAGES_COLUMNS_ORDER], hidden: [] }
+    }
+    const seen = new Set<PackagesColumnKey>()
+    const cleanOrder: PackagesColumnKey[] = []
+    for (const k of Array.isArray(parsed.order) ? parsed.order : []) {
+      if (isPackagesColumnKey(k) && !seen.has(k)) {
+        cleanOrder.push(k)
+        seen.add(k)
+      }
+    }
+    // Append any default-order keys that weren't in storage so a new
+    // column added later doesn't get hidden by stale layouts.
+    for (const k of PACKAGES_COLUMNS_ORDER) {
+      if (!seen.has(k)) {
+        cleanOrder.push(k)
+        seen.add(k)
+      }
+    }
+    const cleanHidden: PackagesColumnKey[] = []
+    const hiddenSeen = new Set<PackagesColumnKey>()
+    for (const k of Array.isArray(parsed.hidden) ? parsed.hidden : []) {
+      if (isPackagesColumnKey(k) && !PACKAGES_REQUIRED_COLUMNS.has(k) && !hiddenSeen.has(k)) {
+        cleanHidden.push(k)
+        hiddenSeen.add(k)
+      }
+    }
+    return { order: cleanOrder, hidden: cleanHidden }
+  } catch {
+    return { order: [...PACKAGES_COLUMNS_ORDER], hidden: [] }
+  }
+}
+
+function writeStoredPackagesColumnLayout(layout: PackagesColumnLayout): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(
+      PACKAGES_COLUMN_LAYOUT_KEY,
+      JSON.stringify({ order: layout.order, hidden: layout.hidden }),
+    )
+  } catch {
+    /* quota/private-mode: best-effort */
   }
 }
 
@@ -421,6 +496,11 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
   const [highlightedPackageId, setHighlightedPackageId] = useState<number | null>(null)
   const rowRefs = useRef<Record<number, HTMLTableRowElement | null>>({})
   const [columnWidths, setColumnWidths] = useState<PackagesColumnWidths>(readStoredPackageColumnWidths)
+  // Operator-defined column order + hidden set, persisted to
+  // localStorage. Drag a header to reorder; the Columns button opens
+  // a checklist to toggle visibility.
+  const [columnLayout, setColumnLayout] = useState<PackagesColumnLayout>(readStoredPackagesColumnLayout)
+  const [columnsMenuOpen, setColumnsMenuOpen] = useState(false)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState<number>(readStoredPackagesPageSize)
   const [search, setSearch] = useState('')
@@ -428,6 +508,49 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
   const [usageByPackageId, setUsageByPackageId] = useState<Record<number, number | null>>({})
   const [usageLoading, setUsageLoading] = useState(false)
   const [sortState, setSortState] = useState<PackagesSortState | null>(null)
+
+  // Drag-reorder: insert `fromKey` immediately before `toKey` in the
+  // saved order. Identical semantics to the analysis table — same
+  // mental model for operators across pages.
+  function handleReorderPackageColumn(fromKey: PackagesColumnKey, toKey: PackagesColumnKey) {
+    setColumnLayout((current) => {
+      const next = current.order.filter((k) => k !== fromKey)
+      const idx = next.indexOf(toKey)
+      if (idx < 0) next.push(fromKey)
+      else next.splice(idx, 0, fromKey)
+      return { ...current, order: next }
+    })
+  }
+
+  function handleTogglePackageColumnVisibility(key: PackagesColumnKey) {
+    if (PACKAGES_REQUIRED_COLUMNS.has(key)) return
+    setColumnLayout((current) => {
+      const hiddenSet = new Set(current.hidden)
+      if (hiddenSet.has(key)) hiddenSet.delete(key)
+      else hiddenSet.add(key)
+      return { ...current, hidden: Array.from(hiddenSet) }
+    })
+  }
+
+  function handleResetPackageColumnLayout() {
+    setColumnLayout({ order: [...PACKAGES_COLUMNS_ORDER], hidden: [] })
+  }
+
+  useEffect(() => {
+    writeStoredPackagesColumnLayout(columnLayout)
+  }, [columnLayout])
+
+  useEffect(() => {
+    if (!columnsMenuOpen) return
+    function handleClickOutside(event: MouseEvent) {
+      const target = event.target as HTMLElement | null
+      if (target?.closest('[data-packages-columns-menu]')) return
+      if (target?.closest('[data-packages-columns-trigger]')) return
+      setColumnsMenuOpen(false)
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [columnsMenuOpen])
 
   useEffect(() => {
     let cancelled = false
@@ -1145,6 +1268,94 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
               <Plus size={14} strokeWidth={2.5} />
               Add Custom
             </button>
+            {/* Columns button — opens a checklist popover for showing
+                or hiding columns + a Reset link. Drag column headers
+                in the table itself to reorder. Layout persists via
+                localStorage so each operator can shape the view to
+                their workflow. */}
+            <div className="relative">
+              <button
+                type="button"
+                data-packages-columns-trigger
+                onClick={() => setColumnsMenuOpen((v) => !v)}
+                aria-haspopup="true"
+                aria-expanded={columnsMenuOpen}
+                className="btn btn-outline btn-sm pkg-header-btn"
+                title="Show or hide columns · drag column headers to reorder"
+              >
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                  <rect x="1.5" y="2.5" width="3.5" height="11" rx="0.7" stroke="currentColor" strokeWidth="1.4" />
+                  <rect x="6.25" y="2.5" width="3.5" height="11" rx="0.7" stroke="currentColor" strokeWidth="1.4" />
+                  <rect x="11" y="2.5" width="3.5" height="11" rx="0.7" stroke="currentColor" strokeWidth="1.4" />
+                </svg>
+                Columns
+                <span className="ml-1 text-tiny text-ink-3 font-mono tabular-nums">
+                  ({PACKAGES_COLUMNS_ORDER.length - columnLayout.hidden.length}/{PACKAGES_COLUMNS_ORDER.length})
+                </span>
+              </button>
+              {columnsMenuOpen ? (
+                <div
+                  data-packages-columns-menu
+                  role="menu"
+                  className="absolute right-0 top-[calc(100%+4px)] z-50 min-w-[230px] bg-surface border border-line rounded-md shadow-[0_8px_24px_-6px_rgba(15,23,42,.18),0_2px_6px_-2px_rgba(15,23,42,.10)] p-1.5"
+                >
+                  <div className="px-2 py-1 text-[9px] uppercase tracking-[0.08em] font-extrabold text-ink-3 flex items-center justify-between">
+                    <span>Visible columns</span>
+                    <button
+                      type="button"
+                      onClick={handleResetPackageColumnLayout}
+                      className="appearance-none border-0 bg-transparent text-[9.5px] font-bold text-brand cursor-pointer hover:underline"
+                      title="Restore the factory default column order and show all columns"
+                    >
+                      Reset
+                    </button>
+                  </div>
+                  {(() => {
+                    const hiddenSet = new Set(columnLayout.hidden)
+                    const visibleKeys = columnLayout.order.filter((k) => !hiddenSet.has(k))
+                    const hiddenKeys = columnLayout.order.filter((k) => hiddenSet.has(k))
+                    return [...visibleKeys, ...hiddenKeys].map((key) => {
+                      const isHidden = hiddenSet.has(key)
+                      const isRequired = PACKAGES_REQUIRED_COLUMNS.has(key)
+                      return (
+                        <label
+                          key={key}
+                          className={`flex items-center gap-2 px-2 py-1.5 rounded-[5px] text-[12px] transition-colors duration-100 ${
+                            isRequired
+                              ? 'text-ink-3 cursor-not-allowed'
+                              : 'text-ink cursor-pointer hover:bg-[rgba(42,91,215,.08)]'
+                          } ${isHidden ? 'opacity-60' : ''}`}
+                          title={
+                            isRequired
+                              ? `${PACKAGES_COLUMN_LABELS[key]} is always visible`
+                              : isHidden
+                                ? 'Hidden · click to show'
+                                : 'Visible · click to hide'
+                          }
+                        >
+                          <input
+                            type="checkbox"
+                            checked={!isHidden}
+                            disabled={isRequired}
+                            onChange={() => handleTogglePackageColumnVisibility(key)}
+                            className="accent-brand cursor-pointer disabled:cursor-not-allowed"
+                          />
+                          <span className="flex-1">{PACKAGES_COLUMN_LABELS[key]}</span>
+                          {isRequired ? (
+                            <span className="text-[9px] uppercase tracking-[0.04em] text-ink-3 font-semibold">
+                              required
+                            </span>
+                          ) : null}
+                        </label>
+                      )
+                    })
+                  })()}
+                  <div className="border-t border-line mt-1 pt-1.5 px-2 pb-1 text-[10.5px] text-ink-3 leading-snug">
+                    Drag a column header to reorder.
+                  </div>
+                </div>
+              ) : null}
+            </div>
           </div>
         </motion.div>
 
@@ -1262,6 +1473,9 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
                   columnWidths={columnWidths}
                   onResizeColumn={handleResizePackageColumn}
                   onResetColumn={handleResetPackageColumn}
+                  columnOrder={columnLayout.order}
+                  hiddenColumns={columnLayout.hidden}
+                  onReorderColumn={handleReorderPackageColumn}
                   usageByPackageId={usageByPackageId}
                   usageLoading={usageLoading}
                   sortState={sortState}

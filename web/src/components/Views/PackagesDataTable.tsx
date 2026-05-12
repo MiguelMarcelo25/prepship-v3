@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { Fragment, useRef, type MutableRefObject, type ReactNode } from 'react'
+import { Fragment, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react'
 import { ArrowUpDown, BadgeDollarSign, ChevronDown, ChevronUp, PackagePlus, PencilLine, SlidersHorizontal, Trash2 } from 'lucide-react'
 import type { PackageDto, PackageLedgerEntryDto } from '../../types/api'
 import {
@@ -18,7 +18,27 @@ export interface PackagesSortState {
 }
 export type PackagesColumnWidths = Partial<Record<PackagesColumnKey, number>>
 
-const PACKAGES_COLUMNS_ORDER: PackagesColumnKey[] = ['package', 'stock', 'usage30', 'reorder', 'cost', 'actions']
+export const PACKAGES_COLUMNS_ORDER: PackagesColumnKey[] = ['package', 'stock', 'usage30', 'reorder', 'cost', 'actions']
+// Columns that cannot be hidden — without 'package' rows lose identity
+// (the package name is the only human-readable cell). Re-order is still
+// allowed on it.
+export const PACKAGES_REQUIRED_COLUMNS = new Set<PackagesColumnKey>(['package'])
+export const PACKAGES_COLUMN_LABELS: Record<PackagesColumnKey, string> = {
+  package: 'Package',
+  stock: 'Stock',
+  usage30: '30d Used',
+  reorder: 'Reorder',
+  cost: 'Cost',
+  actions: 'Actions',
+}
+const PACKAGES_COLUMN_ALIGN: Record<PackagesColumnKey, 'left' | 'center' | 'right'> = {
+  package: 'left',
+  stock: 'center',
+  usage30: 'center',
+  reorder: 'center',
+  cost: 'right',
+  actions: 'right',
+}
 const PACKAGES_COLUMN_DEFAULTS: Record<PackagesColumnKey, number | undefined> = {
   package: undefined,
   stock: 88,
@@ -60,6 +80,24 @@ interface PackagesDataTableProps {
   usageLoading?: boolean
   sortState?: PackagesSortState | null
   onSortChange?: (key: PackagesSortKey) => void
+  /**
+   * Operator-defined column order. Falls back to PACKAGES_COLUMNS_ORDER
+   * when omitted, preserving the original layout for any caller that
+   * doesn't opt in to reorder/visibility controls.
+   */
+  columnOrder?: PackagesColumnKey[]
+  /**
+   * Columns the operator has chosen to hide. 'package' is force-visible
+   * regardless of this list (see PACKAGES_REQUIRED_COLUMNS) so rows
+   * always carry an identifying label.
+   */
+  hiddenColumns?: PackagesColumnKey[]
+  /**
+   * Drag-drop reorder callback. `fromKey` is the column being dragged,
+   * `toKey` is the column it was dropped on — parent decides how to
+   * splice. Pass undefined to disable drag-reorder.
+   */
+  onReorderColumn?: (fromKey: PackagesColumnKey, toKey: PackagesColumnKey) => void
 }
 
 function cn(...parts: Array<string | false | null | undefined>) {
@@ -215,8 +253,28 @@ export function PackagesDataTable({
   usageLoading,
   sortState,
   onSortChange,
+  columnOrder,
+  hiddenColumns,
+  onReorderColumn,
 }: PackagesDataTableProps) {
   const thRefs = useRef<Partial<Record<PackagesColumnKey, HTMLTableCellElement | null>>>({})
+
+  // Drag-reorder state. `draggingKey` is the source while a drag is
+  // active; `dragOverKey` is the current hover target (drives the
+  // drop-indicator stripe). Both reset on dragend/drop.
+  const [draggingKey, setDraggingKey] = useState<PackagesColumnKey | null>(null)
+  const [dragOverKey, setDragOverKey] = useState<PackagesColumnKey | null>(null)
+  const reorderEnabled = Boolean(onReorderColumn)
+
+  // Resolve which columns to render and in what order. Falls back to
+  // the original layout when no override is provided, so any caller
+  // that hasn't opted in keeps the previous behavior byte-for-byte.
+  const effectiveColumns = useMemo<PackagesColumnKey[]>(() => {
+    if (!columnOrder || columnOrder.length === 0) return PACKAGES_COLUMNS_ORDER
+    const hiddenSet = new Set(hiddenColumns ?? [])
+    const filtered = columnOrder.filter((k) => !hiddenSet.has(k))
+    return filtered.length > 0 ? filtered : PACKAGES_COLUMNS_ORDER
+  }, [columnOrder, hiddenColumns])
 
   const columnStyle = (key: PackagesColumnKey) => {
     const overrideWidth = columnWidths?.[key]
@@ -232,8 +290,9 @@ export function PackagesDataTable({
     key: PackagesColumnKey,
     label: string,
     align: 'left' | 'center' | 'right',
+    positionIndex: number,
   ) => {
-    const isLast = key === PACKAGES_COLUMNS_ORDER[PACKAGES_COLUMNS_ORDER.length - 1]
+    const isLast = positionIndex === effectiveColumns.length - 1
     const overrideWidth = columnWidths?.[key]
     const sortable = key !== 'actions' && Boolean(onSortChange)
     const sortKey = key as PackagesSortKey
@@ -243,27 +302,73 @@ export function PackagesDataTable({
         ? ChevronUp
         : ChevronDown
       : ArrowUpDown
+    const isDragging = draggingKey === key
+    const isDragOver = dragOverKey === key && draggingKey !== null && draggingKey !== key
+
+    // HTML5 drag-and-drop: setting draggable both on the th AND on
+    // the inner sort-button is the proven fix from the analysis
+    // table — buttons consume mousedown so the parent's drag never
+    // initiates otherwise. Events bubble up from the button to the
+    // th, so handlers stay attached at the th level.
+    const dragProps = reorderEnabled
+      ? {
+          draggable: true as const,
+          onDragStart: (e: React.DragEvent) => {
+            setDraggingKey(key)
+            e.dataTransfer.effectAllowed = 'move'
+            try { e.dataTransfer.setData('text/plain', key) } catch { /* ignore sandbox throw */ }
+          },
+          onDragOver: (e: React.DragEvent) => {
+            e.preventDefault()
+            e.dataTransfer.dropEffect = 'move'
+            if (dragOverKey !== key) setDragOverKey(key)
+          },
+          onDragLeave: () => { if (dragOverKey === key) setDragOverKey(null) },
+          onDrop: (e: React.DragEvent) => {
+            e.preventDefault()
+            const fromKey = draggingKey
+            setDraggingKey(null)
+            setDragOverKey(null)
+            if (fromKey && fromKey !== key && onReorderColumn) {
+              onReorderColumn(fromKey, key)
+            }
+          },
+          onDragEnd: () => { setDraggingKey(null); setDragOverKey(null) },
+        }
+      : {}
 
     return (
       <th
         ref={(node) => { thRefs.current[key] = node }}
         scope="col"
         aria-sort={isSorted ? (sortState?.direction === 'asc' ? 'ascending' : 'descending') : undefined}
-        style={columnStyle(key)}
+        {...dragProps}
+        style={{
+          ...columnStyle(key),
+          ...(reorderEnabled ? { userSelect: 'none' as const } : {}),
+        }}
         className={cn(
           '!sticky !top-9 !z-[70] !bg-surface-3',
           'border-b-2 border-line px-4 py-3 text-2xs font-extrabold uppercase tracking-[0.05em] text-ink-3',
           'shadow-[0_1px_0_rgba(225,228,232,1)]',
           alignClass(align),
+          isDragging && 'opacity-40',
+          isDragOver && 'shadow-[inset_3px_0_0_var(--ss-blue,_#2a5bd7)]',
+          reorderEnabled && (isDragging ? 'cursor-grabbing' : 'cursor-grab'),
         )}
       >
         {sortable ? (
           <button
             type="button"
+            // Mirror the draggable promotion to the inner button so
+            // mousedown on the button still initiates a drag. Drag
+            // events bubble up to the th's onDragStart handler.
+            draggable={reorderEnabled}
             className={cn(
               'inline-flex w-full items-center gap-1.5 rounded-[6px] text-2xs font-extrabold uppercase tracking-[0.05em] transition',
               'text-ink-3 hover:text-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/25',
               justifyClass(align),
+              reorderEnabled && (isDragging ? 'cursor-grabbing' : 'cursor-grab'),
             )}
             onClick={() => onSortChange?.(sortKey)}
           >
@@ -271,7 +376,9 @@ export function PackagesDataTable({
             <SortIcon size={12} strokeWidth={2.4} className={isSorted ? 'text-brand' : 'text-ink-4'} />
           </button>
         ) : (
-          <span>{label}</span>
+          <span draggable={reorderEnabled} className={cn('inline-block w-full', justifyClass(align))}>
+            {label}
+          </span>
         )}
         {!isLast && onResizeColumn ? (
           <ColumnResizeHandle
@@ -292,7 +399,7 @@ export function PackagesDataTable({
 
   const renderLedger = (pkg: PackageDto, ledger: LedgerState) => (
     <tr>
-      <td colSpan={PACKAGES_COLUMNS_ORDER.length} className="border-b border-line bg-surface-2 px-4 py-3">
+      <td colSpan={effectiveColumns.length} className="border-b border-line bg-surface-2 px-4 py-3">
         <div className="overflow-hidden rounded-card border border-line bg-white">
           {ledger.loading ? (
             <div className="px-3 py-3 text-xs2 font-medium text-ink-3">Loading...</div>
@@ -349,7 +456,7 @@ export function PackagesDataTable({
         <thead className="relative z-50">
           <tr>
             <th
-              colSpan={PACKAGES_COLUMNS_ORDER.length}
+              colSpan={effectiveColumns.length}
               scope="colgroup"
               className="!sticky !top-0 !z-[80] h-9 rounded-t-card border-b border-line !bg-brand-bg px-4 text-left text-2xs font-extrabold uppercase tracking-[0.05em] text-ink-3 shadow-[0_1px_0_rgba(225,228,232,1)]"
             >
@@ -357,12 +464,11 @@ export function PackagesDataTable({
             </th>
           </tr>
           <tr>
-            {renderHeader('package', 'Package', 'left')}
-            {renderHeader('stock', 'Stock', 'center')}
-            {renderHeader('usage30', '30d Used', 'center')}
-            {renderHeader('reorder', 'Reorder', 'center')}
-            {renderHeader('cost', 'Cost', 'right')}
-            {renderHeader('actions', 'Actions', 'right')}
+            {effectiveColumns.map((key, idx) =>
+              <Fragment key={key}>
+                {renderHeader(key, PACKAGES_COLUMN_LABELS[key], PACKAGES_COLUMN_ALIGN[key], idx)}
+              </Fragment>
+            )}
           </tr>
         </thead>
         <tbody>
@@ -382,65 +488,93 @@ export function PackagesDataTable({
                       : 'odd:bg-white even:bg-surface-2 hover:bg-brand-bg/60',
                   )}
                 >
-                  <td className="border-b border-line px-4 py-3 align-middle">
-                    <button
-                      type="button"
-                      className="block max-w-full truncate text-left text-[13px] font-extrabold text-brand underline decoration-line underline-offset-2 hover:text-brand-dark"
-                      onClick={() => onToggleLedger(pkg.packageId)}
-                    >
-                      {pkg.name}
-                    </button>
-                    <div className="mt-1 truncate text-tiny font-medium text-ink-3">
-                      {formatPackageDimensionsText(pkg)}
-                    </div>
-                  </td>
-                  <td className={cn('border-b border-line px-4 py-3 text-center align-middle text-[15px] font-extrabold tabular-nums', stockTone(pkg))}>
-                    {pkg.stockQty ?? 0}
-                  </td>
-                  <td className="border-b border-line px-4 py-3 text-center align-middle tabular-nums" title="Units used in the last 30 days">
-                    {renderUsageValue(usageByPackageId?.[pkg.packageId], usageLoading)}
-                  </td>
-                  <td className="border-b border-line px-4 py-3 text-center align-middle">
-                    <input
-                      type="number"
-                      min="0"
-                      step="1"
-                      title="Reorder Level"
-                      value={reorderInputs[pkg.packageId] ?? String(pkg.reorderLevel ?? 10)}
-                      onChange={(event) => onReorderInputChange(pkg.packageId, event.target.value)}
-                      onBlur={() => onSaveReorderLevel(pkg)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') {
-                          event.preventDefault()
-                          onSaveReorderLevel(pkg)
-                          event.currentTarget.blur()
-                        }
-                      }}
-                      className="h-8 w-14 rounded-md border border-line-2 bg-white px-2 text-center text-xs font-semibold text-ink transition focus:border-brand focus:bg-brand-bg/40"
-                    />
-                  </td>
-                  <td className="border-b border-line px-4 py-3 text-right align-middle font-mono text-xs2 font-semibold text-ink-2">
-                    {formatPackageUnitCost(pkg.unitCost)}
-                  </td>
-                  <td className="border-b border-line px-3 py-3 text-right align-middle">
-                    <div className="inline-flex items-center justify-end gap-1.5">
-                      <ActionButton label="Receive stock" tone="receive" onClick={() => onReceive(pkg)}>
-                        <PackagePlus size={15} strokeWidth={2.25} />
-                      </ActionButton>
-                      <ActionButton label="Adjust stock" tone="adjust" onClick={() => onAdjust(pkg)}>
-                        <SlidersHorizontal size={15} strokeWidth={2.25} />
-                      </ActionButton>
-                      <ActionButton label="Edit package" tone="edit" onClick={() => onEdit(pkg.packageId)}>
-                        <PencilLine size={14} strokeWidth={2.25} />
-                      </ActionButton>
-                      <ActionButton label="Set billing default" tone="billing" onClick={() => onSetBillingDefault(pkg)}>
-                        <BadgeDollarSign size={15} strokeWidth={2.15} />
-                      </ActionButton>
-                      <ActionButton label="Delete package" tone="delete" onClick={() => onDelete(pkg.packageId)}>
-                        <Trash2 size={14} strokeWidth={2.15} />
-                      </ActionButton>
-                    </div>
-                  </td>
+                  {/* Body cells dispatch by column key so they render
+                      in the operator's chosen order and only when the
+                      column is visible. Each branch produces the exact
+                      same markup the hardcoded version produced. */}
+                  {effectiveColumns.map((key) => {
+                    switch (key) {
+                      case 'package':
+                        return (
+                          <td key="package" className="border-b border-line px-4 py-3 align-middle">
+                            <button
+                              type="button"
+                              className="block max-w-full truncate text-left text-[13px] font-extrabold text-brand underline decoration-line underline-offset-2 hover:text-brand-dark"
+                              onClick={() => onToggleLedger(pkg.packageId)}
+                            >
+                              {pkg.name}
+                            </button>
+                            <div className="mt-1 truncate text-tiny font-medium text-ink-3">
+                              {formatPackageDimensionsText(pkg)}
+                            </div>
+                          </td>
+                        )
+                      case 'stock':
+                        return (
+                          <td key="stock" className={cn('border-b border-line px-4 py-3 text-center align-middle text-[15px] font-extrabold tabular-nums', stockTone(pkg))}>
+                            {pkg.stockQty ?? 0}
+                          </td>
+                        )
+                      case 'usage30':
+                        return (
+                          <td key="usage30" className="border-b border-line px-4 py-3 text-center align-middle tabular-nums" title="Units used in the last 30 days">
+                            {renderUsageValue(usageByPackageId?.[pkg.packageId], usageLoading)}
+                          </td>
+                        )
+                      case 'reorder':
+                        return (
+                          <td key="reorder" className="border-b border-line px-4 py-3 text-center align-middle">
+                            <input
+                              type="number"
+                              min="0"
+                              step="1"
+                              title="Reorder Level"
+                              value={reorderInputs[pkg.packageId] ?? String(pkg.reorderLevel ?? 10)}
+                              onChange={(event) => onReorderInputChange(pkg.packageId, event.target.value)}
+                              onBlur={() => onSaveReorderLevel(pkg)}
+                              onKeyDown={(event) => {
+                                if (event.key === 'Enter') {
+                                  event.preventDefault()
+                                  onSaveReorderLevel(pkg)
+                                  event.currentTarget.blur()
+                                }
+                              }}
+                              className="h-8 w-14 rounded-md border border-line-2 bg-white px-2 text-center text-xs font-semibold text-ink transition focus:border-brand focus:bg-brand-bg/40"
+                            />
+                          </td>
+                        )
+                      case 'cost':
+                        return (
+                          <td key="cost" className="border-b border-line px-4 py-3 text-right align-middle font-mono text-xs2 font-semibold text-ink-2">
+                            {formatPackageUnitCost(pkg.unitCost)}
+                          </td>
+                        )
+                      case 'actions':
+                        return (
+                          <td key="actions" className="border-b border-line px-3 py-3 text-right align-middle">
+                            <div className="inline-flex items-center justify-end gap-1.5">
+                              <ActionButton label="Receive stock" tone="receive" onClick={() => onReceive(pkg)}>
+                                <PackagePlus size={15} strokeWidth={2.25} />
+                              </ActionButton>
+                              <ActionButton label="Adjust stock" tone="adjust" onClick={() => onAdjust(pkg)}>
+                                <SlidersHorizontal size={15} strokeWidth={2.25} />
+                              </ActionButton>
+                              <ActionButton label="Edit package" tone="edit" onClick={() => onEdit(pkg.packageId)}>
+                                <PencilLine size={14} strokeWidth={2.25} />
+                              </ActionButton>
+                              <ActionButton label="Set billing default" tone="billing" onClick={() => onSetBillingDefault(pkg)}>
+                                <BadgeDollarSign size={15} strokeWidth={2.15} />
+                              </ActionButton>
+                              <ActionButton label="Delete package" tone="delete" onClick={() => onDelete(pkg.packageId)}>
+                                <Trash2 size={14} strokeWidth={2.15} />
+                              </ActionButton>
+                            </div>
+                          </td>
+                        )
+                      default:
+                        return null
+                    }
+                  })}
                 </tr>
                 {ledger?.open ? renderLedger(pkg, ledger) : null}
               </Fragment>
