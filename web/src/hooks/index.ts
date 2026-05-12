@@ -8,6 +8,7 @@ export {
   useLocations,
   useShippingAccounts,
   useClients,
+  useAllClients,
   useInventory,
   usePackages,
   type UseOrdersOptions,

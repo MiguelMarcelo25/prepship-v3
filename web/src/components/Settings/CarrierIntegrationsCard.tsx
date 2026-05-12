@@ -20,7 +20,7 @@ import {
 } from 'lucide-react'
 import { callVercelFunction } from '../../lib/vercelFunction'
 import { formatCaDateShort } from '../../lib/ca-time'
-import { useClients } from '../../hooks'
+import { useAllClients } from '../../hooks'
 
 // Modern animated checkbox — used in the Assign-Clients popover.
 // Native <input type="checkbox"> hidden with sr-only; the visual is
@@ -1107,13 +1107,28 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
   const [assignOpenForId, setAssignOpenForId] = useState<number | null>(null)
   const [assignDraft, setAssignDraft] = useState<Set<number>>(new Set())
   const [assignSaving, setAssignSaving] = useState(false)
-  const { clients: allClients } = useClients()
-  // Index clients by id for fast name lookup when rendering chips.
+  // useAllClients() returns BOTH active and inactive clients so the
+  // assignment popover can manage carriers that were assigned to
+  // since-deactivated clients (audit gap #1, 2026-05-12). Previously
+  // this used useClients() which filters to active-only; that left
+  // already-assigned-to-inactive-client chips stuck (no way to
+  // uncheck them) and made the chip name fall back to "#42".
+  const { clients: allClients } = useAllClients()
+  // Index clients by id for fast name + active lookup when rendering
+  // chips. We keep the `active` flag so the popover row can show an
+  // "(inactive)" badge and the operator can decide whether to keep
+  // the assignment or remove it.
   const clientById = useMemo(() => {
-    const m = new Map<number, { id: number; name: string }>()
+    const m = new Map<number, { id: number; name: string; active: boolean }>()
     for (const c of allClients ?? []) {
       const id = (c as any).clientId ?? (c as any).id
-      if (typeof id === 'number') m.set(id, { id, name: c.name ?? `#${id}` })
+      if (typeof id === 'number') {
+        m.set(id, {
+          id,
+          name: c.name ?? `#${id}`,
+          active: (c as any).active !== false,
+        })
+      }
     }
     return m
   }, [allClients])
@@ -1262,10 +1277,18 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
       //   - id: offset for stores so two tables can't share a state-dict key
       // The state dicts (testResults, rateResults, deleting, …) all key on
       // `id` so the offset guarantees no cross-table collisions.
+      //
+      // Carriers come from BOTH source=admin AND source=portal (audit gap #2,
+      // 2026-05-12). Previously the Settings list filtered to admin-only,
+      // which left portal-submitted carriers stuck — the operator could see
+      // them only in the Pending card (delete-only) and could never multi-
+      // assign them. Including both sources here means the operator manages
+      // all carriers from one place; the row renderer paints a small
+      // "Portal" badge on portal-sourced rows so the origin is obvious.
       const STORE_DISPLAY_OFFSET = 1_000_000_000
       type RawRow = Omit<SavedRow, 'accountId' | 'kind'>
       const [carriersRes, storesRes] = await Promise.all([
-        callVercelFunction<{ data: RawRow[] }>('/carrier-accounts?source=admin').catch((e) => {
+        callVercelFunction<{ data: RawRow[] }>('/carrier-accounts').catch((e) => {
           console.warn('[Settings] /carrier-accounts fetch failed:', e)
           return { data: [] as RawRow[] }
         }),
@@ -1527,6 +1550,29 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <span style={{ fontWeight: 700 }}>{d.provider.toUpperCase()}</span>
           <span style={{ color: 'var(--text2)' }}>{d.label ?? '—'}</span>
+          {/* "Portal" badge — flags carriers submitted via the client
+              portal vs admin-added ones. Same Settings list now covers
+              both sources (audit fix gap #2, 2026-05-12) so the origin
+              tag is here to keep things scannable. Carriers only —
+              stores never come from portal source. */}
+          {d.kind === 'carrier' && d.source === 'portal' ? (
+            <span
+              title={`Submitted via the client portal${d.clientId ? ` by client #${d.clientId}` : ''} — review credentials before sharing across other clients.`}
+              style={{
+                fontSize: 9,
+                fontWeight: 800,
+                letterSpacing: '0.06em',
+                textTransform: 'uppercase',
+                color: 'rgb(124 58 237)',
+                background: 'rgb(245 243 255)',
+                padding: '2px 6px',
+                borderRadius: 4,
+                border: '1px solid rgb(196 181 253)',
+              }}
+            >
+              Portal
+            </span>
+          ) : null}
           <span style={{ flex: 1, color: 'var(--text3)', fontFamily: 'monospace', fontSize: 11 }}>
             {d.accountIdentifier ?? '—'}
           </span>
@@ -1608,8 +1654,14 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
               onClick={() => openAssignPopover(d)}
               title={
                 isShipStation
-                  ? `Implicitly assigned to ${d.label?.replace(/^ShipStation /, '') ?? 'one client'} · ${SHIPSTATION_MANAGE_HINT}`
-                  : 'Assign this carrier account to one or more clients'
+                  // Spell out the design constraint so operators don't
+                  // file this as a bug. ShipStation v2 keys are
+                  // intrinsically tenant-scoped — there's no upstream
+                  // API surface for "share these keys with client B."
+                  // The practical workflow is: add the same keys to the
+                  // other client's row in Settings → Clients.
+                  ? `ShipStation API keys are tied 1:1 to ${d.label?.replace(/^ShipStation /, '') ?? 'this client'} by upstream design. To use ShipStation for another client, add credentials to that client's row in Settings → Clients.`
+                  : `Assign this ${d.source === 'portal' ? '(portal-submitted) ' : ''}carrier account to one or more clients · multi-select supported`
               }
             />
           ) : null}
@@ -1644,23 +1696,32 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
             ) : (
               d.assignedClientIds.map((cid) => {
                 const client = clientById.get(cid)
+                const isInactive = client ? !client.active : false
                 return (
                   <span
                     key={cid}
+                    title={isInactive ? `Assigned to ${client?.name ?? `#${cid}`} — client is currently disabled` : undefined}
                     style={{
                       display: 'inline-flex',
                       alignItems: 'center',
                       gap: 3,
                       padding: '2px 7px',
                       borderRadius: 10,
-                      background: 'rgb(var(--brand-rgb, 42 91 215) / 0.1)',
-                      color: 'rgb(var(--brand-rgb, 42 91 215))',
+                      background: isInactive
+                        ? 'var(--surface2)'
+                        : 'rgb(var(--brand-rgb, 42 91 215) / 0.1)',
+                      color: isInactive ? 'var(--text3)' : 'rgb(var(--brand-rgb, 42 91 215))',
                       fontSize: 10.5,
                       fontWeight: 700,
                       lineHeight: 1.3,
+                      textDecoration: isInactive ? 'line-through' : 'none',
+                      textDecorationColor: 'var(--text4)',
+                      textDecorationThickness: '1px',
+                      border: isInactive ? '1px dashed var(--border2)' : '1px solid transparent',
                     }}
                   >
                     {client?.name ?? `#${cid}`}
+                    {isInactive ? <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase', textDecoration: 'none', opacity: 0.85 }}>·inactive</span> : null}
                   </span>
                 )
               })
@@ -1773,9 +1834,25 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
                       No clients available. Add clients in the Inventory → Clients tab first.
                     </div>
                   ) : (
-                    (allClients ?? []).map((c, idx) => {
+                    // Sort: active clients first (alphabetical), then
+                    // inactive clients at the bottom (also alphabetical).
+                    // Active clients are the common case and should be
+                    // immediately visible; inactive ones cluster at the
+                    // tail so the operator can still find an
+                    // already-assigned-to-deactivated-client row to
+                    // uncheck — without those rows competing for
+                    // attention during a routine assignment.
+                    [...(allClients ?? [])]
+                      .sort((a, b) => {
+                        const aActive = (a as any).active !== false
+                        const bActive = (b as any).active !== false
+                        if (aActive !== bActive) return aActive ? -1 : 1
+                        return String(a.name ?? '').localeCompare(String(b.name ?? ''))
+                      })
+                      .map((c, idx) => {
                       const cid = (c as any).clientId ?? (c as any).id
                       if (typeof cid !== 'number') return null
+                      const isClientActive = (c as any).active !== false
                       const checked = assignDraft.has(cid)
                       return (
                         <motion.label
@@ -1799,6 +1876,9 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
                             background: checked
                               ? 'rgb(var(--brand-rgb, 42 91 215) / 0.10)'
                               : 'transparent',
+                            // Subtle fade for inactive clients so the
+                            // operator's eye lands on active rows first.
+                            opacity: isClientActive ? 1 : 0.72,
                           }}
                           onMouseEnter={(e) => {
                             if (!checked) e.currentTarget.style.background = 'var(--surface2)'
@@ -1806,6 +1886,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
                           onMouseLeave={(e) => {
                             if (!checked) e.currentTarget.style.background = 'transparent'
                           }}
+                          title={isClientActive ? undefined : 'This client is currently disabled — kept here so you can manage existing assignments.'}
                         >
                           <ModernCheckbox
                             checked={checked}
@@ -1817,12 +1898,34 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
                               flex: 1,
                               fontSize: 13,
                               fontWeight: checked ? 700 : 500,
-                              color: checked ? 'rgb(var(--brand-rgb, 42 91 215))' : 'var(--text)',
+                              color: checked
+                                ? 'rgb(var(--brand-rgb, 42 91 215))'
+                                : isClientActive ? 'var(--text)' : 'var(--text2)',
                               transition: 'color 150ms, font-weight 150ms',
+                              textDecoration: isClientActive ? 'none' : 'line-through',
+                              textDecorationColor: 'var(--text4)',
+                              textDecorationThickness: '1px',
                             }}
                           >
                             {c.name}
                           </span>
+                          {!isClientActive ? (
+                            <span
+                              style={{
+                                fontSize: 9.5,
+                                fontWeight: 800,
+                                letterSpacing: '0.06em',
+                                textTransform: 'uppercase',
+                                color: 'var(--text3)',
+                                background: 'var(--surface2)',
+                                padding: '2px 6px',
+                                borderRadius: 4,
+                                border: '1px solid var(--border)',
+                              }}
+                            >
+                              Inactive
+                            </span>
+                          ) : null}
                           <span
                             style={{
                               fontSize: 10,
