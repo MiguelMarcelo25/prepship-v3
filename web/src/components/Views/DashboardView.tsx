@@ -148,6 +148,11 @@ const COLUMN_OPTIONS = [
   { key: 'units30', label: '30-Day Units' },
   { key: 'priorAvg', label: '30-Day Avg.' },
   { key: 'changePct', label: 'vs Prior 30 Days' },
+  // Trend was previously an anchor column (hardcoded at the
+  // rightmost edge) but operators asked for it to behave like the
+  // other data columns — draggable, resizable, hideable. Sort maps
+  // to 'changePct' since the sparkline visualizes that metric.
+  { key: 'trend', label: 'Trend' },
 ] as const
 
 type ColumnKey = typeof COLUMN_OPTIONS[number]['key']
@@ -231,6 +236,15 @@ const SKU_COLUMNS: Record<ColumnKey, SkuColumnMeta> = {
         {formatPct(row.changePct)}
       </span>
     ),
+  },
+  // Trend sparkline column. Sort key mirrors 'changePct' so clicking
+  // the Trend header reorders the table by the same metric the
+  // sparkline visualizes — operators don't need to learn a separate
+  // "sort trend by what?" concept. Align left so the sparkline hugs
+  // the left edge of the cell; min-width 70 keeps the line readable.
+  trend: {
+    sortKey: 'changePct', label: 'Trend', align: 'left', width: 90, minWidth: 70,
+    renderCell: (row) => <TinyTrend values={last(row.trend, 12)} negative={row.changePct < 0} />,
   },
 }
 
@@ -1540,17 +1554,18 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               happened yet; resize state overrides this naturally. */}
           <table className="w-full min-w-[1320px] table-fixed border-collapse text-sm2">
             <colgroup>
-              {/* Star + Trend stay at static widths (too narrow to
-                  benefit from resize). SKU + Product are resizable
-                  via the columnWidths map — defaults come from
-                  ANCHOR_COLUMN_META.{sku,product}.defaultWidth. */}
+              {/* Star is the only remaining static-width anchor
+                  (36px, too narrow to benefit from resize). SKU +
+                  Product are resizable anchors (no reorder). All
+                  toggleable columns INCLUDING the Trend sparkline
+                  flow through the .map() — Trend joined the data
+                  columns 2026-05-12 per operator request. */}
               <col style={{ width: 36 }} />
               <col style={{ width: columnWidths.sku ?? ANCHOR_COLUMN_META.sku.defaultWidth }} />
               <col style={{ width: columnWidths.product ?? ANCHOR_COLUMN_META.product.defaultWidth }} />
               {visibleColumnOrder.map((key) => (
                 <col key={key} style={{ width: columnWidths[key] ?? SKU_COLUMNS[key].width }} />
               ))}
-              <col style={{ width: 80 }} />
             </colgroup>
             <thead className="bg-surface-2">
               <tr>
@@ -1692,7 +1707,10 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                     </th>
                   )
                 })}
-                <th className="border-b-2 border-line px-3 py-2 text-left text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Trend</th>
+                {/* Trend was previously a standalone non-reorderable
+                    anchor <th> right here — now part of the
+                    visibleColumnOrder map above so it joins the
+                    drag/resize family. */}
               </tr>
             </thead>
             <tbody>
@@ -1752,7 +1770,9 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                       </td>
                     )
                   })}
-                  <td className="px-3 py-2"><TinyTrend values={last(row.trend, 12)} negative={row.changePct < 0} /></td>
+                  {/* Trend was rendered as a separate anchor <td>
+                      here — now flows through the map above via
+                      SKU_COLUMNS.trend.renderCell. */}
                 </tr>
               ))}
               {pageRows.length === 0 ? (
