@@ -61,10 +61,21 @@ export function filterInventoryRows(rows: InventoryItemDto[], filters: Inventory
     if (filters.clientId && String(row.clientId) !== String(filters.clientId)) return false
     if (search && !`${row.sku}${row.name}${row.clientName}`.toLowerCase().includes(search)) return false
     if (filters.alertOnly && row.status === 'ok') return false
-    // `active` is a tri-state on the wire: true / false / null. We
-    // treat null as "active" so legacy rows with no flag set don't
-    // disappear when the toggle is on — only explicit `false` is hidden.
-    if (filters.activeOnly && row.active === false) return false
+    // 2026-05-12: `activeOnly` is now a MUTEX VIEW SWITCH, not a
+    // "show/hide" filter. Operators expected the toggle to swap
+    // between two distinct views rather than just hide a subset:
+    //   - activeOnly === true  → show ONLY active SKUs
+    //   - activeOnly === false → show ONLY deactivated SKUs
+    //
+    // `active` is a tri-state on the wire (true / false / null). We
+    // treat null as "active" so legacy rows with no flag set behave
+    // like normal active SKUs and don't disappear from the default
+    // view.
+    if (filters.activeOnly) {
+      if (row.active === false) return false
+    } else {
+      if (row.active !== false) return false
+    }
     return true
   })
 }

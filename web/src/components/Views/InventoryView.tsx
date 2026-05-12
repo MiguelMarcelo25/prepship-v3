@@ -2566,18 +2566,21 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
             <label style={{ fontSize: 12, color: 'var(--text2)', display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
               <input type="checkbox" checked={alertOnly} onChange={(event) => setAlertOnly(event.target.checked)} /> Low/Out only
             </label>
-            {/* Active toggle — pill-style switch matching the Test
-                Orders toggle in the sidebar (SidebarA.tsx:171-179)
-                so operators get a consistent control vocabulary.
-                ON = hide deactivated SKUs (the default day-to-day
-                view); OFF = show everything including archives. */}
+            {/* Status mode toggle — pill-style switch that swaps
+                between TWO distinct views (NOT a show/hide filter):
+                  ON  → "Active only" view (just active SKUs)
+                  OFF → "Deactivated only" view (just deactivated SKUs)
+                Label text changes with the mode so operators always
+                know which view they're looking at. The pill colors
+                also flip semantics — green when in "active" mode,
+                slate when in "deactivated" mode. */}
             <button
               type="button"
               role="switch"
               aria-checked={activeOnly}
-              aria-label={activeOnly ? 'Active SKUs only — click to show all' : 'Showing all SKUs — click to hide inactive'}
+              aria-label={activeOnly ? 'Active SKUs view — click to switch to Deactivated' : 'Deactivated SKUs view — click to switch to Active'}
               onClick={() => setActiveOnly((v) => !v)}
-              title={activeOnly ? 'Showing active SKUs only · click to include deactivated' : 'Showing all SKUs · click to hide deactivated'}
+              title={activeOnly ? 'Showing active SKUs · click to switch to deactivated' : 'Showing deactivated SKUs · click to switch to active'}
               className="inline-flex items-center gap-2 cursor-pointer"
               style={{ background: 'none', border: 0, padding: 0, fontSize: 12, color: 'var(--text2)' }}
             >
@@ -2589,15 +2592,15 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                   className={`absolute top-0.5 w-2.5 h-2.5 rounded-full bg-white shadow-sm transition-transform duration-150 ${activeOnly ? 'translate-x-[14px]' : 'translate-x-0.5'}`}
                 />
               </span>
-              Active only
-              {/* 2026-05-12: Inline status badge so operators always
-                  understand what the toggle is doing right now.
-                  - inactiveCount > 0  → shows the count, wording
-                    swaps based on whether the toggle hides them
-                    ("X hidden") or surfaces them ("X deactivated").
-                  - inactiveCount === 0 → italic "no deactivated SKUs"
-                    so flipping the toggle doesn't look broken when
-                    there's genuinely nothing to reveal. */}
+              {activeOnly ? 'Active only' : 'Deactivated only'}
+              {/* 2026-05-12: Inline status badge always shows the
+                  count of DEACTIVATED SKUs (the "other side" of the
+                  mutex). In Active mode this hints how many items
+                  exist in the deactivated view; in Deactivated mode
+                  it confirms the count visible on screen. When the
+                  count is zero we explicitly say so — italic, with
+                  a tooltip — so flipping the toggle into an empty
+                  view doesn't look like a bug. */}
               {inactiveCount > 0 ? (
                 <span
                   style={{
@@ -2607,7 +2610,7 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                     marginLeft: 2,
                   }}
                 >
-                  · {inactiveCount} {activeOnly ? 'hidden' : 'deactivated'}
+                  · {inactiveCount} deactivated
                 </span>
               ) : (
                 <span
@@ -2617,7 +2620,7 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                     fontStyle: 'italic',
                     marginLeft: 2,
                   }}
-                  title="No SKUs are currently deactivated — toggling has no effect"
+                  title="No SKUs are currently deactivated — toggling will show an empty view"
                 >
                   · no deactivated SKUs
                 </span>
@@ -2641,11 +2644,11 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
               <div>
                 {alertOnly
                   ? 'No low/out stock'
-                  : activeOnly && inactiveCount === 0
-                    ? 'No SKUs found'
-                    : !activeOnly && inactiveCount === 0
-                      ? 'No SKUs found · no deactivated SKUs to reveal'
-                      : 'No SKUs found'}
+                  : activeOnly
+                    ? 'No active SKUs found'
+                    : inactiveCount === 0
+                      ? 'No deactivated SKUs · everything is active'
+                      : 'No deactivated SKUs match the current filters'}
               </div>
             </div>
           ) : !bulkEditMode ? (
@@ -2687,7 +2690,15 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                 return classes.join(' ') || undefined
               }}
               loading={stockLoading}
-              emptyMessage={alertOnly ? 'No low/out stock' : 'No SKUs found'}
+              emptyMessage={
+                alertOnly
+                  ? 'No low/out stock'
+                  : activeOnly
+                    ? 'No active SKUs found'
+                    : inactiveCount === 0
+                      ? 'No deactivated SKUs · everything is active'
+                      : 'No deactivated SKUs match the current filters'
+              }
             />
           ) : (
             <div id="inv-stock-content">
