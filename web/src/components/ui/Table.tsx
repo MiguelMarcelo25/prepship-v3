@@ -179,6 +179,17 @@ export interface TableProps<Row> {
    *
    *  Returning null/undefined renders no footer. */
   footerRow?: (visibleColumns: TableColumn<Row>[]) => ReactNode
+  /** When true (default), the inner table wrapper uses
+   *  `overflow-x: clip` instead of `overflow-x: auto`. `clip` does NOT
+   *  establish a scroll container per spec, so `position: sticky` on
+   *  the `<thead>` can resolve up to the page's view-content scroll —
+   *  the operator sees the column headers pinned at the top while
+   *  scrolling rows. The trade-off: very wide tables (e.g. Inventory
+   *  with 15+ columns) get visually clipped on the right edge with no
+   *  horizontal scrollbar. Set to `false` when wide-table horizontal
+   *  scroll matters more than the sticky thead (then operators must
+   *  scroll the table sideways instead of seeing pinned headers). */
+  stickyHeader?: boolean
 }
 
 // localStorage helpers — defensive, never throw.
@@ -304,6 +315,7 @@ export function Table<Row>({
   rowRef,
   pinRowToBottom,
   footerRow,
+  stickyHeader = true,
 }: TableProps<Row>) {
   // Sort state — reads stored value first, falls through to default.
   const [sort, setSort] = useState<SortState | null>(() => readStoredSort(storageKey) ?? defaultSort ?? null)
@@ -772,23 +784,27 @@ export function Table<Row>({
         </div>
       </div>
 
-      {/* 2026-05-12 (revised): switched back from overflow-x-clip to
-          overflow-x-auto so wide tables (Inventory with 15 columns)
-          can horizontally scroll INSIDE the wrapper. Operators were
-          hitting the worst-of-both-worlds with `clip` — rightmost
-          columns were clipped AND unreachable (no scrollbar).
-
-          What about sticky thead? The outer wrapper already has
-          overflow-hidden (it's a stacking-context isolation +
-          rounded-corner trick at line 659), which means sticky
-          resolution stops there regardless of what this inner
-          wrapper does. So sticky-during-page-scroll was already
-          broken before this commit; switching to `auto` just lets
-          operators reach the columns that exist beyond the visible
-          edge. For pages where vertical-sticky-thead matters more
-          than horizontal scroll, operators can use the Columns
-          picker to hide enough columns to fit viewport. */}
-      <div className="overflow-x-auto">
+      {/* 2026-05-13 (third round): per-consumer opt-in via
+          `stickyHeader` prop. Default `true`:
+            - inner wrapper is `overflow-x-clip`
+            - `clip` doesn't establish a scroll container (unlike
+              `auto`/`hidden`/`scroll`)
+            - `position: sticky` on `<thead>` resolves up through
+              `clip` to the page's `.view-content` (overflow-y: auto)
+              — column headers actually pin at the top as the
+              operator scrolls the row list. This is what the
+              Packages page operator was asking for.
+            - downside: tables wider than the wrapper get visually
+              clipped on the right edge with no horizontal scrollbar.
+              Most tables in this project fit, so this is the right
+              default.
+          Opt out (`stickyHeader={false}`) for tables that genuinely
+          need horizontal scroll inside the wrapper — Inventory with
+          15+ columns is the prototypical case. Operators on those
+          tables can still hide columns via the Columns picker, or
+          rely on `.view-content`'s own horizontal scroll once the
+          table overflows the viewport. */}
+      <div className={stickyHeader ? 'overflow-x-clip' : 'overflow-x-auto'}>
         <table className="w-full border-collapse table-fixed" style={{ minWidth: 480 }}>
           <colgroup>
             {orderedColumns.map((col) => (
