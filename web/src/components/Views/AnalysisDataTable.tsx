@@ -92,9 +92,38 @@ const SHELL_CLASSES =
 const TABLE_BASE_CLASSES = 'w-full border-separate border-spacing-0'
 
 function tableClassesFor(size: AnalysisColumnSize) {
-  if (size === 'narrow') return `${TABLE_BASE_CLASSES} table-auto min-w-full text-[14px]`
-  if (size === 'wide') return `${TABLE_BASE_CLASSES} table-auto min-w-[1400px] text-[14px]`
-  return `${TABLE_BASE_CLASSES} table-auto min-w-full text-[14px]`
+  // table-fixed is critical for column-resize sanity: with table-auto,
+  // the browser treats <th width> as a hint and rebalances neighbor
+  // columns to satisfy min-w-full — so widening Orders also widens
+  // Client, which is exactly the bug operators reported. table-fixed
+  // honors <colgroup>/<col> widths verbatim; one column moves, others
+  // stay put. Same pattern Packages and Inventory use successfully.
+  if (size === 'narrow') return `${TABLE_BASE_CLASSES} table-fixed min-w-full text-[14px]`
+  if (size === 'wide') return `${TABLE_BASE_CLASSES} table-fixed min-w-[1400px] text-[14px]`
+  return `${TABLE_BASE_CLASSES} table-fixed min-w-full text-[14px]`
+}
+
+// Per-column default widths. table-fixed needs every column to have a
+// width (either from <col> or from first-row cells) or it falls back
+// to equal distribution — which would make Trend's sparkline cell as
+// wide as Item Name. These defaults are tuned to match the natural
+// content widths the table had under table-auto, so the visual
+// baseline doesn't shift for operators who haven't dragged anything.
+// 'name' deliberately has NO default so it flex-fills the remaining
+// space — long product names stay readable while everything else is
+// pinned. Override from columnWidths takes precedence.
+const ANALYSIS_COLUMN_DEFAULT_WIDTHS: Partial<Record<AnalysisSortKey, number>> = {
+  // name: undefined  → flex-fill
+  sku: 140,
+  client: 140,
+  orders: 90,
+  pending: 90,
+  external: 110,
+  qty: 130,
+  trend: 100,
+  stdOrders: 120,
+  expOrders: 120,
+  total: 130,
 }
 
 function cellPaddingFor(size: AnalysisColumnSize) {
@@ -192,6 +221,21 @@ export function AnalysisDataTable({
   return (
     <div className={SHELL_CLASSES}>
       <table id="analysis-table" className={tableClassesFor(columnSize)}>
+        {/* Colgroup pins per-column widths so table-fixed has a
+            definite layout for every visible column. Operator drags
+            on the resize handle update columnWidths[key] which
+            overrides the default here. 'name' deliberately gets no
+            width → flex-fills remaining space (long product names
+            stay readable). Iterates `columns` so reorder/hide are
+            honored. */}
+        <colgroup>
+          {columns.map((column) => {
+            const explicitWidth = columnWidths[column.key]
+            const fallbackWidth = ANALYSIS_COLUMN_DEFAULT_WIDTHS[column.key]
+            const width = explicitWidth ?? fallbackWidth
+            return <col key={column.key} style={width ? { width } : undefined} />
+          })}
+        </colgroup>
         <AnalysisTableHeader
           columns={columns}
           sortKey={sortKey}
