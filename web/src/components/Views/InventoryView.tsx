@@ -665,6 +665,13 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
     readStoredInventoryColumnLayout,
   )
   const [inventoryColumnsMenuOpen, setInventoryColumnsMenuOpen] = useState(false)
+  // The Columns popover is rendered via React Portal so it escapes
+  // (a) the sticky thead's higher z-index (z-[70]/z-[80]) which was
+  // covering popover items overlapping the table, and (b) the
+  // overflow-x:auto on the table wrapper which would clip the menu
+  // at the wrapper's edges. Coords recompute on open + scroll/resize.
+  const inventoryColumnsTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const [inventoryColumnsMenuRect, setInventoryColumnsMenuRect] = useState<{ top: number; right: number } | null>(null)
   // Drag-reorder state — `draggingKey` is the source, `dragOverKey`
   // is the current hover target (drives the drop-indicator stripe).
   const [draggingInventoryColumn, setDraggingInventoryColumn] = useState<InventoryColumnKey | null>(null)
@@ -756,6 +763,37 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [inventoryColumnsMenuOpen])
+
+  // Anchor the portal'd Columns popover under the trigger button.
+  // Recompute on open + scroll/resize so the menu stays glued to
+  // the button when the page moves underneath. useLayoutEffect runs
+  // before paint so there's no one-frame flash at (0,0).
+  useLayoutEffect(() => {
+    if (!inventoryColumnsMenuOpen) {
+      setInventoryColumnsMenuRect(null)
+      return
+    }
+    function update() {
+      const el = inventoryColumnsTriggerRef.current
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      setInventoryColumnsMenuRect({
+        top: rect.bottom + 4,
+        // Mirror the original `right: 0` absolute alignment so the
+        // menu's right edge sits flush with the trigger's right edge.
+        // Clamp ≥ 8px so on narrow viewports the menu doesn't slide
+        // off the viewport's right edge.
+        right: Math.max(8, window.innerWidth - rect.right),
+      })
+    }
+    update()
+    window.addEventListener('resize', update)
+    window.addEventListener('scroll', update, true)
+    return () => {
+      window.removeEventListener('resize', update)
+      window.removeEventListener('scroll', update, true)
+    }
   }, [inventoryColumnsMenuOpen])
 
   const [clientsSort, setClientsSort] = useState(null)
@@ -2028,100 +2066,41 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
             and "Refresh" — easily missed at 115% zoom or on narrow
             viewports where buttons wrap. */}
         {!hideTabs && activeTab === 'stock' && !bulkEditMode ? (
-          <div style={{ position: 'relative' }}>
-            <button
-              type="button"
-              data-inventory-columns-trigger
-              onClick={() => setInventoryColumnsMenuOpen((v) => !v)}
-              className="btn btn-sm"
-              aria-haspopup="true"
-              aria-expanded={inventoryColumnsMenuOpen}
-              title="Show or hide columns · drag column headers to reorder · click a header to sort"
-              style={{
-                background: inventoryColumnsMenuOpen ? 'var(--ss-blue)' : 'rgba(42,91,215,0.10)',
-                color: inventoryColumnsMenuOpen ? '#fff' : 'var(--ss-blue)',
-                border: `1px solid var(--ss-blue)`,
-                fontWeight: 700,
-              }}
-            >
-              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true" style={{ display: 'inline-block', verticalAlign: '-2px', marginRight: 4 }}>
-                <rect x="1.5" y="2.5" width="3.5" height="11" rx="0.7" stroke="currentColor" strokeWidth="1.4" />
-                <rect x="6.25" y="2.5" width="3.5" height="11" rx="0.7" stroke="currentColor" strokeWidth="1.4" />
-                <rect x="11" y="2.5" width="3.5" height="11" rx="0.7" stroke="currentColor" strokeWidth="1.4" />
-              </svg>
-              Columns
-              <span style={{ marginLeft: 4, fontSize: 11, fontFamily: 'monospace', opacity: 0.75 }}>
-                ({INVENTORY_DEFAULT_COLUMN_ORDER.length - inventoryColumnLayout.hidden.length}/{INVENTORY_DEFAULT_COLUMN_ORDER.length})
-              </span>
-            </button>
-            {inventoryColumnsMenuOpen ? (
-              <div
-                data-inventory-columns-menu
-                role="menu"
-                style={{
-                  position: 'absolute', right: 0, top: 'calc(100% + 4px)', zIndex: 50,
-                  minWidth: 240, background: 'var(--surface)', border: '1px solid var(--border)',
-                  borderRadius: 6, boxShadow: '0 8px 24px -6px rgba(15,23,42,.18), 0 2px 6px -2px rgba(15,23,42,.10)',
-                  padding: 6,
-                }}
-              >
-                <div style={{ padding: '4px 8px', fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 800, color: 'var(--text3)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span>Visible columns</span>
-                  <button
-                    type="button"
-                    onClick={handleInventoryColumnLayoutReset}
-                    style={{ background: 'transparent', border: 0, fontSize: 9.5, fontWeight: 700, color: 'var(--ss-blue)', cursor: 'pointer' }}
-                    title="Restore the factory default column order and show all columns"
-                  >
-                    Reset
-                  </button>
-                </div>
-                {(() => {
-                  const hiddenSet = new Set(inventoryColumnLayout.hidden)
-                  const visibleKeys = inventoryColumnLayout.order.filter((k) => !hiddenSet.has(k))
-                  const hiddenKeys = inventoryColumnLayout.order.filter((k) => hiddenSet.has(k))
-                  return [...visibleKeys, ...hiddenKeys].map((key) => {
-                    const isHidden = hiddenSet.has(key)
-                    const isRequired = INVENTORY_REQUIRED_COLUMNS.has(key)
-                    return (
-                      <label
-                        key={key}
-                        style={{
-                          display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px',
-                          borderRadius: 5, fontSize: 12,
-                          color: isRequired ? 'var(--text3)' : 'var(--text)',
-                          cursor: isRequired ? 'not-allowed' : 'pointer',
-                          opacity: isHidden ? 0.6 : 1,
-                        }}
-                        onMouseEnter={(e) => { if (!isRequired) (e.currentTarget as HTMLLabelElement).style.background = 'rgba(42,91,215,.08)' }}
-                        onMouseLeave={(e) => { (e.currentTarget as HTMLLabelElement).style.background = 'transparent' }}
-                        title={isRequired
-                          ? `${INVENTORY_COLUMN_LABELS[key]} is always visible`
-                          : isHidden ? 'Hidden · click to show' : 'Visible · click to hide'
-                        }
-                      >
-                        <input
-                          type="checkbox"
-                          checked={!isHidden}
-                          disabled={isRequired}
-                          onChange={() => handleInventoryColumnToggle(key)}
-                          style={{ accentColor: 'var(--ss-blue)', cursor: isRequired ? 'not-allowed' : 'pointer' }}
-                        />
-                        <span style={{ flex: 1 }}>{INVENTORY_COLUMN_LABELS[key]}</span>
-                        {isRequired ? (
-                          <span style={{ fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text3)', fontWeight: 600 }}>required</span>
-                        ) : null}
-                      </label>
-                    )
-                  })
-                })()}
-                <div style={{ borderTop: '1px solid var(--border)', marginTop: 4, paddingTop: 6, padding: '6px 8px 4px', fontSize: 10.5, color: 'var(--text3)', lineHeight: 1.4 }}>
-                  Tips: drag column headers to reorder · click a header to sort · check/uncheck above to toggle.
-                </div>
-              </div>
-            ) : null}
-          </div>
+          <button
+            type="button"
+            data-inventory-columns-trigger
+            ref={inventoryColumnsTriggerRef}
+            onClick={() => setInventoryColumnsMenuOpen((v) => !v)}
+            className="btn btn-sm"
+            aria-haspopup="true"
+            aria-expanded={inventoryColumnsMenuOpen}
+            title="Show or hide columns · drag column headers to reorder · click a header to sort"
+            style={{
+              background: inventoryColumnsMenuOpen ? 'var(--ss-blue)' : 'rgba(42,91,215,0.10)',
+              color: inventoryColumnsMenuOpen ? '#fff' : 'var(--ss-blue)',
+              border: `1px solid var(--ss-blue)`,
+              fontWeight: 700,
+            }}
+          >
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true" style={{ display: 'inline-block', verticalAlign: '-2px', marginRight: 4 }}>
+              <rect x="1.5" y="2.5" width="3.5" height="11" rx="0.7" stroke="currentColor" strokeWidth="1.4" />
+              <rect x="6.25" y="2.5" width="3.5" height="11" rx="0.7" stroke="currentColor" strokeWidth="1.4" />
+              <rect x="11" y="2.5" width="3.5" height="11" rx="0.7" stroke="currentColor" strokeWidth="1.4" />
+            </svg>
+            Columns
+            <span style={{ marginLeft: 4, fontSize: 11, fontFamily: 'monospace', opacity: 0.75 }}>
+              ({INVENTORY_DEFAULT_COLUMN_ORDER.length - inventoryColumnLayout.hidden.length}/{INVENTORY_DEFAULT_COLUMN_ORDER.length})
+            </span>
+          </button>
         ) : null}
+        {/* Portal'd Columns popover (rendered into document.body via
+            createPortal at the bottom of this component) — escapes
+            (a) the sticky thead's z-[70]/z-[80] stacking (which was
+            covering popover items overlapping the table area), and
+            (b) the overflow-x:auto on each table card. Click-outside
+            handler's `closest('[data-inventory-columns-menu]')` check
+            still works through portals (DOM tree is real, just rooted
+            at document.body). */}
         {!hideTabs ? (
           <>
             <button className="btn btn-outline btn-sm" type="button" onClick={handlePopulateInventory}>📥 Import SKUs from Orders</button>
@@ -3380,6 +3359,101 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
           )}
         </div>
       ) : null}
+
+      {/* Portal'd Columns popover. Anchored to the trigger button's
+          viewport rect via useLayoutEffect above; rendered through
+          createPortal so it escapes the inventory wrapper's stacking
+          context (the sticky thead's z-[70]/z-[80] was covering it).
+          maxHeight + overflow-y-auto on the body region engages a
+          scrollbar if the column list ever exceeds the cap, so the
+          menu never overflows the viewport on small screens. */}
+      {inventoryColumnsMenuOpen && inventoryColumnsMenuRect && typeof document !== 'undefined'
+        ? createPortal(
+            <div
+              data-inventory-columns-menu
+              role="menu"
+              style={{
+                position: 'fixed',
+                top: inventoryColumnsMenuRect.top,
+                right: inventoryColumnsMenuRect.right,
+                zIndex: 9999,
+                minWidth: 240,
+                maxHeight: 'min(480px, 80vh)',
+                background: 'var(--surface)',
+                border: '1px solid var(--border)',
+                borderRadius: 6,
+                boxShadow: '0 8px 24px -6px rgba(15,23,42,.18), 0 2px 6px -2px rgba(15,23,42,.10)',
+                display: 'flex',
+                flexDirection: 'column',
+                overflow: 'hidden',
+              }}
+            >
+              <div style={{ flexShrink: 0, padding: '6px 8px', fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 800, color: 'var(--text3)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid var(--border)', background: 'var(--surface-2, rgba(248,250,252,.6))' }}>
+                <span>Visible columns</span>
+                <button
+                  type="button"
+                  onClick={handleInventoryColumnLayoutReset}
+                  style={{ background: 'transparent', border: 0, fontSize: 9.5, fontWeight: 700, color: 'var(--ss-blue)', cursor: 'pointer' }}
+                  title="Restore the factory default column order and show all columns"
+                >
+                  Reset
+                </button>
+              </div>
+              {/* Scrollable list — flex-1 + min-h-0 (overflow-y auto)
+                  lets the middle region claim leftover space and
+                  scroll independently while header/footer stay
+                  pinned inside the popover. */}
+              <div style={{ flex: '1 1 0', minHeight: 0, overflowY: 'auto', padding: 6, overscrollBehavior: 'contain' }}>
+                {(() => {
+                  const hiddenSet = new Set(inventoryColumnLayout.hidden)
+                  const visibleKeys = inventoryColumnLayout.order.filter((k) => !hiddenSet.has(k))
+                  const hiddenKeys = inventoryColumnLayout.order.filter((k) => hiddenSet.has(k))
+                  return [...visibleKeys, ...hiddenKeys].map((key) => {
+                    const isHidden = hiddenSet.has(key)
+                    const isRequired = INVENTORY_REQUIRED_COLUMNS.has(key)
+                    return (
+                      <label
+                        key={key}
+                        style={{
+                          display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px',
+                          borderRadius: 5, fontSize: 12,
+                          color: isRequired ? 'var(--text3)' : 'var(--text)',
+                          cursor: isRequired ? 'not-allowed' : 'pointer',
+                          opacity: isHidden ? 0.6 : 1,
+                        }}
+                        onMouseEnter={(e) => { if (!isRequired) (e.currentTarget as HTMLLabelElement).style.background = 'rgba(42,91,215,.08)' }}
+                        onMouseLeave={(e) => { (e.currentTarget as HTMLLabelElement).style.background = 'transparent' }}
+                        title={isRequired
+                          ? `${INVENTORY_COLUMN_LABELS[key]} is always visible`
+                          : isHidden ? 'Hidden · click to show' : 'Visible · click to hide'
+                        }
+                      >
+                        <input
+                          type="checkbox"
+                          checked={!isHidden}
+                          disabled={isRequired}
+                          onChange={() => handleInventoryColumnToggle(key)}
+                          style={{ accentColor: 'var(--ss-blue)', cursor: isRequired ? 'not-allowed' : 'pointer' }}
+                        />
+                        <span style={{ flex: 1 }}>{INVENTORY_COLUMN_LABELS[key]}</span>
+                        {isRequired ? (
+                          <span style={{ fontSize: 9, textTransform: 'uppercase', letterSpacing: '0.04em', color: 'var(--text3)', fontWeight: 600 }}>required</span>
+                        ) : null}
+                      </label>
+                    )
+                  })
+                })()}
+              </div>
+              <div style={{ flexShrink: 0, borderTop: '1px solid var(--border)', padding: '6px 8px 5px', fontSize: 10.5, color: 'var(--text3)', lineHeight: 1.4, background: 'var(--surface-2, rgba(248,250,252,.6))', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <span>Drag a column header to reorder.</span>
+                <span style={{ fontFamily: 'monospace', opacity: 0.75 }}>
+                  {INVENTORY_DEFAULT_COLUMN_ORDER.length} columns
+                </span>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
 
       {/* Portal'd parent-SKU popover. Rendered into document.body
           (via createPortal) so it escapes the table cell's
