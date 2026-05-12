@@ -2232,14 +2232,20 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
             <div id="inv-stock-content">
               {groupedRows.map((group) => (
                 <div key={group.clientId} style={{ marginBottom: 18 }}>
-                  {/* Wrapper now mirrors the Packages card (PackagesDataTable
-                      line 454): rounded-card + border + bg-white + shadow-sm
-                      so both tables share the same visual treatment. The
-                      client name moves INSIDE the thead as a brand-bg
-                      colspan title row (replacing the floating caption that
-                      used to sit above each table). Hover-row striping
-                      added on the tbody to match Packages' polish. */}
-                  <div className="relative rounded-card border border-line bg-white shadow-sm">
+                  {/* Wrapper mirrors the Packages card (rounded-card +
+                      border + bg-white + shadow-sm) plus overflow-x:auto
+                      so the table scrolls horizontally inside the card
+                      when the operator drags columns wider than the
+                      viewport or works on a narrow screen. The
+                      scrollbar sits inside the rounded boundary which
+                      looks intentional (matches the Analysis table's
+                      SHELL_CLASSES). Trade-off: sticky <thead> stops
+                      pinning during vertical page-scroll because the
+                      wrapper is now the nearest overflow ancestor for
+                      sticky resolution. The Columns popover gives
+                      operators the mobile escape hatch (hide columns
+                      they don't need on small screens). */}
+                  <div className="relative rounded-card border border-line bg-white shadow-sm overflow-x-auto">
                     <table
                       className={[
                         // Layout
