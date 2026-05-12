@@ -250,6 +250,64 @@ app.get('/stores', async (c) => {
   return c.json({ data: stores });
 });
 
+// 2026-05-12: list the ShipStation accounts known to this deploy so the
+// Settings → Carriers tab can render a row for each one alongside the
+// per-client direct carriers (UPS, EasyPost, Walmart Shipping). The
+// SECRETS are not returned — only a presence flag + a friendly label
+// so the FE can show "ShipStation · DR PREPPER" etc. without ever
+// touching the actual API key.
+//
+// Sources (matches src/lib/imported-handlers/rates-multi.ts:8-10):
+//   1. env.SHIPSTATION_API_KEY_V2          → 'DR PREPPER'
+//   2. env.SHIPSTATION_KFG_API_KEY_V2      → 'KFG'
+//   3. clients.ssApiKeyV2 (per-client)     → client.name
+//
+// Per-client rows are already rendered FE-side by the Carriers card
+// (it derives `hasOwnAccount` from useClients()), so this endpoint
+// only emits the two env-level accounts. Field shape mirrors the
+// per-client row shape close enough that the FE can dedupe / merge.
+app.get('/shipstation-accounts', async (c) => {
+  const accounts: Array<{
+    id: string;
+    name: string;
+    keySource: string;
+    available: boolean;
+    apiVersion: 'v2' | 'v1';
+  }> = [];
+
+  if (process.env.SHIPSTATION_API_KEY_V2) {
+    accounts.push({
+      id: 'env:DR_PREPPER',
+      name: 'DR PREPPER',
+      keySource: 'env.SHIPSTATION_API_KEY_V2',
+      available: true,
+      apiVersion: 'v2',
+    });
+  }
+  if (process.env.SHIPSTATION_KFG_API_KEY_V2) {
+    accounts.push({
+      id: 'env:KFG',
+      name: 'KFG',
+      keySource: 'env.SHIPSTATION_KFG_API_KEY_V2',
+      available: true,
+      apiVersion: 'v2',
+    });
+  }
+  // Legacy v1 default — only emit when the v2 key is absent, otherwise
+  // we'd double-count the DR PREPPER account under two API versions.
+  if (!process.env.SHIPSTATION_API_KEY_V2 && process.env.SHIPSTATION_API_KEY) {
+    accounts.push({
+      id: 'env:DR_PREPPER_V1',
+      name: 'DR PREPPER',
+      keySource: 'env.SHIPSTATION_API_KEY',
+      available: true,
+      apiVersion: 'v1',
+    });
+  }
+
+  return c.json({ data: accounts });
+});
+
 // v2 parity: GET /carriers — slimmer projection of /carrier-accounts keyed by carrier_code.
 app.get('/carriers', async (c) => {
   try {

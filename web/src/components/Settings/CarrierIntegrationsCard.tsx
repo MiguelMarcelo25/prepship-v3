@@ -1,7 +1,8 @@
 // @ts-nocheck
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { api } from '../../lib/api'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   Store,
@@ -1366,9 +1367,11 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
   //
   // The 2_000_000_000 offset matches the STORE_DISPLAY_OFFSET pattern so
   // the per-row state dicts (testResults, deleting, …) keyed on `id` can
-  // never collide across the three sources (carrier_accounts ids 1…N,
-  // store_accounts ids 1B+…, shipstation virtual ids 2B+…).
+  // never collide across the four sources (carrier_accounts ids 1…N,
+  // store_accounts ids 1B+…, shipstation per-client 2B+…, env-based
+  // ShipStation accounts 3B+…).
   const SHIPSTATION_DISPLAY_OFFSET = 2_000_000_000
+  const SHIPSTATION_ENV_DISPLAY_OFFSET = 3_000_000_000
   const shipstationRows = useMemo<SavedRow[]>(() => {
     return (allClients ?? [])
       .filter((c) => c.active && c.hasOwnAccount)
@@ -1395,15 +1398,65 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
       }))
   }, [allClients])
 
+  // 2026-05-12: env-level ShipStation accounts (DR PREPPER, KFG)
+  // surfaced from /api/init/shipstation-accounts. These are the
+  // org-wide credentials read by the backend's rate fan-out
+  // (rates-multi.ts) and need to appear in the Carriers list so
+  // operators understand "yes, ShipStation is connected too" — not
+  // just direct carriers (UPS / EasyPost / Walmart Shipping).
+  // Display-only: the secrets live in Vercel env vars, not in any
+  // table the FE can mutate. Test / Get Rates / Assign / Delete
+  // remain disabled with a tooltip explaining this is env-managed.
+  type EnvShipStationAccount = {
+    id: string
+    name: string
+    keySource: string
+    available: boolean
+    apiVersion: 'v1' | 'v2'
+  }
+  const { data: envShipStationData } = useQuery<{ data: EnvShipStationAccount[] }>({
+    queryKey: ['settings:shipstation-env-accounts'],
+    queryFn: () => api.get<{ data: EnvShipStationAccount[] }>('/init/shipstation-accounts'),
+    staleTime: 5 * 60_000,
+  })
+  const envShipstationRows = useMemo<SavedRow[]>(() => {
+    const accounts = envShipStationData?.data ?? []
+    return accounts
+      .filter((a) => a.available)
+      .map((a, idx) => ({
+        // Use the position as the stable per-row id seed — names are
+        // also unique so this could hash off name, but idx is fine
+        // for the 1-3 env accounts we typically have.
+        id: SHIPSTATION_ENV_DISPLAY_OFFSET + idx + 1,
+        accountId: idx + 1,
+        kind: 'shipstation' as const,
+        clientId: null,
+        provider: 'shipstation',
+        label: `ShipStation ${a.name}`,
+        // accountIdentifier surfaces in the row as a small mono-font
+        // tag — handy for operators verifying which env var feeds it.
+        accountIdentifier: a.keySource,
+        source: 'env',
+        active: true,
+        createdAt: new Date(0).toISOString(),
+        // No client assignment — env accounts are org-wide. Empty
+        // array keeps the "No clients yet" CTA from rendering on
+        // these rows (they're shared, not assigned).
+        assignedClientIds: [],
+      }))
+  }, [envShipStationData])
+
   // Group saved rows by category so we can render each section against its
   // own slice. Unknown providers default to 'carrier' rather than disappearing.
   // ShipStation synthesized rows fall into 'carriers' (provider='shipstation'
   // is not in STORE_PROVIDERS) — which matches operator mental model: it's
-  // a shipping API, even if legacy.
+  // a shipping API, even if legacy. Env-level ShipStation accounts (DR
+  // PREPPER, KFG) sort BEFORE per-client ones because they're the org-wide
+  // defaults and operators expect to see them at the top of the list.
   const savedByCategory = (() => {
     const stores: SavedRow[] = []
     const carriers: SavedRow[] = []
-    const merged = [...saved, ...shipstationRows]
+    const merged = [...saved, ...envShipstationRows, ...shipstationRows]
     for (const row of merged) {
       if (STORE_PROVIDERS.has(row.provider)) stores.push(row)
       else carriers.push(row)
@@ -1426,8 +1479,17 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
     // Assign, Delete) are rendered but disabled with tooltips so the
     // surface looks consistent with real carrier rows.
     const isShipStation = d.kind === 'shipstation'
-    const SHIPSTATION_MANAGE_HINT =
-      'Managed via Settings → Clients · credentials live on the client record'
+    // Two flavors of synthesized ShipStation row, each with a different
+    // story for the operator:
+    //   - source='legacy' → creds live on a clients table row. Editable
+    //     via Settings → Clients. Surface as the yellow "Legacy" pill.
+    //   - source='env'    → creds are Vercel env vars (SHIPSTATION_*_API_KEY_V2).
+    //     Not editable from the UI at all. Surface as a green "Env" pill
+    //     so operators don't go hunting in the Clients tab to find it.
+    const isShipStationEnv = isShipStation && (d as { source?: string }).source === 'env'
+    const SHIPSTATION_MANAGE_HINT = isShipStationEnv
+      ? 'Managed via Vercel env vars (SHIPSTATION_*_API_KEY_V2). Not editable from the UI.'
+      : 'Managed via Settings → Clients · credentials live on the client record'
     return (
       <motion.li
         key={d.id}
@@ -1470,11 +1532,22 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
           </span>
           {/* Hide the date pill on synthesized ShipStation rows — they
               have no real creation timestamp (epoch placeholder). A
-              "LEGACY" badge takes its place so operators see why the
-              actions are disabled. */}
+              colored badge takes its place so operators see at a glance
+              where the creds live: yellow "Legacy" = clients table,
+              green "Env" = Vercel env vars (org-wide). */}
           {isShipStation ? (
             <span
-              style={{
+              style={isShipStationEnv ? {
+                fontSize: 9,
+                fontWeight: 800,
+                letterSpacing: '0.06em',
+                textTransform: 'uppercase',
+                color: 'rgb(22 101 52)',
+                background: 'rgb(220 252 231)',
+                padding: '2px 6px',
+                borderRadius: 4,
+                border: '1px solid rgb(134 239 172)',
+              } : {
                 fontSize: 9,
                 fontWeight: 800,
                 letterSpacing: '0.06em',
@@ -1487,7 +1560,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
               }}
               title={SHIPSTATION_MANAGE_HINT}
             >
-              Legacy
+              {isShipStationEnv ? 'Env' : 'Legacy'}
             </span>
           ) : (
             <span style={{ fontSize: 10, color: 'var(--text3)' }}>{formatCaDateShort(d.createdAt)}</span>
