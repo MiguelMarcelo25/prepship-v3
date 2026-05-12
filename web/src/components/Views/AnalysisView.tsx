@@ -879,31 +879,14 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
     })
   }
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return undefined
-    const panel = stickyPanelRef.current
-    const container = panel?.closest<HTMLElement>('#view-analysis')
-    if (!panel || !container) return undefined
-
-    const updateStickyOffset = () => {
-      const height = Math.ceil(panel.getBoundingClientRect().height)
-      container.style.setProperty('--analysis-table-sticky-top', `${height + 1}px`)
-    }
-
-    updateStickyOffset()
-
-    const observer = typeof ResizeObserver !== 'undefined'
-      ? new ResizeObserver(updateStickyOffset)
-      : null
-    observer?.observe(panel)
-    window.addEventListener('resize', updateStickyOffset)
-
-    return () => {
-      observer?.disconnect()
-      window.removeEventListener('resize', updateStickyOffset)
-      container.style.removeProperty('--analysis-table-sticky-top')
-    }
-  }, [])
+  // The effect that used to ResizeObserver the .analysis-sticky-panel
+  // and write its height into --analysis-table-sticky-top was deleted
+  // 2026-05-12 when the panel itself stopped being position:sticky.
+  // The CSS variable now stays at its declared default of 0px (set in
+  // AnalysisDataTable.css on #view-analysis.view-content), so the
+  // table's own sticky thead anchors directly to the top of the
+  // view-content scroll container. stickyPanelRef is preserved for
+  // legacy callers but no longer drives sticky offset math.
 
   function handleResizeColumn(key: AnalysisSortKey, width: number) {
     setColumnWidths((current) => ({ ...current, [key]: width }))
@@ -1147,13 +1130,20 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
 
   return (
     <div className="view-content" id="view-analysis">
+      {/* Sticky behavior on this panel was removed 2026-05-12 per
+          operator request — they wanted natural document-flow scroll
+          so the chart goes up and out of view as they read the table,
+          instead of staying frozen at the top. The .analysis-sticky-
+          panel class is kept because it owns the chart's stacking
+          context (overflow:hidden + isolation:isolate); only the
+          inline position/top/zIndex props are dropped. The CSS
+          variable --analysis-table-sticky-top still resolves to 0px
+          via the CSS default rule, so the table's own thead sticks
+          to the top of the view-content scroll container directly. */}
       <div
         ref={stickyPanelRef}
         className="analysis-sticky-panel"
         style={{
-          position: 'sticky',
-          top: 0,
-          zIndex: 30,
           background: 'var(--bg)',
           paddingBottom: 6,
           margin: '0 -18px 10px -18px',
