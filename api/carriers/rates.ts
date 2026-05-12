@@ -1005,6 +1005,44 @@ function shippBool(value: unknown, fallback: boolean): boolean {
   return fallback;
 }
 
+function shippFirstString(...values: unknown[]): string {
+  for (const value of values) {
+    const text = String(value ?? '').trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+const shippZipCache = new Map<string, { city?: string; state?: string }>();
+
+async function shippLookupUsZip(zip: unknown): Promise<{ city?: string; state?: string }> {
+  const five = String(zip ?? '').replace(/\D/g, '').slice(0, 5);
+  if (!/^\d{5}$/.test(five)) return {};
+  const cached = shippZipCache.get(five);
+  if (cached) return cached;
+
+  try {
+    const res = await fetch(`https://api.zippopotam.us/us/${five}`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) {
+      const empty = {};
+      shippZipCache.set(five, empty);
+      return empty;
+    }
+    const data = await res.json() as any;
+    const place = Array.isArray(data?.places) ? data.places[0] : null;
+    const result = {
+      city: shippFirstString(place?.['place name']),
+      state: shippFirstString(place?.['state abbreviation']),
+    };
+    shippZipCache.set(five, result);
+    return result;
+  } catch {
+    return {};
+  }
+}
+
 function shippDateDays(deliveryDate: unknown, deliveryDay: unknown): number {
   const dateString = String(deliveryDate ?? '').trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(dateString)) {
@@ -1032,6 +1070,16 @@ function shippRefNumber(input: { externalOrderId?: string | null; orderNumber?: 
     if (value) return value.slice(0, 80);
   }
   return undefined;
+}
+
+function shippHasRawShipTo(rawOrder: any): boolean {
+  if (!rawOrder) return false;
+  if (rawOrder?.shippingInfo?.postalAddress) return true;
+  if (Array.isArray(rawOrder?.fulfillmentStartInstructions)
+    && rawOrder.fulfillmentStartInstructions[0]?.shippingStep?.shipTo) return true;
+  if (rawOrder?.ShippingAddress) return true;
+  if (rawOrder?.shipTo || rawOrder?.ship_to) return true;
+  return false;
 }
 
 async function shippLogin(creds: Record<string, unknown>): Promise<{ apiKey: string; cookieHeader: string; email: string }> {
@@ -1079,6 +1127,11 @@ async function ratesFromShipp(
     rawOrder?: any;
     externalOrderId?: string | null;
     orderNumber?: string | null;
+    toCity?: string;
+    toState?: string;
+    toAddress?: string;
+    toName?: string;
+    toCountry?: string;
   },
 ): Promise<Array<{ service: string; cost: number; days: number; currency: string }>> {
   if (!input.dimsL || !input.dimsW || !input.dimsH) {
@@ -1088,6 +1141,13 @@ async function ratesFromShipp(
   const session = await shippLogin(creds);
   const from = shipEngineShipFrom(creds, { fromZip: input.fromZip, shipFrom: input.shipFrom });
   const to = shipEngineShipTo(input.rawOrder, input.toZip);
+  const hasRawShipTo = shippHasRawShipTo(input.rawOrder);
+  const toZipPlace = await shippLookupUsZip(to.postal_code);
+  const fromHasExplicitCity = Boolean(shippFirstString(creds?.shipFromCity, input.shipFrom?.city));
+  const fromHasExplicitState = Boolean(shippFirstString(creds?.shipFromState, input.shipFrom?.state));
+  const fromZipPlace = (!fromHasExplicitCity || !fromHasExplicitState)
+    ? await shippLookupUsZip(from.postal_code)
+    : {};
   const weightLb = Math.max(0.01, Math.round((Number(input.weightOz || 16) / 16) * 100) / 100);
   const refNumber = shippRefNumber(input);
 
@@ -1096,20 +1156,20 @@ async function ratesFromShipp(
     fromName: shippRequiredString(from.name, 'Seller'),
     fromStreet1: shippRequiredString(from.address_line1, 'Warehouse'),
     fromStreet2: String(from.address_line2 ?? ''),
-    fromCity: shippRequiredString(from.city_locality, 'Carson'),
-    fromState: shippRequiredString(from.state_province, 'CA').slice(0, 2).toUpperCase(),
+    fromCity: shippRequiredString(fromHasExplicitCity ? from.city_locality : shippFirstString(fromZipPlace.city, from.city_locality), 'Carson'),
+    fromState: shippRequiredString(fromHasExplicitState ? from.state_province : shippFirstString(fromZipPlace.state, from.state_province), 'CA').slice(0, 2).toUpperCase(),
     fromZipcode: shippRequiredString(from.postal_code, '90248'),
     fromCountry: shippCountryCode(from.country_code),
     fromPhone: shippRequiredString(from.phone, '0000000000'),
     fromIsResidential: shippBool(creds?.shipFromIsResidential, false),
     toCompanyName: String(to.company_name ?? ''),
-    toName: shippRequiredString(to.name, 'Buyer'),
-    toStreet1: shippRequiredString(to.address_line1, '1 Main St'),
+    toName: shippRequiredString(hasRawShipTo ? to.name : shippFirstString(input.toName, to.name), 'Buyer'),
+    toStreet1: shippRequiredString(hasRawShipTo ? to.address_line1 : shippFirstString(input.toAddress, to.address_line1), '1 Main St'),
     toStreet2: String(to.address_line2 ?? ''),
-    toCity: shippRequiredString(to.city_locality, 'Oakland'),
-    toState: shippRequiredString(to.state_province, 'CA').slice(0, 2).toUpperCase(),
+    toCity: shippRequiredString(hasRawShipTo ? to.city_locality : shippFirstString(input.toCity, toZipPlace.city, to.city_locality), 'Oakland'),
+    toState: shippRequiredString(hasRawShipTo ? to.state_province : shippFirstString(input.toState, toZipPlace.state, to.state_province), 'CA').slice(0, 2).toUpperCase(),
     toZipcode: shippRequiredString(to.postal_code, input.toZip ?? '94601'),
-    toCountry: shippCountryCode(to.country_code),
+    toCountry: shippCountryCode(hasRawShipTo ? to.country_code : shippFirstString(input.toCountry, to.country_code)),
     toPhone: shippRequiredString(to.phone, '0000000000'),
     toIsResidential: shippBool(creds?.toIsResidential, true),
     requireSignature: shippBool(creds?.requireSignature, false),
@@ -2456,6 +2516,11 @@ export default async function handler(req: any, res: any): Promise<void> {
           rawOrder,
           externalOrderId,
           orderNumber,
+          toCity: typeof body?.toCity === 'string' ? body.toCity : undefined,
+          toState: typeof body?.toState === 'string' ? body.toState : undefined,
+          toAddress: typeof body?.toAddress === 'string' ? body.toAddress : undefined,
+          toName: typeof body?.toName === 'string' ? body.toName : undefined,
+          toCountry: typeof body?.toCountry === 'string' ? body.toCountry : undefined,
         });
         res.status(200).json({
           ok: true,
