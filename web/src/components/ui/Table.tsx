@@ -550,11 +550,15 @@ export function Table<Row>({
 
   // Sorted rows — recomputed when data or sort changes.
   // If `pinRowToBottom` is provided, the result is stably partitioned
-  // so all pinned rows sort to the END of the list (after the
-  // operator's chosen sort applies WITHIN each group). This lets
-  // consumers like Inventory keep deactivated SKUs visible but
-  // clustered at the bottom regardless of the active sort.
-  const sortedRows = useMemo(() => {
+  // into `[unpinned, pinned]` so the operator's sort still applies
+  // within each group. `pinnedRows` is exposed separately so the
+  // pagination logic below can paginate ONLY the unpinned set and
+  // append the pinned tail to every page — otherwise a 7-row pinned
+  // cluster on a 50-per-page view of 200 rows would live on page 4,
+  // invisible until the operator clicks through. (Inventory bug
+  // 2026-05-12: operator saw "7 deactivated" in the toolbar badge
+  // but couldn't see any greyscale rows because pagination hid them.)
+  const { sortedRows, pinnedRows, unpinnedRows } = useMemo(() => {
     let result: Row[]
     if (!sort) {
       result = data
@@ -568,7 +572,9 @@ export function Table<Row>({
         result = sort.direction === 'desc' ? sorted.reverse() : sorted
       }
     }
-    if (!pinRowToBottom) return result
+    if (!pinRowToBottom) {
+      return { sortedRows: result, pinnedRows: [] as Row[], unpinnedRows: result }
+    }
     // Stable partition: keep relative order within each group so
     // the operator's sort is preserved among active rows and among
     // pinned rows separately.
@@ -578,7 +584,7 @@ export function Table<Row>({
       if (pinRowToBottom(row)) bottom.push(row)
       else top.push(row)
     }
-    return [...top, ...bottom]
+    return { sortedRows: [...top, ...bottom], pinnedRows: bottom, unpinnedRows: top }
   }, [data, sort, columns, pinRowToBottom])
 
   // ─── Pagination state (only used when `paginated` is true) ───────────────
@@ -628,19 +634,25 @@ export function Table<Row>({
   // a defensive second layer for cases the length-change effect misses
   // (e.g., an externally controlled data array that swaps wholesale
   // but happens to have the same length, with different rows).
+  // NOTE: maxPage is computed against UNPINNED rows because pinned
+  // rows aren't paginated — they're always appended below every page.
   useEffect(() => {
     if (!paginated) return
-    const maxPage = Math.max(1, Math.ceil(sortedRows.length / pageSize))
+    const maxPage = Math.max(1, Math.ceil(unpinnedRows.length / pageSize))
     if (page > maxPage) setPage(maxPage)
-  }, [sortedRows.length, pageSize, page, paginated])
+  }, [unpinnedRows.length, pageSize, page, paginated])
 
-  // Slice for the visible page. When pagination is off, hand sortedRows
-  // through unchanged so the rest of the render path is identical.
+  // Slice for the visible page. Pinned rows are appended AFTER the
+  // paginated slice so they appear on every page (e.g., "deactivated
+  // SKUs at the bottom" on the Inventory table). When pagination is
+  // off, hand sortedRows through unchanged so the rest of the render
+  // path is identical and there are no surprises.
   const pagedRows = useMemo(() => {
     if (!paginated) return sortedRows
     const start = (page - 1) * pageSize
-    return sortedRows.slice(start, start + pageSize)
-  }, [paginated, sortedRows, page, pageSize])
+    const slice = unpinnedRows.slice(start, start + pageSize)
+    return pinnedRows.length > 0 ? [...slice, ...pinnedRows] : slice
+  }, [paginated, sortedRows, unpinnedRows, pinnedRows, page, pageSize])
 
   // Density tokens — picked here once, applied to every cell so
   // the row rhythm stays consistent.
@@ -965,13 +977,19 @@ export function Table<Row>({
           one control vocabulary (Analysis grid, Packages, Inventory).
           Only renders when there's at least one row, so empty-state
           messages stay clean. */}
-      {paginated && !loading && sortedRows.length > 0 ? (
+      {paginated && !loading && unpinnedRows.length > 0 ? (
         <div className="border-t border-line bg-surface-2/40 px-3 py-2">
+          {/* totalItems counts only UNPINNED rows so the pagination
+              math ("Showing 1-50 of 200 rows") reflects what's
+              actually being paginated. Pinned rows live as a footer
+              on every page (Inventory's deactivated SKUs); their
+              count is surfaced separately by the consumer (the
+              toolbar badge in InventoryView). */}
           <TablePaginationBar
             page={page}
             pageSize={pageSize}
             pageSizeOptions={effectivePageSizeOptions}
-            totalItems={sortedRows.length}
+            totalItems={unpinnedRows.length}
             onPageChange={setPage}
             onPageSizeChange={(nextSize) => { setPageSize(nextSize); setPage(1) }}
           />
