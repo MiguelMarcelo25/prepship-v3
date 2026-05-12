@@ -118,27 +118,38 @@ function tableClassesFor(size: AnalysisColumnSize) {
   return `${TABLE_BASE_CLASSES} table-fixed min-w-full text-[14px]`
 }
 
-// Per-column default widths. table-fixed needs every column to have a
-// width (either from <col> or from first-row cells) or it falls back
-// to equal distribution — which would make Trend's sparkline cell as
-// wide as Item Name. These defaults are tuned to match the natural
-// content widths the table had under table-auto, so the visual
-// baseline doesn't shift for operators who haven't dragged anything.
+// Per-column default widths, tightened 2026-05-12 so the 11-column
+// table fits comfortably in MEDIUM mode at typical operator viewports
+// (1366-1500px laptop minus ~250px sidebar = ~1116-1250px available).
+// Old defaults summed to 1170px without name (which flex-fills); on
+// 1166px available the table overflowed and pushed the rightmost
+// columns ("EXP ORDERS $XX.XX") past the viewport edge. New defaults
+// sum to ~1000px without name → ~1150-1200px with name → fits 1250px
+// available comfortably.
+//
 // 'name' deliberately has NO default so it flex-fills the remaining
 // space — long product names stay readable while everything else is
-// pinned. Override from columnWidths takes precedence.
+// pinned. Override from columnWidths takes precedence, so operators
+// can still drag any column to whatever width they want; if they
+// drag wide enough that the total exceeds viewport, page-level
+// horizontal scroll engages (acceptable for explicit-resize cases).
+//
+// Sticky <thead> requires this wrapper NOT to have overflow:auto
+// (see SHELL_CLASSES comment), so the page-level scroll is the only
+// fallback for genuine table overflow. The tighter defaults make
+// that fallback rarely needed in practice.
 const ANALYSIS_COLUMN_DEFAULT_WIDTHS: Partial<Record<AnalysisSortKey, number>> = {
   // name: undefined  → flex-fill
-  sku: 140,
-  client: 140,
-  orders: 90,
-  pending: 90,
-  external: 110,
-  qty: 130,
-  trend: 100,
-  stdOrders: 120,
-  expOrders: 120,
-  total: 130,
+  sku: 120,
+  client: 120,
+  orders: 75,
+  pending: 75,
+  external: 95,
+  qty: 110,
+  trend: 85,
+  stdOrders: 110,
+  expOrders: 110,
+  total: 115,
 }
 
 function cellPaddingFor(size: AnalysisColumnSize) {
