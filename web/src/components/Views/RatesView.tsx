@@ -146,6 +146,7 @@ export default function RatesView() {
         .filter((carrierId): carrierId is string => Boolean(carrierId))
       const allRates = await apiClient.fetchRates({
         ...buildLiveRatesPayload(form),
+        includeAllDirectCarriers: true,
         ...(carrierIds.length ? { carrierIds } : {}),
       })
       const directCarrierErrors = getDirectCarrierErrors(allRates)

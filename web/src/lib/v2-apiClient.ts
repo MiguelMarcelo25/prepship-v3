@@ -481,6 +481,7 @@ function translateRatePayloadToV4(
 
   if (typeof input.residential === 'boolean') out.residential = input.residential;
   if (typeof input.forceRefresh === 'boolean') out.forceRefresh = input.forceRefresh;
+  if (typeof input.includeAllDirectCarriers === 'boolean') out.includeAllDirectCarriers = input.includeAllDirectCarriers;
   if (Array.isArray(input.carrierIds)) out.carrierIds = input.carrierIds;
   const numericOrderId = typeof input.orderId === 'number'
     ? input.orderId
@@ -671,7 +672,7 @@ function storeAccountMatchesOrder(
 
 function directCarrierAccountVisibleForOrder(
   row: DirectCarrierAccountRow,
-  context: { storeId?: unknown; clientId?: unknown }
+  context: { storeId?: unknown; clientId?: unknown; includeAllDirectCarriers?: unknown }
 ): boolean {
   const provider = normalizeProviderKey(row.provider);
   if ((row.sourceTable ?? 'carrier_accounts') === 'store_accounts') {
@@ -679,6 +680,10 @@ function directCarrierAccountVisibleForOrder(
   }
 
   const contextClientId = parseFiniteNumber(context.clientId);
+  if (context.includeAllDirectCarriers === true && contextClientId == null && context.storeId == null) {
+    return !STORE_SCOPED_SHIPPING_PROVIDERS.has(provider);
+  }
+
   const assignedClientIds = normalizeClientIdList(row.assignedClientIds);
   if (assignedClientIds.length > 0) {
     return contextClientId != null && assignedClientIds.includes(contextClientId);
