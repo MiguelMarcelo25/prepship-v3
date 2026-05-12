@@ -3,6 +3,10 @@ import { env } from '../lib/env';
 import { syncOrders } from '../services/order-sync';
 import { syncShipments } from '../services/shipment-sync';
 import { startBackfillBestRates } from '../services/rates-backfill';
+import {
+  importSkusFromOrders,
+  syncShipStationProducts,
+} from '../services/inventory-enrichment';
 
 const app = new Hono();
 
@@ -85,6 +89,34 @@ app.post('/sync-all', async (c) => {
       : null;
   const shipmentsResult = await syncShipments(opts);
   return c.json({ orders: ordersResult, shipments: shipmentsResult, rateBackfillJob });
+});
+
+// 2026-05-13: inventory enrichment cron endpoints — external scheduler
+// safety net for the in-process ticks in sync-scheduler.ts. Both POST
+// and GET supported so any cron service (GitHub Actions, cron-job.org,
+// Render cron) can hit them with the x-cron-secret header. The
+// services are self-serialized only at the in-process level, so an
+// external trigger that happens to overlap an in-process tick will
+// run normally — both paths use coalesce-protected writes, so the
+// worst case is a duplicate scan that produces 0 changes.
+app.post('/import-skus-from-orders', async (c) => {
+  const result = await importSkusFromOrders();
+  return c.json(result);
+});
+
+app.get('/import-skus-from-orders', async (c) => {
+  const result = await importSkusFromOrders();
+  return c.json(result);
+});
+
+app.post('/sync-products', async (c) => {
+  const result = await syncShipStationProducts();
+  return c.json(result);
+});
+
+app.get('/sync-products', async (c) => {
+  const result = await syncShipStationProducts();
+  return c.json(result);
 });
 
 export default app;

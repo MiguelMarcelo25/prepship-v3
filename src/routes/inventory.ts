@@ -9,7 +9,10 @@ import { orders } from '../db/schema/orders';
 import { parentSkus } from '../db/schema/parent-skus';
 import { offsetOf, paginated, paginationSchema } from '../lib/pagination';
 import { applyMovement, inventoryStats } from '../services/inventory';
-import { ssV1Request } from '../lib/shipstation/v1-client';
+import {
+  importSkusFromOrders,
+  syncShipStationProducts,
+} from '../services/inventory-enrichment';
 
 const app = new Hono();
 
@@ -1101,71 +1104,14 @@ app.post('/bulk-update-dims', zValidator('json', bulkDimsBody), async (c) => {
 // have yet (clientId set from the order's clientId, or null if order is
 // unassigned). Useful as a quick way to populate inventory from the
 // orders that already synced from ShipStation.
+//
+// 2026-05-13: extracted to src/services/inventory-enrichment.ts so the
+// in-process scheduler can call the same logic on a 30-min interval.
+// This route handler is now a thin wrapper that the Inventory toolbar's
+// "📥 Import SKUs from Orders" button still drives manually.
 app.post('/import-from-orders', async (c) => {
-  const rows = await db.execute<{
-    sku: string;
-    name: string | null;
-    image_url: string | null;
-    client_id: number | null;
-  }>(sql`
-    select distinct on (item->>'sku', o.client_id)
-      item->>'sku'                               as sku,
-      coalesce(item->>'name', '')                as name,
-      nullif(item->>'imageUrl', '')              as image_url,
-      o.client_id                                as client_id
-    from orders o,
-         jsonb_array_elements(o.items) item
-    where item ? 'sku'
-      and item->>'sku' is not null
-      and item->>'sku' <> ''
-  `);
-
-  let inserted = 0;
-  let skipped = 0;
-
-  for (const r of rows) {
-    const [existing] = await db
-      .select({ id: inventory.id })
-      .from(inventory)
-      .where(
-        and(
-          eq(inventory.sku, r.sku),
-          r.client_id !== null
-            ? eq(inventory.clientId, r.client_id)
-            : isNull(inventory.clientId)
-        )
-      )
-      .limit(1);
-
-    if (existing) {
-      // Back-fill image/name on rows that already exist but are missing
-      // these enrichments. Older rows were created before order-items
-      // started carrying imageUrl, or the first pass pulled an order
-      // where the item had no thumb. Only update NULL/empty columns —
-      // don't clobber data a user may have set manually.
-      if (r.image_url || r.name) {
-        const patch: Record<string, unknown> = { updatedAt: new Date() };
-        if (r.image_url) patch.imageUrl = sql`coalesce(${inventory.imageUrl}, ${r.image_url})`;
-        if (r.name) patch.name = sql`coalesce(nullif(${inventory.name}, ''), ${r.name})`;
-        await db.update(inventory).set(patch).where(eq(inventory.id, existing.id));
-      }
-      skipped += 1;
-      continue;
-    }
-    await db.insert(inventory).values({
-      sku: r.sku,
-      name: r.name || null,
-      imageUrl: r.image_url,
-      clientId: r.client_id,
-    });
-    inserted += 1;
-  }
-
-  return c.json({
-    inserted,
-    skipped,
-    message: `Imported ${inserted} new SKUs from orders (${skipped} existed — images/names back-filled where missing)`,
-  });
+  const result = await importSkusFromOrders();
+  return c.json(result);
 });
 
 // Pull product catalog from ShipStation v1 /products (every account we
@@ -1175,169 +1121,14 @@ app.post('/import-from-orders', async (c) => {
 //   • Per-client accounts (e.g. KFG) → clientId = account owner
 // so each client's product catalog lands on its own row and pulls its
 // ShipStation thumbnail + dims + weight.
+//
+// 2026-05-13: extracted to src/services/inventory-enrichment.ts so the
+// in-process scheduler can fire this hourly. This route handler is the
+// manual path — the "📐 Import Dims from SS" toolbar button still
+// drives it on demand.
 app.post('/sync-products', async (c) => {
-  type SSProduct = {
-    productId: number;
-    sku: string | null;
-    name: string | null;
-    weightOz?: number | null;
-    length?: number | null;
-    width?: number | null;
-    height?: number | null;
-    active?: boolean;
-    thumbnailUrl?: string | null;
-    imageUrl?: string | null;
-  };
-  type SSProductsList = {
-    products: SSProduct[];
-    total: number;
-    page: number;
-    pages: number;
-  };
-
-  type Account = {
-    label: string;
-    apiKey: string | undefined;
-    apiSecret: string | undefined;
-    ownerClientId: number | null;
-  };
-
-  // Build account list — env-main first, then any client with its own creds.
-  const accounts: Account[] = [
-    { label: 'main', apiKey: undefined, apiSecret: undefined, ownerClientId: null },
-  ];
-  const { clients } = await import('../db/schema/clients');
-  const clientRows = await db
-    .select({
-      id: clients.id,
-      name: clients.name,
-      ssApiKey: clients.ssApiKey,
-      ssApiSecret: clients.ssApiSecret,
-    })
-    .from(clients)
-    .where(eq(clients.active, true));
-  for (const cli of clientRows) {
-    if (cli.ssApiKey && cli.ssApiSecret) {
-      accounts.push({
-        label: `client:${cli.name}`,
-        apiKey: cli.ssApiKey,
-        apiSecret: cli.ssApiSecret,
-        ownerClientId: cli.id,
-      });
-    }
-  }
-
-  let inserted = 0;
-  let updated = 0;
-  let skipped = 0;
-  const byAccount: Record<string, { inserted: number; updated: number }> = {};
-
-  for (const acct of accounts) {
-    byAccount[acct.label] = { inserted: 0, updated: 0 };
-    let page = 1;
-
-    try {
-      while (true) {
-        const res = await ssV1Request<SSProductsList>(
-          `/products?pageSize=500&page=${page}`,
-          {
-            apiKey: acct.apiKey,
-            apiSecret: acct.apiSecret,
-            dedupeKey: `products:list:${acct.label}:${page}`,
-          }
-        );
-
-        for (const p of res.products) {
-          const sku = (p.sku ?? '').trim();
-          if (!sku) {
-            skipped += 1;
-            continue;
-          }
-
-          // Match existing row by (clientId, sku) where clientId tracks the
-          // account owner (null for main).
-          const [existing] = await db
-            .select({ id: inventory.id })
-            .from(inventory)
-            .where(
-              and(
-                eq(inventory.sku, sku),
-                acct.ownerClientId === null
-                  ? isNull(inventory.clientId)
-                  : eq(inventory.clientId, acct.ownerClientId)
-              )
-            )
-            .limit(1);
-
-          // ShipStation often returns null thumbnailUrl/imageUrl for products
-          // that DO have images sourced elsewhere (e.g. extracted from order
-          // items). Use coalesce on UPDATE so a null from SS never destroys
-          // an existing URL that was filled by import-from-orders or a prior
-          // sync run. Same for name — preserve a previously-saved name when
-          // SS returns blank.
-          const incomingImage = p.thumbnailUrl ?? p.imageUrl ?? null;
-          const incomingName = p.name ?? null;
-
-          if (existing) {
-            const updateFields: Record<string, unknown> = {
-              weightOz: p.weightOz ?? 0,
-              length: p.length ?? null,
-              width: p.width ?? null,
-              height: p.height ?? null,
-              active: p.active ?? true,
-              updatedAt: new Date(),
-            };
-            if (incomingName) {
-              updateFields.name = sql`coalesce(nullif(${inventory.name}, ''), ${incomingName})`;
-            }
-            if (incomingImage) {
-              // Only overwrite when SS actually returned an image. Null /
-              // empty SS values keep whatever was already on the row.
-              updateFields.imageUrl = incomingImage;
-            }
-            await db
-              .update(inventory)
-              .set(updateFields)
-              .where(eq(inventory.id, existing.id));
-            updated += 1;
-            byAccount[acct.label]!.updated += 1;
-          } else {
-            await db
-              .insert(inventory)
-              .values({
-                sku,
-                clientId: acct.ownerClientId,
-                name: incomingName,
-                weightOz: p.weightOz ?? 0,
-                length: p.length ?? null,
-                width: p.width ?? null,
-                height: p.height ?? null,
-                active: p.active ?? true,
-                imageUrl: incomingImage,
-              });
-            inserted += 1;
-            byAccount[acct.label]!.inserted += 1;
-          }
-        }
-
-        if (page >= res.pages || !res.products.length) break;
-        page += 1;
-      }
-    } catch (err) {
-      console.error(
-        `[sync-products] account "${acct.label}" failed:`,
-        (err as Error).message
-      );
-    }
-  }
-
-  return c.json({
-    inserted,
-    updated,
-    skipped,
-    byAccount,
-    message: `Synced ${inserted + updated} products across ${accounts.length} account(s) (${inserted} new, ${updated} updated, ${skipped} without SKU)`,
-  });
+  const result = await syncShipStationProducts();
+  return c.json(result);
 });
 
 export default app;
