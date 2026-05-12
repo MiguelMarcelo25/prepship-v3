@@ -97,6 +97,24 @@ app.post(
       .where(eq(clients.id, id))
       .limit(1);
     if (!client) return c.json({ error: 'Client not found' }, 404);
+    // 2026-05-13 visibility hardening: refuse to backfill orders into
+    // a disabled client. Without this guard, an operator could
+    // accidentally reassign hundreds of orders to a store they have
+    // explicitly turned off, then wonder why those orders later
+    // disappeared from every list (every read endpoint filters
+    // disabled clients out). The operator must re-enable the client
+    // first via the Settings → Clients toggle, then run the backfill.
+    if (client.active === false) {
+      return c.json(
+        {
+          error: 'Cannot backfill orders into a disabled client',
+          clientId: id,
+          clientName: client.name,
+          hint: 'Re-enable the client from Settings → Clients first, then retry the backfill.',
+        },
+        409,
+      );
+    }
     const storeIds = (client.storeIds ?? []).filter((storeId) => !isExcludedStoreId(storeId));
     if (!storeIds.length) {
       return c.json({ updated: 0, message: 'Client has no storeIds configured' });
