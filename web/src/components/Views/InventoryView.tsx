@@ -2042,7 +2042,14 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                               totalUnits: 90,
                               min: 55,
                               status: 70,
-                              actions: 110,
+                              // Ticket follow-up (2026-05-12): bumped from 110
+                              // to 200 so the "± Adjust" pill no longer gets
+                              // clipped and falls back onto the chain-link
+                              // button's hit area. With pencil + chain-link +
+                              // Adjust pill + flex gaps we need ~170px, 200
+                              // leaves a little slack for the inline parent-
+                              // SKU select that pops in beside the icons.
+                              actions: 200,
                             }
                             const w = widthByKey[key]
                             return <col key={key} style={w ? { width: w } : undefined} />
@@ -2223,80 +2230,112 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                                     )
                                   case 'actions':
                                     return (
-                                      <td key="actions" style={{ whiteSpace: 'nowrap' }}>
-                                        <button className="btn btn-ghost btn-xs" type="button" onClick={() => void openEditSku(row)} title="Edit SKU details">✏️</button>
-                                        <button
-                                          className="btn btn-ghost btn-xs"
-                                          type="button"
-                                          title={row.parentSkuId ? 'Change parent SKU' : 'Assign parent SKU'}
-                                          onClick={async () => {
-                                            try {
-                                              await loadParentOptions(row.clientId)
-                                              setInlineParentRowId((current) => (current === row.id ? null : row.id))
-                                            } catch (error) {
-                                              toastContext?.addToast(error instanceof Error ? error.message : 'Failed to load parents', 'error')
-                                            }
-                                          }}
-                                          style={{ fontSize: 12, color: row.parentSkuId ? 'var(--ss-blue)' : 'var(--text3)' }}
-                                        >
-                                          🔗
-                                        </button>
-                                        {/* Ticket 1 (2026-05-12): replace the tiny "+" with a
-                                            clearly-labeled Adjust pill button. The modal it
-                                            opens already supports both ADD and REMOVE via
-                                            the Direction toggle (+ Add / − Remove) — so a
-                                            single entry point covers both ops. Inline
-                                            label avoids the previous "what does + mean?"
-                                            discoverability problem. */}
-                                        <button
-                                          type="button"
-                                          onClick={() => setAdjustModal({
-                                            invSkuId: row.id,
-                                            sku: row.sku,
-                                            qty: '1',
-                                            note: '',
-                                            date: new Date().toISOString().slice(0, 10),
-                                            type: 'adjust',
-                                            sign: 1,
-                                          })}
-                                          title="Adjust stock — add or remove units"
-                                          style={{
-                                            display: 'inline-flex',
-                                            alignItems: 'center',
-                                            gap: 3,
-                                            marginLeft: 4,
-                                            padding: '3px 9px',
-                                            border: '1px solid var(--ss-blue)',
-                                            borderRadius: 999,
-                                            background: 'rgba(42,91,215,0.08)',
-                                            color: 'var(--ss-blue)',
-                                            fontSize: 11,
-                                            fontWeight: 700,
-                                            cursor: 'pointer',
-                                            lineHeight: 1.2,
-                                            whiteSpace: 'nowrap',
-                                          }}
-                                        >
-                                          <span aria-hidden="true" style={{ fontSize: 12, fontWeight: 800 }}>±</span>
-                                          Adjust
-                                        </button>
-                                        {inlineParentRowId === row.id ? (
-                                          <div style={{ display: 'inline-flex', gap: 4, marginLeft: 6, alignItems: 'center' }}>
-                                            <select
-                                              className="ship-select"
-                                              style={{ fontSize: 11, padding: '2px 4px' }}
-                                              defaultValue={row.parentSkuId ? String(row.parentSkuId) : ''}
-                                              disabled={inlineParentSaving}
-                                              onChange={(event) => void handleInlineParentChange(row, event.target.value)}
-                                            >
-                                              <option value="">— No Parent —</option>
-                                              {(parentSkuOptions[row.clientId] ?? []).map((option) => (
-                                                <option key={option.parentSkuId} value={option.parentSkuId}>{option.name}</option>
-                                              ))}
-                                            </select>
-                                            <button className="btn btn-ghost btn-xs" type="button" onClick={() => setInlineParentRowId(null)} title="Close">✕</button>
-                                          </div>
-                                        ) : null}
+                                      // Action cell layout (2026-05-12 fix):
+                                      // explicit flex row with `gap` + every
+                                      // button gets `flex-shrink: 0` so the
+                                      // pencil / chain-link / Adjust trio
+                                      // can never overflow into each other's
+                                      // hit area. stopPropagation on every
+                                      // onClick guards against a clipped
+                                      // button's near-miss bubbling into the
+                                      // chain-link's handler (which was
+                                      // causing "click the dots, get the
+                                      // Assign Parent SKU modal" in the
+                                      // previous narrow-column rendering).
+                                      <td key="actions" style={{ whiteSpace: 'nowrap', padding: '4px 8px' }}>
+                                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                          <button
+                                            className="btn btn-ghost btn-xs"
+                                            type="button"
+                                            onClick={(event) => { event.stopPropagation(); void openEditSku(row) }}
+                                            title="Edit SKU details"
+                                            style={{ flex: '0 0 auto' }}
+                                          >
+                                            ✏️
+                                          </button>
+                                          <button
+                                            className="btn btn-ghost btn-xs"
+                                            type="button"
+                                            title={row.parentSkuId ? 'Change parent SKU' : 'Assign parent SKU'}
+                                            onClick={async (event) => {
+                                              event.stopPropagation()
+                                              try {
+                                                await loadParentOptions(row.clientId)
+                                                setInlineParentRowId((current) => (current === row.id ? null : row.id))
+                                              } catch (error) {
+                                                toastContext?.addToast(error instanceof Error ? error.message : 'Failed to load parents', 'error')
+                                              }
+                                            }}
+                                            style={{ fontSize: 12, color: row.parentSkuId ? 'var(--ss-blue)' : 'var(--text3)', flex: '0 0 auto' }}
+                                          >
+                                            🔗
+                                          </button>
+                                          {/* Adjust pill — opens the inventory entry modal
+                                              which supports both ADD and REMOVE via the
+                                              Direction toggle. flex-shrink: 0 prevents
+                                              the pill from clipping into the chain-link
+                                              button when the column is narrow. */}
+                                          <button
+                                            type="button"
+                                            onClick={(event) => {
+                                              event.stopPropagation()
+                                              setAdjustModal({
+                                                invSkuId: row.id,
+                                                sku: row.sku,
+                                                qty: '1',
+                                                note: '',
+                                                date: new Date().toISOString().slice(0, 10),
+                                                type: 'adjust',
+                                                sign: 1,
+                                              })
+                                            }}
+                                            title="Adjust stock — add or remove units"
+                                            style={{
+                                              display: 'inline-flex',
+                                              alignItems: 'center',
+                                              gap: 3,
+                                              padding: '3px 10px',
+                                              border: '1px solid var(--ss-blue)',
+                                              borderRadius: 999,
+                                              background: 'rgba(42,91,215,0.08)',
+                                              color: 'var(--ss-blue)',
+                                              fontSize: 11,
+                                              fontWeight: 700,
+                                              cursor: 'pointer',
+                                              lineHeight: 1.2,
+                                              whiteSpace: 'nowrap',
+                                              flex: '0 0 auto',
+                                            }}
+                                          >
+                                            <span aria-hidden="true" style={{ fontSize: 12, fontWeight: 800 }}>±</span>
+                                            Adjust
+                                          </button>
+                                          {inlineParentRowId === row.id ? (
+                                            <div style={{ display: 'inline-flex', gap: 4, alignItems: 'center', flex: '0 0 auto' }}>
+                                              <select
+                                                className="ship-select"
+                                                style={{ fontSize: 11, padding: '2px 4px' }}
+                                                defaultValue={row.parentSkuId ? String(row.parentSkuId) : ''}
+                                                disabled={inlineParentSaving}
+                                                onChange={(event) => { event.stopPropagation(); void handleInlineParentChange(row, event.target.value) }}
+                                                onClick={(event) => event.stopPropagation()}
+                                              >
+                                                <option value="">— No Parent —</option>
+                                                {(parentSkuOptions[row.clientId] ?? []).map((option) => (
+                                                  <option key={option.parentSkuId} value={option.parentSkuId}>{option.name}</option>
+                                                ))}
+                                              </select>
+                                              <button
+                                                className="btn btn-ghost btn-xs"
+                                                type="button"
+                                                onClick={(event) => { event.stopPropagation(); setInlineParentRowId(null) }}
+                                                title="Close"
+                                              >
+                                                ✕
+                                              </button>
+                                            </div>
+                                          ) : null}
+                                        </div>
                                       </td>
                                     )
                                   default:
