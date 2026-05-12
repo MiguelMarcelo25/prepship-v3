@@ -1112,6 +1112,35 @@ const STORE_PULLERS: Record<string, (storeAccountId: number) => Promise<WalmartO
   ebay: pullEbayOrders,
 }
 
+// 2026-05-13: per-provider seller-fee fetcher. Hits the marketplace's
+// settlement / payments endpoint, sums commission + shipping
+// commission + processing into orders.selling_fee, and powers the
+// Analysis page's new Selling Fees + Profit columns. Walmart-first;
+// eBay needs the `sell.finances` OAuth scope (re-auth flow) which
+// will be added in a follow-up.
+interface FeesPullResult {
+  ok?: boolean
+  fetched?: number
+  ordersUpdated?: number
+  ordersMissing?: number
+  totalFeesUsd?: number
+  fromDate?: string
+  toDate?: string
+  fetchedAt?: string
+  note?: string
+  error?: string
+}
+async function pullWalmartFees(storeAccountId: number): Promise<FeesPullResult> {
+  return callVercelFunction<FeesPullResult>('/carriers/walmart/fees', {
+    method: 'POST',
+    body: { storeAccountId },
+  })
+}
+const STORE_FEE_PULLERS: Record<string, (storeAccountId: number) => Promise<FeesPullResult>> = {
+  walmart: pullWalmartFees,
+  // ebay: pullEbayFees — pending sell.finances scope (operator re-auth)
+}
+
 interface CarrierRatesResult {
   ok: boolean
   provider?: string
@@ -1278,6 +1307,46 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
       }))
     } finally {
       setPulling((prev) => ({ ...prev, [d.id]: false }))
+    }
+  }
+
+  // 2026-05-13: per-row "Pull Fees" handler. Mirrors runPullOrders but
+  // hits the marketplace's settlement / payments endpoint to populate
+  // orders.selling_fee on each matched order. After success, busts
+  // the Analysis cache so the Selling Fees + Profit columns light up
+  // without a hard reload.
+  const [pullingFees, setPullingFees] = useState<Record<number, boolean>>({})
+  const [feePullResults, setFeePullResults] = useState<Record<number, FeesPullResult>>({})
+  const runPullFees = async (d: SavedRow) => {
+    const puller = STORE_FEE_PULLERS[d.provider]
+    if (!puller) {
+      setFeePullResults((prev) => ({
+        ...prev,
+        [d.id]: { ok: false, error: `No fees puller for "${d.provider}" yet.` },
+      }))
+      return
+    }
+    setPullingFees((prev) => ({ ...prev, [d.id]: true }))
+    try {
+      const result = await puller(d.accountId)
+      setFeePullResults((prev) => ({ ...prev, [d.id]: result }))
+      // Invalidate the Analysis page's sku-breakdown cache so the
+      // operator sees the freshly-written fees as soon as they hit
+      // /analysis. Best-effort — silently no-ops if the key isn't
+      // seeded yet.
+      try {
+        queryClient.invalidateQueries({ queryKey: ['analysis'] })
+        queryClient.invalidateQueries({ queryKey: ['analysis-sku-breakdown'] })
+      } catch {
+        /* non-fatal */
+      }
+    } catch (err) {
+      setFeePullResults((prev) => ({
+        ...prev,
+        [d.id]: { ok: false, error: err instanceof Error ? err.message : String(err) },
+      }))
+    } finally {
+      setPullingFees((prev) => ({ ...prev, [d.id]: false }))
     }
   }
 
@@ -2015,6 +2084,21 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
               title={`Pull recent ${d.provider} orders`}
             />
           ) : null}
+          {/* Pull Fees — 2026-05-13. Walmart-first. Calls the
+              marketplace settlement endpoint, populates
+              orders.selling_fee, and powers the Analysis page's
+              Selling Fees + Profit columns. eBay support arrives
+              once the operator re-authorizes with sell.finances. */}
+          {isStore && STORE_FEE_PULLERS[d.provider] ? (
+            <ActionButton
+              icon={<Receipt size={11} strokeWidth={2.5} />}
+              label="Pull Fees"
+              loadingLabel="Pulling…"
+              loading={!!pullingFees[d.id]}
+              onClick={() => runPullFees(d)}
+              title={`Sync the last 30 days of ${d.provider} selling fees → powers Analysis > Profit column`}
+            />
+          ) : null}
           {!isStore && !PROVIDER_DEFS.find((p) => p.key === d.provider)?.noRateQuotes ? (
             <ActionButton
               icon={<Receipt size={11} strokeWidth={2.5} />}
@@ -2695,6 +2779,35 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
                 return `📦 ${fetched} fetched · ${inserted} new · ${updated} updated (saved to store_orders)${sampleStr}`
               }
               return `📦 ${fetched} orders found in last 7 days${sampleStr}`
+            })()}
+          </div>
+        ) : null}
+        {/* Inline feedback for Pull Fees. Reports how many orders'
+            selling_fee got populated and the total dollars summed — so
+            the operator can sanity-check against their seller-central
+            dashboard. Stays visible until the next pull (no
+            auto-clear) so quick re-runs are easy to compare. */}
+        {feePullResults[d.id] ? (
+          <div style={{
+            fontSize: 11,
+            color: feePullResults[d.id].ok !== false ? 'var(--green)' : 'var(--red)',
+            paddingLeft: 4,
+            marginTop: 2,
+          }}>
+            {(() => {
+              const r = feePullResults[d.id]
+              if (r.ok === false) return `❌ Fees pull failed: ${r.error ?? 'Unknown error'}`
+              const fetched = r.fetched ?? 0
+              const updated = r.ordersUpdated ?? 0
+              const missing = r.ordersMissing ?? 0
+              const total = typeof r.totalFeesUsd === 'number' ? r.totalFeesUsd : 0
+              const totalStr = total > 0 ? ` · $${total.toFixed(2)} total fees` : ''
+              const missingStr = missing > 0 ? ` · ${missing} transactions didn't match a local order` : ''
+              const window = r.fromDate && r.toDate ? ` [${r.fromDate} → ${r.toDate}]` : ''
+              if (fetched === 0 && updated === 0) {
+                return `💸 No fee-bearing transactions in window${window}${r.note ? ` (${r.note})` : ''}`
+              }
+              return `💸 ${fetched} transactions · ${updated} orders updated${totalStr}${missingStr}${window}`
             })()}
           </div>
         ) : null}

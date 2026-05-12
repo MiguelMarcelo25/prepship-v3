@@ -18,6 +18,13 @@ export type AnalysisSortKey =
   | 'total'
   | 'revenue'
   | 'avgPrice'
+  // 2026-05-13: two new columns powered by per-order seller fees
+  // fetched from Walmart Marketplace (eventually eBay too). `fees`
+  // shows the per-SKU sum of selling fees; `profit` is the derived
+  // bottom line = revenue - shipping - fees. COGS layered in later
+  // when inventory carries per-unit cost reliably across the catalog.
+  | 'fees'
+  | 'profit'
 
 export type AnalysisSortDir = 'asc' | 'desc'
 
@@ -56,6 +63,13 @@ export interface AnalysisTotals {
   // (we don't sum avg prices — that's mathematically meaningless).
   totalRevenue: number
   totalShipping: number
+  // 2026-05-13: footer accumulators for the new Selling Fees + Profit
+  // columns. totalSellingFee sums the per-SKU fee values; totalProfit
+  // is computed FE-side as totalRevenue - totalShipping - totalSellingFee
+  // so the footer summary always equals the per-row math operators
+  // see above it.
+  totalSellingFee: number
+  totalProfit: number
 }
 
 export const ANALYSIS_CHART_COLORS = ['#2a5bd7', '#16a34a', '#e07a00', '#c62828', '#7c3aed', '#0891b2', '#be185d', '#92400e']
@@ -79,6 +93,8 @@ export const ANALYSIS_SORT_LABELS: Record<AnalysisSortKey, string> = {
   total: 'Total Shipping',
   revenue: 'Total Revenue',
   avgPrice: 'Avg Sell Price',
+  fees: 'Selling Fees',
+  profit: 'Profit',
 }
 
 // ──────────────────────────────────────────────────────────────────
@@ -103,6 +119,12 @@ export const DEFAULT_COLUMN_ORDER: AnalysisSortKey[] = [
   'stdOrders',
   'expOrders',
   'total',
+  // 2026-05-13: new bottom-line columns. Placed at the end so they
+  // sit visually as "the answer" after all the input columns. They
+  // depend on the Walmart fees fetcher having been run for the
+  // selected window — until then they read 0/—.
+  'fees',
+  'profit',
 ]
 
 // Columns the operator cannot hide via the toggle UI. Without 'name'
@@ -384,6 +406,18 @@ function getSortValue(row: AnalysisSkuDto, key: AnalysisSortKey) {
       return (row as { totalRevenue?: number }).totalRevenue ?? 0
     case 'avgPrice':
       return (row as { avgSellingPrice?: number }).avgSellingPrice ?? 0
+    case 'fees':
+      return (row as { totalSellingFee?: number }).totalSellingFee ?? 0
+    case 'profit': {
+      // Derived = revenue - shipping - selling fees. Computed inline
+      // here so sorting matches the cell's displayed value exactly.
+      // No COGS for now — when inventory carries reliable per-unit
+      // cost we'll subtract `cost × qty` too.
+      const revenue = (row as { totalRevenue?: number }).totalRevenue ?? 0
+      const shipping = row.totalShipping ?? 0
+      const fees = (row as { totalSellingFee?: number }).totalSellingFee ?? 0
+      return revenue - shipping - fees
+    }
   }
 }
 
@@ -436,6 +470,23 @@ export function buildAnalysisTotals(rows: AnalysisSkuDto[]): AnalysisTotals {
     totalRevenue:
       totals.totalRevenue
       + toAnalysisNumber((row as { totalRevenue?: number }).totalRevenue),
+    // 2026-05-13: footer rollups for the new fees + profit columns.
+    // totalSellingFee is the raw running sum; totalProfit accumulates
+    // the per-row profit so the footer matches what an operator would
+    // get by hand-summing the column. Note this is NOT
+    // totalRevenue - totalShipping - totalSellingFee at the footer
+    // level — each row's profit can be negative (a SKU with high fees
+    // and low revenue) and we want that signed reality in the total.
+    totalSellingFee:
+      totals.totalSellingFee
+      + toAnalysisNumber((row as { totalSellingFee?: number }).totalSellingFee),
+    totalProfit:
+      totals.totalProfit
+      + (
+        toAnalysisNumber((row as { totalRevenue?: number }).totalRevenue)
+        - toAnalysisNumber(row.totalShipping)
+        - toAnalysisNumber((row as { totalSellingFee?: number }).totalSellingFee)
+      ),
   }), {
     skuCount: 0,
     totalOrders: 0,
@@ -450,6 +501,8 @@ export function buildAnalysisTotals(rows: AnalysisSkuDto[]): AnalysisTotals {
     totalExpShipping: 0,
     totalShipping: 0,
     totalRevenue: 0,
+    totalSellingFee: 0,
+    totalProfit: 0,
   })
 }
 

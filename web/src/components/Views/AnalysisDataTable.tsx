@@ -159,6 +159,12 @@ const ANALYSIS_COLUMN_DEFAULT_WIDTHS: Partial<Record<AnalysisSortKey, number>> =
   stdOrders: 110,
   expOrders: 110,
   total: 115,
+  // 2026-05-13: new bottom-line columns powered by per-order Walmart
+  // selling fees. fees is similar magnitude to total shipping; profit
+  // can swing negative on bad SKUs so it needs a sign-prefix's worth
+  // of room.
+  fees: 115,
+  profit: 125,
 }
 
 function cellPaddingFor(size: AnalysisColumnSize) {
@@ -581,6 +587,73 @@ export function AnalysisDataTable({
                           </td>
                         )
                       }
+                      case 'fees': {
+                        // 2026-05-13: Walmart Marketplace selling-fees
+                        // total per SKU. Populated by
+                        // api/carriers/walmart/fees.ts. Reads 0 until
+                        // the operator runs the fees fetcher for the
+                        // selected window (settlement lags delivery by
+                        // 3-7 days, so the cell shows '—' for the most
+                        // recent orders even after sync). Tooltip
+                        // explains the lag so it isn't read as a bug.
+                        const fees = (row as { totalSellingFee?: number }).totalSellingFee ?? 0
+                        return (
+                          <td
+                            key="fees"
+                            className={`${cellPadding} text-right whitespace-nowrap tabular-nums font-semibold text-[13px] text-ink-2 ${TD_BASE}`}
+                            title={
+                              fees > 0
+                                ? `Marketplace fees: ${formatAnalysisMoney(fees)}\nPull latest from Settings → Stores → "Pull Fees" on the Walmart row. Settlement lags delivery by ~3-7 days.`
+                                : 'No fee data yet — run Pull Fees from Settings → Stores → Walmart row, or wait for nightly sync.'
+                            }
+                          >
+                            {fees > 0
+                              ? formatAnalysisMoney(fees)
+                              : <span className="text-line-2">—</span>}
+                          </td>
+                        )
+                      }
+                      case 'profit': {
+                        // Derived bottom line per SKU = revenue -
+                        // shipping - selling fees. COGS will subtract
+                        // here too once inventory carries reliable
+                        // per-unit cost. Green when positive, red when
+                        // negative, gray when the inputs are
+                        // incomplete (no revenue OR no fees yet) so
+                        // operators don't mistake "$0" for "broke even".
+                        const revenue = (row as { totalRevenue?: number }).totalRevenue ?? 0
+                        const shipping = row.totalShipping ?? 0
+                        const fees = (row as { totalSellingFee?: number }).totalSellingFee ?? 0
+                        const profit = revenue - shipping - fees
+                        const hasInputs = revenue > 0
+                        const tone = !hasInputs
+                          ? 'text-ink-3'
+                          : profit > 0
+                            ? 'text-ok'
+                            : profit < 0
+                              ? 'text-danger'
+                              : 'text-ink-2'
+                        return (
+                          <td
+                            key="profit"
+                            className={`${cellPadding} text-right whitespace-nowrap tabular-nums font-extrabold text-[14px] ${tone} ${TD_BASE}`}
+                            title={
+                              hasInputs
+                                ? `Profit = revenue − shipping − fees\n${formatAnalysisMoney(revenue)} − ${formatAnalysisMoney(shipping)} − ${formatAnalysisMoney(fees)} = ${formatAnalysisMoney(profit)}\n(COGS not yet subtracted; layered in once inventory carries reliable per-unit cost)`
+                                : 'Needs revenue data — set unit prices on order line items.'
+                            }
+                          >
+                            {hasInputs ? (
+                              <>
+                                {profit < 0 ? '−' : ''}
+                                {formatAnalysisMoney(Math.abs(profit))}
+                              </>
+                            ) : (
+                              <span className="text-line-2">—</span>
+                            )}
+                          </td>
+                        )
+                      }
                       default:
                         return null
                     }
@@ -763,6 +836,51 @@ export function AnalysisDataTable({
                       >
                         {isFirstVisible ? footerTotalsBadge : null}
                         {footerAvg > 0 ? formatAnalysisMoney(footerAvg) : '—'}
+                      </td>
+                    )
+                  }
+                  case 'fees':
+                    return (
+                      <td
+                        key="fees"
+                        className={`${ftBase} text-right text-[13px] text-ink-2 font-bold`}
+                        title={
+                          totals.totalSellingFee > 0
+                            ? `Total marketplace fees across all SKUs: ${formatAnalysisMoney(totals.totalSellingFee)}`
+                            : 'No fee data yet — run Pull Fees from Settings → Stores → Walmart.'
+                        }
+                      >
+                        {isFirstVisible ? footerTotalsBadge : null}
+                        {totals.totalSellingFee > 0
+                          ? formatAnalysisMoney(totals.totalSellingFee)
+                          : '—'}
+                      </td>
+                    )
+                  case 'profit': {
+                    // Footer profit color-codes the same way the rows do
+                    // — green if the whole catalog is in the black, red
+                    // if the visible SKUs net negative. We compare against
+                    // 0 strictly because "$0.00 even" is its own neutral
+                    // tone (gray) rather than green.
+                    const profitTone =
+                      totals.totalProfit > 0
+                        ? 'text-ok'
+                        : totals.totalProfit < 0
+                          ? 'text-danger'
+                          : 'text-ink-2'
+                    return (
+                      <td
+                        key="profit"
+                        className={`${ftBase} text-right text-[13px] font-extrabold ${profitTone}`}
+                        title={`Total profit across all SKUs = ${formatAnalysisMoney(totals.totalRevenue)} revenue − ${formatAnalysisMoney(totals.totalShipping)} shipping − ${formatAnalysisMoney(totals.totalSellingFee)} fees = ${formatAnalysisMoney(totals.totalProfit)}`}
+                      >
+                        {isFirstVisible ? footerTotalsBadge : null}
+                        {totals.totalRevenue > 0 ? (
+                          <>
+                            {totals.totalProfit < 0 ? '−' : ''}
+                            {formatAnalysisMoney(Math.abs(totals.totalProfit))}
+                          </>
+                        ) : '—'}
                       </td>
                     )
                   }

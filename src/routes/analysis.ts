@@ -325,6 +325,14 @@ type SkuBreakdownRow = {
   // — both shapes appear depending on the marketplace integration that
   // ingested the order.
   total_revenue: string;
+  // 2026-05-13: per-SKU selling-fee total (commission + shipping
+  // commission + processing fees from Walmart Marketplace; future
+  // marketplaces add in). Allocated per-unit just like
+  // total_shipping above. FE renders this in the new "Selling Fees"
+  // column and derives `profit = revenue - shipping - selling_fee`
+  // for the "Profit" column. Returns "0" (not null) for SKUs whose
+  // orders haven't been synced via api/carriers/walmart/fees.ts yet.
+  total_selling_fee: string;
   // Per-day unit map: { 'YYYY-MM-DD': units } for each day this SKU had
   // activity in the selected range. The route pads this to a dense
   // aligned array (one slot per day in the range, zeros for quiet days)
@@ -367,7 +375,16 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
           nullif(item->>'unitPrice', '')::numeric,
           nullif(item->>'unit_price', '')::numeric,
           0
-        )::numeric                                                          as unit_price
+        )::numeric                                                          as unit_price,
+        -- 2026-05-13: per-order seller fee (Walmart Marketplace
+        -- commission + shipping commission + processing, etc.).
+        -- Populated by api/carriers/walmart/fees.ts. NULL when the
+        -- fees fetcher hasn't been run yet for this order (e.g.
+        -- pre-feature orders, orders settling within the next few
+        -- days). Coalesce to 0 so a SKU with mixed fee-known and
+        -- fee-unknown orders still shows a partial sum rather than
+        -- nothing.
+        coalesce(o.selling_fee, 0)::numeric                                 as order_selling_fee
       from orders o
       cross join lateral jsonb_array_elements(o.items) item
       left join clients c on c.id = o.client_id
@@ -440,7 +457,12 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
         -- figure here. max(unit_price) is the per-unit price for
         -- display / sanity-check; line_revenue is the dollar truth.
         max(unit_price)::numeric                                             as unit_price,
-        sum(unit_price * qty)::numeric                                       as line_revenue
+        sum(unit_price * qty)::numeric                                       as line_revenue,
+        -- Carry the per-order fee through to the allocated CTE. Every
+        -- item row in this (order_id, sku_key) group has the same
+        -- order-level fee, so max() is just a "pluck one value" —
+        -- no aggregation math.
+        max(order_selling_fee)::numeric                                      as order_selling_fee
       from item_rows
       group by order_id, sku_key
     ),
@@ -525,6 +547,15 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
       -- total_revenue / total_qty, so a separate aggregate isn't
       -- shipped — keeps the wire payload lean.
       coalesce(sum(line_revenue), 0)::text                                       as total_revenue,
+      -- 2026-05-13: per-SKU seller-fee total (Walmart-first;
+      -- additional marketplaces layered in later). Allocates each
+      -- order's selling_fee proportionally to this SKU's UNIT share
+      -- of the order — same allocation math as total_shipping above.
+      -- A 4-unit order with $4 fee contributes $1 per unit; a SKU
+      -- claiming 2 of those units claims $2 of the fee. Excludes
+      -- external rows (we don't get marketplace fees for orders we
+      -- didn't fulfill via PrepShip).
+      coalesce(sum(order_selling_fee * qty / nullif(order_qty_total, 0)) filter (where not is_external and order_selling_fee > 0), 0)::text as total_selling_fee,
       -- Daily unit counts as { 'YYYY-MM-DD': units }. Every row in the
       -- group shares the same sdj.daily_qty_map (it's joined 1:1 on
       -- sku_key), so array_agg+[1] is just a no-op dedup that lets us

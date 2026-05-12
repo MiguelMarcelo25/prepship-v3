@@ -3360,6 +3360,19 @@ export const apiClient = {
             totalShipping,
             totalRevenue,
             avgSellingPrice,
+            // 2026-05-13: per-SKU seller-fee total (Walmart first;
+            // future marketplaces add in via similar fetcher endpoints).
+            // Backend returns total_selling_fee; legacy aliases (camel
+            // / sellingFee / sellingFeeTotal) are coalesced to be
+            // resilient against shape drift. Profit is derived FE-side
+            // as revenue - shipping - sellingFee for the new Profit
+            // column on the Analysis page.
+            totalSellingFee: parseNum(
+              r.total_selling_fee
+              ?? r.totalSellingFee
+              ?? r.sellingFee
+              ?? r.sellingFeeTotal
+            ),
           };
         });
         return {

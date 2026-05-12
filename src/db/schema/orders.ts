@@ -43,6 +43,19 @@ export const orders = pgTable(
     assignedToUserId: text(),
     assignedToEmail: text(),
     assignedAt: timestamp({ withTimezone: true }),
+    // Selling-platform fees (2026-05-13). Populated by the per-marketplace
+    // fees fetcher (api/carriers/walmart/fees.ts for Walmart; eBay /
+    // sell.finances comes later). Total = sum of commission + shipping
+    // commission + processing + any other deductions returned by the
+    // settlement endpoint. Breakdown stores the per-fee-type detail so a
+    // future tooltip / billing-export can show "Commission $X.XX,
+    // Processing $Y.YY" without re-fetching.
+    sellingFee: numeric({ precision: 10, scale: 2 }).default('0').notNull(),
+    sellingFeeBreakdown: jsonb().$type<Record<string, number>>().default({}).notNull(),
+    sellingFeeSyncedAt: timestamp({ withTimezone: true }),
+    // Provenance: which marketplace API populated this row's fees so we
+    // can re-sync correctly + reason about stale data per source.
+    sellingFeeSource: text(),
     createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
   },
