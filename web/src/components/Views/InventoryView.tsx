@@ -42,6 +42,7 @@ import {
   type ReceiveSkuLookup,
 } from './inventory-parity'
 import { ColumnResizeHandle } from './ColumnResizeHandle'
+import { Table, type TableColumn } from '../ui/Table'
 import { AnalysisPagination } from './AnalysisPagination'
 import './InventoryView.css'
 
@@ -1029,6 +1030,309 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
     document.addEventListener('mousemove', handleMove)
     return () => document.removeEventListener('mousemove', handleMove)
   }, [thumbnailPreview])
+
+  // ─── Column definitions for the shared <Table> component ─────────────────
+  // 2026-05-12: refactored from inline switch-based cell rendering to the
+  // standard <Table> primitive (web/src/components/ui/Table.tsx). Each column
+  // provides a render function returning the cell CONTENT (not the <td>
+  // wrapper — Table handles the td). Handlers (openSkuDrawer, openEditSku,
+  // handleToggleRowActive, etc.) are captured via closure so this memo is
+  // recomputed when those identities change. togglingActiveIds is in the
+  // deps so the per-row spinner state on the active-toggle pill updates.
+  const inventoryColumns = useMemo<TableColumn<InventoryItemDto>[]>(() => [
+    {
+      key: 'sku',
+      label: 'SKU',
+      width: 150,
+      sortable: true,
+      hideable: false,
+      sortValue: (row) => row.sku ?? '',
+      render: (row) => (
+        <button
+          type="button"
+          className="inventory-inline-button inventory-cell-link--nowrap"
+          style={{ color: 'var(--ss-blue)', fontFamily: 'monospace', fontSize: 11.5 }}
+          onClick={(e) => { e.stopPropagation(); void openSkuDrawer(row.id) }}
+          title={`${row.sku} - view orders & sales trend`}
+        >
+          {row.sku}
+        </button>
+      ),
+    },
+    {
+      key: 'thumbnail',
+      label: 'Image',
+      width: 56,
+      sortable: false,
+      render: (row) => (
+        row.imageUrl ? (
+          <img
+            src={row.imageUrl}
+            style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 5, display: 'block', cursor: 'zoom-in' }}
+            onMouseEnter={(event) => showThumbnailPreview(row.imageUrl ?? '', event)}
+            onMouseLeave={() => setThumbnailPreview(null)}
+          />
+        ) : (
+          <div style={{ width: 40, height: 40, background: 'var(--surface3)', border: '1px dashed var(--border)', borderRadius: 5, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, color: 'var(--text4)', textAlign: 'center', lineHeight: 1.2 }}>no<br />img</div>
+        )
+      ),
+    },
+    {
+      key: 'name',
+      label: 'Name',
+      width: 200,
+      sortable: true,
+      hideable: false,
+      sortValue: (row) => row.name ?? '',
+      render: (row) => (
+        <button
+          type="button"
+          className="inventory-inline-button inventory-cell-link--clamp"
+          onClick={(e) => { e.stopPropagation(); void openSkuDrawer(row.id) }}
+          title={`${row.name || row.sku || 'SKU'} - view orders & sales trend`}
+        >
+          {row.name || <span style={{ color: 'var(--text3)' }}>—</span>}
+        </button>
+      ),
+    },
+    {
+      key: 'client',
+      label: 'Client',
+      width: 130,
+      sortable: true,
+      sortValue: (row) => row.clientName ?? '',
+      render: (row) => (
+        <span style={{ color: 'var(--text2)', whiteSpace: 'nowrap' }} title={row.clientName || undefined}>
+          {row.clientName || <span style={{ color: 'var(--text4)' }}>&mdash;</span>}
+        </span>
+      ),
+    },
+    {
+      key: 'weight',
+      label: 'Weight',
+      width: 90,
+      align: 'right',
+      sortable: true,
+      sortValue: (row) => row.weightOz ?? 0,
+      render: (row) => row.weightOz > 0 ? formatWeight(row.weightOz) : <span style={{ color: 'var(--text4)' }}>—</span>,
+    },
+    {
+      key: 'dims',
+      label: 'Dims (LxWxH)',
+      width: 110,
+      align: 'center',
+      sortable: true,
+      // Sort by total volume — biggest packages float to top when sorting desc.
+      sortValue: (row) => (row.packageLength || 0) * (row.packageWidth || 0) * (row.packageHeight || 0),
+      render: (row) => (
+        <span style={{ fontFamily: 'monospace', fontSize: 11.5 }}>
+          {row.packageLength > 0 || row.packageWidth > 0 || row.packageHeight > 0
+            ? `${row.packageLength}×${row.packageWidth}×${row.packageHeight}`
+            : <span style={{ color: 'var(--text4)' }}>—</span>}
+        </span>
+      ),
+    },
+    {
+      key: 'cuFt',
+      label: 'Cu Ft/Unit',
+      width: 90,
+      align: 'center',
+      sortable: true,
+      sortValue: (row) => getInventoryCuFt(row),
+      render: (row) => {
+        const cuFt = getInventoryCuFt(row)
+        return cuFt > 0 ? (
+          <span title={row.cuFtOverride && row.cuFtOverride > 0 ? 'Manual override' : 'Auto-computed from product dims'} style={{ color: 'var(--text3)', fontSize: 11 }}>
+            {cuFt.toFixed(3)}
+            {row.cuFtOverride && row.cuFtOverride > 0
+              ? <span style={{ color: 'var(--ss-blue)', fontSize: 9, marginLeft: 2 }}>✎</span>
+              : null}
+          </span>
+        ) : (
+          <span style={{ color: 'var(--text4)' }}>—</span>
+        )
+      },
+    },
+    {
+      key: 'package',
+      label: 'Package',
+      width: 110,
+      sortable: true,
+      sortValue: (row) => row.packageName ?? '',
+      render: (row) => (
+        row.packageName ? (
+          <span>{row.packageName}</span>
+        ) : (row.packageLength > 0 || row.packageWidth > 0 || row.packageHeight > 0) ? (
+          <span style={{ fontFamily: 'monospace', color: 'var(--text3)' }} title="No named package — showing product dims (L×W×H)">
+            {row.packageLength}×{row.packageWidth}×{row.packageHeight}
+          </span>
+        ) : (
+          <span style={{ color: 'var(--text4)' }}>—</span>
+        )
+      ),
+    },
+    {
+      key: 'stock',
+      label: 'Stock',
+      width: 75,
+      align: 'center',
+      sortable: true,
+      sortValue: (row) => row.currentStock,
+      render: (row) => (
+        <span style={{ fontWeight: 700, fontSize: 13, color: row.currentStock <= 0 ? 'var(--red)' : 'var(--text)' }}>
+          {row.currentStock}
+        </span>
+      ),
+    },
+    {
+      key: 'sold30',
+      label: 'Sold 30d',
+      width: 80,
+      align: 'center',
+      sortable: true,
+      sortValue: (row) => row.soldLast30Days ?? 0,
+      render: (row) => (
+        <span style={{ fontWeight: 700, fontSize: 12, color: (row.soldLast30Days ?? 0) > 0 ? 'var(--ss-blue)' : 'var(--text3)' }}>
+          {row.soldLast30Days ?? 0}
+        </span>
+      ),
+    },
+    {
+      key: 'unitsPerPack',
+      label: 'Units/Pack',
+      width: 90,
+      align: 'center',
+      sortable: true,
+      sortValue: (row) => row.units_per_pack ?? 1,
+      render: (row) => (
+        row.units_per_pack > 1
+          ? <span style={{ background: 'var(--ss-blue-bg)', color: 'var(--ss-blue)', fontSize: 10.5, fontWeight: 700, padding: '1px 6px', borderRadius: 4 }}>×{row.units_per_pack}</span>
+          : <span style={{ color: 'var(--text3)' }}>—</span>
+      ),
+    },
+    {
+      key: 'totalUnits',
+      label: 'Total Units',
+      width: 95,
+      align: 'center',
+      sortable: true,
+      sortValue: (row) => (row.units_per_pack > 1 ? row.currentStock * row.units_per_pack : 0),
+      render: (row) => (
+        row.units_per_pack > 1
+          ? <span style={{ fontWeight: 700, fontSize: 12, color: 'var(--text2)' }}>{row.currentStock * row.units_per_pack}</span>
+          : <span style={{ color: 'var(--text3)', fontSize: 12 }}>—</span>
+      ),
+    },
+    {
+      key: 'min',
+      label: 'Min',
+      width: 60,
+      align: 'center',
+      sortable: true,
+      sortValue: (row) => row.minStock ?? 0,
+      render: (row) => <span style={{ color: 'var(--text3)', fontSize: 12 }}>{row.minStock}</span>,
+    },
+    {
+      key: 'status',
+      label: 'Status',
+      width: 75,
+      align: 'center',
+      sortable: true,
+      // Sort: out (0) → low (1) → ok (2) so descending puts attention-needers first.
+      sortValue: (row) => row.status === 'out' ? 0 : row.status === 'low' ? 1 : 2,
+      render: (row) => (
+        <span className={`stock-badge ${row.status === 'out' ? 'stock-out' : row.status === 'low' ? 'stock-low' : 'stock-ok'}`}>
+          {row.status === 'out' ? 'OUT' : row.status === 'low' ? 'LOW' : 'OK'}
+        </span>
+      ),
+    },
+    {
+      key: 'actions',
+      label: 'Actions',
+      width: 200,
+      sortable: false,
+      render: (row) => (
+        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <button
+            className="btn btn-ghost btn-xs"
+            type="button"
+            onClick={(event) => { event.stopPropagation(); void openEditSku(row) }}
+            title="Edit SKU details"
+            style={{ flex: '0 0 auto' }}
+          >
+            ✏️
+          </button>
+          <button
+            className="btn btn-ghost btn-xs"
+            type="button"
+            title={row.parentSkuId ? 'Change parent SKU' : 'Assign parent SKU'}
+            onClick={async (event) => {
+              event.stopPropagation()
+              const triggerEl = event.currentTarget as HTMLElement
+              try {
+                await loadParentOptions(row.clientId)
+                setInlineParentRowId((current) => {
+                  const next = current === row.id ? null : row.id
+                  setParentPopoverAnchor(next == null ? null : triggerEl)
+                  return next
+                })
+              } catch (error) {
+                toastContext?.addToast(error instanceof Error ? error.message : 'Failed to load parents', 'error')
+              }
+            }}
+            style={{ fontSize: 12, color: row.parentSkuId ? 'var(--ss-blue)' : 'var(--text3)', flex: '0 0 auto' }}
+          >
+            🔗
+          </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation()
+              setAdjustModal({
+                invSkuId: row.id, sku: row.sku, qty: '1', note: '',
+                date: new Date().toISOString().slice(0, 10), type: 'adjust', sign: 1,
+              })
+            }}
+            title="Adjust stock — add or remove units"
+            aria-label="Adjust stock"
+            style={{
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              width: 22, height: 22, padding: 0,
+              border: '1px solid var(--ss-blue)', borderRadius: 999,
+              background: 'rgba(42,91,215,0.08)', color: 'var(--ss-blue)',
+              fontSize: 12, fontWeight: 800, cursor: 'pointer', lineHeight: 1, flex: '0 0 auto',
+            }}
+          >
+            ±
+          </button>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={row.active !== false}
+            aria-label={row.active !== false ? `Deactivate ${row.sku}` : `Activate ${row.sku}`}
+            onClick={(event) => { event.stopPropagation(); void handleToggleRowActive(row) }}
+            disabled={togglingActiveIds.has(row.id)}
+            title={row.active !== false ? 'Active · click to deactivate' : 'Inactive · click to activate'}
+            style={{
+              background: 'none', border: 0, padding: 0,
+              cursor: togglingActiveIds.has(row.id) ? 'wait' : 'pointer',
+              opacity: togglingActiveIds.has(row.id) ? 0.5 : 1,
+              flex: '0 0 auto',
+            }}
+          >
+            <span
+              className={`relative inline-flex items-center w-7 h-3.5 rounded-full transition-colors duration-150 ${row.active !== false ? 'bg-emerald-500' : 'bg-slate-300'}`}
+              aria-hidden="true"
+            >
+              <span
+                className={`absolute top-0.5 w-2.5 h-2.5 rounded-full bg-white shadow-sm transition-transform duration-150 ${row.active !== false ? 'translate-x-[14px]' : 'translate-x-0.5'}`}
+              />
+            </span>
+          </button>
+        </div>
+      ),
+    },
+  ], [openSkuDrawer, openEditSku, handleToggleRowActive, togglingActiveIds, loadParentOptions, showThumbnailPreview])
 
   const filteredRows = useMemo(() => {
     return filterInventoryRows(items, {
@@ -2351,11 +2655,36 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
 
           {stockLoading ? (
             <div className="loading"><div className="spinner" /><div style={{ fontSize: 12, marginTop: 4 }}>Loading inventory…</div></div>
-          ) : groupedRows.length === 0 ? (
+          ) : sortedRows.length === 0 ? (
             <div className="empty-state">
               <div className="empty-icon">📭</div>
               <div>{alertOnly ? 'No low/out stock' : 'No SKUs found'}</div>
             </div>
+          ) : !bulkEditMode ? (
+            /* 2026-05-12: NORMAL mode now uses the shared <Table>
+               primitive (web/src/components/ui/Table.tsx) per the
+               inventory-table-component-design.md refactor. The
+               bulk-edit branch below keeps its bespoke grouped
+               render because bulk-edit's alternate column set
+               (sku + thumbnail + name + store + weight + L + W + H)
+               doesn't share schema with normal mode. <Table>
+               internally manages sort/widths/order/visibility/
+               pagination — Inventory's matching bespoke state still
+               exists in this file but is now redundant for normal
+               mode (cleanup is a follow-up commit). */
+            <Table
+              data={filteredRows}
+              columns={inventoryColumns}
+              rowKey={(row) => row.id}
+              storageKey="inventory-stock-levels"
+              onRowClick={(row) => void openSkuDrawer(row.id)}
+              paginated
+              pageSizeOptions={[10, 20, 50, 100, 200]}
+              defaultPageSize={50}
+              rowClassName={(row) => focusInvSkuId === row.id ? 'inventory-row-focused' : ''}
+              loading={stockLoading}
+              emptyMessage={alertOnly ? 'No low/out stock' : 'No SKUs found'}
+            />
           ) : (
             <div id="inv-stock-content">
               {groupedRows.map((group) => (

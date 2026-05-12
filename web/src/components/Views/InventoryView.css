@@ -214,3 +214,13 @@
     width:100vw;
   }
 }
+
+/* 2026-05-12 — Focused-row flash for the shared <Table> rendering.
+   Applied via the rowClassName prop on rows where focusInvSkuId
+   matches row.id (after navigation from the SKU drawer). Soft blue
+   background fades back to default over 1.5s so the operator can
+   see which row they were directed to without it being permanent. */
+.inventory-row-focused td {
+  background: var(--ss-blue-bg) !important;
+  transition: background 1.5s ease;
+}
