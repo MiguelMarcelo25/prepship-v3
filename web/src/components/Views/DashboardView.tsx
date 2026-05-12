@@ -1202,7 +1202,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
       <div id="view-dashboard" className="view-content !overflow-y-auto !bg-page !p-5">
         <div className="space-y-4">
           <div className="h-12 w-80 animate-pulse rounded-card bg-surface-3" />
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-6">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
             {Array.from({ length: 6 }).map((_, index) => (
               <div key={index} className="h-28 animate-pulse rounded-card border border-line bg-surface" />
             ))}
@@ -1250,7 +1250,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             Filters
           </button>
           {showFilters ? (
-            <div className="absolute right-0 top-12 z-20 w-72 rounded-card border border-line bg-surface p-3 shadow-lg">
+            <div className="absolute right-0 top-12 z-20 w-[min(18rem,calc(100vw-2rem))] rounded-card border border-line bg-surface p-3 shadow-lg">
               <div className="mb-2 text-xs font-extrabold text-ink">Dashboard Filters</div>
               <label className="mb-2 block">
                 <span className="mb-1 block text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Client</span>
@@ -1322,7 +1322,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         </div>
       ) : null}
 
-      <div className="mb-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-6">
+      <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <KpiCard
           title="Total 7-Day Units"
           value={formatInt(kpis.currentUnits7)}

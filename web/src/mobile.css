@@ -289,3 +289,455 @@
     padding: 20px 16px !important;
   }
 }
+
+/* Mobile responsiveness pass for core tools: Dashboard, Inventory,
+ * Locations, Packages, Rate Shop, Analysis, Settings, and Billing.
+ * Desktop remains governed by the component-level styles above 768px. */
+@media (max-width: 768px) {
+  #mobileMenuBtn {
+    width: 44px !important;
+    height: 44px !important;
+    min-width: 44px !important;
+    min-height: 44px !important;
+  }
+
+  .sidebar-bottom button,
+  .ss-header,
+  .ss-store,
+  .sidebar-tool-item {
+    min-height: 44px !important;
+  }
+
+  .btn,
+  button:not([role='separator']),
+  a[role='button'] {
+    min-height: 44px;
+  }
+
+  button[aria-label],
+  button[title],
+  .btn-icon {
+    min-width: 44px;
+  }
+
+  input:not([type='checkbox']):not([type='radio']),
+  select,
+  textarea,
+  .ship-select,
+  .filter-sel {
+    min-height: 44px !important;
+  }
+
+  input[type='checkbox'],
+  input[type='radio'] {
+    min-width: 20px;
+    min-height: 20px;
+  }
+
+  #view-dashboard,
+  #view-inventory,
+  #view-locations,
+  #view-packages,
+  #view-rates,
+  #view-analysis,
+  #view-billing {
+    max-width: 100%;
+    overflow-x: hidden !important;
+  }
+
+  #view-dashboard .recharts-wrapper,
+  #view-dashboard .recharts-surface,
+  #view-analysis .recharts-wrapper,
+  #view-analysis .recharts-surface {
+    max-width: 100%;
+  }
+
+  .ps-data-table-scroll {
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .ps-data-table-scroll table {
+    min-width: 720px;
+  }
+
+  .ps-data-table-scroll th:first-child,
+  .ps-data-table-scroll td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    background: var(--surface);
+  }
+
+  .ps-data-table-scroll thead th:first-child {
+    z-index: 12;
+    background: var(--surface2);
+  }
+
+  #view-rates .rates-table th:first-child,
+  #view-rates .rates-table td:first-child,
+  .responsive-table-wrap table th:first-child,
+  .responsive-table-wrap table td:first-child,
+  .billing-table-wrap table th:first-child,
+  .billing-table-wrap table td:first-child,
+  .analysis-table-wrap table th:first-child,
+  .analysis-table-wrap table td:first-child {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    background: var(--surface);
+  }
+
+  #view-rates .rates-table thead th:first-child,
+  .responsive-table-wrap table thead th:first-child,
+  .billing-table-wrap table thead th:first-child,
+  .analysis-table-wrap table thead th:first-child {
+    z-index: 12;
+    background: var(--surface2);
+  }
+
+  #view-analysis.view-content {
+    overflow-x: hidden !important;
+  }
+
+  .analysis-table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+  }
+
+  #analysis-table {
+    min-width: 820px;
+  }
+
+  .analysis-sticky-panel {
+    overflow-x: hidden;
+  }
+
+  #view-packages [data-packages-columns-menu],
+  .ps-data-table-scroll [role='menu'] {
+    max-height: min(70vh, 520px);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+@media (max-width: 639px) {
+  #view-dashboard,
+  #view-inventory,
+  #view-locations,
+  #view-packages,
+  #view-rates,
+  #view-analysis,
+  #view-billing {
+    padding: 12px !important;
+  }
+
+  #view-settings main {
+    padding: 16px 12px !important;
+  }
+
+  #view-settings [role='tablist'] {
+    padding-left: 12px !important;
+    padding-right: 12px !important;
+  }
+
+  #view-dashboard h1 {
+    font-size: 21px !important;
+    line-height: 1.15 !important;
+  }
+
+  #view-dashboard .relative.flex {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  #view-dashboard .relative.flex > .absolute {
+    left: 0 !important;
+    right: auto !important;
+  }
+
+  #view-dashboard section,
+  #view-rates form,
+  #ratesResult,
+  #view-billing .markup-card,
+  #view-settings .markup-card {
+    max-width: 100% !important;
+  }
+
+  #view-rates form {
+    padding: 16px !important;
+  }
+
+  #view-rates form > .mt-5 {
+    align-items: stretch !important;
+  }
+
+  #view-rates form > .mt-5 > button,
+  #view-rates form > .mt-5 > label {
+    width: 100%;
+    justify-content: center;
+  }
+
+  #view-rates #globalMarkup {
+    width: 100% !important;
+  }
+
+  #view-locations .max-w-3xl,
+  #locationsContent,
+  #locFormCard {
+    max-width: 100% !important;
+  }
+
+  #locFormCard > div:last-child {
+    flex-wrap: wrap;
+    align-items: stretch !important;
+  }
+
+  #locFormCard > div:last-child > button {
+    flex: 1 1 100%;
+  }
+
+  #locationsContent .flex-shrink-0 {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  #view-inventory #inv-panel-stock > div:first-child {
+    align-items: stretch !important;
+  }
+
+  #view-inventory .search-wrap,
+  #view-inventory select.filter-sel,
+  #view-packages .pkg-search-wrap,
+  #view-packages .pkg-search-input {
+    flex: 1 1 100% !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  #view-inventory .inv-tab,
+  #view-packages .pkg-header-btn,
+  #view-billing .analysis-preset {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  #view-packages [data-packages-columns-menu] {
+    position: fixed !important;
+    left: 12px !important;
+    right: 12px !important;
+    top: auto !important;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 12px) !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-height: 70vh;
+  }
+
+  #view-inventory .ps-data-table-scroll,
+  #view-packages .ps-data-table-scroll {
+    overflow: visible !important;
+  }
+
+  #view-inventory .ps-data-table-scroll > table,
+  #view-packages .ps-data-table-scroll > table {
+    display: block !important;
+    min-width: 0 !important;
+    width: 100% !important;
+    table-layout: auto !important;
+  }
+
+  #view-inventory .ps-data-table-scroll colgroup,
+  #view-inventory .ps-data-table-scroll thead,
+  #view-packages .ps-data-table-scroll colgroup,
+  #view-packages .ps-data-table-scroll thead {
+    display: none !important;
+  }
+
+  #view-inventory .ps-data-table-scroll tbody,
+  #view-packages .ps-data-table-scroll tbody {
+    display: grid;
+    gap: 10px;
+    width: 100%;
+  }
+
+  #view-inventory .ps-data-table-scroll tbody tr,
+  #view-packages .ps-data-table-scroll tbody tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 8px 12px;
+    width: 100%;
+    margin: 0;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface) !important;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+  }
+
+  #view-inventory .ps-data-table-scroll tbody tr:hover,
+  #view-packages .ps-data-table-scroll tbody tr:hover {
+    background: var(--surface) !important;
+  }
+
+  #view-inventory .ps-data-table-scroll td,
+  #view-packages .ps-data-table-scroll td {
+    position: static !important;
+    left: auto !important;
+    z-index: auto !important;
+    width: 100% !important;
+    max-width: none !important;
+    min-width: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    overflow: visible !important;
+    text-align: left !important;
+    white-space: normal !important;
+    background: transparent !important;
+  }
+
+  #view-inventory .ps-data-table-scroll td[data-col-key],
+  #view-packages .ps-data-table-scroll td[data-col-key] {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-height: 0;
+  }
+
+  #view-inventory .ps-data-table-scroll td[data-col-label]::before,
+  #view-packages .ps-data-table-scroll td[data-col-label]::before {
+    content: attr(data-col-label);
+    color: var(--text3);
+    font-size: 10px;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    line-height: 1.2;
+    text-transform: uppercase;
+  }
+
+  #view-inventory .ps-data-table-scroll td[colspan],
+  #view-packages .ps-data-table-scroll td[colspan],
+  #view-inventory .ps-data-table-scroll td[data-col-key='sku'],
+  #view-inventory .ps-data-table-scroll td[data-col-key='name'],
+  #view-inventory .ps-data-table-scroll td[data-col-key='actions'],
+  #view-packages .ps-data-table-scroll td[data-col-key='package'],
+  #view-packages .ps-data-table-scroll td[data-col-key='actions'] {
+    grid-column: 1 / -1;
+  }
+
+  #view-inventory .ps-data-table-scroll td[data-col-key='sku'],
+  #view-packages .ps-data-table-scroll td[data-col-key='package'] {
+    padding-bottom: 4px !important;
+    border-bottom: 1px solid var(--border) !important;
+  }
+
+  #view-inventory .ps-data-table-scroll td[data-col-key='stock'],
+  #view-packages .ps-data-table-scroll td[data-col-key='stock'],
+  #view-packages .ps-data-table-scroll td[data-col-key='stockQty'] {
+    font-size: 16px;
+    font-weight: 800;
+  }
+
+  #view-inventory .ps-data-table-scroll td[data-col-key='actions'] > *,
+  #view-packages .ps-data-table-scroll td[data-col-key='actions'] > * {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  #view-analysis .analysis-sticky-panel {
+    border-radius: 0 0 12px 12px;
+  }
+
+  #view-analysis .analysis-sticky-panel input,
+  #view-analysis .analysis-sticky-panel select,
+  #view-analysis .analysis-sticky-panel button {
+    width: 100% !important;
+  }
+
+  #view-billing .billing-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  #view-billing .markup-input-lg,
+  #view-billing .ship-select,
+  #view-billing .filter-sel {
+    width: 100% !important;
+  }
+
+  #view-settings .settings-integration-main {
+    flex-wrap: wrap !important;
+    align-items: flex-start !important;
+  }
+
+  #view-settings .settings-integration-main > span:nth-child(3) {
+    flex: 1 1 100% !important;
+    overflow-wrap: anywhere;
+  }
+
+  #view-settings .settings-integration-main button {
+    flex: 1 1 calc(50% - 6px);
+    justify-content: center;
+  }
+
+  #view-settings .rounded-xl .divide-y > div {
+    flex-wrap: wrap;
+    align-items: stretch !important;
+  }
+
+  #view-settings .rounded-xl .divide-y > div > span:first-child {
+    flex: 1 1 100%;
+  }
+
+  #view-settings .rounded-xl .divide-y > div > select,
+  #view-settings .rounded-xl .divide-y > div > input {
+    flex: 1 1 44%;
+  }
+
+  #view-settings .settings-dialog-backdrop,
+  .packages-overlay,
+  .inventory-overlay,
+  .analysis-order-modal-overlay {
+    padding: 0 !important;
+    align-items: stretch !important;
+    justify-content: stretch !important;
+  }
+
+  #view-settings .settings-dialog-panel,
+  .packages-modal,
+  .packages-modal.packages-modal-narrow,
+  .packages-modal.packages-modal-default,
+  .packages-modal.packages-modal-package-form,
+  .inventory-modal,
+  .analysis-order-modal {
+    width: 100vw !important;
+    max-width: 100vw !important;
+    height: 100dvh !important;
+    max-height: 100dvh !important;
+    min-height: 100dvh !important;
+    margin: 0 !important;
+    border-radius: 0 !important;
+    overflow: auto !important;
+  }
+
+  #view-settings .settings-provider-form-grid,
+  .packages-form-modal-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  #view-settings .settings-provider-grid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .packages-form-modal-actions,
+  #view-settings .settings-dialog-panel > div:last-child {
+    flex-wrap: wrap !important;
+    align-items: stretch !important;
+  }
+
+  .packages-form-modal-actions > button,
+  #view-settings .settings-dialog-panel > div:last-child > button {
+    flex: 1 1 100% !important;
+  }
+}

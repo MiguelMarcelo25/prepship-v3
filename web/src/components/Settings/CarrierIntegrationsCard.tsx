@@ -1710,6 +1710,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
     return (
       <motion.li
         key={d.id}
+        className="settings-integration-row"
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{
@@ -1741,7 +1742,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
           e.currentTarget.style.borderColor = 'var(--border)'
         }}
       >
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div className="settings-integration-main" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <span style={{ fontWeight: 700 }}>{d.provider.toUpperCase()}</span>
           <span style={{ color: 'var(--text2)' }}>{d.label ?? '—'}</span>
           {/* "Portal" badge — flags carriers submitted via the client
@@ -1981,6 +1982,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
           {assignOpenForId === d.id ? (
             <motion.div
               key="assignBackdrop"
+              className="settings-dialog-backdrop"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
@@ -2003,6 +2005,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
             >
               <motion.div
                 key="assignPanel"
+                className="settings-dialog-panel"
                 initial={{ opacity: 0, y: 12, scale: 0.97 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 8, scale: 0.97 }}
@@ -2262,6 +2265,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
           {renamingForId === d.id ? (
             <motion.div
               key="renameBackdrop"
+              className="settings-dialog-backdrop"
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
@@ -2284,6 +2288,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
             >
               <motion.form
                 key="renamePanel"
+                className="settings-dialog-panel"
                 initial={{ opacity: 0, y: 12, scale: 0.97 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 8, scale: 0.97 }}
@@ -2730,6 +2735,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
       {modalOpen ? (
         <motion.div
           key="addModalBackdrop"
+          className="settings-dialog-backdrop"
           role="dialog"
           aria-modal="true"
           initial={{ opacity: 0 }}
@@ -2759,6 +2765,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
         >
           <motion.div
             key="addModalPanel"
+            className="settings-dialog-panel settings-provider-panel"
             initial={{ opacity: 0, y: 16, scale: 0.96 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 12, scale: 0.97 }}
@@ -2818,7 +2825,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
                   <p style={{ fontSize: 12, color: 'var(--text3)', margin: '0 0 14px' }}>
                     Click a tile to add credentials for that {addCategory ?? 'integration'}.
                   </p>
-                  <div style={{
+                  <div className="settings-provider-grid" style={{
                     display: 'grid',
                     gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))',
                     gap: 12,
@@ -2991,7 +2998,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
                         )}
                       </div>
                     )}
-                    <div style={{ display: 'grid', gap: 10, gridTemplateColumns: 'minmax(200px, 1fr) minmax(200px, 1fr)' }}>
+                    <div className="settings-provider-form-grid" style={{ display: 'grid', gap: 10, gridTemplateColumns: 'minmax(200px, 1fr) minmax(200px, 1fr)' }}>
                       <label style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                         <span style={{ fontSize: 11, color: 'var(--text3)' }}>Display label</span>
                         <input

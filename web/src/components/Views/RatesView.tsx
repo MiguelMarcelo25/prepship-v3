@@ -200,7 +200,7 @@ export default function RatesView() {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-7 gap-3">
           {/* Weight is split into two side-by-side inputs (lb + oz)
               that share TWO grid cells (col-span-2 on lg screens).
               The previous version crammed both inputs into a single

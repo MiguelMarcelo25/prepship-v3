@@ -102,7 +102,7 @@ interface AnalysisDataTableProps {
 // operators stay in MEDIUM where the table fits, (b) sticky thead is
 // vastly more useful than wrapper-contained horizontal scroll.
 const SHELL_CLASSES =
-  'border border-line rounded-[10px] bg-surface shadow-[0_1px_3px_rgba(15,23,42,.05),0_1px_2px_rgba(15,23,42,.03)]'
+  'analysis-table-wrap border border-line rounded-[10px] bg-surface shadow-[0_1px_3px_rgba(15,23,42,.05),0_1px_2px_rgba(15,23,42,.03)]'
 
 const TABLE_BASE_CLASSES = 'w-full border-separate border-spacing-0'
 

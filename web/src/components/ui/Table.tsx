@@ -954,6 +954,8 @@ export function Table<Row>({
                       <td
                         key={col.key}
                         data-col-key={col.key}
+                        data-col-label={col.label}
+                        data-col-align={align}
                         className={`${padding} ${fontSize} ${alignCls} overflow-hidden align-middle text-ink ${col.className ?? ''}`}
                         style={{ width: widths[col.key] ?? col.width, maxWidth: widths[col.key] ?? col.width }}
                       >

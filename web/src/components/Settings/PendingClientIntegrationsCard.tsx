@@ -217,7 +217,8 @@ export function PendingClientIntegrationsCard() {
           No pending submissions.
         </div>
       ) : (
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+        <div className="responsive-table-wrap">
+        <table style={{ width: '100%', minWidth: 760, borderCollapse: 'collapse', fontSize: 12 }}>
           <thead>
             <tr style={{ background: 'var(--surface2)', borderBottom: '1px solid var(--border)' }}>
               <SortableHeader sortKey="provider" sortState={sortState} onSort={(key) => setSortState((current) => nextSortState(current, key))} style={th}>Provider</SortableHeader>
@@ -307,6 +308,7 @@ export function PendingClientIntegrationsCard() {
             ))}
           </tbody>
         </table>
+        </div>
       )}
     </div>
   )
