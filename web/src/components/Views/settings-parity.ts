@@ -24,6 +24,12 @@ export interface SettingsMarkupGroup {
 // inspects the source-client tag on each carrier and emits the matching key.
 const MAIN_SHIPSTATION_GROUP_KEY = 'shipstation:dr-prepper'
 const MAIN_SHIPSTATION_GROUP_LABEL = 'ShipStation Carriers — DR PREPPER'
+const DIRECT_CARRIER_GROUP_KEY = 'direct-carrier-accounts'
+const DIRECT_CARRIER_GROUP_LABEL = 'Direct Carrier Accounts'
+const DIRECT_CARRIER_PROVIDER_ID_OFFSET = 10_000_000
+const CLIENT_GROUP_KEY_ALIASES: Record<string, string> = {
+  'kf-goods': 'kfg',
+}
 
 // Placeholder groups: ShipStation accounts whose creds exist on the backend
 // but don't show up via the per-client DB iteration. We only need to hardcode
@@ -33,16 +39,31 @@ const MAIN_SHIPSTATION_GROUP_LABEL = 'ShipStation Carriers — DR PREPPER'
 export const PLACEHOLDER_SHIPSTATION_GROUPS: Array<{ key: string; label: string }> = [
 ]
 
+function slugGroupName(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, '-')
+}
+
+function shipstationGroupKeyFromName(value: string): string {
+  const slug = slugGroupName(value)
+  return `shipstation:${CLIENT_GROUP_KEY_ALIASES[slug] ?? slug}`
+}
+
 export function resolveCarrierGroup(account: CarrierAccountDto): { key: string; label: string } {
   const provider = (account as any)?.provider as string | undefined
+  const sourceClientName = (account as any)?.sourceClientName as string | undefined
+  if (
+    Number(account.shippingProviderId) >= DIRECT_CARRIER_PROVIDER_ID_OFFSET ||
+    sourceClientName?.trim().toLowerCase() === 'direct carrier accounts'
+  ) {
+    return { key: DIRECT_CARRIER_GROUP_KEY, label: DIRECT_CARRIER_GROUP_LABEL }
+  }
   if (provider && provider !== 'shipstation') {
     const label = String(provider).toUpperCase()
     return { key: `${provider}:default`, label: `${label} Carriers` }
   }
-  const sourceClientName = (account as any)?.sourceClientName as string | undefined
   if (sourceClientName) {
     return {
-      key: `shipstation:${sourceClientName.toLowerCase().replace(/\s+/g, '-')}`,
+      key: shipstationGroupKeyFromName(sourceClientName),
       label: `ShipStation Carriers — ${sourceClientName}`,
     }
   }
@@ -206,7 +227,7 @@ export function groupSettingsMarkupRows(
   for (const c of clientPlaceholders) {
     const trimmed = (c?.name ?? '').trim()
     if (!trimmed) continue
-    const key = `shipstation:${trimmed.toLowerCase().replace(/\s+/g, '-')}`
+    const key = shipstationGroupKeyFromName(trimmed)
     if (byKey.has(key)) continue
     if (key === MAIN_SHIPSTATION_GROUP_KEY) continue
     byKey.set(key, { key, label: `ShipStation Carriers — ${trimmed}`, rows: [] })
