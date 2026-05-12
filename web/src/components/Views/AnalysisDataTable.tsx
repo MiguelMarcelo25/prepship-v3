@@ -86,8 +86,23 @@ interface AnalysisDataTableProps {
 // `view-content` scroll container (a different ancestor); the
 // horizontal scroll axis here doesn't interfere. Use `overflow-x-auto`
 // (not -scroll) so the scrollbar only appears when actually needed.
+// No overflow rule on this wrapper — it's intentional. Adding any
+// non-visible overflow (even `overflow-x: auto; overflow-y: visible`)
+// makes the wrapper a scroll container per the CSS spec's "non-visible
+// + visible → both auto" rule. Sticky <thead> then resolves against
+// this wrapper instead of the page-level .view-content scroll
+// container, and since the wrapper auto-heights to its content there's
+// no vertical overflow to "stick" against — so the thead silently
+// scrolls away with the page. By keeping overflow:visible here, the
+// thead's sticky resolves against .view-content (overflow-y:auto from
+// app-shell.css:523), giving operators a column-header bar that pins
+// to the top of the visible area as they scroll long row lists. Trade-
+// off: wide tables in WIDE column-size mode horizontally scroll at the
+// page level instead of inside the wrapper. Acceptable because (a) most
+// operators stay in MEDIUM where the table fits, (b) sticky thead is
+// vastly more useful than wrapper-contained horizontal scroll.
 const SHELL_CLASSES =
-  'overflow-x-auto overflow-y-visible border border-line rounded-[10px] bg-surface shadow-[0_1px_3px_rgba(15,23,42,.05),0_1px_2px_rgba(15,23,42,.03)]'
+  'border border-line rounded-[10px] bg-surface shadow-[0_1px_3px_rgba(15,23,42,.05),0_1px_2px_rgba(15,23,42,.03)]'
 
 const TABLE_BASE_CLASSES = 'w-full border-separate border-spacing-0'
 
