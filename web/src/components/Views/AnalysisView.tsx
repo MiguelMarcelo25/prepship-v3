@@ -1,5 +1,6 @@
 // @ts-nocheck
-import { useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
 import { BarChart3 } from 'lucide-react'
 import {
@@ -604,6 +605,13 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
   // so the layout survives reloads and tab moves.
   const [columnLayout, setColumnLayout] = useState<AnalysisColumnLayout>(readStoredColumnLayout)
   const [columnsMenuOpen, setColumnsMenuOpen] = useState(false)
+  // Ref to the trigger button + computed viewport coordinates for the
+  // popover. The menu is rendered via React Portal into document.body
+  // so it escapes the sticky panel's overflow:hidden clipping. We
+  // recompute the rect on open, scroll, and resize so the menu stays
+  // anchored to the trigger as the page moves underneath it.
+  const columnsTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const [columnsMenuRect, setColumnsMenuRect] = useState<{ top: number; right: number } | null>(null)
   const [drawerOrderWidths, setDrawerOrderWidths] = useState<Partial<Record<DrawerOrdersColumnKey, number>>>(
     readStoredDrawerOrderWidths
   )
@@ -751,7 +759,11 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
   }, [columnLayout])
 
   // Click-outside dismisses the Columns popover so it behaves like
-  // every other dropdown in the app (date preset menu, etc.).
+  // every other dropdown in the app (date preset menu, etc.). Because
+  // the menu is rendered into document.body via portal, the standard
+  // `closest('[data-columns-menu]')` check still works (it traverses
+  // up from the click target through the real DOM, which now includes
+  // the body-anchored menu).
   useEffect(() => {
     if (!columnsMenuOpen) return
     function handleClickOutside(event: MouseEvent) {
@@ -762,6 +774,41 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [columnsMenuOpen])
+
+  // Position the portal-rendered popover under the trigger button.
+  // Recompute on open + on scroll/resize so the menu stays anchored
+  // even if the page moves underneath it. useLayoutEffect (not
+  // useEffect) so the position is computed BEFORE first paint —
+  // prevents a one-frame flash at top:0,right:0 before the
+  // measurement lands.
+  useLayoutEffect(() => {
+    if (!columnsMenuOpen) {
+      setColumnsMenuRect(null)
+      return
+    }
+    function update() {
+      const el = columnsTriggerRef.current
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      // `right` is measured from the viewport's right edge so the
+      // popover's right edge aligns with the button's right edge —
+      // matches the original absolute `right-0` behavior.
+      setColumnsMenuRect({
+        top: rect.bottom + 4,
+        right: Math.max(8, window.innerWidth - rect.right),
+      })
+    }
+    update()
+    // Capture phase on scroll so we catch nested scroll containers
+    // (the page-level view-content scrolls, the sticky panel
+    // itself does not, but we want defense in depth).
+    window.addEventListener('resize', update)
+    window.addEventListener('scroll', update, true)
+    return () => {
+      window.removeEventListener('resize', update)
+      window.removeEventListener('scroll', update, true)
+    }
   }, [columnsMenuOpen])
 
   // Load clients once for the filter dropdown.
@@ -1248,12 +1295,17 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
           {/* Columns button — opens a checklist popover so the operator
               can toggle individual columns on/off. The 'name' column is
               shown as a disabled checkmark (REQUIRED_COLUMNS) so it
-              can't be hidden. Click anywhere outside the popover to
-              close (see handleClickOutside in the effect). */}
-          <div className="relative ml-2">
+              can't be hidden. The popover itself is rendered via React
+              Portal into document.body (see {createPortal(...)} below)
+              so it escapes the sticky panel's overflow:hidden — without
+              the portal, the popover gets clipped at the panel's
+              bottom edge and looks like the list is truncated.
+              Click anywhere outside the popover to close. */}
+          <div className="ml-2">
             <button
               type="button"
               data-columns-trigger
+              ref={columnsTriggerRef}
               onClick={() => setColumnsMenuOpen((v) => !v)}
               aria-haspopup="true"
               aria-expanded={columnsMenuOpen}
@@ -1270,27 +1322,35 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
                 ({displayColumns.length}/{DEFAULT_COLUMN_ORDER.length})
               </span>
             </button>
-            {columnsMenuOpen ? (
-              // Three-region menu (header + scrollable body + footer):
-              //   - Inline style maxHeight = min(420px, 70vh) caps the
-              //     menu so it can't overflow viewport regardless of
-              //     where the trigger sits. Using inline style instead
-              //     of a Tailwind arbitrary value (`max-h-[70vh]`)
-              //     because the JIT-generated class wasn't engaging
-              //     reliably on some operator viewports — likely a
-              //     local-dev HMR cache miss. Inline style is always
-              //     applied verbatim, no class generation needed.
-              //   - flex flex-col is the layout primitive that lets the
-              //     middle region claim the leftover space (flex-1) and
-              //     scroll independently while header/footer stay pinned.
+            {columnsMenuOpen && columnsMenuRect && typeof document !== 'undefined' ? createPortal(
+              // Three-region menu (header + scrollable body + footer)
+              // rendered into document.body via Portal so it escapes
+              // the sticky panel's overflow:hidden. position: fixed
+              // anchors to viewport coordinates computed from the
+              // trigger button's bounding rect (recomputed on
+              // scroll/resize in the useLayoutEffect above).
+              //
+              //   - maxHeight: min(420px, 70vh) caps the menu so it
+              //     can't overflow viewport regardless of where the
+              //     trigger sits. The inner scrolling region engages
+              //     when content exceeds this cap.
+              //   - flex flex-col + flex-1 min-h-0 on the body region
+              //     is the canonical pattern for "middle child fills
+              //     remaining space and scrolls independently" while
+              //     header + footer stay pinned.
               //   - overflow-hidden on the outer container keeps the
               //     rounded corners + shadow looking clean — the inner
-              //     scrolling region handles its own overflow-y.
+              //     scrolling region handles overflow-y.
               <div
                 data-columns-menu
                 role="menu"
-                style={{ maxHeight: 'min(420px, 70vh)' }}
-                className="absolute right-0 top-[calc(100%+4px)] z-50 min-w-[230px] bg-surface border border-line rounded-md shadow-[0_8px_24px_-6px_rgba(15,23,42,.18),0_2px_6px_-2px_rgba(15,23,42,.10)] flex flex-col overflow-hidden"
+                style={{
+                  position: 'fixed',
+                  top: columnsMenuRect.top,
+                  right: columnsMenuRect.right,
+                  maxHeight: 'min(420px, 70vh)',
+                }}
+                className="z-[100] min-w-[230px] bg-surface border border-line rounded-md shadow-[0_8px_24px_-6px_rgba(15,23,42,.18),0_2px_6px_-2px_rgba(15,23,42,.10)] flex flex-col overflow-hidden"
               >
                 <div className="px-2 py-1.5 text-[9px] uppercase tracking-[0.08em] font-extrabold text-ink-3 flex items-center justify-between flex-shrink-0 border-b border-line bg-surface-2/40">
                   <span>Visible columns</span>
@@ -1370,7 +1430,8 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
                     {DEFAULT_COLUMN_ORDER.length} columns
                   </span>
                 </div>
-              </div>
+              </div>,
+              document.body
             ) : null}
           </div>
         </div>
