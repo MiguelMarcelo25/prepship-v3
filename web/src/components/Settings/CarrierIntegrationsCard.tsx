@@ -1751,43 +1751,63 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
         }}
         whileHover={{ y: -1 }}
         style={{
+          // 2026-05-13 redesign: split the row into 4 vertical zones
+          // (identity → credentials → assignment → actions) instead
+          // of cramming all of them onto one wrapping flex line. The
+          // old layout fought itself when 5-6 action buttons + a
+          // 60-char API key + status badges competed for the same
+          // horizontal track. Vertical zones give each role its own
+          // breathing room, so nothing wraps awkwardly anymore.
+          // Padding + gap bumped to match the new card density.
           display: 'flex',
           flexDirection: 'column',
-          gap: 4,
-          padding: '10px 12px',
+          gap: 10,
+          padding: '14px 16px',
           background: 'var(--surface)',
           border: '1px solid var(--border)',
-          borderRadius: 8,
-          marginBottom: 6,
+          borderRadius: 12,
+          marginBottom: 10,
           fontSize: 12,
           boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)',
           transition: 'box-shadow 200ms, border-color 200ms',
         }}
         onMouseEnter={(e) => {
           e.currentTarget.style.boxShadow =
-            '0 6px 14px -4px rgba(15, 23, 42, 0.10), 0 2px 4px -2px rgba(15, 23, 42, 0.06)'
-          e.currentTarget.style.borderColor = 'rgb(var(--brand-rgb, 42 91 215) / 0.25)'
+            '0 8px 18px -4px rgba(15, 23, 42, 0.10), 0 3px 6px -2px rgba(15, 23, 42, 0.06)'
+          e.currentTarget.style.borderColor = 'rgb(var(--brand-rgb, 42 91 215) / 0.28)'
         }}
         onMouseLeave={(e) => {
           e.currentTarget.style.boxShadow = '0 1px 2px rgba(15, 23, 42, 0.04)'
           e.currentTarget.style.borderColor = 'var(--border)'
         }}
       >
-        {/* flexWrap added 2026-05-12: at desktop width, very long
-            accountIdentifier strings (EasyPost API keys are 60+ chars;
-            Walmart credentials are UUIDs) combined with 5-6 action
-            buttons can overflow the card's right edge. Wrapping lets
-            the buttons spill to a second line gracefully instead of
-            extending the row. minWidth:0 lets flex children actually
-            shrink below their intrinsic content width — without it,
-            the accountIdentifier span (further down) refuses to
-            truncate. mobile.css already had this fix; desktop didn't. */}
+        {/* ── ZONE 1: IDENTITY ──────────────────────────────────────
+            Provider + operator-set label on the left; status badges
+            (Portal, Env/Legacy, created-date pill) on the right.
+            Two-column flex so badges anchor to the trailing edge no
+            matter how long the label gets. minWidth:0 + ellipsis on
+            the label lets long labels truncate gracefully instead
+            of pushing badges off-screen. */}
         <div
           className="settings-integration-main"
-          style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', minWidth: 0 }}
+          style={{ display: 'flex', gap: 10, alignItems: 'center', minWidth: 0 }}
         >
-          <span style={{ fontWeight: 700, flexShrink: 0 }}>{d.provider.toUpperCase()}</span>
-          <span style={{ color: 'var(--text2)', flexShrink: 0 }}>{d.label ?? '—'}</span>
+          <span style={{ fontWeight: 800, flexShrink: 0, fontSize: 13, letterSpacing: '0.02em', color: 'var(--text)' }}>{d.provider.toUpperCase()}</span>
+          <span
+            title={d.label ?? undefined}
+            style={{
+              color: 'var(--text2)',
+              flex: '1 1 auto',
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              fontSize: 12.5,
+              fontWeight: 600,
+            }}
+          >
+            {d.label ?? '—'}
+          </span>
           {/* "Portal" badge — flags carriers submitted via the client
               portal vs admin-added ones. Same Settings list now covers
               both sources (audit fix gap #2, 2026-05-12) so the origin
@@ -1811,36 +1831,14 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
               Portal
             </span>
           ) : null}
-          {/* accountIdentifier — operator-set string that can be
-              ANYTHING: a short nickname, a 60-char EasyPost API key,
-              a Walmart UUID, etc. We:
-                - cap it with maxWidth so a long key can't dominate
-                  the row (the date pill + action buttons stay
-                  reachable)
-                - minWidth:0 + truncate-with-ellipsis so flex math
-                  actually allows shrinking past the intrinsic
-                  monospace content width
-                - title attribute exposes the full value on hover
-                  for operators who need to copy/verify it
-              `flex: 1 1 auto` keeps it as the row's main grow-take
-              column when there's slack, but it now stops growing at
-              maxWidth so long keys can't push siblings off-screen. */}
-          <span
-            title={d.accountIdentifier ?? undefined}
-            style={{
-              flex: '1 1 auto',
-              minWidth: 0,
-              maxWidth: 360,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-              color: 'var(--text3)',
-              fontFamily: 'monospace',
-              fontSize: 11,
-            }}
-          >
-            {d.accountIdentifier ?? '—'}
-          </span>
+          {/* Flexible spacer — pushes the trailing status pill
+              (Env/Legacy badge OR creation-date pill) to the row's
+              right edge so it always sits at the trailing rule of
+              the card, regardless of how long provider+label+Portal
+              badge get. The accountIdentifier moved DOWN into its
+              own zone (zone 2) so it no longer fights the badges
+              for horizontal space. */}
+          <span style={{ flex: 1 }} aria-hidden />
           {/* Hide the date pill on synthesized ShipStation rows — they
               have no real creation timestamp (epoch placeholder). A
               colored badge takes its place so operators see at a glance
@@ -1858,6 +1856,7 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
                 padding: '2px 6px',
                 borderRadius: 4,
                 border: '1px solid rgb(134 239 172)',
+                flexShrink: 0,
               } : {
                 fontSize: 9,
                 fontWeight: 800,
@@ -1868,14 +1867,135 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
                 padding: '2px 6px',
                 borderRadius: 4,
                 border: '1px solid rgb(252 211 77)',
+                flexShrink: 0,
               }}
               title={SHIPSTATION_MANAGE_HINT}
             >
               {isShipStationEnv ? 'Env' : 'Legacy'}
             </span>
           ) : (
-            <span style={{ fontSize: 10, color: 'var(--text3)' }}>{formatCaDateShort(d.createdAt)}</span>
+            <span style={{ fontSize: 10, color: 'var(--text3)', flexShrink: 0 }}>{formatCaDateShort(d.createdAt)}</span>
           )}
+        </div>
+
+        {/* ── ZONE 2: ACCOUNT IDENTIFIER ─────────────────────────────
+            Operator-set string that can be ANYTHING — a short
+            nickname, a 60-char EasyPost API key, a Walmart UUID.
+            Promoted to its own line so it can use the full card
+            width with ellipsis fallback instead of fighting with
+            badges + buttons for horizontal space. Subtle muted
+            styling — informational, not interactive — and a slight
+            background tint visually groups it with the identity
+            zone above. */}
+        <div
+          title={d.accountIdentifier ?? undefined}
+          style={{
+            fontFamily: 'monospace',
+            fontSize: 11,
+            color: 'var(--text3)',
+            background: 'var(--surface2, rgba(15, 23, 42, 0.03))',
+            border: '1px solid var(--border)',
+            borderRadius: 6,
+            padding: '5px 9px',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            // Tiny "ID:" prefix gives the row a leading label so
+            // operators don't have to guess what the mono string is.
+          }}
+        >
+          <span style={{
+            fontSize: 9,
+            fontWeight: 800,
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+            color: 'var(--text4, var(--text3))',
+            marginRight: 8,
+            fontFamily: 'inherit',
+          }}>
+            ID
+          </span>
+          {d.accountIdentifier ?? '—'}
+        </div>
+
+        {/* Assigned-client chips — inline summary of which clients
+            currently have access to this carrier account. Empty
+            state nudges operators toward assigning. Carriers only;
+            stores hide it (separate table without junction yet).
+            ShipStation synthesized rows also render this strip — the
+            assignment is implicit (creds live ON the client row) so
+            the chip just confirms which client owns these creds. */}
+        {d.kind === 'carrier' || d.kind === 'shipstation' ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', paddingLeft: 4, marginTop: 2 }}>
+            <span style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 700 }}>
+              Assigned to:
+            </span>
+            {d.assignedClientIds.length === 0 ? (
+              <span style={{ fontSize: 11, color: 'var(--text3)', fontStyle: 'italic' }}>
+                No clients yet — click Assign to add
+              </span>
+            ) : (
+              d.assignedClientIds.map((cid) => {
+                const client = clientById.get(cid)
+                const isInactive = client ? !client.active : false
+                return (
+                  <span
+                    key={cid}
+                    title={isInactive ? `Assigned to ${client?.name ?? `#${cid}`} — client is currently disabled` : undefined}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 3,
+                      padding: '2px 7px',
+                      borderRadius: 10,
+                      background: isInactive
+                        ? 'var(--surface2)'
+                        : 'rgb(var(--brand-rgb, 42 91 215) / 0.1)',
+                      color: isInactive ? 'var(--text3)' : 'rgb(var(--brand-rgb, 42 91 215))',
+                      fontSize: 10.5,
+                      fontWeight: 700,
+                      lineHeight: 1.3,
+                      textDecoration: isInactive ? 'line-through' : 'none',
+                      textDecorationColor: 'var(--text4)',
+                      textDecorationThickness: '1px',
+                      border: isInactive ? '1px dashed var(--border2)' : '1px solid transparent',
+                    }}
+                  >
+                    {client?.name ?? `#${cid}`}
+                    {isInactive ? <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase', textDecoration: 'none', opacity: 0.85 }}>·inactive</span> : null}
+                  </span>
+                )
+              })
+            )}
+          </div>
+        ) : null}
+
+        {/* ── ZONE 4: ACTION TOOLBAR ──────────────────────────────
+            All row-level actions live here on their own track so
+            they don't compete with identity / credentials / chips
+            for horizontal space. Layout:
+              [Test · Pull · Rates · Edit · Approve · Assign]  ←left
+              [Delete]                                          ←right
+            The flex-spacer between the diagnostic group and Delete
+            anchors Delete to the trailing edge, which matches the
+            "destructive action lives on the far right" convention
+            from every modern dashboard UI. Wraps gracefully when
+            the row gets narrow — flexWrap on the container, gap
+            instead of margins so wrapped buttons stay aligned. A
+            subtle dashed divider above the toolbar visually groups
+            it as "what can I do with this row" rather than "more
+            metadata." */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            flexWrap: 'wrap',
+            marginTop: 2,
+            paddingTop: 10,
+            borderTop: '1px dashed var(--border)',
+          }}
+        >
           <ActionButton
             icon={<Wifi size={11} strokeWidth={2.5} />}
             label="Test Connection"
@@ -1968,6 +2088,12 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
               }
             />
           ) : null}
+          {/* Flex spacer — anchors Delete to the trailing edge so the
+              destructive action visually separates from the safer
+              diagnostic / assignment buttons on the left. Convention
+              from every modern dashboard: dangerous actions live in
+              their own visual zone so an accidental click is harder. */}
+          <span style={{ flex: 1 }} aria-hidden />
           <ActionButton
             icon={<Trash2 size={11} strokeWidth={2.25} />}
             label="Delete"
@@ -1979,58 +2105,6 @@ export function CarrierIntegrationsCard({ view = 'all' }: { view?: CarrierIntegr
             title={isShipStation ? `Clear credentials in Clients tab to remove · ${SHIPSTATION_MANAGE_HINT}` : 'Delete integration'}
           />
         </div>
-
-        {/* Assigned-client chips — inline summary of which clients
-            currently have access to this carrier account. Empty
-            state nudges operators toward assigning. Carriers only;
-            stores hide it (separate table without junction yet).
-            ShipStation synthesized rows also render this strip — the
-            assignment is implicit (creds live ON the client row) so
-            the chip just confirms which client owns these creds. */}
-        {d.kind === 'carrier' || d.kind === 'shipstation' ? (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', paddingLeft: 4, marginTop: 2 }}>
-            <span style={{ fontSize: 10, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 700 }}>
-              Assigned to:
-            </span>
-            {d.assignedClientIds.length === 0 ? (
-              <span style={{ fontSize: 11, color: 'var(--text3)', fontStyle: 'italic' }}>
-                No clients yet — click Assign to add
-              </span>
-            ) : (
-              d.assignedClientIds.map((cid) => {
-                const client = clientById.get(cid)
-                const isInactive = client ? !client.active : false
-                return (
-                  <span
-                    key={cid}
-                    title={isInactive ? `Assigned to ${client?.name ?? `#${cid}`} — client is currently disabled` : undefined}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 3,
-                      padding: '2px 7px',
-                      borderRadius: 10,
-                      background: isInactive
-                        ? 'var(--surface2)'
-                        : 'rgb(var(--brand-rgb, 42 91 215) / 0.1)',
-                      color: isInactive ? 'var(--text3)' : 'rgb(var(--brand-rgb, 42 91 215))',
-                      fontSize: 10.5,
-                      fontWeight: 700,
-                      lineHeight: 1.3,
-                      textDecoration: isInactive ? 'line-through' : 'none',
-                      textDecorationColor: 'var(--text4)',
-                      textDecorationThickness: '1px',
-                      border: isInactive ? '1px dashed var(--border2)' : '1px solid transparent',
-                    }}
-                  >
-                    {client?.name ?? `#${cid}`}
-                    {isInactive ? <span style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.04em', textTransform: 'uppercase', textDecoration: 'none', opacity: 0.85 }}>·inactive</span> : null}
-                  </span>
-                )
-              })
-            )}
-          </div>
-        ) : null}
 
         {/* Assign-clients popover — anchored modal-style overlay.
             AnimatePresence handles enter/exit; backdrop click +
