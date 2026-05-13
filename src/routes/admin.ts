@@ -985,4 +985,159 @@ app.post('/cleanup-stale-queue-entries', async (c) => {
   });
 });
 
+// One-time reconciliation: walk every active inventory row, compute
+//   effective_stock = total_received − total_sold_shipped_since_created
+// (the same formula the /inventory list route now uses to populate
+// the STOCK column), and write that value into inventory.stockQty
+// so the cached field aligns with what operators see. For each row
+// that actually needed adjustment, insert a single `adjust`-type
+// inventory_ledger entry recording the delta so the History panel
+// shows the correction transparently.
+//
+// Idempotent: a second run after a successful first run finds no
+// deltas and writes nothing.
+//
+// Lockdown compliance: this READS shipped orders (allowed under the
+// analytics carve-out in AGENTS.md) and only WRITES to the
+// `inventory` table and `inventory_ledger` (neither is locked). It
+// does NOT call deductInventoryForOrder and is NOT gated by the
+// INVENTORY_AUTO_DEDUCT kill switch — that switch governs the
+// automatic per-shipment deduction path; reconciliation is an
+// explicit human-triggered correction with a distinct ledger note
+// so auditors can tell the two apart.
+//
+// Query params:
+//   ?dryRun=1   — return the diff without writing anything.
+//   ?clientId=N — limit to a single client's SKUs.
+app.post('/reconcile-inventory-stock', async (c) => {
+  const dryRun = c.req.query('dryRun') === '1' || c.req.query('dryRun') === 'true';
+  const clientIdRaw = c.req.query('clientId');
+  const clientIdParsed = clientIdRaw !== undefined ? Number(clientIdRaw) : undefined;
+  const clientIdFilter = Number.isFinite(clientIdParsed as number)
+    ? (clientIdParsed as number)
+    : undefined;
+
+  const rows = await db.execute<{
+    inventory_id: number;
+    sku: string;
+    current_stock_qty: number;
+    total_received: number;
+    total_sold: number;
+    effective_stock: number;
+  }>(sql`
+    with receives as (
+      select l.inventory_id as id, coalesce(sum(l.qty), 0)::int as total_received
+      from ${inventoryLedger} l
+      where l.type = 'receive'
+      group by l.inventory_id
+    ),
+    sells as (
+      select i.id as id,
+        coalesce(sum(
+          case
+            when coalesce(item->>'quantity', '') ~ '^[0-9]+$'
+              then (item->>'quantity')::int
+            else 1
+          end
+        ), 0)::int as total_sold
+      from ${inventory} i
+      join ${orders} o
+        on (
+          (i.client_id is null and o.client_id is null)
+          or i.client_id = o.client_id
+        )
+      cross join lateral jsonb_array_elements(o.items) item
+      where item ? 'sku'
+        and lower(item->>'sku') = lower(i.sku)
+        and coalesce(item->>'adjustment', 'false') <> 'true'
+        and o.order_status = 'shipped'
+        and o.order_date >= i.created_at
+      group by i.id
+    )
+    select
+      i.id as inventory_id,
+      i.sku as sku,
+      i.stock_qty as current_stock_qty,
+      coalesce(receives.total_received, 0)::int as total_received,
+      coalesce(sells.total_sold, 0)::int as total_sold,
+      (coalesce(receives.total_received, 0) - coalesce(sells.total_sold, 0))::int as effective_stock
+    from ${inventory} i
+    left join receives on receives.id = i.id
+    left join sells on sells.id = i.id
+    where i.active = true
+      ${
+        clientIdFilter !== undefined
+          ? sql`and i.client_id = ${clientIdFilter}`
+          : sql``
+      }
+  `);
+
+  const adjustments = rows
+    .map((r) => {
+      const currentStockQty = Number(r.current_stock_qty) || 0;
+      const totalReceived = Number(r.total_received) || 0;
+      const totalSold = Number(r.total_sold) || 0;
+      const effectiveStock = Number(r.effective_stock) || 0;
+      return {
+        inventoryId: r.inventory_id,
+        sku: r.sku,
+        currentStockQty,
+        totalReceived,
+        totalSold,
+        effectiveStock,
+        delta: effectiveStock - currentStockQty,
+      };
+    })
+    .filter((a) => a.delta !== 0);
+
+  if (dryRun) {
+    return c.json({
+      mode: 'dry-run',
+      rowsScanned: rows.length,
+      rowsToAdjust: adjustments.length,
+      totalDelta: adjustments.reduce((sum, a) => sum + a.delta, 0),
+      sampleAdjustments: adjustments.slice(0, 20),
+    });
+  }
+
+  if (adjustments.length === 0) {
+    return c.json({
+      mode: 'apply',
+      rowsScanned: rows.length,
+      rowsAdjusted: 0,
+      totalDelta: 0,
+      message: 'All inventory rows already match effectiveStock — nothing to do.',
+    });
+  }
+
+  const reconciliationNote = `Reconciliation backfill ${new Date().toISOString().slice(0, 10)}`;
+  await db.transaction(async (tx) => {
+    for (const a of adjustments) {
+      await tx
+        .update(inventory)
+        .set({ stockQty: a.effectiveStock, updatedAt: new Date() })
+        .where(eq(inventory.id, a.inventoryId));
+      await tx.insert(inventoryLedger).values({
+        inventoryId: a.inventoryId,
+        type: 'adjust',
+        qty: a.delta,
+        note: `${reconciliationNote}: stockQty ${a.currentStockQty} → ${a.effectiveStock} (received ${a.totalReceived} − sold-shipped ${a.totalSold})`,
+        createdBy: 'admin/reconcile-inventory-stock',
+      });
+    }
+  });
+
+  console.info(
+    `[admin/reconcile-inventory-stock] adjusted ${adjustments.length} of ${rows.length} active rows`
+  );
+
+  return c.json({
+    mode: 'apply',
+    rowsScanned: rows.length,
+    rowsAdjusted: adjustments.length,
+    totalDelta: adjustments.reduce((sum, a) => sum + a.delta, 0),
+    sampleAdjustments: adjustments.slice(0, 20),
+  });
+});
+
 export default app;

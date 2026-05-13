@@ -110,18 +110,41 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     soldRows.map((row) => [row.inventory_id, Number(row.sold_last_30_days) || 0])
   );
 
-  // 2026-05-13: operator reported the STOCK column shows numbers
-  // that don't match -SOLD (e.g. "sold 85 / stock 0" or "sold 65 /
-  // stock -79"). Root cause: `stockQty` is only mutated by the
-  // auto-deduct path, which (a) didn't track historical orders
-  // shipped before the system came online and (b) skips edge cases
-  // like external labels. Their mental model — and the correct one
-  // for an operator-facing dashboard — is:
-  //   expected_stock = total_received_qty − total_sold_all_time
-  // Compute it server-side from the source of truth (inventory_ledger
-  // for receives + orders for sells). The cached stockQty stays in
-  // the response as `currentStock` for backward-compat; the new
-  // `effectiveStock` is what the operator sees in the STOCK column.
+  // 2026-05-13 / refined 2026-05-14 (a+b): operator reported the
+  // STOCK column shows numbers that don't match -SOLD (e.g. "sold
+  // 85 / stock 0" or "sold 65 / stock -79"). Root cause: `stockQty`
+  // is only mutated by the auto-deduct path, which (a) didn't track
+  // historical orders shipped before the system came online and (b)
+  // skips edge cases like external labels.
+  //
+  // Definition (refined 2026-05-14):
+  //
+  //   effective_stock = total_received − total_sold_actually_shipped_since_created
+  //
+  // Two non-obvious filters on the sold counter:
+  //   1. Anchor at `inventory.created_at`. Pre-tracking orders
+  //      don't belong in "current stock" math.
+  //   2. Only count `order_status = 'shipped'` (NOT "any non-
+  //      cancelled order"). An awaiting_shipment order represents
+  //      a future commitment, not inventory that has physically
+  //      left the building. STOCK is meant to reflect what we
+  //      actually have on the floor right now.
+  //
+  // Returns: if a shipment carries `isReturn=true` we should
+  // technically add the qty back. We don't yet — returns are rare
+  // and the shipments table doesn't break down qty per item.
+  // Future work: enrich shipments with per-line returned qty.
+  //
+  // Receives are inherently post-created_at (FK constraint), so no
+  // symmetric filter is needed on the receives side. SOLD 30D
+  // stays unfiltered by created_at — it's an unbounded "last 30
+  // days" window by design.
+  //
+  // The cached stockQty stays in the response as `currentStock` for
+  // backward-compat; the new `effectiveStock` is what the operator
+  // sees in the STOCK column. A separate admin endpoint
+  // POST /admin/reconcile-inventory-stock can backfill stockQty to
+  // match effectiveStock for every row (see admin.ts).
   //
   // Allowed under the shipped-data lockdown: this is a READ-only
   // analytics computation. No locked rows are mutated.
@@ -160,7 +183,15 @@ app.get('/', zValidator('query', listQuery), async (c) => {
             and item ? 'sku'
             and lower(item->>'sku') = lower(i.sku)
             and coalesce(item->>'adjustment', 'false') <> 'true'
-            and coalesce(o.order_status, '') <> 'cancelled'
+            -- Only physically-shipped orders count toward sold.
+            -- awaiting_shipment = future commitment, not gone.
+            -- cancelled = never went out. shipped = left the floor.
+            and o.order_status = 'shipped'
+            -- Anchor: only count sales that landed AFTER we added
+            -- this SKU to inventory. Pre-tracking orders don't
+            -- belong in "current stock" math — see the long comment
+            -- block above this CTE.
+            and o.order_date >= i.created_at
           group by i.id
         )
         select
