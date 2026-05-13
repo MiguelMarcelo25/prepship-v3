@@ -3,21 +3,34 @@
 // api/carriers/walmart/fees.ts
 //
 // Vercel serverless endpoint: user-triggered Walmart selling-fee
-// pull. The "Pull Fees" button on each Walmart store row in
-// Settings → Carrier Integrations hits this. Refactored 2026-05-13
-// to delegate the core fetch + DB update to a shared helper at
-// api/_lib/walmart-fees-sync.ts so the nightly cron + backfill
-// script share the same implementation.
+// pull. Powers the "Pull Fees" button in Settings → Carriers on
+// each Walmart store row.
+//
+// Self-contained inline implementation (2026-05-13 revert). A
+// previous version imported the core logic from
+// api/_lib/walmart-fees-sync.ts but that bundle path produced
+// FUNCTION_INVOCATION_FAILED at cold-start on Vercel — module-load
+// failures, not runtime errors, surface as that error code. Rather
+// than chase a bundler heuristic, this file owns its own copy of
+// the fetch + classify + aggregate + UPDATE logic. The nightly
+// cron + operator backfill script still use the shared helper —
+// they were deployed at the same time and are easier to re-verify
+// independently.
 //
 // Auth: Supabase JWT.
 //
 // POST body:
 //   { storeAccountId: number, fromDate?: string, toDate?: string }
+//
+// Response (success):
+//   { ok: true, fetched, ordersUpdated, ordersMissing, totalFeesUsd,
+//     fromDate, toDate, fetchedAt, note? }
+// Response (failure):
+//   { ok: false, error: string }
 // ──────────────────────────────────────────────────────────────────
 
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import postgres from 'postgres';
-import { syncWalmartFeesForAccount } from '../../_lib/walmart-fees-sync';
 
 let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 function getJwks() {
@@ -78,6 +91,163 @@ function readBody(req: any): Promise<unknown> {
   });
 }
 
+// Mint a fresh Walmart OAuth token. Tokens expire ~15 min; we
+// don't cache here since the function is short-lived.
+async function getWalmartAccessToken(creds: Record<string, unknown>): Promise<string> {
+  const clientId = String(creds?.clientId ?? '').trim();
+  const clientSecret = String(creds?.clientSecret ?? '').trim();
+  if (!clientId || !clientSecret) {
+    throw new Error('Walmart credentials missing clientId or clientSecret');
+  }
+  const channelType = String(creds?.channelType ?? '').trim();
+  const basic = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+  const correlationId = `prepship-fees-${Date.now().toString(36)}`;
+  const headers: Record<string, string> = {
+    Authorization: `Basic ${basic}`,
+    'Content-Type': 'application/x-www-form-urlencoded',
+    Accept: 'application/json',
+    'WM_QOS.CORRELATION_ID': correlationId,
+    'WM_SVC.NAME': 'Walmart Marketplace',
+  };
+  if (channelType) headers['WM_CONSUMER.CHANNEL.TYPE'] = channelType;
+  const res = await fetch('https://marketplace.walmartapis.com/v3/token', {
+    method: 'POST',
+    headers,
+    body: 'grant_type=client_credentials',
+  });
+  if (!res.ok) {
+    const t = await res.text().then((s) => s.slice(0, 300)).catch(() => '');
+    throw new Error(`Walmart OAuth ${res.status}: ${t || res.statusText}`);
+  }
+  const data = (await res.json()) as { access_token?: string };
+  if (!data?.access_token) throw new Error('Walmart OAuth response missing access_token');
+  return data.access_token;
+}
+
+// Defensive money parser — Walmart varies between strings,
+// negatives, and { amount, currency } object shapes.
+function parseFeeAmount(value: unknown): number {
+  if (value == null) return 0;
+  if (typeof value === 'number') return Number.isFinite(value) ? Math.abs(value) : 0;
+  if (typeof value === 'string') {
+    const n = parseFloat(value);
+    return Number.isFinite(n) ? Math.abs(n) : 0;
+  }
+  if (typeof value === 'object') {
+    const amount = (value as { amount?: unknown; value?: unknown }).amount
+      ?? (value as { value?: unknown }).value;
+    return parseFeeAmount(amount);
+  }
+  return 0;
+}
+
+type FeeBucket = 'commission' | 'shippingCommission' | 'processingFee' | 'other';
+function classifyFeeBucket(record: Record<string, unknown>): FeeBucket {
+  const type = String(
+    record.transactionType ?? record.paymentType ?? record.feeType ?? record.type ?? ''
+  ).toLowerCase();
+  const description = String(record.transactionDescription ?? record.description ?? '').toLowerCase();
+  const combined = `${type} ${description}`;
+  if (combined.includes('shipping') && combined.includes('commission')) return 'shippingCommission';
+  if (combined.includes('shippingcommission')) return 'shippingCommission';
+  if (combined.includes('processing') || combined.includes('payment_fee')) return 'processingFee';
+  if (combined.includes('commission') || combined.includes('referral')) return 'commission';
+  return 'other';
+}
+
+interface WalmartTransaction {
+  customerOrderId?: string;
+  transactionType?: string;
+  transactionAmount?: unknown;
+  transactionDescription?: string;
+  commission?: unknown;
+  referralFee?: unknown;
+  shippingCommission?: unknown;
+  processingFee?: unknown;
+}
+
+async function fetchWalmartFeeTransactions(
+  accessToken: string,
+  fromDate: string,
+  toDate: string,
+  channelType: string,
+): Promise<{ transactions: WalmartTransaction[]; fetchedCount: number }> {
+  const transactions: WalmartTransaction[] = [];
+  const PAGE_LIMIT = 200;
+  let offset = 0;
+  let safety = 0;
+  while (safety < 100) {
+    safety += 1;
+    const correlationId = `prepship-fees-${Date.now().toString(36)}-${safety}`;
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: 'application/json',
+      'WM_QOS.CORRELATION_ID': correlationId,
+      'WM_SVC.NAME': 'Walmart Marketplace',
+    };
+    if (channelType) headers['WM_CONSUMER.CHANNEL.TYPE'] = channelType;
+    const url = new URL('https://marketplace.walmartapis.com/v3/payments');
+    url.searchParams.set('fromDate', fromDate);
+    url.searchParams.set('toDate', toDate);
+    url.searchParams.set('limit', String(PAGE_LIMIT));
+    url.searchParams.set('offset', String(offset));
+    const res = await fetch(url, { method: 'GET', headers });
+    if (!res.ok) {
+      const txt = await res.text().then((s) => s.slice(0, 400)).catch(() => '');
+      throw new Error(`Walmart /v3/payments ${res.status}: ${txt || res.statusText}`);
+    }
+    const data = (await res.json()) as Record<string, unknown>;
+    const records =
+      ((data?.paymentTransactionsResponse as { transactions?: WalmartTransaction[] })?.transactions)
+      ?? ((data?.elements as { transactions?: WalmartTransaction[] })?.transactions)
+      ?? ((data as { transactions?: WalmartTransaction[] }).transactions)
+      ?? ((data as { paymentRecords?: WalmartTransaction[] }).paymentRecords)
+      ?? [];
+    if (!Array.isArray(records) || records.length === 0) break;
+    transactions.push(...records);
+    if (records.length < PAGE_LIMIT) break;
+    offset += PAGE_LIMIT;
+  }
+  return { transactions, fetchedCount: transactions.length };
+}
+
+function aggregateFeesByOrder(transactions: WalmartTransaction[]): Map<string, { total: number; breakdown: Record<string, number> }> {
+  const map = new Map<string, { total: number; breakdown: Record<string, number> }>();
+  for (const tx of transactions) {
+    const orderId = String(tx.customerOrderId ?? '').trim();
+    if (!orderId) continue;
+    const buckets: Array<{ bucket: FeeBucket; amount: number }> = [];
+    if (tx.commission != null) buckets.push({ bucket: 'commission', amount: parseFeeAmount(tx.commission) });
+    if (tx.referralFee != null) buckets.push({ bucket: 'commission', amount: parseFeeAmount(tx.referralFee) });
+    if (tx.shippingCommission != null) buckets.push({ bucket: 'shippingCommission', amount: parseFeeAmount(tx.shippingCommission) });
+    if (tx.processingFee != null) buckets.push({ bucket: 'processingFee', amount: parseFeeAmount(tx.processingFee) });
+    if (buckets.length === 0) {
+      const type = String(tx.transactionType ?? '').toLowerCase();
+      if (type === 'sale' || type === 'payment' || type === 'payout') continue;
+      const bucket = classifyFeeBucket(tx as Record<string, unknown>);
+      const amount = parseFeeAmount(tx.transactionAmount);
+      if (amount > 0) buckets.push({ bucket, amount });
+    }
+    for (const { bucket, amount } of buckets) {
+      if (amount <= 0) continue;
+      let entry = map.get(orderId);
+      if (!entry) {
+        entry = { total: 0, breakdown: {} };
+        map.set(orderId, entry);
+      }
+      entry.total += amount;
+      entry.breakdown[bucket] = (entry.breakdown[bucket] ?? 0) + amount;
+    }
+  }
+  for (const v of map.values()) {
+    v.total = Math.round(v.total * 100) / 100;
+    for (const k of Object.keys(v.breakdown)) {
+      v.breakdown[k] = Math.round(v.breakdown[k] * 100) / 100;
+    }
+  }
+  return map;
+}
+
 export default async function handler(req: any, res: any): Promise<void> {
   const origin = (req.headers?.origin as string | undefined) ?? null;
   const ch = corsHeaders(origin);
@@ -101,21 +271,110 @@ export default async function handler(req: any, res: any): Promise<void> {
     return;
   }
 
-  // Default window: last 30 days. Operator passes fromDate/toDate
-  // (yyyy-mm-dd) for a back-fill.
   const now = new Date();
   const defaultFrom = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
   const fromDate = String(body?.fromDate ?? defaultFrom.toISOString().slice(0, 10));
   const toDate = String(body?.toDate ?? now.toISOString().slice(0, 10));
 
   const sql = postgres(dbUrl, { max: 1, prepare: false, idle_timeout: 5, connect_timeout: 5 });
+
   try {
-    const result = await syncWalmartFeesForAccount(sql, storeAccountId, fromDate, toDate);
-    if (!result.ok) {
-      res.status(result.error.includes('not found') ? 404 : 500).json(result);
+    // Self-heal schema columns (idempotent).
+    try {
+      await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS selling_fee NUMERIC(10, 2) NOT NULL DEFAULT 0`;
+      await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS selling_fee_breakdown JSONB NOT NULL DEFAULT '{}'::jsonb`;
+      await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS selling_fee_synced_at TIMESTAMPTZ`;
+      await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS selling_fee_source TEXT`;
+      await sql`CREATE INDEX IF NOT EXISTS orders_selling_fee_source_idx ON orders (selling_fee_source) WHERE selling_fee_source IS NOT NULL`;
+    } catch (err) {
+      console.warn('[walmart/fees] column bootstrap failed:', err instanceof Error ? err.message : err);
+    }
+
+    const acctRows = await sql<Array<{ id: number; provider: string; credentials: Record<string, unknown> | null }>>`
+      SELECT id, provider, credentials
+      FROM store_accounts
+      WHERE id = ${storeAccountId}
+      LIMIT 1
+    `;
+    if (acctRows.length === 0) {
+      res.status(404).json({ ok: false, error: `store_account #${storeAccountId} not found` });
       return;
     }
-    res.status(200).json({ ...result, fetchedAt: new Date().toISOString() });
+    const acct = acctRows[0];
+    if (acct.provider !== 'walmart') {
+      res.status(400).json({
+        ok: false,
+        error: `store_account #${storeAccountId} provider is "${acct.provider}", expected "walmart"`,
+      });
+      return;
+    }
+    const creds = acct.credentials ?? {};
+    const channelType = String((creds as { channelType?: unknown }).channelType ?? '').trim();
+
+    const accessToken = await getWalmartAccessToken(creds);
+    const { transactions, fetchedCount } = await fetchWalmartFeeTransactions(
+      accessToken,
+      fromDate,
+      toDate,
+      channelType,
+    );
+
+    const feeMap = aggregateFeesByOrder(transactions);
+    const customerOrderIds = Array.from(feeMap.keys());
+
+    if (customerOrderIds.length === 0) {
+      res.status(200).json({
+        ok: true,
+        fetched: fetchedCount,
+        ordersUpdated: 0,
+        ordersMissing: 0,
+        totalFeesUsd: 0,
+        fromDate,
+        toDate,
+        fetchedAt: new Date().toISOString(),
+        note: 'No fee-bearing transactions in window',
+      });
+      return;
+    }
+
+    const matched = await sql<Array<{ id: number; key: string }>>`
+      SELECT id,
+             coalesce(external_order_id, order_number) AS key
+      FROM orders
+      WHERE (external_order_id = ANY (${customerOrderIds}::text[]))
+         OR (order_number = ANY (${customerOrderIds}::text[]))
+    `;
+
+    let totalFees = 0;
+    let updated = 0;
+    await sql.begin(async (trx) => {
+      for (const row of matched) {
+        const entry = feeMap.get(row.key);
+        if (!entry) continue;
+        totalFees += entry.total;
+        await trx`
+          UPDATE orders
+          SET selling_fee = ${entry.total},
+              selling_fee_breakdown = ${entry.breakdown as Record<string, number>}::jsonb,
+              selling_fee_synced_at = NOW(),
+              selling_fee_source = 'walmart',
+              updated_at = NOW()
+          WHERE id = ${row.id}
+        `;
+        updated += 1;
+      }
+    });
+
+    res.status(200).json({
+      ok: true,
+      fetched: fetchedCount,
+      ordersUpdated: updated,
+      ordersMissing: Math.max(customerOrderIds.length - updated, 0),
+      totalFeesUsd: Math.round(totalFees * 100) / 100,
+      fromDate,
+      toDate,
+      fetchedAt: new Date().toISOString(),
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[walmart/fees]', msg);
