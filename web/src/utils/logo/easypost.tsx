@@ -1,0 +1,22 @@
+// @ts-nocheck
+// EasyPost mark supplied by the user. Sized by height; the viewBox is square.
+
+export default function EasyPostLogo({ height = 30, ...props }: { height?: number } & React.SVGProps<SVGSVGElement>) {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width={height}
+      height={height}
+      viewBox="0 0 150 150"
+      role="img"
+      aria-label="EasyPost"
+      {...props}
+    >
+      <path fill="none" d="M0 0h150v150H0V0Z" />
+      <path
+        fill="#164dff"
+        d="M72.15 87.06c.86.49 1.61.62 2.6.62.87 0 1.86-.24 2.61-.62l55.27-31.91V46.7c0-3.1-1.61-5.96-4.22-7.45L78.97 10.8c-1.23-.74-2.73-1.12-4.22-1.12s-2.85.38-4.22 1.12L21.1 39.24c-2.61 1.49-4.22 4.35-4.22 7.45v57c0 2.99 1.61 5.84 4.22 7.34l49.42 28.56c1.37.74 2.74 1.12 4.22 1.12s2.99-.38 4.22-1.12l49.43-28.56c2.61-1.49 4.22-4.35 4.22-7.34v-8.44l-55.27 31.92c-.62.37-1.61.62-2.61.62-.86 0-1.74-.13-2.6-.62L45.8 111.89V98.61l26.33 15.15c.86.49 1.74.75 2.6.75 1 0 1.86-.25 2.61-.75l55.27-31.91V68.43L77.34 100.48c-.75.37-1.74.62-2.61.62-.99 0-1.74-.13-2.6-.62L45.8 85.2V71.79l26.33 15.27Z"
+      />
+    </svg>
+  )
+}

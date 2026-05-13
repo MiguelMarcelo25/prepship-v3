@@ -27,6 +27,9 @@
 import UpsLogo from '../utils/logo/ups'
 import UspsLogo from '../utils/logo/usps'
 import FedexLogo from '../utils/logo/fedex'
+import ShippLogo from '../utils/logo/shipp'
+import EasyPostLogo from '../utils/logo/easypost'
+import WalmartLogo from '../utils/logo/walmart'
 
 type CarrierBadgeSize = 'xs' | 'sm' | 'md'
 
@@ -51,6 +54,9 @@ interface SizeConfig {
    * width with a few px of horizontal padding on each side.
    */
   fedex: number
+  shipp: number
+  easypost: number
+  walmart: number
   /** Pill font size (px) for non-UPS/USPS carriers. */
   pillFontSize: number
   /** Pill horizontal padding (px). */
@@ -60,17 +66,27 @@ interface SizeConfig {
 const SIZES: Record<CarrierBadgeSize, SizeConfig> = {
   // xs — compact for future extra-tight contexts. FedEx h=10 lands
   // at width ~36 (matches slot width).
-  xs: { slot: { w: 36, h: 22 }, ups: 20, usps: 14, fedex: 10, pillFontSize: 9.5, pillPaddingX: 4 },
+  xs: { slot: { w: 36, h: 22 }, ups: 20, usps: 14, fedex: 10, shipp: 9, easypost: 18, walmart: 19, pillFontSize: 9.5, pillPaddingX: 4 },
   // sm — orders-table / rate-list. FedEx h=17 → w=61 fits 64-px slot
   // with 1.5px breathing room on each side. UPS h=36 fills vertically.
-  sm: { slot: { w: 64, h: 38 }, ups: 36, usps: 26, fedex: 17, pillFontSize: 12, pillPaddingX: 7 },
+  sm: { slot: { w: 64, h: 38 }, ups: 36, usps: 26, fedex: 17, shipp: 15, easypost: 30, walmart: 31, pillFontSize: 12, pillPaddingX: 7 },
   // md — New Order modal prominent rate preview. FedEx h=20 → w=72
   // fits 78-px slot with 3px breathing room each side.
-  md: { slot: { w: 78, h: 48 }, ups: 46, usps: 32, fedex: 20, pillFontSize: 13, pillPaddingX: 9 },
+  md: { slot: { w: 78, h: 48 }, ups: 46, usps: 32, fedex: 20, shipp: 19, easypost: 38, walmart: 39, pillFontSize: 13, pillPaddingX: 9 },
 }
 
-function classifyCarrier(code: string): 'ups' | 'usps' | 'fedex' | 'other' {
+function classifyCarrier(code: string): 'ups' | 'usps' | 'fedex' | 'shipp' | 'easypost' | 'walmart' | 'other' {
   const lower = code.toLowerCase().trim()
+  if (
+    lower === 'shipp' ||
+    lower.startsWith('shipp_') ||
+    lower.startsWith('shipp-') ||
+    lower.includes('shipp.to') ||
+    lower.includes('shipp carrier')
+  )
+    return 'shipp'
+  if (lower.includes('easypost') || lower.includes('easy_post') || lower.includes('easy-post')) return 'easypost'
+  if (lower.includes('walmart')) return 'walmart'
   if (
     lower === 'usps' ||
     lower.startsWith('usps_') ||
@@ -92,11 +108,19 @@ function formatCarrierLabel(code: string): string {
   if (lower.includes('stamps') || lower.includes('usps')) return 'USPS'
   if (lower.includes('ups')) return 'UPS'
   if (lower.includes('fedex')) return 'FedEx'
+  if (
+    lower === 'shipp' ||
+    lower.startsWith('shipp_') ||
+    lower.startsWith('shipp-') ||
+    lower.includes('shipp.to') ||
+    lower.includes('shipp carrier')
+  )
+    return 'Shipp'
   if (lower.includes('dhl')) return 'DHL'
   if (lower.includes('walmart')) return 'Walmart'
   if (lower.includes('amazon')) return 'Amazon'
   if (lower.includes('ebay')) return 'eBay'
-  if (lower.includes('easypost')) return 'EasyPost'
+  if (lower.includes('easypost') || lower.includes('easy_post') || lower.includes('easy-post')) return 'EasyPost'
   return code.replace(/^custom_?/i, '').replace(/_/g, ' ').toUpperCase()
 }
 
@@ -141,6 +165,30 @@ export default function CarrierBadge({ code, size = 'sm', className = '' }: Prop
     return (
       <span className={slotClass} style={slotStyle} title="FedEx">
         <FedexLogo height={dims.fedex} />
+      </span>
+    )
+  }
+
+  if (carrier === 'shipp') {
+    return (
+      <span className={slotClass} style={slotStyle} title="Shipp">
+        <ShippLogo height={dims.shipp} />
+      </span>
+    )
+  }
+
+  if (carrier === 'easypost') {
+    return (
+      <span className={slotClass} style={slotStyle} title="EasyPost">
+        <EasyPostLogo height={dims.easypost} />
+      </span>
+    )
+  }
+
+  if (carrier === 'walmart') {
+    return (
+      <span className={slotClass} style={slotStyle} title="Walmart">
+        <WalmartLogo height={dims.walmart} />
       </span>
     )
   }

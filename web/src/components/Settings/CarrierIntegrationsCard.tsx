@@ -22,6 +22,9 @@ import {
 import { callVercelFunction } from '../../lib/vercelFunction'
 import { formatCaDateShort } from '../../lib/ca-time'
 import { useAllClients } from '../../hooks'
+import ShippLogo from '../../utils/logo/shipp'
+import EasyPostLogo from '../../utils/logo/easypost'
+import WalmartLogo from '../../utils/logo/walmart'
 
 // Modern animated checkbox — used in the Assign-Clients popover.
 // Native <input type="checkbox"> hidden with sr-only; the visual is
@@ -285,6 +288,8 @@ interface ProviderDef {
   simpleIconsSlug?: string
   /** Exact logo asset to try before CDN/favicon fallbacks. */
   logoUrl?: string
+  /** Local SVG component for provider logos we ship with the app. */
+  logoComponent?: React.ComponentType<{ height?: number; className?: string; style?: React.CSSProperties }>
   fields: CredentialField[]
   /** 'store' = marketplace order source (Walmart, Amazon). 'carrier' = real
    *  shipping carrier (UPS, USPS, FedEx, DHL, etc.). Drives which Settings
@@ -363,6 +368,7 @@ const PROVIDER_DEFS: ProviderDef[] = [
     setupTier: 1,
     credentialsUrl: 'https://www.easypost.com/account/api-keys',
     domain: 'easypost.com',
+    logoComponent: EasyPostLogo,
     fields: [
       {
         name: 'apiKey',
@@ -393,6 +399,7 @@ const PROVIDER_DEFS: ProviderDef[] = [
     setupTier: 1,
     credentialsUrl: 'https://shipp.to/api-docs.html',
     domain: 'shipp.to',
+    logoComponent: ShippLogo,
     fields: [
       {
         name: 'apiKey',
@@ -449,6 +456,7 @@ const PROVIDER_DEFS: ProviderDef[] = [
     setupTier: 2,
     credentialsUrl: 'https://developer.walmart.com/account/login',
     domain: 'walmart.com',
+    logoComponent: WalmartLogo,
     fields: [
       { name: 'clientId', label: 'Client ID', hint: 'Same Client ID used for the Walmart Store integration.' },
       { name: 'clientSecret', label: 'Client Secret', type: 'password' },
@@ -631,6 +639,7 @@ const PROVIDER_DEFS: ProviderDef[] = [
     setupTier: 2,
     credentialsUrl: 'https://developer.walmart.com/account/login',
     domain: 'walmart.com',
+    logoComponent: WalmartLogo,
     fields: [
       {
         name: 'clientId',
@@ -877,6 +886,14 @@ const PROVIDER_DEFS: ProviderDef[] = [
 //                          (their free tier is deprecated but URLs still
 //                          serve some brands as of late 2024)
 function ProviderLogo({ provider, size }: { provider: ProviderDef; size: number }) {
+  if (provider.logoComponent) {
+    const Logo = provider.logoComponent
+    const height = provider.key === 'shipp'
+      ? Math.round(size * 0.27)
+      : Math.round(size * 0.65)
+    return <Logo height={height} />
+  }
+
   const sources: string[] = []
   if (provider.logoUrl) sources.push(provider.logoUrl)
   if (provider.simpleIconsSlug) {
