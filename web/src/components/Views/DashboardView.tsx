@@ -2146,26 +2146,68 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           {/* Top SKUs list — flex-1 + overflow-auto so when operator
               stretches the panel taller, MORE rows become visible
               (scrolling for tall lists) instead of the rows getting
-              taller themselves. */}
-          <div className="flex-1 min-h-0 space-y-3 overflow-y-auto pr-1">
-            {topSkuRows.map((row, index) => (
-              <button
-                key={row.sku}
-                type="button"
-                onClick={() => onOpenSku?.(row.sku)}
-                className="group grid w-full grid-cols-[22px_minmax(0,1fr)_44px] items-start gap-2 text-left"
-              >
-                <div className="pt-0.5 text-xs font-extrabold text-ink-2">{index + 1}</div>
-                <div className="min-w-0">
-                  <div className="truncate text-xs font-semibold text-ink group-hover:text-brand">{row.product}</div>
-                  <div className="truncate text-2xs font-mono text-ink-3">{row.sku}</div>
-                  <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-line/70">
-                    <div className="h-full rounded-full bg-brand" style={{ width: `${Math.max(5, (row.units30 / maxTopSku) * 100)}%` }} />
+              taller themselves.
+
+              Readability redesign (2026-05-13): previously the row
+              was a single-line truncated product name with a tiny
+              SKU code and a thin progress bar. Long marketplace
+              titles got cut off at "Korean ra..." which made the
+              list unscannable. New layout:
+                - Rounded brand-tinted rank badge (visual anchor)
+                - line-clamp-2 product name (two lines fit most full
+                  titles before ellipsis kicks in)
+                - SKU code in a faint pill so it doesn't compete with
+                  the product name
+                - Bigger right-aligned units count with a "units"
+                  label below for scanability
+                - Subtle hover background to surface row-as-button
+                - Divider between rows for cleaner separation
+          */}
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 divide-y divide-line/60">
+            {topSkuRows.map((row, index) => {
+              const pct = Math.max(5, Math.min(100, (row.units30 / maxTopSku) * 100))
+              return (
+                <button
+                  key={row.sku}
+                  type="button"
+                  onClick={() => onOpenSku?.(row.sku)}
+                  className="group grid w-full grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-3 rounded-md px-1.5 py-2.5 text-left transition-colors hover:bg-surface-2"
+                >
+                  {/* Rank badge — brand-tinted circle anchors the eye
+                      to scan rank order before reading product names */}
+                  <div className="grid h-7 w-7 place-items-center rounded-full bg-brand/10 text-2xs font-extrabold tabular-nums text-brand ring-1 ring-brand/20">
+                    {index + 1}
                   </div>
-                </div>
-                <div className="pt-0.5 text-right text-xs font-bold text-ink font-mono tabular-nums">{formatInt(row.units30)}</div>
-              </button>
-            ))}
+                  {/* Center column — product (2 lines) + SKU + bar */}
+                  <div className="min-w-0">
+                    <div className="line-clamp-2 text-tiny font-semibold leading-snug text-ink group-hover:text-brand">
+                      {row.product}
+                    </div>
+                    <div className="mt-1 flex items-center gap-2">
+                      <span className="rounded-sm bg-surface-2 px-1 py-px font-mono text-[10px] text-ink-3">{row.sku}</span>
+                    </div>
+                    <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-line/60">
+                      <div
+                        className="h-full rounded-full bg-brand transition-[width] duration-300"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                  </div>
+                  {/* Right column — units count with a label below
+                      so the operator immediately reads "85 units"
+                      not just "85". Tabular-nums keeps the numbers
+                      aligned even across different digit counts. */}
+                  <div className="flex flex-col items-end pl-1 leading-none">
+                    <span className="font-mono text-sm font-extrabold tabular-nums text-ink">
+                      {formatInt(row.units30)}
+                    </span>
+                    <span className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-ink-3">
+                      units
+                    </span>
+                  </div>
+                </button>
+              )
+            })}
             {topSkuRows.length === 0 ? (
               <div className="grid h-40 place-items-center text-tiny text-ink-3">No SKU data available.</div>
             ) : null}
