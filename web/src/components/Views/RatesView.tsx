@@ -59,13 +59,21 @@ function formatMoney(amount: number) {
 }
 
 function LabelCostCell({ row }: { row: RateRowView }) {
-  // 2026-05-13: stopped surfacing the "+ Markup $X.XX" suffix per
-  // operator request. The markup amount is internal margin info that
-  // doesn't need to be visible alongside the cost on every rate row.
-  // The tooltip is also simplified to just the label cost so
-  // operators don't see the same breakdown on hover. Markup is still
-  // computed (row.profit) so anything else that consumes it keeps
-  // working — only the cell render changed.
+  // 2026-05-13 (v2): the "Cost $X.XX" subline is now only shown
+  // when there's an actual markup. If yourPrice equals baseCost
+  // (no carrier markup configured / applied for this rate), then
+  // "Cost $9.84" sitting below "$9.84" was just duplicated info
+  // — the cell read like a stuttering ticket stub. Now:
+  //   • Markup present  → top: $11.32 (orange), sub: Cost $9.84
+  //   • No markup       → top: $9.84 (orange), no sub
+  // Threshold 0.005 catches floating-point near-zero (e.g.
+  // 9.84 - 9.8399999999 = ~1e-10) without false-positive on a
+  // legitimate $0.01 markup.
+  //
+  // Earlier change (kept): "+ Markup $X.XX" suffix is still
+  // suppressed when markup IS present — operators see just the
+  // cost breakdown, not the per-line margin disclosure.
+  const hasMarkup = row.profit >= 0.005
   return (
     <div
       className="leading-tight"
@@ -74,9 +82,11 @@ function LabelCostCell({ row }: { row: RateRowView }) {
       <div className="font-mono tabular-nums text-[12.5px] font-extrabold text-orange-600">
         {formatMoney(row.yourPrice)}
       </div>
-      <div className="mt-0.5 whitespace-nowrap text-[10.5px] font-semibold text-ink-3">
-        Cost {formatMoney(row.baseCost)}
-      </div>
+      {hasMarkup ? (
+        <div className="mt-0.5 whitespace-nowrap text-[10.5px] font-semibold text-ink-3">
+          Cost {formatMoney(row.baseCost)}
+        </div>
+      ) : null}
     </div>
   )
 }
