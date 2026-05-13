@@ -533,7 +533,7 @@ function buildTrend(current: SalesPayload, prior: SalesPayload): TrendPoint[] {
   })
 }
 
-function buildHeatmap(current: SalesPayload, prior: SalesPayload): HeatmapRow[] {
+function buildHeatmap(current: SalesPayload, prior: SalesPayload, limit = 6): HeatmapRow[] {
   const dates = safeArray<string>(current?.dates)
   const currentSeries = current?.series ?? {}
   const priorSeries = prior?.series ?? {}
@@ -562,7 +562,7 @@ function buildHeatmap(current: SalesPayload, prior: SalesPayload): HeatmapRow[] 
 
   return [...familyBuckets.entries()]
     .sort((a, b) => b[1].total - a[1].total)
-    .slice(0, 6)
+    .slice(0, Math.max(1, limit))
     .map(([label, bucket]) => {
       const baseline = sumValues(bucket.prior) / Math.max(1, bucket.prior.length)
       const fallback = sumValues(bucket.current) / Math.max(1, bucket.current.length) || 1
@@ -756,6 +756,40 @@ function SectionSizeToggle({
 
 function TinyTrend({ values, negative = false }: { values: number[]; negative?: boolean }) {
   return <MiniSparkline values={values} positive={!negative} />
+}
+
+// Top-N dropdown — surfaced in the Top SKUs and Heatmap panel headers
+// so operators can pick how many ranked rows to show. Uses a styled
+// native <select> (small, themed) instead of a custom popover so it
+// inherits OS / keyboard / accessibility behavior for free. The
+// onChange handler always returns a value from the fixed set, so
+// callers can keep their state strongly typed.
+function TopNDropdown({
+  value,
+  onChange,
+  options,
+  ariaLabel,
+}: {
+  value: number
+  onChange: (next: number) => void
+  options: readonly number[]
+  ariaLabel: string
+}) {
+  return (
+    <label className="inline-flex items-center gap-1.5 text-2xs font-bold text-ink-3">
+      <span className="hidden sm:inline">Show</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        aria-label={ariaLabel}
+        className="h-7 cursor-pointer rounded-md border border-line bg-surface px-1.5 pr-5 text-2xs font-extrabold text-ink outline-none ring-0 transition hover:bg-surface-2 focus:border-brand focus:ring-1 focus:ring-brand"
+      >
+        {options.map((n) => (
+          <option key={n} value={n}>Top {n}</option>
+        ))}
+      </select>
+    </label>
+  )
 }
 
 export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
@@ -976,6 +1010,44 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
       if (next.has(key)) next.delete(key); else next.add(key)
       return next
     })
+
+  // Top-N dropdown values for the two ranking panels. Operators can
+  // pick Top 5 / Top 10 / Top 15 / Top 20 / Top 25 / Top 30 from a
+  // small inline select in each panel header. Persisted per-panel so
+  // an operator who works mostly with the heatmap can keep that at
+  // top-30 while keeping Top SKUs at top-5 (or vice-versa).
+  // The actual slice happens in useMemo so the panel automatically
+  // re-renders when the count changes — no manual refresh needed.
+  const TOP_N_OPTIONS = [5, 10, 15, 20, 25, 30] as const
+  type TopNValue = (typeof TOP_N_OPTIONS)[number]
+  const isTopN = (v: unknown): v is TopNValue =>
+    typeof v === 'number' && (TOP_N_OPTIONS as readonly number[]).includes(v)
+
+  const TOP_SKU_LIMIT_KEY = 'dashboard_top_sku_limit_v1'
+  const [topSkuLimit, setTopSkuLimit] = useState<TopNValue>(() => {
+    if (typeof window === 'undefined') return 20
+    try {
+      const raw = window.localStorage.getItem(TOP_SKU_LIMIT_KEY)
+      const parsed = raw == null ? null : Number(raw)
+      return isTopN(parsed) ? parsed : 20
+    } catch { return 20 }
+  })
+  useEffect(() => {
+    try { window.localStorage.setItem(TOP_SKU_LIMIT_KEY, String(topSkuLimit)) } catch { /* non-fatal */ }
+  }, [topSkuLimit])
+
+  const HEATMAP_LIMIT_KEY = 'dashboard_heatmap_limit_v1'
+  const [heatmapLimit, setHeatmapLimit] = useState<TopNValue>(() => {
+    if (typeof window === 'undefined') return 5
+    try {
+      const raw = window.localStorage.getItem(HEATMAP_LIMIT_KEY)
+      const parsed = raw == null ? null : Number(raw)
+      return isTopN(parsed) ? parsed : 5
+    } catch { return 5 }
+  })
+  useEffect(() => {
+    try { window.localStorage.setItem(HEATMAP_LIMIT_KEY, String(heatmapLimit)) } catch { /* non-fatal */ }
+  }, [heatmapLimit])
 
   // Drag-and-drop handlers for the edit-mode panel reordering.
   // Mirror the column-reorder pattern used by the table primitive
@@ -1326,7 +1398,10 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   }, [selectedClientId])
 
   const trend = useMemo(() => buildTrend(currentSales, priorSales), [currentSales, priorSales])
-  const heatmap = useMemo(() => buildHeatmap(currentSales, priorSales), [currentSales, priorSales])
+  const heatmap = useMemo(
+    () => buildHeatmap(currentSales, priorSales, heatmapLimit),
+    [currentSales, priorSales, heatmapLimit],
+  )
 
   const currentAgg = useMemo(() => aggregateOrders(currentOrders, dateOnly(6)), [currentOrders])
   const priorAgg = useMemo(() => aggregateOrders(priorOrders, dateOnly(36)), [priorOrders])
@@ -1530,17 +1605,13 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   const totalPages = Math.max(1, Math.ceil(favoritesFirstRows.length / pageSize))
   const pageRows = favoritesFirstRows.slice((page - 1) * pageSize, page * pageSize)
 
-  // Top 20 SKUs by 30-day units. Slice up from the old cap of 5 so
-  // when the operator stretches the Top SKUs panel taller in Edit
-  // mode they actually see MORE data populating in — the panel
-  // becomes dynamic with vertical size. The wrapper around this list
-  // is flex-1 min-h-0 overflow-y-auto, so a short panel scrolls and
-  // a tall panel shows the full top-20 with no scroll. Numbers
-  // beyond 20 deliver diminishing operational signal — top-20 is
-  // the sweet spot for inventory-monitoring dashboards.
+  // Top-N SKUs by 30-day units, where N is operator-controlled via
+  // the Top SKUs panel header dropdown (5/10/15/20/25/30). The wrapper
+  // around this list is flex-1 min-h-0 overflow-y-auto, so a short
+  // panel scrolls and a tall panel shows the full slice with no scroll.
   const topSkuRows = useMemo(
-    () => [...skuRows].sort((left, right) => right.units30 - left.units30).slice(0, 20),
-    [skuRows],
+    () => [...skuRows].sort((left, right) => right.units30 - left.units30).slice(0, topSkuLimit),
+    [skuRows, topSkuLimit],
   )
 
   useEffect(() => {
@@ -2036,10 +2107,16 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           ) : null}
           <div className="flex items-start justify-between gap-3 mb-3">
             <div>
-              <h3 className="text-sm font-extrabold text-ink">Top 20 SKUs (30d)</h3>
+              <h3 className="text-sm font-extrabold text-ink">Top {topSkuLimit} SKUs (30d)</h3>
               <p className="text-tiny text-ink-3">By total units sold · stretch to see more</p>
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
+              <TopNDropdown
+                value={topSkuLimit}
+                onChange={(n) => setTopSkuLimit(n as TopNValue)}
+                options={TOP_N_OPTIONS}
+                ariaLabel="Choose how many top SKUs to show"
+              />
               <SectionSizeToggle
                 value={sectionSizes.topSkus}
                 onChange={(size) => setSectionSize('topSkus', size)}
@@ -2130,9 +2207,15 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
           <div>
             <h3 className="text-sm font-extrabold text-ink">Sales Performance Heatmap by SKU Family</h3>
-            <p className="text-tiny text-ink-3">Performance vs prior 30 days</p>
+            <p className="text-tiny text-ink-3">Top {heatmapLimit} families · performance vs prior 30 days</p>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
+            <TopNDropdown
+              value={heatmapLimit}
+              onChange={(n) => setHeatmapLimit(n as TopNValue)}
+              options={TOP_N_OPTIONS}
+              ariaLabel="Choose how many SKU families to show in the heatmap"
+            />
             <SectionSizeToggle
               value={sectionSizes.heatmap}
               onChange={(size) => setSectionSize('heatmap', size)}
