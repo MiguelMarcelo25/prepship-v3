@@ -15,7 +15,6 @@ export interface RatesFormState {
   heightIn: string
   fromZip: string
   toZip: string
-  markup: string
 }
 
 export interface RatesEmptyState {
@@ -363,14 +362,12 @@ function getMarkupAmount(baseCost: number, markup: RateMarkup | null): number {
 
 export function buildRateRows(
   rates: RateDto[],
-  manualMarkupValue: number,
   sourceAccounts: RateSourceAccount[] = [],
   markups: RateMarkupsMap = {},
 ): RateRowView[] {
   const rows = rates.map((rate) => {
     const baseCost = getRateBaseCost(rate)
-    const savedMarkupAmount = getMarkupAmount(baseCost, getRateMarkup(rate, markups))
-    const profit = savedMarkupAmount + manualMarkupValue
+    const profit = getMarkupAmount(baseCost, getRateMarkup(rate, markups))
     const rateSource = getRateSourceLabel(rate, sourceAccounts)
     return {
       carrierLabel: getCarrierLabel(rate),

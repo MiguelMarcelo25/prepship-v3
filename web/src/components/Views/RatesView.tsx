@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useContext, useMemo, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useContext, useMemo, useState, type FormEvent } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   DollarSign,
@@ -30,7 +30,6 @@ import {
   getAvailableRates,
   getCarrierBadgeClass,
   getRatesValidationState,
-  parseRatesNumber,
   type RatesEmptyState,
   type RatesFormState,
 } from './rates-parity'
@@ -46,10 +45,6 @@ const DEFAULT_FORM: RatesFormState = {
   heightIn: '4',
   fromZip: '90248',
   toZip: '',
-  // Default markup is $0.00 — operators set their own per use. The
-  // previous $1.00 default surprised users who didn't notice it and
-  // got rates with an unexplained dollar tacked on.
-  markup: '0.00',
 }
 
 type RatesResultState =
@@ -99,9 +94,8 @@ export default function RatesView() {
   const { accounts: shippingAccounts, isLoading: accountsLoading } = useShippingAccounts()
   const { markups } = useMarkups()
 
-  const manualMarkupValue = parseRatesNumber(form.markup)
   const rows = resultState.kind === 'table'
-    ? buildRateRows(resultState.rates, manualMarkupValue, shippingAccounts, markups)
+    ? buildRateRows(resultState.rates, shippingAccounts, markups)
     : []
   const sortedRows = useMemo(() => sortRows(
     rows,
@@ -170,16 +164,6 @@ export default function RatesView() {
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    void fetchRates()
-  }
-
-  function handleMarkupBlur() {
-    if (resultState.kind === 'table') void fetchRates()
-  }
-
-  function handleMarkupKeyDown(event: KeyboardEvent<HTMLInputElement>) {
-    if (event.key !== 'Enter') return
     event.preventDefault()
     void fetchRates()
   }
@@ -359,20 +343,6 @@ export default function RatesView() {
             {accountsLoading ? 'Loading carriers…' : resultState.kind === 'loading' ? 'Fetching…' : 'Get Live Rates'}
           </motion.button>
 
-          <label className="inline-flex items-center gap-2 text-[12.5px] text-ink-2 font-medium">
-            Extra Markup $
-            <input
-              id="globalMarkup"
-              type="number"
-              value={form.markup}
-              step="0.25"
-              min="0"
-              onChange={(event) => setForm((current) => ({ ...current, markup: event.target.value }))}
-              onBlur={handleMarkupBlur}
-              onKeyDown={handleMarkupKeyDown}
-              className="w-20 px-2 py-1 rounded-md border border-line bg-page/60 text-center text-[12.5px] text-ink font-mono tabular-nums focus:border-brand/60 focus:ring-2 focus:ring-brand/15 transition-all duration-150 outline-none"
-            />
-          </label>
         </div>
       </motion.form>
 
