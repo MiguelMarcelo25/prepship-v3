@@ -110,35 +110,44 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     soldRows.map((row) => [row.inventory_id, Number(row.sold_last_30_days) || 0])
   );
 
-  // 2026-05-13 / refined 2026-05-14 (a+b): operator reported the
-  // STOCK column shows numbers that don't match -SOLD (e.g. "sold
-  // 85 / stock 0" or "sold 65 / stock -79"). Root cause: `stockQty`
-  // is only mutated by the auto-deduct path, which (a) didn't track
-  // historical orders shipped before the system came online and (b)
-  // skips edge cases like external labels.
+  // 2026-05-13 / refined 2026-05-14 (a+b+c): operator reported the
+  // STOCK column shows numbers that don't match -SOLD. Root cause:
+  // `stockQty` is only mutated by the auto-deduct path, which
+  // didn't track historical orders shipped before the system came
+  // online and skips edge cases like external labels.
   //
-  // Definition (refined 2026-05-14):
+  // Definition (current — revision (c) 2026-05-14):
   //
-  //   effective_stock = total_received − total_sold_actually_shipped_since_created
+  //   effective_stock = total_received − total_sold_shipped_all_time
   //
-  // Two non-obvious filters on the sold counter:
-  //   1. Anchor at `inventory.created_at`. Pre-tracking orders
-  //      don't belong in "current stock" math.
-  //   2. Only count `order_status = 'shipped'` (NOT "any non-
-  //      cancelled order"). An awaiting_shipment order represents
-  //      a future commitment, not inventory that has physically
-  //      left the building. STOCK is meant to reflect what we
-  //      actually have on the floor right now.
+  // The one non-obvious filter on the sold counter:
+  //   Only count `order_status = 'shipped'` (NOT "any non-
+  //   cancelled order"). An awaiting_shipment order represents a
+  //   future commitment, not inventory that has physically left
+  //   the building. STOCK is meant to reflect what we actually
+  //   have on the floor right now.
+  //
+  // History of attempts:
+  //   (a) sum of all non-cancelled order quantities — inflated by
+  //       awaiting_shipment orders, didn't match operator's "what
+  //       has actually gone out" mental model.
+  //   (b) anchored sold counter at inventory.created_at — backfired
+  //       on auto-synced SKUs whose created_at is TODAY but whose
+  //       order history goes back further. Most SKUs are auto-
+  //       synced, so most rows came out wrong.
+  //   (c) (current) no created_at anchor. For an operator who hasn't
+  //       received anything, STOCK = −(every order they've ever
+  //       shipped for this SKU). Matches their mental model
+  //       exactly: "we haven't received any, so STOCK should be
+  //       what's gone."
   //
   // Returns: if a shipment carries `isReturn=true` we should
   // technically add the qty back. We don't yet — returns are rare
   // and the shipments table doesn't break down qty per item.
-  // Future work: enrich shipments with per-line returned qty.
   //
-  // Receives are inherently post-created_at (FK constraint), so no
-  // symmetric filter is needed on the receives side. SOLD 30D
-  // stays unfiltered by created_at — it's an unbounded "last 30
-  // days" window by design.
+  // SOLD 30D stays unrelated to this — it's an unbounded "last 30
+  // days regardless of status" window by design, used as a "recent
+  // velocity" indicator, not a stock signal.
   //
   // The cached stockQty stays in the response as `currentStock` for
   // backward-compat; the new `effectiveStock` is what the operator
@@ -186,12 +195,12 @@ app.get('/', zValidator('query', listQuery), async (c) => {
             -- Only physically-shipped orders count toward sold.
             -- awaiting_shipment = future commitment, not gone.
             -- cancelled = never went out. shipped = left the floor.
+            -- (Revision (c): the created_at anchor that lived here
+            -- was removed — it backfired on auto-synced SKUs whose
+            -- created_at is TODAY but whose order history is
+            -- older. See the long comment block above for the
+            -- full reasoning.)
             and o.order_status = 'shipped'
-            -- Anchor: only count sales that landed AFTER we added
-            -- this SKU to inventory. Pre-tracking orders don't
-            -- belong in "current stock" math — see the long comment
-            -- block above this CTE.
-            and o.order_date >= i.created_at
           group by i.id
         )
         select

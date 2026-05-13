@@ -986,9 +986,11 @@ app.post('/cleanup-stale-queue-entries', async (c) => {
 });
 
 // One-time reconciliation: walk every active inventory row, compute
-//   effective_stock = total_received − total_sold_shipped_since_created
+//   effective_stock = total_received − total_sold_shipped_all_time
 // (the same formula the /inventory list route now uses to populate
-// the STOCK column), and write that value into inventory.stockQty
+// the STOCK column — see the long comment block in inventory.ts for
+// the full semantics and revision history), and write that value
+// into inventory.stockQty
 // so the cached field aligns with what operators see. For each row
 // that actually needed adjustment, insert a single `adjust`-type
 // inventory_ledger entry recording the delta so the History panel
@@ -1051,7 +1053,6 @@ app.post('/reconcile-inventory-stock', async (c) => {
         and lower(item->>'sku') = lower(i.sku)
         and coalesce(item->>'adjustment', 'false') <> 'true'
         and o.order_status = 'shipped'
-        and o.order_date >= i.created_at
       group by i.id
     )
     select
