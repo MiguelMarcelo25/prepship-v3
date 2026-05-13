@@ -442,7 +442,7 @@ export default function RatesView() {
       </motion.form>
 
       {/* Results */}
-      <div id="ratesResult" className="mt-5 w-full max-w-[1400px]">
+      <div id="ratesResult" className="mt-5 w-full max-w-4xl">
         <AnimatePresence mode="wait">
           {resultState.kind === 'loading' ? (
             <motion.div
