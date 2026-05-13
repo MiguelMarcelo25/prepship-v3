@@ -186,9 +186,13 @@ function pillSizeFor(size: AnalysisColumnSize) {
 }
 
 function skuClassesFor(size: AnalysisColumnSize, isLink: boolean) {
+  // 2026-05-13: text-center added so the SKU value matches the
+  // centered SKU column header. Was browser-default (left), which
+  // visually clumped SKUs to the left edge of their cell while the
+  // header text sat in the middle — operator-reported asymmetry.
   return [
     cellPaddingFor(size),
-    'text-[14px]',
+    'text-[14px] text-center',
     "font-bold tabular-nums font-['JetBrains_Mono','Fira_Code',ui-monospace,monospace] !text-[#1d4ed8]",
     isLink ? 'underline decoration-[1px] underline-offset-2 decoration-[#1d4ed8]' : '',
     'border-b border-line align-middle',
@@ -370,13 +374,21 @@ export function AnalysisDataTable({
                   {columns.map((col) => {
                     switch (col.key) {
                       case 'name':
+                        // 2026-05-13: thumbnail+name pair now CENTERED
+                        // (justify-center on the inner flex) so the
+                        // composite cell aligns with the centered
+                        // ITEM NAME header. The name truncates with
+                        // ellipsis if it exceeds nameMaxWidth, so
+                        // centering doesn't push long names past
+                        // the column edge — it just centers whatever
+                        // fits in the box.
                         return (
                           <td
                             key="name"
-                            className={`${cellPadding} ${nameMaxWidth} font-medium text-ink ${TD_BASE}`}
+                            className={`${cellPadding} ${nameMaxWidth} font-medium text-ink text-center ${TD_BASE}`}
                             title={row.name}
                           >
-                            <div className="flex items-center gap-2 min-w-0">
+                            <div className="flex items-center justify-center gap-2 min-w-0">
                               <span
                                 className="flex-shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-md ring-1 ring-line bg-surface-2 overflow-hidden"
                                 aria-hidden
@@ -418,7 +430,7 @@ export function AnalysisDataTable({
                           </td>
                         )
                       case 'orders':
-                        // 2026-05-13: text-right → text-center to match
+                        // 2026-05-13: text-center → text-center to match
                         // the centered "ORDERS" column header. Same
                         // change applied to pending + external below.
                         return (
@@ -457,14 +469,21 @@ export function AnalysisDataTable({
                           </td>
                         )
                       case 'qty':
+                        // 2026-05-13: cell + inner flex both flipped
+                        // from right → center so the bar+number pair
+                        // sits in the middle of the column, matching
+                        // the centered TOTAL QTY header. Inner number
+                        // span lost its text-center + min-width nudge
+                        // for the same reason — the pair is now
+                        // composed as a centered group.
                         return (
-                          <td key="qty" className={`${cellPadding} text-right whitespace-nowrap tabular-nums ${TD_BASE}`}>
-                            <span className="inline-flex items-center justify-end gap-[7px]">
+                          <td key="qty" className={`${cellPadding} text-center whitespace-nowrap tabular-nums ${TD_BASE}`}>
+                            <span className="inline-flex items-center justify-center gap-[7px]">
                               <span
                                 className="h-1.5 rounded-[3px] opacity-65 min-w-[1px] bg-gradient-to-r from-brand to-[#5b8def]"
                                 style={{ width: qtyBarWidth }}
                               />
-                              <span className="font-semibold text-[14px] min-w-[36px] text-right tabular-nums">
+                              <span className="font-semibold text-[14px] tabular-nums">
                                 {row.qty.toLocaleString()}
                               </span>
                             </span>
@@ -490,7 +509,7 @@ export function AnalysisDataTable({
                         return (
                           <td
                             key="stdOrders"
-                            className={`${cellPadding} text-right whitespace-nowrap tabular-nums ${TD_BASE}`}
+                            className={`${cellPadding} text-center whitespace-nowrap tabular-nums ${TD_BASE}`}
                             title={
                               row.standardShipCount > 0
                                 ? `Standard shipping subtotal: ${formatAnalysisMoney(row.standardShipTotal)}\n${row.standardShipCount} orders · ${row.standardShipQtyTotal ?? 0} units · ${stdAvg ? formatAnalysisMoney(stdAvg) : '$0.00'}/unit`
@@ -513,7 +532,7 @@ export function AnalysisDataTable({
                         return (
                           <td
                             key="expOrders"
-                            className={`${cellPadding} text-right whitespace-nowrap tabular-nums ${TD_BASE}`}
+                            className={`${cellPadding} text-center whitespace-nowrap tabular-nums ${TD_BASE}`}
                             title={
                               row.expeditedShipCount > 0
                                 ? `Expedited shipping subtotal: ${formatAnalysisMoney(row.expeditedShipTotal)}\n${row.expeditedShipCount} orders · ${row.expeditedShipQtyTotal ?? 0} units · ${expAvg ? formatAnalysisMoney(expAvg) : '$0.00'}/unit`
@@ -538,7 +557,7 @@ export function AnalysisDataTable({
                         )
                       case 'total':
                         return (
-                          <td key="total" className={`${cellPadding} text-right whitespace-nowrap tabular-nums font-extrabold text-[14px] text-ink ${TD_BASE}`}>
+                          <td key="total" className={`${cellPadding} text-center whitespace-nowrap tabular-nums font-extrabold text-[14px] text-ink ${TD_BASE}`}>
                             {row.totalShipping > 0 ? (
                               formatAnalysisMoney(row.totalShipping)
                             ) : (
@@ -558,7 +577,7 @@ export function AnalysisDataTable({
                         return (
                           <td
                             key="revenue"
-                            className={`${cellPadding} text-right whitespace-nowrap tabular-nums font-bold text-[14px] text-ink ${TD_BASE}`}
+                            className={`${cellPadding} text-center whitespace-nowrap tabular-nums font-bold text-[14px] text-ink ${TD_BASE}`}
                             title={
                               revenue > 0
                                 ? `Total revenue: ${formatAnalysisMoney(revenue)}\n${row.qty.toLocaleString()} units · ${formatAnalysisMoney(avg)}/unit avg`
@@ -581,7 +600,7 @@ export function AnalysisDataTable({
                         return (
                           <td
                             key="avgPrice"
-                            className={`${cellPadding} text-right whitespace-nowrap tabular-nums font-semibold text-[13px] italic text-ink-2 ${TD_BASE}`}
+                            className={`${cellPadding} text-center whitespace-nowrap tabular-nums font-semibold text-[13px] italic text-ink-2 ${TD_BASE}`}
                             title={
                               avg > 0
                                 ? `${formatAnalysisMoney(avg)} avg per unit (revenue ÷ units)`
@@ -607,7 +626,7 @@ export function AnalysisDataTable({
                         return (
                           <td
                             key="fees"
-                            className={`${cellPadding} text-right whitespace-nowrap tabular-nums font-semibold text-[13px] text-ink-2 ${TD_BASE}`}
+                            className={`${cellPadding} text-center whitespace-nowrap tabular-nums font-semibold text-[13px] text-ink-2 ${TD_BASE}`}
                             title={
                               fees > 0
                                 ? `Marketplace fees: ${formatAnalysisMoney(fees)}\nPull latest from Settings → Stores → "Pull Fees" on the Walmart row. Settlement lags delivery by ~3-7 days.`
@@ -643,7 +662,7 @@ export function AnalysisDataTable({
                         return (
                           <td
                             key="profit"
-                            className={`${cellPadding} text-right whitespace-nowrap tabular-nums font-extrabold text-[14px] ${tone} ${TD_BASE}`}
+                            className={`${cellPadding} text-center whitespace-nowrap tabular-nums font-extrabold text-[14px] ${tone} ${TD_BASE}`}
                             title={
                               hasInputs
                                 ? `Profit = revenue − shipping − fees\n${formatAnalysisMoney(revenue)} − ${formatAnalysisMoney(shipping)} − ${formatAnalysisMoney(fees)} = ${formatAnalysisMoney(profit)}\n(COGS not yet subtracted; layered in once inventory carries reliable per-unit cost)`
@@ -704,28 +723,28 @@ export function AnalysisDataTable({
                     )
                   case 'orders':
                     return (
-                      <td key="orders" className={`${ftBase} text-right text-[14px] text-ink`}>
+                      <td key="orders" className={`${ftBase} text-center text-[14px] text-ink`}>
                         {isFirstVisible ? footerTotalsBadge : null}
                         {totals.totalOrders.toLocaleString()}
                       </td>
                     )
                   case 'pending':
                     return (
-                      <td key="pending" className={`${ftBase} text-right text-[14px] text-[#b86200]`}>
+                      <td key="pending" className={`${ftBase} text-center text-[14px] text-[#b86200]`}>
                         {isFirstVisible ? footerTotalsBadge : null}
                         {totals.totalPending > 0 ? totals.totalPending.toLocaleString() : '—'}
                       </td>
                     )
                   case 'external':
                     return (
-                      <td key="external" className={`${ftBase} text-right text-[14px] text-ink-3`}>
+                      <td key="external" className={`${ftBase} text-center text-[14px] text-ink-3`}>
                         {isFirstVisible ? footerTotalsBadge : null}
                         {totals.totalExternal > 0 ? totals.totalExternal.toLocaleString() : '—'}
                       </td>
                     )
                   case 'qty':
                     return (
-                      <td key="qty" className={`${ftBase} text-right text-[14px] text-ink`}>
+                      <td key="qty" className={`${ftBase} text-center text-[14px] text-ink`}>
                         {isFirstVisible ? footerTotalsBadge : null}
                         {totals.totalQty.toLocaleString()}
                       </td>
@@ -753,7 +772,7 @@ export function AnalysisDataTable({
                     return (
                       <td
                         key="stdOrders"
-                        className={`${ftBase} text-right text-[14px] text-ink tabular-nums`}
+                        className={`${ftBase} text-center text-[14px] text-ink tabular-nums`}
                         title={
                           totals.totalStdCount > 0
                             ? `Std subtotal across all SKUs: ${formatAnalysisMoney(totals.totalStdShipping)}\n${totals.totalStdCount} orders · ${totals.totalStdQty} units · ${formatAnalysisMoney(stdFooterAvg)}/unit (weighted)`
@@ -780,7 +799,7 @@ export function AnalysisDataTable({
                     return (
                       <td
                         key="expOrders"
-                        className={`${ftBase} text-right text-[14px] text-[#b86200] tabular-nums`}
+                        className={`${ftBase} text-center text-[14px] text-[#b86200] tabular-nums`}
                         title={
                           totals.totalExpCount > 0
                             ? `Exp subtotal across all SKUs: ${formatAnalysisMoney(totals.totalExpShipping)}\n${totals.totalExpCount} orders · ${totals.totalExpQty} units · ${formatAnalysisMoney(expFooterAvg)}/unit (weighted)`
@@ -801,7 +820,7 @@ export function AnalysisDataTable({
                   }
                   case 'total':
                     return (
-                      <td key="total" className={`${ftBase} text-right text-[13px] text-ink font-extrabold`}>
+                      <td key="total" className={`${ftBase} text-center text-[13px] text-ink font-extrabold`}>
                         {isFirstVisible ? footerTotalsBadge : null}
                         {totals.totalShipping > 0 ? formatAnalysisMoney(totals.totalShipping) : '—'}
                       </td>
@@ -810,7 +829,7 @@ export function AnalysisDataTable({
                     return (
                       <td
                         key="revenue"
-                        className={`${ftBase} text-right text-[13px] text-ink font-extrabold`}
+                        className={`${ftBase} text-center text-[13px] text-ink font-extrabold`}
                         title={
                           totals.totalRevenue > 0
                             ? `Total revenue across all SKUs: ${formatAnalysisMoney(totals.totalRevenue)}\n${totals.totalQty.toLocaleString()} units`
@@ -834,7 +853,7 @@ export function AnalysisDataTable({
                     return (
                       <td
                         key="avgPrice"
-                        className={`${ftBase} text-right text-[13px] italic font-bold text-ink-2`}
+                        className={`${ftBase} text-center text-[13px] italic font-bold text-ink-2`}
                         title={
                           footerAvg > 0
                             ? `Weighted avg across all SKUs: ${formatAnalysisMoney(footerAvg)}/unit\n${formatAnalysisMoney(totals.totalRevenue)} ÷ ${totals.totalQty.toLocaleString()} units`
@@ -850,7 +869,7 @@ export function AnalysisDataTable({
                     return (
                       <td
                         key="fees"
-                        className={`${ftBase} text-right text-[13px] text-ink-2 font-bold`}
+                        className={`${ftBase} text-center text-[13px] text-ink-2 font-bold`}
                         title={
                           totals.totalSellingFee > 0
                             ? `Total marketplace fees across all SKUs: ${formatAnalysisMoney(totals.totalSellingFee)}`
@@ -878,7 +897,7 @@ export function AnalysisDataTable({
                     return (
                       <td
                         key="profit"
-                        className={`${ftBase} text-right text-[13px] font-extrabold ${profitTone}`}
+                        className={`${ftBase} text-center text-[13px] font-extrabold ${profitTone}`}
                         title={`Total profit across all SKUs = ${formatAnalysisMoney(totals.totalRevenue)} revenue − ${formatAnalysisMoney(totals.totalShipping)} shipping − ${formatAnalysisMoney(totals.totalSellingFee)} fees = ${formatAnalysisMoney(totals.totalProfit)}`}
                       >
                         {isFirstVisible ? footerTotalsBadge : null}

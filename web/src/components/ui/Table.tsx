@@ -1114,7 +1114,18 @@ export function Table<Row>({
                 >
                   {orderedColumns.map((col) => {
                     const align = col.align ?? 'left'
-                    const alignCls = align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left'
+                    // 2026-05-13: body cells now ALWAYS center,
+                    // matching the centered headers app-wide. The
+                    // column's `align` prop is preserved on the
+                    // data-col-align attribute (useful for ad-hoc
+                    // CSS or operator-installed userscripts) but no
+                    // longer drives the visual alignment of the
+                    // body. Operator wanted the whole table —
+                    // headers AND data — to read as a centered
+                    // grid; previously body inherited per-column
+                    // align which created mixed text-left / text-
+                    // right with centered headers above them.
+                    const alignCls = 'text-center'
                     const content = col.render
                       ? col.render(row)
                       : ((row as Record<string, unknown>)[col.key] as ReactNode) ?? ''
