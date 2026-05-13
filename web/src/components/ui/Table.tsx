@@ -954,10 +954,8 @@ export function Table<Row>({
               {orderedColumns.map((col) => {
                 const isActive = sort?.key === col.key
                 const align = col.align ?? 'left'
-                const alignCls =
-                  align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left'
-                const justify =
-                  align === 'right' ? 'justify-end' : align === 'center' ? 'justify-center' : 'justify-start'
+                const alignCls = 'text-left'
+                const justify = 'justify-start'
                 const isDragging = draggingKey === col.key
                 const isDragTarget = dragOverKey === col.key && draggingKey !== null && draggingKey !== col.key
                 const reorderable = !col.pinned
@@ -1102,8 +1100,7 @@ export function Table<Row>({
                 >
                   {orderedColumns.map((col) => {
                     const align = col.align ?? 'left'
-                    const alignCls =
-                      align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left'
+                    const alignCls = 'text-left'
                     const content = col.render
                       ? col.render(row)
                       : ((row as Record<string, unknown>)[col.key] as ReactNode) ?? ''
