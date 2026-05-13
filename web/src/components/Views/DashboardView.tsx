@@ -1826,24 +1826,46 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           </div>
         </div>
 
+        {/* Header right cluster — operator-requested order
+            (2026-05-13): freshness info first, then date scope,
+            then filters, then edit/refresh actions.
+              1. Data as of timestamp + live sync chip
+              2. Date range picker
+              3. Filters
+              4. Edit Dashboard (+ Reset when in edit mode)
+              5. Refresh icon
+            Visual grouping: freshness items left, actions right,
+            with the date picker as the operator's primary lever
+            in between. */}
         <div className="relative flex flex-wrap items-center gap-3">
-          {/* Operator-controlled date range. Drives every API call on
-              the dashboard — KPIs, trend, top SKUs, heatmap, table.
-              Presets (Today, Last 7d, Last 30d, This month, etc.) +
-              full day/month/year calendar navigation. See
-              ../DateRangePicker.tsx for the standalone component. */}
+          {/* Group 1 — data freshness (display, no action) */}
+          <div className="inline-flex items-center gap-2">
+            <div className="text-xs font-medium text-ink-3">Data as of {formatDataTimestamp()}</div>
+            {/* Live sync status chip — shows green-dot/Live + cron
+                cadence + "synced X ago." Boss-friendly trust signal.
+                Click to expand the full cron schedule (orders 3 min,
+                shipments 3 min, rate backfill 10 min, etc.). */}
+            <SyncStatusChip data={syncChipData} />
+          </div>
+
+          {/* Group 2 — operator-controlled date range. Drives every
+              API call on the dashboard. */}
           <DateRangePicker value={dateRange} onChange={setDateRange} />
-          {/* Live sync status chip — shows green-dot/Live + cron
-              cadence + "synced X ago." Boss-friendly trust signal.
-              Click to expand the full cron schedule (orders 3 min,
-              shipments 3 min, rate backfill 10 min, etc.). */}
-          <SyncStatusChip data={syncChipData} />
-          <div className="text-xs font-medium text-ink-3">Data as of {formatDataTimestamp()}</div>
-          {/* Edit Dashboard toggle — when active, panels become
-              draggable + show visibility eyes + size toggles get
-              louder treatment. Clicking the same button toggles
-              back to view mode (drag chrome disappears, layout
-              freezes at whatever the operator set). */}
+
+          {/* Group 3 — Filters popover (category + brand secondary cuts) */}
+          <button
+            type="button"
+            onClick={() => setShowFilters((open) => !open)}
+            className="inline-flex h-10 items-center gap-2 rounded-card border border-line bg-surface px-4 text-sm2 font-semibold text-ink shadow-sm hover:bg-surface-2"
+            aria-expanded={showFilters}
+          >
+            <Filter size={15} strokeWidth={2.25} className="text-ink-3" />
+            Filters
+          </button>
+
+          {/* Group 4 — Edit Dashboard toggle + Reset (only in edit
+              mode). When active, panels become draggable, show
+              visibility eyes, and resize handles. */}
           <button
             type="button"
             onClick={() => setEditMode((on) => !on)}
@@ -1878,23 +1900,16 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               Reset
             </button>
           ) : null}
+
+          {/* Group 5 — Refresh icon (rightmost) */}
           <button
             type="button"
             onClick={() => loadDashboard('refresh')}
-            className="grid h-9 w-9 place-items-center rounded-card text-ink-2 hover:bg-surface-2 hover:text-brand"
+            className="grid h-10 w-10 place-items-center rounded-card border border-line bg-surface text-ink-2 shadow-sm hover:bg-surface-2 hover:text-brand"
             aria-label="Refresh dashboard"
             title="Refresh dashboard"
           >
             <RefreshCw size={16} strokeWidth={2.25} className={refreshing ? 'animate-spin' : ''} />
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowFilters((open) => !open)}
-            className="inline-flex h-10 items-center gap-2 rounded-card border border-line bg-surface px-4 text-sm2 font-semibold text-ink shadow-sm hover:bg-surface-2"
-            aria-expanded={showFilters}
-          >
-            <Filter size={15} strokeWidth={2.25} className="text-ink-3" />
-            Filters
           </button>
           {showFilters ? (
             <div className="absolute right-0 top-12 z-20 w-[min(18rem,calc(100vw-2rem))] rounded-card border border-line bg-surface p-3 shadow-lg">
