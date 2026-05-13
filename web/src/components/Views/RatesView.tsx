@@ -58,6 +58,30 @@ function formatMoney(amount: number) {
   return `$${amount.toFixed(2)}`
 }
 
+function LabelCostCell({ row }: { row: ReturnType<typeof buildRateRows>[number] }) {
+  const hasMarkup = row.profit >= 0.005
+  return (
+    <div
+      className="leading-tight"
+      title={
+        hasMarkup
+          ? `Label Cost ${formatMoney(row.yourPrice)} | Cost ${formatMoney(row.baseCost)} + Markup ${formatMoney(row.profit)}`
+          : `Label Cost ${formatMoney(row.yourPrice)}`
+      }
+    >
+      <div className="font-mono tabular-nums text-[12.5px] font-extrabold text-orange-600">
+        {formatMoney(row.yourPrice)}
+      </div>
+      <div className="mt-0.5 whitespace-nowrap text-[10.5px] font-semibold text-ink-3">
+        Cost {formatMoney(row.baseCost)}
+        {hasMarkup ? (
+          <span className="text-emerald-700"> + Markup {formatMoney(row.profit)}</span>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
 const inputCls =
   'w-full px-3 py-2 rounded-lg border border-line bg-surface text-[13px] text-ink placeholder:text-ink-3 ' +
   'focus:border-brand/60 focus:ring-2 focus:ring-brand/15 transition-all duration-150 outline-none ' +
@@ -110,12 +134,8 @@ export default function RatesView() {
           return `${row.rateSourceLabel} ${row.rateSourceDetail ?? ''}`
         case 'service':
           return row.serviceLabel
-        case 'base':
-          return row.baseCost
-        case 'price':
+        case 'labelCost':
           return row.yourPrice
-        case 'profit':
-          return row.profit
         default:
           return ''
       }
@@ -124,7 +144,7 @@ export default function RatesView() {
   ), [rateSort, rows])
 
   const handleRateSort = (key) => {
-    setRateSort((current) => nextSortState(current, key, ['base', 'price', 'profit'].includes(key) ? 'asc' : 'asc'))
+    setRateSort((current) => nextSortState(current, key, key === 'labelCost' ? 'asc' : 'asc'))
   }
 
   async function fetchRates() {
@@ -424,9 +444,7 @@ export default function RatesView() {
                       <SortableHeader sortKey="account" sortState={rateSort} onSort={handleRateSort} className="text-left px-3 py-2 font-bold uppercase tracking-wider text-2xs">Account</SortableHeader>
                       <SortableHeader sortKey="source" sortState={rateSort} onSort={handleRateSort} className="text-left px-3 py-2 font-bold uppercase tracking-wider text-2xs">Rate Source</SortableHeader>
                       <SortableHeader sortKey="service" sortState={rateSort} onSort={handleRateSort} className="text-left px-3 py-2 font-bold uppercase tracking-wider text-2xs">Service</SortableHeader>
-                      <SortableHeader sortKey="base" sortState={rateSort} onSort={handleRateSort} align="right" className="text-right px-3 py-2 font-bold uppercase tracking-wider text-2xs">Base</SortableHeader>
-                      <SortableHeader sortKey="price" sortState={rateSort} onSort={handleRateSort} align="right" className="text-right px-3 py-2 font-bold uppercase tracking-wider text-2xs">Your Price</SortableHeader>
-                      <SortableHeader sortKey="profit" sortState={rateSort} onSort={handleRateSort} align="right" className="text-right px-3 py-2 font-bold uppercase tracking-wider text-2xs">Profit</SortableHeader>
+                      <SortableHeader sortKey="labelCost" sortState={rateSort} onSort={handleRateSort} align="right" className="text-right px-3 py-2 font-bold uppercase tracking-wider text-2xs">Label Cost</SortableHeader>
                       <th className="px-3 py-2" />
                     </tr>
                   </thead>
@@ -446,12 +464,12 @@ export default function RatesView() {
                           {row.carrierNickname || '—'}
                         </td>
                         <td className="px-3 py-2.5 min-w-[170px]">
-                          <div className={`inline-flex max-w-[220px] flex-col rounded-md px-2 py-1 ring-1 ${row.rateSourceTone}`}>
-                            <span className="text-[11.5px] font-extrabold leading-tight">{row.rateSourceLabel}</span>
+                          <div className="max-w-[240px]">
+                            <div className="text-[11.5px] font-bold leading-tight text-ink-2">{row.rateSourceLabel}</div>
                             {row.rateSourceDetail ? (
-                              <span className="mt-0.5 truncate text-[10.5px] font-semibold leading-tight opacity-90" title={row.rateSourceDetail}>
+                              <div className={`mt-1 inline-flex max-w-full truncate rounded-md px-2 py-1 text-[10.5px] font-bold leading-tight ring-1 ${row.rateSourceTone}`} title={row.rateSourceDetail}>
                                 {row.rateSourceDetail}
-                              </span>
+                              </div>
                             ) : null}
                           </div>
                         </td>
@@ -464,9 +482,9 @@ export default function RatesView() {
                             </span>
                           ) : null}
                         </td>
-                        <td className="px-3 py-2.5 text-right font-mono tabular-nums font-bold text-ink">{formatMoney(row.baseCost)}</td>
-                        <td className="px-3 py-2.5 text-right font-mono tabular-nums font-bold text-orange-600">{formatMoney(row.yourPrice)}</td>
-                        <td className="px-3 py-2.5 text-right font-mono tabular-nums font-semibold text-emerald-600">+{formatMoney(row.profit)}</td>
+                        <td className="px-3 py-2.5 text-right">
+                          <LabelCostCell row={row} />
+                        </td>
                         <td className="px-3 py-2.5 text-right">
                           <motion.button
                             whileHover={{ y: -1 }}
