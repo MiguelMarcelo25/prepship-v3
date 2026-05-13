@@ -1530,8 +1530,16 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   const totalPages = Math.max(1, Math.ceil(favoritesFirstRows.length / pageSize))
   const pageRows = favoritesFirstRows.slice((page - 1) * pageSize, page * pageSize)
 
+  // Top 20 SKUs by 30-day units. Slice up from the old cap of 5 so
+  // when the operator stretches the Top SKUs panel taller in Edit
+  // mode they actually see MORE data populating in — the panel
+  // becomes dynamic with vertical size. The wrapper around this list
+  // is flex-1 min-h-0 overflow-y-auto, so a short panel scrolls and
+  // a tall panel shows the full top-20 with no scroll. Numbers
+  // beyond 20 deliver diminishing operational signal — top-20 is
+  // the sweet spot for inventory-monitoring dashboards.
   const topSkuRows = useMemo(
-    () => [...skuRows].sort((left, right) => right.units30 - left.units30).slice(0, 5),
+    () => [...skuRows].sort((left, right) => right.units30 - left.units30).slice(0, 20),
     [skuRows],
   )
 
@@ -2028,8 +2036,8 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           ) : null}
           <div className="flex items-start justify-between gap-3 mb-3">
             <div>
-              <h3 className="text-sm font-extrabold text-ink">Top SKUs (30d)</h3>
-              <p className="text-tiny text-ink-3">By total units sold</p>
+              <h3 className="text-sm font-extrabold text-ink">Top 20 SKUs (30d)</h3>
+              <p className="text-tiny text-ink-3">By total units sold · stretch to see more</p>
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
               <SectionSizeToggle
