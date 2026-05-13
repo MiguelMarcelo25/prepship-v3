@@ -28,16 +28,39 @@
 
 import { lazy, Suspense, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+// 2026-05-13: migrated icons from lucide-react → react-icons (Heroicons
+// v2, solid variants). Visual style is noticeably different from
+// lucide's feather-derived outline geometry — rounded corners, heavier
+// fill, more modern dashboard feel. Solid variants picked specifically
+// because they read better at 11–13px row-action sizes than outline
+// strokes would. The Users icon sits in a saturated gradient pill on
+// the page header where solid also looks better than outline.
+//
+// API note: react-icons accepts `size` and `className` like lucide,
+// but does NOT accept `strokeWidth` (icons are pre-baked SVG paths
+// with fixed weight, not stroked). Every `strokeWidth={...}` prop
+// was removed during this port.
+//
+// Semantic mapping:
+//   Plus       → HiPlus              ("New client" + page-actions)
+//   Pencil     → HiPencilSquare      (Edit row)
+//   Trash2     → HiTrash             (Delete row)
+//   Wand2      → HiSparkles          (Backfill = "magic" auto-assign)
+//   RefreshCw  → HiArrowPath         (Sync stores button)
+//   Users      → HiUsers             (Page header icon)
+//   Building2  → HiBuildingStorefront (Stores column — semantic upgrade
+//                                       from "building" to "storefront")
+//   Search     → HiMagnifyingGlass   (Search input)
 import {
-  Plus,
-  Pencil,
-  Trash2,
-  Wand2,
-  RefreshCw,
-  Users,
-  Building2,
-  Search,
-} from 'lucide-react'
+  HiPlus,
+  HiPencilSquare,
+  HiTrash,
+  HiSparkles,
+  HiArrowPath,
+  HiUsers,
+  HiBuildingStorefront,
+  HiMagnifyingGlass,
+} from 'react-icons/hi2'
 import { Button } from '../components/ui/Button'
 import { Table, type TableColumn } from '../components/ui/Table'
 import {
@@ -221,7 +244,7 @@ export default function Clients() {
           <span className="text-[11px] text-ink-3 italic">none</span>
         ) : (
           <div className="flex items-center gap-1 flex-wrap">
-            <Building2 size={10} strokeWidth={2.25} className="text-ink-3 flex-shrink-0" />
+            <HiBuildingStorefront size={11} className="text-ink-3 flex-shrink-0" />
             {row.storeIds.slice(0, 3).map((sid) => (
               <span key={sid} className="font-mono text-[10.5px] font-semibold px-1.5 py-0.5 rounded bg-surface-2 text-ink-2 ring-1 ring-line/70" title={`Store ${sid}`}>
                 {sid}
@@ -306,7 +329,7 @@ export default function Clients() {
       render: (row) => (
         <div className="inline-flex items-center gap-0">
           <RowAction title="Edit" onClick={(e) => { e.stopPropagation(); setEditing(row) }}>
-            <Pencil size={11} strokeWidth={2.25} />
+            <HiPencilSquare size={12} />
           </RowAction>
           <RowAction
             title={!row.storeIds.length ? 'Add at least one storeId first' : 'Assign matching orders to this client'}
@@ -322,7 +345,7 @@ export default function Clients() {
               )
             }}
           >
-            <Wand2 size={11} strokeWidth={2.25} />
+            <HiSparkles size={12} />
           </RowAction>
           <RowAction
             title={`Delete "${row.name}"`}
@@ -335,7 +358,7 @@ export default function Clients() {
               }
             }}
           >
-            <Trash2 size={11} strokeWidth={2.25} />
+            <HiTrash size={12} />
           </RowAction>
         </div>
       ),
@@ -350,7 +373,7 @@ export default function Clients() {
       <header className="flex-shrink-0 flex items-center justify-between gap-3 px-6 py-4 bg-surface border-b border-line">
         <div className="flex items-center gap-3 min-w-0">
           <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-brand to-brand-dark flex items-center justify-center shadow-sm ring-1 ring-brand/30 flex-shrink-0">
-            <Users size={16} strokeWidth={2.25} className="text-white" />
+            <HiUsers size={17} className="text-white" />
           </div>
           <div className="min-w-0">
             <h1 className="text-[16px] font-extrabold tracking-tight text-ink m-0 leading-none">Clients</h1>
@@ -365,11 +388,11 @@ export default function Clients() {
               stores" instead of inside the table card below. */}
           <span ref={setColumnsAnchor} className="inline-flex items-center" />
           <Button variant="outline" size="sm" disabled={sync.isPending} onClick={() => sync.mutate()}>
-            <RefreshCw size={12} className={sync.isPending ? 'animate-spin' : ''} />
+            <HiArrowPath size={13} className={sync.isPending ? 'animate-spin' : ''} />
             {sync.isPending ? 'Syncing…' : 'Sync stores'}
           </Button>
           <Button variant="primary" size="sm" onClick={() => navigate('/settings/store')}>
-            <Plus size={12} />
+            <HiPlus size={13} />
             New client
           </Button>
         </div>
@@ -406,7 +429,7 @@ export default function Clients() {
           toolbar={
             <div className="flex items-center gap-3 flex-wrap">
               <div className="relative flex-1 min-w-[220px] max-w-md">
-                <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-3 pointer-events-none" strokeWidth={2.25} />
+                <HiMagnifyingGlass size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-3 pointer-events-none" />
                 <input
                   type="text"
                   value={search}
