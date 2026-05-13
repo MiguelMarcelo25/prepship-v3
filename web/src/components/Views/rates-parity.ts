@@ -240,7 +240,7 @@ const PROVIDER_TONE_CLASSES = [
   'bg-slate-100 text-slate-800 ring-slate-200',
 ]
 
-function providerToneFor(value: unknown): string {
+function sourceToneFor(value: unknown): string {
   const text = String(value ?? '').trim().toLowerCase()
   let hash = 0
   for (let i = 0; i < text.length; i += 1) {
@@ -295,17 +295,11 @@ export function getRateSourceLabel(
   if (sourceClientId != null) detailParts.push(`Client #${sourceClientId}`)
   if (providerId != null) detailParts.push(`Provider #${providerId}`)
   const detail = detailParts.length ? detailParts.join(' | ') : null
-  const toneKey = [
-    providerId != null ? `provider:${providerId}` : null,
-    account?.carrierId ? `carrier:${account.carrierId}` : null,
-    detail,
-    label,
-  ].filter(Boolean).join('|')
 
   return {
     label,
     detail,
-    tone: providerToneFor(toneKey || label),
+    tone: sourceToneFor(label),
   }
 }
 

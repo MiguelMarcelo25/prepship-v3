@@ -127,6 +127,10 @@ export interface TableProps<Row> {
    *  filter chips). Renders inside the same shell so the toolbar
    *  shares the rounded border + shadow. */
   toolbar?: ReactNode
+  /** Show the built-in Columns visibility/order/reset control.
+   *  Defaults to true. Set false for fixed tables where all columns
+   *  should stay visible and no customization button should appear. */
+  showColumnControls?: boolean
   /** Optional className applied to the outer shell. Use sparingly —
    *  the default styling is the point. */
   className?: string
@@ -306,6 +310,7 @@ export function Table<Row>({
   loading,
   emptyMessage = 'No data',
   toolbar,
+  showColumnControls = true,
   className,
   paginated,
   pageSizeOptions,
@@ -410,9 +415,82 @@ export function Table<Row>({
     const result: TableColumn<Row>[] = [...reorderable]
     pinnedAt.forEach(({ col, index }) => result.splice(index, 0, col))
     // Step 4: filter out hidden columns
-    const hidden = new Set(hiddenKeys)
+    const hidden = new Set(showColumnControls ? hiddenKeys : [])
     return result.filter((c) => !hidden.has(c.key))
-  }, [columns, orderKeys, hiddenKeys])
+  }, [columns, orderKeys, hiddenKeys, showColumnControls])
+  const columnWidths = useMemo<Record<string, number>>(() => {
+    const desired: Record<string, number> = {}
+    for (const col of orderedColumns) {
+      const raw = widths[col.key] ?? col.width
+      const fallback = Number.isFinite(col.width) ? col.width : 120
+      const min = col.minWidth ?? 60
+      const max = col.maxWidth ?? 800
+      const resolved = Number.isFinite(raw) ? raw : fallback
+      desired[col.key] = Math.max(min, Math.min(max, resolved))
+    }
+    return desired
+  }, [orderedColumns, widths])
+  const tableScrollRef = useRef<HTMLDivElement | null>(null)
+  const [tableViewportWidth, setTableViewportWidth] = useState(0)
+  useEffect(() => {
+    const el = tableScrollRef.current
+    if (!el) return
+    const measure = () => setTableViewportWidth(el.clientWidth)
+    measure()
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(measure)
+      observer.observe(el)
+      return () => observer.disconnect()
+    }
+    window.addEventListener('resize', measure)
+    return () => window.removeEventListener('resize', measure)
+  }, [])
+  const fittedColumnWidths = useMemo<Record<string, number>>(() => {
+    const next = { ...columnWidths }
+    if (!tableViewportWidth || orderedColumns.length === 0) return next
+
+    const total = orderedColumns.reduce((sum, col) => sum + next[col.key], 0)
+    if (total <= tableViewportWidth) return next
+
+    let overflow = total - tableViewportWidth
+    const shrinkable = orderedColumns.reduce((sum, col) => {
+      const min = col.minWidth ?? 60
+      return sum + Math.max(0, next[col.key] - min)
+    }, 0)
+    if (shrinkable <= 0) return next
+
+    for (const col of orderedColumns) {
+      const min = col.minWidth ?? 60
+      const room = Math.max(0, next[col.key] - min)
+      if (room <= 0) continue
+      const reduction = Math.min(room, overflow * (room / shrinkable))
+      next[col.key] -= reduction
+    }
+
+    let fittedTotal = orderedColumns.reduce((sum, col) => sum + next[col.key], 0)
+    for (const col of orderedColumns) {
+      if (fittedTotal <= tableViewportWidth) break
+      const min = col.minWidth ?? 60
+      const room = Math.max(0, next[col.key] - min)
+      const reduction = Math.min(room, fittedTotal - tableViewportWidth)
+      next[col.key] -= reduction
+      fittedTotal -= reduction
+    }
+    return next
+  }, [columnWidths, orderedColumns, tableViewportWidth])
+  const getColumnFitMax = (col: TableColumn<Row>) => {
+    const min = col.minWidth ?? 60
+    const configuredMax = col.maxWidth ?? 800
+    const viewport = tableScrollRef.current?.clientWidth ?? tableViewportWidth
+    if (!viewport) return configuredMax
+    const otherMinimums = orderedColumns.reduce((sum, other) => (
+      other.key === col.key ? sum : sum + (other.minWidth ?? 60)
+    ), 0)
+    return Math.max(min, Math.min(configuredMax, viewport - otherMinimums))
+  }
+  const tableMinWidth = useMemo(() => (
+    Math.min(tableViewportWidth || 480, Math.max(480, orderedColumns.reduce((sum, col) => sum + (col.minWidth ?? 60), 0)))
+  ), [orderedColumns, tableViewportWidth])
 
   // Columns picker open state — controlled here so the toolbar
   // trigger button and the dropdown body share the same state.
@@ -502,8 +580,8 @@ export function Table<Row>({
     event.preventDefault()
     event.stopPropagation()
     const min = col.minWidth ?? 60
-    const max = col.maxWidth ?? 800
-    const startWidth = widths[col.key] ?? col.width
+    const max = getColumnFitMax(col)
+    const startWidth = fittedColumnWidths[col.key] ?? columnWidths[col.key] ?? col.width
     resizingRef.current = { key: col.key, startX: event.clientX, startWidth, min, max }
     document.body.style.cursor = 'col-resize'
     document.body.style.userSelect = 'none'
@@ -534,7 +612,7 @@ export function Table<Row>({
   const autoFitColumn = (col: TableColumn<Row>) => {
     if (col.pinned) return
     const min = col.minWidth ?? 60
-    const max = col.maxWidth ?? 800
+    const max = getColumnFitMax(col)
     const PADDING = 28 // px — covers the cell's px-3 (12px each side) + a tiny safety margin
     const colIndex = orderedColumns.findIndex((c) => c.key === col.key)
     if (colIndex === -1) return
@@ -675,7 +753,7 @@ export function Table<Row>({
   // Hideable columns surfaced in the picker. Render in the
   // declared `columns` order (not the operator's reordered order)
   // so the picker layout stays stable as columns get dragged.
-  const pickerColumns = columns.filter((c) => c.hideable !== false)
+  const pickerColumns = showColumnControls ? columns.filter((c) => c.hideable !== false) : []
   const visibleCount = orderedColumns.length
   const totalToggleable = pickerColumns.length
 
@@ -696,8 +774,10 @@ export function Table<Row>({
           column-control widget always anchored to the right so
           operators have a discoverable entry point for width /
           visibility management. */}
+      {(toolbar || showColumnControls) ? (
       <div className="flex-shrink-0 border-b border-line bg-surface-2/40 px-3 py-2 flex items-center gap-3">
         {toolbar ? <div className="flex-1 min-w-0">{toolbar}</div> : <div className="flex-1" />}
+        {showColumnControls ? (
         <div className="relative flex-shrink-0" ref={columnsPickerRef}>
           <button
             type="button"
@@ -782,7 +862,9 @@ export function Table<Row>({
             </div>
           ) : null}
         </div>
+        ) : null}
       </div>
+      ) : null}
 
       {/* 2026-05-13 (third round): per-consumer opt-in via
           `stickyHeader` prop. Default `true`:
@@ -804,11 +886,11 @@ export function Table<Row>({
           tables can still hide columns via the Columns picker, or
           rely on `.view-content`'s own horizontal scroll once the
           table overflows the viewport. */}
-      <div className={stickyHeader ? 'ps-data-table-scroll overflow-x-clip' : 'ps-data-table-scroll overflow-x-auto'}>
-        <table className="w-full border-collapse table-fixed" style={{ minWidth: 480 }}>
+      <div ref={tableScrollRef} className={stickyHeader ? 'ps-data-table-scroll overflow-x-clip' : 'ps-data-table-scroll overflow-x-auto'}>
+        <table className="w-full border-collapse table-fixed" style={{ minWidth: tableMinWidth }}>
           <colgroup>
             {orderedColumns.map((col) => (
-              <col key={col.key} style={{ width: widths[col.key] ?? col.width }} />
+              <col key={col.key} style={{ width: fittedColumnWidths[col.key] }} />
             ))}
           </colgroup>
 
@@ -957,7 +1039,7 @@ export function Table<Row>({
                         data-col-label={col.label}
                         data-col-align={align}
                         className={`${padding} ${fontSize} ${alignCls} overflow-hidden align-middle text-ink ${col.className ?? ''}`}
-                        style={{ width: widths[col.key] ?? col.width, maxWidth: widths[col.key] ?? col.width }}
+                        style={{ width: fittedColumnWidths[col.key], maxWidth: fittedColumnWidths[col.key] }}
                       >
                         {content}
                       </td>

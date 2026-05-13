@@ -126,6 +126,7 @@ export default function RatesView() {
       label: 'Carrier',
       width: 84,
       minWidth: 76,
+      maxWidth: 110,
       sortable: true,
       hideable: false,
       sortValue: (row) => row.carrierCode,
@@ -136,6 +137,7 @@ export default function RatesView() {
       label: 'Account',
       width: 140,
       minWidth: 110,
+      maxWidth: 210,
       sortable: true,
       sortValue: (row) => row.carrierNickname ?? '',
       render: (row) => (
@@ -149,13 +151,16 @@ export default function RatesView() {
       label: 'Rate Source',
       width: 240,
       minWidth: 180,
+      maxWidth: 300,
       sortable: true,
       sortValue: (row) => `${row.rateSourceLabel} ${row.rateSourceDetail ?? ''}`,
       render: (row) => (
         <div className="max-w-[240px]">
-          <div className="text-[11.5px] font-bold leading-tight text-ink-2">{row.rateSourceLabel}</div>
+          <div className={`inline-flex max-w-full rounded-md px-2 py-1 text-[11.5px] font-extrabold leading-tight ring-1 ${row.rateSourceTone}`} title={row.rateSourceLabel}>
+            <span className="truncate">{row.rateSourceLabel}</span>
+          </div>
           {row.rateSourceDetail ? (
-            <div className={`mt-1 inline-flex max-w-full truncate rounded-md px-2 py-1 text-[10.5px] font-bold leading-tight ring-1 ${row.rateSourceTone}`} title={row.rateSourceDetail}>
+            <div className="mt-1 truncate text-[10.5px] font-semibold leading-tight text-ink-3" title={row.rateSourceDetail}>
               {row.rateSourceDetail}
             </div>
           ) : null}
@@ -167,6 +172,7 @@ export default function RatesView() {
       label: 'Service',
       width: 300,
       minWidth: 220,
+      maxWidth: 420,
       sortable: true,
       sortValue: (row) => row.serviceLabel,
       render: (row) => (
@@ -186,6 +192,7 @@ export default function RatesView() {
       label: 'Label Cost',
       width: 150,
       minWidth: 130,
+      maxWidth: 180,
       align: 'right',
       sortable: true,
       hideable: false,
@@ -435,7 +442,7 @@ export default function RatesView() {
       </motion.form>
 
       {/* Results */}
-      <div id="ratesResult" className="mt-5 max-w-4xl">
+      <div id="ratesResult" className="mt-5 w-full max-w-[1400px]">
         <AnimatePresence mode="wait">
           {resultState.kind === 'loading' ? (
             <motion.div
@@ -495,7 +502,7 @@ export default function RatesView() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.3 }}
-              className="bg-surface rounded-2xl border border-line shadow-sm overflow-hidden"
+              className="bg-surface rounded-2xl border border-line shadow-sm overflow-clip"
             >
               <div className="px-4 py-3 border-b border-line bg-gradient-to-b from-page to-surface-2/30 flex items-center gap-3">
                 <div className="flex-1">
@@ -512,7 +519,8 @@ export default function RatesView() {
                 defaultSort={{ key: 'labelCost', direction: 'asc' }}
                 density="compact"
                 emptyMessage="No rates returned."
-                stickyHeader={false}
+                showColumnControls={false}
+                stickyHeader
                 rowClassName={(row) => row.isBest ? 'bg-emerald-50/40' : undefined}
                 className="!rounded-none !ring-0 !shadow-none"
               />
