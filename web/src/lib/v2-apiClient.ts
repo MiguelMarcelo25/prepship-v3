@@ -588,9 +588,19 @@ type DirectCarrierRatesResult = {
   ok: boolean;
   provider?: string;
   simulated?: boolean;
-  rates?: Array<{ service: string; cost: number; days?: number; currency?: string }>;
+  rates?: DirectCarrierRateResult[];
   error?: string;
   meta?: Record<string, unknown>;
+};
+
+type DirectCarrierRateResult = {
+  service: string;
+  cost: number;
+  days?: number;
+  currency?: string;
+  carrierCode?: string | null;
+  carrierName?: string | null;
+  carrierType?: string | null;
 };
 
 export type DirectCarrierRateError = {
@@ -796,6 +806,21 @@ function inferCarrierCodeForDirectRate(provider: string, service: string): strin
   return p || 'direct_carrier';
 }
 
+function normalizeCarrierCodeForDirectRate(value: unknown): string | null {
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  const normalized = normalizeProviderKey(raw);
+  const compact = normalized.replace(/[^a-z0-9]+/g, '');
+  if (compact.includes('fedex')) return 'fedex';
+  if (compact.includes('usps') || compact.includes('postal')) return 'stamps_com';
+  if (compact.includes('ups')) return 'ups';
+  if (compact.includes('dhl')) return 'dhl_express';
+  if (compact.includes('walmart')) return 'walmart_shipping';
+  if (compact.includes('amazon')) return 'amazon_shipping';
+  if (compact.includes('ebay')) return 'ebay_shipping';
+  return normalized || null;
+}
+
 function slugRateService(value: string): string {
   return value
     .toLowerCase()
@@ -805,14 +830,18 @@ function slugRateService(value: string): string {
 }
 
 function translateDirectRateToV2Shape(
-  rate: { service: string; cost: number; days?: number; currency?: string },
+  rate: DirectCarrierRateResult,
   account: DirectCarrierAccountRow
 ): Record<string, unknown> {
   const provider = normalizeProviderKey(account.provider);
   const shippingProviderId = directProviderIdFromAccount(account);
   const serviceName = String(rate.service || provider || 'Direct carrier');
-  const serviceCode = `${provider}_${slugRateService(serviceName)}`;
-  const carrierCode = inferCarrierCodeForDirectRate(provider, serviceName);
+  const explicitCarrierCode = normalizeCarrierCodeForDirectRate(
+    rate.carrierCode ?? rate.carrierType ?? rate.carrierName
+  );
+  const carrierCode = explicitCarrierCode ?? inferCarrierCodeForDirectRate(provider, serviceName);
+  const carrierServicePrefix = carrierCode && carrierCode !== provider ? `${carrierCode}_` : '';
+  const serviceCode = `${provider}_${carrierServicePrefix}${slugRateService(serviceName)}`;
   const amount = Number(rate.cost ?? 0);
   const currency = String(rate.currency ?? 'USD').toLowerCase();
   const accountLabel = account.label || account.accountIdentifier || provider;
@@ -821,6 +850,8 @@ function translateDirectRateToV2Shape(
     source: 'carrier_accounts',
     carrier_id: `se-${shippingProviderId}`,
     carrier_code: carrierCode,
+    carrier_name: rate.carrierName ?? null,
+    carrier_type: rate.carrierType ?? null,
     carrier_nickname: accountLabel,
     service_code: serviceCode,
     service_type: serviceName,

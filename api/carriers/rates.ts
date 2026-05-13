@@ -1043,6 +1043,28 @@ async function shippLookupUsZip(zip: unknown): Promise<{ city?: string; state?: 
   }
 }
 
+function shippCarrierCode(value: unknown): string | null {
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  const normalized = raw.toLowerCase().replace(/[\s-]+/g, '_');
+  const compact = normalized.replace(/[^a-z0-9]+/g, '');
+  if (compact.includes('fedex')) return 'fedex';
+  if (compact.includes('usps') || compact.includes('postal')) return 'stamps_com';
+  if (compact.includes('ups')) return 'ups';
+  if (compact.includes('dhl')) return 'dhl_express';
+  return normalized.replace(/[^a-z0-9_]+/g, '').replace(/^_+|_+$/g, '') || null;
+}
+
+function shippCarrierName(value: unknown): string | null {
+  const code = shippCarrierCode(value);
+  if (code === 'fedex') return 'FedEx';
+  if (code === 'ups') return 'UPS';
+  if (code === 'stamps_com') return 'USPS';
+  if (code === 'dhl_express') return 'DHL';
+  const raw = String(value ?? '').trim();
+  return raw || null;
+}
+
 function shippDateDays(deliveryDate: unknown, deliveryDay: unknown): number {
   const dateString = String(deliveryDate ?? '').trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(dateString)) {
@@ -1222,10 +1244,15 @@ async function ratesFromShipp(
 
   return rateList
     .map((r: any) => {
-      const carrier = String(r?.carrierType ?? '').trim();
+      const rawCarrier = r?.carrierType ?? r?.carrier ?? r?.carrierCode ?? r?.carrierName;
+      const carrierCode = shippCarrierCode(rawCarrier);
+      const carrierName = shippCarrierName(rawCarrier);
       const serviceName = String(r?.serviceName ?? r?.serviceType ?? 'Shipp').trim();
       return {
-        service: [carrier ? carrier.toUpperCase() : 'Shipp', serviceName].filter(Boolean).join(' '),
+        service: serviceName,
+        carrierCode,
+        carrierName,
+        carrierType: rawCarrier ? String(rawCarrier).trim() : null,
         cost: Number(r?.price ?? 0),
         days: shippDateDays(r?.deliveryDate, r?.deliveryDay),
         currency: 'USD',
