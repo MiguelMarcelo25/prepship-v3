@@ -40,6 +40,7 @@ import {
 } from '../SortableTable'
 import { DateRangePicker, defaultLast30, priorRange, type DateRange } from '../DateRangePicker'
 import { SyncStatusChip, type SyncStatusChipData } from '../SyncStatusChip'
+import { FilterSelect } from '../FilterSelect'
 
 type Client = { clientId: number; name: string }
 
@@ -2600,32 +2601,24 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                 </span>
               </>
             ) : null}
-            <select
+            {/* Custom dropdowns instead of native <select> so the
+                panel ALWAYS opens BELOW the trigger (operator report
+                2026-05-13: native All Categories was opening upward
+                and covering the heatmap). See FilterSelect.tsx. */}
+            <FilterSelect
               value={categoryFilter}
-              onChange={(event) => setCategoryFilter(event.target.value)}
-              className="h-9 rounded-card border border-line bg-surface px-3 text-tiny font-semibold text-ink-2 outline-none hover:bg-surface-2"
-              aria-label="Filter SKU table by category"
-            >
-              <option value="">All Categories</option>
-              {categories.map((category) => (
-                <option key={category} value={category}>
-                  {category}
-                </option>
-              ))}
-            </select>
-            <select
+              onChange={setCategoryFilter}
+              options={categories}
+              placeholder="All Categories"
+              ariaLabel="Filter SKU table by category"
+            />
+            <FilterSelect
               value={brandFilter}
-              onChange={(event) => setBrandFilter(event.target.value)}
-              className="h-9 rounded-card border border-line bg-surface px-3 text-tiny font-semibold text-ink-2 outline-none hover:bg-surface-2"
-              aria-label="Filter SKU table by brand"
-            >
-              <option value="">All Brands</option>
-              {brands.map((brand) => (
-                <option key={brand} value={brand}>
-                  {brand}
-                </option>
-              ))}
-            </select>
+              onChange={setBrandFilter}
+              options={brands}
+              placeholder="All Brands"
+              ariaLabel="Filter SKU table by brand"
+            />
             {/* Wrapper ref tracks "inside" for the click-outside
                 handler — covers BOTH the trigger and the panel so
                 clicks within either stay open, clicks elsewhere
