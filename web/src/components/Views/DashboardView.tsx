@@ -87,6 +87,13 @@ type TrendPoint = {
   day: string
   current: number
   prior: number
+  // 2026-05-13: daily order-revenue total in $ — drives the second
+  // line on the Units Sold Trend chart (right Y-axis). Computed in
+  // useMemo by summing currentOrders.orderTotal grouped by orderDate.
+  // Undefined for prior-period bucket since we don't render a prior
+  // revenue line (avoids visual clutter — operators compare units
+  // against revenue, not revenue-now against revenue-then).
+  currentRevenue?: number
 }
 
 type HeatmapCell = {
@@ -744,6 +751,85 @@ function StatusBadge({ status }: { status: DashboardSkuRow['status'] }) {
 // Tooltips on each button explain what the size does ("Compact:
 // 1/3 width" etc.) so the abbreviation icons aren't mystery
 // characters.
+// 2026-05-13: 7/30/90/180-day quick range selector for the Units
+// Sold Trend panel. Clicking a preset replaces the dashboard-wide
+// dateRange so every panel (trend chart, heatmap, KPIs) reflects
+// the same window — the dashboard is already wired to refetch
+// when dateRange changes (useEffect at line ~1547).
+//
+// "Active" detection compares the current range LENGTH in days
+// to each preset, not the date strings themselves. Operators can
+// also pick custom ranges via the DateRangePicker — a 7-day window
+// they typed manually still highlights the 7d preset, so the UI
+// reflects the actual range regardless of how it got set.
+function RangeToggle({
+  value,
+  onChange,
+}: {
+  value: { from: string; to: string }
+  onChange: (next: { from: string; to: string }) => void
+}) {
+  const presets: Array<{ days: number; label: string }> = [
+    { days: 7,   label: '7d' },
+    { days: 30,  label: '30d' },
+    { days: 90,  label: '90d' },
+    { days: 180, label: '180d' },
+  ]
+
+  // Compute the active preset by measuring the current range. Add
+  // 1 because the range is inclusive on both ends. Round to handle
+  // tz/DST edge cases where the math might be 29.99 / 30.01.
+  const rangeDays = (() => {
+    const from = new Date(value.from).getTime()
+    const to = new Date(value.to).getTime()
+    if (!Number.isFinite(from) || !Number.isFinite(to)) return 0
+    return Math.round((to - from) / 86_400_000) + 1
+  })()
+
+  const setRange = (days: number) => {
+    // Build the new range ending today, going back N days inclusive.
+    // Format as YYYY-MM-DD to match the DateRangePicker convention.
+    const today = new Date()
+    const toIso = (d: Date) => {
+      const y = d.getFullYear()
+      const m = String(d.getMonth() + 1).padStart(2, '0')
+      const dd = String(d.getDate()).padStart(2, '0')
+      return `${y}-${m}-${dd}`
+    }
+    const start = new Date(today)
+    start.setDate(start.getDate() - (days - 1))
+    onChange({ from: toIso(start), to: toIso(today) })
+  }
+
+  return (
+    <div
+      className="inline-flex items-center gap-0.5 rounded-md ring-1 ring-line p-0.5 bg-surface"
+      role="group"
+      aria-label="Select time range"
+    >
+      {presets.map((preset) => {
+        const active = rangeDays === preset.days
+        return (
+          <button
+            key={preset.days}
+            type="button"
+            onClick={() => setRange(preset.days)}
+            title={`Last ${preset.days} days`}
+            aria-pressed={active}
+            className={`inline-flex h-6 items-center justify-center rounded px-2 text-[11px] font-extrabold tabular-nums transition ${
+              active
+                ? 'bg-brand text-white shadow-sm'
+                : 'text-ink-3 hover:text-ink hover:bg-surface-2'
+            }`}
+          >
+            {preset.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 function SectionSizeToggle({
   value,
   onChange,
@@ -1546,7 +1632,37 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedClientId, dateRange.from, dateRange.to])
 
-  const trend = useMemo(() => buildTrend(currentSales, priorSales), [currentSales, priorSales])
+  // 2026-05-13: build daily revenue map from currentOrders so the
+  // Units Sold Trend chart can render a second line for total order
+  // value on a separate right-side Y-axis. Aggregation: sum
+  // order.orderTotal grouped by YYYY-MM-DD of orderDate. Excludes
+  // adjustments / cancellations? — no special filter here because
+  // the order list already comes from fetchOrdersWindow which
+  // respects the dashboard's date range; we just bucket what's
+  // already there. If we later need to exclude cancelled orders
+  // from revenue specifically, add a filter on order.orderStatus
+  // before the reduce.
+  const revenueByDay = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const order of currentOrders) {
+      const day = String((order as any)?.orderDate ?? '').slice(0, 10)
+      if (!day) continue
+      const total = num((order as any)?.orderTotal)
+      map.set(day, (map.get(day) ?? 0) + total)
+    }
+    return map
+  }, [currentOrders])
+
+  // Stitch revenue onto each trend point. Existing trend buckets
+  // come from currentSales.dates so they're already keyed by day;
+  // we just look up each day in the revenue map (0 fallback).
+  const trend = useMemo(() => {
+    const base = buildTrend(currentSales, priorSales)
+    return base.map((point) => ({
+      ...point,
+      currentRevenue: revenueByDay.get(point.day) ?? 0,
+    }))
+  }, [currentSales, priorSales, revenueByDay])
   const heatmap = useMemo(
     () => buildHeatmap(currentSales, priorSales, heatmapLimit),
     [currentSales, priorSales, heatmapLimit],
@@ -2191,23 +2307,40 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           <div className="mb-3 flex items-start justify-between gap-3">
             <div>
               <h3 className="text-sm font-extrabold text-ink">Units Sold Trend</h3>
-              <div className="mt-2 flex items-center gap-5 text-2xs text-ink-3">
+              <div className="mt-2 flex items-center gap-5 text-2xs text-ink-3 flex-wrap">
                 <span className="inline-flex items-center gap-2">
                   <span className="h-0.5 w-8 rounded-full bg-brand" />
-                  This day
+                  This day (units)
                 </span>
                 <span className="inline-flex items-center gap-2">
                   <span className="h-0.5 w-8 rounded-full border-t border-dashed border-ink-3" />
                   Same day, last month
                 </span>
+                <span className="inline-flex items-center gap-2">
+                  <span className="h-0.5 w-8 rounded-full bg-emerald-500" />
+                  Order value ($)
+                </span>
               </div>
             </div>
-            <div className="flex items-center gap-2 flex-shrink-0">
+            <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
               {selectedClient ? (
                 <span className="rounded-full bg-brand-bg px-2 py-1 text-2xs font-bold text-brand">
                   {selectedClient.name}
                 </span>
               ) : null}
+              {/* 2026-05-13: quick range toggles — 7 / 30 / 90 / 180
+                  days. Clicking sets the dashboard-wide dateRange so
+                  every panel (trend, heatmap, KPIs) reflects the
+                  same window. Detection of which button is "active"
+                  is by comparing the current range LENGTH (in days)
+                  to each preset, not by string-comparing dates,
+                  because the DateRangePicker can also be edited
+                  manually — a 7-day range typed by hand should
+                  still highlight the 7d button. */}
+              <RangeToggle
+                value={dateRange}
+                onChange={setDateRange}
+              />
               <SectionSizeToggle
                 value={sectionSizes.trend}
                 onChange={(size) => setSectionSize('trend', size)}
@@ -2236,13 +2369,50 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           </div>
           <div className="flex-1 min-h-0">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={trend} margin={{ top: 8, right: 14, bottom: 4, left: -12 }}>
+              {/* 2026-05-13:
+                  • left margin -12 → 8 — previous value was pulling
+                    the Y-axis off-canvas which clipped the topmost
+                    tick label ("120" in the screenshot). Positive 8
+                    gives the axis room to draw labels without
+                    competing with the panel border.
+                  • Added a second YAxis (yAxisId="revenue", orientation
+                    right) for the order-value series, with its own
+                    auto-scaling domain. The original axis got an
+                    explicit yAxisId="units" so both lines map to the
+                    right scale. ResponsiveContainer keeps the chart
+                    box size constant — only the axis tick values
+                    rescale to fit the data.
+                  • Added a third <Line> for currentRevenue, anchored
+                    to the revenue axis. Emerald color so it visually
+                    distinguishes from the units (brand-blue) and
+                    prior (gray dashed) lines. */}
+              <LineChart data={trend} margin={{ top: 8, right: 8, bottom: 4, left: 8 }}>
                 <CartesianGrid stroke="var(--line)" strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="day" tickFormatter={formatDayLabel} tick={{ fontSize: 10, fill: 'var(--text3)' }} tickLine={false} axisLine={{ stroke: 'var(--line)' }} minTickGap={24} />
-                <YAxis tick={{ fontSize: 10, fill: 'var(--text3)' }} tickLine={false} axisLine={false} allowDecimals={false} width={42} />
+                <YAxis
+                  yAxisId="units"
+                  tick={{ fontSize: 10, fill: 'var(--text3)' }}
+                  tickLine={false}
+                  axisLine={false}
+                  allowDecimals={false}
+                  width={48}
+                />
+                <YAxis
+                  yAxisId="revenue"
+                  orientation="right"
+                  tick={{ fontSize: 10, fill: 'var(--text3)' }}
+                  tickLine={false}
+                  axisLine={false}
+                  allowDecimals={false}
+                  width={56}
+                  tickFormatter={(value: number) => `$${formatInt(value)}`}
+                />
                 <Tooltip
                   labelFormatter={formatDayLabel}
-                  formatter={(value: number, name: string) => [formatInt(num(value)), name === 'current' ? 'This day' : 'Same day, last month']}
+                  formatter={(value: number, name: string) => {
+                    if (name === 'currentRevenue') return [`$${formatInt(num(value))}`, 'Order value']
+                    return [formatInt(num(value)), name === 'current' ? 'This day (units)' : 'Same day, last month (units)']
+                  }}
                   contentStyle={{
                     background: 'var(--surface)',
                     border: '1px solid var(--line)',
@@ -2251,8 +2421,9 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                     fontSize: 12,
                   }}
                 />
-                <Line type="monotone" dataKey="prior" stroke="var(--text3)" strokeWidth={1.5} strokeDasharray="4 4" dot={false} activeDot={{ r: 4 }} />
-                <Line type="monotone" dataKey="current" stroke="var(--brand)" strokeWidth={2.25} dot={{ r: 2 }} activeDot={{ r: 5, strokeWidth: 2, stroke: 'var(--surface)' }} />
+                <Line yAxisId="units" type="monotone" dataKey="prior" stroke="var(--text3)" strokeWidth={1.5} strokeDasharray="4 4" dot={false} activeDot={{ r: 4 }} />
+                <Line yAxisId="units" type="monotone" dataKey="current" stroke="var(--brand)" strokeWidth={2.25} dot={{ r: 2 }} activeDot={{ r: 5, strokeWidth: 2, stroke: 'var(--surface)' }} />
+                <Line yAxisId="revenue" type="monotone" dataKey="currentRevenue" stroke="rgb(16 185 129)" strokeWidth={2} dot={{ r: 2 }} activeDot={{ r: 5, strokeWidth: 2, stroke: 'var(--surface)' }} />
               </LineChart>
             </ResponsiveContainer>
           </div>
