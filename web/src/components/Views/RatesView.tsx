@@ -475,13 +475,15 @@ export default function RatesView() {
                         <td className={`px-3 py-2.5 ${row.carrierNickname ? 'text-ink-2 font-semibold' : 'text-ink-4'}`}>
                           {row.carrierNickname || '—'}
                         </td>
-                        <td className="px-3 py-2.5 min-w-[150px]">
-                          <div className="text-[11.5px] font-semibold text-ink-2">{row.rateSourceLabel}</div>
-                          {row.rateSourceDetail ? (
-                            <div className="mt-0.5 text-[10.5px] text-ink-3 whitespace-nowrap">
-                              {row.rateSourceDetail}
-                            </div>
-                          ) : null}
+                        <td className="px-3 py-2.5 min-w-[170px]">
+                          <div className={`inline-flex max-w-[220px] flex-col rounded-md px-2 py-1 ring-1 ${row.rateSourceTone}`}>
+                            <span className="text-[11.5px] font-extrabold leading-tight">{row.rateSourceLabel}</span>
+                            {row.rateSourceDetail ? (
+                              <span className="mt-0.5 truncate text-[10.5px] font-semibold leading-tight opacity-90" title={row.rateSourceDetail}>
+                                {row.rateSourceDetail}
+                              </span>
+                            ) : null}
+                          </div>
                         </td>
                         <td className="px-3 py-2.5 text-ink">
                           <span>{row.serviceLabel}</span>

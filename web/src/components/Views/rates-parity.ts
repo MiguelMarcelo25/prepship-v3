@@ -29,6 +29,7 @@ export interface RateRowView {
   carrierNickname: string | null
   rateSourceLabel: string
   rateSourceDetail: string | null
+  rateSourceTone: string
   carrierCode: string
   serviceLabel: string
   baseCost: number
@@ -225,10 +226,34 @@ function getDirectProviderLabel(value: unknown): string | null {
   return key ? DIRECT_PROVIDER_LABELS[key] ?? null : null
 }
 
+const PROVIDER_TONE_CLASSES = [
+  'bg-sky-50 text-sky-800 ring-sky-200',
+  'bg-emerald-50 text-emerald-800 ring-emerald-200',
+  'bg-amber-50 text-amber-800 ring-amber-200',
+  'bg-violet-50 text-violet-800 ring-violet-200',
+  'bg-rose-50 text-rose-800 ring-rose-200',
+  'bg-cyan-50 text-cyan-800 ring-cyan-200',
+  'bg-fuchsia-50 text-fuchsia-800 ring-fuchsia-200',
+  'bg-lime-50 text-lime-800 ring-lime-200',
+  'bg-indigo-50 text-indigo-800 ring-indigo-200',
+  'bg-teal-50 text-teal-800 ring-teal-200',
+  'bg-orange-50 text-orange-800 ring-orange-200',
+  'bg-slate-100 text-slate-800 ring-slate-200',
+]
+
+function providerToneFor(value: unknown): string {
+  const text = String(value ?? '').trim().toLowerCase()
+  let hash = 0
+  for (let i = 0; i < text.length; i += 1) {
+    hash = (hash * 31 + text.charCodeAt(i)) >>> 0
+  }
+  return PROVIDER_TONE_CLASSES[hash % PROVIDER_TONE_CLASSES.length]
+}
+
 export function getRateSourceLabel(
   rate: RateDto,
   accounts: RateSourceAccount[] = [],
-): { label: string; detail: string | null } {
+): { label: string; detail: string | null; tone: string } {
   const raw = (rate as any)?.raw ?? {}
   const account = findRateSourceAccount(rate, accounts)
   const providerKey =
@@ -270,10 +295,18 @@ export function getRateSourceLabel(
   }
   if (sourceClientId != null) detailParts.push(`Client #${sourceClientId}`)
   if (providerId != null) detailParts.push(`Provider #${providerId}`)
+  const detail = detailParts.length ? detailParts.join(' | ') : null
+  const toneKey = [
+    providerId != null ? `provider:${providerId}` : null,
+    account?.carrierId ? `carrier:${account.carrierId}` : null,
+    detail,
+    label,
+  ].filter(Boolean).join('|')
 
   return {
     label,
-    detail: detailParts.length ? detailParts.join(' | ') : null,
+    detail,
+    tone: providerToneFor(toneKey || label),
   }
 }
 
@@ -345,6 +378,7 @@ export function buildRateRows(
       carrierNickname: getCarrierNickname(rate),
       rateSourceLabel: rateSource.label,
       rateSourceDetail: rateSource.detail,
+      rateSourceTone: rateSource.tone,
       carrierCode: rate.carrierCode,
       serviceLabel: getServiceLabel(rate),
       baseCost,
