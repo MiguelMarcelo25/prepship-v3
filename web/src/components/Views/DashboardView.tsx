@@ -862,38 +862,48 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     return 'xl:col-span-2'
   }
 
-  // Per-panel VERTICAL size (independent of width). Operator can
-  // pull the bottom-edge handle in edit mode (or pick a preset) to
-  // grow a chart panel taller without growing it wider — useful when
-  // the data has lots of vertical detail (e.g. the Top SKUs list, or
-  // the heatmap with many rows of SKU families). Persisted to its
-  // own localStorage key so we don't break existing width state.
+  // Per-panel VERTICAL size in PIXELS (free pixel resize, not snapped).
+  // Operator drags the bottom edge / corner in edit mode and the panel
+  // grows exactly the number of pixels the mouse moved — feels like
+  // Figma or any other real grid editor.
   //
-  // We DON'T use CSS row-span here. Row-span on a free-position grid
-  // creates dead cells and breaks the drag-reorder UX (the operator
-  // would drop a panel and watch it slide into empty space). Instead
-  // each panel has an explicit minHeight in pixels — short=240px,
-  // standard=340px, tall=480px, xtall=640px. The chart's own
-  // sectionChartHeight() respects the SAME bucket so the visualization
-  // fills the resized container instead of leaving whitespace.
-  type SectionHeight = 'short' | 'standard' | 'tall' | 'xtall'
-  const DEFAULT_SECTION_HEIGHTS: Record<SectionKey, SectionHeight> = {
-    trend: 'standard',
-    topSkus: 'standard',
-    heatmap: 'standard',
-    table: 'tall',
+  // Critical sibling fix: the parent grid now has `items-start` (CSS
+  // `align-items: start`), which prevents one panel's height from
+  // dragging its row-neighbor along with it. Before this fix, growing
+  // Top SKUs to 600px would also stretch Units Sold Trend to 600px
+  // because CSS Grid's default `align-items: stretch` forces all
+  // items in the same row to share the row's max height.
+  //
+  // Persistence is forward-compatible: if the old preset strings
+  // ('short'/'standard'/'tall'/'xtall') are in localStorage, we
+  // migrate them to pixel values on load.
+  const MIN_PANEL_HEIGHT = 180
+  const MAX_PANEL_HEIGHT = 1400
+  const DEFAULT_SECTION_HEIGHTS: Record<SectionKey, number> = {
+    trend: 340,
+    topSkus: 420,
+    heatmap: 380,
+    table: 520,
   }
   const SECTION_HEIGHTS_STORAGE_KEY = 'dashboard_section_heights_v1'
-  const [sectionHeights, setSectionHeights] = useState<Record<SectionKey, SectionHeight>>(() => {
+  const [sectionHeights, setSectionHeights] = useState<Record<SectionKey, number>>(() => {
     if (typeof window === 'undefined') return DEFAULT_SECTION_HEIGHTS
     try {
       const raw = window.localStorage.getItem(SECTION_HEIGHTS_STORAGE_KEY)
       if (!raw) return DEFAULT_SECTION_HEIGHTS
-      const parsed = JSON.parse(raw) as Partial<Record<SectionKey, SectionHeight>>
+      const parsed = JSON.parse(raw) as Partial<Record<SectionKey, unknown>>
       const merged = { ...DEFAULT_SECTION_HEIGHTS }
       for (const key of Object.keys(DEFAULT_SECTION_HEIGHTS) as SectionKey[]) {
         const v = parsed[key]
-        if (v === 'short' || v === 'standard' || v === 'tall' || v === 'xtall') merged[key] = v
+        if (typeof v === 'number' && v >= MIN_PANEL_HEIGHT && v <= MAX_PANEL_HEIGHT) {
+          merged[key] = Math.round(v)
+        } else if (typeof v === 'string') {
+          // Migrate from previous preset format
+          if (v === 'short') merged[key] = 240
+          else if (v === 'tall') merged[key] = 480
+          else if (v === 'xtall') merged[key] = 640
+          else merged[key] = 340
+        }
       }
       return merged
     } catch { return DEFAULT_SECTION_HEIGHTS }
@@ -901,36 +911,14 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   useEffect(() => {
     try { window.localStorage.setItem(SECTION_HEIGHTS_STORAGE_KEY, JSON.stringify(sectionHeights)) } catch { /* non-fatal */ }
   }, [sectionHeights])
-  const setSectionHeight = (key: SectionKey, height: SectionHeight) =>
-    setSectionHeights((current) => ({ ...current, [key]: height }))
-  // Pixel minHeight for the section wrapper based on the height preset.
-  // Inline style — not a Tailwind class — so the drag-resize handle can
-  // smoothly snap between buckets without needing config tweaks.
-  const sectionMinHeightPx = (height: SectionHeight): number => {
-    if (height === 'short') return 240
-    if (height === 'tall') return 480
-    if (height === 'xtall') return 640
-    return 340
-  }
-  // Cycle width: compact → standard → wide → compact. Used by the
-  // right-edge drag handle so the operator can pull a panel "wider"
-  // one step at a time without leaving the mouse to click a preset.
+  // Pixel minHeight for the section wrapper — now a direct identity.
+  // Kept as a helper for readability + future clamping/easing.
+  const sectionMinHeightPx = (height: number): number =>
+    Math.max(MIN_PANEL_HEIGHT, Math.min(MAX_PANEL_HEIGHT, Math.round(height)))
+  // Width still snaps to col-span presets — the grid is xl:grid-cols-3
+  // and Tailwind's responsive classes need named presets. We can't go
+  // free-pixel on width without breaking responsiveness.
   const SIZE_CYCLE: SectionSize[] = ['compact', 'standard', 'wide']
-  const HEIGHT_CYCLE: SectionHeight[] = ['short', 'standard', 'tall', 'xtall']
-  const cycleSectionSize = (key: SectionKey, direction: 1 | -1) => {
-    setSectionSizes((current) => {
-      const idx = SIZE_CYCLE.indexOf(current[key])
-      const next = SIZE_CYCLE[(idx + direction + SIZE_CYCLE.length) % SIZE_CYCLE.length]
-      return { ...current, [key]: next }
-    })
-  }
-  const cycleSectionHeight = (key: SectionKey, direction: 1 | -1) => {
-    setSectionHeights((current) => {
-      const idx = HEIGHT_CYCLE.indexOf(current[key])
-      const next = HEIGHT_CYCLE[(idx + direction + HEIGHT_CYCLE.length) % HEIGHT_CYCLE.length]
-      return { ...current, [key]: next }
-    })
-  }
 
   // Operator-defined panel ORDER. The dashboard now renders all
   // four major panels through one xl:grid-cols-3 container; their
@@ -1068,20 +1056,24 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     const startX = event.clientX
     const startY = event.clientY
     const startSizeIdx = SIZE_CYCLE.indexOf(sectionSizes[key])
-    const startHeightIdx = HEIGHT_CYCLE.indexOf(sectionHeights[key])
+    const startHeightPx = sectionHeights[key]
     const STEP_PX = 110
     const onMove = (ev: MouseEvent) => {
       if (axis !== 'y') {
+        // Width still snaps to col-span presets — responsive grid
+        // requires named Tailwind classes (xl:col-span-1/2/3).
         const dx = ev.clientX - startX
         const targetIdx = Math.max(0, Math.min(SIZE_CYCLE.length - 1, startSizeIdx + Math.round(dx / STEP_PX)))
         const targetSize = SIZE_CYCLE[targetIdx]
         setSectionSizes((current) => (current[key] === targetSize ? current : { ...current, [key]: targetSize }))
       }
       if (axis !== 'x') {
+        // Height is FREE pixel resize — every pixel of mouse movement
+        // = exactly that many pixels of panel height. Clamped to the
+        // 180..1400 range so the layout can't collapse or explode.
         const dy = ev.clientY - startY
-        const targetIdx = Math.max(0, Math.min(HEIGHT_CYCLE.length - 1, startHeightIdx + Math.round(dy / STEP_PX)))
-        const targetHeight = HEIGHT_CYCLE[targetIdx]
-        setSectionHeights((current) => (current[key] === targetHeight ? current : { ...current, [key]: targetHeight }))
+        const target = Math.max(MIN_PANEL_HEIGHT, Math.min(MAX_PANEL_HEIGHT, Math.round(startHeightPx + dy)))
+        setSectionHeights((current) => (current[key] === target ? current : { ...current, [key]: target }))
       }
     }
     const onUp = () => {
@@ -1095,16 +1087,6 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     window.addEventListener('mouseup', onUp)
     document.body.style.cursor = axis === 'x' ? 'ew-resize' : axis === 'y' ? 'ns-resize' : 'nwse-resize'
     document.body.style.userSelect = 'none'
-  }
-  // Inner chart canvas height — now driven by the explicit per-panel
-  // height preset (not derived from width), since the user can now
-  // stretch a panel "longer" independently. Numbers slot just under
-  // the section's outer minHeight so chrome (header + padding) fits.
-  const sectionChartHeight = (height: SectionHeight): string => {
-    if (height === 'short') return 'h-[160px]'
-    if (height === 'tall') return 'h-[380px]'
-    if (height === 'xtall') return 'h-[540px]'
-    return 'h-[240px]'
   }
 
   // Favorited SKUs — the leftmost ☆ icon in each row toggles
@@ -1814,7 +1796,24 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           a "grid by grid" free layout: drag to reorder, click ⅓/⅔/Full
           to resize, click the eye to hide. localStorage persists order,
           sizes, and visibility per browser. */}
-      <div className="mb-3 grid grid-cols-1 gap-3 xl:grid-cols-3">
+      <div
+        className={`mb-3 grid grid-cols-1 items-start gap-3 transition-[background-color,padding] duration-200 xl:grid-cols-3 ${
+          editMode
+            ? 'rounded-card border border-dashed border-brand/30 bg-brand-bg/30 p-3'
+            : ''
+        }`}
+        style={editMode ? {
+          // Subtle 24px grid pattern in edit mode — visually telegraphs
+          // "this is a layout editor" without overpowering panel content.
+          // Two layered linear-gradients form the cross-hatch; alpha is
+          // very low so panel contents stay readable.
+          backgroundImage:
+            'linear-gradient(to right, rgba(99,102,241,0.10) 1px, transparent 1px), ' +
+            'linear-gradient(to bottom, rgba(99,102,241,0.10) 1px, transparent 1px)',
+          backgroundSize: '24px 24px',
+          backgroundPosition: '-1px -1px',
+        } : undefined}
+      >
         {!hiddenPanels.has('trend') || editMode ? (
         <section
           style={{ order: panelOrder.indexOf('trend'), minHeight: sectionMinHeightPx(sectionHeights.trend) }}
@@ -1824,7 +1823,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           onDragLeave={handlePanelDragLeave('trend')}
           onDrop={handlePanelDrop('trend')}
           onDragEnd={handlePanelDragEnd}
-          className={`relative rounded-card border bg-surface p-4 shadow-sm transition ${sectionColSpanClass(sectionSizes.trend)} ${
+          className={`relative flex flex-col rounded-card border bg-surface p-4 shadow-sm transition-[border-color,box-shadow] duration-150 ${sectionColSpanClass(sectionSizes.trend)} ${
             editMode ? 'border-dashed border-brand/60' : 'border-line'
           } ${draggingPanel === 'trend' ? 'opacity-40' : ''} ${
             dragOverPanel === 'trend' ? 'ring-2 ring-brand ring-offset-2 ring-offset-bg' : ''
@@ -1908,7 +1907,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               ) : null}
             </div>
           </div>
-          <div className={sectionChartHeight(sectionHeights.trend)}>
+          <div className="flex-1 min-h-0">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={trend} margin={{ top: 8, right: 14, bottom: 4, left: -12 }}>
                 <CartesianGrid stroke="var(--line)" strokeDasharray="3 3" vertical={false} />
@@ -1942,7 +1941,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           onDragLeave={handlePanelDragLeave('topSkus')}
           onDrop={handlePanelDrop('topSkus')}
           onDragEnd={handlePanelDragEnd}
-          className={`relative rounded-card border bg-surface p-4 shadow-sm transition ${sectionColSpanClass(sectionSizes.topSkus)} ${
+          className={`relative flex flex-col rounded-card border bg-surface p-4 shadow-sm transition-[border-color,box-shadow] duration-150 ${sectionColSpanClass(sectionSizes.topSkus)} ${
             editMode ? 'border-dashed border-brand/60' : 'border-line'
           } ${draggingPanel === 'topSkus' ? 'opacity-40' : ''} ${
             dragOverPanel === 'topSkus' ? 'ring-2 ring-brand ring-offset-2 ring-offset-bg' : ''
@@ -1991,7 +1990,11 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               ) : null}
             </div>
           </div>
-          <div className="space-y-3">
+          {/* Top SKUs list — flex-1 + overflow-auto so when operator
+              stretches the panel taller, MORE rows become visible
+              (scrolling for tall lists) instead of the rows getting
+              taller themselves. */}
+          <div className="flex-1 min-h-0 space-y-3 overflow-y-auto pr-1">
             {topSkuRows.map((row, index) => (
               <button
                 key={row.sku}
@@ -2026,7 +2029,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           onDragLeave={handlePanelDragLeave('heatmap')}
           onDrop={handlePanelDrop('heatmap')}
           onDragEnd={handlePanelDragEnd}
-          className={`relative rounded-card border bg-surface p-4 shadow-sm transition ${sectionColSpanClass(sectionSizes.heatmap)} ${
+          className={`relative flex flex-col rounded-card border bg-surface p-4 shadow-sm transition-[border-color,box-shadow] duration-150 ${sectionColSpanClass(sectionSizes.heatmap)} ${
             editMode ? 'border-dashed border-brand/60' : 'border-line'
           } ${draggingPanel === 'heatmap' ? 'opacity-40' : ''} ${
             dragOverPanel === 'heatmap' ? 'ring-2 ring-brand ring-offset-2 ring-offset-bg' : ''
@@ -2075,7 +2078,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             ) : null}
           </div>
         </div>
-        <div className="overflow-x-auto">
+        <div className="flex-1 min-h-0 overflow-auto">
           {/* Refined diverging palette (2026-05-13): muted ColorBrewer
               RdYlGn-style green → cream → red. The previous Tailwind
               ok/warn/danger tokens are high-saturation alert colors
@@ -2172,7 +2175,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           onDragLeave={handlePanelDragLeave('table')}
           onDrop={handlePanelDrop('table')}
           onDragEnd={handlePanelDragEnd}
-          className={`relative rounded-card border bg-surface shadow-sm transition ${sectionColSpanClass(sectionSizes.table)} ${
+          className={`relative flex flex-col overflow-hidden rounded-card border bg-surface shadow-sm transition-[border-color,box-shadow] duration-150 ${sectionColSpanClass(sectionSizes.table)} ${
             editMode ? 'border-dashed border-brand/60' : 'border-line'
           } ${draggingPanel === 'table' ? 'opacity-40' : ''} ${
             dragOverPanel === 'table' ? 'ring-2 ring-brand ring-offset-2 ring-offset-bg' : ''
@@ -2314,7 +2317,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           </div>
         </div>
 
-        <div className="overflow-x-auto">
+        <div className="flex-1 min-h-0 overflow-auto">
           {/* table-fixed + <colgroup> is the duo that makes column
               widths actually obey our colWidths state. Without
               table-fixed the browser uses content-derived auto-widths
