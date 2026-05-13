@@ -685,6 +685,15 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
   const historyDefaults = useMemo(() => getInventoryDateRangePreset(), [])
   // Extend InventoryTab union locally to include ported v2 tabs (alerts, parents)
   const [activeTab, setActiveTab] = useState<InventoryTab | 'alerts' | 'parents'>(initialTab ?? 'stock')
+  // 2026-05-13: anchor element for the <Table>'s Columns ▾ button.
+  // Operator asked to move the picker out of the table card and into
+  // the page-level toolbar (to the LEFT of "Import SKUs from Orders").
+  // We use a callback ref + state so React re-renders Table when the
+  // anchor element mounts/unmounts. When this is null, Table renders
+  // the Columns button inline as before; when it points to a DOM node,
+  // Table portals the same button + popover there. State, persistence,
+  // click-outside detection all stay inside Table.
+  const [columnsAnchor, setColumnsAnchor] = useState<HTMLElement | null>(null)
   const [clients, setClients] = useState<ClientDto[]>([])
   const [packages, setPackages] = useState<PackageDto[]>([])
   const [items, setItems] = useState<InventoryItemDto[]>([])
@@ -2508,6 +2517,15 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
             switch upstream. */}
         {!hideTabs ? (
           <>
+            {/* 2026-05-13: portal-anchor for the <Table>'s Columns ▾
+                button. Sits HERE in the page toolbar so the picker
+                lives next to "Import SKUs from Orders" instead of
+                inside the table card. The Table primitive renders
+                its existing Columns button + popover into this span
+                via React portal when `columnsAnchorEl` is set. The
+                callback ref hands the DOM element to React state on
+                mount so Table re-renders with a valid portal target. */}
+            <span ref={setColumnsAnchor} className="inline-flex items-center" />
             <button className="btn btn-outline btn-sm" type="button" onClick={handlePopulateInventory}>📥 Import SKUs from Orders</button>
             <button className="btn btn-outline btn-sm" type="button" onClick={handleImportDims} title="Pull weight & dims from ShipStation product catalog into inventory SKUs">📐 Import Dims from SS</button>
             <button
@@ -2676,6 +2694,14 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
               paginated
               pageSizeOptions={[10, 20, 50, 100, 200]}
               defaultPageSize={50}
+              // 2026-05-13: portal the Columns ▾ button to the
+              // page-level toolbar (left of "Import SKUs from
+              // Orders"). When `columnsAnchor` is null (initial
+              // render, before the span mounts), Table falls back
+              // to inline rendering — but the span mounts on the
+              // same tick, so the callback ref fires and Table
+              // re-renders with the portal target set. No flicker.
+              columnsAnchorEl={columnsAnchor}
               // Deactivated SKUs are pinned to the bottom of the
               // sorted result so active rows always appear first.
               // Operator's chosen sort still orders rows WITHIN each

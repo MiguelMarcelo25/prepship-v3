@@ -47,6 +47,7 @@ import {
   type ReactNode,
   type MouseEvent as ReactMouseEvent,
 } from 'react'
+import { createPortal } from 'react-dom'
 import { AnalysisPagination } from '../Views/AnalysisPagination'
 import {
   ArrowDown,
@@ -131,6 +132,23 @@ export interface TableProps<Row> {
    *  Defaults to true. Set false for fixed tables where all columns
    *  should stay visible and no customization button should appear. */
   showColumnControls?: boolean
+  /** When set, the Columns ▾ button + popover renders via React
+   *  portal into this DOM element instead of inline in the Table's
+   *  toolbar. Useful for pages whose page-level toolbar wants to host
+   *  the Columns control next to other actions (e.g. Inventory wants
+   *  it next to "Import SKUs from Orders"). Pair with a callback ref
+   *  on the consumer side:
+   *
+   *    const [anchor, setAnchor] = useState<HTMLElement | null>(null)
+   *    <span ref={setAnchor} />
+   *    <Table columnsAnchorEl={anchor} ... />
+   *
+   *  All state (visibility, order, persistence, click-outside) stays
+   *  inside the Table — only the DOM mount location changes. The
+   *  popover stays anchored to the portal'd button via the existing
+   *  `absolute right-0 top-full` positioning. When unset (default),
+   *  the Columns button renders inline in the toolbar as today. */
+  columnsAnchorEl?: HTMLElement | null
   /** Optional className applied to the outer shell. Use sparingly —
    *  the default styling is the point. */
   className?: string
@@ -321,6 +339,7 @@ export function Table<Row>({
   pinRowToBottom,
   footerRow,
   stickyHeader = true,
+  columnsAnchorEl,
 }: TableProps<Row>) {
   // Sort state — reads stored value first, falls through to default.
   const [sort, setSort] = useState<SortState | null>(() => readStoredSort(storageKey) ?? defaultSort ?? null)
@@ -757,6 +776,98 @@ export function Table<Row>({
   const visibleCount = orderedColumns.length
   const totalToggleable = pickerColumns.length
 
+  // Columns ▾ button + popover. Extracted into a JSX const so the
+  // same subtree can either render INLINE in the table's toolbar or
+  // be portal'd to an external anchor element (via `columnsAnchorEl`).
+  // All state (open/close, click-outside, hidden keys) is captured
+  // by closure, so the JSX behaves identically in both mount modes.
+  const columnsControlNode = (
+    <div className="relative flex-shrink-0" ref={columnsPickerRef}>
+      <button
+        type="button"
+        onClick={() => setColumnsPickerOpen((v) => !v)}
+        className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-md ring-1 text-[11.5px] font-bold transition ${
+          columnsPickerOpen
+            ? 'bg-brand/10 ring-brand/40 text-brand'
+            : 'bg-surface ring-line text-ink-2 hover:text-ink hover:ring-line-2'
+        }`}
+        title="Show/hide columns, reset widths and order"
+      >
+        <Columns3 size={13} strokeWidth={2.25} />
+        <span>Columns</span>
+        <span className="font-mono tabular-nums text-[10px] opacity-70">{visibleCount}/{totalToggleable || orderedColumns.length}</span>
+      </button>
+      {columnsPickerOpen ? (
+        <div
+          role="menu"
+          className="absolute right-0 top-full mt-1.5 z-30 w-[260px] rounded-lg bg-surface ring-1 ring-line shadow-[0_12px_32px_-8px_rgba(15,23,42,0.18)] overflow-hidden"
+        >
+          <div className="px-3 py-2 border-b border-line/70 bg-surface-2/40">
+            <div className="text-[10px] uppercase tracking-[0.18em] font-extrabold text-ink-3">Columns</div>
+            <div className="text-[10.5px] text-ink-3 mt-0.5">Toggle visibility · drag to reorder · drag edge to resize</div>
+          </div>
+          <ul className="max-h-[280px] overflow-y-auto py-1">
+            {pickerColumns.map((col) => {
+              const isHidden = hiddenKeys.includes(col.key)
+              return (
+                <li key={col.key}>
+                  <button
+                    type="button"
+                    onClick={() => toggleHidden(col.key)}
+                    className="w-full flex items-center gap-2.5 px-3 py-1.5 text-left text-[12px] hover:bg-surface-2 transition"
+                  >
+                    <span className={`w-4 h-4 rounded ring-1 inline-flex items-center justify-center transition ${
+                      isHidden ? 'ring-line bg-transparent' : 'ring-brand bg-brand text-white'
+                    }`}>
+                      {!isHidden ? <Check size={10} strokeWidth={3} /> : null}
+                    </span>
+                    <span className={`flex-1 truncate ${isHidden ? 'text-ink-3' : 'text-ink font-medium'}`}>
+                      {col.label || <span className="italic text-ink-3">(no label)</span>}
+                    </span>
+                    {isHidden ? (
+                      <EyeOff size={12} strokeWidth={2} className="flex-shrink-0 text-ink-3" />
+                    ) : (
+                      <Eye size={12} strokeWidth={2} className="flex-shrink-0 text-ink-3" />
+                    )}
+                  </button>
+                </li>
+              )
+            })}
+          </ul>
+          <div className="border-t border-line/70 bg-surface-2/40 p-1.5 flex items-center gap-1">
+            <button
+              type="button"
+              onClick={resetWidths}
+              className="flex-1 inline-flex items-center justify-center gap-1 h-7 px-2 rounded text-[10.5px] font-bold text-ink-2 hover:text-ink hover:bg-surface transition"
+              title="Reset all column widths to defaults"
+            >
+              <RotateCcw size={10} strokeWidth={2.25} />
+              Widths
+            </button>
+            <button
+              type="button"
+              onClick={resetOrder}
+              className="flex-1 inline-flex items-center justify-center gap-1 h-7 px-2 rounded text-[10.5px] font-bold text-ink-2 hover:text-ink hover:bg-surface transition"
+              title="Reset column order to defaults"
+            >
+              <RotateCcw size={10} strokeWidth={2.25} />
+              Order
+            </button>
+            <button
+              type="button"
+              onClick={resetAll}
+              className="flex-1 inline-flex items-center justify-center gap-1 h-7 px-2 rounded text-[10.5px] font-bold text-brand hover:bg-brand/10 transition"
+              title="Reset widths, order, and visibility"
+            >
+              <RotateCcw size={10} strokeWidth={2.25} />
+              All
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  )
+
   return (
     // 2026-05-12 sticky fix (round 2): outermost wrapper was
     // `overflow-hidden` which (just like overflow-x:auto and
@@ -773,98 +884,28 @@ export function Table<Row>({
       {/* Toolbar — operator's slot content on the left, the
           column-control widget always anchored to the right so
           operators have a discoverable entry point for width /
-          visibility management. */}
-      {(toolbar || showColumnControls) ? (
+          visibility management.
+          2026-05-13: the Columns button JSX is now extracted to a
+          const so the same React subtree can either render INLINE in
+          the toolbar (default) OR portal into `columnsAnchorEl` for
+          consumers that want the button living in their page-level
+          toolbar (e.g. Inventory wants it next to "Import SKUs from
+          Orders"). All state (open/close, hidden keys, click-outside)
+          stays in this component — only the mount location changes. */}
+      {(toolbar || (showColumnControls && !columnsAnchorEl)) ? (
       <div className="flex-shrink-0 border-b border-line bg-surface-2/40 px-3 py-2 flex items-center gap-3">
         {toolbar ? <div className="flex-1 min-w-0">{toolbar}</div> : <div className="flex-1" />}
-        {showColumnControls ? (
-        <div className="relative flex-shrink-0" ref={columnsPickerRef}>
-          <button
-            type="button"
-            onClick={() => setColumnsPickerOpen((v) => !v)}
-            className={`inline-flex items-center gap-1.5 h-8 px-3 rounded-md ring-1 text-[11.5px] font-bold transition ${
-              columnsPickerOpen
-                ? 'bg-brand/10 ring-brand/40 text-brand'
-                : 'bg-surface ring-line text-ink-2 hover:text-ink hover:ring-line-2'
-            }`}
-            title="Show/hide columns, reset widths and order"
-          >
-            <Columns3 size={13} strokeWidth={2.25} />
-            <span>Columns</span>
-            <span className="font-mono tabular-nums text-[10px] opacity-70">{visibleCount}/{totalToggleable || orderedColumns.length}</span>
-          </button>
-          {columnsPickerOpen ? (
-            <div
-              role="menu"
-              className="absolute right-0 top-full mt-1.5 z-30 w-[260px] rounded-lg bg-surface ring-1 ring-line shadow-[0_12px_32px_-8px_rgba(15,23,42,0.18)] overflow-hidden"
-            >
-              <div className="px-3 py-2 border-b border-line/70 bg-surface-2/40">
-                <div className="text-[10px] uppercase tracking-[0.18em] font-extrabold text-ink-3">Columns</div>
-                <div className="text-[10.5px] text-ink-3 mt-0.5">Toggle visibility · drag to reorder · drag edge to resize</div>
-              </div>
-              <ul className="max-h-[280px] overflow-y-auto py-1">
-                {pickerColumns.map((col) => {
-                  const isHidden = hiddenKeys.includes(col.key)
-                  return (
-                    <li key={col.key}>
-                      <button
-                        type="button"
-                        onClick={() => toggleHidden(col.key)}
-                        className="w-full flex items-center gap-2.5 px-3 py-1.5 text-left text-[12px] hover:bg-surface-2 transition"
-                      >
-                        <span className={`w-4 h-4 rounded ring-1 inline-flex items-center justify-center transition ${
-                          isHidden ? 'ring-line bg-transparent' : 'ring-brand bg-brand text-white'
-                        }`}>
-                          {!isHidden ? <Check size={10} strokeWidth={3} /> : null}
-                        </span>
-                        <span className={`flex-1 truncate ${isHidden ? 'text-ink-3' : 'text-ink font-medium'}`}>
-                          {col.label || <span className="italic text-ink-3">(no label)</span>}
-                        </span>
-                        {isHidden ? (
-                          <EyeOff size={12} strokeWidth={2} className="flex-shrink-0 text-ink-3" />
-                        ) : (
-                          <Eye size={12} strokeWidth={2} className="flex-shrink-0 text-ink-3" />
-                        )}
-                      </button>
-                    </li>
-                  )
-                })}
-              </ul>
-              <div className="border-t border-line/70 bg-surface-2/40 p-1.5 flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={resetWidths}
-                  className="flex-1 inline-flex items-center justify-center gap-1 h-7 px-2 rounded text-[10.5px] font-bold text-ink-2 hover:text-ink hover:bg-surface transition"
-                  title="Reset all column widths to defaults"
-                >
-                  <RotateCcw size={10} strokeWidth={2.25} />
-                  Widths
-                </button>
-                <button
-                  type="button"
-                  onClick={resetOrder}
-                  className="flex-1 inline-flex items-center justify-center gap-1 h-7 px-2 rounded text-[10.5px] font-bold text-ink-2 hover:text-ink hover:bg-surface transition"
-                  title="Reset column order to defaults"
-                >
-                  <RotateCcw size={10} strokeWidth={2.25} />
-                  Order
-                </button>
-                <button
-                  type="button"
-                  onClick={resetAll}
-                  className="flex-1 inline-flex items-center justify-center gap-1 h-7 px-2 rounded text-[10.5px] font-bold text-brand hover:bg-brand/10 transition"
-                  title="Reset widths, order, and visibility"
-                >
-                  <RotateCcw size={10} strokeWidth={2.25} />
-                  All
-                </button>
-              </div>
-            </div>
-          ) : null}
-        </div>
-        ) : null}
+        {showColumnControls && !columnsAnchorEl ? columnsControlNode : null}
       </div>
       ) : null}
+      {/* When `columnsAnchorEl` is set, render the Columns button +
+          popover via React portal into that external DOM node. The
+          popover stays positioned absolute relative to the wrapper
+          div, so anchoring still works correctly wherever the portal
+          target lives. */}
+      {showColumnControls && columnsAnchorEl
+        ? createPortal(columnsControlNode, columnsAnchorEl)
+        : null}
 
       {/* 2026-05-13 (third round): per-consumer opt-in via
           `stickyHeader` prop. Default `true`:
