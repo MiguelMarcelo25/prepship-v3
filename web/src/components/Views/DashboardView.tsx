@@ -700,6 +700,54 @@ function StatusBadge({ status }: { status: DashboardSkuRow['status'] }) {
   )
 }
 
+// Per-section size toggle. Three buttons (Compact / Standard / Wide)
+// shown in the header of each major dashboard panel. The active
+// preset gets the brand-blue treatment; the others stay quiet so
+// the toggle doesn't dominate the section's actual content.
+// Tooltips on each button explain what the size does ("Compact:
+// 1/3 width" etc.) so the abbreviation icons aren't mystery
+// characters.
+function SectionSizeToggle({
+  value,
+  onChange,
+}: {
+  value: 'compact' | 'standard' | 'wide'
+  onChange: (size: 'compact' | 'standard' | 'wide') => void
+}) {
+  const options: Array<{ key: 'compact' | 'standard' | 'wide'; label: string; symbol: string; title: string }> = [
+    { key: 'compact',  label: '⅓',     symbol: '⅓', title: 'Compact — 1/3 width' },
+    { key: 'standard', label: '⅔',     symbol: '⅔', title: 'Standard — 2/3 width' },
+    { key: 'wide',     label: 'Full',  symbol: '◼',  title: 'Wide — full width' },
+  ]
+  return (
+    <div
+      className="inline-flex items-center gap-0.5 rounded-md ring-1 ring-line p-0.5 bg-surface"
+      role="group"
+      aria-label="Resize this panel"
+    >
+      {options.map((opt) => {
+        const active = value === opt.key
+        return (
+          <button
+            key={opt.key}
+            type="button"
+            onClick={() => onChange(opt.key)}
+            title={opt.title}
+            aria-pressed={active}
+            className={`inline-flex h-6 min-w-[28px] items-center justify-center rounded px-1.5 text-[11px] font-extrabold tabular-nums transition ${
+              active
+                ? 'bg-brand text-white shadow-sm'
+                : 'text-ink-3 hover:text-ink hover:bg-surface-2'
+            }`}
+          >
+            {opt.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 function TinyTrend({ values, negative = false }: { values: number[]; negative?: boolean }) {
   return <MiniSparkline values={values} positive={!negative} />
 }
@@ -739,6 +787,65 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   useEffect(() => {
     try { window.localStorage.setItem(COLUMN_WIDTHS_STORAGE_KEY, JSON.stringify(columnWidths)) } catch { /* non-fatal */ }
   }, [columnWidths])
+
+  // Per-section size presets — 2026-05-13 operator request to
+  // "customize size of all of these charts so it will be able to
+  // layout freely". Each major dashboard section has a 3-button
+  // size toggle (Compact / Standard / Wide) in its header. State
+  // persists per-browser so operators keep their preferred layout
+  // across reloads.
+  //
+  // Width works via Tailwind col-span on the parent grid:
+  //   compact  → col-span 1 (1/3 of row on xl)
+  //   standard → col-span 2 (2/3 of row on xl)
+  //   wide     → col-span 3 (full row)
+  //
+  // Height adapts the chart's inner viewport: compact ≈ 180px,
+  // standard ≈ 260px, wide ≈ 360px so a wider panel also gets a
+  // visually proportional taller canvas.
+  type SectionSize = 'compact' | 'standard' | 'wide'
+  type SectionKey = 'trend' | 'topSkus' | 'heatmap' | 'table'
+  const DEFAULT_SECTION_SIZES: Record<SectionKey, SectionSize> = {
+    trend: 'standard',   // 2/3 of row — was xl:col-span-2 before
+    topSkus: 'compact',  // 1/3 of row — was the smaller column
+    heatmap: 'wide',     // full-width
+    table: 'wide',       // full-width
+  }
+  const SECTION_SIZES_STORAGE_KEY = 'dashboard_section_sizes_v1'
+  const [sectionSizes, setSectionSizes] = useState<Record<SectionKey, SectionSize>>(() => {
+    if (typeof window === 'undefined') return DEFAULT_SECTION_SIZES
+    try {
+      const raw = window.localStorage.getItem(SECTION_SIZES_STORAGE_KEY)
+      if (!raw) return DEFAULT_SECTION_SIZES
+      const parsed = JSON.parse(raw) as Partial<Record<SectionKey, SectionSize>>
+      const merged = { ...DEFAULT_SECTION_SIZES }
+      for (const key of Object.keys(DEFAULT_SECTION_SIZES) as SectionKey[]) {
+        const v = parsed[key]
+        if (v === 'compact' || v === 'standard' || v === 'wide') merged[key] = v
+      }
+      return merged
+    } catch { return DEFAULT_SECTION_SIZES }
+  })
+  useEffect(() => {
+    try { window.localStorage.setItem(SECTION_SIZES_STORAGE_KEY, JSON.stringify(sectionSizes)) } catch { /* non-fatal */ }
+  }, [sectionSizes])
+  const setSectionSize = (key: SectionKey, size: SectionSize) =>
+    setSectionSizes((current) => ({ ...current, [key]: size }))
+  // Tailwind col-span class for a section based on its size preset.
+  // The parent grid is xl:grid-cols-3, so col-spans 1/2/3 map to
+  // 1/3, 2/3, full of the row width respectively.
+  const sectionColSpanClass = (size: SectionSize): string => {
+    if (size === 'compact') return 'xl:col-span-1'
+    if (size === 'wide') return 'xl:col-span-3'
+    return 'xl:col-span-2'
+  }
+  // Inner chart canvas height per size preset. Mirrors the width
+  // change so a wider panel feels visually proportional.
+  const sectionChartHeight = (size: SectionSize): string => {
+    if (size === 'compact') return 'h-[180px]'
+    if (size === 'wide') return 'h-[360px]'
+    return 'h-[260px]'
+  }
 
   // Favorited SKUs — the leftmost ☆ icon in each row toggles
   // membership in this Set. Favorited rows render with a filled
@@ -1219,7 +1326,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
 
   return (
     <div id="view-dashboard" className="view-content !overflow-y-auto !bg-page !p-4 sm:!p-5">
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-[24px] font-extrabold leading-tight tracking-[-0.02em] text-ink">
             Inventory & Stockout Prevention
@@ -1227,6 +1334,37 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           <p className="mt-0.5 text-xs text-ink-3">
             Monitor inventory health, days of supply, and take action to prevent stockouts
           </p>
+        </div>
+
+        {/* Surfaced client filter (2026-05-13 operator request:
+            "i want the filter see in the middle like this").
+            Previously the All Clients dropdown was buried inside
+            the Filters popover; now it lives in the header where
+            it's the always-visible primary scope control. The
+            popover still has Category + Brand filters for the
+            secondary cuts. */}
+        <div className="flex items-center gap-2 mx-auto">
+          <span className="text-2xs font-bold uppercase tracking-[0.06em] text-ink-3">Client</span>
+          <div className="relative">
+            <select
+              value={selectedClientId ?? ''}
+              onChange={(event) => setSelectedClientId(event.target.value ? Number(event.target.value) : null)}
+              className="h-10 appearance-none rounded-card border border-line bg-surface pl-3 pr-9 text-sm font-semibold text-ink shadow-sm hover:bg-surface-2 focus:outline-none focus:ring-2 focus:ring-brand/30 cursor-pointer"
+              aria-label="Filter dashboard by client"
+            >
+              <option value="">All Clients</option>
+              {clients.map((client) => (
+                <option key={client.clientId} value={client.clientId}>
+                  {client.name}
+                </option>
+              ))}
+            </select>
+            <ChevronDown
+              size={14}
+              strokeWidth={2.5}
+              className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-ink-3"
+            />
+          </div>
         </div>
 
         <div className="relative flex flex-wrap items-center gap-3">
@@ -1371,7 +1509,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
       </div>
 
       <div className="mb-3 grid grid-cols-1 gap-3 xl:grid-cols-3">
-        <section className="rounded-card border border-line bg-surface p-4 shadow-sm xl:col-span-2">
+        <section className={`rounded-card border border-line bg-surface p-4 shadow-sm ${sectionColSpanClass(sectionSizes.trend)}`}>
           <div className="mb-3 flex items-start justify-between gap-3">
             <div>
               <h3 className="text-sm font-extrabold text-ink">Units Sold Trend</h3>
@@ -1386,13 +1524,19 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                 </span>
               </div>
             </div>
-            {selectedClient ? (
-              <span className="rounded-full bg-brand-bg px-2 py-1 text-2xs font-bold text-brand">
-                {selectedClient.name}
-              </span>
-            ) : null}
+            <div className="flex items-center gap-2 flex-shrink-0">
+              {selectedClient ? (
+                <span className="rounded-full bg-brand-bg px-2 py-1 text-2xs font-bold text-brand">
+                  {selectedClient.name}
+                </span>
+              ) : null}
+              <SectionSizeToggle
+                value={sectionSizes.trend}
+                onChange={(size) => setSectionSize('trend', size)}
+              />
+            </div>
           </div>
-          <div className="h-[260px]">
+          <div className={sectionChartHeight(sectionSizes.trend)}>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={trend} margin={{ top: 8, right: 14, bottom: 4, left: -12 }}>
                 <CartesianGrid stroke="var(--line)" strokeDasharray="3 3" vertical={false} />
@@ -1416,9 +1560,17 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           </div>
         </section>
 
-        <section className="rounded-card border border-line bg-surface p-4 shadow-sm">
-          <h3 className="text-sm font-extrabold text-ink">Top SKUs (30d)</h3>
-          <p className="mb-3 text-tiny text-ink-3">By total units sold</p>
+        <section className={`rounded-card border border-line bg-surface p-4 shadow-sm ${sectionColSpanClass(sectionSizes.topSkus)}`}>
+          <div className="flex items-start justify-between gap-3 mb-3">
+            <div>
+              <h3 className="text-sm font-extrabold text-ink">Top SKUs (30d)</h3>
+              <p className="text-tiny text-ink-3">By total units sold</p>
+            </div>
+            <SectionSizeToggle
+              value={sectionSizes.topSkus}
+              onChange={(size) => setSectionSize('topSkus', size)}
+            />
+          </div>
           <div className="space-y-3">
             {topSkuRows.map((row, index) => (
               <button
@@ -1451,6 +1603,10 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             <h3 className="text-sm font-extrabold text-ink">Sales Performance Heatmap by SKU Family</h3>
             <p className="text-tiny text-ink-3">Performance vs prior 30 days</p>
           </div>
+          <SectionSizeToggle
+            value={sectionSizes.heatmap}
+            onChange={(size) => setSectionSize('heatmap', size)}
+          />
         </div>
         <div className="overflow-x-auto">
           {/* Refined diverging palette (2026-05-13): muted ColorBrewer
@@ -1484,19 +1640,29 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                     <div key={cell.day} className="text-center">{formatDayLabel(cell.day).replace(' ', ' ')}</div>
                   ))}
                 </div>
-                {heatmap.map((row) => (
-                  <div key={row.label} className="grid grid-cols-[150px_repeat(15,minmax(34px,1fr))] items-center gap-1">
-                    <div className="truncate pr-2 text-xs font-semibold text-ink-2" title={row.label}>{row.label}</div>
-                    {row.cells.map((cell) => (
-                      <div
-                        key={`${row.label}-${cell.day}`}
-                        title={`${formatDayLabel(cell.day)}: ${formatInt(cell.qty)} units, ${formatPct(cell.deviation)} vs baseline`}
-                        className="h-4 rounded-[3px] ring-1 ring-line/40"
-                        style={{ backgroundColor: HEATMAP_TONE_HEX[cell.tone] ?? HEATMAP_TONE_HEX.flat }}
-                      />
-                    ))}
-                  </div>
-                ))}
+                {/* Cell height responds to the heatmap size toggle:
+                    compact stays tight for at-a-glance scanning;
+                    wide grows the bars so deviations are easier to
+                    distinguish at the cost of more vertical space. */}
+                {(() => {
+                  const cellHeightClass =
+                    sectionSizes.heatmap === 'compact' ? 'h-3'
+                    : sectionSizes.heatmap === 'wide' ? 'h-7'
+                    : 'h-4'
+                  return heatmap.map((row) => (
+                    <div key={row.label} className="grid grid-cols-[150px_repeat(15,minmax(34px,1fr))] items-center gap-1">
+                      <div className="truncate pr-2 text-xs font-semibold text-ink-2" title={row.label}>{row.label}</div>
+                      {row.cells.map((cell) => (
+                        <div
+                          key={`${row.label}-${cell.day}`}
+                          title={`${formatDayLabel(cell.day)}: ${formatInt(cell.qty)} units, ${formatPct(cell.deviation)} vs baseline`}
+                          className={`${cellHeightClass} rounded-[3px] ring-1 ring-line/40`}
+                          style={{ backgroundColor: HEATMAP_TONE_HEX[cell.tone] ?? HEATMAP_TONE_HEX.flat }}
+                        />
+                      ))}
+                    </div>
+                  ))
+                })()}
                 {heatmap.length === 0 ? (
                   <div className="grid h-32 place-items-center text-tiny text-ink-3">No heatmap data available.</div>
                 ) : null}
@@ -1536,6 +1702,13 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             <p className="text-tiny text-ink-3">Revenue, velocity, stock status, and restock signals</p>
           </div>
           <div className="relative flex flex-wrap items-center gap-2">
+            {/* Table density toggle — Compact/Standard/Wide adjusts
+                row padding so operators with smaller monitors can
+                pack more rows visible, or expand for readability. */}
+            <SectionSizeToggle
+              value={sectionSizes.table}
+              onChange={(size) => setSectionSize('table', size)}
+            />
             <select
               value={categoryFilter}
               onChange={(event) => setCategoryFilter(event.target.value)}
@@ -1797,14 +1970,24 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               </tr>
             </thead>
             <tbody>
-              {pageRows.map((row) => (
+              {/* Row vertical padding flexes with the table size toggle
+                  (2026-05-13): compact tightens rows for at-a-glance
+                  scanning on smaller screens, wide breathes the table
+                  out for readability on larger displays. Applied to
+                  every <td> in the row through the rowPadY variable. */}
+              {(() => {
+                const rowPadY =
+                  sectionSizes.table === 'compact' ? 'py-1'
+                  : sectionSizes.table === 'wide' ? 'py-3'
+                  : 'py-2'
+                return pageRows.map((row) => (
                 <tr key={row.sku} className="border-b border-line last:border-b-0 hover:bg-brand-bg/30">
                   {/* Favorite toggle — filled amber star when the
                       SKU is in favoriteSkus, outline ink-3 otherwise.
                       stopPropagation on the click prevents the row's
                       hover/select behaviour from interpreting a star
                       click as a row click. */}
-                  <td className="px-3 py-2 overflow-hidden">
+                  <td className={`px-3 ${rowPadY} overflow-hidden`}>
                     {(() => {
                       const isFavorite = favoriteSkus.has(row.sku)
                       return (
@@ -1835,7 +2018,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                       the truncation engage inside the table-fixed
                       cell box; long SKUs now ellipsize instead of
                       bleeding into the Product column. */}
-                  <td className="px-3 py-2 overflow-hidden">
+                  <td className={`px-3 ${rowPadY} overflow-hidden`}>
                     <div className="block truncate font-mono text-xs font-semibold text-brand">{row.sku}</div>
                   </td>
                   {/* Product cell — was bleeding into Store because
@@ -1848,7 +2031,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                       with `truncate` already has `min-w-0` on its
                       flex-parent so it now truncates correctly when
                       the column is narrow. */}
-                  <td className="px-3 py-2 overflow-hidden">
+                  <td className={`px-3 ${rowPadY} overflow-hidden`}>
                     <button
                       type="button"
                       onClick={() => onOpenSku?.(row.sku)}
@@ -1877,7 +2060,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                     return (
                       <td
                         key={key}
-                        className={`${meta.align === 'right' ? 'pr-4 pl-3 text-right' : 'px-3 text-left'} py-2 overflow-hidden`}
+                        className={`${meta.align === 'right' ? 'pr-4 pl-3 text-right' : 'px-3 text-left'} ${rowPadY} overflow-hidden`}
                       >
                         {meta.renderCell(row)}
                       </td>
@@ -1887,7 +2070,8 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                       here — now flows through the map above via
                       SKU_COLUMNS.trend.renderCell. */}
                 </tr>
-              ))}
+                ))
+              })()}
               {pageRows.length === 0 ? (
                 <tr>
                   <td colSpan={visibleColumnCount} className="px-3 py-10 text-center text-sm text-ink-3">
