@@ -1453,49 +1453,79 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           </div>
         </div>
         <div className="overflow-x-auto">
-          <div className="min-w-[900px] space-y-1.5">
-            <div className="grid grid-cols-[150px_repeat(15,minmax(34px,1fr))] gap-1 text-2xs font-semibold text-ink-3">
-              <div />
-              {heatmap[0]?.cells.map((cell) => (
-                <div key={cell.day} className="text-center">{formatDayLabel(cell.day).replace(' ', ' ')}</div>
-              ))}
-            </div>
-            {heatmap.map((row) => (
-              <div key={row.label} className="grid grid-cols-[150px_repeat(15,minmax(34px,1fr))] items-center gap-1">
-                <div className="truncate pr-2 text-xs font-semibold text-ink-2" title={row.label}>{row.label}</div>
-                {row.cells.map((cell) => {
-                  const toneClass =
-                    cell.tone === 'high'
-                      ? 'bg-ok'
-                      : cell.tone === 'mid'
-                        ? 'bg-ok/40'
-                        : cell.tone === 'flat'
-                          ? 'bg-warn/20'
-                          : cell.tone === 'dip'
-                            ? 'bg-warn'
-                            : 'bg-danger'
-                  return (
-                    <div
-                      key={`${row.label}-${cell.day}`}
-                      title={`${formatDayLabel(cell.day)}: ${formatInt(cell.qty)} units, ${formatPct(cell.deviation)} vs baseline`}
-                      className={`h-4 rounded-[3px] ring-1 ring-line/30 ${toneClass}`}
-                    />
-                  )
-                })}
+          {/* Refined diverging palette (2026-05-13): muted ColorBrewer
+              RdYlGn-style green → cream → red. The previous Tailwind
+              ok/warn/danger tokens are high-saturation alert colors
+              that read as "look NOW" — wrong tone for a heatmap where
+              every cell should fade into a pattern. Subtle saturation
+              with clear directional steps lets operators scan rows of
+              SKU families and spot the negative-tone blocks without
+              the chart screaming for attention.
+
+              Cell tones map to a ~5-step diverging scale:
+                high  → deep green   (above +20%)
+                mid   → light green  (+10% to +20%)
+                flat  → soft cream   (-10% to +10%)
+                dip   → soft orange  (-10% to -20%)
+                crash → muted red    (≤ -20%) */}
+          {(() => {
+            const HEATMAP_TONE_HEX: Record<string, string> = {
+              high: '#4daa57',
+              mid:  '#a8d8a3',
+              flat: '#fbe89c',
+              dip:  '#f0a767',
+              crash:'#d56b6b',
+            }
+            return (
+              <div className="min-w-[900px] space-y-1.5">
+                <div className="grid grid-cols-[150px_repeat(15,minmax(34px,1fr))] gap-1 text-2xs font-semibold text-ink-3">
+                  <div />
+                  {heatmap[0]?.cells.map((cell) => (
+                    <div key={cell.day} className="text-center">{formatDayLabel(cell.day).replace(' ', ' ')}</div>
+                  ))}
+                </div>
+                {heatmap.map((row) => (
+                  <div key={row.label} className="grid grid-cols-[150px_repeat(15,minmax(34px,1fr))] items-center gap-1">
+                    <div className="truncate pr-2 text-xs font-semibold text-ink-2" title={row.label}>{row.label}</div>
+                    {row.cells.map((cell) => (
+                      <div
+                        key={`${row.label}-${cell.day}`}
+                        title={`${formatDayLabel(cell.day)}: ${formatInt(cell.qty)} units, ${formatPct(cell.deviation)} vs baseline`}
+                        className="h-4 rounded-[3px] ring-1 ring-line/40"
+                        style={{ backgroundColor: HEATMAP_TONE_HEX[cell.tone] ?? HEATMAP_TONE_HEX.flat }}
+                      />
+                    ))}
+                  </div>
+                ))}
+                {heatmap.length === 0 ? (
+                  <div className="grid h-32 place-items-center text-tiny text-ink-3">No heatmap data available.</div>
+                ) : null}
+                <div className="flex flex-wrap items-center justify-center gap-5 pt-2 text-2xs text-ink-3">
+                  <span className="mr-1">Performance vs prior 30 days</span>
+                  <span className="inline-flex items-center gap-1">
+                    <span className="h-2.5 w-2.5 rounded-sm ring-1 ring-line/40" style={{ backgroundColor: HEATMAP_TONE_HEX.high }} />
+                    &ge; +20%
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <span className="h-2.5 w-2.5 rounded-sm ring-1 ring-line/40" style={{ backgroundColor: HEATMAP_TONE_HEX.mid }} />
+                    +10% to +20%
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <span className="h-2.5 w-2.5 rounded-sm ring-1 ring-line/40" style={{ backgroundColor: HEATMAP_TONE_HEX.flat }} />
+                    -10% to +10%
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <span className="h-2.5 w-2.5 rounded-sm ring-1 ring-line/40" style={{ backgroundColor: HEATMAP_TONE_HEX.dip }} />
+                    -10% to -20%
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <span className="h-2.5 w-2.5 rounded-sm ring-1 ring-line/40" style={{ backgroundColor: HEATMAP_TONE_HEX.crash }} />
+                    &le; -20%
+                  </span>
+                </div>
               </div>
-            ))}
-            {heatmap.length === 0 ? (
-              <div className="grid h-32 place-items-center text-tiny text-ink-3">No heatmap data available.</div>
-            ) : null}
-            <div className="flex flex-wrap items-center justify-center gap-5 pt-2 text-2xs text-ink-3">
-              <span className="mr-1">Performance vs prior 30 days</span>
-              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-ok" /> &ge; +20%</span>
-              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-ok/40" /> +10% to +20%</span>
-              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-warn/20" /> -10% to +10%</span>
-              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-warn" /> -10% to -20%</span>
-              <span className="inline-flex items-center gap-1"><span className="h-2.5 w-2.5 rounded-sm bg-danger" /> &le; -20%</span>
-            </div>
-          </div>
+            )
+          })()}
         </div>
       </section>
 
