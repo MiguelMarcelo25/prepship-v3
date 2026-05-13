@@ -59,24 +59,23 @@ function formatMoney(amount: number) {
 }
 
 function LabelCostCell({ row }: { row: RateRowView }) {
-  const hasMarkup = row.profit >= 0.005
+  // 2026-05-13: stopped surfacing the "+ Markup $X.XX" suffix per
+  // operator request. The markup amount is internal margin info that
+  // doesn't need to be visible alongside the cost on every rate row.
+  // The tooltip is also simplified to just the label cost so
+  // operators don't see the same breakdown on hover. Markup is still
+  // computed (row.profit) so anything else that consumes it keeps
+  // working — only the cell render changed.
   return (
     <div
       className="leading-tight"
-      title={
-        hasMarkup
-          ? `Label Cost ${formatMoney(row.yourPrice)} | Cost ${formatMoney(row.baseCost)} + Markup ${formatMoney(row.profit)}`
-          : `Label Cost ${formatMoney(row.yourPrice)}`
-      }
+      title={`Label Cost ${formatMoney(row.yourPrice)}`}
     >
       <div className="font-mono tabular-nums text-[12.5px] font-extrabold text-orange-600">
         {formatMoney(row.yourPrice)}
       </div>
       <div className="mt-0.5 whitespace-nowrap text-[10.5px] font-semibold text-ink-3">
         Cost {formatMoney(row.baseCost)}
-        {hasMarkup ? (
-          <span className="text-emerald-700"> + Markup {formatMoney(row.profit)}</span>
-        ) : null}
       </div>
     </div>
   )
