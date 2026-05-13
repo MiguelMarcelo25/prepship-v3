@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
 import { Boxes } from 'lucide-react'
 import { apiClient, ApiError } from '../../api/client'
@@ -646,6 +646,24 @@ function positionThumbnailPreview(cursorX: number, cursorY: number) {
   }
 }
 
+function normalizeInventoryClients(nextClients: any[] | undefined): ClientDto[] {
+  return (nextClients ?? []).map((client: any) => ({
+    ...client,
+    clientId: client?.clientId ?? client?.id,
+  }))
+}
+
+function buildStockQuery(stockClientId: string, activeOnly: boolean) {
+  const query: Record<string, unknown> = {}
+  if (stockClientId) query.clientId = Number.parseInt(stockClientId, 10)
+  if (!activeOnly) query.includeInactive = true
+  return query
+}
+
+function maybeQueryParams(query: Record<string, unknown>) {
+  return Object.keys(query).length ? query : undefined
+}
+
 interface InventoryViewProps {
   searchQuery?: string
   onOpenOrder?: (orderId: number, status?: string | null) => void
@@ -698,10 +716,10 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
   const [columnsAnchor, setColumnsAnchor] = useState<HTMLElement | null>(null)
   const [clients, setClients] = useState<ClientDto[]>([])
   const [packages, setPackages] = useState<PackageDto[]>([])
-  const [items, setItems] = useState<InventoryItemDto[]>([])
+  const [itemsState, setItems] = useState<InventoryItemDto[]>([])
   const [alerts, setAlerts] = useState<InventoryAlertDto[]>([])
   const [ledger, setLedger] = useState<InventoryLedgerEntryDto[]>([])
-  const [stockLoading, setStockLoading] = useState(true)
+  const [stockLoadingState, setStockLoading] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(false)
   const [bootError, setBootError] = useState<string | null>(null)
   const [stockSearch, setStockSearch] = useState('')
@@ -724,6 +742,61 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
     if (typeof window === 'undefined') return
     window.localStorage.setItem('inventory_active_only', String(activeOnly))
   }, [activeOnly])
+  const stockQueryParams = useMemo(
+    () => buildStockQuery(stockClientId, activeOnly),
+    [stockClientId, activeOnly],
+  )
+  const clientsQuery = useQuery({
+    queryKey: ['clients'],
+    queryFn: () => apiClient.fetchClients(),
+  })
+  const packagesQuery = useQuery({
+    queryKey: ['packages', 'custom'],
+    queryFn: () => apiClient.fetchPackages('custom'),
+  })
+  const alertsQuery = useQuery({
+    queryKey: ['inventory', 'alerts'],
+    queryFn: () => apiClient.fetchInventoryAlerts(),
+  })
+  const inventoryQuery = useQuery({
+    queryKey: ['inventory', 'stock', stockQueryParams],
+    queryFn: () => apiClient.fetchInventory(maybeQueryParams(stockQueryParams)),
+  })
+  const items = itemsState.length > 0 ? itemsState : inventoryQuery.data ?? []
+  const stockLoading =
+    clientsQuery.isLoading ||
+    packagesQuery.isLoading ||
+    alertsQuery.isLoading ||
+    inventoryQuery.isLoading ||
+    stockLoadingState
+  useEffect(() => {
+    if (clientsQuery.data) setClients(normalizeInventoryClients(clientsQuery.data))
+  }, [clientsQuery.data])
+  useEffect(() => {
+    if (packagesQuery.data) setPackages(packagesQuery.data)
+  }, [packagesQuery.data])
+  useEffect(() => {
+    if (alertsQuery.data) setAlerts(alertsQuery.data)
+  }, [alertsQuery.data])
+  useEffect(() => {
+    if (inventoryQuery.data) setItems(inventoryQuery.data)
+  }, [inventoryQuery.data])
+  useEffect(() => {
+    setStockLoading(
+      clientsQuery.isLoading ||
+        packagesQuery.isLoading ||
+        alertsQuery.isLoading ||
+        inventoryQuery.isLoading,
+    )
+  }, [alertsQuery.isLoading, clientsQuery.isLoading, inventoryQuery.isLoading, packagesQuery.isLoading])
+  useEffect(() => {
+    const error =
+      clientsQuery.error ||
+      packagesQuery.error ||
+      alertsQuery.error ||
+      inventoryQuery.error
+    setBootError(error ? error instanceof Error ? error.message : 'Failed to load inventory view' : null)
+  }, [alertsQuery.error, clientsQuery.error, inventoryQuery.error, packagesQuery.error])
   const [stockSort, setStockSort] = useState<InventorySortState | null>(null)
   // Operator-controlled column layout for the Stock Levels table.
   // Drag a header to reorder, use the Columns popover to toggle
@@ -975,6 +1048,12 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
     setItems((prev) => prev.map((r) => (r.id === row.id ? { ...r, active: nextActive } : r)))
     try {
       await apiClient.updateInventoryItem(row.id, { active: nextActive })
+      queryClient.setQueriesData({ queryKey: ['inventory', 'stock'] }, (current: any) =>
+        Array.isArray(current)
+          ? current.map((cachedRow) => (cachedRow.id === row.id ? { ...cachedRow, active: nextActive } : cachedRow))
+          : current,
+      )
+      void queryClient.invalidateQueries({ queryKey: ['inventory'] })
     } catch (error) {
       // Roll back — server didn't accept the change.
       setItems((prev) => prev.map((r) => (r.id === row.id ? { ...r, active: !nextActive } : r)))
@@ -1696,70 +1775,6 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
   }
 
   useEffect(() => {
-    let active = true
-
-    const loadBootData = async () => {
-      setBootError(null)
-      setStockLoading(true)
-      try {
-        const [nextClients, nextPackages, nextAlerts] = await Promise.all([
-          apiClient.fetchClients(),
-          apiClient.fetchPackages('custom'),
-          apiClient.fetchInventoryAlerts(),
-        ])
-        if (!active) return
-        // v4 returns clients with `id`; v2 code reads `clientId`. Normalize.
-        setClients((nextClients ?? []).map((c: any) => ({ ...c, clientId: c?.clientId ?? c?.id })))
-        setPackages(nextPackages)
-        setAlerts(nextAlerts)
-      } catch (error) {
-        if (!active) return
-        setBootError(error instanceof Error ? error.message : 'Failed to load inventory view')
-      }
-    }
-
-    void loadBootData()
-
-    return () => {
-      active = false
-    }
-  }, [])
-
-  useEffect(() => {
-    let active = true
-
-    const loadStock = async () => {
-      setStockLoading(true)
-      try {
-        // includeInactive=true bypasses the backend's hard-coded
-        // active-only WHERE clause so deactivated SKUs come over
-        // the wire when the toolbar toggle is off. The frontend's
-        // filterInventoryRows still gets the final say — if any
-        // future code paths fetch with includeInactive but want
-        // to hide them locally, the activeOnly client filter
-        // remains as a second layer of defense.
-        const query: Record<string, unknown> = {}
-        if (stockClientId) query.clientId = Number.parseInt(stockClientId, 10)
-        if (!activeOnly) query.includeInactive = true
-        const nextItems = await apiClient.fetchInventory(Object.keys(query).length ? query : undefined)
-        if (!active) return
-        setItems(nextItems)
-      } catch (error) {
-        if (!active) return
-        setBootError(error instanceof Error ? error.message : 'Failed to load inventory')
-      } finally {
-        if (active) setStockLoading(false)
-      }
-    }
-
-    void loadStock()
-
-    return () => {
-      active = false
-    }
-  }, [stockClientId, activeOnly])
-
-  useEffect(() => {
     if (activeTab !== 'history') return
 
     let active = true
@@ -1891,15 +1906,25 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
       // Mirror the loadStock effect's query construction — pass
       // includeInactive only when the toolbar Active-only toggle
       // is OFF so manual refreshes match the current visible filter.
-      const stockQuery: Record<string, unknown> = {}
-      if (stockClientId) stockQuery.clientId = Number.parseInt(stockClientId, 10)
-      if (!activeOnly) stockQuery.includeInactive = true
+      const nextStockQuery = buildStockQuery(stockClientId, activeOnly)
       const [nextClients, nextAlerts, nextItems] = await Promise.all([
-        apiClient.fetchClients(),
-        apiClient.fetchInventoryAlerts(),
-        apiClient.fetchInventory(Object.keys(stockQuery).length ? stockQuery : undefined),
+        queryClient.fetchQuery({
+          queryKey: ['clients'],
+          queryFn: () => apiClient.fetchClients(),
+          staleTime: 0,
+        }),
+        queryClient.fetchQuery({
+          queryKey: ['inventory', 'alerts'],
+          queryFn: () => apiClient.fetchInventoryAlerts(),
+          staleTime: 0,
+        }),
+        queryClient.fetchQuery({
+          queryKey: ['inventory', 'stock', nextStockQuery],
+          queryFn: () => apiClient.fetchInventory(maybeQueryParams(nextStockQuery)),
+          staleTime: 0,
+        }),
       ])
-      setClients((nextClients ?? []).map((c: any) => ({ ...c, clientId: c?.clientId ?? c?.id })))
+      setClients(normalizeInventoryClients(nextClients))
       setAlerts(nextAlerts)
       setItems(nextItems)
       if (activeTab === 'history') {

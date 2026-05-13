@@ -19,10 +19,8 @@ import { ToastContext } from './contexts/ToastContext'
 import { apiClient } from './api/client'
 import type { SyncWorkerStatusDto } from './types/api'
 import { useInitStores } from './hooks'
+import PageSkeleton from './components/PageSkeleton'
 import Sidebar from './components/Sidebar/Sidebar'
-import OrdersView from './components/Views/OrdersView'
-import DashboardView from './components/Views/DashboardView'
-import InventoryView from './components/Views/InventoryView'
 // Clients is the modern card-based page from ./pages/Clients (previously
 // mounted as a standalone /clients route in App.tsx). It's lazy-loaded
 // here so /inventory and the orders views don't pay its bundle cost on
@@ -30,17 +28,20 @@ import InventoryView from './components/Views/InventoryView'
 // chunk. Mounted inside Home's shell so the sidebar + topbar render
 // alongside the cards.
 const ClientsPage = lazy(() => import('./pages/Clients'))
+const OrdersView = lazy(() => import('./components/Views/OrdersView'))
+const DashboardView = lazy(() => import('./components/Views/DashboardView'))
+const InventoryView = lazy(() => import('./components/Views/InventoryView'))
 // 2026-05-13: LocationsView import removed from Home — the component
 // now mounts inside SettingsView's Ship-From Locations tab. Old
 // /locations URLs are redirected to /settings/locations by the
 // useEffect inside this file.
 // import LocationsView from './components/Views/LocationsView'
-import PackagesView from './components/Views/PackagesView'
-import RatesView from './components/Views/RatesView'
-import AnalysisView from './components/Views/AnalysisView'
-import SettingsView from './components/Views/SettingsView'
-import BillingView from './components/Views/BillingView'
-import ManifestsView from './components/Views/ManifestsView'
+const PackagesView = lazy(() => import('./components/Views/PackagesView'))
+const RatesView = lazy(() => import('./components/Views/RatesView'))
+const AnalysisView = lazy(() => import('./components/Views/AnalysisView'))
+const SettingsView = lazy(() => import('./components/Views/SettingsView'))
+const BillingView = lazy(() => import('./components/Views/BillingView'))
+const ManifestsView = lazy(() => import('./components/Views/ManifestsView'))
 import { formatSyncPill } from './components/Views/orders-parity'
 import { getOrdersDateRange } from './components/Views/orders-view-filters'
 
@@ -979,7 +980,8 @@ export default function Home() {
             transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
             className="flex-1 min-h-0 flex flex-col"
           >
-            {displayView === 'dashboard' ? (
+            <Suspense fallback={<PageSkeleton />}>
+              {displayView === 'dashboard' ? (
               <DashboardView
                 onOpenSku={(sku) => {
                   if (!sku) return
@@ -1084,19 +1086,24 @@ export default function Home() {
             ) : (
               <PlaceholderView title={viewTitle} />
             )}
+            </Suspense>
           </motion.div>
         </AnimatePresence>
 
-        <ManifestsView
-          open={manifestOpen}
-          onClose={() => {
-            const target =
-              lastContentView === 'orders'
-                ? `/orders/${currentStatus}`
-                : VIEW_PATHS[lastContentView as Exclude<ViewType, 'orders'>] ?? '/'
-            navigate(target)
-          }}
-        />
+        {manifestOpen ? (
+          <Suspense fallback={null}>
+            <ManifestsView
+              open={manifestOpen}
+              onClose={() => {
+                const target =
+                  lastContentView === 'orders'
+                    ? `/orders/${currentStatus}`
+                    : VIEW_PATHS[lastContentView as Exclude<ViewType, 'orders'>] ?? '/'
+                navigate(target)
+              }}
+            />
+          </Suspense>
+        ) : null}
       </div>
 
       {/* Zoom dropdown — portal-rendered at document.body level so it

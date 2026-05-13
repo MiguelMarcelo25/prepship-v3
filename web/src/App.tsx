@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react';
 import { Route, Routes } from 'react-router-dom';
 import ProtectedRoute from './components/ProtectedRoute';
+import PageSkeleton from './components/PageSkeleton';
 
 const Login = lazy(() => import('./pages/Login'));
 const Logout = lazy(() => import('./pages/Logout'));
@@ -17,25 +18,9 @@ const Picklist = lazy(() => import('./pages/Picklist'));
 const Products = lazy(() => import('./pages/Products'));
 const Invoice = lazy(() => import('./pages/Invoice'));
 
-function PageFallback() {
-  return (
-    <div className="h-full w-full flex items-center justify-center bg-page animate-fadeIn">
-      <div className="flex flex-col items-center gap-3">
-        <div className="relative w-10 h-10">
-          <div className="absolute inset-0 rounded-full border-2 border-line" />
-          <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-brand animate-spinSlow" />
-        </div>
-        <div className="text-tiny text-ink-3 font-sans tracking-wide uppercase">
-          Loading
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export default function App() {
   return (
-    <Suspense fallback={<PageFallback />}>
+    <Suspense fallback={<PageSkeleton />}>
       <Routes>
         {/* Auth routes — the only public surface */}
         <Route path="/login" element={<Login />} />
