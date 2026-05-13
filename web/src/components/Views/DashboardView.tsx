@@ -1356,17 +1356,22 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         priorOrdersRes,
       ] = await Promise.all([
         apiClient.listClients().catch(() => []),
-        // 2026-05-13: includeCancelled=true makes the dashboard's
-        // trend / top SKUs / heatmap / table aggregate ALL three
-        // order statuses (awaiting_shipment + shipped + cancelled),
-        // matching the KPI cards above them that already count the
-        // full /orders set. Without this flag the dashboard's chart
-        // panels would report a smaller "units sold" number than the
-        // KPI card on the same page — confusing for operators.
-        apiClient.fetchAnalysisDailySales({ from: currentFrom, to: currentTo, topN: 15, clientId: cid, includeCancelled: true }),
-        apiClient.fetchAnalysisDailySales({ from: priorFrom, to: priorTo, topN: 15, clientId: cid, includeCancelled: true }),
+        // 2026-05-13 ROLLBACK: previously passed includeCancelled=true
+        // on all three analytics calls. The backend flag is in place
+        // and works in dev, but on production Render (statement_timeout
+        // = 15s, slower CPU than local) the heavy /analysis/sku-breakdown
+        // query times out when cancelled orders are added to its CTE
+        // pipeline ("DbHandler exited" surfaced to operators). For now
+        // the dashboard reverts to awaiting+shipped semantics for these
+        // charts. The KPI cards above (Total 7d/30d Units, Revenue,
+        // stock) still include cancelled because they aggregate the
+        // full /orders set with no filter. We'll re-enable the flag
+        // once the breakdown query is profiled and the slow segment
+        // is indexed or rewritten.
+        apiClient.fetchAnalysisDailySales({ from: currentFrom, to: currentTo, topN: 15, clientId: cid }),
+        apiClient.fetchAnalysisDailySales({ from: priorFrom, to: priorTo, topN: 15, clientId: cid }),
         apiClient.fetchInventory({ ...(cid ? { clientId: cid } : {}) }).catch(() => []),
-        apiClient.fetchAnalysisSkus({ from: currentFrom, to: currentTo, limit: 200, clientId: cid, includeCancelled: true }).catch(() => ({ skus: [] })),
+        apiClient.fetchAnalysisSkus({ from: currentFrom, to: currentTo, limit: 200, clientId: cid }).catch(() => ({ skus: [] })),
         fetchOrdersWindow({ from: currentFrom, to: currentTo, clientId: cid }),
         fetchOrdersWindow({ from: priorFrom, to: priorTo, clientId: cid }),
       ])
@@ -1708,7 +1713,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           </p>
           <p className="mt-1 inline-flex items-center gap-1.5 text-2xs font-semibold text-ink-3">
             <span className="inline-block h-1.5 w-1.5 rounded-full bg-brand" />
-            All order statuses included · awaiting · shipped · cancelled
+            KPIs · all orders (awaiting + shipped + cancelled). Charts · fulfilled orders only.
           </p>
         </div>
 
