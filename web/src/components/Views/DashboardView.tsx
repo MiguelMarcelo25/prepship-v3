@@ -100,8 +100,8 @@ type HeatmapCell = {
   day: string
   qty: number
   // baseline = the average daily units in the prior 30-day window
-  // for this SKU family. Used both to compute the deviation % and
-  // to show "expected vs actual" in the click-to-explain popover.
+  // for this SKU. Used both to compute the deviation % and to show
+  // "expected vs actual" in the click-to-explain popover.
   baseline: number
   deviation: number
   tone: 'high' | 'mid' | 'flat' | 'dip' | 'low'
@@ -1375,11 +1375,16 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
 
   // Heatmap drill-down — operator clicks a cell to see WHY it's
   // orange / yellow / green. We keep the clicked cell + its SKU
-  // family label in state, then render a small popover-modal with
-  // the underlying numbers (units this day, average prior 30d,
-  // % change, color rule that fired). Null when no cell is open.
+  // label in state, then render a small popover-modal with the
+  // underlying numbers (units this day, average prior 30d, %
+  // change, color rule that fired). Null when no cell is open.
   const [selectedHeatmapCell, setSelectedHeatmapCell] = useState<
-    { family: string; cell: HeatmapCell } | null
+    // 2026-05-13: field name was historically `family` when each
+    // heatmap row was a productFamily() grouping; rows are now
+    // individual SKUs (see buildHeatmap()), so the field is now
+    // `label` to match HeatmapRow.label. All consumers below
+    // updated accordingly.
+    { label: string; cell: HeatmapCell } | null
   >(null)
   // Esc key closes the heatmap-cell modal. Common modal pattern.
   useEffect(() => {
@@ -2680,7 +2685,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               that read as "look NOW" — wrong tone for a heatmap where
               every cell should fade into a pattern. Subtle saturation
               with clear directional steps lets operators scan rows of
-              SKU families and spot the negative-tone blocks without
+              top SKUs and spot the negative-tone blocks without
               the chart screaming for attention.
 
               Cell tones map to a ~5-step diverging scale:
@@ -2721,7 +2726,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                         <button
                           key={`${row.label}-${cell.day}`}
                           type="button"
-                          onClick={() => setSelectedHeatmapCell({ family: row.label, cell })}
+                          onClick={() => setSelectedHeatmapCell({ label: row.label, cell })}
                           title={`Click to see why this cell is this color`}
                           aria-label={`${row.label} on ${formatDayLabel(cell.day)} — ${formatInt(cell.qty)} units. Click for details.`}
                           className={`${cellHeightClass} cursor-pointer rounded-[3px] ring-1 ring-line/40 transition hover:scale-110 hover:ring-2 hover:ring-brand/60 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand`}
@@ -3296,7 +3301,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
       {/* Heatmap cell drill-down modal — opens when an operator
           clicks a colored cell in the Sales Performance Heatmap.
           Shows the four pieces of info that determine the color:
-            • The day + SKU family the cell represents
+            • The day + SKU the cell represents
             • Units sold that day (the numerator)
             • Average daily units in the prior 30-day window
               (the baseline, the denominator)
@@ -3304,7 +3309,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             • Which color band the deviation falls into (the rule)
           Closing: click outside the card, the ✕ button, or Esc. */}
       {selectedHeatmapCell ? (() => {
-        const { family, cell } = selectedHeatmapCell
+        const { label, cell } = selectedHeatmapCell
         const deltaUnits = cell.qty - cell.baseline
         const toneRules: Record<HeatmapCell['tone'], { color: string; label: string; rule: string; insight: string }> = {
           high:  { color: '#4daa57', label: 'Strong growth',  rule: '≥ +20% vs baseline',         insight: 'Selling well above the past month\'s typical pace. Stock to keep up.' },
@@ -3320,13 +3325,13 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             onClick={() => setSelectedHeatmapCell(null)}
             role="dialog"
             aria-modal="true"
-            aria-label={`Heatmap details for ${family} on ${formatDayLabel(cell.day)}`}
+            aria-label={`Heatmap details for ${label} on ${formatDayLabel(cell.day)}`}
           >
             <div
               className="w-full max-w-md overflow-hidden rounded-card border border-line bg-surface shadow-2xl"
               onClick={(e) => e.stopPropagation()}
             >
-              {/* Header — color swatch + family + date + close X */}
+              {/* Header — color swatch + SKU label + date + close X */}
               <div className="flex items-center justify-between gap-3 border-b border-line px-5 py-4">
                 <div className="flex min-w-0 items-center gap-3">
                   <span
@@ -3335,7 +3340,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                     aria-hidden="true"
                   />
                   <div className="min-w-0">
-                    <div className="truncate text-sm font-extrabold text-ink">{family}</div>
+                    <div className="truncate text-sm font-extrabold text-ink">{label}</div>
                     <div className="truncate text-2xs font-semibold text-ink-3">{formatDayLabel(cell.day)} · {rule.label}</div>
                   </div>
                 </div>
