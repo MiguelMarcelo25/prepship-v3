@@ -43,7 +43,14 @@ import {
   Store,
   Truck,
   Clock,
+  MapPin,
 } from 'lucide-react'
+// 2026-05-13: Ship-From Locations now lives as a Settings tab instead
+// of a top-level sidebar destination. Mounting <LocationsView embedded />
+// here re-uses every behavior (CRUD, default-toggle, validation) while
+// suppressing its page-level title so the Settings shell owns the
+// chrome.
+import LocationsView from './LocationsView'
 import { apiClient } from '../../api/client'
 import { api } from '../../lib/api'
 import { useShippingAccounts, useClients } from '../../hooks'
@@ -64,7 +71,7 @@ import { PendingClientIntegrationsCard } from '../Settings/PendingClientIntegrat
 
 // Drawer sections — each represents one icon on the rail and one
 // content panel. Order here = rendering order on the rail.
-type DrawerSectionId = 'markups' | 'stores' | 'carriers' | 'pending' | 'sandbox' | 'cache'
+type DrawerSectionId = 'markups' | 'locations' | 'stores' | 'carriers' | 'pending' | 'sandbox' | 'cache'
 
 const DRAWER_SECTION_KEY = 'settings:active-drawer-section'
 
@@ -455,6 +462,12 @@ export default function SettingsView() {
     const aliases: Record<string, DrawerSectionId> = {
       markup: 'markups',
       markups: 'markups',
+      // 2026-05-13: Locations moved from a top-level sidebar entry
+      // into a Settings tab. Both singular and plural slugs map to
+      // the same section so old bookmarks (/locations → redirected
+      // by Home.tsx to /settings/locations) still resolve.
+      location: 'locations',
+      locations: 'locations',
       store: 'stores',
       stores: 'stores',
       carrier: 'carriers',
@@ -472,6 +485,7 @@ export default function SettingsView() {
   // /settings/markup and /settings/markups on different clicks.
   const SECTION_PATH: Record<DrawerSectionId, string> = {
     markups: '/settings/markups',
+    locations: '/settings/locations',
     stores: '/settings/stores',
     carriers: '/settings/carriers',
     pending: '/settings/pending',
@@ -490,7 +504,7 @@ export default function SettingsView() {
     if (fromUrl) return fromUrl
     try {
       const stored = window.localStorage.getItem(DRAWER_SECTION_KEY) as DrawerSectionId | null
-      if (stored && ['markups', 'stores', 'carriers', 'pending', 'sandbox', 'cache'].includes(stored)) {
+      if (stored && ['markups', 'locations', 'stores', 'carriers', 'pending', 'sandbox', 'cache'].includes(stored)) {
         return stored
       }
     } catch {
@@ -569,6 +583,18 @@ export default function SettingsView() {
         '$ or % markup added per carrier account. Applied to displayed rates in the Rate Browser; useful for billing clients above cost.',
       icon: Sparkles,
       tone: 'brand',
+    },
+    {
+      // 2026-05-13: First tab after Markups per operator request —
+      // Ship-From Locations moved out of the sidebar so the left rail
+      // stays focused on order-processing destinations.
+      id: 'locations',
+      label: 'Ship-From Locations',
+      short: 'Locations',
+      description:
+        'Warehouses, 3PL centers, or drop-ship addresses. The ★ default is used for new labels.',
+      icon: MapPin,
+      tone: 'rose',
     },
     {
       id: 'stores',
@@ -918,6 +944,17 @@ export default function SettingsView() {
                     <StatusLine kind="error" message={`Unable to refresh carrier accounts: ${accountsError.message}`} />
                   ) : null}
                 </div>
+              ) : null}
+
+              {/* ─── LOCATIONS panel ───────────────────────────── */}
+              {/* 2026-05-13: Ship-From Locations moved here from a
+                  top-level sidebar destination. <LocationsView /> is
+                  self-contained — it owns its own data fetch, form
+                  state, and CRUD calls. We pass `embedded` so its
+                  built-in title bar is suppressed (the Settings
+                  shell renders one already). */}
+              {activeSection === 'locations' ? (
+                <LocationsView embedded />
               ) : null}
 
               {/* ─── STORES panel ──────────────────────────────── */}

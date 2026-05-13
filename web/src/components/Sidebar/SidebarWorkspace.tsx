@@ -23,7 +23,7 @@ interface WorkspaceItem {
 
 const WORKSPACE_ITEMS: WorkspaceItem[] = [
   { view: 'inventory', icon: <IconBoxes />, label: 'Inventory', tone: 'indigo' },
-  { view: 'locations', icon: <IconMapPin />, label: 'Locations', tone: 'rose' },
+  // 2026-05-13: Locations moved into Settings → Ship-From Locations tab.
   { view: 'packages', icon: <IconPackage />, label: 'Packages', tone: 'amber' },
   { view: 'rates', icon: <IconDollarSign />, label: 'Rate Shop', tone: 'emerald' },
   { view: 'analysis', icon: <IconBarChart />, label: 'Analytics', tone: 'violet' },

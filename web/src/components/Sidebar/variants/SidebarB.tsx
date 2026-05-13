@@ -37,7 +37,7 @@ const TOOL_ITEMS: Array<{ view: SidebarViewType; Icon: any; label: string; hint:
   { view: 'dashboard', Icon: Sparkles,    label: 'Dashboard',  hint: 'Live overview' },
   { view: 'inventory', Icon: Boxes,        label: 'Inventory',  hint: 'Stock & SKUs' },
   { view: 'clients',   Icon: Users,         label: 'Clients',    hint: 'Brands & stores' },
-  { view: 'locations', Icon: Building2,    label: 'Locations',  hint: 'Warehouses' },
+  // 2026-05-13: Locations moved into Settings → Ship-From Locations tab.
   { view: 'packages',  Icon: PackageOpen,  label: 'Packages',   hint: 'Box library' },
   { view: 'rates',     Icon: Wallet,       label: 'Rate Shop',  hint: 'Compare carriers' },
   { view: 'analysis',  Icon: LineChart,    label: 'Analysis',   hint: 'SKU performance' },

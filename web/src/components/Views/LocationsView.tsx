@@ -37,6 +37,13 @@ interface LocationsViewContentProps {
   onEdit: (locationId: number) => void
   onDelete: (locationId: number) => void
   onSetDefault: (locationId: number) => void
+  /** 2026-05-13: when true, suppress the page-level title block and
+   *  outer padding/scroll wrapper so this content can be embedded
+   *  inside another shell (e.g. the Settings page's tab panel). The
+   *  parent page is responsible for rendering its own section header
+   *  in that case. Defaults to false for back-compat with the
+   *  standalone /locations route fallback. */
+  embedded?: boolean
 }
 
 export function LocationsViewContent({
@@ -52,6 +59,7 @@ export function LocationsViewContent({
   onEdit,
   onDelete,
   onSetDefault,
+  embedded = false,
 }: LocationsViewContentProps) {
   const contentState = getLocationsContentState({ loading, error, locations })
 
@@ -60,29 +68,55 @@ export function LocationsViewContent({
     'focus:border-brand/60 focus:ring-2 focus:ring-brand/15 transition-all duration-150 outline-none'
   const labelCls = 'block text-tiny font-bold uppercase tracking-[0.06em] text-ink-3 mb-1.5'
 
+  // 2026-05-13: when embedded inside Settings, drop the page-level
+  // padding + scroll wrapper (the Settings shell provides its own)
+  // and skip the page header (Settings renders its own section
+  // header). The "+ Add Location" button still needs to exist — we
+  // pull it out of the suppressed header block and render it alone
+  // when embedded.
+  const containerClass = embedded ? '' : 'view-content !p-5 !overflow-y-auto'
+
   return (
-    <div id="view-locations" className="view-content !p-5 !overflow-y-auto">
-      <div className="flex items-start justify-between gap-3 mb-5 flex-wrap max-w-3xl">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-rose-500 to-rose-600 flex items-center justify-center shadow-md ring-1 ring-rose-400/20">
-            <MapPin size={20} strokeWidth={2.25} className="text-white" />
-          </div>
-          <div>
-            <h2 className="text-[16px] font-extrabold text-ink font-display tracking-tight">Ship-From Locations</h2>
-            <p className="text-tiny text-ink-3 mt-0.5">Warehouses, 3PL centers, or drop-ship addresses. The ★ default is used for new labels.</p>
-          </div>
+    <div id="view-locations" className={containerClass}>
+      {embedded ? (
+        // Embedded mode: just the Add button, right-aligned, since
+        // the Settings shell already shows "Ship-From Locations" in
+        // its section header above this panel.
+        <div className="flex items-center justify-end mb-5">
+          <motion.button
+            whileHover={{ y: -1 }}
+            whileTap={{ scale: 0.96 }}
+            type="button"
+            onClick={onShowAdd}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-semibold text-white bg-gradient-to-br from-brand to-indigo-600 shadow-md hover:shadow-lg transition-all duration-150 focus-visible:ring-2 focus-visible:ring-brand/40 focus-visible:ring-offset-2 outline-none"
+          >
+            <Plus size={14} strokeWidth={2.5} />
+            Add Location
+          </motion.button>
         </div>
-        <motion.button
-          whileHover={{ y: -1 }}
-          whileTap={{ scale: 0.96 }}
-          type="button"
-          onClick={onShowAdd}
-          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-semibold text-white bg-gradient-to-br from-brand to-indigo-600 shadow-md hover:shadow-lg transition-all duration-150 focus-visible:ring-2 focus-visible:ring-brand/40 focus-visible:ring-offset-2 outline-none"
-        >
-          <Plus size={14} strokeWidth={2.5} />
-          Add Location
-        </motion.button>
-      </div>
+      ) : (
+        <div className="flex items-start justify-between gap-3 mb-5 flex-wrap max-w-3xl">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-rose-500 to-rose-600 flex items-center justify-center shadow-md ring-1 ring-rose-400/20">
+              <MapPin size={20} strokeWidth={2.25} className="text-white" />
+            </div>
+            <div>
+              <h2 className="text-[16px] font-extrabold text-ink font-display tracking-tight">Ship-From Locations</h2>
+              <p className="text-tiny text-ink-3 mt-0.5">Warehouses, 3PL centers, or drop-ship addresses. The ★ default is used for new labels.</p>
+            </div>
+          </div>
+          <motion.button
+            whileHover={{ y: -1 }}
+            whileTap={{ scale: 0.96 }}
+            type="button"
+            onClick={onShowAdd}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-semibold text-white bg-gradient-to-br from-brand to-indigo-600 shadow-md hover:shadow-lg transition-all duration-150 focus-visible:ring-2 focus-visible:ring-brand/40 focus-visible:ring-offset-2 outline-none"
+          >
+            <Plus size={14} strokeWidth={2.5} />
+            Add Location
+          </motion.button>
+        </div>
+      )}
 
       <AnimatePresence>
         {formOpen ? (
@@ -300,7 +334,14 @@ export function LocationsViewContent({
   )
 }
 
-export default function LocationsView() {
+interface LocationsViewProps {
+  /** 2026-05-13: forwarded to LocationsViewContent. Settings tab
+   *  sets this to true so the duplicate "Ship-From Locations" title
+   *  doesn't render on top of the Settings page header. */
+  embedded?: boolean
+}
+
+export default function LocationsView({ embedded = false }: LocationsViewProps = {}) {
   const toastContext = useContext(ToastContext)
   const [locations, setLocations] = useState<LocationDto[]>([])
   const [loading, setLoading] = useState(true)
@@ -421,6 +462,7 @@ export default function LocationsView() {
       onEdit={handleEdit}
       onDelete={handleDelete}
       onSetDefault={handleSetDefault}
+      embedded={embedded}
     />
   )
 }

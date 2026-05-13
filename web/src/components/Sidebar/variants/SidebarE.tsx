@@ -36,7 +36,7 @@ const TOOL_ITEMS: Array<{ view: SidebarViewType; Icon: any; label: string }> = [
   { view: 'dashboard', Icon: LayoutDashboard, label: 'Dashboard' },
   { view: 'inventory', Icon: Boxes, label: 'Inventory' },
   { view: 'clients', Icon: Users, label: 'Clients' },
-  { view: 'locations', Icon: Building2, label: 'Locations' },
+  // 2026-05-13: Locations moved into Settings → Ship-From Locations tab.
   { view: 'packages', Icon: Package, label: 'Packages' },
   { view: 'rates', Icon: Wallet, label: 'Rate Shop' },
   { view: 'analysis', Icon: TrendingUp, label: 'Analysis' },

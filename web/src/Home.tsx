@@ -30,7 +30,11 @@ import InventoryView from './components/Views/InventoryView'
 // chunk. Mounted inside Home's shell so the sidebar + topbar render
 // alongside the cards.
 const ClientsPage = lazy(() => import('./pages/Clients'))
-import LocationsView from './components/Views/LocationsView'
+// 2026-05-13: LocationsView import removed from Home — the component
+// now mounts inside SettingsView's Ship-From Locations tab. Old
+// /locations URLs are redirected to /settings/locations by the
+// useEffect inside this file.
+// import LocationsView from './components/Views/LocationsView'
 import PackagesView from './components/Views/PackagesView'
 import RatesView from './components/Views/RatesView'
 import AnalysisView from './components/Views/AnalysisView'
@@ -73,7 +77,6 @@ const VIEW_LABELS: Record<Exclude<ViewType, 'orders' | 'manifests'>, string> = {
   dashboard: 'Dashboard',
   inventory: 'Inventory',
   clients: 'Clients',
-  locations: 'Locations',
   packages: 'Packages',
   rates: 'Rates',
   analysis: 'Analysis',
@@ -81,11 +84,14 @@ const VIEW_LABELS: Record<Exclude<ViewType, 'orders' | 'manifests'>, string> = {
   billing: 'Billing',
 }
 
-const VIEW_PATHS: Record<Exclude<ViewType, 'orders'>, string> = {
+// 2026-05-13: 'locations' was removed from this map when Ship-From
+// Locations moved into Settings. The useEffect in Home rewrites old
+// /locations URLs to /settings/locations before pathToRoute sees
+// them, so no path entry is needed.
+const VIEW_PATHS: Record<Exclude<ViewType, 'orders' | 'locations'>, string> = {
   dashboard: '/dashboard',
   inventory: '/inventory',
   clients: '/clients',
-  locations: '/locations',
   packages: '/packages',
   rates: '/rates',
   analysis: '/analysis',
@@ -114,6 +120,15 @@ function pathToRoute(pathname: string): {
 } {
   if (pathname === '/' || pathname === '/orders' || pathname === '/orders/') {
     return { view: 'orders', status: 'awaiting_shipment', orderId: null }
+  }
+  // 2026-05-13: /locations was removed from the sidebar — it's now
+  // a tab inside Settings (Ship-From Locations). Old bookmarks /
+  // external links still need to resolve, so map any /locations[/*]
+  // path to the settings view. SettingsView's own URL-binding then
+  // jumps to the locations section because /settings/locations is
+  // a registered alias there.
+  if (pathname === '/locations' || pathname.startsWith('/locations/')) {
+    return { view: 'settings', status: null, orderId: null }
   }
   // /orders/:status/:orderId? — orderId is optional and must be all digits.
   // Anything else after the status (e.g. /orders/awaiting_shipment/foo) is
@@ -165,6 +180,19 @@ export default function Home() {
   const [currentStatus, setCurrentStatus] = useState<OrderStatus>(
     initialRoute.status ?? 'awaiting_shipment',
   )
+
+  // 2026-05-13: /locations was retired as a top-level destination.
+  // Bounce any hits on the old URL straight to the new home — the
+  // Settings → Ship-From Locations tab. Use replace:true so back-
+  // button history isn't polluted with the dead URL.
+  useEffect(() => {
+    if (
+      location.pathname === '/locations' ||
+      location.pathname.startsWith('/locations/')
+    ) {
+      navigate('/settings/locations', { replace: true })
+    }
+  }, [location.pathname, navigate])
 
   // Sync URL → state when the user navigates via back/forward, a Link,
   // or a pasted deep-link such as /orders/awaiting_shipment/12345.
@@ -1035,9 +1063,15 @@ export default function Home() {
               >
                 <ClientsPage />
               </Suspense>
-            ) : displayView === 'locations' ? (
-              <LocationsView />
             ) : displayView === 'packages' ? (
+              /* 2026-05-13: displayView === 'locations' branch
+                 removed — Ship-From Locations is now a tab inside
+                 SettingsView. The /locations URL is rewritten to
+                 /settings/locations by the redirect useEffect above
+                 before this dispatch ever sees it. ViewType still
+                 carries 'locations' for back-compat with stale
+                 callers (e.g. SidebarViewType union); none of them
+                 should reach this branch in normal flow. */
               <PackagesView onOpenOrder={openOrderFromContentView} />
             ) : displayView === 'rates' ? (
               <RatesView />

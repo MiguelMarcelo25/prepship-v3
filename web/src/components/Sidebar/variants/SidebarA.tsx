@@ -54,7 +54,9 @@ const TOOL_ITEMS: Array<{ view: SidebarViewType; Icon: any; label: string; tint:
   { view: 'dashboard', Icon: MdDashboard,    label: 'Dashboard', tint: '#6366f1' }, // indigo-500
   { view: 'inventory', Icon: MdInventory2,   label: 'Inventory', tint: '#f97316' }, // orange-500
   { view: 'clients',   Icon: MdPeople,       label: 'Clients',   tint: '#06b6d4' }, // cyan-500
-  { view: 'locations', Icon: MdLocationOn,   label: 'Locations', tint: '#f43f5e' }, // rose-500
+  // 2026-05-13: Locations moved into Settings (Ship-From Locations
+  // tab). Old route /locations is redirected to /settings/locations
+  // by Home.tsx so existing bookmarks still resolve.
   { view: 'packages',  Icon: BsBoxSeam,      label: 'Packages',  tint: '#8b5cf6' }, // violet-500
   { view: 'rates',     Icon: MdAttachMoney,  label: 'Rate Shop', tint: '#10b981' }, // emerald-500
   { view: 'analysis',  Icon: MdInsights,     label: 'Analysis',  tint: '#3b82f6' }, // blue-500

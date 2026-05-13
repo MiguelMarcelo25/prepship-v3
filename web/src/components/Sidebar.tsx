@@ -29,7 +29,7 @@ const statusItems: { status: string; label: string }[] = [
 
 const toolItems: { to: string; label: string; icon: typeof Package }[] = [
   { to: '/inventory', label: 'Inventory', icon: Package },
-  { to: '/locations', label: 'Locations', icon: MapPin },
+  // 2026-05-13: Locations moved into Settings → Ship-From Locations tab.
   { to: '/packages', label: 'Packages', icon: Boxes },
   { to: '/clients', label: 'Clients', icon: Users },
   { to: '/rates', label: 'Rate Shop', icon: DollarSign },
