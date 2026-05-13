@@ -935,7 +935,21 @@ export function Table<Row>({
             ))}
           </colgroup>
 
-          <thead ref={theadRef} className="bg-surface-2 sticky top-0 z-10">
+          {/* 2026-05-13: sticky + drop shadow moved from <thead> onto
+              each <th> so the floating-header visual works
+              consistently across all browsers. Sticky-on-thead was
+              correct semantically but browsers render shadows on a
+              sticky thead unpredictably (Safari clips, Firefox can
+              paint under tbody, Chrome at the thead edge). Moving
+              both sticky + shadow onto each <th> means every cell
+              paints its own shadow strip, so the effect is uniform
+              everywhere. Matches the per-th pattern Analysis uses.
+              z-index bumped 10 → 25 to match Analysis as well. The
+              0 3px 8px rgba shadow is the canonical "floating
+              header" cue from modern dashboards (Notion, Linear,
+              Vercel) — barely visible to the eye, but gives the
+              headers that "following you while you scroll" feel. */}
+          <thead ref={theadRef}>
             <tr>
               {orderedColumns.map((col) => {
                 const isActive = sort?.key === col.key
@@ -959,7 +973,14 @@ export function Table<Row>({
                     onDragLeave={reorderable ? () => setDragOverKey((k) => (k === col.key ? null : k)) : undefined}
                     onDrop={reorderable ? handleDrop(col) : undefined}
                     onDragEnd={reorderable ? handleDragEnd : undefined}
-                    className={`group/th relative border-b-2 border-line ${headerPadding} ${reorderable ? 'pl-5' : ''} text-[10.5px] font-extrabold uppercase tracking-[0.05em] text-ink-3 ${col.sortable ? 'cursor-pointer select-none hover:bg-line/40' : ''} ${align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left'} ${isDragging ? 'opacity-40' : ''} ${isDragTarget ? 'bg-brand-bg shadow-[inset_3px_0_0_0_var(--brand)]' : ''} transition-colors`}
+                    // `sticky` already establishes a positioning
+                    // context for absolutely-positioned children
+                    // (like the resize handle on the right edge), so
+                    // we drop the previous `relative` — Tailwind's
+                    // sticky utility implies position-context just
+                    // like relative does, and having both triggers a
+                    // cssConflict lint warning.
+                    className={`group/th bg-surface-2 sticky top-0 z-[25] shadow-[0_1px_0_var(--border),0_3px_8px_rgba(15,23,42,0.08)] border-b-2 border-line ${headerPadding} ${reorderable ? 'pl-5' : ''} text-[10.5px] font-extrabold uppercase tracking-[0.05em] text-ink-3 ${col.sortable ? 'cursor-pointer select-none hover:bg-line/40' : ''} ${align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left'} ${isDragging ? 'opacity-40' : ''} ${isDragTarget ? 'bg-brand-bg shadow-[inset_3px_0_0_0_var(--brand)]' : ''} transition-colors`}
                     onClick={() => toggleSort(col)}
                     aria-sort={isActive ? (sort!.direction === 'asc' ? 'ascending' : 'descending') : 'none'}
                     title={reorderable ? `${col.label} — click to sort, drag to reorder, drag right edge to resize, double-click edge to auto-fit` : col.label}
