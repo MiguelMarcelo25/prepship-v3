@@ -3947,6 +3947,13 @@ export default function OrdersView({
         storeId: order.storeId,
         clientId: order.clientId,
         confirmation: normalizeConfirmationForRates(confirmation ?? panelForm.confirmation),
+        orderId: order.orderId,
+        orderNumber: order.orderNumber ?? undefined,
+        externalOrderId:
+          order.externalOrderId ??
+          order.external_order_id ??
+          order.orderNumber ??
+          undefined,
         forceRefresh: true,
       }) as Array<Record<string, unknown>>
 

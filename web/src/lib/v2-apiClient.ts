@@ -1066,9 +1066,11 @@ function translateRateToV2Shape(r: unknown): Record<string, unknown> {
     const obj = r as Record<string, unknown>;
     if ('amount' in obj && 'carrierCode' in obj) return obj;
     const shipping = obj.shipping_amount as { amount?: unknown } | undefined;
+    const originalShipping = obj.original_amount as { amount?: unknown } | undefined;
     const other = obj.other_amount as { amount?: unknown } | undefined;
     const confirmation = obj.confirmation_amount as { amount?: unknown } | undefined;
     const shipmentCost =
+      typeof originalShipping?.amount === 'number' ? originalShipping.amount :
       typeof shipping?.amount === 'number' ? shipping.amount : 0;
     const otherCost =
       (typeof other?.amount === 'number' ? other.amount : 0) +
@@ -3174,7 +3176,21 @@ export const apiClient = {
         const shipStationCarrierIds = requestedCarrierIds
           ? requestedCarrierIds.filter((carrierId) => !isDirectCarrierId(carrierId))
           : null;
-        const directCarrierIds = requestedCarrierIds?.filter(isDirectCarrierId) ?? [];
+        let directCarrierIds = requestedCarrierIds?.filter(isDirectCarrierId) ?? [];
+        if (requestedCarrierIds == null) {
+          const directRows = await fetchDirectCarrierAccountRows().catch((err) => {
+            console.warn(
+              '[v2-apiClient] automatic direct-carrier lookup failed:',
+              err instanceof Error ? err.message : err
+            );
+            return [] as DirectCarrierAccountRow[];
+          });
+          directCarrierIds = [...new Set(
+            directRows
+              .filter((row) => directCarrierAccountVisibleForOrder(row, body))
+              .map((row) => `se-${directProviderIdFromAccount(row)}`)
+          )];
+        }
 
         const shouldFetchShipStation =
           requestedCarrierIds == null || (shipStationCarrierIds?.length ?? 0) > 0;
