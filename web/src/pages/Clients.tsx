@@ -226,11 +226,16 @@ export default function Clients() {
       minWidth: 140,
       sortable: true,
       sortValue: (row) => row.name,
+      // 2026-05-13: added `items-center` to the flex-col so the
+      // name + optional contactName subline both center within the
+      // cell. Without it, the stacked spans aligned to the start of
+      // the flex column (text-center on the parent td applies to
+      // text nodes, not to flex children's bounding boxes).
       render: (row) => (
-        <div className="flex flex-col min-w-0">
-          <span className="font-semibold text-ink truncate" title={row.name}>{row.name}</span>
+        <div className="flex flex-col items-center min-w-0">
+          <span className="font-semibold text-ink truncate max-w-full" title={row.name}>{row.name}</span>
           {row.contactName ? (
-            <span className="text-[11px] text-ink-3 truncate">{row.contactName}</span>
+            <span className="text-[11px] text-ink-3 truncate max-w-full">{row.contactName}</span>
           ) : null}
         </div>
       ),
@@ -257,11 +262,19 @@ export default function Clients() {
       minWidth: 120,
       sortable: true,
       sortValue: (row) => row.storeIds.length,
+      // 2026-05-13: added `justify-center` to the inner flex row.
+      // The parent <td>'s `text-center` (applied by the Table primitive)
+      // doesn't propagate into flex children — flex layout uses
+      // justify-content for cross-axis positioning, not text-align.
+      // Without this, the icon + store-id badges left-anchored in the
+      // cell while the column header sat centered above them —
+      // operator-reported asymmetry. Same fix template applies to any
+      // other future row-direction flex container inside a Table cell.
       render: (row) => (
         row.storeIds.length === 0 ? (
           <span className="text-[11px] text-ink-3 italic">none</span>
         ) : (
-          <div className="flex items-center gap-1 flex-wrap">
+          <div className="flex items-center justify-center gap-1 flex-wrap">
             <HiBuildingStorefront size={13} className="text-indigo-500 flex-shrink-0" />
             {row.storeIds.slice(0, 3).map((sid) => (
               <span key={sid} className="font-mono text-[10.5px] font-semibold px-1.5 py-0.5 rounded bg-surface-2 text-ink-2 ring-1 ring-line/70" title={`Store ${sid}`}>
