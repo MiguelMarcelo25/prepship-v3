@@ -27,6 +27,7 @@
 //   { ok: false, error: string, meta?: ... }
 
 import { createRemoteJWKSet, jwtVerify } from 'jose';
+import { PDFDocument } from 'pdf-lib';
 import postgres from 'postgres';
 
 let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
@@ -415,6 +416,694 @@ async function buyLabelEasyPost(
   };
 }
 
+const SHIPP_PROVIDER_ID_OFFSET = 10_000_000;
+
+function normalizeProviderKey(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+function slugRateService(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 80) || 'rate';
+}
+
+function shippSplitSetCookie(header: string): string[] {
+  if (!header) return [];
+  return header
+    .split(/,(?=\s*[^;,=\s]+=)/g)
+    .map((part) => part.trim())
+    .filter(Boolean);
+}
+
+function shippCookieHeaderFrom(res: any, data: any): string {
+  const getSetCookie = typeof res?.headers?.getSetCookie === 'function'
+    ? res.headers.getSetCookie.bind(res.headers)
+    : null;
+  const setCookies: string[] = getSetCookie
+    ? getSetCookie()
+    : shippSplitSetCookie(String(res?.headers?.get?.('set-cookie') ?? ''));
+  const cookiePairs = setCookies
+    .map((cookie) => cookie.split(';')[0]?.trim())
+    .filter(Boolean);
+
+  const accessToken = String(data?.session?.access_token ?? data?.access_token ?? '').trim();
+  const refreshToken = String(data?.session?.refresh_token ?? data?.refresh_token ?? '').trim();
+  if (accessToken && !cookiePairs.some((cookie) => cookie.startsWith('sb-access-token='))) {
+    cookiePairs.push(`sb-access-token=${encodeURIComponent(accessToken)}`);
+  }
+  if (refreshToken && !cookiePairs.some((cookie) => cookie.startsWith('sb-refresh-token='))) {
+    cookiePairs.push(`sb-refresh-token=${encodeURIComponent(refreshToken)}`);
+  }
+
+  return cookiePairs.join('; ');
+}
+
+function shippRequiredString(value: unknown, fallback: string): string {
+  const v = String(value ?? '').trim();
+  return v || fallback;
+}
+
+function shippCountryCode(value: unknown, fallback = 'US'): string {
+  const v = shippRequiredString(value, fallback).toUpperCase();
+  if (v === 'USA' || v === 'UNITED STATES' || v === 'UNITED STATES OF AMERICA') return 'US';
+  return v.slice(0, 2) || fallback;
+}
+
+function shippBool(value: unknown, fallback: boolean): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    if (/^(true|yes|1)$/i.test(value.trim())) return true;
+    if (/^(false|no|0)$/i.test(value.trim())) return false;
+  }
+  return fallback;
+}
+
+function shippFirstString(...values: unknown[]): string {
+  for (const value of values) {
+    const text = String(value ?? '').trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+const shippZipCache = new Map<string, { city?: string; state?: string }>();
+
+async function shippLookupUsZip(zip: unknown): Promise<{ city?: string; state?: string }> {
+  const five = String(zip ?? '').replace(/\D/g, '').slice(0, 5);
+  if (!/^\d{5}$/.test(five)) return {};
+  const cached = shippZipCache.get(five);
+  if (cached) return cached;
+
+  try {
+    const res = await fetch(`https://api.zippopotam.us/us/${five}`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) {
+      const empty = {};
+      shippZipCache.set(five, empty);
+      return empty;
+    }
+    const data = await res.json() as any;
+    const place = Array.isArray(data?.places) ? data.places[0] : null;
+    const result = {
+      city: shippFirstString(place?.['place name']),
+      state: shippFirstString(place?.['state abbreviation']),
+    };
+    shippZipCache.set(five, result);
+    return result;
+  } catch {
+    return {};
+  }
+}
+
+function shippCarrierCode(value: unknown): string | null {
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  const normalized = raw.toLowerCase().replace(/[\s-]+/g, '_');
+  const compact = normalized.replace(/[^a-z0-9]+/g, '');
+  if (compact.includes('fedex')) return 'fedex';
+  if (compact.includes('usps') || compact.includes('postal')) return 'stamps_com';
+  if (compact.includes('ups')) return 'ups';
+  if (compact.includes('dhl')) return 'dhl_express';
+  return normalized.replace(/[^a-z0-9_]+/g, '').replace(/^_+|_+$/g, '') || null;
+}
+
+function shippCarrierName(value: unknown): string | null {
+  const code = shippCarrierCode(value);
+  if (code === 'fedex') return 'FedEx';
+  if (code === 'ups') return 'UPS';
+  if (code === 'stamps_com') return 'USPS';
+  if (code === 'dhl_express') return 'DHL';
+  const raw = String(value ?? '').trim();
+  return raw || null;
+}
+
+function shippRawCarrier(rate: any): unknown {
+  return rate?.carrierType ?? rate?.carrier ?? rate?.carrierCode ?? rate?.carrierName;
+}
+
+function shippRateServiceName(rate: any): string {
+  return String(rate?.serviceName ?? rate?.serviceType ?? 'Shipp').trim();
+}
+
+function shippServiceCodeForRate(rate: any): string {
+  const carrierCode = shippCarrierCode(shippRawCarrier(rate));
+  const carrierPrefix = carrierCode && carrierCode !== 'shipp' ? `${carrierCode}_` : '';
+  return `shipp_${carrierPrefix}${slugRateService(shippRateServiceName(rate))}`;
+}
+
+function shippDateDays(deliveryDate: unknown, deliveryDay: unknown): number {
+  const dateString = String(deliveryDate ?? '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateString)) {
+    const start = Date.parse(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
+    const end = Date.parse(`${dateString}T00:00:00Z`);
+    if (Number.isFinite(start) && Number.isFinite(end)) {
+      return Math.max(0, Math.ceil((end - start) / 86_400_000));
+    }
+  }
+  const numeric = Number(deliveryDay);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
+}
+
+function shippRefNumber(input: { externalOrderId?: string | null; orderNumber?: string | null; rawOrder?: any }): string | undefined {
+  const candidates = [
+    input.orderNumber,
+    input.externalOrderId,
+    input.rawOrder?.purchaseOrderId,
+    input.rawOrder?.orderId,
+    input.rawOrder?.OrderId,
+    input.rawOrder?.id,
+  ];
+  for (const candidate of candidates) {
+    const value = String(candidate ?? '').trim();
+    if (value) return value.slice(0, 80);
+  }
+  return undefined;
+}
+
+function shippHasRawShipTo(rawOrder: any): boolean {
+  if (!rawOrder) return false;
+  if (rawOrder?.shippingInfo?.postalAddress) return true;
+  if (Array.isArray(rawOrder?.fulfillmentStartInstructions)
+    && rawOrder.fulfillmentStartInstructions[0]?.shippingStep?.shipTo) return true;
+  if (rawOrder?.ShippingAddress) return true;
+  if (rawOrder?.shipTo || rawOrder?.ship_to) return true;
+  return false;
+}
+
+function shippShipTo(rawOrder: any, toZip?: string, explicitShipTo?: any) {
+  const wmAddr = rawOrder?.shippingInfo?.postalAddress ?? null;
+  const ebayContact = Array.isArray(rawOrder?.fulfillmentStartInstructions)
+    ? rawOrder.fulfillmentStartInstructions[0]?.shippingStep?.shipTo
+    : null;
+  const ebayAddr = ebayContact?.contactAddress ?? null;
+  const amazonAddr = rawOrder?.ShippingAddress ?? null;
+  const ssAddr = rawOrder?.shipTo ?? rawOrder?.ship_to ?? null;
+  const explicit = explicitShipTo && typeof explicitShipTo === 'object' ? explicitShipTo : null;
+  const addr = explicit ?? wmAddr ?? ebayAddr ?? amazonAddr ?? ssAddr;
+  const postalCode = String(
+    addr?.postalCode ??
+      addr?.zip ??
+      addr?.PostalCode ??
+      addr?.postal_code ??
+      toZip ??
+      '94601',
+  ).replace(/[^0-9-]/g, '').slice(0, 10);
+
+  return {
+    name: String(addr?.name ?? ebayContact?.fullName ?? addr?.Name ?? ssAddr?.name ?? 'Buyer'),
+    phone: String(
+      addr?.phone ??
+        rawOrder?.shippingInfo?.phone ??
+        ebayContact?.primaryPhone?.phoneNumber ??
+        addr?.Phone ??
+        ssAddr?.phone ??
+        '0000000000',
+    ),
+    company_name: String(addr?.company ?? ebayContact?.companyName ?? addr?.CompanyName ?? ''),
+    address_line1: String(
+      addr?.street1 ??
+        addr?.address1 ??
+        addr?.addressLine1 ??
+        addr?.AddressLine1 ??
+        ssAddr?.street1 ??
+        '1 Main St',
+    ),
+    address_line2: String(
+      addr?.street2 ??
+        addr?.address2 ??
+        addr?.addressLine2 ??
+        addr?.AddressLine2 ??
+        ssAddr?.street2 ??
+        '',
+    ) || null,
+    city_locality: String(addr?.city ?? addr?.City ?? ssAddr?.city ?? 'Oakland'),
+    state_province: String(
+      addr?.state ??
+        addr?.stateOrProvince ??
+        addr?.StateOrRegion ??
+        ssAddr?.state ??
+        'CA',
+    ),
+    postal_code: postalCode || '94601',
+    country_code: String(addr?.country ?? addr?.countryCode ?? addr?.CountryCode ?? ssAddr?.country ?? 'US'),
+    address_residential_indicator: 'yes',
+  };
+}
+
+function shippShipFrom(
+  creds: Record<string, unknown>,
+  input: { fromZip?: string; shipFrom?: any },
+) {
+  const shipFromInput = input.shipFrom && typeof input.shipFrom === 'object' ? input.shipFrom : {};
+  const fromZip = String(
+    creds?.shipFromZip ??
+      shipFromInput?.postalCode ??
+      input.fromZip ??
+      '90248',
+  ).replace(/[^0-9-]/g, '').slice(0, 10);
+  return {
+    name: String(creds?.shipFromName ?? shipFromInput?.name ?? 'Seller'),
+    phone: String(creds?.shipFromPhone ?? shipFromInput?.phone ?? '0000000000'),
+    company_name: String(creds?.shipFromCompany ?? creds?.shipFromName ?? shipFromInput?.company ?? shipFromInput?.name ?? ''),
+    address_line1: String(
+      creds?.shipFromAddress1 ??
+        shipFromInput?.addressLine1 ??
+        shipFromInput?.street1 ??
+        'Warehouse',
+    ),
+    address_line2: String(
+      creds?.shipFromAddress2 ??
+        shipFromInput?.addressLine2 ??
+        shipFromInput?.street2 ??
+        '',
+    ) || null,
+    city_locality: String(creds?.shipFromCity ?? shipFromInput?.city ?? 'Carson'),
+    state_province: String(creds?.shipFromState ?? shipFromInput?.state ?? 'CA'),
+    postal_code: fromZip || '90248',
+    country_code: String(shipFromInput?.country ?? 'US') || 'US',
+    address_residential_indicator: 'no',
+  };
+}
+
+async function shippLogin(creds: Record<string, unknown>): Promise<{ apiKey: string; cookieHeader: string; email: string }> {
+  const apiKey = String(creds?.apiKey ?? '').trim();
+  const email = String(creds?.email ?? '').trim();
+  const password = String(creds?.password ?? '').trim();
+  if (!apiKey || !email || !password) {
+    throw new Error('Shipp requires apiKey, email, and password on the carrier account credentials.');
+  }
+
+  const res = await fetch('https://shipp.to/api/supabase/login', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      'x-api-key': apiKey,
+    },
+    body: JSON.stringify({ email, password }),
+  });
+  const text = await res.text().catch(() => '');
+  let data: any = null;
+  try { data = text ? JSON.parse(text) : null; } catch { /* keep text fallback */ }
+  if (!res.ok) {
+    throw new Error(`Shipp login ${res.status}: ${text.slice(0, 600) || res.statusText}`);
+  }
+
+  const cookieHeader = shippCookieHeaderFrom(res, data);
+  if (!cookieHeader) {
+    throw new Error('Shipp login succeeded but did not return a session cookie.');
+  }
+
+  return { apiKey, cookieHeader, email };
+}
+
+async function quoteShippRates(
+  creds: Record<string, unknown>,
+  input: {
+    weightOz: number;
+    toZip?: string;
+    fromZip?: string;
+    dimsL?: number;
+    dimsW?: number;
+    dimsH?: number;
+    shipFrom?: any;
+    shipTo?: any;
+    rawOrder?: any;
+    externalOrderId?: string | null;
+    orderNumber?: string | null;
+  },
+): Promise<{ session: { apiKey: string; cookieHeader: string }; rates: any[] }> {
+  if (!input.dimsL || !input.dimsW || !input.dimsH) {
+    throw new Error('Shipp label creation requires box dimensions (length, width, height).');
+  }
+
+  const session = await shippLogin(creds);
+  const from = shippShipFrom(creds, { fromZip: input.fromZip, shipFrom: input.shipFrom });
+  const to = shippShipTo(input.rawOrder, input.toZip, input.shipTo);
+  const hasShipTo = Boolean(input.shipTo?.street1) || shippHasRawShipTo(input.rawOrder);
+  const toZipPlace = await shippLookupUsZip(to.postal_code);
+  const fromHasExplicitCity = Boolean(shippFirstString(creds?.shipFromCity, input.shipFrom?.city));
+  const fromHasExplicitState = Boolean(shippFirstString(creds?.shipFromState, input.shipFrom?.state));
+  const fromZipPlace = (!fromHasExplicitCity || !fromHasExplicitState)
+    ? await shippLookupUsZip(from.postal_code)
+    : {};
+  const weightLb = Math.max(0.01, Math.round((Number(input.weightOz || 16) / 16) * 100) / 100);
+  const refNumber = shippRefNumber(input);
+
+  const shippingInfo: Record<string, unknown> = {
+    fromCompanyName: shippRequiredString(from.company_name, shippRequiredString(from.name, 'Seller')),
+    fromName: shippRequiredString(from.name, 'Seller'),
+    fromStreet1: shippRequiredString(from.address_line1, 'Warehouse'),
+    fromStreet2: String(from.address_line2 ?? ''),
+    fromCity: shippRequiredString(fromHasExplicitCity ? from.city_locality : shippFirstString(fromZipPlace.city, from.city_locality), 'Carson'),
+    fromState: shippRequiredString(fromHasExplicitState ? from.state_province : shippFirstString(fromZipPlace.state, from.state_province), 'CA').slice(0, 2).toUpperCase(),
+    fromZipcode: shippRequiredString(from.postal_code, '90248'),
+    fromCountry: shippCountryCode(from.country_code),
+    fromPhone: shippRequiredString(from.phone, '0000000000'),
+    fromIsResidential: shippBool(creds?.shipFromIsResidential, false),
+    toCompanyName: String(to.company_name ?? ''),
+    toName: shippRequiredString(hasShipTo ? to.name : shippFirstString(to.name), 'Buyer'),
+    toStreet1: shippRequiredString(hasShipTo ? to.address_line1 : shippFirstString(to.address_line1), '1 Main St'),
+    toStreet2: String(to.address_line2 ?? ''),
+    toCity: shippRequiredString(hasShipTo ? to.city_locality : shippFirstString(toZipPlace.city, to.city_locality), 'Oakland'),
+    toState: shippRequiredString(hasShipTo ? to.state_province : shippFirstString(toZipPlace.state, to.state_province), 'CA').slice(0, 2).toUpperCase(),
+    toZipcode: shippRequiredString(to.postal_code, input.toZip ?? '94601'),
+    toCountry: shippCountryCode(to.country_code),
+    toPhone: shippRequiredString(to.phone, '0000000000'),
+    toIsResidential: shippBool(creds?.toIsResidential, true),
+    requireSignature: shippBool(creds?.requireSignature, false),
+    shipDate: new Date().toISOString().slice(0, 10),
+  };
+  if (refNumber) shippingInfo.refNumber = refNumber;
+
+  const quoteBody = {
+    shippingInfo,
+    packageLineItems: [
+      {
+        weight: { value: weightLb },
+        dimensions: {
+          length: Number(input.dimsL),
+          width: Number(input.dimsW),
+          height: Number(input.dimsH),
+        },
+        description: String(creds?.packageDescription ?? 'Merchandise'),
+        itemDescription: String(creds?.packageDescription ?? 'Merchandise'),
+        customsValue: { amount: 0, currency: 'USD' },
+        countryOfManufacture: 'US',
+      },
+    ],
+  };
+
+  const res = await fetch('https://shipp.to/api/shipping/quote', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      'x-api-key': session.apiKey,
+      Cookie: session.cookieHeader,
+    },
+    body: JSON.stringify(quoteBody),
+  });
+  const text = await res.text().catch(() => '');
+  let data: any = null;
+  try { data = text ? JSON.parse(text) : null; } catch { /* keep text fallback */ }
+  if (!res.ok) {
+    throw new Error(`Shipp quote ${res.status}: ${text.slice(0, 800) || res.statusText}`);
+  }
+
+  const rates: any[] = Array.isArray(data?.rates) ? data.rates : [];
+  if (!rates.length) {
+    const errors = Array.isArray(data?.errors) && data.errors.length
+      ? ` Carrier errors: ${JSON.stringify(data.errors).slice(0, 500)}`
+      : '';
+    throw new Error(`Shipp returned 0 rates for this shipment.${errors}`);
+  }
+
+  return { session, rates };
+}
+
+function selectShippRate(rates: any[], requestedServiceCode: unknown): any {
+  const wanted = normalizeProviderKey(requestedServiceCode);
+  const sorted = [...rates]
+    .filter((rate) => Number(rate?.price ?? 0) > 0)
+    .sort((a, b) => Number(a?.price ?? 0) - Number(b?.price ?? 0));
+  const exact = sorted.find((rate) => shippServiceCodeForRate(rate) === wanted);
+  if (exact) return exact;
+
+  const wantedSlug = wanted.replace(/^shipp_/, '');
+  const fuzzy = sorted.find((rate) => {
+    const carrierCode = shippCarrierCode(shippRawCarrier(rate));
+    const serviceSlug = slugRateService(shippRateServiceName(rate));
+    return wantedSlug === serviceSlug || wantedSlug === `${carrierCode}_${serviceSlug}`;
+  });
+  if (fuzzy) return fuzzy;
+
+  throw new Error(`Shipp did not return the selected service ${String(requestedServiceCode ?? '')}. Please browse rates again.`);
+}
+
+function shippTrackingFromLabel(label: any): string {
+  return String(
+    label?.data?.tracking_number ??
+      label?.tracking_number ??
+      label?.ShipmentResponse?.ShipmentResults?.ShipmentIdentificationNumber ??
+      label?.output?.transactionShipments?.[0]?.masterTrackingNumber ??
+      '',
+  );
+}
+
+async function pdfDataUrlFromParts(parts: Array<{ base64: string; format?: string }>): Promise<string | null> {
+  const pdf = await PDFDocument.create();
+  let pages = 0;
+
+  for (const part of parts) {
+    const base64 = String(part.base64 ?? '').trim();
+    if (!base64) continue;
+    const format = String(part.format ?? 'application/pdf').toLowerCase();
+    const bytes = Uint8Array.from(Buffer.from(base64, 'base64'));
+    if (format === 'application/pdf' || format === 'pdf') {
+      const src = await PDFDocument.load(bytes);
+      const copied = await pdf.copyPages(src, src.getPageIndices());
+      copied.forEach((page) => {
+        pdf.addPage(page);
+        pages += 1;
+      });
+    } else if (format === 'image/png' || format === 'png') {
+      const image = await pdf.embedPng(bytes);
+      pdf.addPage([image.width, image.height]).drawImage(image, {
+        x: 0,
+        y: 0,
+        width: image.width,
+        height: image.height,
+      });
+      pages += 1;
+    }
+  }
+
+  if (!pages) return null;
+  const merged = await pdf.save();
+  return `data:application/pdf;base64,${Buffer.from(merged).toString('base64')}`;
+}
+
+async function shippLabelUrl(label: any, carrierCode: string | null): Promise<string | null> {
+  if (label?.data?.packages) {
+    const parts = (Array.isArray(label.data.packages) ? label.data.packages : [])
+      .map((pkg: any) => ({
+        base64: String(pkg?.label ?? ''),
+        format: String(pkg?.label_format ?? 'application/pdf'),
+      }));
+    return pdfDataUrlFromParts(parts);
+  }
+
+  if (carrierCode === 'fedex' && label?.output?.transactionShipments?.[0]?.pieceResponses) {
+    const docs = label.output.transactionShipments[0].pieceResponses
+      .flatMap((piece: any) => Array.isArray(piece?.packageDocuments) ? piece.packageDocuments : [])
+      .map((doc: any) => ({
+        base64: String(doc?.encodedLabel ?? ''),
+        format: 'application/pdf',
+      }));
+    return pdfDataUrlFromParts(docs);
+  }
+
+  if (carrierCode === 'ups' && label?.ShipmentResponse?.ShipmentResults?.PackageResults) {
+    const packages = Array.isArray(label.ShipmentResponse.ShipmentResults.PackageResults)
+      ? label.ShipmentResponse.ShipmentResults.PackageResults
+      : [label.ShipmentResponse.ShipmentResults.PackageResults];
+    const firstGraphic = packages
+      .map((pkg: any) => String(pkg?.ShippingLabel?.GraphicImage ?? ''))
+      .find(Boolean);
+    return firstGraphic ? `data:image/gif;base64,${firstGraphic}` : null;
+  }
+
+  return null;
+}
+
+async function buyLabelShipp(
+  creds: Record<string, unknown>,
+  input: {
+    serviceCode: string;
+    weightOz: number;
+    dimsL: number;
+    dimsW: number;
+    dimsH: number;
+    shipFrom?: any;
+    shipTo?: any;
+    rawOrder?: any;
+    externalOrderId?: string | null;
+    orderNumber?: string | null;
+  },
+): Promise<{
+  trackingNumber: string;
+  labelUrl: string | null;
+  cost: number;
+  currency: string;
+  shipmentId: string | null;
+  carrierCode: string | null;
+  carrierName: string | null;
+  serviceName: string;
+  serviceCode: string;
+  selectedRate: any;
+  raw: any;
+}> {
+  const { session, rates } = await quoteShippRates(creds, input);
+  const selectedRate = selectShippRate(rates, input.serviceCode);
+  const quotedShipmentId = String(selectedRate?.quoted_shipment_id ?? '').trim();
+  if (!quotedShipmentId) {
+    throw new Error('Shipp selected rate is missing quoted_shipment_id. Please browse rates again.');
+  }
+
+  const serviceType = String(selectedRate?.serviceType ?? selectedRate?.serviceName ?? '').trim();
+  if (!serviceType) {
+    throw new Error('Shipp selected rate is missing serviceType. Please browse rates again.');
+  }
+
+  const labelRes = await fetch('https://shipp.to/api/shipping/label/create', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      'x-api-key': session.apiKey,
+      Cookie: session.cookieHeader,
+    },
+    body: JSON.stringify({
+      quoted_shipment_id: quotedShipmentId,
+      serviceType,
+      saturdayDelivery: /saturday/i.test(shippRateServiceName(selectedRate)),
+    }),
+  });
+  const text = await labelRes.text().catch(() => '');
+  let data: any = null;
+  try { data = text ? JSON.parse(text) : null; } catch { /* keep text fallback */ }
+  if (!labelRes.ok) {
+    throw new Error(`Shipp label ${labelRes.status}: ${text.slice(0, 800) || labelRes.statusText}`);
+  }
+
+  const label = data?.label ?? data;
+  const carrierCode = shippCarrierCode(shippRawCarrier(selectedRate));
+  const carrierName = shippCarrierName(shippRawCarrier(selectedRate));
+  const trackingNumber = shippTrackingFromLabel(label);
+  const labelUrl = await shippLabelUrl(label, carrierCode);
+  const canonicalServiceCode = shippServiceCodeForRate(selectedRate);
+
+  if (!trackingNumber) {
+    throw new Error('Shipp created a label but did not return a tracking number.');
+  }
+  if (!labelUrl) {
+    throw new Error('Shipp created a label but PrepShip could not read the label PDF.');
+  }
+
+  return {
+    trackingNumber,
+    labelUrl,
+    cost: Number(selectedRate?.price ?? 0),
+    currency: 'USD',
+    shipmentId: quotedShipmentId,
+    carrierCode,
+    carrierName,
+    serviceName: shippRateServiceName(selectedRate),
+    serviceCode: canonicalServiceCode,
+    selectedRate,
+    raw: data,
+  };
+}
+
+async function persistShippShipment(
+  sql: any,
+  args: {
+    body: Record<string, any>;
+    provider: string;
+    carrierAccountId: number;
+    syntheticProviderId: number;
+    carrierLabel: string | null;
+    result: Awaited<ReturnType<typeof buyLabelShipp>>;
+  },
+) {
+  const orderId = Number(args.body.orderId);
+  if (!Number.isFinite(orderId) || orderId <= 0) {
+    throw new Error('orderId is required for Shipp label creation');
+  }
+
+  const selectedRateJson = {
+    carrierCode: args.result.carrierCode,
+    serviceCode: args.result.serviceCode,
+    serviceName: args.result.serviceName,
+    carrierNickname: args.carrierLabel ?? 'Shipp',
+    providerAccountNickname: args.carrierLabel ?? 'Shipp',
+    providerAccountId: args.syntheticProviderId,
+    shippingProviderId: args.syntheticProviderId,
+    provider: 'shipp',
+    source: 'carrier_accounts',
+    amount: args.result.cost,
+    cost: args.result.cost,
+    shipmentCost: args.result.cost,
+    otherCost: 0,
+    deliveryDays: shippDateDays(args.result.selectedRate?.deliveryDate, args.result.selectedRate?.deliveryDay),
+  };
+
+  // Per user override `unlock shipped data` on 2026-05-14: direct Shipp
+  // labels never enter ShipStation, so this function persists the canonical
+  // PrepShip shipment and advances only currently-awaiting orders to shipped.
+  return sql.begin(async (tx: any) => {
+    const [order] = await tx`
+      SELECT id, client_id, order_number, order_status
+      FROM orders
+      WHERE id = ${orderId}
+      FOR UPDATE
+    `;
+    if (!order) throw new Error('Order not found');
+    if (order.order_status === 'shipped' || order.order_status === 'cancelled') {
+      throw new Error(`Cannot create Shipp label for ${order.order_status} order`);
+    }
+
+    const [shipment] = await tx`
+      INSERT INTO shipments (
+        order_id, client_id, order_number,
+        carrier_code, service_code, tracking_number,
+        ship_date, create_date, weight_oz, dims_l, dims_w, dims_h,
+        cost, other_cost, label_url, label_created_at, label_format,
+        label_carrier, label_service, label_tracking, label_cost,
+        label_ship_date, label_provider, label_shipment_id,
+        selected_rate_json, selected_pid, selected_package_id,
+        provider_account_id, provider_account_nickname,
+        voided, source, is_return, created_at, updated_at
+      )
+      VALUES (
+        ${order.id}, ${order.client_id}, ${order.order_number},
+        ${args.result.carrierCode}, ${args.result.serviceCode}, ${args.result.trackingNumber},
+        NOW(), NOW(), ${Number(args.body.weightOz ?? 0)}, ${Number(args.body.dimsL ?? args.body.length ?? 0) || null},
+        ${Number(args.body.dimsW ?? args.body.width ?? 0) || null}, ${Number(args.body.dimsH ?? args.body.height ?? 0) || null},
+        ${args.result.cost.toFixed(2)}, ${'0.00'}, ${args.result.labelUrl}, NOW(), ${args.result.labelUrl?.startsWith('data:application/pdf') ? 'pdf' : 'image'},
+        ${args.result.carrierCode}, ${args.result.serviceCode}, ${args.result.trackingNumber}, ${args.result.cost.toFixed(2)},
+        NOW(), ${args.syntheticProviderId}, ${null},
+        ${sql.json(selectedRateJson)}, ${args.syntheticProviderId}, ${args.body.customPackageId != null ? String(args.body.customPackageId) : null},
+        ${args.syntheticProviderId}, ${args.carrierLabel ?? 'Shipp'},
+        ${false}, ${'shipp'}, ${false}, NOW(), NOW()
+      )
+      RETURNING id
+    `;
+
+    await tx`
+      UPDATE orders
+      SET order_status = 'shipped', updated_at = NOW()
+      WHERE id = ${order.id}
+    `;
+
+    await tx`
+      DELETE FROM print_queue_orders
+      WHERE order_id = ${String(order.id)}
+    `;
+
+    return {
+      localShipmentId: shipment.id,
+      orderNumber: order.order_number,
+      clientId: order.client_id,
+    };
+  });
+}
+
 export default async function handler(req: any, res: any): Promise<void> {
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -459,12 +1148,44 @@ export default async function handler(req: any, res: any): Promise<void> {
       return;
     }
     const { provider, credentials, label } = carrierRows[0];
+    const providerKey = normalizeProviderKey(provider);
     const creds = (credentials ?? {}) as Record<string, unknown>;
 
     // Fetch the saved order's raw payload to derive ship-to (when caller
     // didn't pass an explicit shipTo override).
     let rawOrder: any = null;
-    const externalOrderId = typeof body?.externalOrderId === 'string' ? body.externalOrderId : null;
+    let orderRow: any = null;
+    let orderLookupError: string | null = null;
+    const orderId = Number(body?.orderId);
+    if (Number.isFinite(orderId) && orderId > 0) {
+      try {
+        const rows = await sql<Array<{
+          id: number;
+          client_id: number | null;
+          order_number: string | null;
+          external_order_id: string | null;
+          order_status: string | null;
+          raw: any;
+        }>>`
+          SELECT id, client_id, order_number, external_order_id, order_status, raw
+          FROM orders
+          WHERE id = ${Math.trunc(orderId)}
+          LIMIT 1
+        `;
+        orderRow = rows[0] ?? null;
+        rawOrder = orderRow?.raw ?? null;
+      } catch (err) {
+        orderLookupError = err instanceof Error ? err.message : String(err);
+      }
+    }
+
+    const explicitExternalOrderId = typeof body?.externalOrderId === 'string'
+      ? body.externalOrderId
+      : null;
+    const externalOrderId = explicitExternalOrderId ?? orderRow?.external_order_id ?? null;
+    const orderNumber = typeof body?.orderNumber === 'string'
+      ? body.orderNumber
+      : orderRow?.order_number ?? null;
     if (externalOrderId) {
       const m = externalOrderId.match(/^([a-z_]+)-(.+)$/);
       if (m) {
@@ -474,30 +1195,103 @@ export default async function handler(req: any, res: any): Promise<void> {
             WHERE provider = ${m[1]} AND external_order_id = ${m[2]}
             LIMIT 1
           `;
-          rawOrder = rows[0]?.raw ?? null;
+          rawOrder = rows[0]?.raw ?? rawOrder;
         } catch { /* non-fatal */ }
       }
+    }
+
+    if (providerKey === 'shipp') {
+      if (!Number.isFinite(orderId) || orderId <= 0) {
+        res.status(400).json({ ok: false, error: 'orderId is required for Shipp label creation' });
+        return;
+      }
+      if (orderLookupError) {
+        throw new Error(`Could not load order before buying Shipp label: ${orderLookupError}`);
+      }
+      if (!orderRow) {
+        res.status(404).json({ ok: false, error: `Order ${Math.trunc(orderId)} not found` });
+        return;
+      }
+      if (orderRow.order_status === 'shipped' || orderRow.order_status === 'cancelled') {
+        res.status(409).json({ ok: false, error: `Cannot create Shipp label for ${orderRow.order_status} order` });
+        return;
+      }
+
+      const serviceCode = String(body?.serviceCode ?? '').trim();
+      if (!serviceCode) {
+        res.status(400).json({ ok: false, error: 'serviceCode is required for Shipp label creation' });
+        return;
+      }
+
+      const syntheticProviderId = Number.isFinite(Number(body?.shippingProviderId))
+        ? Number(body.shippingProviderId)
+        : SHIPP_PROVIDER_ID_OFFSET + carrierAccountId;
+      const result = await buyLabelShipp(creds, {
+        serviceCode,
+        weightOz,
+        dimsL,
+        dimsW,
+        dimsH,
+        shipFrom: body?.shipFrom,
+        shipTo: body?.shipTo,
+        rawOrder,
+        externalOrderId,
+        orderNumber,
+      });
+      const persisted = await persistShippShipment(sql, {
+        body,
+        provider: providerKey,
+        carrierAccountId,
+        syntheticProviderId,
+        carrierLabel: label,
+        result,
+      });
+
+      res.status(200).json({
+        ok: true,
+        provider: providerKey,
+        carrierLabel: label,
+        trackingNumber: result.trackingNumber,
+        labelUrl: result.labelUrl,
+        labelFormat: result.labelUrl?.startsWith('data:application/pdf') ? 'PDF' : 'IMAGE',
+        cost: result.cost,
+        currency: result.currency,
+        shipmentId: persisted.localShipmentId,
+        localShipmentId: persisted.localShipmentId,
+        orderStatus: 'shipped',
+        apiVersion: 'shipp',
+        voided: false,
+        meta: {
+          externalOrderId,
+          orderNumber,
+          hasRawOrder: rawOrder != null,
+          carrierAccountId,
+          shippShipmentId: result.shipmentId,
+          selectedServiceCode: result.serviceCode,
+        },
+      });
+      return;
     }
 
     const shipTo = resolveShipTo(body, rawOrder);
     const shipFrom = resolveShipFrom(creds);
 
     let result: any = null;
-    if (provider === 'ups') {
+    if (providerKey === 'ups') {
       // UPS service code default: "03" = Ground. Caller can pass
       // serviceCode like "01" (Next Day Air), "02" (2nd Day Air), etc.
       const serviceCode = String(body?.serviceCode ?? '03');
       result = await buyLabelUps(creds, {
         weightOz, dimsL, dimsW, dimsH, serviceCode, shipFrom, shipTo,
       });
-    } else if (provider === 'easypost') {
+    } else if (providerKey === 'easypost') {
       const serviceCode = String(body?.serviceCode ?? 'USPS Priority');
       result = await buyLabelEasyPost(creds, {
         weightOz, dimsL, dimsW, dimsH, serviceCode, shipFrom, shipTo,
       });
     } else {
       res.status(400).json({
-        error: `Label purchase for "${provider}" is not implemented yet. Currently supported: ups, easypost.`,
+        error: `Label purchase for "${provider}" is not implemented yet. Currently supported: ups, easypost, shipp.`,
       });
       return;
     }

@@ -2000,6 +2000,34 @@ export const apiClient = {
   // and keep flow-control semantics intact. Other methods in this file return
   // safe fallbacks, but labels MUST surface errors to the UI.
   createLabel(payload: unknown): Promise<any> {
+    const body = payload && typeof payload === 'object'
+      ? (payload as Record<string, unknown>)
+      : {};
+    const shippingProviderId = parseFiniteNumber(body.shippingProviderId);
+    const directRef = directAccountRefFromProviderId(shippingProviderId);
+    const carrierCode = normalizeProviderKey(body.carrierCode);
+    const serviceCode = normalizeProviderKey(body.serviceCode);
+
+    // Per user override `unlock shipped data` on 2026-05-14: Shipp labels
+    // are purchased directly from Shipp, not ShipStation. Route only Shipp's
+    // synthetic direct-carrier ids away from /labels so ShipStation never sees
+    // `se-10000025` or `shipp_*` service codes.
+    if (
+      directRef?.sourceTable === 'carrier_accounts' &&
+      (carrierCode === 'shipp' || serviceCode.startsWith('shipp_'))
+    ) {
+      return callVercelFunction<any>('/carriers/labels', {
+        method: 'POST',
+        body: {
+          ...body,
+          carrierAccountId: directRef.accountId,
+          dimsL: body.length ?? body.dimsL,
+          dimsW: body.width ?? body.dimsW,
+          dimsH: body.height ?? body.dimsH,
+        },
+      }).then(normalizeLabelResponse);
+    }
+
     return api.post<any>('/labels', payload).then(normalizeLabelResponse);
   },
 
