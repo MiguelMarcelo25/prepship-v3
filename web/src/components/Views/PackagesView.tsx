@@ -501,6 +501,13 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
   // a checklist to toggle visibility.
   const [columnLayout, setColumnLayout] = useState<PackagesColumnLayout>(readStoredPackagesColumnLayout)
   const [columnsMenuOpen, setColumnsMenuOpen] = useState(false)
+  // 2026-05-13: portal anchor for the <Table>'s Columns ▾ button.
+  // Operator asked: (1) move the picker to the LEFT of "Sync from
+  // ShipStation" and (2) remove the duplicate bespoke columns
+  // button that was rendering alongside Table's built-in one.
+  // Solution: keep ONLY the Table primitive's picker, portaled here.
+  // Same pattern used by Inventory and Clients.
+  const [columnsAnchor, setColumnsAnchor] = useState<HTMLElement | null>(null)
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState<number>(readStoredPackagesPageSize)
   const [search, setSearch] = useState('')
@@ -1227,6 +1234,15 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
                 </button>
               ) : null}
             </div>
+            {/* 2026-05-13: portal anchor for the <Table>'s Columns ▾
+                button. Sits HERE so the picker lives next to "Sync
+                from ShipStation" instead of inside the table card.
+                Replaces the OLD bespoke Packages columns button +
+                popover that lived right after the Add Custom button
+                — see further down for the removal site. Two pickers
+                doing the same job was confusing operators (see
+                screenshot in 2026-05-13 ticket). */}
+            <span ref={setColumnsAnchor} className="inline-flex items-center" />
             <button className="btn btn-outline btn-sm pkg-header-btn" type="button" onClick={() => void handleSyncCarrierPackages()} id="pkgSyncBtn" disabled={syncing}>
               <RefreshCw size={14} strokeWidth={2} className={syncing ? 'pkg-spin' : undefined} />
               {syncing ? 'Syncing…' : 'Sync from ShipStation'}
@@ -1268,94 +1284,21 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
               <Plus size={14} strokeWidth={2.5} />
               Add Custom
             </button>
-            {/* Columns button — opens a checklist popover for showing
-                or hiding columns + a Reset link. Drag column headers
-                in the table itself to reorder. Layout persists via
-                localStorage so each operator can shape the view to
-                their workflow. */}
-            <div className="relative">
-              <button
-                type="button"
-                data-packages-columns-trigger
-                onClick={() => setColumnsMenuOpen((v) => !v)}
-                aria-haspopup="true"
-                aria-expanded={columnsMenuOpen}
-                className="btn btn-outline btn-sm pkg-header-btn"
-                title="Show or hide columns · drag column headers to reorder"
-              >
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                  <rect x="1.5" y="2.5" width="3.5" height="11" rx="0.7" stroke="currentColor" strokeWidth="1.4" />
-                  <rect x="6.25" y="2.5" width="3.5" height="11" rx="0.7" stroke="currentColor" strokeWidth="1.4" />
-                  <rect x="11" y="2.5" width="3.5" height="11" rx="0.7" stroke="currentColor" strokeWidth="1.4" />
-                </svg>
-                Columns
-                <span className="ml-1 text-tiny text-ink-3 font-mono tabular-nums">
-                  ({PACKAGES_COLUMNS_ORDER.length - columnLayout.hidden.length}/{PACKAGES_COLUMNS_ORDER.length})
-                </span>
-              </button>
-              {columnsMenuOpen ? (
-                <div
-                  data-packages-columns-menu
-                  role="menu"
-                  className="absolute right-0 top-[calc(100%+4px)] z-50 min-w-[230px] bg-surface border border-line rounded-md shadow-[0_8px_24px_-6px_rgba(15,23,42,.18),0_2px_6px_-2px_rgba(15,23,42,.10)] p-1.5"
-                >
-                  <div className="px-2 py-1 text-[9px] uppercase tracking-[0.08em] font-extrabold text-ink-3 flex items-center justify-between">
-                    <span>Visible columns</span>
-                    <button
-                      type="button"
-                      onClick={handleResetPackageColumnLayout}
-                      className="appearance-none border-0 bg-transparent text-[9.5px] font-bold text-brand cursor-pointer hover:underline"
-                      title="Restore the factory default column order and show all columns"
-                    >
-                      Reset
-                    </button>
-                  </div>
-                  {(() => {
-                    const hiddenSet = new Set(columnLayout.hidden)
-                    const visibleKeys = columnLayout.order.filter((k) => !hiddenSet.has(k))
-                    const hiddenKeys = columnLayout.order.filter((k) => hiddenSet.has(k))
-                    return [...visibleKeys, ...hiddenKeys].map((key) => {
-                      const isHidden = hiddenSet.has(key)
-                      const isRequired = PACKAGES_REQUIRED_COLUMNS.has(key)
-                      return (
-                        <label
-                          key={key}
-                          className={`flex items-center gap-2 px-2 py-1.5 rounded-[5px] text-[12px] transition-colors duration-100 ${
-                            isRequired
-                              ? 'text-ink-3 cursor-not-allowed'
-                              : 'text-ink cursor-pointer hover:bg-[rgba(42,91,215,.08)]'
-                          } ${isHidden ? 'opacity-60' : ''}`}
-                          title={
-                            isRequired
-                              ? `${PACKAGES_COLUMN_LABELS[key]} is always visible`
-                              : isHidden
-                                ? 'Hidden · click to show'
-                                : 'Visible · click to hide'
-                          }
-                        >
-                          <input
-                            type="checkbox"
-                            checked={!isHidden}
-                            disabled={isRequired}
-                            onChange={() => handleTogglePackageColumnVisibility(key)}
-                            className="accent-brand cursor-pointer disabled:cursor-not-allowed"
-                          />
-                          <span className="flex-1">{PACKAGES_COLUMN_LABELS[key]}</span>
-                          {isRequired ? (
-                            <span className="text-[9px] uppercase tracking-[0.04em] text-ink-3 font-semibold">
-                              required
-                            </span>
-                          ) : null}
-                        </label>
-                      )
-                    })
-                  })()}
-                  <div className="border-t border-line mt-1 pt-1.5 px-2 pb-1 text-[10.5px] text-ink-3 leading-snug">
-                    Drag a column header to reorder.
-                  </div>
-                </div>
-              ) : null}
-            </div>
+            {/* 2026-05-13: REMOVED — bespoke Packages columns button +
+                popover. It duplicated the Table primitive's built-in
+                Columns picker, which now lives at the portal anchor
+                above (next to "Sync from ShipStation"). Operators saw
+                "Columns (6/6)" in the header AND "Columns 6/6" inside
+                the table card — same UI, same data, different state
+                stores. Keeping ONLY the Table primitive's picker now;
+                same pattern landed on Inventory earlier this session.
+                Legacy state (`columnLayout`, `columnsMenuOpen`,
+                `handleTogglePackageColumnVisibility`,
+                `handleResetPackageColumnLayout`) is intentionally
+                kept declared for the moment — the Table picker's
+                state is independent and lives under
+                'packages-table:hidden' / ':order' localStorage keys.
+                A follow-up cleanup commit can prune the dead helpers. */}
           </div>
         </motion.div>
 
@@ -1481,6 +1424,7 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
                   onOpenOrderByNumber={(orderNumber) => void handleOpenOrderByNumber(orderNumber)}
                   usageByPackageId={usageByPackageId}
                   usageLoading={usageLoading}
+                  columnsAnchorEl={columnsAnchor}
                 />
               </>
             )

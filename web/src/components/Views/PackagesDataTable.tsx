@@ -95,6 +95,12 @@ interface PackagesDataTableProps {
   /** When true, Table renders an internal pagination bar. Defaults
    *  to true (Packages is always a long list). */
   paginated?: boolean
+  /** Pass-through to <Table>'s `columnsAnchorEl`. When set, the
+   *  Columns ▾ button portals into this DOM element (e.g. the
+   *  page-level toolbar next to "Sync from ShipStation") instead
+   *  of rendering inline in the table card. See ui/Table.tsx for
+   *  the portal mechanics. */
+  columnsAnchorEl?: HTMLElement | null
 
   // ── Legacy props — now no-ops, Table manages state via storageKey ─
   // Kept in the interface so existing call sites compile without
@@ -291,6 +297,7 @@ export function PackagesDataTable({
   usageByPackageId,
   usageLoading,
   paginated = true,
+  columnsAnchorEl,
 }: PackagesDataTableProps) {
   const columns: TableColumn<PackageDto>[] = [
     {
@@ -453,6 +460,11 @@ export function PackagesDataTable({
         paginated={paginated}
         defaultPageSize={50}
         pageSizeOptions={[25, 50, 100]}
+        // 2026-05-13: portal the Columns ▾ button into the page
+        // toolbar (left of "Sync from ShipStation"). When the
+        // caller doesn't pass an anchor, Table renders the button
+        // inline in the table card's own toolbar as a fallback.
+        columnsAnchorEl={columnsAnchorEl}
         className="!rounded-none !ring-0 !shadow-none"
         rowRef={(row, el) => { rowRefs.current[row.packageId] = el }}
         rowClassName={(row) =>

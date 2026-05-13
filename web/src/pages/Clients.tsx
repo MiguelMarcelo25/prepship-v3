@@ -59,6 +59,12 @@ export default function Clients() {
   const navigate = useNavigate()
   const [editing, setEditing] = useState<Client | null>(null)
   const [search, setSearch] = useState('')
+  // 2026-05-13: portal anchor for the <Table>'s Columns ▾ button.
+  // Operator asked to move the picker out of the table card and into
+  // the page-level toolbar (to the LEFT of "Sync stores"). Callback
+  // ref + state so React re-renders Table when the anchor mounts.
+  // Same pattern used by Inventory and Packages.
+  const [columnsAnchor, setColumnsAnchor] = useState<HTMLElement | null>(null)
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all')
   const {
     clients,
@@ -354,6 +360,10 @@ export default function Clients() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {/* 2026-05-13: portal anchor for the <Table>'s Columns ▾
+              button. Sits HERE so the picker lives next to "Sync
+              stores" instead of inside the table card below. */}
+          <span ref={setColumnsAnchor} className="inline-flex items-center" />
           <Button variant="outline" size="sm" disabled={sync.isPending} onClick={() => sync.mutate()}>
             <RefreshCw size={12} className={sync.isPending ? 'animate-spin' : ''} />
             {sync.isPending ? 'Syncing…' : 'Sync stores'}
@@ -380,6 +390,13 @@ export default function Clients() {
           defaultSort={{ key: 'total', direction: 'desc' }}
           onRowClick={(row) => setEditing(row)}
           density="normal"
+          // 2026-05-13: portal the Columns ▾ button into the page
+          // toolbar (left of "Sync stores"). When the anchor is
+          // null (first render before the span mounts), Table
+          // falls back to inline — but the span attaches on the
+          // same tick, so the callback ref fires and Table
+          // re-renders with the portal target. No flicker.
+          columnsAnchorEl={columnsAnchor}
           loading={isLoading}
           emptyMessage={
             search || statusFilter !== 'all'
