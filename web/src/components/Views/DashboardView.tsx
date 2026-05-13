@@ -548,22 +548,43 @@ function buildTrend(current: SalesPayload, prior: SalesPayload): TrendPoint[] {
 }
 
 function buildHeatmap(current: SalesPayload, prior: SalesPayload, limit = 6): HeatmapRow[] {
+  // 2026-05-13: switched from "by family" (grouped via
+  // productFamily()) to "by individual SKU" per operator request.
+  // Each topSku now becomes its own row instead of being merged
+  // into a family bucket. The downstream cell-click handler still
+  // calls its label field "family" — that's a historical name; the
+  // string it carries is now a SKU label, but renaming the type
+  // field would ripple into setSelectedHeatmapCell + drawer code
+  // for no operator-facing benefit.
   const dates = safeArray<string>(current?.dates)
   const currentSeries = current?.series ?? {}
   const priorSeries = prior?.series ?? {}
-  const familyBuckets = new Map<string, { current: number[]; prior: number[]; total: number }>()
+
+  type SkuBucket = {
+    label: string
+    current: number[]
+    prior: number[]
+    total: number
+  }
+  const skuBuckets: SkuBucket[] = []
 
   for (const sku of safeArray<any>(current?.topSkus)) {
     const key = normalizeSku(sku?.sku)
     if (!key) continue
-    const family = productFamily(String(sku?.name ?? ''), key)
-    const bucket = familyBuckets.get(family) ?? {
+    // Row label = product name when available, else fall back to
+    // the raw SKU code. Operators recognize names faster than codes
+    // for active product lines, but the SKU is a useful fallback
+    // for unnamed catalog entries.
+    const name = String(sku?.name ?? '').trim()
+    const label = name || key
+    const currentValues = currentSeries[key] ?? []
+    const priorValues = priorSeries[key] ?? []
+    const bucket: SkuBucket = {
+      label,
       current: Array.from({ length: dates.length }, () => 0),
       prior: Array.from({ length: dates.length }, () => 0),
       total: 0,
     }
-    const currentValues = currentSeries[key] ?? []
-    const priorValues = priorSeries[key] ?? []
     for (let index = 0; index < dates.length; index += 1) {
       const currentQty = num(currentValues[index])
       const priorQty = num(priorValues[index])
@@ -571,18 +592,18 @@ function buildHeatmap(current: SalesPayload, prior: SalesPayload, limit = 6): He
       bucket.prior[index] += priorQty
       bucket.total += currentQty
     }
-    familyBuckets.set(family, bucket)
+    skuBuckets.push(bucket)
   }
 
-  return [...familyBuckets.entries()]
-    .sort((a, b) => b[1].total - a[1].total)
+  return skuBuckets
+    .sort((a, b) => b.total - a.total)
     .slice(0, Math.max(1, limit))
-    .map(([label, bucket]) => {
+    .map((bucket) => {
       const baseline = sumValues(bucket.prior) / Math.max(1, bucket.prior.length)
       const fallback = sumValues(bucket.current) / Math.max(1, bucket.current.length) || 1
       const compareTo = baseline > 0 ? baseline : fallback
       return {
-        label,
+        label: bucket.label,
         cells: dates.slice(-15).map((day, offset) => {
           const index = dates.length - 15 + offset
           const qty = num(bucket.current[index])
@@ -2616,15 +2637,15 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           ) : null}
         <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h3 className="text-sm font-extrabold text-ink">Sales Performance Heatmap by SKU Family</h3>
-            <p className="text-tiny text-ink-3">Top {heatmapLimit} families · performance vs prior 30 days</p>
+            <h3 className="text-sm font-extrabold text-ink">Sales Performance Heatmap by Top SKUs</h3>
+            <p className="text-tiny text-ink-3">Top {heatmapLimit} SKUs · performance vs prior 30 days</p>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
             <TopNDropdown
               value={heatmapLimit}
               onChange={(n) => setHeatmapLimit(n as TopNValue)}
               options={TOP_N_OPTIONS}
-              ariaLabel="Choose how many SKU families to show in the heatmap"
+              ariaLabel="Choose how many SKUs to show in the heatmap"
             />
             <SectionSizeToggle
               value={sectionSizes.heatmap}
