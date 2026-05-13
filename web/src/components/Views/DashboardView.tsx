@@ -5,15 +5,21 @@ import {
   AlertTriangle,
   ArrowDownRight,
   ArrowUpRight,
+  Check as CheckIcon,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   CircleX,
   Columns3,
+  Edit3,
+  Eye,
+  EyeOff,
   Filter,
+  GripVertical,
   Loader2,
   Package,
   RefreshCw,
+  RotateCcw,
   Star,
 } from 'lucide-react'
 import {
@@ -788,6 +794,22 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     try { window.localStorage.setItem(COLUMN_WIDTHS_STORAGE_KEY, JSON.stringify(columnWidths)) } catch { /* non-fatal */ }
   }, [columnWidths])
 
+  // Edit-Dashboard mode (2026-05-13 follow-up: "i want to have a
+  // edit dashboard and it will draggble and it will freely layout
+  // grid by grid"). When editMode === true, panels gain chrome:
+  // a grip handle that initiates HTML5 drag, a visibility toggle,
+  // the size preset toggle becomes more prominent, and dashed
+  // accent borders telegraph "you can interact with this." When
+  // off, dashboard reads as a clean read-only view — exactly the
+  // pre-edit experience for operators who don't customize.
+  const [editMode, setEditMode] = useState(false)
+  // Drag state for the edit-mode DnD. draggingPanel = the key
+  // operator picked up; dragOverPanel = current hover target
+  // (drives the brand-blue drop-indicator stripe on its left edge,
+  // mirroring the same pattern the table column-reorder uses).
+  const [draggingPanel, setDraggingPanel] = useState<SectionKey | null>(null)
+  const [dragOverPanel, setDragOverPanel] = useState<SectionKey | null>(null)
+
   // Per-section size presets — 2026-05-13 operator request to
   // "customize size of all of these charts so it will be able to
   // layout freely". Each major dashboard section has a 3-button
@@ -838,6 +860,113 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     if (size === 'compact') return 'xl:col-span-1'
     if (size === 'wide') return 'xl:col-span-3'
     return 'xl:col-span-2'
+  }
+
+  // Operator-defined panel ORDER. The dashboard now renders all
+  // four major panels through one xl:grid-cols-3 container; their
+  // CSS `order` property comes from the operator's chosen sequence.
+  // Drag-to-reorder in edit mode mutates this array and persists.
+  // Defensive migration: if an unknown key shows up in stored data
+  // we drop it; if a new known key is missing we append.
+  const DEFAULT_PANEL_ORDER: SectionKey[] = ['trend', 'topSkus', 'heatmap', 'table']
+  const PANEL_ORDER_STORAGE_KEY = 'dashboard_panel_order_v1'
+  const [panelOrder, setPanelOrder] = useState<SectionKey[]>(() => {
+    if (typeof window === 'undefined') return DEFAULT_PANEL_ORDER
+    try {
+      const raw = window.localStorage.getItem(PANEL_ORDER_STORAGE_KEY)
+      if (!raw) return DEFAULT_PANEL_ORDER
+      const parsed = JSON.parse(raw) as unknown
+      if (!Array.isArray(parsed)) return DEFAULT_PANEL_ORDER
+      const known = new Set<SectionKey>(DEFAULT_PANEL_ORDER)
+      const seen = new Set<SectionKey>()
+      const cleaned: SectionKey[] = []
+      for (const key of parsed) {
+        if (typeof key === 'string' && known.has(key as SectionKey) && !seen.has(key as SectionKey)) {
+          cleaned.push(key as SectionKey)
+          seen.add(key as SectionKey)
+        }
+      }
+      for (const key of DEFAULT_PANEL_ORDER) {
+        if (!seen.has(key)) cleaned.push(key)
+      }
+      return cleaned
+    } catch { return DEFAULT_PANEL_ORDER }
+  })
+  useEffect(() => {
+    try { window.localStorage.setItem(PANEL_ORDER_STORAGE_KEY, JSON.stringify(panelOrder)) } catch { /* non-fatal */ }
+  }, [panelOrder])
+
+  // Hidden panels (operator chose to hide a panel from the dashboard
+  // via the edit-mode eye toggle). Stored as a Set of section keys.
+  const HIDDEN_PANELS_STORAGE_KEY = 'dashboard_hidden_panels_v1'
+  const [hiddenPanels, setHiddenPanels] = useState<Set<SectionKey>>(() => {
+    if (typeof window === 'undefined') return new Set()
+    try {
+      const raw = window.localStorage.getItem(HIDDEN_PANELS_STORAGE_KEY)
+      if (!raw) return new Set()
+      const parsed = JSON.parse(raw) as unknown
+      if (!Array.isArray(parsed)) return new Set()
+      return new Set(parsed.filter((k): k is SectionKey => typeof k === 'string'))
+    } catch { return new Set() }
+  })
+  useEffect(() => {
+    try { window.localStorage.setItem(HIDDEN_PANELS_STORAGE_KEY, JSON.stringify([...hiddenPanels])) } catch { /* non-fatal */ }
+  }, [hiddenPanels])
+  const togglePanelHidden = (key: SectionKey) =>
+    setHiddenPanels((current) => {
+      const next = new Set(current)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      return next
+    })
+
+  // Drag-and-drop handlers for the edit-mode panel reordering.
+  // Mirror the column-reorder pattern used by the table primitive
+  // — draggable lives on the panel wrapper; setData required by
+  // Firefox; dragOver requires preventDefault to enable the drop.
+  // When operator drops panel A onto panel B, we splice A out and
+  // insert it BEFORE B in the order array.
+  const handlePanelDragStart = (key: SectionKey) => (event: React.DragEvent<HTMLDivElement>) => {
+    if (!editMode) return
+    setDraggingPanel(key)
+    try { event.dataTransfer.setData('text/plain', key) } catch { /* sandbox throws */ }
+    event.dataTransfer.effectAllowed = 'move'
+  }
+  const handlePanelDragOver = (key: SectionKey) => (event: React.DragEvent<HTMLDivElement>) => {
+    if (!editMode || !draggingPanel || draggingPanel === key) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'move'
+    if (dragOverPanel !== key) setDragOverPanel(key)
+  }
+  const handlePanelDragLeave = (key: SectionKey) => () => {
+    if (dragOverPanel === key) setDragOverPanel(null)
+  }
+  const handlePanelDrop = (key: SectionKey) => (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    const from = draggingPanel
+    setDraggingPanel(null)
+    setDragOverPanel(null)
+    if (!from || from === key) return
+    setPanelOrder((current) => {
+      const fromIdx = current.indexOf(from)
+      const toIdx = current.indexOf(key)
+      if (fromIdx === -1 || toIdx === -1) return current
+      const next = [...current]
+      next.splice(fromIdx, 1)
+      next.splice(toIdx, 0, from)
+      return next
+    })
+  }
+  const handlePanelDragEnd = () => {
+    setDraggingPanel(null)
+    setDragOverPanel(null)
+  }
+
+  // Reset the entire dashboard layout (order, sizes, hidden) to
+  // factory defaults. Surfaced as a button in edit-mode header.
+  const resetDashboardLayout = () => {
+    setPanelOrder([...DEFAULT_PANEL_ORDER])
+    setSectionSizes({ ...DEFAULT_SECTION_SIZES })
+    setHiddenPanels(new Set())
   }
   // Inner chart canvas height per size preset. Mirrors the width
   // change so a wider panel feels visually proportional.
@@ -1369,6 +1498,45 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
 
         <div className="relative flex flex-wrap items-center gap-3">
           <div className="text-xs font-medium text-ink-3">Data as of {formatDataTimestamp()}</div>
+          {/* Edit Dashboard toggle — when active, panels become
+              draggable + show visibility eyes + size toggles get
+              louder treatment. Clicking the same button toggles
+              back to view mode (drag chrome disappears, layout
+              freezes at whatever the operator set). */}
+          <button
+            type="button"
+            onClick={() => setEditMode((on) => !on)}
+            className={`inline-flex h-10 items-center gap-2 rounded-card border px-4 text-sm2 font-semibold shadow-sm transition ${
+              editMode
+                ? 'border-brand bg-brand text-white hover:bg-brand-dark'
+                : 'border-line bg-surface text-ink hover:bg-surface-2'
+            }`}
+            aria-pressed={editMode}
+            title={editMode ? 'Exit edit mode — your layout is saved automatically' : 'Edit dashboard — drag panels to reorder, resize, or hide'}
+          >
+            {editMode ? (
+              <>
+                <CheckIcon size={15} strokeWidth={2.5} />
+                Done editing
+              </>
+            ) : (
+              <>
+                <Edit3 size={15} strokeWidth={2.25} className="text-ink-3" />
+                Edit Dashboard
+              </>
+            )}
+          </button>
+          {editMode ? (
+            <button
+              type="button"
+              onClick={resetDashboardLayout}
+              className="inline-flex h-10 items-center gap-2 rounded-card border border-line bg-surface px-3 text-sm2 font-semibold text-ink-2 hover:bg-surface-2 shadow-sm"
+              title="Restore default panel order, sizes, and visibility"
+            >
+              <RotateCcw size={14} strokeWidth={2.25} />
+              Reset
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={() => loadDashboard('refresh')}
@@ -1508,8 +1676,31 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         />
       </div>
 
+      {/* Unified panel grid — all 4 dashboard panels share ONE
+          grid container so CSS `order` can freely reposition them
+          via drag-and-drop, while `col-span` (from sectionColSpanClass)
+          controls each panel's width. The combination gives operators
+          a "grid by grid" free layout: drag to reorder, click ⅓/⅔/Full
+          to resize, click the eye to hide. localStorage persists order,
+          sizes, and visibility per browser. */}
       <div className="mb-3 grid grid-cols-1 gap-3 xl:grid-cols-3">
-        <section className={`rounded-card border border-line bg-surface p-4 shadow-sm ${sectionColSpanClass(sectionSizes.trend)}`}>
+        {!hiddenPanels.has('trend') || editMode ? (
+        <section
+          style={{ order: panelOrder.indexOf('trend') }}
+          draggable={editMode}
+          onDragStart={handlePanelDragStart('trend')}
+          onDragOver={handlePanelDragOver('trend')}
+          onDragLeave={handlePanelDragLeave('trend')}
+          onDrop={handlePanelDrop('trend')}
+          onDragEnd={handlePanelDragEnd}
+          className={`relative rounded-card border bg-surface p-4 shadow-sm transition ${sectionColSpanClass(sectionSizes.trend)} ${
+            editMode ? 'border-dashed border-brand/60' : 'border-line'
+          } ${draggingPanel === 'trend' ? 'opacity-40' : ''} ${
+            dragOverPanel === 'trend' ? 'ring-2 ring-brand ring-offset-2 ring-offset-bg' : ''
+          } ${hiddenPanels.has('trend') && editMode ? 'opacity-50' : ''} ${
+            editMode ? 'cursor-grab active:cursor-grabbing' : ''
+          }`}
+        >
           <div className="mb-3 flex items-start justify-between gap-3">
             <div>
               <h3 className="text-sm font-extrabold text-ink">Units Sold Trend</h3>
@@ -1534,6 +1725,26 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                 value={sectionSizes.trend}
                 onChange={(size) => setSectionSize('trend', size)}
               />
+              {editMode ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => togglePanelHidden('trend')}
+                    className="grid h-8 w-8 place-items-center rounded-card border border-line bg-surface text-ink-3 hover:bg-surface-2 hover:text-ink"
+                    title={hiddenPanels.has('trend') ? 'Show this panel' : 'Hide this panel'}
+                    aria-label={hiddenPanels.has('trend') ? 'Show Units Sold Trend panel' : 'Hide Units Sold Trend panel'}
+                  >
+                    {hiddenPanels.has('trend') ? <EyeOff size={14} strokeWidth={2.25} /> : <Eye size={14} strokeWidth={2.25} />}
+                  </button>
+                  <span
+                    className="grid h-8 w-8 place-items-center rounded-card border border-line bg-surface text-ink-3"
+                    title="Drag to reorder"
+                    aria-hidden="true"
+                  >
+                    <GripVertical size={14} strokeWidth={2.25} />
+                  </span>
+                </>
+              ) : null}
             </div>
           </div>
           <div className={sectionChartHeight(sectionSizes.trend)}>
@@ -1559,17 +1770,56 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             </ResponsiveContainer>
           </div>
         </section>
+        ) : null}
 
-        <section className={`rounded-card border border-line bg-surface p-4 shadow-sm ${sectionColSpanClass(sectionSizes.topSkus)}`}>
+        {!hiddenPanels.has('topSkus') || editMode ? (
+        <section
+          style={{ order: panelOrder.indexOf('topSkus') }}
+          draggable={editMode}
+          onDragStart={handlePanelDragStart('topSkus')}
+          onDragOver={handlePanelDragOver('topSkus')}
+          onDragLeave={handlePanelDragLeave('topSkus')}
+          onDrop={handlePanelDrop('topSkus')}
+          onDragEnd={handlePanelDragEnd}
+          className={`relative rounded-card border bg-surface p-4 shadow-sm transition ${sectionColSpanClass(sectionSizes.topSkus)} ${
+            editMode ? 'border-dashed border-brand/60' : 'border-line'
+          } ${draggingPanel === 'topSkus' ? 'opacity-40' : ''} ${
+            dragOverPanel === 'topSkus' ? 'ring-2 ring-brand ring-offset-2 ring-offset-bg' : ''
+          } ${hiddenPanels.has('topSkus') && editMode ? 'opacity-50' : ''} ${
+            editMode ? 'cursor-grab active:cursor-grabbing' : ''
+          }`}
+        >
           <div className="flex items-start justify-between gap-3 mb-3">
             <div>
               <h3 className="text-sm font-extrabold text-ink">Top SKUs (30d)</h3>
               <p className="text-tiny text-ink-3">By total units sold</p>
             </div>
-            <SectionSizeToggle
-              value={sectionSizes.topSkus}
-              onChange={(size) => setSectionSize('topSkus', size)}
-            />
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <SectionSizeToggle
+                value={sectionSizes.topSkus}
+                onChange={(size) => setSectionSize('topSkus', size)}
+              />
+              {editMode ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => togglePanelHidden('topSkus')}
+                    className="grid h-8 w-8 place-items-center rounded-card border border-line bg-surface text-ink-3 hover:bg-surface-2 hover:text-ink"
+                    title={hiddenPanels.has('topSkus') ? 'Show this panel' : 'Hide this panel'}
+                    aria-label={hiddenPanels.has('topSkus') ? 'Show Top SKUs panel' : 'Hide Top SKUs panel'}
+                  >
+                    {hiddenPanels.has('topSkus') ? <EyeOff size={14} strokeWidth={2.25} /> : <Eye size={14} strokeWidth={2.25} />}
+                  </button>
+                  <span
+                    className="grid h-8 w-8 place-items-center rounded-card border border-line bg-surface text-ink-3"
+                    title="Drag to reorder"
+                    aria-hidden="true"
+                  >
+                    <GripVertical size={14} strokeWidth={2.25} />
+                  </span>
+                </>
+              ) : null}
+            </div>
           </div>
           <div className="space-y-3">
             {topSkuRows.map((row, index) => (
@@ -1595,18 +1845,56 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             ) : null}
           </div>
         </section>
-      </div>
+        ) : null}
 
-      <section className="mb-3 rounded-card border border-line bg-surface p-4 shadow-sm">
+        {!hiddenPanels.has('heatmap') || editMode ? (
+        <section
+          style={{ order: panelOrder.indexOf('heatmap') }}
+          draggable={editMode}
+          onDragStart={handlePanelDragStart('heatmap')}
+          onDragOver={handlePanelDragOver('heatmap')}
+          onDragLeave={handlePanelDragLeave('heatmap')}
+          onDrop={handlePanelDrop('heatmap')}
+          onDragEnd={handlePanelDragEnd}
+          className={`relative rounded-card border bg-surface p-4 shadow-sm transition ${sectionColSpanClass(sectionSizes.heatmap)} ${
+            editMode ? 'border-dashed border-brand/60' : 'border-line'
+          } ${draggingPanel === 'heatmap' ? 'opacity-40' : ''} ${
+            dragOverPanel === 'heatmap' ? 'ring-2 ring-brand ring-offset-2 ring-offset-bg' : ''
+          } ${hiddenPanels.has('heatmap') && editMode ? 'opacity-50' : ''} ${
+            editMode ? 'cursor-grab active:cursor-grabbing' : ''
+          }`}
+        >
         <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
           <div>
             <h3 className="text-sm font-extrabold text-ink">Sales Performance Heatmap by SKU Family</h3>
             <p className="text-tiny text-ink-3">Performance vs prior 30 days</p>
           </div>
-          <SectionSizeToggle
-            value={sectionSizes.heatmap}
-            onChange={(size) => setSectionSize('heatmap', size)}
-          />
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <SectionSizeToggle
+              value={sectionSizes.heatmap}
+              onChange={(size) => setSectionSize('heatmap', size)}
+            />
+            {editMode ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => togglePanelHidden('heatmap')}
+                  className="grid h-8 w-8 place-items-center rounded-card border border-line bg-surface text-ink-3 hover:bg-surface-2 hover:text-ink"
+                  title={hiddenPanels.has('heatmap') ? 'Show this panel' : 'Hide this panel'}
+                  aria-label={hiddenPanels.has('heatmap') ? 'Show Heatmap panel' : 'Hide Heatmap panel'}
+                >
+                  {hiddenPanels.has('heatmap') ? <EyeOff size={14} strokeWidth={2.25} /> : <Eye size={14} strokeWidth={2.25} />}
+                </button>
+                <span
+                  className="grid h-8 w-8 place-items-center rounded-card border border-line bg-surface text-ink-3"
+                  title="Drag to reorder"
+                  aria-hidden="true"
+                >
+                  <GripVertical size={14} strokeWidth={2.25} />
+                </span>
+              </>
+            ) : null}
+          </div>
         </div>
         <div className="overflow-x-auto">
           {/* Refined diverging palette (2026-05-13): muted ColorBrewer
@@ -1693,9 +1981,26 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             )
           })()}
         </div>
-      </section>
+        </section>
+        ) : null}
 
-      <section className="rounded-card border border-line bg-surface shadow-sm">
+        {!hiddenPanels.has('table') || editMode ? (
+        <section
+          style={{ order: panelOrder.indexOf('table') }}
+          draggable={editMode}
+          onDragStart={handlePanelDragStart('table')}
+          onDragOver={handlePanelDragOver('table')}
+          onDragLeave={handlePanelDragLeave('table')}
+          onDrop={handlePanelDrop('table')}
+          onDragEnd={handlePanelDragEnd}
+          className={`relative rounded-card border bg-surface shadow-sm transition ${sectionColSpanClass(sectionSizes.table)} ${
+            editMode ? 'border-dashed border-brand/60' : 'border-line'
+          } ${draggingPanel === 'table' ? 'opacity-40' : ''} ${
+            dragOverPanel === 'table' ? 'ring-2 ring-brand ring-offset-2 ring-offset-bg' : ''
+          } ${hiddenPanels.has('table') && editMode ? 'opacity-50' : ''} ${
+            editMode ? 'cursor-grab active:cursor-grabbing' : ''
+          }`}
+        >
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
           <div>
             <h3 className="text-sm font-extrabold text-ink">SKU Performance Summary</h3>
@@ -1709,6 +2014,26 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               value={sectionSizes.table}
               onChange={(size) => setSectionSize('table', size)}
             />
+            {editMode ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => togglePanelHidden('table')}
+                  className="grid h-8 w-8 place-items-center rounded-card border border-line bg-surface text-ink-3 hover:bg-surface-2 hover:text-ink"
+                  title={hiddenPanels.has('table') ? 'Show this panel' : 'Hide this panel'}
+                  aria-label={hiddenPanels.has('table') ? 'Show SKU Performance Summary panel' : 'Hide SKU Performance Summary panel'}
+                >
+                  {hiddenPanels.has('table') ? <EyeOff size={14} strokeWidth={2.25} /> : <Eye size={14} strokeWidth={2.25} />}
+                </button>
+                <span
+                  className="grid h-8 w-8 place-items-center rounded-card border border-line bg-surface text-ink-3"
+                  title="Drag to reorder"
+                  aria-hidden="true"
+                >
+                  <GripVertical size={14} strokeWidth={2.25} />
+                </span>
+              </>
+            ) : null}
             <select
               value={categoryFilter}
               onChange={(event) => setCategoryFilter(event.target.value)}
@@ -2136,7 +2461,33 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             </select>
           </div>
         </div>
-      </section>
+        </section>
+        ) : null}
+      </div>
+      {/* /unified panel grid */}
+
+      {/* Edit-mode footer hint — a quiet inline tip telling the
+          operator how the chrome they see is meant to be used.
+          Auto-disappears the moment they leave edit mode. */}
+      {editMode ? (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-card border border-dashed border-brand/50 bg-brand-bg/50 px-4 py-3 text-tiny font-semibold text-ink-2">
+          <div className="flex flex-wrap items-center gap-4">
+            <span className="inline-flex items-center gap-2">
+              <GripVertical size={13} strokeWidth={2.25} className="text-brand" />
+              Drag any panel to reorder
+            </span>
+            <span className="inline-flex items-center gap-2">
+              <Eye size={13} strokeWidth={2.25} className="text-brand" />
+              Toggle visibility per panel
+            </span>
+            <span className="inline-flex items-center gap-2">
+              <span className="rounded-md bg-brand/15 px-1.5 py-0.5 text-2xs font-bold text-brand">⅓ ⅔ Full</span>
+              Resize per panel
+            </span>
+          </div>
+          <span className="text-2xs text-ink-3">Layout auto-saves to this browser.</span>
+        </div>
+      ) : null}
 
       {refreshing ? (
         <div className="fixed bottom-5 right-5 inline-flex items-center gap-2 rounded-card border border-line bg-surface px-3 py-2 text-tiny font-semibold text-ink-2 shadow-lg">
