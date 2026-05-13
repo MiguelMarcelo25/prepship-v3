@@ -1,5 +1,6 @@
 // @ts-nocheck
 import { useContext, useEffect, useState, type FormEvent } from 'react'
+import { createPortal } from 'react-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   MapPin,
@@ -44,6 +45,14 @@ interface LocationsViewContentProps {
    *  in that case. Defaults to false for back-compat with the
    *  standalone /locations route fallback. */
   embedded?: boolean
+  /** 2026-05-13: DOM element to portal the "+ Add Location" CTA
+   *  button into. When provided AND embedded is true, the button
+   *  renders next to the parent page's section title instead of
+   *  inside this view's content area — same UX pattern used by
+   *  the shared <Table>'s columnsAnchorEl. Falsy values fall back
+   *  to in-content rendering, so the embedded prop alone still
+   *  produces a usable view if no anchor is wired up. */
+  headerActionAnchor?: HTMLElement | null
 }
 
 export function LocationsViewContent({
@@ -60,6 +69,7 @@ export function LocationsViewContent({
   onDelete,
   onSetDefault,
   embedded = false,
+  headerActionAnchor = null,
 }: LocationsViewContentProps) {
   const contentState = getLocationsContentState({ loading, error, locations })
 
@@ -71,29 +81,47 @@ export function LocationsViewContent({
   // 2026-05-13: when embedded inside Settings, drop the page-level
   // padding + scroll wrapper (the Settings shell provides its own)
   // and skip the page header (Settings renders its own section
-  // header). The "+ Add Location" button still needs to exist — we
-  // pull it out of the suppressed header block and render it alone
-  // when embedded.
+  // header). The "+ Add Location" button is now portal'd into the
+  // Settings section header (via headerActionAnchor) when one is
+  // provided, so it sits next to "Ship-From Locations" instead of
+  // floating alone above the cards. Falls back to inline rendering
+  // when no anchor is wired up.
   const containerClass = embedded ? '' : 'view-content !p-5 !overflow-y-auto'
+
+  // The Add button itself — extracted so we can either inline it
+  // (standalone /locations view) or portal it into the Settings
+  // header (embedded view with anchor). Identical visual treatment
+  // either way; only the mount point differs.
+  const addButton = (
+    <motion.button
+      whileHover={{ y: -1 }}
+      whileTap={{ scale: 0.96 }}
+      type="button"
+      onClick={onShowAdd}
+      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-semibold text-white bg-gradient-to-br from-brand to-indigo-600 shadow-md hover:shadow-lg transition-all duration-150 focus-visible:ring-2 focus-visible:ring-brand/40 focus-visible:ring-offset-2 outline-none"
+    >
+      <Plus size={14} strokeWidth={2.5} />
+      Add Location
+    </motion.button>
+  )
 
   return (
     <div id="view-locations" className={containerClass}>
+      {/* Portal: when embedded AND we have a header anchor, render
+          the Add button there. The portal'd node remains owned by
+          this component's React tree — props/state/onClick all
+          continue to flow as if it were a normal child. */}
+      {embedded && headerActionAnchor ? createPortal(addButton, headerActionAnchor) : null}
+
       {embedded ? (
-        // Embedded mode: just the Add button, right-aligned, since
-        // the Settings shell already shows "Ship-From Locations" in
-        // its section header above this panel.
-        <div className="flex items-center justify-end mb-5">
-          <motion.button
-            whileHover={{ y: -1 }}
-            whileTap={{ scale: 0.96 }}
-            type="button"
-            onClick={onShowAdd}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-semibold text-white bg-gradient-to-br from-brand to-indigo-600 shadow-md hover:shadow-lg transition-all duration-150 focus-visible:ring-2 focus-visible:ring-brand/40 focus-visible:ring-offset-2 outline-none"
-          >
-            <Plus size={14} strokeWidth={2.5} />
-            Add Location
-          </motion.button>
-        </div>
+        // Embedded WITHOUT an anchor: in-content fallback so the
+        // button is still reachable. Keeps the view self-contained
+        // for any future caller that forgets to wire the anchor.
+        !headerActionAnchor ? (
+          <div className="flex items-center justify-end mb-5">
+            {addButton}
+          </div>
+        ) : null
       ) : (
         <div className="flex items-start justify-between gap-3 mb-5 flex-wrap max-w-3xl">
           <div className="flex items-center gap-3">
@@ -105,16 +133,7 @@ export function LocationsViewContent({
               <p className="text-tiny text-ink-3 mt-0.5">Warehouses, 3PL centers, or drop-ship addresses. The ★ default is used for new labels.</p>
             </div>
           </div>
-          <motion.button
-            whileHover={{ y: -1 }}
-            whileTap={{ scale: 0.96 }}
-            type="button"
-            onClick={onShowAdd}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-[13px] font-semibold text-white bg-gradient-to-br from-brand to-indigo-600 shadow-md hover:shadow-lg transition-all duration-150 focus-visible:ring-2 focus-visible:ring-brand/40 focus-visible:ring-offset-2 outline-none"
-          >
-            <Plus size={14} strokeWidth={2.5} />
-            Add Location
-          </motion.button>
+          {addButton}
         </div>
       )}
 
@@ -339,9 +358,16 @@ interface LocationsViewProps {
    *  sets this to true so the duplicate "Ship-From Locations" title
    *  doesn't render on top of the Settings page header. */
   embedded?: boolean
+  /** 2026-05-13: forwarded to LocationsViewContent. When provided
+   *  AND embedded, the "+ Add Location" button portals into this
+   *  DOM node (typically a slot in the parent's section header). */
+  headerActionAnchor?: HTMLElement | null
 }
 
-export default function LocationsView({ embedded = false }: LocationsViewProps = {}) {
+export default function LocationsView({
+  embedded = false,
+  headerActionAnchor = null,
+}: LocationsViewProps = {}) {
   const toastContext = useContext(ToastContext)
   const [locations, setLocations] = useState<LocationDto[]>([])
   const [loading, setLoading] = useState(true)
@@ -463,6 +489,7 @@ export default function LocationsView({ embedded = false }: LocationsViewProps =
       onDelete={handleDelete}
       onSetDefault={handleSetDefault}
       embedded={embedded}
+      headerActionAnchor={headerActionAnchor}
     />
   )
 }

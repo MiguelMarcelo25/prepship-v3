@@ -243,6 +243,13 @@ export default function SettingsView() {
   const { markups, loading: markupsLoading, saveMarkup } = useMarkups()
   const [drafts, setDrafts] = useState<Record<number, string>>({})
   const [refetchState, setRefetchState] = useState<SettingsRefetchState>({ kind: 'idle' })
+  // 2026-05-13: DOM ref for the section header's right-side action
+  // slot. Captured via callback ref (useState, not useRef) so the
+  // value changes trigger re-render — needed for embedded panels
+  // (LocationsView) that portal a CTA button into this slot once
+  // the DOM node mounts. Sections without a CTA simply leave the
+  // anchor unused; the empty <span> takes no visible space.
+  const [headerActionEl, setHeaderActionEl] = useState<HTMLElement | null>(null)
   const saveToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const refetchResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const latestSaveRequestRef = useRef(0)
@@ -841,6 +848,19 @@ export default function SettingsView() {
                   {activeMeta.description}
                 </p>
               </div>
+              {/* 2026-05-13: Portal target for section-level header
+                  actions. Embedded panels (e.g. LocationsView's
+                  "+ Add Location") render their primary CTA into
+                  this slot via createPortal so the action sits in
+                  the natural place — next to the section title —
+                  instead of floating in a blank row inside the
+                  panel content. Stays empty for sections that
+                  don't need an action button. */}
+              <span
+                ref={setHeaderActionEl}
+                className="shrink-0 pt-1"
+                data-settings-header-action-anchor
+              />
             </motion.header>
           </AnimatePresence>
 
@@ -954,7 +974,10 @@ export default function SettingsView() {
                   built-in title bar is suppressed (the Settings
                   shell renders one already). */}
               {activeSection === 'locations' ? (
-                <LocationsView embedded />
+                <LocationsView
+                  embedded
+                  headerActionAnchor={headerActionEl}
+                />
               ) : null}
 
               {/* ─── STORES panel ──────────────────────────────── */}
