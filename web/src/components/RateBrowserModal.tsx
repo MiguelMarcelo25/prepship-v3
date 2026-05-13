@@ -169,6 +169,7 @@ const CARRIER_NAMES: Record<string, string> = {
   easypost: 'EasyPost',
   shipp: 'Shipp',
   globegistics: 'Globegistics',
+  walmart: 'Walmart',
   walmart_shipping: 'Walmart',
 };
 
@@ -183,6 +184,7 @@ const DIRECT_PROVIDER_LABELS: Record<string, string> = {
   stamps_com: 'Stamps.com Direct',
   ups: 'UPS Direct',
   usps: 'USPS Direct',
+  walmart: 'Walmart',
   walmart_shipping: 'Walmart Shipping',
 };
 
@@ -214,6 +216,37 @@ function isGenericAccountLabel(
   return candidates.includes(normalized);
 }
 
+function providerLabelForAccount(account: Partial<RbCarrierAccountDto> | null | undefined): string | null {
+  const key = normalizeProviderKey(account?.code || account?.carrierCode);
+  return CARRIER_NAMES[key] ?? DIRECT_PROVIDER_LABELS[key] ?? null;
+}
+
+function isOpaqueAccountIdentifierLabel(
+  value: string,
+  account: Partial<RbCarrierAccountDto> | null | undefined
+): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return true;
+  if (!providerLabelForAccount(account)) return false;
+
+  const sourceKey = normalizeProviderKey(
+    (account as any)?.sourceTable ||
+    account?.source ||
+    account?.sourceClientName
+  );
+  const isDirectAccount =
+    account?.directCarrierAccountId != null ||
+    sourceKey.includes('carrier_accounts') ||
+    sourceKey.includes('direct_carrier_accounts');
+  if (!isDirectAccount) return false;
+
+  const accountNumber = toDisplayLabel(account?.accountNumber);
+  const isAccountNumberLabel = accountNumber != null && trimmed === accountNumber;
+  const looksLikeUuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(trimmed);
+  const looksLikeLongToken = /^(?:cid:)?[a-z0-9_-]{12,}$/i.test(trimmed);
+  return looksLikeUuid || (isAccountNumberLabel && looksLikeLongToken);
+}
+
 function formatAccountDisplay(
   account: Partial<RbCarrierAccountDto> | null | undefined,
   fallback = 'Account'
@@ -224,7 +257,10 @@ function formatAccountDisplay(
     toDisplayLabel(account?.accountNumber),
     toDisplayLabel(account?.name),
   ].filter(Boolean) as string[];
-  return labels.find((label) => !isGenericAccountLabel(label, account)) ?? labels[0] ?? fallback;
+  const preferred = labels.find(
+    (label) => !isGenericAccountLabel(label, account) && !isOpaqueAccountIdentifierLabel(label, account)
+  );
+  return preferred ?? providerLabelForAccount(account) ?? labels[0] ?? fallback;
 }
 
 const SERVICE_NAMES: Record<string, string> = {

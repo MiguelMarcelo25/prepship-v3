@@ -68,6 +68,21 @@ const SYNTHETIC_STORE_ID_OFFSETS: Record<string, number> = {
   ebay_shipping: 9_500_000,
 };
 
+const DIRECT_ACCOUNT_PROVIDER_LABELS: Record<string, string> = {
+  amazon_shipping: 'Amazon Shipping',
+  ebay_shipping: 'eBay Shipping',
+  ehub: 'eHub',
+  easypost: 'EasyPost',
+  shipp: 'Shipp',
+  fedex: 'FedEx Direct',
+  simulator: 'Simulator',
+  stamps_com: 'Stamps.com Direct',
+  ups: 'UPS Direct',
+  usps: 'USPS Direct',
+  walmart: 'Walmart',
+  walmart_shipping: 'Walmart Shipping',
+};
+
 // Populated by fetchStores / fetchCounts when clients are loaded — lets
 // downstream filtering (e.g. byStatusStore emission) drop rows for hidden
 // clients even when we only have the id.
@@ -656,6 +671,13 @@ function directAccountKey(account: Pick<DirectCarrierAccountRow, 'id' | 'sourceT
   return `${account.sourceTable ?? 'carrier_accounts'}:${account.id}`;
 }
 
+function looksLikeOpaqueAccountIdentifier(value: unknown): boolean {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  if (!trimmed) return false;
+  if (/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(trimmed)) return true;
+  return /^(?:cid:)?[a-z0-9_-]{12,}$/i.test(trimmed);
+}
+
 function storeAccountMatchesOrder(
   row: DirectCarrierAccountRow,
   context: { storeId?: unknown; clientId?: unknown }
@@ -704,7 +726,12 @@ function directCarrierAccountVisibleForOrder(
 function normalizeDirectCarrierAccountDto(row: DirectCarrierAccountRow): any {
   const provider = normalizeProviderKey(row.provider);
   const shippingProviderId = directProviderIdFromAccount(row);
-  const label = row.label || row.accountIdentifier || provider;
+  const rowLabel = typeof row.label === 'string' ? row.label.trim() : '';
+  const accountIdentifier = typeof row.accountIdentifier === 'string' ? row.accountIdentifier.trim() : '';
+  const label =
+    rowLabel && rowLabel !== accountIdentifier && !looksLikeOpaqueAccountIdentifier(rowLabel)
+      ? rowLabel
+      : DIRECT_ACCOUNT_PROVIDER_LABELS[provider] || rowLabel || accountIdentifier || provider;
   return {
     id: row.id,
     directCarrierAccountId: row.id,
