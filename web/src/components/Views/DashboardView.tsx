@@ -38,6 +38,7 @@ import {
   sortRows,
   type SortState,
 } from '../SortableTable'
+import { DateRangePicker, defaultLast30, priorRange, type DateRange } from '../DateRangePicker'
 
 type Client = { clientId: number; name: string }
 
@@ -800,6 +801,13 @@ function TopNDropdown({
 export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   const [clients, setClients] = useState<Client[]>([])
   const [selectedClientId, setSelectedClientId] = useState<number | null>(null)
+  // Operator-selected date range that drives every API call below.
+  // Default is the last 30 days ending today (matches the old
+  // hard-coded behavior). The DateRangePicker component handles
+  // all the calendar / preset UX; this state is just the result.
+  // priorRange() derives the comparison window (same length,
+  // immediately preceding) used by trend / top-SKUs / heatmap.
+  const [dateRange, setDateRange] = useState<DateRange>(() => defaultLast30())
   const [currentSales, setCurrentSales] = useState<SalesPayload>({ dates: [], topSkus: [], series: {} })
   const [priorSales, setPriorSales] = useState<SalesPayload>({ dates: [], topSkus: [], series: {} })
   const [inventoryRows, setInventoryRows] = useState<InventoryItem[]>([])
@@ -1362,11 +1370,26 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     setError(null)
 
     try {
-      const currentFrom = dateOnly(29)
-      const currentTo = dateOnly(0)
-      const priorFrom = dateOnly(59)
-      const priorTo = dateOnly(30)
-      const sevenFrom = dateOnly(6)
+      // Replace hardcoded last-30-days with operator-chosen range
+      // from the DateRangePicker. priorRange() gives us the
+      // "same length, immediately preceding" window for the
+      // comparison metrics (trend dashed line, heatmap baseline,
+      // KPI vs-prior arrows).
+      const currentFrom = dateRange.from
+      const currentTo = dateRange.to
+      const prior = priorRange(dateRange)
+      const priorFrom = prior.from
+      const priorTo = prior.to
+      // "7-day" KPI is now derived as "last ~25% of the chosen
+      // range" so it scales with the operator's picked window:
+      // last-30 → 7-day; last-90 → ~22-day; etc. Falls back to
+      // 7 days for safety.
+      const rangeLengthDays = Math.max(
+        1,
+        Math.round((new Date(currentTo).getTime() - new Date(currentFrom).getTime()) / 86_400_000) + 1,
+      )
+      const sevenDayOffset = Math.min(Math.max(1, Math.round(rangeLengthDays * 0.25)), rangeLengthDays) - 1
+      const sevenFrom = dateOnly(sevenDayOffset)
       const cid = selectedClientId ?? undefined
 
       const [
@@ -1430,7 +1453,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   useEffect(() => {
     void loadDashboard('initial')
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedClientId])
+  }, [selectedClientId, dateRange.from, dateRange.to])
 
   const trend = useMemo(() => buildTrend(currentSales, priorSales), [currentSales, priorSales])
   const heatmap = useMemo(
@@ -1772,6 +1795,12 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         </div>
 
         <div className="relative flex flex-wrap items-center gap-3">
+          {/* Operator-controlled date range. Drives every API call on
+              the dashboard — KPIs, trend, top SKUs, heatmap, table.
+              Presets (Today, Last 7d, Last 30d, This month, etc.) +
+              full day/month/year calendar navigation. See
+              ../DateRangePicker.tsx for the standalone component. */}
+          <DateRangePicker value={dateRange} onChange={setDateRange} />
           <div className="text-xs font-medium text-ink-3">Data as of {formatDataTimestamp()}</div>
           {/* Edit Dashboard toggle — when active, panels become
               draggable + show visibility eyes + size toggles get
