@@ -51,6 +51,14 @@ type SalesPayload = {
   series: Record<string, number[]>
 }
 
+type DailyOrderCount = {
+  day: string
+  awaiting: number
+  shipped: number
+  cancelled: number
+  total: number
+}
+
 type InventoryItem = {
   id?: number
   sku?: string
@@ -89,10 +97,10 @@ type TrendPoint = {
   current: number
   prior: number
   // 2026-05-13: daily order-revenue total in $ — drives the second
-  // line on the Units Sold Trend chart (right Y-axis). Computed in
+  // line on the Daily Orders Trend chart (right Y-axis). Computed in
   // useMemo by summing currentOrders.orderTotal grouped by orderDate.
   // Undefined for prior-period bucket since we don't render a prior
-  // revenue line (avoids visual clutter — operators compare units
+  // revenue line (avoids visual clutter — operators compare orders
   // against revenue, not revenue-now against revenue-then).
   currentRevenue?: number
 }
@@ -573,6 +581,58 @@ function buildTrend(current: SalesPayload, prior: SalesPayload): TrendPoint[] {
   })
 }
 
+function parseDateKey(day: string) {
+  const [year, month, date] = String(day ?? '').split('-').map((part) => Number(part))
+  if (!year || !month || !date) return null
+  const parsed = new Date(year, month - 1, date)
+  parsed.setHours(0, 0, 0, 0)
+  return parsed
+}
+
+function toDateKey(date: Date) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function buildDateBuckets(from: string, to: string) {
+  const start = parseDateKey(from)
+  const end = parseDateKey(to)
+  if (!start || !end || start > end) return []
+
+  const days: string[] = []
+  const cursor = new Date(start)
+  while (cursor <= end && days.length < 400) {
+    days.push(toDateKey(cursor))
+    cursor.setDate(cursor.getDate() + 1)
+  }
+  return days
+}
+
+function buildOrderCountTrend(
+  currentDays: string[],
+  priorDays: string[],
+  currentCounts: DailyOrderCount[],
+  priorCounts: DailyOrderCount[],
+): TrendPoint[] {
+  const currentByDay = new Map<string, number>()
+  const priorByDay = new Map<string, number>()
+
+  for (const row of safeArray<DailyOrderCount>(currentCounts)) {
+    currentByDay.set(String(row.day), num(row.total))
+  }
+  for (const row of safeArray<DailyOrderCount>(priorCounts)) {
+    priorByDay.set(String(row.day), num(row.total))
+  }
+
+  return currentDays.map((day, index) => ({
+    day,
+    current: currentByDay.get(day) ?? 0,
+    prior: priorByDay.get(priorDays[index]) ?? 0,
+  }))
+}
+
 function buildHeatmap(current: SalesPayload, prior: SalesPayload, limit = 6): HeatmapRow[] {
   // 2026-05-13: switched from "by family" (grouped via
   // productFamily()) to "by individual SKU" per operator request.
@@ -998,6 +1058,8 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   }, [])
   const [currentSales, setCurrentSales] = useState<SalesPayload>({ dates: [], topSkus: [], series: {} })
   const [priorSales, setPriorSales] = useState<SalesPayload>({ dates: [], topSkus: [], series: {} })
+  const [currentDailyCounts, setCurrentDailyCounts] = useState<DailyOrderCount[]>([])
+  const [priorDailyCounts, setPriorDailyCounts] = useState<DailyOrderCount[]>([])
   const [inventoryRows, setInventoryRows] = useState<InventoryItem[]>([])
   const [analysisRows, setAnalysisRows] = useState<AnalysisSku[]>([])
   const [currentOrders, setCurrentOrders] = useState<any[]>([])
@@ -1140,7 +1202,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   // Critical sibling fix: the parent grid now has `items-start` (CSS
   // `align-items: start`), which prevents one panel's height from
   // dragging its row-neighbor along with it. Before this fix, growing
-  // Top SKUs to 600px would also stretch Units Sold Trend to 600px
+  // Top SKUs to 600px would also stretch Daily Orders Trend to 600px
   // because CSS Grid's default `align-items: stretch` forces all
   // items in the same row to share the row's max height.
   //
@@ -1624,6 +1686,8 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         clientsRes,
         currentSalesRes,
         priorSalesRes,
+        currentDailyCountsRes,
+        priorDailyCountsRes,
         inventoryRes,
         analysisRes,
         currentOrdersRes,
@@ -1644,6 +1708,8 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         // is indexed or rewritten.
         apiClient.fetchAnalysisDailySales({ from: currentFrom, to: currentTo, topN: 15, clientId: cid }),
         apiClient.fetchAnalysisDailySales({ from: priorFrom, to: priorTo, topN: 15, clientId: cid }),
+        apiClient.fetchOrdersDailyCounts({ from: currentFrom, to: currentTo, clientId: cid }),
+        apiClient.fetchOrdersDailyCounts({ from: priorFrom, to: priorTo, clientId: cid }),
         apiClient.fetchInventory({ ...(cid ? { clientId: cid } : {}) }).catch(() => []),
         apiClient.fetchAnalysisSkus({ from: currentFrom, to: currentTo, limit: 200, clientId: cid }).catch(() => ({ skus: [] })),
         fetchOrdersWindow({ from: currentFrom, to: currentTo, clientId: cid }),
@@ -1661,6 +1727,8 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
       setClients(nextClients)
       setCurrentSales(currentSalesRes ?? { dates: [], topSkus: [], series: {} })
       setPriorSales(priorSalesRes ?? { dates: [], topSkus: [], series: {} })
+      setCurrentDailyCounts(safeArray<DailyOrderCount>(currentDailyCountsRes?.data))
+      setPriorDailyCounts(safeArray<DailyOrderCount>(priorDailyCountsRes?.data))
       setInventoryRows(safeArray<InventoryItem>(inventoryRes))
       setAnalysisRows(safeArray<AnalysisSku>(analysisRes?.skus))
       setCurrentOrders(safeArray<any>(currentOrdersRes))
@@ -1684,7 +1752,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   }, [selectedClientId, dateRange.from, dateRange.to])
 
   // 2026-05-13: build daily revenue map from currentOrders so the
-  // Units Sold Trend chart can render a second line for total order
+  // Daily Orders Trend chart can render a second line for total order
   // value on a separate right-side Y-axis. Aggregation: sum
   // order.orderTotal grouped by YYYY-MM-DD of orderDate. Excludes
   // adjustments / cancellations? — no special filter here because
@@ -1704,16 +1772,22 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     return map
   }, [currentOrders])
 
-  // Stitch revenue onto each trend point. Existing trend buckets
-  // come from currentSales.dates so they're already keyed by day;
-  // we just look up each day in the revenue map (0 fallback).
+  const unitsTrend = useMemo(() => buildTrend(currentSales, priorSales), [currentSales, priorSales])
+
+  // Daily order counts come from the server aggregate, not the top-N
+  // SKU sales payload. The old chart formula summed only the 15 SKUs
+  // returned by /analysis/sku-daily, so busy days with long-tail SKUs
+  // were undercounted.
   const trend = useMemo(() => {
-    const base = buildTrend(currentSales, priorSales)
+    const currentDays = buildDateBuckets(dateRange.from, dateRange.to)
+    const prior = priorRange(dateRange)
+    const priorDays = buildDateBuckets(prior.from, prior.to)
+    const base = buildOrderCountTrend(currentDays, priorDays, currentDailyCounts, priorDailyCounts)
     return base.map((point) => ({
       ...point,
       currentRevenue: revenueByDay.get(point.day) ?? 0,
     }))
-  }, [currentSales, priorSales, revenueByDay])
+  }, [currentDailyCounts, dateRange.from, dateRange.to, priorDailyCounts, revenueByDay])
   const heatmap = useMemo(
     () => buildHeatmap(currentSales, priorSales, heatmapLimit),
     [currentSales, priorSales, heatmapLimit],
@@ -1952,10 +2026,10 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   const visibleColumnCount = 4 + COLUMN_OPTIONS.filter((option) => visibleColumns[option.key]).length
 
   const kpis = useMemo(() => {
-    const currentUnits30 = sumValues(trend.map((point) => point.current))
-    const priorUnits30 = sumValues(trend.map((point) => point.prior))
-    const currentUnits7 = sumValues(last(trend.map((point) => point.current), 7))
-    const priorUnits7 = sumValues(last(trend.map((point) => point.prior), 7))
+    const currentUnits30 = sumValues(unitsTrend.map((point) => point.current))
+    const priorUnits30 = sumValues(unitsTrend.map((point) => point.prior))
+    const currentUnits7 = sumValues(last(unitsTrend.map((point) => point.current), 7))
+    const priorUnits7 = sumValues(last(unitsTrend.map((point) => point.prior), 7))
     const inStock = inventoryRows.filter((item) => {
       const stock = num(item.currentStock ?? item.stockQty)
       const min = num(item.minStock ?? item.reorderLevel)
@@ -1981,7 +2055,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
       outStock,
       totalStockSkus,
     }
-  }, [currentAgg.revenue, inventoryRows, priorAgg.revenue, trend])
+  }, [currentAgg.revenue, inventoryRows, priorAgg.revenue, unitsTrend])
 
   const maxTopSku = Math.max(...topSkuRows.map((row) => row.units30), 1)
 
@@ -2017,7 +2091,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           </p>
           <p className="mt-1 inline-flex items-center gap-1.5 text-2xs font-semibold text-ink-3">
             <span className="inline-block h-1.5 w-1.5 rounded-full bg-brand" />
-            KPIs · all orders (awaiting + shipped + cancelled). Charts · fulfilled orders only.
+            KPIs · all orders (awaiting + shipped + cancelled). Daily orders · all orders. SKU charts · fulfilled orders only.
           </p>
         </div>
 
@@ -2221,19 +2295,19 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           title="Total 7-Day Units"
           value={formatInt(kpis.currentUnits7)}
           helper={<ChangeText pct={relativePct(kpis.currentUnits7, kpis.priorUnits7)} label="prior 7 days" />}
-          spark={last(trend.map((point) => point.current), 10)}
+          spark={last(unitsTrend.map((point) => point.current), 10)}
         />
         <KpiCard
           title="Total 30-Day Units"
           value={formatInt(kpis.currentUnits30)}
           helper={<ChangeText pct={relativePct(kpis.currentUnits30, kpis.priorUnits30)} />}
-          spark={trend.map((point) => point.current)}
+          spark={unitsTrend.map((point) => point.current)}
         />
         <KpiCard
           title="Total Revenue"
           value={formatMoney(kpis.revenue30)}
           helper={<ChangeText pct={relativePct(kpis.revenue30, kpis.priorRevenue30)} label="prior 30 days" />}
-          spark={trend.map((point) => point.current)}
+          spark={unitsTrend.map((point) => point.current)}
         />
         <KpiCard
           title="In Stock"
@@ -2357,7 +2431,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           ) : null}
           <div className="mb-3 flex items-start justify-between gap-3">
             <div>
-              <h3 className="text-sm font-extrabold text-ink">Units Sold Trend</h3>
+              <h3 className="text-sm font-extrabold text-ink">Daily Orders Trend</h3>
               {/* 2026-05-13: removed the "Same day, last month"
                   legend entry per operator request. The prior-period
                   data is still fetched (priorSales, priorAgg) because
@@ -2367,7 +2441,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               <div className="mt-2 flex items-center gap-5 text-2xs text-ink-3 flex-wrap">
                 <span className="inline-flex items-center gap-2">
                   <span className="h-0.5 w-8 rounded-full bg-brand" />
-                  This day (units)
+                  Orders
                 </span>
                 <span className="inline-flex items-center gap-2">
                   <span className="h-0.5 w-8 rounded-full bg-emerald-500" />
@@ -2405,7 +2479,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                     onClick={() => togglePanelHidden('trend')}
                     className="grid h-8 w-8 place-items-center rounded-card border border-line bg-surface text-ink-3 hover:bg-surface-2 hover:text-ink"
                     title={hiddenPanels.has('trend') ? 'Show this panel' : 'Hide this panel'}
-                    aria-label={hiddenPanels.has('trend') ? 'Show Units Sold Trend panel' : 'Hide Units Sold Trend panel'}
+                    aria-label={hiddenPanels.has('trend') ? 'Show Daily Orders Trend panel' : 'Hide Daily Orders Trend panel'}
                   >
                     {hiddenPanels.has('trend') ? <EyeOff size={14} strokeWidth={2.25} /> : <Eye size={14} strokeWidth={2.25} />}
                   </button>
@@ -2431,19 +2505,19 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                   • Added a second YAxis (yAxisId="revenue", orientation
                     right) for the order-value series, with its own
                     auto-scaling domain. The original axis got an
-                    explicit yAxisId="units" so both lines map to the
+                    explicit yAxisId="orders" so both lines map to the
                     right scale. ResponsiveContainer keeps the chart
                     box size constant — only the axis tick values
                     rescale to fit the data.
                   • Added a third <Line> for currentRevenue, anchored
                     to the revenue axis. Emerald color so it visually
-                    distinguishes from the units (brand-blue) and
+                    distinguishes from the orders (brand-blue) and
                     prior (gray dashed) lines. */}
               <LineChart data={trend} margin={{ top: 8, right: 8, bottom: 4, left: 8 }}>
                 <CartesianGrid stroke="var(--line)" strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="day" tickFormatter={formatDayLabel} tick={{ fontSize: 10, fill: 'var(--text3)' }} tickLine={false} axisLine={{ stroke: 'var(--line)' }} minTickGap={24} />
                 <YAxis
-                  yAxisId="units"
+                  yAxisId="orders"
                   tick={{ fontSize: 10, fill: 'var(--text3)' }}
                   tickLine={false}
                   axisLine={false}
@@ -2469,7 +2543,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                   // need a tooltip formatter case.
                   formatter={(value: number, name: string) => {
                     if (name === 'currentRevenue') return [`$${formatInt(num(value))}`, 'Order value']
-                    return [formatInt(num(value)), 'This day (units)']
+                    return [formatInt(num(value)), 'Orders']
                   }}
                   contentStyle={{
                     background: 'var(--surface)',
@@ -2485,7 +2559,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                     chart now. Heatmap + KPI vs-prior arrows still
                     consume priorSales elsewhere — no data plumbing
                     change needed. */}
-                <Line yAxisId="units" type="monotone" dataKey="current" stroke="var(--brand)" strokeWidth={2.25} dot={{ r: 2 }} activeDot={{ r: 5, strokeWidth: 2, stroke: 'var(--surface)' }} />
+                <Line yAxisId="orders" type="monotone" dataKey="current" stroke="var(--brand)" strokeWidth={2.25} dot={{ r: 2 }} activeDot={{ r: 5, strokeWidth: 2, stroke: 'var(--surface)' }} />
                 <Line yAxisId="revenue" type="monotone" dataKey="currentRevenue" stroke="rgb(16 185 129)" strokeWidth={2} dot={{ r: 2 }} activeDot={{ r: 5, strokeWidth: 2, stroke: 'var(--surface)' }} />
               </LineChart>
             </ResponsiveContainer>

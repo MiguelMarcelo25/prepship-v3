@@ -954,14 +954,10 @@ export function Table<Row>({
               {orderedColumns.map((col) => {
                 const isActive = sort?.key === col.key
                 const align = col.align ?? 'left'
-                // 2026-05-13: header titles now ALWAYS center,
-                // regardless of the column's `align` prop. The
-                // `align` prop continues to drive BODY cell
-                // alignment so currency stays right-justified and
-                // text stays left-justified — only the title row
-                // moves to center for visual balance. Matches the
-                // Linear/Notion/GitHub Insights table convention.
-                const justify = 'justify-center'
+                const alignCls =
+                  align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left'
+                const justify =
+                  align === 'right' ? 'justify-end' : align === 'center' ? 'justify-center' : 'justify-start'
                 const isDragging = draggingKey === col.key
                 const isDragTarget = dragOverKey === col.key && draggingKey !== null && draggingKey !== col.key
                 const reorderable = !col.pinned
@@ -992,19 +988,11 @@ export function Table<Row>({
                     //    was reserving 20px on the left edge for
                     //    a drag-grip affordance, but that grip has
                     //    been HIDDEN since 2026-05-12 (see the
-                    //    block below). With the grip invisible AND
-                    //    the header text now centered, the dead
-                    //    left padding was pulling content 20px
-                    //    off-center. The whole header is still
+                    //    block below). The whole header is still
                     //    draggable (draggable={reorderable} on the
                     //    <th> itself) — operators just grab the
                     //    label, not a separate handle.
-                    //  • Dropped the `text-${align}` class. Since
-                    //    the inner label is wrapped in an
-                    //    inline-flex span (which uses justify-content
-                    //    for positioning, not text-align), the
-                    //    text-${align} class was a no-op visually.
-                    className={`group/th bg-surface-2 sticky top-0 z-[25] shadow-[0_1px_0_var(--border),0_3px_8px_rgba(15,23,42,0.08)] border-b-2 border-line ${headerPadding} text-center text-[10.5px] font-extrabold uppercase tracking-[0.05em] text-ink-3 ${col.sortable ? 'cursor-pointer select-none hover:bg-line/40' : ''} ${isDragging ? 'opacity-40' : ''} ${isDragTarget ? 'bg-brand-bg shadow-[inset_3px_0_0_0_var(--brand)]' : ''} transition-colors`}
+                    className={`group/th bg-surface-2 sticky top-0 z-[25] shadow-[0_1px_0_var(--border),0_3px_8px_rgba(15,23,42,0.08)] border-b-2 border-line ${headerPadding} ${alignCls} text-[10.5px] font-extrabold uppercase tracking-[0.05em] text-ink-3 ${col.sortable ? 'cursor-pointer select-none hover:bg-line/40' : ''} ${isDragging ? 'opacity-40' : ''} ${isDragTarget ? 'bg-brand-bg shadow-[inset_3px_0_0_0_var(--brand)]' : ''} transition-colors`}
                     onClick={() => toggleSort(col)}
                     aria-sort={isActive ? (sort!.direction === 'asc' ? 'ascending' : 'descending') : 'none'}
                     title={reorderable ? `${col.label} — click to sort, drag to reorder, drag right edge to resize, double-click edge to auto-fit` : col.label}
@@ -1114,18 +1102,8 @@ export function Table<Row>({
                 >
                   {orderedColumns.map((col) => {
                     const align = col.align ?? 'left'
-                    // 2026-05-13: body cells now ALWAYS center,
-                    // matching the centered headers app-wide. The
-                    // column's `align` prop is preserved on the
-                    // data-col-align attribute (useful for ad-hoc
-                    // CSS or operator-installed userscripts) but no
-                    // longer drives the visual alignment of the
-                    // body. Operator wanted the whole table —
-                    // headers AND data — to read as a centered
-                    // grid; previously body inherited per-column
-                    // align which created mixed text-left / text-
-                    // right with centered headers above them.
-                    const alignCls = 'text-center'
+                    const alignCls =
+                      align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left'
                     const content = col.render
                       ? col.render(row)
                       : ((row as Record<string, unknown>)[col.key] as ReactNode) ?? ''

@@ -154,25 +154,16 @@ const ANALYSIS_TABLE_COLUMNS: AnalysisTableColumn[] = [
   { key: 'name' },
   { key: 'sku' },
   { key: 'client' },
-  // 2026-05-13: orders / pending / external switched right → center
-  // per operator request. These three columns show small single-
-  // digit counts or compact pill badges ("1 pend", "47 ext", "—"),
-  // not multi-digit currency, so right-alignment was creating an
-  // awkward gap between the header text (pushed right) and the
-  // body badges (rendered center-ish inside narrow columns).
-  // Center-alignment lines the header and the badge up visually.
-  // Numeric / currency columns below (qty, avgPrice, revenue,
-  // stdOrders, expOrders, total) STAY right-aligned because their
-  // decimal places need to line up vertically.
+  // Operator-requested metric columns stay centered; identity and
+  // secondary columns default left so labels/readable text scan cleanly.
   { key: 'orders', align: 'center' },
   { key: 'pending', title: 'Awaiting shipment - not yet labeled', align: 'center' },
   { key: 'external', title: 'Orders shipped externally (no ShipStation label)', align: 'center' },
-  { key: 'qty', align: 'right' },
+  { key: 'qty', align: 'center' },
   {
     key: 'trend',
     title:
       'Daily-units trend across the selected range. Green when the latest half outpaces the earliest half, red when the latest half drops below. Click to sort by trend strength.',
-    align: 'center',
   },
   // 2026-05-12 boss-requested columns. Avg Sell Price comes first so
   // operators reading left-to-right see the per-unit price before the
@@ -182,13 +173,13 @@ const ANALYSIS_TABLE_COLUMNS: AnalysisTableColumn[] = [
     key: 'avgPrice',
     title:
       'Average selling price per unit = total revenue ÷ total units. Derived from orders.items.unitPrice (camel) or unit_price (snake) — both shapes accepted depending on the marketplace integration that ingested the order.',
-    align: 'right',
+    align: 'center',
   },
   {
     key: 'revenue',
     title:
       'Total revenue for this SKU across the selected date range. Sum of (unit_price × qty) over every non-cancelled order. Excludes orders from disabled clients.',
-    align: 'right',
+    align: 'center',
   },
   // Cell layout: {units shipped via class} + {avg cost per unit}.
   // Multiplying the two gives the class subtotal that's also shown in
@@ -199,18 +190,18 @@ const ANALYSIS_TABLE_COLUMNS: AnalysisTableColumn[] = [
     key: 'stdOrders',
     title:
       'Standard-service SS labels — units shipped + average cost per unit (allocated by item units in multi-item orders). Hover for the orders / units / subtotal breakdown.',
-    align: 'right',
+    align: 'center',
   },
   {
     key: 'expOrders',
     title:
       'Expedited-service SS labels — units shipped + average cost per unit. Hover for the orders / units / subtotal breakdown.',
-    align: 'right',
+    align: 'center',
   },
   {
     key: 'total',
     title: 'Total SS label cost (allocated by item units in multi-item orders)',
-    align: 'right',
+    align: 'center',
   },
 ]
 

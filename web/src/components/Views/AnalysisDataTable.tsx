@@ -186,13 +186,9 @@ function pillSizeFor(size: AnalysisColumnSize) {
 }
 
 function skuClassesFor(size: AnalysisColumnSize, isLink: boolean) {
-  // 2026-05-13: text-center added so the SKU value matches the
-  // centered SKU column header. Was browser-default (left), which
-  // visually clumped SKUs to the left edge of their cell while the
-  // header text sat in the middle — operator-reported asymmetry.
   return [
     cellPaddingFor(size),
-    'text-[14px] text-center',
+    'text-[14px] text-left',
     "font-bold tabular-nums font-['JetBrains_Mono','Fira_Code',ui-monospace,monospace] !text-[#1d4ed8]",
     isLink ? 'underline decoration-[1px] underline-offset-2 decoration-[#1d4ed8]' : '',
     'border-b border-line align-middle',
@@ -202,11 +198,7 @@ function skuClassesFor(size: AnalysisColumnSize, isLink: boolean) {
 }
 
 function clientClassesFor(size: AnalysisColumnSize) {
-  // 2026-05-13: center-aligned to match the column header. Was
-  // browser-default (left) which created a visible misalignment
-  // between the centered "CLIENT" header text and the left-floating
-  // body values like "Tran Agency". Operator-reported.
-  return `${cellPaddingFor(size)} text-[14px] text-ink-2 text-center border-b border-line align-middle`
+  return `${cellPaddingFor(size)} text-[14px] text-ink-2 text-left border-b border-line align-middle`
 }
 
 const TD_BASE = 'border-b border-line align-middle text-ink'
@@ -374,21 +366,13 @@ export function AnalysisDataTable({
                   {columns.map((col) => {
                     switch (col.key) {
                       case 'name':
-                        // 2026-05-13: thumbnail+name pair now CENTERED
-                        // (justify-center on the inner flex) so the
-                        // composite cell aligns with the centered
-                        // ITEM NAME header. The name truncates with
-                        // ellipsis if it exceeds nameMaxWidth, so
-                        // centering doesn't push long names past
-                        // the column edge — it just centers whatever
-                        // fits in the box.
                         return (
                           <td
                             key="name"
-                            className={`${cellPadding} ${nameMaxWidth} font-medium text-ink text-center ${TD_BASE}`}
+                            className={`${cellPadding} ${nameMaxWidth} font-medium text-ink text-left ${TD_BASE}`}
                             title={row.name}
                           >
-                            <div className="flex items-center justify-center gap-2 min-w-0">
+                            <div className="flex items-center justify-start gap-2 min-w-0">
                               <span
                                 className="flex-shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-md ring-1 ring-line bg-surface-2 overflow-hidden"
                                 aria-hidden
@@ -430,9 +414,6 @@ export function AnalysisDataTable({
                           </td>
                         )
                       case 'orders':
-                        // 2026-05-13: text-center → text-center to match
-                        // the centered "ORDERS" column header. Same
-                        // change applied to pending + external below.
                         return (
                           <td key="orders" className={`${cellPadding} text-center whitespace-nowrap tabular-nums font-bold ${TD_BASE}`}>
                             {row.orders}
@@ -491,8 +472,8 @@ export function AnalysisDataTable({
                         )
                       case 'trend':
                         return (
-                          <td key="trend" className={`${cellPadding} whitespace-nowrap align-middle text-center ${TD_BASE}`}>
-                            <span className="inline-flex items-center justify-center">
+                          <td key="trend" className={`${cellPadding} whitespace-nowrap align-middle text-left ${TD_BASE}`}>
+                            <span className="inline-flex items-center justify-start">
                               <UnitsTrendSparkline
                                 series={(row as { dailyQty?: number[] }).dailyQty ?? []}
                               />
@@ -626,7 +607,7 @@ export function AnalysisDataTable({
                         return (
                           <td
                             key="fees"
-                            className={`${cellPadding} text-center whitespace-nowrap tabular-nums font-semibold text-[13px] text-ink-2 ${TD_BASE}`}
+                            className={`${cellPadding} text-left whitespace-nowrap tabular-nums font-semibold text-[13px] text-ink-2 ${TD_BASE}`}
                             title={
                               fees > 0
                                 ? `Marketplace fees: ${formatAnalysisMoney(fees)}\nPull latest from Settings → Stores → "Pull Fees" on the Walmart row. Settlement lags delivery by ~3-7 days.`
@@ -662,7 +643,7 @@ export function AnalysisDataTable({
                         return (
                           <td
                             key="profit"
-                            className={`${cellPadding} text-center whitespace-nowrap tabular-nums font-extrabold text-[14px] ${tone} ${TD_BASE}`}
+                            className={`${cellPadding} text-left whitespace-nowrap tabular-nums font-extrabold text-[14px] ${tone} ${TD_BASE}`}
                             title={
                               hasInputs
                                 ? `Profit = revenue − shipping − fees\n${formatAnalysisMoney(revenue)} − ${formatAnalysisMoney(shipping)} − ${formatAnalysisMoney(fees)} = ${formatAnalysisMoney(profit)}\n(COGS not yet subtracted; layered in once inventory carries reliable per-unit cost)`
@@ -717,7 +698,7 @@ export function AnalysisDataTable({
                     // Identity columns get the TOTALS badge if they're
                     // the first visible column, otherwise stay empty.
                     return (
-                      <td key={col.key} className={`${ftBase} text-[14px] text-ink`}>
+                      <td key={col.key} className={`${ftBase} text-left text-[14px] text-ink`}>
                         {footerTotalsBadge}
                       </td>
                     )
@@ -754,7 +735,7 @@ export function AnalysisDataTable({
                     // trend scores across SKUs is misleading), so the
                     // footer cell stays blank.
                     return (
-                      <td key="trend" className={`${ftBase} text-center text-[14px] text-ink-3`}>
+                      <td key="trend" className={`${ftBase} text-left text-[14px] text-ink-3`}>
                         {isFirstVisible ? footerTotalsBadge : null}
                         <span className="text-line-2">—</span>
                       </td>
@@ -869,7 +850,7 @@ export function AnalysisDataTable({
                     return (
                       <td
                         key="fees"
-                        className={`${ftBase} text-center text-[13px] text-ink-2 font-bold`}
+                        className={`${ftBase} text-left text-[13px] text-ink-2 font-bold`}
                         title={
                           totals.totalSellingFee > 0
                             ? `Total marketplace fees across all SKUs: ${formatAnalysisMoney(totals.totalSellingFee)}`
@@ -897,7 +878,7 @@ export function AnalysisDataTable({
                     return (
                       <td
                         key="profit"
-                        className={`${ftBase} text-center text-[13px] font-extrabold ${profitTone}`}
+                        className={`${ftBase} text-left text-[13px] font-extrabold ${profitTone}`}
                         title={`Total profit across all SKUs = ${formatAnalysisMoney(totals.totalRevenue)} revenue − ${formatAnalysisMoney(totals.totalShipping)} shipping − ${formatAnalysisMoney(totals.totalSellingFee)} fees = ${formatAnalysisMoney(totals.totalProfit)}`}
                       >
                         {isFirstVisible ? footerTotalsBadge : null}
