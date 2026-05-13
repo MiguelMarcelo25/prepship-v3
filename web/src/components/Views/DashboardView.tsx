@@ -41,6 +41,7 @@ import {
 import { DateRangePicker, defaultLast30, priorRange, type DateRange } from '../DateRangePicker'
 import { SyncStatusChip, type SyncStatusChipData } from '../SyncStatusChip'
 import { FilterSelect } from '../FilterSelect'
+import { getAnalysisPresetRange } from './analysis-parity'
 
 type Client = { clientId: number; name: string }
 
@@ -833,18 +834,17 @@ function RangeToggle({
   })()
 
   const setRange = (days: number) => {
-    // Build the new range ending today, going back N days inclusive.
-    // Format as YYYY-MM-DD to match the DateRangePicker convention.
-    const today = new Date()
-    const toIso = (d: Date) => {
-      const y = d.getFullYear()
-      const m = String(d.getMonth() + 1).padStart(2, '0')
-      const dd = String(d.getDate()).padStart(2, '0')
-      return `${y}-${m}-${dd}`
-    }
-    const start = new Date(today)
-    start.setDate(start.getDate() - (days - 1))
-    onChange({ from: toIso(start), to: toIso(today) })
+    // 2026-05-14: was reimplementing the same "today minus (days - 1),
+    // formatted YYYY-MM-DD" math that lives in getAnalysisPresetRange.
+    // The two helpers drifted — Analysis used `(days)` instead of
+    // `(days - 1)`, producing a 31-day window for "30d" while the
+    // Dashboard produced 30. Operators saw the same SKU + same preset
+    // showing different unit totals on the two screens (70 vs 72 for
+    // B0OOOBYO3K). Now both screens call the same helper, so
+    // 7d/30d/90d/180d are guaranteed to mean the same window
+    // everywhere — and any future preset addition (e.g. 1yr) inherits
+    // the convention automatically.
+    onChange(getAnalysisPresetRange(days))
   }
 
   return (
