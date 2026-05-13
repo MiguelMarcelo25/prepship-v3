@@ -39,6 +39,7 @@ import {
   type SortState,
 } from '../SortableTable'
 import { DateRangePicker, defaultLast30, priorRange, type DateRange } from '../DateRangePicker'
+import { SyncStatusChip, type SyncStatusChipData } from '../SyncStatusChip'
 
 type Client = { clientId: number; name: string }
 
@@ -808,6 +809,37 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   // priorRange() derives the comparison window (same length,
   // immediately preceding) used by trend / top-SKUs / heatmap.
   const [dateRange, setDateRange] = useState<DateRange>(() => defaultLast30())
+  // Sync status feeds the live-data chip in the dashboard header.
+  // Polled every 30s (independent of the main dashboard reload)
+  // so operators see the cron cadence and last-synced time without
+  // having to refresh the whole page.
+  const [syncChipData, setSyncChipData] = useState<SyncStatusChipData>({
+    lastSync: null,
+    cadenceMinutes: undefined,
+    status: 'idle',
+  })
+  useEffect(() => {
+    let cancelled = false
+    const fetchStatus = async () => {
+      try {
+        const status: any = await apiClient.fetchLegacySyncStatus()
+        if (cancelled) return
+        setSyncChipData({
+          lastSync: typeof status?.lastSync === 'number' ? status.lastSync : null,
+          cadenceMinutes: status?.cadenceMinutes ?? undefined,
+          status: (status?.status as SyncStatusChipData['status']) ?? 'idle',
+        })
+      } catch {
+        // Non-fatal — chip just stays in its previous state.
+      }
+    }
+    void fetchStatus()
+    const id = setInterval(() => void fetchStatus(), 30_000)
+    return () => {
+      cancelled = true
+      clearInterval(id)
+    }
+  }, [])
   const [currentSales, setCurrentSales] = useState<SalesPayload>({ dates: [], topSkus: [], series: {} })
   const [priorSales, setPriorSales] = useState<SalesPayload>({ dates: [], topSkus: [], series: {} })
   const [inventoryRows, setInventoryRows] = useState<InventoryItem[]>([])
@@ -1801,6 +1833,11 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               full day/month/year calendar navigation. See
               ../DateRangePicker.tsx for the standalone component. */}
           <DateRangePicker value={dateRange} onChange={setDateRange} />
+          {/* Live sync status chip — shows green-dot/Live + cron
+              cadence + "synced X ago." Boss-friendly trust signal.
+              Click to expand the full cron schedule (orders 3 min,
+              shipments 3 min, rate backfill 10 min, etc.). */}
+          <SyncStatusChip data={syncChipData} />
           <div className="text-xs font-medium text-ink-3">Data as of {formatDataTimestamp()}</div>
           {/* Edit Dashboard toggle — when active, panels become
               draggable + show visibility eyes + size toggles get

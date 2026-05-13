@@ -536,6 +536,19 @@ app.get('/sync/status', async (c) => {
     // v4 native fields
     lastSyncedAt: status.lastSyncedAt,
     orderCount: status.orderCount,
+    // 2026-05-13: surface the scheduler cadence so the dashboard
+    // can show operators / bosses "data refreshes every N minutes."
+    // Source-of-truth values come from src/services/sync-scheduler.ts
+    // — kept in sync with the *_INTERVAL_MS constants there. If you
+    // change a cadence, change it here too so the displayed number
+    // doesn't drift from reality.
+    cadenceMinutes: {
+      orders: 3,
+      shipments: 3,
+      rateBackfill: 10,
+      inventoryFromOrders: 30,
+      productCatalog: 60,
+    },
     // v2 LegacySyncStatusDto parity fields
     status: lastSync ? 'done' : 'idle',
     mode: lastSync ? 'incremental' : 'idle',
