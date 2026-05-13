@@ -501,6 +501,31 @@ function aggregateOrders(orders: any[], sevenDayStart: string) {
   let units = 0
 
   for (const order of orders) {
+    // 2026-05-13: skip cancelled orders. Previously they were
+    // counted toward units30 / revenue / units totals, which made
+    // the Dashboard's Top SKUs panel show numbers ~10-20% higher
+    // than the Analysis page for the same SKU + window (operator-
+    // reported: dashboard 82 units, analysis 60 units, gap = 22
+    // cancelled units). The backend's /analysis/sku-breakdown
+    // already filters cancelled out (analysis.ts:414, cancelled-
+    // filter default), so aligning the dashboard to the same rule
+    // makes the cross-screen numbers match.
+    //
+    // Semantically: a cancelled sale didn't ship, so it shouldn't
+    // count as "units sold." The KPI cards above the Top SKUs
+    // panel also feed off aggregateOrders, so they get the same
+    // correction — Total 7d/30d Units / Revenue numbers will
+    // drop by however much cancelled volume contributed.
+    //
+    // Multiple variations of "cancelled" appear across the data
+    // surface (different marketplace plugins normalize differently);
+    // we match the backend's predicate exactly:
+    //   coalesce(order_status, '') <> 'cancelled'
+    // which means any order_status equal to literal 'cancelled' is
+    // dropped, everything else (including null) stays.
+    const orderStatus = String(order?.orderStatus ?? '').toLowerCase()
+    if (orderStatus === 'cancelled') continue
+
     const orderTotal = num(order?.orderTotal)
     const orderDay = String(order?.orderDate ?? '').slice(0, 10)
     const items = safeArray<any>(order?.items)

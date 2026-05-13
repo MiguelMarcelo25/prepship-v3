@@ -110,11 +110,91 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     soldRows.map((row) => [row.inventory_id, Number(row.sold_last_30_days) || 0])
   );
 
+  // 2026-05-13: operator reported the STOCK column shows numbers
+  // that don't match -SOLD (e.g. "sold 85 / stock 0" or "sold 65 /
+  // stock -79"). Root cause: `stockQty` is only mutated by the
+  // auto-deduct path, which (a) didn't track historical orders
+  // shipped before the system came online and (b) skips edge cases
+  // like external labels. Their mental model — and the correct one
+  // for an operator-facing dashboard — is:
+  //   expected_stock = total_received_qty − total_sold_all_time
+  // Compute it server-side from the source of truth (inventory_ledger
+  // for receives + orders for sells). The cached stockQty stays in
+  // the response as `currentStock` for backward-compat; the new
+  // `effectiveStock` is what the operator sees in the STOCK column.
+  //
+  // Allowed under the shipped-data lockdown: this is a READ-only
+  // analytics computation. No locked rows are mutated.
+  const effectiveRows = rows.length
+    ? await db.execute<{
+        inventory_id: number
+        total_received: number
+        total_sold: number
+      }>(sql`
+        with ids as (
+          select unnest(array[${sql.join(rows.map((r) => sql`${r.id}`), sql`, `)}]::int[]) as id
+        ),
+        receives as (
+          select l.inventory_id as id, coalesce(sum(l.qty), 0)::int as total_received
+          from ${inventoryLedger} l
+          where l.inventory_id in (select id from ids)
+            and l.type = 'receive'
+          group by l.inventory_id
+        ),
+        sells as (
+          select i.id as id, coalesce(sum(
+            case
+              when coalesce(item->>'quantity', '') ~ '^[0-9]+$'
+                then (item->>'quantity')::int
+              else 1
+            end
+          ), 0)::int as total_sold
+          from ${inventory} i
+          join ${orders} o
+            on (
+              (i.client_id is null and o.client_id is null)
+              or i.client_id = o.client_id
+            )
+          cross join lateral jsonb_array_elements(o.items) item
+          where i.id in (select id from ids)
+            and item ? 'sku'
+            and lower(item->>'sku') = lower(i.sku)
+            and coalesce(item->>'adjustment', 'false') <> 'true'
+            and coalesce(o.order_status, '') <> 'cancelled'
+          group by i.id
+        )
+        select
+          ids.id as inventory_id,
+          coalesce(receives.total_received, 0)::int as total_received,
+          coalesce(sells.total_sold, 0)::int as total_sold
+        from ids
+        left join receives on receives.id = ids.id
+        left join sells on sells.id = ids.id
+      `)
+    : [];
+  const effectiveByInventoryId = new Map(
+    effectiveRows.map((row) => [
+      row.inventory_id,
+      {
+        totalReceived: Number(row.total_received) || 0,
+        totalSold: Number(row.total_sold) || 0,
+        effectiveStock: (Number(row.total_received) || 0) - (Number(row.total_sold) || 0),
+      },
+    ])
+  );
+
   return c.json(paginated(
-    rows.map((row) => ({
-      ...row,
-      soldLast30Days: soldByInventoryId.get(row.id) ?? 0,
-    })),
+    rows.map((row) => {
+      const eff = effectiveByInventoryId.get(row.id) ?? { totalReceived: 0, totalSold: 0, effectiveStock: 0 };
+      return {
+        ...row,
+        soldLast30Days: soldByInventoryId.get(row.id) ?? 0,
+        // NEW fields — see comment block above the SQL.
+        totalReceived: eff.totalReceived,
+        totalSoldAllTime: eff.totalSold,
+        effectiveStock: eff.effectiveStock,
+      };
+    }),
     countRows[0]?.count ?? 0,
     q
   ));
