@@ -862,6 +862,76 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     return 'xl:col-span-2'
   }
 
+  // Per-panel VERTICAL size (independent of width). Operator can
+  // pull the bottom-edge handle in edit mode (or pick a preset) to
+  // grow a chart panel taller without growing it wider — useful when
+  // the data has lots of vertical detail (e.g. the Top SKUs list, or
+  // the heatmap with many rows of SKU families). Persisted to its
+  // own localStorage key so we don't break existing width state.
+  //
+  // We DON'T use CSS row-span here. Row-span on a free-position grid
+  // creates dead cells and breaks the drag-reorder UX (the operator
+  // would drop a panel and watch it slide into empty space). Instead
+  // each panel has an explicit minHeight in pixels — short=240px,
+  // standard=340px, tall=480px, xtall=640px. The chart's own
+  // sectionChartHeight() respects the SAME bucket so the visualization
+  // fills the resized container instead of leaving whitespace.
+  type SectionHeight = 'short' | 'standard' | 'tall' | 'xtall'
+  const DEFAULT_SECTION_HEIGHTS: Record<SectionKey, SectionHeight> = {
+    trend: 'standard',
+    topSkus: 'standard',
+    heatmap: 'standard',
+    table: 'tall',
+  }
+  const SECTION_HEIGHTS_STORAGE_KEY = 'dashboard_section_heights_v1'
+  const [sectionHeights, setSectionHeights] = useState<Record<SectionKey, SectionHeight>>(() => {
+    if (typeof window === 'undefined') return DEFAULT_SECTION_HEIGHTS
+    try {
+      const raw = window.localStorage.getItem(SECTION_HEIGHTS_STORAGE_KEY)
+      if (!raw) return DEFAULT_SECTION_HEIGHTS
+      const parsed = JSON.parse(raw) as Partial<Record<SectionKey, SectionHeight>>
+      const merged = { ...DEFAULT_SECTION_HEIGHTS }
+      for (const key of Object.keys(DEFAULT_SECTION_HEIGHTS) as SectionKey[]) {
+        const v = parsed[key]
+        if (v === 'short' || v === 'standard' || v === 'tall' || v === 'xtall') merged[key] = v
+      }
+      return merged
+    } catch { return DEFAULT_SECTION_HEIGHTS }
+  })
+  useEffect(() => {
+    try { window.localStorage.setItem(SECTION_HEIGHTS_STORAGE_KEY, JSON.stringify(sectionHeights)) } catch { /* non-fatal */ }
+  }, [sectionHeights])
+  const setSectionHeight = (key: SectionKey, height: SectionHeight) =>
+    setSectionHeights((current) => ({ ...current, [key]: height }))
+  // Pixel minHeight for the section wrapper based on the height preset.
+  // Inline style — not a Tailwind class — so the drag-resize handle can
+  // smoothly snap between buckets without needing config tweaks.
+  const sectionMinHeightPx = (height: SectionHeight): number => {
+    if (height === 'short') return 240
+    if (height === 'tall') return 480
+    if (height === 'xtall') return 640
+    return 340
+  }
+  // Cycle width: compact → standard → wide → compact. Used by the
+  // right-edge drag handle so the operator can pull a panel "wider"
+  // one step at a time without leaving the mouse to click a preset.
+  const SIZE_CYCLE: SectionSize[] = ['compact', 'standard', 'wide']
+  const HEIGHT_CYCLE: SectionHeight[] = ['short', 'standard', 'tall', 'xtall']
+  const cycleSectionSize = (key: SectionKey, direction: 1 | -1) => {
+    setSectionSizes((current) => {
+      const idx = SIZE_CYCLE.indexOf(current[key])
+      const next = SIZE_CYCLE[(idx + direction + SIZE_CYCLE.length) % SIZE_CYCLE.length]
+      return { ...current, [key]: next }
+    })
+  }
+  const cycleSectionHeight = (key: SectionKey, direction: 1 | -1) => {
+    setSectionHeights((current) => {
+      const idx = HEIGHT_CYCLE.indexOf(current[key])
+      const next = HEIGHT_CYCLE[(idx + direction + HEIGHT_CYCLE.length) % HEIGHT_CYCLE.length]
+      return { ...current, [key]: next }
+    })
+  }
+
   // Operator-defined panel ORDER. The dashboard now renders all
   // four major panels through one xl:grid-cols-3 container; their
   // CSS `order` property comes from the operator's chosen sequence.
@@ -961,19 +1031,80 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     setDragOverPanel(null)
   }
 
-  // Reset the entire dashboard layout (order, sizes, hidden) to
-  // factory defaults. Surfaced as a button in edit-mode header.
+  // Reset the entire dashboard layout (order, sizes, heights, hidden)
+  // to factory defaults. Surfaced as a button in edit-mode header.
   const resetDashboardLayout = () => {
     setPanelOrder([...DEFAULT_PANEL_ORDER])
     setSectionSizes({ ...DEFAULT_SECTION_SIZES })
+    setSectionHeights({ ...DEFAULT_SECTION_HEIGHTS })
     setHiddenPanels(new Set())
   }
-  // Inner chart canvas height per size preset. Mirrors the width
-  // change so a wider panel feels visually proportional.
-  const sectionChartHeight = (size: SectionSize): string => {
-    if (size === 'compact') return 'h-[180px]'
-    if (size === 'wide') return 'h-[360px]'
-    return 'h-[260px]'
+
+  // Mouse-driven resize for the "freely customized — wider or longer"
+  // affordance the user asked for. Each panel has 3 grab regions in
+  // edit mode:
+  //   • right edge       → pulls horizontally between size presets
+  //   • bottom edge      → pulls vertically between height presets
+  //   • bottom-right     → both axes at once (diagonal)
+  //
+  // We snap to the existing presets (instead of free pixel values)
+  // because the grid still needs Tailwind col-span classes for the
+  // responsive xl:grid-cols-3 layout to work. A "free pixel width"
+  // would break responsiveness — the panel would overflow on smaller
+  // viewports. Snapping to presets keeps the grid healthy.
+  //
+  // Snap thresholds: ~120px of drag in either direction = 1 step.
+  // Less than that = no change, so the operator doesn't accidentally
+  // resize on a click-and-tiny-jitter.
+  const [resizingPanel, setResizingPanel] = useState<SectionKey | null>(null)
+  const handleResizeStart = (
+    key: SectionKey,
+    axis: 'x' | 'y' | 'xy',
+  ) => (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!editMode) return
+    event.preventDefault()
+    event.stopPropagation()
+    setResizingPanel(key)
+    const startX = event.clientX
+    const startY = event.clientY
+    const startSizeIdx = SIZE_CYCLE.indexOf(sectionSizes[key])
+    const startHeightIdx = HEIGHT_CYCLE.indexOf(sectionHeights[key])
+    const STEP_PX = 110
+    const onMove = (ev: MouseEvent) => {
+      if (axis !== 'y') {
+        const dx = ev.clientX - startX
+        const targetIdx = Math.max(0, Math.min(SIZE_CYCLE.length - 1, startSizeIdx + Math.round(dx / STEP_PX)))
+        const targetSize = SIZE_CYCLE[targetIdx]
+        setSectionSizes((current) => (current[key] === targetSize ? current : { ...current, [key]: targetSize }))
+      }
+      if (axis !== 'x') {
+        const dy = ev.clientY - startY
+        const targetIdx = Math.max(0, Math.min(HEIGHT_CYCLE.length - 1, startHeightIdx + Math.round(dy / STEP_PX)))
+        const targetHeight = HEIGHT_CYCLE[targetIdx]
+        setSectionHeights((current) => (current[key] === targetHeight ? current : { ...current, [key]: targetHeight }))
+      }
+    }
+    const onUp = () => {
+      setResizingPanel(null)
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    document.body.style.cursor = axis === 'x' ? 'ew-resize' : axis === 'y' ? 'ns-resize' : 'nwse-resize'
+    document.body.style.userSelect = 'none'
+  }
+  // Inner chart canvas height — now driven by the explicit per-panel
+  // height preset (not derived from width), since the user can now
+  // stretch a panel "longer" independently. Numbers slot just under
+  // the section's outer minHeight so chrome (header + padding) fits.
+  const sectionChartHeight = (height: SectionHeight): string => {
+    if (height === 'short') return 'h-[160px]'
+    if (height === 'tall') return 'h-[380px]'
+    if (height === 'xtall') return 'h-[540px]'
+    return 'h-[240px]'
   }
 
   // Favorited SKUs — the leftmost ☆ icon in each row toggles
@@ -1686,7 +1817,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
       <div className="mb-3 grid grid-cols-1 gap-3 xl:grid-cols-3">
         {!hiddenPanels.has('trend') || editMode ? (
         <section
-          style={{ order: panelOrder.indexOf('trend') }}
+          style={{ order: panelOrder.indexOf('trend'), minHeight: sectionMinHeightPx(sectionHeights.trend) }}
           draggable={editMode}
           onDragStart={handlePanelDragStart('trend')}
           onDragOver={handlePanelDragOver('trend')}
@@ -1697,10 +1828,40 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             editMode ? 'border-dashed border-brand/60' : 'border-line'
           } ${draggingPanel === 'trend' ? 'opacity-40' : ''} ${
             dragOverPanel === 'trend' ? 'ring-2 ring-brand ring-offset-2 ring-offset-bg' : ''
-          } ${hiddenPanels.has('trend') && editMode ? 'opacity-50' : ''} ${
-            editMode ? 'cursor-grab active:cursor-grabbing' : ''
-          }`}
+          } ${resizingPanel === 'trend' ? 'ring-2 ring-brand/60' : ''} ${
+            hiddenPanels.has('trend') && editMode ? 'opacity-50' : ''
+          } ${editMode ? 'cursor-grab active:cursor-grabbing' : ''}`}
         >
+          {editMode ? (
+            <>
+              {/* Right edge — drag horizontally to resize width */}
+              <div
+                draggable={false}
+                onMouseDown={handleResizeStart('trend', 'x')}
+                className="absolute right-0 top-0 z-10 h-full w-1.5 cursor-ew-resize transition hover:bg-brand/30"
+                title="Drag to resize width"
+                aria-label="Resize trend panel width"
+              />
+              {/* Bottom edge — drag vertically to resize height */}
+              <div
+                draggable={false}
+                onMouseDown={handleResizeStart('trend', 'y')}
+                className="absolute bottom-0 left-0 z-10 h-1.5 w-full cursor-ns-resize transition hover:bg-brand/30"
+                title="Drag to resize height"
+                aria-label="Resize trend panel height"
+              />
+              {/* Bottom-right corner — diagonal resize (both axes) */}
+              <div
+                draggable={false}
+                onMouseDown={handleResizeStart('trend', 'xy')}
+                className="absolute bottom-0 right-0 z-20 grid h-4 w-4 cursor-nwse-resize place-items-end pb-0.5 pr-0.5"
+                title="Drag corner to resize freely"
+                aria-label="Resize trend panel"
+              >
+                <span className="block h-2 w-2 border-b-2 border-r-2 border-brand" />
+              </div>
+            </>
+          ) : null}
           <div className="mb-3 flex items-start justify-between gap-3">
             <div>
               <h3 className="text-sm font-extrabold text-ink">Units Sold Trend</h3>
@@ -1747,7 +1908,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               ) : null}
             </div>
           </div>
-          <div className={sectionChartHeight(sectionSizes.trend)}>
+          <div className={sectionChartHeight(sectionHeights.trend)}>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={trend} margin={{ top: 8, right: 14, bottom: 4, left: -12 }}>
                 <CartesianGrid stroke="var(--line)" strokeDasharray="3 3" vertical={false} />
@@ -1774,7 +1935,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
 
         {!hiddenPanels.has('topSkus') || editMode ? (
         <section
-          style={{ order: panelOrder.indexOf('topSkus') }}
+          style={{ order: panelOrder.indexOf('topSkus'), minHeight: sectionMinHeightPx(sectionHeights.topSkus) }}
           draggable={editMode}
           onDragStart={handlePanelDragStart('topSkus')}
           onDragOver={handlePanelDragOver('topSkus')}
@@ -1785,10 +1946,19 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             editMode ? 'border-dashed border-brand/60' : 'border-line'
           } ${draggingPanel === 'topSkus' ? 'opacity-40' : ''} ${
             dragOverPanel === 'topSkus' ? 'ring-2 ring-brand ring-offset-2 ring-offset-bg' : ''
-          } ${hiddenPanels.has('topSkus') && editMode ? 'opacity-50' : ''} ${
-            editMode ? 'cursor-grab active:cursor-grabbing' : ''
-          }`}
+          } ${resizingPanel === 'topSkus' ? 'ring-2 ring-brand/60' : ''} ${
+            hiddenPanels.has('topSkus') && editMode ? 'opacity-50' : ''
+          } ${editMode ? 'cursor-grab active:cursor-grabbing' : ''}`}
         >
+          {editMode ? (
+            <>
+              <div draggable={false} onMouseDown={handleResizeStart('topSkus', 'x')} className="absolute right-0 top-0 z-10 h-full w-1.5 cursor-ew-resize transition hover:bg-brand/30" title="Drag to resize width" aria-label="Resize Top SKUs panel width" />
+              <div draggable={false} onMouseDown={handleResizeStart('topSkus', 'y')} className="absolute bottom-0 left-0 z-10 h-1.5 w-full cursor-ns-resize transition hover:bg-brand/30" title="Drag to resize height" aria-label="Resize Top SKUs panel height" />
+              <div draggable={false} onMouseDown={handleResizeStart('topSkus', 'xy')} className="absolute bottom-0 right-0 z-20 grid h-4 w-4 cursor-nwse-resize place-items-end pb-0.5 pr-0.5" title="Drag corner to resize freely" aria-label="Resize Top SKUs panel">
+                <span className="block h-2 w-2 border-b-2 border-r-2 border-brand" />
+              </div>
+            </>
+          ) : null}
           <div className="flex items-start justify-between gap-3 mb-3">
             <div>
               <h3 className="text-sm font-extrabold text-ink">Top SKUs (30d)</h3>
@@ -1849,7 +2019,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
 
         {!hiddenPanels.has('heatmap') || editMode ? (
         <section
-          style={{ order: panelOrder.indexOf('heatmap') }}
+          style={{ order: panelOrder.indexOf('heatmap'), minHeight: sectionMinHeightPx(sectionHeights.heatmap) }}
           draggable={editMode}
           onDragStart={handlePanelDragStart('heatmap')}
           onDragOver={handlePanelDragOver('heatmap')}
@@ -1860,10 +2030,19 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             editMode ? 'border-dashed border-brand/60' : 'border-line'
           } ${draggingPanel === 'heatmap' ? 'opacity-40' : ''} ${
             dragOverPanel === 'heatmap' ? 'ring-2 ring-brand ring-offset-2 ring-offset-bg' : ''
-          } ${hiddenPanels.has('heatmap') && editMode ? 'opacity-50' : ''} ${
-            editMode ? 'cursor-grab active:cursor-grabbing' : ''
-          }`}
+          } ${resizingPanel === 'heatmap' ? 'ring-2 ring-brand/60' : ''} ${
+            hiddenPanels.has('heatmap') && editMode ? 'opacity-50' : ''
+          } ${editMode ? 'cursor-grab active:cursor-grabbing' : ''}`}
         >
+          {editMode ? (
+            <>
+              <div draggable={false} onMouseDown={handleResizeStart('heatmap', 'x')} className="absolute right-0 top-0 z-10 h-full w-1.5 cursor-ew-resize transition hover:bg-brand/30" title="Drag to resize width" aria-label="Resize Heatmap panel width" />
+              <div draggable={false} onMouseDown={handleResizeStart('heatmap', 'y')} className="absolute bottom-0 left-0 z-10 h-1.5 w-full cursor-ns-resize transition hover:bg-brand/30" title="Drag to resize height" aria-label="Resize Heatmap panel height" />
+              <div draggable={false} onMouseDown={handleResizeStart('heatmap', 'xy')} className="absolute bottom-0 right-0 z-20 grid h-4 w-4 cursor-nwse-resize place-items-end pb-0.5 pr-0.5" title="Drag corner to resize freely" aria-label="Resize Heatmap panel">
+                <span className="block h-2 w-2 border-b-2 border-r-2 border-brand" />
+              </div>
+            </>
+          ) : null}
         <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
           <div>
             <h3 className="text-sm font-extrabold text-ink">Sales Performance Heatmap by SKU Family</h3>
@@ -1986,7 +2165,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
 
         {!hiddenPanels.has('table') || editMode ? (
         <section
-          style={{ order: panelOrder.indexOf('table') }}
+          style={{ order: panelOrder.indexOf('table'), minHeight: sectionMinHeightPx(sectionHeights.table) }}
           draggable={editMode}
           onDragStart={handlePanelDragStart('table')}
           onDragOver={handlePanelDragOver('table')}
@@ -1997,10 +2176,19 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             editMode ? 'border-dashed border-brand/60' : 'border-line'
           } ${draggingPanel === 'table' ? 'opacity-40' : ''} ${
             dragOverPanel === 'table' ? 'ring-2 ring-brand ring-offset-2 ring-offset-bg' : ''
-          } ${hiddenPanels.has('table') && editMode ? 'opacity-50' : ''} ${
-            editMode ? 'cursor-grab active:cursor-grabbing' : ''
-          }`}
+          } ${resizingPanel === 'table' ? 'ring-2 ring-brand/60' : ''} ${
+            hiddenPanels.has('table') && editMode ? 'opacity-50' : ''
+          } ${editMode ? 'cursor-grab active:cursor-grabbing' : ''}`}
         >
+          {editMode ? (
+            <>
+              <div draggable={false} onMouseDown={handleResizeStart('table', 'x')} className="absolute right-0 top-0 z-10 h-full w-1.5 cursor-ew-resize transition hover:bg-brand/30" title="Drag to resize width" aria-label="Resize SKU Summary table width" />
+              <div draggable={false} onMouseDown={handleResizeStart('table', 'y')} className="absolute bottom-0 left-0 z-10 h-1.5 w-full cursor-ns-resize transition hover:bg-brand/30" title="Drag to resize height" aria-label="Resize SKU Summary table height" />
+              <div draggable={false} onMouseDown={handleResizeStart('table', 'xy')} className="absolute bottom-0 right-0 z-20 grid h-4 w-4 cursor-nwse-resize place-items-end pb-0.5 pr-0.5" title="Drag corner to resize freely" aria-label="Resize SKU Summary table">
+                <span className="block h-2 w-2 border-b-2 border-r-2 border-brand" />
+              </div>
+            </>
+          ) : null}
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
           <div>
             <h3 className="text-sm font-extrabold text-ink">SKU Performance Summary</h3>
@@ -2482,7 +2670,13 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             </span>
             <span className="inline-flex items-center gap-2">
               <span className="rounded-md bg-brand/15 px-1.5 py-0.5 text-2xs font-bold text-brand">⅓ ⅔ Full</span>
-              Resize per panel
+              Resize width via presets
+            </span>
+            <span className="inline-flex items-center gap-2">
+              <span className="inline-grid h-4 w-4 place-items-end rounded-sm bg-brand/15 pb-0.5 pr-0.5">
+                <span className="block h-2 w-2 border-b-2 border-r-2 border-brand" />
+              </span>
+              Drag right edge / bottom edge / corner to stretch freely
             </span>
           </div>
           <span className="text-2xs text-ink-3">Layout auto-saves to this browser.</span>
