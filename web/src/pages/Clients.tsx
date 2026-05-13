@@ -27,6 +27,7 @@
 // cleanup pass can delete them if desired.
 
 import { lazy, Suspense, useMemo, useState } from 'react'
+import { AnimatePresence } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
 // 2026-05-13: migrated icons from lucide-react → react-icons (Heroicons
 // v2, solid variants). Visual style is noticeably different from
@@ -62,6 +63,7 @@ import {
   HiMagnifyingGlass,
 } from 'react-icons/hi2'
 import { Button } from '../components/ui/Button'
+import { ConfirmModal } from '../components/ui/ConfirmModal'
 import { Table, type TableColumn } from '../components/ui/Table'
 import {
   useClientsData,
@@ -88,6 +90,22 @@ export default function Clients() {
   // ref + state so React re-renders Table when the anchor mounts.
   // Same pattern used by Inventory and Packages.
   const [columnsAnchor, setColumnsAnchor] = useState<HTMLElement | null>(null)
+  // 2026-05-13: row-action confirmations. Each holds the targeted
+  // row (so the modal can show the client's name in the prompt) or
+  // null when the modal is closed. Native confirm()/alert() were
+  // replaced with these in-app modals so the dialog matches the rest
+  // of the app's design + animations.
+  //   confirmBackfill — "Assign matching orders" magic action
+  //   confirmDelete   — destructive client deletion
+  //   resultDialog    — generic post-action toast (success/error)
+  //                     shown after backfill / sync finishes
+  const [confirmBackfill, setConfirmBackfill] = useState<Row | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<Row | null>(null)
+  const [resultDialog, setResultDialog] = useState<{
+    title: string
+    description: string
+    tone: 'default' | 'danger' | 'magic' | 'info'
+  } | null>(null)
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all')
   const {
     clients,
@@ -244,7 +262,7 @@ export default function Clients() {
           <span className="text-[11px] text-ink-3 italic">none</span>
         ) : (
           <div className="flex items-center gap-1 flex-wrap">
-            <HiBuildingStorefront size={11} className="text-indigo-500 flex-shrink-0" />
+            <HiBuildingStorefront size={13} className="text-indigo-500 flex-shrink-0" />
             {row.storeIds.slice(0, 3).map((sid) => (
               <span key={sid} className="font-mono text-[10.5px] font-semibold px-1.5 py-0.5 rounded bg-surface-2 text-ink-2 ring-1 ring-line/70" title={`Store ${sid}`}>
                 {sid}
@@ -318,8 +336,10 @@ export default function Clients() {
     {
       key: 'actions',
       label: '',
-      width: 110,
-      minWidth: 90,
+      // 2026-05-13: bumped width 110 → 140 and minWidth 90 → 120 to
+      // accommodate the larger 36×36 row-action buttons (was 28×28).
+      width: 140,
+      minWidth: 120,
       align: 'right',
       // 2026-05-13: removed pinned + hideable:false per operator
       // request — every column should be toggleable AND draggable,
@@ -328,8 +348,15 @@ export default function Clients() {
       // this by accident.
       render: (row) => (
         <div className="inline-flex items-center gap-0">
+          {/* 2026-05-13: bumped icons from size=12 → size=16 and
+              relied on the larger RowAction button (w-9 h-9) so the
+              tap target hits modern UI guidelines (~32px+) instead
+              of the previous tight 28px target. Edit still opens the
+              ClientModal directly (no confirmation needed for non-
+              destructive actions). Backfill and Delete now route
+              through ConfirmModal — see the modal block below. */}
           <RowAction tone="edit" title="Edit" onClick={(e) => { e.stopPropagation(); setEditing(row) }}>
-            <HiPencilSquare size={12} />
+            <HiPencilSquare size={16} />
           </RowAction>
           <RowAction
             tone="magic"
@@ -337,16 +364,10 @@ export default function Clients() {
             disabled={!row.storeIds.length || backfill.isPending}
             onClick={(e) => {
               e.stopPropagation()
-              backfill.mutate(
-                { id: row.id, overwrite: false },
-                {
-                  onSuccess: (r) => alert(r.message ?? `Assigned ${r.updated} orders`),
-                  onError: (err) => alert(`Backfill failed: ${(err as Error).message}`),
-                },
-              )
+              setConfirmBackfill(row)
             }}
           >
-            <HiSparkles size={12} />
+            <HiSparkles size={16} />
           </RowAction>
           <RowAction
             title={`Delete "${row.name}"`}
@@ -354,12 +375,10 @@ export default function Clients() {
             disabled={remove.isPending}
             onClick={(e) => {
               e.stopPropagation()
-              if (confirm(`Delete client "${row.name}"? This also deletes their billing config.`)) {
-                remove.mutate(row.id)
-              }
+              setConfirmDelete(row)
             }}
           >
-            <HiTrash size={12} />
+            <HiTrash size={16} />
           </RowAction>
         </div>
       ),
@@ -466,11 +485,119 @@ export default function Clients() {
         />
       </div>
 
-      {editing ? (
-        <Suspense fallback={null}>
-          <ClientModal existing={editing} onClose={() => setEditing(null)} />
-        </Suspense>
-      ) : null}
+      {/* 2026-05-13: ClientModal now wrapped in AnimatePresence so
+          the modal animates IN on mount and OUT on unmount. The
+          modal's outer + inner divs were converted to motion.divs in
+          the same commit so AnimatePresence has motion children to
+          drive enter/exit. Suspense stays outside AnimatePresence
+          because the lazy chunk fetch only runs once per session —
+          subsequent opens reuse the cached module and animate
+          normally. */}
+      <AnimatePresence>
+        {editing ? (
+          <Suspense fallback={null}>
+            <ClientModal existing={editing} onClose={() => setEditing(null)} />
+          </Suspense>
+        ) : null}
+      </AnimatePresence>
+
+      {/* Backfill confirmation — explains what the action will do
+          (assign matching orders by storeId) so the operator isn't
+          surprised by what they're about to trigger. Result lands
+          in the shared resultDialog state. */}
+      <ConfirmModal
+        open={!!confirmBackfill}
+        tone="magic"
+        title={`Assign orders to "${confirmBackfill?.name ?? ''}"?`}
+        description={
+          <>
+            This will scan every order whose storeId matches one of{' '}
+            <span className="font-mono font-semibold text-ink">
+              {confirmBackfill?.storeIds.slice(0, 3).join(', ')}
+              {confirmBackfill && confirmBackfill.storeIds.length > 3
+                ? ` +${confirmBackfill.storeIds.length - 3}`
+                : ''}
+            </span>{' '}
+            and assign them to this client. Existing client assignments
+            won't be overwritten.
+          </>
+        }
+        confirmLabel="Assign orders"
+        loading={backfill.isPending}
+        onCancel={() => {
+          if (!backfill.isPending) setConfirmBackfill(null)
+        }}
+        onConfirm={() => {
+          if (!confirmBackfill) return
+          backfill.mutate(
+            { id: confirmBackfill.id, overwrite: false },
+            {
+              onSuccess: (r) => {
+                setConfirmBackfill(null)
+                setResultDialog({
+                  title: 'Orders assigned',
+                  description: r.message ?? `Assigned ${r.updated} orders to ${confirmBackfill.name}.`,
+                  tone: 'magic',
+                })
+              },
+              onError: (err) => {
+                setConfirmBackfill(null)
+                setResultDialog({
+                  title: 'Backfill failed',
+                  description: (err as Error).message,
+                  tone: 'danger',
+                })
+              },
+            },
+          )
+        }}
+      />
+
+      {/* Delete confirmation — destructive, surfaces the full
+          consequence text (billing config also goes) so operator
+          knows what they're agreeing to. tone=danger drives a rose
+          icon + rose confirm button. */}
+      <ConfirmModal
+        open={!!confirmDelete}
+        tone="danger"
+        title={`Delete "${confirmDelete?.name ?? ''}"?`}
+        description="This also deletes their billing config and removes the client from any carrier-account assignments. This action cannot be undone."
+        confirmLabel="Delete client"
+        loading={remove.isPending}
+        onCancel={() => {
+          if (!remove.isPending) setConfirmDelete(null)
+        }}
+        onConfirm={() => {
+          if (!confirmDelete) return
+          remove.mutate(confirmDelete.id, {
+            onSuccess: () => {
+              setConfirmDelete(null)
+            },
+            onError: (err) => {
+              setConfirmDelete(null)
+              setResultDialog({
+                title: 'Delete failed',
+                description: (err as Error).message,
+                tone: 'danger',
+              })
+            },
+          })
+        }}
+      />
+
+      {/* Result dialog — shared single-button "OK" modal that any
+          row-action mutation result can populate. Replaces the
+          previous alert() calls so success/error feedback stays in
+          the same visual language as the rest of the app. */}
+      <ConfirmModal
+        open={!!resultDialog}
+        tone={resultDialog?.tone ?? 'default'}
+        title={resultDialog?.title ?? ''}
+        description={resultDialog?.description}
+        acknowledgeOnly
+        onCancel={() => setResultDialog(null)}
+        onConfirm={() => setResultDialog(null)}
+      />
 
       {confirmActiveToggleDialog}
     </div>
@@ -524,7 +651,7 @@ function RowAction({ children, onClick, title, disabled, tone }: {
       onClick={onClick}
       title={title}
       disabled={disabled}
-      className={`w-7 h-7 inline-flex items-center justify-center rounded disabled:opacity-30 disabled:cursor-not-allowed transition ${toneClasses}`}
+      className={`w-9 h-9 inline-flex items-center justify-center rounded-lg disabled:opacity-30 disabled:cursor-not-allowed transition ${toneClasses}`}
     >
       {children}
     </button>

@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { motion } from 'framer-motion';
 import { X } from 'lucide-react';
 import { api } from '../lib/api';
 import { Button } from './ui/Button';
@@ -129,15 +130,31 @@ export default function ClientModal({
     mutation.mutate(payload);
   };
 
+  // 2026-05-13: backdrop + panel are motion.div so AnimatePresence
+  // at the consumer (pages/Clients.tsx) can animate enter/exit. Same
+  // animation contract as the ConfirmModal: backdrop fades 0→1 over
+  // 180ms; panel scales 0.96→1 + slides up 8px on a spring. Exit
+  // reverses both. The blur on the backdrop adds a soft "depth" cue
+  // so the modal reads as floating above the page.
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/45"
+    <motion.div
+      key="client-modal-backdrop"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.18 }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-ink/55 backdrop-blur-sm"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
     >
-      <div
-        className="w-[460px] max-w-full bg-white rounded-modal shadow-lg overflow-hidden"
+      <motion.div
+        key="client-modal-panel"
+        initial={{ opacity: 0, scale: 0.96, y: 8 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.97, y: 4 }}
+        transition={{ type: 'spring', stiffness: 380, damping: 28 }}
+        className="w-[460px] max-w-full bg-white rounded-modal shadow-[0_20px_60px_-12px_rgba(15,23,42,0.4),0_8px_24px_-8px_rgba(15,23,42,0.18)] overflow-hidden ring-1 ring-line"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 px-5 py-3 border-b border-line">
@@ -329,7 +346,7 @@ export default function ClientModal({
             </Button>
           </div>
         </form>
-      </div>
-    </div>
+      </motion.div>
+    </motion.div>
   );
 }
