@@ -412,13 +412,15 @@ function getInventorySortValue(row: InventoryItemDto, key: InventorySortKey) {
     case 'package':
       return getInventoryPackageSortLabel(row)
     case 'stock':
-      return toSortNumber(row.currentStock)
+      // Sort by the displayed value (effective stock) so the
+      // operator's "sort by stock" matches what they see.
+      return toSortNumber(row.effectiveStock ?? row.currentStock)
     case 'sold30':
       return toSortNumber(row.soldLast30Days)
     case 'unitsPerPack':
       return toSortNumber(row.units_per_pack)
     case 'totalUnits':
-      return toSortNumber(row.currentStock) * Math.max(1, toSortNumber(row.units_per_pack))
+      return toSortNumber(row.effectiveStock ?? row.currentStock) * Math.max(1, toSortNumber(row.units_per_pack))
     case 'min':
       return toSortNumber(row.minStock)
     case 'status':
@@ -2983,10 +2985,35 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                                         )}
                                       </td>
                                     )
-                                  case 'stock':
+                                  case 'stock': {
+                                    // 2026-05-13: STOCK now shows the
+                                    // operator-correct value computed
+                                    // backend-side as `total_received −
+                                    // total_sold_all_time` (effectiveStock),
+                                    // not the cached stockQty / currentStock.
+                                    // currentStock kept available as a
+                                    // tooltip fallback so power users can
+                                    // see the cached number if they ever
+                                    // need to diff against the ledger.
+                                    const displayStock = row.effectiveStock ?? row.currentStock
+                                    const tooltipParts = [
+                                      `Received: ${row.totalReceived ?? 0}`,
+                                      `Sold (all time): ${row.totalSoldAllTime ?? 0}`,
+                                      `Effective stock: ${displayStock}`,
+                                    ]
+                                    if (typeof row.effectiveStock === 'number' && row.effectiveStock !== row.currentStock) {
+                                      tooltipParts.push(`Cached stockQty: ${row.currentStock}`)
+                                    }
                                     return (
-                                      <td key="stock" style={{ textAlign: 'center', fontWeight: 700, fontSize: 13, color: row.currentStock <= 0 ? 'var(--red)' : 'var(--text)' }}>{row.currentStock}</td>
+                                      <td
+                                        key="stock"
+                                        title={tooltipParts.join('\n')}
+                                        style={{ textAlign: 'center', fontWeight: 700, fontSize: 13, color: displayStock <= 0 ? 'var(--red)' : 'var(--text)' }}
+                                      >
+                                        {displayStock}
+                                      </td>
                                     )
+                                  }
                                   case 'sold30':
                                     return (
                                       <td key="sold30" style={{ textAlign: 'center', fontWeight: 700, fontSize: 12, color: (row.soldLast30Days ?? 0) > 0 ? 'var(--ss-blue)' : 'var(--text3)' }}>{row.soldLast30Days ?? 0}</td>
@@ -2997,10 +3024,15 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                                         {row.units_per_pack > 1 ? <span style={{ background: 'var(--ss-blue-bg)', color: 'var(--ss-blue)', fontSize: 10.5, fontWeight: 700, padding: '1px 6px', borderRadius: 4 }}>×{row.units_per_pack}</span> : '—'}
                                       </td>
                                     )
-                                  case 'totalUnits':
+                                  case 'totalUnits': {
+                                    // Use effective stock here too so the
+                                    // totalUnits column (effective ×
+                                    // units_per_pack) stays consistent.
+                                    const displayStock = row.effectiveStock ?? row.currentStock
                                     return (
-                                      <td key="totalUnits" style={{ textAlign: 'center', fontSize: 12, color: 'var(--text2)' }}>{row.units_per_pack > 1 ? <span style={{ fontWeight: 700 }}>{row.currentStock * row.units_per_pack}</span> : '—'}</td>
+                                      <td key="totalUnits" style={{ textAlign: 'center', fontSize: 12, color: 'var(--text2)' }}>{row.units_per_pack > 1 ? <span style={{ fontWeight: 700 }}>{displayStock * row.units_per_pack}</span> : '—'}</td>
                                     )
+                                  }
                                   case 'min':
                                     return (
                                       <td key="min" style={{ textAlign: 'center', color: 'var(--text3)', fontSize: 12 }}>{row.minStock}</td>

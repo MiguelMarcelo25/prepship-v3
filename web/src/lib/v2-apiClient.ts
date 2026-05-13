@@ -278,6 +278,12 @@ function normalizeInventoryDto(row: any, clientNamesById?: Map<number, string>):
   const width = parseFiniteNumber(row.packageWidth ?? row.width) ?? 0;
   const height = parseFiniteNumber(row.packageHeight ?? row.height) ?? 0;
   const soldLast30Days = parseFiniteNumber(row.soldLast30Days ?? row.last30DaysSold) ?? 0;
+  // 2026-05-13: effective-stock fields from the new /inventory route
+  // computation. Parsed defensively — undefined when the endpoint
+  // (e.g. older deploy) doesn't return them.
+  const totalReceived = parseFiniteNumber(row.totalReceived)
+  const totalSoldAllTime = parseFiniteNumber(row.totalSoldAllTime)
+  const effectiveStock = parseFiniteNumber(row.effectiveStock)
   const clientId = parseFiniteNumber(row.clientId ?? row.client_id) ?? 0;
   const clientName =
     row.clientName ??
@@ -310,6 +316,9 @@ function normalizeInventoryDto(row: any, clientNamesById?: Map<number, string>):
     parentName: row.parentName ?? null,
     lastMovement: row.lastMovement ?? null,
     soldLast30Days,
+    totalReceived,
+    totalSoldAllTime,
+    effectiveStock,
   };
 }
 

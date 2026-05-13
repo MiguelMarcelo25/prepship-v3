@@ -985,6 +985,17 @@ export interface InventoryItemDto {
   imageUrl: string | null;
   baseUnits: number;
   status: 'ok' | 'low' | 'out';
+  // 2026-05-13: effective-stock fields surface "what's REALLY on
+  // hand" computed from the source-of-truth (received ledger −
+  // total sold across all orders), independent of the cached
+  // stockQty field. Used by the Inventory page's STOCK column so
+  // the value matches operator expectations ("sold 85 → stock −85").
+  // Optional because the backend exposes them only on the list
+  // endpoint right now; other endpoints (POST/PATCH responses) may
+  // not include them.
+  totalReceived?: number;
+  totalSoldAllTime?: number;
+  effectiveStock?: number;
 }
 
 export interface UseInventoryOptions {
