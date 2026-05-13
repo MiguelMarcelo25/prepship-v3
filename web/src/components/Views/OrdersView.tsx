@@ -6190,6 +6190,15 @@ export default function OrdersView({
     const selectedPanelAccountLabel = panelIsTestOrder
       ? TEST_SHIPPING_ACCOUNT_LABEL
       : getShipAccountLabelById(shippingAccounts, panelForm.shipAccountId) ?? getShipAccountDisplay(panelOrder, shippingAccounts)
+    const panelPreviewRate = panelRatePreview[0] ?? null
+    const panelPreviewProviderId = panelPreviewRate ? toProviderAccountId(panelPreviewRate.shippingProviderId) : null
+    const panelPreviewAccountLabel = panelPreviewRate
+      ? normalizeShippingAccountName(panelPreviewRate.carrierNickname) ??
+        (panelPreviewProviderId != null
+          ? getShipAccountLabelById(shippingAccounts, String(panelPreviewProviderId))
+          : null) ??
+        formatCarrierCode(toStringValue(panelPreviewRate.carrierCode))
+      : null
     const panelTestRate = panelIsTestOrder ? (panelRatePreview[0] ?? panelOrder.bestRate ?? buildTestMockRate()) : null
     const panelTestRateAmount = panelTestRate
       ? (toNumberValue(panelTestRate.shipmentCost) ?? 0) + (toNumberValue(panelTestRate.otherCost) ?? 0)
@@ -6815,13 +6824,13 @@ export default function OrdersView({
                       <Loader2 size={13} strokeWidth={2.5} className="animate-spin text-brand" />
                       <span className="text-[12px] font-semibold text-brand">Calculating best rate…</span>
                     </div>
-                  ) : panelRatePreview[0] ? (
+                  ) : panelPreviewRate ? (
                     <>
                       <span className="text-[18px] font-bold tabular-nums leading-none text-brand font-display">
-                        {formatMoney((toNumberValue(panelRatePreview[0].shipmentCost) ?? 0) + (toNumberValue(panelRatePreview[0].otherCost) ?? 0))}
+                        {formatMoney((toNumberValue(panelPreviewRate.shipmentCost) ?? 0) + (toNumberValue(panelPreviewRate.otherCost) ?? 0))}
                       </span>
                       <span className="text-[11px] text-ink-3 leading-snug truncate">
-                        {formatCarrierCode(toStringValue(panelRatePreview[0].carrierCode))} · {formatServiceCode(toStringValue(panelRatePreview[0].serviceCode))}
+                        {panelPreviewAccountLabel} · {formatServiceCode(toStringValue(panelPreviewRate.serviceCode))}
                       </span>
                     </>
                   ) : panelOrder.bestRate ? (
