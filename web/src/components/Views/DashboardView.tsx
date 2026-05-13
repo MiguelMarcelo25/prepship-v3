@@ -2307,14 +2307,16 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           <div className="mb-3 flex items-start justify-between gap-3">
             <div>
               <h3 className="text-sm font-extrabold text-ink">Units Sold Trend</h3>
+              {/* 2026-05-13: removed the "Same day, last month"
+                  legend entry per operator request. The prior-period
+                  data is still fetched (priorSales, priorAgg) because
+                  the heatmap baseline + KPI vs-prior arrows depend on
+                  it elsewhere on the dashboard — we just stopped
+                  rendering it on this chart. */}
               <div className="mt-2 flex items-center gap-5 text-2xs text-ink-3 flex-wrap">
                 <span className="inline-flex items-center gap-2">
                   <span className="h-0.5 w-8 rounded-full bg-brand" />
                   This day (units)
-                </span>
-                <span className="inline-flex items-center gap-2">
-                  <span className="h-0.5 w-8 rounded-full border-t border-dashed border-ink-3" />
-                  Same day, last month
                 </span>
                 <span className="inline-flex items-center gap-2">
                   <span className="h-0.5 w-8 rounded-full bg-emerald-500" />
@@ -2409,9 +2411,14 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                 />
                 <Tooltip
                   labelFormatter={formatDayLabel}
+                  // 2026-05-13: 'prior' branch removed — that line was
+                  // taken off the chart per operator request, so there's
+                  // no longer a hover entry for it. Only the two visible
+                  // series ('current' units and 'currentRevenue' $)
+                  // need a tooltip formatter case.
                   formatter={(value: number, name: string) => {
                     if (name === 'currentRevenue') return [`$${formatInt(num(value))}`, 'Order value']
-                    return [formatInt(num(value)), name === 'current' ? 'This day (units)' : 'Same day, last month (units)']
+                    return [formatInt(num(value)), 'This day (units)']
                   }}
                   contentStyle={{
                     background: 'var(--surface)',
@@ -2421,7 +2428,12 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                     fontSize: 12,
                   }}
                 />
-                <Line yAxisId="units" type="monotone" dataKey="prior" stroke="var(--text3)" strokeWidth={1.5} strokeDasharray="4 4" dot={false} activeDot={{ r: 4 }} />
+                {/* 2026-05-13: removed the prior-period <Line> per
+                    operator request. The data is still on each trend
+                    point (point.prior) but nothing renders it on this
+                    chart now. Heatmap + KPI vs-prior arrows still
+                    consume priorSales elsewhere — no data plumbing
+                    change needed. */}
                 <Line yAxisId="units" type="monotone" dataKey="current" stroke="var(--brand)" strokeWidth={2.25} dot={{ r: 2 }} activeDot={{ r: 5, strokeWidth: 2, stroke: 'var(--surface)' }} />
                 <Line yAxisId="revenue" type="monotone" dataKey="currentRevenue" stroke="rgb(16 185 129)" strokeWidth={2} dot={{ r: 2 }} activeDot={{ r: 5, strokeWidth: 2, stroke: 'var(--surface)' }} />
               </LineChart>
