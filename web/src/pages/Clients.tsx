@@ -244,7 +244,7 @@ export default function Clients() {
           <span className="text-[11px] text-ink-3 italic">none</span>
         ) : (
           <div className="flex items-center gap-1 flex-wrap">
-            <HiBuildingStorefront size={11} className="text-ink-3 flex-shrink-0" />
+            <HiBuildingStorefront size={11} className="text-indigo-500 flex-shrink-0" />
             {row.storeIds.slice(0, 3).map((sid) => (
               <span key={sid} className="font-mono text-[10.5px] font-semibold px-1.5 py-0.5 rounded bg-surface-2 text-ink-2 ring-1 ring-line/70" title={`Store ${sid}`}>
                 {sid}
@@ -328,10 +328,11 @@ export default function Clients() {
       // this by accident.
       render: (row) => (
         <div className="inline-flex items-center gap-0">
-          <RowAction title="Edit" onClick={(e) => { e.stopPropagation(); setEditing(row) }}>
+          <RowAction tone="edit" title="Edit" onClick={(e) => { e.stopPropagation(); setEditing(row) }}>
             <HiPencilSquare size={12} />
           </RowAction>
           <RowAction
+            tone="magic"
             title={!row.storeIds.length ? 'Add at least one storeId first' : 'Assign matching orders to this client'}
             disabled={!row.storeIds.length || backfill.isPending}
             onClick={(e) => {
@@ -388,7 +389,7 @@ export default function Clients() {
               stores" instead of inside the table card below. */}
           <span ref={setColumnsAnchor} className="inline-flex items-center" />
           <Button variant="outline" size="sm" disabled={sync.isPending} onClick={() => sync.mutate()}>
-            <HiArrowPath size={13} className={sync.isPending ? 'animate-spin' : ''} />
+            <HiArrowPath size={13} className={`text-emerald-600 ${sync.isPending ? 'animate-spin' : ''}`} />
             {sync.isPending ? 'Syncing…' : 'Sync stores'}
           </Button>
           <Button variant="primary" size="sm" onClick={() => navigate('/settings/store')}>
@@ -476,26 +477,54 @@ export default function Clients() {
   )
 }
 
-// Small icon-only button used inside the actions column. Hover tint
-// is neutral by default (line/ink); pass `tone="danger"` for the
-// destructive Delete action so it picks up a rose hover state.
+// Small icon-only button used inside the actions column.
+//
+// 2026-05-13: extended the `tone` prop from a single 'danger' opt-in
+// to a three-way union ('edit' | 'magic' | 'danger') so each row
+// action carries an at-a-glance color cue. Color picks chosen to be
+// semantically meaningful AND visually distinct so operators can
+// scan a long list and locate the right action quickly:
+//
+//   edit   → sky-600   (calm, informational blue — the "modify"
+//                       color used in most dashboard UIs)
+//   magic  → violet-600 (matches HiSparkles' "magic auto-assign"
+//                        semantic — purple = AI/automation in 2026)
+//   danger → rose-500  (destructive — stays distinct from any
+//                       sortable-cancellation-count text-rose-700
+//                       used elsewhere so they don't visually
+//                       compete; lighter rose works at icon scale)
+//
+// idle = colored, hover = darker shade of same hue + faint matching
+// background tint. Coordinating both idle and hover keeps the
+// affordance consistent — operators don't have to hover to find out
+// what each icon does, but hover still gives clear "I'm targeting
+// this one" feedback.
+//
 // stopPropagation lives on the parent column's onClick so the row's
 // onRowClick (open modal) doesn't also fire when the operator just
-// wanted to delete a row.
+// wanted to delete or edit a row.
 function RowAction({ children, onClick, title, disabled, tone }: {
   children: React.ReactNode
   onClick: (e: React.MouseEvent) => void
   title: string
   disabled?: boolean
-  tone?: 'danger'
+  tone?: 'edit' | 'magic' | 'danger'
 }) {
+  const toneClasses =
+    tone === 'edit'
+      ? 'text-sky-600 hover:bg-sky-50 hover:text-sky-700'
+      : tone === 'magic'
+        ? 'text-violet-600 hover:bg-violet-50 hover:text-violet-700'
+        : tone === 'danger'
+          ? 'text-rose-500 hover:bg-rose-50 hover:text-rose-600'
+          : 'text-ink-3 hover:bg-line/60 hover:text-ink'
   return (
     <button
       type="button"
       onClick={onClick}
       title={title}
       disabled={disabled}
-      className={`w-7 h-7 inline-flex items-center justify-center rounded text-ink-3 hover:bg-line/60 hover:text-ink disabled:opacity-30 disabled:cursor-not-allowed transition ${tone === 'danger' ? 'hover:text-rose-600 hover:bg-rose-50' : ''}`}
+      className={`w-7 h-7 inline-flex items-center justify-center rounded disabled:opacity-30 disabled:cursor-not-allowed transition ${toneClasses}`}
     >
       {children}
     </button>
