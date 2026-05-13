@@ -6,7 +6,7 @@
   "installCommand": "npm install",
   "rewrites": [
     {
-      "source": "/api/:path((?!carrier-accounts|carriers/|store-accounts|oauth/|debug-env|migrate-from|admin/).+)",
+      "source": "/api/:path((?!carrier-accounts|carriers/|store-accounts|oauth/|debug-env|migrate-from|admin/|cron/).+)",
       "destination": "https://prepshipv4-api-l5xc.onrender.com/:path"
     },
     {
@@ -18,5 +18,11 @@
       "destination": "/api/oauth/:path*"
     },
     { "source": "/((?!assets/).*)", "destination": "/index.html" }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/sync-walmart-fees",
+      "schedule": "0 9 * * *"
+    }
   ]
 }

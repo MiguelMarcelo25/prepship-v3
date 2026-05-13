@@ -18,7 +18,7 @@ import { ToastContext } from '../../contexts/ToastContext'
 import { useMarkups } from '../../contexts/MarkupsContext'
 // Shared carrier badge — official UPS/USPS SVG logos with fallback pills.
 import CarrierBadge from '../CarrierBadge'
-import { SortableHeader, nextSortState, sortRows } from '../SortableTable'
+import { Table, type TableColumn } from '../ui/Table'
 import { useShippingAccounts } from '../../hooks'
 import type { DirectCarrierRateError } from '../../lib/v2-apiClient'
 import {
@@ -28,8 +28,8 @@ import {
   buildRatesMetaLabel,
   buildRatesSummary,
   getAvailableRates,
-  getCarrierBadgeClass,
   getRatesValidationState,
+  type RateRowView,
   type RatesEmptyState,
   type RatesFormState,
 } from './rates-parity'
@@ -58,7 +58,7 @@ function formatMoney(amount: number) {
   return `$${amount.toFixed(2)}`
 }
 
-function LabelCostCell({ row }: { row: ReturnType<typeof buildRateRows>[number] }) {
+function LabelCostCell({ row }: { row: RateRowView }) {
   const hasMarkup = row.profit >= 0.005
   return (
     <div
@@ -114,38 +114,106 @@ export default function RatesView() {
   const toastContext = useContext(ToastContext)
   const [form, setForm] = useState<RatesFormState>(DEFAULT_FORM)
   const [resultState, setResultState] = useState<RatesResultState>({ kind: 'idle' })
-  const [rateSort, setRateSort] = useState(null)
   const { accounts: shippingAccounts, isLoading: accountsLoading } = useShippingAccounts()
   const { markups } = useMarkups()
 
   const rows = resultState.kind === 'table'
     ? buildRateRows(resultState.rates, shippingAccounts, markups)
     : []
-  const sortedRows = useMemo(() => sortRows(
-    rows,
-    rateSort,
-    (row, key) => {
-      switch (key) {
-        case 'carrier':
-          return row.carrierCode
-        case 'account':
-          return row.carrierNickname
-        case 'source':
-          return `${row.rateSourceLabel} ${row.rateSourceDetail ?? ''}`
-        case 'service':
-          return row.serviceLabel
-        case 'labelCost':
-          return row.yourPrice
-        default:
-          return ''
-      }
+  const rateColumns = useMemo<TableColumn<RateRowView>[]>(() => [
+    {
+      key: 'carrier',
+      label: 'Carrier',
+      width: 84,
+      minWidth: 76,
+      sortable: true,
+      hideable: false,
+      sortValue: (row) => row.carrierCode,
+      render: (row) => <CarrierBadge code={row.carrierCode} size="sm" />,
     },
-    (row) => `${row.carrierCode}-${row.carrierNickname ?? ''}-${row.serviceLabel}`,
-  ), [rateSort, rows])
-
-  const handleRateSort = (key) => {
-    setRateSort((current) => nextSortState(current, key, key === 'labelCost' ? 'asc' : 'asc'))
-  }
+    {
+      key: 'account',
+      label: 'Account',
+      width: 140,
+      minWidth: 110,
+      sortable: true,
+      sortValue: (row) => row.carrierNickname ?? '',
+      render: (row) => (
+        <span className={row.carrierNickname ? 'text-ink-2 font-semibold' : 'text-ink-4'}>
+          {row.carrierNickname || '-'}
+        </span>
+      ),
+    },
+    {
+      key: 'source',
+      label: 'Rate Source',
+      width: 240,
+      minWidth: 180,
+      sortable: true,
+      sortValue: (row) => `${row.rateSourceLabel} ${row.rateSourceDetail ?? ''}`,
+      render: (row) => (
+        <div className="max-w-[240px]">
+          <div className="text-[11.5px] font-bold leading-tight text-ink-2">{row.rateSourceLabel}</div>
+          {row.rateSourceDetail ? (
+            <div className={`mt-1 inline-flex max-w-full truncate rounded-md px-2 py-1 text-[10.5px] font-bold leading-tight ring-1 ${row.rateSourceTone}`} title={row.rateSourceDetail}>
+              {row.rateSourceDetail}
+            </div>
+          ) : null}
+        </div>
+      ),
+    },
+    {
+      key: 'service',
+      label: 'Service',
+      width: 300,
+      minWidth: 220,
+      sortable: true,
+      sortValue: (row) => row.serviceLabel,
+      render: (row) => (
+        <div className="min-w-0">
+          <span>{row.serviceLabel}</span>
+          {row.isBest ? (
+            <span className="ml-2 inline-flex items-center gap-1 text-2xs font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded-md">
+              <Award size={10} strokeWidth={2.75} />
+              CHEAPEST
+            </span>
+          ) : null}
+        </div>
+      ),
+    },
+    {
+      key: 'labelCost',
+      label: 'Label Cost',
+      width: 150,
+      minWidth: 130,
+      align: 'right',
+      sortable: true,
+      hideable: false,
+      sortValue: (row) => row.yourPrice,
+      render: (row) => <LabelCostCell row={row} />,
+    },
+    {
+      key: 'action',
+      label: '',
+      width: 90,
+      minWidth: 84,
+      align: 'right',
+      sortable: false,
+      pinned: true,
+      hideable: false,
+      render: (row) => (
+        <motion.button
+          whileHover={{ y: -1 }}
+          whileTap={{ scale: 0.94 }}
+          type="button"
+          onClick={() => toastContext?.addToast(buildRateSelectionToast(row))}
+          className="px-2.5 py-1 rounded-md text-2xs font-semibold text-white bg-gradient-to-br from-brand to-indigo-600 shadow-sm hover:shadow-md transition-all duration-150"
+        >
+          Select
+        </motion.button>
+      ),
+    },
+  ], [toastContext])
 
   async function fetchRates() {
     const validation = getRatesValidationState(form)
@@ -436,71 +504,18 @@ export default function RatesView() {
                 </div>
               </div>
               <DirectCarrierWarnings errors={resultState.directCarrierErrors} />
-              <div className="overflow-x-auto">
-                <table className="rates-table w-full text-[12.5px]">
-                  <thead>
-                    <tr className="bg-page/50 text-ink-3">
-                      <SortableHeader sortKey="carrier" sortState={rateSort} onSort={handleRateSort} className="text-left px-3 py-2 font-bold uppercase tracking-wider text-2xs">Carrier</SortableHeader>
-                      <SortableHeader sortKey="account" sortState={rateSort} onSort={handleRateSort} className="text-left px-3 py-2 font-bold uppercase tracking-wider text-2xs">Account</SortableHeader>
-                      <SortableHeader sortKey="source" sortState={rateSort} onSort={handleRateSort} className="text-left px-3 py-2 font-bold uppercase tracking-wider text-2xs">Rate Source</SortableHeader>
-                      <SortableHeader sortKey="service" sortState={rateSort} onSort={handleRateSort} className="text-left px-3 py-2 font-bold uppercase tracking-wider text-2xs">Service</SortableHeader>
-                      <SortableHeader sortKey="labelCost" sortState={rateSort} onSort={handleRateSort} align="right" className="text-right px-3 py-2 font-bold uppercase tracking-wider text-2xs">Label Cost</SortableHeader>
-                      <th className="px-3 py-2" />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sortedRows.map((row, idx) => (
-                      <motion.tr
-                        key={`${row.rate.carrierCode}-${row.rate.shippingProviderId ?? 'na'}-${row.rate.serviceCode}`}
-                        initial={{ opacity: 0, y: 4 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ delay: idx * 0.025, duration: 0.18 }}
-                        className={`border-t border-line transition-colors hover:bg-brand-bg/30 ${row.isBest ? 'bg-emerald-50/40' : ''}`}
-                      >
-                        <td className="px-3 py-2.5">
-                          <CarrierBadge code={row.carrierCode} size="sm" />
-                        </td>
-                        <td className={`px-3 py-2.5 ${row.carrierNickname ? 'text-ink-2 font-semibold' : 'text-ink-4'}`}>
-                          {row.carrierNickname || '—'}
-                        </td>
-                        <td className="px-3 py-2.5 min-w-[170px]">
-                          <div className="max-w-[240px]">
-                            <div className="text-[11.5px] font-bold leading-tight text-ink-2">{row.rateSourceLabel}</div>
-                            {row.rateSourceDetail ? (
-                              <div className={`mt-1 inline-flex max-w-full truncate rounded-md px-2 py-1 text-[10.5px] font-bold leading-tight ring-1 ${row.rateSourceTone}`} title={row.rateSourceDetail}>
-                                {row.rateSourceDetail}
-                              </div>
-                            ) : null}
-                          </div>
-                        </td>
-                        <td className="px-3 py-2.5 text-ink">
-                          <span>{row.serviceLabel}</span>
-                          {row.isBest ? (
-                            <span className="ml-2 inline-flex items-center gap-1 text-2xs font-bold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded-md">
-                              <Award size={10} strokeWidth={2.75} />
-                              CHEAPEST
-                            </span>
-                          ) : null}
-                        </td>
-                        <td className="px-3 py-2.5 text-right">
-                          <LabelCostCell row={row} />
-                        </td>
-                        <td className="px-3 py-2.5 text-right">
-                          <motion.button
-                            whileHover={{ y: -1 }}
-                            whileTap={{ scale: 0.94 }}
-                            type="button"
-                            onClick={() => toastContext?.addToast(buildRateSelectionToast(row))}
-                            className="px-2.5 py-1 rounded-md text-2xs font-semibold text-white bg-gradient-to-br from-brand to-indigo-600 shadow-sm hover:shadow-md transition-all duration-150"
-                          >
-                            Select
-                          </motion.button>
-                        </td>
-                      </motion.tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <Table<RateRowView>
+                data={rows}
+                columns={rateColumns}
+                rowKey={(row) => `${row.rate.carrierCode}-${row.rate.shippingProviderId ?? row.rate.raw?.carrier_id ?? 'na'}-${row.rate.serviceCode ?? row.serviceLabel}-${row.rate.shipmentCost}-${row.rate.otherCost}-${row.carrierNickname ?? ''}`}
+                storageKey="rates-table"
+                defaultSort={{ key: 'labelCost', direction: 'asc' }}
+                density="compact"
+                emptyMessage="No rates returned."
+                stickyHeader={false}
+                rowClassName={(row) => row.isBest ? 'bg-emerald-50/40' : undefined}
+                className="!rounded-none !ring-0 !shadow-none"
+              />
             </motion.div>
           ) : null}
         </AnimatePresence>
