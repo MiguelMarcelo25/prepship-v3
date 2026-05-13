@@ -299,7 +299,10 @@ export function PackagesDataTable({
       width: 280,
       minWidth: 180,
       sortable: true,
-      hideable: false, // required — without it rows lose identity
+      // 2026-05-13: every column toggleable + draggable per operator
+      // request (Awaiting-Shipment parity). Previously hideable:false
+      // here because the package name is row identity, but the Columns
+      // ▾ picker has a Reset button if an operator hides it by mistake.
       sortValue: (row) => row.name ?? '',
       render: (row) => (
         <button
@@ -394,8 +397,9 @@ export function PackagesDataTable({
       width: 200,
       minWidth: 180,
       align: 'right',
-      pinned: true,
-      hideable: false,
+      // 2026-05-13: removed pinned + hideable:false per operator
+      // request — every column toggleable + draggable. Reset button
+      // in the Columns ▾ picker restores defaults if needed.
       render: (row) => (
         <div className="inline-flex items-center justify-end gap-1.5">
           <ActionButton label="Receive stock" tone="receive" onClick={() => onReceive(row)}>

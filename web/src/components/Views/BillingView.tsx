@@ -1060,7 +1060,8 @@ export default function BillingView() {
                 width: 220,
                 minWidth: 140,
                 sortable: true,
-                hideable: false,
+                // 2026-05-13: every column toggleable + draggable
+                // per operator request (Awaiting-Shipment parity).
                 sortValue: (row) => row.clientName ?? '',
                 render: (row) => (
                   <span className="billing-summary-client-cell" style={{ fontWeight: 600, color: 'var(--ss-blue)' }}>
@@ -1090,7 +1091,8 @@ export default function BillingView() {
                 minWidth: 100,
                 align: 'right',
                 sortable: true,
-                hideable: false,
+                // 2026-05-13: every column toggleable + draggable
+                // per operator request (Awaiting-Shipment parity).
                 sortValue: (row) => Number(row.grandTotal ?? 0),
                 render: (row) => (
                   <span style={{ fontWeight: 700, color: 'var(--green)' }}>{formatBillingMoney(row.grandTotal || 0)}</span>
@@ -1161,7 +1163,13 @@ export default function BillingView() {
                     minWidth: 70,
                     align: column.align,
                     sortable: true,
-                    hideable: !column.always,
+                    // 2026-05-13: every column toggleable + draggable per
+                    // operator request (Awaiting-Shipment parity). The
+                    // upstream `column.always` flag in BILLING_DETAIL_COLUMNS
+                    // is intentionally ignored here — Columns ▾ picker's
+                    // Reset button covers the safety case if an operator
+                    // hides too much by accident.
+                    hideable: true,
                     sortValue: (row) => detailSortValueOf(row, column.id),
                     render: (row) => {
                       const metrics = computeBillingDetailMetrics(row)

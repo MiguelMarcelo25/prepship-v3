@@ -1011,7 +1011,9 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
       label: 'SKU',
       width: 150,
       sortable: true,
-      hideable: false,
+      // 2026-05-13: every column toggleable + draggable per operator
+      // request (Awaiting-Shipment parity). Reset button in the
+      // Columns ▾ picker restores defaults if needed.
       sortValue: (row) => row.sku ?? '',
       render: (row) => (
         <button
@@ -1048,7 +1050,9 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
       label: 'Name',
       width: 200,
       sortable: true,
-      hideable: false,
+      // 2026-05-13: every column toggleable + draggable per operator
+      // request (Awaiting-Shipment parity). Reset button in the
+      // Columns ▾ picker restores defaults if needed.
       sortValue: (row) => row.name ?? '',
       render: (row) => (
         <button

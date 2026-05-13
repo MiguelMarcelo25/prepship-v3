@@ -128,7 +128,8 @@ export default function RatesView() {
       minWidth: 76,
       maxWidth: 110,
       sortable: true,
-      hideable: false,
+      // 2026-05-13: every column toggleable + draggable per operator
+      // request (Awaiting-Shipment parity).
       sortValue: (row) => row.carrierCode,
       render: (row) => <CarrierBadge code={row.carrierCode} size="sm" />,
     },
@@ -195,7 +196,8 @@ export default function RatesView() {
       maxWidth: 180,
       align: 'right',
       sortable: true,
-      hideable: false,
+      // 2026-05-13: every column toggleable + draggable per operator
+      // request (Awaiting-Shipment parity).
       sortValue: (row) => row.yourPrice,
       render: (row) => <LabelCostCell row={row} />,
     },
@@ -206,8 +208,10 @@ export default function RatesView() {
       minWidth: 84,
       align: 'right',
       sortable: false,
-      pinned: true,
-      hideable: false,
+      // 2026-05-13: removed pinned + hideable:false per operator
+      // request — every column toggleable + draggable (Awaiting
+      // Shipment parity). Reset button in the Columns ▾ picker
+      // restores defaults if hidden by mistake.
       render: (row) => (
         <motion.button
           whileHover={{ y: -1 }}

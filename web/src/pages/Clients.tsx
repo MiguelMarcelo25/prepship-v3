@@ -137,9 +137,13 @@ export default function Clients() {
   //
   // sortValue() is per-column so e.g. the Status column sorts by the
   // boolean active flag (1/0) instead of trying to compare on the
-  // column's `key` field naively. pinned: true on the actions column
-  // keeps it locked at the end — operators can't accidentally drag
-  // edit/delete out of reach.
+  // column's `key` field naively.
+  //
+  // 2026-05-13: every column (including actions) is now toggleable +
+  // draggable per operator request — matches the Awaiting Shipment
+  // view's behavior. The Table primitive's Columns ▾ popover has a
+  // Reset button that restores defaults if an operator hides the
+  // actions column or any other column by mistake.
   const columns: TableColumn<Row>[] = [
     {
       key: 'active',
@@ -288,8 +292,11 @@ export default function Clients() {
       width: 110,
       minWidth: 90,
       align: 'right',
-      pinned: true,    // not resizable / reorderable — keeps actions stable
-      hideable: false, // operators must always see edit/delete
+      // 2026-05-13: removed pinned + hideable:false per operator
+      // request — every column should be toggleable AND draggable,
+      // matching Awaiting Shipment behavior. The Table primitive's
+      // Columns ▾ picker has a Reset button if an operator hides
+      // this by accident.
       render: (row) => (
         <div className="inline-flex items-center gap-0">
           <RowAction title="Edit" onClick={(e) => { e.stopPropagation(); setEditing(row) }}>
