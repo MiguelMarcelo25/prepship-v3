@@ -50,10 +50,16 @@ function sortButtonPaddingFor(size: 'narrow' | 'medium' | 'wide' | undefined) {
   return 'px-2'
 }
 
-function alignClasses(align: 'left' | 'right' | 'center' | undefined) {
-  if (align === 'right') return { th: 'text-right', btn: 'justify-end' }
-  if (align === 'center') return { th: 'text-center', btn: 'justify-center' }
-  return { th: 'text-left', btn: 'justify-start' }
+// 2026-05-13: header TITLES are now ALWAYS centered, regardless of
+// the column's `align` prop. The `align` prop continues to drive
+// BODY cell alignment (right for currency, left for text, etc) —
+// only the title row moves to center for visual balance. Matches
+// the convention now used across the shared <Table> primitive
+// (see components/ui/Table.tsx) so all tables in the app —
+// Inventory, Clients, Packages, Billing, Rate Shop, and Analysis —
+// share the same centered-header look.
+function alignClasses(_align: 'left' | 'right' | 'center' | undefined) {
+  return { th: 'text-center', btn: 'justify-center' }
 }
 
 export function AnalysisTableHeader({
