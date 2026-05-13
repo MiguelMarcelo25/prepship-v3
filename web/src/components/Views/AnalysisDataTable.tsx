@@ -198,7 +198,11 @@ function skuClassesFor(size: AnalysisColumnSize, isLink: boolean) {
 }
 
 function clientClassesFor(size: AnalysisColumnSize) {
-  return `${cellPaddingFor(size)} text-[14px] text-ink-2 border-b border-line align-middle`
+  // 2026-05-13: center-aligned to match the column header. Was
+  // browser-default (left) which created a visible misalignment
+  // between the centered "CLIENT" header text and the left-floating
+  // body values like "Tran Agency". Operator-reported.
+  return `${cellPaddingFor(size)} text-[14px] text-ink-2 text-center border-b border-line align-middle`
 }
 
 const TD_BASE = 'border-b border-line align-middle text-ink'
@@ -414,14 +418,17 @@ export function AnalysisDataTable({
                           </td>
                         )
                       case 'orders':
+                        // 2026-05-13: text-right → text-center to match
+                        // the centered "ORDERS" column header. Same
+                        // change applied to pending + external below.
                         return (
-                          <td key="orders" className={`${cellPadding} text-right whitespace-nowrap tabular-nums font-bold ${TD_BASE}`}>
+                          <td key="orders" className={`${cellPadding} text-center whitespace-nowrap tabular-nums font-bold ${TD_BASE}`}>
                             {row.orders}
                           </td>
                         )
                       case 'pending':
                         return (
-                          <td key="pending" className={`${cellPadding} text-right whitespace-nowrap tabular-nums ${TD_BASE}`}>
+                          <td key="pending" className={`${cellPadding} text-center whitespace-nowrap tabular-nums ${TD_BASE}`}>
                             {row.pendingOrders > 0 ? (
                               <span
                                 className={`inline-flex items-center gap-1 ${pillSize} rounded-full font-bold leading-snug tabular-nums bg-[rgba(224,122,0,.12)] text-[#b86200]`}
@@ -436,7 +443,7 @@ export function AnalysisDataTable({
                         )
                       case 'external':
                         return (
-                          <td key="external" className={`${cellPadding} text-right whitespace-nowrap tabular-nums ${TD_BASE}`}>
+                          <td key="external" className={`${cellPadding} text-center whitespace-nowrap tabular-nums ${TD_BASE}`}>
                             {row.externalOrders > 0 ? (
                               <span
                                 className={`inline-flex items-center gap-1 ${pillSize} rounded-full font-bold leading-snug tabular-nums bg-[rgba(138,149,163,.16)] text-ink-2`}
