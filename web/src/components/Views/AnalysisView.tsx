@@ -154,9 +154,19 @@ const ANALYSIS_TABLE_COLUMNS: AnalysisTableColumn[] = [
   { key: 'name' },
   { key: 'sku' },
   { key: 'client' },
-  { key: 'orders', align: 'right' },
-  { key: 'pending', title: 'Awaiting shipment - not yet labeled', align: 'right' },
-  { key: 'external', title: 'Orders shipped externally (no ShipStation label)', align: 'right' },
+  // 2026-05-13: orders / pending / external switched right → center
+  // per operator request. These three columns show small single-
+  // digit counts or compact pill badges ("1 pend", "47 ext", "—"),
+  // not multi-digit currency, so right-alignment was creating an
+  // awkward gap between the header text (pushed right) and the
+  // body badges (rendered center-ish inside narrow columns).
+  // Center-alignment lines the header and the badge up visually.
+  // Numeric / currency columns below (qty, avgPrice, revenue,
+  // stdOrders, expOrders, total) STAY right-aligned because their
+  // decimal places need to line up vertically.
+  { key: 'orders', align: 'center' },
+  { key: 'pending', title: 'Awaiting shipment - not yet labeled', align: 'center' },
+  { key: 'external', title: 'Orders shipped externally (no ShipStation label)', align: 'center' },
   { key: 'qty', align: 'right' },
   {
     key: 'trend',
