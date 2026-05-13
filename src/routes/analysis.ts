@@ -171,6 +171,17 @@ const skuDailyQuery = rangeQuery.extend({
   clientId: z.coerce.number().int().optional(),
   top: z.coerce.number().int().positive().max(10).optional(),
   topN: z.coerce.number().int().positive().max(15).optional(),
+  // 2026-05-13: per-caller toggle that decides whether cancelled
+  // orders count toward the analytics. Default is false (preserves
+  // historical Analysis-page behavior — operators reading the
+  // Analysis page see only fulfilled-or-fulfilling units). The new
+  // Dashboard passes ?includeCancelled=true so its KPIs (which
+  // already aggregate the full /orders set) stay consistent with
+  // the trend / top SKUs / heatmap on the same page. Without this
+  // flag, the dashboard would show e.g. "Total 30-Day Units = 852"
+  // in the KPI card while the trend chart sums to a smaller
+  // number (cancelled excluded), confusing operators.
+  includeCancelled: z.coerce.boolean().optional().default(false),
 });
 
 type SkuDailyQuery = z.infer<typeof skuDailyQuery>;
@@ -189,6 +200,16 @@ async function getSkuDaily(q: SkuDailyQuery) {
   const toIso = new Date(q.dateTo).toISOString();
   const cid: number | null = q.clientId ?? null;
   const topLimit = q.top ?? q.topN ?? 5;
+  // Caller-controlled cancelled-orders filter. The dashboard passes
+  // includeCancelled=true so its trend / top SKUs / heatmap match the
+  // KPI cards on the same page (which aggregate the full /orders set
+  // with no status filter). Analysis page leaves this default (false)
+  // so its "Units Sold" semantics remain "units that were or will be
+  // shipped" — cancelled orders aren't fulfilled, so they shouldn't
+  // count there.
+  const cancelledFilter = q.includeCancelled
+    ? sql`true`
+    : sql`o.order_status not in ('cancelled')`;
 
   const top = await db.execute<{ sku: string; name: string | null; total_qty: number }>(sql`
     with item_rows as (
@@ -200,7 +221,7 @@ async function getSkuDaily(q: SkuDailyQuery) {
         coalesce(nullif(item->>'name', ''), '—') as name,
         coalesce((item->>'quantity')::int, 1) as qty
       from orders o, jsonb_array_elements(o.items) item
-      where o.order_status not in ('cancelled')
+      where ${cancelledFilter}
         and o.order_date >= ${fromIso}::timestamptz
         and o.order_date <= ${toIso}::timestamptz
         and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
@@ -245,7 +266,7 @@ async function getSkuDaily(q: SkuDailyQuery) {
       end as sku,
       sum(coalesce((item->>'quantity')::int, 1))::int as qty
     from orders o, jsonb_array_elements(o.items) item
-    where o.order_status not in ('cancelled')
+    where ${cancelledFilter}
       and o.order_date >= ${fromIso}::timestamptz
       and o.order_date <= ${toIso}::timestamptz
       and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
@@ -291,6 +312,11 @@ app.get('/sku-daily', zValidator('query', skuDailyQuery), async (c) => {
 const skuBreakdownQuery = rangeQuery.extend({
   clientId: z.coerce.number().int().optional(),
   limit: z.coerce.number().int().positive().max(2000).optional().default(2000),
+  // 2026-05-13: same caller-controlled cancelled-orders toggle as
+  // skuDailyQuery (see comment there for full rationale). The
+  // Dashboard's SKU Performance Summary panel passes true to align
+  // with its own KPI cards; the Analysis page leaves it false.
+  includeCancelled: z.coerce.boolean().optional().default(false),
 });
 
 type SkuBreakdownQuery = z.infer<typeof skuBreakdownQuery>;
@@ -379,6 +405,13 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
   const fromIso = new Date(q.dateFrom).toISOString();
   const toIso = new Date(q.dateTo).toISOString();
   const cid: number | null = q.clientId ?? null;
+  // Caller-controlled cancelled-orders filter (mirrors the same flag
+  // in getSkuDaily). Default = exclude cancelled. The Dashboard's
+  // SKU Performance Summary opts in to including cancelled so its
+  // numbers align with the dashboard KPI cards.
+  const cancelledFilter = q.includeCancelled
+    ? sql`true`
+    : sql`coalesce(o.order_status, '') <> 'cancelled'`;
 
   const rows = await db.execute<SkuBreakdownRow>(sql`
     with item_rows as (
@@ -452,7 +485,7 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
         order by s.id desc
         limit 1
       ) ls on true
-      where coalesce(o.order_status, '') <> 'cancelled'
+      where ${cancelledFilter}
         and o.order_date >= ${fromIso}::timestamptz
         and o.order_date <= ${toIso}::timestamptz
         and (${cid}::int is null or o.client_id = ${cid}::int)

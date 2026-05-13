@@ -1356,10 +1356,17 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         priorOrdersRes,
       ] = await Promise.all([
         apiClient.listClients().catch(() => []),
-        apiClient.fetchAnalysisDailySales({ from: currentFrom, to: currentTo, topN: 15, clientId: cid }),
-        apiClient.fetchAnalysisDailySales({ from: priorFrom, to: priorTo, topN: 15, clientId: cid }),
+        // 2026-05-13: includeCancelled=true makes the dashboard's
+        // trend / top SKUs / heatmap / table aggregate ALL three
+        // order statuses (awaiting_shipment + shipped + cancelled),
+        // matching the KPI cards above them that already count the
+        // full /orders set. Without this flag the dashboard's chart
+        // panels would report a smaller "units sold" number than the
+        // KPI card on the same page — confusing for operators.
+        apiClient.fetchAnalysisDailySales({ from: currentFrom, to: currentTo, topN: 15, clientId: cid, includeCancelled: true }),
+        apiClient.fetchAnalysisDailySales({ from: priorFrom, to: priorTo, topN: 15, clientId: cid, includeCancelled: true }),
         apiClient.fetchInventory({ ...(cid ? { clientId: cid } : {}) }).catch(() => []),
-        apiClient.fetchAnalysisSkus({ from: currentFrom, to: currentTo, limit: 200, clientId: cid }).catch(() => ({ skus: [] })),
+        apiClient.fetchAnalysisSkus({ from: currentFrom, to: currentTo, limit: 200, clientId: cid, includeCancelled: true }).catch(() => ({ skus: [] })),
         fetchOrdersWindow({ from: currentFrom, to: currentTo, clientId: cid }),
         fetchOrdersWindow({ from: priorFrom, to: priorTo, clientId: cid }),
       ])
@@ -1698,6 +1705,10 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           </h1>
           <p className="mt-0.5 text-xs text-ink-3">
             Monitor inventory health, days of supply, and take action to prevent stockouts
+          </p>
+          <p className="mt-1 inline-flex items-center gap-1.5 text-2xs font-semibold text-ink-3">
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-brand" />
+            All order statuses included · awaiting · shipped · cancelled
           </p>
         </div>
 
