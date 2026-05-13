@@ -42,7 +42,7 @@ import {
   Plus,
   Store,
   Truck,
-  Hourglass,
+  Clock,
 } from 'lucide-react'
 import { apiClient } from '../../api/client'
 import { api } from '../../lib/api'
@@ -594,7 +594,7 @@ export default function SettingsView() {
       short: 'Pending',
       description:
         'Carrier credentials submitted by clients via the client portal that haven\'t been reviewed yet. Approve or reject from this panel.',
-      icon: Hourglass,
+      icon: Clock,
       tone: 'amber',
     },
     {

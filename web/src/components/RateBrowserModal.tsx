@@ -14,6 +14,7 @@
 // module rather than fattening this component.
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { Loader2 } from 'lucide-react';
 import { apiClient } from '../lib/v2-apiClient';
 import { useMarkups, type Markup } from '../contexts/MarkupsContext';
 // Shared carrier badge — official UPS/USPS SVG logos with fallback
@@ -140,6 +141,22 @@ type DirectCarrierRateError = {
   label?: string | null;
   message?: string | null;
 };
+
+function RateLoadingSpinner({ text = 'Fetching rates…' }: { text?: string }): JSX.Element {
+  return (
+    <span
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 6,
+      }}
+    >
+      <Loader2 size={14} strokeWidth={2.5} className="animate-spin" aria-hidden />
+      <span>{text}</span>
+    </span>
+  );
+}
 
 const scopedCarrierAccountsCache = new Map<string, RbCarrierAccountDto[]>();
 
@@ -1417,7 +1434,7 @@ export default function RateBrowserModal({
             marginTop: 80,
           }}
         >
-          ⏳ Fetching rates…
+          <RateLoadingSpinner />
         </div>
       );
     }
@@ -1445,7 +1462,7 @@ export default function RateBrowserModal({
           }}
         >
           {browsing ? (
-            <>⏳ Fetching rates…</>
+            <RateLoadingSpinner />
           ) : missing ? (
             <>
               📏
@@ -1453,7 +1470,7 @@ export default function RateBrowserModal({
               Enter {missing} to fetch rates
             </>
           ) : (
-            <>⏳ Fetching rates…</>
+            <RateLoadingSpinner />
           )}
         </div>
       );
@@ -2199,7 +2216,11 @@ export default function RateBrowserModal({
                         color: isSel ? 'rgba(255,255,255,.7)' : 'var(--text3)',
                       }}
                     >
-                      {pending ? '⏳' : '…'}
+                      {pending ? (
+                        <Loader2 size={12} strokeWidth={2.5} className="animate-spin" aria-label="Fetching rates" />
+                      ) : (
+                        '…'
+                      )}
                     </span>
                   )}
                 </div>

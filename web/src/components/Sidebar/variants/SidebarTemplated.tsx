@@ -20,7 +20,7 @@ import {
   ChevronDown,
   LogOut,
   LayoutDashboard,
-  Hourglass,
+  Clock,
   CheckCircle2,
   XOctagon,
   Box,
@@ -67,7 +67,7 @@ export interface SidebarSpec {
 }
 
 const STATUS_LABELS = { awaiting_shipment: 'Awaiting', shipped: 'Shipped', cancelled: 'Cancelled' } as const
-const STATUS_ICON = { awaiting_shipment: Hourglass, shipped: CheckCircle2, cancelled: XOctagon }
+const STATUS_ICON = { awaiting_shipment: Clock, shipped: CheckCircle2, cancelled: XOctagon }
 
 const TOOL_ITEMS: Array<{ view: SidebarViewType; Icon: any; label: string }> = [
   { view: 'dashboard', Icon: LayoutDashboard, label: 'Dashboard' },

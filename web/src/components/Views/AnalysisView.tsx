@@ -2,7 +2,7 @@
 import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
-import { BarChart3 } from 'lucide-react'
+import { BarChart3, Loader2 } from 'lucide-react'
 import {
   CartesianGrid,
   LabelList,
@@ -1500,9 +1500,18 @@ export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) 
       {dataState.loading ? (
         <div
           id="analysis-loading"
-          style={{ textAlign: 'center', padding: 30, color: 'var(--text3)', fontSize: 13 }}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 8,
+            padding: 30,
+            color: 'var(--text3)',
+            fontSize: 13,
+          }}
         >
-          ⏳ Loading…
+          <Loader2 size={14} strokeWidth={2.5} className="animate-spin" aria-hidden />
+          Loading…
         </div>
       ) : null}
 

@@ -19,7 +19,7 @@ import {
   ChevronDown,
   LogOut,
   LayoutDashboard,
-  Hourglass,
+  Clock,
   CheckCircle2,
   XOctagon,
   Feather,
@@ -28,7 +28,7 @@ import {
 import { useSidebarController, type SidebarVariantProps, type SidebarViewType } from './useSidebarController'
 
 const STATUS_LABELS = { awaiting_shipment: 'Awaiting', shipped: 'Shipped', cancelled: 'Cancelled' } as const
-const STATUS_ICON = { awaiting_shipment: Hourglass, shipped: CheckCircle2, cancelled: XOctagon }
+const STATUS_ICON = { awaiting_shipment: Clock, shipped: CheckCircle2, cancelled: XOctagon }
 const STATUS_DOT = { awaiting_shipment: 'bg-amber-400', shipped: 'bg-emerald-400', cancelled: 'bg-rose-400' }
 
 const TOOL_ITEMS: Array<{ view: SidebarViewType; Icon: any; label: string }> = [

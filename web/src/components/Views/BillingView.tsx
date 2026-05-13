@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { useContext, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
 import { motion } from 'framer-motion'
-import { Receipt } from 'lucide-react'
+import { Loader2, Receipt } from 'lucide-react'
 import { apiClient } from '../../api/client'
 import { ToastContext } from '../../contexts/ToastContext'
 import type {
@@ -1017,7 +1017,14 @@ export default function BillingView() {
             <input type="date" className="ship-select" style={{ width: 140, fontSize: 12 }} value={to} onChange={(event) => setTo(event.target.value)} />
           </div>
           <button className="btn btn-primary btn-sm" type="button" onClick={() => void handleGenerateBilling()} disabled={generateLoading}>
-            {generateLoading ? '⏳ Generating…' : '⚡ Generate Invoices'}
+            {generateLoading ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <Loader2 size={12} strokeWidth={2.5} className="animate-spin" aria-hidden />
+                Generating…
+              </span>
+            ) : (
+              '⚡ Generate Invoices'
+            )}
           </button>
           <button
             className="btn btn-ghost btn-sm"

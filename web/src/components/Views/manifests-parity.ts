@@ -46,7 +46,7 @@ export function buildManifestFilename(startDate: string, endDate: string) {
 }
 
 export function getManifestGenerateButtonLabel(isLoading: boolean) {
-  return isLoading ? '⏳ Generating…' : '⬇️ Download CSV'
+  return isLoading ? 'Generating…' : '⬇️ Download CSV'
 }
 
 export function getManifestStatusText(isLoading: boolean) {

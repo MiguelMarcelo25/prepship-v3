@@ -239,7 +239,7 @@ export function buildSettingsRefetchStatus(state: SettingsRefetchState): Setting
   if (state.kind === 'loading') {
     return {
       visible: true,
-      text: '⏳ Clearing cache and refetching rates...',
+      text: 'Clearing cache and refetching rates...',
       color: 'var(--text3)',
     }
   }
