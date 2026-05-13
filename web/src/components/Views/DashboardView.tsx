@@ -856,6 +856,41 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   const [brandFilter, setBrandFilter] = useState('')
   const [showFilters, setShowFilters] = useState(false)
   const [showColumns, setShowColumns] = useState(false)
+  // Refs for the popover containers so the click-outside handler can
+  // tell "inside vs outside." Each popover (Columns, Filters) gets a
+  // wrapper <div ref> covering BOTH the trigger button and the
+  // popover panel. A mousedown anywhere else closes the open popover.
+  // Operator-reported bug (2026-05-13): clicking the native All Brands
+  // <select> while the Columns popover was open left both visible —
+  // the popover had no idea to close itself. The handler below fixes
+  // that by closing on any mousedown that lands outside the ref'd
+  // container (which also covers Esc-key dismissal for keyboard users).
+  const columnsPopoverRef = useRef<HTMLDivElement>(null)
+  const filtersPopoverRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!showColumns && !showFilters) return
+    const onMouseDown = (event: MouseEvent) => {
+      const target = event.target as Node
+      if (showColumns && !columnsPopoverRef.current?.contains(target)) {
+        setShowColumns(false)
+      }
+      if (showFilters && !filtersPopoverRef.current?.contains(target)) {
+        setShowFilters(false)
+      }
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        if (showColumns) setShowColumns(false)
+        if (showFilters) setShowFilters(false)
+      }
+    }
+    document.addEventListener('mousedown', onMouseDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [showColumns, showFilters])
   const [visibleColumns, setVisibleColumns] = useState<Record<ColumnKey, boolean>>(DEFAULT_VISIBLE_COLUMNS)
 
   // Operator-defined column order + widths for the SKU Performance
@@ -1852,7 +1887,12 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               API call on the dashboard. */}
           <DateRangePicker value={dateRange} onChange={setDateRange} />
 
-          {/* Group 3 — Filters popover (category + brand secondary cuts) */}
+          {/* Group 3 — Filters popover (category + brand secondary cuts).
+              Wrapped with display: contents so click-outside ref works
+              without disturbing layout / popover positioning. Panel
+              moved up next to its trigger so a single ref tracks both
+              (originally rendered far below after Refresh icon). */}
+          <div ref={filtersPopoverRef} style={{ display: 'contents' }}>
           <button
             type="button"
             onClick={() => setShowFilters((open) => !open)}
@@ -1861,55 +1901,6 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           >
             <Filter size={15} strokeWidth={2.25} className="text-ink-3" />
             Filters
-          </button>
-
-          {/* Group 4 — Edit Dashboard toggle + Reset (only in edit
-              mode). When active, panels become draggable, show
-              visibility eyes, and resize handles. */}
-          <button
-            type="button"
-            onClick={() => setEditMode((on) => !on)}
-            className={`inline-flex h-10 items-center gap-2 rounded-card border px-4 text-sm2 font-semibold shadow-sm transition ${
-              editMode
-                ? 'border-brand bg-brand text-white hover:bg-brand-dark'
-                : 'border-line bg-surface text-ink hover:bg-surface-2'
-            }`}
-            aria-pressed={editMode}
-            title={editMode ? 'Exit edit mode — your layout is saved automatically' : 'Edit dashboard — drag panels to reorder, resize, or hide'}
-          >
-            {editMode ? (
-              <>
-                <CheckIcon size={15} strokeWidth={2.5} />
-                Done editing
-              </>
-            ) : (
-              <>
-                <Edit3 size={15} strokeWidth={2.25} className="text-ink-3" />
-                Edit Dashboard
-              </>
-            )}
-          </button>
-          {editMode ? (
-            <button
-              type="button"
-              onClick={resetDashboardLayout}
-              className="inline-flex h-10 items-center gap-2 rounded-card border border-line bg-surface px-3 text-sm2 font-semibold text-ink-2 hover:bg-surface-2 shadow-sm"
-              title="Restore default panel order, sizes, and visibility"
-            >
-              <RotateCcw size={14} strokeWidth={2.25} />
-              Reset
-            </button>
-          ) : null}
-
-          {/* Group 5 — Refresh icon (rightmost) */}
-          <button
-            type="button"
-            onClick={() => loadDashboard('refresh')}
-            className="grid h-10 w-10 place-items-center rounded-card border border-line bg-surface text-ink-2 shadow-sm hover:bg-surface-2 hover:text-brand"
-            aria-label="Refresh dashboard"
-            title="Refresh dashboard"
-          >
-            <RefreshCw size={16} strokeWidth={2.25} className={refreshing ? 'animate-spin' : ''} />
           </button>
           {showFilters ? (
             <div className="absolute right-0 top-12 z-20 w-[min(18rem,calc(100vw-2rem))] rounded-card border border-line bg-surface p-3 shadow-lg">
@@ -1975,6 +1966,56 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               </button>
             </div>
           ) : null}
+          </div>
+
+          {/* Group 4 — Edit Dashboard toggle + Reset (only in edit
+              mode). When active, panels become draggable, show
+              visibility eyes, and resize handles. */}
+          <button
+            type="button"
+            onClick={() => setEditMode((on) => !on)}
+            className={`inline-flex h-10 items-center gap-2 rounded-card border px-4 text-sm2 font-semibold shadow-sm transition ${
+              editMode
+                ? 'border-brand bg-brand text-white hover:bg-brand-dark'
+                : 'border-line bg-surface text-ink hover:bg-surface-2'
+            }`}
+            aria-pressed={editMode}
+            title={editMode ? 'Exit edit mode — your layout is saved automatically' : 'Edit dashboard — drag panels to reorder, resize, or hide'}
+          >
+            {editMode ? (
+              <>
+                <CheckIcon size={15} strokeWidth={2.5} />
+                Done editing
+              </>
+            ) : (
+              <>
+                <Edit3 size={15} strokeWidth={2.25} className="text-ink-3" />
+                Edit Dashboard
+              </>
+            )}
+          </button>
+          {editMode ? (
+            <button
+              type="button"
+              onClick={resetDashboardLayout}
+              className="inline-flex h-10 items-center gap-2 rounded-card border border-line bg-surface px-3 text-sm2 font-semibold text-ink-2 hover:bg-surface-2 shadow-sm"
+              title="Restore default panel order, sizes, and visibility"
+            >
+              <RotateCcw size={14} strokeWidth={2.25} />
+              Reset
+            </button>
+          ) : null}
+
+          {/* Group 5 — Refresh icon (rightmost) */}
+          <button
+            type="button"
+            onClick={() => loadDashboard('refresh')}
+            className="grid h-10 w-10 place-items-center rounded-card border border-line bg-surface text-ink-2 shadow-sm hover:bg-surface-2 hover:text-brand"
+            aria-label="Refresh dashboard"
+            title="Refresh dashboard"
+          >
+            <RefreshCw size={16} strokeWidth={2.25} className={refreshing ? 'animate-spin' : ''} />
+          </button>
         </div>
       </div>
 
@@ -2585,6 +2626,17 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                 </option>
               ))}
             </select>
+            {/* Wrapper ref tracks "inside" for the click-outside
+                handler — covers BOTH the trigger and the panel so
+                clicks within either stay open, clicks elsewhere
+                (incl. the native All Brands <select> next to it)
+                trigger close. Operator-reported 2026-05-13.
+                `display: contents` keeps the wrapper invisible to
+                CSS layout, so the popover's `absolute right-0 top-10`
+                still positions against the outer toolbar (the
+                already-`relative` flex container) rather than the
+                narrow button wrapper. */}
+            <div ref={columnsPopoverRef} style={{ display: 'contents' }}>
             <button
               type="button"
               onClick={() => setShowColumns((open) => !open)}
@@ -2648,6 +2700,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                 </div>
               </div>
             ) : null}
+            </div>
           </div>
         </div>
 
