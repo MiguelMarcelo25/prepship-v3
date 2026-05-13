@@ -592,13 +592,17 @@ function buildHeatmap(current: SalesPayload, prior: SalesPayload, limit = 6): He
     })
 }
 
-function MiniSparkline({ values, positive = true }: { values: number[]; positive?: boolean }) {
+function MiniSparkline({ values, positive = true, size = 'md' }: { values: number[]; positive?: boolean; size?: 'sm' | 'md' | 'lg' }) {
   const points = values.length ? values : [0, 0]
   const max = Math.max(...points, 1)
   const min = Math.min(...points, 0)
   const span = Math.max(1, max - min)
-  const width = 62
-  const height = 28
+  // Larger viewBox + bigger CSS size for the inline-next-to-value
+  // sparkline. The old corner-only sparkline was 62×28 px; the new
+  // inline placement needs more horizontal room to read as a chart
+  // and to balance visually with the big value number.
+  const width = size === 'lg' ? 88 : size === 'sm' ? 48 : 72
+  const height = size === 'lg' ? 32 : size === 'sm' ? 24 : 30
   const step = width / Math.max(1, points.length - 1)
   const path = points
     .map((value, index) => {
@@ -608,9 +612,10 @@ function MiniSparkline({ values, positive = true }: { values: number[]; positive
     })
     .join(' ')
 
+  const sizeClass = size === 'lg' ? 'h-8 w-[88px]' : size === 'sm' ? 'h-6 w-12' : 'h-7 w-[72px]'
   return (
-    <svg viewBox={`0 0 ${width} ${height}`} className={`h-7 w-16 ${positive ? 'text-brand' : 'text-danger'}`} aria-hidden="true">
-      <path d={path} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    <svg viewBox={`0 0 ${width} ${height}`} className={`${sizeClass} ${positive ? 'text-brand' : 'text-danger'}`} aria-hidden="true">
+      <path d={path} fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
 }
@@ -666,21 +671,39 @@ function KpiCard({
       className="flex min-h-[118px] flex-col justify-between rounded-card border border-line bg-surface px-4 py-3 shadow-sm"
     >
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <div className={`text-xs font-semibold ${titleClass}`}>{title}</div>
-          <div className="mt-3 flex items-end gap-1.5 text-[26px] font-extrabold leading-none tracking-[-0.02em] text-ink font-mono tabular-nums">
-            {value}
-            {suffix ? <span className="pb-0.5 text-xs font-bold tracking-normal text-ink-2">{suffix}</span> : null}
+          {/* Value row — sparkline now sits INLINE next to the
+              number (operator request 2026-05-13: match the new
+              design where the chart visually anchors the metric
+              instead of floating in the top-right corner). The
+              flex-1 + ml-auto pattern pushes the sparkline to the
+              far right of the value row so the number stays
+              left-anchored with the title above it. */}
+          <div className="mt-3 flex items-end gap-3 text-[26px] font-extrabold leading-none tracking-[-0.02em] text-ink font-mono tabular-nums">
+            <span className="inline-flex items-end gap-1.5">
+              {value}
+              {suffix ? <span className="pb-0.5 text-xs font-bold tracking-normal text-ink-2">{suffix}</span> : null}
+            </span>
+            {spark ? (
+              <span className="ml-auto pb-0.5">
+                <MiniSparkline values={spark} positive={tone !== 'red'} size="md" />
+              </span>
+            ) : null}
           </div>
           <div className="mt-2 text-tiny">{helper}</div>
         </div>
-        <div className="flex shrink-0 flex-col items-end gap-2">
-          {icon ? <div className={`grid h-9 w-9 place-items-center rounded-full ring-1 ${toneClass}`}>{icon}</div> : null}
-          {spark ? <MiniSparkline values={spark} positive={tone !== 'red'} /> : null}
-        </div>
+        {/* Stock-card icon — kept in the top-right corner. Slightly
+            larger now (10×10 was 9×9) for a punchier presence that
+            matches the design reference. */}
+        {icon ? (
+          <div className={`grid h-10 w-10 flex-shrink-0 place-items-center rounded-full ring-1 ${toneClass}`}>
+            {icon}
+          </div>
+        ) : null}
       </div>
       {typeof progress === 'number' ? (
-        <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-line/70">
+        <div className="mt-3 h-2 overflow-hidden rounded-full bg-line/70">
           <div className={`h-full rounded-full ${progressClass}`} style={{ width: `${Math.max(0, Math.min(100, progress))}%` }} />
         </div>
       ) : null}
