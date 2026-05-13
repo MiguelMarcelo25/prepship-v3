@@ -110,11 +110,51 @@ interface WalmartTransaction {
   processingFee?: unknown;
 }
 
+// Multiple endpoint paths Walmart has used for fees over time.
+// Try them in order; if all 401, the developer-app permissions
+// likely need updating. See matching comment in
+// api/carriers/walmart/fees.ts.
+const WALMART_FEES_ENDPOINT_PATHS = [
+  '/v3/payments/transactionRecords',
+  '/v3/payments',
+];
+
 async function fetchWalmartFeeTransactions(
   accessToken: string,
   fromDate: string,
   toDate: string,
   channelType: string,
+): Promise<{ transactions: WalmartTransaction[]; fetchedCount: number }> {
+  const errors: Array<{ path: string; status: number; body: string }> = [];
+  for (const path of WALMART_FEES_ENDPOINT_PATHS) {
+    try {
+      return await fetchOneEndpoint(accessToken, fromDate, toDate, channelType, path);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const m = msg.match(/\b(\d{3})\b/);
+      const status = m ? Number(m[1]) : 0;
+      errors.push({ path, status, body: msg });
+      if (status === 400) break;
+    }
+  }
+  const all401 = errors.length > 0 && errors.every((e) => e.status === 401);
+  if (all401) {
+    throw new Error(
+      'Walmart Payments API is not enabled on this seller account. '
+      + 'Fix: developer.walmart.com → My Apps → API Permissions, '
+      + 'enable "Payments" / "Finance API", save, retry in ~5 minutes.',
+    );
+  }
+  const last = errors[errors.length - 1];
+  throw new Error(last ? `Walmart fees endpoint ${last.path} ${last.status}: ${last.body.slice(0, 300)}` : 'Walmart fees endpoint returned no response');
+}
+
+async function fetchOneEndpoint(
+  accessToken: string,
+  fromDate: string,
+  toDate: string,
+  channelType: string,
+  path: string,
 ): Promise<{ transactions: WalmartTransaction[]; fetchedCount: number }> {
   const transactions: WalmartTransaction[] = [];
   const PAGE_LIMIT = 200;
@@ -129,7 +169,7 @@ async function fetchWalmartFeeTransactions(
       'WM_SVC.NAME': 'Walmart Marketplace',
     };
     if (channelType) headers['WM_CONSUMER.CHANNEL.TYPE'] = channelType;
-    const url = new URL('https://marketplace.walmartapis.com/v3/payments');
+    const url = new URL(`https://marketplace.walmartapis.com${path}`);
     url.searchParams.set('fromDate', fromDate);
     url.searchParams.set('toDate', toDate);
     url.searchParams.set('limit', String(PAGE_LIMIT));
@@ -137,7 +177,7 @@ async function fetchWalmartFeeTransactions(
     const res = await fetch(url, { method: 'GET', headers });
     if (!res.ok) {
       const txt = await res.text().then((s) => s.slice(0, 400)).catch(() => '');
-      throw new Error(`Walmart /v3/payments ${res.status}: ${txt || res.statusText}`);
+      throw new Error(`Walmart ${path} ${res.status}: ${txt || res.statusText}`);
     }
     const data = (await res.json()) as Record<string, unknown>;
     const records =

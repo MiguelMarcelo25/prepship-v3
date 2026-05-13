@@ -166,11 +166,78 @@ interface WalmartTransaction {
   processingFee?: unknown;
 }
 
+// Walmart's payments API has multiple endpoint paths that have
+// shifted over years of API revisions. We try them in order of
+// preferred granularity (transactionRecords gives per-fee detail;
+// the legacy /v3/payments gives daily summaries). If the gateway
+// returns 401 on ALL paths, the seller's developer app probably
+// hasn't been granted the Payments / Finance API permission —
+// surface a tailored error in that case.
+const WALMART_FEES_ENDPOINT_PATHS = [
+  '/v3/payments/transactionRecords',
+  '/v3/payments',
+];
+
 async function fetchWalmartFeeTransactions(
   accessToken: string,
   fromDate: string,
   toDate: string,
   channelType: string,
+): Promise<{ transactions: WalmartTransaction[]; fetchedCount: number; endpointUsed: string }> {
+  const errors: Array<{ path: string; status: number; body: string }> = [];
+  for (const path of WALMART_FEES_ENDPOINT_PATHS) {
+    try {
+      const result = await fetchOneEndpoint(accessToken, fromDate, toDate, channelType, path);
+      return { ...result, endpointUsed: path };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Capture the error and try the next path. Parse status from
+      // the message if possible so we can decide whether to keep
+      // trying (5xx, 401 → try next) or stop (400 → operator-side).
+      const statusMatch = msg.match(/\b(\d{3})\b/);
+      const status = statusMatch ? Number(statusMatch[1]) : 0;
+      errors.push({ path, status, body: msg });
+      // Only retry on 401 / 404 / 5xx — those might be path-specific.
+      // 400 with an invalid param applies to all paths equally.
+      if (status === 400) {
+        throw friendlyWalmartFeeError(errors);
+      }
+    }
+  }
+  // All paths failed.
+  throw friendlyWalmartFeeError(errors);
+}
+
+// Convert Walmart's nest of error JSON + path-attempts into a
+// short, operator-actionable message. The previous version threw
+// the raw response which became a wall of JSON in the UI — this
+// extracts the diagnosis and adds remediation steps.
+function friendlyWalmartFeeError(errors: Array<{ path: string; status: number; body: string }>): Error {
+  // If every attempt was a 401 / gateway unauthorized, this is a
+  // permissions issue on the developer app, not bad credentials.
+  // (Bad creds would have failed at the OAuth /v3/token step earlier.)
+  const all401 = errors.length > 0 && errors.every((e) => e.status === 401);
+  if (all401) {
+    return new Error(
+      'Walmart Payments API is not enabled on this seller account. '
+      + 'The OAuth token works for /v3/orders (which is why "Pull Orders" succeeds) '
+      + 'but the gateway rejects it for /v3/payments. Fix: go to '
+      + 'developer.walmart.com → My Apps → API Permissions, enable '
+      + '"Payments" / "Finance API" permissions on the developer app, save, '
+      + 'and re-try in ~5 minutes (permission propagation lag).',
+    );
+  }
+  const last = errors[errors.length - 1];
+  if (!last) return new Error('Walmart fees endpoint returned no response');
+  return new Error(`Walmart fees endpoint ${last.path} ${last.status}: ${last.body.slice(0, 300)}`);
+}
+
+async function fetchOneEndpoint(
+  accessToken: string,
+  fromDate: string,
+  toDate: string,
+  channelType: string,
+  path: string,
 ): Promise<{ transactions: WalmartTransaction[]; fetchedCount: number }> {
   const transactions: WalmartTransaction[] = [];
   const PAGE_LIMIT = 200;
@@ -186,7 +253,7 @@ async function fetchWalmartFeeTransactions(
       'WM_SVC.NAME': 'Walmart Marketplace',
     };
     if (channelType) headers['WM_CONSUMER.CHANNEL.TYPE'] = channelType;
-    const url = new URL('https://marketplace.walmartapis.com/v3/payments');
+    const url = new URL(`https://marketplace.walmartapis.com${path}`);
     url.searchParams.set('fromDate', fromDate);
     url.searchParams.set('toDate', toDate);
     url.searchParams.set('limit', String(PAGE_LIMIT));
@@ -194,7 +261,7 @@ async function fetchWalmartFeeTransactions(
     const res = await fetch(url, { method: 'GET', headers });
     if (!res.ok) {
       const txt = await res.text().then((s) => s.slice(0, 400)).catch(() => '');
-      throw new Error(`Walmart /v3/payments ${res.status}: ${txt || res.statusText}`);
+      throw new Error(`Walmart ${path} ${res.status}: ${txt || res.statusText}`);
     }
     const data = (await res.json()) as Record<string, unknown>;
     const records =
