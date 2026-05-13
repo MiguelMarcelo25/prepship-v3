@@ -1019,6 +1019,50 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     setDragOverPanel(null)
   }
 
+  // Auto-scroll the page while a panel is being dragged near the
+  // viewport edges. Without this, dropping a panel "below the fold"
+  // is impossible — the operator can't see the drop target because
+  // the page won't move on its own during HTML5 drag.
+  //
+  // How it works:
+  //   1. While draggingPanel is set, attach a global `dragover` listener
+  //      that captures the cursor's clientY (with preventDefault so
+  //      the body becomes a valid drop target).
+  //   2. A rAF loop reads the last Y and calls window.scrollBy()
+  //      with a velocity proportional to how close the cursor is to
+  //      the top/bottom edges (60px threshold band).
+  //   3. Cleanup on dragEnd / drop removes both.
+  useEffect(() => {
+    if (!draggingPanel) return
+    let rafId: number | null = null
+    let lastY = -1
+    const SCROLL_THRESHOLD = 80
+    const MAX_SCROLL_SPEED = 22
+    const onDragOver = (ev: DragEvent) => {
+      ev.preventDefault()  // marks body as drop target so the event fires
+      lastY = ev.clientY
+    }
+    const tick = () => {
+      if (lastY >= 0) {
+        const vh = window.innerHeight
+        if (lastY < SCROLL_THRESHOLD) {
+          const intensity = Math.max(0.25, 1 - lastY / SCROLL_THRESHOLD)
+          window.scrollBy(0, -intensity * MAX_SCROLL_SPEED)
+        } else if (lastY > vh - SCROLL_THRESHOLD) {
+          const intensity = Math.max(0.25, 1 - (vh - lastY) / SCROLL_THRESHOLD)
+          window.scrollBy(0, intensity * MAX_SCROLL_SPEED)
+        }
+      }
+      rafId = requestAnimationFrame(tick)
+    }
+    document.addEventListener('dragover', onDragOver, { passive: false })
+    rafId = requestAnimationFrame(tick)
+    return () => {
+      if (rafId !== null) cancelAnimationFrame(rafId)
+      document.removeEventListener('dragover', onDragOver)
+    }
+  }, [draggingPanel])
+
   // Reset the entire dashboard layout (order, sizes, heights, hidden)
   // to factory defaults. Surfaced as a button in edit-mode header.
   const resetDashboardLayout = () => {
@@ -1797,26 +1841,45 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           to resize, click the eye to hide. localStorage persists order,
           sizes, and visibility per browser. */}
       <div
-        className={`mb-3 grid grid-cols-1 items-start gap-3 transition-[background-color,padding] duration-200 xl:grid-cols-3 ${
+        className={`mb-3 grid grid-cols-1 xl:grid-cols-3 transition-[background-color,padding] duration-200 ${
           editMode
             ? 'rounded-card border border-dashed border-brand/30 bg-brand-bg/30 p-3'
             : ''
         }`}
-        style={editMode ? {
-          // Subtle 24px grid pattern in edit mode — visually telegraphs
-          // "this is a layout editor" without overpowering panel content.
-          // Two layered linear-gradients form the cross-hatch; alpha is
-          // very low so panel contents stay readable.
-          backgroundImage:
-            'linear-gradient(to right, rgba(99,102,241,0.10) 1px, transparent 1px), ' +
-            'linear-gradient(to bottom, rgba(99,102,241,0.10) 1px, transparent 1px)',
-          backgroundSize: '24px 24px',
-          backgroundPosition: '-1px -1px',
-        } : undefined}
+        style={{
+          // MASONRY-STYLE LAYOUT — the breakthrough that decouples panel
+          // heights. Each panel gets `grid-row: span N` where N = its
+          // pixel height. Combined with `grid-auto-rows: 1px` micro-row
+          // tracks, every panel literally occupies a different count of
+          // row tracks than its neighbours, so growing one panel can't
+          // grow another. `grid-auto-flow: row dense` packs shorter
+          // panels into gaps left by taller ones (Pinterest-style).
+          gridAutoRows: '1px',
+          gridAutoFlow: 'row dense',
+          columnGap: '12px',
+          rowGap: 0,
+          ...(editMode ? {
+            // Subtle 24px grid pattern in edit mode — visually telegraphs
+            // "this is a layout editor" without overpowering content.
+            backgroundImage:
+              'linear-gradient(to right, rgba(99,102,241,0.10) 1px, transparent 1px), ' +
+              'linear-gradient(to bottom, rgba(99,102,241,0.10) 1px, transparent 1px)',
+            backgroundSize: '24px 24px',
+            backgroundPosition: '-1px -1px',
+          } : {}),
+        }}
       >
         {!hiddenPanels.has('trend') || editMode ? (
         <section
-          style={{ order: panelOrder.indexOf('trend'), minHeight: sectionMinHeightPx(sectionHeights.trend) }}
+          style={{
+            order: panelOrder.indexOf('trend'),
+            // Span exactly (height + 12) micro-row-tracks. The +12 makes
+            // room for the marginBottom that creates visual gap, since
+            // rowGap is 0 on the masonry grid.
+            gridRow: `span ${sectionMinHeightPx(sectionHeights.trend) + 12}`,
+            height: sectionMinHeightPx(sectionHeights.trend),
+            marginBottom: 12,
+          }}
           draggable={editMode}
           onDragStart={handlePanelDragStart('trend')}
           onDragOver={handlePanelDragOver('trend')}
@@ -1934,7 +1997,12 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
 
         {!hiddenPanels.has('topSkus') || editMode ? (
         <section
-          style={{ order: panelOrder.indexOf('topSkus'), minHeight: sectionMinHeightPx(sectionHeights.topSkus) }}
+          style={{
+            order: panelOrder.indexOf('topSkus'),
+            gridRow: `span ${sectionMinHeightPx(sectionHeights.topSkus) + 12}`,
+            height: sectionMinHeightPx(sectionHeights.topSkus),
+            marginBottom: 12,
+          }}
           draggable={editMode}
           onDragStart={handlePanelDragStart('topSkus')}
           onDragOver={handlePanelDragOver('topSkus')}
@@ -2022,7 +2090,12 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
 
         {!hiddenPanels.has('heatmap') || editMode ? (
         <section
-          style={{ order: panelOrder.indexOf('heatmap'), minHeight: sectionMinHeightPx(sectionHeights.heatmap) }}
+          style={{
+            order: panelOrder.indexOf('heatmap'),
+            gridRow: `span ${sectionMinHeightPx(sectionHeights.heatmap) + 12}`,
+            height: sectionMinHeightPx(sectionHeights.heatmap),
+            marginBottom: 12,
+          }}
           draggable={editMode}
           onDragStart={handlePanelDragStart('heatmap')}
           onDragOver={handlePanelDragOver('heatmap')}
@@ -2168,7 +2241,12 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
 
         {!hiddenPanels.has('table') || editMode ? (
         <section
-          style={{ order: panelOrder.indexOf('table'), minHeight: sectionMinHeightPx(sectionHeights.table) }}
+          style={{
+            order: panelOrder.indexOf('table'),
+            gridRow: `span ${sectionMinHeightPx(sectionHeights.table) + 12}`,
+            height: sectionMinHeightPx(sectionHeights.table),
+            marginBottom: 12,
+          }}
           draggable={editMode}
           onDragStart={handlePanelDragStart('table')}
           onDragOver={handlePanelDragOver('table')}
