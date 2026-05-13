@@ -89,6 +89,10 @@ type TrendPoint = {
 type HeatmapCell = {
   day: string
   qty: number
+  // baseline = the average daily units in the prior 30-day window
+  // for this SKU family. Used both to compute the deviation % and
+  // to show "expected vs actual" in the click-to-explain popover.
+  baseline: number
   deviation: number
   tone: 'high' | 'mid' | 'flat' | 'dip' | 'low'
 }
@@ -576,6 +580,7 @@ function buildHeatmap(current: SalesPayload, prior: SalesPayload, limit = 6): He
           return {
             day,
             qty,
+            baseline: compareTo,
             deviation,
             tone: heatmapTone(deviation),
           }
@@ -1161,6 +1166,24 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   // Less than that = no change, so the operator doesn't accidentally
   // resize on a click-and-tiny-jitter.
   const [resizingPanel, setResizingPanel] = useState<SectionKey | null>(null)
+
+  // Heatmap drill-down — operator clicks a cell to see WHY it's
+  // orange / yellow / green. We keep the clicked cell + its SKU
+  // family label in state, then render a small popover-modal with
+  // the underlying numbers (units this day, average prior 30d,
+  // % change, color rule that fired). Null when no cell is open.
+  const [selectedHeatmapCell, setSelectedHeatmapCell] = useState<
+    { family: string; cell: HeatmapCell } | null
+  >(null)
+  // Esc key closes the heatmap-cell modal. Common modal pattern.
+  useEffect(() => {
+    if (!selectedHeatmapCell) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSelectedHeatmapCell(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [selectedHeatmapCell])
   const handleResizeStart = (
     key: SectionKey,
     axis: 'x' | 'y' | 'xy',
@@ -2025,11 +2048,11 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               <div className="mt-2 flex items-center gap-5 text-2xs text-ink-3">
                 <span className="inline-flex items-center gap-2">
                   <span className="h-0.5 w-8 rounded-full bg-brand" />
-                  Current 30 Days
+                  This day
                 </span>
                 <span className="inline-flex items-center gap-2">
                   <span className="h-0.5 w-8 rounded-full border-t border-dashed border-ink-3" />
-                  Prior 30 Days
+                  Same day, last month
                 </span>
               </div>
             </div>
@@ -2073,7 +2096,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                 <YAxis tick={{ fontSize: 10, fill: 'var(--text3)' }} tickLine={false} axisLine={false} allowDecimals={false} width={42} />
                 <Tooltip
                   labelFormatter={formatDayLabel}
-                  formatter={(value: number, name: string) => [formatInt(num(value)), name === 'current' ? 'Current 30 Days' : 'Prior 30 Days']}
+                  formatter={(value: number, name: string) => [formatInt(num(value)), name === 'current' ? 'This day' : 'Same day, last month']}
                   contentStyle={{
                     background: 'var(--surface)',
                     border: '1px solid var(--line)',
@@ -2345,10 +2368,13 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                     <div key={row.label} className="grid grid-cols-[150px_repeat(15,minmax(34px,1fr))] items-center gap-1">
                       <div className="truncate pr-2 text-xs font-semibold text-ink-2" title={row.label}>{row.label}</div>
                       {row.cells.map((cell) => (
-                        <div
+                        <button
                           key={`${row.label}-${cell.day}`}
-                          title={`${formatDayLabel(cell.day)}: ${formatInt(cell.qty)} units, ${formatPct(cell.deviation)} vs baseline`}
-                          className={`${cellHeightClass} rounded-[3px] ring-1 ring-line/40`}
+                          type="button"
+                          onClick={() => setSelectedHeatmapCell({ family: row.label, cell })}
+                          title={`Click to see why this cell is this color`}
+                          aria-label={`${row.label} on ${formatDayLabel(cell.day)} — ${formatInt(cell.qty)} units. Click for details.`}
+                          className={`${cellHeightClass} cursor-pointer rounded-[3px] ring-1 ring-line/40 transition hover:scale-110 hover:ring-2 hover:ring-brand/60 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand`}
                           style={{ backgroundColor: HEATMAP_TONE_HEX[cell.tone] ?? HEATMAP_TONE_HEX.flat }}
                         />
                       ))}
@@ -2912,6 +2938,98 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           <span className="text-2xs text-ink-3">Layout auto-saves to this browser.</span>
         </div>
       ) : null}
+
+      {/* Heatmap cell drill-down modal — opens when an operator
+          clicks a colored cell in the Sales Performance Heatmap.
+          Shows the four pieces of info that determine the color:
+            • The day + SKU family the cell represents
+            • Units sold that day (the numerator)
+            • Average daily units in the prior 30-day window
+              (the baseline, the denominator)
+            • % change vs that baseline (the deviation)
+            • Which color band the deviation falls into (the rule)
+          Closing: click outside the card, the ✕ button, or Esc. */}
+      {selectedHeatmapCell ? (() => {
+        const { family, cell } = selectedHeatmapCell
+        const deltaUnits = cell.qty - cell.baseline
+        const toneRules: Record<HeatmapCell['tone'], { color: string; label: string; rule: string; insight: string }> = {
+          high:  { color: '#4daa57', label: 'Strong growth',  rule: '≥ +20% vs baseline',         insight: 'Selling well above the past month\'s typical pace. Stock to keep up.' },
+          mid:   { color: '#a8d8a3', label: 'Modest growth',   rule: '+10% to +20% vs baseline',  insight: 'Trending up. Monitor for sustained demand before reordering.' },
+          flat:  { color: '#fbe89c', label: 'Steady',          rule: '−10% to +10% vs baseline',  insight: 'In line with the past month\'s typical pace. No action needed.' },
+          dip:   { color: '#f0a767', label: 'Slight decline',  rule: '−10% to −20% vs baseline',  insight: 'Demand softening. Hold off on reorders if inventory is healthy.' },
+          low:   { color: '#d56b6b', label: 'Sharp decline',   rule: '≤ −20% vs baseline',        insight: 'Significant drop. Check for marketplace issues, listing changes, or stockouts.' },
+        }
+        const rule = toneRules[cell.tone] ?? toneRules.flat
+        return (
+          <div
+            className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4"
+            onClick={() => setSelectedHeatmapCell(null)}
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Heatmap details for ${family} on ${formatDayLabel(cell.day)}`}
+          >
+            <div
+              className="w-full max-w-md overflow-hidden rounded-card border border-line bg-surface shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* Header — color swatch + family + date + close X */}
+              <div className="flex items-center justify-between gap-3 border-b border-line px-5 py-4">
+                <div className="flex min-w-0 items-center gap-3">
+                  <span
+                    className="h-8 w-8 flex-shrink-0 rounded-md ring-1 ring-line/40 shadow-sm"
+                    style={{ backgroundColor: rule.color }}
+                    aria-hidden="true"
+                  />
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-extrabold text-ink">{family}</div>
+                    <div className="truncate text-2xs font-semibold text-ink-3">{formatDayLabel(cell.day)} · {rule.label}</div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedHeatmapCell(null)}
+                  className="grid h-8 w-8 flex-shrink-0 place-items-center rounded-card text-ink-3 hover:bg-surface-2 hover:text-ink"
+                  aria-label="Close"
+                >
+                  <CircleX size={18} strokeWidth={2.25} />
+                </button>
+              </div>
+              {/* Numbers grid — units, baseline, change */}
+              <div className="grid grid-cols-3 gap-px bg-line">
+                <div className="bg-surface px-4 py-3 text-center">
+                  <div className="text-2xs font-semibold uppercase tracking-wider text-ink-3">Units this day</div>
+                  <div className="mt-1 font-mono text-xl font-extrabold tabular-nums text-ink">{formatInt(cell.qty)}</div>
+                </div>
+                <div className="bg-surface px-4 py-3 text-center">
+                  <div className="text-2xs font-semibold uppercase tracking-wider text-ink-3">Avg / day last month</div>
+                  <div className="mt-1 font-mono text-xl font-extrabold tabular-nums text-ink">{formatInt(Math.round(cell.baseline))}</div>
+                </div>
+                <div className="bg-surface px-4 py-3 text-center">
+                  <div className="text-2xs font-semibold uppercase tracking-wider text-ink-3">Change</div>
+                  <div className="mt-1 font-mono text-xl font-extrabold tabular-nums" style={{ color: cell.deviation >= 0 ? '#4daa57' : '#d56b6b' }}>
+                    {cell.deviation >= 0 ? '+' : ''}{formatPct(cell.deviation).replace('%', '')}%
+                  </div>
+                </div>
+              </div>
+              {/* Why this color — explanatory band */}
+              <div className="border-t border-line px-5 py-4">
+                <div className="text-2xs font-semibold uppercase tracking-wider text-ink-3">Why this color</div>
+                <div className="mt-1.5 text-tiny text-ink-2 leading-relaxed">
+                  Sold <strong className="font-mono tabular-nums">{formatInt(cell.qty)}</strong> units —{' '}
+                  <strong className="font-mono tabular-nums" style={{ color: cell.deviation >= 0 ? '#4daa57' : '#d56b6b' }}>
+                    {deltaUnits >= 0 ? '+' : ''}{formatInt(Math.round(deltaUnits))}
+                  </strong>{' '}
+                  vs the {formatInt(Math.round(cell.baseline))}/day average last month. That's a{' '}
+                  <strong>{rule.rule}</strong> — we paint that band <strong>{rule.label.toLowerCase()}</strong>.
+                </div>
+                <div className="mt-3 rounded-card bg-surface-2 px-3 py-2 text-2xs italic text-ink-2">
+                  {rule.insight}
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      })() : null}
 
       {refreshing ? (
         <div className="fixed bottom-5 right-5 inline-flex items-center gap-2 rounded-card border border-line bg-surface px-3 py-2 text-tiny font-semibold text-ink-2 shadow-lg">
