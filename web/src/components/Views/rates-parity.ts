@@ -240,8 +240,33 @@ const PROVIDER_TONE_CLASSES = [
   'bg-slate-100 text-slate-800 ring-slate-200',
 ]
 
+// 2026-05-13: explicit tone overrides for well-known providers.
+// The hash-mod-12 lookup below works fine for arbitrary unknown
+// labels, but it deterministically COLLIDES when two well-known
+// labels happen to hash to the same bucket — which is exactly
+// what happened with "shipp" and "shipstation" both landing in
+// the violet slot. Operators couldn't tell them apart at a
+// glance on the Rate Shop page.
+//
+// Anchoring well-known providers to a deliberately-chosen tone:
+//   • Shipp gets sky-blue, matching its brand color (#1f7fd4 in
+//     utils/logo/shipp.tsx). Operators see the same blue on the
+//     Settings → Carriers page and the Rate Shop, reinforcing
+//     "blue = Shipp" recognition.
+//   • ShipStation stays in violet (its current hash result) so
+//     existing muscle memory is preserved.
+//
+// Add a new entry here when another collision shows up. The
+// hash fallback remains for any label not on this list.
+const EXPLICIT_TONE_BY_LABEL: Record<string, string> = {
+  shipp: 'bg-sky-50 text-sky-800 ring-sky-200',
+  shipstation: 'bg-violet-50 text-violet-800 ring-violet-200',
+}
+
 function sourceToneFor(value: unknown): string {
   const text = String(value ?? '').trim().toLowerCase()
+  const explicit = EXPLICIT_TONE_BY_LABEL[text]
+  if (explicit) return explicit
   let hash = 0
   for (let i = 0; i < text.length; i += 1) {
     hash = (hash * 31 + text.charCodeAt(i)) >>> 0
