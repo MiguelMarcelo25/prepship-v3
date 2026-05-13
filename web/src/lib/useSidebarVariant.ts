@@ -35,9 +35,17 @@ const EVENT_NAME = 'prepship_sidebar_variant_change'
 const VALID_KEYS = new Set(Object.keys(SIDEBAR_VARIANTS))
 
 function readStored(): SidebarVariantKey {
-  if (typeof window === 'undefined') return 'A'
-  const stored = window.localStorage.getItem(STORAGE_KEY)
-  if (stored && VALID_KEYS.has(stored)) return stored
+  // 2026-05-13: sidebar variant is LOCKED to 'A' ("Clean Linear")
+  // per operator decision. Previously this read from localStorage
+  // so operators could pick variants B–Y via the floating
+  // DesignPicker — that picker is now removed (see main.tsx) and
+  // the chosen sidebar is hardcoded.
+  //
+  // To re-enable variant switching: restore the original body
+  //   const stored = window.localStorage.getItem(STORAGE_KEY)
+  //   if (stored && VALID_KEYS.has(stored)) return stored
+  //   return 'A'
+  // and re-mount <DesignPicker /> in main.tsx.
   return 'A'
 }
 

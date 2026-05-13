@@ -7,7 +7,14 @@ import { AuthProvider } from './lib/auth';
 import { ToastProvider } from './contexts/ToastContext';
 import { MarkupsProvider } from './contexts/MarkupsContext';
 import { ThemeProvider } from './lib/ThemeProvider';
-import DesignPicker from './components/DesignPicker';
+// 2026-05-13: DesignPicker (floating "Design" widget bottom-right)
+// removed per operator decision to lock the app to one look:
+//   • Theme:   "Sky Blue" (DEFAULT_THEME_ID = 'indigo')
+//   • Sidebar: "Clean Linear" (variant 'A')
+// The picker component file stays on disk in case we want to
+// re-enable it later. To restore: re-add the import below and the
+// <DesignPicker /> mount inside <BrowserRouter>.
+// import DesignPicker from './components/DesignPicker';
 import './index.css';
 import './app-shell.css';
 import './App.css';
@@ -31,7 +38,6 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             <MarkupsProvider>
               <BrowserRouter>
                 <App />
-                <DesignPicker />
               </BrowserRouter>
             </MarkupsProvider>
           </ToastProvider>

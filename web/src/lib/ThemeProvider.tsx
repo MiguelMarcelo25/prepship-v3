@@ -40,8 +40,22 @@ function applyTheme(theme: Theme) {
 }
 
 function readStoredId(): string {
-  if (typeof window === 'undefined') return DEFAULT_THEME_ID
-  return window.localStorage.getItem(STORAGE_KEY) || DEFAULT_THEME_ID
+  // 2026-05-13: theme is LOCKED to DEFAULT_THEME_ID ('indigo' aka
+  // "Sky Blue") per operator decision. Previously this read from
+  // localStorage so operators could pick alternate themes via the
+  // floating DesignPicker — that picker is now removed (see
+  // main.tsx) and the chosen theme is hardcoded.
+  //
+  // To re-enable theme switching: restore the original body
+  //   `return window.localStorage.getItem(STORAGE_KEY) || DEFAULT_THEME_ID`
+  // and re-mount <DesignPicker /> in main.tsx.
+  //
+  // Note: the useEffect below still writes the active id to
+  // localStorage every render. That's harmless — keeps the storage
+  // value in sync with the locked theme so if we ever re-enable
+  // the picker, returning operators land on Sky Blue instead of
+  // whatever stale id they last picked.
+  return DEFAULT_THEME_ID
 }
 
 interface ProviderProps {
