@@ -482,7 +482,7 @@ async function runMergeJob(
         const groupId = e.skuGroupId ?? '__ungrouped__';
         if (mergeHeaders && groupId !== lastGroup) {
           const headerPage = merged.addPage([288, 432]);
-          drawHeader(headerPage, e, groupSizes.get(groupId) ?? 1, font, fontReg, rgb);
+          drawHeader(headerPage, e, groupSizes.get(groupId) ?? 1, font, fontReg, rgb, isMockLabel);
           lastGroup = groupId;
         }
       };
@@ -689,7 +689,15 @@ function drawHeader(
   totalOrders: number,
   font: import('pdf-lib').PDFFont,
   fontReg: import('pdf-lib').PDFFont,
-  rgb: typeof import('pdf-lib').rgb
+  rgb: typeof import('pdf-lib').rgb,
+  // 2026-05-14: drawHeader now takes an isTest flag so it can stamp
+  // a small red "TEST" marker on the BATCH HEADER bar when the
+  // entry's label URL is a mock (i.e. the operator is running the
+  // test-order flow rather than a real shipment). Layout below the
+  // bar is identical between test and real — only the marker changes
+  // — so what an operator sees in test prints faithfully predicts
+  // what their boss will see in real prints.
+  isTest = false
 ) {
   const { width, height } = page.getSize();
   const cx = width / 2;
@@ -710,6 +718,21 @@ function drawHeader(
     font,
     color: rgb(1, 1, 1),
   });
+  // Test-mode stamp: small red "TEST" on the right side of the
+  // BATCH HEADER bar. Doesn't shift any other content — the bar is
+  // a fixed-height strip and "TEST" sits in the otherwise-empty
+  // right gutter of that strip.
+  if (isTest) {
+    const testLabel = 'TEST';
+    const testSize = 11;
+    page.drawText(testLabel, {
+      x: width - pad - font.widthOfTextAtSize(testLabel, testSize),
+      y: height - 26,
+      size: testSize,
+      font,
+      color: rgb(1, 0.45, 0.45),
+    });
+  }
 
   let y = height - 60;
   const drawWrapped = (
