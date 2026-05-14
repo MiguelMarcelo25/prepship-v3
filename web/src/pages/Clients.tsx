@@ -262,19 +262,21 @@ export default function Clients() {
       minWidth: 120,
       sortable: true,
       sortValue: (row) => row.storeIds.length,
-      // 2026-05-13: added `justify-center` to the inner flex row.
-      // The parent <td>'s `text-center` (applied by the Table primitive)
-      // doesn't propagate into flex children — flex layout uses
-      // justify-content for cross-axis positioning, not text-align.
-      // Without this, the icon + store-id badges left-anchored in the
-      // cell while the column header sat centered above them —
-      // operator-reported asymmetry. Same fix template applies to any
-      // other future row-direction flex container inside a Table cell.
+      // 2026-05-14 (operator request): left-align the Stores cell so the
+      // store icon + id badges anchor to the cell's left edge, matching
+      // the Client column to its left and reading naturally as a row
+      // starting from the client's name. Previously `justify-center`
+      // pushed the badges to the cell midline. The earlier comment
+      // about the parent <td> being `text-center` is stale — Table
+      // (web/src/components/ui/Table.tsx:1103) actually hardcodes
+      // text-left on every cell regardless of column.align, so the
+      // outer alignment was already left; only the inner flex was
+      // overriding it.
       render: (row) => (
         row.storeIds.length === 0 ? (
           <span className="text-[11px] text-ink-3 italic">none</span>
         ) : (
-          <div className="flex items-center justify-center gap-1 flex-wrap">
+          <div className="flex items-center justify-start gap-1 flex-wrap">
             <HiBuildingStorefront size={13} className="text-indigo-500 flex-shrink-0" />
             {row.storeIds.slice(0, 3).map((sid) => (
               <span key={sid} className="font-mono text-[10.5px] font-semibold px-1.5 py-0.5 rounded bg-surface-2 text-ink-2 ring-1 ring-line/70" title={`Store ${sid}`}>
@@ -348,7 +350,15 @@ export default function Clients() {
     },
     {
       key: 'actions',
-      label: '',
+      // 2026-05-14 (operator request): give the actions column a
+      // visible header label instead of an empty string — operators
+      // scanning the table want a textual cue above the icon row that
+      // matches the conventions of every other column. Header text
+      // alignment currently rides on the Table primitive's hardcoded
+      // text-left (see Table.tsx:1103) so the title reads at the left
+      // edge of the column even though icons sit at the right edge —
+      // separate latent Table bug to fix once we audit other tables.
+      label: 'Actions',
       // 2026-05-13: bumped width 110 → 140 and minWidth 90 → 120 to
       // accommodate the larger 36×36 row-action buttons (was 28×28).
       width: 140,
@@ -479,8 +489,16 @@ export default function Clients() {
                       key={f}
                       type="button"
                       onClick={() => setStatusFilter(f)}
+                      // 2026-05-14 (operator request): active pill now uses
+                      // the PrepShip brand color #03A9F4 (Material Light
+                      // Blue 500) instead of the previous flat dark `bg-ink`.
+                      // Hex literal kept inline (rather than swapped for
+                      // `bg-brand`) so the color is exact regardless of
+                      // whatever the active theme's --brand-rgb is set to;
+                      // if/when the global theme is updated to 03A9F4 this
+                      // can be folded back to `bg-brand`.
                       className={`px-2.5 py-1 rounded text-[10.5px] font-bold uppercase tracking-wider transition ${
-                        isActive ? 'bg-ink text-white' : 'text-ink-2 hover:text-ink hover:bg-white/60'
+                        isActive ? 'bg-[#03A9F4] text-white shadow-sm' : 'text-ink-2 hover:text-ink hover:bg-white/60'
                       }`}
                     >
                       {f}
