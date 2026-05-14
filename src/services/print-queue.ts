@@ -837,13 +837,19 @@ function drawHeader(
   }
 
   // Top section spans from below the BATCH HEADER bar (height-40)
-  // down to the divider top (dividerY+2). Vertically center the
-  // content block in that zone, with a minimum top padding so the
-  // SKU doesn't kiss the BATCH HEADER bar even for huge descriptions.
+  // down to the divider top (dividerY+2). Boss wants the content
+  // block to sit LOWER in that zone — closer to the divider — not
+  // dead-centered. We compute the naturally-centered padding then
+  // add a 50 pt nudge downward (= more padding above). A cap keeps
+  // the QTY line from kissing the divider on long descriptions:
+  // the block can shift down freely until only 8 pt of gap remains
+  // above the divider, then it stops.
   const topSectionTop = height - 40;
   const topSectionBottom = dividerY + 2;
   const topSectionHeight = topSectionTop - topSectionBottom;
-  const verticalPadding = Math.max(10, (topSectionHeight - contentHeight) / 2);
+  const naturalPadding = Math.max(10, (topSectionHeight - contentHeight) / 2);
+  const maxPadding = Math.max(10, topSectionHeight - contentHeight - 8);
+  const verticalPadding = Math.min(maxPadding, naturalPadding + 50);
   let y = topSectionTop - verticalPadding;
 
   if (entry.multiSkuData && entry.multiSkuData.length > 0) {
