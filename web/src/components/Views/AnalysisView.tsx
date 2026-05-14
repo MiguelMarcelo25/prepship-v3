@@ -602,30 +602,65 @@ function DrawerBarValueLabel(props: {
 interface AnalysisViewProps {
   /** Pre-fill the SKU search field. Set by the Dashboard click-to-open flow. */
   initialSearch?: string
+  /** Dashboard click-through context so Analysis opens on the same filtered window. */
+  initialFrom?: string
+  initialTo?: string
+  initialClientId?: number | null
+  initialRequestId?: number
 }
 
-export default function AnalysisView({ initialSearch }: AnalysisViewProps = {}) {
+function inferPresetDays(from: string | undefined, to: string | undefined) {
+  if (!from || !to) return null
+  for (const days of [30, 90, 180, 365]) {
+    const preset = getAnalysisPresetRange(days)
+    if (preset.from === from && preset.to === to) return days
+  }
+  return null
+}
+
+export default function AnalysisView({
+  initialSearch,
+  initialFrom,
+  initialTo,
+  initialClientId,
+  initialRequestId = 0,
+}: AnalysisViewProps = {}) {
   const toastContext = useContext(ToastContext)
   const stickyPanelRef = useRef<HTMLDivElement | null>(null)
   const initialFilters = getInitialAnalysisFilters(
     typeof window === 'undefined' ? null : window.localStorage,
   )
-  const [from, setFrom] = useState(initialFilters.from)
-  const [to, setTo] = useState(initialFilters.to)
-  const [presetDays, setPresetDays] = useState<number | null>(initialFilters.presetDays)
-  const [clientId, setClientId] = useState('')
+  const [from, setFrom] = useState(initialFrom ?? initialFilters.from)
+  const [to, setTo] = useState(initialTo ?? initialFilters.to)
+  const [presetDays, setPresetDays] = useState<number | null>(
+    initialFrom && initialTo ? inferPresetDays(initialFrom, initialTo) : initialFilters.presetDays,
+  )
+  const [clientId, setClientId] = useState(
+    initialClientId != null && Number.isFinite(Number(initialClientId)) && Number(initialClientId) > 0
+      ? String(initialClientId)
+      : '',
+  )
   const [search, setSearch] = useState(initialSearch ?? '')
 
-  // Keep search in sync if the parent passes a new initialSearch (e.g. user
-  // returns to dashboard and clicks a different SKU). Only fires when the
-  // incoming prop is non-empty so it never *clears* a search the user is
-  // typing into the field directly.
+  // Keep dashboard click-throughs in sync. The Dashboard now passes the SKU
+  // plus its active date/client filters, so Analysis does not reuse a stale
+  // custom range from localStorage when the operator expects the same 30d row.
   useEffect(() => {
     if (initialSearch && initialSearch !== search) {
       setSearch(initialSearch)
     }
+    if (initialFrom && initialTo) {
+      setFrom(initialFrom)
+      setTo(initialTo)
+      setPresetDays(inferPresetDays(initialFrom, initialTo))
+    }
+    if (initialClientId != null && Number.isFinite(Number(initialClientId)) && Number(initialClientId) > 0) {
+      setClientId(String(initialClientId))
+    } else if (initialRequestId > 0) {
+      setClientId('')
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialSearch])
+  }, [initialRequestId])
   // Sort state — session-only, NOT persisted (boss directive
   // 2026-05-07): every page refresh resets to qty/desc. Within a
   // session the operator can click any column header to re-sort and

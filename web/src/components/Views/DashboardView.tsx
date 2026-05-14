@@ -160,7 +160,7 @@ type DashboardSortKey =
   | 'changePct'
 
 interface DashboardViewProps {
-  onOpenSku?: (sku: string) => void
+  onOpenSku?: (sku: string, context?: { from: string; to: string; clientId?: number | null }) => void
 }
 
 const TABLE_PAGE_SIZE = 10
@@ -2663,7 +2663,11 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                 <button
                   key={row.sku}
                   type="button"
-                  onClick={() => onOpenSku?.(row.sku)}
+                  onClick={() => onOpenSku?.(row.sku, {
+                    from: dateRange.from,
+                    to: dateRange.to,
+                    clientId: selectedClientId,
+                  })}
                   className="group grid w-full grid-cols-[32px_minmax(0,1fr)_auto] items-center gap-3 rounded-md px-1.5 py-2.5 text-left transition-colors hover:bg-surface-2"
                 >
                   {/* Rank badge — brand-tinted circle anchors the eye
@@ -3261,7 +3265,11 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                   <td className={`px-3 ${rowPadY} overflow-hidden`}>
                     <button
                       type="button"
-                      onClick={() => onOpenSku?.(row.sku)}
+                      onClick={() => onOpenSku?.(row.sku, {
+                        from: dateRange.from,
+                        to: dateRange.to,
+                        clientId: selectedClientId,
+                      })}
                       className="flex w-full min-w-0 items-center gap-2 text-left"
                     >
                       <span className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-md border border-line bg-surface-2">

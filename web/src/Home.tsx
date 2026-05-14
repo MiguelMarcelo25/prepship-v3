@@ -49,6 +49,13 @@ type ViewType = 'orders' | 'dashboard' | 'inventory' | 'clients' | 'locations' |
 type ContentView = Exclude<ViewType, 'manifests'>
 type OrderStatus = 'awaiting_shipment' | 'shipped' | 'cancelled'
 type OrdersDateFilter = '' | 'this-month' | 'last-month' | 'last-30' | 'last-90' | 'custom'
+type AnalysisOpenContext = {
+  sku: string
+  from?: string
+  to?: string
+  clientId?: number | null
+  requestId: number
+}
 
 const ZOOM_OPTIONS = [
   { value: 75, label: '75% — Very Compact' },
@@ -264,9 +271,13 @@ export default function Home() {
     setFilterResetVersion((v) => v + 1)
   }
   // Separate slot for SKU pre-fills coming from Dashboard clicks. Routed into
-  // AnalysisView's `initialSearch` prop so we don't pollute the orders/global
-  // search box with a SKU that's only meaningful on the Analysis screen.
-  const [analysisInitialSku, setAnalysisInitialSku] = useState('')
+  // AnalysisView so we don't pollute the orders/global search box with a SKU
+  // that's only meaningful on the Analysis screen. We also carry the Dashboard
+  // date/client filters so the click-through compares the exact same window.
+  const [analysisInitialContext, setAnalysisInitialContext] = useState<AnalysisOpenContext>({
+    sku: '',
+    requestId: 0,
+  })
   const [dateFilter, setDateFilter] = useState<OrdersDateFilter>('last-30')
   const [ordersDateRange, setOrdersDateRange] = useState<{ start?: string; end?: string }>(
     () => getResolvedDateRange('last-30'),
@@ -983,9 +994,15 @@ export default function Home() {
             <Suspense fallback={<PageSkeleton />}>
               {displayView === 'dashboard' ? (
               <DashboardView
-                onOpenSku={(sku) => {
+                onOpenSku={(sku, context) => {
                   if (!sku) return
-                  setAnalysisInitialSku(sku)
+                  setAnalysisInitialContext((current) => ({
+                    sku,
+                    from: context?.from,
+                    to: context?.to,
+                    clientId: context?.clientId ?? null,
+                    requestId: current.requestId + 1,
+                  }))
                   navigate('/analysis')
                 }}
               />
@@ -1078,7 +1095,13 @@ export default function Home() {
             ) : displayView === 'rates' ? (
               <RatesView />
             ) : displayView === 'analysis' ? (
-              <AnalysisView initialSearch={analysisInitialSku} />
+              <AnalysisView
+                initialSearch={analysisInitialContext.sku}
+                initialFrom={analysisInitialContext.from}
+                initialTo={analysisInitialContext.to}
+                initialClientId={analysisInitialContext.clientId}
+                initialRequestId={analysisInitialContext.requestId}
+              />
             ) : displayView === 'settings' ? (
               <SettingsView />
             ) : displayView === 'billing' ? (
