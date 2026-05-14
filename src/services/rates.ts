@@ -275,6 +275,52 @@ function rateTotal(rate: Rate): number {
   );
 }
 
+function rateMoneyKey(value: unknown): string {
+  const n = Number(value ?? 0);
+  return Number.isFinite(n) ? n.toFixed(4) : '0.0000';
+}
+
+function rateTextKey(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase().replace(/\s+/g, '_');
+}
+
+function rateDedupeKey(rate: Rate): string {
+  const serviceKey = rateTextKey(rate.service_code || rate.service_type);
+  return [
+    rateTextKey(rate.carrier_id),
+    rateTextKey(rate.carrier_code),
+    serviceKey,
+    rateTextKey(rate.package_type),
+    rateMoneyKey(rate.shipping_amount?.amount),
+    rateMoneyKey(rate.confirmation_amount?.amount),
+    rateMoneyKey(rate.insurance_amount?.amount),
+    rateMoneyKey(rate.other_amount?.amount),
+    rateTextKey(rate.estimated_delivery_date ?? rate.delivery_days),
+  ].join('|');
+}
+
+function dedupeRates(rates: Rate[], source: string): Rate[] {
+  const byKey = new Map<string, Rate>();
+  for (const rate of rates) {
+    const key = rateDedupeKey(rate);
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, rate);
+      continue;
+    }
+    if (!existing.rate_id && rate.rate_id) {
+      byKey.set(key, rate);
+    }
+  }
+
+  const unique = [...byKey.values()];
+  const removed = rates.length - unique.length;
+  if (removed > 0) {
+    console.info(`[rates] removed ${removed} duplicate ${source} rate${removed === 1 ? '' : 's'}`);
+  }
+  return unique;
+}
+
 function pickBestRate(rates: Rate[]): Rate | null {
   if (!rates.length) return null;
   return [...rates].sort((a, b) => rateTotal(a) - rateTotal(b))[0]!;
@@ -587,7 +633,10 @@ export async function fetchLiveRates(input: RateInput): Promise<Rate[]> {
   // v2-parity: filter blocked service codes + package types + names.
   // Sort cheapest first (v2 sorts by shipmentCost + otherCost; v4 sort
   // uses shipping_amount only since markups apply at read-time later).
-  const filtered = lifted.filter((r) => !isBlockedRate(r, input.storeId ?? null));
+  const filtered = dedupeRates(
+    lifted.filter((r) => !isBlockedRate(r, input.storeId ?? null)),
+    'live'
+  );
   filtered.sort((a, b) => rateTotal(a) - rateTotal(b));
 
   if (filtered.length) return filtered;
@@ -625,7 +674,19 @@ export async function getRates(
       .where(eq(rateCache.cacheKey, key))
       .limit(1);
     if (cached && Date.now() - cached.fetchedAt.getTime() < CACHE_TTL_MS) {
-      const cachedRaw = cached.rates as Rate[];
+      const cachedRaw = dedupeRates(cached.rates as Rate[], 'cached');
+      if (cachedRaw.length !== (cached.rates as Rate[]).length) {
+        void db
+          .update(rateCache)
+          .set({
+            rates: cachedRaw as unknown[],
+            bestRate: pickBestRate(cachedRaw),
+          })
+          .where(eq(rateCache.cacheKey, key))
+          .catch((err) =>
+            console.warn('[rates] duplicate rate cache repair failed:', err instanceof Error ? err.message : err)
+          );
+      }
       const cachedRates = applyMarkups(cachedRaw, markups);
       return {
         rates: cachedRates,

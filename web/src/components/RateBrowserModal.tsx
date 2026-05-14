@@ -601,11 +601,58 @@ function buildTestMockRateSeeds(
   });
 }
 
+function rateRowTextKey(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase().replace(/\s+/g, '_');
+}
+
+function rateRowMoneyKey(value: unknown): string {
+  const n = Number(value ?? 0);
+  return Number.isFinite(n) ? n.toFixed(4) : '0.0000';
+}
+
+function rateRowDedupeKey(rate: RateRow): string {
+  const raw = rate.raw ?? {};
+  const rawOriginalShipping = Number(raw?.original_amount?.amount);
+  const shipmentCost = Number.isFinite(rawOriginalShipping)
+    ? rawOriginalShipping
+    : Number(rate.shipmentCost) || 0;
+  return [
+    rateRowTextKey(rate.shippingProviderId ?? raw?.carrier_id),
+    rateRowTextKey(rate.carrierCode ?? raw?.carrier_code),
+    rateRowTextKey(rate.serviceCode ?? raw?.service_code ?? rate.serviceName ?? raw?.service_type),
+    rateRowTextKey(raw?.package_type),
+    rateRowMoneyKey(shipmentCost),
+    rateRowMoneyKey(rate.otherCost ?? raw?.other_amount?.amount),
+    rateRowMoneyKey(raw?.confirmation_amount?.amount),
+    rateRowMoneyKey(raw?.insurance_amount?.amount),
+    rateRowTextKey((rate as any).estimatedDelivery ?? raw?.estimated_delivery_date ?? (rate as any).deliveryDays ?? raw?.delivery_days),
+  ].join('|');
+}
+
+function dedupeRateRows(rates: RateRow[]): RateRow[] {
+  const byKey = new Map<string, RateRow>();
+  for (const rate of rates) {
+    const key = rateRowDedupeKey(rate);
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, rate);
+      continue;
+    }
+    if (!existing.raw?.rate_id && rate.raw?.rate_id) {
+      byKey.set(key, rate);
+    }
+  }
+  return [...byKey.values()];
+}
+
 function groupRatesByProviderId(rates: RateRow[]): Record<string, RateRow[]> {
   return rates.reduce<Record<string, RateRow[]>>((acc, rate) => {
     if (rate.shippingProviderId == null) return acc;
     const key = String(rate.shippingProviderId);
-    (acc[key] ??= []).push(rate);
+    const bucket = (acc[key] ??= []);
+    if (!bucket.some((existing) => rateRowDedupeKey(existing) === rateRowDedupeKey(rate))) {
+      bucket.push(rate);
+    }
     return acc;
   }, {});
 }
@@ -1084,30 +1131,31 @@ export default function RateBrowserModal({
       }
       setRateMetaByPid(nextMetaByPid);
 
-      liveFetchedRates = (raw ?? [])
-        .map((r) => {
-          const pid =
-            typeof r.shippingProviderId === 'number'
-              ? r.shippingProviderId
-              : Number(r.shippingProviderId);
-          const rawCarrierId = typeof r.raw?.carrier_id === 'string' ? r.raw.carrier_id : null;
-          const account =
-            (Number.isFinite(pid) ? accountByPid.get(pid) : undefined) ??
-            (rawCarrierId ? accountByCarrierId.get(rawCarrierId) : undefined);
-          return {
-            ...r,
-            shippingProviderId: account?.shippingProviderId ?? r.shippingProviderId,
-            carrierNickname: r.carrierNickname ?? formatAccountDisplay(account, ''),
-          };
-        })
-        .filter((r) => {
-          const pid =
-            typeof r.shippingProviderId === 'number'
-              ? r.shippingProviderId
-              : Number(r.shippingProviderId);
-          return Number.isFinite(pid) && accountByPid.has(pid);
-        })
-        .sort((a, b) => (a.shipmentCost + a.otherCost) - (b.shipmentCost + b.otherCost));
+      liveFetchedRates = dedupeRateRows(
+        (raw ?? [])
+          .map((r) => {
+            const pid =
+              typeof r.shippingProviderId === 'number'
+                ? r.shippingProviderId
+                : Number(r.shippingProviderId);
+            const rawCarrierId = typeof r.raw?.carrier_id === 'string' ? r.raw.carrier_id : null;
+            const account =
+              (Number.isFinite(pid) ? accountByPid.get(pid) : undefined) ??
+              (rawCarrierId ? accountByCarrierId.get(rawCarrierId) : undefined);
+            return {
+              ...r,
+              shippingProviderId: account?.shippingProviderId ?? r.shippingProviderId,
+              carrierNickname: r.carrierNickname ?? formatAccountDisplay(account, ''),
+            };
+          })
+          .filter((r) => {
+            const pid =
+              typeof r.shippingProviderId === 'number'
+                ? r.shippingProviderId
+                : Number(r.shippingProviderId);
+            return Number.isFinite(pid) && accountByPid.has(pid);
+          })
+      ).sort((a, b) => (a.shipmentCost + a.otherCost) - (b.shipmentCost + b.otherCost));
 
       const grouped = groupRatesByProviderId(liveFetchedRates);
       const nextRatesByPid: Record<string, RateRow[]> = {};
@@ -1193,7 +1241,8 @@ export default function RateBrowserModal({
       if (seenPids.has(pid)) continue;
       out.push(...rates);
     }
-    return filterBySvcClass(out).sort((a, b) => rateDisplayTotal(a, markups) - rateDisplayTotal(b, markups));
+    return dedupeRateRows(filterBySvcClass(out))
+      .sort((a, b) => rateDisplayTotal(a, markups) - rateDisplayTotal(b, markups));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ratesByPid, rateShippingAccounts, svcClass, markups]);
 

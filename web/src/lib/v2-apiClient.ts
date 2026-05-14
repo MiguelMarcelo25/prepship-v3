@@ -1067,6 +1067,74 @@ async function fetchDirectCarrierRates(
   };
 }
 
+function rateResultTextKey(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase().replace(/\s+/g, '_');
+}
+
+function rateResultMoneyKey(value: unknown): string {
+  const n = Number(value ?? 0);
+  return Number.isFinite(n) ? n.toFixed(4) : '0.0000';
+}
+
+function rateResultDedupeKey(rate: Record<string, unknown>): string {
+  const raw = rate.raw && typeof rate.raw === 'object'
+    ? rate.raw as Record<string, unknown>
+    : {};
+  const rawShipping = raw.shipping_amount && typeof raw.shipping_amount === 'object'
+    ? raw.shipping_amount as Record<string, unknown>
+    : {};
+  const rawOriginal = raw.original_amount && typeof raw.original_amount === 'object'
+    ? raw.original_amount as Record<string, unknown>
+    : {};
+  const rawOther = raw.other_amount && typeof raw.other_amount === 'object'
+    ? raw.other_amount as Record<string, unknown>
+    : {};
+  const rawConfirmation = raw.confirmation_amount && typeof raw.confirmation_amount === 'object'
+    ? raw.confirmation_amount as Record<string, unknown>
+    : {};
+  const rawInsurance = raw.insurance_amount && typeof raw.insurance_amount === 'object'
+    ? raw.insurance_amount as Record<string, unknown>
+    : {};
+  const shipmentCost = rawOriginal.amount ?? rate.shipmentCost ?? rawShipping.amount ?? rate.amount ?? 0;
+  const otherCost =
+    Number(rate.otherCost ?? 0) ||
+    (Number(rawOther.amount ?? 0) + Number(rawConfirmation.amount ?? 0));
+
+  return [
+    rateResultTextKey(rate.shippingProviderId ?? raw.carrier_id),
+    rateResultTextKey(rate.carrierCode ?? raw.carrier_code),
+    rateResultTextKey(rate.serviceCode ?? raw.service_code ?? rate.serviceName ?? raw.service_type),
+    rateResultTextKey(raw.package_type),
+    rateResultMoneyKey(shipmentCost),
+    rateResultMoneyKey(otherCost),
+    rateResultMoneyKey(rawConfirmation.amount),
+    rateResultMoneyKey(rawInsurance.amount),
+    rateResultTextKey(raw.estimated_delivery_date ?? raw.delivery_days ?? rate.deliveryDays),
+  ].join('|');
+}
+
+function dedupeRateResults<T extends Record<string, unknown>>(rates: T[]): T[] {
+  const byKey = new Map<string, T>();
+  for (const rate of rates) {
+    const key = rateResultDedupeKey(rate);
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, rate);
+      continue;
+    }
+    const existingRaw = existing.raw && typeof existing.raw === 'object'
+      ? existing.raw as Record<string, unknown>
+      : {};
+    const rateRaw = rate.raw && typeof rate.raw === 'object'
+      ? rate.raw as Record<string, unknown>
+      : {};
+    if (!existingRaw.rate_id && rateRaw.rate_id) {
+      byKey.set(key, rate);
+    }
+  }
+  return [...byKey.values()];
+}
+
 // Maps v4's ShipStation-v2-passthrough rate object to the v2-legacy shape
 // the bulk-ported components read. Defensive: if a caller already hands us
 // v2-shape data (has `amount` + `carrierCode`), return it unchanged.
@@ -3385,7 +3453,7 @@ export const apiClient = {
             : Promise.resolve({ rates: [], errors: [], metas: [] }),
         ]);
 
-        const combined = [...shipStationRates, ...directRates.rates].sort((left, right) => {
+        const combined = dedupeRateResults([...shipStationRates, ...directRates.rates]).sort((left, right) => {
           const leftAmount = Number((left as any).shipmentCost ?? (left as any).amount ?? 0) +
             Number((left as any).otherCost ?? 0);
           const rightAmount = Number((right as any).shipmentCost ?? (right as any).amount ?? 0) +
