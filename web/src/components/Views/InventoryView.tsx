@@ -1055,6 +1055,12 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
         .map(([sku, info]) => ({
           value: sku,
           label: info?.name ?? '',
+          // 2026-05-15: thread the imageUrl pulled from the inventory
+          // row through to the Autosuggest dropdown. null when the
+          // row has no image — Autosuggest renders an empty
+          // placeholder square in that case (still reserves the
+          // 36×36 column so options align cleanly).
+          imageUrl: info?.imageUrl ?? null,
         }))
         .sort((a, b) => a.value.localeCompare(b.value)),
     [receiveSkuMap],
@@ -1961,6 +1967,12 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
             invSkuId: row.id,
             name: row.name || '',
             unitsPerPack: row.units_per_pack || 1,
+            // 2026-05-15: forward the inventory row's image URL so
+            // the Receive-tab Autosuggest dropdown can render a
+            // product thumbnail next to each option. row.imageUrl
+            // is already populated by apiClient.fetchInventory —
+            // we just stopped throwing it away at the lookup step.
+            imageUrl: (row as { imageUrl?: string | null }).imageUrl ?? null,
           }
         }
         setReceiveSkuMap(nextMap)

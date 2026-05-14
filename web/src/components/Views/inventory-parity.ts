@@ -24,6 +24,14 @@ export interface ReceiveSkuLookup {
   invSkuId?: number
   name: string
   unitsPerPack: number
+  /** 2026-05-15: optional thumbnail URL pulled from the inventory
+   *  row's imageUrl column. Surfaced through to the Receive-tab
+   *  Autosuggest dropdown so operators can recognize a SKU by its
+   *  product photo instead of decoding the SKU code. Null/undefined
+   *  when the inventory row has no image — Autosuggest renders an
+   *  empty placeholder square in that case to keep row heights
+   *  consistent. */
+  imageUrl?: string | null
 }
 
 export interface ReceiveDraftRow {

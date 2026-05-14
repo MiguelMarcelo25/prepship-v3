@@ -46,6 +46,12 @@ export interface AutosuggestOption {
   label: string
   /** Optional tertiary hint (e.g. inventory count, client name). */
   hint?: string
+  /** Optional thumbnail URL rendered to the LEFT of the text content.
+   *  When present, an empty placeholder square is reserved even if the
+   *  image fails to load — keeps row height stable so keyboard
+   *  navigation doesn't shift content under the cursor. Null/undefined
+   *  hides the thumbnail column entirely for that option. */
+  imageUrl?: string | null
 }
 
 interface Props {
@@ -343,28 +349,68 @@ const Autosuggest = forwardRef<AutosuggestHandle, Props>(function Autosuggest(
                   }}
                   onMouseEnter={() => setActiveIndex(index)}
                   className={`
-                    block w-full text-left px-3 py-2
+                    flex w-full items-center gap-2.5 text-left px-3 py-2
                     border-b border-line/50 last:border-b-0
                     transition-colors
                     ${isActive ? 'bg-brand/10' : 'bg-surface hover:bg-surface-2'}
                     focus:outline-none
                   `}
                 >
-                  <div className="flex items-baseline gap-2">
-                    <span className="font-mono text-[12px] font-bold text-ink truncate">
-                      {option.value}
-                    </span>
-                    {option.hint ? (
-                      <span className="text-[10.5px] text-ink-3 tabular-nums flex-shrink-0">
-                        {option.hint}
-                      </span>
-                    ) : null}
-                  </div>
-                  {option.label ? (
-                    <div className="text-[11.5px] text-ink-2 truncate mt-0.5">
-                      {option.label}
+                  {/* Thumbnail column — present only when imageUrl is
+                      defined for this option. The 36x36 wrapper is
+                      always reserved (not collapsed) so options with
+                      missing/loading images don't visually jitter the
+                      list as new rows render. loading="lazy" +
+                      decoding="async" stagger network fetches so a
+                      slow image host doesn't block the dropdown
+                      becoming interactive. onError swap to a neutral
+                      placeholder ring so a 404 thumbnail doesn't
+                      render the broken-image glyph (operator-visible
+                      eyesore). */}
+                  {option.imageUrl !== undefined ? (
+                    <div
+                      className="
+                        flex-shrink-0 w-9 h-9 rounded
+                        bg-surface-2 ring-1 ring-line/70
+                        overflow-hidden
+                        flex items-center justify-center
+                      "
+                    >
+                      {option.imageUrl ? (
+                        <img
+                          src={option.imageUrl}
+                          alt=""
+                          loading="lazy"
+                          decoding="async"
+                          referrerPolicy="no-referrer"
+                          className="w-full h-full object-cover"
+                          onError={(event) => {
+                            // Hide on load failure so the empty
+                            // placeholder shows instead of the
+                            // browser's broken-image glyph.
+                            (event.currentTarget as HTMLImageElement).style.display = 'none'
+                          }}
+                        />
+                      ) : null}
                     </div>
                   ) : null}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-baseline gap-2">
+                      <span className="font-mono text-[12px] font-bold text-ink truncate">
+                        {option.value}
+                      </span>
+                      {option.hint ? (
+                        <span className="text-[10.5px] text-ink-3 tabular-nums flex-shrink-0">
+                          {option.hint}
+                        </span>
+                      ) : null}
+                    </div>
+                    {option.label ? (
+                      <div className="text-[11.5px] text-ink-2 truncate mt-0.5">
+                        {option.label}
+                      </div>
+                    ) : null}
+                  </div>
                 </button>
               )
             })
