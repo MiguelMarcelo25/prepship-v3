@@ -290,7 +290,6 @@ function rateDedupeKey(rate: Rate): string {
     rateTextKey(rate.carrier_id),
     rateTextKey(rate.carrier_code),
     serviceKey,
-    rateTextKey(rate.package_type),
     rateMoneyKey(rate.shipping_amount?.amount),
     rateMoneyKey(rate.confirmation_amount?.amount),
     rateMoneyKey(rate.insurance_amount?.amount),

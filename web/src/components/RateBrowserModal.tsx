@@ -620,7 +620,6 @@ function rateRowDedupeKey(rate: RateRow): string {
     rateRowTextKey(rate.shippingProviderId ?? raw?.carrier_id),
     rateRowTextKey(rate.carrierCode ?? raw?.carrier_code),
     rateRowTextKey(rate.serviceCode ?? raw?.service_code ?? rate.serviceName ?? raw?.service_type),
-    rateRowTextKey(raw?.package_type),
     rateRowMoneyKey(shipmentCost),
     rateRowMoneyKey(rate.otherCost ?? raw?.other_amount?.amount),
     rateRowMoneyKey(raw?.confirmation_amount?.amount),

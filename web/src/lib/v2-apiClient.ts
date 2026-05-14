@@ -1104,7 +1104,6 @@ function rateResultDedupeKey(rate: Record<string, unknown>): string {
     rateResultTextKey(rate.shippingProviderId ?? raw.carrier_id),
     rateResultTextKey(rate.carrierCode ?? raw.carrier_code),
     rateResultTextKey(rate.serviceCode ?? raw.service_code ?? rate.serviceName ?? raw.service_type),
-    rateResultTextKey(raw.package_type),
     rateResultMoneyKey(shipmentCost),
     rateResultMoneyKey(otherCost),
     rateResultMoneyKey(rawConfirmation.amount),
