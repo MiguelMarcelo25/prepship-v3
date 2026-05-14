@@ -2,6 +2,13 @@ import { lazy, Suspense } from 'react';
 import { Route, Routes } from 'react-router-dom';
 import ProtectedRoute from './components/ProtectedRoute';
 import PageSkeleton from './components/PageSkeleton';
+// 2026-05-15: Catches React.lazy chunk-load failures during render.
+// Required because Suspense converts lazy-import rejections into
+// render-time throws that the window-level handler in main.tsx
+// cannot intercept — without an error boundary above Suspense,
+// React unmounts the entire tree (white screen). See the file
+// header for the complete failure-mode analysis.
+import ChunkErrorBoundary from './components/ChunkErrorBoundary';
 
 const Login = lazy(() => import('./pages/Login'));
 const Logout = lazy(() => import('./pages/Logout'));
@@ -20,8 +27,15 @@ const Invoice = lazy(() => import('./pages/Invoice'));
 
 export default function App() {
   return (
-    <Suspense fallback={<PageSkeleton />}>
-      <Routes>
+    // ChunkErrorBoundary wraps Suspense (NOT the other way around).
+    // Suspense converts the lazy-import rejection into a render-time
+    // throw that bubbles UP — so the boundary must sit ABOVE it to
+    // catch the throw before React's reconciler unmounts the root.
+    // Reversing the order would put the boundary inside the same
+    // tree React just unmounted — no catch.
+    <ChunkErrorBoundary>
+      <Suspense fallback={<PageSkeleton />}>
+        <Routes>
         {/* Auth routes — the only public surface */}
         <Route path="/login" element={<Login />} />
         <Route path="/logout" element={<Logout />} />
@@ -70,7 +84,8 @@ export default function App() {
             </ProtectedRoute>
           }
         />
-      </Routes>
-    </Suspense>
+        </Routes>
+      </Suspense>
+    </ChunkErrorBoundary>
   );
 }
