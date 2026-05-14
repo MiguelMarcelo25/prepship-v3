@@ -778,7 +778,13 @@ function drawHeader(
     y = drawWrapped(`QTY: ${entry.orderQty} per order`, y, 22, font, rgb(0.1, 0.1, 0.1));
   }
 
-  const dividerY = height * 0.32;
+  // 2026-05-14: divider moved from 32% to 42% from the bottom of the
+  // page (i.e. raised ~43 px up) so the empty gap between the QTY
+  // line and the divider closes up. The previous 32% left ~130 px
+  // of dead white space below QTY on a 432-tall slip — the boss's
+  // reference image has the divider sitting around 60 % down from
+  // the top, which corresponds to ~40 % up from the bottom.
+  const dividerY = height * 0.42;
   page.drawLine({
     start: { x: pad, y: dividerY + 2 },
     end: { x: width - pad, y: dividerY + 2 },
