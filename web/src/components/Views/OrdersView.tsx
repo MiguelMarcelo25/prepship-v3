@@ -3893,6 +3893,15 @@ export default function OrdersView({
         )
       } else if (response.labelUrl) {
         openLabelPdfUrl(response.labelUrl, labelPopup)
+        if (response?.meta?.walmartShipmentConfirmed === false) {
+          const confirmError = toStringValue(response.meta.walmartShipmentConfirmError)
+          showToast(
+            `Walmart label created, but Seller Center was not marked shipped${confirmError ? `: ${confirmError}` : ''}. Use Mark as shipped manually for this order.`,
+            'error',
+          )
+          await refetchOrders()
+          return response
+        }
         showToast(mode === 'test' ? `🧪 Test label created${response.trackingNumber ? `: ${response.trackingNumber}` : ''}` : `✅ Label created${response.trackingNumber ? `: ${response.trackingNumber}` : ''}`, 'success')
       } else {
         showLabelPdfPlaceholderMessage(labelPopup, 'Label created, but no PDF URL returned', 'ShipStation created the label but did not return a downloadable PDF URL. Try Reprint Label or open it in ShipStation.')

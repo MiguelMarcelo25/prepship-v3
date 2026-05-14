@@ -891,6 +891,93 @@ function selectWalmartEstimateRate(rates: any[], serviceCode: unknown): any | nu
   }) ?? null;
 }
 
+function walmartTrackingUrl(carrierName: string, trackingNumber: string): string {
+  const carrier = normalizeProviderKey(carrierName);
+  const encoded = encodeURIComponent(trackingNumber);
+  if (carrier.includes('fedex')) return `https://www.fedex.com/fedextrack/?trknbr=${encoded}`;
+  if (carrier.includes('ups')) return `https://www.ups.com/track?tracknum=${encoded}`;
+  if (carrier.includes('usps') || carrier.includes('postal')) return `https://tools.usps.com/go/TrackConfirmAction?tLabels=${encoded}`;
+  return '';
+}
+
+function walmartShipmentMethodCode(rawOrder: any): string {
+  return firstString(rawOrder?.shippingInfo?.methodCode, 'VALUE').toUpperCase();
+}
+
+function walmartShipmentOrderLines(
+  rawOrder: any,
+  input: {
+    carrierName: string;
+    methodCode: string;
+    trackingNumber: string;
+    trackingUrl: string;
+  },
+): Array<Record<string, unknown>> {
+  const orderLines = Array.isArray(rawOrder?.orderLines?.orderLine)
+    ? rawOrder.orderLines.orderLine
+    : [];
+  const sourceLines = orderLines.length > 0 ? orderLines : [{ lineNumber: '1' }];
+  return sourceLines
+    .filter((line: any) => {
+      const statuses = Array.isArray(line?.orderLineStatuses?.orderLineStatus)
+        ? line.orderLineStatuses.orderLineStatus
+        : [];
+      return !statuses.length || statuses.some((status: any) => !/cancel/i.test(String(status?.status ?? '')));
+    })
+    .map((line: any) => ({
+      lineNumber: String(line?.lineNumber ?? '1'),
+      trackingInfo: {
+        shipDateTime: new Date().toISOString(),
+        carrierName: input.carrierName,
+        methodCode: input.methodCode,
+        trackingNumber: input.trackingNumber,
+        ...(input.trackingUrl ? { trackingURL: input.trackingUrl } : {}),
+      },
+    }));
+}
+
+async function confirmWalmartOrderShipped(
+  creds: Record<string, unknown>,
+  token: string,
+  input: {
+    purchaseOrderId: string;
+    rawOrder: any;
+    carrierName: string;
+    trackingNumber: string;
+    trackingUrl: string;
+  },
+): Promise<any> {
+  const methodCode = walmartShipmentMethodCode(input.rawOrder);
+  const orderLines = walmartShipmentOrderLines(input.rawOrder, {
+    carrierName: input.carrierName,
+    methodCode,
+    trackingNumber: input.trackingNumber,
+    trackingUrl: input.trackingUrl,
+  });
+  if (!orderLines.length) {
+    throw new Error('Walmart shipment confirmation has no shippable order lines');
+  }
+
+  const res = await fetch(
+    `https://marketplace.walmartapis.com/v3/orders/${encodeURIComponent(input.purchaseOrderId)}/shipping`,
+    {
+      method: 'POST',
+      headers: walmartMarketplaceHeaders(creds, token, 'application/json', true),
+      body: JSON.stringify({ orderLines }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(`Walmart Ship Confirm ${res.status}: ${await readWalmartError(res)}`);
+  }
+  const text = await res.text().catch(() => '');
+  if (!text) return { ok: true };
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { ok: true, body: text.slice(0, 500) };
+  }
+}
+
 async function downloadWalmartLabelPdf(
   creds: Record<string, unknown>,
   token: string,
@@ -939,6 +1026,9 @@ async function buyLabelWalmartShipping(
   selectedRate: any;
   raw: any;
   context: Awaited<ReturnType<typeof resolveWalmartLabelContext>>;
+  shipmentConfirmed: boolean;
+  shipmentConfirmError: string | null;
+  shipmentConfirmRaw: any;
 }> {
   const context = await resolveWalmartLabelContext(sql, creds, input.body, input.orderRow, input.rawOrder);
   const fromAddress = walmartLabelFromAddress(creds, input.body?.shipFrom);
@@ -1016,6 +1106,30 @@ async function buyLabelWalmartShipping(
   }
 
   const responseCarrierName = firstString(details?.carrierName, carrierName);
+  const trackingUrl = firstString(
+    details?.trackingUrl,
+    details?.trackingURL,
+    selectedRate?.trackingUrl,
+    selectedRate?.trackingURL,
+    walmartTrackingUrl(responseCarrierName, trackingNumber),
+  );
+  let shipmentConfirmed = false;
+  let shipmentConfirmError: string | null = null;
+  let shipmentConfirmRaw: any = null;
+  try {
+    shipmentConfirmRaw = await confirmWalmartOrderShipped(creds, token, {
+      purchaseOrderId: context.purchaseOrderId,
+      rawOrder: context.rawOrder,
+      carrierName: responseCarrierName,
+      trackingNumber,
+      trackingUrl,
+    });
+    shipmentConfirmed = true;
+  } catch (err) {
+    shipmentConfirmError = err instanceof Error ? err.message : String(err);
+    console.warn('[carriers/labels] walmart ship-confirm failed:', shipmentConfirmError);
+  }
+
   const labelUrl = await downloadWalmartLabelPdf(creds, token, responseCarrierName, trackingNumber)
     .catch((err) => {
       console.warn('[carriers/labels] walmart label PDF download failed:', err instanceof Error ? err.message : err);
@@ -1038,6 +1152,9 @@ async function buyLabelWalmartShipping(
     selectedRate,
     raw: data,
     context,
+    shipmentConfirmed,
+    shipmentConfirmError,
+    shipmentConfirmRaw,
   };
 }
 
@@ -1113,21 +1230,24 @@ async function persistWalmartShipment(
       RETURNING id
     `;
 
-    await tx`
-      UPDATE orders
-      SET order_status = 'shipped', updated_at = NOW()
-      WHERE id = ${order.id}
-    `;
+    if (args.result.shipmentConfirmed) {
+      await tx`
+        UPDATE orders
+        SET order_status = 'shipped', updated_at = NOW()
+        WHERE id = ${order.id}
+      `;
 
-    await tx`
-      DELETE FROM print_queue_orders
-      WHERE order_id = ${String(order.id)}
-    `;
+      await tx`
+        DELETE FROM print_queue_orders
+        WHERE order_id = ${String(order.id)}
+      `;
+    }
 
     return {
       localShipmentId: shipment.id,
       orderNumber: order.order_number,
       clientId: order.client_id,
+      orderStatus: args.result.shipmentConfirmed ? 'shipped' : order.order_status,
     };
   });
 }
@@ -2024,7 +2144,7 @@ export default async function handler(req: any, res: any): Promise<void> {
         currency: result.currency,
         shipmentId: persisted.localShipmentId,
         localShipmentId: persisted.localShipmentId,
-        orderStatus: 'shipped',
+        orderStatus: persisted.orderStatus,
         apiVersion: 'walmart_shipping',
         voided: false,
         meta: {
@@ -2037,6 +2157,8 @@ export default async function handler(req: any, res: any): Promise<void> {
           selectedServiceCode: result.serviceCode,
           walmartTrackingNumber: result.trackingNumber,
           labelPdfReturned: Boolean(result.labelUrl),
+          walmartShipmentConfirmed: result.shipmentConfirmed,
+          walmartShipmentConfirmError: result.shipmentConfirmError,
         },
       });
       return;
