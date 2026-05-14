@@ -630,14 +630,17 @@ function drawSkuSalesChart(canvas: HTMLCanvasElement, dailySales: InventorySkuOr
 }
 
 function positionThumbnailPreview(cursorX: number, cursorY: number) {
-  const zoom = (Number.parseFloat(document.body.style.zoom) || 100) / 100
+  const zoomRaw = Number.parseFloat(window.getComputedStyle(document.body).zoom)
+  const zoom = Number.isFinite(zoomRaw) && zoomRaw > 0
+    ? zoomRaw > 10 ? zoomRaw / 100 : zoomRaw
+    : 1
   const width = 170
   const height = 170
   const gap = 14
   const viewportWidth = window.innerWidth
   const viewportHeight = window.innerHeight
-  const rawLeft = cursorX + gap + width > viewportWidth ? cursorX - width - gap : cursorX + gap
-  const rawTop = cursorY + gap + height > viewportHeight ? cursorY - height - gap : cursorY + gap
+  const rawLeft = Math.max(gap, Math.min(cursorX + gap, viewportWidth - width - gap))
+  const rawTop = Math.max(gap, Math.min(cursorY - height / 2, viewportHeight - height - gap))
 
   return {
     left: rawLeft / zoom,

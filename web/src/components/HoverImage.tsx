@@ -43,12 +43,14 @@ function ensurePreviewElement(previewSize: number): HTMLDivElement {
 function position(el: HTMLDivElement, cx: number, cy: number, previewSize: number) {
   // Counter any CSS zoom applied to document.body so the 160×160 preview
   // stays that size visually regardless of zoom level (v4 has a zoom menu).
-  const zoomRaw = window.getComputedStyle(document.body).zoom;
-  const zoom = zoomRaw ? parseFloat(zoomRaw) || 1 : 1;
+  const zoomRaw = Number.parseFloat(window.getComputedStyle(document.body).zoom);
+  const zoom = Number.isFinite(zoomRaw) && zoomRaw > 0
+    ? zoomRaw > 10 ? zoomRaw / 100 : zoomRaw
+    : 1;
   const gap = 14;
   const fullW = previewSize + 10; // size + padding
-  const rawLeft = cx + gap + fullW > window.innerWidth ? cx - fullW - gap : cx + gap;
-  const rawTop = cy + gap + fullW > window.innerHeight ? cy - fullW - gap : cy + gap;
+  const rawLeft = Math.max(gap, Math.min(cx + gap, window.innerWidth - fullW - gap));
+  const rawTop = Math.max(gap, Math.min(cy - fullW / 2, window.innerHeight - fullW - gap));
   el.style.left = `${rawLeft / zoom}px`;
   el.style.top = `${rawTop / zoom}px`;
   el.style.zoom = String(1 / zoom);

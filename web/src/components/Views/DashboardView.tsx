@@ -20,6 +20,7 @@ import {
   Package,
   RefreshCw,
   RotateCcw,
+  Search,
   Star,
 } from 'lucide-react'
 import {
@@ -32,6 +33,7 @@ import {
   YAxis,
 } from 'recharts'
 import { apiClient } from '../../api/client'
+import HoverImage from '../HoverImage'
 import {
   SortableHeader,
   nextSortState,
@@ -3257,9 +3259,24 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                       })}
                       className="flex w-full min-w-0 items-center gap-2 text-left"
                     >
-                      <span className="grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-md border border-line bg-surface-2">
+                      <span className="group relative grid h-9 w-9 shrink-0 place-items-center overflow-hidden rounded-md border border-line bg-surface-2">
                         {row.imageUrl ? (
-                          <img src={row.imageUrl} alt="" className="h-full w-full object-cover" loading="lazy" />
+                          <>
+                            <HoverImage
+                              src={row.imageUrl}
+                              alt=""
+                              size={36}
+                              previewSize={180}
+                              radius={6}
+                              title="Preview product image"
+                            />
+                            <span
+                              className="pointer-events-none absolute inset-0 grid place-items-center bg-black/35 text-white opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+                              aria-hidden="true"
+                            >
+                              <Search size={14} strokeWidth={2.5} />
+                            </span>
+                          </>
                         ) : (
                           <Package size={15} strokeWidth={2.25} className="text-ink-3" />
                         )}
