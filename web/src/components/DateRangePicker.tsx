@@ -286,7 +286,7 @@ export function DateRangePicker({ value, onChange, label, className }: Props): J
         ref={triggerRef}
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className={`inline-flex h-10 items-center gap-2 rounded-card border border-line bg-surface px-3 text-sm2 font-semibold text-ink shadow-sm transition hover:bg-surface-2 ${
+        className={`inline-flex h-10 w-full items-center justify-center gap-2 rounded-card border border-line bg-surface px-3 text-sm2 font-semibold text-ink shadow-sm transition hover:bg-surface-2 sm:w-auto sm:justify-start ${
           open ? 'border-brand ring-2 ring-brand/30' : ''
         }`}
         aria-haspopup="dialog"
@@ -301,7 +301,7 @@ export function DateRangePicker({ value, onChange, label, className }: Props): J
           ref={popoverRef}
           role="dialog"
           aria-label="Select date range"
-          className="absolute right-0 top-12 z-40 flex w-[640px] max-w-[calc(100vw-2rem)] flex-col overflow-hidden rounded-card border border-line bg-surface shadow-2xl sm:flex-row"
+          className="fixed inset-x-3 top-20 z-40 flex max-h-[calc(100vh-6rem)] flex-col overflow-y-auto rounded-card border border-line bg-surface shadow-2xl sm:absolute sm:inset-x-auto sm:right-0 sm:top-12 sm:w-[640px] sm:max-w-[calc(100vw-2rem)] sm:flex-row sm:overflow-hidden"
         >
           {/* Presets column */}
           <div className="border-b border-line bg-surface-2/40 p-2 sm:w-44 sm:border-b-0 sm:border-r">

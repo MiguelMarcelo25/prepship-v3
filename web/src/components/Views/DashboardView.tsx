@@ -782,7 +782,7 @@ function KpiCard({
     <motion.div
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      className="flex min-h-[118px] flex-col justify-between rounded-card border border-line bg-surface px-4 py-3 shadow-sm"
+      className="flex min-h-[112px] flex-col justify-between rounded-card border border-line bg-surface px-3 py-3 shadow-sm sm:min-h-[118px] sm:px-4"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
@@ -794,7 +794,7 @@ function KpiCard({
               flex-1 + ml-auto pattern pushes the sparkline to the
               far right of the value row so the number stays
               left-anchored with the title above it. */}
-          <div className="mt-3 flex items-end gap-3 text-[26px] font-extrabold leading-none tracking-[-0.02em] text-ink font-mono tabular-nums">
+          <div className="mt-3 flex items-end gap-3 text-[24px] font-extrabold leading-none tracking-[-0.02em] text-ink font-mono tabular-nums sm:text-[26px]">
             <span className="inline-flex items-end gap-1.5">
               {value}
               {suffix ? <span className="pb-0.5 text-xs font-bold tracking-normal text-ink-2">{suffix}</span> : null}
@@ -2061,9 +2061,9 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
 
   if (loading) {
     return (
-      <div id="view-dashboard" className="view-content !overflow-y-auto !bg-page !p-5">
+      <div id="view-dashboard" className="view-content !overflow-y-auto !bg-page !p-3 sm:!p-5">
         <div className="space-y-4">
-          <div className="h-12 w-80 animate-pulse rounded-card bg-surface-3" />
+          <div className="h-12 w-full max-w-80 animate-pulse rounded-card bg-surface-3" />
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
             {Array.from({ length: 6 }).map((_, index) => (
               <div key={index} className="h-28 animate-pulse rounded-card border border-line bg-surface" />
@@ -2080,30 +2080,30 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   }
 
   return (
-    <div id="view-dashboard" className="view-content !overflow-y-auto !bg-page !p-4 sm:!p-5">
-      <div className="mb-4 grid grid-cols-1 items-start gap-3 xl:grid-cols-[minmax(0,1fr)_auto]">
+    <div id="view-dashboard" className="view-content !overflow-y-auto !bg-page !p-3 sm:!p-5">
+      <div className="mb-4 grid grid-cols-1 items-start gap-3 sm:gap-4 xl:grid-cols-[minmax(0,1fr)_auto]">
         <div className="contents">
           <div className="min-w-0">
-            <h1 className="text-[24px] font-extrabold leading-tight tracking-[-0.02em] text-ink">
+            <h1 className="text-[22px] font-extrabold leading-tight tracking-[-0.02em] text-ink sm:text-[24px]">
               Inventory & Stockout Prevention
             </h1>
             <p className="mt-0.5 text-xs text-ink-3">
               Monitor inventory health, days of supply, and take action to prevent stockouts
             </p>
-            <p className="mt-1 inline-flex items-center gap-1.5 text-2xs font-semibold text-ink-3">
+            <p className="mt-1 inline-flex flex-wrap items-center gap-1.5 text-2xs font-semibold text-ink-3">
               <span className="inline-block h-1.5 w-1.5 rounded-full bg-brand" />
               KPIs · all orders (awaiting + shipped + cancelled). Daily orders · all orders. SKU charts · fulfilled orders only.
             </p>
           </div>
 
           {/* Keep client context centered beneath the heading/action row. */}
-          <div className="mx-auto flex items-center gap-2 xl:col-span-2 xl:row-start-2">
+          <div className="mx-auto flex w-full items-center justify-center gap-2 sm:w-auto xl:col-span-2 xl:row-start-2">
             <span className="text-2xs font-bold uppercase tracking-[0.06em] text-ink-3">Client</span>
             <div className="relative">
               <select
                 value={selectedClientId ?? ''}
                 onChange={(event) => setSelectedClientId(event.target.value ? Number(event.target.value) : null)}
-                className="h-10 appearance-none rounded-card border border-line bg-surface pl-3 pr-9 text-sm font-semibold text-ink shadow-sm hover:bg-surface-2 focus:outline-none focus:ring-2 focus:ring-brand/30 cursor-pointer"
+                className="h-10 w-full max-w-[18rem] appearance-none rounded-card border border-line bg-surface pl-3 pr-9 text-sm font-semibold text-ink shadow-sm hover:bg-surface-2 focus:outline-none focus:ring-2 focus:ring-brand/30 cursor-pointer sm:w-auto sm:min-w-[13rem]"
                 aria-label="Filter dashboard by client"
               >
                 <option value="">All Clients</option>
@@ -2123,31 +2123,31 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         </div>
 
         {/* Header action bar - aligned with the heading and ending with refresh on the right. */}
-        <div className="relative flex flex-wrap items-center justify-end gap-3 xl:col-start-2 xl:row-start-1">
+        <div className="relative flex w-full flex-col items-stretch gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end sm:gap-3 xl:col-start-2 xl:row-start-1">
           {/* Group 1 — data freshness (display, no action) */}
-          <div className="inline-flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-center gap-2 sm:justify-start">
             <div className="text-xs font-medium text-ink-3">Data as of {formatDataTimestamp()}</div>
             <SyncStatusChip data={syncChipData} />
           </div>
 
-          <div className="relative flex flex-wrap items-center justify-end gap-3">
+          <div className="relative grid w-full grid-cols-1 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center sm:justify-end sm:gap-3">
             {/* Group 2 — operator-controlled date range. Drives every
                 API call on the dashboard. */}
-            <DateRangePicker value={dateRange} onChange={setDateRange} />
+            <DateRangePicker value={dateRange} onChange={setDateRange} className="w-full sm:w-auto" />
 
             {/* Group 3 — Filters popover (category + brand secondary cuts). */}
-            <div ref={filtersPopoverRef} className="relative inline-flex">
+            <div ref={filtersPopoverRef} className="relative inline-flex w-full sm:w-auto">
           <button
             type="button"
             onClick={() => setShowFilters((open) => !open)}
-            className="inline-flex h-10 items-center gap-2 rounded-card border border-line bg-surface px-4 text-sm2 font-semibold text-ink shadow-sm hover:bg-surface-2"
+            className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-card border border-line bg-surface px-4 text-sm2 font-semibold text-ink shadow-sm hover:bg-surface-2 sm:w-auto"
             aria-expanded={showFilters}
           >
             <Filter size={15} strokeWidth={2.25} className="text-ink-3" />
             Filters
           </button>
           {showFilters ? (
-            <div className="absolute left-0 top-12 z-20 w-[min(18rem,calc(100vw-2rem))] rounded-card border border-line bg-surface p-3 shadow-lg">
+            <div className="absolute left-0 top-12 z-20 w-full rounded-card border border-line bg-surface p-3 shadow-lg sm:w-[min(18rem,calc(100vw-2rem))]">
               <div className="mb-2 text-xs font-extrabold text-ink">Dashboard Filters</div>
               <label className="mb-2 block">
                 <span className="mb-1 block text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Client</span>
@@ -2218,7 +2218,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             <button
               type="button"
               onClick={() => setEditMode((on) => !on)}
-              className={`inline-flex h-10 items-center gap-2 rounded-card border px-4 text-sm2 font-semibold shadow-sm transition ${
+              className={`inline-flex h-10 w-full items-center justify-center gap-2 rounded-card border px-4 text-sm2 font-semibold shadow-sm transition sm:w-auto ${
                 editMode
                   ? 'border-brand bg-brand text-white hover:bg-brand-dark'
                   : 'border-line bg-surface text-ink hover:bg-surface-2'
@@ -2242,7 +2242,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               <button
                 type="button"
                 onClick={resetDashboardLayout}
-                className="inline-flex h-10 items-center gap-2 rounded-card border border-line bg-surface px-3 text-sm2 font-semibold text-ink-2 hover:bg-surface-2 shadow-sm"
+                className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-card border border-line bg-surface px-3 text-sm2 font-semibold text-ink-2 hover:bg-surface-2 shadow-sm sm:w-auto"
                 title="Restore default panel order, sizes, and visibility"
               >
                 <RotateCcw size={14} strokeWidth={2.25} />
@@ -2254,7 +2254,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             <button
               type="button"
               onClick={() => loadDashboard('refresh')}
-              className="grid h-10 w-10 place-items-center rounded-card border border-line bg-surface text-ink-2 shadow-sm hover:bg-surface-2 hover:text-brand"
+              className="grid h-10 w-full place-items-center rounded-card border border-line bg-surface text-ink-2 shadow-sm hover:bg-surface-2 hover:text-brand sm:w-10"
               aria-label="Refresh dashboard"
               title="Refresh dashboard"
             >
@@ -2270,7 +2270,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         </div>
       ) : null}
 
-      <div className="mb-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+      <div className="mb-3 grid grid-cols-1 gap-2.5 sm:grid-cols-2 sm:gap-3 lg:grid-cols-3 xl:grid-cols-6">
         <KpiCard
           title="Total 7-Day Units"
           value={formatInt(kpis.currentUnits7)}
@@ -2328,7 +2328,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
       <div
         className={`mb-3 grid grid-cols-1 xl:grid-cols-3 transition-[background-color,padding] duration-200 ${
           editMode
-            ? 'rounded-card border border-dashed border-brand/30 bg-brand-bg/30 p-3'
+            ? 'rounded-card border border-dashed border-brand/30 bg-brand-bg/30 p-2 sm:p-3'
             : ''
         }`}
         style={{
@@ -2371,7 +2371,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           onDragLeave={handlePanelDragLeave('trend')}
           onDrop={handlePanelDrop('trend')}
           onDragEnd={handlePanelDragEnd}
-          className={`relative flex flex-col rounded-card border bg-surface p-4 shadow-sm transition-[border-color,box-shadow] duration-150 ${sectionColSpanClass(sectionSizes.trend)} ${
+          className={`relative flex flex-col rounded-card border bg-surface p-3 shadow-sm transition-[border-color,box-shadow] duration-150 sm:p-4 ${sectionColSpanClass(sectionSizes.trend)} ${
             editMode ? 'border-dashed border-brand/60' : 'border-line'
           } ${draggingPanel === 'trend' ? 'opacity-40' : ''} ${
             dragOverPanel === 'trend' ? 'ring-2 ring-brand ring-offset-2 ring-offset-bg' : ''
@@ -2409,7 +2409,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               </div>
             </>
           ) : null}
-          <div className="mb-3 flex items-start justify-between gap-3">
+          <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <h3 className="text-sm font-extrabold text-ink">Daily Orders Trend</h3>
               {/* 2026-05-13: removed the "Same day, last month"
@@ -2429,7 +2429,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                 </span>
               </div>
             </div>
-            <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
+            <div className="flex w-full flex-wrap items-center justify-between gap-2 sm:w-auto sm:justify-end">
               {selectedClient ? (
                 <span className="rounded-full bg-brand-bg px-2 py-1 text-2xs font-bold text-brand">
                   {selectedClient.name}
@@ -2561,7 +2561,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           onDragLeave={handlePanelDragLeave('topSkus')}
           onDrop={handlePanelDrop('topSkus')}
           onDragEnd={handlePanelDragEnd}
-          className={`relative flex flex-col rounded-card border bg-surface p-4 shadow-sm transition-[border-color,box-shadow] duration-150 ${sectionColSpanClass(sectionSizes.topSkus)} ${
+          className={`relative flex flex-col rounded-card border bg-surface p-3 shadow-sm transition-[border-color,box-shadow] duration-150 sm:p-4 ${sectionColSpanClass(sectionSizes.topSkus)} ${
             editMode ? 'border-dashed border-brand/60' : 'border-line'
           } ${draggingPanel === 'topSkus' ? 'opacity-40' : ''} ${
             dragOverPanel === 'topSkus' ? 'ring-2 ring-brand ring-offset-2 ring-offset-bg' : ''
@@ -2578,12 +2578,12 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               </div>
             </>
           ) : null}
-          <div className="flex items-start justify-between gap-3 mb-3">
+          <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <h3 className="text-sm font-extrabold text-ink">Top {topSkuLimit} SKUs (30d)</h3>
               <p className="text-tiny text-ink-3">By total units sold · stretch to see more</p>
             </div>
-            <div className="flex items-center gap-2 flex-shrink-0">
+            <div className="flex w-full flex-wrap items-center justify-between gap-2 sm:w-auto sm:justify-end">
               <TopNDropdown
                 value={topSkuLimit}
                 onChange={(n) => setTopSkuLimit(n as TopNValue)}
@@ -2706,7 +2706,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           onDragLeave={handlePanelDragLeave('heatmap')}
           onDrop={handlePanelDrop('heatmap')}
           onDragEnd={handlePanelDragEnd}
-          className={`relative flex flex-col rounded-card border bg-surface p-4 shadow-sm transition-[border-color,box-shadow] duration-150 ${sectionColSpanClass(sectionSizes.heatmap)} ${
+          className={`relative flex flex-col rounded-card border bg-surface p-3 shadow-sm transition-[border-color,box-shadow] duration-150 sm:p-4 ${sectionColSpanClass(sectionSizes.heatmap)} ${
             editMode ? 'border-dashed border-brand/60' : 'border-line'
           } ${draggingPanel === 'heatmap' ? 'opacity-40' : ''} ${
             dragOverPanel === 'heatmap' ? 'ring-2 ring-brand ring-offset-2 ring-offset-bg' : ''
@@ -2723,12 +2723,12 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               </div>
             </>
           ) : null}
-        <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+        <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
           <div>
             <h3 className="text-sm font-extrabold text-ink">Sales Performance Heatmap by Top SKUs</h3>
             <p className="text-tiny text-ink-3">Top {heatmapLimit} SKUs · performance vs prior 30 days</p>
           </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
+          <div className="flex w-full flex-wrap items-center justify-between gap-2 sm:w-auto sm:justify-end">
             <TopNDropdown
               value={heatmapLimit}
               onChange={(n) => setHeatmapLimit(n as TopNValue)}
@@ -2786,8 +2786,8 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               crash:'#d56b6b',
             }
             return (
-              <div className="min-w-[900px] space-y-1.5">
-                <div className="grid grid-cols-[150px_repeat(15,minmax(34px,1fr))] gap-1 text-2xs font-semibold text-ink-3">
+              <div className="min-w-[720px] space-y-1.5 sm:min-w-[900px]">
+                <div className="grid grid-cols-[120px_repeat(15,minmax(28px,1fr))] gap-1 text-2xs font-semibold text-ink-3 sm:grid-cols-[150px_repeat(15,minmax(34px,1fr))]">
                   <div />
                   {heatmap[0]?.cells.map((cell) => (
                     <div key={cell.day} className="text-center">{formatDayLabel(cell.day).replace(' ', ' ')}</div>
@@ -2803,7 +2803,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                     : sectionSizes.heatmap === 'wide' ? 'h-7'
                     : 'h-4'
                   return heatmap.map((row) => (
-                    <div key={row.label} className="grid grid-cols-[150px_repeat(15,minmax(34px,1fr))] items-center gap-1">
+                    <div key={row.label} className="grid grid-cols-[120px_repeat(15,minmax(28px,1fr))] items-center gap-1 sm:grid-cols-[150px_repeat(15,minmax(34px,1fr))]">
                       <div className="truncate pr-2 text-xs font-semibold text-ink-2" title={row.label}>{row.label}</div>
                       {row.cells.map((cell) => (
                         <button
@@ -2883,12 +2883,12 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               </div>
             </>
           ) : null}
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
+        <div className="flex flex-col gap-3 border-b border-line px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-4">
           <div>
             <h3 className="text-sm font-extrabold text-ink">SKU Performance Summary</h3>
             <p className="text-tiny text-ink-3">Revenue, velocity, stock status, and restock signals</p>
           </div>
-          <div className="relative flex flex-wrap items-center gap-2">
+          <div className="relative flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
             {/* Table density toggle — Compact/Standard/Wide adjusts
                 row padding so operators with smaller monitors can
                 pack more rows visible, or expand for readability. */}
@@ -2926,6 +2926,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               options={categories}
               placeholder="All Categories"
               ariaLabel="Filter SKU table by category"
+              className="w-full sm:w-auto"
             />
             <FilterSelect
               value={brandFilter}
@@ -2933,6 +2934,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               options={brands}
               placeholder="All Brands"
               ariaLabel="Filter SKU table by brand"
+              className="w-full sm:w-auto"
             />
             {/* Wrapper ref tracks "inside" for the click-outside
                 handler — covers BOTH the trigger and the panel so
@@ -2948,7 +2950,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             <button
               type="button"
               onClick={() => setShowColumns((open) => !open)}
-              className="inline-flex h-9 items-center gap-2 rounded-card border border-line bg-surface px-3 text-tiny font-semibold text-ink-2 hover:bg-surface-2"
+              className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-card border border-line bg-surface px-3 text-tiny font-semibold text-ink-2 hover:bg-surface-2 sm:w-auto"
               aria-expanded={showColumns}
             >
               <Columns3 size={14} strokeWidth={2.25} />
@@ -2956,7 +2958,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               <ChevronDown size={13} strokeWidth={2.25} />
             </button>
             {showColumns ? (
-              <div className="absolute right-0 top-10 z-20 w-60 rounded-card border border-line bg-surface shadow-lg overflow-hidden flex flex-col" style={{ maxHeight: 'min(420px, 70vh)' }}>
+              <div className="absolute left-0 top-10 z-20 flex w-full min-w-[15rem] flex-col overflow-hidden rounded-card border border-line bg-surface shadow-lg sm:left-auto sm:right-0 sm:w-60" style={{ maxHeight: 'min(420px, 70vh)' }}>
                 {/* Sticky header with Reset action — pinned visible
                     so an operator who's shuffled columns into a mess
                     can recover without scrolling to find the button. */}
@@ -3298,7 +3300,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           </table>
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line px-4 py-3 text-tiny text-ink-3">
+        <div className="flex flex-col gap-3 border-t border-line px-3 py-3 text-tiny text-ink-3 sm:flex-row sm:items-center sm:justify-between sm:px-4">
           <div>
             Showing {sortedSkuRows.length === 0 ? 0 : (page - 1) * pageSize + 1} to {Math.min(page * pageSize, sortedSkuRows.length)} of {formatInt(sortedSkuRows.length)} SKUs
           </div>
@@ -3342,7 +3344,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             <select
               value={pageSize}
               onChange={(event) => setPageSize(Number(event.target.value))}
-              className="ml-2 h-8 rounded-card border border-line bg-surface px-3 font-semibold text-ink-2 outline-none hover:bg-surface-2"
+              className="h-8 rounded-card border border-line bg-surface px-3 font-semibold text-ink-2 outline-none hover:bg-surface-2 sm:ml-2"
               aria-label="Rows per page"
             >
               <option value={10}>10 / page</option>

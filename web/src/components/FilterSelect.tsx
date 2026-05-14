@@ -71,7 +71,7 @@ export function FilterSelect({
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className={`inline-flex h-9 items-center gap-2 rounded-card border border-line bg-surface pl-3 pr-8 text-tiny font-semibold text-ink-2 outline-none hover:bg-surface-2 ${
+        className={`inline-flex h-9 w-full items-center justify-between gap-2 rounded-card border border-line bg-surface pl-3 pr-8 text-tiny font-semibold text-ink-2 outline-none hover:bg-surface-2 sm:w-auto ${
           open ? 'border-brand ring-2 ring-brand/30' : ''
         }`}
         aria-haspopup="listbox"
@@ -88,7 +88,7 @@ export function FilterSelect({
 
       {open ? (
         <div
-          className="absolute left-0 top-[calc(100%+4px)] z-30 max-h-64 w-56 overflow-y-auto overflow-x-hidden rounded-card border border-line bg-surface shadow-lg"
+          className="absolute left-0 top-[calc(100%+4px)] z-30 max-h-64 w-full min-w-[14rem] overflow-y-auto overflow-x-hidden rounded-card border border-line bg-surface shadow-lg sm:w-56"
           role="listbox"
           aria-label={ariaLabel}
         >
