@@ -474,12 +474,14 @@ async function fetchOrdersWindow(query: {
   from: string
   to: string
   clientId?: number
+  hideTestOrders?: boolean
 }) {
   const first = await apiClient.fetchOrders({
     page: 1,
     pageSize: 2000,
     dateStart: query.from,
     dateEnd: query.to,
+    hideTestOrders: query.hideTestOrders,
     ...(query.clientId ? { clientId: query.clientId } : {}),
   })
   const orders = safeArray<any>(first?.orders)
@@ -494,6 +496,7 @@ async function fetchOrdersWindow(query: {
           pageSize: 2000,
           dateStart: query.from,
           dateEnd: query.to,
+          hideTestOrders: query.hideTestOrders,
           ...(query.clientId ? { clientId: query.clientId } : {}),
         })
         .then((res: any) => safeArray<any>(res?.orders))
@@ -1706,14 +1709,14 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         // full /orders set with no filter. We'll re-enable the flag
         // once the breakdown query is profiled and the slow segment
         // is indexed or rewritten.
-        apiClient.fetchAnalysisDailySales({ from: currentFrom, to: currentTo, topN: 15, clientId: cid }),
-        apiClient.fetchAnalysisDailySales({ from: priorFrom, to: priorTo, topN: 15, clientId: cid }),
-        apiClient.fetchOrdersDailyCounts({ from: currentFrom, to: currentTo, clientId: cid }),
-        apiClient.fetchOrdersDailyCounts({ from: priorFrom, to: priorTo, clientId: cid }),
+        apiClient.fetchAnalysisDailySales({ from: currentFrom, to: currentTo, topN: 15, clientId: cid, hideTestOrders: true }),
+        apiClient.fetchAnalysisDailySales({ from: priorFrom, to: priorTo, topN: 15, clientId: cid, hideTestOrders: true }),
+        apiClient.fetchOrdersDailyCounts({ from: currentFrom, to: currentTo, clientId: cid, hideTestOrders: true }),
+        apiClient.fetchOrdersDailyCounts({ from: priorFrom, to: priorTo, clientId: cid, hideTestOrders: true }),
         apiClient.fetchInventory({ ...(cid ? { clientId: cid } : {}) }).catch(() => []),
-        apiClient.fetchAnalysisSkus({ from: currentFrom, to: currentTo, limit: 200, clientId: cid }).catch(() => ({ skus: [] })),
-        fetchOrdersWindow({ from: currentFrom, to: currentTo, clientId: cid }),
-        fetchOrdersWindow({ from: priorFrom, to: priorTo, clientId: cid }),
+        apiClient.fetchAnalysisSkus({ from: currentFrom, to: currentTo, limit: 200, clientId: cid, hideTestOrders: true }).catch(() => ({ skus: [] })),
+        fetchOrdersWindow({ from: currentFrom, to: currentTo, clientId: cid, hideTestOrders: true }),
+        fetchOrdersWindow({ from: priorFrom, to: priorTo, clientId: cid, hideTestOrders: true }),
       ])
 
       const nextClients = safeArray<any>(clientsRes)

@@ -171,6 +171,7 @@ const skuDailyQuery = rangeQuery.extend({
   clientId: z.coerce.number().int().optional(),
   top: z.coerce.number().int().positive().max(10).optional(),
   topN: z.coerce.number().int().positive().max(15).optional(),
+  hideTestOrders: z.coerce.boolean().optional().default(false),
   // 2026-05-13: per-caller toggle that decides whether cancelled
   // orders count toward the analytics. Default is false (preserves
   // historical Analysis-page behavior — operators reading the
@@ -210,6 +211,18 @@ async function getSkuDaily(q: SkuDailyQuery) {
   const cancelledFilter = q.includeCancelled
     ? sql`true`
     : sql`o.order_status not in ('cancelled')`;
+  const testOrderFilter = q.hideTestOrders
+    ? sql`and not (
+        exists (
+          select 1 from clients test_client
+          where test_client.id = o.client_id
+            and test_client.is_test = true
+        )
+        or coalesce(o.order_number, '') ilike 'TESTING-%'
+        or o.raw @> '{"test": true}'::jsonb
+        or o.raw @> '{"testing": true}'::jsonb
+      )`
+    : sql``;
 
   const top = await db.execute<{ sku: string; name: string | null; total_qty: number }>(sql`
     with item_rows as (
@@ -224,6 +237,7 @@ async function getSkuDaily(q: SkuDailyQuery) {
       where ${cancelledFilter}
         and o.order_date >= ${fromIso}::timestamptz
         and o.order_date <= ${toIso}::timestamptz
+        ${testOrderFilter}
         and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
         and (${cid}::int is null or o.client_id = ${cid}::int)
         and coalesce((item->>'adjustment')::boolean, false) = false
@@ -269,6 +283,7 @@ async function getSkuDaily(q: SkuDailyQuery) {
     where ${cancelledFilter}
       and o.order_date >= ${fromIso}::timestamptz
       and o.order_date <= ${toIso}::timestamptz
+      ${testOrderFilter}
       and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
       and (${cid}::int is null or o.client_id = ${cid}::int)
       and coalesce((item->>'adjustment')::boolean, false) = false
@@ -312,6 +327,7 @@ app.get('/sku-daily', zValidator('query', skuDailyQuery), async (c) => {
 const skuBreakdownQuery = rangeQuery.extend({
   clientId: z.coerce.number().int().optional(),
   limit: z.coerce.number().int().positive().max(2000).optional().default(2000),
+  hideTestOrders: z.coerce.boolean().optional().default(false),
   // 2026-05-13: same caller-controlled cancelled-orders toggle as
   // skuDailyQuery (see comment there for full rationale). The
   // Dashboard's SKU Performance Summary panel passes true to align
@@ -412,6 +428,14 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
   const cancelledFilter = q.includeCancelled
     ? sql`true`
     : sql`coalesce(o.order_status, '') <> 'cancelled'`;
+  const testOrderFilter = q.hideTestOrders
+    ? sql`and not (
+        coalesce(c.is_test, false) = true
+        or coalesce(o.order_number, '') ilike 'TESTING-%'
+        or o.raw @> '{"test": true}'::jsonb
+        or o.raw @> '{"testing": true}'::jsonb
+      )`
+    : sql``;
 
   const rows = await db.execute<SkuBreakdownRow>(sql`
     with item_rows as (
@@ -488,6 +512,7 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
       where ${cancelledFilter}
         and o.order_date >= ${fromIso}::timestamptz
         and o.order_date <= ${toIso}::timestamptz
+        ${testOrderFilter}
         and (${cid}::int is null or o.client_id = ${cid}::int)
         and coalesce((item->>'adjustment')::boolean, false) = false
         and coalesce((item->>'quantity')::int, 1) > 0
