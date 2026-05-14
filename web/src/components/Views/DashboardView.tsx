@@ -2081,9 +2081,9 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
 
   return (
     <div id="view-dashboard" className="view-content !overflow-y-auto !bg-page !p-4 sm:!p-5">
-      <div className="mb-4 space-y-3">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
+      <div className="mb-4 grid grid-cols-1 items-start gap-3 xl:grid-cols-[minmax(0,1fr)_auto]">
+        <div className="contents">
+          <div className="min-w-0">
             <h1 className="text-[24px] font-extrabold leading-tight tracking-[-0.02em] text-ink">
               Inventory & Stockout Prevention
             </h1>
@@ -2096,8 +2096,8 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             </p>
           </div>
 
-          {/* Keep client context centered while freshness/actions sit together on the top-right row. */}
-          <div className="mx-auto flex items-center gap-2">
+          {/* Keep client context centered beneath the heading/action row. */}
+          <div className="mx-auto flex items-center gap-2 xl:col-span-2 xl:row-start-2">
             <span className="text-2xs font-bold uppercase tracking-[0.06em] text-ink-3">Client</span>
             <div className="relative">
               <select
@@ -2122,8 +2122,8 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           </div>
         </div>
 
-        {/* Header action bar - freshness info leads the controls, ending with refresh on the right. */}
-        <div className="relative flex flex-wrap items-center justify-end gap-3">
+        {/* Header action bar - aligned with the heading and ending with refresh on the right. */}
+        <div className="relative flex flex-wrap items-center justify-end gap-3 xl:col-start-2 xl:row-start-1">
           {/* Group 1 — data freshness (display, no action) */}
           <div className="inline-flex items-center gap-2">
             <div className="text-xs font-medium text-ink-3">Data as of {formatDataTimestamp()}</div>
