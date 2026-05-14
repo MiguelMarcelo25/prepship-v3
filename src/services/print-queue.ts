@@ -763,8 +763,14 @@ function drawHeader(
     y = drawWrapped(`QTY: ${totalQty} per order`, y, 22, font, rgb(0.1, 0.1, 0.1));
   } else {
     const sku = entry.primarySku ?? 'UNKNOWN SKU';
-    y = drawWrapped(sku, y, 24, font, rgb(0.1, 0.1, 0.1), 5);
-    y -= 10;
+    // 2026-05-14: bumped SKU title from 24 → 34 and added a bit more
+    // air above and below so the SKU is the visual anchor of the
+    // batch header (per boss directive — see comparison screenshots
+    // from 2026-05-14). Description + QTY sizing unchanged so the
+    // hierarchy still goes SKU > QTY > description.
+    y -= 6;
+    y = drawWrapped(sku, y, 34, font, rgb(0.1, 0.1, 0.1), 6);
+    y -= 14;
     if (entry.itemDescription) {
       y = drawWrapped(entry.itemDescription, y, 15, fontReg, rgb(0.35, 0.35, 0.35), 4);
       y -= 8;
