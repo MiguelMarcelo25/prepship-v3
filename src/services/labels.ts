@@ -1,4 +1,5 @@
 import { and, eq, or, desc, sql } from 'drizzle-orm';
+import { performance } from 'node:perf_hooks';
 import { db } from '../db/client';
 import { shipments } from '../db/schema/shipments';
 import { orders, orderOverrides } from '../db/schema/orders';
@@ -77,6 +78,43 @@ export class LabelRateLimitError extends Error {
     this.name = 'LabelRateLimitError';
     this.retryAfterMs = retryAfterMs;
   }
+}
+
+type LabelTimer = ReturnType<typeof createLabelTimer>;
+
+function createLabelTimer(orderId: number | string) {
+  const started = performance.now();
+  const prefix = `[label-create] orderId=${orderId}`;
+
+  const elapsed = () => Math.round(performance.now() - started);
+
+  return {
+    async task<T>(step: string, fn: () => Promise<T>): Promise<T> {
+      const stepStarted = performance.now();
+      try {
+        return await fn();
+      } finally {
+        console.info(`${prefix} ${step} ${Math.round(performance.now() - stepStarted)}ms total=${elapsed()}ms`);
+      }
+    },
+    background(step: string, fn: () => Promise<void>): void {
+      void (async () => {
+        const stepStarted = performance.now();
+        try {
+          await fn();
+          console.info(`${prefix} ${step} ${Math.round(performance.now() - stepStarted)}ms total=${elapsed()}ms background=ok`);
+        } catch (err) {
+          console.warn(
+            `${prefix} ${step} failed after ${Math.round(performance.now() - stepStarted)}ms total=${elapsed()}ms:`,
+            err instanceof Error ? err.message : err
+          );
+        }
+      })();
+    },
+    done(step: string): void {
+      console.info(`${prefix} ${step} total=${elapsed()}ms`);
+    },
+  };
 }
 
 function checkLabelRateLimit(clientId: number): void {
@@ -592,7 +630,11 @@ async function persistCreatedLabel(args: {
   return row.id;
 }
 
-async function markOrderShipped(orderId: number, trackingNumber: string | null): Promise<void> {
+async function markOrderShipped(
+  orderId: number,
+  trackingNumber: string | null,
+  options: { cleanupQueue?: boolean } = {}
+): Promise<void> {
   await db
     .update(orders)
     .set({ orderStatus: 'shipped', updatedAt: new Date() })
@@ -606,6 +648,8 @@ async function markOrderShipped(orderId: number, trackingNumber: string | null):
         set: { trackingNumber, updatedAt: new Date() },
       });
   }
+
+  if (options.cleanupQueue === false) return;
 
   // Auto-cleanup print queue: remove any pending queue entries for
   // this order. Without this, "Send to Queue" entries stayed in the
@@ -631,21 +675,39 @@ async function recordFulfillmentDeductions(args: {
   shipmentId: number;
   packageId?: number | string | null;
   source: string;
+  timer?: LabelTimer;
 }) {
   try {
-    await deductPackageForShipment({
+    const deductPackage = () => deductPackageForShipment({
       packageId: args.packageId ?? null,
       shipmentId: args.shipmentId,
       orderId: args.order.id,
       orderNumber: args.order.orderNumber,
     });
-    await deductInventoryForOrder(args.order, {
+    const deductInventory = () => deductInventoryForOrder(args.order, {
       shipmentId: args.shipmentId,
       source: args.source,
     });
+
+    if (args.timer) {
+      await args.timer.task('package stock deduction', deductPackage);
+      await args.timer.task('inventory ledger writes', deductInventory);
+    } else {
+      await deductPackage();
+      await deductInventory();
+    }
   } catch (err) {
     console.warn('[labels] fulfillment deduction failed:', err);
   }
+}
+
+function scheduleQueueCleanupAfterLabel(orderId: number, timer: LabelTimer) {
+  timer.background('queue cleanup', async () => {
+    const removed = await removeQueueEntriesForOrder(orderId);
+    if (removed > 0) {
+      console.info(`[labels] queue cleanup: removed ${removed} queue entries for orderId=${orderId}`);
+    }
+  });
 }
 
 /**
@@ -657,7 +719,8 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
     throw new Error('orderId and serviceCode required');
   }
 
-  const order = await loadOrderRecord(body.orderId);
+  const timer = createLabelTimer(body.orderId);
+  const order = await timer.task('order load', () => loadOrderRecord(body.orderId));
   if (!order) throw new Error('Order not found');
   if (order.orderStatus === 'shipped' || order.orderStatus === 'cancelled') {
     throw new Error(`Cannot create label for ${order.orderStatus} order`);
@@ -690,7 +753,7 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
   }
   if (clientId && !body.testLabel) checkLabelRateLimit(clientId);
 
-  const existing = await findActiveLabelForOrder(order.id);
+  const existing = await timer.task('existing-label check', () => findActiveLabelForOrder(order.id));
   if (existing) {
     const err = new Error('Label already exists for this order') as Error & {
       details?: Record<string, unknown>;
@@ -820,14 +883,17 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
         isReturn: false,
       });
 
-    await markOrderShipped(order.id, fakeTracking);
-    await recordFulfillmentDeductions({
+    await timer.task('markOrderShipped', () => markOrderShipped(order.id, fakeTracking, { cleanupQueue: false }));
+    scheduleQueueCleanupAfterLabel(order.id, timer);
+    timer.background('inventory/package deduction', () => recordFulfillmentDeductions({
       order,
       shipmentId: fakeShipmentId,
       packageId: resolvedPackageId,
       source: 'test_label',
-    });
+      timer,
+    }));
 
+    timer.done('response ready');
     return {
       shipmentId: fakeShipmentId,
       trackingNumber: fakeTracking,
@@ -846,7 +912,7 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
     throw new Error('shippingProviderId required for v2 label creation');
   }
 
-  const created = await ssCreateLabel({
+  const created = await timer.task('ShipStation ssCreateLabel', () => ssCreateLabel({
     apiKeyV2,
     carrierId: `se-${body.shippingProviderId}`,
     serviceCode: body.serviceCode,
@@ -861,9 +927,9 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
     ssOrderId: order.id,
     orderNumber: order.orderNumber ?? null,
     testLabel: false,
-  });
+  }));
 
-  const localShipmentId = await persistCreatedLabel({
+  const localShipmentId = await timer.task('persistCreatedLabel', () => persistCreatedLabel({
     created,
     orderId: order.id,
     orderNumber: order.orderNumber ?? null,
@@ -874,15 +940,17 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
     height,
     selectedPackageId: body.customPackageId ? String(body.customPackageId) : null,
     source: 'prepship_v2',
-  });
+  }));
 
-  await markOrderShipped(order.id, created.trackingNumber);
-  await recordFulfillmentDeductions({
+  await timer.task('markOrderShipped', () => markOrderShipped(order.id, created.trackingNumber, { cleanupQueue: false }));
+  scheduleQueueCleanupAfterLabel(order.id, timer);
+  timer.background('inventory/package deduction', () => recordFulfillmentDeductions({
     order,
     shipmentId: localShipmentId,
     packageId: resolvedPackageId,
     source: 'label',
-  });
+    timer,
+  }));
 
   // Background: v1 mark-shipped — tells ShipStation the order shipped,
   // which in turn pushes the shipped status to the originating
@@ -935,8 +1003,9 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
     created.trackingNumber &&
     ssUpstreamOrderId
   ) {
-    void (async () => {
+    timer.background('ShipStation v1 markOrderShipped ack', async () => {
       const tag = `[labels] localOrderId=${order.id} ssUpstreamOrderId=${ssUpstreamOrderId} ssShipmentId=${created.shipmentId}`;
+      let lastError: string | null = null;
       for (let attempt = 1; attempt <= 2; attempt += 1) {
         try {
           await ssMarkOrderShippedV1(
@@ -954,6 +1023,7 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
           return;
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
+          lastError = msg;
           if (attempt === 2) {
             console.error(
               `${tag} ❌ v1 mark-shipped FAILED after retry — MARKETPLACE NOT NOTIFIED. ${msg}`
@@ -964,7 +1034,8 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
           }
         }
       }
-    })();
+      throw new Error(lastError ?? 'ShipStation v1 mark-shipped failed');
+    });
   } else if (created.trackingNumber) {
     // Diagnostic: tracking exists but we can't ack to ShipStation.
     // Reasons we skip:
@@ -981,6 +1052,7 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
     );
   }
 
+  timer.done('response ready');
   return {
     shipmentId: localShipmentId,
     trackingNumber: created.trackingNumber,

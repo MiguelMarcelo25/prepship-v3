@@ -3878,9 +3878,39 @@ export default function OrdersView({
     }
 
     const labelPopup = mode === 'queue' ? null : openLabelPdfPlaceholder()
+    const schedulePostLabelFollowups = (response: any) => {
+      void (async () => {
+        const followupsStarted = performance.now()
+        try {
+          const skuSaveStarted = performance.now()
+          await autoSavePanelSkuDefaults(panelForm.packageId || null, {
+            order,
+            detail: orderDetail,
+            weightOz,
+            dims: hasCompleteDims(labelDims) ? labelDims : null,
+          })
+          console.info(`[label-create] frontend SKU default save ${Math.round(performance.now() - skuSaveStarted)}ms`)
+        } catch (error) {
+          console.warn('[label-create] frontend SKU default save failed:', error instanceof Error ? error.message : error)
+        }
+
+        try {
+          const refetchStarted = performance.now()
+          await refetchOrders()
+          console.info(`[label-create] frontend refetchOrders ${Math.round(performance.now() - refetchStarted)}ms`)
+        } catch (error) {
+          console.warn('[label-create] frontend refetchOrders failed:', error instanceof Error ? error.message : error)
+        }
+
+        console.info(`[label-create] frontend post-label followups ${Math.round(performance.now() - followupsStarted)}ms`)
+      })()
+      return response
+    }
     setSingleActionBusy(true)
     try {
+      const labelRequestStarted = performance.now()
       const response = await apiClient.createLabel(payload)
+      console.info(`[label-create] frontend apiClient.createLabel ${Math.round(performance.now() - labelRequestStarted)}ms`)
       if (mode === 'queue' && response.labelUrl && order.clientId != null) {
         await apiClient.addToQueue(buildQueueAddPayload(order, response.labelUrl))
         await hydrateQueue(true)
@@ -3899,8 +3929,7 @@ export default function OrdersView({
             `Walmart label created, but Seller Center was not marked shipped${confirmError ? `: ${confirmError}` : ''}. Use Mark as shipped manually for this order.`,
             'error',
           )
-          await refetchOrders()
-          return response
+          return schedulePostLabelFollowups(response)
         }
         showToast(mode === 'test' ? `🧪 Test label created${response.trackingNumber ? `: ${response.trackingNumber}` : ''}` : `✅ Label created${response.trackingNumber ? `: ${response.trackingNumber}` : ''}`, 'success')
       } else {
@@ -3908,15 +3937,7 @@ export default function OrdersView({
         showToast('Label created but no PDF returned', 'info')
       }
 
-      await autoSavePanelSkuDefaults(panelForm.packageId || null, {
-        order,
-        detail: orderDetail,
-        weightOz,
-        dims: hasCompleteDims(labelDims) ? labelDims : null,
-      })
-
-      await refetchOrders()
-      return response
+      return schedulePostLabelFollowups(response)
     } catch (error) {
       showLabelPdfPlaceholderMessage(labelPopup, 'Label creation failed', error instanceof Error ? error.message : 'Label creation failed')
       showToast(error instanceof Error ? error.message : 'Label creation failed', 'error')
