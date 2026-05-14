@@ -2126,16 +2126,22 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           </div>
         </div>
 
-        {/* Top-left action bar — date/filter/edit/refresh are the primary
-            dashboard controls, so they start directly under the title
-            instead of being centered by the client selector. */}
-        <div className="relative flex flex-wrap items-center justify-start gap-3">
-          {/* Group 1 — operator-controlled date range. Drives every
-              API call on the dashboard. */}
-          <DateRangePicker value={dateRange} onChange={setDateRange} />
+        {/* Header action bar — freshness info stays readable on the left;
+            date/filter/edit/refresh controls sit on the top-right. */}
+        <div className="relative flex flex-wrap items-center justify-between gap-3">
+          {/* Group 1 — data freshness (display, no action) */}
+          <div className="inline-flex items-center gap-2">
+            <div className="text-xs font-medium text-ink-3">Data as of {formatDataTimestamp()}</div>
+            <SyncStatusChip data={syncChipData} />
+          </div>
 
-          {/* Group 2 — Filters popover (category + brand secondary cuts). */}
-          <div ref={filtersPopoverRef} className="relative inline-flex">
+          <div className="relative flex flex-wrap items-center justify-end gap-3">
+            {/* Group 2 — operator-controlled date range. Drives every
+                API call on the dashboard. */}
+            <DateRangePicker value={dateRange} onChange={setDateRange} />
+
+            {/* Group 3 — Filters popover (category + brand secondary cuts). */}
+            <div ref={filtersPopoverRef} className="relative inline-flex">
           <button
             type="button"
             onClick={() => setShowFilters((open) => !open)}
@@ -2211,59 +2217,54 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           ) : null}
           </div>
 
-          {/* Group 3 — Edit Dashboard toggle + Reset (only in edit
-              mode). When active, panels become draggable, show
-              visibility eyes, and resize handles. */}
-          <button
-            type="button"
-            onClick={() => setEditMode((on) => !on)}
-            className={`inline-flex h-10 items-center gap-2 rounded-card border px-4 text-sm2 font-semibold shadow-sm transition ${
-              editMode
-                ? 'border-brand bg-brand text-white hover:bg-brand-dark'
-                : 'border-line bg-surface text-ink hover:bg-surface-2'
-            }`}
-            aria-pressed={editMode}
-            title={editMode ? 'Exit edit mode — your layout is saved automatically' : 'Edit dashboard — drag panels to reorder, resize, or hide'}
-          >
-            {editMode ? (
-              <>
-                <CheckIcon size={15} strokeWidth={2.5} />
-                Done editing
-              </>
-            ) : (
-              <>
-                <Edit3 size={15} strokeWidth={2.25} className="text-ink-3" />
-                Edit Dashboard
-              </>
-            )}
-          </button>
-          {editMode ? (
+            {/* Group 4 — Edit Dashboard toggle + Reset (only in edit
+                mode). When active, panels become draggable, show
+                visibility eyes, and resize handles. */}
             <button
               type="button"
-              onClick={resetDashboardLayout}
-              className="inline-flex h-10 items-center gap-2 rounded-card border border-line bg-surface px-3 text-sm2 font-semibold text-ink-2 hover:bg-surface-2 shadow-sm"
-              title="Restore default panel order, sizes, and visibility"
+              onClick={() => setEditMode((on) => !on)}
+              className={`inline-flex h-10 items-center gap-2 rounded-card border px-4 text-sm2 font-semibold shadow-sm transition ${
+                editMode
+                  ? 'border-brand bg-brand text-white hover:bg-brand-dark'
+                  : 'border-line bg-surface text-ink hover:bg-surface-2'
+              }`}
+              aria-pressed={editMode}
+              title={editMode ? 'Exit edit mode — your layout is saved automatically' : 'Edit dashboard — drag panels to reorder, resize, or hide'}
             >
-              <RotateCcw size={14} strokeWidth={2.25} />
-              Reset
+              {editMode ? (
+                <>
+                  <CheckIcon size={15} strokeWidth={2.5} />
+                  Done editing
+                </>
+              ) : (
+                <>
+                  <Edit3 size={15} strokeWidth={2.25} className="text-ink-3" />
+                  Edit Dashboard
+                </>
+              )}
             </button>
-          ) : null}
+            {editMode ? (
+              <button
+                type="button"
+                onClick={resetDashboardLayout}
+                className="inline-flex h-10 items-center gap-2 rounded-card border border-line bg-surface px-3 text-sm2 font-semibold text-ink-2 hover:bg-surface-2 shadow-sm"
+                title="Restore default panel order, sizes, and visibility"
+              >
+                <RotateCcw size={14} strokeWidth={2.25} />
+                Reset
+              </button>
+            ) : null}
 
-          {/* Group 4 — Refresh icon */}
-          <button
-            type="button"
-            onClick={() => loadDashboard('refresh')}
-            className="grid h-10 w-10 place-items-center rounded-card border border-line bg-surface text-ink-2 shadow-sm hover:bg-surface-2 hover:text-brand"
-            aria-label="Refresh dashboard"
-            title="Refresh dashboard"
-          >
-            <RefreshCw size={16} strokeWidth={2.25} className={refreshing ? 'animate-spin' : ''} />
-          </button>
-
-          {/* Group 5 — data freshness (display, no action) */}
-          <div className="inline-flex items-center gap-2">
-            <div className="text-xs font-medium text-ink-3">Data as of {formatDataTimestamp()}</div>
-            <SyncStatusChip data={syncChipData} />
+            {/* Group 5 — Refresh icon */}
+            <button
+              type="button"
+              onClick={() => loadDashboard('refresh')}
+              className="grid h-10 w-10 place-items-center rounded-card border border-line bg-surface text-ink-2 shadow-sm hover:bg-surface-2 hover:text-brand"
+              aria-label="Refresh dashboard"
+              title="Refresh dashboard"
+            >
+              <RefreshCw size={16} strokeWidth={2.25} className={refreshing ? 'animate-spin' : ''} />
+            </button>
           </div>
         </div>
       </div>
