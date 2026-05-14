@@ -37,6 +37,7 @@ import {
   useState,
   type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
 } from 'react'
 
 export interface AutosuggestOption {
@@ -94,6 +95,47 @@ export interface AutosuggestHandle {
   focus: () => void
 }
 
+// 2026-05-15: hover-magnifier state shape. Mirrors InventoryView's
+// ThumbnailPreviewState (web/src/components/Views/InventoryView.tsx)
+// so the preview overlay renders identically across the table and
+// the autosuggest dropdown — one mental model for operators.
+interface ThumbnailPreviewState {
+  src: string
+  left: number
+  top: number
+  zoom: number
+}
+
+// Position the preview floating to the RIGHT of the cursor, vertically
+// centered on it, clamped to viewport bounds so it never clips off-
+// screen. Lifted from InventoryView's positionThumbnailPreview helper
+// to keep cross-component visual parity. The body-zoom math is
+// defensive: some operator setups (browser zoom + OS DPR > 1)
+// double-multiply position values; dividing by the resolved zoom
+// keeps the overlay anchored to the actual cursor position.
+function computePreviewPosition(cursorX: number, cursorY: number): {
+  left: number
+  top: number
+  zoom: number
+} {
+  const zoomRaw = Number.parseFloat(window.getComputedStyle(document.body).zoom)
+  const zoom = Number.isFinite(zoomRaw) && zoomRaw > 0
+    ? zoomRaw > 10 ? zoomRaw / 100 : zoomRaw
+    : 1
+  const width = 170
+  const height = 170
+  const gap = 14
+  const viewportWidth = window.innerWidth
+  const viewportHeight = window.innerHeight
+  const rawLeft = Math.max(gap, Math.min(cursorX + gap, viewportWidth - width - gap))
+  const rawTop = Math.max(gap, Math.min(cursorY - height / 2, viewportHeight - height - gap))
+  return {
+    left: rawLeft / zoom,
+    top: rawTop / zoom,
+    zoom: 1 / zoom,
+  }
+}
+
 // Rank a single option against a query. Higher = better match.
 // Returns -1 if no match at all. Ranking ladder:
 //   100 — exact value match (case-insensitive)
@@ -138,6 +180,13 @@ const Autosuggest = forwardRef<AutosuggestHandle, Props>(function Autosuggest(
   const listboxRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
+  // 2026-05-15: floating large-preview overlay state. Set on
+  // mouseenter of an option's thumbnail, cleared on mouseleave OR
+  // when the popover closes (effect below). pointer-events:none on
+  // the overlay means hovering over the preview itself doesn't
+  // steal hover from the underlying option — no flicker, no
+  // hover-trap.
+  const [thumbnailPreview, setThumbnailPreview] = useState<ThumbnailPreviewState | null>(null)
   const listboxId = useId()
 
   // Expose imperative focus to the parent. Used when the operator
@@ -184,6 +233,29 @@ const Autosuggest = forwardRef<AutosuggestHandle, Props>(function Autosuggest(
   useEffect(() => {
     setActiveIndex(0)
   }, [value])
+
+  // 2026-05-15: clear the floating preview the moment the popover
+  // closes. Without this, picking an option (which closes the
+  // popover) would leave the large preview overlay floating on
+  // screen until the user moved their cursor.
+  useEffect(() => {
+    if (!open) setThumbnailPreview(null)
+  }, [open])
+
+  const handleThumbnailEnter = useCallback(
+    (event: ReactMouseEvent<HTMLImageElement>, src: string) => {
+      if (!src) return
+      setThumbnailPreview({
+        src,
+        ...computePreviewPosition(event.clientX, event.clientY),
+      })
+    },
+    [],
+  )
+
+  const handleThumbnailLeave = useCallback(() => {
+    setThumbnailPreview(null)
+  }, [])
 
   // Click-outside + Esc dismissal. Mirrors the FilterSelect pattern
   // exactly so popover behavior across the app stays consistent.
@@ -383,13 +455,22 @@ const Autosuggest = forwardRef<AutosuggestHandle, Props>(function Autosuggest(
                           loading="lazy"
                           decoding="async"
                           referrerPolicy="no-referrer"
-                          className="w-full h-full object-cover"
+                          className="w-full h-full object-cover cursor-zoom-in"
                           onError={(event) => {
                             // Hide on load failure so the empty
                             // placeholder shows instead of the
                             // browser's broken-image glyph.
                             (event.currentTarget as HTMLImageElement).style.display = 'none'
                           }}
+                          // 2026-05-15: hover-magnifier preview.
+                          // Same UX as the Inventory table thumbnails
+                          // — operator hovers, large preview floats
+                          // to the right of the cursor. cursor-zoom-in
+                          // signals the affordance.
+                          onMouseEnter={(event) =>
+                            handleThumbnailEnter(event, option.imageUrl ?? '')
+                          }
+                          onMouseLeave={handleThumbnailLeave}
                         />
                       ) : null}
                     </div>
@@ -415,6 +496,39 @@ const Autosuggest = forwardRef<AutosuggestHandle, Props>(function Autosuggest(
               )
             })
           )}
+        </div>
+      ) : null}
+      {/* 2026-05-15: Floating large-preview overlay shown when the
+          operator hovers an option's thumbnail. Position-fixed so it
+          floats above EVERY ancestor (including overflow:hidden
+          parents like the Receive row container that would clip an
+          absolutely-positioned child). pointer-events:none ensures
+          hovering the preview itself doesn't intercept the cursor —
+          the operator can move smoothly between adjacent options
+          without flicker. zoom property handles browser-level zoom
+          edge cases (some setups double-multiply position values
+          when document.body has a non-1 zoom). */}
+      {thumbnailPreview ? (
+        <div
+          className="
+            fixed z-[99999]
+            bg-surface ring-1 ring-line rounded-lg
+            shadow-2xl p-1
+            pointer-events-none
+          "
+          style={{
+            left: `${thumbnailPreview.left}px`,
+            top: `${thumbnailPreview.top}px`,
+            zoom: String(thumbnailPreview.zoom),
+          }}
+          aria-hidden
+        >
+          <img
+            src={thumbnailPreview.src}
+            alt=""
+            referrerPolicy="no-referrer"
+            className="w-40 h-40 object-contain rounded block"
+          />
         </div>
       ) : null}
     </div>
