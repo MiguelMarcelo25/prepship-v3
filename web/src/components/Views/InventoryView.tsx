@@ -10,6 +10,11 @@ import {
   AlertTriangle,
   FolderTree,
   History as HistoryIcon,
+  Download,
+  Pencil,
+  RefreshCw,
+  Ruler,
+  Trash2,
   type LucideIcon,
 } from 'lucide-react'
 import { apiClient, ApiError } from '../../api/client'
@@ -2590,7 +2595,14 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
   }
 
   return (
-    <div id="view-inventory" className="view-content !p-5 !overflow-y-auto">
+    <div
+      id="view-inventory"
+      className="view-content inventory-page-shell !p-5 !overflow-y-auto"
+      style={!hideTabs ? {
+        background:
+          'radial-gradient(900px 500px at 8% 0%, rgb(var(--brand-rgb, 42 91 215) / 0.04), transparent 60%), radial-gradient(700px 400px at 100% 100%, rgb(var(--brand-rgb, 42 91 215) / 0.035), transparent 65%), rgb(var(--bg-rgb, 240 242 245))',
+      } : undefined}
+    >
       {/* 2026-05-14: Inventory header / tab system rewritten to match
           the SettingsView "icon-rail + section-header" pattern (operator
           request — boss wanted the same chrome across both pages so
@@ -2777,7 +2789,7 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -4 }}
                 transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-                className="flex items-start gap-4 px-5 pt-5"
+                className="inventory-section-header flex items-start gap-4 px-5 pt-5"
               >
                 <motion.div
                   initial={{ scale: 0.6, rotate: -8, opacity: 0 }}
@@ -2804,128 +2816,97 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                     {activeMeta.description}
                   </p>
                 </div>
-                {/* Right-side action slot — preserves the existing
-                    "200 Low/Out" red shortcut from the legacy header.
-                    Restyled to match the Settings palette + sit on
-                    the right of the section header instead of inline
-                    with the tabs. Only renders when alerts exist. */}
-                {alerts.length > 0 ? (
-                  <motion.button
-                    type="button"
-                    initial={{ opacity: 0, scale: 0.92 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    transition={{ delay: 0.18, duration: 0.22 }}
-                    whileHover={{ scale: 1.04 }}
-                    whileTap={{ scale: 0.96 }}
-                    onClick={() => {
-                      setActiveTab('stock')
-                      setAlertOnly(true)
-                    }}
-                    className="
-                      flex-shrink-0 inline-flex items-center gap-1.5
-                      h-9 px-3 rounded-lg
-                      bg-gradient-to-br from-rose-500 to-rose-600
-                      text-white text-[12px] font-extrabold tracking-tight
-                      shadow-md ring-1 ring-rose-400/30
-                      hover:shadow-lg
-                      transition-shadow
-                    "
-                    title={`Jump to Stock Levels filtered to ${alerts.length} Low/Out SKUs`}
-                  >
-                    <AlertTriangle size={14} strokeWidth={2.5} />
-                    <span className="tabular-nums">{alerts.length} Low/Out</span>
-                  </motion.button>
-                ) : null}
+                <div className="inventory-section-header-actions">
+                  {activeTab === 'stock' ? (
+                    <>
+                      <span ref={setColumnsAnchor} className="inventory-columns-anchor" />
+                      <button className="btn btn-outline btn-sm inventory-action-button" type="button" onClick={handlePopulateInventory}>
+                        <Download size={13} strokeWidth={2.25} />
+                        <span>Import SKUs from Orders</span>
+                      </button>
+                      <button className="btn btn-outline btn-sm inventory-action-button" type="button" onClick={handleImportDims} title="Pull weight & dims from ShipStation product catalog into inventory SKUs">
+                        <Ruler size={13} strokeWidth={2.25} />
+                        <span>Import Dims from SS</span>
+                      </button>
+                      <button
+                        className="btn btn-outline btn-sm inventory-action-button"
+                        type="button"
+                        onClick={() => {
+                          if (bulkEditMode) {
+                            setBulkEditMode(false)
+                            return
+                          }
+                          initializeBulkDrafts()
+                          setBulkEditMode(true)
+                        }}
+                        style={bulkEditMode ? { background: 'var(--ss-blue)', color: '#fff', borderColor: 'var(--ss-blue)' } : undefined}
+                      >
+                        <Pencil size={13} strokeWidth={2.25} />
+                        <span>{bulkEditMode ? 'Exit Bulk' : 'Bulk Edit'}</span>
+                      </button>
+                    </>
+                  ) : null}
+                  {alerts.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveTab('stock')
+                        setAlertOnly(true)
+                      }}
+                      className="inventory-alert-shortcut"
+                      title={`Jump to Stock Levels filtered to ${alerts.length} Low/Out SKUs`}
+                    >
+                      <AlertTriangle size={14} strokeWidth={2.5} />
+                      <span className="tabular-nums">{alerts.length} Low/Out</span>
+                    </button>
+                  ) : null}
+                  {activeTab === 'stock' ? (
+                    <button
+                      className="btn btn-outline btn-sm inventory-action-button inventory-action-button--danger"
+                      type="button"
+                      onClick={() => void handlePurgeTestData()}
+                      disabled={purgeBusy}
+                      title="Delete every order, shipment, inventory SKU, and ledger entry that belongs to a client flagged is_test=true. Does NOT touch real clients."
+                      style={{
+                        opacity: purgeBusy ? 0.6 : 1,
+                        cursor: purgeBusy ? 'wait' : 'pointer',
+                      }}
+                    >
+                      <Trash2 size={13} strokeWidth={2.25} />
+                      <span>{purgeBusy ? 'Purging...' : 'Purge Test Data'}</span>
+                    </button>
+                  ) : null}
+                  <button className="btn btn-outline btn-sm inventory-action-button" type="button" onClick={() => void refreshInventoryView()}>
+                    <RefreshCw size={13} strokeWidth={2.25} />
+                    <span>Refresh</span>
+                  </button>
+                </div>
               </motion.header>
             </AnimatePresence>
           </div>
         )
       })()}
 
-      {/* Toolbar row. In standalone mode (hideTabs=false) this sits
-          BELOW the new icon-rail + section-header. In embedded mode
-          (hideTabs=true, e.g. Clients page) the icon + title also
-          render here so the embedded view keeps its original single-
-          row "icon | spacer | toolbar" layout — no doubled chrome. */}
-      <motion.div
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-        className="flex items-center gap-4 mb-4 flex-wrap"
-      >
-        {hideTabs ? (
+      {hideTabs ? (
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+          className="flex items-center gap-4 mb-4 flex-wrap"
+        >
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-sky-500 to-sky-600 flex items-center justify-center shadow-md ring-1 ring-sky-400/20">
               <Boxes size={20} strokeWidth={2.25} className="text-white" />
             </div>
             <h2 className="text-[16px] font-extrabold text-ink font-display tracking-tight m-0">{viewTitle ?? 'Inventory'}</h2>
           </div>
-        ) : null}
-        <div style={{ flex: 1 }} />
-        {/* 2026-05-12 dedup: the toolbar Columns button + its portal'd
-            popover were removed. The reusable <Table> primitive now
-            renders its own \"Columns ▾\" trigger inside the table card
-            (see components/ui/Table.tsx:617) — so showing both meant
-            the operator saw \"Columns (6/15)\" up here AND \"Columns
-            15/13\" inside the table, doing the same job. Keep only
-            the in-table one; toolbar stays focused on import / bulk /
-            purge actions. The legacy column-layout state below is
-            kept because <Table>'s widths are independent — we still
-            read inventoryColumnLayout for the body-cell render
-            switch upstream. */}
-        <div className="ml-auto flex flex-col items-end gap-2">
-          {!hideTabs ? (
-            <div className="flex flex-wrap items-center justify-end gap-2">
-            {/* 2026-05-13: portal-anchor for the <Table>'s Columns ▾
-                button. Sits HERE in the page toolbar so the picker
-                lives next to "Import SKUs from Orders" instead of
-                inside the table card. The Table primitive renders
-                its existing Columns button + popover into this span
-                via React portal when `columnsAnchorEl` is set. The
-                callback ref hands the DOM element to React state on
-                mount so Table re-renders with a valid portal target. */}
-            <span ref={setColumnsAnchor} className="inline-flex items-center" />
-            <button className="btn btn-outline btn-sm" type="button" onClick={handlePopulateInventory}>📥 Import SKUs from Orders</button>
-            <button className="btn btn-outline btn-sm" type="button" onClick={handleImportDims} title="Pull weight & dims from ShipStation product catalog into inventory SKUs">📐 Import Dims from SS</button>
-            <button
-              className="btn btn-outline btn-sm"
-              type="button"
-              onClick={() => {
-                if (bulkEditMode) {
-                  setBulkEditMode(false)
-                  return
-                }
-                initializeBulkDrafts()
-                setBulkEditMode(true)
-              }}
-              style={bulkEditMode ? { background: 'var(--ss-blue)', color: '#fff', borderColor: 'var(--ss-blue)' } : undefined}
-            >
-              {bulkEditMode ? '✕ Exit Bulk' : '✏️ Bulk Edit'}
-            </button>
-            </div>
-          ) : null}
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            {!hideTabs ? (
-              <button
-                className="btn btn-outline btn-sm"
-                type="button"
-                onClick={() => void handlePurgeTestData()}
-                disabled={purgeBusy}
-                title="Delete every order, shipment, inventory SKU, and ledger entry that belongs to a client flagged is_test=true. Does NOT touch real clients."
-                style={{
-                  color: 'var(--red, #dc2626)',
-                  borderColor: 'var(--red, #dc2626)',
-                  opacity: purgeBusy ? 0.6 : 1,
-                  cursor: purgeBusy ? 'wait' : 'pointer',
-                }}
-              >
-                {purgeBusy ? '🧹 Purging…' : '🧹 Purge Test Data'}
-              </button>
-            ) : null}
-            <button className="btn btn-outline btn-sm" type="button" onClick={() => void refreshInventoryView()}>↻ Refresh</button>
-          </div>
-        </div>
-      </motion.div>
+          <div style={{ flex: 1 }} />
+          <button className="btn btn-outline btn-sm inventory-action-button" type="button" onClick={() => void refreshInventoryView()}>
+            <RefreshCw size={13} strokeWidth={2.25} />
+            <span>Refresh</span>
+          </button>
+        </motion.div>
+      ) : null}
 
       {bootError ? (
         <div className="empty-state" style={{ marginBottom: 12 }}>Error: {bootError}</div>
@@ -2933,8 +2914,8 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
 
       {activeTab === 'stock' ? (
         <div id="inv-panel-stock">
-          <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-            <div className="search-wrap" style={{ flex: 1, maxWidth: 280 }}>
+          <div className="inventory-stock-toolbar">
+            <div className="search-wrap inventory-stock-search">
               <input
                 type="text"
                 value={stockSearch}
@@ -2949,7 +2930,7 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                 <option key={client.clientId} value={client.clientId}>{client.name}</option>
               ))}
             </select>
-            <label style={{ fontSize: 12, color: 'var(--text2)', display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
+            <label className="inventory-filter-check">
               <input type="checkbox" checked={alertOnly} onChange={(event) => setAlertOnly(event.target.checked)} /> Low/Out only
             </label>
             {/* Status mode toggle — pill-style switch that swaps
@@ -2967,8 +2948,7 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
               aria-label={activeOnly ? 'Active SKUs view — click to switch to Deactivated' : 'Deactivated SKUs view — click to switch to Active'}
               onClick={() => setActiveOnly((v) => !v)}
               title={activeOnly ? 'Showing active SKUs · click to switch to deactivated' : 'Showing deactivated SKUs · click to switch to active'}
-              className="inline-flex items-center gap-2 cursor-pointer"
-              style={{ background: 'none', border: 0, padding: 0, fontSize: 12, color: 'var(--text2)' }}
+              className="inventory-active-switch inline-flex items-center gap-2 cursor-pointer"
             >
               <span
                 className={`relative inline-flex items-center w-7 h-3.5 rounded-full transition-colors duration-150 ${activeOnly ? 'bg-emerald-500' : 'bg-slate-300'}`}

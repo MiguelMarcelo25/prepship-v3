@@ -18,7 +18,8 @@
     "db:studio": "drizzle-kit studio",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p web/tsconfig.json",
     "test:orders-ux": "node scripts/orders-ux-guard.mjs",
-    "test:orders-ux:browser": "playwright test web/e2e/orders-ux.spec.js --reporter=line"
+    "test:orders-ux:browser": "playwright test web/e2e/orders-ux.spec.js --reporter=line",
+    "test:inventory-ux:browser": "playwright test web/e2e/inventory-ux.spec.js --reporter=line"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",

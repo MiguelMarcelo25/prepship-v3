@@ -3,6 +3,109 @@
    in InventoryView.tsx. The other inventory tabs (Receive, Alerts, etc.)
    still use the legacy .inv-table class from app-shell.css. */
 
+.inventory-page-shell{
+  background:
+    radial-gradient(900px 500px at 8% 0%, rgb(var(--brand-rgb, 42 91 215) / 0.04), transparent 60%),
+    radial-gradient(700px 400px at 100% 100%, rgb(var(--brand-rgb, 42 91 215) / 0.035), transparent 65%),
+    rgb(var(--bg-rgb, 240 242 245));
+}
+
+.inventory-section-header{
+  align-items:flex-start;
+  padding-bottom:16px;
+}
+
+.inventory-section-header-actions{
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  flex-wrap:wrap;
+  gap:8px;
+  max-width:min(760px, 56vw);
+  margin-left:auto;
+  padding-top:2px;
+}
+
+.inventory-columns-anchor{
+  display:inline-flex;
+  align-items:center;
+  position:relative;
+}
+
+.inventory-action-button{
+  display:inline-flex !important;
+  align-items:center;
+  justify-content:center;
+  gap:6px;
+  white-space:nowrap;
+}
+
+.inventory-action-button--danger{
+  color:var(--red, #dc2626) !important;
+  border-color:var(--red, #dc2626) !important;
+}
+
+.inventory-alert-shortcut{
+  order:-1;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:6px;
+  height:32px;
+  padding:0 12px;
+  border:0;
+  border-radius:8px;
+  background:linear-gradient(135deg, #f43f5e, #e11d48);
+  color:#fff;
+  font-size:12px;
+  font-weight:800;
+  letter-spacing:0;
+  box-shadow:0 8px 18px rgba(225, 29, 72, 0.18);
+  cursor:pointer;
+  transition:box-shadow 0.16s ease, transform 0.16s ease;
+}
+
+.inventory-alert-shortcut:hover{
+  box-shadow:0 10px 22px rgba(225, 29, 72, 0.24);
+}
+
+.inventory-stock-toolbar{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:wrap;
+  margin-bottom:12px;
+  padding:10px;
+  border:1px solid var(--border);
+  border-radius:12px;
+  background:rgb(var(--surface-rgb, 255 255 255) / 0.88);
+  box-shadow:0 1px 3px rgba(15, 23, 42, 0.04);
+}
+
+.inventory-stock-search{
+  flex:1 1 320px;
+  max-width:420px;
+}
+
+.inventory-filter-check{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  color:var(--text2);
+  cursor:pointer;
+  font-size:12px;
+  min-height:32px;
+  padding:0 2px;
+}
+
+.inventory-active-switch{
+  background:none;
+  border:0;
+  color:var(--text2);
+  font-size:12px;
+  padding:0;
+}
+
 .inventory-overlay{
   position:fixed;
   inset:0;
@@ -205,6 +308,29 @@
 }
 
 @media (max-width: 768px) {
+  .inventory-section-header{
+    flex-wrap:wrap;
+    gap:12px;
+  }
+
+  .inventory-section-header-actions{
+    flex:1 1 100%;
+    justify-content:flex-start;
+    max-width:none;
+    padding-top:0;
+  }
+
+  .inventory-stock-toolbar{
+    align-items:stretch;
+  }
+
+  .inventory-stock-search,
+  #view-inventory select.filter-sel{
+    flex:1 1 100%;
+    max-width:none;
+    width:100%;
+  }
+
   .inventory-modal{
     width:min(95vw, 420px);
     padding:18px;
@@ -212,6 +338,29 @@
 
   .inventory-drawer-panel{
     width:100vw;
+  }
+}
+
+@media (max-width: 520px) {
+  .inventory-section-header{
+    padding-left:12px !important;
+    padding-right:12px !important;
+  }
+
+  .inventory-section-header-actions,
+  .inventory-section-header-actions .btn,
+  .inventory-alert-shortcut{
+    width:100%;
+  }
+
+  .inventory-columns-anchor{
+    width:100%;
+  }
+
+  .inventory-columns-anchor > div,
+  .inventory-columns-anchor button,
+  .inventory-action-button{
+    width:100%;
   }
 }
 
