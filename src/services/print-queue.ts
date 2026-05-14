@@ -734,7 +734,17 @@ function drawHeader(
     });
   }
 
-  let y = height - 60;
+  // 2026-05-14: divider moved from 32% to 42% from the bottom of the
+  // page (i.e. raised ~43 px up) so the empty gap between the QTY
+  // line and the divider closes up. The previous 32% left ~130 px
+  // of dead white space below QTY on a 432-tall slip — the boss's
+  // reference image has the divider sitting around 60 % down from
+  // the top, which corresponds to ~40 % up from the bottom.
+  // Computed up here (before the top content) so we can vertically
+  // center the SKU/description/QTY block inside the available zone.
+  const dividerY = height * 0.42;
+
+  // Wrap-aware drawer. Returns the y value AFTER the last line.
   const drawWrapped = (
     text: string,
     startY: number,
@@ -775,6 +785,67 @@ function drawHeader(
     return cy;
   };
 
+  // Measurement-only twin of drawWrapped — counts how many lines the
+  // given text would consume at the given size+font without rendering
+  // anything. Used so we can compute total content height up-front
+  // and vertically center the block.
+  const countWrappedLines = (
+    text: string,
+    fontSize: number,
+    f: typeof font
+  ): number => {
+    const words = safePdfText(text).split(' ').filter(Boolean);
+    if (words.length === 0) return 0;
+    let line = '';
+    let lines = 0;
+    for (const word of words) {
+      const test = line ? `${line} ${word}` : word;
+      if (f.widthOfTextAtSize(test, fontSize) > width - pad * 2 && line) {
+        lines += 1;
+        line = word;
+      } else {
+        line = test;
+      }
+    }
+    if (line) lines += 1;
+    return lines;
+  };
+
+  // Compute the total height of the content block (SKU + optional
+  // description + QTY, or MULTI-SKU + items + QTY). Mirrors the
+  // sizes/gaps used in the draw block below, so changes to one must
+  // be mirrored in the other.
+  let contentHeight: number;
+  if (entry.multiSkuData && entry.multiSkuData.length > 0) {
+    contentHeight =
+      26 + 6 + // MULTI-SKU title
+      8 +      // gap
+      entry.multiSkuData.length * (15 + 6) + // each item line
+      6 +      // gap
+      22 + 6;  // QTY line
+  } else {
+    const skuText = entry.primarySku ?? 'UNKNOWN SKU';
+    const skuLines = countWrappedLines(skuText, 28, font);
+    const descLines = entry.itemDescription
+      ? countWrappedLines(entry.itemDescription, 15, fontReg)
+      : 0;
+    contentHeight =
+      skuLines * (28 + 5) + // SKU lines
+      12 +                  // gap
+      (descLines > 0 ? descLines * (15 + 4) + 8 : 0) + // description lines + gap
+      22 + 6;               // QTY line
+  }
+
+  // Top section spans from below the BATCH HEADER bar (height-40)
+  // down to the divider top (dividerY+2). Vertically center the
+  // content block in that zone, with a minimum top padding so the
+  // SKU doesn't kiss the BATCH HEADER bar even for huge descriptions.
+  const topSectionTop = height - 40;
+  const topSectionBottom = dividerY + 2;
+  const topSectionHeight = topSectionTop - topSectionBottom;
+  const verticalPadding = Math.max(10, (topSectionHeight - contentHeight) / 2);
+  let y = topSectionTop - verticalPadding;
+
   if (entry.multiSkuData && entry.multiSkuData.length > 0) {
     y = drawWrapped('MULTI-SKU', y, 26, font, rgb(0.1, 0.1, 0.1));
     y -= 8;
@@ -786,12 +857,7 @@ function drawHeader(
     y = drawWrapped(`QTY: ${totalQty} per order`, y, 22, font, rgb(0.1, 0.1, 0.1));
   } else {
     const sku = entry.primarySku ?? 'UNKNOWN SKU';
-    // 2026-05-14: subtle bump on SKU title (24 → 28) with a touch
-    // more breathing room above and below. First attempt used 34
-    // which overshot — the boss wants the SKU more prominent than
-    // the description but not dominating the slip. Hierarchy goes
-    // SKU (28) > QTY (22) > description (15).
-    y -= 4;
+    // SKU 28 / description 15 / QTY 22 — hierarchy goes SKU > QTY > description.
     y = drawWrapped(sku, y, 28, font, rgb(0.1, 0.1, 0.1), 5);
     y -= 12;
     if (entry.itemDescription) {
@@ -801,13 +867,6 @@ function drawHeader(
     y = drawWrapped(`QTY: ${entry.orderQty} per order`, y, 22, font, rgb(0.1, 0.1, 0.1));
   }
 
-  // 2026-05-14: divider moved from 32% to 42% from the bottom of the
-  // page (i.e. raised ~43 px up) so the empty gap between the QTY
-  // line and the divider closes up. The previous 32% left ~130 px
-  // of dead white space below QTY on a 432-tall slip — the boss's
-  // reference image has the divider sitting around 60 % down from
-  // the top, which corresponds to ~40 % up from the bottom.
-  const dividerY = height * 0.42;
   page.drawLine({
     start: { x: pad, y: dividerY + 2 },
     end: { x: width - pad, y: dividerY + 2 },
