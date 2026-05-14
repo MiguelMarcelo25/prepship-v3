@@ -1946,7 +1946,6 @@ export default function OrdersView({
     key: string
     rate: Record<string, unknown> | null
   }>>({})
-  const [autoBestRateLoadingIds, setAutoBestRateLoadingIds] = useState<Set<number>>(() => new Set())
   const autoBestRateRequestedRef = useRef<Set<string>>(new Set())
   // Tracks whether the user has *manually* edited weight or any dim in the
   // panel since the current order was loaded. The auto-rate-refresh effect
@@ -3992,18 +3991,6 @@ export default function OrdersView({
     }
   }
 
-  function setAutoBestRateLoading(orderId: number, isLoading: boolean) {
-    setAutoBestRateLoadingIds((current) => {
-      const next = new Set(current)
-      if (isLoading) {
-        next.add(orderId)
-      } else {
-        next.delete(orderId)
-      }
-      return next
-    })
-  }
-
   useEffect(() => {
     if (loading || currentStatus !== 'awaiting_shipment' || orderedFilteredOrders.length === 0) return
 
@@ -4028,7 +4015,6 @@ export default function OrdersView({
 
     async function refreshVisibleBestRate(order: OrderSummaryDto, request: NonNullable<ReturnType<typeof getAutoBestRateRequest>>) {
       autoBestRateRequestedRef.current.add(request.key)
-      if (!cancelled) setAutoBestRateLoading(order.orderId, true)
 
       try {
         if (isTestOrder(order, request.detail)) {
@@ -4095,8 +4081,6 @@ export default function OrdersView({
           '[OrdersView] auto best-rate refresh failed:',
           error instanceof Error ? error.message : error,
         )
-      } finally {
-        if (!cancelled) setAutoBestRateLoading(order.orderId, false)
       }
     }
 
@@ -5294,35 +5278,10 @@ export default function OrdersView({
     const autoRequest = getAutoBestRateRequest(order)
     const autoEntry = autoRequest ? autoBestRateEntries[order.orderId] : null
     const hasMatchingAutoEntry = Boolean(autoRequest && autoEntry?.key === autoRequest.key)
-    const autoRateLoading = autoBestRateLoadingIds.has(order.orderId)
     const displayOrder = hasMatchingAutoEntry && autoEntry?.rate
       ? withBestRateOverride(order, autoEntry.rate)
       : order
 
-    // If the user is actively saving shipment details OR re-fetching rates
-    // for this exact order, the saved bestRate on the row is stale until the
-    // debounced /rates fetch lands. Show the spinner so the row visibly
-    // reflects the recalculation in progress instead of flashing the old
-    // number. Covers both phases of an edit:
-    //   1. shipmentDetailsSaving — POSTing weight/dims to the server
-    //   2. panelRateLoading — fetching new rates after save
-    if ((panelRateLoading || shipmentDetailsSaving) && panelOrder?.orderId === order.orderId) {
-      return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--ss-blue)', fontSize: 11, fontWeight: 600 }}>
-          <span className="ship-rate-spinner" aria-hidden="true" />
-          <span>Calculating…</span>
-        </div>
-      )
-    }
-
-    if (autoRateLoading) {
-      return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--ss-blue)', fontSize: 11, fontWeight: 600 }}>
-          <span className="ship-rate-spinner" aria-hidden="true" />
-          <span>Calculating...</span>
-        </div>
-      )
-    }
 
     if (isTestOrder(displayOrder)) {
       const testAmount = displayOrder.bestRate
@@ -5391,7 +5350,7 @@ export default function OrdersView({
       return <span style={{ color: 'var(--text3)', fontSize: 11 }}>--</span>
     }
     if (!displayOrder.bestRate) {
-      return <div className="spin-center"><span className="spin-sm" /></div>
+      return <span style={{ color: 'var(--text3)', fontSize: 11 }}>--</span>
     }
     if (bestRateBaseCost == null) {
       return <span style={{ color: 'var(--text3)', fontSize: 11 }}>—</span>
