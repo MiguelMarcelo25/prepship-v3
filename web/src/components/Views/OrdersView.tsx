@@ -3758,12 +3758,15 @@ export default function OrdersView({
     return popup
   }
 
+  // 2026-05-14: routes through apiClient.openLabelPdf which fetches
+  // auth-gated /labels endpoints with the Bearer token, opens via
+  // blob: URL, and only falls back to window.open for external CDN
+  // URLs (ShipStation downloads). Previously a raw `window.open(labelUrl)`
+  // here would silently 401 on any auth-gated label URL — Chrome
+  // surfaces that as the misleading "Check internet connection"
+  // error in the download manager. Boss-reported on this date.
   function openLabelPdfUrl(labelUrl: string, popup: Window | null) {
-    if (popup && !popup.closed) {
-      popup.location.href = labelUrl
-      return
-    }
-    window.open(labelUrl, '_blank', 'noopener,noreferrer')
+    void apiClient.openLabelPdf(labelUrl, { popup })
   }
 
   function showLabelPdfPlaceholderMessage(popup: Window | null, title: string, message: string) {
@@ -4440,8 +4443,18 @@ export default function OrdersView({
 
     try {
       const data = await apiClient.retrieveLabel(panelOrder.orderId)
-      window.open(data.labelUrl, '_blank', 'noopener,noreferrer')
-      showToast(`📄 Label opened for ${data.trackingNumber || panelOrder.orderNumber || panelOrder.orderId}`)
+      // 2026-05-14: was `window.open(data.labelUrl, ...)` directly,
+      // which dropped the Supabase Bearer token and silently 401'd
+      // on any auth-gated label URL — Chrome's download manager
+      // surfaces 401 as "Check internet connection" (boss-reported).
+      // Now routed through apiClient.openLabelPdf which proxies via
+      // blob: URL when needed.
+      const opened = await apiClient.openLabelPdf(data.labelUrl)
+      if (opened) {
+        showToast(`📄 Label opened for ${data.trackingNumber || panelOrder.orderNumber || panelOrder.orderId}`)
+      } else {
+        showToast('Label fetch failed — check the popup tab for details, or try Reprint again.', 'error')
+      }
     } catch (error) {
       showToast(error instanceof Error ? error.message : 'Failed to retrieve label', 'error')
     }
@@ -4860,7 +4873,12 @@ export default function OrdersView({
           await apiClient.addToQueue(buildQueueAddPayload(order, response.labelUrl))
           queuedItems.push(...getActiveItems(order, orderDetailsById.get(order.orderId) ?? null))
         } else if (response.labelUrl) {
-          window.open(response.labelUrl, '_blank', 'noopener,noreferrer')
+          // 2026-05-14: routed through apiClient.openLabelPdf so
+          // auth-gated label URLs proxy through a Bearer-authed
+          // fetch + blob: open instead of failing silently with the
+          // misleading "Check internet connection" Chrome error.
+          // Same fix template as the per-order reprint path above.
+          await apiClient.openLabelPdf(response.labelUrl)
         }
         created += 1
         // Mark this row for the 5s strikethrough transition. It'll

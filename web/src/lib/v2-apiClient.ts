@@ -2009,17 +2009,12 @@ export const apiClient = {
       : {};
     const shippingProviderId = parseFiniteNumber(body.shippingProviderId);
     const directRef = directAccountRefFromProviderId(shippingProviderId);
-    const carrierCode = normalizeProviderKey(body.carrierCode);
-    const serviceCode = normalizeProviderKey(body.serviceCode);
 
-    // Per user override `unlock shipped data` on 2026-05-14: Shipp labels
-    // are purchased directly from Shipp, not ShipStation. Route only Shipp's
-    // synthetic direct-carrier ids away from /labels so ShipStation never sees
-    // `se-10000025` or `shipp_*` service codes.
-    if (
-      directRef?.sourceTable === 'carrier_accounts' &&
-      (carrierCode === 'shipp' || serviceCode.startsWith('shipp_'))
-    ) {
+    // Direct carrier accounts use synthetic provider ids (10,000,000 + row id),
+    // not ShipStation carrier ids. Always route those labels through the
+    // Vercel direct-carrier label endpoint so ShipStation never receives
+    // non-existent ids like `se-10000025` or service codes like `shipp_*`.
+    if (directRef?.sourceTable === 'carrier_accounts') {
       return callVercelFunction<any>('/carriers/labels', {
         method: 'POST',
         body: {
@@ -2061,9 +2056,142 @@ export const apiClient = {
   },
 
   async openLabel(url: string): Promise<void> {
-    if (!url) return;
-    const normalized = normalizeMockLabelUrl(url);
-    window.open(typeof normalized === 'string' ? normalized : url, '_blank', 'noopener,noreferrer');
+    // Back-compat thin wrapper. New code should call openLabelPdf()
+    // which handles auth-gated URLs via blob proxy. This wrapper still
+    // works for ShipStation CDN URLs (no auth needed) but will silently
+    // 401 if the URL points at our auth-gated API origin — same failure
+    // mode the boss reported on 2026-05-14 ("Check internet connection"
+    // toast in Chrome's download manager). Prefer openLabelPdf().
+    await this.openLabelPdf(url);
+  },
+
+  /**
+   * Open a label PDF in a new tab, handling all the failure modes that
+   * `window.open(labelUrl)` directly does NOT handle:
+   *
+   *   1. **Mock label URLs** that come from the backend as `/labels/mock/N`
+   *      relative paths or with a stale host — normalized via
+   *      `normalizeMockLabelUrl()` before opening.
+   *
+   *   2. **Auth-gated URLs on our API origin** — `window.open` cannot
+   *      attach the Supabase Bearer token, so any auth-gated endpoint
+   *      returns 401 and Chrome surfaces it as the misleading
+   *      "Check internet connection" download error. We detect API-origin
+   *      URLs and fetch them with the Bearer token, then open the
+   *      response as a `blob:` URL (browser-internal, no further auth).
+   *
+   *   3. **External CDN URLs** (ShipStation v2 downloads, third-party
+   *      carrier label hosts) — opened directly via `window.open` since
+   *      they don't need our auth and `fetch` on them would CORS-fail.
+   *
+   *   4. **Pre-allocated popup windows** — call sites that opened a
+   *      blank tab synchronously (to survive popup blockers) can pass
+   *      it via `options.popup`; we redirect that tab to the resolved
+   *      URL instead of opening a fresh one.
+   *
+   * Returns `true` on success, `false` on a hard failure that even
+   * the fallback `window.open` couldn't recover. Never throws — call
+   * sites can `void` the promise without a try/catch.
+   *
+   * 2026-05-14: introduced after the operator's boss reported every
+   * label download failing with "Check internet connection" in Chrome.
+   * Root cause was `window.open(data.labelUrl)` direct calls in
+   * OrdersView reprintLabel + create-label success paths bypassing
+   * both the URL normalizer AND the Bearer auth header. Mirrors the
+   * battle-tested `openBillingInvoice` pattern below in this file.
+   */
+  async openLabelPdf(
+    url: string,
+    options?: { popup?: Window | null }
+  ): Promise<boolean> {
+    if (!url) return false;
+
+    // Step 1: rewrite stale mock-label hosts / relative paths to point
+    // at the configured API_BASE. normalizeMockLabelUrl is a no-op for
+    // anything that isn't a /labels/mock/N URL.
+    const normalizedRaw = normalizeMockLabelUrl(url);
+    const target = typeof normalizedRaw === 'string' ? normalizedRaw : url;
+
+    const popup = options?.popup ?? null;
+    const openIn = (resolvedUrl: string) => {
+      if (popup && !popup.closed) {
+        popup.location.href = resolvedUrl;
+      } else {
+        window.open(resolvedUrl, '_blank', 'noopener,noreferrer');
+      }
+    };
+
+    // Step 2: figure out whether this URL is on OUR API origin (needs
+    // Bearer auth → use blob proxy) or a third-party CDN (open direct).
+    let needsAuth = false;
+    try {
+      const apiOrigin = new URL(API_BASE).origin;
+      const targetOrigin = new URL(target, API_BASE).origin;
+      needsAuth = targetOrigin === apiOrigin;
+    } catch {
+      // Malformed URL. Try the direct-open fallback and let the browser
+      // show whatever error makes sense instead of failing silently.
+      openIn(target);
+      return false;
+    }
+
+    // Step 3: external CDN — direct open is correct. ShipStation v2
+    // download URLs (api.shipengine.com) and most carrier-direct CDNs
+    // sit here. They don't need our Bearer token and a fetch+blob proxy
+    // would just CORS-fail.
+    if (!needsAuth) {
+      openIn(target);
+      return true;
+    }
+
+    // Step 4: API-origin URL — proxy through fetch with Bearer auth so
+    // the response actually arrives, then open as a blob: URL.
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const headers: Record<string, string> = {
+        Accept: 'application/pdf,application/octet-stream,*/*',
+      };
+      if (session?.access_token) {
+        headers.Authorization = `Bearer ${session.access_token}`;
+      }
+
+      const res = await fetch(target, { headers });
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new Error(
+          `Label fetch ${res.status}: ${body.slice(0, 200) || res.statusText}`
+        );
+      }
+
+      const blob = await res.blob();
+      // Sanity check: if the API returned an HTML 401 page despite
+      // status 200 (some upstream proxies do this), the blob's MIME
+      // type will say so. Surface a clear error rather than opening
+      // an HTML page disguised as a PDF.
+      if (blob.type && blob.type.includes('text/html')) {
+        throw new Error(
+          'Label endpoint returned HTML instead of PDF — token may be expired.'
+        );
+      }
+      const blobUrl = URL.createObjectURL(blob);
+      openIn(blobUrl);
+      // 60 s is enough for the user to grab the print dialog or the
+      // PDF viewer to fully load. After that the blob is GCed; any
+      // open tab keeps its in-memory copy of the bytes either way.
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+      return true;
+    } catch (err) {
+      console.error('[openLabelPdf] auth-fetch failed; falling back to direct open:', err);
+      // Last-ditch: open the original URL directly. The user will see
+      // whatever error the browser surfaces (likely 401 HTML), which
+      // is at least more informative than the operator-reported
+      // "Check internet connection" silent failure of the previous
+      // window.open-only path.
+      openIn(target);
+      return false;
+    }
   },
 
   // ─── Print queue ───────────────────────────────────────────────────────────
