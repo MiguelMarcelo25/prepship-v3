@@ -2081,83 +2081,61 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
 
   return (
     <div id="view-dashboard" className="view-content !overflow-y-auto !bg-page !p-4 sm:!p-5">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-[24px] font-extrabold leading-tight tracking-[-0.02em] text-ink">
-            Inventory & Stockout Prevention
-          </h1>
-          <p className="mt-0.5 text-xs text-ink-3">
-            Monitor inventory health, days of supply, and take action to prevent stockouts
-          </p>
-          <p className="mt-1 inline-flex items-center gap-1.5 text-2xs font-semibold text-ink-3">
-            <span className="inline-block h-1.5 w-1.5 rounded-full bg-brand" />
-            KPIs · all orders (awaiting + shipped + cancelled). Daily orders · all orders. SKU charts · fulfilled orders only.
-          </p>
-        </div>
+      <div className="mb-4 space-y-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-[24px] font-extrabold leading-tight tracking-[-0.02em] text-ink">
+              Inventory & Stockout Prevention
+            </h1>
+            <p className="mt-0.5 text-xs text-ink-3">
+              Monitor inventory health, days of supply, and take action to prevent stockouts
+            </p>
+            <p className="mt-1 inline-flex items-center gap-1.5 text-2xs font-semibold text-ink-3">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-brand" />
+              KPIs · all orders (awaiting + shipped + cancelled). Daily orders · all orders. SKU charts · fulfilled orders only.
+            </p>
+          </div>
 
-        {/* Surfaced client filter (2026-05-13 operator request:
-            "i want the filter see in the middle like this").
-            Previously the All Clients dropdown was buried inside
-            the Filters popover; now it lives in the header where
-            it's the always-visible primary scope control. The
-            popover still has Category + Brand filters for the
-            secondary cuts. */}
-        <div className="flex items-center gap-2 mx-auto">
-          <span className="text-2xs font-bold uppercase tracking-[0.06em] text-ink-3">Client</span>
-          <div className="relative">
-            <select
-              value={selectedClientId ?? ''}
-              onChange={(event) => setSelectedClientId(event.target.value ? Number(event.target.value) : null)}
-              className="h-10 appearance-none rounded-card border border-line bg-surface pl-3 pr-9 text-sm font-semibold text-ink shadow-sm hover:bg-surface-2 focus:outline-none focus:ring-2 focus:ring-brand/30 cursor-pointer"
-              aria-label="Filter dashboard by client"
-            >
-              <option value="">All Clients</option>
-              {clients.map((client) => (
-                <option key={client.clientId} value={client.clientId}>
-                  {client.name}
-                </option>
-              ))}
-            </select>
-            <ChevronDown
-              size={14}
-              strokeWidth={2.5}
-              className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-ink-3"
-            />
+          {/* Surfaced client filter (2026-05-13 operator request:
+              "i want the filter see in the middle like this").
+              2026-05-14 follow-up: actions moved to the top-left, so
+              the client selector now stays on the title row instead of
+              pushing date/filter/edit/refresh controls into the middle. */}
+          <div className="flex items-center gap-2">
+            <span className="text-2xs font-bold uppercase tracking-[0.06em] text-ink-3">Client</span>
+            <div className="relative">
+              <select
+                value={selectedClientId ?? ''}
+                onChange={(event) => setSelectedClientId(event.target.value ? Number(event.target.value) : null)}
+                className="h-10 appearance-none rounded-card border border-line bg-surface pl-3 pr-9 text-sm font-semibold text-ink shadow-sm hover:bg-surface-2 focus:outline-none focus:ring-2 focus:ring-brand/30 cursor-pointer"
+                aria-label="Filter dashboard by client"
+              >
+                <option value="">All Clients</option>
+                {clients.map((client) => (
+                  <option key={client.clientId} value={client.clientId}>
+                    {client.name}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown
+                size={14}
+                strokeWidth={2.5}
+                className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-ink-3"
+              />
+            </div>
           </div>
         </div>
 
-        {/* Header right cluster — operator-requested order
-            (2026-05-13): freshness info first, then date scope,
-            then filters, then edit/refresh actions.
-              1. Data as of timestamp + live sync chip
-              2. Date range picker
-              3. Filters
-              4. Edit Dashboard (+ Reset when in edit mode)
-              5. Refresh icon
-            Visual grouping: freshness items left, actions right,
-            with the date picker as the operator's primary lever
-            in between. */}
-        <div className="relative flex flex-wrap items-center gap-3">
-          {/* Group 1 — data freshness (display, no action) */}
-          <div className="inline-flex items-center gap-2">
-            <div className="text-xs font-medium text-ink-3">Data as of {formatDataTimestamp()}</div>
-            {/* Live sync status chip — shows green-dot/Live + cron
-                cadence + "synced X ago." Boss-friendly trust signal.
-                Click to expand the full cron schedule (orders 3 min,
-                shipments 3 min, rate backfill 10 min, etc.). */}
-            <SyncStatusChip data={syncChipData} />
-          </div>
-
-          {/* Group 2 — operator-controlled date range. Drives every
+        {/* Top-left action bar — date/filter/edit/refresh are the primary
+            dashboard controls, so they start directly under the title
+            instead of being centered by the client selector. */}
+        <div className="relative flex flex-wrap items-center justify-start gap-3">
+          {/* Group 1 — operator-controlled date range. Drives every
               API call on the dashboard. */}
           <DateRangePicker value={dateRange} onChange={setDateRange} />
 
-          {/* Group 3 — Filters popover (category + brand secondary cuts).
-              Wrapped with display: contents so click-outside ref works
-              without disturbing layout / popover positioning. Panel
-              moved up next to its trigger so a single ref tracks both
-              (originally rendered far below after Refresh icon). */}
-          <div ref={filtersPopoverRef} style={{ display: 'contents' }}>
+          {/* Group 2 — Filters popover (category + brand secondary cuts). */}
+          <div ref={filtersPopoverRef} className="relative inline-flex">
           <button
             type="button"
             onClick={() => setShowFilters((open) => !open)}
@@ -2168,7 +2146,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             Filters
           </button>
           {showFilters ? (
-            <div className="absolute right-0 top-12 z-20 w-[min(18rem,calc(100vw-2rem))] rounded-card border border-line bg-surface p-3 shadow-lg">
+            <div className="absolute left-0 top-12 z-20 w-[min(18rem,calc(100vw-2rem))] rounded-card border border-line bg-surface p-3 shadow-lg">
               <div className="mb-2 text-xs font-extrabold text-ink">Dashboard Filters</div>
               <label className="mb-2 block">
                 <span className="mb-1 block text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Client</span>
@@ -2233,7 +2211,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           ) : null}
           </div>
 
-          {/* Group 4 — Edit Dashboard toggle + Reset (only in edit
+          {/* Group 3 — Edit Dashboard toggle + Reset (only in edit
               mode). When active, panels become draggable, show
               visibility eyes, and resize handles. */}
           <button
@@ -2271,7 +2249,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             </button>
           ) : null}
 
-          {/* Group 5 — Refresh icon (rightmost) */}
+          {/* Group 4 — Refresh icon */}
           <button
             type="button"
             onClick={() => loadDashboard('refresh')}
@@ -2281,6 +2259,12 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           >
             <RefreshCw size={16} strokeWidth={2.25} className={refreshing ? 'animate-spin' : ''} />
           </button>
+
+          {/* Group 5 — data freshness (display, no action) */}
+          <div className="inline-flex items-center gap-2">
+            <div className="text-xs font-medium text-ink-3">Data as of {formatDataTimestamp()}</div>
+            <SyncStatusChip data={syncChipData} />
+          </div>
         </div>
       </div>
 
