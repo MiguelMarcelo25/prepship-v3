@@ -2096,12 +2096,8 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             </p>
           </div>
 
-          {/* Surfaced client filter (2026-05-13 operator request:
-              "i want the filter see in the middle like this").
-              2026-05-14 follow-up: actions moved to the top-left, so
-              the client selector now stays on the title row instead of
-              pushing date/filter/edit/refresh controls into the middle. */}
-          <div className="flex items-center gap-2">
+          {/* Keep client context centered while freshness/actions sit together on the top-right row. */}
+          <div className="mx-auto flex items-center gap-2">
             <span className="text-2xs font-bold uppercase tracking-[0.06em] text-ink-3">Client</span>
             <div className="relative">
               <select
@@ -2126,9 +2122,8 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           </div>
         </div>
 
-        {/* Header action bar — freshness info stays readable on the left;
-            date/filter/edit/refresh controls sit on the top-right. */}
-        <div className="relative flex flex-wrap items-center justify-between gap-3">
+        {/* Header action bar - freshness info leads the controls, ending with refresh on the right. */}
+        <div className="relative flex flex-wrap items-center justify-end gap-3">
           {/* Group 1 — data freshness (display, no action) */}
           <div className="inline-flex items-center gap-2">
             <div className="text-xs font-medium text-ink-3">Data as of {formatDataTimestamp()}</div>
