@@ -635,7 +635,15 @@ async function ratesFromWalmartShipping(
     shipFrom?: any;
     rawOrder?: any; // optional pre-fetched store_orders.raw payload
   },
-): Promise<Array<{ service: string; cost: number; days: number; currency: string }>> {
+): Promise<Array<{
+  service: string;
+  cost: number;
+  days: number;
+  currency: string;
+  carrierCode?: string;
+  carrierName?: string;
+  carrierType?: string;
+}>> {
   if (!input.purchaseOrderId) {
     throw new Error(
       'Walmart Shipping Solutions rates require a Walmart purchaseOrderId. Open the Rate Browser on a Walmart-pulled order (orders whose external id starts with walmart-).',
@@ -811,13 +819,19 @@ async function ratesFromWalmartShipping(
 
   return rateList
     .map((r: any) => {
-      const carrier = String(
-        r?.carrierDisplayName ?? r?.carrier?.shortName ?? r?.carrierShortName ?? r?.carrierName ?? r?.carrier ?? 'Walmart',
+      const carrierName = String(
+        r?.carrierName ?? r?.carrier?.shortName ?? r?.carrierShortName ?? r?.carrier ?? r?.carrierDisplayName ?? 'Walmart',
+      );
+      const carrierDisplay = String(
+        r?.carrierDisplayName ?? r?.carrierFullName ?? carrierName,
+      );
+      const carrierServiceType = String(
+        r?.name ?? r?.serviceType ?? r?.carrierServiceType ?? r?.serviceLevel ?? r?.method ?? r?.displayName ?? '',
       );
       const svcType = String(
-        r?.displayName ?? r?.name ?? r?.serviceType ?? r?.carrierServiceType ?? r?.serviceLevel ?? r?.method ?? '',
+        r?.displayName ?? r?.serviceTypeGroupDisplayName ?? carrierServiceType,
       );
-      const service = svcType ? `${carrier} ${svcType}` : carrier;
+      const service = svcType ? `${carrierDisplay} ${svcType}` : carrierDisplay;
       const cost = Number(
         r?.estimatedRate?.amount ?? r?.totalCost?.amount ?? r?.cost?.amount ?? r?.totalCost ?? r?.cost ?? r?.amount ?? 0,
       );
@@ -825,7 +839,15 @@ async function ratesFromWalmartShipping(
         r?.estimatedRate?.currency ?? r?.totalCost?.currency ?? r?.cost?.currency ?? r?.currency ?? 'USD',
       );
       const days = Number(r?.transitTime?.businessDays ?? r?.transitDays ?? r?.deliveryDays ?? 0) || 0;
-      return { service, cost, days, currency };
+      return {
+        service,
+        cost,
+        days,
+        currency,
+        carrierCode: carrierName,
+        carrierName,
+        carrierType: carrierServiceType,
+      };
     })
     .filter((r) => r.cost > 0);
 }
