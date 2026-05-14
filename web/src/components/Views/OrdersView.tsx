@@ -1942,6 +1942,12 @@ export default function OrdersView({
   const shipmentAutoSaveTimerRef = useRef<number | null>(null)
   const shipmentLastSavedKeyRef = useRef<string | null>(null)
   const bestRateRefreshSeqRef = useRef(0)
+  const [autoBestRateEntries, setAutoBestRateEntries] = useState<Record<number, {
+    key: string
+    rate: Record<string, unknown> | null
+  }>>({})
+  const [autoBestRateLoadingIds, setAutoBestRateLoadingIds] = useState<Set<number>>(() => new Set())
+  const autoBestRateRequestedRef = useRef<Set<string>>(new Set())
   // Tracks whether the user has *manually* edited weight or any dim in the
   // panel since the current order was loaded. The auto-rate-refresh effect
   // only fires when this is true. Reset to false whenever panelOrderId
@@ -3902,6 +3908,213 @@ export default function OrdersView({
       .sort((left, right) => getRateTotalForSort(left) - getRateTotalForSort(right))[0] ?? null
   }
 
+  function getRateCarrierIdsForAccounts() {
+    return [...new Set(
+      shippingAccounts
+        .map((account) => toStringValue(account.carrierId))
+        .filter((carrierId): carrierId is string => Boolean(carrierId))
+    )]
+  }
+
+  function getAutoBestRateRequest(order: OrderSummaryDto) {
+    if (order.orderStatus !== 'awaiting_shipment') return null
+    const detail = orderDetailsById.get(order.orderId) ?? null
+    const dims = getDimensions(order, detail)
+    const weightOz = order.weight?.value ?? 0
+    if (!dims || !hasCompleteDims(dims) || weightOz <= 0) return null
+
+    const shipTo = getShipTo(order, detail)
+    if (!shipTo.postalCode) return null
+
+    const confirmation = normalizeConfirmationForRates(
+      toStringValue(order.selectedRate?.confirmation) ??
+      toStringValue(getShippingModel(order)?.confirmation) ??
+      'delivery'
+    )
+    const carrierKey = getRateCarrierIdsForAccounts().join(',')
+    const dimsLabel = `${dims.length || 0}x${dims.width || 0}x${dims.height || 0}`
+    const key = [
+      order.orderId,
+      weightOz,
+      dims.length,
+      dims.width,
+      dims.height,
+      shipTo.postalCode,
+      shipTo.country ?? 'US',
+      shipTo.state ?? '',
+      shipTo.city ?? '',
+      order.storeId ?? '',
+      order.clientId ?? '',
+      confirmation,
+      carrierKey,
+    ].join('|')
+
+    return { detail, dims, dimsLabel, weightOz, shipTo, confirmation, key }
+  }
+
+  function getRateBaseAmount(rate: Record<string, unknown>) {
+    const shipmentCost = toNumberValue(rate.shipmentCost) ?? toNumberValue(rate.amount) ?? 0
+    const otherCost = toNumberValue(rate.otherCost) ?? 0
+    const total = shipmentCost + otherCost
+    return total > 0 ? total : shipmentCost
+  }
+
+  function withBestRateOverride(order: OrderSummaryDto, rate: Record<string, unknown>) {
+    const baseAmount = getRateBaseAmount(rate)
+    const shippingProviderId = toProviderAccountId(rate.shippingProviderId)
+    const serviceCode = toStringValue(rate.serviceCode)
+    const carrierCode = toStringValue(rate.carrierCode)
+    const carrierNickname = toStringValue(rate.carrierNickname)
+    const shippingModel = toRecord(getShippingModel(order)) ?? {}
+    const canonicalOrder = toRecord(order.canonicalOrder)
+    const canonicalShipping = toRecord(canonicalOrder?.shipping) ?? {}
+    const shipping = {
+      ...shippingModel,
+      ...canonicalShipping,
+      bestRate: rate,
+      bestRateAmount: baseAmount,
+      providerAccountId: shippingProviderId ?? toProviderAccountId(shippingModel.providerAccountId) ?? toProviderAccountId(canonicalShipping.providerAccountId),
+      serviceCode: serviceCode ?? toStringValue(shippingModel.serviceCode) ?? toStringValue(canonicalShipping.serviceCode),
+      carrierCode: carrierCode ?? toStringValue(shippingModel.carrierCode) ?? toStringValue(canonicalShipping.carrierCode),
+      accountNickname: carrierNickname ?? toStringValue(shippingModel.accountNickname) ?? toStringValue(canonicalShipping.accountNickname),
+    }
+
+    return {
+      ...order,
+      bestRate: rate,
+      shipping,
+      canonicalOrder: canonicalOrder
+        ? {
+            ...canonicalOrder,
+            shipping,
+          }
+        : order.canonicalOrder,
+    }
+  }
+
+  function setAutoBestRateLoading(orderId: number, isLoading: boolean) {
+    setAutoBestRateLoadingIds((current) => {
+      const next = new Set(current)
+      if (isLoading) {
+        next.add(orderId)
+      } else {
+        next.delete(orderId)
+      }
+      return next
+    })
+  }
+
+  useEffect(() => {
+    if (loading || currentStatus !== 'awaiting_shipment' || orderedFilteredOrders.length === 0) return
+
+    let cancelled = false
+    const carrierIds = getRateCarrierIdsForAccounts()
+    const candidates = orderedFilteredOrders
+      .map((order) => {
+        const request = getAutoBestRateRequest(order)
+        if (!request) return null
+        if (!isTestOrder(order, request.detail) && carrierIds.length === 0) return null
+        const entry = autoBestRateEntries[order.orderId]
+        if (entry?.key === request.key) return null
+        if (autoBestRateRequestedRef.current.has(request.key)) return null
+        return { order, request }
+      })
+      .filter((value): value is { order: OrderSummaryDto; request: NonNullable<ReturnType<typeof getAutoBestRateRequest>> } => value != null)
+
+    if (candidates.length === 0) return
+
+    const queue = [...candidates]
+    const workerCount = Math.min(3, queue.length)
+
+    async function refreshVisibleBestRate(order: OrderSummaryDto, request: NonNullable<ReturnType<typeof getAutoBestRateRequest>>) {
+      autoBestRateRequestedRef.current.add(request.key)
+      if (!cancelled) setAutoBestRateLoading(order.orderId, true)
+
+      try {
+        if (isTestOrder(order, request.detail)) {
+          const testRate = buildTestMockRate(buildBestTestRateForShipment(order.orderId, request.dims, request.weightOz) ?? undefined)
+          await apiClient.saveOrderBestRate(order.orderId, testRate, request.dimsLabel)
+          if (!cancelled) {
+            setAutoBestRateEntries((current) => ({
+              ...current,
+              [order.orderId]: { key: request.key, rate: testRate },
+            }))
+          }
+          return
+        }
+
+        const rates = await apiClient.fetchRates({
+          weightOz: request.weightOz,
+          toZip: request.shipTo.postalCode,
+          toCountry: request.shipTo.country ?? 'US',
+          toState: request.shipTo.state ?? undefined,
+          toCity: request.shipTo.city ?? undefined,
+          dimsL: request.dims.length,
+          dimsW: request.dims.width,
+          dimsH: request.dims.height,
+          residential: true,
+          carrierIds: carrierIds.length ? carrierIds : undefined,
+          storeId: order.storeId,
+          clientId: order.clientId,
+          confirmation: request.confirmation,
+          orderId: order.orderId,
+          orderNumber: order.orderNumber ?? undefined,
+          externalOrderId:
+            order.externalOrderId ??
+            order.external_order_id ??
+            order.orderNumber ??
+            undefined,
+          forceRefresh: true,
+        }) as Array<Record<string, unknown>>
+
+        const bestRate = pickBestPanelRate(rates)
+        await apiClient.saveOrderBestRate(order.orderId, bestRate, request.dimsLabel)
+
+        if (!cancelled) {
+          setAutoBestRateEntries((current) => ({
+            ...current,
+            [order.orderId]: { key: request.key, rate: bestRate },
+          }))
+
+          if (panelOrderId === order.orderId) {
+            setPanelRatePreview(bestRate ? [bestRate] : [])
+            const shippingProviderId = bestRate ? toProviderAccountId(bestRate.shippingProviderId) : null
+            const serviceCode = bestRate ? toStringValue(bestRate.serviceCode) : null
+            if (shippingProviderId != null && serviceCode) {
+              setPanelForm((current) => ({
+                ...current,
+                shipAccountId: String(shippingProviderId),
+                serviceCode,
+              }))
+            }
+          }
+        }
+      } catch (error) {
+        autoBestRateRequestedRef.current.delete(request.key)
+        console.warn(
+          '[OrdersView] auto best-rate refresh failed:',
+          error instanceof Error ? error.message : error,
+        )
+      } finally {
+        if (!cancelled) setAutoBestRateLoading(order.orderId, false)
+      }
+    }
+
+    const workers = Array.from({ length: workerCount }, async () => {
+      while (!cancelled && queue.length > 0) {
+        const next = queue.shift()
+        if (!next) continue
+        await refreshVisibleBestRate(next.order, next.request)
+      }
+    })
+
+    void Promise.all(workers)
+
+    return () => {
+      cancelled = true
+    }
+  }, [loading, currentStatus, orderedFilteredOrders, autoBestRateEntries, orderDetailsById, panelOrderId, markups, shippingAccounts])
+
   async function refreshPanelBestRate(options: {
     order: OrderSummaryDto
     dims: { length: number; width: number; height: number }
@@ -3921,6 +4134,13 @@ export default function OrdersView({
         shipAccountId: TEST_CARRIER_CODE,
         serviceCode: testRate.serviceCode,
       }))
+      const autoRequest = getAutoBestRateRequest(order)
+      if (autoRequest) {
+        setAutoBestRateEntries((current) => ({
+          ...current,
+          [order.orderId]: { key: autoRequest.key, rate: testRate },
+        }))
+      }
       await apiClient.saveOrderBestRate(order.orderId, testRate, `${dims.length || 0}x${dims.width || 0}x${dims.height || 0}`)
       return testRate
     }
@@ -3934,6 +4154,7 @@ export default function OrdersView({
     setPanelRatePreview([])
 
     try {
+      const carrierIds = getRateCarrierIdsForAccounts()
       const rates = await apiClient.fetchRates({
         weightOz,
         toZip: shipTo.postalCode,
@@ -3943,7 +4164,8 @@ export default function OrdersView({
         dimsL: dims.length,
         dimsW: dims.width,
         dimsH: dims.height,
-        residential: Boolean(order.residential ?? order.sourceResidential),
+        residential: true,
+        carrierIds: carrierIds.length ? carrierIds : undefined,
         storeId: order.storeId,
         clientId: order.clientId,
         confirmation: normalizeConfirmationForRates(confirmation ?? panelForm.confirmation),
@@ -3964,6 +4186,13 @@ export default function OrdersView({
 
       if (bestRate) {
         setPanelRatePreview([bestRate])
+        const autoRequest = getAutoBestRateRequest(order)
+        if (autoRequest) {
+          setAutoBestRateEntries((current) => ({
+            ...current,
+            [order.orderId]: { key: autoRequest.key, rate: bestRate },
+          }))
+        }
         const shippingProviderId = toProviderAccountId(bestRate.shippingProviderId)
         const serviceCode = toStringValue(bestRate.serviceCode)
         if (shippingProviderId != null && serviceCode) {
@@ -3979,6 +4208,13 @@ export default function OrdersView({
       }
 
       await apiClient.saveOrderBestRate(order.orderId, null, dimsLabel)
+      const autoRequest = getAutoBestRateRequest(order)
+      if (autoRequest) {
+        setAutoBestRateEntries((current) => ({
+          ...current,
+          [order.orderId]: { key: autoRequest.key, rate: null },
+        }))
+      }
       setPanelRatePreview([])
       return null
     } catch (error) {
@@ -5055,6 +5291,14 @@ export default function OrdersView({
       : null
 
   const renderBestRatePrice = (order: OrderSummaryDto) => {
+    const autoRequest = getAutoBestRateRequest(order)
+    const autoEntry = autoRequest ? autoBestRateEntries[order.orderId] : null
+    const hasMatchingAutoEntry = Boolean(autoRequest && autoEntry?.key === autoRequest.key)
+    const autoRateLoading = autoBestRateLoadingIds.has(order.orderId)
+    const displayOrder = hasMatchingAutoEntry && autoEntry?.rate
+      ? withBestRateOverride(order, autoEntry.rate)
+      : order
+
     // If the user is actively saving shipment details OR re-fetching rates
     // for this exact order, the saved bestRate on the row is stale until the
     // debounced /rates fetch lands. Show the spinner so the row visibly
@@ -5071,9 +5315,18 @@ export default function OrdersView({
       )
     }
 
-    if (isTestOrder(order)) {
-      const testAmount = order.bestRate
-        ? (toNumberValue(order.bestRate.shipmentCost) ?? 0) + (toNumberValue(order.bestRate.otherCost) ?? 0)
+    if (autoRateLoading) {
+      return (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--ss-blue)', fontSize: 11, fontWeight: 600 }}>
+          <span className="ship-rate-spinner" aria-hidden="true" />
+          <span>Calculating...</span>
+        </div>
+      )
+    }
+
+    if (isTestOrder(displayOrder)) {
+      const testAmount = displayOrder.bestRate
+        ? (toNumberValue(displayOrder.bestRate.shipmentCost) ?? 0) + (toNumberValue(displayOrder.bestRate.otherCost) ?? 0)
         : 0
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -5085,19 +5338,19 @@ export default function OrdersView({
       )
     }
 
-    const bestRateBaseCost = getBestRateBaseCost(order)
-    if (order.orderStatus !== 'awaiting_shipment') {
-      if (getIsExternallyFulfilled(order)) {
+    const bestRateBaseCost = getBestRateBaseCost(displayOrder)
+    if (displayOrder.orderStatus !== 'awaiting_shipment') {
+      if (getIsExternallyFulfilled(displayOrder)) {
         return renderExtLabelBadge()
       }
 
-      const selectedRateBase = getSelectedRateBaseCost(order)
-      const labelCost = getSelectedRateFinalCost(order)
+      const selectedRateBase = getSelectedRateBaseCost(displayOrder)
+      const labelCost = getSelectedRateFinalCost(displayOrder)
       if (selectedRateBase == null && labelCost == null) {
         return <span style={{ color: 'var(--text3)', fontSize: 11 }}>—</span>
       }
 
-      const selectedRateCarrierCode = getSelectedRateCarrierCode(order)
+      const selectedRateCarrierCode = getSelectedRateCarrierCode(displayOrder)
       // Apply the same markup the awaiting-shipment column uses, so shipped
       // rows show what the customer was charged (base + markup) — not just
       // the raw carrier label cost. Falls back to labelCost / selectedRateBase
@@ -5105,14 +5358,14 @@ export default function OrdersView({
       const baseForMarkup = selectedRateBase ?? labelCost ?? 0
       const selectedMarkedAmount = applyCarrierMarkup(
         {
-          shippingProviderId: getSelectedRateShippingProviderId(order),
+          shippingProviderId: getSelectedRateShippingProviderId(displayOrder),
           carrierCode: selectedRateCarrierCode ?? '',
-          serviceCode: getSelectedRateServiceCode(order) ?? '',
-          serviceName: order.selectedRate?.serviceName ?? '',
+          serviceCode: getSelectedRateServiceCode(displayOrder) ?? '',
+          serviceName: displayOrder.selectedRate?.serviceName ?? '',
           amount: baseForMarkup,
           shipmentCost: baseForMarkup,
           otherCost: 0,
-          carrierNickname: getSelectedRateCarrierNickname(order),
+          carrierNickname: getSelectedRateCarrierNickname(displayOrder),
         },
         markups,
       )
@@ -5130,11 +5383,14 @@ export default function OrdersView({
       )
     }
 
-    const hasDims = getDimensions(order, null) != null
-    if (!(order.weight?.value && order.weight.value > 0) || !hasDims) {
+    const hasDims = getDimensions(displayOrder, null) != null
+    if (!(displayOrder.weight?.value && displayOrder.weight.value > 0) || !hasDims) {
       return <span style={{ fontSize: 10.5, color: 'var(--text3)' }}>— add dims</span>
     }
-    if (!order.bestRate) {
+    if (hasMatchingAutoEntry && !autoEntry?.rate) {
+      return <span style={{ color: 'var(--text3)', fontSize: 11 }}>--</span>
+    }
+    if (!displayOrder.bestRate) {
       return <div className="spin-center"><span className="spin-sm" /></div>
     }
     if (bestRateBaseCost == null) {
@@ -5142,14 +5398,14 @@ export default function OrdersView({
     }
 
     const markedAmount = applyCarrierMarkup({
-      shippingProviderId: getBestRateShippingProviderId(order),
-      carrierCode: order.bestRate.carrierCode ?? '',
-      serviceCode: getBestRateServiceCode(order) ?? '',
-      serviceName: order.bestRate.serviceName ?? '',
+      shippingProviderId: getBestRateShippingProviderId(displayOrder),
+      carrierCode: displayOrder.bestRate.carrierCode ?? '',
+      serviceCode: getBestRateServiceCode(displayOrder) ?? '',
+      serviceName: displayOrder.bestRate.serviceName ?? '',
       amount: bestRateBaseCost ?? 0,
       shipmentCost: bestRateBaseCost ?? undefined,
       otherCost: 0,
-      carrierNickname: getBestRateCarrierNickname(order),
+      carrierNickname: getBestRateCarrierNickname(displayOrder),
     }, markups)
 
     // Operator request (2026-05-12, under `unlock shipped data`
@@ -8479,6 +8735,13 @@ export default function OrdersView({
               if (panelOrder && isTestOrder(panelOrder, panelDetail)) {
                 const testRate = buildTestMockRate(best)
                 setPanelRatePreview([testRate])
+                const autoRequest = panelOrder ? getAutoBestRateRequest(panelOrder) : null
+                if (autoRequest) {
+                  setAutoBestRateEntries((current) => ({
+                    ...current,
+                    [panelOrderId]: { key: autoRequest.key, rate: testRate },
+                  }))
+                }
                 setPanelForm((current) => ({
                   ...current,
                   shipAccountId: TEST_CARRIER_CODE,
@@ -8497,6 +8760,13 @@ export default function OrdersView({
                 return
               }
               setPanelRatePreview([best])
+              const autoRequest = panelOrder ? getAutoBestRateRequest(panelOrder) : null
+              if (autoRequest) {
+                setAutoBestRateEntries((current) => ({
+                  ...current,
+                  [panelOrderId]: { key: autoRequest.key, rate: best },
+                }))
+              }
               const shippingProviderId = toNumberValue(best.shippingProviderId)
               const serviceCode = toStringValue(best.serviceCode)
               if (shippingProviderId != null && serviceCode) {
