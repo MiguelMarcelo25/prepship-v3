@@ -6,6 +6,7 @@ import {
   importSkusFromOrders,
   syncShipStationProducts,
 } from './inventory-enrichment';
+import { processFulfillmentOutboxOnce } from './fulfillment/outbox';
 
 // v2 ran an in-process worker every 3 minutes for orders + shipments. GitHub
 // Actions cron drifts 30–60 min under load, which means users in v4 see stale
@@ -29,6 +30,7 @@ const RATE_BACKFILL_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 // upstream returns null.
 const INVENTORY_IMPORT_FROM_ORDERS_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const INVENTORY_SYNC_PRODUCTS_INTERVAL_MS = 60 * 60 * 1000; // 60 minutes
+const FULFILLMENT_OUTBOX_INTERVAL_MS = 60 * 1000; // 1 minute
 const STARTUP_DELAY_MS = 15 * 1000; // 15s after boot so we don't fight cold-start
 
 // Serialize runs so overlapping intervals don't pile up ShipStation calls.
@@ -36,11 +38,13 @@ let orderSyncRunning = false;
 let shipmentSyncRunning = false;
 let inventoryImportRunning = false;
 let syncProductsRunning = false;
+let fulfillmentOutboxRunning = false;
 let orderTimer: NodeJS.Timeout | null = null;
 let shipmentTimer: NodeJS.Timeout | null = null;
 let backfillTimer: NodeJS.Timeout | null = null;
 let inventoryImportTimer: NodeJS.Timeout | null = null;
 let syncProductsTimer: NodeJS.Timeout | null = null;
+let fulfillmentOutboxTimer: NodeJS.Timeout | null = null;
 
 async function runOrderSync(): Promise<void> {
   if (orderSyncRunning) {
@@ -155,7 +159,43 @@ async function runSyncProductsTick(): Promise<void> {
   }
 }
 
+async function runFulfillmentOutboxTick(): Promise<void> {
+  if (fulfillmentOutboxRunning) {
+    console.log('[scheduler] fulfillment outbox already running - skipping tick');
+    return;
+  }
+  fulfillmentOutboxRunning = true;
+  try {
+    const result = await processFulfillmentOutboxOnce({ limit: 25 });
+    if (result.processed > 0) {
+      console.log(
+        `[scheduler] fulfillment outbox: ${result.succeeded} succeeded, ${result.failed} failed, ${result.processed} processed`
+      );
+    }
+  } catch (err) {
+    console.error(
+      '[scheduler] fulfillment outbox failed:',
+      err instanceof Error ? err.message : err
+    );
+  } finally {
+    fulfillmentOutboxRunning = false;
+  }
+}
+
 export function startSyncScheduler(): void {
+  if (!fulfillmentOutboxTimer) {
+    console.log(
+      `[scheduler] fulfillment outbox enabled - every ${FULFILLMENT_OUTBOX_INTERVAL_MS / 1000}s`
+    );
+    setTimeout(() => {
+      void runFulfillmentOutboxTick();
+      fulfillmentOutboxTimer = setInterval(
+        () => void runFulfillmentOutboxTick(),
+        FULFILLMENT_OUTBOX_INTERVAL_MS
+      );
+    }, STARTUP_DELAY_MS + 30_000);
+  }
+
   // Only run in-process sync when ShipStation credentials are present.
   // Dev environments without creds would just spam errors otherwise.
   if (!env.SHIPSTATION_API_KEY || !env.SHIPSTATION_API_SECRET) {
@@ -263,6 +303,10 @@ export function stopSyncScheduler(): void {
   if (syncProductsTimer) {
     clearInterval(syncProductsTimer);
     syncProductsTimer = null;
+  }
+  if (fulfillmentOutboxTimer) {
+    clearInterval(fulfillmentOutboxTimer);
+    fulfillmentOutboxTimer = null;
   }
   console.log('[scheduler] stopped');
 }

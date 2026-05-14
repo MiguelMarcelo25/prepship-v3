@@ -54,6 +54,143 @@ async function verifySupabaseJwt(token: string): Promise<{ ok: true } | { ok: fa
   return { ok: false, reason: errors.join(' | ') || 'no verification method' };
 }
 
+function inferStoreProviderFromExternalId(externalOrderId: string | null | undefined): string {
+  if (!externalOrderId) return 'shipstation';
+  const match = externalOrderId.match(/^([a-z_]+)-(.+)$/i);
+  return match?.[1]?.toLowerCase() ?? 'shipstation';
+}
+
+function sourceOrderIdFromExternalId(externalOrderId: string | null | undefined): string | null {
+  if (!externalOrderId) return null;
+  const match = externalOrderId.match(/^[a-z_]+-(.+)$/i);
+  return match?.[1] ?? externalOrderId;
+}
+
+async function ensureFulfillmentOutboxSql(sql: any): Promise<void> {
+  const statements = [
+    `ALTER TABLE orders ADD COLUMN IF NOT EXISTS source_provider TEXT`,
+    `ALTER TABLE orders ADD COLUMN IF NOT EXISTS source_account_id TEXT`,
+    `ALTER TABLE orders ADD COLUMN IF NOT EXISTS source_order_id TEXT`,
+    `ALTER TABLE orders ADD COLUMN IF NOT EXISTS source_order_number TEXT`,
+    `ALTER TABLE orders ADD COLUMN IF NOT EXISTS source_status TEXT`,
+    `ALTER TABLE orders ADD COLUMN IF NOT EXISTS canonical_status TEXT`,
+    `CREATE INDEX IF NOT EXISTS orders_source_provider_idx ON orders (source_provider)`,
+    `CREATE INDEX IF NOT EXISTS orders_canonical_status_idx ON orders (canonical_status)`,
+    `ALTER TABLE shipments ADD COLUMN IF NOT EXISTS carrier_provider TEXT`,
+    `ALTER TABLE shipments ADD COLUMN IF NOT EXISTS carrier_account_id TEXT`,
+    `ALTER TABLE shipments ADD COLUMN IF NOT EXISTS confirmation_status TEXT`,
+    `ALTER TABLE shipments ADD COLUMN IF NOT EXISTS confirmation_provider TEXT`,
+    `ALTER TABLE shipments ADD COLUMN IF NOT EXISTS confirmation_attempts INTEGER NOT NULL DEFAULT 0`,
+    `ALTER TABLE shipments ADD COLUMN IF NOT EXISTS confirmation_last_error TEXT`,
+    `ALTER TABLE shipments ADD COLUMN IF NOT EXISTS marketplace_confirmed_at TIMESTAMPTZ`,
+    `CREATE INDEX IF NOT EXISTS shipments_confirmation_status_idx ON shipments (confirmation_status)`,
+    `CREATE TABLE IF NOT EXISTS fulfillment_outbox (
+      id SERIAL PRIMARY KEY,
+      order_id INTEGER NOT NULL,
+      shipment_id INTEGER,
+      event_type TEXT NOT NULL,
+      provider TEXT NOT NULL,
+      dedupe_key TEXT NOT NULL,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      status TEXT NOT NULL DEFAULT 'pending',
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_error TEXT,
+      next_run_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS fulfillment_outbox_dedupe_idx ON fulfillment_outbox (dedupe_key)`,
+    `CREATE INDEX IF NOT EXISTS fulfillment_outbox_due_idx ON fulfillment_outbox (status, next_run_at)`,
+  ];
+  for (const statement of statements) {
+    await sql.unsafe(statement);
+  }
+}
+
+async function enqueueShipmentConfirmationSql(
+  sql: any,
+  args: {
+    orderId: number;
+    shipmentId: number;
+    externalOrderId: string | null;
+    clientId: number | null;
+    orderNumber: string | null;
+    trackingNumber: string;
+    carrierCode: string | null;
+    carrierProvider: string;
+    carrierAccountId: number | string | null;
+    confirmationProvider?: string | null;
+    shipDate?: string | null;
+    payload?: Record<string, unknown>;
+  },
+): Promise<{ queued: boolean; provider: string }> {
+  await ensureFulfillmentOutboxSql(sql);
+  const provider = args.confirmationProvider ?? inferStoreProviderFromExternalId(args.externalOrderId);
+  const supported = provider === 'shipstation' || provider === 'walmart';
+  await sql`
+    UPDATE orders
+    SET
+      source_provider = COALESCE(source_provider, ${provider}),
+      source_order_id = COALESCE(source_order_id, ${sourceOrderIdFromExternalId(args.externalOrderId)}),
+      source_order_number = COALESCE(source_order_number, ${args.orderNumber}),
+      canonical_status = CASE
+        WHEN ${supported} THEN 'shipped_pending_confirmation'
+        ELSE COALESCE(canonical_status, order_status)
+      END,
+      updated_at = NOW()
+    WHERE id = ${args.orderId}
+  `;
+  await sql`
+    UPDATE shipments
+    SET
+      carrier_provider = ${args.carrierProvider},
+      carrier_account_id = ${args.carrierAccountId == null ? null : String(args.carrierAccountId)},
+      confirmation_provider = ${provider},
+      confirmation_status = ${supported ? 'pending' : 'not_required'},
+      confirmation_last_error = ${supported ? null : `${provider} confirmation connector is not implemented yet`},
+      updated_at = NOW()
+    WHERE id = ${args.shipmentId}
+  `;
+  if (!supported) return { queued: false, provider };
+
+  const payload = {
+    ...args.payload,
+    orderId: args.orderId,
+    shipmentId: args.shipmentId,
+    externalOrderId: args.externalOrderId,
+    clientId: args.clientId,
+    orderNumber: args.orderNumber,
+    trackingNumber: args.trackingNumber,
+    carrierCode: args.carrierCode,
+    carrierProvider: args.carrierProvider,
+    carrierAccountId: args.carrierAccountId,
+    shipDate: args.shipDate ?? new Date().toISOString().slice(0, 10),
+  };
+  const dedupeKey = `shipment_confirmation_requested:${provider}:${args.orderId}:${args.shipmentId}`;
+  await sql`
+    INSERT INTO fulfillment_outbox (
+      order_id, shipment_id, event_type, provider, dedupe_key, payload,
+      status, attempts, next_run_at, updated_at
+    )
+    VALUES (
+      ${args.orderId}, ${args.shipmentId}, 'shipment_confirmation_requested',
+      ${provider}, ${dedupeKey}, ${sql.json(payload)}, 'pending', 0, NOW(), NOW()
+    )
+    ON CONFLICT (dedupe_key) DO UPDATE SET
+      payload = EXCLUDED.payload,
+      status = CASE
+        WHEN fulfillment_outbox.status = 'succeeded' THEN fulfillment_outbox.status
+        ELSE 'pending'
+      END,
+      next_run_at = CASE
+        WHEN fulfillment_outbox.status = 'succeeded' THEN fulfillment_outbox.next_run_at
+        ELSE NOW()
+      END,
+      updated_at = NOW()
+  `;
+  return { queued: true, provider };
+}
+
 function readBody(req: any): Promise<unknown> {
   if (req.body) {
     if (typeof req.body === 'object') return Promise.resolve(req.body);
@@ -1113,22 +1250,12 @@ async function buyLabelWalmartShipping(
     selectedRate?.trackingURL,
     walmartTrackingUrl(responseCarrierName, trackingNumber),
   );
-  let shipmentConfirmed = false;
+  let shipmentConfirmed: boolean | null = null;
   let shipmentConfirmError: string | null = null;
   let shipmentConfirmRaw: any = null;
-  try {
-    shipmentConfirmRaw = await confirmWalmartOrderShipped(creds, token, {
-      purchaseOrderId: context.purchaseOrderId,
-      rawOrder: context.rawOrder,
-      carrierName: responseCarrierName,
-      trackingNumber,
-      trackingUrl,
-    });
-    shipmentConfirmed = true;
-  } catch (err) {
-    shipmentConfirmError = err instanceof Error ? err.message : String(err);
-    console.warn('[carriers/labels] walmart ship-confirm failed:', shipmentConfirmError);
-  }
+  // Shipment confirmation is intentionally queued after the label is persisted.
+  // Buying postage and notifying Walmart are separate fulfillment events; the
+  // outbox worker owns marketplace retries without slowing the label response.
 
   const labelUrl = await downloadWalmartLabelPdf(creds, token, responseCarrierName, trackingNumber)
     .catch((err) => {
@@ -1230,24 +1357,22 @@ async function persistWalmartShipment(
       RETURNING id
     `;
 
-    if (args.result.shipmentConfirmed) {
-      await tx`
-        UPDATE orders
-        SET order_status = 'shipped', updated_at = NOW()
-        WHERE id = ${order.id}
-      `;
+    await tx`
+      UPDATE orders
+      SET order_status = 'shipped', updated_at = NOW()
+      WHERE id = ${order.id}
+    `;
 
-      await tx`
-        DELETE FROM print_queue_orders
-        WHERE order_id = ${String(order.id)}
-      `;
-    }
+    await tx`
+      DELETE FROM print_queue_orders
+      WHERE order_id = ${String(order.id)}
+    `;
 
     return {
       localShipmentId: shipment.id,
       orderNumber: order.order_number,
       clientId: order.client_id,
-      orderStatus: args.result.shipmentConfirmed ? 'shipped' : order.order_status,
+      orderStatus: 'shipped',
     };
   });
 }
@@ -2068,6 +2193,29 @@ export default async function handler(req: any, res: any): Promise<void> {
         carrierLabel: label,
         result,
       });
+      const confirmation = await enqueueShipmentConfirmationSql(sql, {
+        orderId,
+        shipmentId: persisted.localShipmentId,
+        externalOrderId,
+        clientId: persisted.clientId,
+        orderNumber: persisted.orderNumber,
+        trackingNumber: result.trackingNumber,
+        carrierCode: result.carrierCode,
+        carrierProvider: 'shipp',
+        carrierAccountId,
+        shipDate: new Date().toISOString().slice(0, 10),
+        payload: {
+          purchaseOrderId: sourceOrderIdFromExternalId(externalOrderId),
+          rawOrder,
+          carrierName: result.carrierName ?? result.carrierCode,
+          trackingUrl: null,
+          serviceCode: result.serviceCode,
+          serviceName: result.serviceName,
+        },
+      }).catch((err) => {
+        console.warn('[carriers/labels] confirmation outbox enqueue failed:', err instanceof Error ? err.message : err);
+        return { queued: false, provider: inferStoreProviderFromExternalId(externalOrderId), error: err instanceof Error ? err.message : String(err) };
+      });
 
       res.status(200).json({
         ok: true,
@@ -2088,6 +2236,9 @@ export default async function handler(req: any, res: any): Promise<void> {
           orderNumber,
           hasRawOrder: rawOrder != null,
           carrierAccountId,
+          confirmationQueued: confirmation.queued,
+          confirmationProvider: confirmation.provider,
+          confirmationError: confirmation.error ?? null,
           shippShipmentId: result.shipmentId,
           selectedServiceCode: result.serviceCode,
         },
@@ -2132,6 +2283,31 @@ export default async function handler(req: any, res: any): Promise<void> {
         carrierLabel: label,
         result,
       });
+      const confirmation = await enqueueShipmentConfirmationSql(sql, {
+        orderId,
+        shipmentId: persisted.localShipmentId,
+        externalOrderId: result.context.externalOrderId,
+        clientId: persisted.clientId,
+        orderNumber: persisted.orderNumber,
+        trackingNumber: result.trackingNumber,
+        carrierCode: result.carrierCode,
+        carrierProvider: 'walmart_shipping',
+        carrierAccountId,
+        confirmationProvider: 'walmart',
+        shipDate: new Date().toISOString().slice(0, 10),
+        payload: {
+          storeAccountId: carrierAccountId,
+          purchaseOrderId: result.context.purchaseOrderId,
+          rawOrder: result.context.rawOrder,
+          carrierName: result.carrierName,
+          trackingUrl: walmartTrackingUrl(result.carrierName, result.trackingNumber),
+          serviceCode: result.serviceCode,
+          serviceName: result.serviceName,
+        },
+      }).catch((err) => {
+        console.warn('[carriers/labels] walmart confirmation outbox enqueue failed:', err instanceof Error ? err.message : err);
+        return { queued: false, provider: 'walmart', error: err instanceof Error ? err.message : String(err) };
+      });
 
       res.status(200).json({
         ok: true,
@@ -2154,6 +2330,9 @@ export default async function handler(req: any, res: any): Promise<void> {
           purchaseOrderSource: result.context.purchaseOrderSource,
           hasRawOrder: result.context.rawOrder != null,
           carrierAccountId,
+          confirmationQueued: confirmation.queued,
+          confirmationProvider: confirmation.provider,
+          confirmationError: confirmation.error ?? null,
           selectedServiceCode: result.serviceCode,
           walmartTrackingNumber: result.trackingNumber,
           labelPdfReturned: Boolean(result.labelUrl),

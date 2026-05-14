@@ -7,6 +7,7 @@ import {
   importSkusFromOrders,
   syncShipStationProducts,
 } from '../services/inventory-enrichment';
+import { processFulfillmentOutboxOnce } from '../services/fulfillment/outbox';
 
 const app = new Hono();
 
@@ -116,6 +117,19 @@ app.post('/sync-products', async (c) => {
 
 app.get('/sync-products', async (c) => {
   const result = await syncShipStationProducts();
+  return c.json(result);
+});
+
+app.post('/fulfillment-outbox', async (c) => {
+  const body = await c.req.json().catch(() => null) as { limit?: number } | null;
+  const limit = Math.min(Math.max(Number(body?.limit ?? 25) || 25, 1), 100);
+  const result = await processFulfillmentOutboxOnce({ limit });
+  return c.json(result);
+});
+
+app.get('/fulfillment-outbox', async (c) => {
+  const limit = Math.min(Math.max(Number(c.req.query('limit') ?? 25) || 25, 1), 100);
+  const result = await processFulfillmentOutboxOnce({ limit });
   return c.json(result);
 });
 

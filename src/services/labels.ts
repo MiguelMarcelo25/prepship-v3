@@ -6,13 +6,10 @@ import { orders, orderOverrides } from '../db/schema/orders';
 import { clients } from '../db/schema/clients';
 import { ssRequest } from '../lib/shipstation/client';
 import {
-  ssCreateLabel,
   ssCreateReturnLabel,
   ssGetShipmentV1,
   ssListRecentLabels,
-  ssMarkOrderShippedV1,
   ssVoidShipment,
-  asSSUpstreamOrderId,
   type CreatedExternalLabel,
   type ShipstationAddressInput,
 } from '../lib/shipstation/labels';
@@ -29,6 +26,11 @@ import {
 import { deductInventoryForOrder, deductPackageForShipment } from './fulfillment-deductions';
 import { removeQueueEntriesForOrder } from './print-queue';
 import { packages } from '../db/schema/packages';
+import { carrierConnectors } from '../connectors/registry';
+import {
+  enqueueShipmentConfirmation,
+  processFulfillmentOutboxOnce,
+} from './fulfillment/outbox';
 
 // Batch-label callers don't carry a panel-selected package, so customPackageId
 // is often null. When dims are present, fall back to the same ±0.1" tolerance
@@ -912,7 +914,7 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
     throw new Error('shippingProviderId required for v2 label creation');
   }
 
-  const created = await timer.task('ShipStation ssCreateLabel', () => ssCreateLabel({
+  const created = await timer.task('ShipStation createLabel connector', () => carrierConnectors.shipstation.createLabel({
     apiKeyV2,
     carrierId: `se-${body.shippingProviderId}`,
     serviceCode: body.serviceCode,
@@ -951,106 +953,32 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
     source: 'label',
     timer,
   }));
+  // Queue marketplace confirmation separately from label purchase. The label
+  // response stays fast, while fulfillment_outbox owns retries and failure state.
+  await timer.task('enqueue marketplace confirmation', () => enqueueShipmentConfirmation({
+    order: {
+      id: order.id,
+      externalOrderId: order.externalOrderId,
+      clientId,
+      orderNumber: order.orderNumber ?? null,
+    },
+    shipmentId: localShipmentId,
+    trackingNumber: created.trackingNumber,
+    carrierCode: created.carrierCode,
+    shipDate: created.shipDate,
+    confirmationProvider: 'shipstation',
+    payload: {
+      carrierProvider: 'shipstation',
+      carrierAccountId: created.providerAccountId,
+      shipStationShipmentId: created.shipmentId,
+      notifyCustomer: false,
+      notifyMarketplace: true,
+    },
+  }));
 
-  // Background: v1 mark-shipped — tells ShipStation the order shipped,
-  // which in turn pushes the shipped status to the originating
-  // marketplace (Amazon, eBay, Walmart, etc.). Critical for closing the
-  // loop with the marketplace; without this, marketplaces never learn
-  // the order shipped and customers don't get tracking notifications.
-  //
-  // ⚠️ CRITICAL: ShipStation's /orders/markasshipped endpoint expects
-  // the **upstream ShipStation orderId** (the numeric ID assigned by
-  // ShipStation when they received the order from the marketplace),
-  // NOT our local autoincrement primary key.
-  //
-  // In v4-stable, the orders table splits these:
-  //   • orders.id           — local serial PK  (e.g. 12345)
-  //   • orders.externalOrderId — SS upstream ID (e.g. "1438394566")
-  //
-  // The order-sync stores the SS upstream orderId as text in
-  // externalOrderId (see src/services/order-sync.ts:184). We must
-  // parse it back to a number for the v1 API. Passing order.id
-  // (the local PK) results in 404 from ShipStation, which the inner
-  // ssMarkOrderShippedV1 used to silently swallow — leaving labels
-  // marked shipped locally but the marketplace never notified.
-  //
-  // Retry once on transient failure (network blip, 5xx). If both
-  // attempts fail, log at ERROR level so it's grep-able in Render logs.
-  // The shipment row already has the tracking number locally regardless,
-  // so v4 doesn't lose the data — just the SS-side ack.
-  //
-  // Per user override `unlock shipped data` on 2026-05-06 (and
-  // re-confirmed on 2026-05-07 for this fix).
-  //
-  // Credential resolution: per-client v1 keys are PREFERRED but optional.
-  // Sub-stores under a master ShipStation account (e.g. Tran Agency at
-  // clientId=9) have no per-client v1 keys; they're synced + acked via
-  // env.SHIPSTATION_API_KEY/SECRET — the master account credentials.
-  // We pass `undefined` (not null) for missing per-client creds so that
-  // ssV1Request's nullish-coalesce fallback to env vars kicks in. This
-  // matches the order-sync's already-working behavior for the same
-  // clients.
-  //
-  // OrderId resolution: asSSUpstreamOrderId is the ONLY safe way to
-  // produce the SSUpstreamOrderId branded type. Passing order.id (the
-  // local PK) here would fail to compile — that's the regression
-  // protection for the orderId-mismatch bug discovered 2026-05-07.
-  const ssUpstreamOrderId = asSSUpstreamOrderId(order.externalOrderId);
-  const v1ApiKey = creds.apiKey ?? undefined;
-  const v1ApiSecret = creds.apiSecret ?? undefined;
-  if (
-    created.shipmentId &&
-    created.trackingNumber &&
-    ssUpstreamOrderId
-  ) {
-    timer.background('ShipStation v1 markOrderShipped ack', async () => {
-      const tag = `[labels] localOrderId=${order.id} ssUpstreamOrderId=${ssUpstreamOrderId} ssShipmentId=${created.shipmentId}`;
-      let lastError: string | null = null;
-      for (let attempt = 1; attempt <= 2; attempt += 1) {
-        try {
-          await ssMarkOrderShippedV1(
-            {
-              orderId: ssUpstreamOrderId,
-              carrierCode: created.carrierCode,
-              trackingNumber: created.trackingNumber!,
-              shipDate: created.shipDate,
-            },
-            { apiKey: v1ApiKey, apiSecret: v1ApiSecret }
-          );
-          console.info(
-            `${tag} ✅ v1 mark-shipped acked (attempt=${attempt}) — marketplace will be notified by ShipStation`
-          );
-          return;
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          lastError = msg;
-          if (attempt === 2) {
-            console.error(
-              `${tag} ❌ v1 mark-shipped FAILED after retry — MARKETPLACE NOT NOTIFIED. ${msg}`
-            );
-          } else {
-            console.warn(`${tag} v1 mark-shipped attempt ${attempt} failed, retrying in 1.5s: ${msg}`);
-            await new Promise((resolve) => setTimeout(resolve, 1500));
-          }
-        }
-      }
-      throw new Error(lastError ?? 'ShipStation v1 mark-shipped failed');
-    });
-  } else if (created.trackingNumber) {
-    // Diagnostic: tracking exists but we can't ack to ShipStation.
-    // Reasons we skip:
-    //   1. Missing externalOrderId (manual order with no SS counterpart)
-    //   2. externalOrderId not a valid number (corrupted sync data)
-    //   3. Missing shipmentId (createLabel returned no SS-side ID)
-    // (We no longer skip on missing per-client creds — env fallback
-    // handles that case.)
-    const reasons: string[] = [];
-    if (!ssUpstreamOrderId) reasons.push('missing or invalid externalOrderId');
-    if (!created.shipmentId) reasons.push('missing shipmentId');
-    console.warn(
-      `[labels] order=${order.id} skipping v1 mark-shipped: ${reasons.join(', ')}. Marketplace will NOT be notified by ShipStation.`
-    );
-  }
+  timer.background('marketplace confirmation outbox', () =>
+    processFulfillmentOutboxOnce({ orderId: order.id, limit: 5 }).then(() => undefined)
+  );
 
   timer.done('response ready');
   return {
