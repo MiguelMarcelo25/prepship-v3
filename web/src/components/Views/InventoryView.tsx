@@ -57,6 +57,11 @@ import {
 import { ColumnResizeHandle } from './ColumnResizeHandle'
 import { Table, type TableColumn } from '../ui/Table'
 import { AnalysisPagination } from './AnalysisPagination'
+// 2026-05-15: Receive tab SKU picker upgraded from native HTML
+// <datalist> (which Chrome renders as an unstyleable, unfilterable
+// 300-row scroll list) to a real autosuggest combobox. See the
+// component file header for the full rationale.
+import Autosuggest, { type AutosuggestOption } from '../Autosuggest'
 import './InventoryView.css'
 
 // 2026-05-14: per-tab accent palette for the new Settings-style tab
@@ -1038,6 +1043,22 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
   const [receiveRows, setReceiveRows] = useState<ReceiveDraftRow[]>([createReceiveDraftRow()])
   const [receiveSkuMap, setReceiveSkuMap] = useState<Record<string, ReceiveSkuLookup>>({})
   const [receiveResultMessage, setReceiveResultMessage] = useState('')
+  // 2026-05-15: Receive-tab autosuggest options. Derived from
+  // receiveSkuMap so it stays in sync with whatever client filter
+  // has populated the lookup. Memoized so the Object.entries +
+  // map() doesn't rebuild on every keystroke (each Receive row's
+  // <Autosuggest> reads this same array). Sorted alphabetically by
+  // SKU code for deterministic ranking ties.
+  const receiveSkuOptions = useMemo<AutosuggestOption[]>(
+    () =>
+      Object.entries(receiveSkuMap)
+        .map(([sku, info]) => ({
+          value: sku,
+          label: info?.name ?? '',
+        }))
+        .sort((a, b) => a.value.localeCompare(b.value)),
+    [receiveSkuMap],
+  )
   const [historyClientId, setHistoryClientId] = useState('')
   const [historyType, setHistoryType] = useState('')
   const [historyFrom, setHistoryFrom] = useState(historyDefaults.from)
@@ -3580,21 +3601,52 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                 return (
                   <div key={row.id} className="inventory-recv-row">
                     <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                      <input
-                        type="text"
-                        className="ship-select"
-                        placeholder="SKU"
-                        style={{ fontFamily: 'monospace', fontSize: 12, flex: 1 }}
-                        list="react-recv-sku-datalist"
-                        value={row.sku}
-                        onChange={(event) => {
-                          const nextSku = event.target.value
-                          setReceiveRows((current) => current.map((entry) => {
-                            if (entry.id !== row.id) return entry
-                            return applyReceiveSkuInput({ ...entry, sku: nextSku }, receiveSkuMap[nextSku.trim()] ?? null)
-                          }))
-                        }}
-                      />
+                      {/* 2026-05-15: Was a native <input list=
+                          "react-recv-sku-datalist">. Chrome rendered
+                          that as an unstyleable, unfilterable 300+
+                          row scroll list — operator complaint. Now
+                          a real autosuggest combobox: type to
+                          filter, ranked matches with product name
+                          shown beneath each SKU code, arrow-key
+                          navigation, Enter to pick. Reusable
+                          component (web/src/components/Autosuggest.tsx)
+                          ready for parent-SKU picker, bulk-edit,
+                          new-order modal next. */}
+                      <div style={{ flex: 1 }}>
+                        <Autosuggest
+                          value={row.sku}
+                          options={receiveSkuOptions}
+                          placeholder="SKU"
+                          ariaLabel="SKU"
+                          inputClassName="ship-select"
+                          inputStyle={{ fontFamily: 'monospace', fontSize: 12 }}
+                          maxResults={10}
+                          emptyMessage={
+                            row.sku.trim()
+                              ? `No SKU matches "${row.sku.trim()}"`
+                              : null
+                          }
+                          onChange={(nextSku) => {
+                            setReceiveRows((current) =>
+                              current.map((entry) => {
+                                if (entry.id !== row.id) return entry
+                                return applyReceiveSkuInput(
+                                  { ...entry, sku: nextSku },
+                                  receiveSkuMap[nextSku.trim()] ?? null,
+                                )
+                              }),
+                            )
+                          }}
+                          onSelect={(option) => {
+                            // onSelect fires AFTER onChange has
+                            // already pushed the picked value, so
+                            // we don't need to re-apply here. Logged
+                            // for analytics-style hooks later if
+                            // needed. Currently a no-op intentionally.
+                            void option
+                          }}
+                        />
+                      </div>
                       <input
                         type="text"
                         className="ship-select"
@@ -3624,11 +3676,11 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
                   </div>
                 )
               })}
-              <datalist id="react-recv-sku-datalist">
-                {Object.entries(receiveSkuMap).map(([sku, info]) => (
-                  <option key={sku} value={sku}>{info.name || sku}</option>
-                ))}
-              </datalist>
+              {/* 2026-05-15: <datalist id="react-recv-sku-datalist">
+                  removed — Autosuggest above replaced it. The
+                  unstyleable native datalist showed all 300+ SKUs
+                  unfiltered; the new combobox filters as you type
+                  and is keyboard-navigable. */}
             </div>
             <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
               <button className="btn btn-outline btn-sm" type="button" onClick={() => setReceiveRows((current) => [...current, createReceiveDraftRow()])}>＋ Add SKU</button>
