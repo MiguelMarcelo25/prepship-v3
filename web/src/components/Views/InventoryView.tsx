@@ -78,6 +78,7 @@ import './InventoryView.css'
 // here. (Could be hoisted to a shared module later, but inline for
 // now keeps each view self-contained.)
 type InventoryAccentTone = 'brand' | 'emerald' | 'amber' | 'rose' | 'violet'
+type InventoryRouteTab = 'stock' | 'receive' | 'alerts' | 'parents' | 'history'
 
 const INVENTORY_ACCENT_GRADIENT: Record<InventoryAccentTone, string> = {
   brand: 'from-brand to-indigo-600',
@@ -797,6 +798,8 @@ interface InventoryViewProps {
    * but kept as a public surface for future single-tab embed use cases.
    */
   initialTab?: InventoryTab | 'alerts' | 'parents'
+  activeTab?: InventoryRouteTab
+  onTabChange?: (tab: InventoryRouteTab) => void
   /**
    * When true the inventory tab strip is suppressed AND the action
    * buttons (Import SKUs, Bulk Edit, Refresh, etc.) are hidden so
@@ -813,7 +816,7 @@ interface InventoryViewProps {
   viewTitle?: string
 }
 
-export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewTitle }: InventoryViewProps = {}) {
+export default function InventoryView({ onOpenOrder, initialTab, activeTab: controlledActiveTab, onTabChange, hideTabs, viewTitle }: InventoryViewProps = {}) {
   const toastContext = useContext(ToastContext)
   // 2026-05-12 visibility hardening: needed so handleToggleClientActive
   // below can invalidate React Query caches across the app (Sidebar,
@@ -825,7 +828,16 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
   const { stores } = useInitStores()
   const historyDefaults = useMemo(() => getInventoryDateRangePreset(), [])
   // Extend InventoryTab union locally to include ported v2 tabs (alerts, parents)
-  const [activeTab, setActiveTab] = useState<InventoryTab | 'alerts' | 'parents'>(initialTab ?? 'stock')
+  const [activeTabState, setActiveTabState] = useState<InventoryTab | 'alerts' | 'parents'>(initialTab ?? 'stock')
+  const activeTab = controlledActiveTab ?? activeTabState
+  const setActiveTab = (nextTab: InventoryTab | 'alerts' | 'parents') => {
+    if (nextTab === 'clients') {
+      setActiveTabState(nextTab)
+      return
+    }
+    if (controlledActiveTab == null) setActiveTabState(nextTab)
+    onTabChange?.(nextTab)
+  }
   // 2026-05-13: anchor element for the <Table>'s Columns ▾ button.
   // Operator asked to move the picker out of the table card and into
   // the page-level toolbar (to the LEFT of "Import SKUs from Orders").
