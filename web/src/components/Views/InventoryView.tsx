@@ -2545,8 +2545,9 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
             kept because <Table>'s widths are independent — we still
             read inventoryColumnLayout for the body-cell render
             switch upstream. */}
-        {!hideTabs ? (
-          <>
+        <div className="ml-auto flex flex-col items-end gap-2">
+          {!hideTabs ? (
+            <div className="flex flex-wrap items-center justify-end gap-2">
             {/* 2026-05-13: portal-anchor for the <Table>'s Columns ▾
                 button. Sits HERE in the page toolbar so the picker
                 lives next to "Import SKUs from Orders" instead of
@@ -2573,24 +2574,29 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
             >
               {bulkEditMode ? '✕ Exit Bulk' : '✏️ Bulk Edit'}
             </button>
-            <button
-              className="btn btn-outline btn-sm"
-              type="button"
-              onClick={() => void handlePurgeTestData()}
-              disabled={purgeBusy}
-              title="Delete every order, shipment, inventory SKU, and ledger entry that belongs to a client flagged is_test=true. Does NOT touch real clients."
-              style={{
-                color: 'var(--red, #dc2626)',
-                borderColor: 'var(--red, #dc2626)',
-                opacity: purgeBusy ? 0.6 : 1,
-                cursor: purgeBusy ? 'wait' : 'pointer',
-              }}
-            >
-              {purgeBusy ? '🧹 Purging…' : '🧹 Purge Test Data'}
-            </button>
-          </>
-        ) : null}
-        <button className="btn btn-outline btn-sm" type="button" onClick={() => void refreshInventoryView()}>↻ Refresh</button>
+            </div>
+          ) : null}
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {!hideTabs ? (
+              <button
+                className="btn btn-outline btn-sm"
+                type="button"
+                onClick={() => void handlePurgeTestData()}
+                disabled={purgeBusy}
+                title="Delete every order, shipment, inventory SKU, and ledger entry that belongs to a client flagged is_test=true. Does NOT touch real clients."
+                style={{
+                  color: 'var(--red, #dc2626)',
+                  borderColor: 'var(--red, #dc2626)',
+                  opacity: purgeBusy ? 0.6 : 1,
+                  cursor: purgeBusy ? 'wait' : 'pointer',
+                }}
+              >
+                {purgeBusy ? '🧹 Purging…' : '🧹 Purge Test Data'}
+              </button>
+            ) : null}
+            <button className="btn btn-outline btn-sm" type="button" onClick={() => void refreshInventoryView()}>↻ Refresh</button>
+          </div>
+        </div>
       </motion.div>
 
       {bootError ? (

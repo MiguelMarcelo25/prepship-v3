@@ -3735,6 +3735,70 @@ export default function OrdersView({
     await queueExistingLabels(selectedOrderIds)
   }
 
+  function openLabelPdfPlaceholder() {
+    const popup = window.open('', '_blank')
+    if (!popup) return null
+    try {
+      popup.document.title = 'Creating label PDF'
+      popup.document.body.style.margin = '0'
+      popup.document.body.style.fontFamily = 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+      popup.document.body.style.background = '#f8fafc'
+      popup.document.body.innerHTML = `
+        <main style="min-height:100vh;display:grid;place-items:center;color:#0f172a">
+          <section style="padding:24px;text-align:center">
+            <strong style="display:block;font-size:16px;margin-bottom:8px">Creating label PDF...</strong>
+            <span style="color:#64748b;font-size:13px">This tab will open the label as soon as ShipStation returns it.</span>
+          </section>
+        </main>
+      `
+    } catch {
+      // Some browsers restrict writing to the newly opened tab. Keeping the
+      // blank tab still preserves the user gesture for the later PDF redirect.
+    }
+    return popup
+  }
+
+  function openLabelPdfUrl(labelUrl: string, popup: Window | null) {
+    if (popup && !popup.closed) {
+      popup.location.href = labelUrl
+      return
+    }
+    window.open(labelUrl, '_blank', 'noopener,noreferrer')
+  }
+
+  function showLabelPdfPlaceholderMessage(popup: Window | null, title: string, message: string) {
+    if (!popup || popup.closed) return
+    try {
+      popup.document.title = title
+      popup.document.body.style.margin = '0'
+      popup.document.body.style.fontFamily = 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+      popup.document.body.style.background = '#f8fafc'
+      popup.document.body.replaceChildren()
+      const main = popup.document.createElement('main')
+      main.style.minHeight = '100vh'
+      main.style.display = 'grid'
+      main.style.placeItems = 'center'
+      main.style.color = '#0f172a'
+      const section = popup.document.createElement('section')
+      section.style.padding = '24px'
+      section.style.textAlign = 'center'
+      const heading = popup.document.createElement('strong')
+      heading.style.display = 'block'
+      heading.style.fontSize = '16px'
+      heading.style.marginBottom = '8px'
+      heading.textContent = title
+      const body = popup.document.createElement('span')
+      body.style.color = '#64748b'
+      body.style.fontSize = '13px'
+      body.textContent = message
+      section.append(heading, body)
+      main.append(section)
+      popup.document.body.append(main)
+    } catch {
+      // Nothing else to do; the app toast still explains the outcome.
+    }
+  }
+
   async function createOrQueueLabel(mode: 'print' | 'queue' | 'test', order = panelOrder) {
     if (!order) {
       showToast('No order selected', 'error')
@@ -3810,6 +3874,7 @@ export default function OrdersView({
       } : undefined,
     }
 
+    const labelPopup = mode === 'queue' ? null : openLabelPdfPlaceholder()
     setSingleActionBusy(true)
     try {
       const response = await apiClient.createLabel(payload)
@@ -3824,9 +3889,10 @@ export default function OrdersView({
           'success',
         )
       } else if (response.labelUrl) {
-        window.open(response.labelUrl, '_blank', 'noopener,noreferrer')
+        openLabelPdfUrl(response.labelUrl, labelPopup)
         showToast(mode === 'test' ? `🧪 Test label created${response.trackingNumber ? `: ${response.trackingNumber}` : ''}` : `✅ Label created${response.trackingNumber ? `: ${response.trackingNumber}` : ''}`, 'success')
       } else {
+        showLabelPdfPlaceholderMessage(labelPopup, 'Label created, but no PDF URL returned', 'ShipStation created the label but did not return a downloadable PDF URL. Try Reprint Label or open it in ShipStation.')
         showToast('Label created but no PDF returned', 'info')
       }
 
@@ -3840,6 +3906,7 @@ export default function OrdersView({
       await refetchOrders()
       return response
     } catch (error) {
+      showLabelPdfPlaceholderMessage(labelPopup, 'Label creation failed', error instanceof Error ? error.message : 'Label creation failed')
       showToast(error instanceof Error ? error.message : 'Label creation failed', 'error')
       return null
     } finally {
