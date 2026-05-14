@@ -2,8 +2,16 @@
 import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { motion } from 'framer-motion'
-import { Boxes } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
+import {
+  Boxes,
+  Layers,
+  PackagePlus,
+  AlertTriangle,
+  FolderTree,
+  History as HistoryIcon,
+  type LucideIcon,
+} from 'lucide-react'
 import { apiClient, ApiError } from '../../api/client'
 import {
   ConfirmActiveToggleDialog,
@@ -45,6 +53,106 @@ import { ColumnResizeHandle } from './ColumnResizeHandle'
 import { Table, type TableColumn } from '../ui/Table'
 import { AnalysisPagination } from './AnalysisPagination'
 import './InventoryView.css'
+
+// 2026-05-14: per-tab accent palette for the new Settings-style tab
+// rail + section header. Lifted from SettingsView so the two pages
+// stay visually consistent. Each tab claims its own color identity
+// instead of all five tabs reading as one undifferentiated strip:
+//   • Stock Levels  → brand-blue   (default operational state)
+//   • Receive       → emerald      (incoming / positive movement)
+//   • Alerts        → amber        (warning state)
+//   • Parent SKUs   → violet       (taxonomy / structure)
+//   • History       → rose         (audit trail / past)
+// The classnames here mirror SettingsView's ACCENT_* constants
+// exactly — if the Settings palette ever changes, mirror that change
+// here. (Could be hoisted to a shared module later, but inline for
+// now keeps each view self-contained.)
+type InventoryAccentTone = 'brand' | 'emerald' | 'amber' | 'rose' | 'violet'
+
+const INVENTORY_ACCENT_GRADIENT: Record<InventoryAccentTone, string> = {
+  brand: 'from-brand to-indigo-600',
+  emerald: 'from-emerald-500 to-emerald-600',
+  amber: 'from-amber-500 to-amber-600',
+  rose: 'from-rose-500 to-rose-600',
+  violet: 'from-violet-500 to-violet-600',
+}
+
+const INVENTORY_ACCENT_ICON_BG: Record<InventoryAccentTone, string> = {
+  brand: 'from-brand/15 to-brand/5 ring-brand/30',
+  emerald: 'from-emerald-500/15 to-emerald-500/5 ring-emerald-500/30',
+  amber: 'from-amber-500/15 to-amber-500/5 ring-amber-500/30',
+  rose: 'from-rose-500/15 to-rose-500/5 ring-rose-500/30',
+  violet: 'from-violet-500/15 to-violet-500/5 ring-violet-500/30',
+}
+
+const INVENTORY_ACCENT_ICON_COLOR: Record<InventoryAccentTone, string> = {
+  brand: 'text-brand',
+  emerald: 'text-emerald-600',
+  amber: 'text-amber-600',
+  rose: 'text-rose-600',
+  violet: 'text-violet-600',
+}
+
+// Tab metadata array — paired with the existing `activeTab` state
+// machine. Each entry carries everything the rail + section header
+// need to render: id (matches existing setActiveTab values), short
+// label for the rail pill, full label for the section header, a
+// one-line description for the section subtitle, an icon, and the
+// accent tone. Order here is the order tabs appear in the rail.
+const INVENTORY_TAB_META: Array<{
+  id: 'stock' | 'receive' | 'alerts' | 'parents' | 'history'
+  short: string
+  label: string
+  description: string
+  icon: LucideIcon
+  tone: InventoryAccentTone
+}> = [
+  {
+    id: 'stock',
+    short: 'Stock Levels',
+    label: 'Stock Levels',
+    description:
+      'Track on-hand quantity per SKU per client. Adjust min-stock thresholds, edit weights and dimensions, and import new SKUs from existing orders.',
+    icon: Layers,
+    tone: 'brand',
+  },
+  {
+    id: 'receive',
+    short: 'Receive',
+    label: 'Receive Inventory',
+    description:
+      'Log incoming inventory. Pick a client, list the SKUs and quantities received, then post the batch — quantities flow into Stock Levels and a History entry is recorded automatically.',
+    icon: PackagePlus,
+    tone: 'emerald',
+  },
+  {
+    id: 'alerts',
+    short: 'Alerts',
+    label: 'Low / Out-of-Stock Alerts',
+    description:
+      'SKUs at or below their minimum stock threshold. Click any row to jump to it in Stock Levels with the Low/Out filter applied.',
+    icon: AlertTriangle,
+    tone: 'amber',
+  },
+  {
+    id: 'parents',
+    short: 'Parent SKUs',
+    label: 'Parent SKUs',
+    description:
+      'Group child SKUs into parent units (case packs, bundles, kits). Receiving a parent updates every child by its base-unit quantity in one transaction.',
+    icon: FolderTree,
+    tone: 'violet',
+  },
+  {
+    id: 'history',
+    short: 'History',
+    label: 'Inventory History',
+    description:
+      'Audit trail of every inventory adjustment — receives, returns, damage write-offs, and manual edits. Filter by client, type, and date range.',
+    icon: HistoryIcon,
+    tone: 'rose',
+  },
+]
 
 // Pagination page-size options — operator-requested 2026-05-12.
 // 10 / 20 / 50 / 100 / 200. Default 50 balances "see enough at a
@@ -2483,55 +2591,275 @@ export default function InventoryView({ onOpenOrder, initialTab, hideTabs, viewT
 
   return (
     <div id="view-inventory" className="view-content !p-5 !overflow-y-auto">
+      {/* 2026-05-14: Inventory header / tab system rewritten to match
+          the SettingsView "icon-rail + section-header" pattern (operator
+          request — boss wanted the same chrome across both pages so
+          /inventory and /settings/markups feel like one design system,
+          not two unrelated screens).
+
+          Two render modes:
+            • hideTabs=true  → legacy single-icon-+-title header. Used
+              when InventoryView is embedded inside the Clients page
+              (initialTab="clients" forced; no tab switching exposed).
+              Adding the new rail + section header here would clutter
+              the Clients page with redundant chrome.
+            • hideTabs=false → new Settings-style chrome:
+                1) Sticky horizontal icon rail (brand mark + per-tab
+                   accent-toned pills + animated underline indicator)
+                2) Animated section header (large gradient icon + tab
+                   label + tab description + right-side action slot
+                   for the existing 200 Low/Out shortcut)
+          The activeTab state machine is unchanged — only the visual
+          chrome around it is. */}
+      {hideTabs ? null : (() => {
+        // Resolve the active tab's metadata once per render so the rail
+        // and the section header stay in sync. Falls back to the first
+        // entry if activeTab is somehow unknown — defensive, shouldn't
+        // happen given the typed state machine.
+        const activeMeta = INVENTORY_TAB_META.find((t) => t.id === activeTab) ?? INVENTORY_TAB_META[0]
+        const ActiveIcon = activeMeta.icon
+        return (
+          <div className="-mx-5 -mt-5 mb-4">
+            {/* ─── HORIZONTAL ICON RAIL ─────────────────────────────
+                Sticky strip across the top of the panel (negative
+                margin pulls it flush with the page edges since the
+                outer container has p-5). Brand mark on the left,
+                hairline divider, then accent-toned tab pills with
+                an animated underline indicator that morphs between
+                positions via Framer's layoutId. */}
+            <aside
+              className="
+                w-full
+                border-b border-line
+                bg-gradient-to-b from-surface-2 to-surface
+                sticky top-0
+                z-10
+              "
+              aria-label="Inventory sections"
+            >
+              <div
+                className="
+                  flex flex-row items-center gap-2
+                  px-3 sm:px-5 py-3
+                  overflow-x-auto
+                "
+                role="tablist"
+              >
+                {/* Brand mark — clicking returns to the default Stock
+                    Levels view. Mirrors the Settings rail's "back to
+                    start" affordance. */}
+                <motion.button
+                  type="button"
+                  initial={{ rotate: -90, scale: 0.5, opacity: 0 }}
+                  animate={{ rotate: 0, scale: 1, opacity: 1 }}
+                  transition={{ type: 'spring', stiffness: 240, damping: 20, delay: 0.05 }}
+                  whileHover={{ scale: 1.04 }}
+                  whileTap={{ scale: 0.94 }}
+                  onClick={() => setActiveTab('stock')}
+                  className="flex w-10 h-10 sm:w-11 sm:h-11 mr-2 rounded-xl bg-gradient-to-br from-sky-500 to-sky-600 items-center justify-center shadow-md ring-1 ring-sky-400/20 flex-shrink-0"
+                  title="Inventory — back to Stock Levels"
+                  aria-label="Reset to Stock Levels"
+                >
+                  <Boxes size={18} strokeWidth={2.25} className="text-white" />
+                </motion.button>
+
+                {/* Hairline divider between brand mark and tab list */}
+                <div className="hidden sm:block w-px h-7 bg-line/80 mr-1 flex-shrink-0" aria-hidden />
+
+                {INVENTORY_TAB_META.map((tab, idx) => {
+                  const Icon = tab.icon
+                  const isActive = activeTab === tab.id
+                  const accentText = INVENTORY_ACCENT_ICON_COLOR[tab.tone]
+                  const accentBg = INVENTORY_ACCENT_ICON_BG[tab.tone]
+                  // Alerts tab gets a count chip when there ARE alerts —
+                  // mirrors the original "Alerts (200)" affordance so
+                  // operators don't lose that signal. Other tabs render
+                  // just the short label.
+                  const showCount = tab.id === 'alerts' && alerts.length > 0
+                  return (
+                    <motion.button
+                      key={tab.id}
+                      type="button"
+                      role="tab"
+                      aria-selected={isActive}
+                      aria-controls={`inventory-panel-${tab.id}`}
+                      id={`inventory-tab-${tab.id}`}
+                      onClick={() => setActiveTab(tab.id)}
+                      initial={{ opacity: 0, y: -6 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{
+                        duration: 0.32,
+                        delay: 0.08 + idx * 0.04,
+                        ease: [0.22, 1, 0.36, 1],
+                      }}
+                      whileHover={{ scale: isActive ? 1.0 : 1.06 }}
+                      whileTap={{ scale: 0.94 }}
+                      title={tab.label}
+                      className={`
+                        relative group
+                        inline-flex items-center justify-center gap-2
+                        h-11 px-3 sm:px-3.5
+                        rounded-xl flex-shrink-0
+                        transition-colors duration-200
+                        focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/50
+                        ${isActive
+                          ? `bg-gradient-to-br ${accentBg} ring-1`
+                          : 'hover:bg-surface-2 ring-1 ring-transparent hover:ring-line'}
+                      `}
+                    >
+                      {/* Active indicator bar — sits on the BOTTOM
+                          edge of the active pill, morphs between
+                          positions via Framer's layoutId. layoutId
+                          is `inventory-active-indicator` (not the
+                          Settings one) so the two pages don't try
+                          to share the same animated element if they
+                          ever mount in the same tree. */}
+                      {isActive ? (
+                        <motion.span
+                          layoutId="inventory-active-indicator"
+                          transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+                          className={`
+                            absolute bottom-[-9px] left-3 right-3
+                            h-[3px] rounded-full
+                            bg-gradient-to-r ${INVENTORY_ACCENT_GRADIENT[tab.tone]}
+                          `}
+                          aria-hidden
+                        />
+                      ) : null}
+                      <Icon
+                        size={18}
+                        strokeWidth={isActive ? 2.5 : 2.0}
+                        className={`transition-colors duration-200 ${isActive ? accentText : 'text-ink-3 group-hover:text-ink-2'}`}
+                      />
+                      <span
+                        className={`
+                          hidden sm:inline text-[12.5px] font-bold tracking-tight whitespace-nowrap
+                          transition-colors duration-200
+                          ${isActive ? accentText : 'text-ink-3 group-hover:text-ink-2'}
+                        `}
+                      >
+                        {tab.short}
+                      </span>
+                      {/* Alert-count chip — only on the Alerts tab,
+                          only when alerts exist. Sized to match the
+                          tab pill text without dominating it. */}
+                      {showCount ? (
+                        <span
+                          className={`
+                            ml-0.5 inline-flex items-center justify-center
+                            min-w-[20px] h-5 px-1.5 rounded-full
+                            text-[10px] font-extrabold tabular-nums
+                            ${isActive
+                              ? 'bg-amber-500 text-white'
+                              : 'bg-amber-100 text-amber-700 ring-1 ring-amber-200'}
+                          `}
+                          aria-label={`${alerts.length} alerts`}
+                        >
+                          {alerts.length}
+                        </span>
+                      ) : null}
+                    </motion.button>
+                  )
+                })}
+              </div>
+            </aside>
+
+            {/* ─── SECTION HEADER ───────────────────────────────────
+                Animated header (icon + title + description + action
+                slot). Re-keys on activeTab so AnimatePresence treats
+                each tab switch as a fresh enter/exit and the icon
+                spring-rotates in. mb-4 spacing mirrors the original
+                header so downstream toolbar layouts don't shift. */}
+            <AnimatePresence mode="wait">
+              <motion.header
+                key={activeMeta.id}
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+                className="flex items-start gap-4 px-5 pt-5"
+              >
+                <motion.div
+                  initial={{ scale: 0.6, rotate: -8, opacity: 0 }}
+                  animate={{ scale: 1, rotate: 0, opacity: 1 }}
+                  transition={{ type: 'spring', stiffness: 280, damping: 18, delay: 0.05 }}
+                  className={`
+                    w-12 h-12 sm:w-14 sm:h-14 rounded-2xl flex-shrink-0
+                    bg-gradient-to-br ${INVENTORY_ACCENT_ICON_BG[activeMeta.tone]} ring-1
+                    flex items-center justify-center
+                    shadow-sm
+                  `}
+                >
+                  <ActiveIcon
+                    size={22}
+                    strokeWidth={2.25}
+                    className={INVENTORY_ACCENT_ICON_COLOR[activeMeta.tone]}
+                  />
+                </motion.div>
+                <div className="flex-1 min-w-0 pt-0.5">
+                  <h2 className="text-[22px] sm:text-[26px] font-extrabold text-ink font-display tracking-[-0.022em] leading-tight m-0">
+                    {viewTitle ?? activeMeta.label}
+                  </h2>
+                  <p className="text-[12.5px] sm:text-[13px] text-ink-3 mt-1.5 leading-relaxed max-w-3xl">
+                    {activeMeta.description}
+                  </p>
+                </div>
+                {/* Right-side action slot — preserves the existing
+                    "200 Low/Out" red shortcut from the legacy header.
+                    Restyled to match the Settings palette + sit on
+                    the right of the section header instead of inline
+                    with the tabs. Only renders when alerts exist. */}
+                {alerts.length > 0 ? (
+                  <motion.button
+                    type="button"
+                    initial={{ opacity: 0, scale: 0.92 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ delay: 0.18, duration: 0.22 }}
+                    whileHover={{ scale: 1.04 }}
+                    whileTap={{ scale: 0.96 }}
+                    onClick={() => {
+                      setActiveTab('stock')
+                      setAlertOnly(true)
+                    }}
+                    className="
+                      flex-shrink-0 inline-flex items-center gap-1.5
+                      h-9 px-3 rounded-lg
+                      bg-gradient-to-br from-rose-500 to-rose-600
+                      text-white text-[12px] font-extrabold tracking-tight
+                      shadow-md ring-1 ring-rose-400/30
+                      hover:shadow-lg
+                      transition-shadow
+                    "
+                    title={`Jump to Stock Levels filtered to ${alerts.length} Low/Out SKUs`}
+                  >
+                    <AlertTriangle size={14} strokeWidth={2.5} />
+                    <span className="tabular-nums">{alerts.length} Low/Out</span>
+                  </motion.button>
+                ) : null}
+              </motion.header>
+            </AnimatePresence>
+          </div>
+        )
+      })()}
+
+      {/* Toolbar row. In standalone mode (hideTabs=false) this sits
+          BELOW the new icon-rail + section-header. In embedded mode
+          (hideTabs=true, e.g. Clients page) the icon + title also
+          render here so the embedded view keeps its original single-
+          row "icon | spacer | toolbar" layout — no doubled chrome. */}
       <motion.div
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
         className="flex items-center gap-4 mb-4 flex-wrap"
       >
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-sky-500 to-sky-600 flex items-center justify-center shadow-md ring-1 ring-sky-400/20">
-            <Boxes size={20} strokeWidth={2.25} className="text-white" />
+        {hideTabs ? (
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-sky-500 to-sky-600 flex items-center justify-center shadow-md ring-1 ring-sky-400/20">
+              <Boxes size={20} strokeWidth={2.25} className="text-white" />
+            </div>
+            <h2 className="text-[16px] font-extrabold text-ink font-display tracking-tight m-0">{viewTitle ?? 'Inventory'}</h2>
           </div>
-          <h2 className="text-[16px] font-extrabold text-ink font-display tracking-tight m-0">{viewTitle ?? 'Inventory'}</h2>
-        </div>
-        {!hideTabs ? (
-          <div style={{ display: 'flex', gap: 3 }}>
-            {([
-              // 'clients' was removed from this tab strip on 2026-05-10:
-              // Clients are now a top-level sidebar destination (/clients)
-              // that mounts InventoryView with initialTab="clients"
-              // hideTabs={true}. Keeping the tab here would have given
-              // operators two paths to the same data, with the embedded
-              // one looking like it lived under Inventory — confusing.
-              ['stock', 'Stock Levels'],
-              ['receive', 'Receive'],
-              ['alerts', alerts.length > 0 ? `Alerts (${alerts.length})` : 'Alerts'],
-              ['parents', 'Parent SKUs'],
-              ['history', 'History'],
-            ] as Array<[InventoryTab | 'alerts' | 'parents', string]>).map(([tab, label]) => (
-              <button
-                key={tab}
-                type="button"
-                className={`inv-tab${activeTab === tab ? ' active' : ''}`}
-                onClick={() => setActiveTab(tab)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        ) : null}
-        {!hideTabs && alerts.length > 0 ? (
-          <button
-            type="button"
-            onClick={() => {
-              setActiveTab('stock')
-              setAlertOnly(true)
-            }}
-            style={{ background: 'var(--red)', color: '#fff', fontSize: 10.5, fontWeight: 700, padding: '2px 8px', borderRadius: 10, cursor: 'pointer', border: 'none' }}
-          >
-            ⚠ {alerts.length} Low/Out
-          </button>
         ) : null}
         <div style={{ flex: 1 }} />
         {/* 2026-05-12 dedup: the toolbar Columns button + its portal'd
