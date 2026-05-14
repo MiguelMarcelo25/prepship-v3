@@ -20,10 +20,9 @@
  *     items.
  *   • PrepShip-style focus rings + soft brand-bg gradients.
  *
- * Wire-up status (for review):
- *   • Save handler is wired to a NEW backend route /orders/manual
- *     which we'd add next — until then the save button shows a toast
- *     "Saved (stub) — backend route pending".
+ * Wire-up status:
+ *   • Save handler posts to /orders/manual and creates a local awaiting
+ *     shipment order under the Manual Orders sandbox client.
  *   • Rate preview calls existing apiClient.fetchRates which DOES
  *     work; this section is fully live.
  */
@@ -106,6 +105,11 @@ export interface NewOrderPayload {
   shippingPaid: string
   taxPaid: string
   totalPaid: string
+  rateWeightLb: string
+  rateWeightOz: string
+  rateLength: string
+  rateWidth: string
+  rateHeight: string
   // Line items
   items: Array<{ sku: string; name: string; quantity: number; price: number }>
 }
@@ -349,6 +353,11 @@ export default function NewOrderModal({
         shippingPaid: shippingPaid.trim(),
         taxPaid: taxPaid.trim(),
         totalPaid: totalPaid.trim() || computedItemsTotal.toFixed(2),
+        rateWeightLb: rateWeightLb.trim(),
+        rateWeightOz: rateWeightOz.trim(),
+        rateLength: rateLength.trim(),
+        rateWidth: rateWidth.trim(),
+        rateHeight: rateHeight.trim(),
         items: items
           .filter((i) => i.sku.trim() || i.name.trim())
           .map((i) => ({

@@ -1835,6 +1835,10 @@ export const apiClient = {
     );
   },
 
+  createManualOrder(payload: Record<string, unknown>): Promise<any> {
+    return api.post<any>('/orders/manual', payload);
+  },
+
   // ─── Orders: stats / picklist / export / dims ───────────────────────────────
   fetchDailyStats(query?: {
     status?: string;

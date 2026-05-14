@@ -1829,6 +1829,219 @@ app.get('/:id{[0-9]+}/full', async (c) => {
   return c.json(buildOrderDetailPayload(order as Record<string, unknown>, overrides, shipmentRows));
 });
 
+const manualOrderNumberPart = z.union([z.string(), z.number()]).optional();
+
+const manualOrderBody = z.object({
+  shipToName: z.string().trim().min(1),
+  shipToCompany: z.string().optional().default(''),
+  shipToCountry: z.string().optional().default('US'),
+  shipToAddress1: z.string().trim().min(1),
+  shipToAddress2: z.string().optional().default(''),
+  shipToAddress3: z.string().optional().default(''),
+  shipToCity: z.string().trim().min(1),
+  shipToState: z.string().trim().min(1),
+  shipToPostalCode: z.string().trim().min(1),
+  shipToPhone: z.string().optional().default(''),
+  customerEmail: z.string().optional().default(''),
+  orderNumber: z.string().optional().default(''),
+  orderNumberAuto: z.boolean().optional().default(true),
+  orderDate: z.string().optional().default(''),
+  paidDate: z.string().optional().default(''),
+  shippingPaid: manualOrderNumberPart,
+  taxPaid: manualOrderNumberPart,
+  totalPaid: manualOrderNumberPart,
+  rateWeightLb: manualOrderNumberPart,
+  rateWeightOz: manualOrderNumberPart,
+  rateLength: manualOrderNumberPart,
+  rateWidth: manualOrderNumberPart,
+  rateHeight: manualOrderNumberPart,
+  items: z.array(z.object({
+    sku: z.string().optional().default(''),
+    name: z.string().optional().default(''),
+    quantity: z.coerce.number().positive().optional().default(1),
+    price: z.coerce.number().nonnegative().optional().default(0),
+  })).min(1),
+});
+
+function manualNumber(value: unknown, fallback = 0): number {
+  const parsed = finiteNumberOrNull(value);
+  return parsed == null ? fallback : parsed;
+}
+
+function manualDate(value: string | undefined): Date {
+  if (value) {
+    const parsed = new Date(value.includes('T') ? value : `${value}T12:00:00.000Z`);
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+  }
+  return new Date();
+}
+
+function manualOrderNumber(): string {
+  const stamp = new Date()
+    .toISOString()
+    .replace(/\D/g, '')
+    .slice(2, 14);
+  const suffix = Math.random().toString(36).slice(2, 6).toUpperCase();
+  return `MAN-${stamp}-${suffix}`;
+}
+
+async function ensureManualOrdersClient() {
+  const [existing] = await db
+    .select()
+    .from(clients)
+    .where(ilike(clients.name, 'Manual Orders'))
+    .limit(1);
+
+  if (existing) {
+    const [updated] = await db
+      .update(clients)
+      .set({ active: true, isTest: true, updatedAt: new Date() })
+      .where(eq(clients.id, existing.id))
+      .returning();
+    return updated ?? existing;
+  }
+
+  const [created] = await db
+    .insert(clients)
+    .values({
+      name: 'Manual Orders',
+      storeIds: [],
+      active: true,
+      isTest: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .returning();
+  if (!created) throw new Error('Manual Orders client could not be created');
+  return created;
+}
+
+app.post('/manual', zValidator('json', manualOrderBody), async (c) => {
+  const body = c.req.valid('json');
+  const activeItems = body.items
+    .map((item) => ({
+      sku: item.sku.trim(),
+      name: item.name.trim(),
+      quantity: item.quantity,
+      unitPrice: item.price,
+      price: item.price,
+      adjustment: false,
+    }))
+    .filter((item) => item.sku || item.name);
+
+  if (activeItems.length === 0) {
+    return c.json({ error: 'At least one line item is required' }, 400);
+  }
+
+  const manualClient = await ensureManualOrdersClient();
+  const weightOz = (manualNumber(body.rateWeightLb) * 16) + manualNumber(body.rateWeightOz);
+  const dims = {
+    length: manualNumber(body.rateLength),
+    width: manualNumber(body.rateWidth),
+    height: manualNumber(body.rateHeight),
+    units: 'inches',
+  };
+  const hasDims = dims.length > 0 && dims.width > 0 && dims.height > 0;
+  const shippingAmount = manualNumber(body.shippingPaid);
+  const taxAmount = manualNumber(body.taxPaid);
+  const itemSubtotal = activeItems.reduce((sum, item) => sum + item.quantity * item.price, 0);
+  const orderTotal = manualNumber(body.totalPaid, itemSubtotal + shippingAmount + taxAmount);
+  const orderNumber = body.orderNumberAuto || !body.orderNumber.trim()
+    ? manualOrderNumber()
+    : body.orderNumber.trim();
+  const now = new Date();
+  const raw = {
+    source: 'manual',
+    manual: true,
+    test: true,
+    orderNumber,
+    orderDate: body.orderDate,
+    paidDate: body.paidDate,
+    customerEmail: body.customerEmail.trim() || null,
+    shipTo: {
+      name: body.shipToName,
+      company: body.shipToCompany.trim() || null,
+      street1: body.shipToAddress1,
+      street2: body.shipToAddress2.trim() || null,
+      street3: body.shipToAddress3.trim() || null,
+      city: body.shipToCity,
+      state: body.shipToState,
+      postalCode: body.shipToPostalCode,
+      country: body.shipToCountry.trim() || 'US',
+      phone: body.shipToPhone.trim() || null,
+      residential: true,
+    },
+    weight: weightOz > 0 ? { value: weightOz, units: 'ounces' } : null,
+    dimensions: hasDims ? dims : null,
+    items: activeItems,
+    orderTotal,
+    shippingAmount,
+    taxAmount,
+  };
+
+  const [created] = await db
+    .insert(orders)
+    .values({
+      externalOrderId: `manual-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      clientId: manualClient.id,
+      orderNumber,
+      orderStatus: 'awaiting_shipment',
+      orderDate: manualDate(body.orderDate),
+      storeId: null,
+      customerEmail: body.customerEmail.trim() || null,
+      shipToName: body.shipToName,
+      shipToCity: body.shipToCity,
+      shipToState: body.shipToState,
+      shipToPostalCode: body.shipToPostalCode,
+      weightOz: weightOz > 0 ? weightOz : null,
+      orderTotal: orderTotal.toFixed(2),
+      shippingAmount: shippingAmount.toFixed(2),
+      items: activeItems,
+      raw,
+      externallyShipped: false,
+      externallyFulfilledVerified: false,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .returning();
+
+  if (!created) return c.json({ error: 'Manual order could not be created' }, 500);
+
+  const [overrides] = await db
+    .insert(orderOverrides)
+    .values({
+      orderId: created.id,
+      residential: true,
+      rateWeightOz: weightOz > 0 ? weightOz : null,
+      rateDimsL: hasDims ? dims.length : null,
+      rateDimsW: hasDims ? dims.width : null,
+      rateDimsH: hasDims ? dims.height : null,
+      bestRateDims: hasDims ? `${dims.length}x${dims.width}x${dims.height}` : null,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: orderOverrides.orderId,
+      set: {
+        residential: true,
+        rateWeightOz: weightOz > 0 ? weightOz : null,
+        rateDimsL: hasDims ? dims.length : null,
+        rateDimsW: hasDims ? dims.width : null,
+        rateDimsH: hasDims ? dims.height : null,
+        bestRateDims: hasDims ? `${dims.length}x${dims.width}x${dims.height}` : null,
+        updatedAt: now,
+      },
+    })
+    .returning();
+
+  return c.json({
+    data: {
+      order: created,
+      overrides: overrides ?? null,
+      client: manualClient,
+    },
+  }, 201);
+});
+
 const patchBody = z.object({
   residential: z.boolean().nullable().optional(),
   notes: z.string().optional(),

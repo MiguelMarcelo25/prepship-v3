@@ -8649,22 +8649,18 @@ export default function OrdersView({
         onClose={() => setTrackingModal(null)}
       />
 
-      {/* Manual order creation modal. Save handler is currently a
-          stub — wires onClose + toast once the backend route is
-          added. The modal already produces a complete NewOrderPayload
-          shaped to the future POST /orders/manual endpoint. */}
+      {/* Manual order creation modal. Creates a local awaiting-shipment
+          order under the Manual Orders sandbox client. */}
       <NewOrderModal
         open={newOrderOpen}
         onClose={() => setNewOrderOpen(false)}
         onSave={async (payload: NewOrderPayload) => {
-          // Backend route not yet wired — show the structured payload
-          // in the console so the operator (and reviewer) can verify
-          // the form captures every field correctly before we wire
-          // the API. Once /orders/manual exists this becomes a real
-          // apiClient.createManualOrder(payload) call.
-          console.info('[NewOrderModal] save payload (stub):', payload)
-          showToast('🚧 Saved (stub) — backend route /orders/manual pending. Payload logged to console.', 'info')
+          const result = await apiClient.createManualOrder(payload)
+          const orderNumber = result?.data?.order?.orderNumber ?? payload.orderNumber
           setNewOrderOpen(false)
+          showToast(`Manual order created${orderNumber ? `: ${orderNumber}` : ''}`, 'success')
+          await refetchOrders()
+          window.dispatchEvent(new Event('prepship:client-active-changed'))
           return true
         }}
       />
