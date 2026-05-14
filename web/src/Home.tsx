@@ -673,7 +673,7 @@ export default function Home() {
 
           {/* Title — animates out when batch-bar appears */}
           <AnimatePresence mode="wait">
-            {displayView === 'orders' && selectedOrderIds.length > 0 ? (
+            {false ? (
               <motion.div
                 key="batch-bar"
                 initial={{ opacity: 0, y: -6, scale: 0.96 }}
@@ -766,7 +766,7 @@ export default function Home() {
               visible since there's plenty of horizontal space. */}
           {displayView === 'orders' ? (
             <div
-              className={`items-center gap-2 flex-shrink-0 ${selectedOrderIds.length > 0 ? 'hidden md:flex' : 'flex'}`}
+              className="items-center gap-2 flex-shrink-0 flex"
               id="topbarActions"
             >
               {/* Sync status pill */}
@@ -927,7 +927,7 @@ export default function Home() {
               className={[
                 // Hide on mobile during selection mode (matches the rest
                 // of the right cluster) — keep visible on desktop.
-                selectedOrderIds.length > 0 ? 'hidden md:inline-flex' : 'inline-flex',
+                'inline-flex',
                 'items-center justify-center h-8 w-8 rounded-lg ring-1 transition-all duration-150 active:scale-95',
                 hideEmptyPanel
                   ? 'bg-brand/10 text-brand ring-brand/30 hover:bg-brand/15'
@@ -949,7 +949,7 @@ export default function Home() {
               Hidden on mobile during orders-selection mode (consistent
               with the rest of the right cluster). */}
           <div
-            className={`relative ${displayView === 'orders' && selectedOrderIds.length > 0 ? 'hidden md:block' : ''}`}
+            className="relative"
             id="zoom-wrap"
           >
             <button

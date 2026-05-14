@@ -2104,6 +2104,10 @@ export default function OrdersView({
   ), [activeOrderId, activeOrderDetail])
 
   const selectedIdSet = useMemo(() => new Set(selectedOrderIds), [selectedOrderIds])
+  const selectedOrdersForActions = useMemo(
+    () => orders.filter((order) => selectedIdSet.has(order.orderId)),
+    [orders, selectedIdSet]
+  )
   const resolvedColumnPrefs = useMemo(
     () => resolveColumnPrefs(TABLE_COLUMNS.map((column) => ({ key: column.key, label: column.label, width: column.width })), currentStatus, columnPrefs),
     [currentStatus, columnPrefs],
@@ -3003,6 +3007,181 @@ export default function OrdersView({
 
   function showToast(message: string, type: 'success' | 'error' | 'info' = 'info') {
     toastContext?.addToast(message, type)
+  }
+
+  const renderSelectionToolbar = () => {
+    if (selectedOrdersForActions.length === 0) return null
+
+    const selectedCount = selectedOrdersForActions.length
+    const selectedOrderNumbers = selectedOrdersForActions
+      .map((order) => order.orderNumber ?? `#${order.orderId}`)
+      .sort()
+
+    const helperText =
+      currentStatus === 'awaiting_shipment'
+        ? 'Checked rows only. Row click opens detail drawer.'
+        : currentStatus === 'shipped'
+          ? 'Selection is for shipped-order review and existing-label queueing only.'
+          : 'Cancelled orders can be selected for review or copy only.'
+
+    const copySelectedIds = () => {
+      const text = selectedOrderNumbers.join('\n')
+      if (!text) return
+      if (!navigator.clipboard?.writeText) {
+        showToast('Clipboard is not available in this browser', 'error')
+        return
+      }
+      void navigator.clipboard.writeText(text).then(() => {
+        setCopiedAll(true)
+        window.setTimeout(() => setCopiedAll(false), 1200)
+      }).catch(() => {
+        showToast('Unable to copy selected order IDs', 'error')
+      })
+    }
+
+    return (
+      <AnimatePresence initial={false}>
+        <motion.div
+          key="orders-selection-toolbar"
+          id="ordersSelectionToolbar"
+          data-testid="orders-selection-toolbar"
+          role="region"
+          aria-label={`${selectedCount} selected order${selectedCount === 1 ? '' : 's'}`}
+          initial={{ opacity: 0, y: -8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -8 }}
+          transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+          className="orders-selection-toolbar"
+        >
+          <div className="orders-selection-main">
+            <div className="orders-selection-count">
+              <CheckSquare size={14} strokeWidth={2.5} aria-hidden />
+              <span className="font-mono tabular-nums">{selectedCount}</span>
+              <span>selected</span>
+            </div>
+            <div className="orders-selection-copy">
+              <span className="orders-selection-label">
+                {currentStatus === 'awaiting_shipment'
+                  ? 'Selected-row actions'
+                  : currentStatus === 'shipped'
+                    ? 'Shipped selection'
+                    : 'Cancelled selection'}
+              </span>
+              <span className="orders-selection-helper">{helperText}</span>
+            </div>
+          </div>
+
+          <div className="orders-selection-actions">
+            {currentStatus === 'awaiting_shipment' ? (
+              <>
+                <button
+                  type="button"
+                  className="orders-selection-btn orders-selection-btn-primary"
+                  onClick={() => void handleBatchAction('print')}
+                  disabled={batchBusy || selectedCount === 0}
+                  aria-label={`Create and print labels for ${selectedCount} selected orders`}
+                >
+                  <PrinterIcon size={14} strokeWidth={2.4} aria-hidden />
+                  <span>Create + Print</span>
+                </button>
+                <button
+                  type="button"
+                  className="orders-selection-btn"
+                  onClick={() => void handleBatchAction('queue')}
+                  disabled={batchBusy || selectedCount === 0}
+                  aria-label={`Send ${selectedCount} selected orders to the print queue`}
+                >
+                  <ClipboardList size={14} strokeWidth={2.4} aria-hidden />
+                  <span>Send to Queue</span>
+                </button>
+                <div className="orders-selection-menu-wrap">
+                  <button
+                    type="button"
+                    className="orders-selection-btn orders-selection-btn-warn"
+                    onClick={() => setBatchExtShipMenuOpen((open) => !open)}
+                    disabled={extShipBusy || selectedCount === 0}
+                    aria-expanded={batchExtShipMenuOpen}
+                    aria-haspopup="menu"
+                  >
+                    <BadgeCheck size={14} strokeWidth={2.4} aria-hidden />
+                    <span>Mark as Shipped</span>
+                    <ChevronDown size={12} strokeWidth={2.5} aria-hidden />
+                  </button>
+                  {batchExtShipMenuOpen ? (
+                    <div className="orders-selection-menu" role="menu" aria-label="Mark selected orders as shipped">
+                      <div className="orders-selection-menu-head">
+                        <div className="font-semibold text-ink">Mark selected as shipped</div>
+                        <div className="text-[10.5px] text-ink-3">Choose the source marketplace.</div>
+                      </div>
+                      {['Shopify', 'Amazon', 'Walmart', 'eBay', 'Etsy', 'Other'].map((source) => (
+                        <button
+                          key={source}
+                          type="button"
+                          role="menuitem"
+                          disabled={extShipBusy}
+                          onClick={() => {
+                            setBatchExtShipMenuOpen(false)
+                            void handleBatchMarkAsShipped(source)
+                          }}
+                        >
+                          {source}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+                <label className="orders-selection-test">
+                  <input
+                    type="checkbox"
+                    checked={batchTestMode}
+                    onChange={(event) => setBatchTestMode(event.target.checked)}
+                  />
+                  <span>Test mode</span>
+                </label>
+              </>
+            ) : currentStatus === 'shipped' ? (
+              <button
+                type="button"
+                className="orders-selection-btn"
+                onClick={() => void queueExistingLabels(selectedOrderIds)}
+                disabled={selectedCount === 0}
+                aria-label={`Queue existing labels for ${selectedCount} shipped orders`}
+              >
+                <PrinterIcon size={14} strokeWidth={2.4} aria-hidden />
+                <span>Queue Existing Labels</span>
+              </button>
+            ) : (
+              <span className="orders-selection-readonly" role="note">
+                Shipping actions disabled
+              </span>
+            )}
+
+            <button
+              type="button"
+              className="orders-selection-btn"
+              onClick={copySelectedIds}
+              title="Copy selected order numbers"
+            >
+              {copiedAll ? (
+                <CheckIcon size={14} strokeWidth={2.6} aria-hidden />
+              ) : (
+                <CopyIcon size={14} strokeWidth={2.4} aria-hidden />
+              )}
+              <span>{copiedAll ? 'Copied' : 'Copy IDs'}</span>
+            </button>
+            <button
+              type="button"
+              className="orders-selection-btn orders-selection-btn-clear"
+              onClick={clearSelection}
+              aria-label="Clear selected orders"
+            >
+              <XIcon size={14} strokeWidth={2.5} aria-hidden />
+              <span>Clear</span>
+            </button>
+          </div>
+        </motion.div>
+      </AnimatePresence>
+    )
   }
 
   function getPanelWeightOzFromForm(form: PanelFormState) {
@@ -8069,6 +8248,7 @@ export default function OrdersView({
 
         <div className="content-split relative">
           <div className="orders-section" id="ordersSection">
+            {renderSelectionToolbar()}
             <div className="orders-wrap">
               {loading ? (
                 <motion.div
@@ -8274,7 +8454,7 @@ export default function OrdersView({
                             id={`row-${order.orderId}`}
                             className={rowClasses}
                             style={{ borderLeft: `3px solid ${clientColor}`, background: expedited ? 'rgba(34,197,94,.08)' : undefined }}
-                            onClick={() => updateSelection([order.orderId])}
+                            onClick={() => openOrderDetails(order.orderId)}
                             onDoubleClick={() => openShipStationOrder(order.orderId)}
                             onMouseEnter={() => setKbRowId(order.orderId)}
                           >
@@ -8286,7 +8466,7 @@ export default function OrdersView({
                                 // mirrors colgroup + thead so browsers can't
                                 // drift body content out of column alignment.
                                 style={{ width: column.width, maxWidth: column.width }}
-                                title={column.key === 'select' ? 'Use checkbox for multi-select' : 'Select only this order and view details'}
+                                title={column.key === 'select' ? 'Use checkbox for multi-select' : 'Open order details; use checkbox for bulk selection'}
                               >
                                 {renderTableCell(order, column)}
                               </td>
@@ -8318,7 +8498,7 @@ export default function OrdersView({
                           id={`row-${order.orderId}`}
                           className={rowClasses}
                           style={{ borderLeft: `3px solid ${clientColor}`, background: expedited ? 'rgba(34,197,94,.08)' : undefined }}
-                          onClick={() => updateSelection([order.orderId])}
+                          onClick={() => openOrderDetails(order.orderId)}
                           onDoubleClick={() => openShipStationOrder(order.orderId)}
                           onMouseEnter={() => setKbRowId(order.orderId)}
                         >
@@ -8337,7 +8517,7 @@ export default function OrdersView({
                               // explicit td width is a belt-and-braces
                               // guard for subpixel rendering edge cases.
                               style={{ width: column.width, maxWidth: column.width }}
-                              title={column.key === 'select' ? 'Use checkbox for multi-select' : 'Select only this order and view details'}
+                              title={column.key === 'select' ? 'Use checkbox for multi-select' : 'Open order details; use checkbox for bulk selection'}
                             >
                               {renderTableCell(order, column)}
                             </td>
