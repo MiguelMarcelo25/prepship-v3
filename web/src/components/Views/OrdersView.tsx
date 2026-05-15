@@ -5743,7 +5743,7 @@ export default function OrdersView({
 
       return (
         <div style={{ display: 'flex', alignItems: 'center', lineHeight: 1.3 }}>
-          <CarrierBadge code={carrierCode} size="xs" />
+          <CarrierBadge code={carrierCode} size="sm" />
         </div>
       )
     }
@@ -5756,15 +5756,11 @@ export default function OrdersView({
       return <div className="spin-center"><span className="spin-sm" /></div>
     }
 
-    // Operator request (2026-05-12, under `unlock shipped data` override):
-    // shrink the Carrier column logos so FedEx + USPS don't dominate the
-    // row. `xs` slot is 36×22 (vs `sm` 64×38) — the variant was originally
-    // documented as the orders-table size, but the column had drifted to
-    // `sm` somewhere along the way. Applies uniformly to awaiting,
-    // shipped, and cancelled rows since all three share this renderer.
+    // Keep carrier logos readable in the Orders table. Awaiting, shipped,
+    // and cancelled rows all share this renderer.
     return (
       <div style={{ display: 'flex', alignItems: 'center', lineHeight: 1.3 }}>
-        <CarrierBadge code={getCarrierCodeForDisplay(order) ?? ''} size="xs" />
+        <CarrierBadge code={getCarrierCodeForDisplay(order) ?? ''} size="sm" />
       </div>
     )
   }
