@@ -15,6 +15,9 @@ import {
   RefreshCw,
   Ruler,
   Trash2,
+  Plus,
+  CheckCircle2,
+  X,
   type LucideIcon,
 } from 'lucide-react'
 import { apiClient, ApiError } from '../../api/client'
@@ -105,16 +108,13 @@ const INVENTORY_ACCENT_ICON_COLOR: Record<InventoryAccentTone, string> = {
 }
 
 // Tab metadata array — paired with the existing `activeTab` state
-// machine. Each entry carries everything the rail + section header
-// need to render: id (matches existing setActiveTab values), short
-// label for the rail pill, full label for the section header, a
-// one-line description for the section subtitle, an icon, and the
-// accent tone. Order here is the order tabs appear in the rail.
+// machine. Each entry carries everything the rail + compact header
+// need to render: id, short label, full label, icon, and accent tone.
+// Order here is the order tabs appear in the rail.
 const INVENTORY_TAB_META: Array<{
   id: 'stock' | 'receive' | 'alerts' | 'parents' | 'history'
   short: string
   label: string
-  description: string
   icon: LucideIcon
   tone: InventoryAccentTone
 }> = [
@@ -122,8 +122,6 @@ const INVENTORY_TAB_META: Array<{
     id: 'stock',
     short: 'Stock Levels',
     label: 'Stock Levels',
-    description:
-      'Track on-hand quantity per SKU per client. Adjust min-stock thresholds, edit weights and dimensions, and import new SKUs from existing orders.',
     icon: Layers,
     tone: 'brand',
   },
@@ -131,8 +129,6 @@ const INVENTORY_TAB_META: Array<{
     id: 'receive',
     short: 'Receive',
     label: 'Receive Inventory',
-    description:
-      'Log incoming inventory. Pick a client, list the SKUs and quantities received, then post the batch — quantities flow into Stock Levels and a History entry is recorded automatically.',
     icon: PackagePlus,
     tone: 'emerald',
   },
@@ -140,8 +136,6 @@ const INVENTORY_TAB_META: Array<{
     id: 'alerts',
     short: 'Alerts',
     label: 'Low / Out-of-Stock Alerts',
-    description:
-      'SKUs at or below their minimum stock threshold. Click any row to jump to it in Stock Levels with the Low/Out filter applied.',
     icon: AlertTriangle,
     tone: 'amber',
   },
@@ -149,8 +143,6 @@ const INVENTORY_TAB_META: Array<{
     id: 'parents',
     short: 'Parent SKUs',
     label: 'Parent SKUs',
-    description:
-      'Group child SKUs into parent units (case packs, bundles, kits). Receiving a parent updates every child by its base-unit quantity in one transaction.',
     icon: FolderTree,
     tone: 'violet',
   },
@@ -158,8 +150,6 @@ const INVENTORY_TAB_META: Array<{
     id: 'history',
     short: 'History',
     label: 'Inventory History',
-    description:
-      'Audit trail of every inventory adjustment — receives, returns, damage write-offs, and manual edits. Filter by client, type, and date range.',
     icon: HistoryIcon,
     tone: 'rose',
   },
@@ -2669,6 +2659,15 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
     })
   }
 
+  const activeTabSummary = (() => {
+    if (activeTab === 'stock') return `${sortedRows.length} visible SKUs`
+    if (activeTab === 'receive') return `${receiveRows.length} receive row${receiveRows.length === 1 ? '' : 's'} ready`
+    if (activeTab === 'alerts') return `${filteredAlerts.length} low/out SKUs`
+    if (activeTab === 'parents') return `${parentsList.length} parent SKUs`
+    if (activeTab === 'history') return `${ledger.length} movements`
+    return ''
+  })()
+
   return (
     <div
       id="view-inventory"
@@ -2693,8 +2692,8 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
             • hideTabs=false → new Settings-style chrome:
                 1) Sticky horizontal icon rail (brand mark + per-tab
                    accent-toned pills + animated underline indicator)
-                2) Animated section header (large gradient icon + tab
-                   label + tab description + right-side action slot
+                2) Animated section header (gradient icon + tab label
+                   + compact count/status + right-side action slot
                    for the existing 200 Low/Out shortcut)
           The activeTab state machine is unchanged — only the visual
           chrome around it is. */}
@@ -2727,7 +2726,8 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
               <div
                 className="
                   flex flex-row items-center gap-2
-                  px-3 sm:px-5 py-3
+                  inventory-tab-rail
+                  px-3 sm:px-5 py-2.5
                   overflow-x-auto
                 "
                 role="tablist"
@@ -2743,7 +2743,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                   whileHover={{ scale: 1.04 }}
                   whileTap={{ scale: 0.94 }}
                   onClick={() => setActiveTab('stock')}
-                  className="flex w-10 h-10 sm:w-11 sm:h-11 mr-2 rounded-xl bg-gradient-to-br from-sky-500 to-sky-600 items-center justify-center shadow-md ring-1 ring-sky-400/20 flex-shrink-0"
+                  className="flex w-10 h-10 mr-1 sm:mr-2 rounded-xl bg-gradient-to-br from-sky-500 to-sky-600 items-center justify-center shadow-md ring-1 ring-sky-400/20 flex-shrink-0"
                   title="Inventory — back to Stock Levels"
                   aria-label="Reset to Stock Levels"
                 >
@@ -2769,7 +2769,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                       type="button"
                       role="tab"
                       aria-selected={isActive}
-                      aria-controls={`inventory-panel-${tab.id}`}
+                      aria-controls={`inv-panel-${tab.id}`}
                       id={`inventory-tab-${tab.id}`}
                       onClick={() => setActiveTab(tab.id)}
                       initial={{ opacity: 0, y: -6 }}
@@ -2785,7 +2785,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                       className={`
                         relative group
                         inline-flex items-center justify-center gap-2
-                        h-11 px-3 sm:px-3.5
+                        h-10 px-3
                         rounded-xl flex-shrink-0
                         transition-colors duration-200
                         focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/50
@@ -2820,7 +2820,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                       />
                       <span
                         className={`
-                          hidden sm:inline text-[12.5px] font-bold tracking-tight whitespace-nowrap
+                          inline text-[11.5px] sm:text-[12.5px] font-bold tracking-tight whitespace-nowrap
                           transition-colors duration-200
                           ${isActive ? accentText : 'text-ink-3 group-hover:text-ink-2'}
                         `}
@@ -2852,7 +2852,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
             </aside>
 
             {/* ─── SECTION HEADER ───────────────────────────────────
-                Animated header (icon + title + description + action
+                Animated header (icon + title + compact status + action
                 slot). Re-keys on activeTab so AnimatePresence treats
                 each tab switch as a fresh enter/exit and the icon
                 spring-rotates in. mb-4 spacing mirrors the original
@@ -2864,32 +2864,34 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -4 }}
                 transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-                className="inventory-section-header flex items-start gap-4 px-5 pt-5"
+                className="inventory-section-header flex items-center gap-3 px-5 py-3"
               >
                 <motion.div
                   initial={{ scale: 0.6, rotate: -8, opacity: 0 }}
                   animate={{ scale: 1, rotate: 0, opacity: 1 }}
                   transition={{ type: 'spring', stiffness: 280, damping: 18, delay: 0.05 }}
                   className={`
-                    w-12 h-12 sm:w-14 sm:h-14 rounded-2xl flex-shrink-0
+                    w-10 h-10 sm:w-11 sm:h-11 rounded-xl flex-shrink-0
                     bg-gradient-to-br ${INVENTORY_ACCENT_ICON_BG[activeMeta.tone]} ring-1
                     flex items-center justify-center
                     shadow-sm
                   `}
                 >
                   <ActiveIcon
-                    size={22}
+                    size={20}
                     strokeWidth={2.25}
                     className={INVENTORY_ACCENT_ICON_COLOR[activeMeta.tone]}
                   />
                 </motion.div>
-                <div className="flex-1 min-w-0 pt-0.5">
-                  <h2 className="text-[22px] sm:text-[26px] font-extrabold text-ink font-display tracking-[-0.022em] leading-tight m-0">
+                <div className="flex-1 min-w-0">
+                  <h2 className="text-[18px] sm:text-[20px] font-extrabold text-ink font-display tracking-tight leading-tight m-0">
                     {viewTitle ?? activeMeta.label}
                   </h2>
-                  <p className="text-[12.5px] sm:text-[13px] text-ink-3 mt-1.5 leading-relaxed max-w-3xl">
-                    {activeMeta.description}
-                  </p>
+                  {activeTabSummary ? (
+                    <div className="inventory-section-metrics">
+                      <span>{activeTabSummary}</span>
+                    </div>
+                  ) : null}
                 </div>
                 <div className="inventory-section-header-actions">
                   {activeTab === 'stock' ? (
@@ -2897,11 +2899,11 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                       <span ref={setColumnsAnchor} className="inventory-columns-anchor" />
                       <button className="btn btn-outline btn-sm inventory-action-button" type="button" onClick={handlePopulateInventory}>
                         <Download size={13} strokeWidth={2.25} />
-                        <span>Import SKUs from Orders</span>
+                        <span>Import SKUs</span>
                       </button>
                       <button className="btn btn-outline btn-sm inventory-action-button" type="button" onClick={handleImportDims} title="Pull weight & dims from ShipStation product catalog into inventory SKUs">
                         <Ruler size={13} strokeWidth={2.25} />
-                        <span>Import Dims from SS</span>
+                        <span>Import Dims</span>
                       </button>
                       <button
                         className="btn btn-outline btn-sm inventory-action-button"
@@ -2921,7 +2923,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                       </button>
                     </>
                   ) : null}
-                  {alerts.length > 0 ? (
+                  {alerts.length > 0 && activeTab !== 'alerts' ? (
                     <button
                       type="button"
                       onClick={() => {
@@ -2948,7 +2950,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                       }}
                     >
                       <Trash2 size={13} strokeWidth={2.25} />
-                      <span>{purgeBusy ? 'Purging...' : 'Purge Test Data'}</span>
+                      <span>{purgeBusy ? 'Purging...' : 'Purge Test'}</span>
                     </button>
                   ) : null}
                   <button className="btn btn-outline btn-sm inventory-action-button" type="button" onClick={() => void refreshInventoryView()}>
@@ -3626,18 +3628,18 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
 
       {activeTab === 'receive' ? (
         <div id="inv-panel-receive">
-          <div style={{ maxWidth: 640 }}>
-            <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-              <select className="ship-select" value={receiveClientId} style={{ flex: 1, maxWidth: 240 }} onChange={(event) => setReceiveClientId(event.target.value)}>
+          <div className="inventory-receive-panel">
+            <div className="inventory-form-toolbar">
+              <select className="ship-select inventory-field" value={receiveClientId} onChange={(event) => setReceiveClientId(event.target.value)}>
                 <option value="">Select Client…</option>
                 {clients.map((client) => (
                   <option key={client.clientId} value={client.clientId}>{client.name}</option>
                 ))}
               </select>
-              <input type="text" value={receiveNote} onChange={(event) => setReceiveNote(event.target.value)} className="ship-select" placeholder="Note (e.g. PO#, shipment ref)" style={{ flex: 1, maxWidth: 240 }} />
-              <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: 'var(--text2)', whiteSpace: 'nowrap' }}>
-                📅 Received On:
-                <input type="date" value={receiveDate} onChange={(event) => setReceiveDate(event.target.value)} className="ship-select" style={{ fontSize: 11.5, padding: '4px 6px', width: 'auto' }} />
+              <input type="text" value={receiveNote} onChange={(event) => setReceiveNote(event.target.value)} className="ship-select inventory-field" placeholder="Note (PO#, shipment ref)" />
+              <label className="inventory-date-control">
+                <span>Received On</span>
+                <input type="date" value={receiveDate} onChange={(event) => setReceiveDate(event.target.value)} className="ship-select" />
               </label>
             </div>
             <div id="inv-recv-rows">
@@ -3646,7 +3648,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                 const hints = getReceiveRowHints(row, lookup)
                 return (
                   <div key={row.id} className="inventory-recv-row">
-                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <div className="inventory-receive-row-fields">
                       {/* 2026-05-15: Was a native <input list=
                           "react-recv-sku-datalist">. Chrome rendered
                           that as an unstyleable, unfilterable 300+
@@ -3658,7 +3660,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                           component (web/src/components/Autosuggest.tsx)
                           ready for parent-SKU picker, bulk-edit,
                           new-order modal next. */}
-                      <div style={{ flex: 1 }}>
+                      <div className="inventory-receive-sku-field">
                         <Autosuggest
                           value={row.sku}
                           options={receiveSkuOptions}
@@ -3697,27 +3699,29 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                         type="text"
                         className="ship-select"
                         placeholder="Product name (auto-fills)"
-                        style={{ fontSize: 12, flex: 2 }}
+                        style={{ fontSize: 12 }}
                         value={row.name}
                         onChange={(event) => {
                           const nextName = event.target.value
                           setReceiveRows((current) => current.map((entry) => entry.id === row.id ? { ...entry, name: nextName, autofilledName: false } : entry))
                         }}
                       />
-                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2, flexShrink: 0 }}>
+                      <div className="inventory-receive-qty-field">
                         <input
                           type="number"
                           className="ship-select"
                           placeholder="Qty"
                           min="1"
-                          style={{ width: 72, fontSize: 12, textAlign: 'center' }}
+                          style={{ fontSize: 12, textAlign: 'center' }}
                           value={row.qty}
                           onChange={(event) => setReceiveRows((current) => current.map((entry) => entry.id === row.id ? { ...entry, qty: event.target.value } : entry))}
                         />
                         {hints.totalHint ? <span style={{ fontSize: 10, color: 'var(--ss-blue)', fontWeight: 700, whiteSpace: 'nowrap' }}>{hints.totalHint}</span> : null}
                       </div>
-                      {hints.packHint ? <span style={{ fontSize: 10, color: 'var(--text3)', whiteSpace: 'nowrap', alignSelf: 'flex-start', paddingTop: 6 }}>{hints.packHint}</span> : null}
-                      <button className="btn btn-ghost btn-xs" type="button" onClick={() => setReceiveRows((current) => current.length === 1 ? [createReceiveDraftRow()] : current.filter((entry) => entry.id !== row.id))} title="Remove row" style={{ alignSelf: 'flex-start' }}>✕</button>
+                      {hints.packHint ? <span className="inventory-pack-hint">{hints.packHint}</span> : null}
+                      <button className="btn btn-ghost btn-xs inventory-receive-remove" type="button" onClick={() => setReceiveRows((current) => current.length === 1 ? [createReceiveDraftRow()] : current.filter((entry) => entry.id !== row.id))} title="Remove row" aria-label="Remove row">
+                        <X size={13} strokeWidth={2.4} />
+                      </button>
                     </div>
                   </div>
                 )
@@ -3728,9 +3732,15 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                   unfiltered; the new combobox filters as you type
                   and is keyboard-navigable. */}
             </div>
-            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-              <button className="btn btn-outline btn-sm" type="button" onClick={() => setReceiveRows((current) => [...current, createReceiveDraftRow()])}>＋ Add SKU</button>
-              <button className="btn btn-primary btn-sm" type="button" onClick={handleReceiveSubmit} style={{ marginLeft: 'auto' }}>✅ Receive All</button>
+            <div className="inventory-form-actions">
+              <button className="btn btn-outline btn-sm inventory-action-button" type="button" onClick={() => setReceiveRows((current) => [...current, createReceiveDraftRow()])}>
+                <Plus size={13} strokeWidth={2.3} />
+                <span>Add SKU</span>
+              </button>
+              <button className="btn btn-primary btn-sm inventory-action-button" type="button" onClick={handleReceiveSubmit}>
+                <CheckCircle2 size={13} strokeWidth={2.3} />
+                <span>Receive All</span>
+              </button>
             </div>
             {receiveResultMessage ? (
               <div style={{ marginTop: 10, fontSize: 12.5, color: 'var(--green)' }}>
@@ -3902,7 +3912,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
             // Tailwind-only Clients table — sticky headers, theme-aware,
             // border-separate so sticky on <th> works (border-collapse:collapse
             // silently disables sticky in all major browsers).
-            <div className="bg-surface ring-1 ring-line rounded-lg">
+            <div className="inventory-table-shell">
               <table
                 className={[
                   'w-full m-0 border-separate border-spacing-0',
@@ -4058,7 +4068,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
 
       {activeTab === 'history' ? (
         <div id="inv-panel-history">
-          <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          <div className="inventory-filter-toolbar">
             <select className="filter-sel" value={historyClientId} onChange={(event) => setHistoryClientId(event.target.value)}>
               <option value="">All Clients</option>
               {clients.map((client) => (
@@ -4096,7 +4106,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                   wrapper (would silently disable sticky on the th cells),
                   table uses border-separate (border-collapse:collapse
                   silently disables sticky on th in all major browsers). */}
-              <div className="bg-surface ring-1 ring-line rounded-lg">
+              <div className="inventory-table-shell">
                 <table
                   className={[
                     'w-full m-0 border-separate border-spacing-0 text-[11.5px]',
@@ -4148,14 +4158,14 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
 
       {activeTab === 'alerts' ? (
         <div id="inv-panel-alerts">
-          <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          <div className="inventory-filter-toolbar">
             <select className="filter-sel" value={alertsClientId} onChange={(event) => setAlertsClientId(event.target.value)}>
               <option value="">All Clients</option>
               {clients.map((client) => (
                 <option key={client.clientId} value={client.clientId}>{client.name}</option>
               ))}
             </select>
-            <span style={{ fontSize: 11.5, color: 'var(--text3)' }}>
+            <span className="inventory-filter-note">
               {(() => {
                 const out = filteredAlerts.filter((a: any) => getInventoryDisplayStock(a as InventoryItemDto) <= 0).length
                 const low = filteredAlerts.length - out
@@ -4258,7 +4268,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
 
       {activeTab === 'parents' ? (
         <div id="inv-panel-parents">
-          <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          <div className="inventory-filter-toolbar">
             <select className="filter-sel" value={parentsClientId} onChange={(event) => setParentsClientId(event.target.value)}>
               <option value="">All Clients</option>
               {clients.map((client) => (
@@ -4266,7 +4276,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
               ))}
             </select>
             <button
-              className="btn btn-primary btn-sm"
+              className="btn btn-primary btn-sm inventory-action-button"
               type="button"
               onClick={() => {
                 const defaultClient = parentsClientId
@@ -4281,7 +4291,8 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                 setParentsCreateOpen(true)
               }}
             >
-              ＋ Create Parent SKU
+              <Plus size={13} strokeWidth={2.3} />
+              <span>Create Parent SKU</span>
             </button>
           </div>
 
@@ -4353,7 +4364,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
               <div>No parent SKUs yet.</div>
             </div>
           ) : (
-            <div style={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 8, overflow: 'hidden' }}>
+            <div className="inventory-table-shell">
               <table className="inv-table" style={{ margin: 0 }}>
                 <thead>
                   <tr>
