@@ -1794,6 +1794,7 @@ export default function OrdersView({
   // handler currently shows a stub success toast so the UI flow is
   // reviewable in isolation.
   const [newOrderOpen, setNewOrderOpen] = useState(false)
+  const [csvExporting, setCsvExporting] = useState(false)
   const [columnMenuPos, setColumnMenuPos] = useState<{ top: number; right: number } | null>(null)
   const [dragColumnKey, setDragColumnKey] = useState<TableColumnKey | null>(null)
   const [dragOverColumnKey, setDragOverColumnKey] = useState<TableColumnKey | null>(null)
@@ -3013,31 +3014,15 @@ export default function OrdersView({
     if (selectedOrdersForActions.length === 0) return null
 
     const selectedCount = selectedOrdersForActions.length
-    const selectedOrderNumbers = selectedOrdersForActions
-      .map((order) => order.orderNumber ?? `#${order.orderId}`)
-      .sort()
 
     const helperText =
       currentStatus === 'awaiting_shipment'
-        ? 'Checked rows only. Row click opens detail drawer.'
+        ? selectedCount === 1
+          ? 'Order panel active.'
+          : 'Batch Actions panel active.'
         : currentStatus === 'shipped'
-          ? 'Selection is for shipped-order review and existing-label queueing only.'
-          : 'Cancelled orders can be selected for review or copy only.'
-
-    const copySelectedIds = () => {
-      const text = selectedOrderNumbers.join('\n')
-      if (!text) return
-      if (!navigator.clipboard?.writeText) {
-        showToast('Clipboard is not available in this browser', 'error')
-        return
-      }
-      void navigator.clipboard.writeText(text).then(() => {
-        setCopiedAll(true)
-        window.setTimeout(() => setCopiedAll(false), 1200)
-      }).catch(() => {
-        showToast('Unable to copy selected order IDs', 'error')
-      })
-    }
+          ? 'Shipped review active.'
+          : 'Cancelled review active.'
 
     return (
       <AnimatePresence initial={false}>
@@ -3062,7 +3047,7 @@ export default function OrdersView({
             <div className="orders-selection-copy">
               <span className="orders-selection-label">
                 {currentStatus === 'awaiting_shipment'
-                  ? 'Selected-row actions'
+                  ? 'Selected orders'
                   : currentStatus === 'shipped'
                     ? 'Shipped selection'
                     : 'Cancelled selection'}
@@ -3071,114 +3056,6 @@ export default function OrdersView({
             </div>
           </div>
 
-          <div className="orders-selection-actions">
-            {currentStatus === 'awaiting_shipment' ? (
-              <>
-                <button
-                  type="button"
-                  className="orders-selection-btn orders-selection-btn-primary"
-                  onClick={() => void handleBatchAction('print')}
-                  disabled={batchBusy || selectedCount === 0}
-                  aria-label={`Create and print labels for ${selectedCount} selected orders`}
-                >
-                  <PrinterIcon size={14} strokeWidth={2.4} aria-hidden />
-                  <span>Create + Print</span>
-                </button>
-                <button
-                  type="button"
-                  className="orders-selection-btn"
-                  onClick={() => void handleBatchAction('queue')}
-                  disabled={batchBusy || selectedCount === 0}
-                  aria-label={`Send ${selectedCount} selected orders to the print queue`}
-                >
-                  <ClipboardList size={14} strokeWidth={2.4} aria-hidden />
-                  <span>Send to Queue</span>
-                </button>
-                <div className="orders-selection-menu-wrap">
-                  <button
-                    type="button"
-                    className="orders-selection-btn orders-selection-btn-warn"
-                    onClick={() => setBatchExtShipMenuOpen((open) => !open)}
-                    disabled={extShipBusy || selectedCount === 0}
-                    aria-expanded={batchExtShipMenuOpen}
-                    aria-haspopup="menu"
-                  >
-                    <BadgeCheck size={14} strokeWidth={2.4} aria-hidden />
-                    <span>Mark as Shipped</span>
-                    <ChevronDown size={12} strokeWidth={2.5} aria-hidden />
-                  </button>
-                  {batchExtShipMenuOpen ? (
-                    <div className="orders-selection-menu" role="menu" aria-label="Mark selected orders as shipped">
-                      <div className="orders-selection-menu-head">
-                        <div className="font-semibold text-ink">Mark selected as shipped</div>
-                        <div className="text-[10.5px] text-ink-3">Choose the source marketplace.</div>
-                      </div>
-                      {['Shopify', 'Amazon', 'Walmart', 'eBay', 'Etsy', 'Other'].map((source) => (
-                        <button
-                          key={source}
-                          type="button"
-                          role="menuitem"
-                          disabled={extShipBusy}
-                          onClick={() => {
-                            setBatchExtShipMenuOpen(false)
-                            void handleBatchMarkAsShipped(source)
-                          }}
-                        >
-                          {source}
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-                <label className="orders-selection-test">
-                  <input
-                    type="checkbox"
-                    checked={batchTestMode}
-                    onChange={(event) => setBatchTestMode(event.target.checked)}
-                  />
-                  <span>Test mode</span>
-                </label>
-              </>
-            ) : currentStatus === 'shipped' ? (
-              <button
-                type="button"
-                className="orders-selection-btn"
-                onClick={() => void queueExistingLabels(selectedOrderIds)}
-                disabled={selectedCount === 0}
-                aria-label={`Queue existing labels for ${selectedCount} shipped orders`}
-              >
-                <PrinterIcon size={14} strokeWidth={2.4} aria-hidden />
-                <span>Queue Existing Labels</span>
-              </button>
-            ) : (
-              <span className="orders-selection-readonly" role="note">
-                Shipping actions disabled
-              </span>
-            )}
-
-            <button
-              type="button"
-              className="orders-selection-btn"
-              onClick={copySelectedIds}
-              title="Copy selected order numbers"
-            >
-              {copiedAll ? (
-                <CheckIcon size={14} strokeWidth={2.6} aria-hidden />
-              ) : (
-                <CopyIcon size={14} strokeWidth={2.4} aria-hidden />
-              )}
-              <span>{copiedAll ? 'Copied' : 'Copy IDs'}</span>
-            </button>
-            <button
-              type="button"
-              className="orders-selection-btn orders-selection-btn-clear"
-              onClick={clearSelection}
-              aria-label="Clear selected orders"
-            >
-              <XIcon size={14} strokeWidth={2.5} aria-hidden />
-              <span>Clear</span>
-            </button>
-          </div>
         </motion.div>
       </AnimatePresence>
     )
@@ -5953,10 +5830,15 @@ export default function OrdersView({
         // renders empty so the column still reserves its width but no
         // checkbox is interactive.
         if (isReadOnly) return null
+        const isBulkSelected = selectedIdSet.has(order.orderId)
+        const isOpenInPanel = panelOrderId === order.orderId
         return (
           <input
             type="checkbox"
-            checked={selectedIdSet.has(order.orderId)}
+            checked={isBulkSelected}
+            ref={(node) => {
+              if (node) node.indeterminate = isOpenInPanel && !isBulkSelected
+            }}
             onMouseDown={(event) => {
               shiftHeldOnMouseDownRef.current = event.shiftKey
             }}
@@ -5973,8 +5855,9 @@ export default function OrdersView({
               lastSelectionAnchorRef.current = order.orderId
               toggleOrderSelection(order.orderId, event.target.checked)
             }}
-            aria-label={`Select ${order.orderNumber ?? order.orderId}. Shift+click to select a range.`}
-            title="Tip: Shift+click another checkbox to select a range"
+            aria-checked={isOpenInPanel && !isBulkSelected ? 'mixed' : isBulkSelected}
+            aria-label={`${isOpenInPanel && !isBulkSelected ? 'Open in detail panel. Check to select' : 'Select'} ${order.orderNumber ?? order.orderId}. Shift+click to select a range.`}
+            title={isOpenInPanel && !isBulkSelected ? 'Open in detail panel. Check to add to bulk actions.' : 'Tip: Shift+click another checkbox to select a range'}
           />
         )
       case 'date':
@@ -7951,15 +7834,21 @@ export default function OrdersView({
           <button
             id="exportBtn"
             type="button"
-            title="Export visible orders as CSV"
-            className="
+            title={csvExporting ? 'Preparing CSV export...' : 'Export visible orders as CSV'}
+            disabled={csvExporting}
+            aria-busy={csvExporting}
+            className={`
               inline-flex items-center gap-1.5
               h-8 px-2.5 rounded-lg ring-1 ring-line bg-surface
               text-[12px] font-medium text-ink-2
-              hover:text-ink hover:ring-line-2 active:scale-95
+              ${csvExporting
+                ? 'cursor-wait opacity-75'
+                : 'hover:text-ink hover:ring-line-2 active:scale-95'}
               transition-all duration-150
-            "
+            `}
             onClick={async () => {
+              if (csvExporting) return
+              setCsvExporting(true)
               try {
                 const { blob, filename } = await apiClient.downloadOrdersExport({
                   orderStatus: currentStatus,
@@ -7975,14 +7864,21 @@ export default function OrdersView({
                 a.click()
                 document.body.removeChild(a)
                 setTimeout(() => URL.revokeObjectURL(url), 1000)
+                showToast('CSV export downloaded', 'success')
               } catch (err) {
                 console.error('[Export CSV] failed', err)
-                alert('Export failed: ' + (err instanceof Error ? err.message : 'unknown error'))
+                showToast('Export failed: ' + (err instanceof Error ? err.message : 'unknown error'), 'error')
+              } finally {
+                setCsvExporting(false)
               }
             }}
           >
-            <Download size={12.5} strokeWidth={2.25} />
-            <span className="hidden sm:inline">Export CSV</span>
+            {csvExporting ? (
+              <Loader2 size={12.5} strokeWidth={2.25} className="animate-spin" />
+            ) : (
+              <Download size={12.5} strokeWidth={2.25} />
+            )}
+            <span className="hidden sm:inline">{csvExporting ? 'Exporting...' : 'Export CSV'}</span>
           </button>
 
           {/* + New Order — opens the manual-order modal. Lives right

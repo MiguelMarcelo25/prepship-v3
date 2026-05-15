@@ -2469,6 +2469,64 @@ function csvEscape(v: unknown): string {
   return s;
 }
 
+function compactCsvValue(parts: unknown[], separator = ', '): string {
+  return parts
+    .map((part) => {
+      if (part === null || part === undefined) return '';
+      const value = String(part).trim();
+      return value === 'null' || value === 'undefined' ? '' : value;
+    })
+    .filter(Boolean)
+    .join(separator);
+}
+
+function formatCsvNumber(value: unknown, decimals = 2): string | number {
+  const n = finiteNumberOrNull(value);
+  if (n === null) return '';
+  return Number.isInteger(n) ? n : Number(n.toFixed(decimals));
+}
+
+function formatCsvDimensions(
+  length: unknown,
+  width: unknown,
+  height: unknown
+): string {
+  const dims = [
+    ['L', finiteNumberOrNull(length)],
+    ['W', finiteNumberOrNull(width)],
+    ['H', finiteNumberOrNull(height)],
+  ] as const;
+  if (dims.every(([, value]) => value !== null)) {
+    return dims.map(([, value]) => formatCsvNumber(value)).join(' x ');
+  }
+  return dims
+    .filter(([, value]) => value !== null)
+    .map(([label, value]) => `${label} ${formatCsvNumber(value)}`)
+    .join(' ');
+}
+
+function formatCsvItems(items: Array<Record<string, unknown>>): string {
+  return items
+    .map((item) => {
+      const qty = finiteNumberOrNull(item.quantity);
+      const sku = stringOrNull(item.sku);
+      const name = stringOrNull(item.name);
+      return compactCsvValue([qty !== null && qty > 0 ? `${qty}x` : '', sku, name], ' - ');
+    })
+    .filter(Boolean)
+    .join(' | ');
+}
+
+function formatCsvSkuList(items: Array<Record<string, unknown>>): string {
+  return [
+    ...new Set(
+      items
+        .map((item) => stringOrNull(item.sku))
+        .filter((sku): sku is string => Boolean(sku))
+    ),
+  ].join(', ');
+}
+
 app.get('/export', zValidator('query', exportQuery), async (c) => {
   const q = c.req.valid('query');
 
@@ -2568,22 +2626,35 @@ app.get('/export', zValidator('query', exportQuery), async (c) => {
     'Client ID',
     'Status',
     'Recipient',
+    'Recipient Company',
+    'Recipient Phone',
+    'Ship To Address',
+    'Ship To City',
+    'Ship To State',
+    'Ship To Postal Code',
+    'Ship To Country',
+    'Items',
     'Item Name',
     'SKU',
+    'SKU List',
     'Qty',
     'Weight (oz)',
-    'Ship To',
     'Carrier',
     'Service',
+    'Carrier Account',
+    'Package Type',
+    'Package Dims (LxWxH)',
+    'Delivery Days',
+    'Estimated Delivery',
     'Tracking #',
     'Order Total',
+    'Shipping Paid',
     'Best Rate',
     'Label Cost',
     'Ship Margin',
     'Label Created',
+    'Shipped Date',
     'Age (hrs)',
-    'Raw API (JSON)',
-    'Best Rate JSON',
   ];
 
   const lines: string[] = [header.join(',')];
@@ -2594,10 +2665,30 @@ app.get('/export', zValidator('query', exportQuery), async (c) => {
       ? (order.items as Array<Record<string, unknown>>)
       : [];
     const firstItem = items[0] ?? null;
-    const itemName = firstItem?.name ?? '';
-    const itemSku = firstItem?.sku ?? '';
+    const itemName = stringOrNull(firstItem?.name) ?? '';
+    const itemSku = stringOrNull(firstItem?.sku) ?? '';
     const totalQty = items.reduce((s, it) => s + (Number(it.quantity) || 0), 0);
-    const shipTo = [order.shipToCity, order.shipToState].filter(Boolean).join(', ');
+    const rawOrder = recordOrNull(order.raw) ?? {};
+    const rawShipTo = recordOrNull(rawOrder.shipTo) ?? {};
+    const shipToCity = stringOrNull(order.shipToCity) ?? stringOrNull(rawShipTo.city) ?? '';
+    const shipToState = stringOrNull(order.shipToState) ?? stringOrNull(rawShipTo.state) ?? '';
+    const shipToPostalCode =
+      stringOrNull(order.shipToPostalCode) ??
+      stringOrNull(rawShipTo.postalCode) ??
+      stringOrNull(rawShipTo.postal_code) ??
+      '';
+    const shipToCountry =
+      stringOrNull(rawShipTo.country) ??
+      stringOrNull(rawShipTo.countryCode) ??
+      stringOrNull(rawShipTo.country_code) ??
+      '';
+    const shipToAddress = compactCsvValue([
+      rawShipTo.street1,
+      rawShipTo.street2,
+      rawShipTo.street3,
+      compactCsvValue([shipToCity, shipToState, shipToPostalCode], ' '),
+      shipToCountry,
+    ]);
 
     const ship = shipmentsByOrder.get(order.id) ?? shipmentsByOrderNumber.get(order.orderNumber) ?? null;
     const isShippedExport = q.status === 'shipped' || order.orderStatus === 'shipped';
@@ -2620,7 +2711,22 @@ app.get('/export', zValidator('query', exportQuery), async (c) => {
     const tracking = ship?.tracking_number ?? (isShippedExport ? '' : overrides?.trackingNumber ?? '');
     const labelCreated = ship?.label_created_at ?? ship?.create_date ?? ship?.ship_date ?? '';
     const carrier = normalizedBestRate?.carrierCode ?? ship?.carrier_code ?? '';
-    const service = normalizedBestRate?.serviceCode ?? ship?.service_code ?? '';
+    const service =
+      normalizedBestRate?.serviceName ??
+      normalizedBestRate?.serviceCode ??
+      ship?.service_code ??
+      '';
+    const carrierAccount =
+      normalizedBestRate?.providerAccountNickname ??
+      normalizedBestRate?.carrierNickname ??
+      '';
+    const packageType = normalizedBestRate?.packageType ?? '';
+    const packageDims = formatCsvDimensions(
+      overrides?.rateDimsL,
+      overrides?.rateDimsW,
+      overrides?.rateDimsH
+    );
+    const effectiveWeightOz = overrides?.rateWeightOz ?? order.weightOz;
 
     let shipMargin = '';
     if (labelCost !== '' && bestRateAmount !== '' && bestRateAmount != null) {
@@ -2643,29 +2749,42 @@ app.get('/export', zValidator('query', exportQuery), async (c) => {
         order.clientId,
         order.orderStatus,
         order.shipToName,
+        rawShipTo.company,
+        rawShipTo.phone,
+        shipToAddress,
+        shipToCity,
+        shipToState,
+        shipToPostalCode,
+        shipToCountry,
+        formatCsvItems(items),
         itemName,
         itemSku,
+        formatCsvSkuList(items),
         totalQty || '',
-        order.weightOz,
-        shipTo,
+        effectiveWeightOz,
         carrier,
         service,
+        carrierAccount,
+        packageType,
+        packageDims,
+        normalizedBestRate?.deliveryDays ?? '',
+        normalizedBestRate?.estimatedDelivery ?? '',
         tracking,
         order.orderTotal,
+        order.shippingAmount,
         bestRateAmount,
         labelCost,
         shipMargin,
         labelCreated,
+        ship?.ship_date ?? '',
         ageHrs,
-        order.raw ? JSON.stringify(order.raw) : '',
-        bestRateObj ? JSON.stringify(bestRateObj) : '',
       ]
         .map(csvEscape)
         .join(',')
     );
   }
 
-  const body = lines.join('\r\n') + '\r\n';
+  const body = `\ufeff${lines.join('\r\n')}\r\n`;
   const timestamp = new Date().toISOString().slice(0, 10);
   const statusLabel = q.status ? `-${q.status}` : '';
 
