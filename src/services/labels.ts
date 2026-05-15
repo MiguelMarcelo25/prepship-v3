@@ -29,6 +29,7 @@ import { packages } from '../db/schema/packages';
 import { carrierConnectors } from '../connectors/registry';
 import {
   enqueueShipmentConfirmation,
+  inferStoreProvider,
   processFulfillmentOutboxOnce,
 } from './fulfillment/outbox';
 
@@ -557,6 +558,100 @@ async function loadOrderRecord(orderId: number) {
   return order ?? null;
 }
 
+type MarketplaceConfirmationProvider = 'shipstation' | 'walmart';
+
+function firstText(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+    if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  }
+  return '';
+}
+
+function normalizeConfirmationProvider(value: unknown): MarketplaceConfirmationProvider | null {
+  const text = firstText(value).toLowerCase().replace(/[\s-]+/g, '_');
+  if (!text) return null;
+  if (text.includes('walmart')) return 'walmart';
+  if (text.includes('shipstation')) return 'shipstation';
+  return null;
+}
+
+function stripProviderPrefix(externalOrderId: string | null | undefined, provider: string): string {
+  const text = firstText(externalOrderId);
+  const prefix = `${provider}-`;
+  return text.toLowerCase().startsWith(prefix) ? text.slice(prefix.length) : '';
+}
+
+function confirmationProviderForOrder(order: typeof orders.$inferSelect): MarketplaceConfirmationProvider {
+  const raw = order.raw ?? {};
+  const fromRaw = normalizeConfirmationProvider(
+    raw.source_provider ??
+    raw.sourceProvider ??
+    raw.source ??
+    raw.provider ??
+    raw.marketplace ??
+    raw.platform
+  );
+  if (fromRaw) return fromRaw;
+
+  const fromExternalId = normalizeConfirmationProvider(inferStoreProvider(order.externalOrderId));
+  return fromExternalId ?? 'shipstation';
+}
+
+function carrierNameForMarketplace(carrierCode: string | null | undefined): string {
+  const code = firstText(carrierCode).toLowerCase();
+  if (code.includes('fedex')) return 'FedEx';
+  if (code.includes('ups')) return 'UPS';
+  if (code.includes('usps') || code.includes('stamps')) return 'USPS';
+  return firstText(carrierCode, 'Other');
+}
+
+function trackingUrlForCarrier(carrierCode: string | null | undefined, trackingNumber: string | null | undefined): string {
+  const tracking = firstText(trackingNumber);
+  if (!tracking) return '';
+  const carrier = carrierNameForMarketplace(carrierCode).toLowerCase();
+  if (carrier === 'fedex') return `https://www.fedex.com/fedextrack/?trknbr=${encodeURIComponent(tracking)}`;
+  if (carrier === 'ups') return `https://www.ups.com/track?tracknum=${encodeURIComponent(tracking)}`;
+  if (carrier === 'usps') return `https://tools.usps.com/go/TrackConfirmAction?tLabels=${encodeURIComponent(tracking)}`;
+  return '';
+}
+
+function marketplaceConfirmationPayload(
+  order: typeof orders.$inferSelect,
+  created: CreatedExternalLabel,
+  provider: MarketplaceConfirmationProvider,
+): Record<string, unknown> {
+  const raw = order.raw ?? {};
+  const payload: Record<string, unknown> = {
+    carrierProvider: 'shipstation',
+    carrierAccountId: created.providerAccountId,
+    shipStationShipmentId: created.shipmentId,
+    notifyCustomer: false,
+    notifyMarketplace: true,
+  };
+
+  if (provider === 'walmart') {
+    payload.storeAccountId = firstText(
+      raw.accountId,
+      raw.storeAccountId,
+      raw.sourceAccountId,
+      raw.marketplaceAccountId
+    ) || undefined;
+    payload.purchaseOrderId = firstText(
+      raw.purchaseOrderId,
+      stripProviderPrefix(order.externalOrderId, 'walmart'),
+      raw.orderId,
+      raw.id
+    ) || undefined;
+    payload.rawOrder = raw;
+    payload.carrierName = carrierNameForMarketplace(created.carrierCode);
+    payload.trackingUrl = trackingUrlForCarrier(created.carrierCode, created.trackingNumber) || undefined;
+    payload.serviceCode = created.serviceCode;
+  }
+
+  return payload;
+}
+
 async function loadOrderDimsOverride(orderId: number) {
   const [row] = await db
     .select()
@@ -955,6 +1050,7 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
   }));
   // Queue marketplace confirmation separately from label purchase. The label
   // response stays fast, while fulfillment_outbox owns retries and failure state.
+  const confirmationProvider = confirmationProviderForOrder(order);
   await timer.task('enqueue marketplace confirmation', () => enqueueShipmentConfirmation({
     order: {
       id: order.id,
@@ -966,14 +1062,8 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
     trackingNumber: created.trackingNumber,
     carrierCode: created.carrierCode,
     shipDate: created.shipDate,
-    confirmationProvider: 'shipstation',
-    payload: {
-      carrierProvider: 'shipstation',
-      carrierAccountId: created.providerAccountId,
-      shipStationShipmentId: created.shipmentId,
-      notifyCustomer: false,
-      notifyMarketplace: true,
-    },
+    confirmationProvider,
+    payload: marketplaceConfirmationPayload(order, created, confirmationProvider),
   }));
 
   timer.background('marketplace confirmation outbox', () =>
