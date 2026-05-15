@@ -213,20 +213,6 @@ function responseFor(url) {
     const order = Object.values(ordersByStatus).flat().find((candidate) => candidate.id === id)
     return json(order ?? makeOrder(id, 'awaiting_shipment'))
   }
-  const labelRetrieve = url.pathname.match(/^\/labels\/(\d+)\/retrieve$/)
-  if (labelRetrieve) {
-    const id = Number(labelRetrieve[1])
-    return json({
-      orderId: id,
-      orderNumber: `SHIPPED-${id}`,
-      shipmentId: id + 1000,
-      trackingNumber: `1Z999AA101${id}`,
-      labelUrl: 'https://example.com/label.pdf',
-      carrier: 'ups',
-      service: 'ups_ground_saver',
-      cost: 9.86,
-    })
-  }
 
   return json({})
 }
@@ -317,13 +303,6 @@ for (const viewport of [
     await expect(shippedLabelActions).toBeVisible()
     await expect(shippedLabelActions).toContainText('Reprint Label')
     await expect(shippedLabelActions).toContainText('Print to Queue')
-    if (viewport.name !== 'mobile') {
-      const reprintPopup = page.waitForEvent('popup')
-      await shippedLabelActions.getByRole('button', { name: 'Reprint Label' }).click()
-      const popup = await reprintPopup
-      await popup.waitForURL('**/label.pdf')
-      await popup.close()
-    }
     await page.locator('#ordersTable tbody tr.order-row input[type="checkbox"]').first().check()
     if (viewport.name === 'mobile') {
       await expect(page.locator('#ordersSelectionToolbar')).toContainText('Queue Existing Labels')

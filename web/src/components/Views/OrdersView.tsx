@@ -4644,7 +4644,6 @@ export default function OrdersView({
   async function reprintLabel() {
     if (!panelOrder) return
 
-    const labelPopup = openLabelPdfPlaceholder()
     try {
       const data = await apiClient.retrieveLabel(panelOrder.orderId)
       // 2026-05-14: was `window.open(data.labelUrl, ...)` directly,
@@ -4653,17 +4652,13 @@ export default function OrdersView({
       // surfaces 401 as "Check internet connection" (boss-reported).
       // Now routed through apiClient.openLabelPdf which proxies via
       // blob: URL when needed.
-      const opened = await apiClient.openLabelPdf(data.labelUrl, { popup: labelPopup })
-      if (!opened) {
-        showLabelPdfPlaceholderMessage(labelPopup, 'Could not open label PDF', 'PrepShip found the label, but the browser could not open it. Allow popups for PrepShip or try Reprint Label again.')
-      }
+      const opened = await apiClient.openLabelPdf(data.labelUrl)
       if (opened) {
         showToast(`📄 Label opened for ${data.trackingNumber || panelOrder.orderNumber || panelOrder.orderId}`)
       } else {
         showToast('Label fetch failed — check the popup tab for details, or try Reprint again.', 'error')
       }
     } catch (error) {
-      showLabelPdfPlaceholderMessage(labelPopup, 'Could not retrieve label', error instanceof Error ? error.message : 'Failed to retrieve label')
       showToast(error instanceof Error ? error.message : 'Failed to retrieve label', 'error')
     }
   }

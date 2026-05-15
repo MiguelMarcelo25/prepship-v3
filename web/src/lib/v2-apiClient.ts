@@ -2185,9 +2185,8 @@ export const apiClient = {
     const openIn = (resolvedUrl: string) => {
       if (popup && !popup.closed) {
         popup.location.href = resolvedUrl;
-        return true;
       } else {
-        return Boolean(window.open(resolvedUrl, '_blank', 'noopener,noreferrer'));
+        window.open(resolvedUrl, '_blank', 'noopener,noreferrer');
       }
     };
 
@@ -2201,7 +2200,8 @@ export const apiClient = {
     } catch {
       // Malformed URL. Try the direct-open fallback and let the browser
       // show whatever error makes sense instead of failing silently.
-      return openIn(target);
+      openIn(target);
+      return false;
     }
 
     // Step 3: external CDN — direct open is correct. ShipStation v2
@@ -2209,7 +2209,8 @@ export const apiClient = {
     // sit here. They don't need our Bearer token and a fetch+blob proxy
     // would just CORS-fail.
     if (!needsAuth) {
-      return openIn(target);
+      openIn(target);
+      return true;
     }
 
     // Step 4: API-origin URL — proxy through fetch with Bearer auth so
@@ -2244,12 +2245,12 @@ export const apiClient = {
         );
       }
       const blobUrl = URL.createObjectURL(blob);
-      const opened = openIn(blobUrl);
+      openIn(blobUrl);
       // 60 s is enough for the user to grab the print dialog or the
       // PDF viewer to fully load. After that the blob is GCed; any
       // open tab keeps its in-memory copy of the bytes either way.
       setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
-      return opened;
+      return true;
     } catch (err) {
       console.error('[openLabelPdf] auth-fetch failed; falling back to direct open:', err);
       // Last-ditch: open the original URL directly. The user will see
@@ -2257,7 +2258,8 @@ export const apiClient = {
       // is at least more informative than the operator-reported
       // "Check internet connection" silent failure of the previous
       // window.open-only path.
-      return openIn(target);
+      openIn(target);
+      return false;
     }
   },
 
