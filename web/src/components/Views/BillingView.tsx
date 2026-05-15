@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { useContext, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
 import { motion } from 'framer-motion'
-import { Loader2, Receipt } from 'lucide-react'
+import { Check, ListFilter, Loader2, Receipt, SlidersHorizontal, X } from 'lucide-react'
 import { apiClient } from '../../api/client'
 import { ToastContext } from '../../contexts/ToastContext'
 import type {
@@ -57,6 +57,20 @@ interface BillingDetailState {
 const SUMMARY_COL_COUNT = 8
 const BILLING_SUMMARY_PAGE_SIZE_OPTIONS = [10, 25, 50, 100]
 const BILLING_DETAIL_PAGE_SIZE_OPTIONS = [25, 50, 100, 250]
+const BILLING_CLIENT_FILTER_STORAGE_KEY = 'billing_summary_client_filter_v1'
+const SHIPSTATION_BILLING_CLIENT_NAMES = [
+  'eBay - DJC',
+  'Heritage Kids Press',
+  'HUGRAB',
+  'KimlyParc',
+  'Manual Orders',
+  'Techtok',
+  'Tran Agency',
+  'Walmart - DJC',
+]
+const SHIPSTATION_BILLING_CLIENT_NAME_SET = new Set(
+  SHIPSTATION_BILLING_CLIENT_NAMES.map(normalizeBillingClientName),
+)
 
 // Detail-table column default widths (px). Used by the migrated
 // <Table>-driven detail render. Anything not listed defaults to 110.
@@ -126,6 +140,29 @@ function getPackageMarginMarkup(row: ReturnType<typeof buildBillingPackagePriceR
   return <span style={{ color: row.marginColor, fontWeight: 700 }}>{row.marginPct}%</span>
 }
 
+function normalizeBillingClientName(value: string | null | undefined) {
+  return (value ?? '').trim().replace(/\s+/g, ' ').toLowerCase()
+}
+
+function isShipStationBillingClientName(value: string | null | undefined) {
+  return SHIPSTATION_BILLING_CLIENT_NAME_SET.has(normalizeBillingClientName(value))
+}
+
+function readBillingClientFilterIds() {
+  if (typeof window === 'undefined') return []
+  try {
+    const raw = window.localStorage.getItem(BILLING_CLIENT_FILTER_STORAGE_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .map((value) => Number.parseInt(String(value), 10))
+      .filter((value) => Number.isFinite(value) && value > 0)
+  } catch {
+    return []
+  }
+}
+
 export default function BillingView() {
   const toastContext = useContext(ToastContext)
   const initialRange = getBillingInitialRange(typeof window === 'undefined' ? new Date('2026-03-22T00:00:00Z') : new Date())
@@ -145,6 +182,8 @@ export default function BillingView() {
   const [from, setFrom] = useState(initialRange.from)
   const [to, setTo] = useState(initialRange.to)
   const [summaryRows, setSummaryRows] = useState<BillingSummaryDto[]>([])
+  const [clientFilterOpen, setClientFilterOpen] = useState(false)
+  const [selectedBillingClientIds, setSelectedBillingClientIds] = useState<number[]>(readBillingClientFilterIds)
   const [configSort, setConfigSort] = useState(null)
   const [packagePricingSort, setPackagePricingSort] = useState(null)
   const [summarySort, setSummarySort] = useState(null)
@@ -271,8 +310,39 @@ export default function BillingView() {
     },
     (row) => row.name,
   ), [packagePriceDrafts, packagePricingRows, packagePricingSort])
+  const availableBillingClients = useMemo(() => configs.map((config) => ({
+    clientId: Number(config.clientId),
+    clientName: config.clientName,
+    inShipStation: isShipStationBillingClientName(config.clientName),
+  })).filter((client) => Number.isFinite(client.clientId) && client.clientId > 0), [configs])
+  const allBillingClientIds = useMemo(
+    () => availableBillingClients.map((client) => client.clientId),
+    [availableBillingClients],
+  )
+  const selectedBillingClientIdSet = useMemo(
+    () => new Set(selectedBillingClientIds),
+    [selectedBillingClientIds],
+  )
+  const billingClientFilterActive = selectedBillingClientIds.length > 0
+  const filteredSummaryRows = useMemo(() => {
+    if (!billingClientFilterActive) return summaryRows
+    return summaryRows.filter((row) => selectedBillingClientIdSet.has(Number(row.clientId)))
+  }, [billingClientFilterActive, selectedBillingClientIdSet, summaryRows])
+  const excludedBillingClientNames = useMemo(() => {
+    if (!billingClientFilterActive) return []
+    return availableBillingClients
+      .filter((client) => !selectedBillingClientIdSet.has(client.clientId))
+      .map((client) => client.clientName)
+  }, [availableBillingClients, billingClientFilterActive, selectedBillingClientIdSet])
+  const missingShipStationClientNames = useMemo(() => {
+    const prepShipNames = new Set(availableBillingClients.map((client) => normalizeBillingClientName(client.clientName)))
+    return SHIPSTATION_BILLING_CLIENT_NAMES.filter((name) => !prepShipNames.has(normalizeBillingClientName(name)))
+  }, [availableBillingClients])
+  const selectedBillingClientCount = billingClientFilterActive
+    ? selectedBillingClientIds.length
+    : availableBillingClients.length
   const sortedSummaryRows = useMemo(() => sortRows(
-    summaryRows,
+    filteredSummaryRows,
     summarySort,
     (row, key) => {
       switch (key) {
@@ -297,9 +367,9 @@ export default function BillingView() {
       }
     },
     (row) => row.clientName,
-  ), [summaryRows, summarySort])
+  ), [filteredSummaryRows, summarySort])
 
-  const summaryTotals = useMemo(() => buildBillingSummaryTotals(summaryRows), [summaryRows])
+  const summaryTotals = useMemo(() => buildBillingSummaryTotals(filteredSummaryRows), [filteredSummaryRows])
   const visibleDetailColumns = useMemo(() => getVisibleBillingDetailColumns(detailColumnIds), [detailColumnIds])
   // Collapse per-lineType API rows into one row per order. Without this
   // the same order shows up 2-5 times in the table — once per fee type
@@ -395,8 +465,28 @@ export default function BillingView() {
   }, [detailColumnIds])
 
   useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(BILLING_CLIENT_FILTER_STORAGE_KEY, JSON.stringify(selectedBillingClientIds))
+  }, [selectedBillingClientIds])
+
+  useEffect(() => {
+    if (allBillingClientIds.length === 0) return
+    const allowed = new Set(allBillingClientIds)
+    setSelectedBillingClientIds((current) => {
+      const cleaned = current.filter((clientId) => allowed.has(clientId))
+      return cleaned.length === current.length ? current : cleaned
+    })
+  }, [allBillingClientIds])
+
+  useEffect(() => {
     setSummaryPage(1)
-  }, [from, to])
+  }, [from, to, selectedBillingClientIds])
+
+  useEffect(() => {
+    if (!detailState.open || detailState.clientId == null || !billingClientFilterActive) return
+    if (selectedBillingClientIdSet.has(detailState.clientId)) return
+    setDetailState((current) => ({ ...current, open: false }))
+  }, [billingClientFilterActive, detailState.clientId, detailState.open, selectedBillingClientIdSet])
 
   useEffect(() => {
     const maxPage = Math.max(1, Math.ceil(sortedSummaryRows.length / summaryPageSize))
@@ -432,6 +522,42 @@ export default function BillingView() {
   function handleDetailSort(key: BillingDetailColumnId) {
     setDetailPage(1)
     setDetailSort((current) => nextSortState(current, key))
+  }
+
+  function setBillingClientFilter(nextIds: number[]) {
+    const unique = [...new Set(nextIds)]
+    const normalized =
+      unique.length === allBillingClientIds.length && allBillingClientIds.length > 0
+        ? []
+        : unique
+    setSelectedBillingClientIds(normalized)
+    setSummaryPage(1)
+  }
+
+  function handleToggleBillingClient(clientId: number) {
+    const currentSet = billingClientFilterActive
+      ? new Set(selectedBillingClientIds)
+      : new Set(allBillingClientIds)
+
+    if (currentSet.has(clientId)) {
+      currentSet.delete(clientId)
+    } else {
+      currentSet.add(clientId)
+    }
+
+    setBillingClientFilter(allBillingClientIds.filter((id) => currentSet.has(id)))
+  }
+
+  function handleSelectShipStationBillingClients() {
+    setBillingClientFilter(
+      availableBillingClients
+        .filter((client) => client.inShipStation)
+        .map((client) => client.clientId),
+    )
+  }
+
+  function handleSelectAllBillingClients() {
+    setBillingClientFilter([])
   }
 
   useEffect(() => {
@@ -559,18 +685,38 @@ export default function BillingView() {
     setGenerateStatus('')
 
     try {
-      const result = await apiClient.generateBilling(from, to)
+      const targetClientIds = billingClientFilterActive
+        ? selectedBillingClientIds.filter((clientId) => allBillingClientIds.includes(clientId))
+        : []
+      let generated = 0
+
+      if (targetClientIds.length > 0) {
+        for (let index = 0; index < targetClientIds.length; index += 1) {
+          const clientId = targetClientIds[index]
+          const clientName = availableBillingClients.find((client) => client.clientId === clientId)?.clientName ?? 'client'
+          setGenerateStatus(`Generating ${clientName} (${index + 1}/${targetClientIds.length})...`)
+          const result = await apiClient.generateBilling(from, to, clientId)
+          generated += Number(result.generated ?? result.count ?? 0)
+        }
+      } else {
+        const result = await apiClient.generateBilling(from, to)
+        generated = Number(result.generated ?? result.count ?? 0)
+      }
+      const result = { generated }
       toastContext?.addToast(`✅ Generated ${result.generated} billing line items`, 'success')
 
       const rows = await apiClient.fetchBillingSummary(from, to)
-      const totals = buildBillingSummaryTotals(rows)
+      const rowsForStatus = targetClientIds.length > 0
+        ? rows.filter((row) => targetClientIds.includes(Number(row.clientId)))
+        : rows
+      const totals = buildBillingSummaryTotals(rowsForStatus)
       setGenerateStatus(buildGenerateBillingStatus(result.generated, totals.grand))
       setSummaryRows(rows)
       setSummaryError(null)
       const detailTarget =
         detailState.open && detailState.clientId
-          ? rows.find((row) => row.clientId === detailState.clientId)
-          : rows.find((row) => (row.orderCount || 0) > 0 || (row.grandTotal || row.total || 0) > 0)
+          ? rowsForStatus.find((row) => row.clientId === detailState.clientId)
+          : rowsForStatus.find((row) => (row.orderCount || 0) > 0 || (row.grandTotal || row.total || 0) > 0)
       if (detailTarget) {
         await handleLoadDetails(detailTarget.clientId, detailTarget.clientName)
       }
@@ -1046,6 +1192,59 @@ export default function BillingView() {
           </button>
           <span style={{ fontSize: 10.5, color: 'var(--text3)', marginLeft: 4 }}>{fetchRefStatus}</span>
           <span style={{ fontSize: 12, color: 'var(--text3)' }}>{generateStatus}</span>
+        </div>
+
+        <div className="billing-client-filter">
+          <div className="billing-client-filter-head">
+            <div className="billing-client-filter-copy">
+              <div className="billing-client-filter-title">
+                <ListFilter size={14} strokeWidth={2.4} aria-hidden />
+                <span>Client Filter</span>
+                <span className="billing-client-filter-count">
+                  {selectedBillingClientCount} of {availableBillingClients.length || summaryRows.length} clients
+                </span>
+              </div>
+              <div className="billing-client-filter-subtitle">
+                {billingClientFilterActive
+                  ? `Visible billing excludes: ${excludedBillingClientNames.length ? excludedBillingClientNames.join(', ') : 'none'}`
+                  : 'All PrepShip billing clients are included.'}
+              </div>
+            </div>
+            <div className="billing-client-filter-actions">
+              <button className="btn btn-outline btn-sm billing-filter-action" type="button" onClick={handleSelectShipStationBillingClients} title="Show only clients that exist in ShipStation">
+                <Check size={12} strokeWidth={2.5} aria-hidden />
+                ShipStation only
+              </button>
+              <button className="btn btn-ghost btn-sm billing-filter-action" type="button" onClick={handleSelectAllBillingClients} title="Restore every PrepShip billing client">
+                <X size={12} strokeWidth={2.5} aria-hidden />
+                All clients
+              </button>
+              <button className="btn btn-ghost btn-sm billing-filter-action" type="button" onClick={() => setClientFilterOpen((open) => !open)} aria-expanded={clientFilterOpen}>
+                <SlidersHorizontal size={12} strokeWidth={2.5} aria-hidden />
+                Advanced
+              </button>
+            </div>
+          </div>
+
+          {clientFilterOpen ? (
+            <div className="billing-client-filter-options">
+              {availableBillingClients.map((client) => {
+                const checked = billingClientFilterActive ? selectedBillingClientIdSet.has(client.clientId) : true
+                return (
+                  <label key={client.clientId} className={`billing-client-filter-option${checked ? ' is-selected' : ''}${client.inShipStation ? '' : ' is-prepship-only'}`}>
+                    <input type="checkbox" checked={checked} onChange={() => handleToggleBillingClient(client.clientId)} />
+                    <span className="billing-client-filter-name">{client.clientName}</span>
+                    <span className="billing-client-filter-badge">{client.inShipStation ? 'ShipStation' : 'PrepShip only'}</span>
+                  </label>
+                )
+              })}
+              {missingShipStationClientNames.length > 0 ? (
+                <div className="billing-client-filter-note">
+                  ShipStation-only client not in PrepShip billing: {missingShipStationClientNames.join(', ')}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         {/* Summary table — migrated 2026-05-12 to the reusable <Table>
