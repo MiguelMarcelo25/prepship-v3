@@ -68,9 +68,16 @@ function walmartMethodCode(rawOrder: unknown): string {
   return firstString((rawOrder as any)?.shippingInfo?.methodCode, 'VALUE').toUpperCase();
 }
 
+function walmartShipDateTime(shipDate: string | null | undefined): string {
+  const parsed = shipDate ? Date.parse(shipDate) : NaN;
+  // Walmart's JSON shipping API rejects ISO strings here; it expects epoch ms.
+  return String(Number.isFinite(parsed) ? parsed : Date.now());
+}
+
 function walmartOrderLines(rawOrder: unknown, input: {
   carrierName: string;
   methodCode: string;
+  shipDateTime: string;
   trackingNumber: string;
   trackingUrl: string;
 }): Array<Record<string, unknown>> {
@@ -89,7 +96,7 @@ function walmartOrderLines(rawOrder: unknown, input: {
     .map((line: any) => ({
       lineNumber: String(line?.lineNumber ?? '1'),
       trackingInfo: {
-        shipDateTime: new Date().toISOString(),
+        shipDateTime: input.shipDateTime,
         carrierName: input.carrierName,
         methodCode: input.methodCode,
         trackingNumber: input.trackingNumber,
@@ -123,6 +130,7 @@ export function createWalmartStoreConnector(): StoreConnector {
       const orderLines = walmartOrderLines(rawOrder, {
         carrierName,
         methodCode: walmartMethodCode(rawOrder),
+        shipDateTime: walmartShipDateTime(input.shipDate),
         trackingNumber: input.trackingNumber,
         trackingUrl,
       });
