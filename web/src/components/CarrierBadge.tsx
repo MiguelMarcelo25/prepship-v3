@@ -67,9 +67,9 @@ const SIZES: Record<CarrierBadgeSize, SizeConfig> = {
   // xs — compact for future extra-tight contexts. FedEx h=10 lands
   // at width ~36 (matches slot width).
   xs: { slot: { w: 36, h: 22 }, ups: 20, usps: 14, fedex: 10, shipp: 9, easypost: 18, walmart: 19, pillFontSize: 9.5, pillPaddingX: 4 },
-  // sm — orders-table / rate-list. FedEx h=17 → w=61 fits 64-px slot
-  // with 1.5px breathing room on each side. UPS h=36 fills vertically.
-  sm: { slot: { w: 64, h: 38 }, ups: 36, usps: 26, fedex: 17, shipp: 15, easypost: 30, walmart: 31, pillFontSize: 12, pillPaddingX: 7 },
+  // sm — orders-table / rate-list. FedEx stays smaller because the wide
+  // wordmark dominates the row when it fills the full 64-px slot.
+  sm: { slot: { w: 64, h: 38 }, ups: 36, usps: 26, fedex: 13, shipp: 15, easypost: 30, walmart: 31, pillFontSize: 12, pillPaddingX: 7 },
   // md — New Order modal prominent rate preview. FedEx h=20 → w=72
   // fits 78-px slot with 3px breathing room each side.
   md: { slot: { w: 78, h: 48 }, ups: 46, usps: 32, fedex: 20, shipp: 19, easypost: 38, walmart: 39, pillFontSize: 13, pillPaddingX: 9 },
