@@ -981,10 +981,12 @@ export interface InventoryItemDto {
   packageDimHeight: number | null;
   parentName: string | null;
   currentStock: number;
+  cachedStockQty?: number;
   lastMovement: number | null;
   imageUrl: string | null;
   baseUnits: number;
   status: 'ok' | 'low' | 'out';
+  soldLast30Days?: number;
   // 2026-05-13: effective-stock fields surface "what's REALLY on
   // hand" computed from the source-of-truth (received ledger −
   // total sold across all orders), independent of the cached
@@ -1021,6 +1023,10 @@ type V4InventoryRow = {
   name: string | null;
   imageUrl: string | null;
   stockQty: number;
+  soldLast30Days?: number;
+  totalReceived?: number;
+  totalSoldAllTime?: number;
+  effectiveStock?: number;
   reorderLevel: number;
   weightOz: number | null;
   length: number | null;
@@ -1048,6 +1054,9 @@ function transformInventoryRowV4toV2(
   const w = row.width ?? 0;
   const h = row.height ?? 0;
   const baseUnitQty = 1;
+  const cachedStockQty = row.stockQty;
+  const effectiveStock =
+    typeof row.effectiveStock === 'number' ? row.effectiveStock : cachedStockQty;
 
   return {
     id: row.id,
@@ -1074,11 +1083,16 @@ function transformInventoryRowV4toV2(
     packageDimWidth: null,
     packageDimHeight: null,
     parentName: null,
-    currentStock: row.stockQty,
+    currentStock: effectiveStock,
+    cachedStockQty,
     lastMovement: null,
     imageUrl: row.imageUrl,
-    baseUnits: row.stockQty * baseUnitQty,
-    status: statusOf(row.stockQty, row.reorderLevel),
+    baseUnits: effectiveStock * baseUnitQty,
+    status: statusOf(effectiveStock, row.reorderLevel),
+    soldLast30Days: row.soldLast30Days ?? 0,
+    totalReceived: row.totalReceived,
+    totalSoldAllTime: row.totalSoldAllTime,
+    effectiveStock: row.effectiveStock,
   };
 }
 

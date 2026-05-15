@@ -284,6 +284,7 @@ function normalizeInventoryDto(row: any, clientNamesById?: Map<number, string>):
   const totalReceived = parseFiniteNumber(row.totalReceived)
   const totalSoldAllTime = parseFiniteNumber(row.totalSoldAllTime)
   const effectiveStock = parseFiniteNumber(row.effectiveStock)
+  const displayStock = effectiveStock ?? currentStock
   const clientId = parseFiniteNumber(row.clientId ?? row.client_id) ?? 0;
   const clientName =
     row.clientName ??
@@ -296,10 +297,11 @@ function normalizeInventoryDto(row: any, clientNamesById?: Map<number, string>):
     clientId,
     clientName,
     minStock,
-    currentStock,
-    stockQty: currentStock,
+    currentStock: displayStock,
+    stockQty: displayStock,
+    cachedStockQty: currentStock,
     reorderLevel: minStock,
-    status: row.status ?? inventoryStatus(currentStock, minStock),
+    status: row.status ?? inventoryStatus(displayStock, minStock),
     units_per_pack: unitsPerPack,
     unitsPerPack,
     packageLength: length,
@@ -309,7 +311,7 @@ function normalizeInventoryDto(row: any, clientNamesById?: Map<number, string>):
     productWidth: parseFiniteNumber(row.productWidth ?? row.width) ?? width,
     productHeight: parseFiniteNumber(row.productHeight ?? row.height) ?? height,
     baseUnitQty: parseFiniteNumber(row.baseUnitQty) ?? 1,
-    baseUnits: currentStock * (parseFiniteNumber(row.baseUnitQty) ?? 1),
+    baseUnits: displayStock * (parseFiniteNumber(row.baseUnitQty) ?? 1),
     cuFtOverride: parseFiniteNumber(row.cuFtOverride),
     packageId: parseFiniteNumber(row.packageId),
     packageName: row.packageName ?? null,
@@ -2616,12 +2618,16 @@ export const apiClient = {
         for (const c of clientsArr) {
           if (c?.id != null) nameById.set(c.id, c?.name ?? '');
         }
-        return filterRowsToActiveClients(rows, new Set(nameById.keys())).map((row: any) => ({
-          ...row,
-          clientName:
-            row?.clientId != null ? nameById.get(row.clientId) ?? null : null,
-          currentStock: row?.stockQty ?? 0,
-        }));
+        return filterRowsToActiveClients(rows, new Set(nameById.keys())).map((row: any) =>
+          normalizeInventoryDto(
+            {
+              ...row,
+              clientName:
+                row?.clientId != null ? nameById.get(row.clientId) ?? null : null,
+            },
+            nameById
+          )
+        );
       },
       []
     );

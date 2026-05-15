@@ -500,6 +500,33 @@ function toSortNumber(value: unknown) {
   return Number.isFinite(nextValue) ? nextValue : 0
 }
 
+function getInventoryDisplayStock(row: InventoryItemDto) {
+  const effectiveStock = Number(row.effectiveStock)
+  return Number.isFinite(effectiveStock) ? effectiveStock : toSortNumber(row.currentStock)
+}
+
+function getInventoryDisplayStatus(row: InventoryItemDto): 'ok' | 'low' | 'out' {
+  const stock = getInventoryDisplayStock(row)
+  if (stock <= 0) return 'out'
+  if (stock <= toSortNumber(row.minStock)) return 'low'
+  return 'ok'
+}
+
+function getInventoryStockTooltip(row: InventoryItemDto) {
+  const displayStock = getInventoryDisplayStock(row)
+  const cachedStock = Number((row as any).cachedStockQty)
+  const auditStock = Number.isFinite(cachedStock) ? cachedStock : row.currentStock
+  const tooltipParts = [
+    `Received: ${row.totalReceived ?? 0}`,
+    `Sold shipped all-time: ${row.totalSoldAllTime ?? 0}`,
+    `Effective stock: ${displayStock}`,
+  ]
+  if (typeof row.effectiveStock === 'number' && row.effectiveStock !== auditStock) {
+    tooltipParts.push(`Cached stockQty: ${auditStock}`)
+  }
+  return tooltipParts.join('\n')
+}
+
 function getInventoryPackageSortLabel(row: InventoryItemDto) {
   if (row.packageName) return row.packageName
   if (row.packageLength > 0 || row.packageWidth > 0 || row.packageHeight > 0) {
@@ -533,17 +560,17 @@ function getInventorySortValue(row: InventoryItemDto, key: InventorySortKey) {
     case 'stock':
       // Sort by the displayed value (effective stock) so the
       // operator's "sort by stock" matches what they see.
-      return toSortNumber(row.effectiveStock ?? row.currentStock)
+      return getInventoryDisplayStock(row)
     case 'sold30':
       return toSortNumber(row.soldLast30Days)
     case 'unitsPerPack':
       return toSortNumber(row.units_per_pack)
     case 'totalUnits':
-      return toSortNumber(row.effectiveStock ?? row.currentStock) * Math.max(1, toSortNumber(row.units_per_pack))
+      return getInventoryDisplayStock(row) * Math.max(1, toSortNumber(row.units_per_pack))
     case 'min':
       return toSortNumber(row.minStock)
     case 'status':
-      return inventoryStatusRank[row.status] ?? 99
+      return inventoryStatusRank[getInventoryDisplayStatus(row)] ?? 99
     default:
       return ''
   }
@@ -1392,10 +1419,13 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
       width: 75,
       align: 'center',
       sortable: true,
-      sortValue: (row) => row.currentStock,
+      sortValue: (row) => getInventoryDisplayStock(row),
       render: (row) => (
-        <span style={{ fontWeight: 700, fontSize: 13, color: row.currentStock <= 0 ? 'var(--red)' : 'var(--text)' }}>
-          {row.currentStock}
+        <span
+          title={getInventoryStockTooltip(row)}
+          style={{ fontWeight: 700, fontSize: 13, color: getInventoryDisplayStock(row) <= 0 ? 'var(--red)' : 'var(--text)' }}
+        >
+          {getInventoryDisplayStock(row)}
         </span>
       ),
     },
@@ -1431,10 +1461,10 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
       width: 95,
       align: 'center',
       sortable: true,
-      sortValue: (row) => (row.units_per_pack > 1 ? row.currentStock * row.units_per_pack : 0),
+      sortValue: (row) => (row.units_per_pack > 1 ? getInventoryDisplayStock(row) * row.units_per_pack : 0),
       render: (row) => (
         row.units_per_pack > 1
-          ? <span style={{ fontWeight: 700, fontSize: 12, color: 'var(--text2)' }}>{row.currentStock * row.units_per_pack}</span>
+          ? <span style={{ fontWeight: 700, fontSize: 12, color: 'var(--text2)' }}>{getInventoryDisplayStock(row) * row.units_per_pack}</span>
           : <span style={{ color: 'var(--text3)', fontSize: 12 }}>—</span>
       ),
     },
@@ -1454,10 +1484,10 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
       align: 'center',
       sortable: true,
       // Sort: out (0) → low (1) → ok (2) so descending puts attention-needers first.
-      sortValue: (row) => row.status === 'out' ? 0 : row.status === 'low' ? 1 : 2,
+      sortValue: (row) => getInventoryDisplayStatus(row) === 'out' ? 0 : getInventoryDisplayStatus(row) === 'low' ? 1 : 2,
       render: (row) => (
-        <span className={`stock-badge ${row.status === 'out' ? 'stock-out' : row.status === 'low' ? 'stock-low' : 'stock-ok'}`}>
-          {row.status === 'out' ? 'OUT' : row.status === 'low' ? 'LOW' : 'OK'}
+        <span className={`stock-badge ${getInventoryDisplayStatus(row) === 'out' ? 'stock-out' : getInventoryDisplayStatus(row) === 'low' ? 'stock-low' : 'stock-ok'}`}>
+          {getInventoryDisplayStatus(row) === 'out' ? 'OUT' : getInventoryDisplayStatus(row) === 'low' ? 'LOW' : 'OK'}
         </span>
       ),
     },
@@ -1685,7 +1715,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
     filteredAlerts,
     alertsSort,
     (alert: any, key) => {
-      const stock = alert?.currentStock ?? alert?.stockQty ?? 0
+      const stock = getInventoryDisplayStock(alert as InventoryItemDto)
       const minStock = alert?.minStock ?? 0
       const clientName = alert?.clientName
         ?? clients.find((client) => client.clientId === alert?.clientId)?.name
@@ -3382,19 +3412,11 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                                     // tooltip fallback so power users can
                                     // see the cached number if they ever
                                     // need to diff against the ledger.
-                                    const displayStock = row.effectiveStock ?? row.currentStock
-                                    const tooltipParts = [
-                                      `Received: ${row.totalReceived ?? 0}`,
-                                      `Sold (all time): ${row.totalSoldAllTime ?? 0}`,
-                                      `Effective stock: ${displayStock}`,
-                                    ]
-                                    if (typeof row.effectiveStock === 'number' && row.effectiveStock !== row.currentStock) {
-                                      tooltipParts.push(`Cached stockQty: ${row.currentStock}`)
-                                    }
+                                    const displayStock = getInventoryDisplayStock(row)
                                     return (
                                       <td
                                         key="stock"
-                                        title={tooltipParts.join('\n')}
+                                        title={getInventoryStockTooltip(row)}
                                         style={{ textAlign: 'center', fontWeight: 700, fontSize: 13, color: displayStock <= 0 ? 'var(--red)' : 'var(--text)' }}
                                       >
                                         {displayStock}
@@ -3415,7 +3437,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                                     // Use effective stock here too so the
                                     // totalUnits column (effective ×
                                     // units_per_pack) stays consistent.
-                                    const displayStock = row.effectiveStock ?? row.currentStock
+                                    const displayStock = getInventoryDisplayStock(row)
                                     return (
                                       <td key="totalUnits" style={{ textAlign: 'center', fontSize: 12, color: 'var(--text2)' }}>{row.units_per_pack > 1 ? <span style={{ fontWeight: 700 }}>{displayStock * row.units_per_pack}</span> : '—'}</td>
                                     )
@@ -4135,7 +4157,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
             </select>
             <span style={{ fontSize: 11.5, color: 'var(--text3)' }}>
               {(() => {
-                const out = filteredAlerts.filter((a: any) => (a?.currentStock ?? a?.stockQty ?? 0) <= 0).length
+                const out = filteredAlerts.filter((a: any) => getInventoryDisplayStock(a as InventoryItemDto) <= 0).length
                 const low = filteredAlerts.length - out
                 return `${out} out of stock • ${low} low`
               })()}
@@ -4186,7 +4208,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                 </thead>
                 <tbody>
                   {sortedAlerts.map((alert: any) => {
-                    const stock = alert?.currentStock ?? alert?.stockQty ?? 0
+                    const stock = getInventoryDisplayStock(alert as InventoryItemDto)
                     const minStock = alert?.minStock ?? 0
                     const isOut = stock <= 0
                     const isLow = !isOut && minStock > 0 && stock <= minStock
