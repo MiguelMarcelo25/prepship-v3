@@ -2,7 +2,7 @@ import { supabase } from './supabase';
 import { API_BASE } from './api-base';
 
 const SESSION_TIMEOUT_MS = 5_000;
-const READ_TIMEOUT_MS = 12_000;
+const READ_TIMEOUT_MS = 30_000;
 const WRITE_TIMEOUT_MS = 60_000;
 
 export type Pagination = {
