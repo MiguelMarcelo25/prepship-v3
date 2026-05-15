@@ -1795,6 +1795,11 @@ export default function OrdersView({
   // reviewable in isolation.
   const [newOrderOpen, setNewOrderOpen] = useState(false)
   const [csvExporting, setCsvExporting] = useState(false)
+  const [isMobileViewport, setIsMobileViewport] = useState(() => (
+    typeof window !== 'undefined'
+      ? window.matchMedia('(max-width: 768px)').matches
+      : false
+  ))
   const [columnMenuPos, setColumnMenuPos] = useState<{ top: number; right: number } | null>(null)
   const [dragColumnKey, setDragColumnKey] = useState<TableColumnKey | null>(null)
   const [dragOverColumnKey, setDragOverColumnKey] = useState<TableColumnKey | null>(null)
@@ -2168,6 +2173,15 @@ export default function OrdersView({
   // useEffect dep change cycle — perfectly fine for this dropdown
   // because it's hidden until the user clicks it.
   const [globalSkus, setGlobalSkus] = useState<string[]>([])
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const query = window.matchMedia('(max-width: 768px)')
+    const updateMobileViewport = () => setIsMobileViewport(query.matches)
+    updateMobileViewport()
+    query.addEventListener?.('change', updateMobileViewport)
+    return () => query.removeEventListener?.('change', updateMobileViewport)
+  }, [])
+
   useEffect(() => {
     let cancelled = false
     void apiClient
@@ -3055,6 +3069,104 @@ export default function OrdersView({
               <span className="orders-selection-helper">{helperText}</span>
             </div>
           </div>
+
+          {isMobileViewport ? (
+            <div className="orders-selection-actions orders-selection-actions-mobile" aria-label="Selected order actions">
+              {currentStatus === 'awaiting_shipment' ? (
+                <>
+                  <button
+                    type="button"
+                    className="orders-selection-btn orders-selection-btn-primary"
+                    onClick={() => void handleBatchAction('print')}
+                    disabled={batchBusy || selectedCount === 0}
+                    aria-label={`Create and print labels for ${selectedCount} selected orders`}
+                  >
+                    <PrinterIcon size={14} strokeWidth={2.4} aria-hidden />
+                    <span>Print Label</span>
+                  </button>
+                  <button
+                    type="button"
+                    className="orders-selection-btn"
+                    onClick={() => void handleBatchAction('queue')}
+                    disabled={batchBusy || selectedCount === 0}
+                    aria-label={`Send ${selectedCount} selected orders to the print queue`}
+                  >
+                    <ClipboardList size={14} strokeWidth={2.4} aria-hidden />
+                    <span>Print to Queue</span>
+                  </button>
+                  <div className="orders-selection-menu-wrap">
+                    <button
+                      type="button"
+                      className="orders-selection-btn orders-selection-btn-warn"
+                      onClick={() => setBatchExtShipMenuOpen((open) => !open)}
+                      disabled={extShipBusy || selectedCount === 0}
+                      aria-expanded={batchExtShipMenuOpen}
+                      aria-haspopup="menu"
+                    >
+                      <BadgeCheck size={14} strokeWidth={2.4} aria-hidden />
+                      <span>Mark Shipped</span>
+                      <ChevronDown size={12} strokeWidth={2.5} aria-hidden />
+                    </button>
+                    {batchExtShipMenuOpen ? (
+                      <div className="orders-selection-menu" role="menu" aria-label="Mark selected orders as shipped">
+                        <div className="orders-selection-menu-head">
+                          <div className="font-semibold text-ink">Mark selected as shipped</div>
+                          <div className="text-[10.5px] text-ink-3">Choose the source marketplace.</div>
+                        </div>
+                        {['Shopify', 'Amazon', 'Walmart', 'eBay', 'Etsy', 'Other'].map((source) => (
+                          <button
+                            key={source}
+                            type="button"
+                            role="menuitem"
+                            disabled={extShipBusy}
+                            onClick={() => {
+                              setBatchExtShipMenuOpen(false)
+                              void handleBatchMarkAsShipped(source)
+                            }}
+                          >
+                            {source}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                  <label className="orders-selection-test">
+                    <input
+                      type="checkbox"
+                      checked={batchTestMode}
+                      onChange={(event) => setBatchTestMode(event.target.checked)}
+                    />
+                    <span>Test mode</span>
+                  </label>
+                </>
+              ) : currentStatus === 'shipped' ? (
+                <button
+                  type="button"
+                  className="orders-selection-btn"
+                  onClick={() => void queueExistingLabels(selectedOrderIds)}
+                  disabled={selectedCount === 0}
+                  aria-label={`Queue existing labels for ${selectedCount} shipped orders`}
+                >
+                  <PrinterIcon size={14} strokeWidth={2.4} aria-hidden />
+                  <span>Queue Existing Labels</span>
+                </button>
+              ) : (
+                <span className="orders-selection-readonly" role="note">
+                  Shipping actions disabled
+                </span>
+              )}
+
+              <button
+                type="button"
+                className="orders-selection-btn orders-selection-btn-clear"
+                onClick={clearSelection}
+                aria-label="Clear selected orders"
+              >
+                <XIcon size={14} strokeWidth={2.5} aria-hidden />
+                <span>Clear</span>
+              </button>
+            </div>
+          ) : null}
 
         </motion.div>
       </AnimatePresence>

@@ -16,6 +16,7 @@ test.beforeAll(async () => {
 const clients = [
   { id: 1, name: 'KF Goods', active: true, isTest: false, storeId: 101 },
   { id: 2, name: 'eBay - DJC', active: true, isTest: false, storeId: 102 },
+  { id: 3, name: 'Test Orders', active: true, isTest: true, storeId: 103 },
 ]
 
 const rates = {
@@ -34,6 +35,11 @@ const rates = {
 function makeOrder(id, status, clientId = 1) {
   const shipped = status === 'shipped'
   const cancelled = status === 'cancelled'
+  const storeIdByClientId = {
+    1: 101,
+    2: 102,
+    3: 103,
+  }
   return {
     id,
     orderId: id,
@@ -42,7 +48,7 @@ function makeOrder(id, status, clientId = 1) {
     orderDate: '2026-05-14T02:11:00.000Z',
     externalOrderId: `external-${id}`,
     clientId,
-    storeId: clientId === 1 ? 101 : 102,
+    storeId: storeIdByClientId[clientId] ?? clientId,
     customerEmail: `operator-${id}@example.com`,
     shipToName: id % 2 ? 'Ella and Seth Johnson' : 'Tony McMasters',
     shipToCity: 'El Reno',
@@ -107,10 +113,30 @@ function makeOrder(id, status, clientId = 1) {
 }
 
 const ordersByStatus = {
-  awaiting_shipment: [makeOrder(964542, 'awaiting_shipment'), makeOrder(964543, 'awaiting_shipment', 2)],
+  awaiting_shipment: [
+    makeOrder(964542, 'awaiting_shipment'),
+    makeOrder(964543, 'awaiting_shipment', 2),
+    makeOrder(964544, 'awaiting_shipment', 3),
+  ],
   shipped: [makeOrder(864542, 'shipped'), makeOrder(864543, 'shipped', 2)],
   cancelled: [makeOrder(764542, 'cancelled'), makeOrder(764543, 'cancelled', 2)],
 }
+
+const countRows = [
+  { orderStatus: 'awaiting_shipment', cnt: 3 },
+  { orderStatus: 'shipped', cnt: 2 },
+  { orderStatus: 'cancelled', cnt: 2 },
+]
+
+const countStoreRows = [
+  { orderStatus: 'awaiting_shipment', storeId: 101, cnt: 1 },
+  { orderStatus: 'awaiting_shipment', storeId: 102, cnt: 1 },
+  { orderStatus: 'awaiting_shipment', storeId: 103, cnt: 1 },
+  { orderStatus: 'shipped', storeId: 101, cnt: 1 },
+  { orderStatus: 'shipped', storeId: 102, cnt: 1 },
+  { orderStatus: 'cancelled', storeId: 101, cnt: 1 },
+  { orderStatus: 'cancelled', storeId: 102, cnt: 1 },
+]
 
 function json(body) {
   return {
@@ -157,8 +183,21 @@ function responseFor(url) {
   if (url.pathname === '/settings/orders.columnPrefs') return json({ value: null })
   if (url.pathname === '/orders/sync/status') return json({ status: 'idle', lastSyncAt: '2026-05-15T00:00:00.000Z' })
   if (url.pathname === '/shipments/status') return json({ status: 'idle' })
-  if (url.pathname === '/init/stores') return json({ data: clients.map((client) => ({ id: client.storeId, name: client.name, clientId: client.id })) })
-  if (url.pathname === '/init/counts') return json({ awaiting_shipment: 2, shipped: 2, cancelled: 2 })
+  if (url.pathname === '/init/stores') {
+    return json({
+      data: clients.map((client) => ({
+        id: client.storeId,
+        storeId: client.storeId,
+        name: client.name,
+        storeName: client.name,
+        clientName: client.name,
+        clientId: client.id,
+        active: client.active,
+        isTest: client.isTest,
+      })),
+    })
+  }
+  if (url.pathname === '/init/counts') return json({ byStatus: countRows, byStatusStore: countStoreRows })
   if (url.pathname === '/clients/order-stats') {
     return json({ data: clients.map((client) => ({ clientId: client.id, awaiting_shipment: 1, shipped: 1, cancelled: 1 })) })
   }
@@ -229,22 +268,54 @@ for (const viewport of [
 
     await page.locator('#ordersTable tbody tr.order-row input[type="checkbox"]').first().check()
     await expect(page.locator('#ordersSelectionToolbar')).toBeVisible()
-    await expect(page.locator('#ordersSelectionToolbar')).toContainText('Create + Print')
-    await expect(page.locator('#ordersSelectionToolbar')).toContainText('Send to Queue')
+    if (viewport.name === 'mobile') {
+      const mobileActions = page.locator('.orders-selection-actions-mobile')
+      await expect(mobileActions).toBeVisible()
+      await expect(page.locator('#ordersSelectionToolbar')).toContainText('Print Label')
+      await expect(page.locator('#ordersSelectionToolbar')).toContainText('Print to Queue')
+      await expect(page.locator('#ordersSelectionToolbar')).toContainText('Test mode')
+
+      const toolbarBox = await page.locator('#ordersSelectionToolbar').boundingBox()
+      const actionsBox = await mobileActions.boundingBox()
+      expect(toolbarBox).not.toBeNull()
+      expect(actionsBox).not.toBeNull()
+      expect(Math.abs((actionsBox.x + actionsBox.width / 2) - (toolbarBox.x + toolbarBox.width / 2))).toBeLessThan(2)
+    } else {
+      await expect(page.locator('#ordersSelectionToolbar')).not.toContainText('Print Label')
+      await expect(page.locator('#ordersSelectionToolbar')).not.toContainText('Print to Queue')
+    }
     await page.screenshot({ path: path.join(screenshotDir, `${viewport.name}-03-awaiting-selected.png`), fullPage: true })
+
+    if (viewport.name === 'mobile') {
+      await page.locator('#mobileMenuBtn').click()
+      const testToggle = page.getByRole('button', { name: /Hide Test Orders|Show Test Orders/ })
+      await expect(testToggle).toBeVisible()
+      const toggleBox = await testToggle.boundingBox()
+      expect(toggleBox).not.toBeNull()
+      expect(toggleBox.width).toBeLessThanOrEqual(30)
+      expect(toggleBox.height).toBeLessThanOrEqual(16)
+    }
 
     await page.goto(`${baseUrl}/orders/shipped`)
     await page.waitForSelector('#ordersTable tbody tr.order-row', { state: 'visible' })
     await page.locator('#ordersTable tbody tr.order-row input[type="checkbox"]').first().check()
-    await expect(page.locator('#ordersSelectionToolbar')).toContainText('Queue Existing Labels')
-    await expect(page.locator('#ordersSelectionToolbar')).not.toContainText('Create + Print')
+    if (viewport.name === 'mobile') {
+      await expect(page.locator('#ordersSelectionToolbar')).toContainText('Queue Existing Labels')
+    } else {
+      await expect(page.locator('#ordersSelectionToolbar')).not.toContainText('Queue Existing Labels')
+    }
+    await expect(page.locator('#ordersSelectionToolbar')).not.toContainText('Print Label')
     await page.screenshot({ path: path.join(screenshotDir, `${viewport.name}-04-shipped-selected.png`), fullPage: true })
 
     await page.goto(`${baseUrl}/orders/cancelled`)
     await page.waitForSelector('#ordersTable tbody tr.order-row', { state: 'visible' })
     await page.locator('#ordersTable tbody tr.order-row input[type="checkbox"]').first().check()
-    await expect(page.locator('#ordersSelectionToolbar')).toContainText('Shipping actions disabled')
-    await expect(page.locator('#ordersSelectionToolbar')).not.toContainText('Create + Print')
+    if (viewport.name === 'mobile') {
+      await expect(page.locator('#ordersSelectionToolbar')).toContainText('Shipping actions disabled')
+    } else {
+      await expect(page.locator('#ordersSelectionToolbar')).not.toContainText('Shipping actions disabled')
+    }
+    await expect(page.locator('#ordersSelectionToolbar')).not.toContainText('Print Label')
     await page.screenshot({ path: path.join(screenshotDir, `${viewport.name}-05-cancelled-selected.png`), fullPage: true })
   })
 }
