@@ -2191,6 +2191,26 @@ export const apiClient = {
       }
     };
 
+    const openBlob = (blob: Blob) => {
+      const blobUrl = URL.createObjectURL(blob);
+      const opened = openIn(blobUrl);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
+      return opened;
+    };
+
+    // Some historical labels are stored as data:application/pdf;base64 URLs.
+    // Chrome blocks top-frame navigation from about:blank to data: URLs, so
+    // convert those bytes into a browser-safe blob: URL before redirecting.
+    if (/^data:/i.test(target)) {
+      try {
+        const blob = await fetch(target).then((res) => res.blob());
+        return openBlob(blob);
+      } catch (err) {
+        console.error('[openLabelPdf] data-url conversion failed:', err);
+        return false;
+      }
+    }
+
     // Step 2: figure out whether this URL is on OUR API origin (needs
     // Bearer auth → use blob proxy) or a third-party CDN (open direct).
     let needsAuth = false;
@@ -2243,13 +2263,7 @@ export const apiClient = {
           'Label endpoint returned HTML instead of PDF — token may be expired.'
         );
       }
-      const blobUrl = URL.createObjectURL(blob);
-      const opened = openIn(blobUrl);
-      // 60 s is enough for the user to grab the print dialog or the
-      // PDF viewer to fully load. After that the blob is GCed; any
-      // open tab keeps its in-memory copy of the bytes either way.
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
-      return opened;
+      return openBlob(blob);
     } catch (err) {
       console.error('[openLabelPdf] auth-fetch failed; falling back to direct open:', err);
       // Last-ditch: open the original URL directly. The user will see
