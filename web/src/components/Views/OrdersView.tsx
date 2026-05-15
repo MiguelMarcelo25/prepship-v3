@@ -6713,11 +6713,6 @@ export default function OrdersView({
       : `${TEST_SHIPPING_ACCOUNT_LABEL} · PrepShip Test Standard`
     const shipped = panelOrder.orderStatus !== 'awaiting_shipment'
     const trackingNumber = panelOrder.label?.trackingNumber ?? null
-    const shippedHasPrepShipLabel = shipped && !getIsExternallyFulfilled(panelOrder)
-    const canQueueShippedLabel = Boolean(panelOrder.label?.labelUrl && panelOrder.clientId != null)
-    const shippedLabelUnavailableCopy = getIsExternallyFulfilled(panelOrder)
-      ? 'External label - reprint in marketplace or carrier'
-      : 'No saved PrepShip label URL yet'
     const deliveryLine = panelOrder.label?.shipDate
       ? `Shipped: ${formatDateOnly(panelOrder.label.shipDate, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}`
       : 'Delivery: —'
@@ -6834,21 +6829,15 @@ export default function OrdersView({
               </button>
               {printMenuOpen ? (
                 <div className="absolute top-[calc(100%+4px)] right-0 z-30 min-w-[180px] rounded-lg bg-surface ring-1 ring-line shadow-lg py-1 text-[12px]">
-                  {shipped ? (
-                    shippedHasPrepShipLabel ? (
-                      <button
-                        type="button"
-                        className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-ink-2 hover:text-ink hover:bg-surface-2 transition"
-                        onClick={() => { setPrintMenuOpen(false); void reprintLabel() }}
-                      >
-                        <PrinterIcon size={12} strokeWidth={2.25} className="text-ink-3" />
-                        Reprint Label
-                      </button>
-                    ) : (
-                      <div className="px-3 py-2 text-[11.5px] leading-snug text-ink-4">
-                        {shippedLabelUnavailableCopy}
-                      </div>
-                    )
+                  {shipped && trackingNumber ? (
+                    <button
+                      type="button"
+                      className="w-full text-left px-3 py-1.5 flex items-center gap-2 text-ink-2 hover:text-ink hover:bg-surface-2 transition"
+                      onClick={() => { setPrintMenuOpen(false); void reprintLabel() }}
+                    >
+                      <PrinterIcon size={12} strokeWidth={2.25} className="text-ink-3" />
+                      Reprint Label
+                    </button>
                   ) : (
                     <button
                       type="button"
@@ -7203,55 +7192,7 @@ export default function OrdersView({
                 {dims ? `${dims.length} × ${dims.width} × ${dims.height} in` : ''}
               </div>
 
-              {shipped ? (
-                <div
-                  data-testid="shipped-label-actions"
-                  className="flex items-stretch gap-1 p-1.5 bg-surface-2/40"
-                >
-                  <button
-                    type="button"
-                    onClick={() => void reprintLabel()}
-                    disabled={!shippedHasPrepShipLabel}
-                    title={shippedHasPrepShipLabel ? 'Open the existing shipping label PDF' : shippedLabelUnavailableCopy}
-                    className={[
-                      'flex-[5] inline-flex items-center justify-center gap-2',
-                      'h-9 rounded-lg',
-                      'text-[12.5px] font-semibold tracking-tight',
-                      shippedHasPrepShipLabel
-                        ? 'text-white bg-brand hover:bg-brand-dark shadow-[0_1px_2px_rgba(42,91,215,0.20),inset_0_1px_0_rgba(255,255,255,0.12)]'
-                        : 'text-ink-4 bg-surface ring-1 ring-line cursor-not-allowed',
-                      'active:scale-[0.985]',
-                      'disabled:opacity-70 disabled:active:scale-100',
-                      'transition-all duration-150 ease-out',
-                    ].join(' ')}
-                  >
-                    <PrinterIcon size={13} strokeWidth={2.5} aria-hidden />
-                    <span>{shippedHasPrepShipLabel ? 'Reprint Label' : 'Reprint unavailable'}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => void queueExistingLabels([panelOrder.orderId])}
-                    disabled={!canQueueShippedLabel}
-                    title={canQueueShippedLabel ? 'Add the existing label to the print queue' : shippedLabelUnavailableCopy}
-                    className={[
-                      'flex-[3] inline-flex items-center justify-center gap-1.5',
-                      'h-9 px-2 rounded-lg',
-                      'text-[12.5px] font-semibold',
-                      'bg-surface ring-1 ring-line',
-                      canQueueShippedLabel
-                        ? 'text-ink-2 hover:text-ink hover:ring-line-2 hover:bg-surface'
-                        : 'text-ink-4 cursor-not-allowed',
-                      'active:scale-[0.98]',
-                      'disabled:opacity-70 disabled:active:scale-100',
-                      'transition-all duration-150 ease-out',
-                    ].join(' ')}
-                  >
-                    <Inbox size={12.5} strokeWidth={2.25} aria-hidden />
-                    <span>Print to Queue</span>
-                  </button>
-                </div>
-              ) : (
+              {shipped ? null : (
                 <div style={{ padding: '4px 0', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                   <button className="btn btn-primary btn-sm" type="button" style={{ fontSize: 11.5, gap: 4 }} onClick={() => void openRateBrowser()}>🔍 Browse Rates</button>
                   <button
@@ -7527,6 +7468,15 @@ export default function OrdersView({
                 className="font-mono text-[11px] font-semibold text-ink hover:text-brand transition truncate"
               >
                 {trackingNumber}
+              </button>
+              <button
+                type="button"
+                onClick={() => void reprintLabel()}
+                className="ml-auto inline-flex items-center gap-1 h-6 px-2 rounded text-[10.5px] font-semibold text-ink-2 hover:text-ink hover:bg-surface-2 transition"
+                title="Reprint label"
+              >
+                <PrinterIcon size={10} strokeWidth={2.5} />
+                Reprint
               </button>
             </div>
           ) : null}

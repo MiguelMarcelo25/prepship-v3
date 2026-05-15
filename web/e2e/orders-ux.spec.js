@@ -298,11 +298,6 @@ for (const viewport of [
 
     await page.goto(`${baseUrl}/orders/shipped`)
     await page.waitForSelector('#ordersTable tbody tr.order-row', { state: 'visible' })
-    await page.locator('#ordersTable tbody tr.order-row').first().click()
-    const shippedLabelActions = page.getByTestId('shipped-label-actions')
-    await expect(shippedLabelActions).toBeVisible()
-    await expect(shippedLabelActions).toContainText('Reprint Label')
-    await expect(shippedLabelActions).toContainText('Print to Queue')
     await page.locator('#ordersTable tbody tr.order-row input[type="checkbox"]').first().check()
     if (viewport.name === 'mobile') {
       await expect(page.locator('#ordersSelectionToolbar')).toContainText('Queue Existing Labels')
