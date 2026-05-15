@@ -9,7 +9,7 @@ import { rateCache } from '../db/schema/rates';
 import { shipments } from '../db/schema/shipments';
 import { offsetOf, paginated, paginationSchema } from '../lib/pagination';
 import { getSyncStatus, syncOrders } from '../services/order-sync';
-import { getActiveBackfillJob, startBackfillBestRates } from '../services/rates-backfill';
+import { getActiveBackfillJob, getLatestBackfillJob, startBackfillBestRates } from '../services/rates-backfill';
 import { deductInventoryForOrder } from '../services/fulfillment-deductions';
 import { ssMarkOrderShippedV1, asSSUpstreamOrderId } from '../lib/shipstation/labels';
 import { loadClientCredentials } from '../lib/shipstation/credentials';
@@ -525,6 +525,13 @@ function buildCanonicalOrderModel(
 app.get('/sync/status', async (c) => {
   const status = await getSyncStatus();
   const activeRateJob = getActiveBackfillJob();
+  const latestRateJob = getLatestBackfillJob();
+  const rateJob =
+    activeRateJob ??
+    (latestRateJob?.finishedAt &&
+    Date.now() - latestRateJob.finishedAt < 5 * 60 * 1000
+      ? latestRateJob
+      : null);
   const [rateCount] = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(rateCache);
@@ -545,7 +552,7 @@ app.get('/sync/status', async (c) => {
     cadenceMinutes: {
       orders: 3,
       shipments: 3,
-      rateBackfill: 10,
+      rateBackfill: 3,
       inventoryFromOrders: 30,
       productCatalog: 60,
     },
@@ -558,18 +565,18 @@ app.get('/sync/status', async (c) => {
     count: 0,
     lastSync,
     ratesCached: rateCount?.count ?? 0,
-    ratePrefetchRunning: activeRateJob?.status === 'running',
-    ratePrefetchJob: activeRateJob
+    ratePrefetchRunning: rateJob?.status === 'running',
+    ratePrefetchJob: rateJob
       ? {
-          jobId: activeRateJob.jobId,
-          status: activeRateJob.status,
-          total: activeRateJob.total,
-          processed: activeRateJob.processed,
-          updated: activeRateJob.updated,
-          skipped: activeRateJob.skipped,
-          failed: activeRateJob.failed,
-          message: activeRateJob.message,
-          failureSamples: activeRateJob.failureSamples,
+          jobId: rateJob.jobId,
+          status: rateJob.status,
+          total: rateJob.total,
+          processed: rateJob.processed,
+          updated: rateJob.updated,
+          skipped: rateJob.skipped,
+          failed: rateJob.failed,
+          message: rateJob.message,
+          failureSamples: rateJob.failureSamples,
         }
       : null,
     // Back-compat alias: some v2 callers read `lastSyncAt` (no "ed").

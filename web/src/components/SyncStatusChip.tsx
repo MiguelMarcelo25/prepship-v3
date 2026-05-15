@@ -52,7 +52,7 @@ type Props = {
 const DEFAULT_CADENCE: Required<CadenceMap> = {
   orders: 3,
   shipments: 3,
-  rateBackfill: 10,
+  rateBackfill: 3,
   inventoryFromOrders: 30,
   productCatalog: 60,
 }

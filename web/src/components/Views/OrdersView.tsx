@@ -1,6 +1,7 @@
 // @ts-nocheck
 import './OrdersView.css'
 import { lazy, Suspense, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   Package,
@@ -1714,6 +1715,7 @@ export default function OrdersView({
   stores = [],
 }: OrdersViewProps) {
   const toastContext = useContext(ToastContext)
+  const queryClient = useQueryClient()
   const { user: authUser } = useAuth()
   // Order assignment: only admins can assign orders to other users. Workers
   // see only their own assigned rows (server-side filter; this flag just
@@ -2471,7 +2473,10 @@ export default function OrdersView({
   useEffect(() => {
     if (refreshVersion === 0) return
     void refetchOrders()
-  }, [refreshVersion, refetchOrders])
+    if (panelOrderId != null) {
+      void queryClient.invalidateQueries({ queryKey: ['v2-hooks:order-detail', panelOrderId] })
+    }
+  }, [refreshVersion, refetchOrders, panelOrderId, queryClient])
 
   // Sidebar nav resets — Home bumps `filterResetVersion` whenever the
   // user clicks a sidebar entry. We clear all OrdersView-local filters

@@ -411,11 +411,31 @@ export function formatSyncPill(sync: {
   mode: 'idle' | 'incremental' | 'full'
   page: number
   lastSync: number | null
+  ratePrefetchRunning?: boolean
+  ratePrefetchJob?: {
+    total?: number
+    processed?: number
+    updated?: number
+    status?: string
+  } | null
 }) {
   if (sync.status === 'syncing') {
     return {
       className: 'sync-pill syncing',
       text: `${sync.mode === 'full' ? 'Full sync' : 'Syncing'}… (${sync.page || 0})`,
+    }
+  }
+
+  if (sync.ratePrefetchRunning || sync.ratePrefetchJob?.status === 'running') {
+    const total = Number(sync.ratePrefetchJob?.total ?? 0)
+    const processed = Number(sync.ratePrefetchJob?.processed ?? 0)
+    const updated = Number(sync.ratePrefetchJob?.updated ?? 0)
+    const progress = total > 0 ? `${processed}/${total}` : 'starting'
+    return {
+      className: 'sync-pill syncing',
+      text: updated > 0
+        ? `Best rates ${progress} - ${updated} updated`
+        : `Best rates ${progress}`,
     }
   }
 

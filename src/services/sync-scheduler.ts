@@ -46,6 +46,13 @@ let inventoryImportTimer: NodeJS.Timeout | null = null;
 let syncProductsTimer: NodeJS.Timeout | null = null;
 let fulfillmentOutboxTimer: NodeJS.Timeout | null = null;
 
+function isRateBackfillSchedulerEnabled(): boolean {
+  return (
+    env.ENABLE_RATE_BACKFILL_SCHEDULER ||
+    (env.NODE_ENV === 'production' && !env.DISABLE_RATE_BACKFILL_SCHEDULER)
+  );
+}
+
 async function runOrderSync(): Promise<void> {
   if (orderSyncRunning) {
     console.log('[scheduler] orders sync already running — skipping tick');
@@ -57,6 +64,9 @@ async function runOrderSync(): Promise<void> {
     console.log(
       `[scheduler] orders synced: ${result.synced} rows in ${result.pages} page(s), watermark ${result.lastSyncedAt}`
     );
+    if (result.synced > 0 && isRateBackfillSchedulerEnabled()) {
+      runBackfillTick();
+    }
   } catch (err) {
     console.error(
       '[scheduler] orders sync failed:',
@@ -231,9 +241,7 @@ export function startSyncScheduler(): void {
     );
   }, STARTUP_DELAY_MS + 90_000);
 
-  const rateBackfillEnabled =
-    env.ENABLE_RATE_BACKFILL_SCHEDULER ||
-    (env.NODE_ENV === 'production' && !env.DISABLE_RATE_BACKFILL_SCHEDULER);
+  const rateBackfillEnabled = isRateBackfillSchedulerEnabled();
 
   if (rateBackfillEnabled) {
     console.log(

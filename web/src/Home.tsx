@@ -353,6 +353,13 @@ export default function Home() {
     error: null,
   })
   const lastSeenSyncRef = useRef<number>(0)
+  const hasSeenInitialSyncStatusRef = useRef(false)
+  const lastSeenRateJobRef = useRef<{
+    jobId: string
+    processed: number
+    updated: number
+    status: string
+  } | null>(null)
   const [workerStatus, setWorkerStatus] = useState<SyncWorkerStatusDto | null>(null)
   const [zoomPct, setZoomPct] = useState(() => {
     if (typeof window === 'undefined') return 100
@@ -507,11 +514,42 @@ export default function Home() {
         if (!active) return
         setSyncStatus(next)
 
-        if (next.status === 'done' && next.count > 0 && (next.lastSync ?? 0) > lastSeenSyncRef.current) {
-          lastSeenSyncRef.current = next.lastSync ?? 0
+        const nextLastSync = next.lastSync ?? (next.lastSyncedAt ? Date.parse(next.lastSyncedAt) : null)
+        if (!hasSeenInitialSyncStatusRef.current) {
+          hasSeenInitialSyncStatusRef.current = true
+          if (nextLastSync) lastSeenSyncRef.current = nextLastSync
+        } else if (next.status === 'done' && nextLastSync && nextLastSync > lastSeenSyncRef.current) {
+          lastSeenSyncRef.current = nextLastSync
           setOrdersRefreshVersion((value) => value + 1)
-          if (next.count <= 10) {
+          if (next.count > 0 && next.count <= 10) {
             toastContext?.addToast(`🆕 ${next.count} order${next.count === 1 ? '' : 's'} updated`)
+          }
+        }
+
+        const rateJob = next.ratePrefetchJob ?? null
+        if (rateJob?.jobId) {
+          const nextRateJob = {
+            jobId: String(rateJob.jobId),
+            processed: Number(rateJob.processed ?? 0),
+            updated: Number(rateJob.updated ?? 0),
+            status: String(rateJob.status ?? 'running'),
+          }
+          const previous = lastSeenRateJobRef.current
+          const changed =
+            previous == null
+              ? nextRateJob.updated > 0
+              : previous.jobId !== nextRateJob.jobId ||
+                nextRateJob.updated > previous.updated ||
+                nextRateJob.status !== previous.status
+          lastSeenRateJobRef.current = nextRateJob
+          if (changed) {
+            setOrdersRefreshVersion((value) => value + 1)
+          }
+        } else if (lastSeenRateJobRef.current) {
+          const shouldRefresh = lastSeenRateJobRef.current.status === 'running'
+          lastSeenRateJobRef.current = null
+          if (shouldRefresh) {
+            setOrdersRefreshVersion((value) => value + 1)
           }
         }
       } catch (error) {

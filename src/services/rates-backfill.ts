@@ -80,6 +80,7 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
 
 const jobs = new Map<string, BackfillJob>();
 let activeJobId: string | null = null;
+let latestJobId: string | null = null;
 
 export function getBackfillJob(jobId: string): BackfillJob | null {
   return jobs.get(jobId) ?? null;
@@ -87,6 +88,10 @@ export function getBackfillJob(jobId: string): BackfillJob | null {
 
 export function getActiveBackfillJob(): BackfillJob | null {
   return activeJobId ? (jobs.get(activeJobId) ?? null) : null;
+}
+
+export function getLatestBackfillJob(): BackfillJob | null {
+  return latestJobId ? (jobs.get(latestJobId) ?? null) : null;
 }
 
 export function startBackfillBestRates(opts: {
@@ -116,6 +121,7 @@ export function startBackfillBestRates(opts: {
   };
   jobs.set(jobId, job);
   activeJobId = jobId;
+  latestJobId = jobId;
   void runBackfill(jobId, opts);
   return job;
 }
