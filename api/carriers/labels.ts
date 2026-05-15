@@ -808,6 +808,7 @@ async function resolveWalmartLabelContext(
 ): Promise<{
   purchaseOrderId: string;
   purchaseOrderSource: string;
+  storeAccountId: number | null;
   rawOrder: any;
   externalOrderId: string | null;
   orderNumber: string | null;
@@ -821,6 +822,7 @@ async function resolveWalmartLabelContext(
     : orderRow?.order_number ?? null;
   let purchaseOrderId = firstString(body?.purchaseOrderId, rawOrder?.purchaseOrderId);
   let purchaseOrderSource = purchaseOrderId ? 'body.purchaseOrderId' : 'none';
+  let storeAccountId: number | null = null;
 
   if (!purchaseOrderId && externalOrderId?.startsWith('walmart-')) {
     purchaseOrderId = externalOrderId.slice('walmart-'.length);
@@ -835,8 +837,8 @@ async function resolveWalmartLabelContext(
 
   if (lookupA || lookupB || lookupC) {
     try {
-      const orderRows = await sql<Array<{ external_order_id: string; customer_order_id?: string | null; raw: any }>>`
-        SELECT external_order_id, customer_order_id, raw FROM store_orders
+      const orderRows = await sql<Array<{ carrier_account_id: number | null; external_order_id: string; customer_order_id?: string | null; raw: any }>>`
+        SELECT carrier_account_id, external_order_id, customer_order_id, raw FROM store_orders
         WHERE provider = 'walmart'
           AND (
             external_order_id IN (${lookupA}, ${lookupB}, ${lookupC})
@@ -847,6 +849,7 @@ async function resolveWalmartLabelContext(
       `;
       if (orderRows[0]) {
         purchaseOrderId = orderRows[0].external_order_id;
+        storeAccountId = orderRows[0].carrier_account_id ?? storeAccountId;
         purchaseOrderSource = purchaseOrderSource === 'none'
           ? 'store_orders lookup'
           : purchaseOrderSource;
@@ -874,11 +877,12 @@ async function resolveWalmartLabelContext(
 
   if (purchaseOrderId && !walmartRawOrderUsable(rawOrder)) {
     try {
-      const orderRows = await sql<Array<{ raw: any }>>`
-        SELECT raw FROM store_orders
+      const orderRows = await sql<Array<{ carrier_account_id: number | null; raw: any }>>`
+        SELECT carrier_account_id, raw FROM store_orders
         WHERE provider = 'walmart' AND external_order_id = ${purchaseOrderId}
         LIMIT 1
       `;
+      storeAccountId = orderRows[0]?.carrier_account_id ?? storeAccountId;
       rawOrder = orderRows[0]?.raw ?? null;
     } catch { /* non-fatal */ }
   }
@@ -892,6 +896,7 @@ async function resolveWalmartLabelContext(
   return {
     purchaseOrderId,
     purchaseOrderSource,
+    storeAccountId,
     rawOrder,
     externalOrderId,
     orderNumber,
@@ -1046,6 +1051,7 @@ function walmartShipmentOrderLines(
   input: {
     carrierName: string;
     methodCode: string;
+    shipDateTime: string;
     trackingNumber: string;
     trackingUrl: string;
   },
@@ -1064,7 +1070,7 @@ function walmartShipmentOrderLines(
     .map((line: any) => ({
       lineNumber: String(line?.lineNumber ?? '1'),
       trackingInfo: {
-        shipDateTime: new Date().toISOString(),
+        shipDateTime: input.shipDateTime,
         carrierName: input.carrierName,
         methodCode: input.methodCode,
         trackingNumber: input.trackingNumber,
@@ -1082,12 +1088,15 @@ async function confirmWalmartOrderShipped(
     carrierName: string;
     trackingNumber: string;
     trackingUrl: string;
+    shipDate?: string | null;
   },
 ): Promise<any> {
   const methodCode = walmartShipmentMethodCode(input.rawOrder);
+  const parsedShipDate = input.shipDate ? Date.parse(input.shipDate) : NaN;
   const orderLines = walmartShipmentOrderLines(input.rawOrder, {
     carrierName: input.carrierName,
     methodCode,
+    shipDateTime: String(Number.isFinite(parsedShipDate) ? parsedShipDate : Date.now()),
     trackingNumber: input.trackingNumber,
     trackingUrl: input.trackingUrl,
   });
@@ -1136,6 +1145,262 @@ async function downloadWalmartLabelPdf(
   }
   const buffer = Buffer.from(await res.arrayBuffer());
   return `data:application/pdf;base64,${buffer.toString('base64')}`;
+}
+
+function findWalmartLabelString(value: unknown, keys: string[], depth = 0): string {
+  if (depth > 5 || value == null) return '';
+  if (typeof value === 'string') return '';
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findWalmartLabelString(item, keys, depth + 1);
+      if (found) return found;
+    }
+    return '';
+  }
+  if (typeof value !== 'object') return '';
+
+  const record = value as Record<string, unknown>;
+  const wanted = new Set(keys.map((key) => key.toLowerCase()));
+  for (const [key, raw] of Object.entries(record)) {
+    if (wanted.has(key.toLowerCase())) {
+      const text = firstString(raw);
+      if (text) return text;
+    }
+  }
+  for (const raw of Object.values(record)) {
+    const found = findWalmartLabelString(raw, keys, depth + 1);
+    if (found) return found;
+  }
+  return '';
+}
+
+function walmartLabelDataUrlFromPayload(payload: unknown): string {
+  const base64 = findWalmartLabelString(payload, [
+    'labelData',
+    'label_data',
+    'labelBase64',
+    'labelPDF',
+    'labelPdf',
+    'pdfData',
+    'pdf_data',
+    'pdfBase64',
+  ]).replace(/\s+/g, '');
+  if (!base64) return '';
+  if (/^data:application\/pdf/i.test(base64)) return base64;
+  if (/^[A-Za-z0-9+/=]+$/.test(base64) && base64.length > 100) {
+    return `data:application/pdf;base64,${base64}`;
+  }
+  return '';
+}
+
+async function downloadWalmartLabelPdfFromUrl(
+  creds: Record<string, unknown>,
+  token: string,
+  url: string,
+): Promise<string> {
+  if (!/^https?:\/\//i.test(url)) return '';
+  const res = await fetch(url, {
+    headers: walmartMarketplaceHeaders(creds, token, 'application/pdf,application/json,image/png,*/*'),
+  });
+  if (!res.ok) {
+    console.warn(`[carriers/labels] walmart label download url ${res.status}: ${await readWalmartError(res)}`);
+    return '';
+  }
+
+  const contentType = res.headers.get('content-type') || '';
+  if (/pdf/i.test(contentType)) {
+    const buffer = Buffer.from(await res.arrayBuffer());
+    return `data:application/pdf;base64,${buffer.toString('base64')}`;
+  }
+  if (/json/i.test(contentType)) {
+    return walmartLabelDataUrlFromPayload(await res.json().catch(() => null));
+  }
+  if (/image\/png/i.test(contentType)) {
+    const buffer = Buffer.from(await res.arrayBuffer());
+    return `data:image/png;base64,${buffer.toString('base64')}`;
+  }
+  return '';
+}
+
+async function downloadWalmartLabelPdfById(
+  creds: Record<string, unknown>,
+  token: string,
+  labelId: string,
+): Promise<string> {
+  const res = await fetch(
+    `https://marketplace.walmartapis.com/v3/shipping/labels/${encodeURIComponent(labelId)}`,
+    {
+      headers: walmartMarketplaceHeaders(creds, token, 'application/pdf,application/json'),
+    },
+  );
+  if (!res.ok) {
+    console.warn(`[carriers/labels] walmart label download by id ${res.status}: ${await readWalmartError(res)}`);
+    return '';
+  }
+
+  const contentType = res.headers.get('content-type') || '';
+  if (/pdf/i.test(contentType)) {
+    const buffer = Buffer.from(await res.arrayBuffer());
+    return `data:application/pdf;base64,${buffer.toString('base64')}`;
+  }
+
+  const text = await res.text().catch(() => '');
+  if (!text) return '';
+  try {
+    const parsed = JSON.parse(text);
+    const labelUrl = walmartLabelDataUrlFromPayload(parsed);
+    if (labelUrl) return labelUrl;
+    const directUrl = findWalmartLabelString(parsed, ['labelUrl', 'labelURL', 'downloadUrl', 'downloadURL', 'href', 'url']);
+    return directUrl ? downloadWalmartLabelPdfFromUrl(creds, token, directUrl) : '';
+  } catch {
+    const compact = text.trim().replace(/\s+/g, '');
+    if (/^[A-Za-z0-9+/=]+$/.test(compact) && compact.length > 100) {
+      return `data:application/pdf;base64,${compact}`;
+    }
+    return '';
+  }
+}
+
+async function markWalmartConfirmationAttemptSql(
+  sql: any,
+  args: {
+    orderId: number;
+    shipmentId: number;
+    provider: string;
+    succeeded: boolean;
+    error?: string | null;
+  },
+): Promise<void> {
+  const dedupeKeyPrefix = `shipment_confirmation_requested:${args.provider}:${args.orderId}:${args.shipmentId}`;
+  await sql`
+    UPDATE shipments
+    SET
+      confirmation_status = ${args.succeeded ? 'succeeded' : 'failed'},
+      confirmation_attempts = COALESCE(confirmation_attempts, 0) + 1,
+      confirmation_last_error = ${args.succeeded ? null : args.error ?? 'Walmart confirmation failed'},
+      marketplace_confirmed_at = CASE WHEN ${args.succeeded} THEN NOW() ELSE marketplace_confirmed_at END,
+      updated_at = NOW()
+    WHERE id = ${args.shipmentId}
+  `;
+  await sql`
+    UPDATE fulfillment_outbox
+    SET
+      status = ${args.succeeded ? 'succeeded' : 'failed'},
+      attempts = attempts + 1,
+      last_error = ${args.succeeded ? null : args.error ?? 'Walmart confirmation failed'},
+      next_run_at = CASE
+        WHEN ${args.succeeded} THEN next_run_at
+        ELSE NOW() + INTERVAL '2 minutes'
+      END,
+      updated_at = NOW()
+    WHERE dedupe_key = ${dedupeKeyPrefix}
+  `;
+  await sql`
+    UPDATE orders
+    SET canonical_status = ${args.succeeded ? 'shipped' : 'confirmation_failed'}, updated_at = NOW()
+    WHERE id = ${args.orderId}
+  `;
+}
+
+async function loadWalmartStoreCredentialsForConfirmationSql(
+  sql: any,
+  args: {
+    purchaseOrderId?: string | null;
+    storeAccountId?: number | string | null;
+    fallbackCreds: Record<string, unknown>;
+  },
+): Promise<{ credentials: Record<string, unknown>; storeAccountId: number | null; source: string }> {
+  const explicitId = Number(args.storeAccountId);
+  let accountId = Number.isFinite(explicitId) && explicitId > 0 ? Math.trunc(explicitId) : null;
+
+  const loadById = async (id: number) => {
+    const rows = await sql<Array<{ id: number; credentials: Record<string, unknown> }>>`
+      SELECT id, credentials
+      FROM store_accounts
+      WHERE id = ${id} AND provider = 'walmart'
+      LIMIT 1
+    `;
+    const row = rows[0];
+    return row?.credentials ? { credentials: row.credentials, storeAccountId: row.id, source: `store_accounts.${row.id}` } : null;
+  };
+
+  if (accountId) {
+    const explicit = await loadById(accountId).catch(() => null);
+    if (explicit) return explicit;
+    accountId = null;
+  }
+
+  const purchaseOrderId = firstString(args.purchaseOrderId);
+  if (purchaseOrderId) {
+    const rows = await sql<Array<{ carrier_account_id: number | null }>>`
+      SELECT carrier_account_id
+      FROM store_orders
+      WHERE provider = 'walmart' AND external_order_id = ${purchaseOrderId}
+      LIMIT 1
+    `.catch(() => []) as Array<{ carrier_account_id: number | null }>;
+    const inferredId = rows[0]?.carrier_account_id;
+    if (inferredId) {
+      const inferred = await loadById(inferredId).catch(() => null);
+      if (inferred) return { ...inferred, source: `store_orders.${purchaseOrderId}->${inferred.source}` };
+    }
+  }
+
+  return { credentials: args.fallbackCreds, storeAccountId: null, source: 'label_account_fallback' };
+}
+
+async function confirmWalmartSourceOrderAfterLabelSql(
+  sql: any,
+  args: {
+    orderId: number;
+    shipmentId: number;
+    purchaseOrderId: string | null;
+    rawOrder: any;
+    carrierName: string;
+    trackingNumber: string;
+    trackingUrl: string;
+    shipDate?: string | null;
+    storeAccountId?: number | string | null;
+    fallbackCreds: Record<string, unknown>;
+  },
+): Promise<{
+  confirmed: boolean;
+  error: string | null;
+  raw: any;
+  storeAccountId: number | null;
+  credentialSource: string;
+}> {
+  const purchaseOrderId = firstString(args.purchaseOrderId);
+  if (!purchaseOrderId) {
+    throw new Error('Walmart shipment confirmation missing purchaseOrderId');
+  }
+
+  const loaded = await loadWalmartStoreCredentialsForConfirmationSql(sql, {
+    purchaseOrderId,
+    storeAccountId: args.storeAccountId,
+    fallbackCreds: args.fallbackCreds,
+  });
+  const token = await getWalmartAccessTokenForLabels(loaded.credentials);
+  const raw = await confirmWalmartOrderShipped(loaded.credentials, token, {
+    purchaseOrderId,
+    rawOrder: args.rawOrder,
+    carrierName: args.carrierName,
+    trackingNumber: args.trackingNumber,
+    trackingUrl: args.trackingUrl,
+    shipDate: args.shipDate,
+  });
+  await markWalmartConfirmationAttemptSql(sql, {
+    orderId: args.orderId,
+    shipmentId: args.shipmentId,
+    provider: 'walmart',
+    succeeded: true,
+  });
+  return {
+    confirmed: true,
+    error: null,
+    raw,
+    storeAccountId: loaded.storeAccountId,
+    credentialSource: loaded.source,
+  };
 }
 
 async function buyLabelWalmartShipping(
@@ -1232,6 +1497,13 @@ async function buyLabelWalmartShipping(
 
   const data = await res.json();
   const details = data?.data && typeof data.data === 'object' ? data.data : data;
+  const labelId = firstString(
+    details?.labelId,
+    details?.labelID,
+    details?.label_id,
+    details?.id,
+    data?.labelId,
+  );
   const trackingNumber = firstString(
     details?.trackingNo,
     details?.trackingNumber,
@@ -1253,15 +1525,31 @@ async function buyLabelWalmartShipping(
   let shipmentConfirmed: boolean | null = null;
   let shipmentConfirmError: string | null = null;
   let shipmentConfirmRaw: any = null;
-  // Shipment confirmation is intentionally queued after the label is persisted.
-  // Buying postage and notifying Walmart are separate fulfillment events; the
-  // outbox worker owns marketplace retries without slowing the label response.
+  // Shipment confirmation runs after the label is persisted. The handler
+  // attempts it immediately, and the outbox row remains the retry safety net.
 
-  const labelUrl = await downloadWalmartLabelPdf(creds, token, responseCarrierName, trackingNumber)
-    .catch((err) => {
+  let labelUrl = walmartLabelDataUrlFromPayload(data);
+  if (!labelUrl) {
+    const directUrl = findWalmartLabelString(data, ['labelUrl', 'labelURL', 'downloadUrl', 'downloadURL', 'href', 'url']);
+    if (directUrl) {
+      labelUrl = await downloadWalmartLabelPdfFromUrl(creds, token, directUrl).catch((err) => {
+        console.warn('[carriers/labels] walmart label PDF download url failed:', err instanceof Error ? err.message : err);
+        return '';
+      });
+    }
+  }
+  if (!labelUrl && labelId) {
+    labelUrl = await downloadWalmartLabelPdfById(creds, token, labelId).catch((err) => {
+      console.warn('[carriers/labels] walmart label PDF download by id failed:', err instanceof Error ? err.message : err);
+      return '';
+    });
+  }
+  if (!labelUrl) {
+    labelUrl = await downloadWalmartLabelPdf(creds, token, responseCarrierName, trackingNumber).catch((err) => {
       console.warn('[carriers/labels] walmart label PDF download failed:', err instanceof Error ? err.message : err);
       return '';
     });
+  }
   const serviceName = walmartEstimateServiceName(selectedRate);
   const serviceCode = walmartEstimateServiceCode(selectedRate);
   const carrierCode = normalizeCarrierCodeForDirectRate(responseCarrierName) ?? inferCarrierCodeForDirectRate('walmart_shipping', serviceName);
@@ -2217,6 +2505,43 @@ export default async function handler(req: any, res: any): Promise<void> {
         return { queued: false, provider: inferStoreProviderFromExternalId(externalOrderId), error: err instanceof Error ? err.message : String(err) };
       });
 
+      let marketplaceShipmentConfirmed: boolean | null = null;
+      let marketplaceShipmentConfirmError: string | null = null;
+      let marketplaceCredentialSource: string | null = null;
+      let marketplaceStoreAccountId: number | null = null;
+      if (confirmation.provider === 'walmart') {
+        try {
+          const confirmed = await confirmWalmartSourceOrderAfterLabelSql(sql, {
+            orderId,
+            shipmentId: persisted.localShipmentId,
+            purchaseOrderId: sourceOrderIdFromExternalId(externalOrderId),
+            rawOrder,
+            carrierName: result.carrierName ?? result.carrierCode ?? 'Other',
+            trackingNumber: result.trackingNumber,
+            trackingUrl: walmartTrackingUrl(result.carrierName ?? result.carrierCode ?? '', result.trackingNumber),
+            shipDate: new Date().toISOString().slice(0, 10),
+            fallbackCreds: {},
+          });
+          marketplaceShipmentConfirmed = confirmed.confirmed;
+          marketplaceShipmentConfirmError = confirmed.error;
+          marketplaceCredentialSource = confirmed.credentialSource;
+          marketplaceStoreAccountId = confirmed.storeAccountId;
+        } catch (err) {
+          marketplaceShipmentConfirmed = false;
+          marketplaceShipmentConfirmError = err instanceof Error ? err.message : String(err);
+          console.warn('[carriers/labels] walmart source confirmation after Shipp label failed:', marketplaceShipmentConfirmError);
+          await markWalmartConfirmationAttemptSql(sql, {
+            orderId,
+            shipmentId: persisted.localShipmentId,
+            provider: 'walmart',
+            succeeded: false,
+            error: marketplaceShipmentConfirmError,
+          }).catch((markErr) => {
+            console.warn('[carriers/labels] walmart source confirmation status update failed:', markErr instanceof Error ? markErr.message : markErr);
+          });
+        }
+      }
+
       res.status(200).json({
         ok: true,
         provider: providerKey,
@@ -2239,6 +2564,10 @@ export default async function handler(req: any, res: any): Promise<void> {
           confirmationQueued: confirmation.queued,
           confirmationProvider: confirmation.provider,
           confirmationError: confirmation.error ?? null,
+          marketplaceShipmentConfirmed,
+          marketplaceShipmentConfirmError,
+          marketplaceStoreAccountId,
+          marketplaceCredentialSource,
           shippShipmentId: result.shipmentId,
           selectedServiceCode: result.serviceCode,
         },
@@ -2296,7 +2625,7 @@ export default async function handler(req: any, res: any): Promise<void> {
         confirmationProvider: 'walmart',
         shipDate: new Date().toISOString().slice(0, 10),
         payload: {
-          storeAccountId: carrierAccountId,
+          storeAccountId: result.context.storeAccountId ?? undefined,
           purchaseOrderId: result.context.purchaseOrderId,
           rawOrder: result.context.rawOrder,
           carrierName: result.carrierName,
@@ -2308,6 +2637,41 @@ export default async function handler(req: any, res: any): Promise<void> {
         console.warn('[carriers/labels] walmart confirmation outbox enqueue failed:', err instanceof Error ? err.message : err);
         return { queued: false, provider: 'walmart', error: err instanceof Error ? err.message : String(err) };
       });
+
+      let walmartConfirmationCredentialSource: string | null = null;
+      let walmartConfirmationStoreAccountId: number | null = result.context.storeAccountId ?? null;
+      try {
+        const confirmed = await confirmWalmartSourceOrderAfterLabelSql(sql, {
+          orderId,
+          shipmentId: persisted.localShipmentId,
+          purchaseOrderId: result.context.purchaseOrderId,
+          rawOrder: result.context.rawOrder,
+          carrierName: result.carrierName,
+          trackingNumber: result.trackingNumber,
+          trackingUrl: walmartTrackingUrl(result.carrierName, result.trackingNumber),
+          shipDate: new Date().toISOString().slice(0, 10),
+          storeAccountId: result.context.storeAccountId,
+          fallbackCreds: creds,
+        });
+        result.shipmentConfirmRaw = confirmed.raw;
+        result.shipmentConfirmed = confirmed.confirmed;
+        result.shipmentConfirmError = confirmed.error;
+        walmartConfirmationCredentialSource = confirmed.credentialSource;
+        walmartConfirmationStoreAccountId = confirmed.storeAccountId;
+      } catch (err) {
+        result.shipmentConfirmed = false;
+        result.shipmentConfirmError = err instanceof Error ? err.message : String(err);
+        console.warn('[carriers/labels] walmart immediate confirmation failed:', result.shipmentConfirmError);
+        await markWalmartConfirmationAttemptSql(sql, {
+          orderId,
+          shipmentId: persisted.localShipmentId,
+          provider: 'walmart',
+          succeeded: false,
+          error: result.shipmentConfirmError,
+        }).catch((markErr) => {
+          console.warn('[carriers/labels] walmart confirmation status update failed:', markErr instanceof Error ? markErr.message : markErr);
+        });
+      }
 
       res.status(200).json({
         ok: true,
@@ -2328,6 +2692,8 @@ export default async function handler(req: any, res: any): Promise<void> {
           orderNumber: result.context.orderNumber,
           purchaseOrderId: result.context.purchaseOrderId,
           purchaseOrderSource: result.context.purchaseOrderSource,
+          marketplaceStoreAccountId: walmartConfirmationStoreAccountId,
+          marketplaceCredentialSource: walmartConfirmationCredentialSource,
           hasRawOrder: result.context.rawOrder != null,
           carrierAccountId,
           confirmationQueued: confirmation.queued,
