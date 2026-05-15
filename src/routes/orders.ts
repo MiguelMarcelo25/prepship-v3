@@ -24,6 +24,65 @@ import { isAdminEmail } from '../lib/admin-emails';
 
 const app = new Hono();
 
+type OrdersListTimings = Record<string, number>;
+
+function msSince(startedAt: number): number {
+  return Math.round(performance.now() - startedAt);
+}
+
+async function timedOrdersStep<T>(
+  timings: OrdersListTimings,
+  name: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const startedAt = performance.now();
+  try {
+    return await fn();
+  } finally {
+    timings[name] = msSince(startedAt);
+  }
+}
+
+function orderListRequestMeta(q: z.infer<typeof listQuery>) {
+  return {
+    status: q.status ?? 'all',
+    page: q.page,
+    pageSize: q.pageSize,
+    clientId: q.clientId ?? null,
+    storeId: q.storeId ?? null,
+    hasSearch: Boolean(q.search?.trim()),
+    hasSku: Boolean(q.sku),
+    dateFrom: q.dateFrom ?? null,
+    dateTo: q.dateTo ?? null,
+  };
+}
+
+function logSlowOrdersList(
+  q: z.infer<typeof listQuery>,
+  timings: OrdersListTimings,
+  totalMs: number,
+  extra: Record<string, unknown>,
+): void {
+  const slowestStepMs = Math.max(0, ...Object.values(timings));
+  if (totalMs < 750 && slowestStepMs < 500) return;
+  console.info('[orders:list] completed', {
+    ...orderListRequestMeta(q),
+    ...extra,
+    totalMs,
+    timings,
+  });
+}
+
+function isLikelyDbTimeout(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /timeout|timed out|statement timeout|canceling statement|connection terminated|pool/i.test(msg);
+}
+
+function dbErrorMessage(err: unknown): string {
+  if (err instanceof Error && err.message) return err.message;
+  return String(err);
+}
+
 // ════════════════════════════════════════════════════════════════════
 // SHIPPED / CANCELLED LOCKDOWN — backend route guard
 // ────────────────────────────────────────────────────────────────────
@@ -753,6 +812,8 @@ const orderListSelect = {
 
 app.get('/', zValidator('query', listQuery), async (c) => {
   const q = c.req.valid('query');
+  const routeStartedAt = performance.now();
+  const timings: OrdersListTimings = {};
   const search = q.search?.trim();
   const searchPattern = search ? `%${search}%` : null;
   const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
@@ -859,11 +920,13 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     ].filter(<T>(x: T | undefined): x is T => x !== undefined)
   );
 
+  try {
   // No ROW_NUMBER() dedup: orders.external_order_id is already UNIQUE, so
   // ShipStation's orderId is the true key. Two rows with the same order_number
   // are legitimately distinct (different store / orderId) — v2 never collapses
   // by order_number and neither should we.
-  const [joined, countRows] = await Promise.all([
+  const offset = offsetOf(q);
+  const joined = await timedOrdersStep(timings, 'ordersPage', () =>
     db
       .select({ order: orderListSelect, overrides: orderOverrides })
       .from(orders)
@@ -871,12 +934,22 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       .where(where)
       .orderBy(desc(orders.orderDate))
       .limit(q.pageSize)
-      .offset(offsetOf(q)),
-    db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(orders)
-      .where(where),
-  ]);
+      .offset(offset)
+  );
+
+  const canInferTotal = joined.length < q.pageSize && (q.page === 1 || joined.length > 0);
+  let total = canInferTotal ? offset + joined.length : 0;
+  let countWasSkipped = canInferTotal;
+  if (!canInferTotal) {
+    const countRows = await timedOrdersStep(timings, 'ordersCount', () =>
+      db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(orders)
+        .where(where)
+    );
+    total = countRows[0]?.count ?? 0;
+    countWasSkipped = false;
+  }
 
   // v2-parity enrichment: the Shipped grid expects `order.label` and
   // `order.selectedRate` objects so the Shipping Account / Selected Rate /
@@ -893,43 +966,67 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   ];
   const latestShipByOrderId = new Map<number, LatestShipmentRow>();
   const latestShipByOrderNumber = new Map<string, LatestShipmentRow>();
-  if (pageOrderIds.length || pageOrderNumbers.length) {
-    const shipmentPredicates = [
-      pageOrderIds.length
-        ? sql`order_id in (${sql.join(pageOrderIds.map((id) => sql`${id}`), sql`, `)})`
-        : undefined,
-      pageOrderNumbers.length
-        ? sql`order_number in (${sql.join(pageOrderNumbers.map((n) => sql`${n}`), sql`, `)})`
-        : undefined,
-    ].filter(<T>(x: T | undefined): x is T => x !== undefined);
-    const shipRows = await db.execute<LatestShipmentRow>(sql`
-      select
-        order_id,
-        order_number,
-        tracking_number,
-        carrier_code,
-        service_code,
-        ship_date,
-        create_date,
-        label_created_at,
-        cost,
-        label_cost,
-        other_cost,
-        label_url,
-        label_shipment_id,
-        provider_account_id,
-        provider_account_nickname,
-        selected_rate_json
-      from shipments
-      where (${sql.join(shipmentPredicates, sql` or `)})
-        ${q.status === 'cancelled' ? sql`` : sql`and coalesce(voided, false) = false`}
-      order by id desc
-    `);
-    for (const s of shipRows) {
-      if (s.order_id != null && !latestShipByOrderId.has(s.order_id)) {
+  if (pageOrderIds.length) {
+    const shipRowsById = await timedOrdersStep(timings, 'shipmentsByOrderId', () =>
+      db.execute<LatestShipmentRow>(sql`
+        select distinct on (order_id)
+          order_id,
+          order_number,
+          tracking_number,
+          carrier_code,
+          service_code,
+          ship_date,
+          create_date,
+          label_created_at,
+          cost,
+          label_cost,
+          other_cost,
+          label_url,
+          label_shipment_id,
+          provider_account_id,
+          provider_account_nickname,
+          selected_rate_json
+        from shipments
+        where order_id in (${sql.join(pageOrderIds.map((id) => sql`${id}`), sql`, `)})
+          ${q.status === 'cancelled' ? sql`` : sql`and coalesce(voided, false) = false`}
+        order by order_id, id desc
+      `)
+    );
+    for (const s of shipRowsById) {
+      if (s.order_id != null) {
         latestShipByOrderId.set(s.order_id, s);
       }
-      if (s.order_id == null && s.order_number && !latestShipByOrderNumber.has(s.order_number)) {
+    }
+  }
+  if (pageOrderNumbers.length) {
+    const shipRowsByOrderNumber = await timedOrdersStep(timings, 'shipmentsByOrderNumber', () =>
+      db.execute<LatestShipmentRow>(sql`
+        select distinct on (order_number)
+          order_id,
+          order_number,
+          tracking_number,
+          carrier_code,
+          service_code,
+          ship_date,
+          create_date,
+          label_created_at,
+          cost,
+          label_cost,
+          other_cost,
+          label_url,
+          label_shipment_id,
+          provider_account_id,
+          provider_account_nickname,
+          selected_rate_json
+        from shipments
+        where order_id is null
+          and order_number in (${sql.join(pageOrderNumbers.map((n) => sql`${n}`), sql`, `)})
+          ${q.status === 'cancelled' ? sql`` : sql`and coalesce(voided, false) = false`}
+        order by order_number, id desc
+      `)
+    );
+    for (const s of shipRowsByOrderNumber) {
+      if (s.order_number) {
         latestShipByOrderNumber.set(s.order_number, s);
       }
     }
@@ -1292,8 +1389,35 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       canonicalOrder,
     };
   });
-  const total = countRows[0]?.count ?? 0;
+  const totalMs = msSince(routeStartedAt);
+  logSlowOrdersList(q, timings, totalMs, {
+    rows: rows.length,
+    total,
+    countWasSkipped,
+    shipmentsByOrderId: latestShipByOrderId.size,
+    shipmentsByOrderNumber: latestShipByOrderNumber.size,
+  });
   return c.json(paginated(rows, total, q));
+  } catch (err) {
+    const totalMs = msSince(routeStartedAt);
+    console.error('[orders:list] failed', {
+      ...orderListRequestMeta(q),
+      totalMs,
+      timings,
+      error: dbErrorMessage(err),
+    });
+    return c.json(
+      {
+        error: 'Failed to load orders',
+        code: isLikelyDbTimeout(err) ? 'ORDERS_LIST_TIMEOUT' : 'ORDERS_LIST_ERROR',
+        message: isLikelyDbTimeout(err)
+          ? 'The orders query is temporarily slow or the database pool is busy. Please retry.'
+          : dbErrorMessage(err),
+        timingsMs: timings,
+      },
+      isLikelyDbTimeout(err) ? 503 : 500,
+    );
+  }
 });
 
 type LatestShipmentRow = {

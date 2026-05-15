@@ -39,6 +39,7 @@ let shipmentSyncRunning = false;
 let inventoryImportRunning = false;
 let syncProductsRunning = false;
 let fulfillmentOutboxRunning = false;
+let heavySchedulerJobRunning: string | null = null;
 let orderTimer: NodeJS.Timeout | null = null;
 let shipmentTimer: NodeJS.Timeout | null = null;
 let backfillTimer: NodeJS.Timeout | null = null;
@@ -47,10 +48,28 @@ let syncProductsTimer: NodeJS.Timeout | null = null;
 let fulfillmentOutboxTimer: NodeJS.Timeout | null = null;
 
 function isRateBackfillSchedulerEnabled(): boolean {
-  return (
-    env.ENABLE_RATE_BACKFILL_SCHEDULER ||
-    (env.NODE_ENV === 'production' && !env.DISABLE_RATE_BACKFILL_SCHEDULER)
-  );
+  return env.ENABLE_RATE_BACKFILL_SCHEDULER && !env.DISABLE_RATE_BACKFILL_SCHEDULER;
+}
+
+async function runHeavySchedulerJob<T>(
+  name: string,
+  fn: () => Promise<T>,
+): Promise<T | null> {
+  if (heavySchedulerJobRunning) {
+    console.log(
+      `[scheduler] ${name} skipped - ${heavySchedulerJobRunning} is still running`
+    );
+    return null;
+  }
+  heavySchedulerJobRunning = name;
+  const startedAt = Date.now();
+  try {
+    return await fn();
+  } finally {
+    const elapsedMs = Date.now() - startedAt;
+    console.log(`[scheduler] ${name} finished in ${elapsedMs}ms`);
+    heavySchedulerJobRunning = null;
+  }
 }
 
 async function runOrderSync(): Promise<void> {
@@ -60,7 +79,8 @@ async function runOrderSync(): Promise<void> {
   }
   orderSyncRunning = true;
   try {
-    const result = await syncOrders({});
+    const result = await runHeavySchedulerJob('orders sync', () => syncOrders({}));
+    if (!result) return;
     console.log(
       `[scheduler] orders synced: ${result.synced} rows in ${result.pages} page(s), watermark ${result.lastSyncedAt}`
     );
@@ -100,7 +120,8 @@ async function runShipmentSync(): Promise<void> {
   }
   shipmentSyncRunning = true;
   try {
-    const result = await syncShipments({});
+    const result = await runHeavySchedulerJob('shipments sync', () => syncShipments({}));
+    if (!result) return;
     console.log(
       `[scheduler] shipments synced: ${result.inserted} new + ${result.updated} updated, ${result.ordersMarkedShipped} orders marked shipped`
     );
@@ -127,7 +148,8 @@ async function runInventoryImportFromOrders(): Promise<void> {
   }
   inventoryImportRunning = true;
   try {
-    const result = await importSkusFromOrders();
+    const result = await runHeavySchedulerJob('inventory import-from-orders', () => importSkusFromOrders());
+    if (!result) return;
     console.log(
       `[scheduler] inventory import-from-orders: ${result.inserted} new SKU(s), ${result.skipped} already existed`
     );
@@ -155,7 +177,8 @@ async function runSyncProductsTick(): Promise<void> {
   }
   syncProductsRunning = true;
   try {
-    const result = await syncShipStationProducts();
+    const result = await runHeavySchedulerJob('inventory sync-products', () => syncShipStationProducts());
+    if (!result) return;
     console.log(
       `[scheduler] inventory sync-products: ${result.inserted} new + ${result.updated} updated across ${Object.keys(result.byAccount).length} account(s)`
     );

@@ -179,4 +179,7 @@ serve({ fetch: app.fetch, port: env.PORT }, (info) => {
   void import('./services/sync-scheduler').then(({ startSyncScheduler }) =>
     startSyncScheduler()
   );
+  void import('./services/orders-performance-maintenance').then(
+    ({ ensureOrdersPerformanceIndexes }) => ensureOrdersPerformanceIndexes()
+  );
 });

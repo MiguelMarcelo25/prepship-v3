@@ -10,6 +10,7 @@ import {
   text,
   timestamp,
 } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 import { clients } from './clients';
 import { orders } from './orders';
 
@@ -58,6 +59,12 @@ export const shipments = pgTable(
     index('shipments_order_idx').on(t.orderId),
     index('shipments_client_idx').on(t.clientId),
     index('shipments_date_idx').on(t.shipDate),
+    index('shipments_order_latest_idx')
+      .on(t.orderId, t.id.desc())
+      .where(sql`${t.orderId} is not null and coalesce(${t.voided}, false) = false`),
+    index('shipments_order_number_latest_idx')
+      .on(t.orderNumber, t.id.desc())
+      .where(sql`${t.orderNumber} is not null and ${t.orderId} is null and coalesce(${t.voided}, false) = false`),
   ]
 );
 

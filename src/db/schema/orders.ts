@@ -10,6 +10,7 @@ import {
   text,
   timestamp,
 } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 import { clients } from './clients';
 
 export const orders = pgTable(
@@ -65,6 +66,10 @@ export const orders = pgTable(
     index('orders_store_idx').on(t.storeId),
     index('orders_date_idx').on(t.orderDate),
     index('orders_assigned_user_idx').on(t.assignedToUserId),
+    index('orders_status_date_id_idx').on(t.orderStatus, t.orderDate.desc(), t.id.desc()),
+    index('orders_store_status_date_idx')
+      .on(t.storeId, t.orderStatus, t.orderDate.desc())
+      .where(sql`${t.storeId} is not null`),
   ]
 );
 
