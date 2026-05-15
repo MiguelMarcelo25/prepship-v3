@@ -507,6 +507,9 @@ export function useOrders(
     gcTime: ORDERS_CACHE_MS,
     refetchOnWindowFocus: false,
     retry: 1,
+    retryDelay: 1_500,
+    refetchInterval: (activeQuery) =>
+      activeQuery.state.error != null && activeQuery.state.data == null ? 15_000 : false,
     placeholderData: (previousData, previousQuery) => {
       const previousKey = previousQuery?.queryKey as unknown[] | undefined;
       return previousKey?.[1] === status ? previousData : undefined;
