@@ -196,18 +196,11 @@ function buildDateBuckets(fromIso: string, toIso: string) {
   );
 }
 
-async function getSkuDaily(q: SkuDailyQuery) {
+async function getSkuDailyFromOrderItems(q: SkuDailyQuery) {
   const fromIso = new Date(q.dateFrom).toISOString();
   const toIso = new Date(q.dateTo).toISOString();
   const cid: number | null = q.clientId ?? null;
   const topLimit = q.top ?? q.topN ?? 5;
-  // Caller-controlled cancelled-orders filter. The dashboard passes
-  // includeCancelled=true so its trend / top SKUs / heatmap match the
-  // KPI cards on the same page (which aggregate the full /orders set
-  // with no status filter). Analysis page leaves this default (false)
-  // so its "Units Sold" semantics remain "units that were or will be
-  // shipped" — cancelled orders aren't fulfilled, so they shouldn't
-  // count there.
   const cancelledFilter = q.includeCancelled
     ? sql`true`
     : sql`o.order_status not in ('cancelled')`;
@@ -227,21 +220,19 @@ async function getSkuDaily(q: SkuDailyQuery) {
   const top = await db.execute<{ sku: string; name: string | null; total_qty: number }>(sql`
     with item_rows as (
       select
-        case
-          when nullif(item->>'sku', '') is not null then item->>'sku'
-          else '_name_:' || lower(trim(coalesce(item->>'name', '')))
-        end as sku,
-        coalesce(nullif(item->>'name', ''), '—') as name,
-        coalesce((item->>'quantity')::int, 1) as qty
-      from orders o, jsonb_array_elements(o.items) item
+        oi.sku as sku,
+        coalesce(nullif(oi.name, ''), '-') as name,
+        greatest(0, coalesce(oi.quantity, 0))::int as qty
+      from order_items oi
+      join orders o on o.id = oi.order_id
       where ${cancelledFilter}
         and o.order_date >= ${fromIso}::timestamptz
         and o.order_date <= ${toIso}::timestamptz
         ${testOrderFilter}
         and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
         and (${cid}::int is null or o.client_id = ${cid}::int)
-        and coalesce((item->>'adjustment')::boolean, false) = false
-        -- Hide disabled clients (boss directive 2026-05-07)
+        and oi.quantity > 0
+        and oi.sku <> ''
         and (
           o.client_id is null
           or exists (
@@ -274,20 +265,18 @@ async function getSkuDaily(q: SkuDailyQuery) {
   const daily = await db.execute<{ day: string; sku: string; qty: number }>(sql`
     select
       to_char(o.order_date at time zone 'UTC', 'YYYY-MM-DD') as day,
-      case
-        when nullif(item->>'sku', '') is not null then item->>'sku'
-        else '_name_:' || lower(trim(coalesce(item->>'name', '')))
-      end as sku,
-      sum(coalesce((item->>'quantity')::int, 1))::int as qty
-    from orders o, jsonb_array_elements(o.items) item
+      oi.sku as sku,
+      sum(greatest(0, coalesce(oi.quantity, 0)))::int as qty
+    from order_items oi
+    join orders o on o.id = oi.order_id
     where ${cancelledFilter}
       and o.order_date >= ${fromIso}::timestamptz
       and o.order_date <= ${toIso}::timestamptz
       ${testOrderFilter}
       and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
       and (${cid}::int is null or o.client_id = ${cid}::int)
-      and coalesce((item->>'adjustment')::boolean, false) = false
-      -- Hide disabled clients (boss directive 2026-05-07)
+      and oi.quantity > 0
+      and oi.sku <> ''
       and (
         o.client_id is null
         or exists (
@@ -295,12 +284,7 @@ async function getSkuDaily(q: SkuDailyQuery) {
           where c.id = o.client_id and coalesce(c.active, true) = true
         )
       )
-      and (
-        case
-          when nullif(item->>'sku', '') is not null then item->>'sku'
-          else '_name_:' || lower(trim(coalesce(item->>'name', '')))
-        end
-      ) in (${skuList})
+      and oi.sku in (${skuList})
     group by to_char(o.order_date at time zone 'UTC', 'YYYY-MM-DD'), sku
     order by to_char(o.order_date at time zone 'UTC', 'YYYY-MM-DD') asc
   `);
@@ -318,6 +302,10 @@ async function getSkuDaily(q: SkuDailyQuery) {
   });
 
   return { topSkus: top, days };
+}
+
+async function getSkuDaily(q: SkuDailyQuery) {
+  return getSkuDailyFromOrderItems(q);
 }
 
 app.get('/sku-daily', zValidator('query', skuDailyQuery), async (c) => {
@@ -413,18 +401,12 @@ async function ensureSellingFeeColumns(): Promise<void> {
   }
 }
 
-async function getSkuBreakdown(q: SkuBreakdownQuery) {
-  // Self-heal before the SELECT references o.selling_fee. Cheap
-  // after first call (module-level cache flag).
+async function getSkuBreakdownFromOrderItems(q: SkuBreakdownQuery) {
   await ensureSellingFeeColumns();
 
   const fromIso = new Date(q.dateFrom).toISOString();
   const toIso = new Date(q.dateTo).toISOString();
   const cid: number | null = q.clientId ?? null;
-  // Caller-controlled cancelled-orders filter (mirrors the same flag
-  // in getSkuDaily). Default = exclude cancelled. The Dashboard's
-  // SKU Performance Summary opts in to including cancelled so its
-  // numbers align with the dashboard KPI cards.
   const cancelledFilter = q.includeCancelled
     ? sql`true`
     : sql`coalesce(o.order_status, '') <> 'cancelled'`;
@@ -448,36 +430,15 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
         coalesce(ls.service_code, o.service_code)                           as service_code,
         ls.order_id                                                         as shipment_order_id,
         coalesce(ls.label_cost, 0)                                          as label_cost,
-        coalesce(nullif(item->>'sku', ''), '')                              as sku,
-        case
-          when nullif(item->>'sku', '') is not null then item->>'sku'
-          else '_name_:' || lower(trim(coalesce(item->>'name', '')))
-        end                                                                as sku_key,
-        coalesce(nullif(item->>'name', ''), '—')                            as name,
-        nullif(item->>'imageUrl', '')                                       as image_url,
-        coalesce((item->>'quantity')::int, 1)                               as qty,
-        -- 2026-05-12: unit_price feeds the new Total Revenue + Avg
-        -- Selling Price columns. Some marketplaces ship the field as
-        -- unitPrice (camelCase, ShipStation v2/ebay/walmart), others
-        -- as unit_price (snake_case, internal migrations); the
-        -- coalesce handles both. Casts via nullif so blank strings
-        -- become NULL then 0 instead of raising a numeric-format error.
-        coalesce(
-          nullif(item->>'unitPrice', '')::numeric,
-          nullif(item->>'unit_price', '')::numeric,
-          0
-        )::numeric                                                          as unit_price,
-        -- 2026-05-13: per-order seller fee (Walmart Marketplace
-        -- commission + shipping commission + processing, etc.).
-        -- Populated by api/carriers/walmart/fees.ts. NULL when the
-        -- fees fetcher hasn't been run yet for this order (e.g.
-        -- pre-feature orders, orders settling within the next few
-        -- days). Coalesce to 0 so a SKU with mixed fee-known and
-        -- fee-unknown orders still shows a partial sum rather than
-        -- nothing.
+        oi.sku                                                              as sku,
+        oi.sku                                                              as sku_key,
+        coalesce(nullif(oi.name, ''), '-')                                  as name,
+        nullif(oi.image_url, '')                                            as image_url,
+        greatest(0, coalesce(oi.quantity, 0))::int                          as qty,
+        coalesce(oi.unit_price, 0)::numeric                                 as unit_price,
         coalesce(o.selling_fee, 0)::numeric                                 as order_selling_fee
-      from orders o
-      cross join lateral jsonb_array_elements(o.items) item
+      from order_items oi
+      join orders o on o.id = oi.order_id
       left join clients c on c.id = o.client_id
       left join lateral (
         select
@@ -514,17 +475,8 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
         and o.order_date <= ${toIso}::timestamptz
         ${testOrderFilter}
         and (${cid}::int is null or o.client_id = ${cid}::int)
-        and coalesce((item->>'adjustment')::boolean, false) = false
-        and coalesce((item->>'quantity')::int, 1) > 0
-        -- Hide disabled clients from analysis (boss directive
-        -- 2026-05-07). Matches the orders.ts predicate exactly:
-        -- coalesce(active, true) keeps legacy clients with null
-        -- active flag visible (no behavior change for existing
-        -- data) while explicitly inactive clients (e.g. Api
-        -- Shipments toggled off in Inventory > Clients) drop
-        -- their orders from the SKU breakdown. Orders with no
-        -- client_id at all still pass through (test/orphan
-        -- orders) — same lenient policy as the main orders list.
+        and oi.quantity > 0
+        and oi.sku <> ''
         and (o.client_id is null or coalesce(c.active, true) = true)
     ),
     order_sku_rows as (
@@ -542,18 +494,8 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
         (array_agg(name order by length(name) desc))[1]                      as name,
         max(image_url)                                                       as image_url,
         sum(qty)::int                                                        as qty,
-        -- 2026-05-12: revenue per (order, sku) line = SUM(unit_price * qty)
-        -- across whatever item rows belong to this SKU in this order.
-        -- Same SKU appearing as separate line items in one order
-        -- (e.g. seller stacked them) sum into a single revenue
-        -- figure here. max(unit_price) is the per-unit price for
-        -- display / sanity-check; line_revenue is the dollar truth.
         max(unit_price)::numeric                                             as unit_price,
         sum(unit_price * qty)::numeric                                       as line_revenue,
-        -- Carry the per-order fee through to the allocated CTE. Every
-        -- item row in this (order_id, sku_key) group has the same
-        -- order-level fee, so max() is just a "pluck one value" —
-        -- no aggregation math.
         max(order_selling_fee)::numeric                                      as order_selling_fee
       from item_rows
       group by order_id, sku_key
@@ -581,11 +523,6 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
       where inv.sku is not null and inv.sku <> ''
       order by lower(inv.sku), inv.id
     ),
-    -- Per-SKU per-day unit totals feed the "Units Trend" sparkline in
-    -- the analysis grid. Aggregated here once (post-allocation) so each
-    -- (sku, day) pair is a single row, then collapsed into a JSON map
-    -- so the SELECT below stays one-row-per-SKU. The FE / route handler
-    -- pads this against the date buckets to produce an aligned array.
     sku_day_agg as (
       select
         a.sku_key,
@@ -618,11 +555,6 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
       count(*) filter (where not is_external and ship_class = 'std')::int         as std_orders,
       count(*) filter (where not is_external and label_cost > 0 and ship_class = 'std')::int as std_ship_count,
       coalesce(sum(label_cost * qty / nullif(order_qty_total, 0)) filter (where not is_external and label_cost > 0 and ship_class = 'std'), 0)::text as std_total,
-      -- Per-UNIT shipping average (boss directive 2026-05-07):
-      -- allocate each label by units in the order, then let the FE divide
-      -- by the units for this SKU/service class. A $23 label on two units
-      -- contributes $11.50 per unit; mixed-SKU orders use the same
-      -- per-unit share for every item unit in that order.
       coalesce(sum(qty) filter (where not is_external and label_cost > 0 and ship_class = 'std'), 0)::int as std_qty_total,
       count(*) filter (where not is_external and ship_class = 'exp')::int         as exp_orders,
       count(*) filter (where not is_external and label_cost > 0 and ship_class = 'exp')::int as exp_ship_count,
@@ -631,33 +563,12 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
       count(*) filter (where not is_external and label_cost > 0)::int             as ship_count_with_cost,
       sum(qty)::int                                                              as total_qty,
       coalesce(sum(label_cost * qty / nullif(order_qty_total, 0)) filter (where not is_external and label_cost > 0), 0)::text as total_shipping,
-      -- 2026-05-12 boss-requested column: per-SKU revenue across the
-      -- selected date range. Sums line_revenue (= unit_price × qty)
-      -- across every order containing this SKU. Already excludes
-      -- cancelled orders (outer WHERE) and disabled clients (active
-      -- predicate above). FE computes avg selling price as
-      -- total_revenue / total_qty, so a separate aggregate isn't
-      -- shipped — keeps the wire payload lean.
       coalesce(sum(line_revenue), 0)::text                                       as total_revenue,
-      -- 2026-05-13: per-SKU seller-fee total (Walmart-first;
-      -- additional marketplaces layered in later). Allocates each
-      -- order's selling_fee proportionally to this SKU's UNIT share
-      -- of the order — same allocation math as total_shipping above.
-      -- A 4-unit order with $4 fee contributes $1 per unit; a SKU
-      -- claiming 2 of those units claims $2 of the fee. Excludes
-      -- external rows (we don't get marketplace fees for orders we
-      -- didn't fulfill via PrepShip).
       coalesce(sum(order_selling_fee * qty / nullif(order_qty_total, 0)) filter (where not is_external and order_selling_fee > 0), 0)::text as total_selling_fee,
-      -- Daily unit counts as { 'YYYY-MM-DD': units }. Every row in the
-      -- group shares the same sdj.daily_qty_map (it's joined 1:1 on
-      -- sku_key), so array_agg+[1] is just a no-op dedup that lets us
-      -- pass a non-aggregated column through GROUP BY sku_key.
       (array_agg(sdj.daily_qty_map))[1]                                          as daily_qty_map
     from allocated a
     left join sku_inventory inv on inv.sku_lc = lower(a.sku)
     left join sku_daily_json sdj on sdj.sku_key = a.sku_key
-    -- Qualify to allocated: sku_daily_json also carries sku_key, so an
-    -- unqualified GROUP BY would trip PG's ambiguous-reference check.
     group by a.sku_key
     order by total_qty desc
     limit ${q.limit}
@@ -665,11 +576,10 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
 
   const totalOrders = await db.execute<{ count: number }>(sql`
     select count(*)::int as count from orders o
-    where coalesce(o.order_status, '') <> 'cancelled'
+    where ${cancelledFilter}
       and o.order_date >= ${fromIso}::timestamptz
       and o.order_date <= ${toIso}::timestamptz
       and (${cid}::int is null or o.client_id = ${cid}::int)
-      -- Hide disabled clients (boss directive 2026-05-07)
       and (
         o.client_id is null
         or exists (
@@ -679,11 +589,6 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
       )
   `);
 
-  // Pad each SKU's sparse day→qty map into a dense aligned array. One
-  // value per day in the selected range, zeros for days the SKU had no
-  // activity. The FE renders this directly as a sparkline and computes
-  // the trend score (latest-half avg vs earliest-half avg, normalized
-  // by the joint mean) for sorting + line color.
   const dateBuckets = buildDateBuckets(fromIso, toIso);
   const enrichedRows = rows.map((r) => {
     const map = (r.daily_qty_map ?? {}) as Record<string, number>;
@@ -691,8 +596,6 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
       const value = map[day];
       return typeof value === 'number' ? value : Number(value ?? 0) || 0;
     });
-    // Strip the raw map from the response — the FE only needs the
-    // aligned array, and sending both wastes bytes on long ranges.
     const { daily_qty_map: _omit, ...rest } = r as SkuBreakdownRow & {
       daily_qty_map?: unknown;
     };
@@ -705,6 +608,10 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
     totalSkus: enrichedRows.length,
     totalOrders: totalOrders[0]?.count ?? 0,
   };
+}
+
+async function getSkuBreakdown(q: SkuBreakdownQuery) {
+  return getSkuBreakdownFromOrderItems(q);
 }
 
 app.get('/sku-breakdown', zValidator('query', skuBreakdownQuery), async (c) => {
@@ -727,16 +634,16 @@ app.get('/top-skus', zValidator('query', topSkusQuery), async (c) => {
     order_count: number;
   }>(sql`
     select
-      item->>'sku' as sku,
-      sum(coalesce((item->>'quantity')::int, 1))::int as total_qty,
+      oi.sku as sku,
+      sum(greatest(0, coalesce(oi.quantity, 0)))::int as total_qty,
       count(distinct o.id)::int as order_count
-    from orders o,
-         jsonb_array_elements(o.items) item
+    from order_items oi
+    join orders o on o.id = oi.order_id
     where o.order_date >= ${fromIso}::timestamptz
       and o.order_date <= ${toIso}::timestamptz
-      and item ? 'sku'
-      and item->>'sku' is not null
-      and item->>'sku' <> ''
+      and oi.sku is not null
+      and oi.sku <> ''
+      and oi.quantity > 0
       -- 2026-05-13 visibility hardening: original NOT EXISTS only
       -- filtered test clients, so disabled (non-test) clients orders
       -- still contributed to top-SKU rankings on the Dashboard widget.
@@ -750,7 +657,7 @@ app.get('/top-skus', zValidator('query', topSkusQuery), async (c) => {
         where c.id = o.client_id
           and (c.is_test = true or coalesce(c.active, true) = false)
       )
-    group by item->>'sku'
+    group by oi.sku
     order by total_qty desc
     limit ${q.limit}
   `);
@@ -775,3 +682,4 @@ app.get('/daily-sales', zValidator('query', skuDailyQuery), async (c) => {
 });
 
 export default app;
+

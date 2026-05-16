@@ -53,16 +53,16 @@ export async function importSkusFromOrders(): Promise<ImportSkusFromOrdersResult
     image_url: string | null;
     client_id: number | null;
   }>(sql`
-    select distinct on (item->>'sku', o.client_id)
-      item->>'sku'                               as sku,
-      coalesce(item->>'name', '')                as name,
-      nullif(item->>'imageUrl', '')              as image_url,
-      o.client_id                                as client_id
-    from orders o,
-         jsonb_array_elements(o.items) item
-    where item ? 'sku'
-      and item->>'sku' is not null
-      and item->>'sku' <> ''
+    select distinct on (oi.sku, o.client_id)
+      oi.sku                                    as sku,
+      coalesce(oi.name, '')                     as name,
+      nullif(oi.image_url, '')                  as image_url,
+      o.client_id                               as client_id
+    from order_items oi
+    join orders o on o.id = oi.order_id
+    where oi.sku is not null
+      and oi.sku <> ''
+    order by oi.sku, o.client_id, oi.updated_at desc
   `);
 
   let inserted = 0;

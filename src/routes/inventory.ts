@@ -5,6 +5,7 @@ import { and, desc, eq, gte, ilike, isNull, lte, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { inventory, inventoryLedger } from '../db/schema/inventory';
 import { inventorySkuParents } from '../db/schema/inventory-sku-parents';
+import { orderItems } from '../db/schema/order-items';
 import { orders } from '../db/schema/orders';
 import { parentSkus } from '../db/schema/parent-skus';
 import { offsetOf, paginated, paginationSchema } from '../lib/pagination';
@@ -133,24 +134,20 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         db.execute<{ inventory_id: number; sold_last_30_days: number }>(sql`
         select
           i.id as inventory_id,
-          coalesce(sum(
-            case
-              when coalesce(item->>'quantity', '') ~ '^[0-9]+$'
-                then (item->>'quantity')::int
-              else 1
-            end
-          ), 0)::int as sold_last_30_days
+          coalesce(sum(oi.quantity), 0)::int as sold_last_30_days
         from ${inventory} i
+        join ${orderItems} oi
+          on lower(oi.sku) = lower(i.sku)
         join ${orders} o
           on (
+            o.id = oi.order_id
+            and (
             (i.client_id is null and o.client_id is null)
             or i.client_id = o.client_id
+            )
           )
-        cross join lateral jsonb_array_elements(o.items) item
         where i.id in (${sql.join(rows.map((row) => sql`${row.id}`), sql`, `)})
-          and item ? 'sku'
-          and lower(item->>'sku') = lower(i.sku)
-          and coalesce(item->>'adjustment', 'false') <> 'true'
+          and oi.quantity > 0
           and o.order_date >= now() - interval '30 days'
           and coalesce(o.order_status, '') <> 'cancelled'
         group by i.id
@@ -226,24 +223,20 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           group by l.inventory_id
         ),
         sells as (
-          select i.id as id, coalesce(sum(
-            case
-              when coalesce(item->>'quantity', '') ~ '^[0-9]+$'
-                then (item->>'quantity')::int
-              else 1
-            end
-          ), 0)::int as total_sold
+          select i.id as id, coalesce(sum(oi.quantity), 0)::int as total_sold
           from ${inventory} i
+          join ${orderItems} oi
+            on lower(oi.sku) = lower(i.sku)
           join ${orders} o
             on (
+              o.id = oi.order_id
+              and (
               (i.client_id is null and o.client_id is null)
               or i.client_id = o.client_id
+              )
             )
-          cross join lateral jsonb_array_elements(o.items) item
           where i.id in (select id from ids)
-            and item ? 'sku'
-            and lower(item->>'sku') = lower(i.sku)
-            and coalesce(item->>'adjustment', 'false') <> 'true'
+            and oi.quantity > 0
             -- Only physically-shipped orders count toward sold.
             -- awaiting_shipment = future commitment, not gone.
             -- cancelled = never went out. shipped = left the floor.
@@ -499,15 +492,13 @@ app.get(
       ? await db.execute<{ day: string; units: number }>(sql`
           select
             to_char(date_trunc('day', o.order_date), 'YYYY-MM-DD') as day,
-            sum(coalesce((item->>'quantity')::int, 1))::int        as units
-          from orders o
-          cross join lateral jsonb_array_elements(o.items) item
-          where item ? 'sku'
-            and lower(item->>'sku') = lower(${row.sku})
+            sum(oi.quantity)::int                                  as units
+          from order_items oi
+          join orders o on o.id = oi.order_id
+          where lower(oi.sku) = lower(${row.sku})
             ${dateFilterSql}
             and coalesce(o.order_status, '') <> 'cancelled'
-            and coalesce((item->>'adjustment')::boolean, false) = false
-            and coalesce((item->>'quantity')::int, 1) > 0
+            and oi.quantity > 0
             ${activeClientOrderFilter}
           group by date_trunc('day', o.order_date)
           order by date_trunc('day', o.order_date) asc
@@ -539,14 +530,12 @@ app.get(
       with matching_order_ids as (
         select distinct
           o.id
-        from orders o
-        cross join lateral jsonb_array_elements(o.items) item
-        where item ? 'sku'
-          and lower(item->>'sku') = lower(${row.sku})
+        from order_items oi
+        join orders o on o.id = oi.order_id
+        where lower(oi.sku) = lower(${row.sku})
           ${dateFilterSql}
           and coalesce(o.order_status, '') <> 'cancelled'
-          and coalesce((item->>'adjustment')::boolean, false) = false
-          and coalesce((item->>'quantity')::int, 1) > 0
+          and oi.quantity > 0
           ${activeClientOrderFilter}
       ),
       item_rows as (
@@ -556,16 +545,13 @@ app.get(
           coalesce(ls.service_code, o.service_code)                          as service_code,
           ls.order_id                                                        as shipment_order_id,
           coalesce(ls.marked_cost, 0)                                        as label_cost,
-          coalesce(nullif(item->>'sku', ''), '')                             as sku,
-          case
-            when nullif(item->>'sku', '') is not null then item->>'sku'
-            else '_name_:' || lower(trim(coalesce(item->>'name', '')))
-          end                                                               as sku_key,
-          coalesce(nullif(item->>'name', ''), '—')                           as name,
-          coalesce((item->>'quantity')::int, 1)                              as qty
+          oi.sku                                                            as sku,
+          oi.sku                                                            as sku_key,
+          coalesce(nullif(oi.name, ''), '-')                                 as name,
+          greatest(0, coalesce(oi.quantity, 0))::int                         as qty
         from matching_order_ids moi
         join orders o on o.id = moi.id
-        cross join lateral jsonb_array_elements(o.items) item
+        join order_items oi on oi.order_id = o.id
         left join lateral (
           select
             s.order_id,
@@ -596,8 +582,7 @@ app.get(
           order by s.id desc
           limit 1
         ) ls on true
-        where coalesce((item->>'adjustment')::boolean, false) = false
-          and coalesce((item->>'quantity')::int, 1) > 0
+        where oi.quantity > 0
       ),
       order_sku_rows as (
         select
@@ -678,14 +663,12 @@ app.get(
       with matching_order_ids as (
         select distinct
           o.id
-        from orders o
-        cross join lateral jsonb_array_elements(o.items) item
-        where item ? 'sku'
-          and lower(item->>'sku') = lower(${row.sku})
+        from order_items oi
+        join orders o on o.id = oi.order_id
+        where lower(oi.sku) = lower(${row.sku})
           ${dateFilterSql}
           and coalesce(o.order_status, '') <> 'cancelled'
-          and coalesce((item->>'adjustment')::boolean, false) = false
-          and coalesce((item->>'quantity')::int, 1) > 0
+          and oi.quantity > 0
           ${activeClientOrderFilter}
       ),
       item_rows as (
@@ -700,17 +683,14 @@ app.get(
           ls.order_id                                                        as shipment_order_id,
           coalesce(ls.marked_cost, 0)                                        as label_cost,
           coalesce(o.externally_shipped, false)                              as externally_shipped_flag,
-          coalesce(nullif(item->>'sku', ''), '')                             as sku,
-          case
-            when nullif(item->>'sku', '') is not null then item->>'sku'
-            else '_name_:' || lower(trim(coalesce(item->>'name', '')))
-          end                                                               as sku_key,
-          coalesce(nullif(item->>'name', ''), '—')                           as item_name,
-          coalesce((item->>'quantity')::int, 1)                              as qty,
-          coalesce(item->>'unitPrice', item->>'unit_price')                  as unit_price
+          oi.sku                                                            as sku,
+          oi.sku                                                            as sku_key,
+          coalesce(nullif(oi.name, ''), '-')                                 as item_name,
+          greatest(0, coalesce(oi.quantity, 0))::int                         as qty,
+          oi.unit_price::text                                                as unit_price
         from matching_order_ids moi
         join orders o on o.id = moi.id
-        cross join lateral jsonb_array_elements(o.items) item
+        join order_items oi on oi.order_id = o.id
         left join lateral (
           select
             s.order_id,
@@ -741,8 +721,7 @@ app.get(
           order by s.id desc
           limit 1
         ) ls on true
-        where coalesce((item->>'adjustment')::boolean, false) = false
-          and coalesce((item->>'quantity')::int, 1) > 0
+        where oi.quantity > 0
       ),
       order_sku_rows as (
         select

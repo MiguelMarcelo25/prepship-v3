@@ -11,6 +11,8 @@ import { offsetOf, paginated, paginationSchema } from '../lib/pagination';
 import { getSyncStatus, syncOrders } from '../services/order-sync';
 import { getActiveBackfillJob, getLatestBackfillJob, startBackfillBestRates } from '../services/rates-backfill';
 import { deductInventoryForOrder } from '../services/fulfillment-deductions';
+import { replaceOrderItemsForOrders } from '../services/order-items';
+import { analyticsCacheKey, getAnalyticsCache, setAnalyticsCache } from '../services/analytics-cache';
 import { ssMarkOrderShippedV1, asSSUpstreamOrderId } from '../lib/shipstation/labels';
 import { loadClientCredentials } from '../lib/shipstation/credentials';
 import {
@@ -759,6 +761,26 @@ app.get('/dashboard-sales', zValidator('query', dashboardSalesQuery), async (c) 
     ].filter((p): p is NonNullable<typeof p> => p !== undefined)
   );
 
+  type DashboardSalesPayload = {
+    revenue: number;
+    units: number;
+    bySku: Array<{ sku: string; revenue: number | string; units30: number | string; units7: number | string }>;
+    dailyRevenue: Array<{ day: string; revenue: number | string }>;
+  };
+
+  const cacheKey = analyticsCacheKey('orders.dashboard-sales.v2', {
+    from: q.from,
+    to: q.to,
+    sevenFrom,
+    clientId: q.clientId ?? null,
+    storeId: q.storeId ?? null,
+    includeInactiveClients,
+    hideTestOrders: q.hideTestOrders === true,
+    caller: callerIsAdmin ? 'admin' : callerUserId ?? 'anonymous',
+  });
+  const cached = await getAnalyticsCache<DashboardSalesPayload>(cacheKey);
+  if (cached) return c.json(cached);
+
   const [row] = await db.execute<{
     revenue: number | string | null;
     units: number | string | null;
@@ -770,17 +792,12 @@ app.get('/dashboard-sales', zValidator('query', dashboardSalesQuery), async (c) 
         ${orders.id} as order_id,
         coalesce(${orders.orderTotal}, 0)::numeric as order_total,
         to_char(date_trunc('day', ${orders.orderDate} at time zone 'UTC'), 'YYYY-MM-DD') as day,
-        trim(coalesce(item->>'sku', '')) as sku,
-        case
-          when nullif(item->>'quantity', '') ~ '^-?[0-9]+([.][0-9]+)?$'
-            then greatest(0, (item->>'quantity')::numeric)
-          else 1
-        end as qty
-      from ${orders}
-      cross join lateral jsonb_array_elements(coalesce(${orders.items}, '[]'::jsonb)) as item
+        trim(coalesce(oi.sku, '')) as sku,
+        greatest(0, coalesce(oi.quantity, 0))::numeric as qty
+      from order_items oi
+      join ${orders} on ${orders.id} = oi.order_id
       where ${where}
-        and trim(coalesce(item->>'sku', '')) <> ''
-        and not (lower(coalesce(item->>'adjustment', 'false')) in ('true', 't', '1', 'yes'))
+        and trim(coalesce(oi.sku, '')) <> ''
     ),
     valid_items as (
       select *
@@ -874,12 +891,14 @@ app.get('/dashboard-sales', zValidator('query', dashboardSalesQuery), async (c) 
     });
   }
 
-  return c.json({
+  const payload: DashboardSalesPayload = {
     revenue: Number(row?.revenue ?? 0) || 0,
     units: Number(row?.units ?? 0) || 0,
     bySku: Array.isArray(row?.bySku) ? row.bySku : [],
     dailyRevenue: Array.isArray(row?.dailyRevenue) ? row.dailyRevenue : [],
-  });
+  };
+  void setAnalyticsCache(cacheKey, payload, 120);
+  return c.json(payload);
 });
 
 app.post('/sync', async (c) => {
@@ -1032,9 +1051,10 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       q.sku
         ? sql`exists (
             select 1
-            from jsonb_array_elements(${orders.items}) item
-            where item->>'sku' = ${q.sku}
-              and coalesce((item->>'adjustment')::boolean, false) = false
+            from order_items oi
+            where oi.order_id = ${orders.id}
+              and oi.sku = ${q.sku}
+              and oi.quantity > 0
           )`
         : undefined,
       searchPattern
@@ -1053,9 +1073,12 @@ app.get('/', zValidator('query', listQuery), async (c) => {
             sql`${orders.raw}->'shipTo'->>'street2' ilike ${searchPattern}`,
             sql`exists (
               select 1
-              from jsonb_array_elements(${orders.items}) item
-              where item->>'sku' ilike ${searchPattern}
-                 or item->>'name' ilike ${searchPattern}
+              from order_items oi
+              where oi.order_id = ${orders.id}
+                and (
+                  oi.sku ilike ${searchPattern}
+                  or oi.name ilike ${searchPattern}
+                )
             )`,
             sql`exists (
               select 1
@@ -1655,10 +1678,11 @@ app.get(
     const { sku, qty, orderStatus, storeId } = c.req.valid('query');
     const rows = await db.execute<{ id: number; order_number: string }>(sql`
       select distinct o.id, o.order_number
-      from orders o, jsonb_array_elements(o.items) item
-      where item ? 'sku' and item->>'sku' = ${sku}
+      from order_items oi
+      join orders o on o.id = oi.order_id
+      where oi.sku = ${sku}
         and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
-        ${qty !== undefined ? sql`and coalesce((item->>'quantity')::int, 1) >= ${qty}` : sql``}
+        ${qty !== undefined ? sql`and oi.quantity >= ${qty}` : sql``}
         ${orderStatus ? sql`and o.order_status = ${orderStatus}` : sql``}
         ${storeId !== undefined ? sql`and o.store_id = ${storeId}` : sql``}
       order by o.id desc
@@ -1942,14 +1966,14 @@ app.get('/picklist', zValidator('query', picklistQuery), async (c) => {
     select
       o.client_id                                   as client_id,
       coalesce(c.name, 'Unknown')                   as client_name,
-      item->>'sku'                                  as sku,
-      max(item->>'name')                            as name,
-      max(nullif(item->>'imageUrl', ''))            as image_url,
-      sum(coalesce((item->>'quantity')::int, 1))::int as total_qty,
+      oi.sku                                        as sku,
+      max(oi.name)                                  as name,
+      max(nullif(oi.image_url, ''))                 as image_url,
+      sum(oi.quantity)::int                         as total_qty,
       count(distinct o.id)::int                     as order_count
-    from orders o
-    left join clients c on c.id = o.client_id,
-         jsonb_array_elements(o.items) item
+    from order_items oi
+    join orders o on o.id = oi.order_id
+    left join clients c on c.id = o.client_id
     where (${status}::text is null or o.order_status = ${status}::text)
       and (
         (o.store_id is not null and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)}))
@@ -1959,10 +1983,10 @@ app.get('/picklist', zValidator('query', picklistQuery), async (c) => {
       and (${sid}::int is null or o.store_id = ${sid}::int)
       and o.order_date >= ${fromIso}::timestamptz
       and o.order_date <= ${toIso}::timestamptz
-      and item ? 'sku'
-      and item->>'sku' is not null
-      and item->>'sku' <> ''
-    group by o.client_id, c.name, item->>'sku'
+      and oi.sku is not null
+      and oi.sku <> ''
+      and oi.quantity > 0
+    group by o.client_id, c.name, oi.sku
     order by client_name asc, total_qty desc
   `);
 
@@ -2020,12 +2044,12 @@ app.get('/distinct-skus', async (c) => {
   const sid = storeIdRaw ? Number.parseInt(storeIdRaw, 10) : null;
 
   const rows = await db.execute<{ sku: string }>(sql`
-    select distinct item->>'sku' as sku
-    from orders o,
-         jsonb_array_elements(o.items) item
-    where item->>'sku' is not null
-      and item->>'sku' <> ''
-      and coalesce((item->>'adjustment')::boolean, false) = false
+    select distinct oi.sku as sku
+    from order_items oi
+    join orders o on o.id = oi.order_id
+    where oi.sku is not null
+      and oi.sku <> ''
+      and oi.quantity > 0
       and (
         (o.store_id is not null and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)}))
         or exists (select 1 from clients c where c.id = o.client_id and c.is_test = true)
@@ -2295,6 +2319,7 @@ app.post('/manual', zValidator('json', manualOrderBody), async (c) => {
     .returning();
 
   if (!created) return c.json({ error: 'Manual order could not be created' }, 500);
+  await replaceOrderItemsForOrders([created]);
 
   const [overrides] = await db
     .insert(orderOverrides)

@@ -1,5 +1,6 @@
 export * from './clients';
 export * from './orders';
+export * from './order-items';
 export * from './shipments';
 export * from './packages';
 export * from './package-ledger';
@@ -18,3 +19,4 @@ export * from './product-defaults';
 export * from './sync-meta';
 export * from './carrier-accounts';
 export * from './fulfillment-outbox';
+export * from './analytics-cache';

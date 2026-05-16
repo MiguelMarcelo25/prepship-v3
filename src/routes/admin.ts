@@ -1035,23 +1035,19 @@ app.post('/reconcile-inventory-stock', async (c) => {
     ),
     sells as (
       select i.id as id,
-        coalesce(sum(
-          case
-            when coalesce(item->>'quantity', '') ~ '^[0-9]+$'
-              then (item->>'quantity')::int
-            else 1
-          end
-        ), 0)::int as total_sold
+        coalesce(sum(oi.quantity), 0)::int as total_sold
       from ${inventory} i
+      join order_items oi
+        on lower(oi.sku) = lower(i.sku)
       join ${orders} o
         on (
+          o.id = oi.order_id
+          and (
           (i.client_id is null and o.client_id is null)
           or i.client_id = o.client_id
+          )
         )
-      cross join lateral jsonb_array_elements(o.items) item
-      where item ? 'sku'
-        and lower(item->>'sku') = lower(i.sku)
-        and coalesce(item->>'adjustment', 'false') <> 'true'
+      where oi.quantity > 0
         and o.order_status = 'shipped'
       group by i.id
     )

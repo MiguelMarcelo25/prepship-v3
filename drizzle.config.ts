@@ -5,6 +5,7 @@ export default defineConfig({
   schema: [
     './src/db/schema/clients.ts',
     './src/db/schema/orders.ts',
+    './src/db/schema/order-items.ts',
     './src/db/schema/shipments.ts',
     './src/db/schema/packages.ts',
     './src/db/schema/package-ledger.ts',
@@ -23,6 +24,7 @@ export default defineConfig({
     './src/db/schema/sync-meta.ts',
     './src/db/schema/carrier-accounts.ts',
     './src/db/schema/fulfillment-outbox.ts',
+    './src/db/schema/analytics-cache.ts',
   ],
   out: './drizzle',
   dialect: 'postgresql',

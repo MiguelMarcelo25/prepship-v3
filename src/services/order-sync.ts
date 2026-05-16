@@ -6,6 +6,7 @@ import { printQueue } from '../db/schema/print-queue';
 import { ssV1Request } from '../lib/shipstation/v1-client';
 import { getSettingNumber, setSetting } from './settings';
 import { isExcludedStoreId } from '../config/prepship';
+import { replaceOrderItemsForExternalOrderIds } from './order-items';
 
 const LAST_SYNC_KEY = 'order_sync.last_modified_ms';
 const DEFAULT_LOOKBACK_MS = 1000 * 60 * 60 * 24 * 30; // 30 days on first run
@@ -263,6 +264,12 @@ async function upsertOrdersBatch(
         updatedAt: sql`excluded.updated_at`,
       },
     });
+
+  await replaceOrderItemsForExternalOrderIds(
+    rows
+      .map((row) => row.externalOrderId)
+      .filter((id): id is string => Boolean(id))
+  );
 
   return rows.length;
 }
