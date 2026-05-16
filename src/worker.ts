@@ -7,6 +7,10 @@ import {
   startSyncScheduler,
   stopSyncScheduler,
 } from './services/sync-scheduler';
+import {
+  startQueuedSyncScheduler,
+  stopQueuedSyncScheduler,
+} from './services/sync-job-queue';
 import { ensureOrdersPerformanceIndexes } from './services/orders-performance-maintenance';
 
 let keepAliveTimer: NodeJS.Timeout | null = null;
@@ -20,7 +24,11 @@ function startKeepAliveHeartbeat(): void {
 
 async function shutdown(signal: NodeJS.Signals): Promise<void> {
   console.log(`[worker] received ${signal}; shutting down`);
-  stopSyncScheduler();
+  if (env.USE_PG_BOSS_SCHEDULER) {
+    await stopQueuedSyncScheduler();
+  } else {
+    stopSyncScheduler();
+  }
   if (keepAliveTimer) {
     clearInterval(keepAliveTimer);
     keepAliveTimer = null;
@@ -52,7 +60,7 @@ process.on('uncaughtException', (err) => {
 async function main(): Promise<void> {
   console.log('[worker] PrepShip worker booting');
   console.log(
-    `[worker] RUN_SYNC_SCHEDULER=${env.RUN_SYNC_SCHEDULER}; WORKER_PLACEHOLDER=${env.WORKER_PLACEHOLDER}`
+    `[worker] RUN_SYNC_SCHEDULER=${env.RUN_SYNC_SCHEDULER}; WORKER_PLACEHOLDER=${env.WORKER_PLACEHOLDER}; USE_PG_BOSS_SCHEDULER=${env.USE_PG_BOSS_SCHEDULER}`
   );
 
   if (env.WORKER_PLACEHOLDER) {
@@ -73,8 +81,13 @@ async function main(): Promise<void> {
   }
 
   if (env.RUN_SYNC_SCHEDULER) {
-    console.log('[worker] starting sync scheduler');
-    startSyncScheduler({ mode: 'worker-scheduler' });
+    if (env.USE_PG_BOSS_SCHEDULER) {
+      console.log('[worker] starting pg-boss sync scheduler');
+      await startQueuedSyncScheduler();
+    } else {
+      console.log('[worker] starting interval sync scheduler');
+      startSyncScheduler({ mode: 'worker-scheduler' });
+    }
   } else {
     console.log('[worker] RUN_SYNC_SCHEDULER=false; worker is idle');
     await setWorkerMode('disabled');

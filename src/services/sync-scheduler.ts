@@ -91,7 +91,7 @@ async function runHeavySchedulerJob<T>(
   }
 }
 
-async function runOrderSync(): Promise<void> {
+export async function runOrderSync(): Promise<void> {
   if (orderSyncRunning) {
     console.log('[scheduler] orders sync already running — skipping tick');
     return;
@@ -116,7 +116,7 @@ async function runOrderSync(): Promise<void> {
   }
 }
 
-function runBackfillTick(): void {
+export function runBackfillTick(): void {
   // startBackfillBestRates is already idempotent (activeJobId guard).
   // Just trigger it — if a job is running we'll be a no-op.
   const active = getActiveBackfillJob();
@@ -132,7 +132,7 @@ function runBackfillTick(): void {
   );
 }
 
-async function runShipmentSync(): Promise<void> {
+export async function runShipmentSync(): Promise<void> {
   if (shipmentSyncRunning) {
     console.log('[scheduler] shipments sync already running — skipping tick');
     return;
@@ -160,7 +160,7 @@ async function runShipmentSync(): Promise<void> {
 // land via the 3-min order sync. Back-fills image_url / name on
 // existing rows where the column was NULL. Coalesce protects any
 // operator-set values.
-async function runInventoryImportFromOrders(): Promise<void> {
+export async function runInventoryImportFromOrders(): Promise<void> {
   if (inventoryImportRunning) {
     console.log('[scheduler] inventory import-from-orders already running — skipping tick');
     return;
@@ -189,7 +189,7 @@ async function runInventoryImportFromOrders(): Promise<void> {
 // only overwrite when SS actually returned a value (so a null SS
 // response doesn't destroy a URL we already extracted from an order
 // item).
-async function runSyncProductsTick(): Promise<void> {
+export async function runSyncProductsTick(): Promise<void> {
   if (syncProductsRunning) {
     console.log('[scheduler] inventory sync-products already running — skipping tick');
     return;
@@ -211,7 +211,7 @@ async function runSyncProductsTick(): Promise<void> {
   }
 }
 
-async function runFulfillmentOutboxTick(): Promise<void> {
+export async function runFulfillmentOutboxTick(): Promise<void> {
   if (fulfillmentOutboxRunning) {
     console.log('[scheduler] fulfillment outbox already running - skipping tick');
     return;

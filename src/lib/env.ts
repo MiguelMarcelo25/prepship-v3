@@ -39,6 +39,8 @@ const schema = z.object({
   RUN_SYNC_SCHEDULER: booleanFlag(true),
   WORKER_PLACEHOLDER: booleanFlag(false),
   RUN_ORDERS_PERFORMANCE_MAINTENANCE: optionalBooleanFlag,
+  USE_PG_BOSS_SCHEDULER: booleanFlag(true),
+  PG_BOSS_SCHEMA: z.string().min(1).default('pgboss'),
   SHIPSTATION_API_KEY: z.string().optional(),
   SHIPSTATION_API_SECRET: z.string().optional(),
   SHIPSTATION_API_KEY_V2: z.string().optional(),

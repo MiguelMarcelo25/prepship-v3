@@ -1632,8 +1632,7 @@ export const apiClient = {
 
   // ─── Sync status ────────────────────────────────────────────────────────────
   fetchLegacySyncStatus(): Promise<any> {
-    // v4 mounts the order-sync watermark under /orders, not at the root.
-    return safe('fetchLegacySyncStatus', () => api.get<any>('/orders/sync/status'), {});
+    return safe('fetchLegacySyncStatus', () => api.get<any>('/sync/status'), {});
   },
 
   triggerLegacySync(mode?: 'incremental' | 'full'): Promise<any> {

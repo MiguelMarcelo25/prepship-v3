@@ -42,6 +42,9 @@ export type SyncStatusChipData = {
   cadenceMinutes?: CadenceMap
   /** Hint string surfaced on hover ("orders + shipments syncing", etc.). */
   status?: 'idle' | 'syncing' | 'done' | 'error'
+  workerMode?: string | null
+  queueStarted?: boolean
+  queuedJobs?: number | null
 }
 
 type Props = {
@@ -194,8 +197,17 @@ export function SyncStatusChip({ data, className }: Props): JSX.Element {
 
           {/* Footer note */}
           <div className="border-t border-line bg-surface-2/40 px-4 py-3 text-2xs text-ink-3">
-            Incremental syncs run automatically on the schedule above.
-            Data on this dashboard reflects the most recent successful run.
+            <div>
+              Incremental syncs run automatically on the schedule above.
+              Data on this dashboard reflects the most recent successful run.
+            </div>
+            {data.workerMode ? (
+              <div className="mt-2 font-semibold text-ink-2">
+                Worker: {data.workerMode}
+                {data.queueStarted !== undefined ? ` · queue ${data.queueStarted ? 'active' : 'idle'}` : ''}
+                {data.queuedJobs !== null && data.queuedJobs !== undefined ? ` · ${data.queuedJobs} queued` : ''}
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}

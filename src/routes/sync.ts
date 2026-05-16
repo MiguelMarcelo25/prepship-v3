@@ -8,6 +8,7 @@ import {
   getApiRuntimeStatus,
   getPersistedWorkerStatus,
 } from '../services/worker-status';
+import { getSyncJobQueueStatus } from '../services/sync-job-queue';
 
 const app = new Hono();
 
@@ -52,17 +53,47 @@ app.post('/orders', zValidator('json', triggerBody), async (c) => {
 });
 
 app.get('/status', async (c) => {
-  const [orders, shipments, worker] = await Promise.all([
+  const [orders, shipments, worker, queue] = await Promise.all([
     getSyncStatus(),
     getShipmentSyncStatus(),
     getPersistedWorkerStatus(),
+    getSyncJobQueueStatus(),
   ]);
+  const workerSchedulerActive = Boolean(
+    worker.status?.schedulerEnabled && !worker.stale
+  );
+  const queueStatus = {
+    ...queue,
+    enabled: queue.enabled || workerSchedulerActive,
+    started: queue.started || workerSchedulerActive,
+  };
   return c.json({
     // Legacy top-level fields kept for existing frontend callers.
     ...orders,
+    status: orders.lastSyncedAt ? 'done' : 'idle',
+    mode: orders.lastSyncedAt ? 'incremental' : 'idle',
+    error: null as string | null,
+    page: 0,
+    total: 0,
+    count: 0,
+    lastSync:
+      orders.lastSyncedAt && Number.isFinite(Date.parse(orders.lastSyncedAt))
+        ? Date.parse(orders.lastSyncedAt)
+        : null,
+    lastSyncAt: orders.lastSyncedAt,
+    cadenceMinutes: {
+      orders: 3,
+      shipments: 3,
+      rateBackfill: 10,
+      inventoryFromOrders: 30,
+      productCatalog: 60,
+    },
+    ratePrefetchRunning: false,
+    ratePrefetchJob: null,
     orders,
     shipments,
     worker,
+    queue: queueStatus,
     api: getApiRuntimeStatus(),
   });
 });

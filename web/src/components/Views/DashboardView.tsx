@@ -1100,6 +1100,14 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           lastSync: typeof status?.lastSync === 'number' ? status.lastSync : null,
           cadenceMinutes: status?.cadenceMinutes ?? undefined,
           status: (status?.status as SyncStatusChipData['status']) ?? 'idle',
+          workerMode: status?.worker?.status?.mode ?? null,
+          queueStarted: Boolean(
+            status?.queue?.started ||
+              (status?.worker?.status?.schedulerEnabled && !status?.worker?.stale)
+          ),
+          queuedJobs: Array.isArray(status?.queue?.queues)
+            ? status.queue.queues.reduce((sum: number, queue: { size?: number | null }) => sum + Number(queue.size ?? 0), 0)
+            : null,
         })
       } catch {
         // Non-fatal — chip just stays in its previous state.
