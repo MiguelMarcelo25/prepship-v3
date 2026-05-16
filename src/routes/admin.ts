@@ -14,7 +14,7 @@ import { products } from '../db/schema/products';
 import { settings } from '../db/schema/settings';
 import { syncOrders } from '../services/order-sync';
 import { syncShipments } from '../services/shipment-sync';
-import { backfillMissingOrderItems, getOrderItemsBackfillStatus } from '../services/order-items';
+import { backfillMissingOrderItems, getOrderItemsBackfillStatus, syncOrderItemOrderFields } from '../services/order-items';
 import { ssMarkOrderShippedV1, asSSUpstreamOrderId } from '../lib/shipstation/labels';
 import { loadClientCredentials } from '../lib/shipstation/credentials';
 import { printQueue } from '../db/schema/print-queue';
@@ -47,9 +47,11 @@ app.post(
       if (batchInserted === 0) break;
     }
 
+    const repaired = await syncOrderItemOrderFields();
     const status = await getOrderItemsBackfillStatus();
     return c.json({
       inserted,
+      repaired,
       batches,
       durationMs: Date.now() - startedAt,
       status,

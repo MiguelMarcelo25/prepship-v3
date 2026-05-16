@@ -98,6 +98,12 @@ function callerAssigneeFilter(c: Context) {
     : undefined;
 }
 
+function dashboardCallerCacheScope(c: Context): string {
+  const callerEmail = c.get('email' as never) as string | undefined;
+  const callerUserId = c.get('userId' as never) as string | undefined;
+  return isAdminEmail(callerEmail) ? 'admin' : callerUserId ?? 'anonymous';
+}
+
 function orderVisibilityWhere(
   c: Context,
   q: z.infer<typeof dashboardRangeQuery>,
@@ -142,9 +148,6 @@ async function loadDashboardSummary(
   const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
   const sevenFrom = q.sevenFrom ?? q.from;
   const where = orderVisibilityWhere(c, q, fromDate, toDate, { excludeCancelled: true });
-  const callerEmail = c.get('email' as never) as string | undefined;
-  const callerUserId = c.get('userId' as never) as string | undefined;
-  const callerIsAdmin = isAdminEmail(callerEmail);
 
   type DashboardSummaryPayload = {
     revenue: number;
@@ -161,7 +164,7 @@ async function loadDashboardSummary(
     storeId: q.storeId ?? null,
     includeInactiveClients,
     hideTestOrders: q.hideTestOrders === true,
-    caller: callerIsAdmin ? 'admin' : callerUserId ?? 'anonymous',
+    caller: dashboardCallerCacheScope(c),
   });
 
   const cached = await getAnalyticsCache<DashboardSummaryPayload>(cacheKey);
@@ -293,6 +296,22 @@ app.get('/daily-counts', zValidator('query', dashboardRangeQuery), async (c) => 
   const fromDate = new Date(`${q.from}T00:00:00.000Z`);
   const toDate = new Date(`${q.to}T23:59:59.999Z`);
   const where = orderVisibilityWhere(c, q, fromDate, toDate);
+  const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
+  type DashboardDailyCountsPayload = {
+    data: Array<{ day: string; awaiting: number; shipped: number; cancelled: number; total: number }>;
+  };
+  const cacheKey = analyticsCacheKey('dashboard.daily-counts.v1', {
+    from: q.from,
+    to: q.to,
+    clientId: q.clientId ?? null,
+    storeId: q.storeId ?? null,
+    includeInactiveClients,
+    hideTestOrders: q.hideTestOrders === true,
+    caller: dashboardCallerCacheScope(c),
+  });
+
+  const cached = await getAnalyticsCache<DashboardDailyCountsPayload>(cacheKey);
+  if (cached) return c.json(cached);
 
   const rows = await db.execute<{
     day: string;
@@ -313,7 +332,9 @@ app.get('/daily-counts', zValidator('query', dashboardRangeQuery), async (c) => 
     order by date_trunc('day', ${orders.orderDate} at time zone 'UTC') asc
   `);
 
-  return c.json({ data: rows });
+  const payload = { data: rows };
+  void setAnalyticsCache(cacheKey, payload, 60);
+  return c.json(payload);
 });
 
 app.get('/summary', zValidator('query', dashboardSummaryQuery), async (c) => {
@@ -327,7 +348,23 @@ app.get('/trends', zValidator('query', dashboardSummaryQuery), async (c) => {
 
 app.get('/sku-trends', zValidator('query', dashboardSkuTrendQuery), async (c) => {
   const q = c.req.valid('query');
-  return c.json(await getSkuDailyFromOrderItems({
+  const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
+  const cacheKey = analyticsCacheKey('dashboard.sku-trends.v1', {
+    from: q.from,
+    to: q.to,
+    clientId: q.clientId ?? null,
+    storeId: q.storeId ?? null,
+    top: q.top ?? null,
+    topN: q.topN ?? null,
+    includeCancelled: q.includeCancelled,
+    includeInactiveClients,
+    hideTestOrders: q.hideTestOrders === true,
+    caller: dashboardCallerCacheScope(c),
+  });
+  const cached = await getAnalyticsCache<Awaited<ReturnType<typeof getSkuDailyFromOrderItems>>>(cacheKey);
+  if (cached) return c.json(cached);
+
+  const payload = await getSkuDailyFromOrderItems({
     dateFrom: isoDayStart(q.from),
     dateTo: isoDayEnd(q.to),
     clientId: q.clientId,
@@ -335,11 +372,34 @@ app.get('/sku-trends', zValidator('query', dashboardSkuTrendQuery), async (c) =>
     topN: q.topN,
     hideTestOrders: q.hideTestOrders === true,
     includeCancelled: q.includeCancelled,
-  }));
+  });
+  void setAnalyticsCache(cacheKey, payload, 120);
+  return c.json(payload);
 });
 
 app.get('/top-skus', zValidator('query', dashboardTopSkusQuery), async (c) => {
   const q = c.req.valid('query');
+  const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
+  type DashboardTopSkusPayload = {
+    data: unknown[];
+    dateBuckets: string[];
+    totalSkus: number;
+    totalOrders: number;
+  };
+  const cacheKey = analyticsCacheKey('dashboard.top-skus.v1', {
+    from: q.from,
+    to: q.to,
+    clientId: q.clientId ?? null,
+    storeId: q.storeId ?? null,
+    limit: q.limit,
+    includeCancelled: q.includeCancelled,
+    includeInactiveClients,
+    hideTestOrders: q.hideTestOrders === true,
+    caller: dashboardCallerCacheScope(c),
+  });
+  const cached = await getAnalyticsCache<DashboardTopSkusPayload>(cacheKey);
+  if (cached) return c.json(cached);
+
   const result = await getSkuBreakdownFromOrderItems({
     dateFrom: isoDayStart(q.from),
     dateTo: isoDayEnd(q.to),
@@ -348,16 +408,31 @@ app.get('/top-skus', zValidator('query', dashboardTopSkusQuery), async (c) => {
     hideTestOrders: q.hideTestOrders === true,
     includeCancelled: q.includeCancelled,
   });
-  return c.json({
+  const payload = {
     data: result.rows,
     dateBuckets: result.dateBuckets,
     totalSkus: result.totalSkus,
     totalOrders: result.totalOrders,
-  });
+  };
+  void setAnalyticsCache(cacheKey, payload, 120);
+  return c.json(payload);
 });
 
 app.get('/inventory-risk', zValidator('query', dashboardInventoryRiskQuery), async (c) => {
   const q = c.req.valid('query');
+  type DashboardInventoryRiskPayload = {
+    items: unknown[];
+    total: number;
+  };
+  const cacheKey = analyticsCacheKey('dashboard.inventory-risk.v1', {
+    clientId: q.clientId ?? null,
+    pageSize: q.pageSize,
+    active: q.active,
+    caller: dashboardCallerCacheScope(c),
+  });
+  const cached = await getAnalyticsCache<DashboardInventoryRiskPayload>(cacheKey);
+  if (cached) return c.json(cached);
+
   const where = and(
     ...[
       q.clientId !== undefined ? eq(inventory.clientId, q.clientId) : undefined,
@@ -456,7 +531,7 @@ app.get('/inventory-risk', zValidator('query', dashboardInventoryRiskQuery), asy
     ])
   );
 
-  return c.json({
+  const payload = {
     items: rows.map((row) => {
       const eff = effectiveByInventoryId.get(row.id) ?? { totalReceived: 0, totalSold: 0, effectiveStock: 0 };
       return {
@@ -468,7 +543,9 @@ app.get('/inventory-risk', zValidator('query', dashboardInventoryRiskQuery), asy
       };
     }),
     total: rows.length,
-  });
+  };
+  void setAnalyticsCache(cacheKey, payload, 60);
+  return c.json(payload);
 });
 
 export default app;

@@ -1,6 +1,6 @@
 import postgres from 'postgres';
 import { env } from '../lib/env';
-import { backfillMissingOrderItems } from './order-items';
+import { backfillMissingOrderItems, syncOrderItemOrderFields } from './order-items';
 
 const TABLE_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS "order_items" (
@@ -141,6 +141,13 @@ async function runEnsureOrdersPerformanceIndexes(): Promise<void> {
           );
         }
       } while (backfilled > 0 && rounds < 50);
+
+      const repaired = await syncOrderItemOrderFields();
+      if (repaired > 0) {
+        console.log(
+          `[orders:maintenance] repaired ${repaired} stale order_items fields`
+        );
+      }
 
       await maintenanceSql`ANALYZE "orders"`;
       await maintenanceSql`ANALYZE "order_items"`;

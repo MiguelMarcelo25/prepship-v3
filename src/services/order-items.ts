@@ -43,6 +43,10 @@ async function runEnsureOrderItemsStorage(): Promise<void> {
     )
   `);
   await db.execute(sql`
+    create unique index if not exists order_items_order_line_idx
+      on order_items (order_id, line_index)
+  `);
+  await db.execute(sql`
     create table if not exists analytics_cache (
       cache_key text primary key,
       payload jsonb not null,
@@ -50,6 +54,101 @@ async function runEnsureOrderItemsStorage(): Promise<void> {
       created_at timestamptz not null default now(),
       updated_at timestamptz not null default now()
     )
+  `);
+  await db.execute(sql`
+    create index if not exists analytics_cache_expires_idx
+      on analytics_cache (expires_at)
+  `);
+  await ensureOrderItemsSyncTrigger();
+}
+
+async function ensureOrderItemsSyncTrigger(): Promise<void> {
+  await db.execute(sql`
+    create or replace function prepship_refresh_order_items_for_order()
+    returns trigger
+    language plpgsql
+    as $$
+    begin
+      delete from order_items where order_id = new.id;
+
+      insert into order_items (
+        order_id,
+        line_index,
+        sku,
+        name,
+        quantity,
+        unit_price,
+        line_total,
+        image_url,
+        client_id,
+        store_id,
+        order_status,
+        order_date,
+        updated_at
+      )
+      select
+        new.id,
+        normalized.line_index,
+        normalized.sku,
+        normalized.name,
+        normalized.quantity,
+        normalized.unit_price,
+        coalesce(normalized.explicit_line_total, normalized.unit_price * normalized.quantity),
+        normalized.image_url,
+        new.client_id,
+        new.store_id,
+        new.order_status,
+        new.order_date,
+        now()
+      from (
+        select
+          (item.ordinality - 1)::int as line_index,
+          nullif(trim(coalesce(item.value->>'sku', '')), '') as sku,
+          nullif(coalesce(item.value->>'name', item.value->>'title', item.value->>'description', ''), '') as name,
+          nullif(coalesce(item.value->>'imageUrl', item.value->>'image_url', item.value->>'thumbnailUrl', item.value->>'thumbnail', ''), '') as image_url,
+          case
+            when coalesce(item.value->>'quantity', '') ~ '^-?[0-9]+([.][0-9]+)?$'
+              then greatest(0, (item.value->>'quantity')::numeric)
+            else 1
+          end as quantity,
+          case
+            when coalesce(item.value->>'unitPrice', item.value->>'unit_price', item.value->>'price', '') ~ '^-?[0-9]+([.][0-9]+)?$'
+              then coalesce(item.value->>'unitPrice', item.value->>'unit_price', item.value->>'price')::numeric
+            else 0
+          end as unit_price,
+          case
+            when coalesce(item.value->>'lineTotal', item.value->>'line_total', item.value->>'total', '') ~ '^-?[0-9]+([.][0-9]+)?$'
+              then coalesce(item.value->>'lineTotal', item.value->>'line_total', item.value->>'total')::numeric
+            else null
+          end as explicit_line_total,
+          lower(coalesce(item.value->>'adjustment', 'false')) as adjustment_text
+        from jsonb_array_elements(coalesce(new.items, '[]'::jsonb)) with ordinality as item(value, ordinality)
+      ) normalized
+      where normalized.sku is not null
+        and normalized.quantity > 0
+        and normalized.adjustment_text not in ('true', 't', '1', 'yes');
+
+      return new;
+    end;
+    $$;
+  `);
+  await db.execute(sql`
+    do $$
+    begin
+      if not exists (
+        select 1
+        from pg_trigger
+        where tgname = 'prepship_order_items_refresh'
+          and tgrelid = 'orders'::regclass
+          and not tgisinternal
+      ) then
+        create trigger prepship_order_items_refresh
+        after insert or update of items, client_id, store_id, order_status, order_date on orders
+        for each row
+        execute function prepship_refresh_order_items_for_order();
+      end if;
+    end;
+    $$;
   `);
 }
 
@@ -194,6 +293,7 @@ export type OrderItemsBackfillStatus = {
   orderItemsOrders: number;
   missingOrdersWithAnyItems: number;
   missingOrdersWithValidItems: number;
+  staleOrdersWithOrderFieldMismatch: number;
   firstMissingValidOrderId: number | null;
   complete: boolean;
 };
@@ -209,6 +309,7 @@ export async function getOrderItemsBackfillStatus(): Promise<OrderItemsBackfillS
     order_items_orders: number;
     missing_orders_with_any_items: number;
     missing_orders_with_valid_items: number;
+    stale_orders_with_order_field_mismatch: number;
     first_missing_valid_order_id: number | null;
   }>(sql`
     with orders_with_items as (
@@ -238,6 +339,15 @@ export async function getOrderItemsBackfillStatus(): Promise<OrderItemsBackfillS
         from order_items oi
         where oi.order_id = v.id
       )
+    ),
+    stale_order_item_orders as (
+      select distinct oi.order_id
+      from order_items oi
+      join orders o on o.id = oi.order_id
+      where oi.client_id is distinct from o.client_id
+        or oi.store_id is distinct from o.store_id
+        or oi.order_status is distinct from o.order_status
+        or oi.order_date is distinct from o.order_date
     )
     select
       (select count(*)::int from orders) as orders_total,
@@ -255,10 +365,13 @@ export async function getOrderItemsBackfillStatus(): Promise<OrderItemsBackfillS
         )
       ) as missing_orders_with_any_items,
       (select count(*)::int from missing_valid_orders) as missing_orders_with_valid_items,
+      (select count(*)::int from stale_order_item_orders) as stale_orders_with_order_field_mismatch,
       (select min(id)::int from missing_valid_orders) as first_missing_valid_order_id
   `);
 
   const missingOrdersWithValidItems = Number(row?.missing_orders_with_valid_items ?? 0) || 0;
+  const staleOrdersWithOrderFieldMismatch =
+    Number(row?.stale_orders_with_order_field_mismatch ?? 0) || 0;
 
   return {
     ordersTotal: Number(row?.orders_total ?? 0) || 0,
@@ -268,9 +381,37 @@ export async function getOrderItemsBackfillStatus(): Promise<OrderItemsBackfillS
     orderItemsOrders: Number(row?.order_items_orders ?? 0) || 0,
     missingOrdersWithAnyItems: Number(row?.missing_orders_with_any_items ?? 0) || 0,
     missingOrdersWithValidItems,
+    staleOrdersWithOrderFieldMismatch,
     firstMissingValidOrderId: row?.first_missing_valid_order_id ?? null,
-    complete: missingOrdersWithValidItems === 0,
+    complete: missingOrdersWithValidItems === 0 && staleOrdersWithOrderFieldMismatch === 0,
   };
+}
+
+export async function syncOrderItemOrderFields(): Promise<number> {
+  await ensureOrderItemsStorage();
+  const [row] = await db.execute<{ updated_count: number }>(sql`
+    with repaired as (
+      update order_items oi
+      set
+        client_id = o.client_id,
+        store_id = o.store_id,
+        order_status = o.order_status,
+        order_date = o.order_date,
+        updated_at = now()
+      from orders o
+      where o.id = oi.order_id
+        and (
+          oi.client_id is distinct from o.client_id
+          or oi.store_id is distinct from o.store_id
+          or oi.order_status is distinct from o.order_status
+          or oi.order_date is distinct from o.order_date
+        )
+      returning oi.id
+    )
+    select count(*)::int as updated_count
+    from repaired
+  `);
+  return Number(row?.updated_count ?? 0) || 0;
 }
 
 export async function backfillMissingOrderItems(batchSize = 5000): Promise<number> {
