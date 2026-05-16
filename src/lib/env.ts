@@ -1,6 +1,25 @@
 import 'dotenv/config';
 import { z } from 'zod';
 
+const booleanFlag = (defaultValue: boolean) =>
+  z
+    .string()
+    .optional()
+    .transform((value) => {
+      if (value === undefined) return defaultValue;
+      const normalized = value.trim().toLowerCase();
+      return normalized === 'true' || normalized === '1' || normalized === 'yes';
+    });
+
+const optionalBooleanFlag = z
+  .string()
+  .optional()
+  .transform((value) => {
+    if (value === undefined) return undefined;
+    const normalized = value.trim().toLowerCase();
+    return normalized === 'true' || normalized === '1' || normalized === 'yes';
+  });
+
 const schema = z.object({
   DATABASE_URL: z.string().url(),
   SUPABASE_URL: z.string().url(),
@@ -15,6 +34,11 @@ const schema = z.object({
   PUBLIC_API_URL: z.string().url().optional(),
   CRON_SECRET: z.string().optional(),
   DB_HEALTH_TIMEOUT_MS: z.coerce.number().int().positive().default(12_000),
+  // Runtime split controls. Default RUN_SYNC_SCHEDULER=true keeps legacy API
+  // deploys working until Render envs are explicitly flipped during rollout.
+  RUN_SYNC_SCHEDULER: booleanFlag(true),
+  WORKER_PLACEHOLDER: booleanFlag(false),
+  RUN_ORDERS_PERFORMANCE_MAINTENANCE: optionalBooleanFlag,
   SHIPSTATION_API_KEY: z.string().optional(),
   SHIPSTATION_API_SECRET: z.string().optional(),
   SHIPSTATION_API_KEY_V2: z.string().optional(),

@@ -7,6 +7,14 @@ import {
   syncShipStationProducts,
 } from './inventory-enrichment';
 import { processFulfillmentOutboxOnce } from './fulfillment/outbox';
+import {
+  recordWorkerHeartbeat,
+  recordWorkerJobFailure,
+  recordWorkerJobSkipped,
+  recordWorkerJobStart,
+  recordWorkerJobSuccess,
+  setWorkerMode,
+} from './worker-status';
 
 // v2 ran an in-process worker every 3 minutes for orders + shipments. GitHub
 // Actions cron drifts 30–60 min under load, which means users in v4 see stale
@@ -46,6 +54,7 @@ let backfillTimer: NodeJS.Timeout | null = null;
 let inventoryImportTimer: NodeJS.Timeout | null = null;
 let syncProductsTimer: NodeJS.Timeout | null = null;
 let fulfillmentOutboxTimer: NodeJS.Timeout | null = null;
+let heartbeatTimer: NodeJS.Timeout | null = null;
 
 function isRateBackfillSchedulerEnabled(): boolean {
   return env.ENABLE_RATE_BACKFILL_SCHEDULER && !env.DISABLE_RATE_BACKFILL_SCHEDULER;
@@ -59,12 +68,22 @@ async function runHeavySchedulerJob<T>(
     console.log(
       `[scheduler] ${name} skipped - ${heavySchedulerJobRunning} is still running`
     );
+    await recordWorkerJobSkipped(
+      name,
+      `${heavySchedulerJobRunning} is still running`
+    );
     return null;
   }
   heavySchedulerJobRunning = name;
   const startedAt = Date.now();
+  await recordWorkerJobStart(name);
   try {
-    return await fn();
+    const result = await fn();
+    await recordWorkerJobSuccess(name, startedAt, result);
+    return result;
+  } catch (err) {
+    await recordWorkerJobFailure(name, startedAt, err);
+    throw err;
   } finally {
     const elapsedMs = Date.now() - startedAt;
     console.log(`[scheduler] ${name} finished in ${elapsedMs}ms`);
@@ -198,14 +217,18 @@ async function runFulfillmentOutboxTick(): Promise<void> {
     return;
   }
   fulfillmentOutboxRunning = true;
+  const startedAt = Date.now();
+  await recordWorkerJobStart('fulfillment outbox');
   try {
     const result = await processFulfillmentOutboxOnce({ limit: 25 });
+    await recordWorkerJobSuccess('fulfillment outbox', startedAt, result);
     if (result.processed > 0) {
       console.log(
         `[scheduler] fulfillment outbox: ${result.succeeded} succeeded, ${result.failed} failed, ${result.processed} processed`
       );
     }
   } catch (err) {
+    await recordWorkerJobFailure('fulfillment outbox', startedAt, err);
     console.error(
       '[scheduler] fulfillment outbox failed:',
       err instanceof Error ? err.message : err
@@ -215,7 +238,17 @@ async function runFulfillmentOutboxTick(): Promise<void> {
   }
 }
 
-export function startSyncScheduler(): void {
+export function startSyncScheduler(
+  options: { mode?: 'api-scheduler' | 'worker-scheduler' } = {}
+): void {
+  const mode = options.mode ?? 'api-scheduler';
+  void setWorkerMode(mode);
+  if (!heartbeatTimer) {
+    heartbeatTimer = setInterval(() => {
+      void recordWorkerHeartbeat();
+    }, 30_000);
+  }
+
   if (!fulfillmentOutboxTimer) {
     console.log(
       `[scheduler] fulfillment outbox enabled - every ${FULFILLMENT_OUTBOX_INTERVAL_MS / 1000}s`
@@ -339,5 +372,10 @@ export function stopSyncScheduler(): void {
     clearInterval(fulfillmentOutboxTimer);
     fulfillmentOutboxTimer = null;
   }
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  }
+  void setWorkerMode('disabled');
   console.log('[scheduler] stopped');
 }

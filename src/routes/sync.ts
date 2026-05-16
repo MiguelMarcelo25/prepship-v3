@@ -2,7 +2,12 @@ import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { getSyncStatus, syncOrders } from '../services/order-sync';
+import { getShipmentSyncStatus } from '../services/shipment-sync';
 import { startBackfillBestRates } from '../services/rates-backfill';
+import {
+  getApiRuntimeStatus,
+  getPersistedWorkerStatus,
+} from '../services/worker-status';
 
 const app = new Hono();
 
@@ -47,8 +52,19 @@ app.post('/orders', zValidator('json', triggerBody), async (c) => {
 });
 
 app.get('/status', async (c) => {
-  const status = await getSyncStatus();
-  return c.json(status);
+  const [orders, shipments, worker] = await Promise.all([
+    getSyncStatus(),
+    getShipmentSyncStatus(),
+    getPersistedWorkerStatus(),
+  ]);
+  return c.json({
+    // Legacy top-level fields kept for existing frontend callers.
+    ...orders,
+    orders,
+    shipments,
+    worker,
+    api: getApiRuntimeStatus(),
+  });
 });
 
 export default app;

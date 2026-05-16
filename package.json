@@ -11,6 +11,8 @@
     "dev:api": "tsx watch src/main.ts",
     "dev:web": "vite",
     "start": "tsx src/main.ts",
+    "start:api": "tsx src/main.ts",
+    "start:worker": "tsx src/worker.ts",
     "build:web": "vite build",
     "preview:web": "vite preview",
     "db:generate": "drizzle-kit generate",

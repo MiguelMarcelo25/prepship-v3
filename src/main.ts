@@ -27,6 +27,7 @@ import adminRoute from './routes/admin';
 import carrierAccountsRoute from './routes/carrier-accounts';
 import carriersRoute from './routes/carriers';
 import usersRoute from './routes/users';
+import workerRoute from './routes/worker';
 
 const app = new Hono();
 
@@ -130,6 +131,7 @@ app.use('/admin/*', requireAuth);
 app.use('/carrier-accounts', requireAuth);
 app.use('/carrier-accounts/*', requireAuth);
 app.use('/carriers/*', requireAuth);
+app.use('/worker/*', requireAuth);
 
 app.route('/orders', ordersRoute);
 app.route('/shipments', shipmentsRoute);
@@ -152,6 +154,7 @@ app.route('/admin', adminRoute);
 app.route('/carrier-accounts', carrierAccountsRoute);
 app.route('/carriers', carriersRoute);
 app.route('/users', usersRoute);
+app.route('/worker', workerRoute);
 
 app.notFound((c) => c.json({ error: 'Not found' }, 404));
 
@@ -195,12 +198,26 @@ process.on('uncaughtException', (err) => {
 
 serve({ fetch: app.fetch, port: env.PORT }, (info) => {
   console.log(`API listening on http://localhost:${info.port}`);
-  // Start the 3-minute in-process sync scheduler (v2 parity). GitHub Actions
-  // cron remains as a 10-min safety net for when this process is asleep.
-  void import('./services/sync-scheduler').then(({ startSyncScheduler }) =>
-    startSyncScheduler()
-  );
-  void import('./services/orders-performance-maintenance').then(
-    ({ ensureOrdersPerformanceIndexes }) => ensureOrdersPerformanceIndexes()
-  );
+  // Runtime split: the Web API should serve user traffic, while the Render
+  // Worker owns sync/reporting jobs once RUN_SYNC_SCHEDULER is disabled here.
+  if (env.RUN_SYNC_SCHEDULER) {
+    console.log('[runtime] RUN_SYNC_SCHEDULER=true; starting API scheduler');
+    void import('./services/sync-scheduler').then(({ startSyncScheduler }) =>
+      startSyncScheduler({ mode: 'api-scheduler' })
+    );
+  } else {
+    console.log('[runtime] RUN_SYNC_SCHEDULER=false; API scheduler disabled');
+  }
+
+  const runMaintenance =
+    env.RUN_ORDERS_PERFORMANCE_MAINTENANCE ?? env.RUN_SYNC_SCHEDULER;
+  if (runMaintenance) {
+    void import('./services/orders-performance-maintenance').then(
+      ({ ensureOrdersPerformanceIndexes }) => ensureOrdersPerformanceIndexes()
+    );
+  } else {
+    console.log(
+      '[runtime] orders performance maintenance disabled for this process'
+    );
+  }
 });
