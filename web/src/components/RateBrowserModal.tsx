@@ -936,7 +936,9 @@ export default function RateBrowserModal({
   const hgtNum = parseFloat(hgtStr) || 0;
   const hasWeight = lbNum > 0 || ozNum > 0;
   const hasDims = lenNum > 0 && widNum > 0 && hgtNum > 0;
-  const anyFetched = Object.keys(ratesByPid).length > 0;
+  const hasAnyRateRows = Object.values(ratesByPid).some((rates) => rates.length > 0);
+  const hasCarrierStatus = Object.keys(carrierStatusByPid).length > 0;
+  const anyFetched = hasAnyRateRows || hasCarrierStatus;
 
   // Escape key
   useEffect(() => {
@@ -962,7 +964,11 @@ export default function RateBrowserModal({
     if (!hasWeight || !hasDims || !zip || zip.length < 5) return;
     if (!rateAccountsReady) return;
     autoFetchedRef.current = orderId;
-    void browseRates(undefined, { cachedOnly: true });
+    void (async () => {
+      await browseRates(undefined, { cachedOnly: true });
+      if (autoFetchedRef.current !== orderId) return;
+      await browseRates(undefined, { forceLive: true });
+    })();
     // browseRates is stable across renders via function declaration;
     // intentionally not listed as a dep.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1229,11 +1235,15 @@ export default function RateBrowserModal({
       const nextRatesByPid: Record<string, RateRow[]> = {};
       for (const acct of rateShippingAccounts) {
         const key = String(acct.shippingProviderId);
-        nextRatesByPid[key] = grouped[key] ?? [];
-        if (nextRatesByPid[key].length > 0) {
+        const accountRates = grouped[key] ?? [];
+        if (accountRates.length > 0) {
+          nextRatesByPid[key] = accountRates;
           nextStatusByPid[key] = browseResult?.cached ? 'cached' : 'live';
+        } else if (options.cachedOnly) {
+          nextStatusByPid[key] ??= 'loading';
         } else {
-          nextStatusByPid[key] ??= options.cachedOnly ? 'unavailable' : 'unavailable';
+          nextRatesByPid[key] = [];
+          nextStatusByPid[key] ??= 'unavailable';
         }
       }
       if (seededBestRate && seededPid != null && !nextRatesByPid[String(seededPid)]?.length) {
@@ -1333,6 +1343,29 @@ export default function RateBrowserModal({
         (c) => (ratesByPid[String(c.shippingProviderId)] ?? []).length > 0
       ).length,
     [rateShippingAccounts, ratesByPid]
+  );
+  const totalCarriersChecked = useMemo(
+    () =>
+      rateShippingAccounts.filter((c) => {
+        const key = String(c.shippingProviderId);
+        const status = carrierStatusByPid[key];
+        return (
+          (ratesByPid[key] ?? []).length > 0 ||
+          status === 'cached' ||
+          status === 'live' ||
+          status === 'unavailable' ||
+          status === 'error'
+        );
+      }).length,
+    [carrierStatusByPid, rateShippingAccounts, ratesByPid]
+  );
+  const totalCarriersLoading = useMemo(
+    () =>
+      rateShippingAccounts.filter((c) => {
+        const key = String(c.shippingProviderId);
+        return pendingPids.has(c.shippingProviderId) || carrierStatusByPid[key] === 'loading';
+      }).length,
+    [carrierStatusByPid, pendingPids, rateShippingAccounts]
   );
 
   function handleRateClick(r: RateRow): void {
@@ -1554,7 +1587,7 @@ export default function RateBrowserModal({
         </div>
       );
     }
-    if (browsing && !anyFetched) {
+    if (browsing && !hasAnyRateRows) {
       return (
         <div
           style={{
@@ -1565,6 +1598,7 @@ export default function RateBrowserModal({
           }}
         >
           <RateLoadingSpinner />
+          <div style={{ marginTop: 8 }}>Checking carriers...</div>
         </div>
       );
     }
@@ -2396,7 +2430,9 @@ export default function RateBrowserModal({
               </span>
               <span style={{ fontSize: 11.5, color: 'var(--text3)', flex: 1 }}>
                 {anyFetched
-                  ? `${totalCarriersAvailable} out of ${rateShippingAccounts.length} carriers available`
+                  ? totalCarriersLoading > 0 || browsing
+                    ? `Checking carriers...${totalCarriersAvailable > 0 ? ` ${totalCarriersAvailable} with rates` : ''}`
+                    : `${totalCarriersChecked} of ${rateShippingAccounts.length} carriers checked · ${totalCarriersAvailable} with rates`
                   : ''}
                 {rateBrowseInfo.source === 'cache'
                   ? ` | cached ${formatCacheAge(rateBrowseInfo.cacheAgeMs) ?? ''}`.trimEnd()

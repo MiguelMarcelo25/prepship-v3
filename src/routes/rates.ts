@@ -115,7 +115,8 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
     : accounts.map((account) => account.carrier_id);
   const carriersWithRates = new Set(filtered.map((rate) => rate.carrier_id));
   const statusWhenFound = result.cached ? 'cached' : 'live';
-  const missingStatus = cachedOnly ? 'unavailable' : 'unavailable';
+  const isCachedOnlyLookup = Boolean(cachedOnly && !forceRefresh && !forceLive);
+  const missingStatus = isCachedOnlyLookup ? 'loading' : 'unavailable';
   return c.json({
     ...result,
     requestKey: result.cacheKey,

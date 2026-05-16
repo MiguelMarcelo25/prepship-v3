@@ -3904,7 +3904,15 @@ export const apiClient = {
             return {
               carrierId,
               carrierName: error?.label ?? carrierId,
-              status: hasRate ? 'live' : error ? 'error' : 'unavailable',
+              status: hasRate
+                ? body.cachedOnly === true
+                  ? 'cached'
+                  : 'live'
+                : error
+                  ? 'error'
+                  : body.cachedOnly === true
+                    ? 'loading'
+                    : 'unavailable',
               error: error?.message,
             };
           });
