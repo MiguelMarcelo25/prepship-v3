@@ -526,8 +526,8 @@ async function cachedSafe<T>(
       cachedReads.set(cacheKey, {
         hasValue: true,
         value: fallback,
-        expiresAt: failedAt + 15_000,
-        staleUntil: failedAt + 60_000,
+        expiresAt: failedAt + 60_000,
+        staleUntil: failedAt + 5 * 60_000,
       });
       return fallback;
     })
@@ -1377,8 +1377,8 @@ export const apiClient = {
     return cachedSafe(
       'fetchCounts',
       `fetchCounts:${dateFrom ?? ''}:${dateTo ?? ''}`,
-      60_000,
-      10 * 60_000,
+      120_000,
+      15 * 60_000,
       async () => {
         if (hasDate) {
           const legacyCounts = await api.get<any>(`/init/counts${qs({ dateFrom, dateTo })}`, {
@@ -1736,7 +1736,7 @@ export const apiClient = {
     return cachedSafe(
       'fetchLegacySyncStatus',
       'fetchLegacySyncStatus',
-      30_000,
+      90_000,
       5 * 60_000,
       () => api.get<any>('/sync/status', { timeoutMs: 6_000 }),
       {}
@@ -1747,7 +1747,7 @@ export const apiClient = {
     return cachedSafe(
       'fetchSyncWorkerStatus',
       'fetchSyncWorkerStatus',
-      30_000,
+      90_000,
       5 * 60_000,
       () => api.get<any>('/worker/status', { timeoutMs: 6_000 }),
       { enabled: false }
@@ -2048,8 +2048,8 @@ export const apiClient = {
     return cachedSafe(
       'fetchDailyStats',
       `fetchDailyStats:${queryString}`,
-      60_000,
-      10 * 60_000,
+      5 * 60_000,
+      30 * 60_000,
       async () => {
         // V2 parity: the daily stats endpoint applies only the configured
         // excluded store IDs server-side.
@@ -3217,8 +3217,8 @@ export const apiClient = {
     return cachedSafe(
       'fetchPackages',
       `fetchPackages:${source ?? ''}`,
-      60_000,
-      10 * 60_000,
+      5 * 60_000,
+      30 * 60_000,
       async () => {
         const res = await api.get<any>(`/packages${qs({ source })}`, { timeoutMs: 8_000 });
         if (Array.isArray(res)) return res.map(normalizePackageDto);

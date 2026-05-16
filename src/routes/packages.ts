@@ -11,6 +11,9 @@ import { importStandardPackageDimensions } from '../services/package-dimension-i
 
 const app = new Hono();
 const PACKAGE_START_BACKFILL_DATE = new Date('2026-04-01T00:00:00.000Z');
+const PACKAGES_CACHE_TTL_MS = 60_000;
+let packagesCache: { expiresAt: number; rows: Array<typeof packages.$inferSelect> } | null = null;
+let packagesInflight: Promise<Array<typeof packages.$inferSelect>> | null = null;
 
 const body = z.object({
   name: z.string().min(1),
@@ -30,8 +33,28 @@ const body = z.object({
   isDefault: z.boolean().optional(),
 });
 
+function invalidatePackagesCache() {
+  packagesCache = null;
+  packagesInflight = null;
+}
+
+async function listPackagesCached() {
+  if (packagesCache && packagesCache.expiresAt > Date.now()) return packagesCache.rows;
+  if (packagesInflight) return packagesInflight;
+  packagesInflight = db.select().from(packages).then((rows) => {
+    packagesCache = {
+      rows,
+      expiresAt: Date.now() + PACKAGES_CACHE_TTL_MS,
+    };
+    return rows;
+  }).finally(() => {
+    packagesInflight = null;
+  });
+  return packagesInflight;
+}
+
 app.get('/', async (c) => {
-  const rows = await db.select().from(packages);
+  const rows = await listPackagesCached();
   return c.json(rows);
 });
 
@@ -45,6 +68,7 @@ app.get('/:id{[0-9]+}', async (c) => {
 app.post('/', zValidator('json', body), async (c) => {
   const v = c.req.valid('json');
   const [row] = await db.insert(packages).values(v).returning();
+  invalidatePackagesCache();
   return c.json(row, 201);
 });
 
@@ -57,6 +81,7 @@ app.patch('/:id{[0-9]+}', zValidator('json', body.partial()), async (c) => {
     .where(eq(packages.id, id))
     .returning();
   if (!row) return c.json({ error: 'Package not found' }, 404);
+  invalidatePackagesCache();
   return c.json(row);
 });
 
@@ -64,6 +89,7 @@ app.delete('/:id{[0-9]+}', async (c) => {
   const id = Number(c.req.param('id'));
   const [row] = await db.delete(packages).where(eq(packages.id, id)).returning();
   if (!row) return c.json({ error: 'Package not found' }, 404);
+  invalidatePackagesCache();
   return c.json({ deleted: true });
 });
 
@@ -110,6 +136,7 @@ app.post('/sync', async (c) => {
     }
   }
 
+  if (inserted > 0) invalidatePackagesCache();
   return c.json({
     inserted,
     skipped,
@@ -124,6 +151,7 @@ app.post('/backfill-start-date', async (c) => {
     .where(sql`${packages.createdAt} is distinct from ${PACKAGE_START_BACKFILL_DATE}::timestamptz`)
     .returning({ id: packages.id });
 
+  if (rows.length > 0) invalidatePackagesCache();
   return c.json({
     updated: rows.length,
     startDate: PACKAGE_START_BACKFILL_DATE.toISOString(),
@@ -178,6 +206,7 @@ app.post('/:id{[0-9]+}/receive', zValidator('json', receiveBody), async (c) => {
   });
 
   if (!result) return c.json({ error: 'Package not found' }, 404);
+  invalidatePackagesCache();
   return c.json({ data: result });
 });
 
@@ -220,6 +249,7 @@ app.post('/:id{[0-9]+}/adjust', zValidator('json', adjustBody), async (c) => {
   });
 
   if (!result) return c.json({ error: 'Package not found' }, 404);
+  invalidatePackagesCache();
   return c.json({ data: result });
 });
 
@@ -291,6 +321,7 @@ app.put('/:id{[0-9]+}', zValidator('json', body.partial()), async (c) => {
     .where(eq(packages.id, id))
     .returning();
   if (!row) return c.json({ error: 'Package not found' }, 404);
+  invalidatePackagesCache();
   return c.json(row);
 });
 
@@ -308,6 +339,7 @@ app.patch(
       .where(eq(packages.id, id))
       .returning();
     if (!row) return c.json({ error: 'Package not found' }, 404);
+    invalidatePackagesCache();
     return c.json(row);
   }
 );
@@ -356,6 +388,7 @@ app.post(
         source: 'custom',
       })
       .returning();
+    invalidatePackagesCache();
     return c.json({ data: row, created: true }, 201);
   }
 );
@@ -364,6 +397,7 @@ app.post(
 // idempotent: exact/fuzzy dimension matches are skipped instead of duplicated.
 app.post('/import-standard-dimensions', async (c) => {
   const result = await importStandardPackageDimensions();
+  if (result.inserted > 0) invalidatePackagesCache();
   return c.json({
     ...result,
     message: `Added ${result.inserted} package sizes (${result.skippedExisting} already existed)`,

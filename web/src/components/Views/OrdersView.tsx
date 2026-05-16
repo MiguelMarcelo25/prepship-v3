@@ -429,6 +429,29 @@ function writeLocalColumnPrefs(prefs: ColumnPrefs) {
   }
 }
 
+function scheduleNonCriticalOrdersWork(callback: () => void, delayMs = 2500) {
+  if (typeof window === 'undefined') return () => {}
+  let cancelled = false
+  const run = () => {
+    if (cancelled || document.visibilityState !== 'visible') return
+    callback()
+  }
+
+  if ('requestIdleCallback' in window) {
+    const idleId = window.requestIdleCallback(run, { timeout: delayMs })
+    return () => {
+      cancelled = true
+      window.cancelIdleCallback?.(idleId)
+    }
+  }
+
+  const timeoutId = window.setTimeout(run, delayMs)
+  return () => {
+    cancelled = true
+    window.clearTimeout(timeoutId)
+  }
+}
+
 function getDailyStatsRolloverParts(now = new Date()) {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: DAILY_STATS_ROLLOVER_TIME_ZONE,
@@ -2383,6 +2406,9 @@ export default function OrdersView({
   }, [someVisibleSelected])
 
   useEffect(() => {
+    if (packagesLoaded || packages.length > 0) return
+    if (panelOrderId == null && !rateBrowserOpen && !newOrderOpen && !queueOpen) return
+
     let cancelled = false
 
     setPackagesLoaded(false)
@@ -2403,7 +2429,7 @@ export default function OrdersView({
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [panelOrderId, packages.length, packagesLoaded, queueOpen, rateBrowserOpen, newOrderOpen])
 
   useEffect(() => {
     let cancelled = false
@@ -2413,24 +2439,27 @@ export default function OrdersView({
       setColumnPrefs(localPrefs)
     }
 
-    void apiClient.fetchColumnPrefs()
-      .then((payload) => {
-        if (!cancelled) {
-          const nextPrefs = payload ?? localPrefs
-          if (nextPrefs) writeLocalColumnPrefs(nextPrefs)
-          columnPrefsRef.current = nextPrefs
-          setColumnPrefs(nextPrefs)
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          columnPrefsRef.current = localPrefs
-          setColumnPrefs(localPrefs)
-        }
-      })
+    const cancelScheduled = scheduleNonCriticalOrdersWork(() => {
+      void apiClient.fetchColumnPrefs()
+        .then((payload) => {
+          if (!cancelled) {
+            const nextPrefs = payload ?? localPrefs
+            if (nextPrefs) writeLocalColumnPrefs(nextPrefs)
+            columnPrefsRef.current = nextPrefs
+            setColumnPrefs(nextPrefs)
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            columnPrefsRef.current = localPrefs
+            setColumnPrefs(localPrefs)
+          }
+        })
+    }, 4000)
 
     return () => {
       cancelled = true
+      cancelScheduled()
     }
   }, [])
 
@@ -2460,14 +2489,18 @@ export default function OrdersView({
       }, getMsUntilNextDailyStatsRollover())
     }
 
-    void loadDailyStats()
+    const cancelInitialLoad = scheduleNonCriticalOrdersWork(() => {
+      void loadDailyStats()
+    }, 3000)
     scheduleRolloverRefresh()
     const timer = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return
       void loadDailyStats()
-    }, 5 * 60 * 1000)
+    }, 10 * 60 * 1000)
 
     return () => {
       cancelled = true
+      cancelInitialLoad()
       window.clearInterval(timer)
       if (rolloverTimer !== null) window.clearTimeout(rolloverTimer)
     }
@@ -4294,6 +4327,60 @@ export default function OrdersView({
     }
   }
 
+  function getOrderWithAutoBestRate(order: OrderSummaryDto) {
+    const autoRequest = getAutoBestRateRequest(order)
+    const autoEntry = autoRequest ? autoBestRateEntries[order.orderId] : null
+    return autoRequest && autoEntry?.key === autoRequest.key && autoEntry?.rate
+      ? withBestRateOverride(order, autoEntry.rate)
+      : order
+  }
+
+  function getAppliedRateDims(rate: Record<string, unknown>) {
+    const dims = toRecord(rate.dims)
+    const length = toNumberValue(dims?.length) ?? toNumberValue(rate.length) ?? toNumberValue(rate.dimsL)
+    const width = toNumberValue(dims?.width) ?? toNumberValue(rate.width) ?? toNumberValue(rate.dimsW)
+    const height = toNumberValue(dims?.height) ?? toNumberValue(rate.height) ?? toNumberValue(rate.dimsH)
+    return length && width && height ? { length, width, height } : null
+  }
+
+  function getAppliedRateWeightOz(rate: Record<string, unknown>) {
+    const weight = toRecord(rate.weight)
+    const lb = toNumberValue(weight?.lb)
+    const oz = toNumberValue(weight?.oz)
+    if (lb != null || oz != null) return Math.max(0, (lb ?? 0) * 16 + (oz ?? 0))
+    return toNumberValue(rate.weightOz) ?? toNumberValue(rate.weight_oz) ?? null
+  }
+
+  async function persistAppliedRateForOrder(
+    orderId: number,
+    rate: Record<string, unknown>,
+    options: {
+      fallbackDims?: { length: number; width: number; height: number } | null
+      fallbackWeightOz?: number | null
+      refetch?: boolean
+    } = {},
+  ) {
+    const dims = getAppliedRateDims(rate) ?? options.fallbackDims ?? null
+    const weightOz = getAppliedRateWeightOz(rate) ?? options.fallbackWeightOz ?? null
+    const dimsLabel = dims ? `${dims.length || 0}x${dims.width || 0}x${dims.height || 0}` : null
+    const shippingProviderId = toNumberValue(rate.shippingProviderId)
+
+    const tasks: Promise<unknown>[] = []
+    if (dims || (weightOz != null && weightOz > 0)) {
+      tasks.push(apiClient.saveOrderDims(orderId, {
+        ...(dims ? { length: dims.length, width: dims.width, height: dims.height } : {}),
+        ...(weightOz != null && weightOz > 0 ? { weightOz } : {}),
+      }))
+    }
+    if (shippingProviderId != null) {
+      tasks.push(apiClient.setOrderSelectedPid(orderId, shippingProviderId))
+    }
+
+    tasks.push(apiClient.saveOrderBestRate(orderId, rate, dimsLabel))
+    await Promise.all(tasks)
+    if (options.refetch) await refetchOrders()
+  }
+
   useEffect(() => {
     if (loading || currentStatus !== 'awaiting_shipment' || orderedFilteredOrders.length === 0) return
 
@@ -4323,7 +4410,10 @@ export default function OrdersView({
       try {
         if (isTestOrder(order, request.detail)) {
           const testRate = buildTestMockRate(buildBestTestRateForShipment(order.orderId, request.dims, request.weightOz) ?? undefined)
-          await apiClient.saveOrderBestRate(order.orderId, testRate, request.dimsLabel)
+          await persistAppliedRateForOrder(order.orderId, testRate, {
+            fallbackDims: request.dims,
+            fallbackWeightOz: request.weightOz,
+          })
           if (!cancelled) {
             setAutoBestRateEntries((current) => ({
               ...current,
@@ -4358,7 +4448,14 @@ export default function OrdersView({
         }) as Array<Record<string, unknown>>
 
         const bestRate = pickBestPanelRate(rates)
-        await apiClient.saveOrderBestRate(order.orderId, bestRate, request.dimsLabel)
+        if (bestRate) {
+          await persistAppliedRateForOrder(order.orderId, bestRate, {
+            fallbackDims: request.dims,
+            fallbackWeightOz: request.weightOz,
+          })
+        } else {
+          await apiClient.saveOrderBestRate(order.orderId, null, request.dimsLabel)
+        }
 
         if (!cancelled) {
           setAutoBestRateEntries((current) => ({
@@ -4429,7 +4526,10 @@ export default function OrdersView({
           [order.orderId]: { key: autoRequest.key, rate: testRate },
         }))
       }
-      await apiClient.saveOrderBestRate(order.orderId, testRate, `${dims.length || 0}x${dims.width || 0}x${dims.height || 0}`)
+      await persistAppliedRateForOrder(order.orderId, testRate, {
+        fallbackDims: dims,
+        fallbackWeightOz: weightOz,
+      })
       return testRate
     }
 
@@ -4491,7 +4591,10 @@ export default function OrdersView({
           }))
           void apiClient.setOrderSelectedPid(order.orderId, shippingProviderId)
         }
-        await apiClient.saveOrderBestRate(order.orderId, bestRate, dimsLabel)
+        await persistAppliedRateForOrder(order.orderId, bestRate, {
+          fallbackDims: dims,
+          fallbackWeightOz: weightOz,
+        })
         return bestRate
       }
 
@@ -4789,7 +4892,11 @@ export default function OrdersView({
       setPanelRatePreview([testRate])
       setRateBrowserOpen(false)
       void apiClient
-        .saveOrderBestRate(panelOrder.orderId, testRate, dimsLabel)
+        .saveOrderDims(panelOrder.orderId, {
+          ...(dims ? { length: Number(dims.length) || 0, width: Number(dims.width) || 0, height: Number(dims.height) || 0 } : {}),
+          weightOz: getPanelWeightOz() || getOrderWeightOz(panelOrder, panelDetail),
+        })
+        .then(() => apiClient.saveOrderBestRate(panelOrder.orderId, testRate, dimsLabel))
         .then(() => refetchOrders())
         .catch((error) => {
           showToast(error instanceof Error ? error.message : 'Failed to save test mock rate', 'error')
@@ -4799,7 +4906,7 @@ export default function OrdersView({
 
     const shippingProviderId = toNumberValue(rate.shippingProviderId)
     const serviceCode = toStringValue(rate.serviceCode)
-    if (shippingProviderId == null || !serviceCode) return
+    if (!panelOrderId || shippingProviderId == null || !serviceCode) return
 
     setPanelForm((current) => ({
       ...current,
@@ -4808,7 +4915,13 @@ export default function OrdersView({
     }))
     setPanelRatePreview([rate])
     setRateBrowserOpen(false)
-    void apiClient.saveOrderBestRate(panelOrderId ?? 0, rate, `${panelForm.length || 0}x${panelForm.width || 0}x${panelForm.height || 0}`)
+    void persistAppliedRateForOrder(panelOrderId ?? 0, rate, {
+      fallbackDims: getPanelDims(),
+      fallbackWeightOz: getPanelWeightOz() || getOrderWeightOz(panelOrder, panelDetail),
+      refetch: true,
+    }).catch((error) => {
+      showToast(error instanceof Error ? error.message : 'Failed to save selected rate', 'error')
+    })
   }
 
   async function printPicklist() {
@@ -5602,9 +5715,7 @@ export default function OrdersView({
     const autoRequest = getAutoBestRateRequest(order)
     const autoEntry = autoRequest ? autoBestRateEntries[order.orderId] : null
     const hasMatchingAutoEntry = Boolean(autoRequest && autoEntry?.key === autoRequest.key)
-    const displayOrder = hasMatchingAutoEntry && autoEntry?.rate
-      ? withBestRateOverride(order, autoEntry.rate)
-      : order
+    const displayOrder = getOrderWithAutoBestRate(order)
 
 
     if (isTestOrder(displayOrder)) {
@@ -5667,7 +5778,7 @@ export default function OrdersView({
     }
 
     const hasDims = getDimensions(displayOrder, null) != null
-    if (!(displayOrder.weight?.value && displayOrder.weight.value > 0) || !hasDims) {
+    if (!displayOrder.bestRate && (!(displayOrder.weight?.value && displayOrder.weight.value > 0) || !hasDims)) {
       return <span style={{ fontSize: 10.5, color: 'var(--text3)' }}>— add dims</span>
     }
     if (hasMatchingAutoEntry && !autoEntry?.rate) {
@@ -5748,7 +5859,9 @@ export default function OrdersView({
   }
 
   const renderCarrierCell = (order: OrderSummaryDto) => {
-    if (isTestOrder(order)) {
+    const displayOrder = getOrderWithAutoBestRate(order)
+
+    if (isTestOrder(displayOrder)) {
       return (
         <span
           className="carrier-badge"
@@ -5760,13 +5873,13 @@ export default function OrdersView({
       )
     }
 
-    const shipped = order.orderStatus !== 'awaiting_shipment'
+    const shipped = displayOrder.orderStatus !== 'awaiting_shipment'
     if (shipped) {
-      if (shouldShowCarrierExtLabel(order)) {
+      if (shouldShowCarrierExtLabel(displayOrder)) {
         return renderExtLabelBadge()
       }
 
-      const carrierCode = getShippedDisplayCarrierCode(order)
+      const carrierCode = getShippedDisplayCarrierCode(displayOrder)
       if (!carrierCode) {
         return <span style={{ color: 'var(--text4)', fontSize: 11 }}>{'\u2014'}</span>
       }
@@ -5778,11 +5891,11 @@ export default function OrdersView({
       )
     }
 
-    const hasDims = getDimensions(order, null) != null
-    if (!(order.weight?.value && order.weight.value > 0) || !hasDims) {
+    const hasDims = getDimensions(displayOrder, null) != null
+    if (!displayOrder.bestRate && (!(displayOrder.weight?.value && displayOrder.weight.value > 0) || !hasDims)) {
       return <span style={{ fontSize: 10.5, color: 'var(--text3)' }}>— add dims</span>
     }
-    if (!order.bestRate) {
+    if (!displayOrder.bestRate) {
       return <div className="spin-center"><span className="spin-sm" /></div>
     }
 
@@ -5790,14 +5903,16 @@ export default function OrdersView({
     // and cancelled rows all share this renderer.
     return (
       <div style={{ display: 'flex', alignItems: 'center', lineHeight: 1.3 }}>
-        <CarrierBadge code={getCarrierCodeForDisplay(order) ?? ''} size="sm" />
+        <CarrierBadge code={getCarrierCodeForDisplay(displayOrder) ?? ''} size="sm" />
       </div>
     )
   }
 
   const renderShippingAccountCell = (order: OrderSummaryDto) => {
-    if (isTestOrder(order)) {
-      const testAccount = normalizeShippingAccountName(order.bestRate?.carrierNickname) ?? TEST_SHIPPING_ACCOUNT_LABEL
+    const displayOrder = getOrderWithAutoBestRate(order)
+
+    if (isTestOrder(displayOrder)) {
+      const testAccount = normalizeShippingAccountName(displayOrder.bestRate?.carrierNickname) ?? TEST_SHIPPING_ACCOUNT_LABEL
       return (
         <div style={{ lineHeight: 1.4, whiteSpace: 'nowrap' }}>
           <div style={{ fontSize: 14, fontWeight: 700, color: '#b45309' }}>{testAccount}</div>
@@ -5808,13 +5923,13 @@ export default function OrdersView({
       )
     }
 
-    const shipped = order.orderStatus !== 'awaiting_shipment'
+    const shipped = displayOrder.orderStatus !== 'awaiting_shipment'
     if (shipped) {
-      if (getIsExternallyFulfilled(order)) {
+      if (getIsExternallyFulfilled(displayOrder)) {
         return renderExtLabelBadge()
       }
 
-      const accountDisplay = getShipAccountDisplay(order, shippingAccounts)
+      const accountDisplay = getShipAccountDisplay(displayOrder, shippingAccounts)
       if (!accountDisplay) {
         return <span style={{ color: 'var(--text4)', fontSize: 11 }}>{'\u2014'}</span>
       }
@@ -5823,25 +5938,25 @@ export default function OrdersView({
         <div style={{ lineHeight: 1.4, whiteSpace: 'nowrap' }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text2)' }}>{accountDisplay}</div>
           <div style={{ fontSize: 10, color: 'var(--text3)' }} className="svc-label">
-            {truncate(formatServiceCode(getShippedDisplayServiceCode(order)), 22)}
+            {truncate(formatServiceCode(getShippedDisplayServiceCode(displayOrder)), 22)}
           </div>
         </div>
       )
     }
 
-    const hasDims = getDimensions(order, null) != null
-    if (!(order.weight?.value && order.weight.value > 0) || !hasDims) {
+    const hasDims = getDimensions(displayOrder, null) != null
+    if (!displayOrder.bestRate && (!(displayOrder.weight?.value && displayOrder.weight.value > 0) || !hasDims)) {
       return <span style={{ fontSize: 10.5, color: 'var(--text3)' }}>— add dims</span>
     }
-    if (!order.bestRate) {
+    if (!displayOrder.bestRate) {
       return <div className="spin-center"><span className="spin-sm" /></div>
     }
 
     return (
         <div style={{ lineHeight: 1.4, whiteSpace: 'nowrap' }}>
-          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text2)' }}>{getShipAccountDisplay(order, shippingAccounts)}</div>
+          <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text2)' }}>{getShipAccountDisplay(displayOrder, shippingAccounts)}</div>
           <div style={{ fontSize: 10, color: 'var(--text3)' }} className="svc-label">
-            {truncate(formatServiceCode(getBestRateServiceCode(order)), 22)}
+            {truncate(formatServiceCode(getBestRateServiceCode(displayOrder)), 22)}
           </div>
         </div>
       )
@@ -9096,12 +9211,11 @@ export default function OrdersView({
                   serviceCode: testRate.serviceCode,
                 }))
                 const dims = best.dims
-                const dimsLabel = dims
-                  ? `${dims.length || 0}x${dims.width || 0}x${dims.height || 0}`
-                  : `${panelForm.length || 0}x${panelForm.width || 0}x${panelForm.height || 0}`
-                void apiClient
-                  .saveOrderBestRate(panelOrderId, testRate, dimsLabel)
-                  .then(() => refetchOrders())
+                void persistAppliedRateForOrder(panelOrderId, testRate, {
+                  fallbackDims: dims ?? getPanelDims(),
+                  fallbackWeightOz: getPanelWeightOz() || getOrderWeightOz(panelOrder, panelDetail),
+                  refetch: true,
+                })
                   .catch((error) => {
                     showToast(error instanceof Error ? error.message : 'Failed to save test mock rate', 'error')
                   })
@@ -9129,15 +9243,13 @@ export default function OrdersView({
                   width: best.dims ? String(best.dims.width ?? current.width) : current.width,
                   height: best.dims ? String(best.dims.height ?? current.height) : current.height,
                 }))
-                void apiClient.setOrderSelectedPid(panelOrderId, shippingProviderId)
               }
               const dims = best.dims
-              const dimsLabel = dims
-                ? `${dims.length || 0}x${dims.width || 0}x${dims.height || 0}`
-                : `${panelForm.length || 0}x${panelForm.width || 0}x${panelForm.height || 0}`
-              void apiClient
-                .saveOrderBestRate(panelOrderId, best, dimsLabel)
-                .then(() => refetchOrders())
+              void persistAppliedRateForOrder(panelOrderId, best, {
+                fallbackDims: dims ?? getPanelDims(),
+                fallbackWeightOz: getPanelWeightOz() || getOrderWeightOz(panelOrder, panelDetail),
+                refetch: true,
+              })
                 .catch((error) => {
                   showToast(error instanceof Error ? error.message : 'Failed to save best rate', 'error')
                 })

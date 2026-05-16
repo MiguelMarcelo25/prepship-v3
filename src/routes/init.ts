@@ -10,7 +10,7 @@ import { EXCLUDED_STORE_IDS, EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
 
 const app = new Hono();
 
-const COUNTS_CACHE_TTL_MS = 10_000;
+const COUNTS_CACHE_TTL_MS = 60_000;
 type CountsPayload = {
   awaiting: number;
   shipped: number;

@@ -452,7 +452,9 @@ export function useOrders(
   const clientsQuery = useQuery<V4ClientRow[]>({
     queryKey: ['v2-hooks:clients', 'active-only'],
     queryFn: () => api.get<V4ClientRow[]>('/clients?activeOnly=true'),
-    staleTime: 60_000,
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const isoFrom = toIsoStart(dateStart);
@@ -1216,7 +1218,9 @@ export function usePackages(): UsePackagesResult {
   const query = useQuery<V4PackageRow[]>({
     queryKey: ['v2-hooks:packages'],
     queryFn: () => api.get<V4PackageRow[]>('/packages'),
-    staleTime: 60_000,
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    refetchOnWindowFocus: false,
   });
 
   const packages = useMemo(

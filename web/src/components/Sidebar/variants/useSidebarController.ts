@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { apiClient } from '../../../api/client'
 import { useAuth } from '../../../lib/auth'
@@ -74,6 +74,7 @@ export function useSidebarController(props: SidebarVariantProps) {
   const navigate = useNavigate()
   const [signingOut, setSigningOut] = useState(false)
   const effectiveSearchValue = searchValue ?? localSearchValue
+  const lastCountsLoadRef = useRef(0)
 
   const handleSignOut = async () => {
     if (signingOut) return
@@ -87,19 +88,25 @@ export function useSidebarController(props: SidebarVariantProps) {
 
   useEffect(() => {
     const loadCounts = async () => {
+      if (document.visibilityState !== 'visible') return
+      lastCountsLoadRef.current = Date.now()
       try {
         setCounts(await apiClient.fetchCounts({ dateStart, dateEnd }))
       } catch (error) {
         console.error('Failed to fetch sidebar counts:', error)
       }
     }
-    void loadCounts()
+    const initialTimerId = window.setTimeout(() => {
+      void loadCounts()
+    }, 2500)
     const intervalId = window.setInterval(() => {
       if (document.visibilityState !== 'visible') return
       void loadCounts()
-    }, 120_000)
+    }, 180_000)
     const onVisible = () => {
-      if (document.visibilityState === 'visible') void loadCounts()
+      if (document.visibilityState === 'visible' && Date.now() - lastCountsLoadRef.current > 120_000) {
+        void loadCounts()
+      }
     }
     // Real-time refresh on client active-toggle: dispatched from
     // InventoryView's handleToggleClientActive after a successful PATCH.
@@ -113,6 +120,7 @@ export function useSidebarController(props: SidebarVariantProps) {
     window.addEventListener('focus', onVisible)
     window.addEventListener('prepship:client-active-changed', onClientActiveChanged)
     return () => {
+      window.clearTimeout(initialTimerId)
       window.clearInterval(intervalId)
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('focus', onVisible)

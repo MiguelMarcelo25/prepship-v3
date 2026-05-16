@@ -507,8 +507,10 @@ export default function Home() {
     if (displayView !== 'orders') return
 
     let active = true
+    let initialTimerId: number | null = null
 
     const poll = async () => {
+      if (document.visibilityState !== 'visible') return
       try {
         const next = await apiClient.fetchLegacySyncStatus()
         if (!active) return
@@ -558,25 +560,30 @@ export default function Home() {
       }
     }
 
-    void poll()
+    initialTimerId = window.setTimeout(() => {
+      void poll()
+    }, 5000)
     const intervalId = window.setInterval(() => {
       if (document.visibilityState !== 'visible') return
       void poll()
-    }, 60_000)
+    }, 120_000)
 
     return () => {
       active = false
+      if (initialTimerId !== null) window.clearTimeout(initialTimerId)
       window.clearInterval(intervalId)
     }
   }, [displayView, toastContext])
 
-  // Poll the background [sync-v2] worker every 15s so the topbar can show
+  // Poll the background [sync-v2] worker lightly so the topbar can show
   // its heartbeat (last cycle time, counts, errors). Separate from the
   // legacy sync poller above — the legacy one tracks user-triggered syncs,
   // this one tracks the always-on background worker.
   useEffect(() => {
     let active = true
+    let initialTimerId: number | null = null
     const poll = async () => {
+      if (document.visibilityState !== 'visible') return
       try {
         const next = await apiClient.fetchSyncWorkerStatus()
         if (!active) return
@@ -585,13 +592,16 @@ export default function Home() {
         // Silently ignore — the pill will just not update.
       }
     }
-    void poll()
+    initialTimerId = window.setTimeout(() => {
+      void poll()
+    }, 7000)
     const intervalId = window.setInterval(() => {
       if (document.visibilityState !== 'visible') return
       void poll()
-    }, 60_000)
+    }, 120_000)
     return () => {
       active = false
+      if (initialTimerId !== null) window.clearTimeout(initialTimerId)
       window.clearInterval(intervalId)
     }
   }, [])
