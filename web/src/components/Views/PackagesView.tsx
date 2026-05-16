@@ -56,6 +56,15 @@ function clearPackagesUsageCache(): void {
   USAGE_CACHE.clear()
 }
 
+function getLowStockPackages(packages: PackageDto[]): PackageDto[] {
+  return packages.filter(
+    (pkg) =>
+      typeof pkg.stockQty === 'number' &&
+      typeof pkg.reorderLevel === 'number' &&
+      pkg.stockQty <= pkg.reorderLevel,
+  )
+}
+
 function wasPackageCreatedWithinDays(pkg: PackageDto, days: number): boolean {
   const created = Date.parse(String(pkg.createdAt ?? ''))
   if (!Number.isFinite(created)) return false
@@ -566,29 +575,15 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
       setLoading(true)
       setError(null)
 
-      const [packagesResult, lowStockResult] = await Promise.allSettled([
-        apiClient.fetchPackages(),
-        apiClient.fetchLowStockPackages(),
-      ])
+      const packagesResult = await apiClient.fetchPackages()
 
       if (cancelled) return
 
-      if (packagesResult.status === 'rejected') {
-        setError(packagesResult.reason instanceof Error ? packagesResult.reason.message : 'Failed to load packages')
-        setLoading(false)
-        return
-      }
-
-      const nextPackages = packagesResult.value
+      const nextPackages = packagesResult
       setPackages(nextPackages)
       setReorderInputs(Object.fromEntries(nextPackages.map((pkg) => [pkg.packageId, String(pkg.reorderLevel ?? 10)])))
       setError(null)
-
-      if (lowStockResult.status === 'fulfilled') {
-        setLowStockPackages(lowStockResult.value)
-      } else {
-        setLowStockPackages([])
-      }
+      setLowStockPackages(getLowStockPackages(nextPackages))
 
       setLoading(false)
     }
@@ -641,7 +636,8 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
     }
 
     setUsageLoading(true)
-    void (async () => {
+    const timer = window.setTimeout(() => {
+      void (async () => {
       try {
         const rows = await apiClient.fetchPackagesUsageSummary(days)
         if (cancelled) return
@@ -658,8 +654,12 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
       } finally {
         if (!cancelled) setUsageLoading(false)
       }
-    })()
-    return () => { cancelled = true }
+      })()
+    }, 800)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
   }, [packages])
 
   function handleResizePackageColumn(key: PackagesColumnKey, width: number) {
@@ -707,24 +707,11 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
   }
 
   const refreshPackages = async () => {
-    const [nextPackages, nextLowStock] = await Promise.allSettled([
-      apiClient.fetchPackages(),
-      apiClient.fetchLowStockPackages(),
-    ])
-
-    if (nextPackages.status === 'fulfilled') {
-      setPackages(nextPackages.value)
-      setReorderInputs(Object.fromEntries(nextPackages.value.map((pkg) => [pkg.packageId, String(pkg.reorderLevel ?? 10)])))
-      setError(null)
-    } else {
-      throw nextPackages.reason
-    }
-
-    if (nextLowStock.status === 'fulfilled') {
-      setLowStockPackages(nextLowStock.value)
-    } else {
-      setLowStockPackages([])
-    }
+    const nextPackages = await apiClient.fetchPackages()
+    setPackages(nextPackages)
+    setReorderInputs(Object.fromEntries(nextPackages.map((pkg) => [pkg.packageId, String(pkg.reorderLevel ?? 10)])))
+    setLowStockPackages(getLowStockPackages(nextPackages))
+    setError(null)
   }
 
   const { custom: customPackages } = useMemo(() => splitPackagesBySource(packages), [packages])

@@ -925,26 +925,37 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
   const clientsQuery = useQuery({
     queryKey: ['clients'],
     queryFn: () => apiClient.fetchClients(),
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    refetchOnWindowFocus: false,
   })
   const packagesQuery = useQuery({
     queryKey: ['packages', 'custom'],
     queryFn: () => apiClient.fetchPackages('custom'),
     enabled: activeTab === 'receive',
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    refetchOnWindowFocus: false,
   })
   const alertsQuery = useQuery({
     queryKey: ['inventory', 'alerts'],
     queryFn: () => apiClient.fetchInventoryAlerts(),
     enabled: activeTab === 'alerts' || alertOnly,
+    staleTime: 60_000,
+    gcTime: 10 * 60_000,
+    refetchOnWindowFocus: false,
   })
   const inventoryQuery = useQuery({
     queryKey: ['inventory', 'stock', stockQueryParams],
     queryFn: () => apiClient.fetchInventoryPage(maybeQueryParams(stockQueryParams)),
     placeholderData: (previousData) => previousData,
+    staleTime: 30_000,
+    gcTime: 10 * 60_000,
+    refetchOnWindowFocus: false,
   })
   const items = itemsState
   const stockTotal = inventoryQuery.data?.total ?? items.length
   const stockLoading =
-    clientsQuery.isLoading ||
     inventoryQuery.isLoading ||
     stockLoadingState
   useEffect(() => {
@@ -961,10 +972,9 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
   }, [inventoryQuery.data])
   useEffect(() => {
     setStockLoading(
-      clientsQuery.isLoading ||
-        inventoryQuery.isLoading,
+      inventoryQuery.isLoading,
     )
-  }, [clientsQuery.isLoading, inventoryQuery.isLoading])
+  }, [inventoryQuery.isLoading])
   useEffect(() => {
     const error =
       clientsQuery.error ||

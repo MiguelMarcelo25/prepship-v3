@@ -477,13 +477,31 @@ type CachedRead<T> = {
 
 const cachedReads = new Map<string, CachedRead<unknown>>();
 
+type CachedSafeOptions = {
+  warn?: boolean;
+  fallbackTtlMs?: number;
+  fallbackStaleMs?: number;
+};
+
+function clearCachedReads(...keysOrPrefixes: string[]): void {
+  if (keysOrPrefixes.length === 0) return;
+  for (const key of Array.from(cachedReads.keys())) {
+    if (
+      keysOrPrefixes.some((prefix) => key === prefix || key.startsWith(`${prefix}:`))
+    ) {
+      cachedReads.delete(key);
+    }
+  }
+}
+
 async function cachedSafe<T>(
   methodName: string,
   cacheKey: string,
   ttlMs: number,
   staleMs: number,
   fn: () => Promise<T>,
-  fallback: T
+  fallback: T,
+  options: CachedSafeOptions = {}
 ): Promise<T> {
   const now = Date.now();
   const existing = cachedReads.get(cacheKey) as CachedRead<T> | undefined;
@@ -510,24 +528,28 @@ async function cachedSafe<T>(
     .catch((err) => {
       const current = cachedReads.get(cacheKey) as CachedRead<T> | undefined;
       if (current?.hasValue && current.staleUntil > Date.now()) {
-        warnThrottled(
-          `cached-stale:${methodName}`,
-          `[v2-apiClient] ${methodName} failed; using cached value:`,
-          err instanceof Error ? err.message : err
-        );
+        if (options.warn !== false) {
+          warnThrottled(
+            `cached-stale:${methodName}`,
+            `[v2-apiClient] ${methodName} failed; using cached value:`,
+            err instanceof Error ? err.message : err
+          );
+        }
         return current.value as T;
       }
-      warnThrottled(
-        `cached:${methodName}`,
-        `[v2-apiClient] ${methodName} failed:`,
-        err instanceof Error ? err.message : err
-      );
+      if (options.warn !== false) {
+        warnThrottled(
+          `cached:${methodName}`,
+          `[v2-apiClient] ${methodName} failed:`,
+          err instanceof Error ? err.message : err
+        );
+      }
       const failedAt = Date.now();
       cachedReads.set(cacheKey, {
         hasValue: true,
         value: fallback,
-        expiresAt: failedAt + 60_000,
-        staleUntil: failedAt + 5 * 60_000,
+        expiresAt: failedAt + (options.fallbackTtlMs ?? 60_000),
+        staleUntil: failedAt + (options.fallbackStaleMs ?? 5 * 60_000),
       });
       return fallback;
     })
@@ -1513,7 +1535,8 @@ export const apiClient = {
 
         return { byStatus, byStatusStore };
       },
-      { byStatus: [], byStatusStore: [] }
+      { byStatus: [], byStatusStore: [] },
+      { warn: false, fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 15 * 60_000 }
     );
   },
 
@@ -1587,9 +1610,18 @@ export const apiClient = {
 
   // ─── Clients ────────────────────────────────────────────────────────────────
   fetchClients(): Promise<any[]> {
-    return api
-      .get<any>(`/clients${qs({ activeOnly: true })}`)
-      .then((res) => normalizeClientDtoRows(Array.isArray(res) ? res : []));
+    return cachedSafe(
+      'fetchClients',
+      'fetchClients',
+      5 * 60_000,
+      30 * 60_000,
+      async () => {
+        const res = await api.get<any>(`/clients${qs({ activeOnly: true })}`, { timeoutMs: 8_000 });
+        return normalizeClientDtoRows(Array.isArray(res) ? res : []);
+      },
+      [],
+      { warn: false, fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 30 * 60_000 }
+    );
   },
 
   listClients(): Promise<any[]> {
@@ -1605,15 +1637,21 @@ export const apiClient = {
   },
 
   createClient(data: Record<string, unknown>): Promise<any> {
-    return api.post<any>('/clients', normalizeClientMutationPayload(data));
+    return api.post<any>('/clients', normalizeClientMutationPayload(data)).then((res) => {
+      clearCachedReads('fetchClients', 'fetchStores', 'fetchCounts');
+      return res;
+    });
   },
 
   createClientRecord(data: Record<string, unknown>): Promise<any> {
-    return api.post<any>('/clients', normalizeClientMutationPayload(data));
+    return apiClient.createClient(data);
   },
 
   updateClient(clientId: number, data: Record<string, unknown>): Promise<any> {
-    return api.patch<any>(`/clients/${clientId}`, normalizeClientMutationPayload(data));
+    return api.patch<any>(`/clients/${clientId}`, normalizeClientMutationPayload(data)).then((res) => {
+      clearCachedReads('fetchClients', 'fetchStores', 'fetchCounts');
+      return res;
+    });
   },
 
   updateClientRecord(clientId: number, data: Record<string, unknown>): Promise<any> {
@@ -1623,7 +1661,11 @@ export const apiClient = {
   deleteClientRecord(clientId: number): Promise<any> {
     return safe(
       'deleteClientRecord',
-      () => api.delete<any>(`/clients/${clientId}`),
+      async () => {
+        const res = await api.delete<any>(`/clients/${clientId}`);
+        clearCachedReads('fetchClients', 'fetchStores', 'fetchCounts');
+        return res;
+      },
       { ok: true }
     );
   },
@@ -1633,6 +1675,7 @@ export const apiClient = {
       'syncClientsFromStores',
       async () => {
         const res = await api.post<any>('/clients/sync-stores', {});
+        clearCachedReads('fetchClients', 'fetchStores', 'fetchCounts');
         return {
           ...res,
           clients: normalizeClientDtoRows(Array.isArray(res?.clients) ? res.clients : []),
@@ -1706,8 +1749,11 @@ export const apiClient = {
 
   // ─── Column preferences (settings kv store) ─────────────────────────────────
   fetchColumnPrefs(): Promise<any> {
-    return safe(
+    return cachedSafe(
       'fetchColumnPrefs',
+      'fetchColumnPrefs',
+      5 * 60_000,
+      30 * 60_000,
       async () => {
         const row = await api.get<SettingsRow>('/settings/orders.columnPrefs', { timeoutMs: 8_000 });
         try {
@@ -1716,17 +1762,21 @@ export const apiClient = {
           return null;
         }
       },
-      null
+      null,
+      { warn: false, fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 30 * 60_000 }
     );
   },
 
   saveColumnPrefs(prefs: unknown): Promise<any> {
     return safe(
       'saveColumnPrefs',
-      () =>
-        api.put<any>('/settings/orders.columnPrefs', {
+      async () => {
+        const res = await api.put<any>('/settings/orders.columnPrefs', {
           value: JSON.stringify(prefs ?? null),
-        }),
+        });
+        clearCachedReads('fetchColumnPrefs');
+        return res;
+      },
       {}
     );
   },
@@ -1737,9 +1787,10 @@ export const apiClient = {
       'fetchLegacySyncStatus',
       'fetchLegacySyncStatus',
       90_000,
-      5 * 60_000,
+      10 * 60_000,
       () => api.get<any>('/sync/status', { timeoutMs: 6_000 }),
-      {}
+      {},
+      { warn: false, fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 10 * 60_000 }
     );
   },
 
@@ -1748,9 +1799,10 @@ export const apiClient = {
       'fetchSyncWorkerStatus',
       'fetchSyncWorkerStatus',
       90_000,
-      5 * 60_000,
+      10 * 60_000,
       () => api.get<any>('/worker/status', { timeoutMs: 6_000 }),
-      { enabled: false }
+      { enabled: false },
+      { warn: false, fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 10 * 60_000 }
     );
   },
 
@@ -2589,12 +2641,15 @@ export const apiClient = {
     page: number;
     pageSize: number;
   }> {
-    return safe(
+    const page = Math.max(1, Number(query?.page) || 1);
+    const pageSize = Math.max(1, Math.min(2000, Number(query?.pageSize) || 50));
+    const requestQuery = { ...(query ?? {}), page, pageSize };
+    return cachedSafe(
       'fetchInventoryPage',
+      `fetchInventoryPage:${JSON.stringify(requestQuery)}`,
+      30_000,
+      5 * 60_000,
       async () => {
-        const page = Math.max(1, Number(query?.page) || 1);
-        const pageSize = Math.max(1, Math.min(2000, Number(query?.pageSize) || 50));
-        const requestQuery = { ...(query ?? {}), page, pageSize };
         const [res, clientRows]: [any, any[]] = await Promise.all([
           api.get<any>(`/inventory${qs(requestQuery as any)}`),
           apiClient.fetchClients().catch(() => []),
@@ -2637,7 +2692,8 @@ export const apiClient = {
         totalPages: 1,
         page: Number(query?.page) || 1,
         pageSize: Number(query?.pageSize) || 50,
-      }
+      },
+      { warn: false, fallbackTtlMs: 60_000, fallbackStaleMs: 5 * 60_000 }
     );
   },
 
@@ -2803,7 +2859,7 @@ export const apiClient = {
           api.get<any>(
             `/inventory${qs({ clientId, lowStock: true, pageSize: 200 } as any)}`
           ),
-          api.get<any>(`/clients${qs({ activeOnly: true })}`).catch(() => []),
+          apiClient.fetchClients().catch(() => []),
         ]);
         const rows = Array.isArray(res)
           ? res
@@ -3225,37 +3281,36 @@ export const apiClient = {
         if (Array.isArray(res?.data)) return res.data.map(normalizePackageDto);
         return [];
       },
-      []
+      [],
+      { warn: false, fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 30 * 60_000 }
     );
   },
 
   fetchLowStockPackages(): Promise<any[]> {
     // v4 has no /packages/low-stock — derive client-side.
-    return safe(
-      'fetchLowStockPackages',
-      async () => {
-        const res = await api.get<any[]>('/packages');
-        if (!Array.isArray(res)) return [];
-        return res.filter(
-          (p: any) =>
-            typeof p?.stockQty === 'number' &&
-            typeof p?.reorderLevel === 'number' &&
-            p.stockQty <= p.reorderLevel
-        ).map(normalizePackageDto);
-      },
-      []
+    return apiClient.fetchPackages().then((rows) =>
+      rows.filter(
+        (p: any) =>
+          typeof p?.stockQty === 'number' &&
+          typeof p?.reorderLevel === 'number' &&
+          p.stockQty <= p.reorderLevel
+      )
     );
   },
 
   createPackageMutation(data: Record<string, unknown>): Promise<any> {
     return safe(
       'createPackageMutation',
-      async () => ({
-        ...normalizePackageResponse(
-          await api.post<any>('/packages', normalizePackageMutationPayload(data))
-        ),
-        ok: true,
-      }),
+      async () => {
+        const response = {
+          ...normalizePackageResponse(
+            await api.post<any>('/packages', normalizePackageMutationPayload(data))
+          ),
+          ok: true,
+        };
+        clearCachedReads('fetchPackages', 'fetchPackagesUsageSummary');
+        return response;
+      },
       {}
     );
   },
@@ -3263,7 +3318,11 @@ export const apiClient = {
   autoCreatePackageByDimensions(data: Record<string, unknown>): Promise<any> {
     return safe(
       'autoCreatePackageByDimensions',
-      async () => normalizePackageResponse(await api.post<any>('/packages/auto-create', data)),
+      async () => {
+        const response = normalizePackageResponse(await api.post<any>('/packages/auto-create', data));
+        clearCachedReads('fetchPackages', 'fetchPackagesUsageSummary');
+        return response;
+      },
       {}
     );
   },
@@ -3274,15 +3333,19 @@ export const apiClient = {
   ): Promise<any> {
     return safe(
       'updatePackageMutation',
-      async () => ({
-        ...normalizePackageResponse(
-          await api.patch<any>(
-            `/packages/${packageId}`,
-            normalizePackageMutationPayload(data)
-          )
-        ),
-        ok: true,
-      }),
+      async () => {
+        const response = {
+          ...normalizePackageResponse(
+            await api.patch<any>(
+              `/packages/${packageId}`,
+              normalizePackageMutationPayload(data)
+            )
+          ),
+          ok: true,
+        };
+        clearCachedReads('fetchPackages', 'fetchPackagesUsageSummary');
+        return response;
+      },
       {}
     );
   },
@@ -3290,7 +3353,11 @@ export const apiClient = {
   deletePackageMutation(packageId: number): Promise<any> {
     return safe(
       'deletePackageMutation',
-      async () => ({ ...(await api.delete<any>(`/packages/${packageId}`)), ok: true }),
+      async () => {
+        const response = { ...(await api.delete<any>(`/packages/${packageId}`)), ok: true };
+        clearCachedReads('fetchPackages', 'fetchPackagesUsageSummary');
+        return response;
+      },
       { ok: true }
     );
   },
@@ -3300,7 +3367,11 @@ export const apiClient = {
     // PATCH body, which already accepts reorderLevel.
     return safe(
       'setPackageReorderLevel',
-      () => api.patch<any>(`/packages/${packageId}`, { reorderLevel }),
+      async () => {
+        const response = await api.patch<any>(`/packages/${packageId}`, { reorderLevel });
+        clearCachedReads('fetchPackages');
+        return response;
+      },
       { ok: false }
     );
   },
@@ -3308,13 +3379,16 @@ export const apiClient = {
   receivePackage(packageId: number, data: Record<string, unknown>): Promise<any> {
     return safe(
       'receivePackage',
-      async () =>
-        normalizePackageMovementResponse(
+      async () => {
+        const response = normalizePackageMovementResponse(
           await api.post<any>(
             `/packages/${packageId}/receive`,
             normalizePackageReceivePayload(data)
           )
-        ),
+        );
+        clearCachedReads('fetchPackages', 'fetchPackagesUsageSummary');
+        return response;
+      },
       {}
     );
   },
@@ -3322,13 +3396,16 @@ export const apiClient = {
   adjustPackage(packageId: number, data: Record<string, unknown>): Promise<any> {
     return safe(
       'adjustPackage',
-      async () =>
-        normalizePackageMovementResponse(
+      async () => {
+        const response = normalizePackageMovementResponse(
           await api.post<any>(
             `/packages/${packageId}/adjust`,
             normalizePackageAdjustPayload(data)
           )
-        ),
+        );
+        clearCachedReads('fetchPackages', 'fetchPackagesUsageSummary');
+        return response;
+      },
       {}
     );
   },
@@ -3352,8 +3429,11 @@ export const apiClient = {
   // window. Packages with zero usage are omitted from the response and
   // should be treated as 0 by callers — this keeps the payload tiny.
   fetchPackagesUsageSummary(days = 30): Promise<{ packageId: number; used: number }[]> {
-    return safe(
+    return cachedSafe(
       'fetchPackagesUsageSummary',
+      `fetchPackagesUsageSummary:${days}`,
+      5 * 60_000,
+      30 * 60_000,
       async () => {
         const res = await api.get<any>(`/packages/usage-summary?days=${days}`);
         if (Array.isArray(res?.data)) {
@@ -3364,7 +3444,8 @@ export const apiClient = {
         }
         return [];
       },
-      []
+      [],
+      { fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 30 * 60_000 }
     );
   },
 
@@ -3406,15 +3487,19 @@ export const apiClient = {
   },
 
   fetchBillingConfigs(): Promise<any[]> {
-    return safe(
+    return cachedSafe(
       'fetchBillingConfigs',
+      'fetchBillingConfigs',
+      5 * 60_000,
+      30 * 60_000,
       async () => {
         const res = await api.get<any>('/billing/config');
         if (Array.isArray(res)) return res;
         if (Array.isArray(res?.data)) return res.data;
         return [];
       },
-      []
+      [],
+      { fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 30 * 60_000 }
     );
   },
 
@@ -3453,7 +3538,11 @@ export const apiClient = {
     }
     return safe(
       'updateBillingConfig',
-      () => api.put<any>(`/billing/config/${clientId}`, payload),
+      async () => {
+        const res = await api.put<any>(`/billing/config/${clientId}`, payload);
+        clearCachedReads('fetchBillingConfigs', 'fetchBillingSummary');
+        return res;
+      },
       {}
     );
   },
@@ -3461,12 +3550,15 @@ export const apiClient = {
   generateBilling(from: string, to: string, clientId?: number): Promise<any> {
     return safe(
       'generateBilling',
-      () =>
-        api.post<any>('/billing/generate', {
+      async () => {
+        const res = await api.post<any>('/billing/generate', {
           from,
           to,
           ...(clientId != null ? { clientId } : {}),
-        }),
+        });
+        clearCachedReads('fetchBillingSummary');
+        return res;
+      },
       {}
     );
   },
@@ -3483,12 +3575,15 @@ export const apiClient = {
     // (the /billing/summary response doesn't join client names).
     const dateFrom = toIsoDayStart(from);
     const dateTo = toIsoDayEnd(to);
-    return safe(
+    return cachedSafe(
       'fetchBillingSummary',
+      `fetchBillingSummary:${dateFrom ?? ''}:${dateTo ?? ''}:${clientId ?? ''}`,
+      60_000,
+      10 * 60_000,
       async () => {
         const [res, clientsRes] = await Promise.all([
           api.get<any>(`/billing/summary${qs({ dateFrom, dateTo, clientId })}`),
-          api.get<any>(`/clients${qs({ activeOnly: true })}`).catch(() => []),
+          apiClient.fetchClients().catch(() => []),
         ]);
 
         // Backwards-compat: if server one day changes to a flat array or a
@@ -3525,7 +3620,8 @@ export const apiClient = {
           };
         });
       },
-      []
+      [],
+      { warn: false, fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 10 * 60_000 }
     );
   },
 
@@ -3547,8 +3643,11 @@ export const apiClient = {
   },
 
   fetchBillingPackagePrices(clientId: number): Promise<any[]> {
-    return safe(
+    return cachedSafe(
       'fetchBillingPackagePrices',
+      `fetchBillingPackagePrices:${clientId}`,
+      5 * 60_000,
+      30 * 60_000,
       async () => {
         const res = await api.get<any>(
           `/billing/package-prices${qs({ clientId })}`
@@ -3557,14 +3656,19 @@ export const apiClient = {
         if (Array.isArray(res?.data)) return res.data;
         return [];
       },
-      []
+      [],
+      { fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 30 * 60_000 }
     );
   },
 
   saveBillingPackagePrices(data: Record<string, unknown>): Promise<any> {
     return safe(
       'saveBillingPackagePrices',
-      () => api.put<any>('/billing/package-prices', data),
+      async () => {
+        const res = await api.put<any>('/billing/package-prices', data);
+        clearCachedReads('fetchBillingPackagePrices', 'fetchBillingSummary');
+        return res;
+      },
       {}
     );
   },
@@ -3572,8 +3676,11 @@ export const apiClient = {
   setDefaultPackagePrice(packageId: number, price: number): Promise<any> {
     return safe(
       'setDefaultPackagePrice',
-      () =>
-        api.post<any>('/billing/package-prices/set-default', { packageId, price }),
+      async () => {
+        const res = await api.post<any>('/billing/package-prices/set-default', { packageId, price });
+        clearCachedReads('fetchBillingPackagePrices', 'fetchBillingSummary');
+        return res;
+      },
       {}
     );
   },
@@ -3875,7 +3982,7 @@ export const apiClient = {
 
         const [breakdown, clientsRes] = await Promise.all([
           api.get<any>(`/dashboard/top-skus${qs(q)}`),
-          api.get<any>(`/clients${qs({ activeOnly: true })}`).catch(() => []),
+          apiClient.fetchClients().catch(() => []),
         ]);
         const clients = Array.isArray(clientsRes) ? clientsRes : [];
         const nameById = new Map<number, string>();
@@ -3994,20 +4101,24 @@ export const apiClient = {
     items: any[];
     total: number;
   }> {
-    return safe(
+    const q: Record<string, string | number | boolean> = {};
+    if (query?.clientId !== undefined) q.clientId = query.clientId;
+    if (query?.active !== undefined) q.active = query.active;
+    if (query?.pageSize !== undefined) q.pageSize = query.pageSize;
+    return cachedSafe(
       'fetchDashboardInventoryRisk',
+      `fetchDashboardInventoryRisk:${JSON.stringify(q)}`,
+      60_000,
+      10 * 60_000,
       async () => {
-        const q: Record<string, string | number | boolean> = {};
-        if (query?.clientId !== undefined) q.clientId = query.clientId;
-        if (query?.active !== undefined) q.active = query.active;
-        if (query?.pageSize !== undefined) q.pageSize = query.pageSize;
         const res: any = await api.get<any>(`/dashboard/inventory-risk${qs(q)}`);
         return {
           items: Array.isArray(res?.items) ? res.items : [],
           total: Number(res?.total) || 0,
         };
       },
-      { items: [], total: 0 }
+      { items: [], total: 0 },
+      { warn: false, fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 10 * 60_000 }
     );
   },
 
@@ -4052,7 +4163,7 @@ export const apiClient = {
         const q = normalizeAnalysisRange(query);
         const [breakdown, clientsRes] = await Promise.all([
           api.get<any>(`/analysis/sku-breakdown${qs(q)}`),
-          api.get<any>(`/clients${qs({ activeOnly: true })}`).catch(() => []),
+          apiClient.fetchClients().catch(() => []),
         ]);
         const clients = Array.isArray(clientsRes) ? clientsRes : [];
         const nameById = new Map<number, string>();
