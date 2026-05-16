@@ -48,6 +48,7 @@ const dashboardInventoryRiskQuery = z.object({
   clientId: z.coerce.number().int().optional(),
   pageSize: z.coerce.number().int().positive().max(1000).optional().default(500),
   active: z.coerce.boolean().optional().default(true),
+  liveMetrics: z.coerce.boolean().optional().default(false),
 });
 
 const visibleStoreBasePredicate = sql`(
@@ -429,6 +430,7 @@ app.get('/inventory-risk', zValidator('query', dashboardInventoryRiskQuery), asy
     clientId: q.clientId ?? null,
     pageSize: q.pageSize,
     active: q.active,
+    liveMetrics: q.liveMetrics,
     caller: dashboardCallerCacheScope(c),
   });
   const cached = await getAnalyticsCache<DashboardInventoryRiskPayload>(cacheKey);
@@ -470,7 +472,8 @@ app.get('/inventory-risk', zValidator('query', dashboardInventoryRiskQuery), asy
     .limit(q.pageSize);
 
   const ids = rows.map((row) => row.id);
-  const soldRows = ids.length
+  const shouldRunLiveMetrics = q.liveMetrics === true;
+  const soldRows = ids.length && shouldRunLiveMetrics
     ? await db.execute<{ inventory_id: number; sold_last_30_days: number }>(sql`
         select
           i.id as inventory_id,
@@ -497,7 +500,7 @@ app.get('/inventory-risk', zValidator('query', dashboardInventoryRiskQuery), asy
     soldRows.map((row) => [row.inventory_id, Number(row.sold_last_30_days) || 0])
   );
 
-  const effectiveRows = ids.length
+  const effectiveRows = ids.length && shouldRunLiveMetrics
     ? await db.execute<{
         inventory_id: number;
         total_received: number;
@@ -554,10 +557,20 @@ app.get('/inventory-risk', zValidator('query', dashboardInventoryRiskQuery), asy
 
   const payload = {
     items: rows.map((row) => {
-      const eff = effectiveByInventoryId.get(row.id) ?? { totalReceived: 0, totalSold: 0, effectiveStock: 0 };
+      const stockQty = Number(row.stockQty ?? 0) || 0;
+      const reorderLevel = Number(row.reorderLevel ?? 0) || 0;
+      const eff = effectiveByInventoryId.get(row.id) ?? {
+        totalReceived: 0,
+        totalSold: 0,
+        effectiveStock: stockQty,
+      };
       return {
         ...row,
         soldLast30Days: soldByInventoryId.get(row.id) ?? 0,
+        soldLast7Days: 0,
+        velocityPerDay: 0,
+        daysSupply: null,
+        restockQty: Math.max(0, reorderLevel - stockQty),
         totalReceived: eff.totalReceived,
         totalSoldAllTime: eff.totalSold,
         effectiveStock: eff.effectiveStock,

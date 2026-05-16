@@ -9,7 +9,6 @@ import {
   getPersistedWorkerStatus,
 } from '../services/worker-status';
 import { getSyncJobQueueStatus } from '../services/sync-job-queue';
-import { getReportingMetricsStatus } from '../services/reporting-metrics';
 
 const app = new Hono();
 
@@ -54,15 +53,11 @@ app.post('/orders', zValidator('json', triggerBody), async (c) => {
 });
 
 app.get('/status', async (c) => {
-  const [orders, shipments, worker, queue, reporting] = await Promise.all([
+  const [orders, shipments, worker, queue] = await Promise.all([
     getSyncStatus({ includeOrderCount: false }),
     getShipmentSyncStatus({ includeShipmentCount: false }),
     getPersistedWorkerStatus(),
     getSyncJobQueueStatus(),
-    getReportingMetricsStatus().catch((err) => ({
-      tablesReady: false,
-      error: err instanceof Error ? err.message : String(err),
-    })),
   ]);
   const workerSchedulerActive = Boolean(
     worker.status?.schedulerEnabled && !worker.stale
@@ -100,7 +95,6 @@ app.get('/status', async (c) => {
     shipments,
     worker,
     queue: queueStatus,
-    reporting,
     api: getApiRuntimeStatus(),
   });
 });

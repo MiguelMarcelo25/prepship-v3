@@ -764,6 +764,47 @@ export async function billingSummary(
   });
   if (metrics) return metrics;
 
+  const useLiveFallback = process.env.BILLING_SUMMARY_LIVE_FALLBACK === 'true';
+  if (!useLiveFallback) {
+    const clientRows = await db.execute<{
+      client_id: number;
+      client_name: string;
+    }>(sql`
+      select
+        c.id as client_id,
+        c.name as client_name
+      from clients c
+      where c.active = true
+        and c.name not in ('Manual Orders', 'Rate Browser', 'Api Shipments')
+        ${input.clientId !== undefined ? sql`and c.id = ${input.clientId}` : sql``}
+      order by c.name asc
+    `);
+
+    return {
+      clients: clientRows.map((row) => ({
+        clientId: row.client_id,
+        clientName: row.client_name,
+        pickPackTotal: 0,
+        additionalTotal: 0,
+        packageTotal: 0,
+        shippingTotal: 0,
+        storageTotal: 0,
+        orderCount: 0,
+        grandTotal: 0,
+        total: 0,
+        count: 0,
+        byType: {
+          pick_pack: 0,
+          additional_unit: 0,
+          package_cost: 0,
+          shipping: 0,
+          storage: 0,
+        },
+      })),
+      grandTotal: 0,
+    };
+  }
+
   // v2-parity aggregation. Starts from `clients` with a LEFT JOIN to
   // billing_line_items so every active, non-system client surfaces — even
   // those with zero volume in the window (HUGRAB, KimlyParc, IntegrationTest,

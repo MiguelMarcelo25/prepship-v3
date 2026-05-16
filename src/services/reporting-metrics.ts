@@ -3,6 +3,7 @@ import { db } from '../db/client';
 
 const DEFAULT_REFRESH_DAYS = 45;
 const DEFAULT_INVENTORY_LIMIT = 5000;
+const DEFAULT_REPORTING_READ_TIMEOUT_MS = 1200;
 
 let ensurePromise: Promise<void> | null = null;
 
@@ -91,6 +92,35 @@ function num(value: unknown): number {
     return Number.isFinite(parsed) ? parsed : 0;
   }
   return 0;
+}
+
+function reportingReadErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+async function optionalReportingRead<T>(
+  label: string,
+  fallback: T,
+  fn: () => Promise<T>
+): Promise<T> {
+  const timeoutMs = Number(process.env.REPORTING_READ_TIMEOUT_MS ?? DEFAULT_REPORTING_READ_TIMEOUT_MS);
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      fn(),
+      new Promise<T>((resolve) => {
+        timeoutId = setTimeout(() => {
+          console.warn(`[reporting-metrics] ${label} timed out after ${timeoutMs}ms; using fallback`);
+          resolve(fallback);
+        }, timeoutMs);
+      }),
+    ]);
+  } catch (err) {
+    console.warn(`[reporting-metrics] ${label} unavailable:`, reportingReadErrorMessage(err));
+    return fallback;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
 }
 
 async function ensureTables(): Promise<void> {
@@ -691,142 +721,59 @@ export async function getFreshInventoryRiskMetrics(options: {
   active?: boolean;
   maxAgeMinutes?: number;
 }): Promise<{ items: InventoryRiskMetricRow[]; total: number; source: 'reporting_metrics' } | null> {
-  await ensureReportingMetricsTables();
   const maxAgeMinutes = options.maxAgeMinutes ?? 15;
 
-  const rows = await db.execute<{
-    id: number;
-    client_id: number | null;
-    sku: string;
-    name: string | null;
-    image_url: string | null;
-    stock_qty: number;
-    reorder_level: number;
-    active: boolean;
-    sold_last_7_days: number;
-    sold_last_30_days: number;
-    velocity_per_day: string | number;
-    days_supply: string | number | null;
-    restock_qty: number;
-    total_received: number;
-    total_sold_all_time: number;
-    effective_stock: number;
-    metrics_updated_at: string | Date | null;
-  }>(sql`
-    select
-      i.id,
-      i.client_id,
-      i.sku,
-      i.name,
-      i.image_url,
-      i.stock_qty,
-      i.reorder_level,
-      i.active,
-      m.sold_7d as sold_last_7_days,
-      m.sold_30d as sold_last_30_days,
-      m.velocity_per_day,
-      m.days_supply,
-      m.restock_qty,
-      m.total_received,
-      m.total_sold_all_time,
-      m.effective_stock,
-      m.updated_at as metrics_updated_at
-    from inventory_risk_metrics m
-    join inventory i on i.id = m.inventory_id
-    where m.updated_at >= now() - (${maxAgeMinutes} * interval '1 minute')
-      and (${options.active ?? null}::boolean is null or i.active = ${options.active ?? null}::boolean)
-      and (${options.clientId ?? null}::int is null or i.client_id = ${options.clientId ?? null}::int)
-    order by m.restock_qty desc, m.sold_30d desc, i.updated_at desc
-    limit ${options.pageSize}
-  `);
+  return optionalReportingRead('inventory-risk read model', null, async () => {
+    const rows = await db.execute<{
+      id: number;
+      client_id: number | null;
+      sku: string;
+      name: string | null;
+      image_url: string | null;
+      stock_qty: number;
+      reorder_level: number;
+      active: boolean;
+      sold_last_7_days: number;
+      sold_last_30_days: number;
+      velocity_per_day: string | number;
+      days_supply: string | number | null;
+      restock_qty: number;
+      total_received: number;
+      total_sold_all_time: number;
+      effective_stock: number;
+      metrics_updated_at: string | Date | null;
+    }>(sql`
+      select
+        i.id,
+        i.client_id,
+        i.sku,
+        i.name,
+        i.image_url,
+        i.stock_qty,
+        i.reorder_level,
+        i.active,
+        m.sold_7d as sold_last_7_days,
+        m.sold_30d as sold_last_30_days,
+        m.velocity_per_day,
+        m.days_supply,
+        m.restock_qty,
+        m.total_received,
+        m.total_sold_all_time,
+        m.effective_stock,
+        m.updated_at as metrics_updated_at
+      from inventory_risk_metrics m
+      join inventory i on i.id = m.inventory_id
+      where m.updated_at >= now() - (${maxAgeMinutes} * interval '1 minute')
+        and (${options.active ?? null}::boolean is null or i.active = ${options.active ?? null}::boolean)
+        and (${options.clientId ?? null}::int is null or i.client_id = ${options.clientId ?? null}::int)
+      order by m.restock_qty desc, m.sold_30d desc, i.updated_at desc
+      limit ${options.pageSize}
+    `);
 
-  if (rows.length === 0) return null;
+    if (rows.length === 0) return null;
 
-  return {
-    items: rows.map((row) => ({
-      id: row.id,
-      clientId: row.client_id,
-      sku: row.sku,
-      name: row.name,
-      imageUrl: row.image_url,
-      stockQty: num(row.stock_qty),
-      reorderLevel: num(row.reorder_level),
-      active: row.active,
-      soldLast7Days: num(row.sold_last_7_days),
-      soldLast30Days: num(row.sold_last_30_days),
-      velocityPerDay: num(row.velocity_per_day),
-      daysSupply: row.days_supply == null ? null : num(row.days_supply),
-      restockQty: num(row.restock_qty),
-      totalReceived: num(row.total_received),
-      totalSoldAllTime: num(row.total_sold_all_time),
-      effectiveStock: num(row.effective_stock),
-      metricsUpdatedAt:
-        row.metrics_updated_at instanceof Date
-          ? row.metrics_updated_at.toISOString()
-          : row.metrics_updated_at == null
-            ? null
-            : String(row.metrics_updated_at),
-    })),
-    total: rows.length,
-    source: 'reporting_metrics',
-  };
-}
-
-export async function getFreshInventoryRiskMetricMap(
-  ids: number[],
-  options: { maxAgeMinutes?: number } = {}
-): Promise<Map<number, InventoryRiskMetricRow>> {
-  await ensureReportingMetricsTables();
-  if (ids.length === 0) return new Map();
-  const maxAgeMinutes = options.maxAgeMinutes ?? 45;
-
-  const rows = await db.execute<{
-    id: number;
-    client_id: number | null;
-    sku: string;
-    name: string | null;
-    image_url: string | null;
-    stock_qty: number;
-    reorder_level: number;
-    active: boolean;
-    sold_last_7_days: number;
-    sold_last_30_days: number;
-    velocity_per_day: string | number;
-    days_supply: string | number | null;
-    restock_qty: number;
-    total_received: number;
-    total_sold_all_time: number;
-    effective_stock: number;
-    metrics_updated_at: string | Date | null;
-  }>(sql`
-    select
-      i.id,
-      i.client_id,
-      i.sku,
-      i.name,
-      i.image_url,
-      i.stock_qty,
-      i.reorder_level,
-      i.active,
-      m.sold_7d as sold_last_7_days,
-      m.sold_30d as sold_last_30_days,
-      m.velocity_per_day,
-      m.days_supply,
-      m.restock_qty,
-      m.total_received,
-      m.total_sold_all_time,
-      m.effective_stock,
-      m.updated_at as metrics_updated_at
-    from inventory_risk_metrics m
-    join inventory i on i.id = m.inventory_id
-    where m.inventory_id in (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
-      and m.updated_at >= now() - (${maxAgeMinutes} * interval '1 minute')
-  `);
-
-  return new Map(
-    rows.map((row) => [
-      row.id,
-      {
+    return {
+      items: rows.map((row) => ({
         id: row.id,
         clientId: row.client_id,
         sku: row.sku,
@@ -849,9 +796,94 @@ export async function getFreshInventoryRiskMetricMap(
             : row.metrics_updated_at == null
               ? null
               : String(row.metrics_updated_at),
-      },
-    ])
-  );
+      })),
+      total: rows.length,
+      source: 'reporting_metrics',
+    };
+  });
+}
+
+export async function getFreshInventoryRiskMetricMap(
+  ids: number[],
+  options: { maxAgeMinutes?: number } = {}
+): Promise<Map<number, InventoryRiskMetricRow>> {
+  if (ids.length === 0) return new Map();
+  const maxAgeMinutes = options.maxAgeMinutes ?? 45;
+
+  return optionalReportingRead('inventory-risk metric map', new Map(), async () => {
+    const rows = await db.execute<{
+      id: number;
+      client_id: number | null;
+      sku: string;
+      name: string | null;
+      image_url: string | null;
+      stock_qty: number;
+      reorder_level: number;
+      active: boolean;
+      sold_last_7_days: number;
+      sold_last_30_days: number;
+      velocity_per_day: string | number;
+      days_supply: string | number | null;
+      restock_qty: number;
+      total_received: number;
+      total_sold_all_time: number;
+      effective_stock: number;
+      metrics_updated_at: string | Date | null;
+    }>(sql`
+      select
+        i.id,
+        i.client_id,
+        i.sku,
+        i.name,
+        i.image_url,
+        i.stock_qty,
+        i.reorder_level,
+        i.active,
+        m.sold_7d as sold_last_7_days,
+        m.sold_30d as sold_last_30_days,
+        m.velocity_per_day,
+        m.days_supply,
+        m.restock_qty,
+        m.total_received,
+        m.total_sold_all_time,
+        m.effective_stock,
+        m.updated_at as metrics_updated_at
+      from inventory_risk_metrics m
+      join inventory i on i.id = m.inventory_id
+      where m.inventory_id in (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+        and m.updated_at >= now() - (${maxAgeMinutes} * interval '1 minute')
+    `);
+
+    return new Map(
+      rows.map((row) => [
+        row.id,
+        {
+          id: row.id,
+          clientId: row.client_id,
+          sku: row.sku,
+          name: row.name,
+          imageUrl: row.image_url,
+          stockQty: num(row.stock_qty),
+          reorderLevel: num(row.reorder_level),
+          active: row.active,
+          soldLast7Days: num(row.sold_last_7_days),
+          soldLast30Days: num(row.sold_last_30_days),
+          velocityPerDay: num(row.velocity_per_day),
+          daysSupply: row.days_supply == null ? null : num(row.days_supply),
+          restockQty: num(row.restock_qty),
+          totalReceived: num(row.total_received),
+          totalSoldAllTime: num(row.total_sold_all_time),
+          effectiveStock: num(row.effective_stock),
+          metricsUpdatedAt:
+            row.metrics_updated_at instanceof Date
+              ? row.metrics_updated_at.toISOString()
+              : row.metrics_updated_at == null
+                ? null
+                : String(row.metrics_updated_at),
+        },
+      ])
+    );
+  });
 }
 
 export async function getFreshBillingSummaryMetrics(options: {
@@ -860,75 +892,76 @@ export async function getFreshBillingSummaryMetrics(options: {
   clientId?: number;
   maxAgeMinutes?: number;
 }): Promise<{ clients: BillingSummaryMetricRow[]; grandTotal: number } | null> {
-  await ensureReportingMetricsTables();
   const maxAgeMinutes = options.maxAgeMinutes ?? 45;
   const fromDay = isoDate(new Date(options.dateFrom));
   const toDay = isoDate(new Date(options.dateTo));
 
-  const rows = await db.execute<{
-    client_id: number;
-    client_name: string;
-    pick_pack_total: string | number;
-    additional_total: string | number;
-    package_total: string | number;
-    shipping_total: string | number;
-    storage_total: string | number;
-    order_count: number;
-    grand_total: string | number;
-  }>(sql`
-    select
-      c.id as client_id,
-      c.name as client_name,
-      m.pick_pack_total,
-      m.additional_total,
-      m.package_total,
-      m.shipping_total,
-      m.storage_total,
-      m.order_count,
-      m.grand_total
-    from billing_summary_metrics m
-    join clients c on c.id = m.client_id
-    where m.period_from = ${fromDay}::date
-      and m.period_to = ${toDay}::date
-      and m.updated_at >= now() - (${maxAgeMinutes} * interval '1 minute')
-      and (${options.clientId ?? null}::int is null or m.client_id = ${options.clientId ?? null}::int)
-    order by c.name asc
-  `);
+  return optionalReportingRead('billing-summary read model', null, async () => {
+    const rows = await db.execute<{
+      client_id: number;
+      client_name: string;
+      pick_pack_total: string | number;
+      additional_total: string | number;
+      package_total: string | number;
+      shipping_total: string | number;
+      storage_total: string | number;
+      order_count: number;
+      grand_total: string | number;
+    }>(sql`
+      select
+        c.id as client_id,
+        c.name as client_name,
+        m.pick_pack_total,
+        m.additional_total,
+        m.package_total,
+        m.shipping_total,
+        m.storage_total,
+        m.order_count,
+        m.grand_total
+      from billing_summary_metrics m
+      join clients c on c.id = m.client_id
+      where m.period_from = ${fromDay}::date
+        and m.period_to = ${toDay}::date
+        and m.updated_at >= now() - (${maxAgeMinutes} * interval '1 minute')
+        and (${options.clientId ?? null}::int is null or m.client_id = ${options.clientId ?? null}::int)
+      order by c.name asc
+    `);
 
-  if (rows.length === 0) return null;
+    if (rows.length === 0) return null;
 
-  const clients = rows.map((row) => {
-    const pickPackTotal = num(row.pick_pack_total);
-    const additionalTotal = num(row.additional_total);
-    const packageTotal = num(row.package_total);
-    const shippingTotal = num(row.shipping_total);
-    const storageTotal = num(row.storage_total);
-    const grandTotal = num(row.grand_total);
-    const orderCount = num(row.order_count);
+    const clients = rows.map((row) => {
+      const pickPackTotal = num(row.pick_pack_total);
+      const additionalTotal = num(row.additional_total);
+      const packageTotal = num(row.package_total);
+      const shippingTotal = num(row.shipping_total);
+      const storageTotal = num(row.storage_total);
+      const grandTotal = num(row.grand_total);
+      const orderCount = num(row.order_count);
+      return {
+        clientId: row.client_id,
+        clientName: row.client_name,
+        pickPackTotal,
+        additionalTotal,
+        packageTotal,
+        shippingTotal,
+        storageTotal,
+        orderCount,
+        grandTotal,
+        total: grandTotal,
+        count: orderCount,
+        byType: {
+          pick_pack: pickPackTotal,
+          additional_unit: additionalTotal,
+          package_cost: packageTotal,
+          shipping: shippingTotal,
+          storage: storageTotal,
+        },
+      };
+    });
+
     return {
-      clientId: row.client_id,
-      clientName: row.client_name,
-      pickPackTotal,
-      additionalTotal,
-      packageTotal,
-      shippingTotal,
-      storageTotal,
-      orderCount,
-      grandTotal,
-      total: grandTotal,
-      count: orderCount,
-      byType: {
-        pick_pack: pickPackTotal,
-        additional_unit: additionalTotal,
-        package_cost: packageTotal,
-        shipping: shippingTotal,
-        storage: storageTotal,
-      },
+      clients,
+      grandTotal: clients.reduce((sum, client) => sum + client.grandTotal, 0),
     };
   });
-
-  return {
-    clients,
-    grandTotal: clients.reduce((sum, client) => sum + client.grandTotal, 0),
-  };
 }

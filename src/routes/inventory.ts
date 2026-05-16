@@ -92,12 +92,17 @@ const listQuery = paginationSchema.extend({
   // start seeing deactivated SKUs. Currently only the Stock Levels
   // tab sets this when its "Active only" toolbar toggle is off.
   includeInactive: booleanQuery.optional(),
+  // Emergency/debug-only escape hatch. Normal page loads must use
+  // worker-generated metrics or cheap row-level fallbacks instead of
+  // scanning order history live.
+  liveMetrics: booleanQuery.optional(),
 });
 
 app.get('/', zValidator('query', listQuery), async (c) => {
   const routeStartedAt = performance.now();
   const timings: InventoryRouteTimings = {};
   const q = c.req.valid('query');
+  const shouldRunLiveMetrics = q.liveMetrics === true;
   const where = and(
     ...[
       q.clientId !== undefined ? eq(inventory.clientId, q.clientId) : undefined,
@@ -144,7 +149,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     : new Map();
   const hasFreshMetrics = rows.length > 0 && metricByInventoryId.size === rows.length;
 
-  const soldRows = rows.length && !hasFreshMetrics
+  const soldRows = rows.length && !hasFreshMetrics && shouldRunLiveMetrics
     ? await timedInventoryStep(timings, 'soldLast30Days', () =>
         db.execute<{ inventory_id: number; sold_last_30_days: number }>(sql`
         select
@@ -220,7 +225,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   //
   // Allowed under the shipped-data lockdown: this is a READ-only
   // analytics computation. No locked rows are mutated.
-  const effectiveRows = rows.length && !hasFreshMetrics
+  const effectiveRows = rows.length && !hasFreshMetrics && shouldRunLiveMetrics
     ? await timedInventoryStep(timings, 'effectiveStock', () =>
         db.execute<{
           inventory_id: number
@@ -300,10 +305,20 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           effectiveStock: metric.effectiveStock,
         };
       }
-      const eff = effectiveByInventoryId.get(row.id) ?? { totalReceived: 0, totalSold: 0, effectiveStock: 0 };
+      const stockQty = Number(row.stockQty ?? 0) || 0;
+      const reorderLevel = Number(row.reorderLevel ?? 0) || 0;
+      const eff = effectiveByInventoryId.get(row.id) ?? {
+        totalReceived: 0,
+        totalSold: 0,
+        effectiveStock: stockQty,
+      };
       return {
         ...row,
+        soldLast7Days: 0,
         soldLast30Days: soldByInventoryId.get(row.id) ?? 0,
+        velocityPerDay: 0,
+        daysSupply: null,
+        restockQty: Math.max(0, reorderLevel - stockQty),
         // NEW fields — see comment block above the SQL.
         totalReceived: eff.totalReceived,
         totalSoldAllTime: eff.totalSold,
