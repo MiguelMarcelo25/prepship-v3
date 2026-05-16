@@ -12,7 +12,10 @@ import { clients } from '../db/schema/clients';
 import { inventory } from '../db/schema/inventory';
 import { SS_BASELINE_CARRIER_CODES } from './rates';
 import { resolveCarrierNickname } from './labels';
-import { getFreshBillingSummaryMetrics } from './reporting-metrics';
+import {
+  getFreshBillingSummaryMetrics,
+  refreshBillingSummaryMetrics,
+} from './reporting-metrics';
 
 export type GenerateInput = {
   clientId?: number;
@@ -33,6 +36,19 @@ function toNum(v: string | null | undefined) {
   if (v === null || v === undefined) return 0;
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
+}
+
+function billingSummaryHasValues(summary: { clients: BillingSummaryRow[] }): boolean {
+  return summary.clients.some(
+    (row) =>
+      row.orderCount > 0 ||
+      row.pickPackTotal > 0 ||
+      row.additionalTotal > 0 ||
+      row.packageTotal > 0 ||
+      row.shippingTotal > 0 ||
+      row.storageTotal > 0 ||
+      row.grandTotal > 0
+  );
 }
 
 function stringOrNull(value: unknown): string | null {
@@ -722,11 +738,25 @@ export async function generateLineItems(input: GenerateInput) {
     }
   }
 
+  let billingSummaryMetricsRows: number | null = null;
+  try {
+    billingSummaryMetricsRows = await refreshBillingSummaryMetrics(
+      new Date(input.dateFrom),
+      new Date(input.dateTo)
+    );
+  } catch (err) {
+    console.warn(
+      '[billing] generated line items but failed to refresh summary metrics:',
+      err instanceof Error ? err.message : err
+    );
+  }
+
   return {
     generated,
     count: generated,
     total,
     skipped,
+    billingSummaryMetricsRows,
     message: `Generated ${generated} line items from ${billableRows.length} billable shipments/orders.`,
   };
 }
@@ -747,9 +777,31 @@ export type BillingSummaryRow = {
   byType: Record<string, number>;
 };
 
+async function hasBillingLineItemsForSummary(input: GenerateInput): Promise<boolean> {
+  const [row] = await db.execute<{ exists: boolean }>(sql`
+    select exists (
+      select 1
+      from billing_line_items
+      where ship_date >= ${input.dateFrom}::timestamptz
+        and ship_date <= ${input.dateTo}::timestamptz
+        ${input.clientId !== undefined ? sql`and client_id = ${input.clientId}` : sql``}
+      limit 1
+    ) as exists
+  `);
+  return row?.exists === true;
+}
+
 export async function billingSummary(
   input: GenerateInput
 ): Promise<{ clients: BillingSummaryRow[]; grandTotal: number }> {
+  let hasGeneratedRows: boolean | null = null;
+  const hasLineItems = async () => {
+    if (hasGeneratedRows === null) {
+      hasGeneratedRows = await hasBillingLineItemsForSummary(input);
+    }
+    return hasGeneratedRows;
+  };
+
   const metrics = await getFreshBillingSummaryMetrics({
     dateFrom: input.dateFrom,
     dateTo: input.dateTo,
@@ -762,9 +814,35 @@ export async function billingSummary(
     );
     return null;
   });
-  if (metrics) return metrics;
+  if (metrics && billingSummaryHasValues(metrics)) return metrics;
 
-  const useLiveFallback = process.env.BILLING_SUMMARY_LIVE_FALLBACK === 'true';
+  if (metrics && !(await hasLineItems())) return metrics;
+
+  if (!metrics || !billingSummaryHasValues(metrics)) {
+    if (await hasLineItems()) {
+      try {
+        await refreshBillingSummaryMetrics(
+          new Date(input.dateFrom),
+          new Date(input.dateTo)
+        );
+        const refreshedMetrics = await getFreshBillingSummaryMetrics({
+          dateFrom: input.dateFrom,
+          dateTo: input.dateTo,
+          clientId: input.clientId,
+          maxAgeMinutes: 45,
+        });
+        if (refreshedMetrics) return refreshedMetrics;
+      } catch (err) {
+        console.warn(
+          '[billing] failed to refresh stale summary metrics:',
+          err instanceof Error ? err.message : err
+        );
+      }
+    }
+  }
+
+  const useLiveFallback =
+    process.env.BILLING_SUMMARY_LIVE_FALLBACK === 'true' || (await hasLineItems());
   if (!useLiveFallback) {
     const clientRows = await db.execute<{
       client_id: number;

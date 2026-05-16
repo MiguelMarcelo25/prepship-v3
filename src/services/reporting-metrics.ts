@@ -534,7 +534,8 @@ async function refreshInventoryRiskMetrics(limit: number): Promise<number> {
   });
 }
 
-async function refreshBillingSummaryMetrics(from: Date, to: Date): Promise<number> {
+export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promise<number> {
+  await ensureReportingMetricsTables();
   const fromDay = isoDate(from);
   const toDay = isoDate(to);
 
