@@ -4227,6 +4227,33 @@ export default function OrdersView({
     return { detail, dims, dimsLabel, weightOz, shipTo, confirmation, key }
   }
 
+  function normalizeDimsLabel(value: unknown) {
+    return typeof value === 'string'
+      ? value.replace(/\s+/g, '').toLowerCase()
+      : null
+  }
+
+  function hasSavedBestRateForRequest(
+    order: OrderSummaryDto,
+    request: NonNullable<ReturnType<typeof getAutoBestRateRequest>>,
+  ) {
+    const savedRate =
+      toRecord(order.bestRate) ??
+      toRecord(getShippingModel(order)?.bestRate) ??
+      toRecord(toRecord(order.overrides)?.bestRateJson)
+    if (!savedRate) return false
+    if (getRateBaseAmount(savedRate) <= 0) return false
+
+    const savedDims = normalizeDimsLabel(
+      toRecord(order.overrides)?.bestRateDims ??
+      order.bestRateDims ??
+      getShippingModel(order)?.bestRateDims,
+    )
+    const requestDims = normalizeDimsLabel(request.dimsLabel)
+
+    return !savedDims || savedDims === requestDims
+  }
+
   function getRateBaseAmount(rate: Record<string, unknown>) {
     const shipmentCost = toNumberValue(rate.shipmentCost) ?? toNumberValue(rate.amount) ?? 0
     const otherCost = toNumberValue(rate.otherCost) ?? 0
@@ -4277,6 +4304,7 @@ export default function OrdersView({
         const request = getAutoBestRateRequest(order)
         if (!request) return null
         if (!isTestOrder(order, request.detail) && carrierIds.length === 0) return null
+        if (hasSavedBestRateForRequest(order, request)) return null
         const entry = autoBestRateEntries[order.orderId]
         if (entry?.key === request.key) return null
         if (autoBestRateRequestedRef.current.has(request.key)) return null
@@ -4287,7 +4315,7 @@ export default function OrdersView({
     if (candidates.length === 0) return
 
     const queue = [...candidates]
-    const workerCount = Math.min(3, queue.length)
+    const workerCount = Math.min(1, queue.length)
 
     async function refreshVisibleBestRate(order: OrderSummaryDto, request: NonNullable<ReturnType<typeof getAutoBestRateRequest>>) {
       autoBestRateRequestedRef.current.add(request.key)
@@ -4373,7 +4401,7 @@ export default function OrdersView({
     return () => {
       cancelled = true
     }
-  }, [loading, currentStatus, orderedFilteredOrders, autoBestRateEntries, orderDetailsById, panelOrderId, markups, shippingAccounts])
+  }, [loading, currentStatus, orderedFilteredOrders, orderDetailsById, panelOrderId, markups, shippingAccounts])
 
   async function refreshPanelBestRate(options: {
     order: OrderSummaryDto
