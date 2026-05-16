@@ -91,11 +91,15 @@ app.use('*', async (c, next) => {
 
     if (durationMs >= slowThresholdMs) {
       const url = new URL(c.req.url);
+      const contentLength = c.res.headers.get('content-length');
+      const responseBytes =
+        contentLength && /^\d+$/.test(contentLength) ? Number(contentLength) : null;
       console.info('[api:timing]', {
         method: c.req.method,
         path: url.pathname,
         status: c.res.status,
         durationMs,
+        responseBytes,
       });
     }
   }
