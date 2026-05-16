@@ -132,7 +132,7 @@ async function request<T>(path: string, init: Init = {}): Promise<T> {
 }
 
 export const api = {
-  get: <T,>(path: string) => request<T>(path),
+  get: <T,>(path: string, init?: Omit<Init, 'method' | 'body'>) => request<T>(path, init),
   post: <T,>(path: string, body: unknown) =>
     request<T>(path, { method: 'POST', body }),
   put: <T,>(path: string, body: unknown) =>

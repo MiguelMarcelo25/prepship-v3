@@ -1114,7 +1114,10 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
       }
     }
     void fetchStatus()
-    const id = setInterval(() => void fetchStatus(), 30_000)
+    const id = setInterval(() => {
+      if (document.visibilityState !== 'visible') return
+      void fetchStatus()
+    }, 60_000)
     return () => {
       cancelled = true
       clearInterval(id)

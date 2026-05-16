@@ -95,8 +95,9 @@ export function useSidebarController(props: SidebarVariantProps) {
     }
     void loadCounts()
     const intervalId = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return
       void loadCounts()
-    }, 10000)
+    }, 120_000)
     const onVisible = () => {
       if (document.visibilityState === 'visible') void loadCounts()
     }

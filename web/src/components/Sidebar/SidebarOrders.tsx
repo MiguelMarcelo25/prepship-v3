@@ -193,7 +193,10 @@ export function SidebarOrders({
       }
     }
     void load()
-    const id = window.setInterval(() => void load(), 30000)
+    const id = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return
+      void load()
+    }, 120_000)
     // Real-time refresh on client active-toggle (dispatched from
     // InventoryView). Mirrors the listener in useSidebarController so
     // BOTH sidebar implementations refresh immediately on toggle.

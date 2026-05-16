@@ -447,12 +447,102 @@ async function safe<T>(
   try {
     return await fn();
   } catch (err) {
-    console.warn(
+    warnThrottled(
+      `safe:${methodName}`,
       `[v2-apiClient] ${methodName} failed:`,
       err instanceof Error ? err.message : err
     );
     return fallback;
   }
+}
+
+const WARN_THROTTLE_MS = 60_000;
+const warnLastSeen = new Map<string, number>();
+
+function warnThrottled(key: string, ...args: unknown[]): void {
+  const now = Date.now();
+  const lastSeen = warnLastSeen.get(key) ?? 0;
+  if (now - lastSeen < WARN_THROTTLE_MS) return;
+  warnLastSeen.set(key, now);
+  console.warn(...args);
+}
+
+type CachedRead<T> = {
+  hasValue: boolean;
+  value?: T;
+  expiresAt: number;
+  staleUntil: number;
+  inFlight?: Promise<T>;
+};
+
+const cachedReads = new Map<string, CachedRead<unknown>>();
+
+async function cachedSafe<T>(
+  methodName: string,
+  cacheKey: string,
+  ttlMs: number,
+  staleMs: number,
+  fn: () => Promise<T>,
+  fallback: T
+): Promise<T> {
+  const now = Date.now();
+  const existing = cachedReads.get(cacheKey) as CachedRead<T> | undefined;
+  if (existing?.hasValue && existing.expiresAt > now) return existing.value as T;
+  if (existing?.inFlight) return existing.inFlight;
+
+  const entry: CachedRead<T> = existing ?? {
+    hasValue: false,
+    expiresAt: 0,
+    staleUntil: 0,
+  };
+
+  const inFlight = fn()
+    .then((value) => {
+      const settledAt = Date.now();
+      cachedReads.set(cacheKey, {
+        hasValue: true,
+        value,
+        expiresAt: settledAt + ttlMs,
+        staleUntil: settledAt + staleMs,
+      });
+      return value;
+    })
+    .catch((err) => {
+      const current = cachedReads.get(cacheKey) as CachedRead<T> | undefined;
+      if (current?.hasValue && current.staleUntil > Date.now()) {
+        warnThrottled(
+          `cached-stale:${methodName}`,
+          `[v2-apiClient] ${methodName} failed; using cached value:`,
+          err instanceof Error ? err.message : err
+        );
+        return current.value as T;
+      }
+      warnThrottled(
+        `cached:${methodName}`,
+        `[v2-apiClient] ${methodName} failed:`,
+        err instanceof Error ? err.message : err
+      );
+      const failedAt = Date.now();
+      cachedReads.set(cacheKey, {
+        hasValue: true,
+        value: fallback,
+        expiresAt: failedAt + 15_000,
+        staleUntil: failedAt + 60_000,
+      });
+      return fallback;
+    })
+    .finally(() => {
+      const current = cachedReads.get(cacheKey) as CachedRead<T> | undefined;
+      if (current?.inFlight) {
+        delete current.inFlight;
+      }
+    });
+
+  cachedReads.set(cacheKey, {
+    ...entry,
+    inFlight,
+  });
+  return inFlight;
 }
 
 function notImpl<T>(methodName: string, fallback: T): Promise<T> {
@@ -1284,11 +1374,16 @@ export const apiClient = {
     const hasDate = Boolean(filter?.dateStart || filter?.dateEnd);
     const dateFrom = toIsoDayStart(filter?.dateStart);
     const dateTo = toIsoDayEnd(filter?.dateEnd);
-    return safe(
+    return cachedSafe(
       'fetchCounts',
+      `fetchCounts:${dateFrom ?? ''}:${dateTo ?? ''}`,
+      60_000,
+      10 * 60_000,
       async () => {
         if (hasDate) {
-          const legacyCounts = await api.get<any>(`/init/counts${qs({ dateFrom, dateTo })}`);
+          const legacyCounts = await api.get<any>(`/init/counts${qs({ dateFrom, dateTo })}`, {
+            timeoutMs: 8_000,
+          });
           return {
             byStatus: Array.isArray(legacyCounts?.byStatus)
               ? legacyCounts.byStatus
@@ -1303,7 +1398,7 @@ export const apiClient = {
           };
         }
 
-        const legacyCounts = await api.get<any>('/init/counts');
+        const legacyCounts = await api.get<any>('/init/counts', { timeoutMs: 8_000 });
         return {
           byStatus: Array.isArray(legacyCounts?.byStatus)
             ? legacyCounts.byStatus
@@ -1425,12 +1520,15 @@ export const apiClient = {
   fetchStores(): Promise<any[]> {
     // v2 sidebar parity: return one row per ShipStation storeId, named from
     // the owning client.
-    return safe(
+    return cachedSafe(
       'fetchStores',
+      'fetchStores',
+      60_000,
+      10 * 60_000,
       async () => {
         const [storesRes, clientRowsRes] = await Promise.all([
-          api.get<any>('/init/stores').catch(() => ({ data: [] })),
-          api.get<any>('/clients?includeInactive=true').catch(() => []),
+          api.get<any>('/init/stores', { timeoutMs: 8_000 }).catch(() => ({ data: [] })),
+          api.get<any>('/clients?includeInactive=true', { timeoutMs: 8_000 }).catch(() => []),
         ]);
         const clientRows = Array.isArray(clientRowsRes) ? clientRowsRes : [];
         const clientsById = new Map<number, any>();
@@ -1546,10 +1644,13 @@ export const apiClient = {
 
   // ─── Carrier accounts ───────────────────────────────────────────────────────
   fetchCarrierAccounts(): Promise<any[]> {
-    return safe(
+    return cachedSafe(
       'fetchCarrierAccounts',
+      'fetchCarrierAccounts',
+      60_000,
+      10 * 60_000,
       async () => {
-        const res = await api.get<any>('/init/carrier-accounts');
+        const res = await api.get<any>('/init/carrier-accounts', { timeoutMs: 8_000 });
         if (Array.isArray(res)) return res;
         if (Array.isArray(res?.carriers)) return res.carriers;
         return [];
@@ -1608,7 +1709,7 @@ export const apiClient = {
     return safe(
       'fetchColumnPrefs',
       async () => {
-        const row = await api.get<SettingsRow>('/settings/orders.columnPrefs');
+        const row = await api.get<SettingsRow>('/settings/orders.columnPrefs', { timeoutMs: 8_000 });
         try {
           return JSON.parse(row.value);
         } catch {
@@ -1632,7 +1733,25 @@ export const apiClient = {
 
   // ─── Sync status ────────────────────────────────────────────────────────────
   fetchLegacySyncStatus(): Promise<any> {
-    return safe('fetchLegacySyncStatus', () => api.get<any>('/sync/status'), {});
+    return cachedSafe(
+      'fetchLegacySyncStatus',
+      'fetchLegacySyncStatus',
+      30_000,
+      5 * 60_000,
+      () => api.get<any>('/sync/status', { timeoutMs: 6_000 }),
+      {}
+    );
+  },
+
+  fetchSyncWorkerStatus(): Promise<any> {
+    return cachedSafe(
+      'fetchSyncWorkerStatus',
+      'fetchSyncWorkerStatus',
+      30_000,
+      5 * 60_000,
+      () => api.get<any>('/worker/status', { timeoutMs: 6_000 }),
+      { enabled: false }
+    );
   },
 
   triggerLegacySync(mode?: 'incremental' | 'full'): Promise<any> {
@@ -1774,20 +1893,26 @@ export const apiClient = {
     dateTo?: string
     includeInactiveClients?: boolean
   } = {}): Promise<string[]> {
-    return safe(
+    const q: Record<string, string> = {}
+    if (filters.status) q.status = filters.status
+    if (filters.clientId != null) q.clientId = String(filters.clientId)
+    if (filters.storeId != null) {
+      if (filters.storeId < 0 && filters.clientId == null) q.clientId = String(Math.abs(filters.storeId))
+      else q.storeId = String(filters.storeId)
+    }
+    if (filters.dateFrom) q.dateFrom = filters.dateFrom
+    if (filters.dateTo) q.dateTo = filters.dateTo
+    if (filters.includeInactiveClients) q.includeInactiveClients = 'true'
+    const queryString = qs(q)
+    return cachedSafe(
       'fetchDistinctSkus',
+      `fetchDistinctSkus:${queryString}`,
+      5 * 60_000,
+      15 * 60_000,
       async () => {
-        const q: Record<string, string> = {}
-        if (filters.status) q.status = filters.status
-        if (filters.clientId != null) q.clientId = String(filters.clientId)
-        if (filters.storeId != null) {
-          if (filters.storeId < 0 && filters.clientId == null) q.clientId = String(Math.abs(filters.storeId))
-          else q.storeId = String(filters.storeId)
-        }
-        if (filters.dateFrom) q.dateFrom = filters.dateFrom
-        if (filters.dateTo) q.dateTo = filters.dateTo
-        if (filters.includeInactiveClients) q.includeInactiveClients = 'true'
-        const res = await api.get<{ skus: string[] }>(`/orders/distinct-skus${qs(q)}`)
+        const res = await api.get<{ skus: string[] }>(`/orders/distinct-skus${queryString}`, {
+          timeoutMs: 8_000,
+        })
         return Array.isArray(res?.skus) ? res.skus : []
       },
       []
@@ -1916,17 +2041,19 @@ export const apiClient = {
     // Coerce UI date strings (YYYY-MM-DD) to the ISO datetimes expected by
     // /orders/daily-stats. With no dates, the server applies its default
     // shift window.
-    return safe(
+    const queryString = qs({
+      dateFrom: toIsoDayStart(query?.dateFrom),
+      dateTo: toIsoDayEnd(query?.dateTo),
+    });
+    return cachedSafe(
       'fetchDailyStats',
+      `fetchDailyStats:${queryString}`,
+      60_000,
+      10 * 60_000,
       async () => {
         // V2 parity: the daily stats endpoint applies only the configured
         // excluded store IDs server-side.
-        const res = await api.get<unknown>(
-          `/orders/daily-stats${qs({
-            dateFrom: toIsoDayStart(query?.dateFrom),
-            dateTo: toIsoDayEnd(query?.dateTo),
-          })}`
-        );
+        const res = await api.get<unknown>(`/orders/daily-stats${queryString}`, { timeoutMs: 8_000 });
         return parseDailyStatsSummary(res);
       },
       null
@@ -3016,10 +3143,13 @@ export const apiClient = {
   fetchLocations(): Promise<any[]> {
     // v4 returns rows with `id`; v2 consumers (LocationsView, useLocations)
     // read `locationId`. Normalize here so every caller gets the v2 shape.
-    return safe(
+    return cachedSafe(
       'fetchLocations',
+      'fetchLocations',
+      60_000,
+      10 * 60_000,
       async () => {
-        const res = await api.get<any>('/locations');
+        const res = await api.get<any>('/locations', { timeoutMs: 8_000 });
         const rows = Array.isArray(res)
           ? res
           : Array.isArray(res?.data)
@@ -3084,10 +3214,13 @@ export const apiClient = {
 
   // ─── Packages ──────────────────────────────────────────────────────────────
   fetchPackages(source?: string): Promise<any[]> {
-    return safe(
+    return cachedSafe(
       'fetchPackages',
+      `fetchPackages:${source ?? ''}`,
+      60_000,
+      10 * 60_000,
       async () => {
-        const res = await api.get<any>(`/packages${qs({ source })}`);
+        const res = await api.get<any>(`/packages${qs({ source })}`, { timeoutMs: 8_000 });
         if (Array.isArray(res)) return res.map(normalizePackageDto);
         if (Array.isArray(res?.data)) return res.data.map(normalizePackageDto);
         return [];

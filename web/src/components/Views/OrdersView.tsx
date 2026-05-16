@@ -2175,6 +2175,7 @@ export default function OrdersView({
   // useEffect dep change cycle — perfectly fine for this dropdown
   // because it's hidden until the user clicks it.
   const [globalSkus, setGlobalSkus] = useState<string[]>([])
+  const [skuOptionsRequested, setSkuOptionsRequested] = useState(false)
   useEffect(() => {
     if (typeof window === 'undefined') return
     const query = window.matchMedia('(max-width: 768px)')
@@ -2185,6 +2186,7 @@ export default function OrdersView({
   }, [])
 
   useEffect(() => {
+    if (!skuOptionsRequested) return
     let cancelled = false
     void apiClient
       .fetchDistinctSkus({
@@ -2205,7 +2207,7 @@ export default function OrdersView({
     return () => {
       cancelled = true
     }
-  }, [currentStatus, activeStore, dateRange.start, dateRange.end, includeInactiveClients])
+  }, [skuOptionsRequested, currentStatus, activeStore, dateRange.start, dateRange.end, includeInactiveClients])
 
   // Fall back to the in-memory derivation if the global fetch is empty
   // or hasn't returned yet — keeps the dropdown populated on first
@@ -2223,8 +2225,9 @@ export default function OrdersView({
         skus.add(item.sku)
       }
     }
+    if (skuFilter) skus.add(skuFilter)
     return [...skus].sort((left, right) => left.localeCompare(right))
-  }, [globalSkus, orders])
+  }, [globalSkus, orders, skuFilter])
 
   const searchedOrders = useMemo(() => {
     const query = searchQuery.trim().toLowerCase()
@@ -7821,6 +7824,8 @@ export default function OrdersView({
             <select
               id="skuFilter"
               value={skuFilter}
+              onFocus={() => setSkuOptionsRequested(true)}
+              onMouseDown={() => setSkuOptionsRequested(true)}
               onChange={(event) => setSkuFilter(event.target.value)}
               aria-label="Filter by SKU"
               className="

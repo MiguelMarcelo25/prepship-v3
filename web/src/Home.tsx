@@ -560,8 +560,9 @@ export default function Home() {
 
     void poll()
     const intervalId = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return
       void poll()
-    }, 10000)
+    }, 60_000)
 
     return () => {
       active = false
@@ -585,7 +586,10 @@ export default function Home() {
       }
     }
     void poll()
-    const intervalId = window.setInterval(() => void poll(), 15000)
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState !== 'visible') return
+      void poll()
+    }, 60_000)
     return () => {
       active = false
       window.clearInterval(intervalId)
