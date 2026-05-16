@@ -34,6 +34,10 @@ const schema = z.object({
   PUBLIC_API_URL: z.string().url().optional(),
   CRON_SECRET: z.string().optional(),
   DB_HEALTH_TIMEOUT_MS: z.coerce.number().int().positive().default(12_000),
+  DB_POOL_MAX: z.coerce.number().int().positive().max(20).default(4),
+  DB_IDLE_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(10),
+  DB_CONNECT_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(8),
+  DB_STATEMENT_TIMEOUT_MS: z.coerce.number().int().positive().default(12_000),
   // Runtime split controls. Default RUN_SYNC_SCHEDULER=true keeps legacy API
   // deploys working until Render envs are explicitly flipped during rollout.
   RUN_SYNC_SCHEDULER: booleanFlag(true),
@@ -41,6 +45,7 @@ const schema = z.object({
   RUN_ORDERS_PERFORMANCE_MAINTENANCE: optionalBooleanFlag,
   USE_PG_BOSS_SCHEDULER: booleanFlag(true),
   PG_BOSS_SCHEMA: z.string().min(1).default('pgboss'),
+  PG_BOSS_POOL_MAX: z.coerce.number().int().positive().max(5).default(1),
   SHIPSTATION_API_KEY: z.string().optional(),
   SHIPSTATION_API_SECRET: z.string().optional(),
   SHIPSTATION_API_KEY_V2: z.string().optional(),

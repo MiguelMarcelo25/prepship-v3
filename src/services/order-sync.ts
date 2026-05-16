@@ -603,7 +603,7 @@ export async function syncOrders(opts: {
   };
 }
 
-export async function getSyncStatus(): Promise<{
+export async function getSyncStatus(options: { includeOrderCount?: boolean } = {}): Promise<{
   lastSyncedAt: string | null;
   orderCount: number;
 }> {
@@ -615,6 +615,9 @@ export async function getSyncStatus(): Promise<{
     if (ms && (latestMs === null || ms > latestMs)) latestMs = ms;
   }
   const lastSyncedAt = latestMs ? new Date(latestMs).toISOString() : null;
+  if (options.includeOrderCount === false) {
+    return { lastSyncedAt, orderCount: 0 };
+  }
   const rows = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(orders);

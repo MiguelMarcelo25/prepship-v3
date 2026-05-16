@@ -54,8 +54,8 @@ app.post('/orders', zValidator('json', triggerBody), async (c) => {
 
 app.get('/status', async (c) => {
   const [orders, shipments, worker, queue] = await Promise.all([
-    getSyncStatus(),
-    getShipmentSyncStatus(),
+    getSyncStatus({ includeOrderCount: false }),
+    getShipmentSyncStatus({ includeShipmentCount: false }),
     getPersistedWorkerStatus(),
     getSyncJobQueueStatus(),
   ]);

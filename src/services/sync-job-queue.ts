@@ -41,6 +41,7 @@ type Timer = ReturnType<typeof setInterval> | ReturnType<typeof setTimeout>;
 let boss: PgBoss | null = null;
 let started = false;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+let activeJobName: JobName | null = null;
 const timers: Timer[] = [];
 
 function isRateBackfillSchedulerEnabled(): boolean {
@@ -107,6 +108,15 @@ async function registerWorker(
     name,
     { batchSize: 1, pollingIntervalSeconds: 5 },
     async ([job]) => {
+      if (activeJobName) {
+        console.log(
+          `[job-queue] ${name} skipped because ${activeJobName} is already running`
+        );
+        await recordWorkerJobSkipped(name, `${activeJobName} already running`);
+        return { ok: true, skipped: true, activeJobName };
+      }
+
+      activeJobName = name;
       const startedAt = Date.now();
       console.log(`[job-queue] started ${name} (${job?.id ?? 'unknown'})`);
       await recordWorkerJobStart(name);
@@ -124,6 +134,8 @@ async function registerWorker(
         );
         await recordWorkerJobFailure(name, startedAt, err);
         throw err;
+      } finally {
+        activeJobName = null;
       }
     }
   );
@@ -154,7 +166,7 @@ export async function startQueuedSyncScheduler(): Promise<void> {
     connectionString: env.DATABASE_URL,
     schema: env.PG_BOSS_SCHEMA,
     application_name: 'prepship-worker',
-    max: 4,
+    max: env.PG_BOSS_POOL_MAX,
     retryLimit: 2,
     retryDelay: 30,
     retryBackoff: true,
@@ -233,6 +245,7 @@ export async function stopQueuedSyncScheduler(): Promise<void> {
     await boss.stop({ graceful: true, timeout: 30_000 });
     boss = null;
   }
+  activeJobName = null;
   started = false;
   await setWorkerMode('disabled');
   console.log('[job-queue] stopped');

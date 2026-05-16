@@ -503,12 +503,15 @@ export async function syncShipments(
   };
 }
 
-export async function getShipmentSyncStatus(): Promise<{
+export async function getShipmentSyncStatus(options: { includeShipmentCount?: boolean } = {}): Promise<{
   lastSyncedAt: string | null;
   shipmentCount: number;
 }> {
   const ms = await getSettingNumber(LAST_SYNC_KEY);
   const lastSyncedAt = ms ? new Date(ms).toISOString() : null;
+  if (options.includeShipmentCount === false) {
+    return { lastSyncedAt, shipmentCount: 0 };
+  }
   const rows = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(shipments);

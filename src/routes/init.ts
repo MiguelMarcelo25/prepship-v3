@@ -10,6 +10,24 @@ import { EXCLUDED_STORE_IDS, EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
 
 const app = new Hono();
 
+const COUNTS_CACHE_TTL_MS = 10_000;
+type CountsPayload = {
+  awaiting: number;
+  shipped: number;
+  cancelled: number;
+  on_hold: number;
+  queue: number;
+  inventory: number;
+  byStatus: Array<{ orderStatus: string; cnt: number }>;
+  byStatusStore: Array<{ orderStatus: string; storeId: number; cnt: number }>;
+};
+const countsCache = new Map<string, { expiresAt: number; payload: CountsPayload }>();
+const countsInflight = new Map<string, Promise<CountsPayload>>();
+
+function countsCacheKey(dateFromIso: string | null, dateToIso: string | null): string {
+  return `${dateFromIso ?? ''}|${dateToIso ?? ''}`;
+}
+
 // Single bootstrap call — returns everything needed to render the app shell.
 app.get('/init-data', async (c) => {
   const [clientsRows, locationsRows, packagesRows] = await Promise.all([
@@ -58,6 +76,16 @@ app.get('/counts', async (c) => {
   const dateTo = dateToRaw ? new Date(dateToRaw) : null;
   const dateFromIso = dateFrom && !Number.isNaN(dateFrom.getTime()) ? dateFrom.toISOString() : null;
   const dateToIso = dateTo && !Number.isNaN(dateTo.getTime()) ? dateTo.toISOString() : null;
+  const cacheKey = countsCacheKey(dateFromIso, dateToIso);
+  const cached = countsCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return c.json(cached.payload);
+  }
+  const inflight = countsInflight.get(cacheKey);
+  if (inflight) {
+    return c.json(await inflight);
+  }
+
   const orderDateFilter = () => sql`
     ${dateFromIso ? sql`and o.order_date >= ${dateFromIso}::timestamptz` : sql``}
     ${dateToIso ? sql`and o.order_date <= ${dateToIso}::timestamptz` : sql``}
@@ -89,7 +117,8 @@ app.get('/counts', async (c) => {
     )
   ) and coalesce(c.active, true) = true`;
 
-  const [rows, byStatus, byStatusStore] = await Promise.all([
+  const loadCounts = (async (): Promise<CountsPayload> => {
+    const [rows, byStatus, byStatusStore] = await Promise.all([
     db.execute<{
       awaiting: number;
       shipped: number;
@@ -200,17 +229,30 @@ app.get('/counts', async (c) => {
           end
       order by cnt desc
     `),
-  ]);
-  const totals =
-    rows[0] ?? {
-      awaiting: 0,
-      shipped: 0,
-      cancelled: 0,
-      on_hold: 0,
-      queue: 0,
-      inventory: 0,
-    };
-  return c.json({ ...totals, byStatus, byStatusStore });
+    ]);
+    const totals =
+      rows[0] ?? {
+        awaiting: 0,
+        shipped: 0,
+        cancelled: 0,
+        on_hold: 0,
+        queue: 0,
+        inventory: 0,
+      };
+    return { ...totals, byStatus, byStatusStore };
+  })();
+
+  countsInflight.set(cacheKey, loadCounts);
+  try {
+    const payload = await loadCounts;
+    countsCache.set(cacheKey, {
+      expiresAt: Date.now() + COUNTS_CACHE_TTL_MS,
+      payload,
+    });
+    return c.json(payload);
+  } finally {
+    countsInflight.delete(cacheKey);
+  }
 });
 
 // Direct alias for /rates/carriers — old API exposed it under /init too.
