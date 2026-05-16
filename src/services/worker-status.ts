@@ -64,6 +64,12 @@ function summarizeResult(result: unknown): Record<string, unknown> | null {
     'failed',
     'skipped',
     'total',
+    'refreshed',
+    'days',
+    'dailyRows',
+    'skuRows',
+    'inventoryRows',
+    'billingRows',
     'lastSyncedAt',
   ]) {
     if (source[key] !== undefined) summary[key] = source[key];

@@ -10,6 +10,7 @@ import { orders } from '../db/schema/orders';
 import { analyticsCacheKey, getAnalyticsCache, setAnalyticsCache } from '../services/analytics-cache';
 import { EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
 import { isAdminEmail } from '../lib/admin-emails';
+import { getFreshInventoryRiskMetrics } from '../services/reporting-metrics';
 import { getSkuBreakdownFromOrderItems, getSkuDailyFromOrderItems } from './analysis';
 
 const app = new Hono();
@@ -432,6 +433,26 @@ app.get('/inventory-risk', zValidator('query', dashboardInventoryRiskQuery), asy
   });
   const cached = await getAnalyticsCache<DashboardInventoryRiskPayload>(cacheKey);
   if (cached) return c.json(cached);
+
+  const callerEmail = c.get('email' as never) as string | undefined;
+  if (isAdminEmail(callerEmail)) {
+    const metricsPayload = await getFreshInventoryRiskMetrics({
+      clientId: q.clientId,
+      pageSize: q.pageSize,
+      active: q.active,
+      maxAgeMinutes: 45,
+    }).catch((err) => {
+      console.warn(
+        '[dashboard] inventory-risk reporting metrics unavailable:',
+        err instanceof Error ? err.message : err
+      );
+      return null;
+    });
+    if (metricsPayload) {
+      void setAnalyticsCache(cacheKey, metricsPayload, 60);
+      return c.json(metricsPayload);
+    }
+  }
 
   const where = and(
     ...[

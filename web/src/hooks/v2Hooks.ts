@@ -22,6 +22,8 @@ export type OrderFullDto = any;
 
 const ORDERS_STALE_MS = 30_000;
 const ORDERS_CACHE_MS = 10 * 60_000;
+const SHARED_DATA_STALE_MS = 5 * 60_000;
+const SHARED_DATA_CACHE_MS = 30 * 60_000;
 
 // ──────────────────────────────────────────────────────────────────
 // useOrders
@@ -632,7 +634,9 @@ export function useLocations(): UseLocationsResult {
   const query = useQuery<V4LocationRow[]>({
     queryKey: ['v2-hooks:locations'],
     queryFn: () => api.get<V4LocationRow[]>('/locations'),
-    staleTime: 60_000,
+    staleTime: SHARED_DATA_STALE_MS,
+    gcTime: SHARED_DATA_CACHE_MS,
+    refetchOnWindowFocus: false,
   });
 
   const locations = useMemo<LocationDto[]>(
@@ -763,13 +767,17 @@ export function useShippingAccounts(): UseShippingAccountsResult {
   const query = useQuery<V4CarriersResponse>({
     queryKey: ['v2-hooks:carriers'],
     queryFn: () => api.get<V4CarriersResponse>('/rates/multi'),
-    staleTime: 60_000,
+    staleTime: SHARED_DATA_STALE_MS,
+    gcTime: SHARED_DATA_CACHE_MS,
+    refetchOnWindowFocus: false,
   });
 
   const directQuery = useQuery<V4DirectCarriersResponse>({
     queryKey: ['v2-hooks:carrier-accounts'],
     queryFn: fetchDirectCarrierAccounts,
-    staleTime: 60_000,
+    staleTime: SHARED_DATA_STALE_MS,
+    gcTime: SHARED_DATA_CACHE_MS,
+    refetchOnWindowFocus: false,
   });
 
   // SettingsView keys rows by `shippingProviderId` — must be unique per account.
@@ -906,7 +914,9 @@ export function useClients(): UseClientsResult {
   const query = useQuery<V4ClientFullRow[]>({
     queryKey: ['v2-hooks:clients', 'active-only'],
     queryFn: () => api.get<V4ClientFullRow[]>('/clients?activeOnly=true'),
-    staleTime: 60_000,
+    staleTime: SHARED_DATA_STALE_MS,
+    gcTime: SHARED_DATA_CACHE_MS,
+    refetchOnWindowFocus: false,
   });
 
   const clients = useMemo(() => {
@@ -934,7 +944,9 @@ export function useAllClients(): UseClientsResult {
   const query = useQuery<V4ClientFullRow[]>({
     queryKey: ['v2-hooks:clients', 'include-inactive'],
     queryFn: () => api.get<V4ClientFullRow[]>('/clients?includeInactive=true'),
-    staleTime: 60_000,
+    staleTime: SHARED_DATA_STALE_MS,
+    gcTime: SHARED_DATA_CACHE_MS,
+    refetchOnWindowFocus: false,
   });
 
   const clients = useMemo(() => {
@@ -1111,7 +1123,9 @@ export function useInventory(
   const clientsQuery = useQuery<V4ClientFullRow[]>({
     queryKey: ['v2-hooks:clients', 'active-only'],
     queryFn: () => api.get<V4ClientFullRow[]>('/clients?activeOnly=true'),
-    staleTime: 60_000,
+    staleTime: SHARED_DATA_STALE_MS,
+    gcTime: SHARED_DATA_CACHE_MS,
+    refetchOnWindowFocus: false,
   });
 
   const query = useQuery<Paginated<V4InventoryRow>>({
@@ -1127,6 +1141,10 @@ export function useInventory(
       api.get<Paginated<V4InventoryRow>>(
         `/inventory${qs({ clientId, search, lowStock, page, pageSize })}`
       ),
+    staleTime: 30_000,
+    gcTime: 10 * 60_000,
+    refetchOnWindowFocus: false,
+    placeholderData: (previousData) => previousData,
   });
 
   const items = useMemo(() => {
@@ -1218,8 +1236,8 @@ export function usePackages(): UsePackagesResult {
   const query = useQuery<V4PackageRow[]>({
     queryKey: ['v2-hooks:packages'],
     queryFn: () => api.get<V4PackageRow[]>('/packages'),
-    staleTime: 5 * 60_000,
-    gcTime: 30 * 60_000,
+    staleTime: SHARED_DATA_STALE_MS,
+    gcTime: SHARED_DATA_CACHE_MS,
     refetchOnWindowFocus: false,
   });
 

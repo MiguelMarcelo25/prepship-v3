@@ -14,6 +14,7 @@ import {
   importSkusFromOrders,
   syncShipStationProducts,
 } from '../services/inventory-enrichment';
+import { getFreshInventoryRiskMetricMap } from '../services/reporting-metrics';
 
 const app = new Hono();
 
@@ -129,7 +130,21 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     ])
   );
 
-  const soldRows = rows.length
+  const metricByInventoryId = rows.length
+    ? await timedInventoryStep(timings, 'reportingMetrics', () =>
+        getFreshInventoryRiskMetricMap(rows.map((row) => row.id), { maxAgeMinutes: 45 })
+          .catch((err) => {
+            console.warn(
+              '[inventory:list] reporting metrics unavailable:',
+              err instanceof Error ? err.message : err
+            );
+            return new Map();
+          })
+      )
+    : new Map();
+  const hasFreshMetrics = rows.length > 0 && metricByInventoryId.size === rows.length;
+
+  const soldRows = rows.length && !hasFreshMetrics
     ? await timedInventoryStep(timings, 'soldLast30Days', () =>
         db.execute<{ inventory_id: number; sold_last_30_days: number }>(sql`
         select
@@ -205,7 +220,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   //
   // Allowed under the shipped-data lockdown: this is a READ-only
   // analytics computation. No locked rows are mutated.
-  const effectiveRows = rows.length
+  const effectiveRows = rows.length && !hasFreshMetrics
     ? await timedInventoryStep(timings, 'effectiveStock', () =>
         db.execute<{
           inventory_id: number
@@ -271,6 +286,20 @@ app.get('/', zValidator('query', listQuery), async (c) => {
 
   const response = paginated(
     rows.map((row) => {
+      const metric = metricByInventoryId.get(row.id);
+      if (metric) {
+        return {
+          ...row,
+          soldLast7Days: metric.soldLast7Days,
+          soldLast30Days: metric.soldLast30Days,
+          velocityPerDay: metric.velocityPerDay,
+          daysSupply: metric.daysSupply,
+          restockQty: metric.restockQty,
+          totalReceived: metric.totalReceived,
+          totalSoldAllTime: metric.totalSoldAllTime,
+          effectiveStock: metric.effectiveStock,
+        };
+      }
       const eff = effectiveByInventoryId.get(row.id) ?? { totalReceived: 0, totalSold: 0, effectiveStock: 0 };
       return {
         ...row,

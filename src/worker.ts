@@ -12,6 +12,7 @@ import {
   stopQueuedSyncScheduler,
 } from './services/sync-job-queue';
 import { ensureOrdersPerformanceIndexes } from './services/orders-performance-maintenance';
+import { ensureReportingMetricsTables } from './services/reporting-metrics';
 
 let keepAliveTimer: NodeJS.Timeout | null = null;
 
@@ -76,6 +77,14 @@ async function main(): Promise<void> {
   if (runMaintenance) {
     console.log('[worker] starting orders performance maintenance');
     ensureOrdersPerformanceIndexes();
+    void ensureReportingMetricsTables()
+      .then(() => console.log('[worker] reporting metrics tables ready'))
+      .catch((err) =>
+        console.error(
+          '[worker] reporting metrics table check failed:',
+          err instanceof Error ? err.message : err
+        )
+      );
   } else {
     console.log('[worker] orders performance maintenance disabled');
   }

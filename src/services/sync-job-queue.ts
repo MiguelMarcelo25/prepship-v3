@@ -5,6 +5,7 @@ import {
   runFulfillmentOutboxTick,
   runInventoryImportFromOrders,
   runOrderSync,
+  runReportingRefreshTick,
   runShipmentSync,
   runSyncProductsTick,
 } from './sync-scheduler';
@@ -23,6 +24,7 @@ const RATE_BACKFILL_INTERVAL_MS = 10 * 60 * 1000;
 const INVENTORY_IMPORT_FROM_ORDERS_INTERVAL_MS = 30 * 60 * 1000;
 const INVENTORY_SYNC_PRODUCTS_INTERVAL_MS = 60 * 60 * 1000;
 const FULFILLMENT_OUTBOX_INTERVAL_MS = 60 * 1000;
+const REPORTING_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const STARTUP_DELAY_MS = 15 * 1000;
 
 const JOBS = {
@@ -32,6 +34,7 @@ const JOBS = {
   inventoryImport: 'prepship.sync.inventory-import',
   syncProducts: 'prepship.sync.products',
   fulfillmentOutbox: 'prepship.sync.fulfillment-outbox',
+  reportingRefresh: 'prepship.reporting.refresh',
 } as const;
 
 type JobName = (typeof JOBS)[keyof typeof JOBS];
@@ -189,6 +192,7 @@ export async function startQueuedSyncScheduler(): Promise<void> {
   await registerWorker(JOBS.inventoryImport, runInventoryImportFromOrders);
   await registerWorker(JOBS.syncProducts, runSyncProductsTick);
   await registerWorker(JOBS.fulfillmentOutbox, runFulfillmentOutboxTick);
+  await registerWorker(JOBS.reportingRefresh, runReportingRefreshTick);
   await registerWorker(JOBS.rateBackfill, async () => runBackfillTick());
 
   heartbeatTimer = setInterval(() => {
@@ -201,6 +205,11 @@ export async function startQueuedSyncScheduler(): Promise<void> {
   );
 
   scheduleEnqueue(JOBS.fulfillmentOutbox, STARTUP_DELAY_MS + 30_000, FULFILLMENT_OUTBOX_INTERVAL_MS);
+  scheduleEnqueue(
+    JOBS.reportingRefresh,
+    STARTUP_DELAY_MS + 4 * 60 * 1000,
+    REPORTING_REFRESH_INTERVAL_MS
+  );
 
   if (!env.SHIPSTATION_API_KEY || !env.SHIPSTATION_API_SECRET) {
     console.log(

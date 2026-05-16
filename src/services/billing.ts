@@ -12,6 +12,7 @@ import { clients } from '../db/schema/clients';
 import { inventory } from '../db/schema/inventory';
 import { SS_BASELINE_CARRIER_CODES } from './rates';
 import { resolveCarrierNickname } from './labels';
+import { getFreshBillingSummaryMetrics } from './reporting-metrics';
 
 export type GenerateInput = {
   clientId?: number;
@@ -749,6 +750,20 @@ export type BillingSummaryRow = {
 export async function billingSummary(
   input: GenerateInput
 ): Promise<{ clients: BillingSummaryRow[]; grandTotal: number }> {
+  const metrics = await getFreshBillingSummaryMetrics({
+    dateFrom: input.dateFrom,
+    dateTo: input.dateTo,
+    clientId: input.clientId,
+    maxAgeMinutes: 45,
+  }).catch((err) => {
+    console.warn(
+      '[billing] summary reporting metrics unavailable:',
+      err instanceof Error ? err.message : err
+    );
+    return null;
+  });
+  if (metrics) return metrics;
+
   // v2-parity aggregation. Starts from `clients` with a LEFT JOIN to
   // billing_line_items so every active, non-system client surfaces — even
   // those with zero volume in the window (HUGRAB, KimlyParc, IntegrationTest,

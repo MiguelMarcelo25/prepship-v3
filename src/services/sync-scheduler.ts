@@ -15,6 +15,7 @@ import {
   recordWorkerJobSuccess,
   setWorkerMode,
 } from './worker-status';
+import { refreshReportingMetrics } from './reporting-metrics';
 
 // v2 ran an in-process worker every 3 minutes for orders + shipments. GitHub
 // Actions cron drifts 30–60 min under load, which means users in v4 see stale
@@ -39,6 +40,7 @@ const RATE_BACKFILL_INTERVAL_MS = 10 * 60 * 1000; // 10 minutes
 const INVENTORY_IMPORT_FROM_ORDERS_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const INVENTORY_SYNC_PRODUCTS_INTERVAL_MS = 60 * 60 * 1000; // 60 minutes
 const FULFILLMENT_OUTBOX_INTERVAL_MS = 60 * 1000; // 1 minute
+const REPORTING_REFRESH_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const STARTUP_DELAY_MS = 15 * 1000; // 15s after boot so we don't fight cold-start
 
 // Serialize runs so overlapping intervals don't pile up ShipStation calls.
@@ -47,6 +49,7 @@ let shipmentSyncRunning = false;
 let inventoryImportRunning = false;
 let syncProductsRunning = false;
 let fulfillmentOutboxRunning = false;
+let reportingRefreshRunning = false;
 let heavySchedulerJobRunning: string | null = null;
 let orderTimer: NodeJS.Timeout | null = null;
 let shipmentTimer: NodeJS.Timeout | null = null;
@@ -54,6 +57,7 @@ let backfillTimer: NodeJS.Timeout | null = null;
 let inventoryImportTimer: NodeJS.Timeout | null = null;
 let syncProductsTimer: NodeJS.Timeout | null = null;
 let fulfillmentOutboxTimer: NodeJS.Timeout | null = null;
+let reportingRefreshTimer: NodeJS.Timeout | null = null;
 let heartbeatTimer: NodeJS.Timeout | null = null;
 
 function isRateBackfillSchedulerEnabled(): boolean {
@@ -238,6 +242,30 @@ export async function runFulfillmentOutboxTick(): Promise<void> {
   }
 }
 
+export async function runReportingRefreshTick(): Promise<void> {
+  if (reportingRefreshRunning) {
+    console.log('[scheduler] reporting refresh already running - skipping tick');
+    return;
+  }
+  reportingRefreshRunning = true;
+  try {
+    const result = await runHeavySchedulerJob('reporting metrics refresh', () =>
+      refreshReportingMetrics({ days: 45, inventoryLimit: 2000 })
+    );
+    if (!result) return;
+    console.log(
+      `[scheduler] reporting metrics refreshed: daily=${result.dailyRows}, sku=${result.skuRows}, inventory=${result.inventoryRows}, billing=${result.billingRows}`
+    );
+  } catch (err) {
+    console.error(
+      '[scheduler] reporting metrics refresh failed:',
+      err instanceof Error ? err.message : err
+    );
+  } finally {
+    reportingRefreshRunning = false;
+  }
+}
+
 export function startSyncScheduler(
   options: { mode?: 'api-scheduler' | 'worker-scheduler' } = {}
 ): void {
@@ -260,6 +288,19 @@ export function startSyncScheduler(
         FULFILLMENT_OUTBOX_INTERVAL_MS
       );
     }, STARTUP_DELAY_MS + 30_000);
+  }
+
+  if (!reportingRefreshTimer) {
+    console.log(
+      `[scheduler] reporting metrics refresh enabled - every ${REPORTING_REFRESH_INTERVAL_MS / 60000}m`
+    );
+    setTimeout(() => {
+      void runReportingRefreshTick();
+      reportingRefreshTimer = setInterval(
+        () => void runReportingRefreshTick(),
+        REPORTING_REFRESH_INTERVAL_MS
+      );
+    }, STARTUP_DELAY_MS + 4 * 60 * 1000);
   }
 
   // Only run in-process sync when ShipStation credentials are present.
@@ -371,6 +412,10 @@ export function stopSyncScheduler(): void {
   if (fulfillmentOutboxTimer) {
     clearInterval(fulfillmentOutboxTimer);
     fulfillmentOutboxTimer = null;
+  }
+  if (reportingRefreshTimer) {
+    clearInterval(reportingRefreshTimer);
+    reportingRefreshTimer = null;
   }
   if (heartbeatTimer) {
     clearInterval(heartbeatTimer);

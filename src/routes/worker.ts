@@ -4,13 +4,18 @@ import {
   getPersistedWorkerStatus,
 } from '../services/worker-status';
 import { getSyncJobQueueStatus } from '../services/sync-job-queue';
+import { getReportingMetricsStatus } from '../services/reporting-metrics';
 
 const app = new Hono();
 
 app.get('/status', async (c) => {
-  const [worker, queue] = await Promise.all([
+  const [worker, queue, reporting] = await Promise.all([
     getPersistedWorkerStatus(),
     getSyncJobQueueStatus(),
+    getReportingMetricsStatus().catch((err) => ({
+      tablesReady: false,
+      error: err instanceof Error ? err.message : String(err),
+    })),
   ]);
   const workerSchedulerActive = Boolean(
     worker.status?.schedulerEnabled && !worker.stale
@@ -23,6 +28,7 @@ app.get('/status', async (c) => {
       enabled: queue.enabled || workerSchedulerActive,
       started: queue.started || workerSchedulerActive,
     },
+    reporting,
   });
 });
 
