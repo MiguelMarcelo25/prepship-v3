@@ -2008,7 +2008,13 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
       }
 
       try {
-        const clientRows = await apiClient.fetchInventory({ clientId: Number.parseInt(receiveClientId, 10) })
+        const clientPage = await apiClient.fetchInventoryPage({
+          clientId: Number.parseInt(receiveClientId, 10),
+          active: true,
+          page: 1,
+          pageSize: 2000,
+        })
+        const clientRows = clientPage.items
         if (!active) return
         const nextMap: Record<string, ReceiveSkuLookup> = {}
         for (const row of clientRows) {

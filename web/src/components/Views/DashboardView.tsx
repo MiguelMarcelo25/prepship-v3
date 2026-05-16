@@ -101,6 +101,26 @@ type DashboardOrderAgg = {
   dailyRevenue: Map<string, number>
 }
 
+type DashboardPanelKey = 'metrics' | 'inventory' | 'trend' | 'topSkus' | 'heatmap' | 'table'
+
+const createDashboardPanelLoading = (value: boolean): Record<DashboardPanelKey, boolean> => ({
+  metrics: value,
+  inventory: value,
+  trend: value,
+  topSkus: value,
+  heatmap: value,
+  table: value,
+})
+
+const createDashboardPanelErrors = (value: string | null = null): Record<DashboardPanelKey, string | null> => ({
+  metrics: value,
+  inventory: value,
+  trend: value,
+  topSkus: value,
+  heatmap: value,
+  table: value,
+})
+
 type TrendPoint = {
   day: string
   current: number
@@ -836,6 +856,31 @@ function KpiCard({
   )
 }
 
+function PanelSkeleton({ className = '' }: { className?: string }) {
+  return (
+    <div className={`h-full min-h-[180px] animate-pulse rounded-card border border-line bg-surface p-4 ${className}`}>
+      <div className="mb-4 h-4 w-32 rounded bg-surface-3" />
+      <div className="space-y-3">
+        <div className="h-3 w-full rounded bg-surface-3" />
+        <div className="h-3 w-10/12 rounded bg-surface-3" />
+        <div className="h-3 w-11/12 rounded bg-surface-3" />
+      </div>
+      <div className="mt-5 h-24 rounded bg-surface-3/80" />
+    </div>
+  )
+}
+
+function PanelError({ message, className = '' }: { message: string; className?: string }) {
+  return (
+    <div className={`grid h-full min-h-[160px] place-items-center rounded-card border border-danger/30 bg-danger/10 px-4 py-6 text-center ${className}`}>
+      <div>
+        <div className="text-sm font-extrabold text-danger">Could not load this panel</div>
+        <div className="mt-1 max-w-md text-tiny font-semibold text-danger/80">{message}</div>
+      </div>
+    </div>
+  )
+}
+
 function ChangeText({ pct, inverse = false, label = 'prior 30 days' }: { pct: number; inverse?: boolean; label?: string }) {
   const isGood = inverse ? pct <= 0 : pct >= 0
   const flat = Math.abs(pct) < 0.1
@@ -1075,9 +1120,15 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   const [analysisRows, setAnalysisRows] = useState<AnalysisSku[]>([])
   const [currentOrderAgg, setCurrentOrderAgg] = useState<DashboardOrderAgg>(() => emptyDashboardOrderAgg())
   const [priorOrderAgg, setPriorOrderAgg] = useState<DashboardOrderAgg>(() => emptyDashboardOrderAgg())
-  const [loading, setLoading] = useState(true)
+  const [, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [panelLoading, setPanelLoading] = useState<Record<DashboardPanelKey, boolean>>(() =>
+    createDashboardPanelLoading(true),
+  )
+  const [panelErrors, setPanelErrors] = useState<Record<DashboardPanelKey, string | null>>(() =>
+    createDashboardPanelErrors(),
+  )
   const [sortState, setSortState] = useState<SortState<DashboardSortKey>>({ key: 'units30', direction: 'desc' })
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(TABLE_PAGE_SIZE)
@@ -1668,9 +1719,36 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
 
   const loadDashboard = async (mode: 'initial' | 'refresh' = 'initial') => {
     const loadSeq = ++dashboardLoadSeqRef.current
-    if (mode === 'initial') setLoading(true)
-    else setRefreshing(true)
+    if (mode === 'initial') {
+      setLoading(true)
+      setPanelLoading(createDashboardPanelLoading(true))
+      setInventoryRows([])
+      setAnalysisRows([])
+    } else {
+      setRefreshing(true)
+    }
     setError(null)
+    setPanelErrors(createDashboardPanelErrors())
+
+    const finishPanels = (keys: DashboardPanelKey[]) => {
+      if (loadSeq !== dashboardLoadSeqRef.current) return
+      setPanelLoading((current) => {
+        const next = { ...current }
+        for (const key of keys) next[key] = false
+        return next
+      })
+    }
+
+    const failPanels = (keys: DashboardPanelKey[], loadError: unknown, fallback: string) => {
+      if (loadSeq !== dashboardLoadSeqRef.current) return
+      const message = loadError instanceof Error ? loadError.message : fallback
+      setPanelErrors((current) => {
+        const next = { ...current }
+        for (const key of keys) next[key] = message
+        return next
+      })
+      finishPanels(keys)
+    }
 
     try {
       // Replace hardcoded last-30-days with operator-chosen range
@@ -1696,18 +1774,30 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
       const priorSevenFrom = dateOffsetFrom(priorTo, sevenDayOffset)
       const cid = selectedClientId ?? undefined
 
-      const [
-        clientsRes,
-        currentSalesRes,
-        priorSalesRes,
-        currentDailyCountsRes,
-        priorDailyCountsRes,
-        currentOrderAggRes,
-        priorOrderAggRes,
-      ] = await Promise.all([
-        apiClient.listClients().catch(() => []),
+      const clientsPromise = apiClient
+        .listClients()
+        .then((clientsRes: any[]) => {
+          if (loadSeq !== dashboardLoadSeqRef.current) return
+          const nextClients = safeArray<any>(clientsRes)
+            .map((client) => ({
+              clientId: num(client?.clientId ?? client?.id),
+              name: String(client?.name ?? '').trim(),
+            }))
+            .filter((client) => client.clientId > 0 && client.name)
+            .sort((left, right) => left.name.localeCompare(right.name))
+
+          setClients(nextClients)
+          if (cid && !nextClients.some((client) => client.clientId === cid)) {
+            setSelectedClientId(null)
+          }
+        })
+        .catch(() => {
+          if (loadSeq === dashboardLoadSeqRef.current) setClients([])
+        })
+
+      const corePromise = Promise.all([
         // Keep initial dashboard paint on lightweight aggregate endpoints.
-        // The heavier SKU breakdown table loads after the main view renders.
+        // The heavier SKU breakdown table loads as its own panel payload.
         apiClient.fetchAnalysisDailySales({ from: currentFrom, to: currentTo, topN: 15, clientId: cid, hideTestOrders: true }),
         apiClient.fetchAnalysisDailySales({ from: priorFrom, to: priorTo, topN: 15, clientId: cid, hideTestOrders: true }),
         apiClient.fetchOrdersDailyCounts({ from: currentFrom, to: currentTo, clientId: cid, hideTestOrders: true }),
@@ -1715,56 +1805,66 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         apiClient.fetchDashboardOrderSales({ from: currentFrom, to: currentTo, sevenFrom, clientId: cid, hideTestOrders: true }),
         apiClient.fetchDashboardOrderSales({ from: priorFrom, to: priorTo, sevenFrom: priorSevenFrom, clientId: cid, hideTestOrders: true }),
       ])
+        .then(([
+          currentSalesRes,
+          priorSalesRes,
+          currentDailyCountsRes,
+          priorDailyCountsRes,
+          currentOrderAggRes,
+          priorOrderAggRes,
+        ]) => {
+          if (loadSeq !== dashboardLoadSeqRef.current) return
+          setCurrentSales(currentSalesRes ?? { dates: [], topSkus: [], series: {} })
+          setPriorSales(priorSalesRes ?? { dates: [], topSkus: [], series: {} })
+          setCurrentDailyCounts(safeArray<DailyOrderCount>(currentDailyCountsRes?.data))
+          setPriorDailyCounts(safeArray<DailyOrderCount>(priorDailyCountsRes?.data))
+          setCurrentOrderAgg(normalizeDashboardOrderAgg(currentOrderAggRes))
+          setPriorOrderAgg(normalizeDashboardOrderAgg(priorOrderAggRes))
+          setPage(1)
+          finishPanels(['metrics', 'trend', 'topSkus', 'heatmap'])
+        })
+        .catch((loadError) => {
+          if (loadSeq !== dashboardLoadSeqRef.current) return
+          setCurrentSales({ dates: [], topSkus: [], series: {} })
+          setPriorSales({ dates: [], topSkus: [], series: {} })
+          setCurrentDailyCounts([])
+          setPriorDailyCounts([])
+          setCurrentOrderAgg(emptyDashboardOrderAgg())
+          setPriorOrderAgg(emptyDashboardOrderAgg())
+          failPanels(['metrics', 'trend', 'topSkus', 'heatmap'], loadError, 'Failed to load dashboard metrics')
+        })
 
-      if (loadSeq !== dashboardLoadSeqRef.current) return
-
-      const nextClients = safeArray<any>(clientsRes)
-        .map((client) => ({
-          clientId: num(client?.clientId ?? client?.id),
-          name: String(client?.name ?? '').trim(),
-        }))
-        .filter((client) => client.clientId > 0 && client.name)
-        .sort((left, right) => left.name.localeCompare(right.name))
-
-      setClients(nextClients)
-      setCurrentSales(currentSalesRes ?? { dates: [], topSkus: [], series: {} })
-      setPriorSales(priorSalesRes ?? { dates: [], topSkus: [], series: {} })
-      setCurrentDailyCounts(safeArray<DailyOrderCount>(currentDailyCountsRes?.data))
-      setPriorDailyCounts(safeArray<DailyOrderCount>(priorDailyCountsRes?.data))
-      setInventoryRows([])
-      setAnalysisRows([])
-      setCurrentOrderAgg(normalizeDashboardOrderAgg(currentOrderAggRes))
-      setPriorOrderAgg(normalizeDashboardOrderAgg(priorOrderAggRes))
-      setPage(1)
-
-      void apiClient
-        .fetchInventoryPage({ ...(cid ? { clientId: cid } : {}), active: true, page: 1, pageSize: 1000 })
+      const inventoryPromise = apiClient
+        .fetchInventoryPage({ ...(cid ? { clientId: cid } : {}), active: true, page: 1, pageSize: 300 })
         .then((inventoryRes: any) => {
           if (loadSeq !== dashboardLoadSeqRef.current) return
           setInventoryRows(safeArray<InventoryItem>(inventoryRes?.items))
+          finishPanels(['inventory'])
         })
-        .catch(() => {
+        .catch((loadError) => {
           if (loadSeq !== dashboardLoadSeqRef.current) return
           setInventoryRows([])
+          failPanels(['inventory'], loadError, 'Failed to load inventory snapshot')
         })
 
-      void apiClient
+      const analysisPromise = apiClient
         .fetchAnalysisSkus({ from: currentFrom, to: currentTo, limit: 200, clientId: cid, hideTestOrders: true })
         .then((analysisRes: any) => {
           if (loadSeq !== dashboardLoadSeqRef.current) return
           setAnalysisRows(safeArray<AnalysisSku>(analysisRes?.skus))
+          finishPanels(['table'])
         })
-        .catch(() => {
+        .catch((loadError) => {
           if (loadSeq !== dashboardLoadSeqRef.current) return
           setAnalysisRows([])
+          failPanels(['table'], loadError, 'Failed to load SKU performance summary')
         })
 
-      if (cid && !nextClients.some((client) => client.clientId === cid)) {
-        setSelectedClientId(null)
-      }
+      await Promise.allSettled([clientsPromise, corePromise, inventoryPromise, analysisPromise])
     } catch (loadError) {
       if (loadSeq === dashboardLoadSeqRef.current) {
         setError(loadError instanceof Error ? loadError.message : 'Failed to load dashboard')
+        setPanelLoading(createDashboardPanelLoading(false))
       }
     } finally {
       if (loadSeq === dashboardLoadSeqRef.current) {
@@ -2073,26 +2173,10 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   }, [currentAgg, inventoryRows, priorAgg])
 
   const maxTopSku = Math.max(...topSkuRows.map((row) => row.units30), 1)
-
-  if (loading) {
-    return (
-      <div id="view-dashboard" className="view-content !overflow-y-auto !bg-page !p-3 sm:!p-5">
-        <div className="space-y-4">
-          <div className="h-12 w-full max-w-80 animate-pulse rounded-card bg-surface-3" />
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-            {Array.from({ length: 6 }).map((_, index) => (
-              <div key={index} className="h-28 animate-pulse rounded-card border border-line bg-surface" />
-            ))}
-          </div>
-          <div className="grid grid-cols-1 gap-3 xl:grid-cols-3">
-            <div className="h-72 animate-pulse rounded-card border border-line bg-surface xl:col-span-2" />
-            <div className="h-72 animate-pulse rounded-card border border-line bg-surface" />
-          </div>
-          <div className="h-72 animate-pulse rounded-card border border-line bg-surface" />
-        </div>
-      </div>
-    )
-  }
+  const metricsLoading = panelLoading.metrics || panelLoading.inventory
+  const metricsError = panelErrors.metrics || panelErrors.inventory
+  const tableLoading = panelLoading.table || panelLoading.inventory || panelLoading.metrics
+  const tableError = panelErrors.table || panelErrors.inventory || panelErrors.metrics
 
   return (
     <div id="view-dashboard" className="view-content !overflow-y-auto !bg-page !p-3 sm:!p-5">
@@ -2285,53 +2369,65 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         </div>
       ) : null}
 
-      <div className="mb-3 grid grid-cols-1 gap-2.5 sm:grid-cols-2 sm:gap-3 lg:grid-cols-3 xl:grid-cols-6">
-        <KpiCard
-          title="Total 7-Day Units"
-          value={formatInt(kpis.currentUnits7)}
-          helper={<ChangeText pct={relativePct(kpis.currentUnits7, kpis.priorUnits7)} label="prior 7 days" />}
-          spark={last(unitsTrend.map((point) => point.current), 10)}
-        />
-        <KpiCard
-          title="Total 30-Day Units"
-          value={formatInt(kpis.currentUnits30)}
-          helper={<ChangeText pct={relativePct(kpis.currentUnits30, kpis.priorUnits30)} />}
-          spark={unitsTrend.map((point) => point.current)}
-        />
-        <KpiCard
-          title="Total Revenue"
-          value={formatMoney(kpis.revenue30)}
-          helper={<ChangeText pct={relativePct(kpis.revenue30, kpis.priorRevenue30)} label="prior 30 days" />}
-          spark={unitsTrend.map((point) => point.current)}
-        />
-        <KpiCard
-          title="In Stock"
-          value={formatInt(kpis.inStock)}
-          suffix="SKUs"
-          tone="green"
-          icon={<Package size={18} strokeWidth={2.25} />}
-          helper={<span className="text-ink-3">{Math.round((kpis.inStock / kpis.totalStockSkus) * 100)}% of total SKUs</span>}
-          progress={(kpis.inStock / kpis.totalStockSkus) * 100}
-        />
-        <KpiCard
-          title="Low Stock"
-          value={formatInt(kpis.lowStock)}
-          suffix="SKUs"
-          tone="orange"
-          icon={<AlertTriangle size={18} strokeWidth={2.25} />}
-          helper={<span className="text-ink-3">{Math.round((kpis.lowStock / kpis.totalStockSkus) * 100)}% of total SKUs</span>}
-          progress={(kpis.lowStock / kpis.totalStockSkus) * 100}
-        />
-        <KpiCard
-          title="Out of Stock"
-          value={formatInt(kpis.outStock)}
-          suffix="SKUs"
-          tone="red"
-          icon={<CircleX size={18} strokeWidth={2.25} />}
-          helper={<span className="text-ink-3">{Math.round((kpis.outStock / kpis.totalStockSkus) * 100)}% of total SKUs</span>}
-          progress={(kpis.outStock / kpis.totalStockSkus) * 100}
-        />
-      </div>
+      {metricsError ? (
+        <PanelError message={metricsError} className="mb-3 min-h-[112px]" />
+      ) : (
+        <div className="mb-3 grid grid-cols-1 gap-2.5 sm:grid-cols-2 sm:gap-3 lg:grid-cols-3 xl:grid-cols-6">
+          {metricsLoading ? (
+            Array.from({ length: 6 }).map((_, index) => (
+              <div key={index} className="h-28 animate-pulse rounded-card border border-line bg-surface" />
+            ))
+          ) : (
+            <>
+              <KpiCard
+                title="Total 7-Day Units"
+                value={formatInt(kpis.currentUnits7)}
+                helper={<ChangeText pct={relativePct(kpis.currentUnits7, kpis.priorUnits7)} label="prior 7 days" />}
+                spark={last(unitsTrend.map((point) => point.current), 10)}
+              />
+              <KpiCard
+                title="Total 30-Day Units"
+                value={formatInt(kpis.currentUnits30)}
+                helper={<ChangeText pct={relativePct(kpis.currentUnits30, kpis.priorUnits30)} />}
+                spark={unitsTrend.map((point) => point.current)}
+              />
+              <KpiCard
+                title="Total Revenue"
+                value={formatMoney(kpis.revenue30)}
+                helper={<ChangeText pct={relativePct(kpis.revenue30, kpis.priorRevenue30)} label="prior 30 days" />}
+                spark={unitsTrend.map((point) => point.current)}
+              />
+              <KpiCard
+                title="In Stock"
+                value={formatInt(kpis.inStock)}
+                suffix="SKUs"
+                tone="green"
+                icon={<Package size={18} strokeWidth={2.25} />}
+                helper={<span className="text-ink-3">{Math.round((kpis.inStock / kpis.totalStockSkus) * 100)}% of total SKUs</span>}
+                progress={(kpis.inStock / kpis.totalStockSkus) * 100}
+              />
+              <KpiCard
+                title="Low Stock"
+                value={formatInt(kpis.lowStock)}
+                suffix="SKUs"
+                tone="orange"
+                icon={<AlertTriangle size={18} strokeWidth={2.25} />}
+                helper={<span className="text-ink-3">{Math.round((kpis.lowStock / kpis.totalStockSkus) * 100)}% of total SKUs</span>}
+                progress={(kpis.lowStock / kpis.totalStockSkus) * 100}
+              />
+              <KpiCard
+                title="Out of Stock"
+                value={formatInt(kpis.outStock)}
+                suffix="SKUs"
+                tone="red"
+                icon={<CircleX size={18} strokeWidth={2.25} />}
+                helper={<span className="text-ink-3">{Math.round((kpis.outStock / kpis.totalStockSkus) * 100)}% of total SKUs</span>}
+                progress={(kpis.outStock / kpis.totalStockSkus) * 100}
+              />
+            </>
+          )}
+        </div>
+      )}
 
       {/* Unified panel grid — all 4 dashboard panels share ONE
           grid container so CSS `order` can freely reposition them
@@ -2490,6 +2586,11 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             </div>
           </div>
           <div className="flex-1 min-h-0">
+            {panelLoading.trend ? (
+              <PanelSkeleton className="min-h-full" />
+            ) : panelErrors.trend ? (
+              <PanelError message={panelErrors.trend} className="min-h-full" />
+            ) : (
             <ResponsiveContainer width="100%" height="100%">
               {/* 2026-05-13:
                   • left margin -12 → 8 — previous value was pulling
@@ -2558,6 +2659,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                 <Line yAxisId="revenue" type="monotone" dataKey="currentRevenue" stroke="rgb(16 185 129)" strokeWidth={2} dot={{ r: 2 }} activeDot={{ r: 5, strokeWidth: 2, stroke: 'var(--surface)' }} />
               </LineChart>
             </ResponsiveContainer>
+            )}
           </div>
         </section>
         ) : null}
@@ -2651,6 +2753,11 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                 - Subtle hover background to surface row-as-button
                 - Divider between rows for cleaner separation
           */}
+          {panelLoading.topSkus ? (
+            <PanelSkeleton className="flex-1 min-h-0" />
+          ) : panelErrors.topSkus ? (
+            <PanelError message={panelErrors.topSkus} className="flex-1 min-h-0" />
+          ) : (
           <div className="flex-1 min-h-0 overflow-y-auto pr-1 divide-y divide-line/60">
             {topSkuRows.map((row, index) => {
               const pct = Math.max(5, Math.min(100, (row.units30 / maxTopSku) * 100))
@@ -2704,6 +2811,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               <div className="grid h-40 place-items-center text-tiny text-ink-3">No SKU data available.</div>
             ) : null}
           </div>
+          )}
         </section>
         ) : null}
 
@@ -2776,6 +2884,11 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             ) : null}
           </div>
         </div>
+        {panelLoading.heatmap ? (
+          <PanelSkeleton className="flex-1 min-h-0" />
+        ) : panelErrors.heatmap ? (
+          <PanelError message={panelErrors.heatmap} className="flex-1 min-h-0" />
+        ) : (
         <div className="flex-1 min-h-0 overflow-auto">
           {/* Refined diverging palette (2026-05-13): muted ColorBrewer
               RdYlGn-style green → cream → red. The previous Tailwind
@@ -2864,6 +2977,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             )
           })()}
         </div>
+        )}
         </section>
         ) : null}
 
@@ -3029,6 +3143,11 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           </div>
         </div>
 
+        {tableLoading ? (
+          <PanelSkeleton className="mx-3 my-3 flex-1 min-h-0 sm:mx-4" />
+        ) : tableError ? (
+          <PanelError message={tableError} className="mx-3 my-3 flex-1 min-h-0 sm:mx-4" />
+        ) : (
         <div className="flex-1 min-h-0 overflow-auto">
           {/* table-fixed + <colgroup> is the duo that makes column
               widths actually obey our colWidths state. Without
@@ -3329,6 +3448,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             </tbody>
           </table>
         </div>
+        )}
 
         <div className="flex flex-col gap-3 border-t border-line px-3 py-3 text-tiny text-ink-3 sm:flex-row sm:items-center sm:justify-between sm:px-4">
           <div>

@@ -77,6 +77,27 @@ const isAllowedCorsOrigin = (origin: string) => {
 };
 
 app.use('*', logger());
+app.use('*', async (c, next) => {
+  const startedAt = Date.now();
+  try {
+    await next();
+  } finally {
+    const durationMs = Date.now() - startedAt;
+    const thresholdMs = Number.parseInt(process.env.API_TIMING_LOG_MS ?? '750', 10);
+    const slowThresholdMs = Number.isFinite(thresholdMs) && thresholdMs > 0 ? thresholdMs : 750;
+    c.header('Server-Timing', `app;dur=${durationMs}`);
+
+    if (durationMs >= slowThresholdMs) {
+      const url = new URL(c.req.url);
+      console.info('[api:timing]', {
+        method: c.req.method,
+        path: url.pathname,
+        status: c.res.status,
+        durationMs,
+      });
+    }
+  }
+});
 app.use(
   '*',
   cors({
