@@ -186,6 +186,93 @@ export async function replaceOrderItemsForExternalOrderIds(externalOrderIds: str
   await replaceOrderItemsForOrders(rows);
 }
 
+export type OrderItemsBackfillStatus = {
+  ordersTotal: number;
+  ordersWithItems: number;
+  ordersWithValidItems: number;
+  orderItemsTotal: number;
+  orderItemsOrders: number;
+  missingOrdersWithAnyItems: number;
+  missingOrdersWithValidItems: number;
+  firstMissingValidOrderId: number | null;
+  complete: boolean;
+};
+
+export async function getOrderItemsBackfillStatus(): Promise<OrderItemsBackfillStatus> {
+  await ensureOrderItemsStorage();
+
+  const [row] = await db.execute<{
+    orders_total: number;
+    orders_with_items: number;
+    orders_with_valid_items: number;
+    order_items_total: number;
+    order_items_orders: number;
+    missing_orders_with_any_items: number;
+    missing_orders_with_valid_items: number;
+    first_missing_valid_order_id: number | null;
+  }>(sql`
+    with orders_with_items as (
+      select o.id, o.items
+      from orders o
+      where jsonb_array_length(coalesce(o.items, '[]'::jsonb)) > 0
+    ),
+    valid_orders as (
+      select distinct o.id
+      from orders_with_items o
+      cross join lateral jsonb_array_elements(coalesce(o.items, '[]'::jsonb)) as item(value)
+      where nullif(trim(coalesce(item.value->>'sku', '')), '') is not null
+        and lower(coalesce(item.value->>'adjustment', 'false')) not in ('true', 't', '1', 'yes')
+        and (
+          case
+            when coalesce(item.value->>'quantity', '') ~ '^-?[0-9]+([.][0-9]+)?$'
+              then greatest(0, (item.value->>'quantity')::numeric)
+            else 1
+          end
+        ) > 0
+    ),
+    missing_valid_orders as (
+      select v.id
+      from valid_orders v
+      where not exists (
+        select 1
+        from order_items oi
+        where oi.order_id = v.id
+      )
+    )
+    select
+      (select count(*)::int from orders) as orders_total,
+      (select count(*)::int from orders_with_items) as orders_with_items,
+      (select count(*)::int from valid_orders) as orders_with_valid_items,
+      (select count(*)::int from order_items) as order_items_total,
+      (select count(distinct order_id)::int from order_items) as order_items_orders,
+      (
+        select count(*)::int
+        from orders_with_items o
+        where not exists (
+          select 1
+          from order_items oi
+          where oi.order_id = o.id
+        )
+      ) as missing_orders_with_any_items,
+      (select count(*)::int from missing_valid_orders) as missing_orders_with_valid_items,
+      (select min(id)::int from missing_valid_orders) as first_missing_valid_order_id
+  `);
+
+  const missingOrdersWithValidItems = Number(row?.missing_orders_with_valid_items ?? 0) || 0;
+
+  return {
+    ordersTotal: Number(row?.orders_total ?? 0) || 0,
+    ordersWithItems: Number(row?.orders_with_items ?? 0) || 0,
+    ordersWithValidItems: Number(row?.orders_with_valid_items ?? 0) || 0,
+    orderItemsTotal: Number(row?.order_items_total ?? 0) || 0,
+    orderItemsOrders: Number(row?.order_items_orders ?? 0) || 0,
+    missingOrdersWithAnyItems: Number(row?.missing_orders_with_any_items ?? 0) || 0,
+    missingOrdersWithValidItems,
+    firstMissingValidOrderId: row?.first_missing_valid_order_id ?? null,
+    complete: missingOrdersWithValidItems === 0,
+  };
+}
+
 export async function backfillMissingOrderItems(batchSize = 5000): Promise<number> {
   await ensureOrderItemsStorage();
   const size = Math.max(100, Math.min(20000, Math.trunc(batchSize)));
@@ -198,6 +285,19 @@ export async function backfillMissingOrderItems(batchSize = 5000): Promise<numbe
           select 1
           from order_items oi
           where oi.order_id = o.id
+        )
+        and exists (
+          select 1
+          from jsonb_array_elements(coalesce(o.items, '[]'::jsonb)) as item(value)
+          where nullif(trim(coalesce(item.value->>'sku', '')), '') is not null
+            and lower(coalesce(item.value->>'adjustment', 'false')) not in ('true', 't', '1', 'yes')
+            and (
+              case
+                when coalesce(item.value->>'quantity', '') ~ '^-?[0-9]+([.][0-9]+)?$'
+                  then greatest(0, (item.value->>'quantity')::numeric)
+                else 1
+              end
+            ) > 0
         )
       order by o.id asc
       limit ${size}

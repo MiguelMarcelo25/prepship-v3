@@ -14,11 +14,48 @@ import { products } from '../db/schema/products';
 import { settings } from '../db/schema/settings';
 import { syncOrders } from '../services/order-sync';
 import { syncShipments } from '../services/shipment-sync';
+import { backfillMissingOrderItems, getOrderItemsBackfillStatus } from '../services/order-items';
 import { ssMarkOrderShippedV1, asSSUpstreamOrderId } from '../lib/shipstation/labels';
 import { loadClientCredentials } from '../lib/shipstation/credentials';
 import { printQueue } from '../db/schema/print-queue';
 
 const app = new Hono();
+
+app.get('/order-items/backfill-status', async (c) => {
+  return c.json(await getOrderItemsBackfillStatus());
+});
+
+app.post(
+  '/order-items/backfill',
+  zValidator(
+    'json',
+    z.object({
+      batchSize: z.number().int().positive().max(20000).optional().default(5000),
+      maxBatches: z.number().int().positive().max(100).optional().default(10),
+    }).optional()
+  ),
+  async (c) => {
+    const body = c.req.valid('json') ?? { batchSize: 5000, maxBatches: 10 };
+    const startedAt = Date.now();
+    let inserted = 0;
+    let batches = 0;
+
+    for (let batch = 0; batch < body.maxBatches; batch += 1) {
+      const batchInserted = await backfillMissingOrderItems(body.batchSize);
+      batches += 1;
+      inserted += batchInserted;
+      if (batchInserted === 0) break;
+    }
+
+    const status = await getOrderItemsBackfillStatus();
+    return c.json({
+      inserted,
+      batches,
+      durationMs: Date.now() - startedAt,
+      status,
+    });
+  }
+);
 
 // Flip a client to sandbox/test mode. Any client with is_test=true is
 // excluded from ShipStation sync, billing, shipment sync, daily stats, and
