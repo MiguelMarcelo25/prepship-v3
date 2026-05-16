@@ -70,6 +70,12 @@ export const orders = pgTable(
     index('orders_store_status_date_idx')
       .on(t.storeId, t.orderStatus, t.orderDate.desc())
       .where(sql`${t.storeId} is not null`),
+    index('orders_dashboard_sales_date_idx')
+      .on(t.orderDate.desc())
+      .where(sql`${t.orderStatus} <> 'cancelled'`),
+    index('orders_dashboard_sales_client_date_idx')
+      .on(t.clientId, t.orderDate.desc())
+      .where(sql`${t.orderStatus} <> 'cancelled'`),
   ]
 );
 

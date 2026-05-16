@@ -44,6 +44,8 @@ export const inventory = pgTable(
   (t) => [
     index('inventory_client_idx').on(t.clientId),
     index('inventory_sku_idx').on(t.sku),
+    index('inventory_active_updated_idx').on(t.active, t.updatedAt),
+    index('inventory_client_active_updated_idx').on(t.clientId, t.active, t.updatedAt),
     unique('inventory_client_sku_unq').on(t.clientId, t.sku),
   ]
 );
@@ -64,6 +66,7 @@ export const inventoryLedger = pgTable(
   },
   (t) => [
     index('inventory_ledger_inv_idx').on(t.inventoryId),
+    index('inventory_ledger_inv_type_idx').on(t.inventoryId, t.type),
     index('inventory_ledger_created_idx').on(t.createdAt),
   ]
 );

@@ -724,6 +724,164 @@ app.get('/daily-counts', zValidator('query', dailyCountsQuery), async (c) => {
   return c.json({ data: rows });
 });
 
+const dashboardSalesQuery = dailyCountsQuery.extend({
+  sevenFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'sevenFrom must be YYYY-MM-DD').optional(),
+});
+
+app.get('/dashboard-sales', zValidator('query', dashboardSalesQuery), async (c) => {
+  const q = c.req.valid('query');
+  const startedAt = performance.now();
+
+  const callerEmail = c.get('email' as never) as string | undefined;
+  const callerUserId = c.get('userId' as never) as string | undefined;
+  const callerIsAdmin = isAdminEmail(callerEmail);
+  const assigneeFilter = !callerIsAdmin && callerUserId
+    ? eq(orders.assignedToUserId, callerUserId)
+    : undefined;
+
+  const fromDate = new Date(`${q.from}T00:00:00.000Z`);
+  const toDate = new Date(`${q.to}T23:59:59.999Z`);
+  const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
+  const sevenFrom = q.sevenFrom ?? q.from;
+
+  const where = and(
+    ...[
+      assigneeFilter,
+      q.clientId !== undefined ? eq(orders.clientId, q.clientId) : undefined,
+      q.storeId !== undefined ? eq(orders.storeId, q.storeId) : undefined,
+      includeInactiveClients ? visibleStoreBasePredicate : visibleStorePredicate,
+      q.hideTestOrders === true && q.clientId === undefined && q.storeId === undefined
+        ? sql`not ${testOrderPredicate}`
+        : undefined,
+      gte(orders.orderDate, fromDate),
+      lte(orders.orderDate, toDate),
+      sql`lower(coalesce(${orders.orderStatus}, '')) <> 'cancelled'`,
+    ].filter((p): p is NonNullable<typeof p> => p !== undefined)
+  );
+
+  const [row] = await db.execute<{
+    revenue: number | string | null;
+    units: number | string | null;
+    bySku: Array<{ sku: string; revenue: number | string; units30: number | string; units7: number | string }> | null;
+    dailyRevenue: Array<{ day: string; revenue: number | string }> | null;
+  }>(sql`
+    with item_rows as (
+      select
+        ${orders.id} as order_id,
+        coalesce(${orders.orderTotal}, 0)::numeric as order_total,
+        to_char(date_trunc('day', ${orders.orderDate} at time zone 'UTC'), 'YYYY-MM-DD') as day,
+        trim(coalesce(item->>'sku', '')) as sku,
+        case
+          when nullif(item->>'quantity', '') ~ '^-?[0-9]+([.][0-9]+)?$'
+            then greatest(0, (item->>'quantity')::numeric)
+          else 1
+        end as qty
+      from ${orders}
+      cross join lateral jsonb_array_elements(coalesce(${orders.items}, '[]'::jsonb)) as item
+      where ${where}
+        and trim(coalesce(item->>'sku', '')) <> ''
+        and not (lower(coalesce(item->>'adjustment', 'false')) in ('true', 't', '1', 'yes'))
+    ),
+    valid_items as (
+      select *
+      from item_rows
+      where qty > 0
+    ),
+    order_totals as (
+      select
+        order_id,
+        max(order_total) as order_total,
+        sum(qty) as order_qty
+      from valid_items
+      group by order_id
+    ),
+    allocated as (
+      select
+        vi.order_id,
+        vi.day,
+        vi.sku,
+        vi.qty,
+        case
+          when ot.order_qty > 0 then ot.order_total * vi.qty / ot.order_qty
+          else 0
+        end as allocated_revenue
+      from valid_items vi
+      join order_totals ot on ot.order_id = vi.order_id
+    ),
+    sku_totals as (
+      select
+        sku,
+        coalesce(sum(allocated_revenue), 0) as revenue,
+        coalesce(sum(qty), 0) as units30,
+        coalesce(sum(qty) filter (where day >= ${sevenFrom}), 0) as units7
+      from allocated
+      group by sku
+    ),
+    daily_totals as (
+      select
+        day,
+        coalesce(sum(order_total), 0) as revenue
+      from (
+        select distinct vi.order_id, vi.day, ot.order_total
+        from valid_items vi
+        join order_totals ot on ot.order_id = vi.order_id
+      ) distinct_orders
+      group by day
+    )
+    select
+      coalesce((select sum(order_total) from order_totals), 0)::float8 as "revenue",
+      coalesce((select sum(order_qty) from order_totals), 0)::float8 as "units",
+      coalesce(
+        (
+          select jsonb_agg(
+            jsonb_build_object(
+              'sku', sku,
+              'revenue', revenue,
+              'units30', units30,
+              'units7', units7
+            )
+            order by units30 desc, sku asc
+          )
+          from sku_totals
+        ),
+        '[]'::jsonb
+      ) as "bySku",
+      coalesce(
+        (
+          select jsonb_agg(
+            jsonb_build_object(
+              'day', day,
+              'revenue', revenue
+            )
+            order by day asc
+          )
+          from daily_totals
+        ),
+        '[]'::jsonb
+      ) as "dailyRevenue"
+  `);
+
+  const totalMs = msSince(startedAt);
+  if (totalMs >= 500) {
+    console.info('[orders:dashboard-sales] completed', {
+      from: q.from,
+      to: q.to,
+      clientId: q.clientId ?? null,
+      storeId: q.storeId ?? null,
+      totalMs,
+      skuRows: Array.isArray(row?.bySku) ? row.bySku.length : 0,
+      dayRows: Array.isArray(row?.dailyRevenue) ? row.dailyRevenue.length : 0,
+    });
+  }
+
+  return c.json({
+    revenue: Number(row?.revenue ?? 0) || 0,
+    units: Number(row?.units ?? 0) || 0,
+    bySku: Array.isArray(row?.bySku) ? row.bySku : [],
+    dailyRevenue: Array.isArray(row?.dailyRevenue) ? row.dailyRevenue : [],
+  });
+});
+
 app.post('/sync', async (c) => {
   // Optional body lets a caller force a backfill further back than the
   // default watermark. Used by the UI / admin tools to pull a new keyed

@@ -94,13 +94,20 @@ type RevenueAgg = {
   units7: number
 }
 
+type DashboardOrderAgg = {
+  revenue: number
+  units: number
+  bySku: Map<string, RevenueAgg>
+  dailyRevenue: Map<string, number>
+}
+
 type TrendPoint = {
   day: string
   current: number
   prior: number
   // 2026-05-13: daily order-revenue total in $ — drives the second
   // line on the Daily Orders Trend chart (right Y-axis). Computed in
-  // useMemo by summing currentOrders.orderTotal grouped by orderDate.
+  // the server aggregate grouped by orderDate.
   // Undefined for prior-period bucket since we don't render a prior
   // revenue line (avoids visual clutter — operators compare orders
   // against revenue, not revenue-now against revenue-then).
@@ -392,10 +399,9 @@ function formatPct(value: number) {
   return `${value > 0 ? '+' : ''}${value.toFixed(Math.abs(value) >= 10 ? 0 : 1)}%`
 }
 
-function dateOnly(daysAgo: number) {
-  const d = new Date()
-  d.setHours(0, 0, 0, 0)
-  d.setDate(d.getDate() - daysAgo)
+function dateOffsetFrom(day: string, daysBack: number) {
+  const d = new Date(`${day}T00:00:00.000Z`)
+  d.setUTCDate(d.getUTCDate() - daysBack)
   return d.toISOString().slice(0, 10)
 }
 
@@ -441,6 +447,43 @@ function normalizeSku(value: unknown) {
   return String(value ?? '').trim()
 }
 
+function emptyDashboardOrderAgg(): DashboardOrderAgg {
+  return {
+    revenue: 0,
+    units: 0,
+    bySku: new Map(),
+    dailyRevenue: new Map(),
+  }
+}
+
+function normalizeDashboardOrderAgg(value: unknown): DashboardOrderAgg {
+  const payload = (value && typeof value === 'object' ? value : {}) as Record<string, unknown>
+  const bySku = new Map<string, RevenueAgg>()
+  for (const row of safeArray<any>(payload.bySku)) {
+    const sku = normalizeSku(row?.sku)
+    if (!sku) continue
+    bySku.set(sku, {
+      revenue: num(row?.revenue),
+      units30: num(row?.units30),
+      units7: num(row?.units7),
+    })
+  }
+
+  const dailyRevenue = new Map<string, number>()
+  for (const row of safeArray<any>(payload.dailyRevenue)) {
+    const day = String(row?.day ?? '').slice(0, 10)
+    if (!day) continue
+    dailyRevenue.set(day, num(row?.revenue))
+  }
+
+  return {
+    revenue: num(payload.revenue),
+    units: num(payload.units),
+    bySku,
+    dailyRevenue,
+  }
+}
+
 function stockStatus(stock: number, minStock: number): DashboardSkuRow['status'] {
   if (stock <= 0) return 'out'
   if (stock <= minStock) return 'low'
@@ -470,43 +513,6 @@ function productFamily(name: string, sku: string) {
   if (/snack|chip|cracker|cookie|candy/.test(text)) return 'Snacks'
   const words = name.split(/\s+/).filter(Boolean)
   return words.slice(0, 2).join(' ') || sku || 'Other SKUs'
-}
-
-async function fetchOrdersWindow(query: {
-  from: string
-  to: string
-  clientId?: number
-  hideTestOrders?: boolean
-}) {
-  const first = await apiClient.fetchOrders({
-    page: 1,
-    pageSize: 2000,
-    dateStart: query.from,
-    dateEnd: query.to,
-    hideTestOrders: query.hideTestOrders,
-    ...(query.clientId ? { clientId: query.clientId } : {}),
-  })
-  const orders = safeArray<any>(first?.orders)
-  const pages = Math.min(num(first?.pages, 1), 5)
-  if (pages <= 1) return orders
-
-  const rest = await Promise.all(
-    Array.from({ length: pages - 1 }, (_, index) =>
-      apiClient
-        .fetchOrders({
-          page: index + 2,
-          pageSize: 2000,
-          dateStart: query.from,
-          dateEnd: query.to,
-          hideTestOrders: query.hideTestOrders,
-          ...(query.clientId ? { clientId: query.clientId } : {}),
-        })
-        .then((res: any) => safeArray<any>(res?.orders))
-        .catch(() => [])
-    )
-  )
-
-  return [...orders, ...rest.flat()]
 }
 
 function aggregateOrders(orders: any[], sevenDayStart: string) {
@@ -1067,8 +1073,8 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   const [priorDailyCounts, setPriorDailyCounts] = useState<DailyOrderCount[]>([])
   const [inventoryRows, setInventoryRows] = useState<InventoryItem[]>([])
   const [analysisRows, setAnalysisRows] = useState<AnalysisSku[]>([])
-  const [currentOrders, setCurrentOrders] = useState<any[]>([])
-  const [priorOrders, setPriorOrders] = useState<any[]>([])
+  const [currentOrderAgg, setCurrentOrderAgg] = useState<DashboardOrderAgg>(() => emptyDashboardOrderAgg())
+  const [priorOrderAgg, setPriorOrderAgg] = useState<DashboardOrderAgg>(() => emptyDashboardOrderAgg())
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -1090,6 +1096,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   // container (which also covers Esc-key dismissal for keyboard users).
   const columnsPopoverRef = useRef<HTMLDivElement>(null)
   const filtersPopoverRef = useRef<HTMLDivElement>(null)
+  const dashboardLoadSeqRef = useRef(0)
   useEffect(() => {
     if (!showColumns && !showFilters) return
     const onMouseDown = (event: MouseEvent) => {
@@ -1660,6 +1667,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   )
 
   const loadDashboard = async (mode: 'initial' | 'refresh' = 'initial') => {
+    const loadSeq = ++dashboardLoadSeqRef.current
     if (mode === 'initial') setLoading(true)
     else setRefreshing(true)
     setError(null)
@@ -1684,7 +1692,8 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         Math.round((new Date(currentTo).getTime() - new Date(currentFrom).getTime()) / 86_400_000) + 1,
       )
       const sevenDayOffset = Math.min(Math.max(1, Math.round(rangeLengthDays * 0.25)), rangeLengthDays) - 1
-      const sevenFrom = dateOnly(sevenDayOffset)
+      const sevenFrom = dateOffsetFrom(currentTo, sevenDayOffset)
+      const priorSevenFrom = dateOffsetFrom(priorTo, sevenDayOffset)
       const cid = selectedClientId ?? undefined
 
       const [
@@ -1693,33 +1702,21 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         priorSalesRes,
         currentDailyCountsRes,
         priorDailyCountsRes,
-        inventoryRes,
-        analysisRes,
-        currentOrdersRes,
-        priorOrdersRes,
+        currentOrderAggRes,
+        priorOrderAggRes,
       ] = await Promise.all([
         apiClient.listClients().catch(() => []),
-        // 2026-05-13 ROLLBACK: previously passed includeCancelled=true
-        // on all three analytics calls. The backend flag is in place
-        // and works in dev, but on production Render (statement_timeout
-        // = 15s, slower CPU than local) the heavy /analysis/sku-breakdown
-        // query times out when cancelled orders are added to its CTE
-        // pipeline ("DbHandler exited" surfaced to operators). For now
-        // the dashboard reverts to awaiting+shipped semantics for these
-        // charts. The KPI cards above (Total 7d/30d Units, Revenue,
-        // stock) still include cancelled because they aggregate the
-        // full /orders set with no filter. We'll re-enable the flag
-        // once the breakdown query is profiled and the slow segment
-        // is indexed or rewritten.
+        // Keep initial dashboard paint on lightweight aggregate endpoints.
+        // The heavier SKU breakdown table loads after the main view renders.
         apiClient.fetchAnalysisDailySales({ from: currentFrom, to: currentTo, topN: 15, clientId: cid, hideTestOrders: true }),
         apiClient.fetchAnalysisDailySales({ from: priorFrom, to: priorTo, topN: 15, clientId: cid, hideTestOrders: true }),
         apiClient.fetchOrdersDailyCounts({ from: currentFrom, to: currentTo, clientId: cid, hideTestOrders: true }),
         apiClient.fetchOrdersDailyCounts({ from: priorFrom, to: priorTo, clientId: cid, hideTestOrders: true }),
-        apiClient.fetchInventory({ ...(cid ? { clientId: cid } : {}) }).catch(() => []),
-        apiClient.fetchAnalysisSkus({ from: currentFrom, to: currentTo, limit: 200, clientId: cid, hideTestOrders: true }).catch(() => ({ skus: [] })),
-        fetchOrdersWindow({ from: currentFrom, to: currentTo, clientId: cid, hideTestOrders: true }),
-        fetchOrdersWindow({ from: priorFrom, to: priorTo, clientId: cid, hideTestOrders: true }),
+        apiClient.fetchDashboardOrderSales({ from: currentFrom, to: currentTo, sevenFrom, clientId: cid, hideTestOrders: true }),
+        apiClient.fetchDashboardOrderSales({ from: priorFrom, to: priorTo, sevenFrom: priorSevenFrom, clientId: cid, hideTestOrders: true }),
       ])
+
+      if (loadSeq !== dashboardLoadSeqRef.current) return
 
       const nextClients = safeArray<any>(clientsRes)
         .map((client) => ({
@@ -1734,20 +1731,46 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
       setPriorSales(priorSalesRes ?? { dates: [], topSkus: [], series: {} })
       setCurrentDailyCounts(safeArray<DailyOrderCount>(currentDailyCountsRes?.data))
       setPriorDailyCounts(safeArray<DailyOrderCount>(priorDailyCountsRes?.data))
-      setInventoryRows(safeArray<InventoryItem>(inventoryRes))
-      setAnalysisRows(safeArray<AnalysisSku>(analysisRes?.skus))
-      setCurrentOrders(safeArray<any>(currentOrdersRes))
-      setPriorOrders(safeArray<any>(priorOrdersRes))
+      setInventoryRows([])
+      setAnalysisRows([])
+      setCurrentOrderAgg(normalizeDashboardOrderAgg(currentOrderAggRes))
+      setPriorOrderAgg(normalizeDashboardOrderAgg(priorOrderAggRes))
       setPage(1)
+
+      void apiClient
+        .fetchInventoryPage({ ...(cid ? { clientId: cid } : {}), active: true, page: 1, pageSize: 1000 })
+        .then((inventoryRes: any) => {
+          if (loadSeq !== dashboardLoadSeqRef.current) return
+          setInventoryRows(safeArray<InventoryItem>(inventoryRes?.items))
+        })
+        .catch(() => {
+          if (loadSeq !== dashboardLoadSeqRef.current) return
+          setInventoryRows([])
+        })
+
+      void apiClient
+        .fetchAnalysisSkus({ from: currentFrom, to: currentTo, limit: 200, clientId: cid, hideTestOrders: true })
+        .then((analysisRes: any) => {
+          if (loadSeq !== dashboardLoadSeqRef.current) return
+          setAnalysisRows(safeArray<AnalysisSku>(analysisRes?.skus))
+        })
+        .catch(() => {
+          if (loadSeq !== dashboardLoadSeqRef.current) return
+          setAnalysisRows([])
+        })
 
       if (cid && !nextClients.some((client) => client.clientId === cid)) {
         setSelectedClientId(null)
       }
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : 'Failed to load dashboard')
+      if (loadSeq === dashboardLoadSeqRef.current) {
+        setError(loadError instanceof Error ? loadError.message : 'Failed to load dashboard')
+      }
     } finally {
-      setLoading(false)
-      setRefreshing(false)
+      if (loadSeq === dashboardLoadSeqRef.current) {
+        setLoading(false)
+        setRefreshing(false)
+      }
     }
   }
 
@@ -1756,26 +1779,13 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedClientId, dateRange.from, dateRange.to])
 
-  // 2026-05-13: build daily revenue map from currentOrders so the
+  // Daily revenue comes from /orders/dashboard-sales so the
   // Daily Orders Trend chart can render a second line for total order
   // value on a separate right-side Y-axis. Aggregation: sum
   // order.orderTotal grouped by YYYY-MM-DD of orderDate. Excludes
   // adjustments / cancellations? — no special filter here because
-  // the order list already comes from fetchOrdersWindow which
-  // respects the dashboard's date range; we just bucket what's
-  // already there. If we later need to exclude cancelled orders
-  // from revenue specifically, add a filter on order.orderStatus
-  // before the reduce.
-  const revenueByDay = useMemo(() => {
-    const map = new Map<string, number>()
-    for (const order of currentOrders) {
-      const day = String((order as any)?.orderDate ?? '').slice(0, 10)
-      if (!day) continue
-      const total = num((order as any)?.orderTotal)
-      map.set(day, (map.get(day) ?? 0) + total)
-    }
-    return map
-  }, [currentOrders])
+  // the aggregate endpoint already applies the same dashboard filters.
+  const revenueByDay = useMemo(() => currentOrderAgg.dailyRevenue, [currentOrderAgg])
 
   const unitsTrend = useMemo(() => buildTrend(currentSales, priorSales), [currentSales, priorSales])
 
@@ -1798,8 +1808,8 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     [currentSales, priorSales, heatmapLimit],
   )
 
-  const currentAgg = useMemo(() => aggregateOrders(currentOrders, dateOnly(6)), [currentOrders])
-  const priorAgg = useMemo(() => aggregateOrders(priorOrders, dateOnly(36)), [priorOrders])
+  const currentAgg = currentOrderAgg
+  const priorAgg = priorOrderAgg
 
   const inventoryBySku = useMemo(() => {
     const map = new Map<string, InventoryItem>()
@@ -2031,10 +2041,10 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   const visibleColumnCount = 4 + COLUMN_OPTIONS.filter((option) => visibleColumns[option.key]).length
 
   const kpis = useMemo(() => {
-    const currentUnits30 = sumValues(unitsTrend.map((point) => point.current))
-    const priorUnits30 = sumValues(unitsTrend.map((point) => point.prior))
-    const currentUnits7 = sumValues(last(unitsTrend.map((point) => point.current), 7))
-    const priorUnits7 = sumValues(last(unitsTrend.map((point) => point.prior), 7))
+    const currentUnits30 = currentAgg.units
+    const priorUnits30 = priorAgg.units
+    const currentUnits7 = [...currentAgg.bySku.values()].reduce((sum, row) => sum + row.units7, 0)
+    const priorUnits7 = [...priorAgg.bySku.values()].reduce((sum, row) => sum + row.units7, 0)
     const inStock = inventoryRows.filter((item) => {
       const stock = num(item.currentStock ?? item.stockQty)
       const min = num(item.minStock ?? item.reorderLevel)
@@ -2060,7 +2070,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
       outStock,
       totalStockSkus,
     }
-  }, [currentAgg.revenue, inventoryRows, priorAgg.revenue, unitsTrend])
+  }, [currentAgg, inventoryRows, priorAgg])
 
   const maxTopSku = Math.max(...topSkuRows.map((row) => row.units30), 1)
 

@@ -164,6 +164,13 @@ export interface TableProps<Row> {
   /** Initial page size. Must be one of pageSizeOptions. Defaults to
    *  50 (or the first option if 50 isn't in the list). */
   defaultPageSize?: number
+  serverPagination?: {
+    page: number
+    pageSize: number
+    totalItems: number
+    onPageChange: (page: number) => void
+    onPageSizeChange: (pageSize: number) => void
+  }
   /** Per-row class name for visual customization — focused rows,
    *  status-tinted rows, etc. Receives the row + its index in the
    *  *paginated/sorted* view (not the original data index). */
@@ -333,6 +340,7 @@ export function Table<Row>({
   paginated,
   pageSizeOptions,
   defaultPageSize,
+  serverPagination,
   rowClassName,
   renderRowExpansion,
   rowRef,
@@ -714,6 +722,7 @@ export function Table<Row>({
 
   const [page, setPage] = useState<number>(() => readStoredPage(storageKey) ?? 1)
   const [pageSize, setPageSize] = useState<number>(initialPageSize)
+  const usingServerPagination = Boolean(paginated && serverPagination)
 
   // Persist page + pageSize when they change.
   useEffect(() => {
@@ -731,13 +740,13 @@ export function Table<Row>({
   // mutation-style row updates don't reset the page.
   const lastDataLengthRef = useRef(data.length)
   useEffect(() => {
-    if (!paginated) return
+    if (!paginated || usingServerPagination) return
     if (data.length < lastDataLengthRef.current) setPage(1)
     lastDataLengthRef.current = data.length
-  }, [data.length, paginated])
+  }, [data.length, paginated, usingServerPagination])
   useEffect(() => {
-    if (paginated) setPage(1)
-  }, [sort?.key, sort?.direction, paginated])
+    if (paginated && !usingServerPagination) setPage(1)
+  }, [sort?.key, sort?.direction, paginated, usingServerPagination])
 
   // Clamp page when total shrinks past the operator's current page —
   // a defensive second layer for cases the length-change effect misses
@@ -746,10 +755,10 @@ export function Table<Row>({
   // NOTE: maxPage is computed against UNPINNED rows because pinned
   // rows aren't paginated — they're always appended below every page.
   useEffect(() => {
-    if (!paginated) return
+    if (!paginated || usingServerPagination) return
     const maxPage = Math.max(1, Math.ceil(unpinnedRows.length / pageSize))
     if (page > maxPage) setPage(maxPage)
-  }, [unpinnedRows.length, pageSize, page, paginated])
+  }, [unpinnedRows.length, pageSize, page, paginated, usingServerPagination])
 
   // Slice for the visible page. Pinned rows are appended AFTER the
   // paginated slice so they appear on every page (e.g., "deactivated
@@ -758,10 +767,11 @@ export function Table<Row>({
   // path is identical and there are no surprises.
   const pagedRows = useMemo(() => {
     if (!paginated) return sortedRows
+    if (usingServerPagination) return sortedRows
     const start = (page - 1) * pageSize
     const slice = unpinnedRows.slice(start, start + pageSize)
     return pinnedRows.length > 0 ? [...slice, ...pinnedRows] : slice
-  }, [paginated, sortedRows, unpinnedRows, pinnedRows, page, pageSize])
+  }, [paginated, usingServerPagination, sortedRows, unpinnedRows, pinnedRows, page, pageSize])
 
   // Density tokens — picked here once, applied to every cell so
   // the row rhythm stays consistent.
@@ -867,6 +877,18 @@ export function Table<Row>({
       ) : null}
     </div>
   )
+
+  const paginationTotalItems = usingServerPagination
+    ? Math.max(0, Number(serverPagination?.totalItems) || 0)
+    : unpinnedRows.length
+  const paginationPage = usingServerPagination ? (serverPagination?.page ?? 1) : page
+  const paginationPageSize = usingServerPagination ? (serverPagination?.pageSize ?? pageSize) : pageSize
+  const handlePaginationPageChange = usingServerPagination
+    ? serverPagination!.onPageChange
+    : setPage
+  const handlePaginationPageSizeChange = usingServerPagination
+    ? serverPagination!.onPageSizeChange
+    : (nextSize: number) => { setPageSize(nextSize); setPage(1) }
 
   return (
     // 2026-05-12 sticky fix (round 2): outermost wrapper was
@@ -1149,7 +1171,7 @@ export function Table<Row>({
           one control vocabulary (Analysis grid, Packages, Inventory).
           Only renders when there's at least one row, so empty-state
           messages stay clean. */}
-      {paginated && !loading && unpinnedRows.length > 0 ? (
+      {paginated && !loading && paginationTotalItems > 0 ? (
         <div className="border-t border-line bg-surface-2/40 px-3 py-2">
           {/* totalItems counts only UNPINNED rows so the pagination
               math ("Showing 1-50 of 200 rows") reflects what's
@@ -1158,12 +1180,12 @@ export function Table<Row>({
               count is surfaced separately by the consumer (the
               toolbar badge in InventoryView). */}
           <TablePaginationBar
-            page={page}
-            pageSize={pageSize}
+            page={paginationPage}
+            pageSize={paginationPageSize}
             pageSizeOptions={effectivePageSizeOptions}
-            totalItems={unpinnedRows.length}
-            onPageChange={setPage}
-            onPageSizeChange={(nextSize) => { setPageSize(nextSize); setPage(1) }}
+            totalItems={paginationTotalItems}
+            onPageChange={handlePaginationPageChange}
+            onPageSizeChange={handlePaginationPageSizeChange}
           />
         </div>
       ) : null}

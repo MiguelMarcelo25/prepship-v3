@@ -802,10 +802,20 @@ function normalizeInventoryClients(nextClients: any[] | undefined): ClientDto[] 
   }))
 }
 
-function buildStockQuery(stockClientId: string, activeOnly: boolean) {
-  const query: Record<string, unknown> = {}
+function buildStockQuery(
+  stockClientId: string,
+  activeOnly: boolean,
+  stockSearch = '',
+  alertOnly = false,
+  page = 1,
+  pageSize = 50,
+) {
+  const query: Record<string, unknown> = { page, pageSize }
   if (stockClientId) query.clientId = Number.parseInt(stockClientId, 10)
-  if (!activeOnly) query.includeInactive = true
+  const search = stockSearch.trim()
+  if (search) query.search = search
+  if (alertOnly) query.lowStock = true
+  query.active = activeOnly
   return query
 }
 
@@ -902,9 +912,15 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
     if (typeof window === 'undefined') return
     window.localStorage.setItem('inventory_active_only', String(activeOnly))
   }, [activeOnly])
+  const [stockPage, setStockPage] = useState(1)
+  const [stockPageSize, setStockPageSize] = useState<number>(readStoredInventoryPageSize)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    window.localStorage.setItem(INVENTORY_PAGE_SIZE_KEY, String(stockPageSize))
+  }, [stockPageSize])
   const stockQueryParams = useMemo(
-    () => buildStockQuery(stockClientId, activeOnly),
-    [stockClientId, activeOnly],
+    () => buildStockQuery(stockClientId, activeOnly, stockSearch, alertOnly, stockPage, stockPageSize),
+    [stockClientId, activeOnly, stockSearch, alertOnly, stockPage, stockPageSize],
   )
   const clientsQuery = useQuery({
     queryKey: ['clients'],
@@ -913,20 +929,22 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
   const packagesQuery = useQuery({
     queryKey: ['packages', 'custom'],
     queryFn: () => apiClient.fetchPackages('custom'),
+    enabled: activeTab === 'receive',
   })
   const alertsQuery = useQuery({
     queryKey: ['inventory', 'alerts'],
     queryFn: () => apiClient.fetchInventoryAlerts(),
+    enabled: activeTab === 'alerts' || alertOnly,
   })
   const inventoryQuery = useQuery({
     queryKey: ['inventory', 'stock', stockQueryParams],
-    queryFn: () => apiClient.fetchInventory(maybeQueryParams(stockQueryParams)),
+    queryFn: () => apiClient.fetchInventoryPage(maybeQueryParams(stockQueryParams)),
+    placeholderData: (previousData) => previousData,
   })
-  const items = itemsState.length > 0 ? itemsState : inventoryQuery.data ?? []
+  const items = itemsState
+  const stockTotal = inventoryQuery.data?.total ?? items.length
   const stockLoading =
     clientsQuery.isLoading ||
-    packagesQuery.isLoading ||
-    alertsQuery.isLoading ||
     inventoryQuery.isLoading ||
     stockLoadingState
   useEffect(() => {
@@ -939,24 +957,22 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
     if (alertsQuery.data) setAlerts(alertsQuery.data)
   }, [alertsQuery.data])
   useEffect(() => {
-    if (inventoryQuery.data) setItems(inventoryQuery.data)
+    if (inventoryQuery.data) setItems(inventoryQuery.data.items)
   }, [inventoryQuery.data])
   useEffect(() => {
     setStockLoading(
       clientsQuery.isLoading ||
-        packagesQuery.isLoading ||
-        alertsQuery.isLoading ||
         inventoryQuery.isLoading,
     )
-  }, [alertsQuery.isLoading, clientsQuery.isLoading, inventoryQuery.isLoading, packagesQuery.isLoading])
+  }, [clientsQuery.isLoading, inventoryQuery.isLoading])
   useEffect(() => {
     const error =
       clientsQuery.error ||
-      packagesQuery.error ||
-      alertsQuery.error ||
+      (activeTab === 'receive' ? packagesQuery.error : null) ||
+      (activeTab === 'alerts' || alertOnly ? alertsQuery.error : null) ||
       inventoryQuery.error
     setBootError(error ? error instanceof Error ? error.message : 'Failed to load inventory view' : null)
-  }, [alertsQuery.error, clientsQuery.error, inventoryQuery.error, packagesQuery.error])
+  }, [activeTab, alertOnly, alertsQuery.error, clientsQuery.error, inventoryQuery.error, packagesQuery.error])
   const [stockSort, setStockSort] = useState<InventorySortState | null>(null)
   // Operator-controlled column layout for the Stock Levels table.
   // Drag a header to reorder, use the Columns popover to toggle
@@ -1609,14 +1625,6 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
   // Operator-requested 2026-05-12: pageSize options 10/20/50/100/200.
   // pageSize persists per-browser; page resets to 1 on any filter/sort
   // change to keep the operator anchored at the top of the new result set.
-  const [stockPage, setStockPage] = useState(1)
-  const [stockPageSize, setStockPageSize] = useState<number>(readStoredInventoryPageSize)
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return
-    window.localStorage.setItem(INVENTORY_PAGE_SIZE_KEY, String(stockPageSize))
-  }, [stockPageSize])
-
   // Reset to page 1 whenever the filter/sort/active inputs change so
   // operators don't land on page 7 of a fresh result that only has
   // 2 pages. Mirrors how Packages/Analysis paging hooks behave.
@@ -1627,17 +1635,16 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
   // Clamp page when total shrinks (e.g., operator narrows the filter
   // and the previous last-page becomes invalid).
   useEffect(() => {
-    const maxPage = Math.max(1, Math.ceil(sortedRows.length / stockPageSize))
+    const maxPage = Math.max(1, Math.ceil(stockTotal / stockPageSize))
     if (stockPage > maxPage) setStockPage(maxPage)
-  }, [sortedRows.length, stockPageSize, stockPage])
+  }, [stockTotal, stockPageSize, stockPage])
 
   // Slice the sorted/filtered list to just the current page. Grouping
   // happens AFTER pagination so each rendered page shows up to
   // pageSize rows total across all clients (not pageSize per group).
   const pagedRows = useMemo(() => {
-    const start = (stockPage - 1) * stockPageSize
-    return sortedRows.slice(start, start + stockPageSize)
-  }, [sortedRows, stockPage, stockPageSize])
+    return sortedRows
+  }, [sortedRows])
 
   const groupedRows = useMemo(() => groupInventoryRowsByClient(pagedRows), [pagedRows])
   const storeNameMap = useMemo(() => {
@@ -2097,27 +2104,37 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
       // Mirror the loadStock effect's query construction — pass
       // includeInactive only when the toolbar Active-only toggle
       // is OFF so manual refreshes match the current visible filter.
-      const nextStockQuery = buildStockQuery(stockClientId, activeOnly)
-      const [nextClients, nextAlerts, nextItems] = await Promise.all([
+      const nextStockQuery = buildStockQuery(stockClientId, activeOnly, stockSearch, alertOnly, stockPage, stockPageSize)
+      const [nextClients, nextPage] = await Promise.all([
         queryClient.fetchQuery({
           queryKey: ['clients'],
           queryFn: () => apiClient.fetchClients(),
           staleTime: 0,
         }),
         queryClient.fetchQuery({
-          queryKey: ['inventory', 'alerts'],
-          queryFn: () => apiClient.fetchInventoryAlerts(),
-          staleTime: 0,
-        }),
-        queryClient.fetchQuery({
           queryKey: ['inventory', 'stock', nextStockQuery],
-          queryFn: () => apiClient.fetchInventory(maybeQueryParams(nextStockQuery)),
+          queryFn: () => apiClient.fetchInventoryPage(maybeQueryParams(nextStockQuery)),
           staleTime: 0,
         }),
       ])
       setClients(normalizeInventoryClients(nextClients))
-      setAlerts(nextAlerts)
-      setItems(nextItems)
+      setItems(nextPage.items)
+      if (activeTab === 'alerts' || alertOnly) {
+        const nextAlerts = await queryClient.fetchQuery({
+          queryKey: ['inventory', 'alerts'],
+          queryFn: () => apiClient.fetchInventoryAlerts(),
+          staleTime: 0,
+        })
+        setAlerts(nextAlerts)
+      }
+      if (activeTab === 'receive') {
+        const nextPackages = await queryClient.fetchQuery({
+          queryKey: ['packages', 'custom'],
+          queryFn: () => apiClient.fetchPackages('custom'),
+          staleTime: 0,
+        })
+        setPackages(nextPackages)
+      }
       if (activeTab === 'history') {
         const nextLedger = await apiClient.fetchInventoryLedger(buildInventoryLedgerQuery({
           clientId: historyClientId,
@@ -2265,7 +2282,17 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
 
   async function openEditSku(item: InventoryItemDto) {
     try {
-      await loadParentOptions(item.clientId)
+      const tasks: Promise<unknown>[] = [loadParentOptions(item.clientId)]
+      if (packages.length === 0) {
+        tasks.push(
+          queryClient.fetchQuery({
+            queryKey: ['packages', 'custom'],
+            queryFn: () => apiClient.fetchPackages('custom'),
+            staleTime: 5 * 60_000,
+          }).then((nextPackages) => setPackages(nextPackages))
+        )
+      }
+      await Promise.all(tasks)
       setEditSkuForm(createEditSkuFormState(item))
     } catch (error) {
       toastContext?.addToast(error instanceof Error ? error.message : 'Failed to load parent SKUs', 'error')
@@ -3113,6 +3140,16 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
               paginated
               pageSizeOptions={[10, 20, 50, 100, 200]}
               defaultPageSize={50}
+              serverPagination={{
+                page: stockPage,
+                pageSize: stockPageSize,
+                totalItems: stockTotal,
+                onPageChange: setStockPage,
+                onPageSizeChange: (nextSize) => {
+                  setStockPageSize(nextSize)
+                  setStockPage(1)
+                },
+              }}
               // 2026-05-13: portal the Columns ▾ button to the
               // page-level toolbar (left of "Import SKUs from
               // Orders"). When `columnsAnchor` is null (initial
@@ -3602,13 +3639,13 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                   totalItems counter reflects the full sortedRows length,
                   not just the current page's worth, so operators see
                   the real result count of their filters. */}
-              {sortedRows.length > 0 ? (
+              {stockTotal > 0 ? (
                 <div style={{ marginTop: 12 }}>
                   <AnalysisPagination
                     page={stockPage}
                     pageSize={stockPageSize}
                     pageSizeOptions={[...INVENTORY_PAGE_SIZE_OPTIONS]}
-                    totalItems={sortedRows.length}
+                    totalItems={stockTotal}
                     onPageChange={setStockPage}
                     onPageSizeChange={(nextSize) => {
                       setStockPageSize(nextSize)

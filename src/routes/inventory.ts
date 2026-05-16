@@ -16,6 +16,48 @@ import {
 
 const app = new Hono();
 
+const booleanQuery = z.preprocess((value) => {
+  if (typeof value !== 'string') return value;
+  const normalized = value.trim().toLowerCase();
+  if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+  if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+  return value;
+}, z.boolean());
+
+type InventoryRouteTimings = Record<string, number>;
+
+function msSince(startedAt: number): number {
+  return Math.round(performance.now() - startedAt);
+}
+
+async function timedInventoryStep<T>(
+  timings: InventoryRouteTimings,
+  name: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const startedAt = performance.now();
+  try {
+    return await fn();
+  } finally {
+    timings[name] = msSince(startedAt);
+  }
+}
+
+function logSlowInventoryRoute(
+  route: string,
+  timings: InventoryRouteTimings,
+  totalMs: number,
+  meta: Record<string, unknown>,
+): void {
+  const slowestStepMs = Math.max(0, ...Object.values(timings));
+  if (totalMs < 750 && slowestStepMs < 500) return;
+  console.info(`[inventory:${route}] completed`, {
+    ...meta,
+    totalMs,
+    timings,
+  });
+}
+
 const EXPEDITED_SERVICES = [
   'ups_2nd_day_air', 'ups_2nd_day_air_am',
   'ups_next_day_air', 'ups_next_day_air_saver', 'ups_next_day_air_early_am',
@@ -39,17 +81,20 @@ const activeInventoryClientPredicate = sql`(
 const listQuery = paginationSchema.extend({
   clientId: z.coerce.number().int().optional(),
   search: z.string().optional(),
-  lowStock: z.coerce.boolean().optional(),
+  lowStock: booleanQuery.optional(),
+  active: booleanQuery.optional(),
   // Opt-in flag — when true, the response includes inventory rows
   // where active=false. Default behavior (omitted/false) keeps the
   // legacy "active-only" semantics so the rate browser, order
   // auto-fulfillment lookups, and Receive tab don't accidentally
   // start seeing deactivated SKUs. Currently only the Stock Levels
   // tab sets this when its "Active only" toolbar toggle is off.
-  includeInactive: z.coerce.boolean().optional(),
+  includeInactive: booleanQuery.optional(),
 });
 
 app.get('/', zValidator('query', listQuery), async (c) => {
+  const routeStartedAt = performance.now();
+  const timings: InventoryRouteTimings = {};
   const q = c.req.valid('query');
   const where = and(
     ...[
@@ -63,24 +108,29 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       q.lowStock ? lte(inventory.stockQty, inventory.reorderLevel) : undefined,
       // Active filter: applied unless the caller explicitly asks
       // for everything via ?includeInactive=true.
-      q.includeInactive ? undefined : eq(inventory.active, true),
+      q.active !== undefined
+        ? eq(inventory.active, q.active)
+        : q.includeInactive ? undefined : eq(inventory.active, true),
       activeInventoryClientPredicate,
     ].filter(<T>(x: T | undefined): x is T => x !== undefined)
   );
 
-  const [rows, countRows] = await Promise.all([
-    db
-      .select()
-      .from(inventory)
-      .where(where)
-      .orderBy(desc(inventory.updatedAt))
-      .limit(q.pageSize)
-      .offset(offsetOf(q)),
-    db.select({ count: sql<number>`count(*)::int` }).from(inventory).where(where),
-  ]);
+  const [rows, countRows] = await timedInventoryStep(timings, 'pageAndCount', () =>
+    Promise.all([
+      db
+        .select()
+        .from(inventory)
+        .where(where)
+        .orderBy(desc(inventory.updatedAt))
+        .limit(q.pageSize)
+        .offset(offsetOf(q)),
+      db.select({ count: sql<number>`count(*)::int` }).from(inventory).where(where),
+    ])
+  );
 
   const soldRows = rows.length
-    ? await db.execute<{ inventory_id: number; sold_last_30_days: number }>(sql`
+    ? await timedInventoryStep(timings, 'soldLast30Days', () =>
+        db.execute<{ inventory_id: number; sold_last_30_days: number }>(sql`
         select
           i.id as inventory_id,
           coalesce(sum(
@@ -105,6 +155,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           and coalesce(o.order_status, '') <> 'cancelled'
         group by i.id
       `)
+      )
     : [];
   const soldByInventoryId = new Map(
     soldRows.map((row) => [row.inventory_id, Number(row.sold_last_30_days) || 0])
@@ -158,11 +209,12 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   // Allowed under the shipped-data lockdown: this is a READ-only
   // analytics computation. No locked rows are mutated.
   const effectiveRows = rows.length
-    ? await db.execute<{
-        inventory_id: number
-        total_received: number
-        total_sold: number
-      }>(sql`
+    ? await timedInventoryStep(timings, 'effectiveStock', () =>
+        db.execute<{
+          inventory_id: number
+          total_received: number
+          total_sold: number
+        }>(sql`
         with ids as (
           select unnest(array[${sql.join(rows.map((r) => sql`${r.id}`), sql`, `)}]::int[]) as id
         ),
@@ -211,6 +263,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         left join receives on receives.id = ids.id
         left join sells on sells.id = ids.id
       `)
+      )
     : [];
   const effectiveByInventoryId = new Map(
     effectiveRows.map((row) => [
@@ -223,7 +276,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     ])
   );
 
-  return c.json(paginated(
+  const response = paginated(
     rows.map((row) => {
       const eff = effectiveByInventoryId.get(row.id) ?? { totalReceived: 0, totalSold: 0, effectiveStock: 0 };
       return {
@@ -237,7 +290,21 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     }),
     countRows[0]?.count ?? 0,
     q
-  ));
+  );
+
+  logSlowInventoryRoute('list', timings, msSince(routeStartedAt), {
+    page: q.page,
+    pageSize: q.pageSize,
+    total: countRows[0]?.count ?? 0,
+    rows: rows.length,
+    clientId: q.clientId ?? null,
+    hasSearch: Boolean(q.search?.trim()),
+    lowStock: q.lowStock ?? false,
+    active: q.active ?? null,
+    includeInactive: q.includeInactive ?? false,
+  });
+
+  return c.json(response);
 });
 
 // Global ledger query — flattens the ledger across all SKUs with filters.
@@ -252,6 +319,8 @@ const ledgerQuery = paginationSchema.extend({
 });
 
 app.get('/ledger', zValidator('query', ledgerQuery), async (c) => {
+  const routeStartedAt = performance.now();
+  const timings: InventoryRouteTimings = {};
   const q = c.req.valid('query');
   const dateStart = q.dateStart != null && Number.isFinite(q.dateStart) ? new Date(q.dateStart) : null;
   const dateEnd = q.dateEnd != null && Number.isFinite(q.dateEnd) ? new Date(q.dateEnd) : null;
@@ -266,33 +335,45 @@ app.get('/ledger', zValidator('query', ledgerQuery), async (c) => {
     ].filter(<T>(x: T | undefined): x is T => x !== undefined)
   );
 
-  const [rows, countRows] = await Promise.all([
-    db
-      .select({
-        id: inventoryLedger.id,
-        inventoryId: inventoryLedger.inventoryId,
-        sku: inventory.sku,
-        name: inventory.name,
-        clientId: inventory.clientId,
-        type: inventoryLedger.type,
-        qty: inventoryLedger.qty,
-        orderId: inventoryLedger.orderId,
-        note: inventoryLedger.note,
-        createdBy: inventoryLedger.createdBy,
-        createdAt: inventoryLedger.createdAt,
-      })
-      .from(inventoryLedger)
-      .innerJoin(inventory, eq(inventory.id, inventoryLedger.inventoryId))
-      .where(where)
-      .orderBy(desc(inventoryLedger.createdAt))
-      .limit(q.pageSize)
-      .offset(offsetOf(q)),
-    db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(inventoryLedger)
-      .innerJoin(inventory, eq(inventory.id, inventoryLedger.inventoryId))
-      .where(where),
-  ]);
+  const [rows, countRows] = await timedInventoryStep(timings, 'pageAndCount', () =>
+    Promise.all([
+      db
+        .select({
+          id: inventoryLedger.id,
+          inventoryId: inventoryLedger.inventoryId,
+          sku: inventory.sku,
+          name: inventory.name,
+          clientId: inventory.clientId,
+          type: inventoryLedger.type,
+          qty: inventoryLedger.qty,
+          orderId: inventoryLedger.orderId,
+          note: inventoryLedger.note,
+          createdBy: inventoryLedger.createdBy,
+          createdAt: inventoryLedger.createdAt,
+        })
+        .from(inventoryLedger)
+        .innerJoin(inventory, eq(inventory.id, inventoryLedger.inventoryId))
+        .where(where)
+        .orderBy(desc(inventoryLedger.createdAt))
+        .limit(q.pageSize)
+        .offset(offsetOf(q)),
+      db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(inventoryLedger)
+        .innerJoin(inventory, eq(inventory.id, inventoryLedger.inventoryId))
+        .where(where),
+    ])
+  );
+
+  logSlowInventoryRoute('ledger', timings, msSince(routeStartedAt), {
+    page: q.page,
+    pageSize: q.pageSize,
+    total: countRows[0]?.count ?? 0,
+    rows: rows.length,
+    clientId: q.clientId ?? null,
+    type: q.type ?? null,
+    hasSku: Boolean(q.sku?.trim()),
+  });
 
   return c.json(paginated(rows, countRows[0]?.count ?? 0, q));
 });

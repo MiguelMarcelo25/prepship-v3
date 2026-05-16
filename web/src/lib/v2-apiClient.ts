@@ -2456,6 +2456,65 @@ export const apiClient = {
   },
 
   // ─── Inventory ─────────────────────────────────────────────────────────────
+  fetchInventoryPage(query?: Record<string, unknown>): Promise<{
+    items: any[];
+    total: number;
+    totalPages: number;
+    page: number;
+    pageSize: number;
+  }> {
+    return safe(
+      'fetchInventoryPage',
+      async () => {
+        const page = Math.max(1, Number(query?.page) || 1);
+        const pageSize = Math.max(1, Math.min(2000, Number(query?.pageSize) || 50));
+        const requestQuery = { ...(query ?? {}), page, pageSize };
+        const [res, clientRows]: [any, any[]] = await Promise.all([
+          api.get<any>(`/inventory${qs(requestQuery as any)}`),
+          apiClient.fetchClients().catch(() => []),
+        ]);
+        const clientNamesById = new Map<number, string>(
+          clientRows.map((client: any) => [Number(client.clientId ?? client.id), String(client.name ?? '')])
+        );
+        const activeClientIds = new Set<number>(
+          clientRows
+            .map((client: any) => Number(client.clientId ?? client.id))
+            .filter(Number.isFinite)
+        );
+
+        const data = Array.isArray(res)
+          ? res
+          : Array.isArray(res?.data)
+            ? res.data
+            : [];
+        const pagination = res?.pagination ?? {};
+        const total = Number(pagination.total ?? res?.total ?? data.length) || 0;
+        const responsePage = Number(pagination.page ?? res?.page ?? page) || page;
+        const responsePageSize = Number(pagination.pageSize ?? res?.pageSize ?? pageSize) || pageSize;
+        const totalPages =
+          Number(pagination.totalPages ?? res?.totalPages ?? res?.pages) ||
+          Math.max(1, Math.ceil(total / responsePageSize));
+
+        return {
+          items: filterRowsToActiveClients(data, activeClientIds).map((row) =>
+            normalizeInventoryDto(row, clientNamesById)
+          ),
+          total,
+          totalPages,
+          page: responsePage,
+          pageSize: responsePageSize,
+        };
+      },
+      {
+        items: [],
+        total: 0,
+        totalPages: 1,
+        page: Number(query?.page) || 1,
+        pageSize: Number(query?.pageSize) || 50,
+      }
+    );
+  },
+
   // Auto-paginates through all pages so the Inventory main view shows EVERY
   // SKU instead of just the first 50 (which was the previous bug — the
   // backend GET /inventory caps pageSize at 200 and defaults to 50, and
@@ -3530,6 +3589,40 @@ export const apiClient = {
       // Fallback returned on error so the dashboard render code can keep
       // pattern-matching `payload?.data` without an extra null guard.
       { data: [] as Array<{ day: string; awaiting: number; shipped: number; cancelled: number; total: number }> }
+    );
+  },
+
+  fetchDashboardOrderSales(query: { from: string; to: string; sevenFrom?: string; clientId?: number; storeId?: number; hideTestOrders?: boolean }): Promise<{
+    revenue: number;
+    units: number;
+    bySku: Array<{ sku: string; revenue: number; units30: number; units7: number }>;
+    dailyRevenue: Array<{ day: string; revenue: number }>;
+  }> {
+    return safe(
+      'fetchDashboardOrderSales',
+      async () => {
+        const q: Record<string, string | number | boolean> = {
+          from: query.from,
+          to: query.to,
+        };
+        if (query.sevenFrom) q.sevenFrom = query.sevenFrom;
+        if (query.clientId !== undefined) q.clientId = query.clientId;
+        if (query.storeId !== undefined) q.storeId = query.storeId;
+        if (query.hideTestOrders) q.hideTestOrders = true;
+        const res: any = await api.get<any>(`/orders/dashboard-sales${qs(q)}`);
+        return {
+          revenue: Number(res?.revenue) || 0,
+          units: Number(res?.units) || 0,
+          bySku: Array.isArray(res?.bySku) ? res.bySku : [],
+          dailyRevenue: Array.isArray(res?.dailyRevenue) ? res.dailyRevenue : [],
+        };
+      },
+      {
+        revenue: 0,
+        units: 0,
+        bySku: [] as Array<{ sku: string; revenue: number; units30: number; units7: number }>,
+        dailyRevenue: [] as Array<{ day: string; revenue: number }>,
+      }
     );
   },
 
