@@ -185,7 +185,7 @@ const skuDailyQuery = rangeQuery.extend({
   includeCancelled: z.coerce.boolean().optional().default(false),
 });
 
-type SkuDailyQuery = z.infer<typeof skuDailyQuery>;
+export type SkuDailyQuery = z.infer<typeof skuDailyQuery>;
 
 function buildDateBuckets(fromIso: string, toIso: string) {
   const startMs = Date.parse(`${fromIso.slice(0, 10)}T00:00:00.000Z`);
@@ -196,7 +196,7 @@ function buildDateBuckets(fromIso: string, toIso: string) {
   );
 }
 
-async function getSkuDailyFromOrderItems(q: SkuDailyQuery) {
+export async function getSkuDailyFromOrderItems(q: SkuDailyQuery) {
   const fromIso = new Date(q.dateFrom).toISOString();
   const toIso = new Date(q.dateTo).toISOString();
   const cid: number | null = q.clientId ?? null;
@@ -323,7 +323,7 @@ const skuBreakdownQuery = rangeQuery.extend({
   includeCancelled: z.coerce.boolean().optional().default(false),
 });
 
-type SkuBreakdownQuery = z.infer<typeof skuBreakdownQuery>;
+export type SkuBreakdownQuery = z.infer<typeof skuBreakdownQuery>;
 type SkuBreakdownRow = {
   sku: string;
   name: string | null;
@@ -401,7 +401,7 @@ async function ensureSellingFeeColumns(): Promise<void> {
   }
 }
 
-async function getSkuBreakdownFromOrderItems(q: SkuBreakdownQuery) {
+export async function getSkuBreakdownFromOrderItems(q: SkuBreakdownQuery) {
   await ensureSellingFeeColumns();
 
   const fromIso = new Date(q.dateFrom).toISOString();

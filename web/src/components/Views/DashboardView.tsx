@@ -1807,14 +1807,14 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         })
 
       const corePromise = Promise.all([
-        // Keep initial dashboard paint on lightweight aggregate endpoints.
+        // Keep initial dashboard paint on dedicated aggregate endpoints.
         // The heavier SKU breakdown table loads as its own panel payload.
-        apiClient.fetchAnalysisDailySales({ from: currentFrom, to: currentTo, topN: 15, clientId: cid, hideTestOrders: true }),
-        apiClient.fetchAnalysisDailySales({ from: priorFrom, to: priorTo, topN: 15, clientId: cid, hideTestOrders: true }),
-        apiClient.fetchOrdersDailyCounts({ from: currentFrom, to: currentTo, clientId: cid, hideTestOrders: true }),
-        apiClient.fetchOrdersDailyCounts({ from: priorFrom, to: priorTo, clientId: cid, hideTestOrders: true }),
-        apiClient.fetchDashboardOrderSales({ from: currentFrom, to: currentTo, sevenFrom, clientId: cid, hideTestOrders: true }),
-        apiClient.fetchDashboardOrderSales({ from: priorFrom, to: priorTo, sevenFrom: priorSevenFrom, clientId: cid, hideTestOrders: true }),
+        apiClient.fetchDashboardSkuTrends({ from: currentFrom, to: currentTo, topN: 15, clientId: cid, hideTestOrders: true }),
+        apiClient.fetchDashboardSkuTrends({ from: priorFrom, to: priorTo, topN: 15, clientId: cid, hideTestOrders: true }),
+        apiClient.fetchDashboardDailyCounts({ from: currentFrom, to: currentTo, clientId: cid, hideTestOrders: true }),
+        apiClient.fetchDashboardDailyCounts({ from: priorFrom, to: priorTo, clientId: cid, hideTestOrders: true }),
+        apiClient.fetchDashboardSummary({ from: currentFrom, to: currentTo, sevenFrom, clientId: cid, hideTestOrders: true }),
+        apiClient.fetchDashboardSummary({ from: priorFrom, to: priorTo, sevenFrom: priorSevenFrom, clientId: cid, hideTestOrders: true }),
       ])
         .then(([
           currentSalesRes,
@@ -1846,7 +1846,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         })
 
       const inventoryPromise = apiClient
-        .fetchInventoryPage({ ...(cid ? { clientId: cid } : {}), active: true, page: 1, pageSize: 300 })
+        .fetchDashboardInventoryRisk({ ...(cid ? { clientId: cid } : {}), active: true, pageSize: 300 })
         .then((inventoryRes: any) => {
           if (loadSeq !== dashboardLoadSeqRef.current) return
           setInventoryRows(safeArray<InventoryItem>(inventoryRes?.items))
@@ -1859,7 +1859,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         })
 
       const analysisPromise = apiClient
-        .fetchAnalysisSkus({ from: currentFrom, to: currentTo, limit: 200, clientId: cid, hideTestOrders: true })
+        .fetchDashboardTopSkus({ from: currentFrom, to: currentTo, limit: 200, clientId: cid, hideTestOrders: true })
         .then((analysisRes: any) => {
           if (loadSeq !== dashboardLoadSeqRef.current) return
           setAnalysisRows(safeArray<AnalysisSku>(analysisRes?.skus))

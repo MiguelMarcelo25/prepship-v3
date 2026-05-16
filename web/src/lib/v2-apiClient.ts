@@ -3758,6 +3758,259 @@ export const apiClient = {
     );
   },
 
+  fetchDashboardDailyCounts(query: { from: string; to: string; clientId?: number; storeId?: number; hideTestOrders?: boolean }): Promise<{
+    data: Array<{ day: string; awaiting: number; shipped: number; cancelled: number; total: number }>;
+  }> {
+    return safe(
+      'fetchDashboardDailyCounts',
+      async () => {
+        const q: Record<string, string | number | boolean> = { from: query.from, to: query.to };
+        if (query.clientId !== undefined) q.clientId = query.clientId;
+        if (query.storeId !== undefined) q.storeId = query.storeId;
+        if (query.hideTestOrders) q.hideTestOrders = true;
+        const res: any = await api.get<any>(`/dashboard/daily-counts${qs(q)}`);
+        const data = Array.isArray(res?.data) ? res.data : [];
+        return { data };
+      },
+      { data: [] as Array<{ day: string; awaiting: number; shipped: number; cancelled: number; total: number }> }
+    );
+  },
+
+  fetchDashboardSummary(query: { from: string; to: string; sevenFrom?: string; clientId?: number; storeId?: number; hideTestOrders?: boolean }): Promise<{
+    revenue: number;
+    units: number;
+    bySku: Array<{ sku: string; revenue: number; units30: number; units7: number }>;
+    dailyRevenue: Array<{ day: string; revenue: number }>;
+  }> {
+    return safe(
+      'fetchDashboardSummary',
+      async () => {
+        const q: Record<string, string | number | boolean> = {
+          from: query.from,
+          to: query.to,
+        };
+        if (query.sevenFrom) q.sevenFrom = query.sevenFrom;
+        if (query.clientId !== undefined) q.clientId = query.clientId;
+        if (query.storeId !== undefined) q.storeId = query.storeId;
+        if (query.hideTestOrders) q.hideTestOrders = true;
+        const res: any = await api.get<any>(`/dashboard/summary${qs(q)}`);
+        return {
+          revenue: Number(res?.revenue) || 0,
+          units: Number(res?.units) || 0,
+          bySku: Array.isArray(res?.bySku) ? res.bySku : [],
+          dailyRevenue: Array.isArray(res?.dailyRevenue) ? res.dailyRevenue : [],
+        };
+      },
+      {
+        revenue: 0,
+        units: 0,
+        bySku: [] as Array<{ sku: string; revenue: number; units30: number; units7: number }>,
+        dailyRevenue: [] as Array<{ day: string; revenue: number }>,
+      }
+    );
+  },
+
+  fetchDashboardSkuTrends(query: {
+    from: string;
+    to: string;
+    top?: number;
+    topN?: number;
+    clientId?: number;
+    storeId?: number;
+    hideTestOrders?: boolean;
+    includeCancelled?: boolean;
+  }): Promise<any> {
+    return safe(
+      'fetchDashboardSkuTrends',
+      async () => {
+        const q: Record<string, string | number | boolean> = { from: query.from, to: query.to };
+        if (query.top !== undefined) q.top = query.top;
+        if (query.topN !== undefined) q.topN = query.topN;
+        if (query.clientId !== undefined) q.clientId = query.clientId;
+        if (query.storeId !== undefined) q.storeId = query.storeId;
+        if (query.hideTestOrders) q.hideTestOrders = true;
+        if (query.includeCancelled !== undefined) q.includeCancelled = query.includeCancelled;
+
+        const res: any = await api.get<any>(`/dashboard/sku-trends${qs(q)}`);
+        const topSkusRaw = Array.isArray(res?.topSkus) ? res.topSkus : [];
+        const daysArr = Array.isArray(res?.days) ? res.days : [];
+        const dates = daysArr.map((d: any) => d?.day).filter(Boolean);
+        const series: Record<string, number[]> = {};
+        for (const t of topSkusRaw) {
+          if (!t?.sku) continue;
+          series[t.sku] = daysArr.map((d: any) => Number(d?.[t.sku]) || 0);
+        }
+        const topSkus = topSkusRaw
+          .map((t: any) => ({
+            sku: t.sku,
+            name: t.name ?? '',
+            total: Number(t.total ?? t.total_qty ?? t.totalQty ?? 0) || 0,
+            totalQty: Number(t.total ?? t.total_qty ?? t.totalQty ?? 0) || 0,
+          }))
+          .sort((left: any, right: any) => right.totalQty - left.totalQty);
+        return { dates, topSkus, series };
+      },
+      { dates: [], topSkus: [], series: {} }
+    );
+  },
+
+  fetchDashboardTopSkus(query: {
+    from: string;
+    to: string;
+    limit?: number;
+    clientId?: number;
+    storeId?: number;
+    hideTestOrders?: boolean;
+    includeCancelled?: boolean;
+  }): Promise<any> {
+    return safe(
+      'fetchDashboardTopSkus',
+      async () => {
+        const q: Record<string, string | number | boolean> = { from: query.from, to: query.to };
+        if (query.limit !== undefined) q.limit = query.limit;
+        if (query.clientId !== undefined) q.clientId = query.clientId;
+        if (query.storeId !== undefined) q.storeId = query.storeId;
+        if (query.hideTestOrders) q.hideTestOrders = true;
+        if (query.includeCancelled !== undefined) q.includeCancelled = query.includeCancelled;
+
+        const [breakdown, clientsRes] = await Promise.all([
+          api.get<any>(`/dashboard/top-skus${qs(q)}`),
+          api.get<any>(`/clients${qs({ activeOnly: true })}`).catch(() => []),
+        ]);
+        const clients = Array.isArray(clientsRes) ? clientsRes : [];
+        const nameById = new Map<number, string>();
+        for (const c of clients) {
+          if (c?.id != null) nameById.set(c.id, c?.name ?? '');
+        }
+        const parseNum = (v: unknown): number => {
+          if (typeof v === 'number') return Number.isFinite(v) ? v : 0;
+          if (typeof v === 'string') {
+            const n = Number.parseFloat(v);
+            return Number.isFinite(n) ? n : 0;
+          }
+          return 0;
+        };
+        const rows = Array.isArray(breakdown?.data) ? breakdown.data : [];
+        const skus = rows.map((r: any) => {
+          const rawInvSkuId =
+            r.inv_sku_id ?? r.invSkuId ?? r.inventory_id ?? r.inventoryId ?? null;
+          const invSkuId =
+            rawInvSkuId == null || rawInvSkuId === '' ? null : Number(rawInvSkuId);
+
+          const standardShipCount = parseNum(
+            r.std_ship_count ?? r.standardShipCount ?? r.std_orders ?? 0
+          );
+          const standardTotalShipping = parseNum(
+            r.std_total ?? r.standardTotalShipping ?? r.standardShipTotal
+          );
+          const standardShipQtyTotal = parseNum(
+            r.std_qty_total ?? r.standardShipQtyTotal ?? standardShipCount
+          );
+          const expeditedShipCount = parseNum(
+            r.exp_ship_count ?? r.expeditedShipCount ?? r.exp_orders ?? 0
+          );
+          const expeditedTotalShipping = parseNum(
+            r.exp_total ?? r.expeditedTotalShipping ?? r.expeditedShipTotal
+          );
+          const expeditedShipQtyTotal = parseNum(
+            r.exp_qty_total ?? r.expeditedShipQtyTotal ?? expeditedShipCount
+          );
+          const shipCountWithCost = parseNum(
+            r.ship_count_with_cost ?? r.shipCountWithCost ?? standardShipCount + expeditedShipCount
+          );
+          const totalShipping = parseNum(r.total_shipping ?? r.totalShipping);
+          const totalRevenue = parseNum(r.total_revenue ?? r.totalRevenue);
+          const totalQty = parseNum(r.total_qty ?? r.qty);
+          const avgSellingPrice =
+            totalQty > 0 && totalRevenue > 0
+              ? Number((totalRevenue / totalQty).toFixed(2))
+              : 0;
+          const dailyQtyRaw = r.daily_qty ?? r.dailyQty ?? [];
+          const dailyQty: number[] = Array.isArray(dailyQtyRaw)
+            ? dailyQtyRaw.map((value: unknown) => {
+                if (typeof value === 'number' && Number.isFinite(value)) return value;
+                const parsed = Number(value);
+                return Number.isFinite(parsed) ? parsed : 0;
+              })
+            : [];
+
+          return {
+            sku: r.sku,
+            name: r.name ?? '',
+            imageUrl: r.image_url ?? r.imageUrl ?? null,
+            invSkuId: Number.isFinite(invSkuId) ? invSkuId : null,
+            clientId: r.client_id ?? r.clientId ?? null,
+            clientName:
+              r.client_name ??
+              r.clientName ??
+              (r.client_id != null ? nameById.get(r.client_id) ?? '' : ''),
+            dailyQty,
+            orders: parseNum(r.orders),
+            pendingOrders: parseNum(r.pending ?? r.pendingOrders),
+            externalOrders: parseNum(r.ext_shipped ?? r.externalOrders),
+            qty: parseNum(r.total_qty ?? r.qty),
+            standardOrders: parseNum(r.std_orders ?? r.standardOrders),
+            standardShipCount,
+            standardShipQtyTotal,
+            standardAvgShipping:
+              standardShipQtyTotal > 0
+                ? Number((standardTotalShipping / standardShipQtyTotal).toFixed(2))
+                : 0,
+            standardTotalShipping,
+            standardShipTotal: standardTotalShipping,
+            expeditedOrders: parseNum(r.exp_orders ?? r.expeditedOrders),
+            expeditedShipCount,
+            expeditedShipQtyTotal,
+            expeditedAvgShipping:
+              expeditedShipQtyTotal > 0
+                ? Number((expeditedTotalShipping / expeditedShipQtyTotal).toFixed(2))
+                : 0,
+            expeditedTotalShipping,
+            expeditedShipTotal: expeditedTotalShipping,
+            shipCountWithCost,
+            blendedAvgShipping:
+              shipCountWithCost > 0 ? Number((totalShipping / shipCountWithCost).toFixed(2)) : 0,
+            totalShipping,
+            totalRevenue,
+            avgSellingPrice,
+            totalSellingFee: parseNum(
+              r.total_selling_fee
+              ?? r.totalSellingFee
+              ?? r.sellingFee
+              ?? r.sellingFeeTotal
+            ),
+          };
+        });
+        return {
+          skus,
+          orderCount: breakdown?.totalOrders ?? 0,
+        };
+      },
+      { skus: [], orderCount: 0 }
+    );
+  },
+
+  fetchDashboardInventoryRisk(query?: { clientId?: number; active?: boolean; pageSize?: number }): Promise<{
+    items: any[];
+    total: number;
+  }> {
+    return safe(
+      'fetchDashboardInventoryRisk',
+      async () => {
+        const q: Record<string, string | number | boolean> = {};
+        if (query?.clientId !== undefined) q.clientId = query.clientId;
+        if (query?.active !== undefined) q.active = query.active;
+        if (query?.pageSize !== undefined) q.pageSize = query.pageSize;
+        const res: any = await api.get<any>(`/dashboard/inventory-risk${qs(q)}`);
+        return {
+          items: Array.isArray(res?.items) ? res.items : [],
+          total: Number(res?.total) || 0,
+        };
+      },
+      { items: [], total: 0 }
+    );
+  },
+
   fetchAnalysisDailySales(query: Record<string, unknown>): Promise<any> {
     // v2 AnalysisView expects `{dates, topSkus, series: {[sku]: number[]}}`.
     // v4's `/analysis/sku-daily` returns `{topSkus:[{sku,name,total_qty}], days:[{day, [sku]:qty, ...}]}`.
