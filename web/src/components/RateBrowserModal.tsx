@@ -142,6 +142,27 @@ type DirectCarrierRateError = {
   message?: string | null;
 };
 
+type CarrierRateStatus = 'cached' | 'loading' | 'live' | 'unavailable' | 'error';
+
+type RateBrowseInfo = {
+  source: 'cache' | 'live' | 'mixed' | null;
+  cacheAgeMs?: number;
+};
+
+type BrowseRateOptions = {
+  cachedOnly?: boolean;
+  forceLive?: boolean;
+};
+
+function formatCacheAge(ms: number | undefined): string | null {
+  if (!Number.isFinite(ms ?? NaN)) return null;
+  const seconds = Math.max(0, Math.round((ms ?? 0) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  return `${Math.round(minutes / 60)}h ago`;
+}
+
 function RateLoadingSpinner({ text = 'Fetching rates…' }: { text?: string }): JSX.Element {
   return (
     <span
@@ -772,6 +793,8 @@ export default function RateBrowserModal({
   // ── Rates state ────────────────────────────────────────────────────────────
   const [ratesByPid, setRatesByPid] = useState<Record<string, RateRow[]>>({});
   const [rateErrorsByPid, setRateErrorsByPid] = useState<Record<string, string>>({});
+  const [carrierStatusByPid, setCarrierStatusByPid] = useState<Record<string, CarrierRateStatus>>({});
+  const [rateBrowseInfo, setRateBrowseInfo] = useState<RateBrowseInfo>({ source: null });
   // Per-carrier resolution metadata from the direct-carrier path. Used to
   // render the "rates came from X" hint under Walmart / Amazon / eBay
   // shipping panels so operators can tell whether the quote came from
@@ -785,6 +808,7 @@ export default function RateBrowserModal({
   const [scopedShippingAccounts, setScopedShippingAccounts] = useState<RbCarrierAccountDto[]>([]);
   const [scopedAccountsLoading, setScopedAccountsLoading] = useState(false);
   const [scopedAccountsError, setScopedAccountsError] = useState<string | null>(null);
+  const browseSequenceRef = useRef(0);
 
   const rateShippingAccounts = useMemo(
     () => (testMode ? shippingAccounts : scopedShippingAccounts),
@@ -896,6 +920,8 @@ export default function RateBrowserModal({
           : {}
     );
     setRateErrorsByPid({});
+    setCarrierStatusByPid({});
+    setRateBrowseInfo({ source: seededBestRate ? 'cache' : null });
     setRateMetaByPid({});
     // `locations` is intentionally not in deps — it doesn't change per-order
     // and we only want to re-hydrate when the modal opens or the order changes.
@@ -922,7 +948,8 @@ export default function RateBrowserModal({
     return () => window.removeEventListener('keydown', handler);
   }, [open, onClose]);
 
-  // Auto-fetch rates on open when weight + dims are already valid (v2 parity).
+  // Try the cache on open when weight + dims are already valid. Live carrier
+  // fanout stays explicit so opening the modal never waits on every carrier.
   // Guard with a ref so we only fire once per open, not on every form edit.
   const autoFetchedRef = useRef<number | null>(null);
   useEffect(() => {
@@ -935,7 +962,7 @@ export default function RateBrowserModal({
     if (!hasWeight || !hasDims || !zip || zip.length < 5) return;
     if (!rateAccountsReady) return;
     autoFetchedRef.current = orderId;
-    void browseRates();
+    void browseRates(undefined, { cachedOnly: true });
     // browseRates is stable across renders via function declaration;
     // intentionally not listed as a dep.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -990,10 +1017,15 @@ export default function RateBrowserModal({
   // Fetch all scoped carrier accounts in one UI request. The backend still calls
   // ShipStation per carrier, but it does that work in parallel and returns one
   // grouped result set for the modal.
-  async function browseRates(confirmationOverride?: RateConfirmation): Promise<void> {
+  async function browseRates(
+    confirmationOverride?: RateConfirmation,
+    options: BrowseRateOptions = {}
+  ): Promise<void> {
     if (!zip || zip.length < 5 || !hasWeight || !hasDims) return;
     if (!testMode && !rateShippingAccounts.length) return;
 
+    const requestSeq = browseSequenceRef.current + 1;
+    browseSequenceRef.current = requestSeq;
     const totalOz = lbNum * 16 + ozNum;
     const rateConfirmation = normalizeConfirmationForRates(confirmationOverride ?? confirmation);
     setBrowsing(true);
@@ -1023,7 +1055,11 @@ export default function RateBrowserModal({
     if (seededPid != null) {
       setSelectedPid((current) => current ?? seededPid);
     }
-    setPendingPids(new Set(rateShippingAccounts.map((a) => a.shippingProviderId)));
+    setPendingPids(
+      options.cachedOnly
+        ? new Set()
+        : new Set(rateShippingAccounts.map((a) => a.shippingProviderId))
+    );
     let liveFetchedRates: RateRow[] = [];
 
     // Persist dims for this order (fire-and-forget) so re-open sees them.
@@ -1070,7 +1106,11 @@ export default function RateBrowserModal({
           .map((acct) => [acct.carrierId as string, acct])
       );
       const carrierIds = [...new Set([...accountByCarrierId.keys()])];
-      const raw = (await apiClient.fetchRates({
+      const preferredAccount =
+        (selectedPid != null ? accountByPid.get(selectedPid) : null) ??
+        (seededPid != null ? accountByPid.get(seededPid) : null) ??
+        rateShippingAccounts[0];
+      const browseResult = await apiClient.browseRates({
         fromPostalCode: selectedLocation?.postalCode?.slice(0, 5) ?? undefined,
         toPostalCode: zip,
         toCountry: 'US',
@@ -1084,6 +1124,7 @@ export default function RateBrowserModal({
         },
         residential: true,
         carrierIds: carrierIds.length ? carrierIds : undefined,
+        preferredCarrierId: preferredAccount?.carrierId ?? undefined,
         storeId: toFiniteNumber(order?.storeId) ?? undefined,
         clientId: toFiniteNumber(order?.clientId) ?? undefined,
         confirmation: rateConfirmation,
@@ -1097,11 +1138,19 @@ export default function RateBrowserModal({
           toOptionalString(order?.external_order_id) ??
           toOptionalString(order?.orderNumber) ??
           undefined,
-        forceRefresh: false,
-      })) as RateRow[];
+        cachedOnly: options.cachedOnly === true,
+        forceLive: options.forceLive === true,
+        forceRefresh: options.forceLive === true,
+      });
+      if (browseSequenceRef.current !== requestSeq) return;
+      const raw = (Array.isArray(browseResult)
+        ? browseResult
+        : Array.isArray(browseResult?.rates)
+          ? browseResult.rates
+          : []) as RateRow[];
 
-      const directErrors = Array.isArray((raw as any)?.directCarrierErrors)
-        ? ((raw as any).directCarrierErrors as DirectCarrierRateError[])
+      const directErrors = Array.isArray((browseResult as any)?.directCarrierErrors)
+        ? ((browseResult as any).directCarrierErrors as DirectCarrierRateError[])
         : [];
       const nextErrorsByPid: Record<string, string> = {};
       for (const err of directErrors) {
@@ -1110,6 +1159,17 @@ export default function RateBrowserModal({
         if (pid != null && message) nextErrorsByPid[String(pid)] = message;
       }
       setRateErrorsByPid(nextErrorsByPid);
+      setRateBrowseInfo({
+        source:
+          browseResult?.source === 'cache' || browseResult?.source === 'live' || browseResult?.source === 'mixed'
+            ? browseResult.source
+            : browseResult?.cached
+              ? 'cache'
+              : raw.length
+                ? 'live'
+                : null,
+        cacheAgeMs: typeof browseResult?.cacheAgeMs === 'number' ? browseResult.cacheAgeMs : undefined,
+      });
 
       // Fix 3 (2026-05-12): capture per-carrier resolution meta so the
       // rate panel can render the "rates came from X" hint. Walmart in
@@ -1118,8 +1178,8 @@ export default function RateBrowserModal({
       // (`'body.externalOrderId'` / `'store_orders lookup'`), from an
       // on-demand Marketplace API lookup (`'walmart_marketplace_api'`),
       // or from the settings-demo fallback path.
-      const directMetas = Array.isArray((raw as any)?.directCarrierMetas)
-        ? ((raw as any).directCarrierMetas as Array<{ shippingProviderId?: number; meta: Record<string, unknown> }>)
+      const directMetas = Array.isArray((browseResult as any)?.directCarrierMetas)
+        ? ((browseResult as any).directCarrierMetas as Array<{ shippingProviderId?: number; meta: Record<string, unknown> }>)
         : [];
       const nextMetaByPid: Record<string, Record<string, unknown>> = {};
       for (const m of directMetas) {
@@ -1129,6 +1189,15 @@ export default function RateBrowserModal({
         }
       }
       setRateMetaByPid(nextMetaByPid);
+      const nextStatusByPid: Record<string, CarrierRateStatus> = {};
+      const carrierStatuses = Array.isArray(browseResult?.carrierStatuses)
+        ? browseResult.carrierStatuses as Array<{ carrierId?: string; status?: CarrierRateStatus }>
+        : [];
+      for (const status of carrierStatuses) {
+        if (!status.carrierId) continue;
+        const account = accountByCarrierId.get(status.carrierId);
+        if (account) nextStatusByPid[String(account.shippingProviderId)] = status.status ?? 'unavailable';
+      }
 
       liveFetchedRates = dedupeRateRows(
         (raw ?? [])
@@ -1161,13 +1230,26 @@ export default function RateBrowserModal({
       for (const acct of rateShippingAccounts) {
         const key = String(acct.shippingProviderId);
         nextRatesByPid[key] = grouped[key] ?? [];
+        if (nextRatesByPid[key].length > 0) {
+          nextStatusByPid[key] = browseResult?.cached ? 'cached' : 'live';
+        } else {
+          nextStatusByPid[key] ??= options.cachedOnly ? 'unavailable' : 'unavailable';
+        }
       }
       if (seededBestRate && seededPid != null && !nextRatesByPid[String(seededPid)]?.length) {
         nextRatesByPid[String(seededPid)] = [seededBestRate];
+        nextStatusByPid[String(seededPid)] ??= 'cached';
       }
+      for (const [pid, message] of Object.entries(nextErrorsByPid)) {
+        if (message) nextStatusByPid[pid] = 'error';
+      }
+      setCarrierStatusByPid(nextStatusByPid);
       setRatesByPid(nextRatesByPid);
     } catch {
+      if (browseSequenceRef.current !== requestSeq) return;
       setRateErrorsByPid({});
+      setCarrierStatusByPid({});
+      setRateBrowseInfo({ source: seededBestRate ? 'cache' : null });
       setRateMetaByPid({});
       setRatesByPid(
         seededBestRate && seededPid != null
@@ -1518,7 +1600,11 @@ export default function RateBrowserModal({
               Enter {missing} to fetch rates
             </>
           ) : (
-            <RateLoadingSpinner />
+            <>
+              No live rates loaded yet
+              <br />
+              Click Browse Rates to refresh carrier quotes.
+            </>
           )}
         </div>
       );
@@ -2074,7 +2160,7 @@ export default function RateBrowserModal({
                   onChange={(e) => {
                     const next = normalizeConfirmationForRates(e.target.value);
                     setConfirmation(next);
-                    if (anyFetched && !browsing) void browseRates(next);
+                    if (anyFetched && !browsing) void browseRates(next, { forceLive: true });
                   }}
                   className="ship-select"
                   style={{ width: '100%', marginBottom: 10 }}
@@ -2111,7 +2197,7 @@ export default function RateBrowserModal({
               <button
                 type="button"
                 className="btn btn-primary"
-                onClick={() => void browseRates()}
+                onClick={() => void browseRates(undefined, { forceLive: true })}
                 disabled={
                   browsing ||
                   !hasWeight ||
@@ -2127,7 +2213,7 @@ export default function RateBrowserModal({
                   padding: 9,
                 }}
               >
-                {browsing ? 'Fetching…' : 'Browse Rates'}
+                {browsing ? 'Fetching...' : anyFetched ? 'Refresh Live Rates' : 'Browse Rates'}
               </button>
             </div>
           </div>
@@ -2168,6 +2254,7 @@ export default function RateBrowserModal({
               const isSel = c.shippingProviderId === selectedPid;
               const rates = ratesByPid[String(c.shippingProviderId)];
               const carrierError = rateErrorsByPid[String(c.shippingProviderId)];
+              const carrierStatus = carrierStatusByPid[String(c.shippingProviderId)];
               const count =
                 rates != null
                   ? hideUnavail
@@ -2266,6 +2353,12 @@ export default function RateBrowserModal({
                     >
                       {pending ? (
                         <Loader2 size={12} strokeWidth={2.5} className="animate-spin" aria-label="Fetching rates" />
+                      ) : carrierStatus === 'unavailable' ? (
+                        '—'
+                      ) : carrierStatus === 'cached' ? (
+                        'C'
+                      ) : carrierStatus === 'live' ? (
+                        'L'
                       ) : (
                         '…'
                       )}
@@ -2305,6 +2398,13 @@ export default function RateBrowserModal({
                 {anyFetched
                   ? `${totalCarriersAvailable} out of ${rateShippingAccounts.length} carriers available`
                   : ''}
+                {rateBrowseInfo.source === 'cache'
+                  ? ` | cached ${formatCacheAge(rateBrowseInfo.cacheAgeMs) ?? ''}`.trimEnd()
+                  : rateBrowseInfo.source === 'live'
+                    ? ' | live'
+                    : rateBrowseInfo.source === 'mixed'
+                      ? ' | cached + live'
+                      : ''}
               </span>
               <label
                 style={{

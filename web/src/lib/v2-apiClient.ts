@@ -619,6 +619,11 @@ function translateRatePayloadToV4(
 
   if (typeof input.residential === 'boolean') out.residential = input.residential;
   if (typeof input.forceRefresh === 'boolean') out.forceRefresh = input.forceRefresh;
+  if (typeof input.forceLive === 'boolean') out.forceLive = input.forceLive;
+  if (typeof input.cachedOnly === 'boolean') out.cachedOnly = input.cachedOnly;
+  if (typeof input.preferredCarrierId === 'string' && input.preferredCarrierId) {
+    out.preferredCarrierId = input.preferredCarrierId;
+  }
   if (typeof input.includeAllDirectCarriers === 'boolean') out.includeAllDirectCarriers = input.includeAllDirectCarriers;
   if (Array.isArray(input.carrierIds)) out.carrierIds = input.carrierIds;
   const numericOrderId = typeof input.orderId === 'number'
@@ -1246,6 +1251,40 @@ function dedupeRateResults<T extends Record<string, unknown>>(rates: T[]): T[] {
     }
   }
   return [...byKey.values()];
+}
+
+const rateBrowseInflight = new Map<string, Promise<any>>();
+
+function stableRateBrowseKey(body: Record<string, unknown>): string {
+  const keys = [
+    'weightOz',
+    'toZip',
+    'toCountry',
+    'toState',
+    'toCity',
+    'residential',
+    'dimsL',
+    'dimsW',
+    'dimsH',
+    'storeId',
+    'clientId',
+    'confirmation',
+    'carrierIds',
+    'preferredCarrierId',
+    'forceRefresh',
+    'forceLive',
+    'cachedOnly',
+    'orderId',
+    'externalOrderId',
+    'orderNumber',
+  ];
+  const keyed: Record<string, unknown> = {};
+  for (const key of keys) {
+    const value = body[key];
+    if (value === undefined || value === null || value === '') continue;
+    keyed[key] = Array.isArray(value) ? [...value].map(String).sort() : value;
+  }
+  return JSON.stringify(keyed);
 }
 
 // Maps v4's ShipStation-v2-passthrough rate object to the v2-legacy shape
@@ -3799,7 +3838,97 @@ export const apiClient = {
   browseRates(data: Record<string, unknown>): Promise<any> {
     return safe(
       'browseRates',
-      () => api.post<any>('/rates/browse', data),
+      async () => {
+        const body = translateRatePayloadToV4(data);
+        const requestedCarrierIds = Array.isArray(body.carrierIds)
+          ? body.carrierIds.map((value) => String(value)).filter(Boolean)
+          : [];
+        const shipStationCarrierIds = requestedCarrierIds.filter((carrierId) => !isDirectCarrierId(carrierId));
+        const directCarrierIds = requestedCarrierIds.filter(isDirectCarrierId);
+        const preferredCarrierId =
+          typeof body.preferredCarrierId === 'string'
+            ? body.preferredCarrierId
+            : requestedCarrierIds[0];
+        const requestKey = stableRateBrowseKey({
+          ...body,
+          carrierIds: requestedCarrierIds,
+          preferredCarrierId,
+        });
+        const existing = rateBrowseInflight.get(requestKey);
+        if (existing) return existing;
+
+        const inFlight = (async () => {
+          const shouldFetchShipStation =
+            requestedCarrierIds.length === 0 || shipStationCarrierIds.length > 0;
+          const shouldFetchDirect = directCarrierIds.length > 0 && body.cachedOnly !== true;
+          const [shipStationResult, directRates] = await Promise.all([
+            shouldFetchShipStation
+              ? api.post<any>('/rates/browse', {
+                  ...body,
+                  ...(shipStationCarrierIds.length ? { carrierIds: shipStationCarrierIds } : {}),
+                  ...(preferredCarrierId ? { preferredCarrierId } : {}),
+                })
+              : Promise.resolve({
+                  rates: [],
+                  bestRate: null,
+                  cached: false,
+                  source: 'live',
+                  carrierStatuses: [],
+                }),
+            shouldFetchDirect
+              ? fetchDirectCarrierRates(body, directCarrierIds)
+              : Promise.resolve({ rates: [], errors: [], metas: [] }),
+          ]);
+          const shipStationRates = Array.isArray(shipStationResult?.rates)
+            ? shipStationResult.rates.map(translateRateToV2Shape)
+            : [];
+          const combined = dedupeRateResults([...shipStationRates, ...directRates.rates]).sort((left, right) => {
+            const leftAmount = Number((left as any).shipmentCost ?? (left as any).amount ?? 0) +
+              Number((left as any).otherCost ?? 0);
+            const rightAmount = Number((right as any).shipmentCost ?? (right as any).amount ?? 0) +
+              Number((right as any).otherCost ?? 0);
+            return leftAmount - rightAmount;
+          });
+          const bestRate = combined[0] ?? (
+            shipStationResult?.bestRate
+              ? translateRateToV2Shape(shipStationResult.bestRate)
+              : null
+          );
+          const directCarrierStatuses = directCarrierIds.map((carrierId) => {
+            const providerId = toProviderAccountId(carrierId);
+            const hasRate = combined.some((rate) => {
+              const raw = rate.raw && typeof rate.raw === 'object' ? rate.raw as Record<string, unknown> : {};
+              return String(rate.shippingProviderId ?? raw.carrier_id) === String(providerId);
+            });
+            const error = directRates.errors.find((item) => String(item.shippingProviderId) === String(providerId));
+            return {
+              carrierId,
+              carrierName: error?.label ?? carrierId,
+              status: hasRate ? 'live' : error ? 'error' : 'unavailable',
+              error: error?.message,
+            };
+          });
+          return {
+            ...shipStationResult,
+            requestKey: shipStationResult?.requestKey ?? requestKey,
+            rates: combined,
+            bestRate,
+            carrierStatuses: [
+              ...(Array.isArray(shipStationResult?.carrierStatuses) ? shipStationResult.carrierStatuses : []),
+              ...directCarrierStatuses,
+            ],
+            directCarrierErrors: directRates.errors,
+            directCarrierMetas: directRates.metas,
+          };
+        })();
+
+        rateBrowseInflight.set(requestKey, inFlight);
+        try {
+          return await inFlight;
+        } finally {
+          rateBrowseInflight.delete(requestKey);
+        }
+      },
       { rates: [], bestRate: null }
     );
   },

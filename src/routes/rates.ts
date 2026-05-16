@@ -49,27 +49,85 @@ app.post('/', zValidator('json', rateBody), async (c) => {
   return c.json(result);
 });
 
-const browseBody = rateBody
-  .omit({ carrierIds: true })
-  .extend({ carrierId: z.string().min(1) });
+const browseBody = rateBody.extend({
+  carrierId: z.string().min(1).optional(),
+  preferredCarrierId: z.string().min(1).optional(),
+  forceLive: z.boolean().optional(),
+  cachedOnly: z.boolean().optional(),
+});
+
+function rateTotal(rate: { shipping_amount?: { amount?: number }; other_amount?: { amount?: number }; confirmation_amount?: { amount?: number } }): number {
+  return (
+    Number(rate.shipping_amount?.amount ?? 0) +
+    Number(rate.other_amount?.amount ?? 0) +
+    Number(rate.confirmation_amount?.amount ?? 0)
+  );
+}
+
+function orderedCarrierIds(carrierIds: string[] | undefined, preferredCarrierId?: string): string[] | undefined {
+  const unique = [...new Set((carrierIds ?? []).filter(Boolean))];
+  if (!preferredCarrierId || !unique.includes(preferredCarrierId)) return unique.length ? unique : undefined;
+  return [preferredCarrierId, ...unique.filter((carrierId) => carrierId !== preferredCarrierId)];
+}
 
 app.post('/browse', zValidator('json', browseBody), async (c) => {
   const body = c.req.valid('json');
-  const { forceRefresh, carrierId, signature, confirmation, ...rest } = body;
+  const {
+    forceRefresh,
+    forceLive,
+    cachedOnly,
+    carrierId,
+    carrierIds,
+    preferredCarrierId,
+    signature,
+    confirmation,
+    ...rest
+  } = body;
+  const requestedCarrierIds = carrierIds?.length ? carrierIds : carrierId ? [carrierId] : undefined;
+  const preferred = preferredCarrierId ?? carrierId ?? requestedCarrierIds?.[0];
+  const orderedIds = orderedCarrierIds(requestedCarrierIds, preferred);
   const result = await getRates(
-    { ...rest, confirmation: confirmation ?? signature ?? null, carrierIds: [carrierId] },
-    { forceRefresh }
+    { ...rest, confirmation: confirmation ?? signature ?? null, carrierIds: orderedIds },
+    {
+      forceRefresh: forceRefresh || forceLive,
+      cachedOnly: Boolean(cachedOnly && !forceRefresh && !forceLive),
+    }
   );
-  const filtered = result.rates.filter((r) => r.carrier_id === carrierId);
+  const requestedSet = requestedCarrierIds?.length ? new Set(requestedCarrierIds) : null;
+  const filtered = requestedSet
+    ? result.rates.filter((r) => requestedSet.has(r.carrier_id))
+    : result.rates;
   const cheapest = [...filtered].sort(
-    (a, b) =>
-      (a.shipping_amount.amount + (a.other_amount?.amount ?? 0)) -
-      (b.shipping_amount.amount + (b.other_amount?.amount ?? 0))
+    (a, b) => rateTotal(a) - rateTotal(b)
   )[0] ?? null;
+  const accounts = await getCarrierAccountsForRateContext({
+    storeId: rest.storeId ?? null,
+    clientId: rest.clientId ?? null,
+  }).catch(() => []);
+  const accountNameByCarrierId = new Map(
+    accounts.map((account) => [
+      account.carrier_id,
+      account.friendly_name ?? account.nickname ?? account.carrier_code ?? account.carrier_id,
+    ])
+  );
+  const statusCarrierIds = requestedCarrierIds?.length
+    ? requestedCarrierIds
+    : accounts.map((account) => account.carrier_id);
+  const carriersWithRates = new Set(filtered.map((rate) => rate.carrier_id));
+  const statusWhenFound = result.cached ? 'cached' : 'live';
+  const missingStatus = cachedOnly ? 'unavailable' : 'unavailable';
   return c.json({
     ...result,
+    requestKey: result.cacheKey,
+    source: result.cached ? 'cache' : filtered.length ? 'live' : 'live',
+    cacheAgeMs: result.cacheAgeMs,
     rates: filtered,
     bestRate: cheapest,
+    carrierStatuses: statusCarrierIds.map((id) => ({
+      carrierId: id,
+      carrierName: accountNameByCarrierId.get(id) ?? id,
+      status: carriersWithRates.has(id) ? statusWhenFound : missingStatus,
+    })),
   });
 });
 

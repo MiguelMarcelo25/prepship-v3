@@ -125,6 +125,10 @@ function applyMarkups(rates: Rate[], markups: Map<string, Markup>): Rate[] {
 
 const CACHE_TTL_MS = 1000 * 60 * 60 * 6; // 6 hours
 const CARRIER_CACHE_MS = 1000 * 60 * 15; // 15 min
+const RATE_FETCH_CONCURRENCY = Math.max(
+  1,
+  Math.min(8, Number.parseInt(process.env.RATE_FETCH_CONCURRENCY ?? '4', 10) || 4)
+);
 const RATE_CACHE_VERSION = 'ground-saver-v1';
 const RATE_CONFIRMATIONS = new Set([
   'none',
@@ -512,6 +516,25 @@ function shipDateIso(): string {
   return new Date().toISOString();
 }
 
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (;;) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= items.length) return;
+      results[index] = await mapper(items[index]!, index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 // v2-parity: one /v2/rates/estimate call per carrier with v2's flat body.
 // Returns v2-shaped EstimateRate[] flattened across all carriers.
 async function fetchEstimateForCarrier(
@@ -624,8 +647,10 @@ export async function fetchLiveRates(input: RateInput): Promise<Rate[]> {
 
   if (!carriers.length) return [];
 
-  const batches = await Promise.all(
-    carriers.map((c) => fetchEstimateForCarrier(c, input, shipFrom)),
+  const batches = await mapWithConcurrency(
+    carriers,
+    RATE_FETCH_CONCURRENCY,
+    (c) => fetchEstimateForCarrier(c, input, shipFrom),
   );
   const lifted: Rate[] = batches.flat().map(toRate);
 
@@ -653,11 +678,17 @@ export type GetRatesResult = {
   cached: boolean;
   cacheKey: string;
   fetchedAt: string;
+  cacheAgeMs?: number;
+};
+
+type GetRatesOptions = {
+  forceRefresh?: boolean;
+  cachedOnly?: boolean;
 };
 
 export async function getRates(
   input: RateInput,
-  opts: { forceRefresh?: boolean } = {}
+  opts: GetRatesOptions = {}
 ): Promise<GetRatesResult> {
   const resolvedInput = await resolveRateInput(input);
   const key = rateCacheKey(resolvedInput);
@@ -693,8 +724,21 @@ export async function getRates(
         cached: true,
         cacheKey: key,
         fetchedAt: cached.fetchedAt.toISOString(),
+        cacheAgeMs: Date.now() - cached.fetchedAt.getTime(),
       };
     }
+  }
+
+  if (opts.cachedOnly) {
+    const now = new Date();
+    return {
+      rates: [],
+      bestRate: null,
+      cached: false,
+      cacheKey: key,
+      fetchedAt: now.toISOString(),
+      cacheAgeMs: undefined,
+    };
   }
 
   const rawRates = await fetchLiveRates(resolvedInput);
