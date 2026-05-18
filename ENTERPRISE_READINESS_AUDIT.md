@@ -6,6 +6,13 @@ PrepShip v4 now has strong production foundations: Vercel frontend, Render API, 
 
 This audit defines what must be checked and fixed before PrepShip can be considered enterprise-ready.
 
+Companion DJ/OpenClaw documents:
+
+- `DEV_TASKS_README.md`
+- `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md`
+- `SECURITY_PATCH_PLAN.md`
+- `RATE_SYSTEM_HARDENING_PLAN.md`
+
 ## Phase 12 Progress Update
 
 Status: first audit-to-implementation batch started.
@@ -360,6 +367,15 @@ Deliverable table:
 7. Convert remaining runtime DDL to migrations.
 8. Continue moving dashboard, inventory, analysis, and billing to read models.
 
+## Recommended Patches
+
+- Add RBAC/client-scope middleware after roles are finalized.
+- Add credential governance: audit events, rotation process, last-used tracking, and log redaction.
+- Convert remaining runtime DDL to Drizzle migrations.
+- Persist user-visible job state for print queue, rate backfill, sync, and reporting.
+- Add reconciliation reports for inventory, packages, labels, billing, rate cache, and fulfillment outbox.
+- Add production observability, alerts, and runbooks.
+
 ## Required Tests Before Production
 
 - `npm run typecheck`
@@ -375,6 +391,13 @@ Deliverable table:
 - Print queue and sync job status survive restart where user-visible.
 - Render logs show no repeated 30s timeouts or request storms.
 - Supabase CPU, memory, and connection count stay controlled after deploy.
+
+## Test Plan
+
+- Run the local verification commands listed in Required Tests Before Production.
+- Run API smoke tests for auth, admin denial, client secret redaction, and route root/wildcard protection.
+- Run browser checks for Orders, Inventory, Billing, Dashboard, Rate Browser, Settings, and Packages.
+- Run production log checks for request storms, 499s, 30s timeouts, slow DB queries, and external API failure spikes.
 
 ## Runbooks Needed
 
@@ -392,6 +415,14 @@ Deliverable table:
 - Database restore.
 - Rollback deploy.
 - Suspicious access/security event.
+
+## Deployment/Rollback Notes
+
+- Deploy high-risk fixes in small batches with smoke tests between each batch.
+- Keep strict JWT claims disabled until production token compatibility is verified.
+- Keep compatibility routes until Vercel/Render rewrite behavior is verified.
+- Roll back by reverting the last batch if auth, billing, rates, labels, or inventory smoke tests fail.
+- Do not remove runtime DDL until matching migrations have been applied and verified.
 
 ## Recommended Implementation Order
 
