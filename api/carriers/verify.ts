@@ -39,44 +39,12 @@
 // After deploy, the new tile shows up in the Add Carrier modal, the verify
 // button works, and there are no other call sites to update.
 
-import { createRemoteJWKSet, jwtVerify } from 'jose';
 import postgres from 'postgres';
-
-// Supabase migrated this project to ES256 asymmetric keys, so verification
-// happens against the public key published at /auth/v1/.well-known/jwks.json
-// rather than a shared HS256 secret. We still fall back to HS256 against
-// SUPABASE_JWT_SECRET for any straggling legacy-issued tokens.
-let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
-function getJwks() {
-  if (cachedJwks) return cachedJwks;
-  const base = (process.env.SUPABASE_URL ?? '').replace(/\/+$/, '');
-  if (!base) return null;
-  cachedJwks = createRemoteJWKSet(new URL(`${base}/auth/v1/.well-known/jwks.json`));
-  return cachedJwks;
-}
-
-async function verifySupabaseJwt(token: string): Promise<{ ok: true } | { ok: false; reason: string }> {
-  const errors: string[] = [];
-  const jwks = getJwks();
-  if (jwks) {
-    try {
-      await jwtVerify(token, jwks);
-      return { ok: true };
-    } catch (err) {
-      errors.push(`JWKS: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-  const secret = process.env.SUPABASE_JWT_SECRET;
-  if (secret) {
-    try {
-      await jwtVerify(token, new TextEncoder().encode(secret));
-      return { ok: true };
-    } catch (err) {
-      errors.push(`HS256: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-  return { ok: false, reason: errors.join(' | ') || 'no verification method available' };
-}
+import {
+  extractBearerToken,
+  verifySupabaseJwt,
+} from '../../src/lib/auth/verify-supabase-jwt';
+import { corsHeaders } from '../../src/lib/http/cors';
 
 type ProviderType =
   | 'simulator'
@@ -901,22 +869,6 @@ const VERIFIERS: Partial<Record<ProviderType, Verifier>> = {
   endicia: verifyEndicia,
 };
 
-function corsHeaders(origin: string | null): Record<string, string> {
-  const allowed = new Set([
-    'https://prepship.vercel.app',
-    'https://prepship-eta.vercel.app',
-    'http://localhost:5173',
-  ]);
-  const allow = origin && allowed.has(origin) ? origin : '';
-  const headers: Record<string, string> = {
-    Vary: 'Origin',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-  };
-  if (allow) headers['Access-Control-Allow-Origin'] = allow;
-  return headers;
-}
-
 function readBody(req: any): Promise<unknown> {
   // Mirror the body-parsing approach in api/carrier-accounts.ts so behaviour
   // is consistent across endpoints.
@@ -949,7 +901,7 @@ function readBody(req: any): Promise<unknown> {
 
 export default async function handler(req: any, res: any): Promise<void> {
   const origin = (req.headers?.origin as string | undefined) ?? null;
-  const ch = corsHeaders(origin);
+  const ch = corsHeaders(origin, { methods: 'POST, OPTIONS' });
   for (const [k, v] of Object.entries(ch)) res.setHeader(k, v);
 
   if (req.method === 'OPTIONS') {
@@ -961,15 +913,17 @@ export default async function handler(req: any, res: any): Promise<void> {
     return;
   }
 
-  const auth = (req.headers?.authorization || req.headers?.Authorization || '') as string;
-  const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+  const token = extractBearerToken(
+    req.headers?.authorization || req.headers?.Authorization
+  );
   if (!token) {
     res.status(401).json({ error: 'Missing Authorization' });
     return;
   }
   const verified = await verifySupabaseJwt(token);
   if (!verified.ok) {
-    res.status(401).json({ error: 'Invalid token', reason: verified.reason });
+    console.warn('[direct-carrier-verify] Invalid token:', verified.reason);
+    res.status(401).json({ error: 'Invalid token' });
     return;
   }
 

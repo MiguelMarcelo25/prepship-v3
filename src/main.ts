@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { logger } from 'hono/logger';
 import { cors } from 'hono/cors';
 import { env } from './lib/env';
+import { isAllowedCorsOrigin } from './lib/http/cors';
 import { requireAdmin, requireAuth } from './middleware/auth';
 import health from './routes/health';
 import ordersRoute from './routes/orders';
@@ -31,52 +32,6 @@ import usersRoute from './routes/users';
 import workerRoute from './routes/worker';
 
 const app = new Hono();
-
-const configuredCorsOrigins = env.WEB_ORIGIN
-  ? env.WEB_ORIGIN.split(',').map((s) => s.trim()).filter(Boolean)
-  : [];
-
-const isDevelopmentLocalOrigin = (origin: string) => {
-  if (env.NODE_ENV === 'production') return false;
-
-  try {
-    const { hostname, protocol } = new URL(origin);
-    if (protocol !== 'http:' && protocol !== 'https:') return false;
-
-    return (
-      hostname === 'localhost' ||
-      hostname === '127.0.0.1' ||
-      hostname === '[::1]' ||
-      hostname === '::1' ||
-      hostname.startsWith('192.168.') ||
-      hostname.startsWith('10.') ||
-      /^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname)
-    );
-  } catch {
-    return false;
-  }
-};
-
-const isAllowedCorsOrigin = (origin: string) => {
-  if (configuredCorsOrigins.includes(origin)) return true;
-  if (isDevelopmentLocalOrigin(origin)) return true;
-
-  try {
-    const { hostname, protocol } = new URL(origin);
-    if (protocol !== 'https:') return false;
-
-    return (
-      hostname === 'prepshipv4.vercel.app' ||
-      hostname === 'prepshipv4.drprepperusa.com' ||
-      hostname === 'prepshipv3.vercel.app' ||
-      hostname === 'prepshipv3.drprepperusa.com' ||
-      hostname === 'prepshipv3-dr-prepper-usas-projects.vercel.app' ||
-      hostname.endsWith('-dr-prepper-usas-projects.vercel.app')
-    );
-  } catch {
-    return false;
-  }
-};
 
 app.use('*', logger());
 app.use('*', async (c, next) => {

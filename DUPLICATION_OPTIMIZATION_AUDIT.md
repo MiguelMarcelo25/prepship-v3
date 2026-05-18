@@ -6,14 +6,40 @@ This audit maps duplicate logic and source-of-truth drift in PrepShip v4. The hi
 
 The recommended direction is to keep Render/Hono as the canonical app API, move shared behavior into `src/services/*` or `src/lib/*`, and leave Vercel serverless handlers as thin compatibility adapters only where they still must exist.
 
+## Phase 11 Progress Update
+
+Status: first implementation batch started.
+
+Completed in this batch:
+
+- Added canonical Supabase JWT verifier: `src/lib/auth/verify-supabase-jwt.ts`.
+- Added canonical CORS helper: `src/lib/http/cors.ts`.
+- Moved Hono `requireAuth` to the shared verifier.
+- Moved `src/main.ts` to the shared CORS allowlist helper.
+- Replaced duplicated JWT/CORS helpers in the active compatibility handlers:
+  - `api/carrier-accounts.ts`
+  - `api/store-accounts.ts`
+  - `api/carriers/rates.ts`
+  - `api/carriers/verify.ts`
+  - `src/lib/imported-handlers/carrier-accounts.ts`
+  - `src/lib/imported-handlers/rates-multi.ts`
+  - `src/lib/imported-handlers/carriers-verify.ts`
+- Stopped those handlers from returning JWT verifier internals to the browser.
+
+Still duplicated and tracked for the next batch:
+
+- Legacy/maintenance Vercel handlers still contain local JWT/CORS copies: `api/migrate-from.ts`, `api/admin/fix-marketplace-timestamps.ts`, `api/carriers/validate-address.ts`, `api/carriers/labels.ts`, `api/carriers/ebay/orders.ts`, `api/carriers/walmart/*`, and cron/debug handlers.
+- Runtime DDL remains in carrier/store compatibility handlers, marketplace order handlers, fulfillment outbox setup, label compatibility code, and orders maintenance.
+- `web/src/lib/v2-apiClient.ts` still has broad `safe()` fallback usage; critical workflows need a second pass after the auth/CORS consolidation.
+
 ## Source-of-Truth Map
 
 | Area | Current Duplicate Files/Logic | Canonical Owner To Keep | Files/Routes To Replace | Risk If Unchanged | Optimization | Test Plan |
 |---|---|---|---|---|---|---|
 | Carrier accounts | `api/carrier-accounts.ts`, `src/routes/carrier-accounts.ts`, `src/lib/imported-handlers/carrier-accounts.ts`, `web/src/lib/vercelFunction.ts`, settings cards | `src/services/carrier-accounts.ts` plus `src/routes/carrier-accounts.ts` | Replace imported handler and Vercel logic with thin adapters | High: account create/rename/approve/delete can drift by route | Shared service for list/upsert/update/delete/assign-client; route adapters only parse HTTP | API tests for GET/POST/PATCH/DELETE through Render and any retained Vercel adapter |
 | Store accounts | `api/store-accounts.ts` mirrors carrier account CRUD and bootstrap logic | Shared `src/services/credential-accounts.ts` with provider/table config | Replace duplicated CRUD/auth/CORS/bootstrap in store handler | High: marketplace credentials can diverge from carrier credential behavior | Config-driven service for `carrier_accounts` and `store_accounts` | Integration tests for store and carrier CRUD using the same service expectations |
-| Supabase JWT/auth verification | `src/middleware/auth.ts`, `api/*`, `api/carriers/*`, `src/lib/imported-handlers/*` | `src/lib/auth/verify-supabase-jwt.ts` | Replace per-file JWT helpers | Critical: one endpoint may accept weaker tokens than another | One verifier with optional strict issuer/audience and role extraction | Unauth, expired token, wrong issuer, wrong audience, admin/non-admin route tests |
-| CORS allowlists | `src/main.ts`, `api/*`, imported handlers | `src/lib/http/cors.ts` | Replace local `corsHeaders` helpers and repeated origin arrays | Medium/high: production origin can fail on one path or overly broad CORS can expose APIs | Shared allowlist from env plus local dev defaults | OPTIONS tests for Vercel and Render paths with allowed and disallowed origins |
+| Supabase JWT/auth verification | `src/middleware/auth.ts`, `api/*`, `api/carriers/*`, `src/lib/imported-handlers/*` | `src/lib/auth/verify-supabase-jwt.ts` | First batch replaced Hono auth, carrier/store accounts, direct carrier rates/verify, and imported active handlers. Remaining legacy/maintenance Vercel handlers still need migration. | Critical: one endpoint may accept weaker tokens than another | One verifier with optional strict issuer/audience and role extraction | Unauth, expired token, wrong issuer, wrong audience, admin/non-admin route tests |
+| CORS allowlists | `src/main.ts`, `api/*`, imported handlers | `src/lib/http/cors.ts` | First batch replaced Hono app CORS, carrier/store accounts, direct carrier rates/verify, and imported active handlers. Remaining cron/debug/marketplace compatibility handlers still need migration. | Medium/high: production origin can fail on one path or overly broad CORS can expose APIs | Shared allowlist from env plus local dev defaults | OPTIONS tests for Vercel and Render paths with allowed and disallowed origins |
 | Client DTO and secret redaction | `src/routes/clients.ts`, `src/routes/init.ts`, frontend client shapes | `src/lib/public-client.ts` | Replace any raw client returns | Critical: ShipStation keys can leak to browser | All client responses go through `publicClient` | Curl/API tests assert no `ssApiKey`, `ssApiSecret`, or `ssApiKeyV2` in JSON |
 | Rates/cache/browser/backfill | `src/services/rates.ts`, `src/routes/rates.ts`, `src/services/rates-backfill.ts`, `web/src/lib/v2-apiClient.ts`, `RateBrowserModal` | `src/services/rates.ts` for cache keys, diagnostics, fetch policy | Replace weak cache matching and duplicated frontend normalization | High: wrong/stale rates, repeated carrier API calls, misleading "no rates" UI | Shared cache key builder, diagnostics DTO, bounded concurrency, negative cache | Tests for cache hit, cache miss, one carrier fail, all carriers empty, duplicate nickname |
 | Frontend API wrappers | `web/src/lib/api.ts`, `web/src/lib/v2-apiClient.ts`, `web/src/lib/vercelFunction.ts` | `web/src/lib/api.ts` as low-level transport; `v2-apiClient` as typed domain facade | Remove silent fallback behavior from critical workflows | High: API 500/auth failures appear as empty data | One normalized error policy; preserve stale data instead of fake empty arrays | Forced 500 tests for orders, inventory, counts, rates, billing summary |
@@ -34,9 +60,9 @@ The recommended direction is to keep Render/Hono as the canonical app API, move 
 
 ### Auth and CORS
 
-- [ ] Extract shared JWT verifier with strict-claims option.
-- [ ] Replace duplicated verifier functions in Vercel and imported handlers.
-- [ ] Extract shared CORS header/allowlist helper.
+- [x] Extract shared JWT verifier with strict-claims option.
+- [~] Replace duplicated verifier functions in Vercel and imported handlers.
+- [x] Extract shared CORS header/allowlist helper.
 - [ ] Add tests for unauthenticated root paths and wildcard paths.
 - [ ] Confirm admin-only routes reject non-admin tokens.
 

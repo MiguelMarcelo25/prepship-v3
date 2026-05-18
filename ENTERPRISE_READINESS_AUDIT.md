@@ -6,6 +6,31 @@ PrepShip v4 now has strong production foundations: Vercel frontend, Render API, 
 
 This audit defines what must be checked and fixed before PrepShip can be considered enterprise-ready.
 
+## Phase 12 Progress Update
+
+Status: first audit-to-implementation batch started.
+
+Implemented:
+
+- Shared Supabase JWT verification with optional strict issuer/audience enforcement.
+- Shared CORS origin/header policy for Render and active Vercel compatibility handlers.
+- Active carrier/store/direct-carrier compatibility handlers now use the shared verifier and no longer expose token verification reasons to the browser.
+
+Confirmed gaps from repo search:
+
+- RBAC/client-scope rules are still not fully formalized beyond `requireAuth` and `requireAdmin`.
+- Runtime DDL remains in production-capable paths and must be converted into a migration backlog.
+- Durable job state is mixed: scheduler protection has improved, but print queue/rate backfill and some compatibility paths still need restart-safe progress guarantees.
+- Broad frontend `safe()` fallback usage remains and needs a failure-mode sweep.
+- Audit logging and reconciliation are planning items; they are not complete yet.
+
+Current readiness read:
+
+| Track | Status | Percent |
+|---|---|---:|
+| Phase 11 duplication/source-of-truth | First auth/CORS batch implemented | 35% |
+| Phase 12 enterprise readiness | Critical gaps confirmed, first security consolidation implemented | 30% |
+
 ## Critical Blockers
 
 | Blocker | Risk | Required Outcome | Verification |
@@ -58,6 +83,12 @@ Deliverable table:
 
 | Route | Required Role | Client Scope Rule | Current Enforcement | Gap | Fix | Test |
 |---|---|---|---|---|---|---|
+| `/admin`, `/admin/*` | admin | global admin only | `requireAuth` + `requireAdmin` | needs API smoke test with non-admin token | keep middleware, add auth/RBAC tests | non-admin returns `403` |
+| `/users`, `/users/*` | admin or support, pending policy | user-management scope | `requireAuth` only | role policy not formalized | add permission middleware once roles are defined | operator/client token denied when policy lands |
+| `/orders`, `/orders/*` | admin/operator/warehouse/client user | client/store scoped rows | `requireAuth`; shipped/cancelled mutation guards exist | no formal client-scope middleware | add route-level scope policy and query filters | client user cannot read another client's orders |
+| `/inventory`, `/inventory/*` | admin/operator/warehouse/client user | client scoped SKUs | `requireAuth` | no formal client-scope middleware | add scope policy and filtered inventory queries | client user cannot read another client's inventory |
+| `/billing`, `/billing/*` | admin/operator/accounting | client scoped billing | `requireAuth` | billing role and field-level margin/cost visibility not formalized | add billing permission and field DTOs | warehouse/client user denied from cost/margin |
+| `/carrier-accounts`, `/store-accounts`, `/settings/*` | admin/operator with credential permission | account/client assignment scope | mixed Render/Vercel auth; first shared verifier batch applied | no field-level credential RBAC/audit log | central credential service + audit events | non-credential role cannot read/write credential endpoints |
 
 ### Secrets / Credential Management
 
@@ -78,7 +109,7 @@ Deliverable table:
 
 ### Database Migrations / Schema Governance
 
-- [ ] List all runtime DDL in `src` and `api`.
+- [~] List all runtime DDL in `src` and `api`.
 - [ ] Convert production runtime DDL to Drizzle migrations.
 - [ ] Review foreign keys and cascade rules.
 - [ ] Review unique constraints for natural keys.
@@ -91,6 +122,12 @@ Deliverable table:
 
 | Table | Missing Constraint/Index/FK | Runtime DDL Risk | Migration Needed | Rollback Consideration |
 |---|---|---|---|---|
+| `carrier_accounts` | table/index bootstrap still exists in Vercel/imported compatibility handlers | request-time DDL and route drift | carrier account tables/indexes migration | safe rollback keeps existing table; remove runtime bootstrap after deploy |
+| `carrier_account_clients` | junction table/index bootstrap still exists in compatibility handlers | request-time DDL and assignment drift | junction table/index migration | preserve existing assignments before removing bootstrap |
+| `store_accounts` | table/index bootstrap and one-time migration still exist in Vercel handler | request latency and migration side effects during API call | store accounts migration plus separate data migration | rollback must not re-copy deleted carrier marketplace rows |
+| `store_orders` | marketplace handlers create table/indexes at runtime | first fetch can alter schema under user traffic | store orders migration | keep compatibility read path until migration verified |
+| `fulfillment_outbox` | service and label compatibility path ensure table/indexes at runtime | label/outbox request may pay DDL cost | fulfillment outbox migration | rollback keeps table; worker can ignore unused columns |
+| `order_items`, `analytics_cache` | maintenance service still creates if missing | safer than request-time but still schema drift | ensure existing migrations fully own schema | rollback should not drop analytics cache during deploy |
 
 ### Observability / Monitoring
 

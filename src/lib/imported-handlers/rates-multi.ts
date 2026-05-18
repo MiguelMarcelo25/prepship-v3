@@ -12,42 +12,12 @@
 // Auth: requires a Supabase JWT in Authorization: Bearer <token>. Verified
 // against SUPABASE_JWT_SECRET. Same gate as the Render API uses.
 
-import { createRemoteJWKSet, jwtVerify } from 'jose';
 import postgres from 'postgres';
-
-// Supabase project uses ES256 asymmetric keys; verify via JWKS first and
-// fall back to HS256 with the legacy shared secret.
-let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
-function getJwks() {
-  if (cachedJwks) return cachedJwks;
-  const base = (process.env.SUPABASE_URL ?? '').replace(/\/+$/, '');
-  if (!base) return null;
-  cachedJwks = createRemoteJWKSet(new URL(`${base}/auth/v1/.well-known/jwks.json`));
-  return cachedJwks;
-}
-
-async function verifySupabaseJwt(token: string): Promise<{ ok: true } | { ok: false; reason: string }> {
-  const errors: string[] = [];
-  const jwks = getJwks();
-  if (jwks) {
-    try {
-      await jwtVerify(token, jwks);
-      return { ok: true };
-    } catch (err) {
-      errors.push(`JWKS: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-  const secret = process.env.SUPABASE_JWT_SECRET;
-  if (secret) {
-    try {
-      await jwtVerify(token, new TextEncoder().encode(secret));
-      return { ok: true };
-    } catch (err) {
-      errors.push(`HS256: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-  return { ok: false, reason: errors.join(' | ') || 'no verification method available' };
-}
+import {
+  extractBearerToken,
+  verifySupabaseJwt,
+} from '../auth/verify-supabase-jwt';
+import { corsHeaders } from '../http/cors';
 
 interface SsCarrier {
   carrier_id: string;
@@ -109,25 +79,9 @@ async function fetchSsCarriers(apiKeyV2: string): Promise<FetchResult> {
   }
 }
 
-function corsHeaders(origin: string | null): Record<string, string> {
-  const allowed = new Set([
-    'https://prepship.vercel.app',
-    'https://prepship-eta.vercel.app',
-    'http://localhost:5173',
-  ]);
-  const allow = origin && allowed.has(origin) ? origin : '';
-  const headers: Record<string, string> = {
-    'Vary': 'Origin',
-    'Access-Control-Allow-Methods': 'GET, OPTIONS',
-    'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-  };
-  if (allow) headers['Access-Control-Allow-Origin'] = allow;
-  return headers;
-}
-
 export default async function handler(req: any, res: any): Promise<void> {
   const origin = (req.headers?.origin as string | undefined) ?? null;
-  const ch = corsHeaders(origin);
+  const ch = corsHeaders(origin, { methods: 'GET, OPTIONS' });
   for (const [k, v] of Object.entries(ch)) res.setHeader(k, v);
 
   if (req.method === 'OPTIONS') {
@@ -140,20 +94,17 @@ export default async function handler(req: any, res: any): Promise<void> {
   }
 
   // Auth: verify Supabase JWT
-  const auth = (req.headers?.authorization || req.headers?.Authorization || '') as string;
-  const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+  const token = extractBearerToken(
+    req.headers?.authorization || req.headers?.Authorization
+  );
   if (!token) {
     res.status(401).json({ error: 'Missing Authorization' });
     return;
   }
-  const jwtSecret = process.env.SUPABASE_JWT_SECRET;
-  if (!jwtSecret) {
-    res.status(500).json({ error: 'Server misconfigured (no JWT secret)' });
-    return;
-  }
   const verified = await verifySupabaseJwt(token);
   if (!verified.ok) {
-    res.status(401).json({ error: 'Invalid token', reason: verified.reason });
+    console.warn('[imported-rates-multi] Invalid token:', verified.reason);
+    res.status(401).json({ error: 'Invalid token' });
     return;
   }
 

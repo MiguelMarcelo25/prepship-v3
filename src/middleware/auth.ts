@@ -1,13 +1,11 @@
 import { createMiddleware } from 'hono/factory';
-import {
-  createRemoteJWKSet,
-  decodeProtectedHeader,
-  jwtVerify,
-  type JWTVerifyOptions,
-  type JWTPayload,
-} from 'jose';
-import { env } from '../lib/env';
+import type { JWTPayload } from 'jose';
 import { isAdminEmail } from '../lib/admin-emails';
+import {
+  extractBearerToken,
+  verifySupabaseJwt,
+} from '../lib/auth/verify-supabase-jwt';
+import { env } from '../lib/env';
 
 export type AuthVars = {
   userId: string;
@@ -20,18 +18,6 @@ export type AuthVars = {
 // via window.open which can't attach a bearer token, and they're fake data
 // anyway. The shipmentId is effectively unguessable (random 8-digit int).
 const AUTH_BYPASS_PREFIXES = ['/labels/mock/'];
-
-let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
-
-function getSupabaseJwks() {
-  if (!cachedJwks) {
-    const base = env.SUPABASE_URL.replace(/\/+$/, '');
-    cachedJwks = createRemoteJWKSet(
-      new URL(`${base}/auth/v1/.well-known/jwks.json`)
-    );
-  }
-  return cachedJwks;
-}
 
 function payloadToAuthVars(payload: JWTPayload): AuthVars | null {
   if (typeof payload.sub !== 'string' || !payload.sub) return null;
@@ -56,71 +42,28 @@ function payloadToAuthVars(payload: JWTPayload): AuthVars | null {
   };
 }
 
-async function verifySupabaseJwt(token: string): Promise<AuthVars | null> {
-  const errors: string[] = [];
-  let protectedHeader: ReturnType<typeof decodeProtectedHeader>;
-  try {
-    protectedHeader = decodeProtectedHeader(token);
-  } catch (err) {
-    console.warn(
-      '[auth] Malformed Supabase JWT:',
-      err instanceof Error ? err.message : String(err)
-    );
-    return null;
-  }
-  const isHmacToken = protectedHeader.alg?.startsWith('HS') ?? false;
-  const verifyOptions: JWTVerifyOptions | undefined = env.STRICT_JWT_CLAIMS
-    ? {
-        issuer: `${env.SUPABASE_URL.replace(/\/+$/, '')}/auth/v1`,
-        audience: 'authenticated',
-      }
-    : undefined;
-
-  const verifyWithSecret = async () => {
-    const { payload } = await jwtVerify(
-      token,
-      new TextEncoder().encode(env.SUPABASE_JWT_SECRET),
-      verifyOptions
-    );
-    return payloadToAuthVars(payload);
-  };
-
-  const verifyWithJwks = async () => {
-    const { payload } = await jwtVerify(token, getSupabaseJwks(), verifyOptions);
-    return payloadToAuthVars(payload);
-  };
-
-  const attempts = isHmacToken
-    ? [verifyWithSecret]
-    : [verifyWithJwks, verifyWithSecret];
-
-  for (const attempt of attempts) {
-    try {
-      const authVars = await attempt();
-      if (authVars) return authVars;
-      errors.push('verified token missing subject');
-    } catch (err) {
-      errors.push(err instanceof Error ? err.message : String(err));
-    }
-  }
-
-  console.warn('[auth] Invalid Supabase JWT:', errors.join(' | '));
-  return null;
-}
-
 export const requireAuth = createMiddleware<{ Variables: AuthVars }>(
   async (c, next) => {
     if (AUTH_BYPASS_PREFIXES.some((p) => c.req.path.startsWith(p))) {
       await next();
       return;
     }
-    const auth = c.req.header('authorization');
-    if (!auth?.toLowerCase().startsWith('bearer ')) {
+    const token = extractBearerToken(c.req.header('authorization'));
+    if (!token) {
       return c.json({ error: 'Missing bearer token' }, 401);
     }
-    const token = auth.slice(7).trim();
-    const authVars = await verifySupabaseJwt(token);
+    const verified = await verifySupabaseJwt(token, {
+      supabaseUrl: env.SUPABASE_URL,
+      jwtSecret: env.SUPABASE_JWT_SECRET,
+      strictClaims: env.STRICT_JWT_CLAIMS,
+    });
+    if (!verified.ok) {
+      console.warn('[auth] Invalid Supabase JWT:', verified.reason);
+      return c.json({ error: 'Invalid token' }, 401);
+    }
+    const authVars = payloadToAuthVars(verified.payload);
     if (!authVars) {
+      console.warn('[auth] Verified Supabase JWT missing subject');
       return c.json({ error: 'Invalid token' }, 401);
     }
     c.set('userId', authVars.userId);
