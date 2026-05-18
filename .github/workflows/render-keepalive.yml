@@ -1,11 +1,8 @@
 name: Keep Render API warm
 
 on:
-  # Render can spin down when idle. Keep this cheap health ping separate from
-  # the heavier sync workflow so the app stays reachable without constantly
-  # running ShipStation/database sync work.
-  schedule:
-    - cron: '*/5 * * * *'
+  # Automatic GitHub schedules are disabled. Render API/worker uptime is owned
+  # by Render now; keep this only as a manual emergency health ping.
   workflow_dispatch:
 
 jobs:

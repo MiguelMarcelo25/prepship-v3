@@ -1,12 +1,8 @@
 name: Sync ShipStation orders + shipments
 
 on:
-  # Backup safety-net sync. The primary sync lives in-process on the API
-  # (src/services/sync-scheduler.ts) and fires every 3 minutes while Render
-  # is awake. This workflow catches gaps when Render spins down; the separate
-  # render-keepalive workflow is responsible for keeping the service warm.
-  schedule:
-    - cron: '*/10 * * * *'
+  # Automatic GitHub schedules are disabled. The Render worker scheduler owns
+  # background sync/reporting; keep this only for manual recovery/backfills.
   workflow_dispatch:
     inputs:
       mode:
