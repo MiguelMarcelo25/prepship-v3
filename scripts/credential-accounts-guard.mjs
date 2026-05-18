@@ -22,6 +22,7 @@ function assert(condition, message) {
 }
 
 const helper = read('src/lib/credential-accounts.ts');
+const service = read('src/services/credential-accounts.ts');
 const handlers = [
   ['api/carrier-accounts.ts', read('api/carrier-accounts.ts')],
   ['api/store-accounts.ts', read('api/store-accounts.ts')],
@@ -37,6 +38,14 @@ assert(
     helper.includes('normalizeCredentialAccountBody') &&
     helper.includes('readJsonRequestBody'),
   'credential account helper owns provider/source/body parsing primitives',
+);
+
+assert(
+  service.includes('listCredentialAccounts') &&
+    service.includes('upsertCredentialAccount') &&
+    service.includes('deleteCredentialAccount') &&
+    service.includes('replaceCarrierAccountClientAssignments'),
+  'credential account service owns shared list/upsert/delete/assignment database operations',
 );
 
 for (const [file, source] of handlers) {
@@ -57,6 +66,16 @@ for (const [file, source] of handlers) {
     `${file} does not define local source allowlist`,
   );
   assert(!/await\s+readBody\(/.test(source), `${file} no longer calls local readBody`);
+  assert(
+    !/res\.status\(500\)\.json\(\{\s*error:\s*msg\s*\}\)/.test(source),
+    `${file} returns production-safe generic 500 errors`,
+  );
+  assert(
+    source.includes('listCredentialAccounts') &&
+      source.includes('upsertCredentialAccount') &&
+      source.includes('deleteCredentialAccount'),
+    `${file} uses shared credential account database service`,
+  );
 }
 
 if (process.exitCode) {

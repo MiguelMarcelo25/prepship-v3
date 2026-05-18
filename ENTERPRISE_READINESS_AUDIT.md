@@ -19,6 +19,8 @@ Implemented:
 - Frontend client consumers now rely on `hasShipStationV1Credentials` / `hasShipStationV2Credentials` booleans instead of raw secret response fields.
 - Carrier/store compatibility handlers now share credential-account request parsing, provider/source validation, credential-key extraction, and masked account identifier logging.
 - Credential-account parsing drift is now guarded by `npm run test:credential-accounts`.
+- Carrier/store compatibility handlers now share credential-account database operations for list, upsert, delete, carrier client assignment, and synthetic store-client maintenance.
+- Carrier/store credential handlers now return production-safe generic 500 responses while keeping full details in server logs.
 
 Confirmed gaps from repo search:
 
@@ -33,8 +35,8 @@ Current readiness read:
 
 | Track | Status | Percent |
 |---|---|---:|
-| Phase 11 duplication/source-of-truth | First auth/CORS batch implemented | 35% |
-| Phase 12 enterprise readiness | Critical gaps confirmed, first security consolidation implemented | 30% |
+| Phase 11 duplication/source-of-truth | Auth/CORS and credential-account service batches implemented | 45% |
+| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential consolidation implemented | 35% |
 
 ## Critical Blockers
 

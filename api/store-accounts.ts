@@ -23,6 +23,15 @@ import {
   readJsonRequestBody,
 } from '../src/lib/credential-accounts';
 import { corsHeaders } from '../src/lib/http/cors';
+import {
+  deleteCredentialAccount,
+  deleteSyntheticStoreClientForAccount,
+  ensureSyntheticStoreClient,
+  getCredentialAccountProvider,
+  getCredentialAccountStoredCredentialKeys,
+  listCredentialAccounts,
+  upsertCredentialAccount,
+} from '../src/services/credential-accounts';
 
 const TABLE = 'store_accounts';
 
@@ -197,22 +206,7 @@ export default async function handler(req: any, res: any): Promise<void> {
       // table" — for now just filters by source since we don't have a
       // reviewed_at column. Tightening can come later.
       const wantSource = source && ALLOWED_ACCOUNT_SOURCES.has(source) ? source : null;
-      const rows = wantSource
-        ? await sql<Array<Record<string, unknown>>>`
-            SELECT id, client_id AS "clientId", provider, label, account_identifier AS "accountIdentifier",
-                   source, active, created_at AS "createdAt"
-            FROM ${sql(TABLE)}
-            WHERE source = ${wantSource}
-            ORDER BY created_at DESC
-            LIMIT 200
-          `
-        : await sql<Array<Record<string, unknown>>>`
-            SELECT id, client_id AS "clientId", provider, label, account_identifier AS "accountIdentifier",
-                   source, active, created_at AS "createdAt"
-            FROM ${sql(TABLE)}
-            ORDER BY created_at DESC
-            LIMIT 200
-          `;
+      const rows = await listCredentialAccounts(sql, TABLE, { source: wantSource });
       res.status(200).json({ data: rows, pending: pending === '1' });
       return;
     }
@@ -260,37 +254,29 @@ export default async function handler(req: any, res: any): Promise<void> {
         return;
       }
 
-      // Upsert on the natural key. ON CONFLICT updates label/credentials so
-      // re-submitting the same account from the portal vs admin merges.
-      // postgres.js auto-stringifies plain objects for jsonb columns; passing
-      // the object directly (rather than JSON.stringify + ::jsonb cast) is
-      // the library's documented happy path and avoids a class of cast bugs.
-      const inserted = await sql<Array<Record<string, unknown>>>`
-        INSERT INTO ${sql(TABLE)} (client_id, provider, label, account_identifier, credentials, source)
-        VALUES (${clientId}, ${provider}, ${label}, ${accountIdentifier}, ${credentials as Record<string, unknown>}, ${source})
-        ON CONFLICT (COALESCE(client_id, -1), provider, COALESCE(account_identifier, ''))
-        DO UPDATE SET
-          label = EXCLUDED.label,
-          credentials = EXCLUDED.credentials,
-          updated_at = NOW()
-        RETURNING id, client_id AS "clientId", provider, label, account_identifier AS "accountIdentifier",
-                  source, active, created_at AS "createdAt"
-      `;
+      const inserted = await upsertCredentialAccount(sql, TABLE, {
+        provider,
+        label,
+        accountIdentifier,
+        credentials,
+        source,
+        clientId,
+        credentialKeys: credKeys,
+        bodyKeys,
+        bodyType,
+      });
 
       // Post-insert verification — log what actually landed in JSONB so a
       // future "credentials saved empty" bug doesn't require a code dive.
       try {
-        const verifyRow = await sql<Array<{ credentials: unknown }>>`
-          SELECT credentials FROM ${sql(TABLE)} WHERE id = ${inserted[0]?.id as number}
-        `;
-        const stored = verifyRow[0]?.credentials;
-        const storedKeys = stored && typeof stored === 'object' && !Array.isArray(stored)
-          ? Object.keys(stored as Record<string, unknown>).sort()
-          : [];
+        const storedKeys = await getCredentialAccountStoredCredentialKeys(
+          sql,
+          TABLE,
+          inserted?.id as number | undefined,
+        );
         console.log('[store-accounts:POST] post-insert', JSON.stringify({
-          rowId: inserted[0]?.id ?? null,
+          rowId: inserted?.id ?? null,
           storedCredentialKeys: storedKeys,
-          storedType: typeof stored,
         }));
       } catch (vErr) {
         console.warn('[store-accounts:POST] post-insert verify failed:', vErr instanceof Error ? vErr.message : vErr);
@@ -303,52 +289,16 @@ export default async function handler(req: any, res: any): Promise<void> {
       // so when orders are pulled they reuse this client_id rather than
       // creating a duplicate. Idempotent: skips if a clients row already
       // exists for the synthetic store_id (re-saves don't dupe).
-      const SYNTHETIC_STORE_OFFSETS: Record<string, number> = {
-        walmart:      9_000_000,
-        amazon:       9_100_000,
-        shopify:      9_200_000,
-        etsy:         9_300_000,
-        tiktok_shop:  9_400_000,
-        ebay:         9_500_000,
-        woocommerce:  9_600_000,
-        bigcommerce:  9_700_000,
-      };
-      const accountId = inserted[0]?.id as number | undefined;
+      const accountId = inserted?.id as number | undefined;
       if (accountId != null) {
-        const offset = SYNTHETIC_STORE_OFFSETS[provider] ?? 9_900_000;
-        const syntheticStoreId = offset + accountId;
         try {
-          const existing = await sql<Array<{ id: number }>>`
-            SELECT id FROM clients
-            WHERE store_ids @> ARRAY[${syntheticStoreId}]::integer[]
-            LIMIT 1
-          `;
-          if (existing.length === 0) {
-            // Friendly client name — try to make it human-readable based
-            // on the provider slug + the user-supplied label.
-            const providerLabels: Record<string, string> = {
-              walmart: 'Walmart Marketplace',
-              amazon: 'Amazon Marketplace',
-              ebay: 'eBay',
-              shopify: 'Shopify',
-              etsy: 'Etsy',
-              tiktok_shop: 'TikTok Shop',
-              woocommerce: 'WooCommerce',
-              bigcommerce: 'BigCommerce',
-            };
-            const baseName = providerLabels[provider] ?? provider.toUpperCase();
-            const friendly = label && !new RegExp(provider, 'i').test(label)
-              ? `${baseName} — ${label}`
-              : (label || baseName);
-            await sql`
-              INSERT INTO clients (name, store_ids, active, is_test)
-              VALUES (${friendly}, ARRAY[${syntheticStoreId}]::integer[], true, false)
-            `;
+          const synthetic = await ensureSyntheticStoreClient(sql, { provider, accountId, label });
+          if (synthetic?.created) {
             console.log('[store-accounts:POST] auto-created clients row', JSON.stringify({
               provider,
               accountId,
-              syntheticStoreId,
-              clientName: friendly,
+              syntheticStoreId: synthetic.syntheticStoreId,
+              clientName: synthetic.clientName,
             }));
           }
         } catch (clientErr) {
@@ -359,7 +309,7 @@ export default async function handler(req: any, res: any): Promise<void> {
         }
       }
 
-      res.status(200).json({ data: inserted[0] ?? null });
+      res.status(200).json({ data: inserted ?? null });
       return;
     }
 
@@ -371,48 +321,20 @@ export default async function handler(req: any, res: any): Promise<void> {
         res.status(400).json({ error: 'id query parameter is required' });
         return;
       }
-      // Look up provider before deleting so we can compute the matching
-      // synthetic store_id and cascade-delete the auto-created clients row.
-      const existing = await sql<Array<{ provider: string }>>`
-        SELECT provider FROM ${sql(TABLE)} WHERE id = ${id} LIMIT 1
-      `;
-      const provider = existing[0]?.provider ?? null;
-
-      const deleted = await sql<Array<{ id: number }>>`
-        DELETE FROM ${sql(TABLE)}
-        WHERE id = ${id}
-        RETURNING id
-      `;
-      if (deleted.length === 0) {
+      const provider = await getCredentialAccountProvider(sql, TABLE, id);
+      const deletedId = await deleteCredentialAccount(sql, TABLE, id);
+      if (deletedId == null) {
         res.status(404).json({ error: `store_accounts row #${id} not found` });
         return;
       }
 
-      // Cascade: remove the auto-created clients row whose store_ids array
-      // is exactly [syntheticStoreId]. We deliberately use equality (not
-      // containment) so we don't damage clients with multiple store_ids
-      // — only the auto-created single-store clients get cleaned up.
-      const SYNTHETIC_STORE_OFFSETS: Record<string, number> = {
-        walmart:      9_000_000,
-        amazon:       9_100_000,
-        shopify:      9_200_000,
-        etsy:         9_300_000,
-        tiktok_shop:  9_400_000,
-        ebay:         9_500_000,
-        woocommerce:  9_600_000,
-        bigcommerce:  9_700_000,
-      };
       let cascadedClientId: number | null = null;
       if (provider) {
-        const offset = SYNTHETIC_STORE_OFFSETS[provider] ?? 9_900_000;
-        const syntheticStoreId = offset + id;
         try {
-          const cascade = await sql<Array<{ id: number }>>`
-            DELETE FROM clients
-            WHERE store_ids = ARRAY[${syntheticStoreId}]::integer[]
-            RETURNING id
-          `;
-          cascadedClientId = cascade[0]?.id ?? null;
+          cascadedClientId = await deleteSyntheticStoreClientForAccount(sql, {
+            provider,
+            accountId: id,
+          });
         } catch (cascadeErr) {
           console.warn(
             '[store-accounts:DELETE] could not cascade-delete clients row:',
@@ -422,7 +344,7 @@ export default async function handler(req: any, res: any): Promise<void> {
       }
 
       res.status(200).json({
-        data: { id: deleted[0].id, deleted: true, cascadedClientId },
+        data: { id: deletedId, deleted: true, cascadedClientId },
       });
       return;
     }
@@ -431,7 +353,7 @@ export default async function handler(req: any, res: any): Promise<void> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[store-accounts]', msg);
-    res.status(500).json({ error: msg });
+    res.status(500).json({ error: 'Store account request failed' });
   } finally {
     try {
       await sql.end({ timeout: 1 });

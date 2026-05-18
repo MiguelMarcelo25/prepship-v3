@@ -36,6 +36,14 @@ import {
   readJsonRequestBody,
 } from '../src/lib/credential-accounts';
 import { corsHeaders } from '../src/lib/http/cors';
+import {
+  deleteCredentialAccount,
+  getCredentialAccountStoredCredentialKeys,
+  listCredentialAccounts,
+  normalizeAssignedClientIds,
+  replaceCarrierAccountClientAssignments,
+  upsertCredentialAccount,
+} from '../src/services/credential-accounts';
 
 const TABLE = 'carrier_accounts';
 
@@ -178,42 +186,10 @@ export default async function handler(req: any, res: any): Promise<void> {
       // table" — for now just filters by source since we don't have a
       // reviewed_at column. Tightening can come later.
       const wantSource = source && ALLOWED_ACCOUNT_SOURCES.has(source) ? source : null;
-      const rows = wantSource
-        ? await sql<Array<Record<string, unknown>>>`
-            SELECT
-              ca.id, ca.client_id AS "clientId", ca.provider, ca.label,
-              ca.account_identifier AS "accountIdentifier",
-              ca.source, ca.active, ca.created_at AS "createdAt",
-              COALESCE(
-                (
-                  SELECT array_agg(cac.client_id ORDER BY cac.client_id)
-                  FROM carrier_account_clients cac
-                  WHERE cac.carrier_account_id = ca.id
-                ),
-                '{}'::int[]
-              ) AS "assignedClientIds"
-            FROM ${sql(TABLE)} ca
-            WHERE ca.source = ${wantSource}
-            ORDER BY ca.created_at DESC
-            LIMIT 200
-          `
-        : await sql<Array<Record<string, unknown>>>`
-            SELECT
-              ca.id, ca.client_id AS "clientId", ca.provider, ca.label,
-              ca.account_identifier AS "accountIdentifier",
-              ca.source, ca.active, ca.created_at AS "createdAt",
-              COALESCE(
-                (
-                  SELECT array_agg(cac.client_id ORDER BY cac.client_id)
-                  FROM carrier_account_clients cac
-                  WHERE cac.carrier_account_id = ca.id
-                ),
-                '{}'::int[]
-              ) AS "assignedClientIds"
-            FROM ${sql(TABLE)} ca
-            ORDER BY ca.created_at DESC
-            LIMIT 200
-          `;
+      const rows = await listCredentialAccounts(sql, TABLE, {
+        source: wantSource,
+        includeAssignments: true,
+      });
       res.status(200).json({ data: rows, pending: pending === '1' });
       return;
     }
@@ -261,43 +237,35 @@ export default async function handler(req: any, res: any): Promise<void> {
         return;
       }
 
-      // Upsert on the natural key. ON CONFLICT updates label/credentials so
-      // re-submitting the same account from the portal vs admin merges.
-      // postgres.js auto-stringifies plain objects for jsonb columns; passing
-      // the object directly (rather than JSON.stringify + ::jsonb cast) is
-      // the library's documented happy path and avoids a class of cast bugs.
-      const inserted = await sql<Array<Record<string, unknown>>>`
-        INSERT INTO ${sql(TABLE)} (client_id, provider, label, account_identifier, credentials, source)
-        VALUES (${clientId}, ${provider}, ${label}, ${accountIdentifier}, ${credentials as Record<string, unknown>}, ${source})
-        ON CONFLICT (COALESCE(client_id, -1), provider, COALESCE(account_identifier, ''))
-        DO UPDATE SET
-          label = EXCLUDED.label,
-          credentials = EXCLUDED.credentials,
-          updated_at = NOW()
-        RETURNING id, client_id AS "clientId", provider, label, account_identifier AS "accountIdentifier",
-                  source, active, created_at AS "createdAt"
-      `;
+      const inserted = await upsertCredentialAccount(sql, TABLE, {
+        provider,
+        label,
+        accountIdentifier,
+        credentials,
+        source,
+        clientId,
+        credentialKeys: credKeys,
+        bodyKeys,
+        bodyType,
+      });
 
       // Post-insert verification — log what actually landed in JSONB so a
       // future "credentials saved empty" bug doesn't require a code dive.
       try {
-        const verifyRow = await sql<Array<{ credentials: unknown }>>`
-          SELECT credentials FROM ${sql(TABLE)} WHERE id = ${inserted[0]?.id as number}
-        `;
-        const stored = verifyRow[0]?.credentials;
-        const storedKeys = stored && typeof stored === 'object' && !Array.isArray(stored)
-          ? Object.keys(stored as Record<string, unknown>).sort()
-          : [];
+        const storedKeys = await getCredentialAccountStoredCredentialKeys(
+          sql,
+          TABLE,
+          inserted?.id as number | undefined,
+        );
         console.log('[carrier-accounts:POST] post-insert', JSON.stringify({
-          rowId: inserted[0]?.id ?? null,
+          rowId: inserted?.id ?? null,
           storedCredentialKeys: storedKeys,
-          storedType: typeof stored,
         }));
       } catch (vErr) {
         console.warn('[carrier-accounts:POST] post-insert verify failed:', vErr instanceof Error ? vErr.message : vErr);
       }
 
-      res.status(200).json({ data: inserted[0] ?? null });
+      res.status(200).json({ data: inserted ?? null });
       return;
     }
 
@@ -311,67 +279,17 @@ export default async function handler(req: any, res: any): Promise<void> {
       }
 
       const body = await readJsonRequestBody(req);
-      const rawIds = Array.isArray(body?.clientIds) ? body.clientIds : [];
-      const clientIds = Array.from(
-        new Set(
-          rawIds
-            .map((v) => Number(v))
-            .filter((n) => Number.isFinite(n) && n > 0)
-        )
-      ) as number[];
+      const clientIds = normalizeAssignedClientIds(body);
 
-      // Pre-read: we need the current `source` so we can return whether
-      // this save also promoted the carrier (FE may want to celebrate it
-      // with a toast).
-      const existsRows = await sql<Array<{ id: number; source: string }>>`
-        SELECT id, source FROM ${sql(TABLE)} WHERE id = ${id} LIMIT 1
-      `;
-      if (existsRows.length === 0) {
+      const assignmentResult = await replaceCarrierAccountClientAssignments(sql, id, clientIds, {
+        promotePortal: true,
+      });
+      if (!assignmentResult) {
         res.status(404).json({ error: `carrier_accounts row #${id} not found` });
         return;
       }
-      const wasPortal = existsRows[0].source === 'portal';
 
-      await sql.begin(async (trx) => {
-        await trx`DELETE FROM carrier_account_clients WHERE carrier_account_id = ${id}`;
-        if (clientIds.length > 0) {
-          await trx`
-            INSERT INTO carrier_account_clients (carrier_account_id, client_id)
-            SELECT ${id}, unnest(${clientIds}::int[])
-            ON CONFLICT (carrier_account_id, client_id) DO NOTHING
-          `;
-        }
-        // Option A — implicit approval. Assigning clients to a
-        // portal-source carrier is an explicit operator review action,
-        // so we treat it as approval and promote source → 'admin'.
-        // This is what makes the carrier reachable by downstream
-        // consumers (rate-shop, useShippingAccounts) which filter
-        // ?source=admin. Without this promotion the assignment would
-        // be a DB write that nothing reads — see Phase 1 audit
-        // 2026-05-12. Filtered to only fire when source=portal so a
-        // re-save on an already-admin row stays a no-op.
-        await trx`
-          UPDATE ${trx(TABLE)} SET source = 'admin', updated_at = NOW()
-          WHERE id = ${id} AND source = 'portal'
-        `;
-      });
-
-      const refreshed = await sql<Array<{ client_id: number }>>`
-        SELECT client_id FROM carrier_account_clients
-        WHERE carrier_account_id = ${id}
-        ORDER BY client_id
-      `;
-      res.status(200).json({
-        data: {
-          id,
-          assignedClientIds: refreshed.map((r) => r.client_id),
-          // promotedFromPortal: true means "this Save also flipped
-          // source from portal → admin" so the FE can show a
-          // confirmation toast ("✓ Approved and assigned").
-          promotedFromPortal: wasPortal,
-          source: wasPortal ? 'admin' : existsRows[0].source,
-        },
-      });
+      res.status(200).json({ data: assignmentResult });
       return;
     }
 
@@ -586,16 +504,12 @@ export default async function handler(req: any, res: any): Promise<void> {
         res.status(400).json({ error: 'id query parameter is required' });
         return;
       }
-      const deleted = await sql<Array<{ id: number }>>`
-        DELETE FROM ${sql(TABLE)}
-        WHERE id = ${id}
-        RETURNING id
-      `;
-      if (deleted.length === 0) {
+      const deletedId = await deleteCredentialAccount(sql, TABLE, id);
+      if (deletedId == null) {
         res.status(404).json({ error: `carrier_accounts row #${id} not found` });
         return;
       }
-      res.status(200).json({ data: { id: deleted[0].id, deleted: true } });
+      res.status(200).json({ data: { id: deletedId, deleted: true } });
       return;
     }
 
@@ -603,7 +517,7 @@ export default async function handler(req: any, res: any): Promise<void> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[carrier-accounts]', msg);
-    res.status(500).json({ error: msg });
+    res.status(500).json({ error: 'Carrier account request failed' });
   } finally {
     try {
       await sql.end({ timeout: 1 });

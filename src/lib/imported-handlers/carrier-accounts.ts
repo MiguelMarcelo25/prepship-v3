@@ -22,6 +22,13 @@ import {
   readJsonRequestBody,
 } from '../credential-accounts';
 import { corsHeaders } from '../http/cors';
+import {
+  deleteCredentialAccount,
+  listCredentialAccounts,
+  normalizeAssignedClientIds,
+  replaceCarrierAccountClientAssignments,
+  upsertCredentialAccount,
+} from '../../services/credential-accounts';
 
 const TABLE = 'carrier_accounts';
 
@@ -156,47 +163,10 @@ export default async function handler(req: any, res: any): Promise<void> {
       // table" — for now just filters by source since we don't have a
       // reviewed_at column. Tightening can come later.
       const wantSource = source && ALLOWED_ACCOUNT_SOURCES.has(source) ? source : null;
-      // Enrich each row with assignedClientIds (the new M:N junction).
-      // Aggregated as INTEGER[] inside SQL so the FE gets one extra
-      // field per row without an N+1 round-trip. COALESCE(...,'{}')
-      // ensures rows with no assignments come back as `[]` (not null),
-      // matching the frontend's TypeScript expectation.
-      const rows = wantSource
-        ? await sql<Array<Record<string, unknown>>>`
-            SELECT
-              ca.id, ca.client_id AS "clientId", ca.provider, ca.label,
-              ca.account_identifier AS "accountIdentifier",
-              ca.source, ca.active, ca.created_at AS "createdAt",
-              COALESCE(
-                (
-                  SELECT array_agg(cac.client_id ORDER BY cac.client_id)
-                  FROM carrier_account_clients cac
-                  WHERE cac.carrier_account_id = ca.id
-                ),
-                '{}'::int[]
-              ) AS "assignedClientIds"
-            FROM ${sql(TABLE)} ca
-            WHERE ca.source = ${wantSource}
-            ORDER BY ca.created_at DESC
-            LIMIT 200
-          `
-        : await sql<Array<Record<string, unknown>>>`
-            SELECT
-              ca.id, ca.client_id AS "clientId", ca.provider, ca.label,
-              ca.account_identifier AS "accountIdentifier",
-              ca.source, ca.active, ca.created_at AS "createdAt",
-              COALESCE(
-                (
-                  SELECT array_agg(cac.client_id ORDER BY cac.client_id)
-                  FROM carrier_account_clients cac
-                  WHERE cac.carrier_account_id = ca.id
-                ),
-                '{}'::int[]
-              ) AS "assignedClientIds"
-            FROM ${sql(TABLE)} ca
-            ORDER BY ca.created_at DESC
-            LIMIT 200
-          `;
+      const rows = await listCredentialAccounts(sql, TABLE, {
+        source: wantSource,
+        includeAssignments: true,
+      });
       res.status(200).json({ data: rows, pending: pending === '1' });
       return;
     }
@@ -230,20 +200,18 @@ export default async function handler(req: any, res: any): Promise<void> {
         return;
       }
 
-      // Upsert on the natural key. ON CONFLICT updates label/credentials so
-      // re-submitting the same account from the portal vs admin merges.
-      const inserted = await sql<Array<Record<string, unknown>>>`
-        INSERT INTO ${sql(TABLE)} (client_id, provider, label, account_identifier, credentials, source)
-        VALUES (${clientId}, ${provider}, ${label}, ${accountIdentifier}, ${JSON.stringify(credentials)}::jsonb, ${source})
-        ON CONFLICT (COALESCE(client_id, -1), provider, COALESCE(account_identifier, ''))
-        DO UPDATE SET
-          label = EXCLUDED.label,
-          credentials = EXCLUDED.credentials,
-          updated_at = NOW()
-        RETURNING id, client_id AS "clientId", provider, label, account_identifier AS "accountIdentifier",
-                  source, active, created_at AS "createdAt"
-      `;
-      res.status(200).json({ data: inserted[0] ?? null });
+      const inserted = await upsertCredentialAccount(sql, TABLE, {
+        provider,
+        label,
+        accountIdentifier,
+        credentials,
+        source,
+        clientId,
+        credentialKeys: credKeys,
+        bodyKeys,
+        bodyType: typeof body,
+      });
+      res.status(200).json({ data: inserted ?? null });
       return;
     }
 
@@ -262,56 +230,13 @@ export default async function handler(req: any, res: any): Promise<void> {
         return;
       }
       const body = await readJsonRequestBody(req);
-      const rawIds = Array.isArray(body?.clientIds) ? body.clientIds : [];
-      const clientIds = Array.from(
-        new Set(
-          rawIds
-            .map((v) => Number(v))
-            .filter((n) => Number.isFinite(n) && n > 0)
-        )
-      ) as number[];
-
-      // Verify the carrier account exists before mutating its
-      // assignments — friendlier error than a silent no-op.
-      const exists = await sql<Array<{ id: number }>>`
-        SELECT id FROM ${sql(TABLE)} WHERE id = ${id} LIMIT 1
-      `;
-      if (exists.length === 0) {
+      const clientIds = normalizeAssignedClientIds(body);
+      const assignmentResult = await replaceCarrierAccountClientAssignments(sql, id, clientIds);
+      if (!assignmentResult) {
         res.status(404).json({ error: `carrier_accounts row #${id} not found` });
         return;
       }
-
-      // Replace-semantics: delete all existing assignments, insert
-      // the new set. Wrapped in a transaction so the assignment list
-      // is never observable in a half-updated state. ON CONFLICT
-      // DO NOTHING is belt-and-suspenders against duplicate input.
-      await sql.begin(async (trx) => {
-        await trx`DELETE FROM carrier_account_clients WHERE carrier_account_id = ${id}`;
-        if (clientIds.length > 0) {
-          // Build the VALUES list inline. Postgres' UNNEST trick
-          // also works but a plain VALUES is simpler when N is small
-          // (operators rarely assign >20 clients to one carrier).
-          await trx`
-            INSERT INTO carrier_account_clients (carrier_account_id, client_id)
-            SELECT ${id}, unnest(${clientIds}::int[])
-            ON CONFLICT (carrier_account_id, client_id) DO NOTHING
-          `;
-        }
-      });
-
-      // Return the fresh assignment list so the FE can drop a
-      // local refresh round-trip.
-      const refreshed = await sql<Array<{ client_id: number }>>`
-        SELECT client_id FROM carrier_account_clients
-        WHERE carrier_account_id = ${id}
-        ORDER BY client_id
-      `;
-      res.status(200).json({
-        data: {
-          id,
-          assignedClientIds: refreshed.map((r) => r.client_id),
-        },
-      });
+      res.status(200).json({ data: assignmentResult });
       return;
     }
 
@@ -323,16 +248,12 @@ export default async function handler(req: any, res: any): Promise<void> {
         res.status(400).json({ error: 'id query parameter is required' });
         return;
       }
-      const deleted = await sql<Array<{ id: number }>>`
-        DELETE FROM ${sql(TABLE)}
-        WHERE id = ${id}
-        RETURNING id
-      `;
-      if (deleted.length === 0) {
+      const deletedId = await deleteCredentialAccount(sql, TABLE, id);
+      if (deletedId == null) {
         res.status(404).json({ error: `carrier_accounts row #${id} not found` });
         return;
       }
-      res.status(200).json({ data: { id: deleted[0].id, deleted: true } });
+      res.status(200).json({ data: { id: deletedId, deleted: true } });
       return;
     }
 
