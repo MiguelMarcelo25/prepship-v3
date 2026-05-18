@@ -19,6 +19,16 @@ const app = new Hono();
 
 app.all('/multi', runNodeHandler(multiCarrierHandler));
 
+const rateCachePublicColumns = {
+  cacheKey: rateCache.cacheKey,
+  weightOz: rateCache.weightOz,
+  toZip: rateCache.toZip,
+  rates: rateCache.rates,
+  bestRate: rateCache.bestRate,
+  weightVersion: rateCache.weightVersion,
+  fetchedAt: rateCache.fetchedAt,
+};
+
 const rateBody = z.object({
   weightOz: z.number().positive(),
   toZip: z.string().min(3),
@@ -276,14 +286,14 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
 
   const exactRows = exactKeys.length
     ? await db
-        .select()
+        .select(rateCachePublicColumns)
         .from(rateCache)
         .where(or(...exactKeys.map((key) => eq(rateCache.cacheKey, key))))
         .orderBy(sql`${rateCache.fetchedAt} desc`)
     : [];
   const roughRows = pairs.length
     ? await db
-        .select()
+        .select(rateCachePublicColumns)
         .from(rateCache)
         .where(
           or(
@@ -357,7 +367,7 @@ app.get('/cached', zValidator('query', cachedQuery), async (c) => {
   // weightOz + toZip are required by the schema, so the non-null
   // assertion is safe.
   const rows = await db
-    .select()
+    .select(rateCachePublicColumns)
     .from(rateCache)
     .where(
       and(

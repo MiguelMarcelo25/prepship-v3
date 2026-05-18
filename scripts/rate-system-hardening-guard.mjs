@@ -52,8 +52,16 @@ assert(
 
 assert(
   service.includes('cachedDiagnosticsFromCache') &&
-    service.includes('diagnostics: liveResult.carrierDiagnostics as unknown[]'),
+    service.includes('writeRateCache(key, resolvedInput, rawRates, liveResult.carrierDiagnostics, now)'),
   'getRates persists live diagnostics and reuses cached diagnostics',
+);
+
+assert(
+  service.includes('writeRateCache') &&
+    service.includes('rate_cache.diagnostics column missing') &&
+    service.includes('legacy rate cache write failed') &&
+    route.includes('rateCachePublicColumns'),
+  'rate cache reads/writes are backward-compatible and do not block live rates',
 );
 
 assert(

@@ -816,6 +816,135 @@ function cachedDiagnosticsFromCache(value: unknown, rates: Rate[]): CarrierRateD
   return diagnostics.length ? diagnostics : cachedDiagnosticsFromRates(rates);
 }
 
+type RateCacheReadRow = {
+  cacheKey: string;
+  weightOz: number | null;
+  toZip: string | null;
+  rates: unknown[];
+  bestRate: unknown;
+  diagnostics?: unknown[] | null;
+  weightVersion: number | null;
+  fetchedAt: Date;
+};
+
+const rateCacheReadColumns = {
+  cacheKey: rateCache.cacheKey,
+  weightOz: rateCache.weightOz,
+  toZip: rateCache.toZip,
+  rates: rateCache.rates,
+  bestRate: rateCache.bestRate,
+  diagnostics: rateCache.diagnostics,
+  weightVersion: rateCache.weightVersion,
+  fetchedAt: rateCache.fetchedAt,
+};
+
+const legacyRateCacheReadColumns = {
+  cacheKey: rateCache.cacheKey,
+  weightOz: rateCache.weightOz,
+  toZip: rateCache.toZip,
+  rates: rateCache.rates,
+  bestRate: rateCache.bestRate,
+  weightVersion: rateCache.weightVersion,
+  fetchedAt: rateCache.fetchedAt,
+};
+
+function isMissingRateCacheDiagnosticsColumnError(err: unknown): boolean {
+  const row = err as { code?: string; message?: string };
+  const message = String(row?.message ?? '');
+  return row?.code === '42703' && /diagnostics/i.test(message);
+}
+
+async function selectRateCacheByKey(cacheKey: string): Promise<RateCacheReadRow | null> {
+  try {
+    const [cached] = await db
+      .select(rateCacheReadColumns)
+      .from(rateCache)
+      .where(eq(rateCache.cacheKey, cacheKey))
+      .limit(1);
+    return cached ?? null;
+  } catch (err) {
+    if (!isMissingRateCacheDiagnosticsColumnError(err)) throw err;
+    console.warn(
+      '[rates] rate_cache.diagnostics column missing; reading legacy rate cache row without diagnostics'
+    );
+    const [cached] = await db
+      .select(legacyRateCacheReadColumns)
+      .from(rateCache)
+      .where(eq(rateCache.cacheKey, cacheKey))
+      .limit(1);
+    return cached ? { ...cached, diagnostics: null } : null;
+  }
+}
+
+async function writeRateCache(
+  cacheKey: string,
+  input: RateInput,
+  rawRates: Rate[],
+  carrierDiagnostics: CarrierRateDiagnostic[],
+  fetchedAt: Date,
+): Promise<void> {
+  const bestRate = pickBestRate(rawRates);
+  try {
+    await db
+      .insert(rateCache)
+      .values({
+        cacheKey,
+        weightOz: input.weightOz,
+        toZip: input.toZip,
+        rates: rawRates as unknown[],
+        bestRate,
+        diagnostics: carrierDiagnostics as unknown[],
+        weightVersion: 1,
+        fetchedAt,
+      })
+      .onConflictDoUpdate({
+        target: rateCache.cacheKey,
+        set: {
+          rates: rawRates as unknown[],
+          bestRate,
+          diagnostics: carrierDiagnostics as unknown[],
+          fetchedAt,
+        },
+      });
+    return;
+  } catch (err) {
+    if (!isMissingRateCacheDiagnosticsColumnError(err)) {
+      console.warn('[rates] rate cache write failed:', err instanceof Error ? err.message : err);
+      return;
+    }
+    console.warn(
+      '[rates] rate_cache.diagnostics column missing; retrying rate cache write without diagnostics'
+    );
+  }
+
+  try {
+    await db
+      .insert(rateCache)
+      .values({
+        cacheKey,
+        weightOz: input.weightOz,
+        toZip: input.toZip,
+        rates: rawRates as unknown[],
+        bestRate,
+        weightVersion: 1,
+        fetchedAt,
+      })
+      .onConflictDoUpdate({
+        target: rateCache.cacheKey,
+        set: {
+          rates: rawRates as unknown[],
+          bestRate,
+          fetchedAt,
+        },
+      });
+  } catch (err) {
+    console.warn(
+      '[rates] legacy rate cache write failed:',
+      err instanceof Error ? err.message : err
+    );
+  }
+}
+
 export async function getRates(
   input: RateInput,
   opts: GetRatesOptions = {}
@@ -828,11 +957,7 @@ export async function getRates(
   const markups = await loadCarrierMarkups();
 
   if (!opts.forceRefresh) {
-    const [cached] = await db
-      .select()
-      .from(rateCache)
-      .where(eq(rateCache.cacheKey, key))
-      .limit(1);
+    const cached = await selectRateCacheByKey(key);
     if (cached) {
       const cachedRaw = dedupeRates(cached.rates as Rate[], 'cached');
       const cacheAgeMs = Date.now() - cached.fetchedAt.getTime();
@@ -887,27 +1012,7 @@ export async function getRates(
   // Cache the RAW rates so markup updates always show fresh prices. Empty
   // results are cached briefly to prevent repeated live calls for carrier
   // accounts that already returned no service for this shipment.
-  await db
-    .insert(rateCache)
-    .values({
-      cacheKey: key,
-      weightOz: resolvedInput.weightOz,
-      toZip: resolvedInput.toZip,
-      rates: rawRates as unknown[],
-      bestRate: pickBestRate(rawRates),
-      diagnostics: liveResult.carrierDiagnostics as unknown[],
-      weightVersion: 1,
-      fetchedAt: now,
-    })
-    .onConflictDoUpdate({
-      target: rateCache.cacheKey,
-      set: {
-        rates: rawRates as unknown[],
-        bestRate: pickBestRate(rawRates),
-        diagnostics: liveResult.carrierDiagnostics as unknown[],
-        fetchedAt: now,
-      },
-    });
+  await writeRateCache(key, resolvedInput, rawRates, liveResult.carrierDiagnostics, now);
 
   const rates = applyMarkups(rawRates, markups);
   return {
