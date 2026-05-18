@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { and, eq, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { rateCache } from '../db/schema/rates';
-import { getCarrierAccountsForRateContext, getRates } from '../services/rates';
+import { getCarrierAccountsForRateContext, getRates, rateCacheKey } from '../services/rates';
 import {
   getActiveBackfillJob,
   getBackfillJob,
@@ -197,45 +197,154 @@ const cachedQuery = z
     { message: 'weightOz (or wt) and toZip (or zip) are required' }
   );
 
-// Bulk lookup of cached rates for many (weightOz, toZip) pairs in one call.
+// Bulk lookup of cached rates. Exact cacheKey matches are authoritative;
+// legacy weight+ZIP matches stay available but are explicitly approximate.
+const bulkItemBody = z
+  .object({
+    cacheKey: z.string().min(1).optional(),
+    weightOz: z.number().positive().optional(),
+    toZip: z.string().min(3).optional(),
+    toCountry: z.string().optional(),
+    residential: z.boolean().optional(),
+    dimsL: z.number().positive().optional(),
+    dimsW: z.number().positive().optional(),
+    dimsH: z.number().positive().optional(),
+    carrierIds: z.array(z.string()).optional(),
+    storeId: z.number().int().nullable().optional(),
+    clientId: z.number().int().nullable().optional(),
+    sourceClientId: z.number().int().nullable().optional(),
+    confirmation: z.string().nullable().optional(),
+  })
+  .refine(
+    (item) => Boolean(item.cacheKey) || (item.weightOz !== undefined && item.toZip !== undefined),
+    { message: 'Each item needs cacheKey or weightOz + toZip' },
+  );
+
 const bulkBody = z.object({
   items: z
-    .array(z.object({ weightOz: z.number(), toZip: z.string().min(3) }))
+    .array(bulkItemBody)
     .min(1)
     .max(200),
 });
 
 app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
   const { items } = c.req.valid('json');
-  const pairs = items.map((it) => ({
-    weightOz: it.weightOz,
-    toZip: it.toZip.toUpperCase(),
-  }));
-  const rows = await db
-    .select()
-    .from(rateCache)
-    .where(
-      or(
-        ...pairs.map((pair) =>
-          and(
-            eq(rateCache.weightOz, pair.weightOz),
-            eq(rateCache.toZip, pair.toZip)
+  const exactKeys = [
+    ...new Set(
+      items
+        .map((it) => {
+          if (it.cacheKey) return it.cacheKey;
+          if (it.weightOz === undefined || it.toZip === undefined) return null;
+          if (
+            it.dimsL === undefined &&
+            it.dimsW === undefined &&
+            it.dimsH === undefined &&
+            it.residential === undefined &&
+            it.storeId === undefined &&
+            it.clientId === undefined &&
+            it.sourceClientId === undefined &&
+            it.carrierIds === undefined &&
+            it.confirmation === undefined &&
+            it.toCountry === undefined
+          ) {
+            return null;
+          }
+          return rateCacheKey({
+            weightOz: it.weightOz,
+            toZip: it.toZip,
+            toCountry: it.toCountry,
+            residential: it.residential,
+            dimsL: it.dimsL,
+            dimsW: it.dimsW,
+            dimsH: it.dimsH,
+            carrierIds: it.carrierIds,
+            storeId: it.storeId,
+            clientId: it.clientId,
+            sourceClientId: it.sourceClientId,
+            confirmation: it.confirmation,
+          });
+        })
+        .filter((key): key is string => Boolean(key)),
+    ),
+  ];
+  const pairs = items
+    .filter((it) => it.weightOz !== undefined && it.toZip !== undefined)
+    .map((it) => ({
+      weightOz: it.weightOz!,
+      toZip: it.toZip!.toUpperCase(),
+    }));
+
+  const exactRows = exactKeys.length
+    ? await db
+        .select()
+        .from(rateCache)
+        .where(or(...exactKeys.map((key) => eq(rateCache.cacheKey, key))))
+        .orderBy(sql`${rateCache.fetchedAt} desc`)
+    : [];
+  const roughRows = pairs.length
+    ? await db
+        .select()
+        .from(rateCache)
+        .where(
+          or(
+            ...pairs.map((pair) =>
+              and(
+                eq(rateCache.weightOz, pair.weightOz),
+                eq(rateCache.toZip, pair.toZip)
+              )
+            )
           )
         )
-      )
-    )
-    .orderBy(sql`${rateCache.fetchedAt} desc`);
-  const rowsByPair = new Map<string, typeof rows[number]>();
-  for (const row of rows) {
+        .orderBy(sql`${rateCache.fetchedAt} desc`)
+    : [];
+  const exactRowsByKey = new Map<string, typeof exactRows[number]>();
+  for (const row of exactRows) {
+    if (!exactRowsByKey.has(row.cacheKey)) exactRowsByKey.set(row.cacheKey, row);
+  }
+  const rowsByPair = new Map<string, typeof roughRows[number]>();
+  for (const row of roughRows) {
     const key = `${row.weightOz}|${row.toZip}`;
     if (!rowsByPair.has(key)) rowsByPair.set(key, row);
   }
   const results = items.map((it) => {
-    const toZip = it.toZip.toUpperCase();
+    const computedCacheKey =
+      it.cacheKey ??
+      (it.weightOz !== undefined && it.toZip !== undefined
+        ? rateCacheKey({
+            weightOz: it.weightOz,
+            toZip: it.toZip,
+            toCountry: it.toCountry,
+            residential: it.residential,
+            dimsL: it.dimsL,
+            dimsW: it.dimsW,
+            dimsH: it.dimsH,
+            carrierIds: it.carrierIds,
+            storeId: it.storeId,
+            clientId: it.clientId,
+            sourceClientId: it.sourceClientId,
+            confirmation: it.confirmation,
+          })
+        : null);
+    const exactHit = computedCacheKey ? exactRowsByKey.get(computedCacheKey) : null;
+    if (exactHit) {
+      return {
+        cacheKey: computedCacheKey,
+        weightOz: it.weightOz,
+        toZip: it.toZip,
+        hit: exactHit,
+        matchQuality: 'exact' as const,
+        approximate: false,
+      };
+    }
+    const toZip = it.toZip?.toUpperCase();
     return {
       weightOz: it.weightOz,
       toZip: it.toZip,
-      hit: rowsByPair.get(`${it.weightOz}|${toZip}`) ?? null,
+      cacheKey: computedCacheKey,
+      hit:
+        it.weightOz !== undefined && toZip
+          ? rowsByPair.get(`${it.weightOz}|${toZip}`) ?? null
+          : null,
       matchQuality: 'rough' as const,
       approximate: true,
     };

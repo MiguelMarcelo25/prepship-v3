@@ -783,6 +783,39 @@ function cachedDiagnosticsFromRates(rates: Rate[]): CarrierRateDiagnostic[] {
   return [...byCarrier.values()];
 }
 
+function cachedDiagnosticsFromCache(value: unknown, rates: Rate[]): CarrierRateDiagnostic[] {
+  if (!Array.isArray(value)) return cachedDiagnosticsFromRates(rates);
+  const diagnostics = value
+    .map((item): CarrierRateDiagnostic | null => {
+      if (!item || typeof item !== 'object') return null;
+      const row = item as Record<string, unknown>;
+      const carrierId = String(row.carrierId ?? '').trim();
+      if (!carrierId) return null;
+      const status = String(row.status ?? 'cached');
+      const safeStatus: CarrierRateDiagnosticStatus =
+        status === 'ok' ||
+        status === 'empty' ||
+        status === 'failed' ||
+        status === 'cached' ||
+        status === 'loading'
+          ? status
+          : 'cached';
+      const rateCount = Number(row.rateCount ?? 0);
+      const durationMs = Number(row.durationMs);
+      return {
+        carrierId,
+        carrierCode: typeof row.carrierCode === 'string' ? row.carrierCode : undefined,
+        nickname: typeof row.nickname === 'string' ? row.nickname : undefined,
+        status: safeStatus,
+        rateCount: Number.isFinite(rateCount) ? rateCount : 0,
+        durationMs: Number.isFinite(durationMs) ? durationMs : undefined,
+        error: typeof row.error === 'string' ? publicCarrierRateError(row.error) : undefined,
+      };
+    })
+    .filter((item): item is CarrierRateDiagnostic => Boolean(item));
+  return diagnostics.length ? diagnostics : cachedDiagnosticsFromRates(rates);
+}
+
 export async function getRates(
   input: RateInput,
   opts: GetRatesOptions = {}
@@ -828,7 +861,7 @@ export async function getRates(
           cacheKey: key,
           fetchedAt: cached.fetchedAt.toISOString(),
           cacheAgeMs,
-          carrierDiagnostics: cachedDiagnosticsFromRates(cachedRates),
+          carrierDiagnostics: cachedDiagnosticsFromCache(cached.diagnostics, cachedRates),
         };
       }
     }
@@ -862,6 +895,7 @@ export async function getRates(
       toZip: resolvedInput.toZip,
       rates: rawRates as unknown[],
       bestRate: pickBestRate(rawRates),
+      diagnostics: liveResult.carrierDiagnostics as unknown[],
       weightVersion: 1,
       fetchedAt: now,
     })
@@ -870,6 +904,7 @@ export async function getRates(
       set: {
         rates: rawRates as unknown[],
         bestRate: pickBestRate(rawRates),
+        diagnostics: liveResult.carrierDiagnostics as unknown[],
         fetchedAt: now,
       },
     });

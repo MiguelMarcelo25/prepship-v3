@@ -45,7 +45,7 @@ Current readiness read:
 
 | Track | Status | Percent |
 |---|---|---:|
-| Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, and billing/rates frontend failure-state guards implemented | 54% |
+| Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, and rate cache diagnostics/bulk semantics implemented | 68% |
 | Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented | 42% |
 
 ## Critical Blockers

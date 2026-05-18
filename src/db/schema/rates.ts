@@ -16,6 +16,7 @@ export const rateCache = pgTable(
     toZip: text(),
     rates: jsonb().$type<unknown[]>().notNull(),
     bestRate: jsonb(),
+    diagnostics: jsonb().$type<unknown[]>(),
     weightVersion: integer(),
     fetchedAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
   },

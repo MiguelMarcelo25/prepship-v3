@@ -3855,6 +3855,7 @@ export const apiClient = {
                   cached: false,
                   source: 'live',
                   carrierStatuses: [],
+                  carrierDiagnostics: [],
                 }),
             shouldFetchDirect
               ? fetchDirectCarrierRates(body, directCarrierIds)
@@ -3882,6 +3883,10 @@ export const apiClient = {
               return String(rate.shippingProviderId ?? raw.carrier_id) === String(providerId);
             });
             const error = directRates.errors.find((item) => String(item.shippingProviderId) === String(providerId));
+            const rateCount = directRates.rates.filter((rate) => {
+              const raw = rate.raw && typeof rate.raw === 'object' ? rate.raw as Record<string, unknown> : {};
+              return String(rate.shippingProviderId ?? raw.carrier_id) === String(providerId);
+            }).length;
             return {
               carrierId,
               carrierName: error?.label ?? carrierId,
@@ -3892,11 +3897,33 @@ export const apiClient = {
                 : error
                   ? 'error'
                   : body.cachedOnly === true
-                    ? 'loading'
-                    : 'unavailable',
+                  ? 'loading'
+                  : 'unavailable',
+              rateCount,
               error: error?.message,
             };
           });
+          const shipStationDiagnostics = Array.isArray(shipStationResult?.carrierDiagnostics)
+            ? shipStationResult.carrierDiagnostics.map((diagnostic: Record<string, unknown>) => ({
+                ...diagnostic,
+                source: 'shipstation',
+              }))
+            : [];
+          const directCarrierDiagnostics = directCarrierStatuses.map((status) => ({
+            carrierId: status.carrierId,
+            nickname: status.carrierName,
+            source: 'direct',
+            status:
+              status.status === 'live'
+                ? 'ok'
+                : status.status === 'unavailable'
+                  ? 'empty'
+                  : status.status === 'error'
+                    ? 'failed'
+                    : status.status,
+            rateCount: status.rateCount,
+            error: status.error,
+          }));
           return {
             ...shipStationResult,
             requestKey: shipStationResult?.requestKey ?? requestKey,
@@ -3905,6 +3932,10 @@ export const apiClient = {
             carrierStatuses: [
               ...(Array.isArray(shipStationResult?.carrierStatuses) ? shipStationResult.carrierStatuses : []),
               ...directCarrierStatuses,
+            ],
+            carrierDiagnostics: [
+              ...shipStationDiagnostics,
+              ...directCarrierDiagnostics,
             ],
             directCarrierErrors: directRates.errors,
             directCarrierMetas: directRates.metas,

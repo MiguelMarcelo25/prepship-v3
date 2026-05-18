@@ -4,7 +4,9 @@
 
 This is the canonical boss-facing audit for duplicate logic and source-of-truth drift in PrepShip v4. It supersedes `DUPLICATION_OPTIMIZATION_AUDIT.md`.
 
-The highest-risk duplication remains around rate fetching/cache behavior, frontend API error handling, inventory stock calculations, and user-visible job state. Phase 11 Batch 1 moved carrier/store credential account PATCH behavior and table bootstrap logic behind shared helpers, while keeping Render/Hono as the preferred canonical API and Vercel functions as compatibility adapters.
+The highest-risk duplication remains around inventory stock calculations, user-visible job state, label side effects, and the last runtime DDL surfaces. Phase 11 Batch 1 moved carrier/store credential account PATCH behavior and table bootstrap logic behind shared helpers. Phase 11 Batch 2 moved rate cache diagnostics and exact/approximate bulk lookup semantics behind the canonical rate service/route boundary.
+
+Current progress: 68%. This is not 100% because inventory source-of-truth cleanup, durable print/rate-backfill job status, label side-effect status reporting, and remaining runtime DDL migration cleanup still need implementation and production verification.
 
 ## Critical Blockers
 
@@ -13,7 +15,7 @@ The highest-risk duplication remains around rate fetching/cache behavior, fronte
 | Carrier/store account route drift | Save, rename, approve, assignment, or delete can behave differently by route | Shared credential-account service owns all DB behavior | Static guard now covers shared PATCH/assignment parity; live API smoke tests still needed |
 | Auth/JWT duplication | One compatibility endpoint can validate weaker tokens than another | Shared verifier is used by every active handler | Unauth, expired, wrong issuer/audience, admin/non-admin tests |
 | Client DTO duplication | ShipStation credentials can leak if raw client rows return | `publicClient` is the only mapper for client responses | Secret-redaction guard and live `/clients` smoke test |
-| Rate cache/key duplication | UI can show stale/wrong/no rates and retry external APIs too often | One canonical rate cache key and diagnostics shape | cache hit/miss, one-carrier failure, all-carriers-empty tests |
+| Rate cache/key duplication | UI can show stale/wrong/no rates and retry external APIs too often | One canonical rate cache key and diagnostics shape | `npm run test:rate-system-hardening`; browser Rate Browser verification still needed |
 | Job state duplication | Long-running work can disappear on restart or run twice | Durable job status and singleton execution | restart and dual-worker tests |
 
 ## High-Risk Issues
@@ -25,7 +27,7 @@ The highest-risk duplication remains around rate fetching/cache behavior, fronte
 | JWT/auth | Hono middleware, Vercel handlers, imported handlers | `src/lib/auth/verify-supabase-jwt.ts` | inconsistent token validation | Replace remaining legacy handler copies | auth coverage plus live token tests |
 | CORS | Render app, Vercel handlers, imported handlers | `src/lib/http/cors.ts` | origin drift or overexposure | Replace remaining cron/debug/marketplace copies | OPTIONS tests for allowed/disallowed origins |
 | Client DTOs | `/clients`, `/init`, frontend client shapes | `src/lib/public-client.ts` | credential leakage | enforce `publicClient` everywhere | `npm run test:client-redaction` |
-| Rates/cache | routes, services, backfill, Rate Browser normalization | `src/services/rates.ts` | wrong/stale rates, API storms | centralize cache key and diagnostics | rate cache and carrier failure tests |
+| Rates/cache | routes, services, backfill, Rate Browser normalization | `src/services/rates.ts` plus `src/routes/rates.ts` for API semantics | wrong/stale rates, API storms | [x] canonical cache key exported, cache diagnostics persisted, exact/rough bulk lookup guarded; [ ] backfill durable status remains | `npm run test:rate-system-hardening` plus browser rate audit |
 | Frontend API wrappers | `api.ts`, `v2-apiClient.ts`, `vercelFunction.ts` | `api.ts` transport and `v2-apiClient` domain facade | failures appear as empty data | remove critical silent fallbacks | forced 500 UI tests |
 
 ## Medium-Risk Issues
@@ -47,7 +49,7 @@ The highest-risk duplication remains around rate fetching/cache behavior, fronte
 - [x] Move carrier/store PATCH rename/approval behavior behind shared service functions.
 - [ ] Replace remaining JWT/CORS copies in legacy/maintenance handlers.
 - [~] Move runtime table/index bootstrap into migrations.
-- [ ] Centralize rate cache key, diagnostics DTO, concurrency policy, and negative cache.
+- [x] Centralize rate cache key usage, persisted diagnostics, concurrency policy, negative cache, and exact/rough bulk lookup guard.
 - [ ] Add inventory reconciliation service.
 - [ ] Move user-visible print queue/rate backfill status out of process memory.
 - [ ] Add label side-effect status reporting.
@@ -80,11 +82,11 @@ The highest-risk duplication remains around rate fetching/cache behavior, fronte
 - [x] Critical frontend methods guarded against `safe()` empty fallbacks.
 - [x] `fetchRates` throws request failures to caller error states.
 - [x] billing summary rethrows first-load failures while preserving stale cache.
-- [ ] canonical `rateCacheKey`.
-- [ ] approximate bulk cache marking.
-- [ ] carrier diagnostics retained through backend and UI.
-- [ ] `RATE_FETCH_CONCURRENCY` enforcement verified.
-- [ ] no-rate negative cache with diagnostics.
+- [x] canonical `rateCacheKey`.
+- [x] exact cache lookup when `cacheKey` is supplied; rough weight/ZIP cache hits are marked approximate.
+- [x] carrier diagnostics retained through backend cache and Rate Browser client diagnostics.
+- [x] `RATE_FETCH_CONCURRENCY` enforcement guarded.
+- [x] no-rate negative cache with diagnostics.
 - [ ] visible retry/error states for all critical screens.
 
 ## Test Plan
@@ -94,6 +96,7 @@ The highest-risk duplication remains around rate fetching/cache behavior, fronte
 - `npm run test:auth-coverage`
 - `npm run test:client-redaction`
 - `npm run test:credential-accounts`
+- `npm run test:rate-system-hardening`
 - `npm run test:frontend-failure-states`
 - `npm run test:orders-ux`
 - Live API smoke tests for `/users`, `/clients`, `/admin/*`
