@@ -9,14 +9,17 @@ const reportingMetricsMigration = fs.readFileSync(
   path.join(root, reportingMetricsMigrationPath),
   'utf8',
 );
+const storeOrdersMigrationPath = 'drizzle/0030_store_orders.sql';
+const storeOrdersMigration = fs.readFileSync(
+  path.join(root, storeOrdersMigrationPath),
+  'utf8',
+);
 const scanRoots = ['src', 'api'];
 const ddlPattern =
   /create\s+(?:unique\s+)?(?:table|index)(?:\s+concurrently)?\s+if\s+not\s+exists/i;
 
 const expectedRuntimeDdlFiles = [
-  'api/carriers/ebay/orders.ts',
   'api/carriers/labels.ts',
-  'api/carriers/walmart/orders.ts',
   'src/services/credential-account-schema.ts',
   'src/services/fulfillment/outbox.ts',
   'src/services/order-items.ts',
@@ -36,6 +39,14 @@ const reportingMetricTables = [
   'sku_velocity_metrics',
   'inventory_risk_metrics',
   'billing_summary_metrics',
+];
+
+const storeOrderRelations = [
+  'store_orders',
+  'store_orders_provider_external_idx',
+  'store_orders_carrier_account_idx',
+  'store_orders_last_fetched_at_idx',
+  'store_orders_shipment_status_idx',
 ];
 
 function walk(dir, out = []) {
@@ -116,10 +127,24 @@ for (const table of reportingMetricTables) {
   );
 }
 
+for (const relation of storeOrderRelations) {
+  assert(
+    storeOrdersMigration.includes(`"${relation}"`),
+    `${storeOrdersMigrationPath} owns ${relation}`,
+  );
+}
+
 assert(
   audit.includes('src/services/reporting-metrics.ts') &&
     audit.includes(reportingMetricsMigrationPath),
   `${auditPath} documents reporting metrics DDL migration resolution`,
+);
+
+assert(
+  audit.includes('api/carriers/ebay/orders.ts') &&
+    audit.includes('api/carriers/walmart/orders.ts') &&
+    audit.includes(storeOrdersMigrationPath),
+  `${auditPath} documents store_orders DDL migration resolution`,
 );
 
 if (process.exitCode) process.exit(process.exitCode);

@@ -4,9 +4,9 @@
 
 This is the canonical boss-facing audit for duplicate logic and source-of-truth drift in PrepShip v4. It supersedes `DUPLICATION_OPTIMIZATION_AUDIT.md`.
 
-The highest-risk duplication remains around inventory stock calculations, user-visible job state, label side effects, and the last runtime DDL surfaces. Phase 11 Batch 1 moved carrier/store credential account PATCH behavior and table bootstrap logic behind shared helpers. Phase 11 Batch 2 moved rate cache diagnostics and exact/approximate bulk lookup semantics behind the canonical rate service/route boundary. Phase 11 Batch 3 added the runtime DDL inventory and static guard so new request-time schema creation cannot slip in undocumented. Phase 11 Batch 4 moved reporting metrics schema ownership into a Drizzle migration. Phase 11 Batch 5 moved the Walmart selling-fee source index fully to migration ownership.
+The highest-risk duplication remains around inventory stock calculations, user-visible job state, label side effects, and the last runtime DDL surfaces. Phase 11 Batch 1 moved carrier/store credential account PATCH behavior and table bootstrap logic behind shared helpers. Phase 11 Batch 2 moved rate cache diagnostics and exact/approximate bulk lookup semantics behind the canonical rate service/route boundary. Phase 11 Batch 3 added the runtime DDL inventory and static guard so new request-time schema creation cannot slip in undocumented. Phase 11 Batch 4 moved reporting metrics schema ownership into a Drizzle migration. Phase 11 Batch 5 moved the Walmart selling-fee source index fully to migration ownership. Phase 11 Batch 6 moved marketplace `store_orders` schema ownership into a Drizzle migration.
 
-Current progress: 78%. This is not 100% because inventory source-of-truth cleanup, durable print/rate-backfill job status, label side-effect status reporting, and remaining compatibility runtime DDL cleanup still need implementation and production verification.
+Current progress: 80%. This is not 100% because inventory source-of-truth cleanup, durable print/rate-backfill job status, label side-effect status reporting, and remaining compatibility runtime DDL cleanup still need implementation and production verification.
 
 ## Critical Blockers
 
@@ -36,7 +36,7 @@ Current progress: 78%. This is not 100% because inventory source-of-truth cleanu
 |---|---|---|
 | Product defaults vs inventory defaults | package/dim defaults can diverge | Pick one canonical defaults service and make inventory derived |
 | Inventory stock/effective stock | ledger, stock cache, and order-derived sold metrics can disagree | `inventory_ledger` as movement history and `inventory.stockQty` as reconciled cache |
-| Runtime DDL | runtime DDL inventory is documented and guarded; reporting metrics and Walmart selling-fee source index are migration-owned; some production-capable compatibility paths still create tables/indexes at request/job time | continue converting request-time DDL to Drizzle migrations |
+| Runtime DDL | runtime DDL inventory is documented and guarded; reporting metrics, Walmart selling-fee source index, and `store_orders` are migration-owned; some production-capable compatibility paths still create tables/indexes at request/job time | continue converting request-time DDL to Drizzle migrations |
 | Label side effects | label creation touches shipments, packages, inventory, print queue, billing, fulfillment | return and persist side-effect statuses/warnings |
 | Legacy compatibility handlers | some Vercel handlers remain near orders/shipments write paths | handle in a separately scoped lockdown-safe review |
 
@@ -51,6 +51,7 @@ Current progress: 78%. This is not 100% because inventory source-of-truth cleanu
 - [x] Add `RUNTIME_DDL_MIGRATION_AUDIT.md` inventory and static guard.
 - [x] Move reporting metrics table/index ownership to `drizzle/0029_reporting_metrics.sql`.
 - [x] Move Walmart selling-fee source index ownership to `drizzle/0019_selling_fees.sql`.
+- [x] Move marketplace `store_orders` table/index ownership to `drizzle/0030_store_orders.sql`.
 - [~] Move runtime table/index bootstrap into migrations.
 - [x] Centralize rate cache key usage, persisted diagnostics, concurrency policy, negative cache, and exact/rough bulk lookup guard.
 - [ ] Add inventory reconciliation service.
@@ -70,6 +71,7 @@ Current progress: 78%. This is not 100% because inventory source-of-truth cleanu
 - [x] Runtime DDL inventory/guard created.
 - [x] Reporting metrics runtime DDL moved to migration-owned schema.
 - [x] Walmart selling-fee source index runtime DDL removed from compatibility paths.
+- [x] `store_orders` runtime DDL removed from eBay/Walmart marketplace order handlers.
 - [~] Runtime DDL moved to migrations.
 - [ ] `CarrierIntegrationsCard` endpoint policy confirmed.
 - [ ] Regression tests for rename, approve, assignment, delete, pending portal rows.

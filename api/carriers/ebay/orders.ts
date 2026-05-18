@@ -18,6 +18,7 @@
 
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import postgres from 'postgres';
+import { assertStoreOrdersSchemaReady } from '../../_lib/store-orders-schema.js';
 
 let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 function getJwks() {
@@ -168,44 +169,16 @@ export default async function handler(req: any, res: any): Promise<void> {
 
   const sql = postgres(dbUrl, { max: 1, prepare: false, idle_timeout: 5, connect_timeout: 5 });
 
-  // Same store_orders bootstrap as Walmart — first call creates table.
-  const bootstrapStatements = [
-    `CREATE TABLE IF NOT EXISTS store_orders (
-      id SERIAL PRIMARY KEY,
-      carrier_account_id INTEGER NOT NULL,
-      provider TEXT NOT NULL,
-      external_order_id TEXT NOT NULL,
-      customer_order_id TEXT,
-      order_date TIMESTAMPTZ,
-      source_status TEXT,
-      ship_to JSONB,
-      items JSONB,
-      totals JSONB,
-      raw JSONB NOT NULL DEFAULT '{}'::jsonb,
-      shipment_status TEXT NOT NULL DEFAULT 'unshipped',
-      tracking_number TEXT,
-      tracking_carrier TEXT,
-      shipped_at TIMESTAMPTZ,
-      first_fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      last_fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS store_orders_provider_external_idx
-      ON store_orders (provider, external_order_id)`,
-    `CREATE INDEX IF NOT EXISTS store_orders_carrier_account_idx
-      ON store_orders (carrier_account_id)`,
-    `CREATE INDEX IF NOT EXISTS store_orders_last_fetched_at_idx
-      ON store_orders (last_fetched_at DESC)`,
-    `CREATE INDEX IF NOT EXISTS store_orders_shipment_status_idx
-      ON store_orders (shipment_status)`,
-    `ALTER TABLE store_orders ENABLE ROW LEVEL SECURITY`,
-  ];
-  for (const stmt of bootstrapStatements) {
-    try { await sql.unsafe(stmt); }
-    catch (err) {
-      console.warn('[carriers/ebay/orders] bootstrap stmt failed:',
-        err instanceof Error ? err.message : err);
-    }
+  try {
+    await assertStoreOrdersSchemaReady(sql, '[carriers/ebay/orders]');
+  } catch (err) {
+    console.error(
+      '[carriers/ebay/orders] store_orders schema readiness failed:',
+      err instanceof Error ? err.message : err,
+    );
+    res.status(500).json({ ok: false, error: 'Store orders schema is not ready' });
+    try { await sql.end({ timeout: 1 }); } catch { /* ignore */ }
+    return;
   }
 
   try {

@@ -4,7 +4,7 @@
 
 This is the Phase 11 inventory for remaining runtime `CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS` statements in production-capable `src` and `api` paths.
 
-Current status: inventory and guard created. Phase 11 Batch 4 moved reporting metrics schema ownership into `drizzle/0029_reporting_metrics.sql` and changed runtime reporting code to a readiness check. Phase 11 Batch 5 removed repeated Walmart selling-fee source index runtime creation and left the index owned by `drizzle/0019_selling_fees.sql`. The remaining work is to keep temporary compatibility fallbacks only where needed and defer shipped/label-adjacent cleanup to separately reviewed batches.
+Current status: inventory and guard created. Phase 11 Batch 4 moved reporting metrics schema ownership into `drizzle/0029_reporting_metrics.sql` and changed runtime reporting code to a readiness check. Phase 11 Batch 5 removed repeated Walmart selling-fee source index runtime creation and left the index owned by `drizzle/0019_selling_fees.sql`. Phase 11 Batch 6 moved `store_orders` table/index ownership into `drizzle/0030_store_orders.sql` and changed marketplace order handlers to a readiness check. The remaining work is to keep temporary compatibility fallbacks only where needed and defer shipped/label-adjacent cleanup to separately reviewed batches.
 
 ## Classification Legend
 
@@ -23,8 +23,6 @@ Current status: inventory and guard created. Phase 11 Batch 4 moved reporting me
 | `src/services/order-items.ts` | `order_items`, `analytics_cache`, analytics index | already covered by migration | Keep as temporary self-heal until production trigger/backfill verification is complete |
 | `src/services/orders-performance-maintenance.ts` | `order_items`, `analytics_cache`, performance indexes | already covered by migration | Convert any missing index-only statements to migrations before removing maintenance DDL |
 | `src/services/fulfillment/outbox.ts` | fulfillment outbox and order/shipment support indexes | requires separate shipped/label review | Do not refactor in this batch; migrate only with label/outbox recovery tests |
-| `api/carriers/ebay/orders.ts` | `store_orders` table/indexes | compatibility fallback to keep temporarily | Add/verify store order migration, then keep handler as read/write compatibility only |
-| `api/carriers/walmart/orders.ts` | `store_orders` table/indexes | compatibility fallback to keep temporarily | Share store order migration ownership with eBay order handler |
 | `api/carriers/labels.ts` | fulfillment outbox, shipment support indexes, compatibility `shipments` table ensure | requires separate shipped/label review | Do not change without a label/shipment-specific plan and locked-surface review |
 
 ## Resolved Runtime DDL
@@ -36,6 +34,8 @@ Current status: inventory and guard created. Phase 11 Batch 4 moved reporting me
 | `api/_lib/walmart-fees-sync.ts` | `orders_selling_fee_source_idx` | removed request-time index creation; helper still leaves column fallback untouched | `npm run test:runtime-ddl` |
 | `api/cron/sync-walmart-fees.ts` | `orders_selling_fee_source_idx` | removed request-time index creation; cron compatibility path still leaves column fallback untouched | `npm run test:runtime-ddl` |
 | `api/carriers/walmart/fees.ts` | `orders_selling_fee_source_idx` | removed request-time index creation; API compatibility path still leaves column fallback untouched | `npm run test:runtime-ddl` |
+| `api/carriers/ebay/orders.ts` | `store_orders` table/indexes | moved to `drizzle/0030_store_orders.sql`; handler now verifies migration readiness instead of creating schema | `npm run test:runtime-ddl` |
+| `api/carriers/walmart/orders.ts` | `store_orders` table/indexes | moved to `drizzle/0030_store_orders.sql`; handler now verifies migration readiness instead of creating schema | `npm run test:runtime-ddl` |
 
 ## Guard Policy
 
@@ -49,7 +49,7 @@ Current status: inventory and guard created. Phase 11 Batch 4 moved reporting me
 - [x] Add static guard for known runtime DDL files.
 - [x] Add reporting metrics Drizzle migration.
 - [x] Move Walmart selling-fee index ownership fully to migration/shared helper.
-- [ ] Add `store_orders` Drizzle migration or confirm existing production schema ownership.
+- [x] Add `store_orders` Drizzle migration and remove marketplace order request-time DDL.
 - [ ] Remove credential-account runtime bootstrap after live credential route smoke tests.
 - [ ] Schedule separate label/outbox/shipment DDL cleanup plan.
 
@@ -69,5 +69,6 @@ Current status: inventory and guard created. Phase 11 Batch 4 moved reporting me
 ## Deployment/Rollback Notes
 
 - Batch 4 includes one schema ownership change: reporting metrics tables now belong to `drizzle/0029_reporting_metrics.sql`.
-- Roll back by reverting the reporting migration/readiness-check changes if the migration is not ready for the deployment path.
+- Batch 6 includes one schema ownership change: marketplace `store_orders` now belongs to `drizzle/0030_store_orders.sql`.
+- Roll back by reverting the relevant migration/readiness-check changes if the migration is not ready for the deployment path.
 - Do not remove runtime DDL from production paths until matching migrations are applied and smoke-tested.

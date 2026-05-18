@@ -35,7 +35,7 @@ Implemented:
 Confirmed gaps from repo search:
 
 - RBAC/client-scope rules are still not fully formalized beyond `requireAuth` and `requireAdmin`.
-- Runtime DDL remains in some production-capable paths, but the request/job-time DDL inventory and static guard now exist. Reporting metrics table/index ownership has moved into `drizzle/0029_reporting_metrics.sql`, and the Walmart selling-fee source index is owned by `drizzle/0019_selling_fees.sql`.
+- Runtime DDL remains in some production-capable paths, but the request/job-time DDL inventory and static guard now exist. Reporting metrics table/index ownership has moved into `drizzle/0029_reporting_metrics.sql`, the Walmart selling-fee source index is owned by `drizzle/0019_selling_fees.sql`, and marketplace `store_orders` is owned by `drizzle/0030_store_orders.sql`.
 - Durable job state is mixed: scheduler protection has improved, but print queue/rate backfill and some compatibility paths still need restart-safe progress guarantees.
 - Broad frontend `safe()` fallback usage remains and needs a failure-mode sweep.
 - Audit logging and reconciliation are planning items; they are not complete yet.
@@ -45,8 +45,8 @@ Current readiness read:
 
 | Track | Status | Percent |
 |---|---|---:|
-| Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, rate cache diagnostics/bulk semantics, runtime DDL inventory/guard, reporting metrics migration, and Walmart selling-fee index cleanup implemented | 78% |
-| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with two low-risk classes migrated | 46% |
+| Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, rate cache diagnostics/bulk semantics, runtime DDL inventory/guard, reporting metrics migration, Walmart selling-fee index cleanup, and `store_orders` migration implemented | 80% |
+| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with three low-risk classes migrated | 47% |
 
 ## Critical Blockers
 
@@ -145,7 +145,7 @@ Deliverable table:
 | `carrier_accounts` | table/index bootstrap still exists in Vercel/imported compatibility handlers | request-time DDL and route drift | carrier account tables/indexes migration | safe rollback keeps existing table; remove runtime bootstrap after deploy |
 | `carrier_account_clients` | junction table/index bootstrap still exists in compatibility handlers | request-time DDL and assignment drift | junction table/index migration | preserve existing assignments before removing bootstrap |
 | `store_accounts` | table/index bootstrap and one-time migration still exist in Vercel handler | request latency and migration side effects during API call | store accounts migration plus separate data migration | rollback must not re-copy deleted carrier marketplace rows |
-| `store_orders` | marketplace handlers create table/indexes at runtime | first fetch can alter schema under user traffic | store orders migration | keep compatibility read path until migration verified |
+| `store_orders` | resolved: marketplace handlers verify migration readiness instead of creating table/indexes at runtime | request-time table/index creation removed | `0030_store_orders.sql` added | rollback can temporarily restore runtime ensure if migration is missing |
 | `fulfillment_outbox` | service and label compatibility path ensure table/indexes at runtime | label/outbox request may pay DDL cost | fulfillment outbox migration | rollback keeps table; worker can ignore unused columns |
 | `order_items`, `analytics_cache` | maintenance service still creates if missing | safer than request-time but still schema drift | ensure existing migrations fully own schema | rollback should not drop analytics cache during deploy |
 | reporting metrics tables | resolved: worker service now checks migration readiness instead of creating tables | runtime schema ownership removed | `0029_reporting_metrics.sql` added | rollback keeps tables and can pause refresh worker |
