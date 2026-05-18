@@ -31,6 +31,7 @@ Completed in this batch:
 - Removed frontend credential-presence inference from raw client secret response fields.
 - Added shared credential-account request helper: `src/lib/credential-accounts.ts`.
 - Moved carrier/store compatibility handlers onto the shared provider/source/body parsing helper.
+- Added credential-account drift guard: `npm run test:credential-accounts`.
 
 Still duplicated and tracked for the next batch:
 
@@ -60,6 +61,7 @@ Still duplicated and tracked for the next batch:
 ### Carrier and Store Accounts
 
 - [x] Create shared credential-account request normalization helper.
+- [x] Add automated drift guard for duplicated provider/source/body parsing.
 - [ ] Create a shared account service boundary for carrier and store DB operations.
 - [ ] Keep Vercel functions only as compatibility wrappers while frontend rewrites remain.
 - [ ] Move runtime table/index bootstrap into migrations.
@@ -120,6 +122,7 @@ Still duplicated and tracked for the next batch:
 - `npm run typecheck`
 - `npm run build:web`
 - `npm run test:client-redaction`
+- `npm run test:credential-accounts`
 - `npm run test:orders-ux`
 - API auth smoke tests for `/users`, `/clients`, `/admin/*`
 - Secret redaction smoke tests for `/clients` and `/init/init-data`
