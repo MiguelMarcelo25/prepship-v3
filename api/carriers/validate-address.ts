@@ -20,32 +20,12 @@
 // Response (success): the standardized address + deliverability flag.
 // Response (failure): { ok: false, error }.
 
-import { createRemoteJWKSet, jwtVerify } from 'jose';
 import postgres from 'postgres';
-
-let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
-function getJwks() {
-  if (cachedJwks) return cachedJwks;
-  const base = (process.env.SUPABASE_URL ?? '').replace(/\/+$/, '');
-  if (!base) return null;
-  cachedJwks = createRemoteJWKSet(new URL(`${base}/auth/v1/.well-known/jwks.json`));
-  return cachedJwks;
-}
-
-async function verifySupabaseJwt(token: string): Promise<{ ok: true } | { ok: false; reason: string }> {
-  const errors: string[] = [];
-  const jwks = getJwks();
-  if (jwks) {
-    try { await jwtVerify(token, jwks); return { ok: true }; }
-    catch (err) { errors.push(`JWKS: ${err instanceof Error ? err.message : String(err)}`); }
-  }
-  const secret = process.env.SUPABASE_JWT_SECRET;
-  if (secret) {
-    try { await jwtVerify(token, new TextEncoder().encode(secret)); return { ok: true }; }
-    catch (err) { errors.push(`HS256: ${err instanceof Error ? err.message : String(err)}`); }
-  }
-  return { ok: false, reason: errors.join(' | ') || 'no verification method' };
-}
+import {
+  extractBearerToken,
+  verifySupabaseJwt,
+} from '../../src/lib/auth/verify-supabase-jwt';
+import { corsHeaders } from '../../src/lib/http/cors';
 
 function readBody(req: any): Promise<unknown> {
   if (req.body) {
@@ -91,18 +71,30 @@ async function getUspsAccessToken(creds: Record<string, unknown>): Promise<strin
 
 export default async function handler(req: any, res: any): Promise<void> {
   res.setHeader('Cache-Control', 'no-store');
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  const origin = (req.headers?.origin as string | undefined) ?? null;
+  const ch = corsHeaders(origin, { methods: 'POST, OPTIONS' });
+  for (const [k, v] of Object.entries(ch)) res.setHeader(k, v);
+
+  if (req.method === 'OPTIONS') {
+    res.status(204).end();
+    return;
+  }
 
   if (req.method !== 'POST') {
     res.status(405).json({ error: 'POST only' });
     return;
   }
 
-  const auth = (req.headers?.authorization || req.headers?.Authorization || '') as string;
-  const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+  const token = extractBearerToken(
+    req.headers?.authorization || req.headers?.Authorization
+  );
   if (!token) { res.status(401).json({ error: 'Missing Authorization' }); return; }
   const verified = await verifySupabaseJwt(token);
-  if (!verified.ok) { res.status(401).json({ error: 'Invalid token', reason: verified.reason }); return; }
+  if (!verified.ok) {
+    console.warn('[validate-address] Invalid token:', verified.reason);
+    res.status(401).json({ error: 'Invalid token' });
+    return;
+  }
 
   const dbUrl = process.env.DATABASE_URL;
   if (!dbUrl) { res.status(500).json({ error: 'DATABASE_URL not configured' }); return; }

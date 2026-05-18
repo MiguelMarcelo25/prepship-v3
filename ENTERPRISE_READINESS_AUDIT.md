@@ -14,7 +14,7 @@ Implemented:
 
 - Shared Supabase JWT verification with optional strict issuer/audience enforcement.
 - Shared CORS origin/header policy for Render and active Vercel compatibility handlers.
-- Active carrier/store/direct-carrier compatibility handlers now use the shared verifier and no longer expose token verification reasons to the browser.
+- Active carrier/store/direct-carrier/address-validation/Walmart-probe compatibility handlers now use the shared verifier and no longer expose token verification reasons to the browser.
 
 Confirmed gaps from repo search:
 
@@ -23,6 +23,7 @@ Confirmed gaps from repo search:
 - Durable job state is mixed: scheduler protection has improved, but print queue/rate backfill and some compatibility paths still need restart-safe progress guarantees.
 - Broad frontend `safe()` fallback usage remains and needs a failure-mode sweep.
 - Audit logging and reconciliation are planning items; they are not complete yet.
+- Label and marketplace order/fee compatibility handlers still need auth/CORS consolidation, but should be handled in a separately scoped review because they touch `orders`/`shipments` write paths.
 
 Current readiness read:
 
