@@ -328,13 +328,12 @@ export default async function handler(req: any, res: any): Promise<void> {
 
   const sql = postgres(dbUrl, { max: 1, prepare: false, idle_timeout: 10, connect_timeout: 10 });
   try {
-    // Self-heal schema columns (idempotent).
+    // Self-heal schema columns (idempotent). The supporting index is migration-owned.
     try {
       await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS selling_fee NUMERIC(10, 2) NOT NULL DEFAULT 0`;
       await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS selling_fee_breakdown JSONB NOT NULL DEFAULT '{}'::jsonb`;
       await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS selling_fee_synced_at TIMESTAMPTZ`;
       await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS selling_fee_source TEXT`;
-      await sql`CREATE INDEX IF NOT EXISTS orders_selling_fee_source_idx ON orders (selling_fee_source) WHERE selling_fee_source IS NOT NULL`;
     } catch (err) {
       console.warn('[cron/sync-walmart-fees] column bootstrap failed:', err instanceof Error ? err.message : err);
     }

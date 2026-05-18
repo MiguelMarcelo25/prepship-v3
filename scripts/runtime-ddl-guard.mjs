@@ -14,13 +14,9 @@ const ddlPattern =
   /create\s+(?:unique\s+)?(?:table|index)(?:\s+concurrently)?\s+if\s+not\s+exists/i;
 
 const expectedRuntimeDdlFiles = [
-  'api/_lib/walmart-fees-sync.ts',
-  'api/cron/sync-walmart-fees.ts',
   'api/carriers/ebay/orders.ts',
   'api/carriers/labels.ts',
-  'api/carriers/walmart/fees.ts',
   'api/carriers/walmart/orders.ts',
-  'src/routes/analysis.ts',
   'src/services/credential-account-schema.ts',
   'src/services/fulfillment/outbox.ts',
   'src/services/order-items.ts',

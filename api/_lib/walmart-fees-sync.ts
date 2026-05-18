@@ -12,7 +12,8 @@
 //
 // The helper takes a postgres client + store-account id + date
 // window and does the full cycle:
-//   1. Self-heal the selling_fee columns (idempotent).
+//   1. Self-heal the selling_fee columns (idempotent). The supporting
+//      selling_fee_source index is migration-owned.
 //   2. Read store-account credentials.
 //   3. Mint a Walmart OAuth token.
 //   4. Page through /v3/payments for the window, defensively
@@ -64,7 +65,6 @@ async function ensureSellingFeeColumns(sql: ReturnType<typeof postgres>): Promis
     await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS selling_fee_breakdown JSONB NOT NULL DEFAULT '{}'::jsonb`;
     await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS selling_fee_synced_at TIMESTAMPTZ`;
     await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS selling_fee_source TEXT`;
-    await sql`CREATE INDEX IF NOT EXISTS orders_selling_fee_source_idx ON orders (selling_fee_source) WHERE selling_fee_source IS NOT NULL`;
     columnsEnsured = true;
   } catch (err) {
     console.warn('[walmart-fees-sync] column bootstrap failed:', err instanceof Error ? err.message : err);

@@ -16,8 +16,8 @@
 
 | Document | Status | Percent | Why Not 100% |
 |---|---|---:|---|
-| `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md` | Created / active | 76% | Reporting metrics DDL moved to migration; inventory truth, durable jobs, label side effects, and remaining compatibility DDL cleanup still open |
-| `ENTERPRISE_READINESS_AUDIT.md` | Created / active | 45% | One runtime DDL class is migration-owned now; needs RBAC, audit logs, reconciliation, alerts, DR, runbooks, and authenticated production verification |
+| `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md` | Created / active | 78% | Reporting metrics and Walmart selling-fee index DDL moved to migration ownership; inventory truth, durable jobs, label side effects, and remaining compatibility DDL cleanup still open |
+| `ENTERPRISE_READINESS_AUDIT.md` | Created / active | 46% | Two runtime DDL classes are migration-owned now; needs RBAC, audit logs, reconciliation, alerts, DR, runbooks, and authenticated production verification |
 | `SECURITY_PATCH_PLAN.md` | Created / mostly implemented | 85% | Needs live auth smoke tests, strict JWT production rollout, `/users` final role policy |
 | `RATE_SYSTEM_HARDENING_PLAN.md` | Created / mostly implemented | 72% | Needs browser production verification, duplicate-name UX polish, metrics, durable backfill status |
 
@@ -35,8 +35,8 @@
 | Phase 8 - Shared Frontend Data Layer | Partial/good progress | 65% | Needs standardized React Query hooks and remaining broad `safe()` fallback cleanup |
 | Phase 9 - Lazy Loading + UI Performance | Partial | 55% | Needs more lazy-loaded drawers/modals/charts/export tools and all-tool browser audit |
 | Phase 10 - DJ/OpenClaw Security + Failure-State Hardening | Mostly complete | 85% | Unauthenticated production auth smoke checks passed; needs authenticated secret checks, deeper raw-error route audit, and formal RBAC/client scoping |
-| Phase 11 - Source-of-Truth + Duplication Audit | In progress | 76% | Reporting metrics DDL moved to migration; inventory/jobs/labels and remaining compatibility DDL still remain |
-| Phase 12 - Enterprise Readiness | Scoped/started | 45% | Runtime DDL backlog is clearer and one low-risk class is migration-owned; needs RBAC, secrets governance, audit logs, reconciliation, alerts, DR, and runbooks |
+| Phase 11 - Source-of-Truth + Duplication Audit | In progress | 78% | Reporting metrics and Walmart selling-fee index DDL moved to migration ownership; inventory/jobs/labels and remaining compatibility DDL still remain |
+| Phase 12 - Enterprise Readiness | Scoped/started | 46% | Runtime DDL backlog is clearer and two low-risk classes are migration-owned; needs RBAC, secrets governance, audit logs, reconciliation, alerts, DR, and runbooks |
 
 ## Phase Checklist
 
@@ -148,7 +148,7 @@
 - [ ] deeper raw-error route audit
 - [ ] formal RBAC/client-scope enforcement
 
-### Phase 11 - Source-of-Truth + Duplication Audit: 76%
+### Phase 11 - Source-of-Truth + Duplication Audit: 78%
 
 - [x] `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md`
 - [x] shared JWT verifier
@@ -164,6 +164,7 @@
 - [x] `RUNTIME_DDL_MIGRATION_AUDIT.md`
 - [x] static runtime DDL guard
 - [x] reporting metrics Drizzle migration
+- [x] Walmart selling-fee source index moved to migration ownership
 - [~] runtime DDL migration cleanup
 - [ ] inventory source-of-truth cleanup
 - [ ] durable job state for print queue/rate backfill
@@ -171,7 +172,7 @@
 - [ ] remaining legacy JWT/CORS copies cleanup
 - [ ] carrier/store endpoint policy final verification
 
-### Phase 12 - Enterprise Readiness: 45%
+### Phase 12 - Enterprise Readiness: 46%
 
 - [x] `ENTERPRISE_READINESS_AUDIT.md`
 - [x] critical/high/medium issue buckets scoped
@@ -200,7 +201,7 @@
 3. Browser-audit all tools.
    - Orders, Dashboard, Inventory, Clients, Packages, Rate Shop, Analysis, Settings, Billing, Manifests.
 4. Continue Phase 11 with the next safest batch.
-   - Move Walmart selling-fee index ownership fully to migration/shared helper.
+   - Add/verify `store_orders` Drizzle migration or confirm existing production schema ownership.
    - Keep label/outbox/shipment-adjacent DDL deferred to a separate reviewed plan.
    - Inventory source-of-truth cleanup.
    - Durable job state for print queue/rate backfill.

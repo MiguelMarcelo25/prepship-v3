@@ -379,8 +379,9 @@ type SkuBreakdownRow = {
 // the SELECT below references o.selling_fee, so without these
 // columns the query fails with "column o.selling_fee does not
 // exist" and the whole Analysis page breaks (2026-05-13 operator
-// report). Cached behind a module-level flag so we only hit the DB
-// catalog once per process lifetime.
+// report). The selling_fee_source index is migration-owned, not
+// request-time DDL. Cached behind a module-level flag so we only hit
+// the DB catalog once per process lifetime.
 let sellingFeeColumnsEnsured = false;
 async function ensureSellingFeeColumns(): Promise<void> {
   if (sellingFeeColumnsEnsured) return;
@@ -389,7 +390,6 @@ async function ensureSellingFeeColumns(): Promise<void> {
     await db.execute(sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS selling_fee_breakdown JSONB NOT NULL DEFAULT '{}'::jsonb`);
     await db.execute(sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS selling_fee_synced_at TIMESTAMPTZ`);
     await db.execute(sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS selling_fee_source TEXT`);
-    await db.execute(sql`CREATE INDEX IF NOT EXISTS orders_selling_fee_source_idx ON orders (selling_fee_source) WHERE selling_fee_source IS NOT NULL`);
     sellingFeeColumnsEnsured = true;
   } catch (err) {
     // Don't break the analysis page if bootstrap fails (e.g. DB

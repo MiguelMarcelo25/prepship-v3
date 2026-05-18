@@ -35,7 +35,7 @@ Implemented:
 Confirmed gaps from repo search:
 
 - RBAC/client-scope rules are still not fully formalized beyond `requireAuth` and `requireAdmin`.
-- Runtime DDL remains in some production-capable paths, but the request/job-time DDL inventory and static guard now exist. Reporting metrics table/index ownership has moved into `drizzle/0029_reporting_metrics.sql`.
+- Runtime DDL remains in some production-capable paths, but the request/job-time DDL inventory and static guard now exist. Reporting metrics table/index ownership has moved into `drizzle/0029_reporting_metrics.sql`, and the Walmart selling-fee source index is owned by `drizzle/0019_selling_fees.sql`.
 - Durable job state is mixed: scheduler protection has improved, but print queue/rate backfill and some compatibility paths still need restart-safe progress guarantees.
 - Broad frontend `safe()` fallback usage remains and needs a failure-mode sweep.
 - Audit logging and reconciliation are planning items; they are not complete yet.
@@ -45,8 +45,8 @@ Current readiness read:
 
 | Track | Status | Percent |
 |---|---|---:|
-| Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, rate cache diagnostics/bulk semantics, runtime DDL inventory/guard, and reporting metrics migration implemented | 76% |
-| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with one low-risk class migrated | 45% |
+| Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, rate cache diagnostics/bulk semantics, runtime DDL inventory/guard, reporting metrics migration, and Walmart selling-fee index cleanup implemented | 78% |
+| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with two low-risk classes migrated | 46% |
 
 ## Critical Blockers
 
@@ -129,6 +129,7 @@ Deliverable table:
 - [x] List all runtime DDL in `src` and `api`.
 - [x] Add static guard for new undocumented runtime DDL.
 - [x] Move reporting metrics runtime DDL into `drizzle/0029_reporting_metrics.sql`.
+- [x] Keep Walmart selling-fee source index owned by `drizzle/0019_selling_fees.sql`.
 - [ ] Convert production runtime DDL to Drizzle migrations.
 - [ ] Review foreign keys and cascade rules.
 - [ ] Review unique constraints for natural keys.
@@ -148,6 +149,7 @@ Deliverable table:
 | `fulfillment_outbox` | service and label compatibility path ensure table/indexes at runtime | label/outbox request may pay DDL cost | fulfillment outbox migration | rollback keeps table; worker can ignore unused columns |
 | `order_items`, `analytics_cache` | maintenance service still creates if missing | safer than request-time but still schema drift | ensure existing migrations fully own schema | rollback should not drop analytics cache during deploy |
 | reporting metrics tables | resolved: worker service now checks migration readiness instead of creating tables | runtime schema ownership removed | `0029_reporting_metrics.sql` added | rollback keeps tables and can pause refresh worker |
+| `orders_selling_fee_source_idx` | resolved: compatibility paths no longer create the index at runtime | request-time index creation removed | `0019_selling_fees.sql` owns it | rollback can temporarily restore runtime ensure if migration is missing |
 
 ### Observability / Monitoring
 
