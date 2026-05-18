@@ -27,7 +27,7 @@ import postgres from 'postgres';
 import {
   extractBearerToken,
   verifySupabaseJwt,
-} from '../src/lib/auth/verify-supabase-jwt';
+} from '../src/lib/auth/verify-supabase-jwt.js';
 import {
   ALLOWED_ACCOUNT_SOURCES,
   CREDENTIAL_PROVIDER_PATTERN,
@@ -35,9 +35,9 @@ import {
   normalizeCredentialAccountBody,
   normalizeCredentialAccountPatchBody,
   readJsonRequestBody,
-} from '../src/lib/credential-accounts';
-import { corsHeaders } from '../src/lib/http/cors';
-import { ensureCredentialAccountRuntimeSchema } from '../src/services/credential-account-schema';
+} from '../src/lib/credential-accounts.js';
+import { corsHeaders } from '../src/lib/http/cors.js';
+import { ensureCredentialAccountRuntimeSchema } from '../src/services/credential-account-schema.js';
 import {
   deleteCredentialAccount,
   getCredentialAccountSnapshot,
@@ -47,7 +47,7 @@ import {
   patchCredentialAccount,
   replaceCarrierAccountClientAssignments,
   upsertCredentialAccount,
-} from '../src/services/credential-accounts';
+} from '../src/services/credential-accounts.js';
 
 const TABLE = 'carrier_accounts';
 

@@ -14,7 +14,7 @@ import postgres from 'postgres';
 import {
   extractBearerToken,
   verifySupabaseJwt,
-} from '../src/lib/auth/verify-supabase-jwt';
+} from '../src/lib/auth/verify-supabase-jwt.js';
 import {
   ALLOWED_ACCOUNT_SOURCES,
   CREDENTIAL_PROVIDER_PATTERN,
@@ -22,12 +22,12 @@ import {
   normalizeCredentialAccountBody,
   normalizeCredentialAccountPatchBody,
   readJsonRequestBody,
-} from '../src/lib/credential-accounts';
-import { corsHeaders } from '../src/lib/http/cors';
+} from '../src/lib/credential-accounts.js';
+import { corsHeaders } from '../src/lib/http/cors.js';
 import {
   ensureCredentialAccountRuntimeSchema,
   migrateLegacyStoreCredentialRows,
-} from '../src/services/credential-account-schema';
+} from '../src/services/credential-account-schema.js';
 import {
   deleteCredentialAccount,
   deleteSyntheticStoreClientForAccount,
@@ -37,7 +37,7 @@ import {
   listCredentialAccounts,
   patchCredentialAccount,
   upsertCredentialAccount,
-} from '../src/services/credential-accounts';
+} from '../src/services/credential-accounts.js';
 
 const TABLE = 'store_accounts';
 

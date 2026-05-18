@@ -22,6 +22,7 @@
     "test:client-redaction": "node scripts/client-redaction-guard.mjs",
     "test:credential-accounts": "node scripts/credential-accounts-guard.mjs",
     "test:rate-system-hardening": "node scripts/rate-system-hardening-guard.mjs",
+    "test:vercel-function-imports": "node scripts/vercel-function-imports-guard.mjs",
     "test:auth-coverage": "node scripts/auth-coverage-guard.mjs",
     "test:frontend-failure-states": "node scripts/frontend-failure-states-guard.mjs",
     "test:orders-ux": "node scripts/orders-ux-guard.mjs",

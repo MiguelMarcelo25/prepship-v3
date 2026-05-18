@@ -24,8 +24,8 @@ import postgres from 'postgres';
 import {
   extractBearerToken,
   verifySupabaseJwt,
-} from '../../src/lib/auth/verify-supabase-jwt';
-import { corsHeaders } from '../../src/lib/http/cors';
+} from '../../src/lib/auth/verify-supabase-jwt.js';
+import { corsHeaders } from '../../src/lib/http/cors.js';
 
 function readBody(req: any): Promise<unknown> {
   if (req.body) {
