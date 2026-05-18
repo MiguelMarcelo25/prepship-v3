@@ -35,7 +35,7 @@ Implemented:
 Confirmed gaps from repo search:
 
 - RBAC/client-scope rules are still not fully formalized beyond `requireAuth` and `requireAdmin`.
-- Runtime DDL remains in production-capable paths and must be converted into a migration backlog.
+- Runtime DDL remains in production-capable paths, but the request/job-time DDL inventory and static guard now exist.
 - Durable job state is mixed: scheduler protection has improved, but print queue/rate backfill and some compatibility paths still need restart-safe progress guarantees.
 - Broad frontend `safe()` fallback usage remains and needs a failure-mode sweep.
 - Audit logging and reconciliation are planning items; they are not complete yet.
@@ -45,8 +45,8 @@ Current readiness read:
 
 | Track | Status | Percent |
 |---|---|---:|
-| Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, and rate cache diagnostics/bulk semantics implemented | 68% |
-| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented | 42% |
+| Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, rate cache diagnostics/bulk semantics, and runtime DDL inventory/guard implemented | 72% |
+| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer | 44% |
 
 ## Critical Blockers
 
@@ -54,7 +54,7 @@ Current readiness read:
 |---|---|---|---|
 | RBAC and client scoping are not fully formalized | Users may access actions or data beyond their role/client scope | Route matrix with role and client-scope enforcement | API tests for admin, operator, warehouse, client user, support/read-only |
 | Credential governance is incomplete | Carrier/store/ShipStation secrets can be mishandled, logged, or hard to rotate | Redaction, protected storage, rotation, audit log, last-used tracking | Secret scan, API response tests, credential update audit test |
-| Runtime DDL still exists in production paths | Request latency, schema drift, unpredictable deploys | Schema managed by Drizzle migrations | `rg "CREATE TABLE IF NOT EXISTS" src api` review and migration backlog |
+| Runtime DDL still exists in production paths | Request latency, schema drift, unpredictable deploys | Schema managed by Drizzle migrations | `RUNTIME_DDL_MIGRATION_AUDIT.md`, `npm run test:runtime-ddl`, and migration backlog |
 | User-visible jobs are not all durable | Restart/multi-instance can lose or duplicate work | DB-backed job state, idempotency, locks, failure state | Restart and dual-worker tests |
 | Audit logging is not comprehensive | Cannot prove who changed business-critical data | Append-only audit events for credentials, labels, orders, inventory, billing, settings | Audit table/API/event tests |
 | Reconciliation reports are missing | Inventory, billing, label, and fulfillment truth can diverge silently | Scheduled reconciliation reports with repair process | Reconciliation queries and mismatch test data |
@@ -126,7 +126,8 @@ Deliverable table:
 
 ### Database Migrations / Schema Governance
 
-- [~] List all runtime DDL in `src` and `api`.
+- [x] List all runtime DDL in `src` and `api`.
+- [x] Add static guard for new undocumented runtime DDL.
 - [ ] Convert production runtime DDL to Drizzle migrations.
 - [ ] Review foreign keys and cascade rules.
 - [ ] Review unique constraints for natural keys.
@@ -145,6 +146,7 @@ Deliverable table:
 | `store_orders` | marketplace handlers create table/indexes at runtime | first fetch can alter schema under user traffic | store orders migration | keep compatibility read path until migration verified |
 | `fulfillment_outbox` | service and label compatibility path ensure table/indexes at runtime | label/outbox request may pay DDL cost | fulfillment outbox migration | rollback keeps table; worker can ignore unused columns |
 | `order_items`, `analytics_cache` | maintenance service still creates if missing | safer than request-time but still schema drift | ensure existing migrations fully own schema | rollback should not drop analytics cache during deploy |
+| reporting metrics tables | worker service creates reporting/read-model tables at runtime | worker startup can own schema changes | reporting metrics migration | rollback keeps tables and can pause refresh worker |
 
 ### Observability / Monitoring
 
@@ -381,6 +383,7 @@ Deliverable table:
 - `npm run typecheck`
 - `npm run build:web`
 - `npm run test:orders-ux`
+- `npm run test:runtime-ddl`
 - Unauthenticated `/users` and `/clients` return `401`.
 - Non-admin `/admin/*` returns `403`.
 - `/clients` and `/init/init-data` never return ShipStation secrets.

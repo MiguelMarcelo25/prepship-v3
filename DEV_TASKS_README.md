@@ -3,9 +3,9 @@
 ## Current State
 
 - Branch: `prepshipv4-stable`
-- Latest pushed commit: `d5216561`
+- Latest pushed commit before Phase 11 Batch 3: `0e6294fe`
 - Worktree at last update: clean
-- Latest fix pushed: GitHub scheduled production crons disabled
+- Latest completed fix before this batch: GitHub scheduled production crons disabled and DJ/OpenClaw phase tracker updated
 - GitHub Actions:
   - `Keep Render API warm`: manual only now
   - `Sync ShipStation orders + shipments`: manual only now
@@ -16,8 +16,8 @@
 
 | Document | Status | Percent | Why Not 100% |
 |---|---|---:|---|
-| `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md` | Created / active | 68% | Inventory truth, durable jobs, label side effects, and runtime DDL cleanup still open |
-| `ENTERPRISE_READINESS_AUDIT.md` | Created / active | 42% | Needs RBAC, audit logs, reconciliation, alerts, DR, runbooks, production verification |
+| `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md` | Created / active | 72% | Runtime DDL is now inventoried/guarded; inventory truth, durable jobs, label side effects, and actual DDL migration removal still open |
+| `ENTERPRISE_READINESS_AUDIT.md` | Created / active | 44% | Runtime DDL backlog is clearer; needs RBAC, audit logs, reconciliation, alerts, DR, runbooks, and authenticated production verification |
 | `SECURITY_PATCH_PLAN.md` | Created / mostly implemented | 85% | Needs live auth smoke tests, strict JWT production rollout, `/users` final role policy |
 | `RATE_SYSTEM_HARDENING_PLAN.md` | Created / mostly implemented | 72% | Needs browser production verification, duplicate-name UX polish, metrics, durable backfill status |
 
@@ -34,9 +34,9 @@
 | Phase 7 - Billing + Packages | Partial/good progress | 60% | Needs billing reconciliation, billing summary read model, package usage metrics, and package ledger hardening |
 | Phase 8 - Shared Frontend Data Layer | Partial/good progress | 65% | Needs standardized React Query hooks and remaining broad `safe()` fallback cleanup |
 | Phase 9 - Lazy Loading + UI Performance | Partial | 55% | Needs more lazy-loaded drawers/modals/charts/export tools and all-tool browser audit |
-| Phase 10 - DJ/OpenClaw Security + Failure-State Hardening | Mostly complete | 85% | Needs live production auth smoke tests, deeper raw-error route audit, and formal RBAC/client scoping |
-| Phase 11 - Source-of-Truth + Duplication Audit | In progress | 68% | Rate cache/diagnostics and credential ownership improved; inventory/jobs/labels/runtime DDL still remain |
-| Phase 12 - Enterprise Readiness | Scoped/started | 42% | Needs RBAC, secrets governance, audit logs, reconciliation, alerts, DR, and runbooks |
+| Phase 10 - DJ/OpenClaw Security + Failure-State Hardening | Mostly complete | 85% | Unauthenticated production auth smoke checks passed; needs authenticated secret checks, deeper raw-error route audit, and formal RBAC/client scoping |
+| Phase 11 - Source-of-Truth + Duplication Audit | In progress | 72% | Runtime DDL inventory/guard added; inventory/jobs/labels and actual DDL migration removal still remain |
+| Phase 12 - Enterprise Readiness | Scoped/started | 44% | Runtime DDL backlog is clearer; needs RBAC, secrets governance, audit logs, reconciliation, alerts, DR, and runbooks |
 
 ## Phase Checklist
 
@@ -144,11 +144,11 @@
 - [x] safer credential-handler 500s
 - [x] auth/client/credential/frontend/orders guard tests
 - [x] GitHub scheduled production crons disabled
-- [ ] live production auth smoke tests
+- [~] live production auth smoke tests
 - [ ] deeper raw-error route audit
 - [ ] formal RBAC/client-scope enforcement
 
-### Phase 11 - Source-of-Truth + Duplication Audit: 68%
+### Phase 11 - Source-of-Truth + Duplication Audit: 72%
 
 - [x] `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md`
 - [x] shared JWT verifier
@@ -161,6 +161,8 @@
 - [x] persisted rate cache diagnostics
 - [x] exact-or-approximate `/rates/cached/bulk`
 - [x] normalized Rate Browser diagnostics
+- [x] `RUNTIME_DDL_MIGRATION_AUDIT.md`
+- [x] static runtime DDL guard
 - [~] runtime DDL migration cleanup
 - [ ] inventory source-of-truth cleanup
 - [ ] durable job state for print queue/rate backfill
@@ -168,7 +170,7 @@
 - [ ] remaining legacy JWT/CORS copies cleanup
 - [ ] carrier/store endpoint policy final verification
 
-### Phase 12 - Enterprise Readiness: 42%
+### Phase 12 - Enterprise Readiness: 44%
 
 - [x] `ENTERPRISE_READINESS_AUDIT.md`
 - [x] critical/high/medium issue buckets scoped
@@ -176,6 +178,7 @@
 - [ ] secrets governance
 - [ ] audit logging
 - [ ] reconciliation reports
+- [~] runtime DDL backlog/inventory
 - [ ] durable jobs
 - [ ] observability/alerts
 - [ ] deployment/rollback/DR runbooks
@@ -184,20 +187,21 @@
 
 ## Recommended Next Order
 
-1. Verify production after `d5216561`.
+1. Finish production verification after this batch deploys.
    - Confirm GitHub no longer creates new scheduled cron failures.
-   - Confirm Render API and worker are deployed.
-   - Confirm Rate Browser no longer returns `/rates/browse` internal server error.
-2. Run production smoke tests.
-   - `/users` unauthenticated returns `401`.
-   - `/clients` unauthenticated returns `401`.
-   - non-admin `/admin/*` returns `403`.
-   - `/clients` and `/init/init-data` do not expose ShipStation secrets.
+   - Confirm Render API and worker are deployed on the latest pushed commit.
+   - Confirm Rate Browser stays healthy across several awaiting-shipment orders.
+2. Finish auth/security smoke tests.
+   - [x] `/users` unauthenticated returns `401`.
+   - [x] `/clients` unauthenticated returns `401`.
+   - [ ] non-admin `/admin/*` returns `403`.
+   - [ ] `/clients` and `/init/init-data` with a valid token do not expose ShipStation secrets.
 3. Browser-audit all tools.
    - Orders, Dashboard, Inventory, Clients, Packages, Rate Shop, Analysis, Settings, Billing, Manifests.
-4. Continue Phase 11.
+4. Continue Phase 11 with the next safest batch.
+   - Move reporting metrics runtime DDL into a Drizzle migration.
+   - Keep label/outbox/shipment-adjacent DDL deferred to a separate reviewed plan.
    - Inventory source-of-truth cleanup.
-   - Runtime DDL migration cleanup.
    - Durable job state for print queue/rate backfill.
    - Label side-effect status reporting.
 5. Continue Phase 12.
@@ -215,6 +219,7 @@
 - `npm run test:client-redaction`
 - `npm run test:credential-accounts`
 - `npm run test:rate-system-hardening`
+- `npm run test:runtime-ddl`
 - `npm run test:frontend-failure-states`
 - `npm run test:orders-ux`
 

@@ -1,0 +1,104 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
+const root = process.cwd();
+const auditPath = 'RUNTIME_DDL_MIGRATION_AUDIT.md';
+const audit = fs.readFileSync(path.join(root, auditPath), 'utf8');
+const scanRoots = ['src', 'api'];
+const ddlPattern =
+  /create\s+(?:unique\s+)?(?:table|index)(?:\s+concurrently)?\s+if\s+not\s+exists/i;
+
+const expectedRuntimeDdlFiles = [
+  'api/_lib/walmart-fees-sync.ts',
+  'api/cron/sync-walmart-fees.ts',
+  'api/carriers/ebay/orders.ts',
+  'api/carriers/labels.ts',
+  'api/carriers/walmart/fees.ts',
+  'api/carriers/walmart/orders.ts',
+  'src/routes/analysis.ts',
+  'src/services/credential-account-schema.ts',
+  'src/services/fulfillment/outbox.ts',
+  'src/services/order-items.ts',
+  'src/services/orders-performance-maintenance.ts',
+  'src/services/reporting-metrics.ts',
+];
+
+const requiredClassifications = [
+  'already covered by migration',
+  'compatibility fallback to keep temporarily',
+  'safe to move to migration now',
+  'requires separate shipped/label review',
+];
+
+function walk(dir, out = []) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      walk(full, out);
+    } else if (entry.isFile() && /\.(ts|tsx|js|mjs)$/.test(entry.name)) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+function rel(file) {
+  return path.relative(root, file).replaceAll(path.sep, '/');
+}
+
+function fail(message) {
+  console.error(`FAIL ${message}`);
+  process.exitCode = 1;
+}
+
+function pass(message) {
+  console.log(`PASS ${message}`);
+}
+
+function assert(condition, message) {
+  if (condition) pass(message);
+  else fail(message);
+}
+
+const discovered = scanRoots
+  .flatMap((scanRoot) => walk(path.join(root, scanRoot)))
+  .filter((file) => ddlPattern.test(fs.readFileSync(file, 'utf8')))
+  .map(rel)
+  .sort();
+
+const expected = [...expectedRuntimeDdlFiles].sort();
+const unexpected = discovered.filter((file) => !expected.includes(file));
+const missing = expected.filter((file) => !discovered.includes(file));
+
+assert(
+  unexpected.length === 0,
+  unexpected.length
+    ? `no undocumented runtime DDL files: ${unexpected.join(', ')}`
+    : 'no undocumented runtime DDL files',
+);
+
+assert(
+  missing.length === 0,
+  missing.length
+    ? `runtime DDL inventory entries still exist: ${missing.join(', ')}`
+    : 'runtime DDL inventory matches current src/api scan',
+);
+
+for (const file of expectedRuntimeDdlFiles) {
+  assert(audit.includes(`\`${file}\``), `${auditPath} documents ${file}`);
+}
+
+for (const classification of requiredClassifications) {
+  assert(
+    audit.includes(classification),
+    `${auditPath} includes classification: ${classification}`,
+  );
+}
+
+assert(
+  audit.includes('Do not change without a label/shipment-specific plan') &&
+    audit.includes('Do not refactor in this batch'),
+  `${auditPath} keeps label/shipment-adjacent DDL out of generic cleanup`,
+);
+
+if (process.exitCode) process.exit(process.exitCode);

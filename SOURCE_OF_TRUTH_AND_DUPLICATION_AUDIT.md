@@ -4,9 +4,9 @@
 
 This is the canonical boss-facing audit for duplicate logic and source-of-truth drift in PrepShip v4. It supersedes `DUPLICATION_OPTIMIZATION_AUDIT.md`.
 
-The highest-risk duplication remains around inventory stock calculations, user-visible job state, label side effects, and the last runtime DDL surfaces. Phase 11 Batch 1 moved carrier/store credential account PATCH behavior and table bootstrap logic behind shared helpers. Phase 11 Batch 2 moved rate cache diagnostics and exact/approximate bulk lookup semantics behind the canonical rate service/route boundary.
+The highest-risk duplication remains around inventory stock calculations, user-visible job state, label side effects, and the last runtime DDL surfaces. Phase 11 Batch 1 moved carrier/store credential account PATCH behavior and table bootstrap logic behind shared helpers. Phase 11 Batch 2 moved rate cache diagnostics and exact/approximate bulk lookup semantics behind the canonical rate service/route boundary. Phase 11 Batch 3 added the runtime DDL inventory and static guard so new request-time schema creation cannot slip in undocumented.
 
-Current progress: 68%. This is not 100% because inventory source-of-truth cleanup, durable print/rate-backfill job status, label side-effect status reporting, and remaining runtime DDL migration cleanup still need implementation and production verification.
+Current progress: 72%. This is not 100% because inventory source-of-truth cleanup, durable print/rate-backfill job status, label side-effect status reporting, and actual runtime DDL migration removal still need implementation and production verification.
 
 ## Critical Blockers
 
@@ -36,7 +36,7 @@ Current progress: 68%. This is not 100% because inventory source-of-truth cleanu
 |---|---|---|
 | Product defaults vs inventory defaults | package/dim defaults can diverge | Pick one canonical defaults service and make inventory derived |
 | Inventory stock/effective stock | ledger, stock cache, and order-derived sold metrics can disagree | `inventory_ledger` as movement history and `inventory.stockQty` as reconciled cache |
-| Runtime DDL | centralized compatibility fallback still creates credential-account tables for older deployments | continue converting request-time DDL to Drizzle migrations |
+| Runtime DDL | runtime DDL inventory is documented and guarded, but some production-capable paths still create tables/indexes at request/job time | continue converting request-time DDL to Drizzle migrations |
 | Label side effects | label creation touches shipments, packages, inventory, print queue, billing, fulfillment | return and persist side-effect statuses/warnings |
 | Legacy compatibility handlers | some Vercel handlers remain near orders/shipments write paths | handle in a separately scoped lockdown-safe review |
 
@@ -48,6 +48,7 @@ Current progress: 68%. This is not 100% because inventory source-of-truth cleanu
 - [x] Add auth coverage and frontend failure-state guards.
 - [x] Move carrier/store PATCH rename/approval behavior behind shared service functions.
 - [ ] Replace remaining JWT/CORS copies in legacy/maintenance handlers.
+- [x] Add `RUNTIME_DDL_MIGRATION_AUDIT.md` inventory and static guard.
 - [~] Move runtime table/index bootstrap into migrations.
 - [x] Centralize rate cache key usage, persisted diagnostics, concurrency policy, negative cache, and exact/rough bulk lookup guard.
 - [ ] Add inventory reconciliation service.
@@ -64,6 +65,7 @@ Current progress: 68%. This is not 100% because inventory source-of-truth cleanu
 - [x] PATCH rename/approval service consolidation.
 - [x] `store_accounts` and `carrier_account_clients` added to migration source of truth.
 - [ ] Vercel functions kept only as compatibility wrappers.
+- [x] Runtime DDL inventory/guard created.
 - [~] Runtime DDL moved to migrations.
 - [ ] `CarrierIntegrationsCard` endpoint policy confirmed.
 - [ ] Regression tests for rename, approve, assignment, delete, pending portal rows.
