@@ -14,9 +14,6 @@ type Client = {
   phone: string | null;
   active: boolean;
   storeIds: number[];
-  ssApiKey?: string | null;
-  ssApiSecret?: string | null;
-  ssApiKeyV2?: string | null;
   hasShipStationV1Credentials?: boolean;
   hasShipStationV2Credentials?: boolean;
   rateSourceClientId?: number | null;
@@ -64,9 +61,9 @@ export default function ClientModal({
   // Carrier credentials. Optional, advanced. Setting any of these scopes
   // this client's Rate Browser to a specific ShipStation account; leaving
   // them blank falls through to the env-default (DR PREPPER main).
-  const [ssApiKey, setSsApiKey] = useState(existing?.ssApiKey ?? '');
-  const [ssApiSecret, setSsApiSecret] = useState(existing?.ssApiSecret ?? '');
-  const [ssApiKeyV2, setSsApiKeyV2] = useState(existing?.ssApiKeyV2 ?? '');
+  const [ssApiKey, setSsApiKey] = useState('');
+  const [ssApiSecret, setSsApiSecret] = useState('');
+  const [ssApiKeyV2, setSsApiKeyV2] = useState('');
   const [rateSourceClientId, setRateSourceClientId] = useState(
     existing?.rateSourceClientId != null ? String(existing.rateSourceClientId) : ''
   );
@@ -84,7 +81,7 @@ export default function ClientModal({
           .map((r) => ({
             id: r.id,
             name: r.name,
-            hasV2: Boolean(r.hasShipStationV2Credentials || r.ssApiKeyV2),
+            hasV2: Boolean(r.hasShipStationV2Credentials),
           }))
       );
     }).catch(() => undefined);
@@ -267,7 +264,7 @@ export default function ClientModal({
                     type="password"
                     value={ssApiKeyV2}
                     onChange={(e) => setSsApiKeyV2(e.target.value)}
-                    placeholder={existing?.ssApiKeyV2 ? '•••••• (set)' : 'TEST_xxxxxxx'}
+                    placeholder={existing?.hasShipStationV2Credentials ? '•••••• (set)' : 'TEST_xxxxxxx'}
                   />
                   <div className="text-tiny text-ink-3 mt-1">
                     Used by the Rate Browser, /v2/carriers, and /v2/rates/estimate.
@@ -303,7 +300,7 @@ export default function ClientModal({
                       type="password"
                       value={ssApiKey}
                       onChange={(e) => setSsApiKey(e.target.value)}
-                      placeholder={existing?.ssApiKey ? '•••••• (set)' : '—'}
+                      placeholder={existing?.hasShipStationV1Credentials ? '•••••• (set)' : '—'}
                     />
                   </div>
                   <div>
@@ -314,7 +311,7 @@ export default function ClientModal({
                       type="password"
                       value={ssApiSecret}
                       onChange={(e) => setSsApiSecret(e.target.value)}
-                      placeholder={existing?.ssApiSecret ? '•••••• (set)' : '—'}
+                      placeholder={existing?.hasShipStationV1Credentials ? '•••••• (set)' : '—'}
                     />
                   </div>
                 </div>

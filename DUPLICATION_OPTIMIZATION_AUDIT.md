@@ -27,6 +27,10 @@ Completed in this batch:
   - `src/lib/imported-handlers/rates-multi.ts`
   - `src/lib/imported-handlers/carriers-verify.ts`
 - Stopped those handlers from returning JWT verifier internals to the browser.
+- Added client DTO redaction guard: `npm run test:client-redaction`.
+- Removed frontend credential-presence inference from raw client secret response fields.
+- Added shared credential-account request helper: `src/lib/credential-accounts.ts`.
+- Moved carrier/store compatibility handlers onto the shared provider/source/body parsing helper.
 
 Still duplicated and tracked for the next batch:
 
@@ -39,8 +43,8 @@ Still duplicated and tracked for the next batch:
 
 | Area | Current Duplicate Files/Logic | Canonical Owner To Keep | Files/Routes To Replace | Risk If Unchanged | Optimization | Test Plan |
 |---|---|---|---|---|---|---|
-| Carrier accounts | `api/carrier-accounts.ts`, `src/routes/carrier-accounts.ts`, `src/lib/imported-handlers/carrier-accounts.ts`, `web/src/lib/vercelFunction.ts`, settings cards | `src/services/carrier-accounts.ts` plus `src/routes/carrier-accounts.ts` | Replace imported handler and Vercel logic with thin adapters | High: account create/rename/approve/delete can drift by route | Shared service for list/upsert/update/delete/assign-client; route adapters only parse HTTP | API tests for GET/POST/PATCH/DELETE through Render and any retained Vercel adapter |
-| Store accounts | `api/store-accounts.ts` mirrors carrier account CRUD and bootstrap logic | Shared `src/services/credential-accounts.ts` with provider/table config | Replace duplicated CRUD/auth/CORS/bootstrap in store handler | High: marketplace credentials can diverge from carrier credential behavior | Config-driven service for `carrier_accounts` and `store_accounts` | Integration tests for store and carrier CRUD using the same service expectations |
+| Carrier accounts | `api/carrier-accounts.ts`, `src/routes/carrier-accounts.ts`, `src/lib/imported-handlers/carrier-accounts.ts`, `web/src/lib/vercelFunction.ts`, settings cards | `src/services/carrier-accounts.ts` plus `src/routes/carrier-accounts.ts` | First helper extraction completed for provider/source/body parsing. Remaining: DB reads/writes and assignment flows still need one canonical service. | High: account create/rename/approve/delete can drift by route | Shared service for list/upsert/update/delete/assign-client; route adapters only parse HTTP | API tests for GET/POST/PATCH/DELETE through Render and any retained Vercel adapter |
+| Store accounts | `api/store-accounts.ts` mirrors carrier account CRUD and bootstrap logic | Shared `src/services/credential-accounts.ts` with provider/table config | First helper extraction completed for provider/source/body parsing. Remaining: store-specific migration/client auto-create behavior still needs service boundary. | High: marketplace credentials can diverge from carrier credential behavior | Config-driven service for `carrier_accounts` and `store_accounts` | Integration tests for store and carrier CRUD using the same service expectations |
 | Supabase JWT/auth verification | `src/middleware/auth.ts`, `api/*`, `api/carriers/*`, `src/lib/imported-handlers/*` | `src/lib/auth/verify-supabase-jwt.ts` | First batches replaced Hono auth, carrier/store accounts, direct carrier rates/verify, address validation, Walmart carrier probe, and imported active handlers. Remaining legacy/maintenance Vercel handlers still need migration. | Critical: one endpoint may accept weaker tokens than another | One verifier with optional strict issuer/audience and role extraction | Unauth, expired token, wrong issuer, wrong audience, admin/non-admin route tests |
 | CORS allowlists | `src/main.ts`, `api/*`, imported handlers | `src/lib/http/cors.ts` | First batches replaced Hono app CORS, carrier/store accounts, direct carrier rates/verify, address validation, Walmart carrier probe, and imported active handlers. Remaining cron/debug/marketplace compatibility handlers still need migration. | Medium/high: production origin can fail on one path or overly broad CORS can expose APIs | Shared allowlist from env plus local dev defaults | OPTIONS tests for Vercel and Render paths with allowed and disallowed origins |
 | Client DTO and secret redaction | `src/routes/clients.ts`, `src/routes/init.ts`, frontend client shapes | `src/lib/public-client.ts` | Replace any raw client returns | Critical: ShipStation keys can leak to browser | All client responses go through `publicClient` | Curl/API tests assert no `ssApiKey`, `ssApiSecret`, or `ssApiKeyV2` in JSON |
@@ -55,7 +59,8 @@ Still duplicated and tracked for the next batch:
 
 ### Carrier and Store Accounts
 
-- [ ] Create a shared account service boundary for carrier and store credentials.
+- [x] Create shared credential-account request normalization helper.
+- [ ] Create a shared account service boundary for carrier and store DB operations.
 - [ ] Keep Vercel functions only as compatibility wrappers while frontend rewrites remain.
 - [ ] Move runtime table/index bootstrap into migrations.
 - [ ] Confirm `CarrierIntegrationsCard` uses one endpoint policy per account type.
@@ -71,10 +76,10 @@ Still duplicated and tracked for the next batch:
 
 ### DTOs and Secrets
 
-- [ ] Use `publicClient` for every endpoint returning client rows.
-- [ ] Add automated assertions that client responses do not expose ShipStation secrets.
-- [ ] Track credential presence with booleans only.
-- [ ] Confirm frontend update payloads do not overwrite existing secrets with blank redacted values.
+- [x] Use `publicClient` for every endpoint returning client rows in `/clients` and `/init/init-data`.
+- [x] Add automated assertions that client responses do not expose ShipStation secrets (`npm run test:client-redaction`).
+- [x] Track credential presence with booleans only in client response consumers.
+- [x] Confirm frontend update payloads do not overwrite existing secrets with blank redacted values.
 
 ### Rates
 
@@ -114,6 +119,7 @@ Still duplicated and tracked for the next batch:
 
 - `npm run typecheck`
 - `npm run build:web`
+- `npm run test:client-redaction`
 - `npm run test:orders-ux`
 - API auth smoke tests for `/users`, `/clients`, `/admin/*`
 - Secret redaction smoke tests for `/clients` and `/init/init-data`

@@ -15,6 +15,13 @@ import {
   extractBearerToken,
   verifySupabaseJwt,
 } from '../src/lib/auth/verify-supabase-jwt';
+import {
+  ALLOWED_ACCOUNT_SOURCES,
+  CREDENTIAL_PROVIDER_PATTERN,
+  maskAccountIdentifier,
+  normalizeCredentialAccountBody,
+  readJsonRequestBody,
+} from '../src/lib/credential-accounts';
 import { corsHeaders } from '../src/lib/http/cors';
 
 const TABLE = 'store_accounts';
@@ -26,9 +33,6 @@ const TABLE = 'store_accounts';
 // verifier endpoint (api/carriers/verify.ts) is the single source of truth
 // for which providers can actually be tested; unknown providers there fall
 // through to a clean "not yet implemented" response.
-const PROVIDER_PATTERN = /^[a-z][a-z0-9_]{1,30}$/;
-const ALLOWED_SOURCES = new Set(['admin', 'portal']);
-
 let tableEnsured = false;
 
 async function ensureTable(sql: ReturnType<typeof postgres>): Promise<void> {
@@ -192,7 +196,7 @@ export default async function handler(req: any, res: any): Promise<void> {
       // pending=1 means "source=portal AND not yet linked into the markup
       // table" — for now just filters by source since we don't have a
       // reviewed_at column. Tightening can come later.
-      const wantSource = source && ALLOWED_SOURCES.has(source) ? source : null;
+      const wantSource = source && ALLOWED_ACCOUNT_SOURCES.has(source) ? source : null;
       const rows = wantSource
         ? await sql<Array<Record<string, unknown>>>`
             SELECT id, client_id AS "clientId", provider, label, account_identifier AS "accountIdentifier",
@@ -214,29 +218,33 @@ export default async function handler(req: any, res: any): Promise<void> {
     }
 
     if (req.method === 'POST') {
-      const body = (await readBody(req)) as Record<string, unknown>;
-      const provider = String(body?.provider ?? '').toLowerCase();
-      const label = body?.label != null ? String(body.label).slice(0, 200) : null;
-      const accountIdentifier = body?.accountIdentifier != null ? String(body.accountIdentifier).slice(0, 200) : null;
-      const credentials = body?.credentials && typeof body.credentials === 'object' ? body.credentials : {};
-      const source = ALLOWED_SOURCES.has(String(body?.source ?? '')) ? String(body.source) : 'admin';
-      const clientId = body?.clientId != null && Number.isFinite(Number(body.clientId)) ? Number(body.clientId) : null;
+      const body = await readJsonRequestBody(req);
+      const {
+        provider,
+        label,
+        accountIdentifier,
+        credentials,
+        source,
+        clientId,
+        credentialKeys: credKeys,
+        bodyKeys,
+        bodyType,
+      } = normalizeCredentialAccountBody(body);
 
       // Diagnostic: log key shape (never values) so a bad save can be traced
       // without dumping secrets. Drop a row that arrives with no credential
       // keys at all — the prior 4/30 Walmart row landed in that empty state
       // and there's no legitimate flow that should produce one.
-      const credKeys = Object.keys(credentials).sort();
       console.log('[store-accounts:POST]', JSON.stringify({
         provider,
-        accountIdentifier: accountIdentifier ? `${String(accountIdentifier).slice(0, 8)}…` : null,
+        accountIdentifier: maskAccountIdentifier(accountIdentifier),
         credentialKeys: credKeys,
-        bodyKeys: Object.keys(body ?? {}).sort(),
-        bodyType: typeof body,
+        bodyKeys,
+        bodyType,
         source,
       }));
 
-      if (!PROVIDER_PATTERN.test(provider)) {
+      if (!CREDENTIAL_PROVIDER_PATTERN.test(provider)) {
         res.status(400).json({ error: `Invalid provider slug: ${provider}` });
         return;
       }
@@ -247,7 +255,7 @@ export default async function handler(req: any, res: any): Promise<void> {
       if (credKeys.length === 0) {
         res.status(400).json({
           error: 'No credential fields received. Make sure all required fields are filled in before saving.',
-          meta: { bodyKeys: Object.keys(body ?? {}).sort() },
+          meta: { bodyKeys },
         });
         return;
       }

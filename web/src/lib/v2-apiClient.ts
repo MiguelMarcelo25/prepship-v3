@@ -345,9 +345,7 @@ function normalizeClientDtoRows(rows: any[]): any[] {
     );
     const hasOwnAccount = Boolean(
       row?.hasShipStationV1Credentials ||
-        row?.hasShipStationV2Credentials ||
-      ((row?.ssApiKey ?? row?.ss_api_key) && (row?.ssApiSecret ?? row?.ss_api_secret)) ||
-        (row?.ssApiKeyV2 ?? row?.ss_api_key_v2)
+        row?.hasShipStationV2Credentials
     );
     const storeIds = Array.isArray(row?.storeIds)
       ? row.storeIds.map((value: unknown) => Number(value)).filter(Number.isFinite)

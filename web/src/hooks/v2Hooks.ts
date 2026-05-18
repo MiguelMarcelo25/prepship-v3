@@ -870,9 +870,6 @@ type V4ClientFullRow = {
   contactName: string | null;
   email: string | null;
   phone: string | null;
-  ssApiKey?: string | null;
-  ssApiSecret?: string | null;
-  ssApiKeyV2?: string | null;
   hasShipStationV1Credentials?: boolean;
   hasShipStationV2Credentials?: boolean;
   rateSourceClientId: number | null;
@@ -894,8 +891,7 @@ function transformClientRowV4toV2(
     active: row.active,
     hasOwnAccount: Boolean(
       row.hasShipStationV1Credentials ||
-        row.hasShipStationV2Credentials ||
-      (row.ssApiKey && row.ssApiSecret) || row.ssApiKeyV2
+        row.hasShipStationV2Credentials
     ),
     rateSourceClientId: rateSourceId,
     rateSourceName:

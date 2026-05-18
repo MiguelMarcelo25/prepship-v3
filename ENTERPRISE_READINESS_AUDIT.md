@@ -15,6 +15,9 @@ Implemented:
 - Shared Supabase JWT verification with optional strict issuer/audience enforcement.
 - Shared CORS origin/header policy for Render and active Vercel compatibility handlers.
 - Active carrier/store/direct-carrier/address-validation/Walmart-probe compatibility handlers now use the shared verifier and no longer expose token verification reasons to the browser.
+- Client redaction guard added as `npm run test:client-redaction` to block `/clients` and `/init/init-data` regressions that return raw ShipStation credential fields.
+- Frontend client consumers now rely on `hasShipStationV1Credentials` / `hasShipStationV2Credentials` booleans instead of raw secret response fields.
+- Carrier/store compatibility handlers now share credential-account request parsing, provider/source validation, credential-key extraction, and masked account identifier logging.
 
 Confirmed gaps from repo search:
 
@@ -359,6 +362,7 @@ Deliverable table:
 - Unauthenticated `/users` and `/clients` return `401`.
 - Non-admin `/admin/*` returns `403`.
 - `/clients` and `/init/init-data` never return ShipStation secrets.
+- `npm run test:client-redaction` passes.
 - One carrier rate failure shows carrier-level diagnostic.
 - Orders, Inventory, Billing, Dashboard, Rate Browser do not show fake empty states on API failure.
 - Print queue and sync job status survive restart where user-visible.
