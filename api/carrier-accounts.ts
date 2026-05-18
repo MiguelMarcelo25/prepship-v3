@@ -33,14 +33,18 @@ import {
   CREDENTIAL_PROVIDER_PATTERN,
   maskAccountIdentifier,
   normalizeCredentialAccountBody,
+  normalizeCredentialAccountPatchBody,
   readJsonRequestBody,
 } from '../src/lib/credential-accounts';
 import { corsHeaders } from '../src/lib/http/cors';
+import { ensureCredentialAccountRuntimeSchema } from '../src/services/credential-account-schema';
 import {
   deleteCredentialAccount,
+  getCredentialAccountSnapshot,
   getCredentialAccountStoredCredentialKeys,
   listCredentialAccounts,
   normalizeAssignedClientIds,
+  patchCredentialAccount,
   replaceCarrierAccountClientAssignments,
   upsertCredentialAccount,
 } from '../src/services/credential-accounts';
@@ -54,90 +58,6 @@ const TABLE = 'carrier_accounts';
 // verifier endpoint (api/carriers/verify.ts) is the single source of truth
 // for which providers can actually be tested; unknown providers there fall
 // through to a clean "not yet implemented" response.
-let tableEnsured = false;
-
-async function ensureTable(sql: ReturnType<typeof postgres>): Promise<void> {
-  if (tableEnsured) return;
-  // One statement per call — multi-statement raw SQL is unreliable through
-  // pgbouncer in transaction-pool mode. ENABLE ROW LEVEL SECURITY keeps
-  // Supabase's anon/authenticated REST keys out of this table — credentials
-  // must never be readable by frontend client SDKs. Our Vercel functions
-  // use the postgres superuser (DATABASE_URL), which bypasses RLS.
-  const stmts = [
-    `CREATE TABLE IF NOT EXISTS ${TABLE} (
-      id SERIAL PRIMARY KEY,
-      client_id INTEGER,
-      provider TEXT NOT NULL,
-      label TEXT,
-      account_identifier TEXT,
-      credentials JSONB NOT NULL DEFAULT '{}'::jsonb,
-      source TEXT NOT NULL DEFAULT 'admin',
-      active BOOLEAN NOT NULL DEFAULT true,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS carrier_accounts_client_provider_account_idx
-      ON ${TABLE} (
-        COALESCE(client_id, -1),
-        provider,
-        COALESCE(account_identifier, '')
-      )`,
-    `CREATE TABLE IF NOT EXISTS carrier_account_clients (
-      carrier_account_id INTEGER NOT NULL,
-      client_id INTEGER NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      PRIMARY KEY (carrier_account_id, client_id),
-      CONSTRAINT carrier_account_clients_account_fk
-        FOREIGN KEY (carrier_account_id) REFERENCES ${TABLE}(id) ON DELETE CASCADE
-    )`,
-    `CREATE INDEX IF NOT EXISTS carrier_account_clients_client_idx
-      ON carrier_account_clients(client_id)`,
-    `ALTER TABLE ${TABLE} ENABLE ROW LEVEL SECURITY`,
-    `ALTER TABLE carrier_account_clients ENABLE ROW LEVEL SECURITY`,
-  ];
-  for (const stmt of stmts) {
-    try {
-      await sql.unsafe(stmt);
-    } catch (err) {
-      console.warn(
-        '[carrier-accounts] bootstrap statement failed:',
-        err instanceof Error ? err.message : err,
-      );
-    }
-  }
-  tableEnsured = true;
-}
-
-function readBody(req: any): Promise<unknown> {
-  // Vercel runtimes vary in how they expose the body — sometimes a parsed
-  // object, sometimes the raw string, sometimes neither. Handle each case.
-  if (req.body) {
-    if (typeof req.body === 'object') return Promise.resolve(req.body);
-    if (typeof req.body === 'string') {
-      try {
-        return Promise.resolve(JSON.parse(req.body));
-      } catch {
-        return Promise.resolve({});
-      }
-    }
-  }
-  return new Promise((resolve, reject) => {
-    let raw = '';
-    req.on('data', (chunk: Buffer) => {
-      raw += chunk.toString();
-    });
-    req.on('end', () => {
-      if (!raw) return resolve({});
-      try {
-        resolve(JSON.parse(raw));
-      } catch (err) {
-        reject(err);
-      }
-    });
-    req.on('error', reject);
-  });
-}
-
 export default async function handler(req: any, res: any): Promise<void> {
   const origin = (req.headers?.origin as string | undefined) ?? null;
   const ch = corsHeaders(origin);
@@ -176,7 +96,7 @@ export default async function handler(req: any, res: any): Promise<void> {
   });
 
   try {
-    await ensureTable(sql);
+    await ensureCredentialAccountRuntimeSchema(sql, TABLE);
 
     if (req.method === 'GET') {
       const url = new URL(req.url ?? '', 'http://x');
@@ -322,96 +242,37 @@ export default async function handler(req: any, res: any): Promise<void> {
       }
 
       const body = await readJsonRequestBody(req);
-      const hasSource = body?.source !== undefined;
-      const hasLabel = body?.label !== undefined;
+      const patch = normalizeCredentialAccountPatchBody(body);
 
       // Reject empty bodies up-front so the caller gets a clear
       // error instead of a successful no-op UPDATE.
-      if (!hasSource && !hasLabel) {
+      if (!patch.hasSource && !patch.hasLabel) {
         res.status(400).json({
           error: 'PATCH body must include at least one of: source, label',
         });
         return;
       }
 
-      // Validate source if present.
-      let validatedSource: string | null = null;
-      if (hasSource) {
-        const rawSource = body?.source != null ? String(body.source) : '';
-        if (!ALLOWED_ACCOUNT_SOURCES.has(rawSource)) {
-          res.status(400).json({
-            error: `source must be one of: ${[...ALLOWED_ACCOUNT_SOURCES].join(', ')}`,
-          });
-          return;
-        }
-        validatedSource = rawSource;
-      }
-
-      // Normalize label if present. Trim + 200-char cap mirror the
-      // POST upsert path so a rename can never produce a label that
-      // POST wouldn't accept. Empty after trim → NULL so the UI's
-      // existing `label ?? accountIdentifier ?? '—'` fallback chain
-      // takes over.
-      let validatedLabel: string | null = null;
-      let labelGoesNull = false;
-      if (hasLabel) {
-        const rawLabel = body?.label == null ? '' : String(body.label);
-        const trimmed = rawLabel.trim().slice(0, 200);
-        if (trimmed.length === 0) {
-          labelGoesNull = true;
-        } else {
-          validatedLabel = trimmed;
-        }
+      if (patch.hasSource && patch.source == null) {
+        res.status(400).json({
+          error: `source must be one of: ${[...ALLOWED_ACCOUNT_SOURCES].join(', ')}`,
+        });
+        return;
       }
 
       // Pre-fetch the OLD label so the rename-propagation step
       // (below) can target the right snapshots. Same query also
       // verifies the row exists — saves a roundtrip.
-      const beforeRows = (await sql<Array<{ label: string | null; source: string }>>`
-        SELECT label, source FROM ${sql(TABLE)} WHERE id = ${id} LIMIT 1
-      `) as Array<{ label: string | null; source: string }>;
-      if (beforeRows.length === 0) {
+      const before = await getCredentialAccountSnapshot(sql, TABLE, id);
+      if (!before) {
         res.status(404).json({ error: `carrier_accounts row #${id} not found` });
         return;
       }
-      const oldLabel = beforeRows[0].label;
+      const oldLabel = before.label;
 
-      // Compose the SET clause dynamically based on which fields
-      // arrived. updated_at always bumps so anyone watching the row
-      // (e.g. cache layer) sees a fresh timestamp.
-      let updated: Array<Record<string, unknown>>;
-      if (hasSource && hasLabel) {
-        updated = (await sql<Array<Record<string, unknown>>>`
-          UPDATE ${sql(TABLE)}
-          SET source = ${validatedSource},
-              label = ${labelGoesNull ? null : validatedLabel},
-              updated_at = NOW()
-          WHERE id = ${id}
-          RETURNING id, client_id AS "clientId", provider, label,
-                    account_identifier AS "accountIdentifier",
-                    source, active, created_at AS "createdAt"
-        `) as Array<Record<string, unknown>>;
-      } else if (hasSource) {
-        updated = (await sql<Array<Record<string, unknown>>>`
-          UPDATE ${sql(TABLE)}
-          SET source = ${validatedSource}, updated_at = NOW()
-          WHERE id = ${id}
-          RETURNING id, client_id AS "clientId", provider, label,
-                    account_identifier AS "accountIdentifier",
-                    source, active, created_at AS "createdAt"
-        `) as Array<Record<string, unknown>>;
-      } else {
-        updated = (await sql<Array<Record<string, unknown>>>`
-          UPDATE ${sql(TABLE)}
-          SET label = ${labelGoesNull ? null : validatedLabel}, updated_at = NOW()
-          WHERE id = ${id}
-          RETURNING id, client_id AS "clientId", provider, label,
-                    account_identifier AS "accountIdentifier",
-                    source, active, created_at AS "createdAt"
-        `) as Array<Record<string, unknown>>;
-      }
+      const updated = await patchCredentialAccount(sql, TABLE, id, patch);
 
-      if (updated.length === 0) {
+      if (!updated) {
         res.status(404).json({ error: `carrier_accounts row #${id} not found` });
         return;
       }
@@ -438,12 +299,12 @@ export default async function handler(req: any, res: any): Promise<void> {
       // unrelated snapshots.
       let ordersUpdated = 0;
       if (
-        hasLabel &&
+        patch.hasLabel &&
         oldLabel != null &&
         oldLabel.length > 0 &&
-        !labelGoesNull &&
-        validatedLabel != null &&
-        validatedLabel !== oldLabel
+        !patch.labelGoesNull &&
+        patch.label != null &&
+        patch.label !== oldLabel
       ) {
         try {
           const r1 = (await sql`
@@ -451,7 +312,7 @@ export default async function handler(req: any, res: any): Promise<void> {
             SET best_rate_json = jsonb_set(
               best_rate_json,
               '{providerAccountNickname}',
-              to_jsonb(${validatedLabel}::text)
+              to_jsonb(${patch.label}::text)
             )
             FROM orders o
             WHERE ovr.order_id = o.id
@@ -463,7 +324,7 @@ export default async function handler(req: any, res: any): Promise<void> {
             SET best_rate_json = jsonb_set(
               best_rate_json,
               '{carrierNickname}',
-              to_jsonb(${validatedLabel}::text)
+              to_jsonb(${patch.label}::text)
             )
             FROM orders o
             WHERE ovr.order_id = o.id
@@ -487,7 +348,7 @@ export default async function handler(req: any, res: any): Promise<void> {
       }
 
       res.status(200).json({
-        data: updated[0],
+        data: updated,
         // ordersUpdated: how many awaiting orders' display nicknames
         // were refreshed by this rename. UI uses this to confirm
         // ("Renamed + refreshed 12 awaiting orders").

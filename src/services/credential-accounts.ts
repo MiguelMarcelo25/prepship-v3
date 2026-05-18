@@ -2,7 +2,7 @@ import type { CredentialAccountBody } from '../lib/credential-accounts';
 
 export type CredentialAccountTable = 'carrier_accounts' | 'store_accounts';
 
-type SqlLike = {
+export type SqlLike = {
   (strings: TemplateStringsArray, ...values: unknown[]): Promise<unknown>;
   (identifier: string): unknown;
   unsafe: (query: string) => Promise<unknown>;
@@ -22,6 +22,19 @@ export type CarrierAssignmentResult = {
   assignedClientIds: number[];
   promotedFromPortal?: boolean;
   source?: string;
+};
+
+export type CredentialAccountSnapshot = {
+  label: string | null;
+  source: string;
+};
+
+export type CredentialAccountPatchInput = {
+  hasSource: boolean;
+  source: string | null;
+  hasLabel: boolean;
+  label: string | null;
+  labelGoesNull: boolean;
 };
 
 const SYNTHETIC_STORE_OFFSETS: Record<string, number> = {
@@ -201,6 +214,64 @@ export async function deleteCredentialAccount(
     RETURNING id
   `) as Array<{ id: number }>;
   return rows[0]?.id ?? null;
+}
+
+export async function getCredentialAccountSnapshot(
+  sql: SqlLike,
+  table: CredentialAccountTable,
+  id: number,
+): Promise<CredentialAccountSnapshot | null> {
+  const rows = (await sql`
+    SELECT label, source FROM ${sql(table)} WHERE id = ${id} LIMIT 1
+  `) as CredentialAccountSnapshot[];
+  return rows[0] ?? null;
+}
+
+export async function patchCredentialAccount(
+  sql: SqlLike,
+  table: CredentialAccountTable,
+  id: number,
+  patch: CredentialAccountPatchInput,
+): Promise<CredentialAccountRow | null> {
+  if (patch.hasSource && patch.hasLabel) {
+    const rows = (await sql`
+      UPDATE ${sql(table)}
+      SET source = ${patch.source},
+          label = ${patch.labelGoesNull ? null : patch.label},
+          updated_at = NOW()
+      WHERE id = ${id}
+      RETURNING id, client_id AS "clientId", provider, label,
+                account_identifier AS "accountIdentifier",
+                source, active, created_at AS "createdAt"
+    `) as CredentialAccountRow[];
+    return rows[0] ?? null;
+  }
+
+  if (patch.hasSource) {
+    const rows = (await sql`
+      UPDATE ${sql(table)}
+      SET source = ${patch.source}, updated_at = NOW()
+      WHERE id = ${id}
+      RETURNING id, client_id AS "clientId", provider, label,
+                account_identifier AS "accountIdentifier",
+                source, active, created_at AS "createdAt"
+    `) as CredentialAccountRow[];
+    return rows[0] ?? null;
+  }
+
+  if (patch.hasLabel) {
+    const rows = (await sql`
+      UPDATE ${sql(table)}
+      SET label = ${patch.labelGoesNull ? null : patch.label}, updated_at = NOW()
+      WHERE id = ${id}
+      RETURNING id, client_id AS "clientId", provider, label,
+                account_identifier AS "accountIdentifier",
+                source, active, created_at AS "createdAt"
+    `) as CredentialAccountRow[];
+    return rows[0] ?? null;
+  }
+
+  return null;
 }
 
 export async function replaceCarrierAccountClientAssignments(

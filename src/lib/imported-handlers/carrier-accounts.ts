@@ -19,13 +19,17 @@ import {
   ALLOWED_ACCOUNT_SOURCES,
   CREDENTIAL_PROVIDER_PATTERN,
   normalizeCredentialAccountBody,
+  normalizeCredentialAccountPatchBody,
   readJsonRequestBody,
 } from '../credential-accounts';
 import { corsHeaders } from '../http/cors';
+import { ensureCredentialAccountRuntimeSchema } from '../../services/credential-account-schema';
 import {
   deleteCredentialAccount,
+  getCredentialAccountSnapshot,
   listCredentialAccounts,
   normalizeAssignedClientIds,
+  patchCredentialAccount,
   replaceCarrierAccountClientAssignments,
   upsertCredentialAccount,
 } from '../../services/credential-accounts';
@@ -39,82 +43,6 @@ const TABLE = 'carrier_accounts';
 // verifier endpoint (api/carriers/verify.ts) is the single source of truth
 // for which providers can actually be tested; unknown providers there fall
 // through to a clean "not yet implemented" response.
-let tableEnsured = false;
-
-async function ensureTable(sql: ReturnType<typeof postgres>): Promise<void> {
-  if (tableEnsured) return;
-  await sql.unsafe(`
-    CREATE TABLE IF NOT EXISTS ${TABLE} (
-      id SERIAL PRIMARY KEY,
-      client_id INTEGER,
-      provider TEXT NOT NULL,
-      label TEXT,
-      account_identifier TEXT,
-      credentials JSONB NOT NULL DEFAULT '{}'::jsonb,
-      source TEXT NOT NULL DEFAULT 'admin',
-      active BOOLEAN NOT NULL DEFAULT true,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS carrier_accounts_client_provider_account_idx
-      ON ${TABLE} (
-        COALESCE(client_id, -1),
-        provider,
-        COALESCE(account_identifier, '')
-      );
-
-    -- Many-to-many junction: a carrier account can be assigned to
-    -- multiple clients (operators reuse the same UPS/USPS/FedEx
-    -- credentials across several DR Prepper sub-stores). The legacy
-    -- carrier_accounts.client_id stays as a backward-compat anchor;
-    -- the junction is the authoritative source of "which clients
-    -- can use this carrier" going forward. ON DELETE CASCADE on both
-    -- sides so dropping a client or carrier account auto-cleans
-    -- orphan assignments.
-    CREATE TABLE IF NOT EXISTS carrier_account_clients (
-      carrier_account_id INTEGER NOT NULL,
-      client_id INTEGER NOT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      PRIMARY KEY (carrier_account_id, client_id),
-      CONSTRAINT carrier_account_clients_account_fk
-        FOREIGN KEY (carrier_account_id) REFERENCES ${TABLE}(id) ON DELETE CASCADE
-    );
-    CREATE INDEX IF NOT EXISTS carrier_account_clients_client_idx
-      ON carrier_account_clients(client_id);
-  `);
-  tableEnsured = true;
-}
-
-function readBody(req: any): Promise<unknown> {
-  // Vercel runtimes vary in how they expose the body — sometimes a parsed
-  // object, sometimes the raw string, sometimes neither. Handle each case.
-  if (req.body) {
-    if (typeof req.body === 'object') return Promise.resolve(req.body);
-    if (typeof req.body === 'string') {
-      try {
-        return Promise.resolve(JSON.parse(req.body));
-      } catch {
-        return Promise.resolve({});
-      }
-    }
-  }
-  return new Promise((resolve, reject) => {
-    let raw = '';
-    req.on('data', (chunk: Buffer) => {
-      raw += chunk.toString();
-    });
-    req.on('end', () => {
-      if (!raw) return resolve({});
-      try {
-        resolve(JSON.parse(raw));
-      } catch (err) {
-        reject(err);
-      }
-    });
-    req.on('error', reject);
-  });
-}
-
 export default async function handler(req: any, res: any): Promise<void> {
   const origin = (req.headers?.origin as string | undefined) ?? null;
   const ch = corsHeaders(origin);
@@ -153,7 +81,7 @@ export default async function handler(req: any, res: any): Promise<void> {
   });
 
   try {
-    await ensureTable(sql);
+    await ensureCredentialAccountRuntimeSchema(sql, TABLE);
 
     if (req.method === 'GET') {
       const url = new URL(req.url ?? '', 'http://x');
@@ -231,12 +159,100 @@ export default async function handler(req: any, res: any): Promise<void> {
       }
       const body = await readJsonRequestBody(req);
       const clientIds = normalizeAssignedClientIds(body);
-      const assignmentResult = await replaceCarrierAccountClientAssignments(sql, id, clientIds);
+      const assignmentResult = await replaceCarrierAccountClientAssignments(sql, id, clientIds, {
+        promotePortal: true,
+      });
       if (!assignmentResult) {
         res.status(404).json({ error: `carrier_accounts row #${id} not found` });
         return;
       }
       res.status(200).json({ data: assignmentResult });
+      return;
+    }
+
+    if (req.method === 'PATCH') {
+      const url = new URL(req.url ?? '', 'http://x');
+      const idStr = url.searchParams.get('id');
+      const id = idStr != null ? Number(idStr) : NaN;
+      if (!Number.isFinite(id) || id <= 0) {
+        res.status(400).json({ error: 'id query parameter is required' });
+        return;
+      }
+
+      const body = await readJsonRequestBody(req);
+      const patch = normalizeCredentialAccountPatchBody(body);
+      if (!patch.hasSource && !patch.hasLabel) {
+        res.status(400).json({
+          error: 'PATCH body must include at least one of: source, label',
+        });
+        return;
+      }
+      if (patch.hasSource && patch.source == null) {
+        res.status(400).json({
+          error: `source must be one of: ${[...ALLOWED_ACCOUNT_SOURCES].join(', ')}`,
+        });
+        return;
+      }
+
+      const before = await getCredentialAccountSnapshot(sql, TABLE, id);
+      if (!before) {
+        res.status(404).json({ error: `carrier_accounts row #${id} not found` });
+        return;
+      }
+
+      const updated = await patchCredentialAccount(sql, TABLE, id, patch);
+      if (!updated) {
+        res.status(404).json({ error: `carrier_accounts row #${id} not found` });
+        return;
+      }
+
+      let ordersUpdated = 0;
+      if (
+        patch.hasLabel &&
+        before.label != null &&
+        before.label.length > 0 &&
+        !patch.labelGoesNull &&
+        patch.label != null &&
+        patch.label !== before.label
+      ) {
+        try {
+          const r1 = (await sql`
+            UPDATE order_overrides ovr
+            SET best_rate_json = jsonb_set(
+              best_rate_json,
+              '{providerAccountNickname}',
+              to_jsonb(${patch.label}::text)
+            )
+            FROM orders o
+            WHERE ovr.order_id = o.id
+              AND o.order_status = 'awaiting_shipment'
+              AND ovr.best_rate_json->>'providerAccountNickname' = ${before.label}
+          `) as unknown as { count?: number };
+          const r2 = (await sql`
+            UPDATE order_overrides ovr
+            SET best_rate_json = jsonb_set(
+              best_rate_json,
+              '{carrierNickname}',
+              to_jsonb(${patch.label}::text)
+            )
+            FROM orders o
+            WHERE ovr.order_id = o.id
+              AND o.order_status = 'awaiting_shipment'
+              AND ovr.best_rate_json->>'carrierNickname' = ${before.label}
+          `) as unknown as { count?: number };
+          ordersUpdated = Math.max(
+            typeof r1.count === 'number' ? r1.count : 0,
+            typeof r2.count === 'number' ? r2.count : 0,
+          );
+        } catch (err) {
+          console.warn(
+            '[carrier-accounts:PATCH] awaiting-snapshot backfill failed:',
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
+
+      res.status(200).json({ data: updated, ordersUpdated });
       return;
     }
 

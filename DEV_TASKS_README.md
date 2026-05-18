@@ -7,9 +7,9 @@ This README is the boss-facing index for the PrepShip v4 production-hardening wo
 Current repo state:
 
 - Branch: `prepshipv4-stable`
-- Last confirmed pushed commit when this packet was prepared: `ea586c6c`
-- Scope of this packet: documentation and planning only
-- Runtime code changes in this batch: none
+- Last confirmed pushed commit before Phase 11 Batch 1: `1ba7126b`
+- Current active batch: Phase 11 Batch 1, carrier/store credential ownership
+- Runtime code changes in this batch: credential-account route parity and migration-backed schema source of truth
 
 ## Four Required Deliverables
 
@@ -143,8 +143,8 @@ Current repo state:
 - [x] auth coverage guard
 - [x] frontend failure-state guard
 - [x] exact `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md`
-- [ ] finish carrier/store PATCH rename/approval consolidation
-- [ ] move runtime DDL into migrations
+- [x] finish carrier/store PATCH rename/approval consolidation
+- [~] move runtime DDL into migrations
 - [ ] centralize rate cache key/diagnostics further
 - [ ] inventory source-of-truth cleanup
 - [ ] durable job state for print queue/rate backfill

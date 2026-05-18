@@ -20,9 +20,14 @@ import {
   CREDENTIAL_PROVIDER_PATTERN,
   maskAccountIdentifier,
   normalizeCredentialAccountBody,
+  normalizeCredentialAccountPatchBody,
   readJsonRequestBody,
 } from '../src/lib/credential-accounts';
 import { corsHeaders } from '../src/lib/http/cors';
+import {
+  ensureCredentialAccountRuntimeSchema,
+  migrateLegacyStoreCredentialRows,
+} from '../src/services/credential-account-schema';
 import {
   deleteCredentialAccount,
   deleteSyntheticStoreClientForAccount,
@@ -30,6 +35,7 @@ import {
   getCredentialAccountProvider,
   getCredentialAccountStoredCredentialKeys,
   listCredentialAccounts,
+  patchCredentialAccount,
   upsertCredentialAccount,
 } from '../src/services/credential-accounts';
 
@@ -42,122 +48,6 @@ const TABLE = 'store_accounts';
 // verifier endpoint (api/carriers/verify.ts) is the single source of truth
 // for which providers can actually be tested; unknown providers there fall
 // through to a clean "not yet implemented" response.
-let tableEnsured = false;
-
-async function ensureTable(sql: ReturnType<typeof postgres>): Promise<void> {
-  if (tableEnsured) return;
-  // One statement per call — multi-statement raw SQL is unreliable through
-  // pgbouncer in transaction-pool mode. ENABLE ROW LEVEL SECURITY keeps
-  // Supabase's anon/authenticated REST keys out of this table — credentials
-  // must never be readable by frontend client SDKs. Our Vercel functions
-  // use the postgres superuser (DATABASE_URL), which bypasses RLS.
-  const stmts = [
-    `CREATE TABLE IF NOT EXISTS ${TABLE} (
-      id SERIAL PRIMARY KEY,
-      client_id INTEGER,
-      provider TEXT NOT NULL,
-      label TEXT,
-      account_identifier TEXT,
-      credentials JSONB NOT NULL DEFAULT '{}'::jsonb,
-      source TEXT NOT NULL DEFAULT 'admin',
-      active BOOLEAN NOT NULL DEFAULT true,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS store_accounts_client_provider_account_idx
-      ON ${TABLE} (
-        COALESCE(client_id, -1),
-        provider,
-        COALESCE(account_identifier, '')
-      )`,
-    `ALTER TABLE ${TABLE} ENABLE ROW LEVEL SECURITY`,
-  ];
-  for (const stmt of stmts) {
-    try {
-      await sql.unsafe(stmt);
-    } catch (err) {
-      console.warn(
-        '[store-accounts] bootstrap statement failed:',
-        err instanceof Error ? err.message : err,
-      );
-    }
-  }
-
-  // One-time migration: move any rows that were saved to carrier_accounts
-  // back when the UI was a single combined section but actually represent
-  // marketplace stores (Walmart, Amazon, eBay, etc.). We preserve the
-  // original `id` so store_orders.carrier_account_id (which currently
-  // points at the integer ID in carrier_accounts) stays valid after the
-  // row's home table changes — column rename is cosmetic and can wait.
-  // After moving, we DELETE the original rows + advance the SERIAL
-  // sequence past the highest preserved id so future POSTs don't collide.
-  try {
-    await sql.unsafe(`
-      INSERT INTO ${TABLE} (id, client_id, provider, label, account_identifier,
-                            credentials, source, active, created_at, updated_at)
-      SELECT id, client_id, provider, label, account_identifier,
-             credentials, source, active, created_at, updated_at
-      FROM carrier_accounts
-      WHERE provider IN (
-        'walmart','amazon','amazon_shipping','ebay','shopify','etsy',
-        'tiktok_shop','woocommerce','bigcommerce'
-      )
-      ON CONFLICT (
-        COALESCE(client_id, -1), provider, COALESCE(account_identifier, '')
-      ) DO NOTHING
-    `);
-    await sql.unsafe(`
-      DELETE FROM carrier_accounts
-      WHERE provider IN (
-        'walmart','amazon','amazon_shipping','ebay','shopify','etsy',
-        'tiktok_shop','woocommerce','bigcommerce'
-      )
-    `);
-    await sql.unsafe(`
-      SELECT setval('store_accounts_id_seq',
-        GREATEST(COALESCE((SELECT MAX(id) FROM ${TABLE}), 0) + 1, 1),
-        false)
-    `);
-  } catch (err) {
-    console.warn(
-      '[store-accounts] one-time store migration failed (likely empty source table):',
-      err instanceof Error ? err.message : err,
-    );
-  }
-
-  tableEnsured = true;
-}
-
-function readBody(req: any): Promise<unknown> {
-  // Vercel runtimes vary in how they expose the body — sometimes a parsed
-  // object, sometimes the raw string, sometimes neither. Handle each case.
-  if (req.body) {
-    if (typeof req.body === 'object') return Promise.resolve(req.body);
-    if (typeof req.body === 'string') {
-      try {
-        return Promise.resolve(JSON.parse(req.body));
-      } catch {
-        return Promise.resolve({});
-      }
-    }
-  }
-  return new Promise((resolve, reject) => {
-    let raw = '';
-    req.on('data', (chunk: Buffer) => {
-      raw += chunk.toString();
-    });
-    req.on('end', () => {
-      if (!raw) return resolve({});
-      try {
-        resolve(JSON.parse(raw));
-      } catch (err) {
-        reject(err);
-      }
-    });
-    req.on('error', reject);
-  });
-}
-
 export default async function handler(req: any, res: any): Promise<void> {
   const origin = (req.headers?.origin as string | undefined) ?? null;
   const ch = corsHeaders(origin);
@@ -196,7 +86,8 @@ export default async function handler(req: any, res: any): Promise<void> {
   });
 
   try {
-    await ensureTable(sql);
+    await ensureCredentialAccountRuntimeSchema(sql, TABLE);
+    await migrateLegacyStoreCredentialRows(sql);
 
     if (req.method === 'GET') {
       const url = new URL(req.url ?? '', 'http://x');
@@ -310,6 +201,40 @@ export default async function handler(req: any, res: any): Promise<void> {
       }
 
       res.status(200).json({ data: inserted ?? null });
+      return;
+    }
+
+    if (req.method === 'PATCH') {
+      const url = new URL(req.url ?? '', 'http://x');
+      const idStr = url.searchParams.get('id');
+      const id = idStr != null ? Number(idStr) : NaN;
+      if (!Number.isFinite(id) || id <= 0) {
+        res.status(400).json({ error: 'id query parameter is required' });
+        return;
+      }
+
+      const body = await readJsonRequestBody(req);
+      const patch = normalizeCredentialAccountPatchBody(body);
+      if (!patch.hasSource && !patch.hasLabel) {
+        res.status(400).json({
+          error: 'PATCH body must include at least one of: source, label',
+        });
+        return;
+      }
+      if (patch.hasSource && patch.source == null) {
+        res.status(400).json({
+          error: `source must be one of: ${[...ALLOWED_ACCOUNT_SOURCES].join(', ')}`,
+        });
+        return;
+      }
+
+      const updated = await patchCredentialAccount(sql, TABLE, id, patch);
+      if (!updated) {
+        res.status(404).json({ error: `store_accounts row #${id} not found` });
+        return;
+      }
+
+      res.status(200).json({ data: updated });
       return;
     }
 

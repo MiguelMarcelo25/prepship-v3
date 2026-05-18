@@ -16,6 +16,14 @@ export type CredentialAccountBody = {
   bodyType: string;
 };
 
+export type CredentialAccountPatchBody = {
+  hasSource: boolean;
+  hasLabel: boolean;
+  source: CredentialAccountSource | null;
+  label: string | null;
+  labelGoesNull: boolean;
+};
+
 export async function readJsonRequestBody(req: any): Promise<Record<string, unknown>> {
   if (req.body) {
     if (typeof req.body === 'object') return req.body as Record<string, unknown>;
@@ -72,6 +80,35 @@ export function normalizeCredentialAccountBody(
     bodyKeys: Object.keys(body ?? {}).sort(),
     bodyType: typeof body,
   };
+}
+
+export function normalizeCredentialAccountPatchBody(
+  body: Record<string, unknown>,
+): CredentialAccountPatchBody {
+  const hasSource = body?.source !== undefined;
+  const hasLabel = body?.label !== undefined;
+
+  let source: CredentialAccountSource | null = null;
+  if (hasSource) {
+    const rawSource = body?.source != null ? String(body.source) : '';
+    if (ALLOWED_ACCOUNT_SOURCES.has(rawSource)) {
+      source = rawSource as CredentialAccountSource;
+    }
+  }
+
+  let label: string | null = null;
+  let labelGoesNull = false;
+  if (hasLabel) {
+    const rawLabel = body?.label == null ? '' : String(body.label);
+    const trimmed = rawLabel.trim().slice(0, 200);
+    if (trimmed.length === 0) {
+      labelGoesNull = true;
+    } else {
+      label = trimmed;
+    }
+  }
+
+  return { hasSource, hasLabel, source, label, labelGoesNull };
 }
 
 export function maskAccountIdentifier(value: string | null): string | null {

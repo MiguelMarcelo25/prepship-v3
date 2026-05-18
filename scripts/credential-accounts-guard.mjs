@@ -23,6 +23,8 @@ function assert(condition, message) {
 
 const helper = read('src/lib/credential-accounts.ts');
 const service = read('src/services/credential-accounts.ts');
+const schemaFallback = read('src/services/credential-account-schema.ts');
+const migration = read('drizzle/0027_credential_accounts_source_of_truth.sql');
 const handlers = [
   ['api/carrier-accounts.ts', read('api/carrier-accounts.ts')],
   ['api/store-accounts.ts', read('api/store-accounts.ts')],
@@ -76,7 +78,46 @@ for (const [file, source] of handlers) {
       source.includes('deleteCredentialAccount'),
     `${file} uses shared credential account database service`,
   );
+  assert(
+    source.includes('ensureCredentialAccountRuntimeSchema'),
+    `${file} uses centralized runtime schema fallback`,
+  );
+  assert(
+    !source.includes('CREATE TABLE IF NOT EXISTS ${TABLE}'),
+    `${file} does not own credential account table DDL`,
+  );
 }
+
+assert(
+  service.includes('patchCredentialAccount') &&
+    service.includes('getCredentialAccountSnapshot'),
+  'credential account service owns shared patch/snapshot database operations',
+);
+
+assert(
+  schemaFallback.includes('ensureCredentialAccountRuntimeSchema') &&
+    schemaFallback.includes('migrateLegacyStoreCredentialRows'),
+  'credential account runtime schema fallback is centralized',
+);
+
+assert(
+  migration.includes('CREATE TABLE IF NOT EXISTS "store_accounts"') &&
+    migration.includes('CREATE TABLE IF NOT EXISTS "carrier_account_clients"'),
+  'credential account tables and assignment junction are represented in migrations',
+);
+
+assert(
+  handlers[0][1].includes("if (req.method === 'PATCH')") &&
+    handlers[1][1].includes("if (req.method === 'PATCH')") &&
+    handlers[2][1].includes("if (req.method === 'PATCH')"),
+  'carrier/store handlers share PATCH source/label update support',
+);
+
+assert(
+  handlers[0][1].includes('promotePortal: true') &&
+    handlers[2][1].includes('promotePortal: true'),
+  'Vercel and Render carrier assignment paths both promote portal rows',
+);
 
 if (process.exitCode) {
   process.exit(process.exitCode);
