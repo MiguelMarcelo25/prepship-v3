@@ -40,6 +40,7 @@ Completed in this batch:
 - Added guard coverage that prevents those handlers from returning raw internal 500 error text to the browser.
 - Added frontend failure-state guard: `npm run test:frontend-failure-states`.
 - Changed `fetchRates` to throw real request failures so Rate Shop, New Order, and Orders panel callers can show their existing error states instead of fake empty rate lists.
+- Changed `fetchBillingSummary` to preserve stale cached billing rows when available but rethrow first-load failures instead of showing fake zero-dollar/empty billing totals.
 
 Still duplicated and tracked for the next batch:
 
@@ -104,7 +105,7 @@ Still duplicated and tracked for the next batch:
 
 - [x] Identify and guard critical methods that must not use silent `safe()` empty fallbacks.
 - [x] Remove silent `safe()` fallback from `fetchRates`.
-- [ ] Preserve stale data on refresh failure.
+- [~] Preserve stale data on refresh failure; counts and billing summary now rethrow first-load failures while keeping stale cached data when available.
 - [ ] Add visible retry/error state for orders, inventory, billing, rate browser, counts, and init data.
 - [ ] Keep true empty state visually different from request failure.
 

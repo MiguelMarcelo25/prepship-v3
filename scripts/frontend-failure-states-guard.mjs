@@ -65,6 +65,11 @@ assert(
   'fetchCounts keeps stale cached data but rethrows first-load failures',
 );
 
+assert(
+  methodBlock('fetchBillingSummary').includes('throwOnError: true'),
+  'fetchBillingSummary keeps stale cached data but rethrows first-load failures',
+);
+
 if (process.exitCode) {
   process.exit(process.exitCode);
 }

@@ -3647,7 +3647,7 @@ export const apiClient = {
         });
       },
       [],
-      { warn: false, fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 10 * 60_000 }
+      { warn: false, fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 10 * 60_000, throwOnError: true }
     );
   },
 

@@ -22,6 +22,7 @@ Implemented:
 - Carrier/store compatibility handlers now share credential-account database operations for list, upsert, delete, carrier client assignment, and synthetic store-client maintenance.
 - Carrier/store credential handlers now return production-safe generic 500 responses while keeping full details in server logs.
 - Critical frontend fetch guard added as `npm run test:frontend-failure-states`; `fetchRates` now surfaces request failures to existing caller error states instead of converting failures to empty rate arrays.
+- `fetchBillingSummary` now preserves stale cached billing rows but rethrows first-load failures, preventing API errors from appearing as generated zero-dollar billing summaries.
 
 Confirmed gaps from repo search:
 
@@ -36,8 +37,8 @@ Current readiness read:
 
 | Track | Status | Percent |
 |---|---|---:|
-| Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, and first frontend failure-state guard implemented | 50% |
-| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/frontend guard work implemented | 38% |
+| Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, and billing/rates frontend failure-state guards implemented | 52% |
+| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/frontend billing guard work implemented | 40% |
 
 ## Critical Blockers
 
