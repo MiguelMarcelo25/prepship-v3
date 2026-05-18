@@ -1,36 +1,27 @@
 # PrepShip DJ/OpenClaw Dev Task Packet
 
-## Purpose
-
-This README is the boss-facing index for the PrepShip v4 production-hardening work. It connects the phase tracker with the four DJ/OpenClaw deliverables and shows what is complete, partial, and still open.
-
-Current repo state:
+## Current State
 
 - Branch: `prepshipv4-stable`
-- Last confirmed pushed commit before this batch: `4930e3fa`
-- Current active batch: Phase 11 Batch 2, rate cache and diagnostics ownership
-- Runtime code changes in this batch: persisted rate-cache diagnostics, exact-or-approximate bulk cache lookup, and normalized Rate Browser diagnostics
+- Latest pushed commit: `d5216561`
+- Worktree at last update: clean
+- Latest fix pushed: GitHub scheduled production crons disabled
+- GitHub Actions:
+  - `Keep Render API warm`: manual only now
+  - `Sync ShipStation orders + shipments`: manual only now
+  - `CI`: still runs on push/PR
+- Render worker remains the primary background scheduler.
 
-## Four Required Deliverables
+## Four DJ/OpenClaw Docs
 
-- [x] `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md` - 68%
-  - Canonical source-of-truth and duplication map.
-  - Replaces `DUPLICATION_OPTIMIZATION_AUDIT.md` as the boss-facing document.
-  - Not 100% yet because inventory truth, durable job state, label side effects, and remaining runtime DDL cleanup still need implementation.
+| Document | Status | Percent | Why Not 100% |
+|---|---|---:|---|
+| `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md` | Created / active | 68% | Inventory truth, durable jobs, label side effects, and runtime DDL cleanup still open |
+| `ENTERPRISE_READINESS_AUDIT.md` | Created / active | 42% | Needs RBAC, audit logs, reconciliation, alerts, DR, runbooks, production verification |
+| `SECURITY_PATCH_PLAN.md` | Created / mostly implemented | 85% | Needs live auth smoke tests, strict JWT production rollout, `/users` final role policy |
+| `RATE_SYSTEM_HARDENING_PLAN.md` | Created / mostly implemented | 72% | Needs browser production verification, duplicate-name UX polish, metrics, durable backfill status |
 
-- [x] `ENTERPRISE_READINESS_AUDIT.md` - 42%
-  - Enterprise readiness audit for RBAC, credentials, migrations, jobs, observability, audit logs, reconciliation, testing, deployment, privacy, and disaster recovery.
-  - Not 100% yet because enterprise readiness needs RBAC/client-scope enforcement, audit logging, reconciliation, alerts, runbooks, and production verification.
-
-- [x] `SECURITY_PATCH_PLAN.md` - 85%
-  - Immediate security patch plan for auth coverage, admin enforcement, secret redaction, safe errors, strict JWT claims, unsafe routes, and production auth smoke tests.
-  - Not 100% yet because strict JWT must be staged in production, `/users` role policy needs final RBAC decision, and live auth smoke tests still need real tokens.
-
-- [x] `RATE_SYSTEM_HARDENING_PLAN.md` - 72%
-  - Rate system plan for carrier diagnostics, concurrency, negative caching, cache-key correctness, duplicate carrier names, and Rate Browser behavior.
-  - Not 100% yet because browser verification, duplicate-name UX polish, provider/account metrics, and rate backfill durable status are still open.
-
-## Percentage Summary
+## Phase Summary
 
 | Phase | Status | Percent | Why Not 100% Yet |
 |---|---|---:|---|
@@ -43,13 +34,13 @@ Current repo state:
 | Phase 7 - Billing + Packages | Partial/good progress | 60% | Needs billing reconciliation, billing summary read model, package usage metrics, and package ledger hardening |
 | Phase 8 - Shared Frontend Data Layer | Partial/good progress | 65% | Needs standardized React Query hooks and remaining broad `safe()` fallback cleanup |
 | Phase 9 - Lazy Loading + UI Performance | Partial | 55% | Needs more lazy-loaded drawers/modals/charts/export tools and all-tool browser audit |
-| Phase 10 - Security + Failure-State Hardening | Mostly complete | 85% | Needs live production auth smoke tests, deeper raw-error route audit, and formal RBAC/client scoping |
-| Phase 11 - Source-of-Truth + Duplication | In progress | 68% | Rate cache/diagnostics and credential ownership improved; inventory/jobs/labels/runtime DDL still remain |
+| Phase 10 - DJ/OpenClaw Security + Failure-State Hardening | Mostly complete | 85% | Needs live production auth smoke tests, deeper raw-error route audit, and formal RBAC/client scoping |
+| Phase 11 - Source-of-Truth + Duplication Audit | In progress | 68% | Rate cache/diagnostics and credential ownership improved; inventory/jobs/labels/runtime DDL still remain |
 | Phase 12 - Enterprise Readiness | Scoped/started | 42% | Needs RBAC, secrets governance, audit logs, reconciliation, alerts, DR, and runbooks |
 
-## Phase Status
+## Phase Checklist
 
-### Phase 1 - Runtime Architecture
+### Phase 1 - Runtime Architecture: 100%
 
 - [x] Vercel frontend
 - [x] Render API
@@ -59,19 +50,20 @@ Current repo state:
 - [x] Worker owns background sync
 - [x] Pg-boss/job queue foundation
 
-### Phase 2 - Observability
+### Phase 2 - Observability: 65%
 
 - [x] API timing logs
 - [x] `Server-Timing`
 - [x] `/sync/status`
 - [x] `/worker/status`
 - [x] worker heartbeat/status basics
+- [x] GitHub scheduled cron noise removed
 - [ ] external alerts
 - [ ] p95/p99 dashboard
 - [ ] slow DB query dashboard
-- [ ] status panel
+- [ ] internal status panel
 
-### Phase 3 - Dashboard + Analysis Cleanup
+### Phase 3 - Dashboard + Analysis Cleanup: 85%
 
 - [x] `/dashboard` route
 - [x] dashboard summary/trends/top SKUs/inventory-risk endpoints
@@ -81,7 +73,7 @@ Current repo state:
 - [ ] remaining Analysis JSONB cleanup
 - [ ] dashboard/analysis regression tests
 
-### Phase 4 - `order_items` Normalization
+### Phase 4 - `order_items` Normalization: 80%
 
 - [x] `order_items` table
 - [x] indexes
@@ -92,7 +84,7 @@ Current repo state:
 - [ ] parity tests
 - [ ] remaining JSONB analytics audit
 
-### Phase 5 - Reporting Read Models
+### Phase 5 - Reporting Read Models: 30%
 
 - [x] `analytics_cache`
 - [x] reporting/read-model direction started
@@ -102,7 +94,7 @@ Current repo state:
 - [ ] inventory risk metrics
 - [ ] billing summary metrics
 
-### Phase 6 - Inventory Metrics
+### Phase 6 - Inventory Metrics: 50%
 
 - [x] `order_items` used in important inventory paths
 - [x] lower-SKU index support started
@@ -111,7 +103,7 @@ Current repo state:
 - [ ] inventory reconciliation service
 - [ ] precomputed sold/velocity/days-supply/restock metrics
 
-### Phase 7 - Billing + Packages
+### Phase 7 - Billing + Packages: 60%
 
 - [x] generated billing line items exist
 - [x] billing summary first-load failure no longer fakes `$0.00`
@@ -121,7 +113,7 @@ Current repo state:
 - [ ] package usage metrics
 - [ ] package ledger/reporting hardening
 
-### Phase 8 - Shared Frontend Data Layer
+### Phase 8 - Shared Frontend Data Layer: 65%
 
 - [x] request storm reduced
 - [x] hidden-tab/status pressure reduced
@@ -131,7 +123,7 @@ Current repo state:
 - [ ] remove remaining broad `safe()` fallbacks
 - [ ] visible retry/error states for every tool page
 
-### Phase 9 - Lazy Loading + UI Performance
+### Phase 9 - Lazy Loading + UI Performance: 55%
 
 - [x] major route/view lazy loading
 - [x] Orders side data delayed/lazy-loaded
@@ -140,7 +132,7 @@ Current repo state:
 - [ ] split very large frontend views
 - [ ] browser audit all tool pages
 
-### Phase 10 - DJ/OpenClaw Security + Failure-State Hardening
+### Phase 10 - DJ/OpenClaw Security + Failure-State Hardening: 85%
 
 - [x] `/users` gated
 - [x] protected root + wildcard route gates
@@ -151,29 +143,32 @@ Current repo state:
 - [x] mock label URLs signed/expiring
 - [x] safer credential-handler 500s
 - [x] auth/client/credential/frontend/orders guard tests
+- [x] GitHub scheduled production crons disabled
 - [ ] live production auth smoke tests
 - [ ] deeper raw-error route audit
 - [ ] formal RBAC/client-scope enforcement
 
-### Phase 11 - Source-of-Truth + Duplication Audit
+### Phase 11 - Source-of-Truth + Duplication Audit: 68%
 
-- [x] source-of-truth audit content
+- [x] `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md`
 - [x] shared JWT verifier
 - [x] shared CORS helper
 - [x] shared credential-account helper/service
 - [x] auth coverage guard
 - [x] frontend failure-state guard
-- [x] exact `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md`
-- [x] finish carrier/store PATCH rename/approval consolidation
-- [~] move runtime DDL into migrations
-- [x] centralize rate cache key and persist cache diagnostics
-- [x] exact-or-approximate `/rates/cached/bulk` behavior guarded
-- [x] normalized Rate Browser diagnostics across ShipStation/direct carriers
+- [x] carrier/store PATCH rename/approval consolidation
+- [x] centralized rate cache key
+- [x] persisted rate cache diagnostics
+- [x] exact-or-approximate `/rates/cached/bulk`
+- [x] normalized Rate Browser diagnostics
+- [~] runtime DDL migration cleanup
 - [ ] inventory source-of-truth cleanup
 - [ ] durable job state for print queue/rate backfill
 - [ ] label side-effect status reporting
+- [ ] remaining legacy JWT/CORS copies cleanup
+- [ ] carrier/store endpoint policy final verification
 
-### Phase 12 - Enterprise Readiness
+### Phase 12 - Enterprise Readiness: 42%
 
 - [x] `ENTERPRISE_READINESS_AUDIT.md`
 - [x] critical/high/medium issue buckets scoped
@@ -184,36 +179,50 @@ Current repo state:
 - [ ] durable jobs
 - [ ] observability/alerts
 - [ ] deployment/rollback/DR runbooks
+- [ ] privacy/compliance checklist
+- [ ] production readiness signoff checklist
 
-## Implementation Priority
+## Recommended Next Order
 
-1. Production auth smoke tests for `/users`, `/clients`, and `/admin/*`.
-2. Security patch follow-through for strict JWT rollout, safe errors, and credential governance.
-3. Source-of-truth consolidation for carrier/store account route ownership.
-4. Browser-verify Rate Browser cached/live/failed carrier behavior in production.
-5. Frontend failure-state cleanup for remaining broad `safe()` fallback paths.
-6. Runtime DDL to Drizzle migration backlog.
-7. Durable job state for print queue, rate backfill, sync, and reporting.
-8. Inventory and billing reconciliation reports.
-9. Observability, alerts, runbooks, rollback, and disaster recovery.
+1. Verify production after `d5216561`.
+   - Confirm GitHub no longer creates new scheduled cron failures.
+   - Confirm Render API and worker are deployed.
+   - Confirm Rate Browser no longer returns `/rates/browse` internal server error.
+2. Run production smoke tests.
+   - `/users` unauthenticated returns `401`.
+   - `/clients` unauthenticated returns `401`.
+   - non-admin `/admin/*` returns `403`.
+   - `/clients` and `/init/init-data` do not expose ShipStation secrets.
+3. Browser-audit all tools.
+   - Orders, Dashboard, Inventory, Clients, Packages, Rate Shop, Analysis, Settings, Billing, Manifests.
+4. Continue Phase 11.
+   - Inventory source-of-truth cleanup.
+   - Runtime DDL migration cleanup.
+   - Durable job state for print queue/rate backfill.
+   - Label side-effect status reporting.
+5. Continue Phase 12.
+   - RBAC/client-scope route matrix.
+   - Audit logging.
+   - Reconciliation reports.
+   - Observability alerts.
+   - Runbooks and disaster recovery.
 
-## Required Verification Before Deploy
+## Verification Commands
 
-- [ ] `npm run typecheck`
-- [ ] `npm run build:web`
-- [ ] `npm run test:auth-coverage`
-- [ ] `npm run test:client-redaction`
-- [ ] `npm run test:credential-accounts`
-- [ ] `npm run test:rate-system-hardening`
-- [ ] `npm run test:frontend-failure-states`
-- [ ] `npm run test:orders-ux`
-- [ ] Browser audit: Orders, Dashboard, Inventory, Clients, Packages, Rate Shop, Analysis, Settings, Billing, Manifests
-- [ ] Render logs show no repeated 30s timeouts or request storms
-- [ ] Supabase CPU, memory, and connection count remain controlled
+- `npm run typecheck`
+- `npm run build:web`
+- `npm run test:auth-coverage`
+- `npm run test:client-redaction`
+- `npm run test:credential-accounts`
+- `npm run test:rate-system-hardening`
+- `npm run test:frontend-failure-states`
+- `npm run test:orders-ux`
 
-## Notes
+## Assumptions
 
+- Render worker is the primary scheduler.
+- GitHub Actions should stay CI-only.
+- Manual GitHub workflow buttons can remain for emergency recovery.
+- Browser extension console errors are external and not counted as PrepShip bugs.
+- Shipped/cancelled mutation protections remain locked unless the exact override phrase is given again.
 - `DUPLICATION_OPTIMIZATION_AUDIT.md` is retained as a legacy pointer only.
-- Completed items stay marked `[x]`.
-- Partially scoped items use `[~]`.
-- Open work stays `[ ]` until implemented, tested, and production-verified.
