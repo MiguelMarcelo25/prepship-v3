@@ -3744,9 +3744,7 @@ export const apiClient = {
   // on input and remap to v2-legacy on output so every reader of the result
   // can use the same field names the bulk-ported v2 code expects.
   fetchRates(data: Record<string, unknown>): Promise<any[]> {
-    return safe(
-      'fetchRates',
-      async () => {
+    return (async () => {
         const body = translateRatePayloadToV4(data);
         const requestedCarrierIds = Array.isArray(body.carrierIds)
           ? body.carrierIds.map((value) => String(value)).filter(Boolean)
@@ -3814,9 +3812,7 @@ export const apiClient = {
           enumerable: false,
         });
         return combined;
-      },
-      []
-    );
+      })();
   },
 
   // v2 parity: thin wrapper around POST /rates/browse. Backend already

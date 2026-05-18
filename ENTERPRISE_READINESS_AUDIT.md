@@ -21,6 +21,7 @@ Implemented:
 - Credential-account parsing drift is now guarded by `npm run test:credential-accounts`.
 - Carrier/store compatibility handlers now share credential-account database operations for list, upsert, delete, carrier client assignment, and synthetic store-client maintenance.
 - Carrier/store credential handlers now return production-safe generic 500 responses while keeping full details in server logs.
+- Critical frontend fetch guard added as `npm run test:frontend-failure-states`; `fetchRates` now surfaces request failures to existing caller error states instead of converting failures to empty rate arrays.
 
 Confirmed gaps from repo search:
 
@@ -35,8 +36,8 @@ Current readiness read:
 
 | Track | Status | Percent |
 |---|---|---:|
-| Phase 11 duplication/source-of-truth | Auth/CORS and credential-account service batches implemented | 45% |
-| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential consolidation implemented | 35% |
+| Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, and first frontend failure-state guard implemented | 50% |
+| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/frontend guard work implemented | 38% |
 
 ## Critical Blockers
 

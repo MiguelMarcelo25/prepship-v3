@@ -38,6 +38,8 @@ Completed in this batch:
   - `api/store-accounts.ts`
   - `src/lib/imported-handlers/carrier-accounts.ts`
 - Added guard coverage that prevents those handlers from returning raw internal 500 error text to the browser.
+- Added frontend failure-state guard: `npm run test:frontend-failure-states`.
+- Changed `fetchRates` to throw real request failures so Rate Shop, New Order, and Orders panel callers can show their existing error states instead of fake empty rate lists.
 
 Still duplicated and tracked for the next batch:
 
@@ -100,7 +102,8 @@ Still duplicated and tracked for the next batch:
 
 ### Frontend API Layer
 
-- [ ] Identify all critical methods still using silent fallback.
+- [x] Identify and guard critical methods that must not use silent `safe()` empty fallbacks.
+- [x] Remove silent `safe()` fallback from `fetchRates`.
 - [ ] Preserve stale data on refresh failure.
 - [ ] Add visible retry/error state for orders, inventory, billing, rate browser, counts, and init data.
 - [ ] Keep true empty state visually different from request failure.
@@ -130,6 +133,7 @@ Still duplicated and tracked for the next batch:
 - `npm run build:web`
 - `npm run test:client-redaction`
 - `npm run test:credential-accounts`
+- `npm run test:frontend-failure-states`
 - `npm run test:orders-ux`
 - API auth smoke tests for `/users`, `/clients`, `/admin/*`
 - Secret redaction smoke tests for `/clients` and `/init/init-data`
