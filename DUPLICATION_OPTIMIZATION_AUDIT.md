@@ -41,6 +41,7 @@ Completed in this batch:
 - Added frontend failure-state guard: `npm run test:frontend-failure-states`.
 - Changed `fetchRates` to throw real request failures so Rate Shop, New Order, and Orders panel callers can show their existing error states instead of fake empty rate lists.
 - Changed `fetchBillingSummary` to preserve stale cached billing rows when available but rethrow first-load failures instead of showing fake zero-dollar/empty billing totals.
+- Added auth coverage guard: `npm run test:auth-coverage`.
 
 Still duplicated and tracked for the next batch:
 
@@ -83,8 +84,9 @@ Still duplicated and tracked for the next batch:
 - [x] Extract shared JWT verifier with strict-claims option.
 - [~] Replace duplicated verifier functions in Vercel and imported handlers.
 - [x] Extract shared CORS header/allowlist helper.
-- [ ] Add tests for unauthenticated root paths and wildcard paths.
-- [ ] Confirm admin-only routes reject non-admin tokens.
+- [x] Add static guard coverage for root and wildcard protected route auth gates.
+- [x] Add static guard coverage that admin root and wildcard routes require `requireAdmin`.
+- [ ] Add live API tests for unauthenticated root/wildcard paths and non-admin admin denial.
 
 ### DTOs and Secrets
 
