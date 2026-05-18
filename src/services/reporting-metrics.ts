@@ -124,111 +124,28 @@ async function optionalReportingRead<T>(
 }
 
 async function ensureTables(): Promise<void> {
-  await db.execute(sql`
-    create table if not exists reporting_refresh_runs (
-      id serial primary key,
-      scope text not null,
-      status text not null,
-      started_at timestamptz not null default now(),
-      finished_at timestamptz,
-      duration_ms integer,
-      rows_affected integer not null default 0,
-      error text
+  const rows = await db.execute<{ table_name: string }>(sql`
+    with required(table_name) as (
+      values
+        ('reporting_refresh_runs'),
+        ('daily_sales_metrics'),
+        ('sku_velocity_metrics'),
+        ('inventory_risk_metrics'),
+        ('billing_summary_metrics')
     )
+    select table_name
+    from required
+    where to_regclass('public.' || table_name) is null
+    order by table_name
   `);
 
-  await db.execute(sql`
-    create index if not exists reporting_refresh_runs_scope_started_idx
-      on reporting_refresh_runs (scope, started_at desc)
-  `);
-
-  await db.execute(sql`
-    create table if not exists daily_sales_metrics (
-      day date not null,
-      client_id integer not null default 0,
-      store_id integer not null default 0,
-      order_count integer not null default 0,
-      shipped_count integer not null default 0,
-      cancelled_count integer not null default 0,
-      unit_count numeric(14, 3) not null default 0,
-      revenue numeric(14, 2) not null default 0,
-      updated_at timestamptz not null default now(),
-      primary key (day, client_id, store_id)
-    )
-  `);
-
-  await db.execute(sql`
-    create index if not exists daily_sales_metrics_updated_idx
-      on daily_sales_metrics (updated_at desc)
-  `);
-
-  await db.execute(sql`
-    create table if not exists sku_velocity_metrics (
-      sku text not null,
-      client_id integer not null default 0,
-      sold_7d integer not null default 0,
-      sold_30d integer not null default 0,
-      velocity_per_day numeric(12, 4) not null default 0,
-      updated_at timestamptz not null default now(),
-      primary key (sku, client_id)
-    )
-  `);
-
-  await db.execute(sql`
-    create index if not exists sku_velocity_metrics_updated_idx
-      on sku_velocity_metrics (updated_at desc)
-  `);
-
-  await db.execute(sql`
-    create table if not exists inventory_risk_metrics (
-      inventory_id integer primary key,
-      sku text not null,
-      client_id integer,
-      stock_qty integer not null default 0,
-      reorder_level integer not null default 0,
-      sold_7d integer not null default 0,
-      sold_30d integer not null default 0,
-      velocity_per_day numeric(12, 4) not null default 0,
-      days_supply numeric(12, 2),
-      restock_qty integer not null default 0,
-      total_received integer not null default 0,
-      total_sold_all_time integer not null default 0,
-      effective_stock integer not null default 0,
-      updated_at timestamptz not null default now()
-    )
-  `);
-
-  await db.execute(sql`
-    create index if not exists inventory_risk_metrics_client_restock_idx
-      on inventory_risk_metrics (client_id, restock_qty desc, sold_30d desc)
-  `);
-
-  await db.execute(sql`
-    create index if not exists inventory_risk_metrics_updated_idx
-      on inventory_risk_metrics (updated_at desc)
-  `);
-
-  await db.execute(sql`
-    create table if not exists billing_summary_metrics (
-      client_id integer not null,
-      period_from date not null,
-      period_to date not null,
-      order_count integer not null default 0,
-      pick_pack_total numeric(14, 2) not null default 0,
-      additional_total numeric(14, 2) not null default 0,
-      package_total numeric(14, 2) not null default 0,
-      shipping_total numeric(14, 2) not null default 0,
-      storage_total numeric(14, 2) not null default 0,
-      grand_total numeric(14, 2) not null default 0,
-      updated_at timestamptz not null default now(),
-      primary key (client_id, period_from, period_to)
-    )
-  `);
-
-  await db.execute(sql`
-    create index if not exists billing_summary_metrics_updated_idx
-      on billing_summary_metrics (updated_at desc)
-  `);
+  if (rows.length > 0) {
+    throw new Error(
+      `Reporting metrics migration is missing tables: ${rows
+        .map((row) => row.table_name)
+        .join(', ')}. Run drizzle/0029_reporting_metrics.sql before refreshing reporting metrics.`
+    );
+  }
 }
 
 export function ensureReportingMetricsTables(): Promise<void> {

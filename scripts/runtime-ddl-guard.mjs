@@ -4,6 +4,11 @@ import path from 'node:path';
 const root = process.cwd();
 const auditPath = 'RUNTIME_DDL_MIGRATION_AUDIT.md';
 const audit = fs.readFileSync(path.join(root, auditPath), 'utf8');
+const reportingMetricsMigrationPath = 'drizzle/0029_reporting_metrics.sql';
+const reportingMetricsMigration = fs.readFileSync(
+  path.join(root, reportingMetricsMigrationPath),
+  'utf8',
+);
 const scanRoots = ['src', 'api'];
 const ddlPattern =
   /create\s+(?:unique\s+)?(?:table|index)(?:\s+concurrently)?\s+if\s+not\s+exists/i;
@@ -20,7 +25,6 @@ const expectedRuntimeDdlFiles = [
   'src/services/fulfillment/outbox.ts',
   'src/services/order-items.ts',
   'src/services/orders-performance-maintenance.ts',
-  'src/services/reporting-metrics.ts',
 ];
 
 const requiredClassifications = [
@@ -28,6 +32,14 @@ const requiredClassifications = [
   'compatibility fallback to keep temporarily',
   'safe to move to migration now',
   'requires separate shipped/label review',
+];
+
+const reportingMetricTables = [
+  'reporting_refresh_runs',
+  'daily_sales_metrics',
+  'sku_velocity_metrics',
+  'inventory_risk_metrics',
+  'billing_summary_metrics',
 ];
 
 function walk(dir, out = []) {
@@ -99,6 +111,19 @@ assert(
   audit.includes('Do not change without a label/shipment-specific plan') &&
     audit.includes('Do not refactor in this batch'),
   `${auditPath} keeps label/shipment-adjacent DDL out of generic cleanup`,
+);
+
+for (const table of reportingMetricTables) {
+  assert(
+    reportingMetricsMigration.includes(`"${table}"`),
+    `${reportingMetricsMigrationPath} owns ${table}`,
+  );
+}
+
+assert(
+  audit.includes('src/services/reporting-metrics.ts') &&
+    audit.includes(reportingMetricsMigrationPath),
+  `${auditPath} documents reporting metrics DDL migration resolution`,
 );
 
 if (process.exitCode) process.exit(process.exitCode);
