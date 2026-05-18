@@ -10,10 +10,6 @@
       "destination": "https://prepshipv4-api-l5xc.onrender.com/:path"
     },
     {
-      "source": "/aws-api/:path*",
-      "destination": "http://13.58.82.26:3000/:path*"
-    },
-    {
       "source": "/oauth/:path*",
       "destination": "/api/oauth/:path*"
     },

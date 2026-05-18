@@ -46,6 +46,8 @@ const INDEX_STATEMENTS = [
   `CREATE INDEX CONCURRENTLY IF NOT EXISTS "inventory_client_active_updated_idx"
      ON "inventory" ("client_id", "active", "updated_at" DESC)
      WHERE "client_id" IS NOT NULL`,
+  `CREATE INDEX CONCURRENTLY IF NOT EXISTS "inventory_lower_sku_idx"
+     ON "inventory" (lower("sku"))`,
   `CREATE INDEX CONCURRENTLY IF NOT EXISTS "inventory_ledger_inv_type_idx"
      ON "inventory_ledger" ("inventory_id", "type")`,
   `CREATE INDEX CONCURRENTLY IF NOT EXISTS "shipments_order_latest_idx"

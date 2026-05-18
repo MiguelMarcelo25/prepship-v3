@@ -32,6 +32,7 @@ import {
   inferStoreProvider,
   processFulfillmentOutboxOnce,
 } from './fulfillment/outbox';
+import { addMockLabelSignature } from '../lib/mock-label-access';
 
 // Batch-label callers don't carry a panel-selected package, so customPackageId
 // is often null. When dims are present, fall back to the same ±0.1" tolerance
@@ -913,9 +914,10 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
     // API host, not the frontend origin. Falls back to relative path in dev
     // when PUBLIC_API_URL isn't set (Vite proxies /labels/ to localhost:3000).
     const apiBase = (process.env.PUBLIC_API_URL ?? '').replace(/\/+$/, '');
-    const mockLabelUrl = apiBase
+    const mockLabelUrlBase = apiBase
       ? `${apiBase}/labels/mock/${fakeShipmentId}`
       : `/labels/mock/${fakeShipmentId}`;
+    const mockLabelUrl = addMockLabelSignature(mockLabelUrlBase, fakeShipmentId);
 
     const mockData: MockLabelData = {
       shipmentId: fakeShipmentId,
@@ -1190,9 +1192,10 @@ async function createMockShipmentForOrder(args: {
   const fakeTracking = generateFakeTrackingNumber();
   const createdAt = new Date();
   const apiBase = (process.env.PUBLIC_API_URL ?? '').replace(/\/+$/, '');
-  const mockLabelUrl = apiBase
+  const mockLabelUrlBase = apiBase
     ? `${apiBase}/labels/mock/${fakeShipmentId}`
     : `/labels/mock/${fakeShipmentId}`;
+  const mockLabelUrl = addMockLabelSignature(mockLabelUrlBase, fakeShipmentId);
 
   const raw = (order.raw as { shipTo?: Record<string, unknown> } | null) ?? {};
   const shipToRaw = (raw.shipTo ?? {}) as Record<string, unknown>;

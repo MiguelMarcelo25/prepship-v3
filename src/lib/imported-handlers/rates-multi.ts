@@ -71,6 +71,12 @@ interface FetchResult {
   status: number | null;
 }
 
+function publicCarrierFetchError(result: FetchResult): string | null {
+  if (!result.error) return null;
+  if (result.status) return `ShipStation carrier request failed (${result.status})`;
+  return 'ShipStation carrier request failed';
+}
+
 async function fetchSsCarriers(apiKeyV2: string): Promise<FetchResult> {
   if (!apiKeyV2) return { carriers: [], error: 'no key configured', status: null };
   const ctrl = new AbortController();
@@ -231,7 +237,7 @@ export default async function handler(req: any, res: any): Promise<void> {
       keySource: t.keySource,
       status: r.status,
       count: r.carriers.length,
-      error: r.error,
+      error: publicCarrierFetchError(r),
     });
     for (const c of r.carriers) {
       const key = `${t.source}:${c.carrier_id}`;
@@ -243,6 +249,9 @@ export default async function handler(req: any, res: any): Promise<void> {
 
   res.status(200).json({
     carriers: aggregated,
-    _diagnostics: { dbError, sources: diagnostics },
+    _diagnostics: {
+      dbError: dbError ? 'Client carrier credential lookup failed' : null,
+      sources: diagnostics,
+    },
   });
 }

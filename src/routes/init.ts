@@ -6,6 +6,7 @@ import { locations } from '../db/schema/locations';
 import { packages } from '../db/schema/packages';
 import { ssRequest } from '../lib/shipstation';
 import type { CarriersResponse } from '../lib/shipstation/types';
+import { publicClient } from '../lib/public-client';
 import { EXCLUDED_STORE_IDS, EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
 
 const app = new Hono();
@@ -47,7 +48,7 @@ app.get('/init-data', async (c) => {
   }
 
   return c.json({
-    clients: clientsRows,
+    clients: clientsRows.map(publicClient),
     locations: locationsRows,
     packages: packagesRows,
     carriers,
@@ -263,7 +264,11 @@ app.get('/carrier-accounts', async (c) => {
     });
     return c.json(res);
   } catch (err) {
-    return c.json({ error: (err as Error).message, carriers: [] }, 502);
+    console.warn(
+      '[init/carrier-accounts] failed:',
+      err instanceof Error ? err.message : String(err)
+    );
+    return c.json({ error: 'Failed to load carrier accounts', carriers: [] }, 502);
   }
 });
 
@@ -370,7 +375,11 @@ app.get('/carriers', async (c) => {
       })),
     });
   } catch (err) {
-    return c.json({ error: (err as Error).message, data: [] }, 502);
+    console.warn(
+      '[init/carriers] failed:',
+      err instanceof Error ? err.message : String(err)
+    );
+    return c.json({ error: 'Failed to load carriers', data: [] }, 502);
   }
 });
 

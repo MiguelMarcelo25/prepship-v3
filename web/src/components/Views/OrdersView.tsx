@@ -3070,6 +3070,8 @@ export default function OrdersView({
 
     const selectedCount = selectedOrdersForActions.length
 
+    // Per user override (`unlock shipped data`): keep the locked cancelled
+    // selection surface explicit that it is review/copy only, not editable.
     const helperText =
       currentStatus === 'awaiting_shipment'
         ? selectedCount === 1
@@ -3077,7 +3079,7 @@ export default function OrdersView({
           : 'Batch Actions panel active.'
         : currentStatus === 'shipped'
           ? 'Shipped review active.'
-          : 'Cancelled review active.'
+          : 'Cancelled orders can be selected for review or copy only.'
 
     return (
       <AnimatePresence initial={false}>

@@ -1,4 +1,5 @@
 import { env } from '../lib/env';
+import { sql as pg } from '../db/client';
 import { syncOrders } from './order-sync';
 import { syncShipments } from './shipment-sync';
 import { startBackfillBestRates, getActiveBackfillJob } from './rates-backfill';
@@ -60,6 +61,26 @@ let fulfillmentOutboxTimer: NodeJS.Timeout | null = null;
 let reportingRefreshTimer: NodeJS.Timeout | null = null;
 let heartbeatTimer: NodeJS.Timeout | null = null;
 
+async function withSchedulerAdvisoryLock<T>(
+  name: string,
+  fn: () => Promise<T>,
+): Promise<T | null> {
+  const lockName = `prepship.scheduler.${name}`;
+  const [row] = await pg<{ acquired: boolean }[]>`
+    select pg_try_advisory_lock(hashtext(${lockName})) as acquired
+  `;
+  if (!row?.acquired) {
+    console.log(`[scheduler] ${name} skipped - another process holds the scheduler lock`);
+    await recordWorkerJobSkipped(name, 'scheduler lock held by another process');
+    return null;
+  }
+  try {
+    return await fn();
+  } finally {
+    await pg`select pg_advisory_unlock(hashtext(${lockName}))`;
+  }
+}
+
 function isRateBackfillSchedulerEnabled(): boolean {
   return env.ENABLE_RATE_BACKFILL_SCHEDULER && !env.DISABLE_RATE_BACKFILL_SCHEDULER;
 }
@@ -78,21 +99,23 @@ async function runHeavySchedulerJob<T>(
     );
     return null;
   }
-  heavySchedulerJobRunning = name;
-  const startedAt = Date.now();
-  await recordWorkerJobStart(name);
-  try {
-    const result = await fn();
-    await recordWorkerJobSuccess(name, startedAt, result);
-    return result;
-  } catch (err) {
-    await recordWorkerJobFailure(name, startedAt, err);
-    throw err;
-  } finally {
-    const elapsedMs = Date.now() - startedAt;
-    console.log(`[scheduler] ${name} finished in ${elapsedMs}ms`);
-    heavySchedulerJobRunning = null;
-  }
+  return withSchedulerAdvisoryLock(name, async () => {
+    heavySchedulerJobRunning = name;
+    const startedAt = Date.now();
+    await recordWorkerJobStart(name);
+    try {
+      const result = await fn();
+      await recordWorkerJobSuccess(name, startedAt, result);
+      return result;
+    } catch (err) {
+      await recordWorkerJobFailure(name, startedAt, err);
+      throw err;
+    } finally {
+      const elapsedMs = Date.now() - startedAt;
+      console.log(`[scheduler] ${name} finished in ${elapsedMs}ms`);
+      heavySchedulerJobRunning = null;
+    }
+  });
 }
 
 export async function runOrderSync(): Promise<void> {
@@ -221,18 +244,26 @@ export async function runFulfillmentOutboxTick(): Promise<void> {
     return;
   }
   fulfillmentOutboxRunning = true;
-  const startedAt = Date.now();
-  await recordWorkerJobStart('fulfillment outbox');
   try {
-    const result = await processFulfillmentOutboxOnce({ limit: 25 });
-    await recordWorkerJobSuccess('fulfillment outbox', startedAt, result);
+    const result = await withSchedulerAdvisoryLock('fulfillment outbox', async () => {
+      const startedAt = Date.now();
+      await recordWorkerJobStart('fulfillment outbox');
+      try {
+        const outboxResult = await processFulfillmentOutboxOnce({ limit: 25 });
+        await recordWorkerJobSuccess('fulfillment outbox', startedAt, outboxResult);
+        return outboxResult;
+      } catch (err) {
+        await recordWorkerJobFailure('fulfillment outbox', startedAt, err);
+        throw err;
+      }
+    });
+    if (!result) return;
     if (result.processed > 0) {
       console.log(
         `[scheduler] fulfillment outbox: ${result.succeeded} succeeded, ${result.failed} failed, ${result.processed} processed`
       );
     }
   } catch (err) {
-    await recordWorkerJobFailure('fulfillment outbox', startedAt, err);
     console.error(
       '[scheduler] fulfillment outbox failed:',
       err instanceof Error ? err.message : err

@@ -6,6 +6,7 @@ import { db } from '../db/client';
 import { clients } from '../db/schema/clients';
 import { orders } from '../db/schema/orders';
 import { ssV1Request } from '../lib/shipstation/v1-client';
+import { publicClient } from '../lib/public-client';
 import { EXCLUDED_STORE_IDS_SQL, isExcludedStoreId } from '../config/prepship';
 
 const app = new Hono();
@@ -13,6 +14,35 @@ const app = new Hono();
 function boolQuery(value: string | undefined): boolean {
   const normalized = value?.trim().toLowerCase();
   return normalized === '1' || normalized === 'true' || normalized === 'yes';
+}
+
+function parsePositiveIntQuery(
+  value: string | undefined,
+  fallback: number,
+  max: number,
+): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(Math.floor(parsed), max);
+}
+
+function lightweightClient(row: ReturnType<typeof publicClient>) {
+  return {
+    id: row.id,
+    name: row.name,
+    storeIds: row.storeIds,
+    contactName: row.contactName,
+    email: row.email,
+    phone: row.phone,
+    active: row.active,
+    isTest: row.isTest,
+    rateSourceClientId: row.rateSourceClientId,
+    brandName: row.brandName,
+    brandColor: row.brandColor,
+    brandLogo: row.brandLogo,
+    hasShipStationV1Credentials: row.hasShipStationV1Credentials,
+    hasShipStationV2Credentials: row.hasShipStationV2Credentials,
+  };
 }
 
 const body = z.object({
@@ -40,20 +70,43 @@ app.get('/', async (c) => {
     .select()
     .from(clients)
     .where(activeOnly ? eq(clients.active, true) : undefined);
-  return c.json(rows);
+  const safeRows = rows.map(publicClient);
+  const wantsPaged =
+    c.req.query('page') !== undefined ||
+    c.req.query('pageSize') !== undefined ||
+    c.req.query('lightweight') !== undefined;
+  if (wantsPaged) {
+    const page = parsePositiveIntQuery(c.req.query('page'), 1, 100000);
+    const pageSize = parsePositiveIntQuery(c.req.query('pageSize'), 100, 500);
+    const start = (page - 1) * pageSize;
+    const lightweight = boolQuery(c.req.query('lightweight'));
+    return c.json({
+      data: safeRows
+        .slice(start, start + pageSize)
+        .map((row) => (lightweight ? lightweightClient(row) : row)),
+      pagination: {
+        page,
+        pageSize,
+        total: safeRows.length,
+        totalPages: Math.max(1, Math.ceil(safeRows.length / pageSize)),
+      },
+    });
+  }
+  return c.json(safeRows);
 });
 
 app.get('/:id{[0-9]+}', async (c) => {
   const id = Number(c.req.param('id'));
   const [row] = await db.select().from(clients).where(eq(clients.id, id)).limit(1);
   if (!row) return c.json({ error: 'Client not found' }, 404);
-  return c.json(row);
+  return c.json(publicClient(row));
 });
 
 app.post('/', zValidator('json', body), async (c) => {
   const v = c.req.valid('json');
   const [row] = await db.insert(clients).values(v).returning();
-  return c.json(row, 201);
+  if (!row) return c.json({ error: 'Client create failed' }, 500);
+  return c.json(publicClient(row), 201);
 });
 
 app.patch('/:id{[0-9]+}', zValidator('json', body.partial()), async (c) => {
@@ -65,7 +118,7 @@ app.patch('/:id{[0-9]+}', zValidator('json', body.partial()), async (c) => {
     .where(eq(clients.id, id))
     .returning();
   if (!row) return c.json({ error: 'Client not found' }, 404);
-  return c.json(row);
+  return c.json(publicClient(row));
 });
 
 app.delete('/:id{[0-9]+}', async (c) => {

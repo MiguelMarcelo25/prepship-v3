@@ -17,6 +17,8 @@ type Client = {
   ssApiKey?: string | null;
   ssApiSecret?: string | null;
   ssApiKeyV2?: string | null;
+  hasShipStationV1Credentials?: boolean;
+  hasShipStationV2Credentials?: boolean;
   rateSourceClientId?: number | null;
 };
 
@@ -79,7 +81,11 @@ export default function ClientModal({
       setAllClients(
         rows
           .filter((r) => !existing || r.id !== existing.id)
-          .map((r) => ({ id: r.id, name: r.name, hasV2: Boolean(r.ssApiKeyV2) }))
+          .map((r) => ({
+            id: r.id,
+            name: r.name,
+            hasV2: Boolean(r.hasShipStationV2Credentials || r.ssApiKeyV2),
+          }))
       );
     }).catch(() => undefined);
     return () => { cancelled = true; };
@@ -118,14 +124,17 @@ export default function ClientModal({
       email: email.trim() || null,
       phone: phone.trim() || null,
       storeIds: parseStoreIds(storeIds),
-      ssApiKey: ssApiKey.trim() || null,
-      ssApiSecret: ssApiSecret.trim() || null,
-      ssApiKeyV2: ssApiKeyV2.trim() || null,
       rateSourceClientId:
         parsedRateSource != null && Number.isFinite(parsedRateSource) && parsedRateSource > 0
           ? parsedRateSource
           : null,
     };
+    // Credentials are redacted by the API on reads. Only send credential
+    // fields when an operator has typed a replacement value; otherwise edits
+    // to names/store IDs must not erase existing ShipStation credentials.
+    if (ssApiKey.trim()) payload.ssApiKey = ssApiKey.trim();
+    if (ssApiSecret.trim()) payload.ssApiSecret = ssApiSecret.trim();
+    if (ssApiKeyV2.trim()) payload.ssApiKeyV2 = ssApiKeyV2.trim();
     if (!isEdit) payload.active = true;
     mutation.mutate(payload);
   };

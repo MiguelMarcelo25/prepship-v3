@@ -1197,12 +1197,16 @@ export default function RateBrowserModal({
       setRateMetaByPid(nextMetaByPid);
       const nextStatusByPid: Record<string, CarrierRateStatus> = {};
       const carrierStatuses = Array.isArray(browseResult?.carrierStatuses)
-        ? browseResult.carrierStatuses as Array<{ carrierId?: string; status?: CarrierRateStatus }>
+        ? browseResult.carrierStatuses as Array<{ carrierId?: string; status?: CarrierRateStatus; error?: string }>
         : [];
       for (const status of carrierStatuses) {
         if (!status.carrierId) continue;
         const account = accountByCarrierId.get(status.carrierId);
-        if (account) nextStatusByPid[String(account.shippingProviderId)] = status.status ?? 'unavailable';
+        if (account) {
+          const key = String(account.shippingProviderId);
+          nextStatusByPid[key] = status.status ?? 'unavailable';
+          if (status.error) nextErrorsByPid[key] = status.error;
+        }
       }
 
       liveFetchedRates = dedupeRateRows(
@@ -1367,6 +1371,21 @@ export default function RateBrowserModal({
       }).length,
     [carrierStatusByPid, pendingPids, rateShippingAccounts]
   );
+  const carrierDisplayCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const account of rateShippingAccounts) {
+      const label = formatAccountDisplay(account);
+      counts.set(label, (counts.get(label) ?? 0) + 1);
+    }
+    return counts;
+  }, [rateShippingAccounts]);
+
+  function formatSidebarAccountDisplay(account: RbCarrierAccountDto): string {
+    const label = formatAccountDisplay(account);
+    if ((carrierDisplayCounts.get(label) ?? 0) <= 1) return label;
+    const suffix = account.carrierId ?? account.directCarrierAccountId ?? account.shippingProviderId;
+    return `${label} · ${suffix}`;
+  }
 
   function handleRateClick(r: RateRow): void {
     const pid =
@@ -2343,7 +2362,7 @@ export default function RateBrowserModal({
                       whiteSpace: 'nowrap',
                     }}
                   >
-                    {formatAccountDisplay(c)}
+                    {formatSidebarAccountDisplay(c)}
                   </span>
                   {carrierError ? (
                     <span

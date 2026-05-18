@@ -129,6 +129,10 @@ const RATE_FETCH_CONCURRENCY = Math.max(
   1,
   Math.min(8, Number.parseInt(process.env.RATE_FETCH_CONCURRENCY ?? '4', 10) || 4)
 );
+const RATE_NEGATIVE_CACHE_TTL_MS = Math.max(
+  60_000,
+  Number.parseInt(process.env.RATE_NEGATIVE_CACHE_TTL_MS ?? '600000', 10) || 600_000
+);
 const RATE_CACHE_VERSION = 'ground-saver-v1';
 const RATE_CONFIRMATIONS = new Set([
   'none',
@@ -386,6 +390,18 @@ type EstimateRate = {
   rate_details?: unknown[];
 };
 
+export type CarrierRateDiagnosticStatus = 'ok' | 'empty' | 'failed' | 'cached' | 'loading';
+
+export type CarrierRateDiagnostic = {
+  carrierId: string;
+  carrierCode?: string;
+  nickname?: string;
+  status: CarrierRateDiagnosticStatus;
+  rateCount: number;
+  durationMs?: number;
+  error?: string;
+};
+
 // Cheap mini-carrier lookup so we can tell stamps_com apart (needs city/state
 // in the rate-estimate body). v2 calls discoverCarriers() per request; v4
 // reuses its 15-min-cached getAllCarrierIds() + a parallel nickname cache.
@@ -535,13 +551,26 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
+type CarrierEstimateResult = {
+  carrier: CarrierInfo;
+  rates: EstimateRate[];
+  diagnostic: CarrierRateDiagnostic;
+};
+
+function publicCarrierRateError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err ?? 'Carrier rate request failed');
+  return raw.replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [redacted]').slice(0, 240);
+}
+
 // v2-parity: one /v2/rates/estimate call per carrier with v2's flat body.
-// Returns v2-shaped EstimateRate[] flattened across all carriers.
+// Returns v2-shaped EstimateRate[] plus carrier diagnostics so the UI can
+// distinguish "no service" from "carrier failed".
 async function fetchEstimateForCarrier(
   carrier: CarrierInfo,
   input: RateInput,
   shipFrom: Address,
-): Promise<EstimateRate[]> {
+): Promise<CarrierEstimateResult> {
+  const startedAt = Date.now();
   const needsCity = carrier.carrier_code === 'stamps_com';
   const body: Record<string, unknown> = {
     carrier_ids: [carrier.carrier_id],
@@ -586,13 +615,37 @@ async function fetchEstimateForCarrier(
       r.carrier_code = override?.carrier_code ?? r.carrier_code ?? carrier.carrier_code;
       r.carrier_nickname = override?.nickname ?? r.carrier_nickname ?? carrier.nickname;
     }
-    return rates;
+    return {
+      carrier,
+      rates,
+      diagnostic: {
+        carrierId: carrier.carrier_id,
+        carrierCode: override?.carrier_code ?? carrier.carrier_code,
+        nickname: override?.nickname ?? carrier.nickname,
+        status: rates.length ? 'ok' : 'empty',
+        rateCount: rates.length,
+        durationMs: Date.now() - startedAt,
+      },
+    };
   } catch (err) {
+    const message = publicCarrierRateError(err);
     console.warn(
       `[rates-estimate] carrier ${carrier.carrier_code} (${carrier.carrier_id}) failed:`,
       err instanceof Error ? err.message : err,
     );
-    return [];
+    return {
+      carrier,
+      rates: [],
+      diagnostic: {
+        carrierId: carrier.carrier_id,
+        carrierCode: carrier.carrier_code,
+        nickname: carrier.nickname,
+        status: 'failed',
+        rateCount: 0,
+        durationMs: Date.now() - startedAt,
+        error: message,
+      },
+    };
   }
 }
 
@@ -631,7 +684,12 @@ function toRate(er: EstimateRate): Rate {
   };
 }
 
-export async function fetchLiveRates(input: RateInput): Promise<Rate[]> {
+export type FetchLiveRatesResult = {
+  rates: Rate[];
+  carrierDiagnostics: CarrierRateDiagnostic[];
+};
+
+export async function fetchLiveRatesWithDiagnostics(input: RateInput): Promise<FetchLiveRatesResult> {
   const shipFrom = input.shipFrom ?? (await getDefaultShipFrom());
 
   // v2-parity: /v2/rates/estimate takes ONE carrier_id per call. Issue N
@@ -645,14 +703,14 @@ export async function fetchLiveRates(input: RateInput): Promise<Rate[]> {
     ? allCarriers.filter((c) => input.carrierIds!.includes(c.carrier_id))
     : allCarriers;
 
-  if (!carriers.length) return [];
+  if (!carriers.length) return { rates: [], carrierDiagnostics: [] };
 
   const batches = await mapWithConcurrency(
     carriers,
     RATE_FETCH_CONCURRENCY,
     (c) => fetchEstimateForCarrier(c, input, shipFrom),
   );
-  const lifted: Rate[] = batches.flat().map(toRate);
+  const lifted: Rate[] = batches.flatMap((batch) => batch.rates).map(toRate);
 
   // v2-parity: filter blocked service codes + package types + names.
   // Sort cheapest first (v2 sorts by shipmentCost + otherCost; v4 sort
@@ -662,14 +720,31 @@ export async function fetchLiveRates(input: RateInput): Promise<Rate[]> {
     'live'
   );
   filtered.sort((a, b) => rateTotal(a) - rateTotal(b));
+  const filteredCounts = new Map<string, number>();
+  for (const rate of filtered) {
+    filteredCounts.set(rate.carrier_id, (filteredCounts.get(rate.carrier_id) ?? 0) + 1);
+  }
+  const carrierDiagnostics = batches.map(({ carrier, diagnostic }) => {
+    if (diagnostic.status !== 'ok') return diagnostic;
+    const rateCount = filteredCounts.get(carrier.carrier_id) ?? 0;
+    return {
+      ...diagnostic,
+      status: rateCount > 0 ? 'ok' : 'empty',
+      rateCount,
+    } satisfies CarrierRateDiagnostic;
+  });
 
-  if (filtered.length) return filtered;
+  if (filtered.length) return { rates: filtered, carrierDiagnostics };
 
   // v2's /rates/estimate returns empty array when no rates exist for the
   // route — treat that as a normal "no service" condition, not an error.
   // (v4's previous /v2/rates endpoint surfaced this via rate_response.errors;
   // the estimate endpoint just omits them.)
-  return [];
+  return { rates: [], carrierDiagnostics };
+}
+
+export async function fetchLiveRates(input: RateInput): Promise<Rate[]> {
+  return (await fetchLiveRatesWithDiagnostics(input)).rates;
 }
 
 export type GetRatesResult = {
@@ -679,12 +754,34 @@ export type GetRatesResult = {
   cacheKey: string;
   fetchedAt: string;
   cacheAgeMs?: number;
+  carrierDiagnostics: CarrierRateDiagnostic[];
 };
 
 type GetRatesOptions = {
   forceRefresh?: boolean;
   cachedOnly?: boolean;
 };
+
+function cachedDiagnosticsFromRates(rates: Rate[]): CarrierRateDiagnostic[] {
+  const byCarrier = new Map<string, CarrierRateDiagnostic>();
+  for (const rate of rates) {
+    const carrierId = String(rate.carrier_id ?? '');
+    if (!carrierId) continue;
+    const existing = byCarrier.get(carrierId);
+    if (existing) {
+      existing.rateCount += 1;
+      continue;
+    }
+    byCarrier.set(carrierId, {
+      carrierId,
+      carrierCode: rate.carrier_code,
+      nickname: rate.carrier_nickname,
+      status: 'cached',
+      rateCount: 1,
+    });
+  }
+  return [...byCarrier.values()];
+}
 
 export async function getRates(
   input: RateInput,
@@ -703,29 +800,37 @@ export async function getRates(
       .from(rateCache)
       .where(eq(rateCache.cacheKey, key))
       .limit(1);
-    if (cached && Date.now() - cached.fetchedAt.getTime() < CACHE_TTL_MS) {
+    if (cached) {
       const cachedRaw = dedupeRates(cached.rates as Rate[], 'cached');
-      if (cachedRaw.length !== (cached.rates as Rate[]).length) {
-        void db
-          .update(rateCache)
-          .set({
-            rates: cachedRaw as unknown[],
-            bestRate: pickBestRate(cachedRaw),
-          })
-          .where(eq(rateCache.cacheKey, key))
-          .catch((err) =>
-            console.warn('[rates] duplicate rate cache repair failed:', err instanceof Error ? err.message : err)
-          );
+      const cacheAgeMs = Date.now() - cached.fetchedAt.getTime();
+      const cacheTtlMs = cachedRaw.length ? CACHE_TTL_MS : RATE_NEGATIVE_CACHE_TTL_MS;
+      if (cacheAgeMs >= cacheTtlMs) {
+        // Fall through to live refresh. Empty/no-service results are cached
+        // only briefly so operators are not stuck with stale carrier failures.
+      } else {
+        if (cachedRaw.length !== (cached.rates as Rate[]).length) {
+          void db
+            .update(rateCache)
+            .set({
+              rates: cachedRaw as unknown[],
+              bestRate: pickBestRate(cachedRaw),
+            })
+            .where(eq(rateCache.cacheKey, key))
+            .catch((err) =>
+              console.warn('[rates] duplicate rate cache repair failed:', err instanceof Error ? err.message : err)
+            );
+        }
+        const cachedRates = applyMarkups(cachedRaw, markups);
+        return {
+          rates: cachedRates,
+          bestRate: pickBestRate(cachedRates),
+          cached: true,
+          cacheKey: key,
+          fetchedAt: cached.fetchedAt.toISOString(),
+          cacheAgeMs,
+          carrierDiagnostics: cachedDiagnosticsFromRates(cachedRates),
+        };
       }
-      const cachedRates = applyMarkups(cachedRaw, markups);
-      return {
-        rates: cachedRates,
-        bestRate: pickBestRate(cachedRates),
-        cached: true,
-        cacheKey: key,
-        fetchedAt: cached.fetchedAt.toISOString(),
-        cacheAgeMs: Date.now() - cached.fetchedAt.getTime(),
-      };
     }
   }
 
@@ -738,23 +843,17 @@ export async function getRates(
       cacheKey: key,
       fetchedAt: now.toISOString(),
       cacheAgeMs: undefined,
+      carrierDiagnostics: [],
     };
   }
 
-  const rawRates = await fetchLiveRates(resolvedInput);
+  const liveResult = await fetchLiveRatesWithDiagnostics(resolvedInput);
+  const rawRates = liveResult.rates;
   const now = new Date();
 
-  if (!rawRates.length) {
-    return {
-      rates: [],
-      bestRate: null,
-      cached: false,
-      cacheKey: key,
-      fetchedAt: now.toISOString(),
-    };
-  }
-
-  // Cache the RAW rates so markup updates always show fresh prices.
+  // Cache the RAW rates so markup updates always show fresh prices. Empty
+  // results are cached briefly to prevent repeated live calls for carrier
+  // accounts that already returned no service for this shipment.
   await db
     .insert(rateCache)
     .values({
@@ -782,5 +881,6 @@ export async function getRates(
     cached: false,
     cacheKey: key,
     fetchedAt: now.toISOString(),
+    carrierDiagnostics: liveResult.carrierDiagnostics,
   };
 }

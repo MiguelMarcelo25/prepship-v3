@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { rateCache } from '../db/schema/rates';
 import { getCarrierAccountsForRateContext, getRates } from '../services/rates';
@@ -114,6 +114,9 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
     ? requestedCarrierIds
     : accounts.map((account) => account.carrier_id);
   const carriersWithRates = new Set(filtered.map((rate) => rate.carrier_id));
+  const diagnosticsByCarrierId = new Map(
+    (result.carrierDiagnostics ?? []).map((diagnostic) => [diagnostic.carrierId, diagnostic])
+  );
   const statusWhenFound = result.cached ? 'cached' : 'live';
   const isCachedOnlyLookup = Boolean(cachedOnly && !forceRefresh && !forceLive);
   const missingStatus = isCachedOnlyLookup ? 'loading' : 'unavailable';
@@ -124,11 +127,29 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
     cacheAgeMs: result.cacheAgeMs,
     rates: filtered,
     bestRate: cheapest,
-    carrierStatuses: statusCarrierIds.map((id) => ({
-      carrierId: id,
-      carrierName: accountNameByCarrierId.get(id) ?? id,
-      status: carriersWithRates.has(id) ? statusWhenFound : missingStatus,
-    })),
+    carrierStatuses: statusCarrierIds.map((id) => {
+      const diagnostic = diagnosticsByCarrierId.get(id);
+      const hasRates = carriersWithRates.has(id);
+      const status = hasRates
+        ? statusWhenFound
+        : diagnostic?.status === 'failed'
+          ? 'error'
+          : diagnostic?.status === 'empty'
+            ? 'unavailable'
+            : diagnostic?.status === 'loading'
+              ? 'loading'
+              : missingStatus;
+      return {
+        carrierId: id,
+        carrierName: accountNameByCarrierId.get(id) ?? diagnostic?.nickname ?? id,
+        carrierCode: diagnostic?.carrierCode,
+        nickname: diagnostic?.nickname,
+        status,
+        rateCount: hasRates ? filtered.filter((rate) => rate.carrier_id === id).length : diagnostic?.rateCount ?? 0,
+        durationMs: diagnostic?.durationMs,
+        error: diagnostic?.error,
+      };
+    }),
   });
 });
 
@@ -186,21 +207,39 @@ const bulkBody = z.object({
 
 app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
   const { items } = c.req.valid('json');
-  const results = await Promise.all(
-    items.map(async (it) => {
-      const rows = await db
-        .select()
-        .from(rateCache)
-        .where(
+  const pairs = items.map((it) => ({
+    weightOz: it.weightOz,
+    toZip: it.toZip.toUpperCase(),
+  }));
+  const rows = await db
+    .select()
+    .from(rateCache)
+    .where(
+      or(
+        ...pairs.map((pair) =>
           and(
-            eq(rateCache.weightOz, it.weightOz),
-            eq(rateCache.toZip, it.toZip.toUpperCase())
+            eq(rateCache.weightOz, pair.weightOz),
+            eq(rateCache.toZip, pair.toZip)
           )
         )
-        .limit(1);
-      return { weightOz: it.weightOz, toZip: it.toZip, hit: rows[0] ?? null };
-    })
-  );
+      )
+    )
+    .orderBy(sql`${rateCache.fetchedAt} desc`);
+  const rowsByPair = new Map<string, typeof rows[number]>();
+  for (const row of rows) {
+    const key = `${row.weightOz}|${row.toZip}`;
+    if (!rowsByPair.has(key)) rowsByPair.set(key, row);
+  }
+  const results = items.map((it) => {
+    const toZip = it.toZip.toUpperCase();
+    return {
+      weightOz: it.weightOz,
+      toZip: it.toZip,
+      hit: rowsByPair.get(`${it.weightOz}|${toZip}`) ?? null,
+      matchQuality: 'rough' as const,
+      approximate: true,
+    };
+  });
   return c.json({ data: results });
 });
 

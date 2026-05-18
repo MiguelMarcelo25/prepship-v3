@@ -3,7 +3,7 @@ import { Hono } from 'hono';
 import { logger } from 'hono/logger';
 import { cors } from 'hono/cors';
 import { env } from './lib/env';
-import { requireAuth } from './middleware/auth';
+import { requireAdmin, requireAuth } from './middleware/auth';
 import health from './routes/health';
 import ordersRoute from './routes/orders';
 import shipmentsRoute from './routes/shipments';
@@ -115,29 +115,39 @@ app.route('/health', health);
 app.route('/cron', cronRoute);
 
 // Everything below requires a valid Supabase JWT.
-app.use('/orders/*', requireAuth);
-app.use('/shipments/*', requireAuth);
-app.use('/packages/*', requireAuth);
-app.use('/clients/*', requireAuth);
-app.use('/rates/*', requireAuth);
-app.use('/labels/*', requireAuth);
-app.use('/sync/*', requireAuth);
-app.use('/inventory/*', requireAuth);
-app.use('/locations/*', requireAuth);
-app.use('/settings/*', requireAuth);
-app.use('/billing/*', requireAuth);
-app.use('/manifests/*', requireAuth);
-app.use('/analysis/*', requireAuth);
-app.use('/dashboard/*', requireAuth);
-app.use('/print-queue/*', requireAuth);
-app.use('/parent-skus/*', requireAuth);
-app.use('/products/*', requireAuth);
-app.use('/init/*', requireAuth);
-app.use('/admin/*', requireAuth);
-app.use('/carrier-accounts', requireAuth);
-app.use('/carrier-accounts/*', requireAuth);
-app.use('/carriers/*', requireAuth);
-app.use('/worker/*', requireAuth);
+const protectedPrefixes = [
+  '/orders',
+  '/shipments',
+  '/packages',
+  '/clients',
+  '/rates',
+  '/labels',
+  '/sync',
+  '/inventory',
+  '/locations',
+  '/settings',
+  '/billing',
+  '/manifests',
+  '/analysis',
+  '/dashboard',
+  '/print-queue',
+  '/parent-skus',
+  '/products',
+  '/init',
+  '/admin',
+  '/carrier-accounts',
+  '/carriers',
+  '/users',
+  '/worker',
+];
+
+for (const prefix of protectedPrefixes) {
+  app.use(prefix, requireAuth);
+  app.use(`${prefix}/*`, requireAuth);
+}
+
+app.use('/admin', requireAdmin);
+app.use('/admin/*', requireAdmin);
 
 app.route('/orders', ordersRoute);
 app.route('/shipments', shipmentsRoute);
@@ -168,10 +178,10 @@ app.notFound((c) => c.json({ error: 'Not found' }, 404));
 app.onError((err, c) => {
   console.error(err);
   const status = (err as { status?: number }).status ?? 500;
-  return c.json(
-    { error: err.message || 'Internal server error' },
-    status as 500
-  );
+  const isSafeClientError = status >= 400 && status < 500;
+  const message =
+    isSafeClientError && err.message ? err.message : 'Internal server error';
+  return c.json({ error: message }, status as 500);
 });
 
 // Keep the process alive on unhandled rejections / uncaught exceptions.

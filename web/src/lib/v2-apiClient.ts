@@ -344,6 +344,8 @@ function normalizeClientDtoRows(rows: any[]): any[] {
       row?.rateSourceClientId ?? row?.rate_source_client_id
     );
     const hasOwnAccount = Boolean(
+      row?.hasShipStationV1Credentials ||
+        row?.hasShipStationV2Credentials ||
       ((row?.ssApiKey ?? row?.ss_api_key) && (row?.ssApiSecret ?? row?.ss_api_secret)) ||
         (row?.ssApiKeyV2 ?? row?.ss_api_key_v2)
     );
@@ -481,6 +483,7 @@ type CachedSafeOptions = {
   warn?: boolean;
   fallbackTtlMs?: number;
   fallbackStaleMs?: number;
+  throwOnError?: boolean;
 };
 
 function clearCachedReads(...keysOrPrefixes: string[]): void {
@@ -544,6 +547,7 @@ async function cachedSafe<T>(
           err instanceof Error ? err.message : err
         );
       }
+      if (options.throwOnError) throw err;
       const failedAt = Date.now();
       cachedReads.set(cacheKey, {
         hasValue: true,
@@ -1575,7 +1579,7 @@ export const apiClient = {
         return { byStatus, byStatusStore };
       },
       { byStatus: [], byStatusStore: [] },
-      { warn: false, fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 15 * 60_000 }
+      { warn: false, fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 15 * 60_000, throwOnError: true }
     );
   },
 
@@ -1641,10 +1645,7 @@ export const apiClient = {
   },
 
   fetchInitData(): Promise<any> {
-    return safe('fetchInitData', () => api.get<any>('/init/init-data'), {
-      stores: [],
-      carriers: [],
-    });
+    return api.get<any>('/init/init-data');
   },
 
   // ─── Clients ────────────────────────────────────────────────────────────────
@@ -1829,7 +1830,7 @@ export const apiClient = {
       10 * 60_000,
       () => api.get<any>('/sync/status', { timeoutMs: 6_000 }),
       {},
-      { warn: false, fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 10 * 60_000 }
+      { warn: false, fallbackTtlMs: 2 * 60_000, fallbackStaleMs: 10 * 60_000, throwOnError: true }
     );
   },
 
@@ -1908,9 +1909,7 @@ export const apiClient = {
   //   each row keyed by `orderId` (not `id`)
   // This adapter translates both directions so the v2 UI renders.
   fetchOrders(query: Record<string, unknown>): Promise<any> {
-    return safe(
-      'fetchOrders',
-      async () => {
+    return (async () => {
         const q: Record<string, unknown> = { ...query };
         if (q.orderStatus !== undefined) {
           q.status = q.orderStatus;
@@ -1943,9 +1942,7 @@ export const apiClient = {
           pages: pagination.totalPages ?? 1,
           currentPage: pagination.page ?? 1,
         };
-      },
-      { orders: [], total: 0, pages: 1, currentPage: 1 }
-    );
+    })();
   },
 
   listOrders(query: Record<string, unknown>): Promise<any> {
@@ -1953,11 +1950,7 @@ export const apiClient = {
   },
 
   fetchOrderFull(orderId: number): Promise<any> {
-    return safe(
-      'fetchOrderFull',
-      () => api.get<any>(`/orders/${orderId}/full`),
-      null
-    );
+    return api.get<any>(`/orders/${orderId}/full`);
   },
 
   // v2 parity: plain single-order read (no hydration). Use when callers only
@@ -2732,7 +2725,7 @@ export const apiClient = {
         page: Number(query?.page) || 1,
         pageSize: Number(query?.pageSize) || 50,
       },
-      { warn: false, fallbackTtlMs: 60_000, fallbackStaleMs: 5 * 60_000 }
+      { warn: false, fallbackTtlMs: 60_000, fallbackStaleMs: 5 * 60_000, throwOnError: true }
     );
   },
 
@@ -2749,9 +2742,7 @@ export const apiClient = {
   // backend would need a streaming endpoint or the UI would need infinite
   // scroll — at which point this helper would change shape.
   fetchInventory(query?: Record<string, unknown>): Promise<any[]> {
-    return safe(
-      'fetchInventory',
-      async () => {
+    return (async () => {
         const PAGE_SIZE = 200;
         const PAGE_CAP = 50; // 200 × 50 = 10,000 SKUs hard cap
         const baseQ: Record<string, unknown> = { ...(query ?? {}), pageSize: PAGE_SIZE, page: 1 };
@@ -2812,9 +2803,7 @@ export const apiClient = {
         return filterRowsToActiveClients(allRows, activeClientIds).map((row) =>
           normalizeInventoryDto(row, clientNamesById)
         );
-      },
-      []
-    );
+    })();
   },
 
   fetchInventoryDetail(invSkuId: number): Promise<any> {
@@ -3836,9 +3825,7 @@ export const apiClient = {
   // returns `{rates, bestRate, ...}` — we passthrough verbatim (no
   // translation) since the rate-browser UI consumes the v4 shape directly.
   browseRates(data: Record<string, unknown>): Promise<any> {
-    return safe(
-      'browseRates',
-      async () => {
+    const run = async () => {
         const body = translateRatePayloadToV4(data);
         const requestedCarrierIds = Array.isArray(body.carrierIds)
           ? body.carrierIds.map((value) => String(value)).filter(Boolean)
@@ -3936,9 +3923,8 @@ export const apiClient = {
         } finally {
           rateBrowseInflight.delete(requestKey);
         }
-      },
-      { rates: [], bestRate: null }
-    );
+    };
+    return run();
   },
 
   // ─── Analysis ──────────────────────────────────────────────────────────────

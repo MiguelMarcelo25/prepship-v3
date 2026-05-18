@@ -38,6 +38,39 @@ function invalidatePackagesCache() {
   packagesInflight = null;
 }
 
+function boolQuery(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === '1' || normalized === 'true' || normalized === 'yes';
+}
+
+function parsePositiveIntQuery(
+  value: string | undefined,
+  fallback: number,
+  max: number,
+): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(Math.floor(parsed), max);
+}
+
+function publicPackageListRow(row: typeof packages.$inferSelect) {
+  return {
+    id: row.id,
+    name: row.name,
+    type: row.type,
+    length: row.length,
+    width: row.width,
+    height: row.height,
+    tareWeightOz: row.tareWeightOz,
+    carrierCode: row.carrierCode,
+    packageCode: row.packageCode,
+    stockQty: row.stockQty,
+    reorderLevel: row.reorderLevel,
+    unitCost: row.unitCost,
+    isDefault: row.isDefault,
+  };
+}
+
 async function listPackagesCached() {
   if (packagesCache && packagesCache.expiresAt > Date.now()) return packagesCache.rows;
   if (packagesInflight) return packagesInflight;
@@ -55,6 +88,28 @@ async function listPackagesCached() {
 
 app.get('/', async (c) => {
   const rows = await listPackagesCached();
+  const wantsPaged =
+    c.req.query('page') !== undefined ||
+    c.req.query('pageSize') !== undefined ||
+    c.req.query('lightweight') !== undefined;
+  if (wantsPaged) {
+    const page = parsePositiveIntQuery(c.req.query('page'), 1, 100000);
+    const pageSize = parsePositiveIntQuery(c.req.query('pageSize'), 100, 500);
+    const start = (page - 1) * pageSize;
+    const lightweight = boolQuery(c.req.query('lightweight'));
+    const data = rows
+      .slice(start, start + pageSize)
+      .map((row) => (lightweight ? publicPackageListRow(row) : row));
+    return c.json({
+      data,
+      pagination: {
+        page,
+        pageSize,
+        total: rows.length,
+        totalPages: Math.max(1, Math.ceil(rows.length / pageSize)),
+      },
+    });
+  }
   return c.json(rows);
 });
 

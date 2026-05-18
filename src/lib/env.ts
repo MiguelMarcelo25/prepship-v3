@@ -38,6 +38,7 @@ const schema = z.object({
   DB_IDLE_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(10),
   DB_CONNECT_TIMEOUT_SECONDS: z.coerce.number().int().positive().default(8),
   DB_STATEMENT_TIMEOUT_MS: z.coerce.number().int().positive().default(12_000),
+  STRICT_JWT_CLAIMS: booleanFlag(false),
   // Runtime split controls. Default RUN_SYNC_SCHEDULER=true keeps legacy API
   // deploys working until Render envs are explicitly flipped during rollout.
   RUN_SYNC_SCHEDULER: booleanFlag(true),

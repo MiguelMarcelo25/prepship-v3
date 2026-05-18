@@ -3,9 +3,11 @@ import {
   createRemoteJWKSet,
   decodeProtectedHeader,
   jwtVerify,
+  type JWTVerifyOptions,
   type JWTPayload,
 } from 'jose';
 import { env } from '../lib/env';
+import { isAdminEmail } from '../lib/admin-emails';
 
 export type AuthVars = {
   userId: string;
@@ -67,17 +69,24 @@ async function verifySupabaseJwt(token: string): Promise<AuthVars | null> {
     return null;
   }
   const isHmacToken = protectedHeader.alg?.startsWith('HS') ?? false;
+  const verifyOptions: JWTVerifyOptions | undefined = env.STRICT_JWT_CLAIMS
+    ? {
+        issuer: `${env.SUPABASE_URL.replace(/\/+$/, '')}/auth/v1`,
+        audience: 'authenticated',
+      }
+    : undefined;
 
   const verifyWithSecret = async () => {
     const { payload } = await jwtVerify(
       token,
-      new TextEncoder().encode(env.SUPABASE_JWT_SECRET)
+      new TextEncoder().encode(env.SUPABASE_JWT_SECRET),
+      verifyOptions
     );
     return payloadToAuthVars(payload);
   };
 
   const verifyWithJwks = async () => {
-    const { payload } = await jwtVerify(token, getSupabaseJwks());
+    const { payload } = await jwtVerify(token, getSupabaseJwks(), verifyOptions);
     return payloadToAuthVars(payload);
   };
 
@@ -117,6 +126,19 @@ export const requireAuth = createMiddleware<{ Variables: AuthVars }>(
     c.set('userId', authVars.userId);
     c.set('email', authVars.email);
     c.set('role', authVars.role);
+    await next();
+  }
+);
+
+export const requireAdmin = createMiddleware<{ Variables: AuthVars }>(
+  async (c, next) => {
+    const email = c.get('email');
+    const role = c.get('role');
+
+    if (role !== 'admin' && !isAdminEmail(email)) {
+      return c.json({ error: 'Admin access required' }, 403);
+    }
+
     await next();
   }
 );

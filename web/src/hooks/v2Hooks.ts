@@ -839,8 +839,8 @@ export function useShippingAccounts(): UseShippingAccountsResult {
 // ──────────────────────────────────────────────────────────────────
 // useClients — v4 returns flat rows with `id`; adapt to v2 ClientDto.
 // Resolves `rateSourceName` by looking up the referenced client's name
-// in the same list. Derives `hasOwnAccount` from ShipStation API key
-// presence. Shares the `['v2-hooks:clients']` query key with useOrders
+// in the same list. Derives `hasOwnAccount` from the server's redacted
+// credential-presence booleans. Shares the `['v2-hooks:clients']` query key with useOrders
 // so React Query dedupes the /clients fetch.
 // ──────────────────────────────────────────────────────────────────
 
@@ -870,9 +870,11 @@ type V4ClientFullRow = {
   contactName: string | null;
   email: string | null;
   phone: string | null;
-  ssApiKey: string | null;
-  ssApiSecret: string | null;
-  ssApiKeyV2: string | null;
+  ssApiKey?: string | null;
+  ssApiSecret?: string | null;
+  ssApiKeyV2?: string | null;
+  hasShipStationV1Credentials?: boolean;
+  hasShipStationV2Credentials?: boolean;
   rateSourceClientId: number | null;
   active: boolean;
 };
@@ -891,6 +893,8 @@ function transformClientRowV4toV2(
     phone: row.phone ?? '',
     active: row.active,
     hasOwnAccount: Boolean(
+      row.hasShipStationV1Credentials ||
+        row.hasShipStationV2Credentials ||
       (row.ssApiKey && row.ssApiSecret) || row.ssApiKeyV2
     ),
     rateSourceClientId: rateSourceId,

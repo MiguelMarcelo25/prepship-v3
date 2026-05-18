@@ -14,6 +14,7 @@ import {
   voidLabelV2,
 } from '../services/labels';
 import { generateMockLabelHtml } from '../services/mock-label-generator';
+import { verifyMockLabelSignature } from '../lib/mock-label-access';
 
 const app = new Hono();
 
@@ -171,6 +172,15 @@ app.get('/mock/:shipmentId', async (c) => {
     return c.json({ error: 'Not found' }, 404);
   }
   const shipmentId = Number(param);
+  if (
+    !verifyMockLabelSignature(
+      shipmentId,
+      c.req.query('exp'),
+      c.req.query('sig')
+    )
+  ) {
+    return c.json({ error: 'Mock label link expired' }, 403);
+  }
   // Try the hot in-memory cache first; fall back to DB so mocks survive restarts.
   const data = getMockLabel(shipmentId) ?? await getMockLabelAsync(shipmentId);
   if (!data) {

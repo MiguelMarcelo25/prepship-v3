@@ -389,7 +389,7 @@ export default async function handler(req: any, res: any): Promise<void> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[carrier-accounts]', msg);
-    res.status(500).json({ error: msg });
+    res.status(500).json({ error: 'Carrier account request failed' });
   } finally {
     try {
       await sql.end({ timeout: 1 });
