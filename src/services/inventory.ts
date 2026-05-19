@@ -1,4 +1,4 @@
-import { eq, sql } from 'drizzle-orm';
+import { eq, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
 import { inventory, inventoryLedger } from '../db/schema/inventory';
 
@@ -52,7 +52,7 @@ export async function applyMovement(move: StockMovement) {
   });
 }
 
-export async function inventoryStats(clientId?: number) {
+export async function inventoryStats(clientId?: number, scopePredicate: SQL = sql`true`) {
   const where = clientId !== undefined ? sql`client_id = ${clientId}` : sql`true`;
   const rows = await db.execute<{
     total: number;
@@ -67,6 +67,7 @@ export async function inventoryStats(clientId?: number) {
       coalesce(sum(stock_qty), 0)::int                                           as total_units
     from inventory
     where ${where}
+      and ${scopePredicate}
       and active = true
       and (
         client_id is null

@@ -1,7 +1,7 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, desc, eq, gte, ilike, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, ilike, isNull, lte, or, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
 import { inventory, inventoryLedger } from '../db/schema/inventory';
 import { inventorySkuParents } from '../db/schema/inventory-sku-parents';
@@ -9,6 +9,7 @@ import { orderItems } from '../db/schema/order-items';
 import { orders } from '../db/schema/orders';
 import { parentSkus } from '../db/schema/parent-skus';
 import { offsetOf, paginated, paginationSchema } from '../lib/pagination';
+import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 import { applyMovement, inventoryStats } from '../services/inventory';
 import {
   importSkusFromOrders,
@@ -80,6 +81,71 @@ const activeInventoryClientPredicate = sql`(
   )
 )`;
 
+function normalizeScopeIds(values: number[] | undefined): number[] {
+  if (!Array.isArray(values)) return [];
+  return Array.from(
+    new Set(
+      values
+        .map((value) => Number(value))
+        .filter((value) => Number.isInteger(value) && value > 0)
+    )
+  );
+}
+
+function intArraySql(values: number[]): SQL {
+  return sql`array[${sql.join(values.map((value) => sql`${value}`), sql`, `)}]::int[]`;
+}
+
+function inventoryScopeFromContext(c: Context): ClientStoreScope {
+  return getClientStoreScope({
+    email: c.get('email' as never) as string | undefined,
+    role: c.get('role' as never) as string | undefined,
+    permissions: c.get('permissions' as never) as string[] | undefined,
+    clientIds: c.get('clientIds' as never) as number[] | undefined,
+    storeIds: c.get('storeIds' as never) as number[] | undefined,
+  });
+}
+
+function inventoryScopePredicate(scope: ClientStoreScope): SQL {
+  const predicates: SQL[] = [];
+  const clientIds = normalizeScopeIds(scope.clientIds);
+  const storeIds = normalizeScopeIds(scope.storeIds);
+
+  if (clientIds.length) {
+    predicates.push(sql`${inventory.clientId} = any(${intArraySql(clientIds)})`);
+  }
+  if (storeIds.length) {
+    predicates.push(sql`exists (
+      select 1 from clients scoped_client
+      where scoped_client.id = ${inventory.clientId}
+        and scoped_client.store_ids && ${intArraySql(storeIds)}
+    )`);
+  }
+  if (!predicates.length) {
+    return scope.isRestricted ? sql`false` : sql`true`;
+  }
+  if (predicates.length === 1) return predicates[0]!;
+  return sql`(${sql.join(predicates, sql` or `)})`;
+}
+
+function inventoryOrderScopePredicate(scope: ClientStoreScope): SQL {
+  const predicates: SQL[] = [];
+  const clientIds = normalizeScopeIds(scope.clientIds);
+  const storeIds = normalizeScopeIds(scope.storeIds);
+
+  if (clientIds.length) {
+    predicates.push(sql`o.client_id = any(${intArraySql(clientIds)})`);
+  }
+  if (storeIds.length) {
+    predicates.push(sql`o.store_id = any(${intArraySql(storeIds)})`);
+  }
+  if (!predicates.length) {
+    return scope.isRestricted ? sql`false` : sql`true`;
+  }
+  if (predicates.length === 1) return predicates[0]!;
+  return sql`(${sql.join(predicates, sql` or `)})`;
+}
+
 const listQuery = paginationSchema.extend({
   clientId: z.coerce.number().int().optional(),
   search: z.string().optional(),
@@ -102,6 +168,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   const routeStartedAt = performance.now();
   const timings: InventoryRouteTimings = {};
   const q = c.req.valid('query');
+  const scope = inventoryScopeFromContext(c);
   const shouldRunLiveMetrics = q.liveMetrics === true;
   const where = and(
     ...[
@@ -119,6 +186,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         ? eq(inventory.active, q.active)
         : q.includeInactive ? undefined : eq(inventory.active, true),
       activeInventoryClientPredicate,
+      inventoryScopePredicate(scope),
     ].filter(<T>(x: T | undefined): x is T => x !== undefined)
   );
 
@@ -359,6 +427,7 @@ app.get('/ledger', zValidator('query', ledgerQuery), async (c) => {
   const routeStartedAt = performance.now();
   const timings: InventoryRouteTimings = {};
   const q = c.req.valid('query');
+  const ledgerScope = inventoryScopeFromContext(c);
   const dateStart = q.dateStart != null && Number.isFinite(q.dateStart) ? new Date(q.dateStart) : null;
   const dateEnd = q.dateEnd != null && Number.isFinite(q.dateEnd) ? new Date(q.dateEnd) : null;
   const where = and(
@@ -369,6 +438,7 @@ app.get('/ledger', zValidator('query', ledgerQuery), async (c) => {
       dateStart && !Number.isNaN(dateStart.getTime()) ? gte(inventoryLedger.createdAt, dateStart) : undefined,
       dateEnd && !Number.isNaN(dateEnd.getTime()) ? lte(inventoryLedger.createdAt, dateEnd) : undefined,
       activeInventoryClientPredicate,
+      inventoryScopePredicate(ledgerScope),
     ].filter(<T>(x: T | undefined): x is T => x !== undefined)
   );
 
@@ -418,8 +488,10 @@ app.get('/ledger', zValidator('query', ledgerQuery), async (c) => {
 app.get('/stats', async (c) => {
   const clientId = c.req.query('clientId');
   const parsed = clientId !== undefined ? Number(clientId) : undefined;
+  const statsScope = inventoryScopeFromContext(c);
   const stats = await inventoryStats(
-    Number.isFinite(parsed as number) ? (parsed as number) : undefined
+    Number.isFinite(parsed as number) ? (parsed as number) : undefined,
+    inventoryScopePredicate(statsScope)
   );
   return c.json(stats);
 });
@@ -433,6 +505,7 @@ app.get(
   zValidator('query', z.object({ clientId: z.coerce.number().int().optional() })),
   async (c) => {
     const { clientId } = c.req.valid('query');
+    const alertsScope = inventoryScopeFromContext(c);
     const rows = await db
       .select({
         id: inventory.id,
@@ -450,6 +523,7 @@ app.get(
             clientId !== undefined ? eq(inventory.clientId, clientId) : undefined,
             eq(inventory.active, true),
             activeInventoryClientPredicate,
+            inventoryScopePredicate(alertsScope),
             lte(inventory.stockQty, inventory.reorderLevel),
           ].filter(<T>(x: T | undefined): x is T => x !== undefined)
         )
@@ -461,17 +535,33 @@ app.get(
 
 app.get('/:id{[0-9]+}', async (c) => {
   const id = Number(c.req.param('id'));
-  const [row] = await db.select().from(inventory).where(eq(inventory.id, id)).limit(1);
+  const detailScope = inventoryScopeFromContext(c);
+  const [row] = await db
+    .select()
+    .from(inventory)
+    .where(and(eq(inventory.id, id), inventoryScopePredicate(detailScope)))
+    .limit(1);
   if (!row) return c.json({ error: 'Inventory item not found' }, 404);
   return c.json(row);
 });
 
 app.get('/:id{[0-9]+}/ledger', async (c) => {
   const id = Number(c.req.param('id'));
+  const ledgerDetailScope = inventoryScopeFromContext(c);
   const rows = await db
-    .select()
+    .select({
+      id: inventoryLedger.id,
+      inventoryId: inventoryLedger.inventoryId,
+      type: inventoryLedger.type,
+      qty: inventoryLedger.qty,
+      orderId: inventoryLedger.orderId,
+      note: inventoryLedger.note,
+      createdBy: inventoryLedger.createdBy,
+      createdAt: inventoryLedger.createdAt,
+    })
     .from(inventoryLedger)
-    .where(eq(inventoryLedger.inventoryId, id))
+    .innerJoin(inventory, eq(inventory.id, inventoryLedger.inventoryId))
+    .where(and(eq(inventoryLedger.inventoryId, id), inventoryScopePredicate(ledgerDetailScope)))
     .orderBy(desc(inventoryLedger.createdAt))
     .limit(200);
   return c.json({ data: rows });
@@ -493,11 +583,12 @@ app.get(
   async (c) => {
     const id = Number(c.req.param('id'));
     const { days, dateFrom, dateTo } = c.req.valid('query');
+    const skuOrdersScope = inventoryScopeFromContext(c);
 
     const [row] = await db
       .select({ sku: inventory.sku, name: inventory.name, clientId: inventory.clientId })
       .from(inventory)
-      .where(eq(inventory.id, id))
+      .where(and(eq(inventory.id, id), inventoryScopePredicate(skuOrdersScope)))
       .limit(1);
     if (!row) return c.json({ error: 'Inventory item not found' }, 404);
 
@@ -530,6 +621,7 @@ app.get(
             and coalesce(c.active, true) = true
         )
       )
+      and ${inventoryOrderScopePredicate(skuOrdersScope)}
     `;
 
     const dailyRows = since || until
@@ -982,6 +1074,7 @@ app.put(
 // join table + left-joins parent_skus for display fields.
 app.get('/:id{[0-9]+}/parents', async (c) => {
   const id = Number(c.req.param('id'));
+  const parentsScope = inventoryScopeFromContext(c);
   const rows = await db
     .select({
       parentSkuId: inventorySkuParents.parentSkuId,
@@ -992,8 +1085,9 @@ app.get('/:id{[0-9]+}/parents', async (c) => {
       baseUnitQty: parentSkus.baseUnitQty,
     })
     .from(inventorySkuParents)
+    .innerJoin(inventory, eq(inventory.id, inventorySkuParents.inventoryId))
     .innerJoin(parentSkus, eq(parentSkus.id, inventorySkuParents.parentSkuId))
-    .where(eq(inventorySkuParents.inventoryId, id))
+    .where(and(eq(inventorySkuParents.inventoryId, id), inventoryScopePredicate(parentsScope)))
     .orderBy(desc(inventorySkuParents.isPrimary), parentSkus.name);
   return c.json({ data: rows });
 });

@@ -29,6 +29,7 @@
     "test:client-store-scope": "node scripts/client-store-scope-guard.mjs",
     "test:dashboard-client-scope": "node scripts/dashboard-client-store-scope-guard.mjs",
     "test:analysis-client-scope": "node scripts/analysis-client-store-scope-guard.mjs",
+    "test:inventory-client-scope": "node scripts/inventory-client-store-scope-guard.mjs",
     "test:frontend-failure-states": "node scripts/frontend-failure-states-guard.mjs",
     "test:orders-ux": "node scripts/orders-ux-guard.mjs",
     "test:orders-ux:browser": "playwright test web/e2e/orders-ux.spec.js --reporter=line",
