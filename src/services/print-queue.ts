@@ -3,6 +3,7 @@ import { and, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
 import { clients } from '../db/schema/clients';
 import { printQueue, type PrintQueueEntry } from '../db/schema/print-queue';
+import { settings } from '../db/schema/settings';
 import { createLabelV2, type CreateLabelInputDto } from './labels';
 
 export type AddToQueueInput = {
@@ -77,6 +78,58 @@ export type QueueSendJob = {
   errorMessage?: string;
 };
 
+export const PRINT_QUEUE_SEND_STATUS_KEY = 'print_queue.batch_send.last_run';
+export const PRINT_QUEUE_MERGE_STATUS_KEY = 'print_queue.pdf_merge.last_run';
+
+type QueueSendResultSnapshot = {
+  orderId: number;
+  success: boolean;
+  queueEntryId?: string;
+  alreadyQueued?: boolean;
+  trackingNumber?: string | null;
+  error?: string;
+};
+
+export type QueueSendJobSnapshot = {
+  version: 1;
+  durableKey: typeof PRINT_QUEUE_SEND_STATUS_KEY;
+  jobId: string;
+  status: QueueSendJob['status'];
+  active: boolean;
+  clientIds: number[];
+  progress: number;
+  total: number;
+  current: number;
+  queued: number;
+  failed: number;
+  message: string;
+  clientId: number | null;
+  queuedEntryIds: string[];
+  errorMessage: string | null;
+  resultSamples: QueueSendResultSnapshot[];
+  createdAt: string;
+  updatedAt: string;
+  persistedAt: string;
+};
+
+export type MergeJobSnapshot = {
+  version: 1;
+  durableKey: typeof PRINT_QUEUE_MERGE_STATUS_KEY;
+  jobId: string;
+  status: MergeJob['status'];
+  active: boolean;
+  clientIds: number[];
+  progress: number;
+  total: number;
+  current: number;
+  message: string;
+  fileName: string | null;
+  errorMessage: string | null;
+  labelErrors: string[];
+  createdAt: string;
+  persistedAt: string;
+};
+
 export type PrintQueueListScope = {
   scopeClientIds?: number[];
   scopeStoreIds?: number[];
@@ -86,6 +139,133 @@ export type PrintQueueListScope = {
 const mergeJobs = new Map<string, MergeJob>();
 const queueSendJobs = new Map<string, QueueSendJob>();
 const QUEUE_SEND_ORDER_TIMEOUT_MS = 30_000;
+
+function toQueueSendSnapshot(job: QueueSendJob): QueueSendJobSnapshot {
+  return {
+    version: 1,
+    durableKey: PRINT_QUEUE_SEND_STATUS_KEY,
+    jobId: job.jobId,
+    status: job.status,
+    active: job.status === 'pending' || job.status === 'running',
+    clientIds: [...job.clientIds],
+    progress: job.progress,
+    total: job.total,
+    current: job.current,
+    queued: job.queued,
+    failed: job.failed,
+    message: job.message,
+    clientId: job.clientId ?? null,
+    queuedEntryIds: [...job.queuedEntryIds],
+    errorMessage: job.errorMessage ?? null,
+    resultSamples: job.results.slice(-10).map((result) => ({
+      orderId: result.orderId,
+      success: result.success,
+      queueEntryId: result.queueEntryId,
+      alreadyQueued: result.alreadyQueued,
+      trackingNumber: result.trackingNumber ?? null,
+      error: result.error,
+    })),
+    createdAt: new Date(job.createdAt).toISOString(),
+    updatedAt: new Date(job.updatedAt).toISOString(),
+    persistedAt: new Date().toISOString(),
+  };
+}
+
+function toMergeSnapshot(job: MergeJob): MergeJobSnapshot {
+  return {
+    version: 1,
+    durableKey: PRINT_QUEUE_MERGE_STATUS_KEY,
+    jobId: job.jobId,
+    status: job.status,
+    active: job.status === 'pending' || job.status === 'running',
+    clientIds: [...job.clientIds],
+    progress: job.progress,
+    total: job.total,
+    current: job.current,
+    message: job.message,
+    fileName: job.fileName ?? null,
+    errorMessage: job.errorMessage ?? null,
+    labelErrors: (job.labelErrors ?? []).slice(-10),
+    createdAt: new Date(job.createdAt).toISOString(),
+    persistedAt: new Date().toISOString(),
+  };
+}
+
+export async function persistQueueSendJobSnapshot(job: QueueSendJob): Promise<void> {
+  try {
+    const value = JSON.stringify(toQueueSendSnapshot(job));
+    await db
+      .insert(settings)
+      .values({ key: PRINT_QUEUE_SEND_STATUS_KEY, value })
+      .onConflictDoUpdate({
+        target: settings.key,
+        set: { value },
+      });
+  } catch (err) {
+    console.warn(
+      '[print-queue] failed to persist batch-send status:',
+      err instanceof Error ? err.message : err
+    );
+  }
+}
+
+export async function persistMergeJobSnapshot(job: MergeJob): Promise<void> {
+  try {
+    const value = JSON.stringify(toMergeSnapshot(job));
+    await db
+      .insert(settings)
+      .values({ key: PRINT_QUEUE_MERGE_STATUS_KEY, value })
+      .onConflictDoUpdate({
+        target: settings.key,
+        set: { value },
+      });
+  } catch (err) {
+    console.warn(
+      '[print-queue] failed to persist PDF-merge status:',
+      err instanceof Error ? err.message : err
+    );
+  }
+}
+
+export async function getLatestQueueSendJobSnapshot(): Promise<QueueSendJobSnapshot | null> {
+  try {
+    const [row] = await db
+      .select({ value: settings.value })
+      .from(settings)
+      .where(eq(settings.key, PRINT_QUEUE_SEND_STATUS_KEY))
+      .limit(1);
+    if (!row?.value) return null;
+    return JSON.parse(row.value) as QueueSendJobSnapshot;
+  } catch (err) {
+    console.warn(
+      '[print-queue] failed to read batch-send durable status:',
+      err instanceof Error ? err.message : err
+    );
+    return null;
+  }
+}
+
+export async function getLatestMergeJobSnapshot(): Promise<MergeJobSnapshot | null> {
+  try {
+    const [row] = await db
+      .select({ value: settings.value })
+      .from(settings)
+      .where(eq(settings.key, PRINT_QUEUE_MERGE_STATUS_KEY))
+      .limit(1);
+    if (!row?.value) return null;
+    return JSON.parse(row.value) as MergeJobSnapshot;
+  } catch (err) {
+    console.warn(
+      '[print-queue] failed to read PDF-merge durable status:',
+      err instanceof Error ? err.message : err
+    );
+    return null;
+  }
+}
+
+function shouldPersistProgress(current: number, total: number): boolean {
+  return current === total || current % 10 === 0;
+}
 
 function cleanOldJobs() {
   const cutoff = Date.now() - 30 * 60 * 1000;
@@ -417,6 +597,7 @@ export function startQueueSendJob(input: {
   };
   queueSendJobs.set(jobId, job);
 
+  void persistQueueSendJobSnapshot(job);
   void runQueueSendJob(jobId, input.orders, input.concurrency);
   return { jobId, total: input.orders.length };
 }
@@ -437,6 +618,7 @@ async function runQueueSendJob(
   const concurrency = Math.max(1, Math.min(8, Math.floor(requestedConcurrency || 5)));
   job.status = 'running';
   updateQueueSendProgress(job);
+  void persistQueueSendJobSnapshot(job);
 
   try {
     await withConcurrency(
@@ -464,6 +646,9 @@ async function runQueueSendJob(
         } finally {
           job.current += 1;
           updateQueueSendProgress(job);
+          if (shouldPersistProgress(job.current, job.total)) {
+            void persistQueueSendJobSnapshot(job);
+          }
         }
       },
       concurrency
@@ -483,11 +668,13 @@ async function runQueueSendJob(
     if (job.current > job.total) job.current = job.total;
     job.status = 'done';
     updateQueueSendProgress(job);
+    await persistQueueSendJobSnapshot(job);
   } catch (err) {
     job.status = 'error';
     job.errorMessage = err instanceof Error ? err.message : 'Queue send failed';
     job.message = job.errorMessage;
     job.updatedAt = Date.now();
+    await persistQueueSendJobSnapshot(job);
   }
 }
 
@@ -573,6 +760,7 @@ export async function startPrintJob(input: {
   };
   mergeJobs.set(jobId, job);
 
+  void persistMergeJobSnapshot(job);
   void runMergeJob(jobId, entries, input.mergeHeaders !== false, input.requestOrigin);
   return { jobId, total: entries.length };
 }
@@ -589,6 +777,7 @@ async function runMergeJob(
 ) {
   const job = mergeJobs.get(jobId)!;
   job.status = 'running';
+  void persistMergeJobSnapshot(job);
   job.message = 'Initializing PDF merge…';
 
   try {
@@ -613,6 +802,9 @@ async function runMergeJob(
       const e = sorted[i]!;
       job.current = i;
       job.progress = Math.round((i / sorted.length) * 90);
+      if (shouldPersistProgress(i, sorted.length)) {
+        void persistMergeJobSnapshot(job);
+      }
       job.message = `Merging label ${i + 1} of ${sorted.length}…`;
 
       let pdfBytes: Uint8Array | null = null;
@@ -701,6 +893,7 @@ async function runMergeJob(
     }
 
     job.progress = 95;
+    void persistMergeJobSnapshot(job);
     job.message = 'Finalizing PDF…';
     const bytes = await merged.save();
     job.mergedPdfBase64 = Buffer.from(bytes).toString('base64');
@@ -718,9 +911,15 @@ async function runMergeJob(
 
     const failed = failedEntryIds.size;
     const success = successfulEntryIds.length;
+    const doneMessage =
+      failed > 0
+        ? `Done - ${success} merged (${failed} failed - re-create those labels and re-queue).`
+        : `Done - ${success} label${success === 1 ? '' : 's'} merged.`;
     job.status = 'done';
     job.progress = 100;
     job.current = success;
+    job.message = doneMessage;
+    await persistMergeJobSnapshot(job);
     job.message =
       failed > 0
         ? `Done — ${success} merged (${failed} failed — re-create those labels and re-queue).`
@@ -729,6 +928,7 @@ async function runMergeJob(
     job.status = 'error';
     job.errorMessage = (err as Error).message;
     job.message = `Error: ${job.errorMessage}`;
+    await persistMergeJobSnapshot(job);
   }
 }
 

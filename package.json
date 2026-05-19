@@ -48,6 +48,7 @@
     "test:durable-jobs-plan": "node scripts/durable-jobs-plan-guard.mjs",
     "test:rate-backfill-durable": "node scripts/rate-backfill-durable-guard.mjs",
     "test:ref-rates-durable": "node scripts/ref-rates-durable-guard.mjs",
+    "test:print-queue-durable": "node scripts/print-queue-durable-guard.mjs",
     "test:marketplace-reconciliation": "tsx scripts/marketplace-status-reconciliation-guard.ts",
     "test:shipstation-awaiting-parity": "tsx scripts/shipstation-awaiting-parity-guard.ts",
     "test:frontend-failure-states": "node scripts/frontend-failure-states-guard.mjs",

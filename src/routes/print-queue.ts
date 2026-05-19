@@ -7,6 +7,8 @@ import {
   canViewMergeJob,
   canViewQueueSendJob,
   clearQueue,
+  getLatestMergeJobSnapshot,
+  getLatestQueueSendJobSnapshot,
   getQueueSendJobStatus,
   getMergeJobStatus,
   listQueue,
@@ -164,6 +166,7 @@ app.get('/batch-send/status/:jobId', async (c) => {
   if (!job || !(await canViewQueueSendJob(job, printQueueScopeFromContext(c)))) {
     return c.json({ error: 'Job not found' }, 404);
   }
+  const durableJob = await getLatestQueueSendJobSnapshot();
   return c.json({
     job_id: job.jobId,
     status: job.status,
@@ -177,6 +180,7 @@ app.get('/batch-send/status/:jobId', async (c) => {
     queued_entry_ids: job.queuedEntryIds,
     results: job.results,
     error: job.errorMessage ?? null,
+    durableJob: durableJob?.jobId === job.jobId ? durableJob : null,
   });
 });
 
@@ -221,6 +225,7 @@ app.get('/print/status/:jobId', async (c) => {
   if (!job || !(await canViewMergeJob(job, printQueueScopeFromContext(c)))) {
     return c.json({ error: 'Job not found' }, 404);
   }
+  const durableJob = await getLatestMergeJobSnapshot();
   return c.json({
     job_id: job.jobId,
     status: job.status,
@@ -231,6 +236,7 @@ app.get('/print/status/:jobId', async (c) => {
     file_name: job.fileName ?? null,
     error: job.errorMessage ?? null,
     label_errors: job.labelErrors ?? [],
+    durableJob: durableJob?.jobId === job.jobId ? durableJob : null,
   });
 });
 

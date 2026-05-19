@@ -64,7 +64,7 @@ Confirmed gaps from repo search:
 
 - RBAC/client-scope rules are now documented in a route matrix, the first runtime permission middleware is implemented for safer admin/settings/credential surfaces, low-risk client/init payload scoping exists, and dashboard/analysis/inventory/billing/print-queue read/action scoping has started. Remaining operational route query enforcement is still incomplete.
 - Runtime DDL remains in some production-capable paths, but the request/job-time DDL inventory and static guard now exist. Reporting metrics table/index ownership has moved into `drizzle/0029_reporting_metrics.sql`, the Walmart selling-fee source index is owned by `drizzle/0019_selling_fees.sql`, marketplace `store_orders` is owned by `drizzle/0030_store_orders.sql`, credential-account RLS/readiness is owned by `drizzle/0031_credential_accounts_rls.sql`, `order_items` / `analytics_cache` readiness is owned by `drizzle/0024_order_items_phase2.sql` plus `drizzle/0025_order_items_sync_trigger.sql`, and low-risk orders/inventory performance indexes are owned by migrations `0021`, `0022`, `0023`, and `0026`.
-- Durable job state is now mapped in `DURABLE_JOBS_PLAN.md`. ShipStation Awaiting parity, rate backfill, and billing reference-rate fetch now persist latest-run status; print queue send/merge and full job progress/events still need runtime restart-safe guarantees.
+- Durable job state is now mapped in `DURABLE_JOBS_PLAN.md`. ShipStation Awaiting parity, rate backfill, billing reference-rate fetch, and print queue send/merge now persist latest-run status; full job progress/events, idempotency, and PDF artifact durability still need runtime restart-safe guarantees.
 - Broad frontend `safe()` fallback usage remains and needs a failure-mode sweep.
 - Secrets governance is mapped, but rotation, last-used tracking, audit events, and production log/response smoke tests are not complete yet.
 - Audit logging is mapped, but the append-only table/service and runtime event writers are not implemented yet.
@@ -79,8 +79,8 @@ Current readiness read:
 
 | Track | Status | Percent |
 |---|---|---:|
-| Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, rate cache diagnostics/bulk semantics, runtime DDL inventory/guard, reporting metrics migration, Walmart selling-fee index cleanup, `store_orders` migration, credential-account DDL cleanup, `order_items` / `analytics_cache` readiness cleanup, low-risk orders/inventory index cleanup, ShipStation Awaiting parity latest-run status, rate backfill latest-run status, billing reference-rate latest-run status, and durable job strategy documented | 92% |
-| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated, RBAC/client-scope route matrix documented, first runtime permission layer implemented, low-risk client/init payload scoping added, dashboard/analysis/inventory/billing/print-queue read/action scoping started, secrets governance matrix added, audit logging matrix added, reconciliation reports plan added, marketplace awaiting-count reconciliation guarded, observability/alerting plan added, operational runbooks/DR plan added, privacy/compliance plan added, production signoff checklist added, and key operational jobs now persist latest-run status | 92% |
+| Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, rate cache diagnostics/bulk semantics, runtime DDL inventory/guard, reporting metrics migration, Walmart selling-fee index cleanup, `store_orders` migration, credential-account DDL cleanup, `order_items` / `analytics_cache` readiness cleanup, low-risk orders/inventory index cleanup, ShipStation Awaiting parity latest-run status, rate backfill latest-run status, billing reference-rate latest-run status, print queue send/merge latest-run status, and durable job strategy documented | 94% |
+| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated, RBAC/client-scope route matrix documented, first runtime permission layer implemented, low-risk client/init payload scoping added, dashboard/analysis/inventory/billing/print-queue read/action scoping started, secrets governance matrix added, audit logging matrix added, reconciliation reports plan added, marketplace awaiting-count reconciliation guarded, observability/alerting plan added, operational runbooks/DR plan added, privacy/compliance plan added, production signoff checklist added, and key operational jobs now persist latest-run status | 93% |
 
 ## Critical Blockers
 
@@ -271,7 +271,8 @@ The full event matrix now lives in `AUDIT_LOGGING_MATRIX.md`. The condensed trac
 - [x] Create `DURABLE_JOBS_PLAN.md`.
 - [x] Add `npm run test:durable-jobs-plan`.
 - [ ] Rate backfill survives server restart.
-- [ ] Print queue jobs survive server restart.
+- [~] Print queue latest job summaries survive server restart.
+- [ ] Print queue active progress and PDF artifacts survive server restart.
 - [ ] Sync scheduler is safe with multiple instances.
 - [ ] Jobs have idempotency keys.
 - [ ] Jobs have retry limits.
@@ -289,8 +290,8 @@ The detailed durable jobs plan now lives in `DURABLE_JOBS_PLAN.md`. The condense
 |---|---|---|---|---|---|
 | rate backfill best rates | in-memory job map plus durable latest snapshot | latest summary survives restart; active progress still process-local | duplicate provider fanout possible | date/window key missing | full durable job row or pg-boss workflow |
 | billing reference-rate fetch | in-memory job map plus durable latest snapshot | latest summary survives restart; active progress still process-local | duplicate reference-rate fetch possible | client/date/window key missing | full durable job row and result summary |
-| print queue batch send | in-memory job map | lost after restart | duplicate queue entries possible | selected-order/user key needed | durable job row and per-order results |
-| print queue PDF merge | in-memory job map + base64 output | lost after restart | duplicate merge possible | entry/user key needed | durable job row and artifact pointer |
+| print queue batch send | in-memory job map plus durable latest snapshot | latest summary survives restart; active polling still process-local | duplicate queue entries possible | selected-order/user key needed | durable job row and per-order results |
+| print queue PDF merge | in-memory job map + base64 output plus durable latest snapshot | latest summary survives restart; PDF artifact is still memory-only | duplicate merge possible | entry/user key needed | durable job row and artifact pointer |
 
 ### External API Resilience
 
