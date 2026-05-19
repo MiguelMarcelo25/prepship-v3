@@ -25,10 +25,28 @@ type AuthState = {
 };
 
 const Ctx = createContext<AuthState | null>(null);
+const LOGOUT_REMOTE_TIMEOUT_MS = 1500;
 
 function buildRedirect(path: string): string {
   if (typeof window === 'undefined') return path;
   return `${window.location.origin}${path}`;
+}
+
+function wait(ms: number): Promise<'timeout'> {
+  return new Promise((resolve) => {
+    window.setTimeout(() => resolve('timeout'), ms);
+  });
+}
+
+// Wipes the stale refresh-token entry from localStorage without
+// waiting on /auth/v1/logout. We use this when the browser needs to
+// become logged out even if remote session revocation is slow or fails.
+async function clearLocalSession() {
+  try {
+    await supabase.auth.signOut({ scope: 'local' });
+  } catch {
+    // Best effort: the next session refresh attempt will retry cleanup.
+  }
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -126,7 +144,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return { needsEmailConfirmation: !data.session };
       },
       signOut: async () => {
-        await supabase.auth.signOut();
+        setSession(null);
+        setLoading(false);
+
+        const remoteSignOut = supabase.auth
+          .signOut()
+          .then(({ error }) => {
+            if (error) {
+              console.warn('[auth] Remote sign-out failed:', error.message);
+              return 'error' as const;
+            }
+            return 'ok' as const;
+          })
+          .catch((err) => {
+            console.warn('[auth] Remote sign-out threw:', err);
+            return 'error' as const;
+          });
+
+        const outcome = await Promise.race([
+          remoteSignOut,
+          wait(LOGOUT_REMOTE_TIMEOUT_MS),
+        ]);
+
+        if (outcome !== 'ok') {
+          await clearLocalSession();
+        }
       },
       resetPasswordForEmail: async (email) => {
         const { error } = await supabase.auth.resetPasswordForEmail(email, {
