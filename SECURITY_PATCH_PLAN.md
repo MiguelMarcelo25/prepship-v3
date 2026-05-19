@@ -4,7 +4,7 @@
 
 This plan tracks the immediate security patch work discussed by DJ/OpenClaw. It focuses on route auth coverage, admin enforcement, secret redaction, safer public errors, JWT hardening, unsafe route review, and production smoke tests.
 
-Several patches are already implemented and guarded locally. The first runtime RBAC permission layer is also implemented for `/users`, settings, carrier accounts, and carrier verification, with explicit client/store scope filtering started for `/clients`, `/init`, `/dashboard`, `/analysis`, `/inventory`, `/billing`, and `GET /print-queue`. Remaining work is mostly production verification, remaining operational route scoping, audit logging, credential governance, and deeper raw-error review.
+Several patches are already implemented and guarded locally. The first runtime RBAC permission layer is also implemented for `/users`, settings, carrier accounts, and carrier verification, with explicit client/store scope filtering started for `/clients`, `/init`, `/dashboard`, `/analysis`, `/inventory`, `/billing`, and `/print-queue` list/action ownership. Remaining work is mostly production verification, remaining operational route scoping, audit logging, credential governance, and deeper raw-error review.
 
 ## Critical Blockers
 
@@ -33,7 +33,7 @@ Several patches are already implemented and guarded locally. The first runtime R
 
 | Area | Concern | Recommended Patch |
 |---|---|---|
-| RBAC | first permission layer exists and client/init/dashboard/analysis/inventory/billing/print-queue list scoping has started, but operational route row scoping is not complete | continue route-by-route client/store scope implementation |
+| RBAC | first permission layer exists and client/init/dashboard/analysis/inventory/billing/print-queue list/action scoping has started, but operational route row scoping is not complete | continue route-by-route client/store scope implementation |
 | client scoping | authenticated users may need row-level/client-level limits | add client/store scope policies and tests |
 | credential governance | rotation, last-used, and audit events are not complete | central credential audit events and rotation process |
 | logs | secrets/tokens need log scan | add redaction policy and log scan checklist |
@@ -68,6 +68,8 @@ Several patches are already implemented and guarded locally. The first runtime R
 - [x] Add `npm run test:billing-client-scope`.
 - [x] Add Print Queue list endpoint row-scope query filters.
 - [x] Add `npm run test:print-queue-client-scope`.
+- [x] Add Print Queue action/job ownership checks.
+- [x] Add `npm run test:print-queue-ownership`.
 - [ ] Build remaining operational route row-scope query filters.
 - [ ] Add audit logs for credential and admin actions.
 
@@ -125,6 +127,7 @@ Several patches are already implemented and guarded locally. The first runtime R
 - `npm run test:inventory-client-scope`
 - `npm run test:billing-client-scope`
 - `npm run test:print-queue-client-scope`
+- `npm run test:print-queue-ownership`
 - `npm run test:client-redaction`
 - `npm run test:credential-accounts`
 - `npm run test:frontend-failure-states`

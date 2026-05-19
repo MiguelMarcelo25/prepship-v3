@@ -3,6 +3,9 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import {
   addToQueue,
+  assertPrintQueueClientsVisible,
+  canViewMergeJob,
+  canViewQueueSendJob,
   clearQueue,
   getQueueSendJobStatus,
   getMergeJobStatus,
@@ -71,6 +74,7 @@ app.post('/add', zValidator('json', addBody), async (c) => {
     itemDescription: b.item_description ?? null,
     orderQty: b.order_qty ?? 1,
     multiSkuData: b.multi_sku_data ?? null,
+    scope: printQueueScopeFromContext(c),
   });
   return c.json({
     queue_entry_id: entry.id,
@@ -119,6 +123,10 @@ const queueSendBody = z.object({
 
 app.post('/batch-send', zValidator('json', queueSendBody), async (c) => {
   const b = c.req.valid('json');
+  await assertPrintQueueClientsVisible(
+    b.orders.map((order) => order.client_id),
+    printQueueScopeFromContext(c)
+  );
   const result = startQueueSendJob({
     concurrency: b.concurrency,
     orders: b.orders.map((order) => ({
@@ -151,9 +159,11 @@ app.post('/batch-send', zValidator('json', queueSendBody), async (c) => {
   return c.json({ job_id: result.jobId, total: result.total });
 });
 
-app.get('/batch-send/status/:jobId', (c) => {
+app.get('/batch-send/status/:jobId', async (c) => {
   const job = getQueueSendJobStatus(c.req.param('jobId'));
-  if (!job) return c.json({ error: 'Job not found' }, 404);
+  if (!job || !(await canViewQueueSendJob(job, printQueueScopeFromContext(c)))) {
+    return c.json({ error: 'Job not found' }, 404);
+  }
   return c.json({
     job_id: job.jobId,
     status: job.status,
@@ -178,7 +188,7 @@ app.post(
   ),
   async (c) => {
     const body = c.req.valid('json');
-    const cleared = await clearQueue(body?.client_id);
+    const cleared = await clearQueue(body?.client_id, printQueueScopeFromContext(c));
     return c.json({ cleared_count: cleared });
   }
 );
@@ -200,14 +210,17 @@ app.post(
       queueEntryIds: b.queue_entry_ids,
       mergeHeaders: b.merge_headers,
       requestOrigin: new URL(c.req.url).origin,
+      scope: printQueueScopeFromContext(c),
     });
     return c.json({ job_id: result.jobId, total: result.total });
   }
 );
 
-app.get('/print/status/:jobId', (c) => {
+app.get('/print/status/:jobId', async (c) => {
   const job = getMergeJobStatus(c.req.param('jobId'));
-  if (!job) return c.json({ error: 'Job not found' }, 404);
+  if (!job || !(await canViewMergeJob(job, printQueueScopeFromContext(c)))) {
+    return c.json({ error: 'Job not found' }, 404);
+  }
   return c.json({
     job_id: job.jobId,
     status: job.status,
@@ -221,9 +234,15 @@ app.get('/print/status/:jobId', (c) => {
   });
 });
 
-app.get('/print/download/:jobId', (c) => {
+app.get('/print/download/:jobId', async (c) => {
   const job = getMergeJobStatus(c.req.param('jobId'));
-  if (!job || job.status !== 'done' || !job.mergedPdfBase64 || !job.fileName) {
+  if (
+    !job ||
+    !(await canViewMergeJob(job, printQueueScopeFromContext(c))) ||
+    job.status !== 'done' ||
+    !job.mergedPdfBase64 ||
+    !job.fileName
+  ) {
     return c.json({ error: 'Job not found or not ready' }, 404);
   }
   const bytes = Buffer.from(job.mergedPdfBase64, 'base64');
@@ -253,7 +272,7 @@ app.get('/print/download/:jobId', (c) => {
 // exist, which surfaces as a 500 if someone passes a bad id.
 app.delete('/:entryId', async (c) => {
   const entryId = c.req.param('entryId');
-  await removeFromQueue(entryId);
+  await removeFromQueue(entryId, undefined, printQueueScopeFromContext(c));
   return c.json({ removed_entry: entryId });
 });
 

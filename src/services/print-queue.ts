@@ -15,11 +15,13 @@ export type AddToQueueInput = {
   itemDescription?: string | null;
   orderQty?: number;
   multiSkuData?: { sku: string; qty: number }[] | null;
+  scope?: PrintQueueListScope;
 };
 
 export type MergeJob = {
   jobId: string;
   status: 'pending' | 'running' | 'done' | 'error';
+  clientIds: number[];
   progress: number;
   total: number;
   current: number;
@@ -60,6 +62,7 @@ export type QueueSendJobResult = {
 export type QueueSendJob = {
   jobId: string;
   status: 'pending' | 'running' | 'done' | 'error';
+  clientIds: number[];
   progress: number;
   total: number;
   current: number;
@@ -167,6 +170,82 @@ function printQueueScopePredicate(scope: PrintQueueListScope): SQL {
   return sql`(${sql.join(predicates, sql` or `)})`;
 }
 
+function printQueueClientScopePredicate(scope: PrintQueueListScope): SQL {
+  const clientIds = normalizeScopeIds(scope.scopeClientIds);
+  const storeIds = normalizeScopeIds(scope.scopeStoreIds);
+  const predicates: SQL[] = [];
+
+  if (clientIds.length) {
+    predicates.push(sql`${clients.id} = any(${intArraySql(clientIds)})`);
+  }
+  if (storeIds.length) {
+    predicates.push(sql`${clients.storeIds} && ${intArraySql(storeIds)}`);
+  }
+  if (!predicates.length) {
+    return scope.scopeRestricted === true ? sql`false` : sql`true`;
+  }
+  if (predicates.length === 1) return predicates[0]!;
+  return sql`(${sql.join(predicates, sql` or `)})`;
+}
+
+function normalizeClientIds(values: number[]): number[] {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => Number(value))
+        .filter((value) => Number.isInteger(value) && value > 0)
+    )
+  );
+}
+
+export async function assertPrintQueueClientsVisible(
+  clientIds: number[],
+  scope: PrintQueueListScope = {}
+): Promise<void> {
+  const ids = normalizeClientIds(clientIds);
+  if (!ids.length) return;
+  if (
+    scope.scopeRestricted !== true &&
+    !normalizeScopeIds(scope.scopeClientIds).length &&
+    !normalizeScopeIds(scope.scopeStoreIds).length
+  ) {
+    return;
+  }
+
+  const rows = await db
+    .select({ id: clients.id })
+    .from(clients)
+    .where(and(inArray(clients.id, ids), printQueueClientScopePredicate(scope)));
+
+  if (rows.length !== ids.length) {
+    throw new Error('One or more print queue clients are not authorized');
+  }
+}
+
+export async function canViewQueueSendJob(
+  job: QueueSendJob,
+  scope: PrintQueueListScope = {}
+): Promise<boolean> {
+  try {
+    await assertPrintQueueClientsVisible(job.clientIds, scope);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function canViewMergeJob(
+  job: MergeJob,
+  scope: PrintQueueListScope = {}
+): Promise<boolean> {
+  try {
+    await assertPrintQueueClientsVisible(job.clientIds, scope);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function timeoutAfter(ms: number, message: string): Promise<never> {
   return new Promise((_, reject) => {
     setTimeout(() => reject(new Error(message)), ms);
@@ -259,6 +338,8 @@ export async function listQueue(
 export async function addToQueue(
   input: AddToQueueInput
 ): Promise<{ entry: PrintQueueEntry; alreadyQueued: boolean }> {
+  await assertPrintQueueClientsVisible([input.clientId], input.scope);
+
   const [existing] = await db
     .select()
     .from(printQueue)
@@ -316,10 +397,12 @@ export function startQueueSendJob(input: {
 
   cleanOldJobs();
   const jobId = randomUUID();
+  const clientIds = normalizeClientIds(input.orders.map((order) => order.clientId));
   const firstClientId = input.orders.find((order) => Number.isFinite(order.clientId))?.clientId ?? null;
   const job: QueueSendJob = {
     jobId,
     status: 'pending',
+    clientIds,
     progress: 0,
     total: input.orders.length,
     current: 0,
@@ -408,18 +491,23 @@ async function runQueueSendJob(
   }
 }
 
-export async function removeFromQueue(entryId: string, clientId?: number) {
+export async function removeFromQueue(
+  entryId: string,
+  clientId?: number,
+  scope: PrintQueueListScope = {}
+) {
   const where = clientId !== undefined
-    ? and(eq(printQueue.id, entryId), eq(printQueue.clientId, clientId))
-    : eq(printQueue.id, entryId);
+    ? and(eq(printQueue.id, entryId), eq(printQueue.clientId, clientId), printQueueScopePredicate(scope))
+    : and(eq(printQueue.id, entryId), printQueueScopePredicate(scope));
   const [row] = await db.delete(printQueue).where(where).returning();
   if (!row) throw new Error(`Queue entry not found: ${entryId}`);
   return row;
 }
 
-export async function clearQueue(clientId?: number) {
+export async function clearQueue(clientId?: number, scope: PrintQueueListScope = {}) {
   const conds = [eq(printQueue.status, 'queued')];
   if (clientId !== undefined) conds.push(eq(printQueue.clientId, clientId));
+  conds.push(printQueueScopePredicate(scope));
   const rows = await db
     .delete(printQueue)
     .where(and(...conds))
@@ -455,6 +543,7 @@ export async function startPrintJob(input: {
   queueEntryIds: string[];
   mergeHeaders?: boolean;
   requestOrigin?: string;
+  scope?: PrintQueueListScope;
 }): Promise<{ jobId: string; total: number }> {
   if (!input.queueEntryIds.length)
     throw new Error('queueEntryIds must be non-empty');
@@ -463,6 +552,7 @@ export async function startPrintJob(input: {
   if (input.clientId !== undefined) {
     conds.push(eq(printQueue.clientId, input.clientId));
   }
+  conds.push(printQueueScopePredicate(input.scope ?? {}));
   const entries = await db.select().from(printQueue).where(and(...conds));
   if (entries.length !== input.queueEntryIds.length) {
     throw new Error('One or more queue entries not found or unauthorized');
@@ -473,6 +563,7 @@ export async function startPrintJob(input: {
   const job: MergeJob = {
     jobId,
     status: 'pending',
+    clientIds: normalizeClientIds(entries.map((entry) => entry.clientId)),
     progress: 0,
     total: entries.length,
     current: 0,
