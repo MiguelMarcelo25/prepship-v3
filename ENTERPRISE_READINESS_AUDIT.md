@@ -16,6 +16,7 @@ Companion DJ/OpenClaw documents:
 - `OBSERVABILITY_ALERTING_PLAN.md`
 - `OPERATIONAL_RUNBOOKS_AND_DR_PLAN.md`
 - `PRIVACY_COMPLIANCE_PLAN.md`
+- `PRODUCTION_READINESS_SIGNOFF.md`
 - `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md`
 - `SECURITY_PATCH_PLAN.md`
 - `RATE_SYSTEM_HARDENING_PLAN.md`
@@ -54,6 +55,7 @@ Implemented:
 - Observability and alerting plan added as `OBSERVABILITY_ALERTING_PLAN.md`, covering API, DB, Supabase, worker, sync, rate, label, billing, reporting, and frontend runtime signals. `npm run test:observability-alerting` guards the deliverable.
 - Operational runbooks and disaster recovery plan added as `OPERATIONAL_RUNBOOKS_AND_DR_PLAN.md`, covering rates, labels, sync, inventory, billing, print queue, frontend, users, credentials, database restore, rollback, suspicious access, deployment, and DR. `npm run test:operational-runbooks` guards the deliverable.
 - Privacy and compliance plan added as `PRIVACY_COMPLIANCE_PLAN.md`, covering customer PII, order identifiers, label artifacts, billing data, credentials, logs, user metadata, generated reports, retention, deletion, and access review. `npm run test:privacy-compliance` guards the deliverable.
+- Production readiness signoff checklist added as `PRODUCTION_READINESS_SIGNOFF.md`, covering local checks, browser smoke, API auth/security smoke, version parity, Render logs, Supabase health, migration status, reconciliation, alert/runbook readiness, rollback, and owner approval. `npm run test:production-signoff` guards the deliverable.
 
 Confirmed gaps from repo search:
 
@@ -67,6 +69,7 @@ Confirmed gaps from repo search:
 - Observability and alerting are mapped, but runtime metric emitters, dashboards, thresholds, alert destinations, and runbook links are not implemented yet.
 - Operational runbooks and DR are mapped, but dedicated runbook pages, owner approval, restore drills, and rollback drills are not complete yet.
 - Privacy and compliance are mapped, but retention/deletion policy, field-level privacy rules, access reviews, and log redaction scans are not complete yet.
+- Production signoff gates are mapped, but the checklist has not yet been used against a full manual release with evidence links.
 - Label and marketplace order/fee compatibility handlers still need auth/CORS consolidation, but should be handled in a separately scoped review because they touch `orders`/`shipments` write paths.
 
 Current readiness read:
@@ -74,7 +77,7 @@ Current readiness read:
 | Track | Status | Percent |
 |---|---|---:|
 | Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, rate cache diagnostics/bulk semantics, runtime DDL inventory/guard, reporting metrics migration, Walmart selling-fee index cleanup, `store_orders` migration, credential-account DDL cleanup, `order_items` / `analytics_cache` readiness cleanup, and low-risk orders/inventory index cleanup implemented | 85% |
-| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated, RBAC/client-scope route matrix documented, first runtime permission layer implemented, low-risk client/init payload scoping added, dashboard/analysis/inventory/billing/print-queue read/action scoping started, secrets governance matrix added, audit logging matrix added, reconciliation reports plan added, observability/alerting plan added, operational runbooks/DR plan added, and privacy/compliance plan added | 88% |
+| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated, RBAC/client-scope route matrix documented, first runtime permission layer implemented, low-risk client/init payload scoping added, dashboard/analysis/inventory/billing/print-queue read/action scoping started, secrets governance matrix added, audit logging matrix added, reconciliation reports plan added, observability/alerting plan added, operational runbooks/DR plan added, privacy/compliance plan added, and production signoff checklist added | 90% |
 
 ## Critical Blockers
 
@@ -362,6 +365,7 @@ Critical screens:
 - [ ] Load tests for orders/rates/inventory.
 - [ ] Chaos tests for external API failures.
 - [ ] Regression tests for shipped/cancelled immutability.
+- [x] Production readiness signoff checklist scoped in `PRODUCTION_READINESS_SIGNOFF.md`.
 
 Critical workflows:
 
@@ -504,6 +508,7 @@ The detailed privacy/compliance plan now lives in `PRIVACY_COMPLIANCE_PLAN.md`. 
 - `npm run test:observability-alerting`
 - `npm run test:operational-runbooks`
 - `npm run test:privacy-compliance`
+- `npm run test:production-signoff`
 - Unauthenticated `/users` and `/clients` return `401`.
 - Non-admin `/admin/*` returns `403`.
 - `/clients` and `/init/init-data` never return ShipStation secrets.
@@ -556,12 +561,13 @@ The detailed privacy/compliance plan now lives in `PRIVACY_COMPLIANCE_PLAN.md`. 
 5. Review `OBSERVABILITY_ALERTING_PLAN.md` and approve alert owners/thresholds.
 6. Review `OPERATIONAL_RUNBOOKS_AND_DR_PLAN.md` and approve runbook owners.
 7. Review `PRIVACY_COMPLIANCE_PLAN.md` and approve data-class owners.
-8. Implement remaining operational client/store row-scope query filters from `RBAC_CLIENT_SCOPE_MATRIX.md`.
-9. Secrets and credential audit, including audit events.
-10. Migration/runtime DDL cleanup plan.
-11. Durable job status and idempotency plan.
-12. External API resilience metrics and diagnostics.
-13. Data reconciliation reports.
-14. Frontend failure-mode Playwright tests.
-15. Observability and alerting integration.
-16. Deployment, rollback, disaster recovery, and privacy runbooks.
+8. Review `PRODUCTION_READINESS_SIGNOFF.md` and approve release gates.
+9. Implement remaining operational client/store row-scope query filters from `RBAC_CLIENT_SCOPE_MATRIX.md`.
+10. Secrets and credential audit, including audit events.
+11. Migration/runtime DDL cleanup plan.
+12. Durable job status and idempotency plan.
+13. External API resilience metrics and diagnostics.
+14. Data reconciliation reports.
+15. Frontend failure-mode Playwright tests.
+16. Observability and alerting integration.
+17. Deployment, rollback, disaster recovery, privacy, and production signoff runbooks.
