@@ -14,6 +14,7 @@ Companion DJ/OpenClaw documents:
 - `AUDIT_LOGGING_MATRIX.md`
 - `RECONCILIATION_REPORTS_PLAN.md`
 - `OBSERVABILITY_ALERTING_PLAN.md`
+- `OPERATIONAL_RUNBOOKS_AND_DR_PLAN.md`
 - `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md`
 - `SECURITY_PATCH_PLAN.md`
 - `RATE_SYSTEM_HARDENING_PLAN.md`
@@ -50,6 +51,7 @@ Implemented:
 - Audit logging matrix added as `AUDIT_LOGGING_MATRIX.md`, covering credentials, admin/user changes, labels, orders, inventory, packages, billing, settings, sync/backfill, and print queue events. `npm run test:audit-logging` guards the deliverable.
 - Reconciliation reports plan added as `RECONCILIATION_REPORTS_PLAN.md`, covering order, order-item, shipment, label, billing, inventory, package, rate, fulfillment, client/store, and carrier account reconciliation. `npm run test:reconciliation-plan` guards the deliverable.
 - Observability and alerting plan added as `OBSERVABILITY_ALERTING_PLAN.md`, covering API, DB, Supabase, worker, sync, rate, label, billing, reporting, and frontend runtime signals. `npm run test:observability-alerting` guards the deliverable.
+- Operational runbooks and disaster recovery plan added as `OPERATIONAL_RUNBOOKS_AND_DR_PLAN.md`, covering rates, labels, sync, inventory, billing, print queue, frontend, users, credentials, database restore, rollback, suspicious access, deployment, and DR. `npm run test:operational-runbooks` guards the deliverable.
 
 Confirmed gaps from repo search:
 
@@ -61,6 +63,7 @@ Confirmed gaps from repo search:
 - Audit logging is mapped, but the append-only table/service and runtime event writers are not implemented yet.
 - Reconciliation reporting is mapped, but report queries, scheduled runs, artifacts, and repair dry-runs are not implemented yet.
 - Observability and alerting are mapped, but runtime metric emitters, dashboards, thresholds, alert destinations, and runbook links are not implemented yet.
+- Operational runbooks and DR are mapped, but dedicated runbook pages, owner approval, restore drills, and rollback drills are not complete yet.
 - Label and marketplace order/fee compatibility handlers still need auth/CORS consolidation, but should be handled in a separately scoped review because they touch `orders`/`shipments` write paths.
 
 Current readiness read:
@@ -68,7 +71,7 @@ Current readiness read:
 | Track | Status | Percent |
 |---|---|---:|
 | Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, rate cache diagnostics/bulk semantics, runtime DDL inventory/guard, reporting metrics migration, Walmart selling-fee index cleanup, `store_orders` migration, credential-account DDL cleanup, `order_items` / `analytics_cache` readiness cleanup, and low-risk orders/inventory index cleanup implemented | 85% |
-| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated, RBAC/client-scope route matrix documented, first runtime permission layer implemented, low-risk client/init payload scoping added, dashboard/analysis/inventory/billing/print-queue read/action scoping started, secrets governance matrix added, audit logging matrix added, reconciliation reports plan added, and observability/alerting plan added | 84% |
+| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated, RBAC/client-scope route matrix documented, first runtime permission layer implemented, low-risk client/init payload scoping added, dashboard/analysis/inventory/billing/print-queue read/action scoping started, secrets governance matrix added, audit logging matrix added, reconciliation reports plan added, observability/alerting plan added, and operational runbooks/DR plan added | 86% |
 
 ## Critical Blockers
 
@@ -393,6 +396,8 @@ Deliverable table:
 
 ### Deployment / Rollback
 
+- [x] Create `OPERATIONAL_RUNBOOKS_AND_DR_PLAN.md`.
+- [x] Add `npm run test:operational-runbooks`.
 - [ ] Staging environment matches production.
 - [ ] Migrations are tested before deploy.
 - [ ] Rollback process is documented.
@@ -406,8 +411,14 @@ Deliverable table:
 
 Deliverable table:
 
+The detailed deployment/rollback and DR plan now lives in `OPERATIONAL_RUNBOOKS_AND_DR_PLAN.md`. The condensed tracker below shows the first deploy controls to implement.
+
 | Deploy Step | Failure Mode | Rollback Step | Owner | Verification |
 |---|---|---|---|---|
+| Vercel frontend deploy | white screen or API mismatch | rollback previous Vercel deployment | Frontend | incognito app load |
+| Render API deploy | API 5xx, auth failure, route timeout | rollback API to previous commit | API | `/health/ready`, Orders, Rates smoke |
+| Render worker deploy | sync/reporting/rate backfill stuck | rollback worker or pause scheduler | Worker | heartbeat and sync status |
+| Drizzle migration | migration failure or slow lock | stop deploy and apply rollback/restore plan | DB | schema version and app smoke |
 
 ### Compliance / Privacy
 
@@ -423,6 +434,7 @@ Deliverable table:
 
 ### Disaster Recovery
 
+- [x] Disaster recovery matrix scoped in `OPERATIONAL_RUNBOOKS_AND_DR_PLAN.md`.
 - [ ] Automated DB backups.
 - [ ] Point-in-time recovery.
 - [ ] Restore test completed.
@@ -473,6 +485,7 @@ Deliverable table:
 - `npm run test:audit-logging`
 - `npm run test:reconciliation-plan`
 - `npm run test:observability-alerting`
+- `npm run test:operational-runbooks`
 - Unauthenticated `/users` and `/clients` return `401`.
 - Non-admin `/admin/*` returns `403`.
 - `/clients` and `/init/init-data` never return ShipStation secrets.
@@ -523,12 +536,13 @@ Deliverable table:
 3. Review `AUDIT_LOGGING_MATRIX.md` and approve event names.
 4. Review `RECONCILIATION_REPORTS_PLAN.md` and approve report ownership.
 5. Review `OBSERVABILITY_ALERTING_PLAN.md` and approve alert owners/thresholds.
-6. Implement remaining operational client/store row-scope query filters from `RBAC_CLIENT_SCOPE_MATRIX.md`.
-7. Secrets and credential audit, including audit events.
-8. Migration/runtime DDL cleanup plan.
-9. Durable job status and idempotency plan.
-10. External API resilience metrics and diagnostics.
-11. Data reconciliation reports.
-12. Frontend failure-mode Playwright tests.
-13. Observability and alerting integration.
-14. Deployment, rollback, and disaster recovery runbooks.
+6. Review `OPERATIONAL_RUNBOOKS_AND_DR_PLAN.md` and approve runbook owners.
+7. Implement remaining operational client/store row-scope query filters from `RBAC_CLIENT_SCOPE_MATRIX.md`.
+8. Secrets and credential audit, including audit events.
+9. Migration/runtime DDL cleanup plan.
+10. Durable job status and idempotency plan.
+11. External API resilience metrics and diagnostics.
+12. Data reconciliation reports.
+13. Frontend failure-mode Playwright tests.
+14. Observability and alerting integration.
+15. Deployment, rollback, and disaster recovery runbooks.
