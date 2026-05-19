@@ -105,6 +105,10 @@ assert.match(script, /blocked by shipped\/cancelled lockdown/);
 assert.match(script, /Only awaiting_shipment rows can be updated without the shipped-data override/);
 assert.match(script, /allow-shipped-override/);
 assert.match(script, /Per user override `unlock shipped data`/);
+assert.match(script, /shipstation_awaiting_parity\.last_run/);
+assert.match(script, /persistParityRunStatus/);
+assert.match(script, /updatedSafe/);
+assert.match(script, /updatedOverride/);
 
 const ordersRoute = readFileSync('src/routes/orders.ts', 'utf8');
 assert.match(ordersRoute, /visibleAwaitingOrdersPredicate/);

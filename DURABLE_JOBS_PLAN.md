@@ -4,7 +4,7 @@
 
 This Phase 11/12 deliverable defines how PrepShip should move user-visible and operational background jobs from mixed in-memory state toward durable, restart-safe job state. The goal is to prevent lost progress, duplicate work, confusing stuck states, and repeated external API calls when Render restarts or scales.
 
-This is a planning/control batch only. It does not change worker scheduling, print queue behavior, rate backfill behavior, label behavior, shipped/cancelled logic, or database state.
+The first low-risk implementation is now in place for ShipStation Awaiting parity: the reconciliation script persists its latest dry-run/apply summary to `settings` at `shipstation_awaiting_parity.last_run`. This gives support and future status panels a durable audit point without changing worker scheduling, print queue behavior, rate backfill behavior, label behavior, or label purchase flows.
 
 ## Critical Blockers
 
@@ -51,6 +51,7 @@ This is a planning/control batch only. It does not change worker scheduling, pri
 ## Recommended Patches
 
 - [ ] Create a `job_runs` table or adopt pg-boss state as the canonical durable job source.
+- [x] Persist ShipStation Awaiting parity dry-run/apply status to `settings` as an initial durable reconciliation status checkpoint.
 - [ ] Persist job owner, client ids, store ids, status, progress, total, failure count, message, started/finished timestamps, and idempotency key.
 - [ ] Persist large artifacts outside hot job rows with signed/expiring access.
 - [ ] Add helper APIs for start, progress update, terminal success/failure, cancellation, and visibility checks.
@@ -61,6 +62,7 @@ This is a planning/control batch only. It does not change worker scheduling, pri
 ## Test Plan
 
 - `npm run test:durable-jobs-plan`
+- `npm run test:shipstation-awaiting-parity`
 - Future implementation tests:
   - duplicate job start returns existing active job
   - job status survives simulated process restart

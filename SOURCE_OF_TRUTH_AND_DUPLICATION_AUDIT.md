@@ -6,7 +6,7 @@ This is the canonical boss-facing audit for duplicate logic and source-of-truth 
 
 The highest-risk duplication remains around inventory stock calculations, user-visible job state, label side effects, and the last runtime DDL surfaces. Phase 11 Batch 1 moved carrier/store credential account PATCH behavior and table bootstrap logic behind shared helpers. Phase 11 Batch 2 moved rate cache diagnostics and exact/approximate bulk lookup semantics behind the canonical rate service/route boundary. Phase 11 Batch 3 added the runtime DDL inventory and static guard so new request-time schema creation cannot slip in undocumented. Phase 11 Batch 4 moved reporting metrics schema ownership into a Drizzle migration. Phase 11 Batch 5 moved the Walmart selling-fee source index fully to migration ownership. Phase 11 Batch 6 moved marketplace `store_orders` schema ownership into a Drizzle migration. Phase 11 Batch 7 removed credential-account request-time DDL and moved RLS readiness into migration ownership. Phase 11 Batch 8 moved `order_items`, `analytics_cache`, and the order item trigger/function to migration-readiness checks. Phase 11 Batch 9 removed duplicate runtime creation for low-risk orders/inventory performance indexes that were already migration-owned.
 
-Current progress: 85%. This is not 100% because inventory source-of-truth cleanup, durable print/rate-backfill job status, label side-effect status reporting, and remaining shipment-adjacent runtime DDL cleanup still need implementation and production verification.
+Current progress: 86%. This is not 100% because inventory source-of-truth cleanup, durable print/rate-backfill job status, label side-effect status reporting, and remaining shipment-adjacent runtime DDL cleanup still need implementation and production verification. ShipStation Awaiting parity now has a durable last-run status checkpoint in `settings`.
 
 ## Critical Blockers
 
@@ -55,6 +55,7 @@ Current progress: 85%. This is not 100% because inventory source-of-truth cleanu
 - [x] Move credential-account runtime table/index/RLS readiness to migrations.
 - [x] Move `order_items`, `analytics_cache`, and order item trigger/function readiness to migrations.
 - [x] Move low-risk orders/inventory performance index runtime creation to existing migrations.
+- [x] Persist ShipStation Awaiting parity dry-run/apply status to `settings` via `shipstation_awaiting_parity.last_run`.
 - [~] Move runtime table/index bootstrap into migrations.
 - [x] Centralize rate cache key usage, persisted diagnostics, concurrency policy, negative cache, and exact/rough bulk lookup guard.
 - [ ] Add inventory reconciliation service.

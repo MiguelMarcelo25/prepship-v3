@@ -45,6 +45,37 @@ type LocalRow = ShipStationParityLocalOrder & {
   marketplaceProviders: string[] | null;
 };
 
+const PARITY_STATUS_KEY = 'shipstation_awaiting_parity.last_run';
+
+type ShipStationAwaitingParityRunStatus = {
+  version: 1;
+  mode: 'dry-run' | 'apply';
+  ranAt: string;
+  allowShippedOverride: boolean;
+  storeIds: number[] | null;
+  orderNumbers: string[] | null;
+  dateFrom: string | null;
+  pageSize: number;
+  liveAwaiting: number;
+  localChecked: number;
+  findings: number;
+  safeCandidates: number;
+  blocked: number;
+  needsConfirmation: number;
+  shippedOverrideEligible: number;
+  updatedSafe: number | null;
+  updatedOverride: number | null;
+  sampleFindings: Array<{
+    id: number;
+    orderNumber: string | null;
+    externalOrderId: string | null;
+    storeId: number | null;
+    from: string;
+    to: string | null;
+    kind: string;
+  }>;
+};
+
 function argValue(name: string): string | null {
   const prefix = `--${name}=`;
   const inline = process.argv.find((arg) => arg.startsWith(prefix));
@@ -352,6 +383,24 @@ async function applySafeCandidates(
   return { safeUpdated, overrideUpdated };
 }
 
+async function persistParityRunStatus(
+  sql: Sql,
+  status: ShipStationAwaitingParityRunStatus,
+): Promise<void> {
+  try {
+    await sql`
+      INSERT INTO settings (key, value)
+      VALUES (${PARITY_STATUS_KEY}, ${JSON.stringify(status)})
+      ON CONFLICT (key) DO UPDATE SET value = excluded.value
+    `;
+  } catch (err) {
+    console.warn(
+      '[shipstation-awaiting] failed to persist parity status:',
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
 function printUsage(): void {
   console.log(`
 Usage:
@@ -469,10 +518,14 @@ async function main(): Promise<void> {
       }
     }
 
+    let updatedSafe: number | null = null;
+    let updatedOverride: number | null = null;
     if (apply) {
       const { safeUpdated, overrideUpdated } = await applySafeCandidates(sql, findings, {
         allowShippedOverride,
       });
+      updatedSafe = safeUpdated;
+      updatedOverride = overrideUpdated;
       console.log(`\nUpdated ${safeUpdated} safe awaiting_shipment row(s).`);
       if (allowShippedOverride) {
         console.log(`Updated ${overrideUpdated} shipped-data override row(s).`);
@@ -480,6 +533,35 @@ async function main(): Promise<void> {
     } else {
       console.log('\nDry run only. Re-run with --apply after reviewing the candidate table.');
     }
+
+    await persistParityRunStatus(sql, {
+      version: 1,
+      mode: apply ? 'apply' : 'dry-run',
+      ranAt: new Date().toISOString(),
+      allowShippedOverride,
+      storeIds: storeIds ?? null,
+      orderNumbers: orderNumbers ?? null,
+      dateFrom: dateFrom?.toISOString() ?? null,
+      pageSize,
+      liveAwaiting: liveAwaiting.length,
+      localChecked: localRows.length,
+      findings: actionable.length,
+      safeCandidates: safe.length,
+      blocked: blocked.length,
+      needsConfirmation: needsConfirmation.length,
+      shippedOverrideEligible: overrideSafe.length,
+      updatedSafe,
+      updatedOverride,
+      sampleFindings: actionable.slice(0, 25).map((finding) => ({
+        id: finding.id,
+        orderNumber: finding.orderNumber,
+        externalOrderId: finding.externalOrderId,
+        storeId: finding.storeId,
+        from: finding.currentStatus,
+        to: finding.targetStatus,
+        kind: finding.kind,
+      })),
+    });
   } finally {
     await sql.end({ timeout: 1 });
   }
