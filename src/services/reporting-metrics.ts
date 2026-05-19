@@ -1,4 +1,4 @@
-import { sql } from 'drizzle-orm';
+import { sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
 
 const DEFAULT_REFRESH_DAYS = 45;
@@ -6,6 +6,21 @@ const DEFAULT_INVENTORY_LIMIT = 5000;
 const DEFAULT_REPORTING_READ_TIMEOUT_MS = 1200;
 
 let ensurePromise: Promise<void> | null = null;
+
+function normalizeScopeIds(values: number[] | undefined): number[] {
+  if (!Array.isArray(values)) return [];
+  return Array.from(
+    new Set(
+      values
+        .map((value) => Number(value))
+        .filter((value) => Number.isInteger(value) && value > 0)
+    )
+  );
+}
+
+function intArraySql(values: number[]): SQL {
+  return sql`array[${sql.join(values.map((value) => sql`${value}`), sql`, `)}]::int[]`;
+}
 
 type ReportingRefreshScope =
   | 'daily-sales'
@@ -808,11 +823,30 @@ export async function getFreshBillingSummaryMetrics(options: {
   dateFrom: string;
   dateTo: string;
   clientId?: number;
+  scopeClientIds?: number[];
+  scopeStoreIds?: number[];
+  scopeRestricted?: boolean;
   maxAgeMinutes?: number;
 }): Promise<{ clients: BillingSummaryMetricRow[]; grandTotal: number } | null> {
   const maxAgeMinutes = options.maxAgeMinutes ?? 45;
   const fromDay = isoDate(new Date(options.dateFrom));
   const toDay = isoDate(new Date(options.dateTo));
+  const billingMetricsScopePredicate = (() => {
+    const clientIds = normalizeScopeIds(options.scopeClientIds);
+    const storeIds = normalizeScopeIds(options.scopeStoreIds);
+    const predicates: SQL[] = [];
+    if (clientIds.length) {
+      predicates.push(sql`m.client_id = any(${intArraySql(clientIds)})`);
+    }
+    if (storeIds.length) {
+      predicates.push(sql`c.store_ids && ${intArraySql(storeIds)}`);
+    }
+    if (!predicates.length) {
+      return options.scopeRestricted === true ? sql`false` : sql`true`;
+    }
+    if (predicates.length === 1) return predicates[0]!;
+    return sql`(${sql.join(predicates, sql` or `)})`;
+  })();
 
   return optionalReportingRead('billing-summary read model', null, async () => {
     const rows = await db.execute<{
@@ -842,6 +876,7 @@ export async function getFreshBillingSummaryMetrics(options: {
         and m.period_to = ${toDay}::date
         and m.updated_at >= now() - (${maxAgeMinutes} * interval '1 minute')
         and (${options.clientId ?? null}::int is null or m.client_id = ${options.clientId ?? null}::int)
+        and ${billingMetricsScopePredicate}
       order by c.name asc
     `);
 

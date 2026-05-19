@@ -1,7 +1,7 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, asc, desc, eq, notInArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, notInArray, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
 import {
   billingConfig,
@@ -15,6 +15,7 @@ import {
   generateLineItems,
   upsertBillingConfig,
 } from '../services/billing';
+import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 
 const app = new Hono();
 
@@ -22,7 +23,65 @@ const app = new Hono();
 // grids (sqlite-billing-repository.ts listBillableClients / listSummary).
 const SYSTEM_CLIENT_NAMES = ['Manual Orders', 'Rate Browser', 'Api Shipments'];
 
+function normalizeScopeIds(values: number[] | undefined): number[] {
+  if (!Array.isArray(values)) return [];
+  return Array.from(
+    new Set(
+      values
+        .map((value) => Number(value))
+        .filter((value) => Number.isInteger(value) && value > 0)
+    )
+  );
+}
+
+function intArraySql(values: number[]): SQL {
+  return sql`array[${sql.join(values.map((value) => sql`${value}`), sql`, `)}]::int[]`;
+}
+
+function billingScopeFromContext(c: Context): ClientStoreScope {
+  return getClientStoreScope({
+    email: c.get('email' as never) as string | undefined,
+    role: c.get('role' as never) as string | undefined,
+    permissions: c.get('permissions' as never) as string[] | undefined,
+    clientIds: c.get('clientIds' as never) as number[] | undefined,
+    storeIds: c.get('storeIds' as never) as number[] | undefined,
+  });
+}
+
+function billingClientScopePredicate(scope: ClientStoreScope): SQL {
+  const predicates: SQL[] = [];
+  const clientIds = normalizeScopeIds(scope.clientIds);
+  const storeIds = normalizeScopeIds(scope.storeIds);
+
+  if (clientIds.length) {
+    predicates.push(sql`${clients.id} = any(${intArraySql(clientIds)})`);
+  }
+  if (storeIds.length) {
+    predicates.push(sql`${clients.storeIds} && ${intArraySql(storeIds)}`);
+  }
+  if (!predicates.length) {
+    return scope.isRestricted ? sql`false` : sql`true`;
+  }
+  if (predicates.length === 1) return predicates[0]!;
+  return sql`(${sql.join(predicates, sql` or `)})`;
+}
+
+function withBillingScope<T extends object>(c: Context, q: T): T & {
+  scopeClientIds: number[];
+  scopeStoreIds: number[];
+  scopeRestricted: boolean;
+} {
+  const scope = billingScopeFromContext(c);
+  return {
+    ...q,
+    scopeClientIds: scope.clientIds,
+    scopeStoreIds: scope.storeIds,
+    scopeRestricted: scope.isRestricted,
+  };
+}
+
 app.get('/config', async (c) => {
+  const configScope = billingScopeFromContext(c);
   // v2 parity: the Config grid is keyed on `clients`, not `billing_config`.
   // Every active non-system client appears — clients without a billing_config
   // row surface with defaults (pickPackFee: 0, pickPackMaxUnits: 1, etc.) so
@@ -50,7 +109,8 @@ app.get('/config', async (c) => {
     .where(
       and(
         eq(clients.active, true),
-        notInArray(clients.name, SYSTEM_CLIENT_NAMES)
+        notInArray(clients.name, SYSTEM_CLIENT_NAMES),
+        billingClientScopePredicate(configScope)
       )
     )
     .orderBy(asc(clients.name));
@@ -179,11 +239,11 @@ app.post('/generate', zValidator('json', generateSchema), async (c) => {
 
 app.get('/summary', zValidator('query', generateSchema), async (c) => {
   const q = c.req.valid('query');
-  const summary = await billingSummary({
+  const summary = await billingSummary(withBillingScope(c, {
     clientId: q.clientId,
     dateFrom: q.dateFrom!,
     dateTo: q.dateTo!,
-  });
+  }));
   // v2 parity: the primary consumer (v2 BillingView via v2-apiClient shim)
   // reads `data: []` as a flat list with clientName + per-type totals.
   // Keep `clients` + `grandTotal` around for back-compat with the old v4
@@ -197,12 +257,12 @@ app.get('/summary', zValidator('query', generateSchema), async (c) => {
 
 app.get('/details', zValidator('query', detailsSchema), async (c) => {
   const q = c.req.valid('query');
-  const rows = await billingDetails({
+  const rows = await billingDetails(withBillingScope(c, {
     clientId: q.clientId,
     dateFrom: q.dateFrom!,
     dateTo: q.dateTo!,
     limit: q.limit,
-  });
+  }));
   return c.json({ data: rows });
 });
 
@@ -229,9 +289,16 @@ function escHtml(s: string | number | null | undefined): string {
 
 app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
   const { clientId, dateFrom, dateTo } = c.req.valid('query');
+  const invoiceScope = billingScopeFromContext(c);
 
   const clientRow = await db.execute<{ id: number; name: string }>(
-    sql`select id, name from clients where id = ${clientId} and active = true limit 1`
+    sql`
+      select id, name from clients
+      where id = ${clientId}
+        and active = true
+        and ${billingClientScopePredicate(invoiceScope)}
+      limit 1
+    `
   );
   if (!clientRow.length) return c.text('Client not found', 404);
 
@@ -442,10 +509,21 @@ app.get(
   zValidator('query', z.object({ clientId: z.coerce.number().int() })),
   async (c) => {
     const { clientId } = c.req.valid('query');
+    const packagePriceScope = billingScopeFromContext(c);
+    const packagePriceScopePredicate = billingClientScopePredicate(packagePriceScope);
     const rows = await db
       .select()
       .from(clientPackagePrices)
-      .where(eq(clientPackagePrices.clientId, clientId));
+      .where(
+        and(
+          eq(clientPackagePrices.clientId, clientId),
+          sql`exists (
+            select 1 from ${clients}
+            where ${clients.id} = ${clientPackagePrices.clientId}
+              and ${packagePriceScopePredicate}
+          )`
+        )
+      );
     return c.json({ data: rows });
   }
 );

@@ -3,9 +3,9 @@
 ## Current State
 
 - Branch: `prepshipv4-stable`
-- Latest pushed commit before Phase 12 Batch 3D: `72f2f717`
+- Latest pushed commit before Phase 12 Batch 3E: `16a814a1`
 - Worktree at last update: clean
-- Latest completed fix before this batch: Analysis direct endpoint client/store scoping added
+- Latest completed fix before this batch: Inventory read endpoint client/store scoping added
 - Latest production read from user: Rate Browser and live app behavior look healthy after the recent deploys
 - GitHub Actions:
   - `Keep Render API warm`: manual only now
@@ -18,8 +18,8 @@
 | Document | Status | Percent | Why Not 100% |
 |---|---|---:|---|
 | `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md` | Created / active | 85% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, `order_items`/`analytics_cache`, and low-risk orders/inventory indexes moved to migration ownership; inventory truth, durable jobs, label side effects, and shipment-adjacent DDL cleanup still open |
-| `ENTERPRISE_READINESS_AUDIT.md` | Created / active | 70% | Dashboard, Analysis, and Inventory read scoping now apply explicit JWT client/store claims; still needs remaining operational route scoping, audit logs, reconciliation, alerts, DR, runbooks, and authenticated production verification |
-| `SECURITY_PATCH_PLAN.md` | Created / mostly implemented | 91% | Needs live auth smoke tests, strict JWT production rollout, and broader role/client-scope rollout |
+| `ENTERPRISE_READINESS_AUDIT.md` | Created / active | 73% | Dashboard, Analysis, Inventory, and Billing read scoping now apply explicit JWT client/store claims; still needs remaining operational route scoping, audit logs, reconciliation, alerts, DR, runbooks, and authenticated production verification |
+| `SECURITY_PATCH_PLAN.md` | Created / mostly implemented | 92% | Needs live auth smoke tests, strict JWT production rollout, and broader role/client-scope rollout |
 | `RATE_SYSTEM_HARDENING_PLAN.md` | Created / mostly implemented | 72% | Needs browser production verification, duplicate-name UX polish, metrics, durable backfill status |
 
 ## Phase Summary
@@ -32,12 +32,12 @@
 | Phase 4 - `order_items` Normalization | Mostly complete | 83% | Runtime schema bootstrap now checks migrations; needs production trigger/backfill verification and parity tests |
 | Phase 5 - Reporting Read Models | Started | 30% | `analytics_cache` exists, but full dashboard/daily/SKU/inventory/billing read models are not complete |
 | Phase 6 - Inventory Metrics | Partial | 50% | Needs ledger source-of-truth enforcement, reconciliation, and precomputed sold/velocity/restock metrics |
-| Phase 7 - Billing + Packages | Partial/good progress | 60% | Needs billing reconciliation, billing summary read model, package usage metrics, and package ledger hardening |
+| Phase 7 - Billing + Packages | Partial/good progress | 62% | Billing read surfaces now have client/store scope; needs reconciliation, billing summary read model completion, package usage metrics, and package ledger hardening |
 | Phase 8 - Shared Frontend Data Layer | Partial/good progress | 65% | Needs standardized React Query hooks and remaining broad `safe()` fallback cleanup |
 | Phase 9 - Lazy Loading + UI Performance | Partial | 55% | Needs more lazy-loaded drawers/modals/charts/export tools and all-tool browser audit |
-| Phase 10 - DJ/OpenClaw Security + Failure-State Hardening | Mostly complete | 91% | Unauthenticated production auth smoke checks passed and first runtime permission layer exists; dashboard/analysis/inventory/client/init scoping started; needs authenticated secret checks, deeper raw-error route audit, and broader client scoping |
+| Phase 10 - DJ/OpenClaw Security + Failure-State Hardening | Mostly complete | 92% | Unauthenticated production auth smoke checks passed and first runtime permission layer exists; dashboard/analysis/inventory/billing/client/init scoping started; needs authenticated secret checks, deeper raw-error route audit, and broader client scoping |
 | Phase 11 - Source-of-Truth + Duplication Audit | In progress | 85% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, `order_items`/`analytics_cache`, and low-risk orders/inventory indexes moved to migration ownership; inventory/jobs/labels and shipment-adjacent DDL still remain |
-| Phase 12 - Enterprise Readiness | Scoped/started | 70% | Dashboard, Analysis, and Inventory read scoping are implemented for explicit client/store JWT claims; needs remaining operational route query scoping, secrets governance, audit logs, reconciliation, alerts, DR, and runbooks |
+| Phase 12 - Enterprise Readiness | Scoped/started | 73% | Dashboard, Analysis, Inventory, and Billing read scoping are implemented for explicit client/store JWT claims; needs remaining operational route query scoping, secrets governance, audit logs, reconciliation, alerts, DR, and runbooks |
 
 ## Phase Checklist
 
@@ -105,10 +105,11 @@
 - [ ] inventory reconciliation service
 - [ ] precomputed sold/velocity/days-supply/restock metrics
 
-### Phase 7 - Billing + Packages: 60%
+### Phase 7 - Billing + Packages: 62%
 
 - [x] generated billing line items exist
 - [x] billing summary first-load failure no longer fakes `$0.00`
+- [x] billing read endpoints apply explicit client/store scope claims
 - [x] `/packages` lightweight/paginated support
 - [ ] billing reconciliation report
 - [ ] billing summary read model
@@ -134,7 +135,7 @@
 - [ ] split very large frontend views
 - [ ] browser audit all tool pages
 
-### Phase 10 - DJ/OpenClaw Security + Failure-State Hardening: 91%
+### Phase 10 - DJ/OpenClaw Security + Failure-State Hardening: 92%
 
 - [x] `/users` gated
 - [x] protected root + wildcard route gates
@@ -150,6 +151,7 @@
 - [x] first dashboard aggregate client/store scope guard
 - [x] first Analysis read client/store scope guard
 - [x] first Inventory read client/store scope guard
+- [x] first Billing read client/store scope guard
 - [~] live production auth smoke tests
 - [ ] deeper raw-error route audit
 - [ ] formal RBAC/client-scope enforcement
@@ -186,7 +188,7 @@
 - [ ] remaining legacy JWT/CORS copies cleanup
 - [ ] carrier/store endpoint policy final verification
 
-### Phase 12 - Enterprise Readiness: 70%
+### Phase 12 - Enterprise Readiness: 73%
 
 - [x] `ENTERPRISE_READINESS_AUDIT.md`
 - [x] critical/high/medium issue buckets scoped
@@ -206,7 +208,9 @@
 - [x] `npm run test:analysis-client-scope`
 - [x] `/inventory` list/ledger/stats/alerts/detail/detail-ledger/parents/SKU-orders scope filtering for scoped users
 - [x] `npm run test:inventory-client-scope`
-- [ ] remaining operational route query scoping for orders/billing/manifests/print queue
+- [x] `/billing` config/summary/details/invoice/package-prices scope filtering for scoped users
+- [x] `npm run test:billing-client-scope`
+- [ ] remaining operational route query scoping for orders/manifests/print queue
 - [ ] secrets governance
 - [ ] audit logging
 - [ ] reconciliation reports
@@ -241,7 +245,7 @@
    - Label side-effect status reporting.
 5. Continue Phase 12.
    - Review `RBAC_CLIENT_SCOPE_MATRIX.md` with DJ/OpenClaw.
-   - Deploy and smoke-test the runtime RBAC, client/init scope, dashboard scope, analysis scope, and inventory scope layer.
+   - Deploy and smoke-test the runtime RBAC, client/init scope, dashboard scope, analysis scope, inventory scope, and billing scope layer.
    - Implement remaining operational route query scoping in separate reviewed batches.
    - Audit logging.
    - Reconciliation reports.
@@ -258,6 +262,7 @@
 - `npm run test:dashboard-client-scope`
 - `npm run test:analysis-client-scope`
 - `npm run test:inventory-client-scope`
+- `npm run test:billing-client-scope`
 - `npm run test:client-redaction`
 - `npm run test:credential-accounts`
 - `npm run test:rate-system-hardening`

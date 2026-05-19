@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, lte, sql } from 'drizzle-orm';
+import { and, eq, gte, inArray, lte, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
 import {
   billingConfig,
@@ -21,6 +21,9 @@ export type GenerateInput = {
   clientId?: number;
   dateFrom: string; // ISO
   dateTo: string; // ISO
+  scopeClientIds?: number[];
+  scopeStoreIds?: number[];
+  scopeRestricted?: boolean;
 };
 
 // v2 parity constant: the first unit on every order is included in the pick/pack
@@ -49,6 +52,61 @@ function billingSummaryHasValues(summary: { clients: BillingSummaryRow[] }): boo
       row.storageTotal > 0 ||
       row.grandTotal > 0
   );
+}
+
+function normalizeScopeIds(values: number[] | undefined): number[] {
+  if (!Array.isArray(values)) return [];
+  return Array.from(
+    new Set(
+      values
+        .map((value) => Number(value))
+        .filter((value) => Number.isInteger(value) && value > 0)
+    )
+  );
+}
+
+function intArraySql(values: number[]): SQL {
+  return sql`array[${sql.join(values.map((value) => sql`${value}`), sql`, `)}]::int[]`;
+}
+
+function billingClientScopePredicate(input: GenerateInput): SQL {
+  const predicates: SQL[] = [];
+  const clientIds = normalizeScopeIds(input.scopeClientIds);
+  const storeIds = normalizeScopeIds(input.scopeStoreIds);
+
+  if (clientIds.length) {
+    predicates.push(sql`c.id = any(${intArraySql(clientIds)})`);
+  }
+  if (storeIds.length) {
+    predicates.push(sql`c.store_ids && ${intArraySql(storeIds)}`);
+  }
+  if (!predicates.length) {
+    return input.scopeRestricted === true ? sql`false` : sql`true`;
+  }
+  if (predicates.length === 1) return predicates[0]!;
+  return sql`(${sql.join(predicates, sql` or `)})`;
+}
+
+function billingLineItemScopePredicate(input: GenerateInput): SQL {
+  const predicates: SQL[] = [];
+  const clientIds = normalizeScopeIds(input.scopeClientIds);
+  const storeIds = normalizeScopeIds(input.scopeStoreIds);
+
+  if (clientIds.length) {
+    predicates.push(sql`${billingLineItems.clientId} = any(${intArraySql(clientIds)})`);
+  }
+  if (storeIds.length) {
+    predicates.push(sql`exists (
+      select 1 from clients scoped_client
+      where scoped_client.id = ${billingLineItems.clientId}
+        and scoped_client.store_ids && ${intArraySql(storeIds)}
+    )`);
+  }
+  if (!predicates.length) {
+    return input.scopeRestricted === true ? sql`false` : sql`true`;
+  }
+  if (predicates.length === 1) return predicates[0]!;
+  return sql`(${sql.join(predicates, sql` or `)})`;
 }
 
 function stringOrNull(value: unknown): string | null {
@@ -785,6 +843,7 @@ async function hasBillingLineItemsForSummary(input: GenerateInput): Promise<bool
       where ship_date >= ${input.dateFrom}::timestamptz
         and ship_date <= ${input.dateTo}::timestamptz
         ${input.clientId !== undefined ? sql`and client_id = ${input.clientId}` : sql``}
+        and ${billingLineItemScopePredicate(input)}
       limit 1
     ) as exists
   `);
@@ -806,6 +865,9 @@ export async function billingSummary(
     dateFrom: input.dateFrom,
     dateTo: input.dateTo,
     clientId: input.clientId,
+    scopeClientIds: input.scopeClientIds,
+    scopeStoreIds: input.scopeStoreIds,
+    scopeRestricted: input.scopeRestricted,
     maxAgeMinutes: 45,
   }).catch((err) => {
     console.warn(
@@ -829,6 +891,9 @@ export async function billingSummary(
           dateFrom: input.dateFrom,
           dateTo: input.dateTo,
           clientId: input.clientId,
+          scopeClientIds: input.scopeClientIds,
+          scopeStoreIds: input.scopeStoreIds,
+          scopeRestricted: input.scopeRestricted,
           maxAgeMinutes: 45,
         });
         if (refreshedMetrics) return refreshedMetrics;
@@ -855,6 +920,7 @@ export async function billingSummary(
       where c.active = true
         and c.name not in ('Manual Orders', 'Rate Browser', 'Api Shipments')
         ${input.clientId !== undefined ? sql`and c.id = ${input.clientId}` : sql``}
+        and ${billingClientScopePredicate(input)}
       order by c.name asc
     `);
 
@@ -922,6 +988,7 @@ export async function billingSummary(
     where c.active = true
       and c.name not in ('Manual Orders', 'Rate Browser', 'Api Shipments')
       ${input.clientId !== undefined ? sql`and c.id = ${input.clientId}` : sql``}
+      and ${billingClientScopePredicate(input)}
     group by c.id, c.name
     order by c.name asc
   `);
@@ -1007,7 +1074,8 @@ export async function billingDetails(input: GenerateInput & { limit?: number }) 
         lte(billingLineItems.shipDate, to),
         input.clientId !== undefined
           ? eq(billingLineItems.clientId, input.clientId)
-          : undefined
+          : undefined,
+        billingLineItemScopePredicate(input)
       )
     )
     .orderBy(billingLineItems.shipDate)
