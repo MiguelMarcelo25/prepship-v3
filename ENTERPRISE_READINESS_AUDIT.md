@@ -11,6 +11,7 @@ Companion DJ/OpenClaw documents:
 - `DEV_TASKS_README.md`
 - `RBAC_CLIENT_SCOPE_MATRIX.md`
 - `SECRETS_GOVERNANCE_MATRIX.md`
+- `AUDIT_LOGGING_MATRIX.md`
 - `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md`
 - `SECURITY_PATCH_PLAN.md`
 - `RATE_SYSTEM_HARDENING_PLAN.md`
@@ -44,6 +45,7 @@ Implemented:
 - Print Queue list scope layer added: `GET /print-queue` applies explicit client/store JWT scope for queued entry reads, and `npm run test:print-queue-client-scope` guards the behavior.
 - Print Queue ownership layer added: add, clear, delete, print-job creation/status/download, and batch-send startup/status validate explicit client/store JWT scope, and `npm run test:print-queue-ownership` guards the behavior.
 - Secrets governance matrix added as `SECRETS_GOVERNANCE_MATRIX.md`, covering Supabase, ShipStation, carrier/store, marketplace OAuth, direct carrier, and label URL credential/artifact classes. `npm run test:secrets-governance` guards the deliverable.
+- Audit logging matrix added as `AUDIT_LOGGING_MATRIX.md`, covering credentials, admin/user changes, labels, orders, inventory, packages, billing, settings, sync/backfill, and print queue events. `npm run test:audit-logging` guards the deliverable.
 
 Confirmed gaps from repo search:
 
@@ -52,7 +54,8 @@ Confirmed gaps from repo search:
 - Durable job state is mixed: scheduler protection has improved, but print queue/rate backfill and some compatibility paths still need restart-safe progress guarantees.
 - Broad frontend `safe()` fallback usage remains and needs a failure-mode sweep.
 - Secrets governance is mapped, but rotation, last-used tracking, audit events, and production log/response smoke tests are not complete yet.
-- Audit logging and reconciliation are planning items; they are not complete yet.
+- Audit logging is mapped, but the append-only table/service and runtime event writers are not implemented yet.
+- Reconciliation is a planning item; it is not complete yet.
 - Label and marketplace order/fee compatibility handlers still need auth/CORS consolidation, but should be handled in a separately scoped review because they touch `orders`/`shipments` write paths.
 
 Current readiness read:
@@ -60,7 +63,7 @@ Current readiness read:
 | Track | Status | Percent |
 |---|---|---:|
 | Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, rate cache diagnostics/bulk semantics, runtime DDL inventory/guard, reporting metrics migration, Walmart selling-fee index cleanup, `store_orders` migration, credential-account DDL cleanup, `order_items` / `analytics_cache` readiness cleanup, and low-risk orders/inventory index cleanup implemented | 85% |
-| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated, RBAC/client-scope route matrix documented, first runtime permission layer implemented, low-risk client/init payload scoping added, dashboard/analysis/inventory/billing/print-queue read/action scoping started, and secrets governance matrix added | 78% |
+| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated, RBAC/client-scope route matrix documented, first runtime permission layer implemented, low-risk client/init payload scoping added, dashboard/analysis/inventory/billing/print-queue read/action scoping started, secrets governance matrix added, and audit logging matrix added | 80% |
 
 ## Critical Blockers
 
@@ -209,6 +212,8 @@ Deliverable table:
 
 ### Audit Logging
 
+- [x] Create `AUDIT_LOGGING_MATRIX.md`.
+- [x] Add `npm run test:audit-logging`.
 - [ ] User login/logout/admin role changes.
 - [ ] Client create/update/delete.
 - [ ] Credential create/update/delete.
@@ -224,8 +229,15 @@ Deliverable table:
 
 Deliverable table:
 
+The full event matrix now lives in `AUDIT_LOGGING_MATRIX.md`. The condensed tracker below shows the first event groups to implement.
+
 | Action | Audited? | Actor Captured? | Before/After Captured? | Fix |
 |---|---|---|---|---|
+| credential create/update/delete | [ ] | [ ] | [ ] | add audit service and wrap credential service writes |
+| admin/user permission change | [ ] | [ ] | [ ] | audit user-management routes |
+| billing config/generation/export | [ ] | [ ] | [ ] | audit billing generation and export actions |
+| inventory/package receive/adjust | [ ] | [ ] | [ ] | audit operational quantity changes |
+| label/order/shipped override actions | [ ] | [ ] | [ ] | handle in separate reviewed operational batch |
 
 ### Background Jobs / Distributed Safety
 
@@ -434,6 +446,7 @@ Deliverable table:
 - `npm run test:print-queue-client-scope`
 - `npm run test:print-queue-ownership`
 - `npm run test:secrets-governance`
+- `npm run test:audit-logging`
 - Unauthenticated `/users` and `/clients` return `401`.
 - Non-admin `/admin/*` returns `403`.
 - `/clients` and `/init/init-data` never return ShipStation secrets.
@@ -481,12 +494,13 @@ Deliverable table:
 
 1. Smoke-test the runtime RBAC, client/init scope, dashboard scope, analysis scope, inventory scope, billing scope, and print-queue list/action scope layer after deploy.
 2. Review `SECRETS_GOVERNANCE_MATRIX.md`, assign credential owners, and decide rotation/last-used/audit rollout order.
-3. Implement remaining operational client/store row-scope query filters from `RBAC_CLIENT_SCOPE_MATRIX.md`.
-4. Secrets and credential audit, including audit events.
-5. Migration/runtime DDL cleanup plan.
-6. Durable job status and idempotency plan.
-7. External API resilience metrics and diagnostics.
-8. Data reconciliation reports.
-9. Frontend failure-mode Playwright tests.
-10. Observability and alerting integration.
-11. Deployment, rollback, and disaster recovery runbooks.
+3. Review `AUDIT_LOGGING_MATRIX.md` and approve event names.
+4. Implement remaining operational client/store row-scope query filters from `RBAC_CLIENT_SCOPE_MATRIX.md`.
+5. Secrets and credential audit, including audit events.
+6. Migration/runtime DDL cleanup plan.
+7. Durable job status and idempotency plan.
+8. External API resilience metrics and diagnostics.
+9. Data reconciliation reports.
+10. Frontend failure-mode Playwright tests.
+11. Observability and alerting integration.
+12. Deployment, rollback, and disaster recovery runbooks.

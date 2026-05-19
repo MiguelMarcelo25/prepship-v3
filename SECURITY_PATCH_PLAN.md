@@ -4,7 +4,7 @@
 
 This plan tracks the immediate security patch work discussed by DJ/OpenClaw. It focuses on route auth coverage, admin enforcement, secret redaction, safer public errors, JWT hardening, unsafe route review, and production smoke tests.
 
-Several patches are already implemented and guarded locally. The first runtime RBAC permission layer is also implemented for `/users`, settings, carrier accounts, and carrier verification, with explicit client/store scope filtering started for `/clients`, `/init`, `/dashboard`, `/analysis`, `/inventory`, `/billing`, and `/print-queue` list/action ownership. The first secrets governance matrix is also created. Remaining work is mostly production verification, remaining operational route scoping, audit logging, credential rotation/last-used tracking, and deeper raw-error review.
+Several patches are already implemented and guarded locally. The first runtime RBAC permission layer is also implemented for `/users`, settings, carrier accounts, and carrier verification, with explicit client/store scope filtering started for `/clients`, `/init`, `/dashboard`, `/analysis`, `/inventory`, `/billing`, and `/print-queue` list/action ownership. The first secrets governance and audit logging matrices are also created. Remaining work is mostly production verification, remaining operational route scoping, runtime audit event implementation, credential rotation/last-used tracking, and deeper raw-error review.
 
 ## Critical Blockers
 
@@ -36,6 +36,7 @@ Several patches are already implemented and guarded locally. The first runtime R
 | RBAC | first permission layer exists and client/init/dashboard/analysis/inventory/billing/print-queue list/action scoping has started, but operational route row scoping is not complete | continue route-by-route client/store scope implementation |
 | client scoping | authenticated users may need row-level/client-level limits | add client/store scope policies and tests |
 | credential governance | matrix exists, but rotation, last-used, and audit events are not complete | central credential audit events and rotation process |
+| audit logging | event matrix exists, but append-only audit table/service is not implemented | add audit events for credential/admin/business-critical changes |
 | logs | secrets/tokens need log scan | add redaction policy and log scan checklist |
 | runtime DDL | credential tables still have compatibility bootstrap paths | move DDL to migrations |
 
@@ -72,6 +73,8 @@ Several patches are already implemented and guarded locally. The first runtime R
 - [x] Add `npm run test:print-queue-ownership`.
 - [x] Add `SECRETS_GOVERNANCE_MATRIX.md`.
 - [x] Add `npm run test:secrets-governance`.
+- [x] Add `AUDIT_LOGGING_MATRIX.md`.
+- [x] Add `npm run test:audit-logging`.
 - [ ] Build remaining operational route row-scope query filters.
 - [ ] Add audit logs for credential and admin actions.
 
@@ -131,6 +134,7 @@ Several patches are already implemented and guarded locally. The first runtime R
 - `npm run test:print-queue-client-scope`
 - `npm run test:print-queue-ownership`
 - `npm run test:secrets-governance`
+- `npm run test:audit-logging`
 - `npm run test:client-redaction`
 - `npm run test:credential-accounts`
 - `npm run test:frontend-failure-states`
