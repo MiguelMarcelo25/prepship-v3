@@ -18,6 +18,7 @@ Companion DJ/OpenClaw documents:
 - `PRIVACY_COMPLIANCE_PLAN.md`
 - `PRODUCTION_READINESS_SIGNOFF.md`
 - `DURABLE_JOBS_PLAN.md`
+- `JWT_SESSION_EXPIRATION_PLAN.md`
 - `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md`
 - `SECURITY_PATCH_PLAN.md`
 - `RATE_SYSTEM_HARDENING_PLAN.md`
@@ -61,6 +62,7 @@ Implemented:
 - Privacy and compliance plan added as `PRIVACY_COMPLIANCE_PLAN.md`, covering customer PII, order identifiers, label artifacts, billing data, credentials, logs, user metadata, generated reports, retention, deletion, and access review. `npm run test:privacy-compliance` guards the deliverable.
 - Production readiness signoff checklist added as `PRODUCTION_READINESS_SIGNOFF.md`, covering local checks, browser smoke, API auth/security smoke, version parity, Render logs, Supabase health, migration status, reconciliation, alert/runbook readiness, rollback, and owner approval. `npm run test:production-signoff` guards the deliverable.
 - Durable jobs plan added as `DURABLE_JOBS_PLAN.md`, covering sync, reporting refresh, rate backfill, billing reference-rate fetch, print queue batch send, print queue PDF merge, and fulfillment outbox durable status strategy. `npm run test:durable-jobs-plan` guards the deliverable.
+- JWT/session expiration plan added as `JWT_SESSION_EXPIRATION_PLAN.md`, documenting the 7-day Supabase Auth time-box session policy while keeping access JWTs short-lived. `npm run test:jwt-session-policy` guards the deliverable.
 
 Confirmed gaps from repo search:
 
@@ -83,6 +85,7 @@ Current readiness read:
 |---|---|---:|
 | Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, rate cache diagnostics/bulk semantics, runtime DDL inventory/guard, reporting metrics migration, Walmart selling-fee index cleanup, `store_orders` migration, credential-account DDL cleanup, `order_items` / `analytics_cache` readiness cleanup, low-risk orders/inventory index cleanup, ShipStation Awaiting parity latest-run status, rate backfill latest-run status, billing reference-rate latest-run status, print queue send/merge latest-run status, and durable job strategy documented | 94% |
 | Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated, RBAC/client-scope route matrix documented, first runtime permission layer implemented, low-risk client/init payload scoping added, dashboard/analysis/inventory/billing/print-queue/orders/manifests read/action scoping started, secrets governance matrix added, audit logging matrix added, reconciliation reports plan added, marketplace awaiting-count reconciliation guarded, observability/alerting plan added, operational runbooks/DR plan added, privacy/compliance plan added, production signoff checklist added, and key operational jobs now persist latest-run status | 95% |
+| Phase 13 JWT/session expiration | 7-day maximum login session policy documented and guarded; access JWTs remain short-lived | 45% |
 
 ## Critical Blockers
 
@@ -94,6 +97,7 @@ Current readiness read:
 | User-visible jobs are not all durable | Restart/multi-instance can lose or duplicate work | DB-backed job state, idempotency, locks, failure state | Restart and dual-worker tests |
 | Audit logging is not comprehensive | Cannot prove who changed business-critical data | Append-only audit events for credentials, labels, orders, inventory, billing, settings | Audit table/API/event tests |
 | Reconciliation reports are missing | Inventory, billing, label, and fulfillment truth can diverge silently | Scheduled reconciliation reports with repair process | Reconciliation queries and mismatch test data |
+| 7-day session policy requires Supabase admin action | Code/docs cannot set the hosted Supabase Auth time-box by themselves | Supabase Auth time-box user sessions set to 7 days with short-lived access JWTs | `npm run test:jwt-session-policy` plus staging/production smoke evidence |
 
 ## High-Risk Issues
 
@@ -159,6 +163,24 @@ The full route matrix now lives in `RBAC_CLIENT_SCOPE_MATRIX.md`. The condensed 
 | `/manifests`, `/manifests/*` | admin/operator/warehouse/support | client scoped manifest shipments | `requireAuth`; GET/POST generate filter explicit JWT `clientIds` / `storeIds` | location policy and production smoke tests still need review | add location-aware tests if assignments are enabled | scoped user cannot access another client's manifest rows |
 | `/print-queue`, `/print-queue/*` | admin/operator/warehouse/support | client scoped queue entries and queue jobs | `requireAuth`; list/add/clear/delete/print/status/download and batch-send startup/status scope checks for explicit JWT claims | durable job state, location policy, and production smoke tests still need review | move job progress to durable state and add browser/API smoke tests | client user/support cannot read or mutate another client's queue entries or jobs |
 | `/carrier-accounts`, `/store-accounts`, `/settings/*` | admin/operator with credential/settings permission | account/client assignment scope | Render carrier-account route has method-aware credential permission; settings have read/write permission gates | Vercel compatibility and audit logging still need follow-up | central credential service + audit events | non-credential role cannot write credential endpoints |
+
+### JWT Session Expiration
+
+- [x] Create `JWT_SESSION_EXPIRATION_PLAN.md`.
+- [x] Add `npm run test:jwt-session-policy`.
+- [x] Keep backend JWT `exp` validation through `jose`.
+- [x] Keep access JWTs short-lived rather than extending them to 7 days.
+- [ ] Set Supabase Auth time-box user sessions to 7 days.
+- [ ] Verify expired-session behavior in staging with a short temporary time-box.
+- [ ] Capture production login and forced re-login evidence.
+
+Deliverable table:
+
+| Control | Current State | Gap | Required Fix | Test |
+|---|---|---|---|---|
+| Access JWT expiry | verified by `jose`; should remain short-lived | production Auth setting needs review | keep/prefer 1-hour access JWT expiry | auth smoke and Supabase settings review |
+| Session max lifetime | policy documented | Supabase time-box setting must be set by project admin | set time-box user sessions to 7 days | staging short-timebox proof and production signoff |
+| Strict issuer/audience | optional env flag exists | not yet enabled in production | test then enable `STRICT_JWT_CLAIMS=true` separately | login/API token compatibility smoke |
 
 ### Secrets / Credential Management
 
@@ -531,6 +553,7 @@ The detailed privacy/compliance plan now lives in `PRIVACY_COMPLIANCE_PLAN.md`. 
 - `npm run test:privacy-compliance`
 - `npm run test:production-signoff`
 - `npm run test:durable-jobs-plan`
+- `npm run test:jwt-session-policy`
 - Unauthenticated `/users` and `/clients` return `401`.
 - Non-admin `/admin/*` returns `403`.
 - `/clients` and `/init/init-data` never return ShipStation secrets.
@@ -570,6 +593,7 @@ The detailed privacy/compliance plan now lives in `PRIVACY_COMPLIANCE_PLAN.md`. 
 
 - Deploy high-risk fixes in small batches with smoke tests between each batch.
 - Keep strict JWT claims disabled until production token compatibility is verified.
+- Enforce the 7-day login limit through Supabase Auth time-boxed sessions, not 7-day access JWTs.
 - Keep compatibility routes until Vercel/Render rewrite behavior is verified.
 - Roll back by reverting the last batch if auth, billing, rates, labels, or inventory smoke tests fail.
 - Do not remove runtime DDL until matching migrations have been applied and verified.
@@ -588,9 +612,10 @@ The detailed privacy/compliance plan now lives in `PRIVACY_COMPLIANCE_PLAN.md`. 
 10. Secrets and credential audit, including audit events.
 11. Migration/runtime DDL cleanup plan.
 12. Review `DURABLE_JOBS_PLAN.md` and approve durable job storage target.
-13. Durable job status and idempotency implementation.
-14. External API resilience metrics and diagnostics.
-15. Data reconciliation reports.
-16. Frontend failure-mode Playwright tests.
-17. Observability and alerting integration.
-18. Deployment, rollback, disaster recovery, privacy, and production signoff runbooks.
+13. Review `JWT_SESSION_EXPIRATION_PLAN.md` and have DJ/admin set Supabase Auth time-box user sessions to 7 days.
+14. Durable job status and idempotency implementation.
+15. External API resilience metrics and diagnostics.
+16. Data reconciliation reports.
+17. Frontend failure-mode Playwright tests.
+18. Observability and alerting integration.
+19. Deployment, rollback, disaster recovery, privacy, and production signoff runbooks.

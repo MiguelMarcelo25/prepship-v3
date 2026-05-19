@@ -2,9 +2,11 @@
 
 ## Executive Summary
 
-This plan tracks the immediate security patch work discussed by DJ/OpenClaw. It focuses on route auth coverage, admin enforcement, secret redaction, safer public errors, JWT hardening, unsafe route review, and production smoke tests.
+This plan tracks the immediate security patch work discussed by DJ/OpenClaw. It focuses on route auth coverage, admin enforcement, secret redaction, safer public errors, JWT hardening, unsafe route review, JWT/session expiration policy, and production smoke tests.
 
 Several patches are already implemented and guarded locally. The first runtime RBAC permission layer is also implemented for `/users`, settings, carrier accounts, and carrier verification, with explicit client/store scope filtering started for `/clients`, `/init`, `/dashboard`, `/analysis`, `/inventory`, `/billing`, and `/print-queue` list/action ownership. The first secrets governance, audit logging, and reconciliation plan matrices are also created. Remaining work is mostly production verification, remaining operational route scoping, runtime audit/reconciliation implementation, credential rotation/last-used tracking, and deeper raw-error review.
+
+Phase 13 adds `JWT_SESSION_EXPIRATION_PLAN.md`: PrepShip should enforce a 7-day maximum login session through Supabase Auth time-boxed sessions while keeping access JWTs short-lived.
 
 ## Critical Blockers
 
@@ -25,6 +27,7 @@ Several patches are already implemented and guarded locally. The first runtime R
 | `/admin` enforcement | [x] `requireAdmin` root and wildcard guarded | production non-admin smoke test still needed | test non-admin token returns `403` |
 | client redaction | [x] `/clients` and `/init/init-data` guarded by mapper tests | future endpoints can return raw clients if not audited | route audit for all client-returning endpoints |
 | JWT strict claims | [x] optional strict issuer/audience support exists | strict mode needs staged token compatibility check | enable `STRICT_JWT_CLAIMS=true` only after login/token test |
+| JWT session expiration | [x] 7-day session policy documented in `JWT_SESSION_EXPIRATION_PLAN.md` | Supabase dashboard setting and expiry UX still need production proof | set Supabase Auth time-box user sessions to 7 days; keep access JWTs short-lived |
 | safe errors | [~] credential handlers use safer generic 500s | wider route handlers may still return `err.message` | audit and patch raw error responses |
 | unsafe proxy | [x] `/aws-api` rewrite removed | confirm no external workflow depends on it | production route/rewrite smoke test |
 | mock labels | [x] signed/expiring mock label URLs | confirm no real PII enters mock labels | route review and sample response check |
@@ -78,6 +81,8 @@ Several patches are already implemented and guarded locally. The first runtime R
 - [x] Add `npm run test:audit-logging`.
 - [x] Add `RECONCILIATION_REPORTS_PLAN.md`.
 - [x] Add `npm run test:reconciliation-plan`.
+- [x] Add `JWT_SESSION_EXPIRATION_PLAN.md`.
+- [x] Add `npm run test:jwt-session-policy`.
 - [ ] Build remaining operational route row-scope query filters.
 - [ ] Add audit logs for credential and admin actions.
 
@@ -122,6 +127,9 @@ Several patches are already implemented and guarded locally. The first runtime R
 - [ ] `/init/init-data` with token has no ShipStation secrets
 - [ ] normal login still works with current JWT settings
 - [ ] strict JWT claims tested before production enablement
+- [ ] Supabase Auth time-box user sessions is set to 7 days
+- [ ] access JWT expiry remains short-lived, preferably current/default 1 hour
+- [ ] expired-session behavior returns users to login cleanly
 
 ## Test Plan
 
@@ -139,6 +147,7 @@ Several patches are already implemented and guarded locally. The first runtime R
 - `npm run test:secrets-governance`
 - `npm run test:audit-logging`
 - `npm run test:reconciliation-plan`
+- `npm run test:jwt-session-policy`
 - `npm run test:client-redaction`
 - `npm run test:credential-accounts`
 - `npm run test:frontend-failure-states`
@@ -148,6 +157,8 @@ Several patches are already implemented and guarded locally. The first runtime R
 ## Deployment/Rollback Notes
 
 - Keep `STRICT_JWT_CLAIMS=false` until production token compatibility is verified.
+- Keep access JWT expiry short; do not set access JWT lifetime to 7 days.
+- Enforce the 7-day login limit through Supabase Auth time-boxed sessions.
 - Deploy auth/secret changes separately from broader client/store row-scope changes.
 - If production login breaks after strict claims are enabled, disable `STRICT_JWT_CLAIMS` and redeploy/restart.
 - If a route starts returning unexpected 401/403, check root/wildcard route registration and token audience/issuer first.

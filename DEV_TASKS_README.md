@@ -5,13 +5,14 @@
 - Branch: `prepshipv4-stable`
 - Latest pushed commit before this Orders/Manifests scope batch: `5878e2ed`
 - Worktree at last update: clean
-- Latest implementation batch tracked here: Orders/Manifests client/store read scope
+- Latest implementation batch tracked here: Phase 13 JWT/session expiration policy
 - Latest production read from user: Rate Browser and live app behavior look healthy after the recent deploys
 - GitHub Actions:
   - `Keep Render API warm`: manual only now
   - `Sync ShipStation orders + shipments`: manual only now
   - `CI`: still runs on push/PR
 - Render worker remains the primary background scheduler.
+- New Phase 13 tracks the Supabase Auth 7-day maximum login session policy.
 
 ## Four DJ/OpenClaw Docs
 
@@ -21,6 +22,12 @@
 | `ENTERPRISE_READINESS_AUDIT.md` | Created / active | 95% | Dashboard, Analysis, Inventory, Billing, Print Queue, Orders, and Manifests now apply explicit JWT client/store claims on key read surfaces; secrets governance, audit logging, reconciliation reporting, observability/alerting, runbook/DR planning, privacy/compliance, and production signoff are mapped; marketplace awaiting-count reconciliation and key operational latest-run statuses have guarded paths; still needs label/shipment-sensitive policy, broader runtime audit/reconciliation/alert implementation, DR drills, artifact durability, and authenticated production verification |
 | `SECURITY_PATCH_PLAN.md` | Created / mostly implemented | 95% | Needs live auth smoke tests, strict JWT production rollout, label/shipment-sensitive scope review, and broader field-level role/client-scope rollout |
 | `RATE_SYSTEM_HARDENING_PLAN.md` | Created / mostly implemented | 78% | Needs browser production verification, duplicate-name UX polish, provider/account metrics, and full backfill progress/events beyond latest-run durability |
+
+## Additional Phase 13 Doc
+
+| Document | Status | Percent | Why Not 100% |
+|---|---|---:|---|
+| `JWT_SESSION_EXPIRATION_PLAN.md` | Created / policy ready | 45% | Repo policy and guard exist; Supabase Auth time-box session setting, staging short-timebox proof, and production verification still require DJ/admin dashboard action |
 
 ## Phase Summary
 
@@ -38,6 +45,7 @@
 | Phase 10 - DJ/OpenClaw Security + Failure-State Hardening | Mostly complete | 95% | Unauthenticated production auth smoke checks passed and first runtime permission layer exists; dashboard/analysis/inventory/billing/print-queue/client/init/orders/manifests scoping started; needs authenticated secret checks, deeper raw-error route audit, and label/shipment-sensitive scope review |
 | Phase 11 - Source-of-Truth + Duplication Audit | In progress | 94% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, `order_items`/`analytics_cache`, low-risk orders/inventory indexes, durable job strategy, ShipStation Awaiting parity status, rate backfill status, billing reference-rate status, and print queue latest-run status moved to documented ownership; inventory truth, labels, full job events/artifacts, and shipment-adjacent DDL still remain |
 | Phase 12 - Enterprise Readiness | Scoped/started | 95% | Dashboard, Analysis, Inventory, Billing, Print Queue, Orders, and Manifests read/action ownership are implemented for explicit client/store JWT claims on key surfaces; secrets governance, audit logging, reconciliation reporting, observability/alerting, runbook/DR planning, privacy/compliance, and production signoff are mapped; marketplace awaiting-count reconciliation and key durable latest-run status paths exist; needs label/shipment-sensitive scope review, broader runtime audit/reconciliation/alert implementation, DR drills, and owner signoff evidence |
+| Phase 13 - JWT Session Expiration | Policy ready | 45% | 7-day session policy is documented and guarded; Supabase Auth time-box setting, staging expiry proof, and production evidence are still manual/admin verification steps |
 
 ## Phase Checklist
 
@@ -270,6 +278,19 @@
 - [~] privacy/compliance checklist
 - [~] production readiness signoff checklist
 
+### Phase 13 - JWT Session Expiration: 45%
+
+- [x] Policy chosen: 7-day maximum Supabase session lifetime
+- [x] Access JWTs remain short-lived, preferably current/default 1 hour
+- [x] `JWT_SESSION_EXPIRATION_PLAN.md`
+- [x] `npm run test:jwt-session-policy`
+- [x] Backend keeps current JWT `exp` validation through `jose`
+- [x] `STRICT_JWT_CLAIMS` stays staged behind env flag
+- [ ] Configure Supabase Auth time-box user sessions to 7 days
+- [ ] Verify expired-session behavior in staging with a short temporary time-box
+- [ ] Verify production login and forced re-login behavior after rollout
+- [ ] Add production evidence to `PRODUCTION_READINESS_SIGNOFF.md`
+
 ## Recommended Next Order
 
 1. Finish production verification after this batch deploys.
@@ -308,6 +329,11 @@
    - Reconciliation reports.
    - Observability alerts.
    - Runbooks and disaster recovery.
+6. Continue Phase 13.
+   - Have DJ/admin set Supabase Auth time-box user sessions to 7 days.
+   - Keep access JWT expiry short; do not set access JWT lifetime to 7 days.
+   - Run staging short-timebox proof before production rollout.
+   - Capture production login and expired-session evidence in the signoff checklist.
 
 ## Verification Commands
 
@@ -336,6 +362,7 @@
 - `npm run test:credential-accounts`
 - `npm run test:rate-system-hardening`
 - `npm run test:runtime-ddl`
+- `npm run test:jwt-session-policy`
 - `npm run test:frontend-failure-states`
 - `npm run test:orders-ux`
 
@@ -347,3 +374,4 @@
 - Browser extension console errors are external and not counted as PrepShip bugs.
 - Shipped/cancelled mutation protections remain locked unless the exact override phrase is given again.
 - `DUPLICATION_OPTIMIZATION_AUDIT.md` is retained as a legacy pointer only.
+- Phase 13 enforces a 7-day login session through Supabase Auth session settings, not through 7-day access JWTs.
