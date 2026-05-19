@@ -3,18 +3,21 @@ import type { CredentialAccountTable, SqlLike } from './credential-accounts';
 const ensuredTables = new Set<CredentialAccountTable>();
 let legacyStoreRowsMigrated = false;
 
-const BASE_CREDENTIAL_ACCOUNT_RELATIONS = [
+const CARRIER_ACCOUNT_RELATIONS = [
   'carrier_accounts',
   'carrier_accounts_client_provider_account_idx',
+  'carrier_account_clients',
+  'carrier_account_clients_pkey',
+  'carrier_account_clients_client_idx',
+];
+
+const STORE_ACCOUNT_RELATIONS = [
   'store_accounts',
   'store_accounts_client_provider_account_idx',
 ];
 
-const CARRIER_ASSIGNMENT_RELATIONS = [
-  'carrier_account_clients',
-  'carrier_account_clients_pkey',
+const CARRIER_ACCOUNT_CONSTRAINTS = [
   'carrier_account_clients_account_fk',
-  'carrier_account_clients_client_idx',
 ];
 
 async function runStatements(
@@ -41,8 +44,8 @@ export async function ensureCredentialAccountRuntimeSchema(
   if (ensuredTables.has(table)) return;
 
   const requiredRelations = table === 'carrier_accounts'
-    ? [...BASE_CREDENTIAL_ACCOUNT_RELATIONS, ...CARRIER_ASSIGNMENT_RELATIONS]
-    : BASE_CREDENTIAL_ACCOUNT_RELATIONS;
+    ? CARRIER_ACCOUNT_RELATIONS
+    : STORE_ACCOUNT_RELATIONS;
 
   const values = requiredRelations.map((relation) => `('${relation}')`).join(', ');
   const missing = (await sql.unsafe(`
@@ -61,8 +64,35 @@ export async function ensureCredentialAccountRuntimeSchema(
     );
   }
 
+  if (table === 'carrier_accounts') {
+    const constraintValues = CARRIER_ACCOUNT_CONSTRAINTS
+      .map((constraint) => `('${constraint}')`)
+      .join(', ');
+    const missingConstraints = (await sql.unsafe(`
+      SELECT constraint_name
+      FROM (VALUES ${constraintValues}) AS expected(constraint_name)
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint c
+        JOIN pg_class rel ON rel.oid = c.conrelid
+        JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+        WHERE nsp.nspname = 'public'
+          AND c.conname = expected.constraint_name
+      )
+      ORDER BY constraint_name
+    `)) as Array<{ constraint_name: string }>;
+
+    if (missingConstraints.length > 0) {
+      const names = missingConstraints.map((row) => row.constraint_name).join(', ');
+      throw new Error(
+        `${table}: credential account migrations are missing constraints: ${names}. ` +
+          'Run drizzle/0027_credential_accounts_source_of_truth.sql before using credential account routes.',
+      );
+    }
+  }
+
   const rlsTables = table === 'carrier_accounts'
-    ? ['carrier_accounts', 'store_accounts', 'carrier_account_clients']
+    ? ['carrier_accounts', 'carrier_account_clients']
     : ['store_accounts'];
   const rlsValues = rlsTables.map((relation) => `('${relation}')`).join(', ');
   const insecure = (await sql.unsafe(`
@@ -75,7 +105,7 @@ export async function ensureCredentialAccountRuntimeSchema(
 
   if (insecure.length > 0) {
     const names = insecure.map((row) => row.table_name).join(', ');
-    throw new Error(
+    console.warn(
       `${table}: credential account tables are missing row-level security: ${names}. ` +
         'Run drizzle/0031_credential_accounts_rls.sql before using credential account routes.',
     );
