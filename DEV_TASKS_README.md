@@ -3,9 +3,10 @@
 ## Current State
 
 - Branch: `prepshipv4-stable`
-- Latest pushed commit before Phase 11 Batch 9: `4f613b20`
+- Latest pushed commit before Phase 12 Batch 1: `a79ff510`
 - Worktree at last update: clean
-- Latest completed fix before this batch: GitHub scheduled production crons disabled and DJ/OpenClaw phase tracker updated
+- Latest completed fix before this batch: low-risk orders/inventory performance index runtime DDL removed and Phase 11 migration cleanup updated
+- Latest production read from user: Rate Browser and live app behavior look healthy after the recent deploys
 - GitHub Actions:
   - `Keep Render API warm`: manual only now
   - `Sync ShipStation orders + shipments`: manual only now
@@ -17,7 +18,7 @@
 | Document | Status | Percent | Why Not 100% |
 |---|---|---:|---|
 | `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md` | Created / active | 85% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, `order_items`/`analytics_cache`, and low-risk orders/inventory indexes moved to migration ownership; inventory truth, durable jobs, label side effects, and shipment-adjacent DDL cleanup still open |
-| `ENTERPRISE_READINESS_AUDIT.md` | Created / active | 50% | Six runtime DDL classes are migration-owned now; needs RBAC, audit logs, reconciliation, alerts, DR, runbooks, and authenticated production verification |
+| `ENTERPRISE_READINESS_AUDIT.md` | Created / active | 53% | RBAC/client-scope matrix is now documented; still needs runtime permission middleware, audit logs, reconciliation, alerts, DR, runbooks, and authenticated production verification |
 | `SECURITY_PATCH_PLAN.md` | Created / mostly implemented | 85% | Needs live auth smoke tests, strict JWT production rollout, `/users` final role policy |
 | `RATE_SYSTEM_HARDENING_PLAN.md` | Created / mostly implemented | 72% | Needs browser production verification, duplicate-name UX polish, metrics, durable backfill status |
 
@@ -36,7 +37,7 @@
 | Phase 9 - Lazy Loading + UI Performance | Partial | 55% | Needs more lazy-loaded drawers/modals/charts/export tools and all-tool browser audit |
 | Phase 10 - DJ/OpenClaw Security + Failure-State Hardening | Mostly complete | 85% | Unauthenticated production auth smoke checks passed; needs authenticated secret checks, deeper raw-error route audit, and formal RBAC/client scoping |
 | Phase 11 - Source-of-Truth + Duplication Audit | In progress | 85% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, `order_items`/`analytics_cache`, and low-risk orders/inventory indexes moved to migration ownership; inventory/jobs/labels and shipment-adjacent DDL still remain |
-| Phase 12 - Enterprise Readiness | Scoped/started | 50% | Runtime DDL backlog is clearer and six low-risk classes are migration-owned; needs RBAC, secrets governance, audit logs, reconciliation, alerts, DR, and runbooks |
+| Phase 12 - Enterprise Readiness | Scoped/started | 53% | RBAC/client-scope matrix is now documented; needs runtime permission middleware, secrets governance, audit logs, reconciliation, alerts, DR, and runbooks |
 
 ## Phase Checklist
 
@@ -181,11 +182,14 @@
 - [ ] remaining legacy JWT/CORS copies cleanup
 - [ ] carrier/store endpoint policy final verification
 
-### Phase 12 - Enterprise Readiness: 50%
+### Phase 12 - Enterprise Readiness: 53%
 
 - [x] `ENTERPRISE_READINESS_AUDIT.md`
 - [x] critical/high/medium issue buckets scoped
-- [ ] RBAC/client-scope route matrix
+- [x] `RBAC_CLIENT_SCOPE_MATRIX.md`
+- [x] canonical enterprise role names defined
+- [x] RBAC/client-scope route matrix completed for planning
+- [ ] runtime RBAC/client-scope permission middleware
 - [ ] secrets governance
 - [ ] audit logging
 - [ ] reconciliation reports
@@ -219,7 +223,8 @@
    - Durable job state for print queue/rate backfill.
    - Label side-effect status reporting.
 5. Continue Phase 12.
-   - RBAC/client-scope route matrix.
+   - Review `RBAC_CLIENT_SCOPE_MATRIX.md` with DJ/OpenClaw.
+   - Implement runtime RBAC/client-scope middleware in a small follow-up batch.
    - Audit logging.
    - Reconciliation reports.
    - Observability alerts.

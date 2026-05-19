@@ -9,6 +9,7 @@ This audit defines what must be checked and fixed before PrepShip can be conside
 Companion DJ/OpenClaw documents:
 
 - `DEV_TASKS_README.md`
+- `RBAC_CLIENT_SCOPE_MATRIX.md`
 - `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md`
 - `SECURITY_PATCH_PLAN.md`
 - `RATE_SYSTEM_HARDENING_PLAN.md`
@@ -31,10 +32,11 @@ Implemented:
 - Critical frontend fetch guard added as `npm run test:frontend-failure-states`; `fetchRates` now surfaces request failures to existing caller error states instead of converting failures to empty rate arrays.
 - `fetchBillingSummary` now preserves stale cached billing rows but rethrows first-load failures, preventing API errors from appearing as generated zero-dollar billing summaries.
 - Auth coverage guard added as `npm run test:auth-coverage`; it locks in `/users`, `/worker`, protected root and wildcard route auth, and `/admin` admin enforcement.
+- Phase 12 RBAC/client-scope planning matrix added as `RBAC_CLIENT_SCOPE_MATRIX.md`, including canonical roles, route-group policy, scope expectations, current enforcement, gaps, required fixes, and tests.
 
 Confirmed gaps from repo search:
 
-- RBAC/client-scope rules are still not fully formalized beyond `requireAuth` and `requireAdmin`.
+- RBAC/client-scope rules are now documented in a route matrix, but runtime permission middleware and scoped query enforcement are not implemented yet.
 - Runtime DDL remains in some production-capable paths, but the request/job-time DDL inventory and static guard now exist. Reporting metrics table/index ownership has moved into `drizzle/0029_reporting_metrics.sql`, the Walmart selling-fee source index is owned by `drizzle/0019_selling_fees.sql`, marketplace `store_orders` is owned by `drizzle/0030_store_orders.sql`, credential-account RLS/readiness is owned by `drizzle/0031_credential_accounts_rls.sql`, `order_items` / `analytics_cache` readiness is owned by `drizzle/0024_order_items_phase2.sql` plus `drizzle/0025_order_items_sync_trigger.sql`, and low-risk orders/inventory performance indexes are owned by migrations `0021`, `0022`, `0023`, and `0026`.
 - Durable job state is mixed: scheduler protection has improved, but print queue/rate backfill and some compatibility paths still need restart-safe progress guarantees.
 - Broad frontend `safe()` fallback usage remains and needs a failure-mode sweep.
@@ -46,13 +48,13 @@ Current readiness read:
 | Track | Status | Percent |
 |---|---|---:|
 | Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, rate cache diagnostics/bulk semantics, runtime DDL inventory/guard, reporting metrics migration, Walmart selling-fee index cleanup, `store_orders` migration, credential-account DDL cleanup, `order_items` / `analytics_cache` readiness cleanup, and low-risk orders/inventory index cleanup implemented | 85% |
-| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated | 50% |
+| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated, and RBAC/client-scope route matrix documented | 53% |
 
 ## Critical Blockers
 
 | Blocker | Risk | Required Outcome | Verification |
 |---|---|---|---|
-| RBAC and client scoping are not fully formalized | Users may access actions or data beyond their role/client scope | Route matrix with role and client-scope enforcement | API tests for admin, operator, warehouse, client user, support/read-only |
+| RBAC and client scoping are documented but not enforced | Users may access actions or data beyond their role/client scope until middleware/query filters exist | Runtime role and client-scope enforcement based on `RBAC_CLIENT_SCOPE_MATRIX.md` | API tests for admin, operator, warehouse, client user, support/read-only |
 | Credential governance is incomplete | Carrier/store/ShipStation secrets can be mishandled, logged, or hard to rotate | Redaction, protected storage, rotation, audit log, last-used tracking | Secret scan, API response tests, credential update audit test |
 | Runtime DDL still exists in some production paths | Request latency, schema drift, unpredictable deploys | Schema managed by Drizzle migrations | `RUNTIME_DDL_MIGRATION_AUDIT.md`, `npm run test:runtime-ddl`, and migration backlog |
 | User-visible jobs are not all durable | Restart/multi-instance can lose or duplicate work | DB-backed job state, idempotency, locks, failure state | Restart and dual-worker tests |
@@ -87,8 +89,8 @@ Current readiness read:
 
 ### RBAC / Access Control
 
-- [ ] Define roles: admin, operator, warehouse, client user, read-only/support.
-- [ ] Create route permission matrix.
+- [x] Define roles: admin, operator, warehouse, client user, read-only/support.
+- [x] Create route permission matrix in `RBAC_CLIENT_SCOPE_MATRIX.md`.
 - [ ] Add client-scoped access rules for orders, inventory, labels, print queue, billing.
 - [ ] Add field-level protection for credentials, costs, margins, billing data.
 - [ ] Verify frontend hides restricted actions.
@@ -97,6 +99,8 @@ Current readiness read:
 - [ ] Test client user access to another client's data.
 
 Deliverable table:
+
+The full route matrix now lives in `RBAC_CLIENT_SCOPE_MATRIX.md`. The condensed enterprise tracker below shows the highest-risk route groups.
 
 | Route | Required Role | Client Scope Rule | Current Enforcement | Gap | Fix | Test |
 |---|---|---|---|---|---|---|
@@ -433,7 +437,7 @@ Deliverable table:
 
 ## Recommended Implementation Order
 
-1. RBAC/client-scope audit and route matrix.
+1. Implement runtime RBAC/client-scope middleware from `RBAC_CLIENT_SCOPE_MATRIX.md`.
 2. Secrets and credential audit, including audit events.
 3. Migration/runtime DDL cleanup plan.
 4. Durable job status and idempotency plan.
