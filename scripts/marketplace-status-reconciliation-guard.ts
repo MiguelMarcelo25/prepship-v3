@@ -7,6 +7,7 @@ import {
 } from '../api/_lib/marketplace-status-reconciliation.ts';
 
 assert.equal(normalizeMarketplaceOrderStatus('walmart', 'Shipped'), 'shipped');
+assert.equal(normalizeMarketplaceOrderStatus('walmart', 'Delivered'), 'shipped');
 assert.equal(normalizeMarketplaceOrderStatus('walmart', 'Acknowledged'), 'awaiting_shipment');
 assert.equal(normalizeMarketplaceOrderStatus('walmart', 'Created'), 'awaiting_shipment');
 assert.equal(normalizeMarketplaceOrderStatus('walmart', 'Cancelled'), 'cancelled');

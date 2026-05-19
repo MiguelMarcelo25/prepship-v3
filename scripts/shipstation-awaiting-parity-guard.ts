@@ -97,4 +97,16 @@ assert.match(script, /Dry run only/);
 assert.match(script, /blocked by shipped\/cancelled lockdown/);
 assert.match(script, /Only awaiting_shipment rows can be updated without the shipped-data override/);
 
+const ordersRoute = readFileSync('src/routes/orders.ts', 'utf8');
+assert.match(ordersRoute, /visibleAwaitingOrdersPredicate/);
+assert.match(ordersRoute, /external_order_id.+walmart-%/s);
+assert.match(ordersRoute, /external_order_id.+ebay-%/s);
+assert.match(ordersRoute, /real_marketplace_order/s);
+
+const initRoute = readFileSync('src/routes/init.ts', 'utf8');
+assert.match(initRoute, /visibleAwaitingOrdersPredicate/);
+assert.match(initRoute, /external_order_id.+walmart-%/s);
+assert.match(initRoute, /external_order_id.+ebay-%/s);
+assert.match(initRoute, /real_marketplace_order/s);
+
 console.log('ShipStation awaiting parity guard passed');

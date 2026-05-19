@@ -181,6 +181,29 @@ const activeOrderClientPredicate = sql`(
 
 const visibleStorePredicate = sql`${visibleStoreBasePredicate} and ${activeOrderClientPredicate}`;
 
+function visibleAwaitingOrdersPredicate(alias: 'orders' | 'o' = 'orders') {
+  const rowId = sql.raw(`${alias}.id`);
+  const externalOrderId = sql.raw(`${alias}.external_order_id`);
+  const orderNumber = sql.raw(`${alias}.order_number`);
+  return sql`not (
+    (
+      coalesce(${externalOrderId}, '') ilike 'walmart-%'
+      or coalesce(${externalOrderId}, '') ilike 'ebay-%'
+    )
+    and ${orderNumber} is not null
+    and exists (
+      select 1
+      from orders real_marketplace_order
+      where real_marketplace_order.order_number = ${orderNumber}
+        and real_marketplace_order.id <> ${rowId}
+        and coalesce(real_marketplace_order.external_order_id, '') not ilike 'walmart-%'
+        and coalesce(real_marketplace_order.external_order_id, '') not ilike 'ebay-%'
+        and real_marketplace_order.store_id is not null
+        and real_marketplace_order.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+    )
+  )`;
+}
+
 const testOrderPredicate = sql`(
   exists (
     select 1 from ${clients} test_client
@@ -1030,6 +1053,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   const where = and(
     ...[
       statusPredicate,
+      q.status === 'awaiting_shipment' ? visibleAwaitingOrdersPredicate('orders') : undefined,
       assigneeFilter,
       q.clientId !== undefined ? eq(orders.clientId, q.clientId) : undefined,
       q.storeId !== undefined ? eq(orders.storeId, q.storeId) : undefined,
@@ -1718,6 +1742,7 @@ app.get(
         and order_date <= ${toIso}::timestamptz
         and store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
         and (${status}::text is null or order_status = ${status}::text)
+        and (${status}::text is distinct from 'awaiting_shipment' or ${visibleAwaitingOrdersPredicate('orders')})
       group by store_id
       order by count desc
     `);
@@ -1916,6 +1941,7 @@ app.get(
         and o.order_date >= ${fromIso}::timestamptz
         and o.order_date <= ${toIso}::timestamptz
         and ${visibleOrderPredicate}
+        and ${visibleAwaitingOrdersPredicate('o')}
     `);
     const upcomingRows = await db.execute<{ upcoming_orders: number }>(sql`
       select count(*)::int as upcoming_orders

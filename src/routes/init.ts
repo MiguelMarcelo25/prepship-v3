@@ -135,6 +135,23 @@ app.get('/counts', async (c) => {
       and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
     )
   ) and coalesce(c.active, true) = true`;
+  const visibleAwaitingOrdersPredicate = sql`not (
+    (
+      coalesce(o.external_order_id, '') ilike 'walmart-%'
+      or coalesce(o.external_order_id, '') ilike 'ebay-%'
+    )
+    and o.order_number is not null
+    and exists (
+      select 1
+      from orders real_marketplace_order
+      where real_marketplace_order.order_number = o.order_number
+        and real_marketplace_order.id <> o.id
+        and coalesce(real_marketplace_order.external_order_id, '') not ilike 'walmart-%'
+        and coalesce(real_marketplace_order.external_order_id, '') not ilike 'ebay-%'
+        and real_marketplace_order.store_id is not null
+        and real_marketplace_order.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+    )
+  )`;
 
   const loadCounts = (async (): Promise<CountsPayload> => {
     const [rows, byStatus, byStatusStore] = await Promise.all([
@@ -152,6 +169,7 @@ app.get('/counts', async (c) => {
           left join clients c on c.id = o.client_id
           where o.order_status = 'awaiting_shipment'
             and ${visibleOrderPredicate}
+            and ${visibleAwaitingOrdersPredicate}
             ${orderDateFilter()}
             and not exists (
               select 1 from clients hidden_client
@@ -216,6 +234,10 @@ app.get('/counts', async (c) => {
       left join clients c on c.id = o.client_id
         where ${visibleOrderPredicate}
         ${orderDateFilter()}
+        and (
+          o.order_status is distinct from 'awaiting_shipment'
+          or ${visibleAwaitingOrdersPredicate}
+        )
         and not exists (
           select 1 from clients hidden_client
           where hidden_client.id = o.client_id
@@ -235,6 +257,10 @@ app.get('/counts', async (c) => {
       left join clients c on c.id = o.client_id
         where ${visibleOrderPredicate}
         ${orderDateFilter()}
+        and (
+          o.order_status is distinct from 'awaiting_shipment'
+          or ${visibleAwaitingOrdersPredicate}
+        )
         and not exists (
           select 1 from clients hidden_client
           where hidden_client.id = o.client_id

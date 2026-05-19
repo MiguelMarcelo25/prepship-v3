@@ -42,7 +42,7 @@ export function normalizeMarketplaceOrderStatus(
   if (!status) return null;
 
   if (provider === 'walmart') {
-    if (status === 'shipped') return 'shipped';
+    if (status === 'shipped' || status === 'delivered') return 'shipped';
     if (status === 'cancelled' || status === 'canceled') return 'cancelled';
     if (status === 'acknowledged' || status === 'created') return 'awaiting_shipment';
     return null;

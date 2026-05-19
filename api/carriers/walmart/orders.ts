@@ -540,7 +540,7 @@ export default async function handler(req: any, res: any): Promise<void> {
       // marketplace gets its own group in any byStore breakdown.
       const ppStatus = (() => {
         const s = (sourceStatus ?? '').toLowerCase();
-        if (s === 'shipped') return 'shipped';
+        if (s === 'shipped' || s === 'delivered') return 'shipped';
         if (s === 'cancelled' || s === 'canceled') return 'cancelled';
         return 'awaiting_shipment';
       })();
