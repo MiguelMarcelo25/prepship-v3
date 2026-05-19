@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
+import { clients } from '../db/schema/clients';
 import { printQueue, type PrintQueueEntry } from '../db/schema/print-queue';
 import { createLabelV2, type CreateLabelInputDto } from './labels';
 
@@ -73,6 +74,12 @@ export type QueueSendJob = {
   errorMessage?: string;
 };
 
+export type PrintQueueListScope = {
+  scopeClientIds?: number[];
+  scopeStoreIds?: number[];
+  scopeRestricted?: boolean;
+};
+
 const mergeJobs = new Map<string, MergeJob>();
 const queueSendJobs = new Map<string, QueueSendJob>();
 const QUEUE_SEND_ORDER_TIMEOUT_MS = 30_000;
@@ -121,6 +128,43 @@ function getExistingLabelUrl(err: unknown): string | null {
   const details = (err as { details?: Record<string, unknown> })?.details;
   const labelUrl = details?.labelUrl;
   return typeof labelUrl === 'string' && labelUrl ? labelUrl : null;
+}
+
+function normalizeScopeIds(values: number[] | undefined): number[] {
+  if (!Array.isArray(values)) return [];
+  return Array.from(
+    new Set(
+      values
+        .map((value) => Number(value))
+        .filter((value) => Number.isInteger(value) && value > 0)
+    )
+  );
+}
+
+function intArraySql(values: number[]): SQL {
+  return sql`array[${sql.join(values.map((value) => sql`${value}`), sql`, `)}]::int[]`;
+}
+
+function printQueueScopePredicate(scope: PrintQueueListScope): SQL {
+  const clientIds = normalizeScopeIds(scope.scopeClientIds);
+  const storeIds = normalizeScopeIds(scope.scopeStoreIds);
+  const predicates: SQL[] = [];
+
+  if (clientIds.length) {
+    predicates.push(sql`${printQueue.clientId} = any(${intArraySql(clientIds)})`);
+  }
+  if (storeIds.length) {
+    predicates.push(sql`exists (
+      select 1 from ${clients}
+      where ${clients.id} = ${printQueue.clientId}
+        and ${clients.storeIds} && ${intArraySql(storeIds)}
+    )`);
+  }
+  if (!predicates.length) {
+    return scope.scopeRestricted === true ? sql`false` : sql`true`;
+  }
+  if (predicates.length === 1) return predicates[0]!;
+  return sql`(${sql.join(predicates, sql` or `)})`;
 }
 
 function timeoutAfter(ms: number, message: string): Promise<never> {
@@ -178,10 +222,15 @@ async function processQueueSendOrder(
 
 // ─── CRUD ─────────────────────────────────────────────────────────────
 
-export async function listQueue(clientId?: number, includePrinted = false) {
-  const conds = [];
+export async function listQueue(
+  clientId?: number,
+  includePrinted = false,
+  scope: PrintQueueListScope = {}
+) {
+  const conds: SQL[] = [];
   if (clientId !== undefined) conds.push(eq(printQueue.clientId, clientId));
   if (!includePrinted) conds.push(eq(printQueue.status, 'queued'));
+  conds.push(printQueueScopePredicate(scope));
   const where = conds.length ? and(...conds) : undefined;
   const entries = await db.select().from(printQueue).where(where);
   const totalQty = entries.reduce((s, e) => s + (e.orderQty ?? 1), 0);

@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import {
@@ -10,9 +10,26 @@ import {
   removeFromQueue,
   startQueueSendJob,
   startPrintJob,
+  type PrintQueueListScope,
 } from '../services/print-queue';
+import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 
 const app = new Hono();
+
+function printQueueScopeFromContext(c: Context): PrintQueueListScope {
+  const scope: ClientStoreScope = getClientStoreScope({
+    email: c.get('email' as never) as string | undefined,
+    role: c.get('role' as never) as string | undefined,
+    permissions: c.get('permissions' as never) as string[] | undefined,
+    clientIds: c.get('clientIds' as never) as number[] | undefined,
+    storeIds: c.get('storeIds' as never) as number[] | undefined,
+  });
+  return {
+    scopeClientIds: scope.clientIds,
+    scopeStoreIds: scope.storeIds,
+    scopeRestricted: scope.isRestricted,
+  };
+}
 
 const listQ = z.object({
   clientId: z.coerce.number().int().optional(),
@@ -24,7 +41,7 @@ const listQ = z.object({
 
 app.get('/', zValidator('query', listQ), async (c) => {
   const q = c.req.valid('query');
-  return c.json(await listQueue(q.clientId, q.includePrinted));
+  return c.json(await listQueue(q.clientId, q.includePrinted, printQueueScopeFromContext(c)));
 });
 
 const addBody = z.object({
