@@ -1,7 +1,7 @@
 import { Hono, type Context } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, desc, eq, gte, ilike, inArray, lte, notInArray, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, ilike, inArray, lte, notInArray, or, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
 import { clients } from '../db/schema/clients';
 import { orderOverrides, orders } from '../db/schema/orders';
@@ -23,6 +23,7 @@ import {
 } from '../services/order-rate-dto';
 import { EXCLUDED_STORE_IDS, EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
 import { isAdminEmail } from '../lib/admin-emails';
+import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 
 const app = new Hono();
 
@@ -187,6 +188,42 @@ function visibleAwaitingOrdersPredicate(alias: 'orders' | 'o' = 'orders') {
     coalesce(${externalOrderId}, '') ilike 'walmart-%'
     or coalesce(${externalOrderId}, '') ilike 'ebay-%'
   )`;
+}
+
+function ordersScopeFromContext(c: Context): ClientStoreScope {
+  return getClientStoreScope({
+    email: c.get('email' as never) as string | undefined,
+    role: c.get('role' as never) as string | undefined,
+    permissions: c.get('permissions' as never) as string[] | undefined,
+    clientIds: c.get('clientIds' as never) as number[] | undefined,
+    storeIds: c.get('storeIds' as never) as number[] | undefined,
+  });
+}
+
+function orderScopePredicate(scope: ClientStoreScope): SQL | undefined {
+  if (!scope.isRestricted) return undefined;
+  const predicates: SQL[] = [];
+  if (scope.clientIds.length > 0) predicates.push(inArray(orders.clientId, scope.clientIds));
+  if (scope.storeIds.length > 0) predicates.push(inArray(orders.storeId, scope.storeIds));
+  if (!predicates.length) return sql`false`;
+  return predicates.length === 1 ? predicates[0] : (or(...predicates) ?? sql`false`);
+}
+
+function orderAliasScopePredicate(alias: 'orders' | 'o', scope: ClientStoreScope): SQL {
+  if (!scope.isRestricted) return sql`true`;
+  const predicates: SQL[] = [];
+  if (scope.clientIds.length > 0) {
+    predicates.push(
+      sql`${sql.raw(`${alias}.client_id`)} in (${sql.join(scope.clientIds.map((id) => sql`${id}`), sql`, `)})`
+    );
+  }
+  if (scope.storeIds.length > 0) {
+    predicates.push(
+      sql`${sql.raw(`${alias}.store_id`)} in (${sql.join(scope.storeIds.map((id) => sql`${id}`), sql`, `)})`
+    );
+  }
+  if (!predicates.length) return sql`false`;
+  return sql`(${sql.join(predicates, sql` or `)})`;
 }
 
 const testOrderPredicate = sql`(
@@ -680,6 +717,7 @@ const dailyCountsQuery = z.object({
 
 app.get('/daily-counts', zValidator('query', dailyCountsQuery), async (c) => {
   const q = c.req.valid('query');
+  const dailyCountsScope = ordersScopeFromContext(c);
 
   // Same assignee-scoping rules as GET / (admins see all; workers see only
   // their assigned orders).
@@ -699,6 +737,7 @@ app.get('/daily-counts', zValidator('query', dailyCountsQuery), async (c) => {
   const where = and(
     ...[
       assigneeFilter,
+      orderScopePredicate(dailyCountsScope),
       q.clientId !== undefined ? eq(orders.clientId, q.clientId) : undefined,
       q.storeId !== undefined ? eq(orders.storeId, q.storeId) : undefined,
       includeInactiveClients ? visibleStoreBasePredicate : visibleStorePredicate,
@@ -741,6 +780,7 @@ const dashboardSalesQuery = dailyCountsQuery.extend({
 app.get('/dashboard-sales', zValidator('query', dashboardSalesQuery), async (c) => {
   const q = c.req.valid('query');
   const startedAt = performance.now();
+  const dashboardSalesScope = ordersScopeFromContext(c);
 
   const callerEmail = c.get('email' as never) as string | undefined;
   const callerUserId = c.get('userId' as never) as string | undefined;
@@ -757,6 +797,7 @@ app.get('/dashboard-sales', zValidator('query', dashboardSalesQuery), async (c) 
   const where = and(
     ...[
       assigneeFilter,
+      orderScopePredicate(dashboardSalesScope),
       q.clientId !== undefined ? eq(orders.clientId, q.clientId) : undefined,
       q.storeId !== undefined ? eq(orders.storeId, q.storeId) : undefined,
       includeInactiveClients ? visibleStoreBasePredicate : visibleStorePredicate,
@@ -785,6 +826,8 @@ app.get('/dashboard-sales', zValidator('query', dashboardSalesQuery), async (c) 
     includeInactiveClients,
     hideTestOrders: q.hideTestOrders === true,
     caller: callerIsAdmin ? 'admin' : callerUserId ?? 'anonymous',
+    scopeClientIds: dashboardSalesScope.isRestricted ? dashboardSalesScope.clientIds : null,
+    scopeStoreIds: dashboardSalesScope.isRestricted ? dashboardSalesScope.storeIds : null,
   });
   const cached = await getAnalyticsCache<DashboardSalesPayload>(cacheKey);
   if (cached) return c.json(cached);
@@ -999,6 +1042,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   const q = c.req.valid('query');
   const routeStartedAt = performance.now();
   const timings: OrdersListTimings = {};
+  const orderScope = ordersScopeFromContext(c);
   const search = q.search?.trim();
   const searchPattern = search ? `%${search}%` : null;
   const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
@@ -1039,6 +1083,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     ...[
       statusPredicate,
       q.status === 'awaiting_shipment' ? visibleAwaitingOrdersPredicate('orders') : undefined,
+      orderScopePredicate(orderScope),
       assigneeFilter,
       q.clientId !== undefined ? eq(orders.clientId, q.clientId) : undefined,
       q.storeId !== undefined ? eq(orders.storeId, q.storeId) : undefined,
@@ -1685,11 +1730,13 @@ app.get(
   ),
   async (c) => {
     const { sku, qty, orderStatus, storeId } = c.req.valid('query');
+    const idsScope = ordersScopeFromContext(c);
     const rows = await db.execute<{ id: number; order_number: string }>(sql`
       select distinct o.id, o.order_number
       from order_items oi
       join orders o on o.id = oi.order_id
       where oi.sku = ${sku}
+        and ${orderAliasScopePredicate('o', idsScope)}
         and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
         ${qty !== undefined ? sql`and oi.quantity >= ${qty}` : sql``}
         ${orderStatus ? sql`and o.order_status = ${orderStatus}` : sql``}
@@ -1714,6 +1761,7 @@ app.get(
   ),
   async (c) => {
     const q = c.req.valid('query');
+    const storeCountsScope = ordersScopeFromContext(c);
     const fromIso = (q.dateFrom ? new Date(q.dateFrom) : new Date(0)).toISOString();
     const toIso = (q.dateTo ? new Date(q.dateTo) : new Date(Date.now() + 86400000)).toISOString();
     const status = q.status ?? null;
@@ -1726,6 +1774,7 @@ app.get(
       where order_date >= ${fromIso}::timestamptz
         and order_date <= ${toIso}::timestamptz
         and store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
+        and ${orderAliasScopePredicate('orders', storeCountsScope)}
         and (${status}::text is null or order_status = ${status}::text)
         and (${status}::text is distinct from 'awaiting_shipment' or ${visibleAwaitingOrdersPredicate('orders')})
       group by store_id
@@ -1875,6 +1924,7 @@ app.get(
   ),
   async (c) => {
     const q = c.req.valid('query');
+    const dailyStatsScope = ordersScopeFromContext(c);
     // Current fulfillment intake: v2's PT noon-to-noon shift window, including
     // the Friday-noon to Monday-noon weekend hold.
     const shift = computeFulfillmentShiftWindow();
@@ -1915,6 +1965,7 @@ app.get(
         and o.order_date >= ${fromIso}::timestamptz
         and o.order_date <= ${toIso}::timestamptz
         and ${visibleOrderPredicate}
+        and ${orderAliasScopePredicate('o', dailyStatsScope)}
     `);
     // needToShip: remaining same-day fulfillment work inside the intake
     // window. Bucket/external-shipped rules stay in the order list query.
@@ -1926,6 +1977,7 @@ app.get(
         and o.order_date >= ${fromIso}::timestamptz
         and o.order_date <= ${toIso}::timestamptz
         and ${visibleOrderPredicate}
+        and ${orderAliasScopePredicate('o', dailyStatsScope)}
         and ${visibleAwaitingOrdersPredicate('o')}
     `);
     const upcomingRows = await db.execute<{ upcoming_orders: number }>(sql`
@@ -1935,6 +1987,7 @@ app.get(
       where o.order_date > ${toIso}::timestamptz
         and o.order_status <> 'cancelled'
         and ${visibleOrderPredicate}
+        and ${orderAliasScopePredicate('o', dailyStatsScope)}
     `);
     const w = windowedRows[0];
     const b = backlogRows[0];
@@ -1955,6 +2008,7 @@ app.get(
 
 app.get('/picklist', zValidator('query', picklistQuery), async (c) => {
   const q = c.req.valid('query');
+  const picklistScope = ordersScopeFromContext(c);
   const fromIso = q.dateFrom
     ? new Date(q.dateFrom).toISOString()
     : new Date(0).toISOString();
@@ -1992,6 +2046,7 @@ app.get('/picklist', zValidator('query', picklistQuery), async (c) => {
       )
       and (${cid}::int is null or o.client_id = ${cid}::int)
       and (${sid}::int is null or o.store_id = ${sid}::int)
+      and ${orderAliasScopePredicate('o', picklistScope)}
       and o.order_date >= ${fromIso}::timestamptz
       and o.order_date <= ${toIso}::timestamptz
       and oi.sku is not null
@@ -2043,6 +2098,7 @@ app.get('/picklist', zValidator('query', picklistQuery), async (c) => {
 // Excludes adjustment items (where item.adjustment is truthy) since
 // those aren't real SKUs — they're discounts, fees, etc.
 app.get('/distinct-skus', async (c) => {
+  const distinctSkusScope = ordersScopeFromContext(c);
   const status = c.req.query('status') ?? null;
   const clientIdRaw = c.req.query('clientId');
   const storeIdRaw = c.req.query('storeId');
@@ -2078,6 +2134,7 @@ app.get('/distinct-skus', async (c) => {
       and (${status}::text is null or o.order_status = ${status}::text)
       and (${cid}::int is null or o.client_id = ${cid}::int)
       and (${sid}::int is null or o.store_id = ${sid}::int)
+      and ${orderAliasScopePredicate('o', distinctSkusScope)}
       and (${dateFrom}::timestamptz is null or o.order_date >= ${dateFrom}::timestamptz)
       and (${dateTo}::timestamptz is null or o.order_date <= ${dateTo}::timestamptz)
     order by sku asc
@@ -2093,6 +2150,7 @@ app.get('/distinct-skus', async (c) => {
 });
 
 app.get('/by-number/:orderNumber', async (c) => {
+  const byNumberScope = ordersScopeFromContext(c);
   // Decode in case the orderNumber contains URL-special characters
   // (unlikely for marketplace IDs, but defensive against a stray
   // "TESTING-" with a slash one day).
@@ -2103,7 +2161,7 @@ app.get('/by-number/:orderNumber', async (c) => {
   const [row] = await db
     .select({ id: orders.id, orderNumber: orders.orderNumber, orderStatus: orders.orderStatus })
     .from(orders)
-    .where(eq(orders.orderNumber, orderNumber))
+    .where(and(eq(orders.orderNumber, orderNumber), orderScopePredicate(byNumberScope)))
     .limit(1);
   if (!row) return c.json({ error: 'Order not found' }, 404);
   return c.json(row);
@@ -2111,7 +2169,12 @@ app.get('/by-number/:orderNumber', async (c) => {
 
 app.get('/:id{[0-9]+}', async (c) => {
   const id = Number(c.req.param('id'));
-  const [order] = await db.select().from(orders).where(eq(orders.id, id)).limit(1);
+  const detailScope = ordersScopeFromContext(c);
+  const [order] = await db
+    .select()
+    .from(orders)
+    .where(and(eq(orders.id, id), orderScopePredicate(detailScope)))
+    .limit(1);
   if (!order) return c.json({ error: 'Order not found' }, 404);
 
   const [overrides, shipmentRows] = await Promise.all([
@@ -2134,7 +2197,12 @@ app.get('/:id{[0-9]+}', async (c) => {
 // Alias of GET /orders/:id — old API exposed both shapes. Same payload.
 app.get('/:id{[0-9]+}/full', async (c) => {
   const id = Number(c.req.param('id'));
-  const [order] = await db.select().from(orders).where(eq(orders.id, id)).limit(1);
+  const fullDetailScope = ordersScopeFromContext(c);
+  const [order] = await db
+    .select()
+    .from(orders)
+    .where(and(eq(orders.id, id), orderScopePredicate(fullDetailScope)))
+    .limit(1);
   if (!order) return c.json({ error: 'Order not found' }, 404);
   const [overrides, shipmentRows] = await Promise.all([
     db
@@ -2854,6 +2922,7 @@ function formatCsvSkuList(items: Array<Record<string, unknown>>): string {
 
 app.get('/export', zValidator('query', exportQuery), async (c) => {
   const q = c.req.valid('query');
+  const exportScope = ordersScopeFromContext(c);
 
   // Auto-exclude is_test clients unless one is explicitly requested — keeps
   // sandbox orders out of the CSV. Mirrors the logic in GET / and
@@ -2874,6 +2943,7 @@ app.get('/export', zValidator('query', exportQuery), async (c) => {
   const where = and(
     ...[
       q.status ? eq(orders.orderStatus, q.status) : undefined,
+      orderScopePredicate(exportScope),
       q.clientId !== undefined ? eq(orders.clientId, q.clientId) : undefined,
       notInArray(orders.storeId, [...EXCLUDED_STORE_IDS]),
       q.dateFrom ? gte(orders.orderDate, new Date(q.dateFrom)) : undefined,

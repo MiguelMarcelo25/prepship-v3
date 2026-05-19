@@ -50,6 +50,8 @@ Implemented:
 - Billing read scope layer added: `/billing/config`, `/billing/summary`, `/billing/details`, `/billing/invoice`, and `/billing/package-prices` apply explicit client/store JWT scope, including billing read-model filtering, and `npm run test:billing-client-scope` guards the behavior.
 - Print Queue list scope layer added: `GET /print-queue` applies explicit client/store JWT scope for queued entry reads, and `npm run test:print-queue-client-scope` guards the behavior.
 - Print Queue ownership layer added: add, clear, delete, print-job creation/status/download, and batch-send startup/status validate explicit client/store JWT scope, and `npm run test:print-queue-ownership` guards the behavior.
+- Orders read scope layer added: list, daily-counts, dashboard-sales compatibility, SKU id lookup, store-counts, daily-stats, picklist, distinct SKUs, by-number, detail, full detail, and export apply explicit client/store JWT scope, and `npm run test:orders-manifests-scope` guards the behavior.
+- Manifest generate scope layer added: GET/POST manifest generation applies explicit client/store JWT scope to shipment rows, and `npm run test:orders-manifests-scope` guards the behavior.
 - Secrets governance matrix added as `SECRETS_GOVERNANCE_MATRIX.md`, covering Supabase, ShipStation, carrier/store, marketplace OAuth, direct carrier, and label URL credential/artifact classes. `npm run test:secrets-governance` guards the deliverable.
 - Audit logging matrix added as `AUDIT_LOGGING_MATRIX.md`, covering credentials, admin/user changes, labels, orders, inventory, packages, billing, settings, sync/backfill, and print queue events. `npm run test:audit-logging` guards the deliverable.
 - Reconciliation reports plan added as `RECONCILIATION_REPORTS_PLAN.md`, covering order, order-item, shipment, label, billing, inventory, package, rate, fulfillment, client/store, and carrier account reconciliation. `npm run test:reconciliation-plan` guards the deliverable.
@@ -62,7 +64,7 @@ Implemented:
 
 Confirmed gaps from repo search:
 
-- RBAC/client-scope rules are now documented in a route matrix, the first runtime permission middleware is implemented for safer admin/settings/credential surfaces, low-risk client/init payload scoping exists, and dashboard/analysis/inventory/billing/print-queue read/action scoping has started. Remaining operational route query enforcement is still incomplete.
+- RBAC/client-scope rules are now documented in a route matrix, the first runtime permission middleware is implemented for safer admin/settings/credential surfaces, low-risk client/init payload scoping exists, and dashboard/analysis/inventory/billing/print-queue/orders/manifests read/action scoping has started. Remaining label/shipment-sensitive and field-level policy enforcement is still incomplete.
 - Runtime DDL remains in some production-capable paths, but the request/job-time DDL inventory and static guard now exist. Reporting metrics table/index ownership has moved into `drizzle/0029_reporting_metrics.sql`, the Walmart selling-fee source index is owned by `drizzle/0019_selling_fees.sql`, marketplace `store_orders` is owned by `drizzle/0030_store_orders.sql`, credential-account RLS/readiness is owned by `drizzle/0031_credential_accounts_rls.sql`, `order_items` / `analytics_cache` readiness is owned by `drizzle/0024_order_items_phase2.sql` plus `drizzle/0025_order_items_sync_trigger.sql`, and low-risk orders/inventory performance indexes are owned by migrations `0021`, `0022`, `0023`, and `0026`.
 - Durable job state is now mapped in `DURABLE_JOBS_PLAN.md`. ShipStation Awaiting parity, rate backfill, billing reference-rate fetch, and print queue send/merge now persist latest-run status; full job progress/events, idempotency, and PDF artifact durability still need runtime restart-safe guarantees.
 - Broad frontend `safe()` fallback usage remains and needs a failure-mode sweep.
@@ -80,13 +82,13 @@ Current readiness read:
 | Track | Status | Percent |
 |---|---|---:|
 | Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, rate cache diagnostics/bulk semantics, runtime DDL inventory/guard, reporting metrics migration, Walmart selling-fee index cleanup, `store_orders` migration, credential-account DDL cleanup, `order_items` / `analytics_cache` readiness cleanup, low-risk orders/inventory index cleanup, ShipStation Awaiting parity latest-run status, rate backfill latest-run status, billing reference-rate latest-run status, print queue send/merge latest-run status, and durable job strategy documented | 94% |
-| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated, RBAC/client-scope route matrix documented, first runtime permission layer implemented, low-risk client/init payload scoping added, dashboard/analysis/inventory/billing/print-queue read/action scoping started, secrets governance matrix added, audit logging matrix added, reconciliation reports plan added, marketplace awaiting-count reconciliation guarded, observability/alerting plan added, operational runbooks/DR plan added, privacy/compliance plan added, production signoff checklist added, and key operational jobs now persist latest-run status | 93% |
+| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated, RBAC/client-scope route matrix documented, first runtime permission layer implemented, low-risk client/init payload scoping added, dashboard/analysis/inventory/billing/print-queue/orders/manifests read/action scoping started, secrets governance matrix added, audit logging matrix added, reconciliation reports plan added, marketplace awaiting-count reconciliation guarded, observability/alerting plan added, operational runbooks/DR plan added, privacy/compliance plan added, production signoff checklist added, and key operational jobs now persist latest-run status | 95% |
 
 ## Critical Blockers
 
 | Blocker | Risk | Required Outcome | Verification |
 |---|---|---|---|
-| RBAC and client scoping are partially enforced | First permission middleware covers `/users`, settings, and credential surfaces; low-risk client/init payload scoping exists; dashboard, analysis, inventory, billing, and print-queue read/action scoping started; remaining operational row scoping is still missing | Runtime role and client-scope enforcement based on `RBAC_CLIENT_SCOPE_MATRIX.md` | API tests for admin, operator, warehouse, client user, support/read-only |
+| RBAC and client scoping are partially enforced | First permission middleware covers `/users`, settings, and credential surfaces; low-risk client/init payload scoping exists; dashboard, analysis, inventory, billing, print-queue, orders, and manifests read/action scoping started; label/shipment-sensitive and field-level policies are still missing | Runtime role and client-scope enforcement based on `RBAC_CLIENT_SCOPE_MATRIX.md` | API tests for admin, operator, warehouse, client user, support/read-only |
 | Credential governance is incomplete | Carrier/store/ShipStation secrets can be mishandled, logged, or hard to rotate | Redaction, protected storage, rotation, audit log, last-used tracking | Secret scan, API response tests, credential update audit test |
 | Runtime DDL still exists in some production paths | Request latency, schema drift, unpredictable deploys | Schema managed by Drizzle migrations | `RUNTIME_DDL_MIGRATION_AUDIT.md`, `npm run test:runtime-ddl`, and migration backlog |
 | User-visible jobs are not all durable | Restart/multi-instance can lose or duplicate work | DB-backed job state, idempotency, locks, failure state | Restart and dual-worker tests |
@@ -131,7 +133,9 @@ Current readiness read:
 - [x] Add first Billing read client/store scope filters.
 - [x] Add first Print Queue list client/store scope filters.
 - [x] Add first Print Queue action/job ownership filters.
-- [ ] Add remaining client-scoped access rules for orders, manifests/labels, and sensitive mutation paths.
+- [x] Add first Orders read/list/export client/store scope filters.
+- [x] Add first Manifests generate client/store scope filters.
+- [ ] Add remaining client-scoped access rules for labels/shipments and sensitive mutation paths.
 - [ ] Add field-level protection for credentials, costs, margins, billing data.
 - [ ] Verify frontend hides restricted actions.
 - [ ] Verify backend rejects bypassed restricted actions.
@@ -149,9 +153,10 @@ The full route matrix now lives in `RBAC_CLIENT_SCOPE_MATRIX.md`. The condensed 
 | `/clients`, `/clients/*` | admin/operator with client-management permission, scoped support/client users | Explicit JWT `clientIds` / `storeIds` filter scoped users; secrets never returned | `requireAuth`; client secret redaction tests; client/store scope helper filters list/detail when scope claims exist | client-management mutation role and field-level policy not fully formalized | add mutation permission and safe DTO tests per role | scoped users only see assigned clients |
 | `/dashboard`, `/dashboard/*` | admin/operator/warehouse/client user/support | client/store scoped aggregate rows | `requireAuth`; dashboard summary/daily/SKU/inventory-risk scope filters for explicit JWT claims | production smoke tests and finer field policy still needed | add API tests and keep extending scope policy | client user dashboard excludes other clients |
 | `/analysis`, `/analysis/*` | admin/operator/warehouse/client user/support | client/store scoped analytics rows | `requireAuth`; overview/daily shipments/top SKUs/SKU detail scope filters for explicit JWT claims | production smoke tests and cost/margin field policy still needed | add API tests and field-level DTO policy | client user analysis excludes other clients |
-| `/orders`, `/orders/*` | admin/operator/warehouse/client user | client/store scoped rows | `requireAuth`; shipped/cancelled mutation guards exist | no formal client-scope middleware | add route-level scope policy and query filters | client user cannot read another client's orders |
+| `/orders`, `/orders/*` | admin/operator/warehouse/client user | client/store scoped rows | `requireAuth`; list/daily-counts/dashboard-sales/ids/store-counts/daily-stats/picklist/distinct-skus/by-number/detail/full/export filter explicit JWT `clientIds` / `storeIds`; shipped/cancelled mutation guards exist | mutation permission policy and production smoke tests still needed | add mutation role policy without weakening locked surfaces | client user cannot read another client's orders; shipped/cancelled guard still passes |
 | `/inventory`, `/inventory/*` | admin/operator/warehouse/client user | client scoped SKUs | `requireAuth`; list/ledger/stats/alerts/detail/detail-ledger/parents/SKU-orders scope filters for explicit JWT claims | production smoke tests and mutation permission policy still needed | add API tests and mutation permission review in a separate batch | client user cannot read another client's inventory |
 | `/billing`, `/billing/*` | admin/operator/accounting | client scoped billing | `requireAuth`; config/summary/details/invoice/package-prices scope filters for explicit JWT claims | billing mutation/generation permission and field-level margin/cost visibility still need review | add billing permission and field DTOs | warehouse/client user denied from cost/margin |
+| `/manifests`, `/manifests/*` | admin/operator/warehouse/support | client scoped manifest shipments | `requireAuth`; GET/POST generate filter explicit JWT `clientIds` / `storeIds` | location policy and production smoke tests still need review | add location-aware tests if assignments are enabled | scoped user cannot access another client's manifest rows |
 | `/print-queue`, `/print-queue/*` | admin/operator/warehouse/support | client scoped queue entries and queue jobs | `requireAuth`; list/add/clear/delete/print/status/download and batch-send startup/status scope checks for explicit JWT claims | durable job state, location policy, and production smoke tests still need review | move job progress to durable state and add browser/API smoke tests | client user/support cannot read or mutate another client's queue entries or jobs |
 | `/carrier-accounts`, `/store-accounts`, `/settings/*` | admin/operator with credential/settings permission | account/client assignment scope | Render carrier-account route has method-aware credential permission; settings have read/write permission gates | Vercel compatibility and audit logging still need follow-up | central credential service + audit events | non-credential role cannot write credential endpoints |
 
@@ -516,6 +521,7 @@ The detailed privacy/compliance plan now lives in `PRIVACY_COMPLIANCE_PLAN.md`. 
 - `npm run test:billing-client-scope`
 - `npm run test:print-queue-client-scope`
 - `npm run test:print-queue-ownership`
+- `npm run test:orders-manifests-scope`
 - `npm run test:secrets-governance`
 - `npm run test:audit-logging`
 - `npm run test:reconciliation-plan`
@@ -570,7 +576,7 @@ The detailed privacy/compliance plan now lives in `PRIVACY_COMPLIANCE_PLAN.md`. 
 
 ## Recommended Implementation Order
 
-1. Smoke-test the runtime RBAC, client/init scope, dashboard scope, analysis scope, inventory scope, billing scope, and print-queue list/action scope layer after deploy.
+1. Smoke-test the runtime RBAC, client/init scope, dashboard scope, analysis scope, inventory scope, billing scope, print-queue list/action scope, orders scope, and manifests scope layer after deploy.
 2. Review `SECRETS_GOVERNANCE_MATRIX.md`, assign credential owners, and decide rotation/last-used/audit rollout order.
 3. Review `AUDIT_LOGGING_MATRIX.md` and approve event names.
 4. Review `RECONCILIATION_REPORTS_PLAN.md` and approve report ownership.
@@ -578,7 +584,7 @@ The detailed privacy/compliance plan now lives in `PRIVACY_COMPLIANCE_PLAN.md`. 
 6. Review `OPERATIONAL_RUNBOOKS_AND_DR_PLAN.md` and approve runbook owners.
 7. Review `PRIVACY_COMPLIANCE_PLAN.md` and approve data-class owners.
 8. Review `PRODUCTION_READINESS_SIGNOFF.md` and approve release gates.
-9. Implement remaining operational client/store row-scope query filters from `RBAC_CLIENT_SCOPE_MATRIX.md`.
+9. Implement remaining label/shipment-sensitive and field-level route policy from `RBAC_CLIENT_SCOPE_MATRIX.md`.
 10. Secrets and credential audit, including audit events.
 11. Migration/runtime DDL cleanup plan.
 12. Review `DURABLE_JOBS_PLAN.md` and approve durable job storage target.

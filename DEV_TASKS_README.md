@@ -3,9 +3,9 @@
 ## Current State
 
 - Branch: `prepshipv4-stable`
-- Latest pushed commit before this print queue durable status batch: `2c2ab35e`
+- Latest pushed commit before this Orders/Manifests scope batch: `5878e2ed`
 - Worktree at last update: clean
-- Latest implementation batch tracked here: print queue durable latest-run status
+- Latest implementation batch tracked here: Orders/Manifests client/store read scope
 - Latest production read from user: Rate Browser and live app behavior look healthy after the recent deploys
 - GitHub Actions:
   - `Keep Render API warm`: manual only now
@@ -18,8 +18,8 @@
 | Document | Status | Percent | Why Not 100% |
 |---|---|---:|---|
 | `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md` | Created / active | 94% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, `order_items`/`analytics_cache`, low-risk orders/inventory indexes, durable job strategy, ShipStation Awaiting parity status, rate backfill status, billing reference-rate status, and print queue batch/merge latest-run status moved to documented ownership; inventory truth, label side effects, full job progress/events, artifact storage, and shipment-adjacent DDL cleanup still open |
-| `ENTERPRISE_READINESS_AUDIT.md` | Created / active | 93% | Dashboard, Analysis, Inventory, Billing, and Print Queue list/action ownership now apply explicit JWT client/store claims; secrets governance, audit logging, reconciliation reporting, observability/alerting, runbook/DR planning, privacy/compliance, and production signoff are now mapped; marketplace awaiting-count reconciliation and key operational latest-run statuses now have guarded paths; print queue latest status now survives in `settings`; still needs remaining orders/manifests scoping, broader runtime audit/reconciliation/alert implementation, DR drills, artifact durability, and authenticated production verification |
-| `SECURITY_PATCH_PLAN.md` | Created / mostly implemented | 94% | Needs live auth smoke tests, strict JWT production rollout, orders/manifests scope review, and broader role/client-scope rollout |
+| `ENTERPRISE_READINESS_AUDIT.md` | Created / active | 95% | Dashboard, Analysis, Inventory, Billing, Print Queue, Orders, and Manifests now apply explicit JWT client/store claims on key read surfaces; secrets governance, audit logging, reconciliation reporting, observability/alerting, runbook/DR planning, privacy/compliance, and production signoff are mapped; marketplace awaiting-count reconciliation and key operational latest-run statuses have guarded paths; still needs label/shipment-sensitive policy, broader runtime audit/reconciliation/alert implementation, DR drills, artifact durability, and authenticated production verification |
+| `SECURITY_PATCH_PLAN.md` | Created / mostly implemented | 95% | Needs live auth smoke tests, strict JWT production rollout, label/shipment-sensitive scope review, and broader field-level role/client-scope rollout |
 | `RATE_SYSTEM_HARDENING_PLAN.md` | Created / mostly implemented | 78% | Needs browser production verification, duplicate-name UX polish, provider/account metrics, and full backfill progress/events beyond latest-run durability |
 
 ## Phase Summary
@@ -35,9 +35,9 @@
 | Phase 7 - Billing + Packages | Partial/good progress | 64% | Billing read surfaces now have client/store scope and billing reference-rate fetch latest-run durability; needs reconciliation, billing summary read model completion, package usage metrics, and package ledger hardening |
 | Phase 8 - Shared Frontend Data Layer | Partial/good progress | 65% | Needs standardized React Query hooks and remaining broad `safe()` fallback cleanup |
 | Phase 9 - Lazy Loading + UI Performance | Partial | 55% | Needs more lazy-loaded drawers/modals/charts/export tools and all-tool browser audit |
-| Phase 10 - DJ/OpenClaw Security + Failure-State Hardening | Mostly complete | 94% | Unauthenticated production auth smoke checks passed and first runtime permission layer exists; dashboard/analysis/inventory/billing/print-queue/client/init scoping started; needs authenticated secret checks, deeper raw-error route audit, and orders/manifests scoping review |
+| Phase 10 - DJ/OpenClaw Security + Failure-State Hardening | Mostly complete | 95% | Unauthenticated production auth smoke checks passed and first runtime permission layer exists; dashboard/analysis/inventory/billing/print-queue/client/init/orders/manifests scoping started; needs authenticated secret checks, deeper raw-error route audit, and label/shipment-sensitive scope review |
 | Phase 11 - Source-of-Truth + Duplication Audit | In progress | 94% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, `order_items`/`analytics_cache`, low-risk orders/inventory indexes, durable job strategy, ShipStation Awaiting parity status, rate backfill status, billing reference-rate status, and print queue latest-run status moved to documented ownership; inventory truth, labels, full job events/artifacts, and shipment-adjacent DDL still remain |
-| Phase 12 - Enterprise Readiness | Scoped/started | 93% | Dashboard, Analysis, Inventory, Billing, and Print Queue list/action ownership are implemented for explicit client/store JWT claims; secrets governance, audit logging, reconciliation reporting, observability/alerting, runbook/DR planning, privacy/compliance, and production signoff are mapped; marketplace awaiting-count reconciliation and key durable latest-run status paths exist; print queue support status now has durable snapshots; needs orders/manifests scoping, broader runtime audit/reconciliation/alert implementation, DR drills, and owner signoff evidence |
+| Phase 12 - Enterprise Readiness | Scoped/started | 95% | Dashboard, Analysis, Inventory, Billing, Print Queue, Orders, and Manifests read/action ownership are implemented for explicit client/store JWT claims on key surfaces; secrets governance, audit logging, reconciliation reporting, observability/alerting, runbook/DR planning, privacy/compliance, and production signoff are mapped; marketplace awaiting-count reconciliation and key durable latest-run status paths exist; needs label/shipment-sensitive scope review, broader runtime audit/reconciliation/alert implementation, DR drills, and owner signoff evidence |
 
 ## Phase Checklist
 
@@ -157,6 +157,8 @@
 - [x] first Billing read client/store scope guard
 - [x] first Print Queue list client/store scope guard
 - [x] first Print Queue action/job ownership guard
+- [x] first Orders read/list/export client/store scope guard
+- [x] first Manifests generate client/store scope guard
 - [~] live production auth smoke tests
 - [ ] deeper raw-error route audit
 - [ ] formal RBAC/client-scope enforcement
@@ -207,7 +209,7 @@
 - [ ] remaining legacy JWT/CORS copies cleanup
 - [ ] carrier/store endpoint policy final verification
 
-### Phase 12 - Enterprise Readiness: 93%
+### Phase 12 - Enterprise Readiness: 95%
 
 - [x] `ENTERPRISE_READINESS_AUDIT.md`
 - [x] critical/high/medium issue buckets scoped
@@ -233,6 +235,9 @@
 - [x] `npm run test:print-queue-client-scope`
 - [x] `/print-queue` add/clear/delete/print/status/download ownership checks for scoped users
 - [x] `npm run test:print-queue-ownership`
+- [x] `/orders` list/daily-counts/dashboard-sales/ids/store-counts/daily-stats/picklist/distinct-skus/by-number/detail/full/export scope filtering for scoped users
+- [x] `/manifests/generate` GET/POST scope filtering for scoped users
+- [x] `npm run test:orders-manifests-scope`
 - [x] `SECRETS_GOVERNANCE_MATRIX.md`
 - [x] `npm run test:secrets-governance`
 - [x] `AUDIT_LOGGING_MATRIX.md`
@@ -254,7 +259,7 @@
 - [x] `npm run test:ref-rates-durable`
 - [x] Print queue latest-run durable status in `settings`
 - [x] `npm run test:print-queue-durable`
-- [ ] remaining operational route query scoping for orders/manifests
+- [ ] remaining label/shipment-sensitive route scope review
 - [~] secrets governance
 - [~] audit logging
 - [~] reconciliation reports
@@ -317,6 +322,7 @@
 - `npm run test:billing-client-scope`
 - `npm run test:print-queue-client-scope`
 - `npm run test:print-queue-ownership`
+- `npm run test:orders-manifests-scope`
 - `npm run test:secrets-governance`
 - `npm run test:audit-logging`
 - `npm run test:reconciliation-plan`

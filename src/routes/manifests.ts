@@ -1,9 +1,10 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, asc, eq, gte, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, lte, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
 import { shipments } from '../db/schema/shipments';
+import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 
 const app = new Hono();
 
@@ -33,7 +34,34 @@ type ManifestFilters = {
   dateTo: string;
   carrierCode?: string;
   clientId?: number;
+  scope?: ClientStoreScope;
 };
+
+function manifestScopeFromContext(c: Context): ClientStoreScope {
+  return getClientStoreScope({
+    email: c.get('email' as never) as string | undefined,
+    role: c.get('role' as never) as string | undefined,
+    permissions: c.get('permissions' as never) as string[] | undefined,
+    clientIds: c.get('clientIds' as never) as number[] | undefined,
+    storeIds: c.get('storeIds' as never) as number[] | undefined,
+  });
+}
+
+function manifestClientScopePredicate(scope: ClientStoreScope): SQL | undefined {
+  if (!scope.isRestricted) return undefined;
+  const predicates: SQL[] = [];
+  if (scope.clientIds.length > 0) predicates.push(inArray(shipments.clientId, scope.clientIds));
+  if (scope.storeIds.length > 0) {
+    predicates.push(sql`exists (
+      select 1
+      from orders scoped_order
+      where scoped_order.id = ${shipments.orderId}
+        and scoped_order.store_id in (${sql.join(scope.storeIds.map((id) => sql`${id}`), sql`, `)})
+    )`);
+  }
+  if (!predicates.length) return sql`false`;
+  return predicates.length === 1 ? predicates[0] : sql`(${sql.join(predicates, sql` or `)})`;
+}
 
 async function loadManifest(filters: ManifestFilters) {
   const rows = await db
@@ -57,6 +85,7 @@ async function loadManifest(filters: ManifestFilters) {
         lte(shipments.shipDate, new Date(filters.dateTo)),
         filters.carrierCode ? eq(shipments.carrierCode, filters.carrierCode) : undefined,
         filters.clientId !== undefined ? eq(shipments.clientId, filters.clientId) : undefined,
+        filters.scope ? manifestClientScopePredicate(filters.scope) : undefined,
         // 2026-05-12 visibility fix: drop shipments owned by test
         // clients (sandbox data) OR by clients the operator disabled
         // via Settings → Clients. Previously only the test branch was
@@ -87,6 +116,7 @@ app.get('/generate', zValidator('query', query), async (c) => {
     dateTo: q.dateTo,
     carrierCode: q.carrierCode,
     clientId: q.clientId,
+    scope: manifestScopeFromContext(c),
   });
   return c.json(result);
 });
@@ -107,6 +137,7 @@ app.post('/generate', zValidator('json', postBody), async (c) => {
     // (ShipStation uses the same lowercase code in both places).
     carrierCode: b.carrierCode ?? b.carrierId,
     clientId: b.clientId,
+    scope: manifestScopeFromContext(c),
   });
   return c.json(result);
 });
