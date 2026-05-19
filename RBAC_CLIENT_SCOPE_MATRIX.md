@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-This document started as the Phase 12 Batch 1 RBAC planning deliverable. Phase 12 Batch 2 implemented the first narrow runtime permission layer for safer admin/settings/credential surfaces. Phase 12 Batch 3A added low-risk `/clients` and `/init` scoping. Phase 12 Batch 3B starts operational aggregate scoping with `/dashboard`.
+This document started as the Phase 12 Batch 1 RBAC planning deliverable. Phase 12 Batch 2 implemented the first narrow runtime permission layer for safer admin/settings/credential surfaces. Phase 12 Batch 3A added low-risk `/clients` and `/init` scoping. Phase 12 Batch 3B started operational aggregate scoping with `/dashboard`. Phase 12 Batch 3C extends explicit client/store read scoping into direct `/analysis` endpoints.
 
 This work does not change shipped/cancelled mutation guards, shipment logic, label creation, or fulfillment side effects.
 
@@ -28,6 +28,8 @@ This work does not change shipped/cancelled mutation guards, shipment logic, lab
 - [x] `/dashboard` summary/daily-counts/SKU panels/inventory-risk filter explicit client/store scopes.
 - [x] dashboard cache keys include client/store scope.
 - [x] `npm run test:dashboard-client-scope` guards the dashboard scope layer.
+- [x] `/analysis` overview/daily-shipments/top-skus/SKU detail/SKU daily endpoints filter explicit client/store scopes.
+- [x] `npm run test:analysis-client-scope` guards the analysis scope layer.
 - [ ] Remaining operational route row-scope middleware and query filters.
 - [ ] Field-level DTO redaction by role for costs, margins, and billing.
 - [ ] Audit events for credential/admin actions.
@@ -62,7 +64,7 @@ This work does not change shipped/cancelled mutation guards, shipment logic, lab
 | `/orders`, `/orders/*` | `admin`, `operator`, `warehouse`, scoped `client_user`, scoped `read_only_support` | Rows filtered to assigned client/store; support read-only; client_user only own client/store | `requireAuth`; shipped/cancelled mutation guards exist | No formal client/store scope middleware | Add scope-aware order query filters and mutation permission checks without weakening locked surfaces | Client user cannot read another client's orders; support cannot mutate; shipped/cancelled guard still passes |
 | `/shipments`, `/shipments/*` | `admin`, `operator`, scoped `warehouse`, scoped `client_user`, scoped `read_only_support` | Shipment reads scoped through related order/client/store | `requireAuth` | Shipment table is locked; read scope needs policy, mutation review needs separate human plan | Add read scoping only in a separately reviewed implementation; do not alter locked shipment mutation paths in this batch | Client user cannot read another client's shipments; locked mutation tests remain unchanged |
 | `/dashboard`, `/dashboard/*` | `admin`, `operator`, `warehouse`, scoped `client_user`, scoped `read_only_support` | Aggregates filtered to assigned client/store; support read-only | `requireAuth`; summary/daily-counts/SKU panels/inventory-risk filter explicit JWT `clientIds` / `storeIds`; cache keys include scope | production smoke tests and finer dashboard DTO permission policy still needed | Add API tests and keep role-specific DTO policy | Client user dashboard excludes other clients; support sees read-only metrics |
-| `/analysis`, `/analysis/*` | `admin`, `operator`, scoped `warehouse`, scoped `client_user`, scoped `read_only_support` | Analytics filtered to assigned client/store; cost/margin fields require explicit permission | `requireAuth` | Scope and field-level analytics permissions are not formalized | Add scoped analysis filters and field-level DTOs | Client user cannot access other-client SKUs; warehouse cannot see restricted margin fields |
+| `/analysis`, `/analysis/*` | `admin`, `operator`, scoped `warehouse`, scoped `client_user`, scoped `read_only_support` | Analytics filtered to assigned client/store; cost/margin fields require explicit permission | `requireAuth`; overview/daily shipments/top SKUs/SKU detail/SKU daily endpoints filter explicit JWT `clientIds` / `storeIds` | Production smoke tests and field-level analytics cost/margin permissions still needed | Add API smoke tests and field-level DTOs for restricted roles | Client user cannot access other-client SKUs; warehouse cannot see restricted margin fields |
 | `/inventory`, `/inventory/*` | `admin`, `operator`, `warehouse`, scoped `client_user`, scoped `read_only_support` | Inventory rows filtered to assigned client/store; support read-only | `requireAuth` | No formal client/store scope middleware | Add inventory scope filter and mutation role checks | Client user cannot read another client's inventory; support cannot adjust stock |
 | `/billing`, `/billing/*` | `admin`, `operator` with billing permission, scoped `client_user` if explicitly allowed | Billing rows filtered to assigned client/store; costs/margins protected | `requireAuth` | Billing role and field-level visibility are not formalized | Add billing permission and DTO redaction for restricted roles | Warehouse denied billing; client_user only sees own approved billing fields |
 | `/manifests`, `/manifests/*` | `admin`, `operator`, `warehouse`, scoped `read_only_support` | Manifest data scoped to assigned client/store/location | `requireAuth` | No formal client/store/location scope middleware | Add scoped manifest queries and mutation role checks | Warehouse cannot access another location/client manifest |
@@ -100,9 +102,10 @@ This work does not change shipped/cancelled mutation guards, shipment logic, lab
 5. [x] Add a client/store assignment scope helper.
 6. [x] Add low-risk client/init payload filters.
 7. [x] Add dashboard aggregate read-scope filters.
-8. [ ] Add remaining read-scope filters for `/orders`, `/analysis`, `/inventory`, `/billing`, and `/manifests`.
-9. [ ] Add field-level DTO tests for credentials, cost, margin, and billing visibility.
-10. [ ] Add browser tests for role-restricted UI hiding after backend enforcement exists.
+8. [x] Add analysis read-scope filters for overview, daily shipments, top SKUs, SKU detail, SKU daily, SKU list, and daily sales.
+9. [ ] Add remaining read-scope filters for `/orders`, `/inventory`, `/billing`, and `/manifests`.
+10. [ ] Add field-level DTO tests for credentials, cost, margin, and billing visibility.
+11. [ ] Add browser tests for role-restricted UI hiding after backend enforcement exists.
 
 ## Required Tests
 
@@ -117,10 +120,11 @@ This work does not change shipped/cancelled mutation guards, shipment logic, lab
 - `npm run test:rbac-permissions` passes.
 - `npm run test:client-store-scope` passes.
 - `npm run test:dashboard-client-scope` passes.
+- `npm run test:analysis-client-scope` passes.
 
 ## Out Of Scope For This Batch
 
-- No query filters are changed in this batch.
+- No additional query filters are changed outside Analysis in this batch.
 - No shipped/cancelled mutation logic is changed.
 - No shipment table mutation logic is changed.
 - No label side-effect, fulfillment outbox, or inventory deduction logic is changed.

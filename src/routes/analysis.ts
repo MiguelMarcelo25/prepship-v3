@@ -1,9 +1,10 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
 import { EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
+import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 
 // v2-parity: exact list from apps/api/src/common/prepship-config.ts.
 // v4 previously used a broad regex `(priority|express|overnight|expedited|...)`
@@ -25,6 +26,7 @@ const EXPEDITED_SERVICES_SQL = sql`ARRAY[${sql.join(EXPEDITED_SERVICES.map((s) =
 const app = new Hono();
 
 app.get('/overview', async (c) => {
+  const scope = analysisScopeFromContext(c);
   // 2026-05-12 visibility fix: every sub-query excludes rows tied to
   // either (a) is_test clients (sandbox / smoke-test data) or (b)
   // inactive clients (operator disabled them via Settings → Clients).
@@ -46,21 +48,27 @@ app.get('/overview', async (c) => {
     select
       (select count(*)::int from orders o
          where order_date >= date_trunc('day',  now())
+           and ${analysisOrderScopePredicate(scope)}
            and not exists (select 1 from clients c where c.id = o.client_id and (c.is_test = true or coalesce(c.active, true) = false))) as orders_today,
       (select count(*)::int from orders o
          where order_date >= date_trunc('week', now())
+           and ${analysisOrderScopePredicate(scope)}
            and not exists (select 1 from clients c where c.id = o.client_id and (c.is_test = true or coalesce(c.active, true) = false))) as orders_week,
       (select count(*)::int from orders o
          where order_date >= date_trunc('month',now())
+           and ${analysisOrderScopePredicate(scope)}
            and not exists (select 1 from clients c where c.id = o.client_id and (c.is_test = true or coalesce(c.active, true) = false))) as orders_month,
       (select count(*)::int from shipments s
          where s.voided = false and s.ship_date >= date_trunc('day',  now())
+           and ${analysisShipmentScopePredicate(scope)}
            and not exists (select 1 from clients c where c.id = s.client_id and (c.is_test = true or coalesce(c.active, true) = false))) as shipped_today,
       (select count(*)::int from shipments s
          where s.voided = false and s.ship_date >= date_trunc('week', now())
+           and ${analysisShipmentScopePredicate(scope)}
            and not exists (select 1 from clients c where c.id = s.client_id and (c.is_test = true or coalesce(c.active, true) = false))) as shipped_week,
       (select count(*)::int from shipments s
          where s.voided = false and s.ship_date >= date_trunc('month',now())
+           and ${analysisShipmentScopePredicate(scope)}
            and not exists (select 1 from clients c where c.id = s.client_id and (c.is_test = true or coalesce(c.active, true) = false))) as shipped_month,
       (select coalesce(sum(marked_cost),0)::text
          from (
@@ -87,6 +95,7 @@ app.get('/overview', async (c) => {
                end as markup
            ) cost_model
            where s.voided = false and s.ship_date >= date_trunc('month',now())
+             and ${analysisShipmentScopePredicate(scope)}
              and not exists (select 1 from clients c where c.id = s.client_id and (c.is_test = true or coalesce(c.active, true) = false))
          ) shipping_costs) as shipping_cost_month
   `);
@@ -119,6 +128,7 @@ app.get('/daily-shipments', zValidator('query', rangeQuery), async (c) => {
   const q = c.req.valid('query');
   const fromIso = new Date(q.dateFrom).toISOString();
   const toIso = new Date(q.dateTo).toISOString();
+  const dailyShipmentsScope = analysisScopeFromContext(c);
   const rows = await db.execute<{
     day: string;
     count: number;
@@ -153,6 +163,7 @@ app.get('/daily-shipments', zValidator('query', rangeQuery), async (c) => {
     where s.voided = false
       and s.ship_date >= ${fromIso}::timestamptz
       and s.ship_date <= ${toIso}::timestamptz
+      and ${analysisShipmentScopePredicate(dailyShipmentsScope)}
       -- 2026-05-12 visibility fix: also exclude inactive clients
       -- (operator disabled them in Settings → Clients) so the timeseries
       -- chart stops including their historical shipments.
@@ -164,6 +175,8 @@ app.get('/daily-shipments', zValidator('query', rangeQuery), async (c) => {
 });
 
 const topSkusQuery = rangeQuery.extend({
+  clientId: z.coerce.number().int().optional(),
+  storeId: z.coerce.number().int().optional(),
   limit: z.coerce.number().int().positive().max(200).optional().default(50),
 });
 
@@ -191,6 +204,7 @@ type ClientStoreScopeQuery = {
   storeIds?: number[];
   scopeRestricted?: boolean;
 };
+type AnalysisScopeInput = ClientStoreScopeQuery & { storeId?: number; isRestricted?: boolean };
 
 export type SkuDailyQuery = z.infer<typeof skuDailyQuery> & ClientStoreScopeQuery;
 
@@ -218,7 +232,27 @@ function intArraySql(values: number[]): SQL {
   return sql`array[${sql.join(values.map((value) => sql`${value}`), sql`, `)}]::int[]`;
 }
 
-function analysisOrderScopePredicate(q: ClientStoreScopeQuery & { storeId?: number }): SQL {
+function analysisScopeFromContext(c: Context): ClientStoreScope {
+  return getClientStoreScope({
+    email: c.get('email' as never) as string | undefined,
+    role: c.get('role' as never) as string | undefined,
+    permissions: c.get('permissions' as never) as string[] | undefined,
+    clientIds: c.get('clientIds' as never) as number[] | undefined,
+    storeIds: c.get('storeIds' as never) as number[] | undefined,
+  });
+}
+
+function withAnalysisScope<T extends object>(c: Context, q: T): T & ClientStoreScopeQuery {
+  const scope = analysisScopeFromContext(c);
+  return {
+    ...q,
+    clientIds: scope.clientIds,
+    storeIds: scope.storeIds,
+    scopeRestricted: scope.isRestricted,
+  };
+}
+
+function analysisOrderScopePredicate(q: AnalysisScopeInput): SQL {
   const predicates: SQL[] = [];
   const clientIds = normalizeScopeIds(q.clientIds);
   const storeIds = normalizeScopeIds([
@@ -233,7 +267,29 @@ function analysisOrderScopePredicate(q: ClientStoreScopeQuery & { storeId?: numb
     predicates.push(sql`o.store_id = any(${intArraySql(storeIds)})`);
   }
   if (!predicates.length) {
-    return q.scopeRestricted === true ? sql`false` : sql`true`;
+    return q.scopeRestricted === true || q.isRestricted === true ? sql`false` : sql`true`;
+  }
+  if (predicates.length === 1) return predicates[0]!;
+  return sql`(${sql.join(predicates, sql` or `)})`;
+}
+
+function analysisShipmentScopePredicate(q: AnalysisScopeInput): SQL {
+  const predicates: SQL[] = [];
+  const clientIds = normalizeScopeIds(q.clientIds);
+  const storeIds = normalizeScopeIds(q.storeIds);
+
+  if (clientIds.length) {
+    predicates.push(sql`s.client_id = any(${intArraySql(clientIds)})`);
+  }
+  if (storeIds.length) {
+    predicates.push(sql`exists (
+      select 1 from clients scoped_client
+      where scoped_client.id = s.client_id
+        and scoped_client.store_ids && ${intArraySql(storeIds)}
+    )`);
+  }
+  if (!predicates.length) {
+    return q.scopeRestricted === true || q.isRestricted === true ? sql`false` : sql`true`;
   }
   if (predicates.length === 1) return predicates[0]!;
   return sql`(${sql.join(predicates, sql` or `)})`;
@@ -354,7 +410,7 @@ async function getSkuDaily(q: SkuDailyQuery) {
 }
 
 app.get('/sku-daily', zValidator('query', skuDailyQuery), async (c) => {
-  return c.json(await getSkuDaily(c.req.valid('query')));
+  return c.json(await getSkuDaily(withAnalysisScope(c, c.req.valid('query'))));
 });
 
 const skuBreakdownQuery = rangeQuery.extend({
@@ -627,6 +683,7 @@ export async function getSkuBreakdownFromOrderItems(q: SkuBreakdownQuery) {
       and o.order_date >= ${fromIso}::timestamptz
       and o.order_date <= ${toIso}::timestamptz
       and (${cid}::int is null or o.client_id = ${cid}::int)
+      and ${analysisOrderScopePredicate(q)}
       and (
         o.client_id is null
         or exists (
@@ -662,7 +719,7 @@ async function getSkuBreakdown(q: SkuBreakdownQuery) {
 }
 
 app.get('/sku-breakdown', zValidator('query', skuBreakdownQuery), async (c) => {
-  const result = await getSkuBreakdown(c.req.valid('query'));
+  const result = await getSkuBreakdown(withAnalysisScope(c, c.req.valid('query')));
   return c.json({
     data: result.rows,
     dateBuckets: result.dateBuckets,
@@ -673,8 +730,10 @@ app.get('/sku-breakdown', zValidator('query', skuBreakdownQuery), async (c) => {
 
 app.get('/top-skus', zValidator('query', topSkusQuery), async (c) => {
   const q = c.req.valid('query');
+  const topSkusScope = withAnalysisScope(c, q);
   const fromIso = new Date(q.dateFrom).toISOString();
   const toIso = new Date(q.dateTo).toISOString();
+  const cid: number | null = q.clientId ?? null;
   const rows = await db.execute<{
     sku: string;
     total_qty: number;
@@ -688,6 +747,8 @@ app.get('/top-skus', zValidator('query', topSkusQuery), async (c) => {
     join orders o on o.id = oi.order_id
     where o.order_date >= ${fromIso}::timestamptz
       and o.order_date <= ${toIso}::timestamptz
+      and (${cid}::int is null or o.client_id = ${cid}::int)
+      and ${analysisOrderScopePredicate(topSkusScope)}
       and oi.sku is not null
       and oi.sku <> ''
       and oi.quantity > 0
@@ -715,7 +776,7 @@ app.get('/top-skus', zValidator('query', topSkusQuery), async (c) => {
 // v4 picked clearer names (sku-breakdown, sku-daily). Mount the v2 paths as
 // aliases so the v2-apiClient compat shim doesn't need to translate.
 app.get('/skus', zValidator('query', skuBreakdownQuery), async (c) => {
-  const result = await getSkuBreakdown(c.req.valid('query'));
+  const result = await getSkuBreakdown(withAnalysisScope(c, c.req.valid('query')));
   return c.json({
     data: result.rows,
     dateBuckets: result.dateBuckets,
@@ -725,7 +786,7 @@ app.get('/skus', zValidator('query', skuBreakdownQuery), async (c) => {
 });
 
 app.get('/daily-sales', zValidator('query', skuDailyQuery), async (c) => {
-  return c.json(await getSkuDaily(c.req.valid('query')));
+  return c.json(await getSkuDaily(withAnalysisScope(c, c.req.valid('query'))));
 });
 
 export default app;
