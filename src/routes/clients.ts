@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
@@ -7,6 +8,11 @@ import { clients } from '../db/schema/clients';
 import { orders } from '../db/schema/orders';
 import { ssV1Request } from '../lib/shipstation/v1-client';
 import { publicClient } from '../lib/public-client';
+import {
+  filterClientsForScope,
+  getClientStoreScope,
+  isClientVisibleToScope,
+} from '../lib/client-store-scope';
 import { EXCLUDED_STORE_IDS_SQL, isExcludedStoreId } from '../config/prepship';
 
 const app = new Hono();
@@ -45,6 +51,16 @@ function lightweightClient(row: ReturnType<typeof publicClient>) {
   };
 }
 
+function scopeFromContext(c: Context) {
+  return getClientStoreScope({
+    email: c.get('email' as never) as string | undefined,
+    role: c.get('role' as never) as string | undefined,
+    permissions: c.get('permissions' as never) as string[] | undefined,
+    clientIds: c.get('clientIds' as never) as number[] | undefined,
+    storeIds: c.get('storeIds' as never) as number[] | undefined,
+  });
+}
+
 const body = z.object({
   name: z.string().min(1),
   storeIds: z.array(z.number().int()).optional(),
@@ -70,7 +86,9 @@ app.get('/', async (c) => {
     .select()
     .from(clients)
     .where(activeOnly ? eq(clients.active, true) : undefined);
+  const scope = scopeFromContext(c);
   const safeRows = rows.map(publicClient);
+  const visibleRows = filterClientsForScope(safeRows, scope);
   const wantsPaged =
     c.req.query('page') !== undefined ||
     c.req.query('pageSize') !== undefined ||
@@ -81,25 +99,30 @@ app.get('/', async (c) => {
     const start = (page - 1) * pageSize;
     const lightweight = boolQuery(c.req.query('lightweight'));
     return c.json({
-      data: safeRows
+      data: visibleRows
         .slice(start, start + pageSize)
         .map((row) => (lightweight ? lightweightClient(row) : row)),
       pagination: {
         page,
         pageSize,
-        total: safeRows.length,
-        totalPages: Math.max(1, Math.ceil(safeRows.length / pageSize)),
+        total: visibleRows.length,
+        totalPages: Math.max(1, Math.ceil(visibleRows.length / pageSize)),
       },
     });
   }
-  return c.json(safeRows);
+  return c.json(visibleRows);
 });
 
 app.get('/:id{[0-9]+}', async (c) => {
   const id = Number(c.req.param('id'));
   const [row] = await db.select().from(clients).where(eq(clients.id, id)).limit(1);
   if (!row) return c.json({ error: 'Client not found' }, 404);
-  return c.json(publicClient(row));
+  const scope = scopeFromContext(c);
+  const safeRow = publicClient(row);
+  if (!isClientVisibleToScope(safeRow, scope)) {
+    return c.json({ error: 'Client not found' }, 404);
+  }
+  return c.json(safeRow);
 });
 
 app.post('/', zValidator('json', body), async (c) => {

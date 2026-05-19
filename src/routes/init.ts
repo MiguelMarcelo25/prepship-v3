@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import type { Context } from 'hono';
 import { eq, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { clients } from '../db/schema/clients';
@@ -7,6 +8,7 @@ import { packages } from '../db/schema/packages';
 import { ssRequest } from '../lib/shipstation';
 import type { CarriersResponse } from '../lib/shipstation/types';
 import { publicClient } from '../lib/public-client';
+import { filterClientsForScope, getClientStoreScope } from '../lib/client-store-scope';
 import { EXCLUDED_STORE_IDS, EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
 
 const app = new Hono();
@@ -29,6 +31,16 @@ function countsCacheKey(dateFromIso: string | null, dateToIso: string | null): s
   return `${dateFromIso ?? ''}|${dateToIso ?? ''}`;
 }
 
+function scopeFromContext(c: Context) {
+  return getClientStoreScope({
+    email: c.get('email' as never) as string | undefined,
+    role: c.get('role' as never) as string | undefined,
+    permissions: c.get('permissions' as never) as string[] | undefined,
+    clientIds: c.get('clientIds' as never) as number[] | undefined,
+    storeIds: c.get('storeIds' as never) as number[] | undefined,
+  });
+}
+
 // Single bootstrap call — returns everything needed to render the app shell.
 app.get('/init-data', async (c) => {
   const [clientsRows, locationsRows, packagesRows] = await Promise.all([
@@ -47,8 +59,14 @@ app.get('/init-data', async (c) => {
     // ShipStation may be down or creds missing — return what we have.
   }
 
+  const scope = scopeFromContext(c);
+  const visibleClients = filterClientsForScope(
+    clientsRows.map(publicClient),
+    scope
+  );
+
   return c.json({
-    clients: clientsRows.map(publicClient),
+    clients: visibleClients,
     locations: locationsRows,
     packages: packagesRows,
     carriers,
@@ -276,13 +294,15 @@ app.get('/carrier-accounts', async (c) => {
 // v2 returns one row per (clientId, storeId) pairing. We hydrate from clients.storeIds.
 app.get('/stores', async (c) => {
   const rows = await db.select().from(clients);
+  const scope = scopeFromContext(c);
+  const visibleClients = filterClientsForScope(rows.map(publicClient), scope);
   const stores: Array<{
     storeId: number;
     clientId: number;
     clientName: string;
     active: boolean;
   }> = [];
-  for (const cli of rows) {
+  for (const cli of visibleClients) {
     if (!cli.active) continue;
     if (cli.isTest) {
       stores.push({ storeId: -cli.id, clientId: cli.id, clientName: cli.name, active: true });

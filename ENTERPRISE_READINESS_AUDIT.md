@@ -35,10 +35,11 @@ Implemented:
 - Phase 12 RBAC/client-scope planning matrix added as `RBAC_CLIENT_SCOPE_MATRIX.md`, including canonical roles, route-group policy, scope expectations, current enforcement, gaps, required fixes, and tests.
 - First runtime RBAC permission layer added: canonical role/permission constants, JWT `app_metadata.permissions` support, `requirePermission`, method-aware credential-account permission middleware, `/users` root user-management gate, settings read/write gates, carrier-account read/write gates, and carrier verification credential-write gate.
 - RBAC permission guard added as `npm run test:rbac-permissions`.
+- First client/store scope foundation added: JWT `clientIds` / `storeIds` claim parsing, reusable client/store scope helper, `/clients` list/detail filtering for scoped users, `/init/init-data` client filtering, `/init/stores` store filtering, and `npm run test:client-store-scope`.
 
 Confirmed gaps from repo search:
 
-- RBAC/client-scope rules are now documented in a route matrix, and the first runtime permission middleware is implemented for safer admin/settings/credential surfaces. Client/store row-scope query enforcement is not implemented yet.
+- RBAC/client-scope rules are now documented in a route matrix, the first runtime permission middleware is implemented for safer admin/settings/credential surfaces, and low-risk client/init payload scoping exists. Operational route query enforcement is not implemented yet.
 - Runtime DDL remains in some production-capable paths, but the request/job-time DDL inventory and static guard now exist. Reporting metrics table/index ownership has moved into `drizzle/0029_reporting_metrics.sql`, the Walmart selling-fee source index is owned by `drizzle/0019_selling_fees.sql`, marketplace `store_orders` is owned by `drizzle/0030_store_orders.sql`, credential-account RLS/readiness is owned by `drizzle/0031_credential_accounts_rls.sql`, `order_items` / `analytics_cache` readiness is owned by `drizzle/0024_order_items_phase2.sql` plus `drizzle/0025_order_items_sync_trigger.sql`, and low-risk orders/inventory performance indexes are owned by migrations `0021`, `0022`, `0023`, and `0026`.
 - Durable job state is mixed: scheduler protection has improved, but print queue/rate backfill and some compatibility paths still need restart-safe progress guarantees.
 - Broad frontend `safe()` fallback usage remains and needs a failure-mode sweep.
@@ -50,13 +51,13 @@ Current readiness read:
 | Track | Status | Percent |
 |---|---|---:|
 | Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, rate cache diagnostics/bulk semantics, runtime DDL inventory/guard, reporting metrics migration, Walmart selling-fee index cleanup, `store_orders` migration, credential-account DDL cleanup, `order_items` / `analytics_cache` readiness cleanup, and low-risk orders/inventory index cleanup implemented | 85% |
-| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated, RBAC/client-scope route matrix documented, and first runtime permission layer implemented | 58% |
+| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated, RBAC/client-scope route matrix documented, first runtime permission layer implemented, and low-risk client/init payload scoping added | 61% |
 
 ## Critical Blockers
 
 | Blocker | Risk | Required Outcome | Verification |
 |---|---|---|---|
-| RBAC and client scoping are partially enforced | First permission middleware covers `/users`, settings, and credential surfaces, but operational row scoping is still missing | Runtime role and client-scope enforcement based on `RBAC_CLIENT_SCOPE_MATRIX.md` | API tests for admin, operator, warehouse, client user, support/read-only |
+| RBAC and client scoping are partially enforced | First permission middleware covers `/users`, settings, and credential surfaces; low-risk client/init payload scoping exists; operational row scoping is still missing | Runtime role and client-scope enforcement based on `RBAC_CLIENT_SCOPE_MATRIX.md` | API tests for admin, operator, warehouse, client user, support/read-only |
 | Credential governance is incomplete | Carrier/store/ShipStation secrets can be mishandled, logged, or hard to rotate | Redaction, protected storage, rotation, audit log, last-used tracking | Secret scan, API response tests, credential update audit test |
 | Runtime DDL still exists in some production paths | Request latency, schema drift, unpredictable deploys | Schema managed by Drizzle migrations | `RUNTIME_DDL_MIGRATION_AUDIT.md`, `npm run test:runtime-ddl`, and migration backlog |
 | User-visible jobs are not all durable | Restart/multi-instance can lose or duplicate work | DB-backed job state, idempotency, locks, failure state | Restart and dual-worker tests |
@@ -94,6 +95,7 @@ Current readiness read:
 - [x] Define roles: admin, operator, warehouse, client user, read-only/support.
 - [x] Create route permission matrix in `RBAC_CLIENT_SCOPE_MATRIX.md`.
 - [x] Add first runtime permission middleware for `/users`, settings, carrier accounts, and carrier verification.
+- [x] Add first client/store scope helper and low-risk `/clients` + `/init` payload filters.
 - [ ] Add client-scoped access rules for orders, inventory, labels, print queue, billing.
 - [ ] Add field-level protection for credentials, costs, margins, billing data.
 - [ ] Verify frontend hides restricted actions.
@@ -109,6 +111,7 @@ The full route matrix now lives in `RBAC_CLIENT_SCOPE_MATRIX.md`. The condensed 
 |---|---|---|---|---|---|---|
 | `/admin`, `/admin/*` | admin | global admin only | `requireAuth` + `requireAdmin` | needs API smoke test with non-admin token | keep middleware, add auth/RBAC tests | non-admin returns `403` |
 | `/users`, `/users/*` | admin/user-management | user-management scope; `/users/me` authenticated self | `requireAuth` plus `requirePermission('users:manage')` on root list | live non-admin smoke test still needed | keep `/users/me` self-readable; add API behavior tests | operator/client token denied from root list |
+| `/clients`, `/clients/*` | admin/operator with client-management permission, scoped support/client users | Explicit JWT `clientIds` / `storeIds` filter scoped users; secrets never returned | `requireAuth`; client secret redaction tests; client/store scope helper filters list/detail when scope claims exist | client-management mutation role and field-level policy not fully formalized | add mutation permission and safe DTO tests per role | scoped users only see assigned clients |
 | `/orders`, `/orders/*` | admin/operator/warehouse/client user | client/store scoped rows | `requireAuth`; shipped/cancelled mutation guards exist | no formal client-scope middleware | add route-level scope policy and query filters | client user cannot read another client's orders |
 | `/inventory`, `/inventory/*` | admin/operator/warehouse/client user | client scoped SKUs | `requireAuth` | no formal client-scope middleware | add scope policy and filtered inventory queries | client user cannot read another client's inventory |
 | `/billing`, `/billing/*` | admin/operator/accounting | client scoped billing | `requireAuth` | billing role and field-level margin/cost visibility not formalized | add billing permission and field DTOs | warehouse/client user denied from cost/margin |
@@ -396,6 +399,7 @@ Deliverable table:
 - `npm run test:orders-ux`
 - `npm run test:runtime-ddl`
 - `npm run test:rbac-permissions`
+- `npm run test:client-store-scope`
 - Unauthenticated `/users` and `/clients` return `401`.
 - Non-admin `/admin/*` returns `403`.
 - `/clients` and `/init/init-data` never return ShipStation secrets.
@@ -441,8 +445,8 @@ Deliverable table:
 
 ## Recommended Implementation Order
 
-1. Smoke-test the first runtime RBAC permission layer after deploy.
-2. Implement client/store row-scope middleware and query filters from `RBAC_CLIENT_SCOPE_MATRIX.md`.
+1. Smoke-test the first runtime RBAC permission and client/init scope layer after deploy.
+2. Implement operational client/store row-scope query filters from `RBAC_CLIENT_SCOPE_MATRIX.md`.
 3. Secrets and credential audit, including audit events.
 4. Migration/runtime DDL cleanup plan.
 5. Durable job status and idempotency plan.

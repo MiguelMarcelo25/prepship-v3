@@ -12,6 +12,8 @@ export type AuthVars = {
   email?: string;
   role?: string;
   permissions?: string[];
+  clientIds?: number[];
+  storeIds?: number[];
 };
 
 export const APP_ROLES = [
@@ -30,6 +32,7 @@ export const APP_PERMISSIONS = [
   'settings:write',
   'credentials:read',
   'credentials:write',
+  'scope:global',
 ] as const;
 
 export type AppPermission = (typeof APP_PERMISSIONS)[number];
@@ -78,13 +81,48 @@ function payloadToAuthVars(payload: JWTPayload): AuthVars | null {
   const permissions = rawPermissions.filter(
     (permission): permission is string => typeof permission === 'string'
   );
+  const clientIds = normalizeIdList(
+    appMetadata?.clientIds ??
+      appMetadata?.client_ids ??
+      appMetadata?.assignedClientIds ??
+      appMetadata?.assigned_client_ids ??
+      payload.clientIds ??
+      payload.client_ids
+  );
+  const storeIds = normalizeIdList(
+    appMetadata?.storeIds ??
+      appMetadata?.store_ids ??
+      appMetadata?.assignedStoreIds ??
+      appMetadata?.assigned_store_ids ??
+      payload.storeIds ??
+      payload.store_ids
+  );
 
   return {
     userId: payload.sub,
     email,
     role,
     permissions,
+    clientIds,
+    storeIds,
   };
+}
+
+function normalizeIdList(value: unknown): number[] {
+  const rawValues =
+    typeof value === 'string'
+      ? value.split(',')
+      : Array.isArray(value)
+        ? value
+        : [];
+
+  return Array.from(
+    new Set(
+      rawValues
+        .map((raw) => Number(raw))
+        .filter((id) => Number.isInteger(id) && id > 0)
+    )
+  );
 }
 
 export function isAppRole(role: string | undefined): role is AppRole {
@@ -129,6 +167,8 @@ export const requireAuth = createMiddleware<{ Variables: AuthVars }>(
     c.set('email', authVars.email);
     c.set('role', authVars.role);
     c.set('permissions', authVars.permissions);
+    c.set('clientIds', authVars.clientIds);
+    c.set('storeIds', authVars.storeIds);
     await next();
   }
 );

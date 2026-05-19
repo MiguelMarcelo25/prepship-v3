@@ -54,7 +54,8 @@ assert(
   'clients route does not return raw client rows',
 );
 assert(
-  /clients:\s*clientsRows\.map\(publicClient\)/.test(initRoute),
+  /clients:\s*clientsRows\.map\(publicClient\)/.test(initRoute) ||
+    /visibleClients\s*=\s*filterClientsForScope\(\s*clientsRows\.map\(publicClient\)/.test(initRoute),
   'init-data maps client rows through publicClient',
 );
 assert(

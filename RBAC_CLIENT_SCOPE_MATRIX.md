@@ -19,7 +19,13 @@ This work does not change shipped/cancelled mutation guards, shipment logic, lab
 - [x] Carrier-account route uses method-aware `credentials:read` / `credentials:write`.
 - [x] Carrier verification requires `credentials:write`.
 - [x] `npm run test:rbac-permissions` guards the first runtime layer.
-- [ ] Client/store row-scope middleware and query filters.
+- [x] JWT `clientIds` / `storeIds` claims are parsed into auth context.
+- [x] Client/store scope helper exists.
+- [x] `/clients` list/detail responses are filtered when explicit client/store scopes are present.
+- [x] `/init/init-data` client payload is filtered when explicit client/store scopes are present.
+- [x] `/init/stores` payload is filtered when explicit client/store scopes are present.
+- [x] `npm run test:client-store-scope` guards the first client/store scope layer.
+- [ ] Operational route row-scope middleware and query filters.
 - [ ] Field-level DTO redaction by role for costs, margins, and billing.
 - [ ] Audit events for credential/admin actions.
 
@@ -58,7 +64,7 @@ This work does not change shipped/cancelled mutation guards, shipment logic, lab
 | `/billing`, `/billing/*` | `admin`, `operator` with billing permission, scoped `client_user` if explicitly allowed | Billing rows filtered to assigned client/store; costs/margins protected | `requireAuth` | Billing role and field-level visibility are not formalized | Add billing permission and DTO redaction for restricted roles | Warehouse denied billing; client_user only sees own approved billing fields |
 | `/manifests`, `/manifests/*` | `admin`, `operator`, `warehouse`, scoped `read_only_support` | Manifest data scoped to assigned client/store/location | `requireAuth` | No formal client/store/location scope middleware | Add scoped manifest queries and mutation role checks | Warehouse cannot access another location/client manifest |
 | `/print-queue`, `/print-queue/*` | `admin`, `operator`, `warehouse`, scoped `read_only_support` | Print queue entries scoped by assigned client/store/location; support read-only | `requireAuth` | Queue entry ownership and role policy not formalized | Add scoped queue reads and mutation permissions | Warehouse cannot delete another location/client queue entry |
-| `/clients`, `/clients/*` | `admin`, `operator` with client-management permission, `read_only_support` read-only | Client rows global for admins; scoped/read-only for support/client_user if enabled; secrets never returned | `requireAuth`; client secret redaction tests exist | Client-management role and field-level policy not formalized | Add client-management permission and safe DTO tests per role | `/clients` never returns secrets; non-client-management roles denied or scoped |
+| `/clients`, `/clients/*` | `admin`, `operator` with client-management permission, `read_only_support` read-only | Client rows global for admins; scoped users filtered by explicit JWT `clientIds` / `storeIds`; secrets never returned | `requireAuth`; client secret redaction tests; list/detail scope filtering when claims exist | Client-management mutation role and field-level policy not fully formalized | Add mutation permission and safe DTO tests per role | `/clients` never returns secrets; scoped users only see assigned clients |
 | `/packages`, `/packages/*` | `admin`, `operator`, `warehouse`, scoped `read_only_support` | Packages scoped to location/client where applicable; cost fields protected | `requireAuth` | Package scope and package-cost visibility not formalized | Add package scope policy and cost DTO guards | Warehouse cannot edit global package settings without permission |
 | `/settings`, `/settings/*` | `admin`; selected operator sub-sections by permission | Global settings; credential fields protected | `requireAuth`; reads require `settings:read`; writes require `settings:write` | Settings sections are not yet split into finer-grained permission groups | Add frontend role hiding and finer setting groups if needed | Operator can access allowed settings only; unauthorized role receives `403` |
 | `/carrier-accounts`, `/carrier-accounts/*` | `admin`, operator with credential permission | Credential rows scoped by assigned carrier/client/store permissions; secrets masked | `requireAuth`; method-aware credentials permission middleware; shared credential handler and safe 500s exist | Audit logging, last-used policy, and Vercel compatibility parity still need follow-up | Add credential audit events and role-specific DTO tests | Non-credential role denied; response never includes raw secret fields |
@@ -70,7 +76,7 @@ This work does not change shipped/cancelled mutation guards, shipment logic, lab
 | `/locations`, `/locations/*` | `admin`, `operator`, `warehouse` scoped by location | Location rows filtered to assigned warehouse/location where applicable | `requireAuth` | Location scope not formalized | Add location assignment policy | Warehouse cannot access another location if assignments are enabled |
 | `/parent-skus`, `/parent-skus/*` | `admin`, `operator`, scoped `warehouse`, scoped `client_user` if allowed | SKU rows filtered to assigned client/store | `requireAuth` | SKU/client scope policy not formalized | Add SKU scope filters and mutation role checks | Client user cannot access another client's SKU mappings |
 | `/products`, `/products/*` | `admin`, `operator`, scoped `warehouse`, scoped `client_user` if allowed | Product/default rows filtered to assigned client/store | `requireAuth` | Product default ownership and scope policy not formalized | Add product scope filters and default-edit permissions | Client user cannot edit unrelated product defaults |
-| `/init`, `/init/*` | authenticated app users; data scoped by role | Initial payload must include only role/client/store-allowed data; secrets redacted | `requireAuth`; client redaction guard exists | Role-based init payloads are not formalized | Add role-aware init DTOs and assignment filters | Client user init payload excludes other clients and secrets |
+| `/init`, `/init/*` | authenticated app users; data scoped by role | Initial client/store payloads filter by explicit JWT `clientIds` / `storeIds`; secrets redacted | `requireAuth`; client redaction guard; init-data and stores scope filtering when claims exist | counts and other operational init payloads still need row-scope review | Add operational count scoping in a separate reviewed batch | Client user init payload excludes other clients and secrets |
 
 ## Field-Level Protection Matrix
 
@@ -88,10 +94,11 @@ This work does not change shipped/cancelled mutation guards, shipment logic, lab
 2. [x] Add a `requirePermission` wrapper around current auth variables.
 3. [x] Apply admin-only user-management policy to `/users` while keeping `/users/me` authenticated-self.
 4. [x] Apply settings and credential permissions to settings, carrier accounts, and carrier verification.
-5. [ ] Add a client/store assignment scope helper.
-6. [ ] Add read-scope filters for `/orders`, `/dashboard`, `/analysis`, `/inventory`, `/billing`, and `/manifests`.
-7. [ ] Add field-level DTO tests for credentials, cost, margin, and billing visibility.
-8. [ ] Add browser tests for role-restricted UI hiding after backend enforcement exists.
+5. [x] Add a client/store assignment scope helper.
+6. [x] Add low-risk client/init payload filters.
+7. [ ] Add read-scope filters for `/orders`, `/dashboard`, `/analysis`, `/inventory`, `/billing`, and `/manifests`.
+8. [ ] Add field-level DTO tests for credentials, cost, margin, and billing visibility.
+9. [ ] Add browser tests for role-restricted UI hiding after backend enforcement exists.
 
 ## Required Tests
 
@@ -104,6 +111,7 @@ This work does not change shipped/cancelled mutation guards, shipment logic, lab
 - Credential endpoints never return raw credential secret values.
 - Shipped/cancelled immutability tests keep passing.
 - `npm run test:rbac-permissions` passes.
+- `npm run test:client-store-scope` passes.
 
 ## Out Of Scope For This Batch
 
