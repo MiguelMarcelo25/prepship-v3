@@ -4,9 +4,9 @@
 
 This is the canonical boss-facing audit for duplicate logic and source-of-truth drift in PrepShip v4. It supersedes `DUPLICATION_OPTIMIZATION_AUDIT.md`.
 
-The highest-risk duplication remains around inventory stock calculations, user-visible job state, label side effects, and the last runtime DDL surfaces. Phase 11 Batch 1 moved carrier/store credential account PATCH behavior and table bootstrap logic behind shared helpers. Phase 11 Batch 2 moved rate cache diagnostics and exact/approximate bulk lookup semantics behind the canonical rate service/route boundary. Phase 11 Batch 3 added the runtime DDL inventory and static guard so new request-time schema creation cannot slip in undocumented. Phase 11 Batch 4 moved reporting metrics schema ownership into a Drizzle migration. Phase 11 Batch 5 moved the Walmart selling-fee source index fully to migration ownership. Phase 11 Batch 6 moved marketplace `store_orders` schema ownership into a Drizzle migration. Phase 11 Batch 7 removed credential-account request-time DDL and moved RLS readiness into migration ownership. Phase 11 Batch 8 moved `order_items`, `analytics_cache`, and the order item trigger/function to migration-readiness checks. Phase 11 Batch 9 removed duplicate runtime creation for low-risk orders/inventory performance indexes that were already migration-owned. Phase 11 Batch 10 added durable latest-run status for rate backfill.
+The highest-risk duplication remains around inventory stock calculations, user-visible job state, label side effects, and the last runtime DDL surfaces. Phase 11 Batch 1 moved carrier/store credential account PATCH behavior and table bootstrap logic behind shared helpers. Phase 11 Batch 2 moved rate cache diagnostics and exact/approximate bulk lookup semantics behind the canonical rate service/route boundary. Phase 11 Batch 3 added the runtime DDL inventory and static guard so new request-time schema creation cannot slip in undocumented. Phase 11 Batch 4 moved reporting metrics schema ownership into a Drizzle migration. Phase 11 Batch 5 moved the Walmart selling-fee source index fully to migration ownership. Phase 11 Batch 6 moved marketplace `store_orders` schema ownership into a Drizzle migration. Phase 11 Batch 7 removed credential-account request-time DDL and moved RLS readiness into migration ownership. Phase 11 Batch 8 moved `order_items`, `analytics_cache`, and the order item trigger/function to migration-readiness checks. Phase 11 Batch 9 removed duplicate runtime creation for low-risk orders/inventory performance indexes that were already migration-owned. Phase 11 Batch 10 added durable latest-run status for rate backfill. Phase 11 Batch 11 added durable latest-run status for billing reference-rate fetch.
 
-Current progress: 90%. This is not 100% because inventory source-of-truth cleanup, print queue/reference-rate durable job status, label side-effect status reporting, and remaining shipment-adjacent runtime DDL cleanup still need implementation and production verification. ShipStation Awaiting parity and rate backfill now have durable last-run status checkpoints in `settings`.
+Current progress: 92%. This is not 100% because inventory source-of-truth cleanup, print queue durable job status, label side-effect status reporting, and remaining shipment-adjacent runtime DDL cleanup still need implementation and production verification. ShipStation Awaiting parity, rate backfill, and billing reference-rate fetch now have durable last-run status checkpoints in `settings`.
 
 ## Critical Blockers
 
@@ -16,7 +16,7 @@ Current progress: 90%. This is not 100% because inventory source-of-truth cleanu
 | Auth/JWT duplication | One compatibility endpoint can validate weaker tokens than another | Shared verifier is used by every active handler | Unauth, expired, wrong issuer/audience, admin/non-admin tests |
 | Client DTO duplication | ShipStation credentials can leak if raw client rows return | `publicClient` is the only mapper for client responses | Secret-redaction guard and live `/clients` smoke test |
 | Rate cache/key duplication | UI can show stale/wrong/no rates and retry external APIs too often | One canonical rate cache key and diagnostics shape | `npm run test:rate-system-hardening`; browser Rate Browser verification still needed |
-| Job state duplication | Long-running work can disappear on restart or run twice | Durable job status and singleton execution | rate backfill durable guard exists; restart and dual-worker tests still needed |
+| Job state duplication | Long-running work can disappear on restart or run twice | Durable job status and singleton execution | rate backfill/ref-rate durable guards exist; restart and dual-worker tests still needed |
 
 ## High-Risk Issues
 
@@ -60,7 +60,8 @@ Current progress: 90%. This is not 100% because inventory source-of-truth cleanu
 - [x] Centralize rate cache key usage, persisted diagnostics, concurrency policy, negative cache, and exact/rough bulk lookup guard.
 - [ ] Add inventory reconciliation service.
 - [x] Persist rate backfill latest-run status to `settings` with `/rates/backfill-best/latest`.
-- [ ] Move user-visible print queue and reference-rate status out of process memory.
+- [x] Persist billing reference-rate fetch latest-run status to `settings` through `/billing/fetch-ref-rates/status`.
+- [ ] Move user-visible print queue status out of process memory.
 - [ ] Add label side-effect status reporting.
 
 ## Detailed Checklist

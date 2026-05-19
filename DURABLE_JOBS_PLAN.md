@@ -4,7 +4,7 @@
 
 This Phase 11/12 deliverable defines how PrepShip should move user-visible and operational background jobs from mixed in-memory state toward durable, restart-safe job state. The goal is to prevent lost progress, duplicate work, confusing stuck states, and repeated external API calls when Render restarts or scales.
 
-The first low-risk implementation is now in place for ShipStation Awaiting parity: the reconciliation script persists its latest dry-run/apply summary to `settings` at `shipstation_awaiting_parity.last_run`. The next low-risk implementation is also in place for best-rate backfill: `rates-backfill.ts` persists the latest run snapshot to `settings` at `rate_backfill_best_rates.last_run`, and `/rates/backfill-best/latest` exposes the memory job plus durable snapshot for support/status checks. This gives support and future status panels durable audit points without changing print queue behavior, label behavior, or label purchase flows.
+The first low-risk implementation is now in place for ShipStation Awaiting parity: the reconciliation script persists its latest dry-run/apply summary to `settings` at `shipstation_awaiting_parity.last_run`. Best-rate backfill also persists its latest run snapshot to `settings` at `rate_backfill_best_rates.last_run`, and `/rates/backfill-best/latest` exposes the memory job plus durable snapshot for support/status checks. Billing reference-rate fetch now follows the same pattern with `billing_ref_rates_fetch.last_run` included in `/billing/fetch-ref-rates/status`. These give support and future status panels durable audit points without changing print queue behavior, label behavior, or label purchase flows.
 
 ## Critical Blockers
 
@@ -22,7 +22,7 @@ The first low-risk implementation is now in place for ShipStation Awaiting parit
 | Print queue batch send | in-memory job status with scoped ownership checks | restart loses status/results | persist job header, progress, ownership, and result summary |
 | Print queue PDF merge | in-memory job plus base64 PDF output | restart loses output/status; large memory use | durable job metadata and artifact storage/expiry policy |
 | Rate backfill best rates | in-memory job map | restart loses active/latest status and can duplicate provider calls | durable backfill job table or pg-boss workflow |
-| Billing reference-rate fetch | in-memory job map | billing support cannot prove prior job state after restart | durable job state and failure samples |
+| Billing reference-rate fetch | in-memory job map plus durable latest snapshot | billing support can see latest summary after restart; active progress still process-local | full durable job row and progress events |
 | Sync/reporting worker jobs | pg-boss/scheduler foundation exists | status/history needs unified operator view | unify status snapshots with durable job events |
 
 ## Medium-Risk Issues
@@ -43,7 +43,7 @@ The first low-risk implementation is now in place for ShipStation Awaiting parit
 | Sync scheduler shipments | pg-boss / scheduler status | mostly survives via queue | singleton/lock protection exists | job name + interval | pg-boss + worker status event | Sync owner | dual-worker enqueue test |
 | Reporting refresh | worker/reporting status | partial | duplicate refresh possible if not locked | report type + period | pg-boss or job table lease | Reporting owner | duplicate refresh test |
 | Rate backfill best rates | in-memory `Map` plus durable latest snapshot in `settings` | latest summary survives restart; active progress still process-local | duplicate provider fanout possible | backfill type + date/window | durable job row + progress events | Rate owner | `npm run test:rate-backfill-durable`; restart/status test |
-| Billing reference-rate fetch | in-memory `Map` in `ref-rates-fetch.ts` | lost after restart | duplicate reference-rate fetch possible | client/date/window | durable job row + result summary | Billing owner | restart/status test |
+| Billing reference-rate fetch | in-memory `Map` plus durable latest snapshot in `settings` | latest summary survives restart; active progress still process-local | duplicate reference-rate fetch possible | client/date/window | durable job row + result summary | Billing owner | `npm run test:ref-rates-durable`; restart/status test |
 | Print queue batch send | in-memory `Map` in `print-queue.ts` | lost after restart | duplicate queue entries possible | selected order ids + user | durable job row + per-order results | Warehouse owner | restart/status test |
 | Print queue PDF merge | in-memory `Map` plus base64 output | lost after restart | duplicate merge possible | entry ids + user | durable job row + artifact pointer | Warehouse owner | artifact expiry test |
 | Fulfillment outbox | DB-backed outbox concept | survives if table applied | duplicate send risk depends on idempotency | provider/order event key | DB outbox + terminal status | Fulfillment owner | replay idempotency test |
@@ -53,6 +53,7 @@ The first low-risk implementation is now in place for ShipStation Awaiting parit
 - [ ] Create a `job_runs` table or adopt pg-boss state as the canonical durable job source.
 - [x] Persist ShipStation Awaiting parity dry-run/apply status to `settings` as an initial durable reconciliation status checkpoint.
 - [x] Persist rate backfill latest-run status to `settings` and expose `/rates/backfill-best/latest` as an initial durable operational checkpoint.
+- [x] Persist billing reference-rate fetch latest-run status to `settings` and include it in `/billing/fetch-ref-rates/status`.
 - [ ] Persist job owner, client ids, store ids, status, progress, total, failure count, message, started/finished timestamps, and idempotency key.
 - [ ] Persist large artifacts outside hot job rows with signed/expiring access.
 - [ ] Add helper APIs for start, progress update, terminal success/failure, cancellation, and visibility checks.
@@ -64,6 +65,7 @@ The first low-risk implementation is now in place for ShipStation Awaiting parit
 
 - `npm run test:durable-jobs-plan`
 - `npm run test:rate-backfill-durable`
+- `npm run test:ref-rates-durable`
 - `npm run test:shipstation-awaiting-parity`
 - Future implementation tests:
   - duplicate job start returns existing active job
@@ -86,7 +88,7 @@ The first low-risk implementation is now in place for ShipStation Awaiting parit
 1. Review this matrix with DJ/OpenClaw and approve durable job storage target.
 2. Add `job_runs` migration or pg-boss status adapter design.
 3. Implement durable latest-run status for rate backfill best rates. Initial checkpoint complete; full `job_runs` progress/events remain future work.
-4. Implement durable state for billing reference-rate fetch.
+4. Implement durable latest-run status for billing reference-rate fetch. Initial checkpoint complete; full `job_runs` progress/events remain future work.
 5. Implement durable state for print queue batch send.
 6. Implement durable metadata and artifact pointer for print queue PDF merge.
 7. Add unified job status panel and audit events.

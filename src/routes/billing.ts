@@ -821,7 +821,7 @@ app.post(
 // — matches v2's BillingReferenceRateFetchStatusDto so the frontend's
 // progress + done toasts render with real numbers instead of "undefined".
 app.get('/fetch-ref-rates/status', async (c) => {
-  const [{ getActiveRefRatesJob }, rows] = await Promise.all([
+  const [{ getActiveRefRatesJob, getLatestRefRatesJobSnapshot }, rows] = await Promise.all([
     import('../services/ref-rates-fetch'),
     db.select({ count: sql<number>`count(*)::int` }).from(billingRefRates),
   ]);
@@ -839,6 +839,7 @@ app.get('/fetch-ref-rates/status', async (c) => {
     failureSamples: job?.failureSamples ?? [],
     totalRefRates: rows[0]?.count ?? 0,
     job,
+    durableJob: await getLatestRefRatesJobSnapshot(),
   });
 });
 

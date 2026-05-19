@@ -3,6 +3,7 @@ import { and, eq, gte, isNotNull, lte, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { shipments } from '../db/schema/shipments';
 import { billingRefRates } from '../db/schema/billing';
+import { settings } from '../db/schema/settings';
 import { getRates } from './rates';
 
 // v2 had a "RateShopper" job that fetched live ShipStation rates for every
@@ -25,6 +26,32 @@ export type RefRatesJob = {
   failureSamples: string[];
   startedAt: number;
   finishedAt: number | null;
+};
+
+type RefRatesOptions = {
+  daysBack?: number;
+  limit?: number;
+};
+
+export const REF_RATES_FETCH_STATUS_KEY = 'billing_ref_rates_fetch.last_run';
+
+export type RefRatesJobSnapshot = {
+  version: 1;
+  durableKey: typeof REF_RATES_FETCH_STATUS_KEY;
+  jobId: string;
+  status: RefRatesJob['status'];
+  active: boolean;
+  total: number;
+  processed: number;
+  inserted: number;
+  failed: number;
+  message: string;
+  error: string | null;
+  failureSamples: string[];
+  options: RefRatesOptions;
+  startedAt: string;
+  finishedAt: string | null;
+  persistedAt: string;
 };
 
 const jobs = new Map<string, RefRatesJob>();
@@ -64,10 +91,78 @@ export function getActiveRefRatesJob(): RefRatesJob | null {
   return id ? (jobs.get(id) ?? null) : null;
 }
 
-export function startRefRatesFetch(opts: {
-  daysBack?: number;
-  limit?: number;
-} = {}): RefRatesJob {
+function toRefRatesSnapshot(
+  job: RefRatesJob,
+  opts: RefRatesOptions,
+): RefRatesJobSnapshot {
+  return {
+    version: 1,
+    durableKey: REF_RATES_FETCH_STATUS_KEY,
+    jobId: job.jobId,
+    status: job.status,
+    active: activeJobId === job.jobId && job.status === 'running',
+    total: job.total,
+    processed: job.processed,
+    inserted: job.inserted,
+    failed: job.failed,
+    message: job.message,
+    error: job.error,
+    failureSamples: [...job.failureSamples],
+    options: {
+      daysBack: opts.daysBack,
+      limit: opts.limit,
+    },
+    startedAt: new Date(job.startedAt).toISOString(),
+    finishedAt: job.finishedAt ? new Date(job.finishedAt).toISOString() : null,
+    persistedAt: new Date().toISOString(),
+  };
+}
+
+async function persistRefRatesJobSnapshot(
+  job: RefRatesJob,
+  opts: RefRatesOptions,
+): Promise<void> {
+  try {
+    const value = JSON.stringify(toRefRatesSnapshot(job, opts));
+    await db
+      .insert(settings)
+      .values({
+        key: REF_RATES_FETCH_STATUS_KEY,
+        value,
+      })
+      .onConflictDoUpdate({
+        target: settings.key,
+        set: {
+          value,
+        },
+      });
+  } catch (err) {
+    console.warn(
+      '[ref-rates-fetch] failed to persist durable status:',
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+export async function getLatestRefRatesJobSnapshot(): Promise<RefRatesJobSnapshot | null> {
+  try {
+    const [row] = await db
+      .select({ value: settings.value })
+      .from(settings)
+      .where(eq(settings.key, REF_RATES_FETCH_STATUS_KEY))
+      .limit(1);
+    if (!row?.value) return null;
+    return JSON.parse(row.value) as RefRatesJobSnapshot;
+  } catch (err) {
+    console.warn(
+      '[ref-rates-fetch] failed to read durable status:',
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
+}
+
+export function startRefRatesFetch(opts: RefRatesOptions = {}): RefRatesJob {
   if (activeJobId && jobs.get(activeJobId)?.status === 'running') {
     return jobs.get(activeJobId)!;
   }
@@ -87,17 +182,19 @@ export function startRefRatesFetch(opts: {
   };
   jobs.set(jobId, job);
   activeJobId = jobId;
+  void persistRefRatesJobSnapshot(job, opts);
   void runFetch(jobId, opts);
   return job;
 }
 
 async function runFetch(
   jobId: string,
-  opts: { daysBack?: number; limit?: number }
+  opts: RefRatesOptions
 ) {
   const job = jobs.get(jobId)!;
   job.status = 'running';
-  job.message = 'Finding unique shipment weight/zip pairs…';
+  job.message = 'Finding unique shipment weight/zip pairs...';
+  await persistRefRatesJobSnapshot(job, opts);
 
   try {
     const daysBack = Math.max(1, Math.min(opts.daysBack ?? 30, 180));
@@ -143,6 +240,7 @@ async function runFetch(
 
     job.total = rawPairs.length;
     job.message = `Fetching live rates for ${rawPairs.length} unique weight/zip pairs…`;
+    await persistRefRatesJobSnapshot(job, opts);
 
     for (const pair of rawPairs) {
       if (jobs.get(jobId)?.status !== 'running') break;
@@ -204,16 +302,21 @@ async function runFetch(
       if (job.processed % 10 === 0 || job.processed === job.total) {
         job.message = `${job.processed}/${job.total} — ${job.inserted} rates inserted, ${job.failed} failed`;
       }
+      if (job.processed % 25 === 0 || job.processed === job.total) {
+        void persistRefRatesJobSnapshot(job, opts);
+      }
     }
 
     job.status = 'done';
     job.finishedAt = Date.now();
     job.message = `Done — ${job.inserted} rates inserted, ${job.failed} failed (of ${job.total})`;
+    await persistRefRatesJobSnapshot(job, opts);
   } catch (err) {
     job.status = 'error';
     job.error = (err as Error).message;
     job.message = `Error: ${job.error}`;
     job.finishedAt = Date.now();
+    await persistRefRatesJobSnapshot(job, opts);
   } finally {
     if (activeJobId === jobId) activeJobId = null;
     lastJobId = jobId;
