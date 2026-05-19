@@ -19,6 +19,10 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import postgres from 'postgres';
 import { assertStoreOrdersSchemaReady } from '../../_lib/store-orders-schema.js';
+import {
+  hasExistingMarketplaceOrderRow,
+  reconcileMarketplaceOrderStatuses,
+} from '../../_lib/marketplace-status-reconciliation.js';
 
 let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 function getJwks() {
@@ -361,6 +365,8 @@ export default async function handler(req: any, res: any): Promise<void> {
 
     let inserted = 0;
     let updated = 0;
+    let reconciledOrders = 0;
+    let skippedSyntheticMirrors = 0;
     for (const o of elements) {
       const externalOrderId = o?.orderId ? String(o.orderId) : null;
       if (!externalOrderId) continue;
@@ -425,7 +431,25 @@ export default async function handler(req: any, res: any): Promise<void> {
         return 'awaiting_shipment';
       })();
       const externalOrderIdPrefixed = `ebay-${externalOrderId}`;
+      const marketplaceOrderNumber = customerOrderId ?? externalOrderId;
       try {
+        const hasShipStationRow = await hasExistingMarketplaceOrderRow(
+          sql,
+          'ebay',
+          marketplaceOrderNumber,
+        );
+        if (hasShipStationRow) {
+          const reconciliation = await reconcileMarketplaceOrderStatuses(sql, {
+            provider: 'ebay',
+            storeAccountId: accountId,
+            orderNumbers: [marketplaceOrderNumber],
+            dryRun: false,
+          });
+          reconciledOrders += reconciliation.updated;
+          skippedSyntheticMirrors += 1;
+          continue;
+        }
+
         await sql`
           INSERT INTO orders (
             external_order_id, client_id, order_number, order_status,
@@ -500,6 +524,8 @@ export default async function handler(req: any, res: any): Promise<void> {
       fetched: elements.length,
       inserted,
       updated,
+      reconciledOrders,
+      skippedSyntheticMirrors,
       sample,
       windowStart: sinceDate,
       fetchedAt: new Date().toISOString(),

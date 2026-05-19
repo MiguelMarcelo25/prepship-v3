@@ -23,6 +23,10 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import postgres from 'postgres';
 import { assertStoreOrdersSchemaReady } from '../../_lib/store-orders-schema.js';
+import {
+  hasExistingMarketplaceOrderRow,
+  reconcileMarketplaceOrderStatuses,
+} from '../../_lib/marketplace-status-reconciliation.js';
 
 let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 function getJwks() {
@@ -459,6 +463,8 @@ export default async function handler(req: any, res: any): Promise<void> {
     // a clear picture of how the latest pull changed our local data.
     let inserted = 0;
     let updated = 0;
+    let reconciledOrders = 0;
+    let skippedSyntheticMirrors = 0;
     for (const o of elements as any[]) {
       const externalOrderId = o?.purchaseOrderId ? String(o.purchaseOrderId) : null;
       if (!externalOrderId) continue;
@@ -540,7 +546,25 @@ export default async function handler(req: any, res: any): Promise<void> {
       })();
       const syntheticStoreId = 9_000_000 + accountId;
       const externalOrderIdPrefixed = `walmart-${externalOrderId}`;
+      const marketplaceOrderNumber = customerOrderId ?? externalOrderId;
       try {
+        const hasShipStationRow = await hasExistingMarketplaceOrderRow(
+          sql,
+          'walmart',
+          marketplaceOrderNumber,
+        );
+        if (hasShipStationRow) {
+          const reconciliation = await reconcileMarketplaceOrderStatuses(sql, {
+            provider: 'walmart',
+            storeAccountId: accountId,
+            orderNumbers: [marketplaceOrderNumber],
+            dryRun: false,
+          });
+          reconciledOrders += reconciliation.updated;
+          skippedSyntheticMirrors += 1;
+          continue;
+        }
+
         // Template literal form lets postgres.js auto-serialize the
         // array/object params correctly into JSONB columns. The earlier
         // sql.unsafe + JSON.stringify + ::jsonb form double-encoded the
@@ -622,6 +646,8 @@ export default async function handler(req: any, res: any): Promise<void> {
       fetched: elements.length,
       inserted,
       updated,
+      reconciledOrders,
+      skippedSyntheticMirrors,
       sample,
       windowStart: createdStartDate,
       fetchedAt: new Date().toISOString(),

@@ -1,0 +1,251 @@
+export type MarketplaceProvider = 'walmart' | 'ebay';
+export type PrepShipOrderStatus = 'awaiting_shipment' | 'shipped' | 'cancelled';
+
+type SqlRow = Record<string, unknown>;
+export type MarketplaceSql = <T extends SqlRow[] = SqlRow[]>(
+  strings: TemplateStringsArray,
+  ...values: unknown[]
+) => Promise<T>;
+
+export type MarketplaceReconciliationCandidate = {
+  id: number;
+  orderNumber: string;
+  externalOrderId: string;
+  currentStatus: string;
+  targetStatus: PrepShipOrderStatus;
+  sourceStatuses: string[];
+};
+
+export type MarketplaceReconciliationResult = {
+  provider: MarketplaceProvider;
+  dryRun: boolean;
+  checkedOrderNumbers: number;
+  updated: number;
+  candidates: MarketplaceReconciliationCandidate[];
+  skipped: Array<{
+    orderNumber: string;
+    reason: string;
+    sourceStatuses: string[];
+    targetStatus: PrepShipOrderStatus | null;
+  }>;
+};
+
+function cleanStatus(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+export function normalizeMarketplaceOrderStatus(
+  provider: MarketplaceProvider,
+  sourceStatus: unknown,
+): PrepShipOrderStatus | null {
+  const status = cleanStatus(sourceStatus);
+  if (!status) return null;
+
+  if (provider === 'walmart') {
+    if (status === 'shipped') return 'shipped';
+    if (status === 'cancelled' || status === 'canceled') return 'cancelled';
+    if (status === 'acknowledged' || status === 'created') return 'awaiting_shipment';
+    return null;
+  }
+
+  if (status === 'fulfilled') return 'shipped';
+  if (status === 'cancelled' || status === 'canceled') return 'cancelled';
+  if (
+    status === 'not_started' ||
+    status === 'in_progress' ||
+    status === 'ready_to_ship' ||
+    status === 'started'
+  ) {
+    return 'awaiting_shipment';
+  }
+  return null;
+}
+
+export function aggregateMarketplaceOrderStatus(
+  sourceStatuses: unknown[],
+  provider: MarketplaceProvider,
+): PrepShipOrderStatus | null {
+  const normalized = sourceStatuses
+    .map((status) => normalizeMarketplaceOrderStatus(provider, status))
+    .filter((status): status is PrepShipOrderStatus => status !== null);
+
+  if (!normalized.length) return null;
+  if (normalized.includes('awaiting_shipment')) return 'awaiting_shipment';
+  if (normalized.includes('shipped')) return 'shipped';
+  if (normalized.every((status) => status === 'cancelled')) return 'cancelled';
+  return null;
+}
+
+export function shouldUpdateMarketplaceOrderStatus(
+  currentStatus: unknown,
+  targetStatus: PrepShipOrderStatus | null,
+): boolean {
+  return currentStatus === 'awaiting_shipment' && targetStatus !== null && targetStatus !== 'awaiting_shipment';
+}
+
+export async function hasExistingMarketplaceOrderRow(
+  sql: MarketplaceSql,
+  provider: MarketplaceProvider,
+  orderNumber: string | null | undefined,
+): Promise<boolean> {
+  const normalizedOrderNumber = String(orderNumber ?? '').trim();
+  if (!normalizedOrderNumber) return false;
+  const syntheticPrefix = `${provider}-%`;
+  const rows = await sql<Array<{ id: number }>>`
+    SELECT id
+    FROM orders
+    WHERE order_number = ${normalizedOrderNumber}
+      AND external_order_id NOT LIKE ${syntheticPrefix}
+    LIMIT 1
+  `;
+  return rows.length > 0;
+}
+
+async function loadStoreOrderStatuses(
+  sql: MarketplaceSql,
+  options: {
+    provider: MarketplaceProvider;
+    storeAccountId?: number | null;
+    orderNumbers?: string[];
+  },
+): Promise<Array<{ orderNumber: string; sourceStatus: string | null }>> {
+  const orderNumbers = [...new Set((options.orderNumbers ?? []).map((value) => value.trim()).filter(Boolean))];
+  const storeAccountId = Number.isFinite(options.storeAccountId)
+    ? Number(options.storeAccountId)
+    : null;
+
+  if (storeAccountId !== null && orderNumbers.length > 0) {
+    return sql<Array<{ orderNumber: string; sourceStatus: string | null }>>`
+      SELECT customer_order_id AS "orderNumber", source_status AS "sourceStatus"
+      FROM store_orders
+      WHERE provider = ${options.provider}
+        AND carrier_account_id = ${storeAccountId}
+        AND customer_order_id = ANY(${orderNumbers}::text[])
+        AND customer_order_id IS NOT NULL
+    `;
+  }
+
+  if (storeAccountId !== null) {
+    return sql<Array<{ orderNumber: string; sourceStatus: string | null }>>`
+      SELECT customer_order_id AS "orderNumber", source_status AS "sourceStatus"
+      FROM store_orders
+      WHERE provider = ${options.provider}
+        AND carrier_account_id = ${storeAccountId}
+        AND customer_order_id IS NOT NULL
+    `;
+  }
+
+  if (orderNumbers.length > 0) {
+    return sql<Array<{ orderNumber: string; sourceStatus: string | null }>>`
+      SELECT customer_order_id AS "orderNumber", source_status AS "sourceStatus"
+      FROM store_orders
+      WHERE provider = ${options.provider}
+        AND customer_order_id = ANY(${orderNumbers}::text[])
+        AND customer_order_id IS NOT NULL
+    `;
+  }
+
+  return sql<Array<{ orderNumber: string; sourceStatus: string | null }>>`
+    SELECT customer_order_id AS "orderNumber", source_status AS "sourceStatus"
+    FROM store_orders
+    WHERE provider = ${options.provider}
+      AND customer_order_id IS NOT NULL
+  `;
+}
+
+export async function reconcileMarketplaceOrderStatuses(
+  sql: MarketplaceSql,
+  options: {
+    provider: MarketplaceProvider;
+    storeAccountId?: number | null;
+    orderNumbers?: string[];
+    dryRun?: boolean;
+  },
+): Promise<MarketplaceReconciliationResult> {
+  const dryRun = options.dryRun !== false;
+  const sourceRows = await loadStoreOrderStatuses(sql, options);
+  const statusesByOrderNumber = new Map<string, string[]>();
+
+  for (const row of sourceRows) {
+    const orderNumber = String(row.orderNumber ?? '').trim();
+    if (!orderNumber) continue;
+    const statuses = statusesByOrderNumber.get(orderNumber) ?? [];
+    statuses.push(String(row.sourceStatus ?? ''));
+    statusesByOrderNumber.set(orderNumber, statuses);
+  }
+
+  const result: MarketplaceReconciliationResult = {
+    provider: options.provider,
+    dryRun,
+    checkedOrderNumbers: statusesByOrderNumber.size,
+    updated: 0,
+    candidates: [],
+    skipped: [],
+  };
+
+  const syntheticPrefix = `${options.provider}-%`;
+  for (const [orderNumber, sourceStatuses] of statusesByOrderNumber) {
+    const targetStatus = aggregateMarketplaceOrderStatus(sourceStatuses, options.provider);
+    if (!targetStatus || targetStatus === 'awaiting_shipment') {
+      result.skipped.push({
+        orderNumber,
+        reason: targetStatus === 'awaiting_shipment' ? 'marketplace still open' : 'unrecognized marketplace status',
+        sourceStatuses,
+        targetStatus,
+      });
+      continue;
+    }
+
+    const candidates = await sql<Array<{
+      id: number;
+      orderNumber: string;
+      externalOrderId: string;
+      currentStatus: string;
+    }>>`
+      SELECT
+        id,
+        order_number AS "orderNumber",
+        external_order_id AS "externalOrderId",
+        order_status AS "currentStatus"
+      FROM orders
+      WHERE order_number = ${orderNumber}
+        AND order_status = 'awaiting_shipment'
+        AND external_order_id NOT LIKE ${syntheticPrefix}
+      ORDER BY id
+    `;
+
+    if (!candidates.length) {
+      result.skipped.push({
+        orderNumber,
+        reason: 'no visible awaiting ShipStation row matched',
+        sourceStatuses,
+        targetStatus,
+      });
+      continue;
+    }
+
+    for (const candidate of candidates) {
+      if (!shouldUpdateMarketplaceOrderStatus(candidate.currentStatus, targetStatus)) continue;
+      result.candidates.push({
+        ...candidate,
+        targetStatus,
+        sourceStatuses,
+      });
+    }
+  }
+
+  if (!dryRun && result.candidates.length > 0) {
+    for (const candidate of result.candidates) {
+      const rows = await sql<Array<{ id: number }>>`
+        UPDATE orders
+        SET order_status = ${candidate.targetStatus}, updated_at = NOW()
+        WHERE id = ${candidate.id}
+          AND order_status = 'awaiting_shipment'
+        RETURNING id
+      `;
+      result.updated += rows.length;
+    }
+  }
+
+  return result;
+}

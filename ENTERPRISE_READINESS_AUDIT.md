@@ -17,6 +17,7 @@ Companion DJ/OpenClaw documents:
 - `OPERATIONAL_RUNBOOKS_AND_DR_PLAN.md`
 - `PRIVACY_COMPLIANCE_PLAN.md`
 - `PRODUCTION_READINESS_SIGNOFF.md`
+- `DURABLE_JOBS_PLAN.md`
 - `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md`
 - `SECURITY_PATCH_PLAN.md`
 - `RATE_SYSTEM_HARDENING_PLAN.md`
@@ -52,20 +53,22 @@ Implemented:
 - Secrets governance matrix added as `SECRETS_GOVERNANCE_MATRIX.md`, covering Supabase, ShipStation, carrier/store, marketplace OAuth, direct carrier, and label URL credential/artifact classes. `npm run test:secrets-governance` guards the deliverable.
 - Audit logging matrix added as `AUDIT_LOGGING_MATRIX.md`, covering credentials, admin/user changes, labels, orders, inventory, packages, billing, settings, sync/backfill, and print queue events. `npm run test:audit-logging` guards the deliverable.
 - Reconciliation reports plan added as `RECONCILIATION_REPORTS_PLAN.md`, covering order, order-item, shipment, label, billing, inventory, package, rate, fulfillment, client/store, and carrier account reconciliation. `npm run test:reconciliation-plan` guards the deliverable.
+- Marketplace order status reconciliation added as a guarded dry-run/apply path for Walmart/eBay awaiting-count drift. `npm run test:marketplace-reconciliation` guards the status mapping, synthetic-row prevention, and apply-safety contract.
 - Observability and alerting plan added as `OBSERVABILITY_ALERTING_PLAN.md`, covering API, DB, Supabase, worker, sync, rate, label, billing, reporting, and frontend runtime signals. `npm run test:observability-alerting` guards the deliverable.
 - Operational runbooks and disaster recovery plan added as `OPERATIONAL_RUNBOOKS_AND_DR_PLAN.md`, covering rates, labels, sync, inventory, billing, print queue, frontend, users, credentials, database restore, rollback, suspicious access, deployment, and DR. `npm run test:operational-runbooks` guards the deliverable.
 - Privacy and compliance plan added as `PRIVACY_COMPLIANCE_PLAN.md`, covering customer PII, order identifiers, label artifacts, billing data, credentials, logs, user metadata, generated reports, retention, deletion, and access review. `npm run test:privacy-compliance` guards the deliverable.
 - Production readiness signoff checklist added as `PRODUCTION_READINESS_SIGNOFF.md`, covering local checks, browser smoke, API auth/security smoke, version parity, Render logs, Supabase health, migration status, reconciliation, alert/runbook readiness, rollback, and owner approval. `npm run test:production-signoff` guards the deliverable.
+- Durable jobs plan added as `DURABLE_JOBS_PLAN.md`, covering sync, reporting refresh, rate backfill, billing reference-rate fetch, print queue batch send, print queue PDF merge, and fulfillment outbox durable status strategy. `npm run test:durable-jobs-plan` guards the deliverable.
 
 Confirmed gaps from repo search:
 
 - RBAC/client-scope rules are now documented in a route matrix, the first runtime permission middleware is implemented for safer admin/settings/credential surfaces, low-risk client/init payload scoping exists, and dashboard/analysis/inventory/billing/print-queue read/action scoping has started. Remaining operational route query enforcement is still incomplete.
 - Runtime DDL remains in some production-capable paths, but the request/job-time DDL inventory and static guard now exist. Reporting metrics table/index ownership has moved into `drizzle/0029_reporting_metrics.sql`, the Walmart selling-fee source index is owned by `drizzle/0019_selling_fees.sql`, marketplace `store_orders` is owned by `drizzle/0030_store_orders.sql`, credential-account RLS/readiness is owned by `drizzle/0031_credential_accounts_rls.sql`, `order_items` / `analytics_cache` readiness is owned by `drizzle/0024_order_items_phase2.sql` plus `drizzle/0025_order_items_sync_trigger.sql`, and low-risk orders/inventory performance indexes are owned by migrations `0021`, `0022`, `0023`, and `0026`.
-- Durable job state is mixed: scheduler protection has improved, but print queue/rate backfill and some compatibility paths still need restart-safe progress guarantees.
+- Durable job state is now mapped in `DURABLE_JOBS_PLAN.md`, but rate backfill, reference-rate fetch, print queue send/merge, and some compatibility paths still need runtime restart-safe progress guarantees.
 - Broad frontend `safe()` fallback usage remains and needs a failure-mode sweep.
 - Secrets governance is mapped, but rotation, last-used tracking, audit events, and production log/response smoke tests are not complete yet.
 - Audit logging is mapped, but the append-only table/service and runtime event writers are not implemented yet.
-- Reconciliation reporting is mapped, but report queries, scheduled runs, artifacts, and repair dry-runs are not implemented yet.
+- Reconciliation reporting is mapped, and marketplace awaiting-count repair now has a dry-run/apply path; broader report queries, scheduled runs, artifacts, and non-marketplace repair dry-runs are not implemented yet.
 - Observability and alerting are mapped, but runtime metric emitters, dashboards, thresholds, alert destinations, and runbook links are not implemented yet.
 - Operational runbooks and DR are mapped, but dedicated runbook pages, owner approval, restore drills, and rollback drills are not complete yet.
 - Privacy and compliance are mapped, but retention/deletion policy, field-level privacy rules, access reviews, and log redaction scans are not complete yet.
@@ -76,8 +79,8 @@ Current readiness read:
 
 | Track | Status | Percent |
 |---|---|---:|
-| Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, rate cache diagnostics/bulk semantics, runtime DDL inventory/guard, reporting metrics migration, Walmart selling-fee index cleanup, `store_orders` migration, credential-account DDL cleanup, `order_items` / `analytics_cache` readiness cleanup, and low-risk orders/inventory index cleanup implemented | 85% |
-| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated, RBAC/client-scope route matrix documented, first runtime permission layer implemented, low-risk client/init payload scoping added, dashboard/analysis/inventory/billing/print-queue read/action scoping started, secrets governance matrix added, audit logging matrix added, reconciliation reports plan added, observability/alerting plan added, operational runbooks/DR plan added, privacy/compliance plan added, and production signoff checklist added | 90% |
+| Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, rate cache diagnostics/bulk semantics, runtime DDL inventory/guard, reporting metrics migration, Walmart selling-fee index cleanup, `store_orders` migration, credential-account DDL cleanup, `order_items` / `analytics_cache` readiness cleanup, low-risk orders/inventory index cleanup, and durable job strategy documented | 87% |
+| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated, RBAC/client-scope route matrix documented, first runtime permission layer implemented, low-risk client/init payload scoping added, dashboard/analysis/inventory/billing/print-queue read/action scoping started, secrets governance matrix added, audit logging matrix added, reconciliation reports plan added, marketplace awaiting-count reconciliation guarded, observability/alerting plan added, operational runbooks/DR plan added, privacy/compliance plan added, and production signoff checklist added | 91% |
 
 ## Critical Blockers
 
@@ -265,6 +268,8 @@ The full event matrix now lives in `AUDIT_LOGGING_MATRIX.md`. The condensed trac
 
 ### Background Jobs / Distributed Safety
 
+- [x] Create `DURABLE_JOBS_PLAN.md`.
+- [x] Add `npm run test:durable-jobs-plan`.
 - [ ] Rate backfill survives server restart.
 - [ ] Print queue jobs survive server restart.
 - [ ] Sync scheduler is safe with multiple instances.
@@ -278,8 +283,14 @@ The full event matrix now lives in `AUDIT_LOGGING_MATRIX.md`. The condensed trac
 
 Deliverable table:
 
+The detailed durable jobs plan now lives in `DURABLE_JOBS_PLAN.md`. The condensed tracker below shows the first job classes to implement.
+
 | Job | Current State Storage | Restart Behavior | Multi-Instance Risk | Idempotency Risk | Fix |
 |---|---|---|---|---|---|
+| rate backfill best rates | in-memory job map | lost after restart | duplicate provider fanout possible | date/window key missing | durable job row or pg-boss workflow |
+| billing reference-rate fetch | in-memory job map | lost after restart | duplicate reference-rate fetch possible | client/date/window key missing | durable job row and result summary |
+| print queue batch send | in-memory job map | lost after restart | duplicate queue entries possible | selected-order/user key needed | durable job row and per-order results |
+| print queue PDF merge | in-memory job map + base64 output | lost after restart | duplicate merge possible | entry/user key needed | durable job row and artifact pointer |
 
 ### External API Resilience
 
@@ -303,6 +314,8 @@ Deliverable table:
 
 - [x] Create `RECONCILIATION_REPORTS_PLAN.md`.
 - [x] Add `npm run test:reconciliation-plan`.
+- [x] Add guarded marketplace status reconciliation dry-run/apply script.
+- [x] Add `npm run test:marketplace-reconciliation`.
 - [ ] Local orders vs ShipStation orders.
 - [ ] Local shipments vs ShipStation shipments.
 - [ ] Labels vs billing records.
@@ -505,10 +518,12 @@ The detailed privacy/compliance plan now lives in `PRIVACY_COMPLIANCE_PLAN.md`. 
 - `npm run test:secrets-governance`
 - `npm run test:audit-logging`
 - `npm run test:reconciliation-plan`
+- `npm run test:marketplace-reconciliation`
 - `npm run test:observability-alerting`
 - `npm run test:operational-runbooks`
 - `npm run test:privacy-compliance`
 - `npm run test:production-signoff`
+- `npm run test:durable-jobs-plan`
 - Unauthenticated `/users` and `/clients` return `401`.
 - Non-admin `/admin/*` returns `403`.
 - `/clients` and `/init/init-data` never return ShipStation secrets.
@@ -565,9 +580,10 @@ The detailed privacy/compliance plan now lives in `PRIVACY_COMPLIANCE_PLAN.md`. 
 9. Implement remaining operational client/store row-scope query filters from `RBAC_CLIENT_SCOPE_MATRIX.md`.
 10. Secrets and credential audit, including audit events.
 11. Migration/runtime DDL cleanup plan.
-12. Durable job status and idempotency plan.
-13. External API resilience metrics and diagnostics.
-14. Data reconciliation reports.
-15. Frontend failure-mode Playwright tests.
-16. Observability and alerting integration.
-17. Deployment, rollback, disaster recovery, privacy, and production signoff runbooks.
+12. Review `DURABLE_JOBS_PLAN.md` and approve durable job storage target.
+13. Durable job status and idempotency implementation.
+14. External API resilience metrics and diagnostics.
+15. Data reconciliation reports.
+16. Frontend failure-mode Playwright tests.
+17. Observability and alerting integration.
+18. Deployment, rollback, disaster recovery, privacy, and production signoff runbooks.
