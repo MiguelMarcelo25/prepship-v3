@@ -182,25 +182,10 @@ const activeOrderClientPredicate = sql`(
 const visibleStorePredicate = sql`${visibleStoreBasePredicate} and ${activeOrderClientPredicate}`;
 
 function visibleAwaitingOrdersPredicate(alias: 'orders' | 'o' = 'orders') {
-  const rowId = sql.raw(`${alias}.id`);
   const externalOrderId = sql.raw(`${alias}.external_order_id`);
-  const orderNumber = sql.raw(`${alias}.order_number`);
   return sql`not (
-    (
-      coalesce(${externalOrderId}, '') ilike 'walmart-%'
-      or coalesce(${externalOrderId}, '') ilike 'ebay-%'
-    )
-    and ${orderNumber} is not null
-    and exists (
-      select 1
-      from orders real_marketplace_order
-      where real_marketplace_order.order_number = ${orderNumber}
-        and real_marketplace_order.id <> ${rowId}
-        and coalesce(real_marketplace_order.external_order_id, '') not ilike 'walmart-%'
-        and coalesce(real_marketplace_order.external_order_id, '') not ilike 'ebay-%'
-        and real_marketplace_order.store_id is not null
-        and real_marketplace_order.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
-    )
+    coalesce(${externalOrderId}, '') ilike 'walmart-%'
+    or coalesce(${externalOrderId}, '') ilike 'ebay-%'
   )`;
 }
 

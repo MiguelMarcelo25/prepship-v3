@@ -242,3 +242,15 @@ export function shouldApplyShipStationAwaitingParityCandidate(
     isTerminalStatus(candidate.targetStatus)
   );
 }
+
+export function shouldApplyShipStationAwaitingParityOverrideCandidate(
+  candidate: ShipStationAwaitingParityFinding,
+): boolean {
+  return (
+    candidate.kind === 'terminal_local_but_shipstation_awaiting' &&
+    candidate.targetStatus === 'awaiting_shipment' &&
+    candidate.eligibleWithOverride === true &&
+    candidate.blockedByLockdown === true &&
+    isTerminalStatus(candidate.currentStatus)
+  );
+}

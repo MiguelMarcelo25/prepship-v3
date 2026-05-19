@@ -10,6 +10,7 @@ import {
   type ShipStationParityLocalOrder,
   classifyShipStationAwaitingParity,
   shouldApplyShipStationAwaitingParityCandidate,
+  shouldApplyShipStationAwaitingParityOverrideCandidate,
 } from '../api/_lib/shipstation-awaiting-parity.ts';
 import { ssV1Request } from '../src/lib/shipstation/v1-client.ts';
 
@@ -313,20 +314,42 @@ async function loadLocalRows(sql: Sql, options: {
 async function applySafeCandidates(
   sql: Sql,
   candidates: ReturnType<typeof classifyShipStationAwaitingParity>,
-): Promise<number> {
-  let updated = 0;
+  options: { allowShippedOverride: boolean },
+): Promise<{ safeUpdated: number; overrideUpdated: number }> {
+  let safeUpdated = 0;
+  let overrideUpdated = 0;
   for (const candidate of candidates) {
-    if (!shouldApplyShipStationAwaitingParityCandidate(candidate)) continue;
-    const rows = await sql<Array<{ id: number }>>`
-      UPDATE orders
-      SET order_status = ${candidate.targetStatus}, updated_at = NOW()
-      WHERE id = ${candidate.id}
-        AND order_status = 'awaiting_shipment'
-      RETURNING id
-    `;
-    updated += rows.length;
+    if (shouldApplyShipStationAwaitingParityCandidate(candidate)) {
+      const rows = await sql<Array<{ id: number }>>`
+        UPDATE orders
+        SET order_status = ${candidate.targetStatus}, updated_at = NOW()
+        WHERE id = ${candidate.id}
+          AND order_status = 'awaiting_shipment'
+        RETURNING id
+      `;
+      safeUpdated += rows.length;
+      continue;
+    }
+
+    if (
+      options.allowShippedOverride &&
+      shouldApplyShipStationAwaitingParityOverrideCandidate(candidate)
+    ) {
+      // Per user override `unlock shipped data` on 2026-05-19: allow a
+      // terminal row to reopen only when ShipStation/raw awaiting evidence
+      // exists and there is no active non-voided shipment.
+      const rows = await sql<Array<{ id: number }>>`
+        UPDATE orders
+        SET order_status = 'awaiting_shipment', updated_at = NOW()
+        WHERE id = ${candidate.id}
+          AND order_status = ${candidate.currentStatus}
+          AND order_status IN ('shipped', 'cancelled')
+        RETURNING id
+      `;
+      overrideUpdated += rows.length;
+    }
   }
-  return updated;
+  return { safeUpdated, overrideUpdated };
 }
 
 function printUsage(): void {
@@ -344,10 +367,12 @@ Options:
   --all-dates                  Disable local date lookback.
   --page-size                  ShipStation page size. Default: 500.
   --apply                      Apply safe awaiting -> terminal corrections.
+  --allow-shipped-override     With --apply, also apply eligible terminal -> awaiting corrections.
 
 Safety:
   Dry run only unless --apply is present.
   Only awaiting_shipment rows can be updated without the shipped-data override.
+  Per user override 'unlock shipped data': --allow-shipped-override is required for shipped/cancelled -> awaiting.
   Shipped/cancelled -> awaiting findings are reported as blocked by shipped/cancelled lockdown.
 `);
 }
@@ -362,6 +387,7 @@ async function main(): Promise<void> {
   if (!dbUrl) throw new Error('DATABASE_URL is required');
 
   const apply = hasFlag('apply');
+  const allowShippedOverride = hasFlag('allow-shipped-override');
   const storeIds = parseStoreIds();
   const orderNumbers = parseOrderNumbers();
   const dateFrom = parseDateFrom();
@@ -382,6 +408,7 @@ async function main(): Promise<void> {
     const findings = classifyShipStationAwaitingParity(localRows, liveAwaiting);
     const actionable = findings.filter((finding) => finding.kind !== 'in_sync');
     const safe = actionable.filter(shouldApplyShipStationAwaitingParityCandidate);
+    const overrideSafe = actionable.filter(shouldApplyShipStationAwaitingParityOverrideCandidate);
     const blocked = actionable.filter((finding) => finding.blockedByLockdown);
     const needsConfirmation = actionable.filter((finding) => finding.targetStatus === null);
 
@@ -389,6 +416,10 @@ async function main(): Promise<void> {
     console.log(
       `liveAwaiting=${liveAwaiting.length} localChecked=${localRows.length} findings=${actionable.length} safeCandidates=${safe.length} blocked=${blocked.length} needsConfirmation=${needsConfirmation.length}`,
     );
+
+    if (allowShippedOverride) {
+      console.log(`shippedOverrideEligible=${overrideSafe.length}`);
+    }
 
     if (actionable.length) {
       console.table(
@@ -401,16 +432,32 @@ async function main(): Promise<void> {
           to: finding.targetStatus ?? '-',
           kind: finding.kind,
           evidence: finding.sourceEvidence.join(', ') || '-',
-          apply: shouldApplyShipStationAwaitingParityCandidate(finding) ? 'safe' : 'no',
+          apply: shouldApplyShipStationAwaitingParityCandidate(finding)
+            ? 'safe'
+            : allowShippedOverride && shouldApplyShipStationAwaitingParityOverrideCandidate(finding)
+              ? 'override'
+              : 'no',
         })),
       );
     }
 
-    if (blocked.length) {
+    if (blocked.length && !allowShippedOverride) {
       console.log('\nBlocked by shipped/cancelled lockdown:');
       for (const finding of blocked) {
         console.log(
           `- ${finding.orderNumber} (${finding.id}) ${finding.currentStatus} -> ${finding.targetStatus}: ${finding.reason}`,
+        );
+      }
+    }
+
+    if (blocked.length && allowShippedOverride) {
+      console.log('\nShipped-data override enabled for eligible terminal -> awaiting corrections.');
+      for (const finding of blocked) {
+        const eligible = shouldApplyShipStationAwaitingParityOverrideCandidate(finding)
+          ? 'eligible'
+          : 'not eligible';
+        console.log(
+          `- ${finding.orderNumber} (${finding.id}) ${finding.currentStatus} -> ${finding.targetStatus}: ${eligible}; ${finding.reason}`,
         );
       }
     }
@@ -423,8 +470,13 @@ async function main(): Promise<void> {
     }
 
     if (apply) {
-      const updated = await applySafeCandidates(sql, findings);
-      console.log(`\nUpdated ${updated} safe awaiting_shipment row(s).`);
+      const { safeUpdated, overrideUpdated } = await applySafeCandidates(sql, findings, {
+        allowShippedOverride,
+      });
+      console.log(`\nUpdated ${safeUpdated} safe awaiting_shipment row(s).`);
+      if (allowShippedOverride) {
+        console.log(`Updated ${overrideUpdated} shipped-data override row(s).`);
+      }
     } else {
       console.log('\nDry run only. Re-run with --apply after reviewing the candidate table.');
     }

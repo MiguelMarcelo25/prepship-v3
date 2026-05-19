@@ -136,21 +136,8 @@ app.get('/counts', async (c) => {
     )
   ) and coalesce(c.active, true) = true`;
   const visibleAwaitingOrdersPredicate = sql`not (
-    (
-      coalesce(o.external_order_id, '') ilike 'walmart-%'
-      or coalesce(o.external_order_id, '') ilike 'ebay-%'
-    )
-    and o.order_number is not null
-    and exists (
-      select 1
-      from orders real_marketplace_order
-      where real_marketplace_order.order_number = o.order_number
-        and real_marketplace_order.id <> o.id
-        and coalesce(real_marketplace_order.external_order_id, '') not ilike 'walmart-%'
-        and coalesce(real_marketplace_order.external_order_id, '') not ilike 'ebay-%'
-        and real_marketplace_order.store_id is not null
-        and real_marketplace_order.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
-    )
+    coalesce(o.external_order_id, '') ilike 'walmart-%'
+    or coalesce(o.external_order_id, '') ilike 'ebay-%'
   )`;
 
   const loadCounts = (async (): Promise<CountsPayload> => {

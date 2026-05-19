@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   classifyShipStationAwaitingParity,
+  shouldApplyShipStationAwaitingParityOverrideCandidate,
   shouldApplyShipStationAwaitingParityCandidate,
 } from '../api/_lib/shipstation-awaiting-parity.ts';
 
@@ -76,6 +77,11 @@ assert.equal(
   false,
   'terminal-to-awaiting correction must stay blocked without explicit shipped-data override',
 );
+assert.equal(
+  shouldApplyShipStationAwaitingParityOverrideCandidate(hugrab!),
+  true,
+  'explicit override should allow the voided-label HUGRAB terminal-to-awaiting correction',
+);
 
 const ebay = byOrderNumber.get('12-14640-05489');
 assert.equal(ebay?.kind, 'local_awaiting_missing_from_shipstation');
@@ -86,6 +92,7 @@ const freshLabel = byOrderNumber.get('fresh-label');
 assert.equal(freshLabel?.kind, 'terminal_local_but_shipstation_awaiting');
 assert.equal(freshLabel?.eligibleWithOverride, false);
 assert.equal(shouldApplyShipStationAwaitingParityCandidate(freshLabel!), false);
+assert.equal(shouldApplyShipStationAwaitingParityOverrideCandidate(freshLabel!), false);
 
 const pkg = readFileSync('package.json', 'utf8');
 assert.match(pkg, /shipstation:awaiting:diff/);
@@ -96,17 +103,19 @@ const script = readFileSync('scripts/reconcile-shipstation-awaiting.ts', 'utf8')
 assert.match(script, /Dry run only/);
 assert.match(script, /blocked by shipped\/cancelled lockdown/);
 assert.match(script, /Only awaiting_shipment rows can be updated without the shipped-data override/);
+assert.match(script, /allow-shipped-override/);
+assert.match(script, /Per user override `unlock shipped data`/);
 
 const ordersRoute = readFileSync('src/routes/orders.ts', 'utf8');
 assert.match(ordersRoute, /visibleAwaitingOrdersPredicate/);
 assert.match(ordersRoute, /external_order_id.+walmart-%/s);
 assert.match(ordersRoute, /external_order_id.+ebay-%/s);
-assert.match(ordersRoute, /real_marketplace_order/s);
+assert.doesNotMatch(ordersRoute, /real_marketplace_order/s);
 
 const initRoute = readFileSync('src/routes/init.ts', 'utf8');
 assert.match(initRoute, /visibleAwaitingOrdersPredicate/);
 assert.match(initRoute, /external_order_id.+walmart-%/s);
 assert.match(initRoute, /external_order_id.+ebay-%/s);
-assert.match(initRoute, /real_marketplace_order/s);
+assert.doesNotMatch(initRoute, /real_marketplace_order/s);
 
 console.log('ShipStation awaiting parity guard passed');
