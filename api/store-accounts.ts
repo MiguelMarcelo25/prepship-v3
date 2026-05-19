@@ -1,8 +1,7 @@
 // @ts-nocheck
 // Vercel serverless function: CRUD for the store_accounts table (marketplace order sources — Walmart, Amazon, eBay, etc.). Mirrors api/carrier-accounts.ts but writes to a separate table so credentials for stores stay isolated from credentials for shipping carriers.
-// Bootstraps the table on first call so we don't need a separate migration
-// step. Same shape as src/db/schema/carrier-accounts.ts so a future move
-// back to the Render backend is a noop.
+// Uses the migration-owned credential account schema. The handler verifies
+// readiness on entry instead of creating tables or indexes during requests.
 //
 // Endpoints (all under the same path, dispatched on req.method):
 //   GET  /api/store-accounts            → list (filterable by source/pending)

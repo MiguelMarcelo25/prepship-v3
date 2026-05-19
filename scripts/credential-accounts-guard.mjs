@@ -24,7 +24,9 @@ function assert(condition, message) {
 const helper = read('src/lib/credential-accounts.ts');
 const service = read('src/services/credential-accounts.ts');
 const schemaFallback = read('src/services/credential-account-schema.ts');
-const migration = read('drizzle/0027_credential_accounts_source_of_truth.sql');
+const carrierMigration = read('drizzle/0015_amusing_namorita.sql');
+const credentialMigration = read('drizzle/0027_credential_accounts_source_of_truth.sql');
+const credentialRlsMigration = read('drizzle/0031_credential_accounts_rls.sql');
 const handlers = [
   ['api/carrier-accounts.ts', read('api/carrier-accounts.ts')],
   ['api/store-accounts.ts', read('api/store-accounts.ts')],
@@ -80,7 +82,7 @@ for (const [file, source] of handlers) {
   );
   assert(
     source.includes('ensureCredentialAccountRuntimeSchema'),
-    `${file} uses centralized runtime schema fallback`,
+    `${file} uses centralized credential account schema readiness check`,
   );
   assert(
     !source.includes('CREATE TABLE IF NOT EXISTS ${TABLE}'),
@@ -97,12 +99,28 @@ assert(
 assert(
   schemaFallback.includes('ensureCredentialAccountRuntimeSchema') &&
     schemaFallback.includes('migrateLegacyStoreCredentialRows'),
-  'credential account runtime schema fallback is centralized',
+  'credential account schema readiness and legacy store migration are centralized',
 );
 
 assert(
-  migration.includes('CREATE TABLE IF NOT EXISTS "store_accounts"') &&
-    migration.includes('CREATE TABLE IF NOT EXISTS "carrier_account_clients"'),
+  !/CREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX)\s+IF\s+NOT\s+EXISTS/i.test(schemaFallback),
+  'credential account schema helper does not create tables or indexes at runtime',
+);
+
+assert(
+  schemaFallback.includes('to_regclass') &&
+    schemaFallback.includes('relrowsecurity') &&
+    schemaFallback.includes('0031_credential_accounts_rls.sql'),
+  'credential account schema helper verifies migration readiness and RLS',
+);
+
+assert(
+  carrierMigration.includes('CREATE TABLE IF NOT EXISTS "carrier_accounts"') &&
+    credentialMigration.includes('CREATE TABLE IF NOT EXISTS "store_accounts"') &&
+    credentialMigration.includes('CREATE TABLE IF NOT EXISTS "carrier_account_clients"') &&
+    credentialRlsMigration.includes('ALTER TABLE "carrier_accounts" ENABLE ROW LEVEL SECURITY') &&
+    credentialRlsMigration.includes('ALTER TABLE "store_accounts" ENABLE ROW LEVEL SECURITY') &&
+    credentialRlsMigration.includes('ALTER TABLE "carrier_account_clients" ENABLE ROW LEVEL SECURITY'),
   'credential account tables and assignment junction are represented in migrations',
 );
 

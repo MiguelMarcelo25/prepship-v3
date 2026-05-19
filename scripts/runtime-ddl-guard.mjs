@@ -14,13 +14,17 @@ const storeOrdersMigration = fs.readFileSync(
   path.join(root, storeOrdersMigrationPath),
   'utf8',
 );
+const credentialAccountsRlsMigrationPath = 'drizzle/0031_credential_accounts_rls.sql';
+const credentialAccountsRlsMigration = fs.readFileSync(
+  path.join(root, credentialAccountsRlsMigrationPath),
+  'utf8',
+);
 const scanRoots = ['src', 'api'];
 const ddlPattern =
   /create\s+(?:unique\s+)?(?:table|index)(?:\s+concurrently)?\s+if\s+not\s+exists/i;
 
 const expectedRuntimeDdlFiles = [
   'api/carriers/labels.ts',
-  'src/services/credential-account-schema.ts',
   'src/services/fulfillment/outbox.ts',
   'src/services/order-items.ts',
   'src/services/orders-performance-maintenance.ts',
@@ -47,6 +51,12 @@ const storeOrderRelations = [
   'store_orders_carrier_account_idx',
   'store_orders_last_fetched_at_idx',
   'store_orders_shipment_status_idx',
+];
+
+const credentialAccountRlsTables = [
+  'carrier_accounts',
+  'store_accounts',
+  'carrier_account_clients',
 ];
 
 function walk(dir, out = []) {
@@ -134,6 +144,13 @@ for (const relation of storeOrderRelations) {
   );
 }
 
+for (const table of credentialAccountRlsTables) {
+  assert(
+    credentialAccountsRlsMigration.includes(`"${table}"`),
+    `${credentialAccountsRlsMigrationPath} enables RLS for ${table}`,
+  );
+}
+
 assert(
   audit.includes('src/services/reporting-metrics.ts') &&
     audit.includes(reportingMetricsMigrationPath),
@@ -145,6 +162,12 @@ assert(
     audit.includes('api/carriers/walmart/orders.ts') &&
     audit.includes(storeOrdersMigrationPath),
   `${auditPath} documents store_orders DDL migration resolution`,
+);
+
+assert(
+  audit.includes('src/services/credential-account-schema.ts') &&
+    audit.includes(credentialAccountsRlsMigrationPath),
+  `${auditPath} documents credential account runtime DDL migration resolution`,
 );
 
 if (process.exitCode) process.exit(process.exitCode);

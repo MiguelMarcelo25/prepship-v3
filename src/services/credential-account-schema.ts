@@ -3,6 +3,20 @@ import type { CredentialAccountTable, SqlLike } from './credential-accounts';
 const ensuredTables = new Set<CredentialAccountTable>();
 let legacyStoreRowsMigrated = false;
 
+const BASE_CREDENTIAL_ACCOUNT_RELATIONS = [
+  'carrier_accounts',
+  'carrier_accounts_client_provider_account_idx',
+  'store_accounts',
+  'store_accounts_client_provider_account_idx',
+];
+
+const CARRIER_ASSIGNMENT_RELATIONS = [
+  'carrier_account_clients',
+  'carrier_account_clients_pkey',
+  'carrier_account_clients_account_fk',
+  'carrier_account_clients_client_idx',
+];
+
 async function runStatements(
   sql: SqlLike,
   label: string,
@@ -26,45 +40,47 @@ export async function ensureCredentialAccountRuntimeSchema(
 ): Promise<void> {
   if (ensuredTables.has(table)) return;
 
-  const statements = [
-    `CREATE TABLE IF NOT EXISTS ${table} (
-      id SERIAL PRIMARY KEY,
-      client_id INTEGER,
-      provider TEXT NOT NULL,
-      label TEXT,
-      account_identifier TEXT,
-      credentials JSONB NOT NULL DEFAULT '{}'::jsonb,
-      source TEXT NOT NULL DEFAULT 'admin',
-      active BOOLEAN NOT NULL DEFAULT true,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS ${table}_client_provider_account_idx
-      ON ${table} (
-        COALESCE(client_id, -1),
-        provider,
-        COALESCE(account_identifier, '')
-      )`,
-    `ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`,
-  ];
+  const requiredRelations = table === 'carrier_accounts'
+    ? [...BASE_CREDENTIAL_ACCOUNT_RELATIONS, ...CARRIER_ASSIGNMENT_RELATIONS]
+    : BASE_CREDENTIAL_ACCOUNT_RELATIONS;
 
-  if (table === 'carrier_accounts') {
-    statements.push(
-      `CREATE TABLE IF NOT EXISTS carrier_account_clients (
-        carrier_account_id INTEGER NOT NULL,
-        client_id INTEGER NOT NULL,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        PRIMARY KEY (carrier_account_id, client_id),
-        CONSTRAINT carrier_account_clients_account_fk
-          FOREIGN KEY (carrier_account_id) REFERENCES carrier_accounts(id) ON DELETE CASCADE
-      )`,
-      `CREATE INDEX IF NOT EXISTS carrier_account_clients_client_idx
-        ON carrier_account_clients(client_id)`,
-      `ALTER TABLE carrier_account_clients ENABLE ROW LEVEL SECURITY`,
+  const values = requiredRelations.map((relation) => `('${relation}')`).join(', ');
+  const missing = (await sql.unsafe(`
+    SELECT relation_name
+    FROM (VALUES ${values}) AS expected(relation_name)
+    WHERE to_regclass('public.' || relation_name) IS NULL
+    ORDER BY relation_name
+  `)) as Array<{ relation_name: string }>;
+
+  if (missing.length > 0) {
+    const names = missing.map((row) => row.relation_name).join(', ');
+    throw new Error(
+      `${table}: credential account migrations are missing relations: ${names}. ` +
+        'Run drizzle/0015_amusing_namorita.sql, drizzle/0027_credential_accounts_source_of_truth.sql, ' +
+        'and drizzle/0031_credential_accounts_rls.sql before using credential account routes.',
     );
   }
 
-  await runStatements(sql, `${table}:schema`, statements);
+  const rlsTables = table === 'carrier_accounts'
+    ? ['carrier_accounts', 'store_accounts', 'carrier_account_clients']
+    : ['store_accounts'];
+  const rlsValues = rlsTables.map((relation) => `('${relation}')`).join(', ');
+  const insecure = (await sql.unsafe(`
+    SELECT table_name
+    FROM (VALUES ${rlsValues}) AS expected(table_name)
+    JOIN pg_class c ON c.oid = ('public.' || expected.table_name)::regclass
+    WHERE c.relrowsecurity IS NOT TRUE
+    ORDER BY table_name
+  `)) as Array<{ table_name: string }>;
+
+  if (insecure.length > 0) {
+    const names = insecure.map((row) => row.table_name).join(', ');
+    throw new Error(
+      `${table}: credential account tables are missing row-level security: ${names}. ` +
+        'Run drizzle/0031_credential_accounts_rls.sql before using credential account routes.',
+    );
+  }
+
   ensuredTables.add(table);
 }
 

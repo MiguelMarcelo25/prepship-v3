@@ -1,8 +1,7 @@
 // @ts-nocheck
 // Vercel serverless function: CRUD for the carrier_accounts table.
-// Bootstraps the table on first call so we don't need a separate migration
-// step. Same shape as src/db/schema/carrier-accounts.ts so a future move
-// back to the Render backend is a noop.
+// Uses the migration-owned credential account schema. The handler verifies
+// readiness on entry instead of creating tables or indexes during requests.
 //
 // Endpoints (all under the same path, dispatched on req.method):
 //   GET    /api/carrier-accounts            → list (filterable by source/pending)
