@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { sql } from 'drizzle-orm';
+import { sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
 import { EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
 
@@ -169,6 +169,7 @@ const topSkusQuery = rangeQuery.extend({
 
 const skuDailyQuery = rangeQuery.extend({
   clientId: z.coerce.number().int().optional(),
+  storeId: z.coerce.number().int().optional(),
   top: z.coerce.number().int().positive().max(10).optional(),
   topN: z.coerce.number().int().positive().max(15).optional(),
   hideTestOrders: z.coerce.boolean().optional().default(false),
@@ -185,7 +186,13 @@ const skuDailyQuery = rangeQuery.extend({
   includeCancelled: z.coerce.boolean().optional().default(false),
 });
 
-export type SkuDailyQuery = z.infer<typeof skuDailyQuery>;
+type ClientStoreScopeQuery = {
+  clientIds?: number[];
+  storeIds?: number[];
+  scopeRestricted?: boolean;
+};
+
+export type SkuDailyQuery = z.infer<typeof skuDailyQuery> & ClientStoreScopeQuery;
 
 function buildDateBuckets(fromIso: string, toIso: string) {
   const startMs = Date.parse(`${fromIso.slice(0, 10)}T00:00:00.000Z`);
@@ -194,6 +201,42 @@ function buildDateBuckets(fromIso: string, toIso: string) {
   return Array.from({ length: days }, (_, index) =>
     new Date(startMs + index * 86_400_000).toISOString().slice(0, 10)
   );
+}
+
+function normalizeScopeIds(values: number[] | undefined): number[] {
+  if (!Array.isArray(values)) return [];
+  return Array.from(
+    new Set(
+      values
+        .map((value) => Number(value))
+        .filter((value) => Number.isInteger(value) && value > 0)
+    )
+  );
+}
+
+function intArraySql(values: number[]): SQL {
+  return sql`array[${sql.join(values.map((value) => sql`${value}`), sql`, `)}]::int[]`;
+}
+
+function analysisOrderScopePredicate(q: ClientStoreScopeQuery & { storeId?: number }): SQL {
+  const predicates: SQL[] = [];
+  const clientIds = normalizeScopeIds(q.clientIds);
+  const storeIds = normalizeScopeIds([
+    ...(q.storeIds ?? []),
+    ...(q.storeId !== undefined ? [q.storeId] : []),
+  ]);
+
+  if (clientIds.length) {
+    predicates.push(sql`o.client_id = any(${intArraySql(clientIds)})`);
+  }
+  if (storeIds.length) {
+    predicates.push(sql`o.store_id = any(${intArraySql(storeIds)})`);
+  }
+  if (!predicates.length) {
+    return q.scopeRestricted === true ? sql`false` : sql`true`;
+  }
+  if (predicates.length === 1) return predicates[0]!;
+  return sql`(${sql.join(predicates, sql` or `)})`;
 }
 
 export async function getSkuDailyFromOrderItems(q: SkuDailyQuery) {
@@ -231,6 +274,7 @@ export async function getSkuDailyFromOrderItems(q: SkuDailyQuery) {
         ${testOrderFilter}
         and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
         and (${cid}::int is null or o.client_id = ${cid}::int)
+        and ${analysisOrderScopePredicate(q)}
         and oi.quantity > 0
         and oi.sku <> ''
         and (
@@ -275,6 +319,7 @@ export async function getSkuDailyFromOrderItems(q: SkuDailyQuery) {
       ${testOrderFilter}
       and o.store_id not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)})
       and (${cid}::int is null or o.client_id = ${cid}::int)
+      and ${analysisOrderScopePredicate(q)}
       and oi.quantity > 0
       and oi.sku <> ''
       and (
@@ -314,6 +359,7 @@ app.get('/sku-daily', zValidator('query', skuDailyQuery), async (c) => {
 
 const skuBreakdownQuery = rangeQuery.extend({
   clientId: z.coerce.number().int().optional(),
+  storeId: z.coerce.number().int().optional(),
   limit: z.coerce.number().int().positive().max(2000).optional().default(2000),
   hideTestOrders: z.coerce.boolean().optional().default(false),
   // 2026-05-13: same caller-controlled cancelled-orders toggle as
@@ -323,7 +369,7 @@ const skuBreakdownQuery = rangeQuery.extend({
   includeCancelled: z.coerce.boolean().optional().default(false),
 });
 
-export type SkuBreakdownQuery = z.infer<typeof skuBreakdownQuery>;
+export type SkuBreakdownQuery = z.infer<typeof skuBreakdownQuery> & ClientStoreScopeQuery;
 type SkuBreakdownRow = {
   sku: string;
   name: string | null;
@@ -475,6 +521,7 @@ export async function getSkuBreakdownFromOrderItems(q: SkuBreakdownQuery) {
         and o.order_date <= ${toIso}::timestamptz
         ${testOrderFilter}
         and (${cid}::int is null or o.client_id = ${cid}::int)
+        and ${analysisOrderScopePredicate(q)}
         and oi.quantity > 0
         and oi.sku <> ''
         and (o.client_id is null or coalesce(c.active, true) = true)

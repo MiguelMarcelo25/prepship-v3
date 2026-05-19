@@ -3,9 +3,9 @@
 ## Current State
 
 - Branch: `prepshipv4-stable`
-- Latest pushed commit before Phase 12 Batch 3A: `8c38e623`
+- Latest pushed commit before Phase 12 Batch 3B: `5570e5ef`
 - Worktree at last update: clean
-- Latest completed fix before this batch: first runtime RBAC permission gates added for `/users`, settings, carrier accounts, and carrier verification
+- Latest completed fix before this batch: client/store scope foundation added for `/clients` and `/init`
 - Latest production read from user: Rate Browser and live app behavior look healthy after the recent deploys
 - GitHub Actions:
   - `Keep Render API warm`: manual only now
@@ -18,8 +18,8 @@
 | Document | Status | Percent | Why Not 100% |
 |---|---|---:|---|
 | `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md` | Created / active | 85% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, `order_items`/`analytics_cache`, and low-risk orders/inventory indexes moved to migration ownership; inventory truth, durable jobs, label side effects, and shipment-adjacent DDL cleanup still open |
-| `ENTERPRISE_READINESS_AUDIT.md` | Created / active | 61% | First client/store scope foundation is implemented for explicit JWT claims and low-risk `/clients` + `/init` client/store payloads; still needs operational route scoping, audit logs, reconciliation, alerts, DR, runbooks, and authenticated production verification |
-| `SECURITY_PATCH_PLAN.md` | Created / mostly implemented | 88% | Needs live auth smoke tests, strict JWT production rollout, and broader role/client-scope rollout |
+| `ENTERPRISE_READINESS_AUDIT.md` | Created / active | 64% | Dashboard aggregate scoping is now started for explicit JWT claims; still needs remaining operational route scoping, audit logs, reconciliation, alerts, DR, runbooks, and authenticated production verification |
+| `SECURITY_PATCH_PLAN.md` | Created / mostly implemented | 89% | Needs live auth smoke tests, strict JWT production rollout, and broader role/client-scope rollout |
 | `RATE_SYSTEM_HARDENING_PLAN.md` | Created / mostly implemented | 72% | Needs browser production verification, duplicate-name UX polish, metrics, durable backfill status |
 
 ## Phase Summary
@@ -35,9 +35,9 @@
 | Phase 7 - Billing + Packages | Partial/good progress | 60% | Needs billing reconciliation, billing summary read model, package usage metrics, and package ledger hardening |
 | Phase 8 - Shared Frontend Data Layer | Partial/good progress | 65% | Needs standardized React Query hooks and remaining broad `safe()` fallback cleanup |
 | Phase 9 - Lazy Loading + UI Performance | Partial | 55% | Needs more lazy-loaded drawers/modals/charts/export tools and all-tool browser audit |
-| Phase 10 - DJ/OpenClaw Security + Failure-State Hardening | Mostly complete | 88% | Unauthenticated production auth smoke checks passed and first runtime permission layer exists; needs authenticated secret checks, deeper raw-error route audit, and broader client scoping |
+| Phase 10 - DJ/OpenClaw Security + Failure-State Hardening | Mostly complete | 89% | Unauthenticated production auth smoke checks passed and first runtime permission layer exists; dashboard/client/init scoping started; needs authenticated secret checks, deeper raw-error route audit, and broader client scoping |
 | Phase 11 - Source-of-Truth + Duplication Audit | In progress | 85% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, `order_items`/`analytics_cache`, and low-risk orders/inventory indexes moved to migration ownership; inventory/jobs/labels and shipment-adjacent DDL still remain |
-| Phase 12 - Enterprise Readiness | Scoped/started | 61% | Client/store scope foundation is implemented for low-risk client/init payloads; needs operational route query scoping, secrets governance, audit logs, reconciliation, alerts, DR, and runbooks |
+| Phase 12 - Enterprise Readiness | Scoped/started | 64% | Dashboard aggregate scoping is implemented for explicit client/store JWT claims; needs remaining operational route query scoping, secrets governance, audit logs, reconciliation, alerts, DR, and runbooks |
 
 ## Phase Checklist
 
@@ -134,7 +134,7 @@
 - [ ] split very large frontend views
 - [ ] browser audit all tool pages
 
-### Phase 10 - DJ/OpenClaw Security + Failure-State Hardening: 88%
+### Phase 10 - DJ/OpenClaw Security + Failure-State Hardening: 89%
 
 - [x] `/users` gated
 - [x] protected root + wildcard route gates
@@ -147,6 +147,7 @@
 - [x] auth/client/credential/frontend/orders guard tests
 - [x] GitHub scheduled production crons disabled
 - [x] first runtime RBAC permission guard for `/users`, settings, and credential surfaces
+- [x] first dashboard aggregate client/store scope guard
 - [~] live production auth smoke tests
 - [ ] deeper raw-error route audit
 - [ ] formal RBAC/client-scope enforcement
@@ -183,7 +184,7 @@
 - [ ] remaining legacy JWT/CORS copies cleanup
 - [ ] carrier/store endpoint policy final verification
 
-### Phase 12 - Enterprise Readiness: 61%
+### Phase 12 - Enterprise Readiness: 64%
 
 - [x] `ENTERPRISE_READINESS_AUDIT.md`
 - [x] critical/high/medium issue buckets scoped
@@ -196,7 +197,10 @@
 - [x] `/clients` list/detail scope filtering for scoped users
 - [x] `/init/init-data` and `/init/stores` client/store payload scope filtering
 - [x] `npm run test:client-store-scope`
-- [ ] operational route query scoping for orders/dashboard/analysis/inventory/billing/manifests/print queue
+- [x] `/dashboard` summary/daily-counts/SKU panels/inventory-risk scope filtering for scoped users
+- [x] dashboard cache keys include client/store scope
+- [x] `npm run test:dashboard-client-scope`
+- [ ] remaining operational route query scoping for orders/analysis/inventory/billing/manifests/print queue
 - [ ] secrets governance
 - [ ] audit logging
 - [ ] reconciliation reports
@@ -231,8 +235,8 @@
    - Label side-effect status reporting.
 5. Continue Phase 12.
    - Review `RBAC_CLIENT_SCOPE_MATRIX.md` with DJ/OpenClaw.
-   - Deploy and smoke-test the first runtime RBAC permission and client/init scope layer.
-   - Implement operational route query scoping in a separate reviewed batch.
+   - Deploy and smoke-test the runtime RBAC, client/init scope, and dashboard scope layer.
+   - Implement remaining operational route query scoping in separate reviewed batches.
    - Audit logging.
    - Reconciliation reports.
    - Observability alerts.
@@ -245,6 +249,7 @@
 - `npm run test:auth-coverage`
 - `npm run test:rbac-permissions`
 - `npm run test:client-store-scope`
+- `npm run test:dashboard-client-scope`
 - `npm run test:client-redaction`
 - `npm run test:credential-accounts`
 - `npm run test:rate-system-hardening`

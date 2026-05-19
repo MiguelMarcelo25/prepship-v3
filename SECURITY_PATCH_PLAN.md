@@ -4,7 +4,7 @@
 
 This plan tracks the immediate security patch work discussed by DJ/OpenClaw. It focuses on route auth coverage, admin enforcement, secret redaction, safer public errors, JWT hardening, unsafe route review, and production smoke tests.
 
-Several patches are already implemented and guarded locally. The first runtime RBAC permission layer is also implemented for `/users`, settings, carrier accounts, and carrier verification, with explicit client/store scope filtering started for `/clients` and `/init`. Remaining work is mostly production verification, operational route scoping, audit logging, credential governance, and deeper raw-error review.
+Several patches are already implemented and guarded locally. The first runtime RBAC permission layer is also implemented for `/users`, settings, carrier accounts, and carrier verification, with explicit client/store scope filtering started for `/clients`, `/init`, and `/dashboard`. Remaining work is mostly production verification, remaining operational route scoping, audit logging, credential governance, and deeper raw-error review.
 
 ## Critical Blockers
 
@@ -33,7 +33,7 @@ Several patches are already implemented and guarded locally. The first runtime R
 
 | Area | Concern | Recommended Patch |
 |---|---|---|
-| RBAC | first permission layer exists and low-risk client/init scoping has started, but operational route row scoping is not complete | continue route-by-route client/store scope implementation |
+| RBAC | first permission layer exists and client/init/dashboard scoping has started, but operational route row scoping is not complete | continue route-by-route client/store scope implementation |
 | client scoping | authenticated users may need row-level/client-level limits | add client/store scope policies and tests |
 | credential governance | rotation, last-used, and audit events are not complete | central credential audit events and rotation process |
 | logs | secrets/tokens need log scan | add redaction policy and log scan checklist |
@@ -58,7 +58,9 @@ Several patches are already implemented and guarded locally. The first runtime R
 - [x] Add `npm run test:rbac-permissions`.
 - [x] Add first client/store scope helper and low-risk `/clients` + `/init` filters.
 - [x] Add `npm run test:client-store-scope`.
-- [ ] Build operational route row-scope query filters.
+- [x] Add dashboard aggregate row-scope query filters.
+- [x] Add `npm run test:dashboard-client-scope`.
+- [ ] Build remaining operational route row-scope query filters.
 - [ ] Add audit logs for credential and admin actions.
 
 ## Checklist
@@ -110,6 +112,7 @@ Several patches are already implemented and guarded locally. The first runtime R
 - `npm run test:auth-coverage`
 - `npm run test:rbac-permissions`
 - `npm run test:client-store-scope`
+- `npm run test:dashboard-client-scope`
 - `npm run test:client-redaction`
 - `npm run test:credential-accounts`
 - `npm run test:frontend-failure-states`

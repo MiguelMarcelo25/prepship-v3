@@ -1,7 +1,7 @@
 import { Hono, type Context } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, desc, eq, gte, lte, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, lte, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
 import { clients } from '../db/schema/clients';
 import { inventory, inventoryLedger } from '../db/schema/inventory';
@@ -10,6 +10,7 @@ import { orders } from '../db/schema/orders';
 import { analyticsCacheKey, getAnalyticsCache, setAnalyticsCache } from '../services/analytics-cache';
 import { EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
 import { isAdminEmail } from '../lib/admin-emails';
+import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 import { getFreshInventoryRiskMetrics } from '../services/reporting-metrics';
 import { getSkuBreakdownFromOrderItems, getSkuDailyFromOrderItems } from './analysis';
 
@@ -100,10 +101,59 @@ function callerAssigneeFilter(c: Context) {
     : undefined;
 }
 
-function dashboardCallerCacheScope(c: Context): string {
+function dashboardScopeFromContext(c: Context): ClientStoreScope {
+  return getClientStoreScope({
+    email: c.get('email' as never) as string | undefined,
+    role: c.get('role' as never) as string | undefined,
+    permissions: c.get('permissions' as never) as string[] | undefined,
+    clientIds: c.get('clientIds' as never) as number[] | undefined,
+    storeIds: c.get('storeIds' as never) as number[] | undefined,
+  });
+}
+
+function intArraySql(values: number[]): SQL {
+  return sql`array[${sql.join(values.map((value) => sql`${value}`), sql`, `)}]::int[]`;
+}
+
+function orderScopePredicate(scope: ClientStoreScope): SQL | undefined {
+  if (!scope.isRestricted) return undefined;
+  const predicates: SQL[] = [];
+  if (scope.clientIds.length) {
+    predicates.push(sql`${orders.clientId} = any(${intArraySql(scope.clientIds)})`);
+  }
+  if (scope.storeIds.length) {
+    predicates.push(sql`${orders.storeId} = any(${intArraySql(scope.storeIds)})`);
+  }
+  if (!predicates.length) return sql`false`;
+  if (predicates.length === 1) return predicates[0]!;
+  return sql`(${sql.join(predicates, sql` or `)})`;
+}
+
+function inventoryScopePredicate(scope: ClientStoreScope): SQL | undefined {
+  if (!scope.isRestricted) return undefined;
+  const predicates: SQL[] = [];
+  if (scope.clientIds.length) {
+    predicates.push(sql`${inventory.clientId} = any(${intArraySql(scope.clientIds)})`);
+  }
+  if (scope.storeIds.length) {
+    predicates.push(sql`exists (
+      select 1 from ${clients} scoped_client
+      where scoped_client.id = ${inventory.clientId}
+        and scoped_client.store_ids && ${intArraySql(scope.storeIds)}
+    )`);
+  }
+  if (!predicates.length) return sql`false`;
+  if (predicates.length === 1) return predicates[0]!;
+  return sql`(${sql.join(predicates, sql` or `)})`;
+}
+
+function dashboardCallerCacheScope(c: Context, scope: ClientStoreScope): string {
   const callerEmail = c.get('email' as never) as string | undefined;
   const callerUserId = c.get('userId' as never) as string | undefined;
-  return isAdminEmail(callerEmail) ? 'admin' : callerUserId ?? 'anonymous';
+  const callerScope = scope.isRestricted
+    ? `clients=${scope.clientIds.join(',')};stores=${scope.storeIds.join(',')}`
+    : 'global';
+  return `${isAdminEmail(callerEmail) ? 'admin' : callerUserId ?? 'anonymous'}:${callerScope}`;
 }
 
 function orderVisibilityWhere(
@@ -111,12 +161,14 @@ function orderVisibilityWhere(
   q: z.infer<typeof dashboardRangeQuery>,
   fromDate: Date,
   toDate: Date,
+  scope: ClientStoreScope,
   options: { excludeCancelled?: boolean } = {},
 ) {
   const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
   return and(
     ...[
       callerAssigneeFilter(c),
+      orderScopePredicate(scope),
       q.clientId !== undefined ? eq(orders.clientId, q.clientId) : undefined,
       q.storeId !== undefined ? eq(orders.storeId, q.storeId) : undefined,
       includeInactiveClients ? visibleStoreBasePredicate : visibleStorePredicate,
@@ -149,7 +201,8 @@ async function loadDashboardSummary(
   const toDate = new Date(`${q.to}T23:59:59.999Z`);
   const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
   const sevenFrom = q.sevenFrom ?? q.from;
-  const where = orderVisibilityWhere(c, q, fromDate, toDate, { excludeCancelled: true });
+  const scope = dashboardScopeFromContext(c);
+  const where = orderVisibilityWhere(c, q, fromDate, toDate, scope, { excludeCancelled: true });
 
   type DashboardSummaryPayload = {
     revenue: number;
@@ -166,7 +219,7 @@ async function loadDashboardSummary(
     storeId: q.storeId ?? null,
     includeInactiveClients,
     hideTestOrders: q.hideTestOrders === true,
-    caller: dashboardCallerCacheScope(c),
+    caller: dashboardCallerCacheScope(c, scope),
   });
 
   const cached = await getAnalyticsCache<DashboardSummaryPayload>(cacheKey);
@@ -297,7 +350,8 @@ app.get('/daily-counts', zValidator('query', dashboardRangeQuery), async (c) => 
   const q = c.req.valid('query');
   const fromDate = new Date(`${q.from}T00:00:00.000Z`);
   const toDate = new Date(`${q.to}T23:59:59.999Z`);
-  const where = orderVisibilityWhere(c, q, fromDate, toDate);
+  const scope = dashboardScopeFromContext(c);
+  const where = orderVisibilityWhere(c, q, fromDate, toDate, scope);
   const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
   type DashboardDailyCountsPayload = {
     data: Array<{ day: string; awaiting: number; shipped: number; cancelled: number; total: number }>;
@@ -309,7 +363,7 @@ app.get('/daily-counts', zValidator('query', dashboardRangeQuery), async (c) => 
     storeId: q.storeId ?? null,
     includeInactiveClients,
     hideTestOrders: q.hideTestOrders === true,
-    caller: dashboardCallerCacheScope(c),
+    caller: dashboardCallerCacheScope(c, scope),
   });
 
   const cached = await getAnalyticsCache<DashboardDailyCountsPayload>(cacheKey);
@@ -350,6 +404,7 @@ app.get('/trends', zValidator('query', dashboardSummaryQuery), async (c) => {
 
 app.get('/sku-trends', zValidator('query', dashboardSkuTrendQuery), async (c) => {
   const q = c.req.valid('query');
+  const scope = dashboardScopeFromContext(c);
   const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
   const cacheKey = analyticsCacheKey('dashboard.sku-trends.v1', {
     from: q.from,
@@ -361,7 +416,7 @@ app.get('/sku-trends', zValidator('query', dashboardSkuTrendQuery), async (c) =>
     includeCancelled: q.includeCancelled,
     includeInactiveClients,
     hideTestOrders: q.hideTestOrders === true,
-    caller: dashboardCallerCacheScope(c),
+    caller: dashboardCallerCacheScope(c, scope),
   });
   const cached = await getAnalyticsCache<Awaited<ReturnType<typeof getSkuDailyFromOrderItems>>>(cacheKey);
   if (cached) return c.json(cached);
@@ -370,6 +425,10 @@ app.get('/sku-trends', zValidator('query', dashboardSkuTrendQuery), async (c) =>
     dateFrom: isoDayStart(q.from),
     dateTo: isoDayEnd(q.to),
     clientId: q.clientId,
+    storeId: q.storeId,
+    clientIds: scope.clientIds,
+    storeIds: scope.storeIds,
+    scopeRestricted: scope.isRestricted,
     top: q.top,
     topN: q.topN,
     hideTestOrders: q.hideTestOrders === true,
@@ -381,6 +440,7 @@ app.get('/sku-trends', zValidator('query', dashboardSkuTrendQuery), async (c) =>
 
 app.get('/top-skus', zValidator('query', dashboardTopSkusQuery), async (c) => {
   const q = c.req.valid('query');
+  const scope = dashboardScopeFromContext(c);
   const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
   type DashboardTopSkusPayload = {
     data: unknown[];
@@ -397,7 +457,7 @@ app.get('/top-skus', zValidator('query', dashboardTopSkusQuery), async (c) => {
     includeCancelled: q.includeCancelled,
     includeInactiveClients,
     hideTestOrders: q.hideTestOrders === true,
-    caller: dashboardCallerCacheScope(c),
+    caller: dashboardCallerCacheScope(c, scope),
   });
   const cached = await getAnalyticsCache<DashboardTopSkusPayload>(cacheKey);
   if (cached) return c.json(cached);
@@ -406,6 +466,10 @@ app.get('/top-skus', zValidator('query', dashboardTopSkusQuery), async (c) => {
     dateFrom: isoDayStart(q.from),
     dateTo: isoDayEnd(q.to),
     clientId: q.clientId,
+    storeId: q.storeId,
+    clientIds: scope.clientIds,
+    storeIds: scope.storeIds,
+    scopeRestricted: scope.isRestricted,
     limit: q.limit,
     hideTestOrders: q.hideTestOrders === true,
     includeCancelled: q.includeCancelled,
@@ -422,6 +486,7 @@ app.get('/top-skus', zValidator('query', dashboardTopSkusQuery), async (c) => {
 
 app.get('/inventory-risk', zValidator('query', dashboardInventoryRiskQuery), async (c) => {
   const q = c.req.valid('query');
+  const scope = dashboardScopeFromContext(c);
   type DashboardInventoryRiskPayload = {
     items: unknown[];
     total: number;
@@ -431,13 +496,14 @@ app.get('/inventory-risk', zValidator('query', dashboardInventoryRiskQuery), asy
     pageSize: q.pageSize,
     active: q.active,
     liveMetrics: q.liveMetrics,
-    caller: dashboardCallerCacheScope(c),
+    caller: dashboardCallerCacheScope(c, scope),
   });
   const cached = await getAnalyticsCache<DashboardInventoryRiskPayload>(cacheKey);
   if (cached) return c.json(cached);
 
   const callerEmail = c.get('email' as never) as string | undefined;
-  if (isAdminEmail(callerEmail)) {
+  const reportingMetricsAllowed = isAdminEmail(callerEmail) && !scope.isRestricted;
+  if (reportingMetricsAllowed) {
     const metricsPayload = await getFreshInventoryRiskMetrics({
       clientId: q.clientId,
       pageSize: q.pageSize,
@@ -460,6 +526,7 @@ app.get('/inventory-risk', zValidator('query', dashboardInventoryRiskQuery), asy
     ...[
       q.clientId !== undefined ? eq(inventory.clientId, q.clientId) : undefined,
       q.active !== undefined ? eq(inventory.active, q.active) : undefined,
+      inventoryScopePredicate(scope),
       activeInventoryClientPredicate,
     ].filter((p): p is NonNullable<typeof p> => p !== undefined)
   );
