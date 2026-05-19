@@ -118,4 +118,12 @@ assert.match(initRoute, /external_order_id.+walmart-%/s);
 assert.match(initRoute, /external_order_id.+ebay-%/s);
 assert.doesNotMatch(initRoute, /real_marketplace_order/s);
 
+const shipmentSync = readFileSync('src/services/shipment-sync.ts', 'utf8');
+assert.match(
+  shipmentSync,
+  /values\.voided === false[\s\S]+values\.isReturn === false[\s\S]+shippedOrderIds\.push/,
+  'shipment sync must not mark orders shipped from voided or return shipments',
+);
+assert.match(shipmentSync, /Per user override `unlock shipped data`/);
+
 console.log('ShipStation awaiting parity guard passed');

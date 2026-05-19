@@ -259,7 +259,15 @@ async function upsertShipmentsBatch(pageShipments: SSShipment[]): Promise<{
     // upserted (not skipped). Collected here (after all skips resolved)
     // so the outer order-status flip doesn't mark orders shipped when
     // we dropped their corresponding shipment row.
-    if (ord && ord.status === 'awaiting_shipment') {
+    // Per user override `unlock shipped data` on 2026-05-19: do not let a
+    // voided ShipStation label re-close an order that ShipStation still shows
+    // in Awaiting. Only active outbound shipments can promote an order.
+    if (
+      ord &&
+      ord.status === 'awaiting_shipment' &&
+      values.voided === false &&
+      values.isReturn === false
+    ) {
       shippedOrderIds.push(ord.id);
     }
   }
