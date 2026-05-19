@@ -8,6 +8,8 @@ import { getCarrierAccountsForRateContext, getRates, rateCacheKey } from '../ser
 import {
   getActiveBackfillJob,
   getBackfillJob,
+  getLatestBackfillJob,
+  getLatestBackfillJobSnapshot,
   startBackfillBestRates,
 } from '../services/rates-backfill';
 import { ssRequest } from '../lib/shipstation';
@@ -443,6 +445,13 @@ app.get('/backfill-best/status/:jobId', (c) => {
 
 app.get('/backfill-best/active', (c) => {
   return c.json({ job: getActiveBackfillJob() });
+});
+
+app.get('/backfill-best/latest', async (c) => {
+  return c.json({
+    job: getLatestBackfillJob(),
+    durableJob: await getLatestBackfillJobSnapshot(),
+  });
 });
 
 app.delete('/cache', async (c) => {

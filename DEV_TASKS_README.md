@@ -3,9 +3,9 @@
 ## Current State
 
 - Branch: `prepshipv4-stable`
-- Latest pushed commit before this ShipStation parity status batch: `59798ed6`
+- Latest pushed commit before this rate-backfill durable status batch: `8ba7fa07`
 - Worktree at last update: clean
-- Latest implementation batch tracked here: ShipStation Awaiting parity durable last-run status
+- Latest implementation batch tracked here: rate backfill durable latest-run status
 - Latest production read from user: Rate Browser and live app behavior look healthy after the recent deploys
 - GitHub Actions:
   - `Keep Render API warm`: manual only now
@@ -17,10 +17,10 @@
 
 | Document | Status | Percent | Why Not 100% |
 |---|---|---:|---|
-| `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md` | Created / active | 88% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, `order_items`/`analytics_cache`, low-risk orders/inventory indexes, durable job strategy, and ShipStation Awaiting parity last-run status moved to documented ownership; inventory truth, print/rate-backfill durable implementation, label side effects, and shipment-adjacent DDL cleanup still open |
+| `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md` | Created / active | 90% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, `order_items`/`analytics_cache`, low-risk orders/inventory indexes, durable job strategy, ShipStation Awaiting parity status, and rate backfill latest-run status moved to documented ownership; inventory truth, print/reference-rate durable implementation, label side effects, and shipment-adjacent DDL cleanup still open |
 | `ENTERPRISE_READINESS_AUDIT.md` | Created / active | 91% | Dashboard, Analysis, Inventory, Billing, and Print Queue list/action ownership now apply explicit JWT client/store claims; secrets governance, audit logging, reconciliation reporting, observability/alerting, runbook/DR planning, privacy/compliance, and production signoff are now mapped; marketplace awaiting-count reconciliation now has a dry-run/apply path; still needs remaining orders/manifests scoping, broader runtime audit/reconciliation/alert implementation, DR drills, and authenticated production verification |
 | `SECURITY_PATCH_PLAN.md` | Created / mostly implemented | 94% | Needs live auth smoke tests, strict JWT production rollout, orders/manifests scope review, and broader role/client-scope rollout |
-| `RATE_SYSTEM_HARDENING_PLAN.md` | Created / mostly implemented | 72% | Needs browser production verification, duplicate-name UX polish, metrics, durable backfill status |
+| `RATE_SYSTEM_HARDENING_PLAN.md` | Created / mostly implemented | 78% | Needs browser production verification, duplicate-name UX polish, provider/account metrics, and full backfill progress/events beyond latest-run durability |
 
 ## Phase Summary
 
@@ -36,7 +36,7 @@
 | Phase 8 - Shared Frontend Data Layer | Partial/good progress | 65% | Needs standardized React Query hooks and remaining broad `safe()` fallback cleanup |
 | Phase 9 - Lazy Loading + UI Performance | Partial | 55% | Needs more lazy-loaded drawers/modals/charts/export tools and all-tool browser audit |
 | Phase 10 - DJ/OpenClaw Security + Failure-State Hardening | Mostly complete | 94% | Unauthenticated production auth smoke checks passed and first runtime permission layer exists; dashboard/analysis/inventory/billing/print-queue/client/init scoping started; needs authenticated secret checks, deeper raw-error route audit, and orders/manifests scoping review |
-| Phase 11 - Source-of-Truth + Duplication Audit | In progress | 88% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, `order_items`/`analytics_cache`, low-risk orders/inventory indexes, durable job strategy, and ShipStation Awaiting parity status moved to documented ownership; inventory truth, print/rate-backfill durable implementation, labels, and shipment-adjacent DDL still remain |
+| Phase 11 - Source-of-Truth + Duplication Audit | In progress | 90% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, `order_items`/`analytics_cache`, low-risk orders/inventory indexes, durable job strategy, ShipStation Awaiting parity status, and rate backfill latest-run status moved to documented ownership; inventory truth, print/reference-rate durable implementation, labels, and shipment-adjacent DDL still remain |
 | Phase 12 - Enterprise Readiness | Scoped/started | 91% | Dashboard, Analysis, Inventory, Billing, and Print Queue list/action ownership are implemented for explicit client/store JWT claims; secrets governance, audit logging, reconciliation reporting, observability/alerting, runbook/DR planning, privacy/compliance, and production signoff are mapped; marketplace awaiting-count reconciliation has a guarded dry-run/apply path; needs orders/manifests scoping, broader runtime audit/reconciliation/alert implementation, DR drills, and owner signoff evidence |
 
 ## Phase Checklist
@@ -160,7 +160,7 @@
 - [ ] deeper raw-error route audit
 - [ ] formal RBAC/client-scope enforcement
 
-### Phase 11 - Source-of-Truth + Duplication Audit: 88%
+### Phase 11 - Source-of-Truth + Duplication Audit: 90%
 
 - [x] `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md`
 - [x] shared JWT verifier
@@ -188,9 +188,12 @@
 - [x] `DURABLE_JOBS_PLAN.md`
 - [x] `npm run test:durable-jobs-plan`
 - [x] ShipStation Awaiting parity durable last-run status in `settings`
+- [x] Rate backfill durable latest-run status in `settings`
+- [x] `/rates/backfill-best/latest`
+- [x] `npm run test:rate-backfill-durable`
 - [~] runtime DDL migration cleanup
 - [ ] inventory source-of-truth cleanup
-- [~] durable job state for print queue/rate backfill
+- [~] durable job state for print queue/reference-rate jobs and full rate-backfill progress/events
 - [ ] label side-effect status reporting
 - [ ] remaining legacy JWT/CORS copies cleanup
 - [ ] carrier/store endpoint policy final verification

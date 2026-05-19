@@ -79,7 +79,7 @@ Current readiness read:
 
 | Track | Status | Percent |
 |---|---|---:|
-| Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, rate cache diagnostics/bulk semantics, runtime DDL inventory/guard, reporting metrics migration, Walmart selling-fee index cleanup, `store_orders` migration, credential-account DDL cleanup, `order_items` / `analytics_cache` readiness cleanup, low-risk orders/inventory index cleanup, and durable job strategy documented | 87% |
+| Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, rate cache diagnostics/bulk semantics, runtime DDL inventory/guard, reporting metrics migration, Walmart selling-fee index cleanup, `store_orders` migration, credential-account DDL cleanup, `order_items` / `analytics_cache` readiness cleanup, low-risk orders/inventory index cleanup, ShipStation Awaiting parity latest-run status, rate backfill latest-run status, and durable job strategy documented | 90% |
 | Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated, RBAC/client-scope route matrix documented, first runtime permission layer implemented, low-risk client/init payload scoping added, dashboard/analysis/inventory/billing/print-queue read/action scoping started, secrets governance matrix added, audit logging matrix added, reconciliation reports plan added, marketplace awaiting-count reconciliation guarded, observability/alerting plan added, operational runbooks/DR plan added, privacy/compliance plan added, and production signoff checklist added | 91% |
 
 ## Critical Blockers
@@ -287,7 +287,7 @@ The detailed durable jobs plan now lives in `DURABLE_JOBS_PLAN.md`. The condense
 
 | Job | Current State Storage | Restart Behavior | Multi-Instance Risk | Idempotency Risk | Fix |
 |---|---|---|---|---|---|
-| rate backfill best rates | in-memory job map | lost after restart | duplicate provider fanout possible | date/window key missing | durable job row or pg-boss workflow |
+| rate backfill best rates | in-memory job map plus durable latest snapshot | latest summary survives restart; active progress still process-local | duplicate provider fanout possible | date/window key missing | full durable job row or pg-boss workflow |
 | billing reference-rate fetch | in-memory job map | lost after restart | duplicate reference-rate fetch possible | client/date/window key missing | durable job row and result summary |
 | print queue batch send | in-memory job map | lost after restart | duplicate queue entries possible | selected-order/user key needed | durable job row and per-order results |
 | print queue PDF merge | in-memory job map + base64 output | lost after restart | duplicate merge possible | entry/user key needed | durable job row and artifact pointer |

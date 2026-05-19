@@ -3,6 +3,7 @@ import { and, desc, eq, isNull, lt, notInArray, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orders, orderOverrides } from '../db/schema/orders';
 import { packages } from '../db/schema/packages';
+import { settings } from '../db/schema/settings';
 import { getRates } from './rates';
 import type { Rate } from '../lib/shipstation';
 import { EXCLUDED_STORE_IDS } from '../config/prepship';
@@ -57,6 +58,34 @@ export type BackfillJob = {
   finishedAt: number | null;
 };
 
+type BackfillOptions = {
+  clientId?: number;
+  limit?: number;
+  maxAgeHours?: number;
+};
+
+export const RATE_BACKFILL_STATUS_KEY = 'rate_backfill_best_rates.last_run';
+
+export type BackfillJobSnapshot = {
+  version: 1;
+  durableKey: typeof RATE_BACKFILL_STATUS_KEY;
+  jobId: string;
+  status: BackfillJob['status'];
+  active: boolean;
+  total: number;
+  processed: number;
+  updated: number;
+  skipped: number;
+  failed: number;
+  message: string;
+  error: string | null;
+  failureSamples: string[];
+  options: BackfillOptions;
+  startedAt: string;
+  finishedAt: string | null;
+  persistedAt: string;
+};
+
 const PER_ORDER_TIMEOUT_MS = 30_000;
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
@@ -94,13 +123,80 @@ export function getLatestBackfillJob(): BackfillJob | null {
   return latestJobId ? (jobs.get(latestJobId) ?? null) : null;
 }
 
-export function startBackfillBestRates(opts: {
-  clientId?: number;
-  limit?: number;
-  // Omit to fetch only missing rates. Use 0 to refresh every matched order,
-  // or N to refresh rates older than N hours.
-  maxAgeHours?: number;
-}): BackfillJob {
+function toBackfillSnapshot(
+  job: BackfillJob,
+  opts: BackfillOptions,
+): BackfillJobSnapshot {
+  return {
+    version: 1,
+    durableKey: RATE_BACKFILL_STATUS_KEY,
+    jobId: job.jobId,
+    status: job.status,
+    active: activeJobId === job.jobId && job.status === 'running',
+    total: job.total,
+    processed: job.processed,
+    updated: job.updated,
+    skipped: job.skipped,
+    failed: job.failed,
+    message: job.message,
+    error: job.error,
+    failureSamples: [...job.failureSamples],
+    options: {
+      clientId: opts.clientId,
+      limit: opts.limit,
+      maxAgeHours: opts.maxAgeHours,
+    },
+    startedAt: new Date(job.startedAt).toISOString(),
+    finishedAt: job.finishedAt ? new Date(job.finishedAt).toISOString() : null,
+    persistedAt: new Date().toISOString(),
+  };
+}
+
+async function persistBackfillJobSnapshot(
+  job: BackfillJob,
+  opts: BackfillOptions,
+): Promise<void> {
+  try {
+    const value = JSON.stringify(toBackfillSnapshot(job, opts));
+    await db
+      .insert(settings)
+      .values({
+        key: RATE_BACKFILL_STATUS_KEY,
+        value,
+      })
+      .onConflictDoUpdate({
+        target: settings.key,
+        set: {
+          value,
+        },
+      });
+  } catch (err) {
+    console.warn(
+      '[rates-backfill] failed to persist durable status:',
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+export async function getLatestBackfillJobSnapshot(): Promise<BackfillJobSnapshot | null> {
+  try {
+    const [row] = await db
+      .select({ value: settings.value })
+      .from(settings)
+      .where(eq(settings.key, RATE_BACKFILL_STATUS_KEY))
+      .limit(1);
+    if (!row?.value) return null;
+    return JSON.parse(row.value) as BackfillJobSnapshot;
+  } catch (err) {
+    console.warn(
+      '[rates-backfill] failed to read durable status:',
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
+}
+
+export function startBackfillBestRates(opts: BackfillOptions): BackfillJob {
   if (activeJobId && jobs.get(activeJobId)?.status === 'running') {
     return jobs.get(activeJobId)!;
   }
@@ -122,17 +218,19 @@ export function startBackfillBestRates(opts: {
   jobs.set(jobId, job);
   activeJobId = jobId;
   latestJobId = jobId;
+  void persistBackfillJobSnapshot(job, opts);
   void runBackfill(jobId, opts);
   return job;
 }
 
 async function runBackfill(
   jobId: string,
-  opts: { clientId?: number; limit?: number; maxAgeHours?: number }
+  opts: BackfillOptions
 ) {
   const job = jobs.get(jobId)!;
   job.status = 'running';
-  job.message = 'Querying orders…';
+  job.message = 'Querying orders...';
+  await persistBackfillJobSnapshot(job, opts);
 
   try {
     const staleCutoff =
@@ -179,6 +277,7 @@ async function runBackfill(
 
     job.total = rows.length;
     job.message = `Found ${rows.length} orders; fetching rates…`;
+    await persistBackfillJobSnapshot(job, opts);
 
     // Resolve a default L/W/H once per job — every carrier requires dims.
     // Prefer the packages row marked default; otherwise a safe 6×6×6.
@@ -274,6 +373,9 @@ async function runBackfill(
       if (job.processed % 10 === 0 || job.processed === job.total) {
         job.message = `${job.processed}/${job.total} — ${job.updated} updated, ${job.skipped} skipped, ${job.failed} failed`;
       }
+      if (job.processed % 50 === 0 || job.processed === job.total) {
+        void persistBackfillJobSnapshot(job, opts);
+      }
     };
 
     let idx = 0;
@@ -289,11 +391,13 @@ async function runBackfill(
     job.status = 'done';
     job.finishedAt = Date.now();
     job.message = `Done — ${job.updated} updated, ${job.skipped} skipped, ${job.failed} failed (of ${job.total})`;
+    await persistBackfillJobSnapshot(job, opts);
   } catch (err) {
     job.status = 'error';
     job.error = (err as Error).message;
     job.message = `Error: ${job.error}`;
     job.finishedAt = Date.now();
+    await persistBackfillJobSnapshot(job, opts);
   } finally {
     if (activeJobId === jobId) activeJobId = null;
   }

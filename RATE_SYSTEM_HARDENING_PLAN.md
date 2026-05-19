@@ -4,9 +4,9 @@
 
 This plan tracks the rate-shopping and Rate Browser hardening work. The target is a fast, reliable operator experience where cached rates can appear immediately, live carrier refreshes happen safely, carrier failures are visible, and one slow or broken carrier never blocks the whole modal.
 
-Some frontend failure-state work is already complete: `fetchRates` no longer converts real request failures into fake empty rate arrays, and Rate Browser improvements have started. Phase 11 Batch 2 adds a static guard for rate hardening, persists carrier diagnostics in `rate_cache`, keeps exact `cacheKey` hits authoritative, and explicitly marks legacy weight/ZIP bulk hits as approximate.
+Some frontend failure-state work is already complete: `fetchRates` no longer converts real request failures into fake empty rate arrays, and Rate Browser improvements have started. Phase 11 Batch 2 adds a static guard for rate hardening, persists carrier diagnostics in `rate_cache`, keeps exact `cacheKey` hits authoritative, and explicitly marks legacy weight/ZIP bulk hits as approximate. The latest Phase 11 batch persists best-rate backfill latest-run status to `settings` and exposes `/rates/backfill-best/latest`.
 
-Current progress: 72%. This is not 100% because browser verification, duplicate carrier-name UX polish, provider/account metrics, and durable rate-backfill job status still need implementation or production confirmation.
+Current progress: 78%. This is not 100% because browser verification, duplicate carrier-name UX polish, provider/account metrics, and full rate-backfill progress/events beyond latest-run durability still need implementation or production confirmation.
 
 ## Critical Blockers
 
@@ -37,7 +37,7 @@ Current progress: 72%. This is not 100% because browser verification, duplicate 
 | stale best rate | cached best rate can be mistaken for live | show source and age in UI |
 | external API outage | ShipStation/direct carrier outage can look like no rates | visible provider outage diagnostic |
 | order list rate preload | rough cached reads can be overtrusted | distinguish approximate preload from exact browse rates |
-| rate backfill | job state and cache writes need durability | move progress/status to durable job state |
+| rate backfill | latest run now persists; full progress/events remain process-local | move full progress/status to durable job state |
 
 ## Recommended Patches
 
@@ -51,6 +51,9 @@ Current progress: 72%. This is not 100% because browser verification, duplicate 
 - [x] Add `RATE_NEGATIVE_CACHE_TTL_MS`, default `600000`.
 - [x] Cache no-rate diagnostics briefly.
 - [x] Add `npm run test:rate-system-hardening`.
+- [x] Add `npm run test:rate-backfill-durable`.
+- [x] Persist best-rate backfill latest-run status to `settings`.
+- [x] Expose `/rates/backfill-best/latest`.
 - [ ] Show duplicate carrier nickname disambiguation.
 - [x] Add carrier row states: `cached`, `loading`, `live`, `unavailable`, `error`.
 - [x] Add all-carrier auto-refresh on modal open when weight, dimensions, ZIP, and accounts are valid.
@@ -107,7 +110,8 @@ Rate Browser responses should include:
 - [x] negative-result cache
 - [x] diagnostic result for every ShipStation/direct carrier in Rate Browser responses
 - [ ] provider/account-level timeout and failure logging
-- [ ] rate backfill writes diagnostics when no rate is available
+- [x] rate backfill latest-run status survives process restart via `settings`
+- [ ] rate backfill writes full progress/events and diagnostics to durable job state
 
 ### Frontend
 
@@ -134,6 +138,7 @@ Rate Browser responses should include:
 - `npm run typecheck`
 - `npm run build:web`
 - `npm run test:rate-system-hardening`
+- `npm run test:rate-backfill-durable`
 - `npm run test:frontend-failure-states`
 - `npm run test:orders-ux`
 - backend rate tests for:
