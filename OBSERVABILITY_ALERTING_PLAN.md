@@ -1,0 +1,95 @@
+# PrepShip Observability And Alerting Plan
+
+## Executive Summary
+
+This Phase 12 deliverable defines the production signals, metrics, alerts, dashboards, and ownership needed for PrepShip to be enterprise-ready. The goal is to make failures visible before operators or clients discover them in the browser.
+
+This is a planning/control batch only. It does not change runtime logging, request handling, external API behavior, or shipped/cancelled order logic. Implementation should follow this matrix in small batches after owners and alert thresholds are approved.
+
+## Critical Blockers
+
+| Blocker | Risk | Required Outcome | Verification |
+|---|---|---|---|
+| No central alerting policy | API, sync, rate, label, billing, or DB failures can stay silent | Alert policy with owner, threshold, and action for each critical signal | Alert dry-run or dashboard screenshot |
+| External API failures lack account-level visibility | ShipStation/carrier failures can appear as generic no-rate/no-label states | Provider/account tagged metrics for rates, labels, sync, and marketplace APIs | Simulated provider failure emits tagged signal |
+| Slow DB/query visibility is incomplete | Supabase pressure can become page timeouts and 499s | Slow route and slow query dashboard | Route timing and slow query smoke test |
+| Job failures are not consistently surfaced | Sync, rate backfill, print queue, and reporting jobs can fail or restart unclearly | Job health dashboard with failed/stuck/dead-letter states | Failed-job fixture appears in status signal |
+
+## High-Risk Issues
+
+| Area | Current State | Risk If Unchanged | Required Fix |
+|---|---|---|---|
+| API requests | Timing logs and `Server-Timing` exist | No consistent p95/p99 or alert thresholds | Add request metrics by route, status, and duration bucket |
+| External APIs | Rate/label/sync clients have partial diagnostics | Carrier/store outages can hide in generic UI failures | Add provider/account metrics and alert thresholds |
+| Database | Pool and timeout protections exist | Slow queries can still create page timeouts | Add slow query signal and route-to-query correlation |
+| Worker/jobs | Worker status and heartbeat exist | Failed/stuck jobs can require manual log hunting | Add job success/failure/stuck counters and alerting |
+| Frontend | Failure states improved for key fetches | Browser errors may not be captured centrally | Add frontend error reporting and release/version tags |
+
+## Medium-Risk Issues
+
+| Area | Concern | Recommended Patch |
+|---|---|---|
+| Request IDs | Logs are harder to correlate across frontend/API/worker | Add request ID propagation and include it in structured logs |
+| Response size | Large responses can hurt browser speed and bandwidth | Log response-size buckets for heavy routes |
+| Cache health | Cache hits/misses are not fully visible | Track analytics/rate/reporting cache hit ratio |
+| Status panel | Operators need a quick internal health view | Add internal status panel backed by lightweight status APIs |
+| Runbooks | Alerts need clear actions | Link every alert to a runbook and escalation owner |
+
+## Signal Matrix
+
+| Signal | Current Visibility | Missing Metric / Log | Alert Needed | Owner | Test |
+|---|---|---|---|---|---|
+| API 5xx rate | server logs | route/status p95/p99 error counters | API 5xx spike | API owner | force test route error in staging |
+| API latency | timing middleware and `Server-Timing` | p95/p99 dashboard by route | p95 over threshold for hot routes | API owner | slow route fixture emits metric |
+| API 499/timeouts | Render logs | route/client/request-id aggregation | 499 spike or 30s timeout spike | API owner | production log review checklist |
+| Slow DB queries | partial route timing | query duration, table, route correlation | slow query over threshold | DB owner | slow query smoke test |
+| Supabase pool pressure | Supabase dashboard/manual | connection count and saturation alert | high connections/pool timeout | DB owner | Supabase metric review |
+| Worker heartbeat | `/worker/status` | stale heartbeat alert | heartbeat stale | Worker owner | stop worker in staging |
+| Sync jobs | `/sync/status` and worker logs | success/failure duration counters | sync failure/stuck job | Sync owner | failed sync fixture |
+| Rate calls | rate diagnostics | provider/account success, empty, failed, timeout counters | rate failure spike by account/provider | Rate owner | mocked carrier failure |
+| Label creation | label route/provider logs | provider/account label failure counters | label failure spike | Fulfillment owner | label failure fixture |
+| Billing generation | generated rows and UI status | generation duration, zero-total anomaly, failed run counters | failed billing generation or zero-total anomaly | Billing owner | billing fixture with mismatch |
+| Inventory/reporting refresh | worker/reporting logs | refresh duration and failed refresh counters | reporting refresh failed/stale | Reporting owner | failed refresh fixture |
+| Frontend runtime errors | browser console/manual | release-tagged frontend error capture | frontend error spike | Frontend owner | client error fixture |
+
+## Recommended Patches
+
+- [ ] Add a shared request-id middleware and propagate request IDs to logs and response headers.
+- [ ] Standardize structured logs for API errors, external API failures, and worker jobs.
+- [ ] Add route-level metrics for status, duration, and response-size buckets.
+- [ ] Add provider/account-level metrics for ShipStation, direct carriers, and marketplace APIs.
+- [ ] Add job health metrics for worker heartbeat, sync, rate backfill, print queue, reporting refresh, and fulfillment outbox.
+- [ ] Add slow DB query visibility linked to route/request ID where practical.
+- [ ] Add frontend error capture with release/build version.
+- [ ] Add an internal status panel that summarizes API, worker, sync, queue, DB, rates, labels, billing, and reporting health.
+
+## Test Plan
+
+- `npm run test:observability-alerting`
+- Future implementation tests:
+  - API request emits request ID, route, status, and duration
+  - simulated 500 emits safe structured error without secrets
+  - simulated ShipStation rate failure increments provider/account failure signal
+  - simulated label failure increments provider/account failure signal
+  - stale worker heartbeat triggers status warning
+  - failed reporting refresh appears in status signal
+  - frontend error fixture includes release/build version
+
+## Deployment / Rollback Notes
+
+- This matrix is planning-only and safe to deploy with documentation and guard changes.
+- Runtime observability changes should be feature-flagged or low-risk additive logging first.
+- Alert thresholds should start in notify-only mode before paging/escalation.
+- Rollback should disable new emitters or alerts without removing existing logs.
+- No alert should include secrets, tokens, full customer addresses, or raw provider credentials.
+
+## Recommended Implementation Order
+
+1. Review this matrix with DJ/OpenClaw and assign owners.
+2. Add request IDs and structured API/worker logs.
+3. Add route status/duration/response-size metrics for hot routes.
+4. Add external provider/account metrics for rates and labels.
+5. Add worker/job heartbeat, failure, and stale-job metrics.
+6. Add slow DB query dashboard and Supabase pressure checklist.
+7. Add frontend error capture with release/build tags.
+8. Create alert thresholds and runbook links after baseline data is collected.

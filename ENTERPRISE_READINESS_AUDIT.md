@@ -13,6 +13,7 @@ Companion DJ/OpenClaw documents:
 - `SECRETS_GOVERNANCE_MATRIX.md`
 - `AUDIT_LOGGING_MATRIX.md`
 - `RECONCILIATION_REPORTS_PLAN.md`
+- `OBSERVABILITY_ALERTING_PLAN.md`
 - `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md`
 - `SECURITY_PATCH_PLAN.md`
 - `RATE_SYSTEM_HARDENING_PLAN.md`
@@ -48,6 +49,7 @@ Implemented:
 - Secrets governance matrix added as `SECRETS_GOVERNANCE_MATRIX.md`, covering Supabase, ShipStation, carrier/store, marketplace OAuth, direct carrier, and label URL credential/artifact classes. `npm run test:secrets-governance` guards the deliverable.
 - Audit logging matrix added as `AUDIT_LOGGING_MATRIX.md`, covering credentials, admin/user changes, labels, orders, inventory, packages, billing, settings, sync/backfill, and print queue events. `npm run test:audit-logging` guards the deliverable.
 - Reconciliation reports plan added as `RECONCILIATION_REPORTS_PLAN.md`, covering order, order-item, shipment, label, billing, inventory, package, rate, fulfillment, client/store, and carrier account reconciliation. `npm run test:reconciliation-plan` guards the deliverable.
+- Observability and alerting plan added as `OBSERVABILITY_ALERTING_PLAN.md`, covering API, DB, Supabase, worker, sync, rate, label, billing, reporting, and frontend runtime signals. `npm run test:observability-alerting` guards the deliverable.
 
 Confirmed gaps from repo search:
 
@@ -58,6 +60,7 @@ Confirmed gaps from repo search:
 - Secrets governance is mapped, but rotation, last-used tracking, audit events, and production log/response smoke tests are not complete yet.
 - Audit logging is mapped, but the append-only table/service and runtime event writers are not implemented yet.
 - Reconciliation reporting is mapped, but report queries, scheduled runs, artifacts, and repair dry-runs are not implemented yet.
+- Observability and alerting are mapped, but runtime metric emitters, dashboards, thresholds, alert destinations, and runbook links are not implemented yet.
 - Label and marketplace order/fee compatibility handlers still need auth/CORS consolidation, but should be handled in a separately scoped review because they touch `orders`/`shipments` write paths.
 
 Current readiness read:
@@ -65,7 +68,7 @@ Current readiness read:
 | Track | Status | Percent |
 |---|---|---:|
 | Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, rate cache diagnostics/bulk semantics, runtime DDL inventory/guard, reporting metrics migration, Walmart selling-fee index cleanup, `store_orders` migration, credential-account DDL cleanup, `order_items` / `analytics_cache` readiness cleanup, and low-risk orders/inventory index cleanup implemented | 85% |
-| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated, RBAC/client-scope route matrix documented, first runtime permission layer implemented, low-risk client/init payload scoping added, dashboard/analysis/inventory/billing/print-queue read/action scoping started, secrets governance matrix added, audit logging matrix added, and reconciliation reports plan added | 82% |
+| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated, RBAC/client-scope route matrix documented, first runtime permission layer implemented, low-risk client/init payload scoping added, dashboard/analysis/inventory/billing/print-queue read/action scoping started, secrets governance matrix added, audit logging matrix added, reconciliation reports plan added, and observability/alerting plan added | 84% |
 
 ## Critical Blockers
 
@@ -196,6 +199,8 @@ Deliverable table:
 
 ### Observability / Monitoring
 
+- [x] Create `OBSERVABILITY_ALERTING_PLAN.md`.
+- [x] Add `npm run test:observability-alerting`.
 - [ ] Include request IDs in backend logs.
 - [ ] Use structured error logs for API failures.
 - [ ] Capture frontend errors.
@@ -209,8 +214,16 @@ Deliverable table:
 
 Deliverable table:
 
+The detailed signal plan now lives in `OBSERVABILITY_ALERTING_PLAN.md`. The condensed tracker below shows the first signal classes to implement.
+
 | Signal | Current Visibility | Missing Metric/Log | Alert Needed | Owner |
 |---|---|---|---|---|
+| API 5xx and latency | timing logs and `Server-Timing` | route/status/duration p95/p99 counters | 5xx spike and hot-route latency spike | API |
+| API 499/timeouts | Render logs/manual review | request-id and route aggregation | timeout/499 spike | API |
+| Slow DB and Supabase pressure | manual Supabase dashboard | slow query, pool saturation, route correlation | slow query and connection saturation | DB |
+| Worker/sync/reporting jobs | `/worker/status` and logs | stale heartbeat, failed/stuck job counters | stale heartbeat and failed job | Worker |
+| Rate/label provider health | rate diagnostics and provider logs | provider/account success/failure/timeout counters | rate/label failure spike | Fulfillment/Rates |
+| Frontend runtime errors | browser console/manual | release-tagged frontend error capture | frontend error spike | Frontend |
 
 ### Audit Logging
 
@@ -459,6 +472,7 @@ Deliverable table:
 - `npm run test:secrets-governance`
 - `npm run test:audit-logging`
 - `npm run test:reconciliation-plan`
+- `npm run test:observability-alerting`
 - Unauthenticated `/users` and `/clients` return `401`.
 - Non-admin `/admin/*` returns `403`.
 - `/clients` and `/init/init-data` never return ShipStation secrets.
@@ -508,12 +522,13 @@ Deliverable table:
 2. Review `SECRETS_GOVERNANCE_MATRIX.md`, assign credential owners, and decide rotation/last-used/audit rollout order.
 3. Review `AUDIT_LOGGING_MATRIX.md` and approve event names.
 4. Review `RECONCILIATION_REPORTS_PLAN.md` and approve report ownership.
-5. Implement remaining operational client/store row-scope query filters from `RBAC_CLIENT_SCOPE_MATRIX.md`.
-6. Secrets and credential audit, including audit events.
-7. Migration/runtime DDL cleanup plan.
-8. Durable job status and idempotency plan.
-9. External API resilience metrics and diagnostics.
-10. Data reconciliation reports.
-11. Frontend failure-mode Playwright tests.
-12. Observability and alerting integration.
-13. Deployment, rollback, and disaster recovery runbooks.
+5. Review `OBSERVABILITY_ALERTING_PLAN.md` and approve alert owners/thresholds.
+6. Implement remaining operational client/store row-scope query filters from `RBAC_CLIENT_SCOPE_MATRIX.md`.
+7. Secrets and credential audit, including audit events.
+8. Migration/runtime DDL cleanup plan.
+9. Durable job status and idempotency plan.
+10. External API resilience metrics and diagnostics.
+11. Data reconciliation reports.
+12. Frontend failure-mode Playwright tests.
+13. Observability and alerting integration.
+14. Deployment, rollback, and disaster recovery runbooks.
