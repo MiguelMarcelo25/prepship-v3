@@ -23,133 +23,68 @@ export function ensureOrderItemsStorage(): Promise<void> {
 }
 
 async function runEnsureOrderItemsStorage(): Promise<void> {
-  await db.execute(sql`
-    create table if not exists order_items (
-      id serial primary key,
-      order_id integer not null references orders(id) on delete cascade,
-      line_index integer not null default 0,
-      sku text not null,
-      name text,
-      quantity numeric(12, 3) not null default 0,
-      unit_price numeric(12, 2) not null default 0,
-      line_total numeric(12, 2) not null default 0,
-      image_url text,
-      client_id integer references clients(id),
-      store_id integer,
-      order_status text not null,
-      order_date timestamptz,
-      created_at timestamptz not null default now(),
-      updated_at timestamptz not null default now()
+  const missingRelations = await db.execute<{ relation_name: string }>(sql`
+    with required(relation_name) as (
+      values
+        ('order_items'),
+        ('order_items_order_line_idx'),
+        ('order_items_order_id_idx'),
+        ('order_items_sku_idx'),
+        ('order_items_lower_sku_idx'),
+        ('order_items_date_idx'),
+        ('order_items_client_date_idx'),
+        ('order_items_store_date_idx'),
+        ('order_items_active_date_idx'),
+        ('order_items_active_client_date_idx'),
+        ('order_items_active_sku_date_idx'),
+        ('analytics_cache'),
+        ('analytics_cache_expires_idx')
+    )
+    select relation_name
+    from required
+    where to_regclass('public.' || relation_name) is null
+    order by relation_name
+  `);
+
+  if (missingRelations.length > 0) {
+    throw new Error(
+      `Order item analytics migrations are missing relations: ${missingRelations
+        .map((row) => row.relation_name)
+        .join(', ')}. Run drizzle/0024_order_items_phase2.sql and drizzle/0025_order_items_sync_trigger.sql before using order item analytics.`
+    );
+  }
+
+  const missingFunction = await db.execute<{ function_name: string }>(sql`
+    select function_name
+    from (values ('prepship_refresh_order_items_for_order')) as required(function_name)
+    where to_regproc('public.' || function_name) is null
+  `);
+
+  if (missingFunction.length > 0) {
+    throw new Error(
+      'Order item analytics migration is missing function: prepship_refresh_order_items_for_order. ' +
+        'Run drizzle/0025_order_items_sync_trigger.sql before using order item analytics.'
+    );
+  }
+
+  const missingTrigger = await db.execute<{ trigger_name: string }>(sql`
+    select trigger_name
+    from (values ('prepship_order_items_refresh')) as required(trigger_name)
+    where not exists (
+      select 1
+      from pg_trigger t
+      where t.tgname = required.trigger_name
+        and t.tgrelid = 'orders'::regclass
+        and not t.tgisinternal
     )
   `);
-  await db.execute(sql`
-    create unique index if not exists order_items_order_line_idx
-      on order_items (order_id, line_index)
-  `);
-  await db.execute(sql`
-    create table if not exists analytics_cache (
-      cache_key text primary key,
-      payload jsonb not null,
-      expires_at timestamptz not null,
-      created_at timestamptz not null default now(),
-      updated_at timestamptz not null default now()
-    )
-  `);
-  await db.execute(sql`
-    create index if not exists analytics_cache_expires_idx
-      on analytics_cache (expires_at)
-  `);
-  await ensureOrderItemsSyncTrigger();
-}
 
-async function ensureOrderItemsSyncTrigger(): Promise<void> {
-  await db.execute(sql`
-    create or replace function prepship_refresh_order_items_for_order()
-    returns trigger
-    language plpgsql
-    as $$
-    begin
-      delete from order_items where order_id = new.id;
-
-      insert into order_items (
-        order_id,
-        line_index,
-        sku,
-        name,
-        quantity,
-        unit_price,
-        line_total,
-        image_url,
-        client_id,
-        store_id,
-        order_status,
-        order_date,
-        updated_at
-      )
-      select
-        new.id,
-        normalized.line_index,
-        normalized.sku,
-        normalized.name,
-        normalized.quantity,
-        normalized.unit_price,
-        coalesce(normalized.explicit_line_total, normalized.unit_price * normalized.quantity),
-        normalized.image_url,
-        new.client_id,
-        new.store_id,
-        new.order_status,
-        new.order_date,
-        now()
-      from (
-        select
-          (item.ordinality - 1)::int as line_index,
-          nullif(trim(coalesce(item.value->>'sku', '')), '') as sku,
-          nullif(coalesce(item.value->>'name', item.value->>'title', item.value->>'description', ''), '') as name,
-          nullif(coalesce(item.value->>'imageUrl', item.value->>'image_url', item.value->>'thumbnailUrl', item.value->>'thumbnail', ''), '') as image_url,
-          case
-            when coalesce(item.value->>'quantity', '') ~ '^-?[0-9]+([.][0-9]+)?$'
-              then greatest(0, (item.value->>'quantity')::numeric)
-            else 1
-          end as quantity,
-          case
-            when coalesce(item.value->>'unitPrice', item.value->>'unit_price', item.value->>'price', '') ~ '^-?[0-9]+([.][0-9]+)?$'
-              then coalesce(item.value->>'unitPrice', item.value->>'unit_price', item.value->>'price')::numeric
-            else 0
-          end as unit_price,
-          case
-            when coalesce(item.value->>'lineTotal', item.value->>'line_total', item.value->>'total', '') ~ '^-?[0-9]+([.][0-9]+)?$'
-              then coalesce(item.value->>'lineTotal', item.value->>'line_total', item.value->>'total')::numeric
-            else null
-          end as explicit_line_total,
-          lower(coalesce(item.value->>'adjustment', 'false')) as adjustment_text
-        from jsonb_array_elements(coalesce(new.items, '[]'::jsonb)) with ordinality as item(value, ordinality)
-      ) normalized
-      where normalized.sku is not null
-        and normalized.quantity > 0
-        and normalized.adjustment_text not in ('true', 't', '1', 'yes');
-
-      return new;
-    end;
-    $$;
-  `);
-  await db.execute(sql`
-    do $$
-    begin
-      if not exists (
-        select 1
-        from pg_trigger
-        where tgname = 'prepship_order_items_refresh'
-          and tgrelid = 'orders'::regclass
-          and not tgisinternal
-      ) then
-        create trigger prepship_order_items_refresh
-        after insert or update of items, client_id, store_id, order_status, order_date on orders
-        for each row
-        execute function prepship_refresh_order_items_for_order();
-      end if;
-    end;
-    $$;
-  `);
+  if (missingTrigger.length > 0) {
+    throw new Error(
+      'Order item analytics migration is missing trigger: prepship_order_items_refresh. ' +
+        'Run drizzle/0025_order_items_sync_trigger.sql before using order item analytics.'
+    );
+  }
 }
 
 function itemValue(item: Record<string, unknown>, keys: string[]): unknown {

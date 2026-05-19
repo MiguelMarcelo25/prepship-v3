@@ -19,6 +19,16 @@ const credentialAccountsRlsMigration = fs.readFileSync(
   path.join(root, credentialAccountsRlsMigrationPath),
   'utf8',
 );
+const orderItemsMigrationPath = 'drizzle/0024_order_items_phase2.sql';
+const orderItemsMigration = fs.readFileSync(
+  path.join(root, orderItemsMigrationPath),
+  'utf8',
+);
+const orderItemsTriggerMigrationPath = 'drizzle/0025_order_items_sync_trigger.sql';
+const orderItemsTriggerMigration = fs.readFileSync(
+  path.join(root, orderItemsTriggerMigrationPath),
+  'utf8',
+);
 const scanRoots = ['src', 'api'];
 const ddlPattern =
   /create\s+(?:unique\s+)?(?:table|index)(?:\s+concurrently)?\s+if\s+not\s+exists/i;
@@ -26,7 +36,6 @@ const ddlPattern =
 const expectedRuntimeDdlFiles = [
   'api/carriers/labels.ts',
   'src/services/fulfillment/outbox.ts',
-  'src/services/order-items.ts',
   'src/services/orders-performance-maintenance.ts',
 ];
 
@@ -57,6 +66,22 @@ const credentialAccountRlsTables = [
   'carrier_accounts',
   'store_accounts',
   'carrier_account_clients',
+];
+
+const orderItemsRelations = [
+  'order_items',
+  'order_items_order_line_idx',
+  'order_items_order_id_idx',
+  'order_items_sku_idx',
+  'order_items_lower_sku_idx',
+  'order_items_date_idx',
+  'order_items_client_date_idx',
+  'order_items_store_date_idx',
+  'order_items_active_date_idx',
+  'order_items_active_client_date_idx',
+  'order_items_active_sku_date_idx',
+  'analytics_cache',
+  'analytics_cache_expires_idx',
 ];
 
 function walk(dir, out = []) {
@@ -151,6 +176,20 @@ for (const table of credentialAccountRlsTables) {
   );
 }
 
+for (const relation of orderItemsRelations) {
+  assert(
+    orderItemsMigration.includes(`"${relation}"`) ||
+      orderItemsTriggerMigration.includes(`"${relation}"`),
+    `${orderItemsMigrationPath} or ${orderItemsTriggerMigrationPath} owns ${relation}`,
+  );
+}
+
+assert(
+  orderItemsTriggerMigration.includes('prepship_refresh_order_items_for_order') &&
+    orderItemsTriggerMigration.includes('prepship_order_items_refresh'),
+  `${orderItemsTriggerMigrationPath} owns order_items trigger/function`,
+);
+
 assert(
   audit.includes('src/services/reporting-metrics.ts') &&
     audit.includes(reportingMetricsMigrationPath),
@@ -168,6 +207,13 @@ assert(
   audit.includes('src/services/credential-account-schema.ts') &&
     audit.includes(credentialAccountsRlsMigrationPath),
   `${auditPath} documents credential account runtime DDL migration resolution`,
+);
+
+assert(
+  audit.includes('src/services/order-items.ts') &&
+    audit.includes(orderItemsMigrationPath) &&
+    audit.includes(orderItemsTriggerMigrationPath),
+  `${auditPath} documents order_items runtime DDL migration resolution`,
 );
 
 if (process.exitCode) process.exit(process.exitCode);

@@ -3,7 +3,7 @@
 ## Current State
 
 - Branch: `prepshipv4-stable`
-- Latest pushed commit before Phase 11 Batch 7: `6ba9efba`
+- Latest pushed commit before Phase 11 Batch 8: `18132c81`
 - Worktree at last update: clean
 - Latest completed fix before this batch: GitHub scheduled production crons disabled and DJ/OpenClaw phase tracker updated
 - GitHub Actions:
@@ -16,8 +16,8 @@
 
 | Document | Status | Percent | Why Not 100% |
 |---|---|---:|---|
-| `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md` | Created / active | 82% | Reporting metrics, Walmart selling-fee index, `store_orders`, and credential-account DDL moved to migration ownership; inventory truth, durable jobs, label side effects, and remaining DDL cleanup still open |
-| `ENTERPRISE_READINESS_AUDIT.md` | Created / active | 48% | Four runtime DDL classes are migration-owned now; needs RBAC, audit logs, reconciliation, alerts, DR, runbooks, and authenticated production verification |
+| `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md` | Created / active | 84% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, and `order_items`/`analytics_cache` moved to migration ownership; inventory truth, durable jobs, label side effects, and remaining DDL cleanup still open |
+| `ENTERPRISE_READINESS_AUDIT.md` | Created / active | 49% | Five runtime DDL classes are migration-owned now; needs RBAC, audit logs, reconciliation, alerts, DR, runbooks, and authenticated production verification |
 | `SECURITY_PATCH_PLAN.md` | Created / mostly implemented | 85% | Needs live auth smoke tests, strict JWT production rollout, `/users` final role policy |
 | `RATE_SYSTEM_HARDENING_PLAN.md` | Created / mostly implemented | 72% | Needs browser production verification, duplicate-name UX polish, metrics, durable backfill status |
 
@@ -28,15 +28,15 @@
 | Phase 1 - Runtime Architecture | Complete | 100% | Done |
 | Phase 2 - Observability | Good start | 65% | Needs external alerts, p95/p99 dashboards, slow-query dashboard, and status panel |
 | Phase 3 - Dashboard + Analysis Cleanup | Mostly complete | 85% | Needs production parity checks, remaining Analysis JSONB audit, and regression tests |
-| Phase 4 - `order_items` Normalization | Mostly complete | 80% | Needs production trigger/backfill verification and parity tests |
+| Phase 4 - `order_items` Normalization | Mostly complete | 83% | Runtime schema bootstrap now checks migrations; needs production trigger/backfill verification and parity tests |
 | Phase 5 - Reporting Read Models | Started | 30% | `analytics_cache` exists, but full dashboard/daily/SKU/inventory/billing read models are not complete |
 | Phase 6 - Inventory Metrics | Partial | 50% | Needs ledger source-of-truth enforcement, reconciliation, and precomputed sold/velocity/restock metrics |
 | Phase 7 - Billing + Packages | Partial/good progress | 60% | Needs billing reconciliation, billing summary read model, package usage metrics, and package ledger hardening |
 | Phase 8 - Shared Frontend Data Layer | Partial/good progress | 65% | Needs standardized React Query hooks and remaining broad `safe()` fallback cleanup |
 | Phase 9 - Lazy Loading + UI Performance | Partial | 55% | Needs more lazy-loaded drawers/modals/charts/export tools and all-tool browser audit |
 | Phase 10 - DJ/OpenClaw Security + Failure-State Hardening | Mostly complete | 85% | Unauthenticated production auth smoke checks passed; needs authenticated secret checks, deeper raw-error route audit, and formal RBAC/client scoping |
-| Phase 11 - Source-of-Truth + Duplication Audit | In progress | 82% | Reporting metrics, Walmart selling-fee index, `store_orders`, and credential-account DDL moved to migration ownership; inventory/jobs/labels and remaining compatibility DDL still remain |
-| Phase 12 - Enterprise Readiness | Scoped/started | 48% | Runtime DDL backlog is clearer and four low-risk classes are migration-owned; needs RBAC, secrets governance, audit logs, reconciliation, alerts, DR, and runbooks |
+| Phase 11 - Source-of-Truth + Duplication Audit | In progress | 84% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, and `order_items`/`analytics_cache` moved to migration ownership; inventory/jobs/labels and remaining compatibility DDL still remain |
+| Phase 12 - Enterprise Readiness | Scoped/started | 49% | Runtime DDL backlog is clearer and five low-risk classes are migration-owned; needs RBAC, secrets governance, audit logs, reconciliation, alerts, DR, and runbooks |
 
 ## Phase Checklist
 
@@ -73,12 +73,13 @@
 - [ ] remaining Analysis JSONB cleanup
 - [ ] dashboard/analysis regression tests
 
-### Phase 4 - `order_items` Normalization: 80%
+### Phase 4 - `order_items` Normalization: 83%
 
 - [x] `order_items` table
 - [x] indexes
 - [x] trigger/backfill/repair logic
 - [x] dashboard/analysis/inventory hot paths partially moved
+- [x] runtime schema bootstrap replaced with migration-readiness checks
 - [ ] production trigger verification
 - [ ] production backfill verification
 - [ ] parity tests
@@ -148,7 +149,7 @@
 - [ ] deeper raw-error route audit
 - [ ] formal RBAC/client-scope enforcement
 
-### Phase 11 - Source-of-Truth + Duplication Audit: 82%
+### Phase 11 - Source-of-Truth + Duplication Audit: 84%
 
 - [x] `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md`
 - [x] shared JWT verifier
@@ -169,6 +170,8 @@
 - [x] eBay/Walmart marketplace order handlers verify `store_orders` migration readiness instead of creating schema at request time
 - [x] credential-account runtime DDL removed
 - [x] credential-account RLS/readiness migration added
+- [x] `order_items` / `analytics_cache` runtime DDL removed
+- [x] order item trigger/function readiness moved to migration checks
 - [~] runtime DDL migration cleanup
 - [ ] inventory source-of-truth cleanup
 - [ ] durable job state for print queue/rate backfill
@@ -176,7 +179,7 @@
 - [ ] remaining legacy JWT/CORS copies cleanup
 - [ ] carrier/store endpoint policy final verification
 
-### Phase 12 - Enterprise Readiness: 48%
+### Phase 12 - Enterprise Readiness: 49%
 
 - [x] `ENTERPRISE_READINESS_AUDIT.md`
 - [x] critical/high/medium issue buckets scoped
@@ -207,6 +210,7 @@
 4. Continue Phase 11 with the next safest batch.
    - Apply and smoke-test `drizzle/0030_store_orders.sql` before marketplace order imports rely on it.
    - Apply and smoke-test `drizzle/0031_credential_accounts_rls.sql` before carrier/store credential routes rely on it.
+   - Apply and smoke-test `drizzle/0024_order_items_phase2.sql` and `drizzle/0025_order_items_sync_trigger.sql` before order item analytics/backfill rely on them.
    - Keep label/outbox/shipment-adjacent DDL deferred to a separate reviewed plan.
    - Inventory source-of-truth cleanup.
    - Durable job state for print queue/rate backfill.
