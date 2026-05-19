@@ -3,9 +3,9 @@
 ## Current State
 
 - Branch: `prepshipv4-stable`
-- Latest pushed commit before this Operational Runbooks batch: `3d54bd0a`
+- Latest pushed commit before this Privacy Compliance batch: `f37397a4`
 - Worktree at last update: clean
-- Latest implementation batch tracked here: Operational runbooks and disaster recovery plan and guard
+- Latest implementation batch tracked here: Privacy and compliance plan and guard
 - Latest production read from user: Rate Browser and live app behavior look healthy after the recent deploys
 - GitHub Actions:
   - `Keep Render API warm`: manual only now
@@ -18,7 +18,7 @@
 | Document | Status | Percent | Why Not 100% |
 |---|---|---:|---|
 | `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md` | Created / active | 85% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, `order_items`/`analytics_cache`, and low-risk orders/inventory indexes moved to migration ownership; inventory truth, durable jobs, label side effects, and shipment-adjacent DDL cleanup still open |
-| `ENTERPRISE_READINESS_AUDIT.md` | Created / active | 86% | Dashboard, Analysis, Inventory, Billing, and Print Queue list/action ownership now apply explicit JWT client/store claims; secrets governance, audit logging, reconciliation reporting, observability/alerting, and runbook/DR planning are now mapped; still needs remaining orders/manifests scoping, runtime audit/reconciliation/alert implementation, DR drills, and authenticated production verification |
+| `ENTERPRISE_READINESS_AUDIT.md` | Created / active | 88% | Dashboard, Analysis, Inventory, Billing, and Print Queue list/action ownership now apply explicit JWT client/store claims; secrets governance, audit logging, reconciliation reporting, observability/alerting, runbook/DR planning, and privacy/compliance are now mapped; still needs remaining orders/manifests scoping, runtime audit/reconciliation/alert implementation, DR drills, and authenticated production verification |
 | `SECURITY_PATCH_PLAN.md` | Created / mostly implemented | 94% | Needs live auth smoke tests, strict JWT production rollout, orders/manifests scope review, and broader role/client-scope rollout |
 | `RATE_SYSTEM_HARDENING_PLAN.md` | Created / mostly implemented | 72% | Needs browser production verification, duplicate-name UX polish, metrics, durable backfill status |
 
@@ -37,7 +37,7 @@
 | Phase 9 - Lazy Loading + UI Performance | Partial | 55% | Needs more lazy-loaded drawers/modals/charts/export tools and all-tool browser audit |
 | Phase 10 - DJ/OpenClaw Security + Failure-State Hardening | Mostly complete | 94% | Unauthenticated production auth smoke checks passed and first runtime permission layer exists; dashboard/analysis/inventory/billing/print-queue/client/init scoping started; needs authenticated secret checks, deeper raw-error route audit, and orders/manifests scoping review |
 | Phase 11 - Source-of-Truth + Duplication Audit | In progress | 85% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, `order_items`/`analytics_cache`, and low-risk orders/inventory indexes moved to migration ownership; inventory/jobs/labels and shipment-adjacent DDL still remain |
-| Phase 12 - Enterprise Readiness | Scoped/started | 86% | Dashboard, Analysis, Inventory, Billing, and Print Queue list/action ownership are implemented for explicit client/store JWT claims; secrets governance, audit logging, reconciliation reporting, observability/alerting, and runbook/DR planning are mapped; needs orders/manifests scoping, runtime audit/reconciliation/alert implementation, DR drills, and production signoff |
+| Phase 12 - Enterprise Readiness | Scoped/started | 88% | Dashboard, Analysis, Inventory, Billing, and Print Queue list/action ownership are implemented for explicit client/store JWT claims; secrets governance, audit logging, reconciliation reporting, observability/alerting, runbook/DR planning, and privacy/compliance are mapped; needs orders/manifests scoping, runtime audit/reconciliation/alert implementation, DR drills, and production signoff |
 
 ## Phase Checklist
 
@@ -192,7 +192,7 @@
 - [ ] remaining legacy JWT/CORS copies cleanup
 - [ ] carrier/store endpoint policy final verification
 
-### Phase 12 - Enterprise Readiness: 86%
+### Phase 12 - Enterprise Readiness: 88%
 
 - [x] `ENTERPRISE_READINESS_AUDIT.md`
 - [x] critical/high/medium issue buckets scoped
@@ -228,6 +228,8 @@
 - [x] `npm run test:observability-alerting`
 - [x] `OPERATIONAL_RUNBOOKS_AND_DR_PLAN.md`
 - [x] `npm run test:operational-runbooks`
+- [x] `PRIVACY_COMPLIANCE_PLAN.md`
+- [x] `npm run test:privacy-compliance`
 - [ ] remaining operational route query scoping for orders/manifests
 - [~] secrets governance
 - [~] audit logging
@@ -236,7 +238,7 @@
 - [ ] durable jobs
 - [~] observability/alerts
 - [~] deployment/rollback/DR runbooks
-- [ ] privacy/compliance checklist
+- [~] privacy/compliance checklist
 - [ ] production readiness signoff checklist
 
 ## Recommended Next Order
@@ -268,6 +270,7 @@
    - Review `RECONCILIATION_REPORTS_PLAN.md` with DJ/OpenClaw and approve report ownership.
    - Review `OBSERVABILITY_ALERTING_PLAN.md` with DJ/OpenClaw and approve alert owners/thresholds.
    - Review `OPERATIONAL_RUNBOOKS_AND_DR_PLAN.md` with DJ/OpenClaw and approve runbook owners.
+   - Review `PRIVACY_COMPLIANCE_PLAN.md` with DJ/OpenClaw and approve data-class owners.
    - Deploy and smoke-test the runtime RBAC, client/init scope, dashboard scope, analysis scope, inventory scope, billing scope, and print-queue list/action scope layer.
    - Implement remaining operational route query scoping in separate reviewed batches.
    - Audit logging.
@@ -293,6 +296,7 @@
 - `npm run test:reconciliation-plan`
 - `npm run test:observability-alerting`
 - `npm run test:operational-runbooks`
+- `npm run test:privacy-compliance`
 - `npm run test:client-redaction`
 - `npm run test:credential-accounts`
 - `npm run test:rate-system-hardening`
