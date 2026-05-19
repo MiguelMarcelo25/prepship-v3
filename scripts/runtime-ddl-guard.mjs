@@ -29,6 +29,26 @@ const orderItemsTriggerMigration = fs.readFileSync(
   path.join(root, orderItemsTriggerMigrationPath),
   'utf8',
 );
+const ordersEndpointPerformanceMigrationPath = 'drizzle/0021_orders_endpoint_performance.sql';
+const ordersEndpointPerformanceMigration = fs.readFileSync(
+  path.join(root, ordersEndpointPerformanceMigrationPath),
+  'utf8',
+);
+const dashboardSalesPerformanceMigrationPath = 'drizzle/0022_dashboard_sales_performance.sql';
+const dashboardSalesPerformanceMigration = fs.readFileSync(
+  path.join(root, dashboardSalesPerformanceMigrationPath),
+  'utf8',
+);
+const inventoryListPerformanceMigrationPath = 'drizzle/0023_inventory_list_performance.sql';
+const inventoryListPerformanceMigration = fs.readFileSync(
+  path.join(root, inventoryListPerformanceMigrationPath),
+  'utf8',
+);
+const inventoryLowerSkuMigrationPath = 'drizzle/0026_inventory_lower_sku_idx.sql';
+const inventoryLowerSkuMigration = fs.readFileSync(
+  path.join(root, inventoryLowerSkuMigrationPath),
+  'utf8',
+);
 const scanRoots = ['src', 'api'];
 const ddlPattern =
   /create\s+(?:unique\s+)?(?:table|index)(?:\s+concurrently)?\s+if\s+not\s+exists/i;
@@ -82,6 +102,49 @@ const orderItemsRelations = [
   'order_items_active_sku_date_idx',
   'analytics_cache',
   'analytics_cache_expires_idx',
+];
+
+const lowRiskPerformanceIndexes = [
+  {
+    indexName: 'orders_status_date_id_idx',
+    migrationPath: ordersEndpointPerformanceMigrationPath,
+    migration: ordersEndpointPerformanceMigration,
+  },
+  {
+    indexName: 'orders_store_status_date_idx',
+    migrationPath: ordersEndpointPerformanceMigrationPath,
+    migration: ordersEndpointPerformanceMigration,
+  },
+  {
+    indexName: 'orders_dashboard_sales_date_idx',
+    migrationPath: dashboardSalesPerformanceMigrationPath,
+    migration: dashboardSalesPerformanceMigration,
+  },
+  {
+    indexName: 'orders_dashboard_sales_client_date_idx',
+    migrationPath: dashboardSalesPerformanceMigrationPath,
+    migration: dashboardSalesPerformanceMigration,
+  },
+  {
+    indexName: 'inventory_active_updated_idx',
+    migrationPath: inventoryListPerformanceMigrationPath,
+    migration: inventoryListPerformanceMigration,
+  },
+  {
+    indexName: 'inventory_client_active_updated_idx',
+    migrationPath: inventoryListPerformanceMigrationPath,
+    migration: inventoryListPerformanceMigration,
+  },
+  {
+    indexName: 'inventory_ledger_inv_type_idx',
+    migrationPath: inventoryListPerformanceMigrationPath,
+    migration: inventoryListPerformanceMigration,
+  },
+  {
+    indexName: 'inventory_lower_sku_idx',
+    migrationPath: inventoryLowerSkuMigrationPath,
+    migration: inventoryLowerSkuMigration,
+  },
 ];
 
 function walk(dir, out = []) {
@@ -190,6 +253,13 @@ assert(
   `${orderItemsTriggerMigrationPath} owns order_items trigger/function`,
 );
 
+for (const { indexName, migrationPath, migration } of lowRiskPerformanceIndexes) {
+  assert(
+    migration.includes(`"${indexName}"`),
+    `${migrationPath} owns ${indexName}`,
+  );
+}
+
 assert(
   audit.includes('src/services/reporting-metrics.ts') &&
     audit.includes(reportingMetricsMigrationPath),
@@ -214,6 +284,13 @@ assert(
     audit.includes(orderItemsMigrationPath) &&
     audit.includes(orderItemsTriggerMigrationPath),
   `${auditPath} documents order_items runtime DDL migration resolution`,
+);
+
+assert(
+  audit.includes('orders/inventory performance indexes') &&
+    audit.includes(ordersEndpointPerformanceMigrationPath) &&
+    audit.includes(inventoryListPerformanceMigrationPath),
+  `${auditPath} documents low-risk performance index runtime DDL migration resolution`,
 );
 
 if (process.exitCode) process.exit(process.exitCode);

@@ -35,7 +35,7 @@ Implemented:
 Confirmed gaps from repo search:
 
 - RBAC/client-scope rules are still not fully formalized beyond `requireAuth` and `requireAdmin`.
-- Runtime DDL remains in some production-capable paths, but the request/job-time DDL inventory and static guard now exist. Reporting metrics table/index ownership has moved into `drizzle/0029_reporting_metrics.sql`, the Walmart selling-fee source index is owned by `drizzle/0019_selling_fees.sql`, marketplace `store_orders` is owned by `drizzle/0030_store_orders.sql`, credential-account RLS/readiness is owned by `drizzle/0031_credential_accounts_rls.sql`, and `order_items` / `analytics_cache` readiness is owned by `drizzle/0024_order_items_phase2.sql` plus `drizzle/0025_order_items_sync_trigger.sql`.
+- Runtime DDL remains in some production-capable paths, but the request/job-time DDL inventory and static guard now exist. Reporting metrics table/index ownership has moved into `drizzle/0029_reporting_metrics.sql`, the Walmart selling-fee source index is owned by `drizzle/0019_selling_fees.sql`, marketplace `store_orders` is owned by `drizzle/0030_store_orders.sql`, credential-account RLS/readiness is owned by `drizzle/0031_credential_accounts_rls.sql`, `order_items` / `analytics_cache` readiness is owned by `drizzle/0024_order_items_phase2.sql` plus `drizzle/0025_order_items_sync_trigger.sql`, and low-risk orders/inventory performance indexes are owned by migrations `0021`, `0022`, `0023`, and `0026`.
 - Durable job state is mixed: scheduler protection has improved, but print queue/rate backfill and some compatibility paths still need restart-safe progress guarantees.
 - Broad frontend `safe()` fallback usage remains and needs a failure-mode sweep.
 - Audit logging and reconciliation are planning items; they are not complete yet.
@@ -45,8 +45,8 @@ Current readiness read:
 
 | Track | Status | Percent |
 |---|---|---:|
-| Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, rate cache diagnostics/bulk semantics, runtime DDL inventory/guard, reporting metrics migration, Walmart selling-fee index cleanup, `store_orders` migration, credential-account DDL cleanup, and `order_items` / `analytics_cache` readiness cleanup implemented | 84% |
-| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with five low-risk classes migrated | 49% |
+| Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, rate cache diagnostics/bulk semantics, runtime DDL inventory/guard, reporting metrics migration, Walmart selling-fee index cleanup, `store_orders` migration, credential-account DDL cleanup, `order_items` / `analytics_cache` readiness cleanup, and low-risk orders/inventory index cleanup implemented | 85% |
+| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated | 50% |
 
 ## Critical Blockers
 
@@ -148,6 +148,7 @@ Deliverable table:
 | `store_orders` | resolved: marketplace handlers verify migration readiness instead of creating table/indexes at runtime | request-time table/index creation removed | `0030_store_orders.sql` added | rollback can temporarily restore runtime ensure if migration is missing |
 | `fulfillment_outbox` | service and label compatibility path ensure table/indexes at runtime | label/outbox request may pay DDL cost | fulfillment outbox migration | rollback keeps table; worker can ignore unused columns |
 | `order_items`, `analytics_cache` | resolved: analytics/backfill service verifies migration readiness instead of creating table/index/trigger/function at runtime | runtime schema ownership removed | `0024_order_items_phase2.sql` and `0025_order_items_sync_trigger.sql` own readiness | rollback can temporarily restore runtime ensure if migration is missing |
+| orders/inventory performance indexes | resolved: maintenance service no longer creates low-risk orders/inventory indexes at runtime | runtime index ownership removed | `0021_orders_endpoint_performance.sql`, `0022_dashboard_sales_performance.sql`, `0023_inventory_list_performance.sql`, and `0026_inventory_lower_sku_idx.sql` own indexes | rollback can temporarily restore runtime index ensure if migrations are missing |
 | reporting metrics tables | resolved: worker service now checks migration readiness instead of creating tables | runtime schema ownership removed | `0029_reporting_metrics.sql` added | rollback keeps tables and can pause refresh worker |
 | `orders_selling_fee_source_idx` | resolved: compatibility paths no longer create the index at runtime | request-time index creation removed | `0019_selling_fees.sql` owns it | rollback can temporarily restore runtime ensure if migration is missing |
 
