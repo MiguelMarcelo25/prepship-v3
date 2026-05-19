@@ -12,6 +12,7 @@ Companion DJ/OpenClaw documents:
 - `RBAC_CLIENT_SCOPE_MATRIX.md`
 - `SECRETS_GOVERNANCE_MATRIX.md`
 - `AUDIT_LOGGING_MATRIX.md`
+- `RECONCILIATION_REPORTS_PLAN.md`
 - `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md`
 - `SECURITY_PATCH_PLAN.md`
 - `RATE_SYSTEM_HARDENING_PLAN.md`
@@ -46,6 +47,7 @@ Implemented:
 - Print Queue ownership layer added: add, clear, delete, print-job creation/status/download, and batch-send startup/status validate explicit client/store JWT scope, and `npm run test:print-queue-ownership` guards the behavior.
 - Secrets governance matrix added as `SECRETS_GOVERNANCE_MATRIX.md`, covering Supabase, ShipStation, carrier/store, marketplace OAuth, direct carrier, and label URL credential/artifact classes. `npm run test:secrets-governance` guards the deliverable.
 - Audit logging matrix added as `AUDIT_LOGGING_MATRIX.md`, covering credentials, admin/user changes, labels, orders, inventory, packages, billing, settings, sync/backfill, and print queue events. `npm run test:audit-logging` guards the deliverable.
+- Reconciliation reports plan added as `RECONCILIATION_REPORTS_PLAN.md`, covering order, order-item, shipment, label, billing, inventory, package, rate, fulfillment, client/store, and carrier account reconciliation. `npm run test:reconciliation-plan` guards the deliverable.
 
 Confirmed gaps from repo search:
 
@@ -55,7 +57,7 @@ Confirmed gaps from repo search:
 - Broad frontend `safe()` fallback usage remains and needs a failure-mode sweep.
 - Secrets governance is mapped, but rotation, last-used tracking, audit events, and production log/response smoke tests are not complete yet.
 - Audit logging is mapped, but the append-only table/service and runtime event writers are not implemented yet.
-- Reconciliation is a planning item; it is not complete yet.
+- Reconciliation reporting is mapped, but report queries, scheduled runs, artifacts, and repair dry-runs are not implemented yet.
 - Label and marketplace order/fee compatibility handlers still need auth/CORS consolidation, but should be handled in a separately scoped review because they touch `orders`/`shipments` write paths.
 
 Current readiness read:
@@ -63,7 +65,7 @@ Current readiness read:
 | Track | Status | Percent |
 |---|---|---:|
 | Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, rate cache diagnostics/bulk semantics, runtime DDL inventory/guard, reporting metrics migration, Walmart selling-fee index cleanup, `store_orders` migration, credential-account DDL cleanup, `order_items` / `analytics_cache` readiness cleanup, and low-risk orders/inventory index cleanup implemented | 85% |
-| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated, RBAC/client-scope route matrix documented, first runtime permission layer implemented, low-risk client/init payload scoping added, dashboard/analysis/inventory/billing/print-queue read/action scoping started, secrets governance matrix added, and audit logging matrix added | 80% |
+| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated, RBAC/client-scope route matrix documented, first runtime permission layer implemented, low-risk client/init payload scoping added, dashboard/analysis/inventory/billing/print-queue read/action scoping started, secrets governance matrix added, audit logging matrix added, and reconciliation reports plan added | 82% |
 
 ## Critical Blockers
 
@@ -277,6 +279,8 @@ Deliverable table:
 
 ### Data Reconciliation
 
+- [x] Create `RECONCILIATION_REPORTS_PLAN.md`.
+- [x] Add `npm run test:reconciliation-plan`.
 - [ ] Local orders vs ShipStation orders.
 - [ ] Local shipments vs ShipStation shipments.
 - [ ] Labels vs billing records.
@@ -289,8 +293,15 @@ Deliverable table:
 
 Deliverable table:
 
+The detailed report plan now lives in `RECONCILIATION_REPORTS_PLAN.md`. The condensed tracker below shows the first report classes to implement.
+
 | Reconciliation | Canonical Source | Local Source | Mismatch Detection | Repair Process | Owner |
 |---|---|---|---|---|---|
+| `orders.items` vs `order_items` | order ingestion payload | normalized `order_items` | count/qty/revenue mismatch | rerun order item repair/backfill | Analytics |
+| billing summaries vs billing line items | generated line items | summary/read-model output | totals/order count/client mismatch | rebuild billing summary/read model | Billing |
+| inventory ledger vs displayed stock | `inventory_ledger` | `inventory.stockQty` / effective stock | ledger/cache mismatch | dry-run approved cache rebuild | Inventory |
+| package ledger vs package stock | package ledger/mutations | package stock/cache | quantity/usage mismatch | package stock rebuild | Packages |
+| rate cache vs actual label cost | label purchase cost | `rate_cache` / best-rate fields | cached/best rate differs from paid label cost | mark stale and refresh future rates | Rates |
 
 ### Frontend Reliability
 
@@ -447,6 +458,7 @@ Deliverable table:
 - `npm run test:print-queue-ownership`
 - `npm run test:secrets-governance`
 - `npm run test:audit-logging`
+- `npm run test:reconciliation-plan`
 - Unauthenticated `/users` and `/clients` return `401`.
 - Non-admin `/admin/*` returns `403`.
 - `/clients` and `/init/init-data` never return ShipStation secrets.
@@ -495,12 +507,13 @@ Deliverable table:
 1. Smoke-test the runtime RBAC, client/init scope, dashboard scope, analysis scope, inventory scope, billing scope, and print-queue list/action scope layer after deploy.
 2. Review `SECRETS_GOVERNANCE_MATRIX.md`, assign credential owners, and decide rotation/last-used/audit rollout order.
 3. Review `AUDIT_LOGGING_MATRIX.md` and approve event names.
-4. Implement remaining operational client/store row-scope query filters from `RBAC_CLIENT_SCOPE_MATRIX.md`.
-5. Secrets and credential audit, including audit events.
-6. Migration/runtime DDL cleanup plan.
-7. Durable job status and idempotency plan.
-8. External API resilience metrics and diagnostics.
-9. Data reconciliation reports.
-10. Frontend failure-mode Playwright tests.
-11. Observability and alerting integration.
-12. Deployment, rollback, and disaster recovery runbooks.
+4. Review `RECONCILIATION_REPORTS_PLAN.md` and approve report ownership.
+5. Implement remaining operational client/store row-scope query filters from `RBAC_CLIENT_SCOPE_MATRIX.md`.
+6. Secrets and credential audit, including audit events.
+7. Migration/runtime DDL cleanup plan.
+8. Durable job status and idempotency plan.
+9. External API resilience metrics and diagnostics.
+10. Data reconciliation reports.
+11. Frontend failure-mode Playwright tests.
+12. Observability and alerting integration.
+13. Deployment, rollback, and disaster recovery runbooks.
