@@ -10,6 +10,7 @@ Companion DJ/OpenClaw documents:
 
 - `DEV_TASKS_README.md`
 - `RBAC_CLIENT_SCOPE_MATRIX.md`
+- `SECRETS_GOVERNANCE_MATRIX.md`
 - `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md`
 - `SECURITY_PATCH_PLAN.md`
 - `RATE_SYSTEM_HARDENING_PLAN.md`
@@ -42,6 +43,7 @@ Implemented:
 - Billing read scope layer added: `/billing/config`, `/billing/summary`, `/billing/details`, `/billing/invoice`, and `/billing/package-prices` apply explicit client/store JWT scope, including billing read-model filtering, and `npm run test:billing-client-scope` guards the behavior.
 - Print Queue list scope layer added: `GET /print-queue` applies explicit client/store JWT scope for queued entry reads, and `npm run test:print-queue-client-scope` guards the behavior.
 - Print Queue ownership layer added: add, clear, delete, print-job creation/status/download, and batch-send startup/status validate explicit client/store JWT scope, and `npm run test:print-queue-ownership` guards the behavior.
+- Secrets governance matrix added as `SECRETS_GOVERNANCE_MATRIX.md`, covering Supabase, ShipStation, carrier/store, marketplace OAuth, direct carrier, and label URL credential/artifact classes. `npm run test:secrets-governance` guards the deliverable.
 
 Confirmed gaps from repo search:
 
@@ -49,6 +51,7 @@ Confirmed gaps from repo search:
 - Runtime DDL remains in some production-capable paths, but the request/job-time DDL inventory and static guard now exist. Reporting metrics table/index ownership has moved into `drizzle/0029_reporting_metrics.sql`, the Walmart selling-fee source index is owned by `drizzle/0019_selling_fees.sql`, marketplace `store_orders` is owned by `drizzle/0030_store_orders.sql`, credential-account RLS/readiness is owned by `drizzle/0031_credential_accounts_rls.sql`, `order_items` / `analytics_cache` readiness is owned by `drizzle/0024_order_items_phase2.sql` plus `drizzle/0025_order_items_sync_trigger.sql`, and low-risk orders/inventory performance indexes are owned by migrations `0021`, `0022`, `0023`, and `0026`.
 - Durable job state is mixed: scheduler protection has improved, but print queue/rate backfill and some compatibility paths still need restart-safe progress guarantees.
 - Broad frontend `safe()` fallback usage remains and needs a failure-mode sweep.
+- Secrets governance is mapped, but rotation, last-used tracking, audit events, and production log/response smoke tests are not complete yet.
 - Audit logging and reconciliation are planning items; they are not complete yet.
 - Label and marketplace order/fee compatibility handlers still need auth/CORS consolidation, but should be handled in a separately scoped review because they touch `orders`/`shipments` write paths.
 
@@ -57,7 +60,7 @@ Current readiness read:
 | Track | Status | Percent |
 |---|---|---:|
 | Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, rate cache diagnostics/bulk semantics, runtime DDL inventory/guard, reporting metrics migration, Walmart selling-fee index cleanup, `store_orders` migration, credential-account DDL cleanup, `order_items` / `analytics_cache` readiness cleanup, and low-risk orders/inventory index cleanup implemented | 85% |
-| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated, RBAC/client-scope route matrix documented, first runtime permission layer implemented, low-risk client/init payload scoping added, and dashboard/analysis/inventory/billing/print-queue read/action scoping started | 76% |
+| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated, RBAC/client-scope route matrix documented, first runtime permission layer implemented, low-risk client/init payload scoping added, dashboard/analysis/inventory/billing/print-queue read/action scoping started, and secrets governance matrix added | 78% |
 
 ## Critical Blockers
 
@@ -134,20 +137,29 @@ The full route matrix now lives in `RBAC_CLIENT_SCOPE_MATRIX.md`. The condensed 
 
 ### Secrets / Credential Management
 
-- [ ] Verify ShipStation keys never return to frontend.
-- [ ] Verify carrier/store credentials are protected at rest.
+- [x] Create `SECRETS_GOVERNANCE_MATRIX.md`.
+- [x] Add `npm run test:secrets-governance`.
+- [~] Verify ShipStation keys never return to frontend.
+- [~] Verify carrier/store credentials are protected at rest.
 - [ ] Verify Supabase service role is backend-only.
 - [ ] Verify direct carrier OAuth tokens never expose to frontend/logs.
 - [ ] Add credential change audit events.
 - [ ] Add credential rotation process.
 - [ ] Add last-used timestamp tracking.
-- [ ] Move credential-table DDL to migrations.
+- [x] Move credential-table DDL to migrations.
 - [ ] Scan logs for token/secret output.
 
 Deliverable table:
 
+The detailed matrix now lives in `SECRETS_GOVERNANCE_MATRIX.md`. The condensed tracker below shows the highest-risk credential classes.
+
 | Credential Type | Storage Location | Who Can Read | Who Can Write | Frontend Exposure Risk | Rotation Gap | Fix |
 |---|---|---|---|---|---|---|
+| Supabase service role/JWT secrets | env only | backend/platform admins | platform admins | critical if copied to frontend env or logs | rotation runbook needed | env/log scan and staged strict-claims rollout |
+| Client ShipStation keys | `clients` table | backend services only | admin/operator client-management flow | guarded by public client serializer | rotation history missing | keep redaction tests and add credential audit event |
+| Carrier/store credentials | `carrier_accounts` / `store_accounts` | backend credential services only | credential-permission users | shared handlers avoid raw response exposure | last-used and rotation metadata missing | add audit, last-used, and log redaction |
+| Marketplace OAuth tokens | `store_accounts.credentials` | marketplace services only | OAuth callback/admin re-auth | token refresh errors can leak provider text if not redacted | re-auth runbook missing | add OAuth audit events and redacted errors |
+| Label PDFs/signed URLs | provider/mock signed URLs | authenticated operational users | label/mock services | label PDFs are PII-bearing artifacts | retention policy missing | add label access/retention runbook |
 
 ### Database Migrations / Schema Governance
 
@@ -421,6 +433,7 @@ Deliverable table:
 - `npm run test:billing-client-scope`
 - `npm run test:print-queue-client-scope`
 - `npm run test:print-queue-ownership`
+- `npm run test:secrets-governance`
 - Unauthenticated `/users` and `/clients` return `401`.
 - Non-admin `/admin/*` returns `403`.
 - `/clients` and `/init/init-data` never return ShipStation secrets.
@@ -467,12 +480,13 @@ Deliverable table:
 ## Recommended Implementation Order
 
 1. Smoke-test the runtime RBAC, client/init scope, dashboard scope, analysis scope, inventory scope, billing scope, and print-queue list/action scope layer after deploy.
-2. Implement remaining operational client/store row-scope query filters from `RBAC_CLIENT_SCOPE_MATRIX.md`.
-3. Secrets and credential audit, including audit events.
-4. Migration/runtime DDL cleanup plan.
-5. Durable job status and idempotency plan.
-6. External API resilience metrics and diagnostics.
-7. Data reconciliation reports.
-8. Frontend failure-mode Playwright tests.
-9. Observability and alerting integration.
-10. Deployment, rollback, and disaster recovery runbooks.
+2. Review `SECRETS_GOVERNANCE_MATRIX.md`, assign credential owners, and decide rotation/last-used/audit rollout order.
+3. Implement remaining operational client/store row-scope query filters from `RBAC_CLIENT_SCOPE_MATRIX.md`.
+4. Secrets and credential audit, including audit events.
+5. Migration/runtime DDL cleanup plan.
+6. Durable job status and idempotency plan.
+7. External API resilience metrics and diagnostics.
+8. Data reconciliation reports.
+9. Frontend failure-mode Playwright tests.
+10. Observability and alerting integration.
+11. Deployment, rollback, and disaster recovery runbooks.
