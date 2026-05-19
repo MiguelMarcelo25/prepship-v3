@@ -2,9 +2,26 @@
 
 ## Executive Summary
 
-This document is the Phase 12 Batch 1 RBAC planning deliverable. It defines the canonical role names, route-group access expectations, client/store scoping rules, current enforcement, gaps, required fixes, and tests needed before runtime permission middleware is implemented.
+This document started as the Phase 12 Batch 1 RBAC planning deliverable. Phase 12 Batch 2 has now implemented the first narrow runtime permission layer for safer admin/settings/credential surfaces. The deeper client/store row-scope work remains open.
 
-This batch is documentation/control work only. It does not change runtime behavior, shipped/cancelled mutation guards, shipment logic, label creation, or fulfillment side effects.
+This work does not change shipped/cancelled mutation guards, shipment logic, label creation, or fulfillment side effects.
+
+## Current Implementation Status
+
+- [x] Canonical roles are defined in `src/middleware/auth.ts`.
+- [x] Canonical permissions are defined in `src/middleware/auth.ts`.
+- [x] `requirePermission()` exists.
+- [x] Supabase JWT `app_metadata.permissions` is read for explicit permissions.
+- [x] `/users` root list requires `users:manage`.
+- [x] `/users/me` remains authenticated-self.
+- [x] Settings reads require `settings:read`.
+- [x] Settings writes require `settings:write`.
+- [x] Carrier-account route uses method-aware `credentials:read` / `credentials:write`.
+- [x] Carrier verification requires `credentials:write`.
+- [x] `npm run test:rbac-permissions` guards the first runtime layer.
+- [ ] Client/store row-scope middleware and query filters.
+- [ ] Field-level DTO redaction by role for costs, margins, and billing.
+- [ ] Audit events for credential/admin actions.
 
 ## Canonical Roles
 
@@ -32,7 +49,7 @@ This batch is documentation/control work only. It does not change runtime behavi
 | `/health`, `/health/ready` | public/service health | No client scope | Routed before normal app auth | Confirm readiness endpoint is what Render uses | Keep current behavior; document Render health check target | `/health/ready` returns service-ready status and is used by Render |
 | `/cron` | service/scheduler secret policy | No client scope | Routed before normal app auth | Policy is special-case and should stay separate from app-user RBAC | Keep service-only cron behavior documented; do not mix with user roles | Unauthorized public cron mutation cannot run scheduler work |
 | `/admin`, `/admin/*` | `admin` | Global admin only | `requireAuth` plus `requireAdmin` | Needs route-level permission tests for every admin sub-area | Keep `requireAdmin`; add explicit admin route tests and audit logging later | Non-admin token returns `403`; unauthenticated returns `401` |
-| `/users`, `/users/*` | `admin` by default; future `/users/me` can be authenticated-self | Global user-management scope | `requireAuth` | User-management role policy not fully formalized | Add user-management permission middleware; split `/users/me` if needed | Operator/client/support denied from `/users`; self endpoint still works if created |
+| `/users`, `/users/*` | `admin` / `users:manage`; `/users/me` authenticated-self | Global user-management scope | `requireAuth`; root list now has `requirePermission('users:manage')` | Live non-admin smoke test still needed | Keep root list gated and `/users/me` self-readable | Operator/client/support denied from `/users`; `/users/me` still works |
 | `/orders`, `/orders/*` | `admin`, `operator`, `warehouse`, scoped `client_user`, scoped `read_only_support` | Rows filtered to assigned client/store; support read-only; client_user only own client/store | `requireAuth`; shipped/cancelled mutation guards exist | No formal client/store scope middleware | Add scope-aware order query filters and mutation permission checks without weakening locked surfaces | Client user cannot read another client's orders; support cannot mutate; shipped/cancelled guard still passes |
 | `/shipments`, `/shipments/*` | `admin`, `operator`, scoped `warehouse`, scoped `client_user`, scoped `read_only_support` | Shipment reads scoped through related order/client/store | `requireAuth` | Shipment table is locked; read scope needs policy, mutation review needs separate human plan | Add read scoping only in a separately reviewed implementation; do not alter locked shipment mutation paths in this batch | Client user cannot read another client's shipments; locked mutation tests remain unchanged |
 | `/dashboard`, `/dashboard/*` | `admin`, `operator`, `warehouse`, scoped `client_user`, scoped `read_only_support` | Aggregates filtered to assigned client/store; support read-only | `requireAuth` | Dashboard metrics currently rely on auth, not formal scope policy | Add scoped aggregate filters and dashboard DTO permission policy | Client user dashboard excludes other clients; support sees read-only metrics |
@@ -43,9 +60,9 @@ This batch is documentation/control work only. It does not change runtime behavi
 | `/print-queue`, `/print-queue/*` | `admin`, `operator`, `warehouse`, scoped `read_only_support` | Print queue entries scoped by assigned client/store/location; support read-only | `requireAuth` | Queue entry ownership and role policy not formalized | Add scoped queue reads and mutation permissions | Warehouse cannot delete another location/client queue entry |
 | `/clients`, `/clients/*` | `admin`, `operator` with client-management permission, `read_only_support` read-only | Client rows global for admins; scoped/read-only for support/client_user if enabled; secrets never returned | `requireAuth`; client secret redaction tests exist | Client-management role and field-level policy not formalized | Add client-management permission and safe DTO tests per role | `/clients` never returns secrets; non-client-management roles denied or scoped |
 | `/packages`, `/packages/*` | `admin`, `operator`, `warehouse`, scoped `read_only_support` | Packages scoped to location/client where applicable; cost fields protected | `requireAuth` | Package scope and package-cost visibility not formalized | Add package scope policy and cost DTO guards | Warehouse cannot edit global package settings without permission |
-| `/settings`, `/settings/*` | `admin`; selected operator sub-sections by permission | Global settings; credential fields protected | `requireAuth` | Settings sections are not split by permission | Add settings permission groups and frontend/backend enforcement | Operator can access allowed settings only; credential settings require permission |
-| `/carrier-accounts`, `/carrier-accounts/*` | `admin`, operator with credential permission | Credential rows scoped by assigned carrier/client/store permissions; secrets masked | `requireAuth`; shared credential-account handler and safe 500s exist | Credential RBAC, audit logging, and last-used policy incomplete | Add credential permission middleware, audit events, and role-specific DTOs | Non-credential role denied; response never includes raw secret fields |
-| `/carriers`, `/carriers/*` | `admin`, `operator`, `warehouse` for read/rate use; credential mutation requires credential permission | Carrier reads can be scoped to assigned account/store; secret fields protected | `requireAuth`; shared verifier on active compatibility handlers | Read vs credential mutation permission is not formalized | Split carrier read permissions from credential/admin mutations | Warehouse can rate with assigned account but cannot edit credentials |
+| `/settings`, `/settings/*` | `admin`; selected operator sub-sections by permission | Global settings; credential fields protected | `requireAuth`; reads require `settings:read`; writes require `settings:write` | Settings sections are not yet split into finer-grained permission groups | Add frontend role hiding and finer setting groups if needed | Operator can access allowed settings only; unauthorized role receives `403` |
+| `/carrier-accounts`, `/carrier-accounts/*` | `admin`, operator with credential permission | Credential rows scoped by assigned carrier/client/store permissions; secrets masked | `requireAuth`; method-aware credentials permission middleware; shared credential handler and safe 500s exist | Audit logging, last-used policy, and Vercel compatibility parity still need follow-up | Add credential audit events and role-specific DTO tests | Non-credential role denied; response never includes raw secret fields |
+| `/carriers`, `/carriers/*` | `admin`, `operator`, `warehouse` for read/rate use; credential mutation requires credential permission | Carrier reads can be scoped to assigned account/store; secret fields protected | `requireAuth`; `/carriers/verify` now requires `credentials:write` | Broader carrier read vs mutation permissions still need route-by-route review | Split carrier read permissions from credential/admin mutations | Warehouse can rate with assigned account but cannot edit credentials |
 | `/rates`, `/rates/*` | `admin`, `operator`, `warehouse`; scoped `client_user` only if allowed | Rate requests limited to assigned order/client/store/account; cost/margin display protected | `requireAuth`; rate diagnostics/concurrency/caching improved | Account scope and margin visibility need formal policy | Add rate account-scope checks and field-level result DTOs | Client user cannot rate against another client's account; margin hidden where restricted |
 | `/labels`, `/labels/*` | `admin`, `operator`, `warehouse` | Label actions scoped through assigned order/client/store; shipped/cancelled protections preserved | `requireAuth`; `/labels/mock/` has special bypass/signed URL behavior | Label side effects and role policy need separate review | Add label permission tests in a dedicated batch; do not change side-effect paths here | Unauthorized role cannot create/void labels; locked order tests remain unchanged |
 | `/sync`, `/sync/*` | `admin`, operator with sync permission | Global/service operational scope | `requireAuth` | Sync permission and visibility not formalized | Add sync permission and audit events | Warehouse/client user denied sync start; status visibility policy documented |
@@ -67,14 +84,14 @@ This batch is documentation/control work only. It does not change runtime behavi
 
 ## Required Implementation Order
 
-1. Add shared permission constants and role names.
-2. Add a `requirePermission` / `requireRole` wrapper around current auth variables.
-3. Add a client/store assignment scope helper.
-4. Apply admin-only policy to `/users` and keep `/admin` covered.
-5. Apply credential permissions to `/settings`, `/carrier-accounts`, `/carriers`, and credential mutations.
-6. Add read-scope filters for `/orders`, `/dashboard`, `/analysis`, `/inventory`, `/billing`, and `/manifests`.
-7. Add field-level DTO tests for credentials, cost, margin, and billing visibility.
-8. Add browser tests for role-restricted UI hiding after backend enforcement exists.
+1. [x] Add shared permission constants and role names.
+2. [x] Add a `requirePermission` wrapper around current auth variables.
+3. [x] Apply admin-only user-management policy to `/users` while keeping `/users/me` authenticated-self.
+4. [x] Apply settings and credential permissions to settings, carrier accounts, and carrier verification.
+5. [ ] Add a client/store assignment scope helper.
+6. [ ] Add read-scope filters for `/orders`, `/dashboard`, `/analysis`, `/inventory`, `/billing`, and `/manifests`.
+7. [ ] Add field-level DTO tests for credentials, cost, margin, and billing visibility.
+8. [ ] Add browser tests for role-restricted UI hiding after backend enforcement exists.
 
 ## Required Tests
 
@@ -86,10 +103,10 @@ This batch is documentation/control work only. It does not change runtime behavi
 - `/clients` and `/init/init-data` never return `ssApiKey`, `ssApiSecret`, or `ssApiKeyV2`.
 - Credential endpoints never return raw credential secret values.
 - Shipped/cancelled immutability tests keep passing.
+- `npm run test:rbac-permissions` passes.
 
 ## Out Of Scope For This Batch
 
-- No runtime permission middleware is implemented in this batch.
 - No query filters are changed in this batch.
 - No shipped/cancelled mutation logic is changed.
 - No shipment table mutation logic is changed.

@@ -4,7 +4,7 @@
 
 This plan tracks the immediate security patch work discussed by DJ/OpenClaw. It focuses on route auth coverage, admin enforcement, secret redaction, safer public errors, JWT hardening, unsafe route review, and production smoke tests.
 
-Several patches are already implemented and guarded locally. Remaining work is mostly production verification, RBAC/client-scope policy, audit logging, credential governance, and deeper raw-error review.
+Several patches are already implemented and guarded locally. The first runtime RBAC permission layer is also implemented for `/users`, settings, carrier accounts, and carrier verification. Remaining work is mostly production verification, broader client/store scoping, audit logging, credential governance, and deeper raw-error review.
 
 ## Critical Blockers
 
@@ -20,7 +20,7 @@ Several patches are already implemented and guarded locally. Remaining work is m
 
 | Area | Current Status | Risk | Recommended Patch |
 |---|---|---|---|
-| `/users` auth | [x] root and wildcard auth guarded | role policy still needs final RBAC decision | decide admin/support access and add live tests |
+| `/users` auth | [x] root and wildcard auth guarded; root list now requires `users:manage` | production non-admin smoke test still needed | verify non-admin cannot list users and `/users/me` still works |
 | protected route roots/wildcards | [x] static auth coverage guard | production tokens still need smoke tests | test unauth root and wildcard requests after deploy |
 | `/admin` enforcement | [x] `requireAdmin` root and wildcard guarded | production non-admin smoke test still needed | test non-admin token returns `403` |
 | client redaction | [x] `/clients` and `/init/init-data` guarded by mapper tests | future endpoints can return raw clients if not audited | route audit for all client-returning endpoints |
@@ -33,7 +33,7 @@ Several patches are already implemented and guarded locally. Remaining work is m
 
 | Area | Concern | Recommended Patch |
 |---|---|---|
-| RBAC | `requireAuth` is not a complete enterprise permission model | define roles and route permission matrix |
+| RBAC | first permission layer exists, but client/store row scoping is not complete | continue route-by-route client/store scope implementation |
 | client scoping | authenticated users may need row-level/client-level limits | add client/store scope policies and tests |
 | credential governance | rotation, last-used, and audit events are not complete | central credential audit events and rotation process |
 | logs | secrets/tokens need log scan | add redaction policy and log scan checklist |
@@ -53,8 +53,10 @@ Several patches are already implemented and guarded locally. Remaining work is m
 - [~] Return generic production-safe 500s for credential handlers.
 - [ ] Audit remaining route handlers that return raw `err.message`.
 - [ ] Run production auth smoke tests.
-- [ ] Decide and enforce admin/support policy for `/users`.
-- [ ] Build formal RBAC/client-scope middleware.
+- [x] Decide and enforce admin/user-management policy for `/users` root list.
+- [x] Build first formal RBAC permission middleware.
+- [x] Add `npm run test:rbac-permissions`.
+- [ ] Build client/store row-scope middleware and query filters.
 - [ ] Add audit logs for credential and admin actions.
 
 ## Checklist
@@ -104,6 +106,7 @@ Several patches are already implemented and guarded locally. Remaining work is m
 - `npm run typecheck`
 - `npm run build:web`
 - `npm run test:auth-coverage`
+- `npm run test:rbac-permissions`
 - `npm run test:client-redaction`
 - `npm run test:credential-accounts`
 - `npm run test:frontend-failure-states`
@@ -113,6 +116,6 @@ Several patches are already implemented and guarded locally. Remaining work is m
 ## Deployment/Rollback Notes
 
 - Keep `STRICT_JWT_CLAIMS=false` until production token compatibility is verified.
-- Deploy auth/secret changes separately from RBAC/client-scope changes.
+- Deploy auth/secret changes separately from broader client/store row-scope changes.
 - If production login breaks after strict claims are enabled, disable `STRICT_JWT_CLAIMS` and redeploy/restart.
 - If a route starts returning unexpected 401/403, check root/wildcard route registration and token audience/issuer first.

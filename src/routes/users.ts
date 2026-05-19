@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { createClient } from '@supabase/supabase-js';
 import { env } from '../lib/env';
 import { isAdminEmail } from '../lib/admin-emails';
+import { requirePermission } from '../middleware/auth';
 
 const app = new Hono();
 
@@ -13,10 +14,8 @@ const app = new Hono();
 //   { id: <uuid>, email: <string>, isAdmin: <bool>, createdAt: <iso>,
 //     lastSignInAt: <iso|null> }
 //
-// All authenticated callers can read this list (the dropdown needs it on
-// every page that exposes the assign UI). Only admins can actually invoke
-// /orders/bulk-assign — that gate is enforced server-side in the orders
-// route, not here.
+// The root list requires `users:manage` because it is backed by Supabase
+// service-role access. /users/me remains available to any authenticated caller.
 
 type CachedUsers = {
   users: Array<{
@@ -41,7 +40,7 @@ function getAdminClient() {
   return cachedAdminClient;
 }
 
-app.get('/', async (c) => {
+app.get('/', requirePermission('users:manage'), async (c) => {
   if (cache && Date.now() - cache.fetchedAt < CACHE_TTL_MS) {
     return c.json({ users: cache.users, cached: true });
   }

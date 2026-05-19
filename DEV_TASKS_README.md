@@ -3,9 +3,9 @@
 ## Current State
 
 - Branch: `prepshipv4-stable`
-- Latest pushed commit before Phase 12 Batch 1: `a79ff510`
+- Latest pushed commit before Phase 12 Batch 2: `8a4b3016`
 - Worktree at last update: clean
-- Latest completed fix before this batch: low-risk orders/inventory performance index runtime DDL removed and Phase 11 migration cleanup updated
+- Latest completed fix before this batch: RBAC/client-scope route matrix added and Phase 12 planning updated
 - Latest production read from user: Rate Browser and live app behavior look healthy after the recent deploys
 - GitHub Actions:
   - `Keep Render API warm`: manual only now
@@ -18,8 +18,8 @@
 | Document | Status | Percent | Why Not 100% |
 |---|---|---:|---|
 | `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md` | Created / active | 85% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, `order_items`/`analytics_cache`, and low-risk orders/inventory indexes moved to migration ownership; inventory truth, durable jobs, label side effects, and shipment-adjacent DDL cleanup still open |
-| `ENTERPRISE_READINESS_AUDIT.md` | Created / active | 53% | RBAC/client-scope matrix is now documented; still needs runtime permission middleware, audit logs, reconciliation, alerts, DR, runbooks, and authenticated production verification |
-| `SECURITY_PATCH_PLAN.md` | Created / mostly implemented | 85% | Needs live auth smoke tests, strict JWT production rollout, `/users` final role policy |
+| `ENTERPRISE_READINESS_AUDIT.md` | Created / active | 58% | First runtime RBAC permission layer is implemented for `/users`, settings, carrier accounts, and carrier verification; still needs client/store row scoping, audit logs, reconciliation, alerts, DR, runbooks, and authenticated production verification |
+| `SECURITY_PATCH_PLAN.md` | Created / mostly implemented | 88% | Needs live auth smoke tests, strict JWT production rollout, and broader role/client-scope rollout |
 | `RATE_SYSTEM_HARDENING_PLAN.md` | Created / mostly implemented | 72% | Needs browser production verification, duplicate-name UX polish, metrics, durable backfill status |
 
 ## Phase Summary
@@ -35,9 +35,9 @@
 | Phase 7 - Billing + Packages | Partial/good progress | 60% | Needs billing reconciliation, billing summary read model, package usage metrics, and package ledger hardening |
 | Phase 8 - Shared Frontend Data Layer | Partial/good progress | 65% | Needs standardized React Query hooks and remaining broad `safe()` fallback cleanup |
 | Phase 9 - Lazy Loading + UI Performance | Partial | 55% | Needs more lazy-loaded drawers/modals/charts/export tools and all-tool browser audit |
-| Phase 10 - DJ/OpenClaw Security + Failure-State Hardening | Mostly complete | 85% | Unauthenticated production auth smoke checks passed; needs authenticated secret checks, deeper raw-error route audit, and formal RBAC/client scoping |
+| Phase 10 - DJ/OpenClaw Security + Failure-State Hardening | Mostly complete | 88% | Unauthenticated production auth smoke checks passed and first runtime permission layer exists; needs authenticated secret checks, deeper raw-error route audit, and broader client scoping |
 | Phase 11 - Source-of-Truth + Duplication Audit | In progress | 85% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, `order_items`/`analytics_cache`, and low-risk orders/inventory indexes moved to migration ownership; inventory/jobs/labels and shipment-adjacent DDL still remain |
-| Phase 12 - Enterprise Readiness | Scoped/started | 53% | RBAC/client-scope matrix is now documented; needs runtime permission middleware, secrets governance, audit logs, reconciliation, alerts, DR, and runbooks |
+| Phase 12 - Enterprise Readiness | Scoped/started | 58% | First runtime permission middleware is implemented for safer admin/settings/credential surfaces; needs client/store row scoping, secrets governance, audit logs, reconciliation, alerts, DR, and runbooks |
 
 ## Phase Checklist
 
@@ -134,7 +134,7 @@
 - [ ] split very large frontend views
 - [ ] browser audit all tool pages
 
-### Phase 10 - DJ/OpenClaw Security + Failure-State Hardening: 85%
+### Phase 10 - DJ/OpenClaw Security + Failure-State Hardening: 88%
 
 - [x] `/users` gated
 - [x] protected root + wildcard route gates
@@ -146,6 +146,7 @@
 - [x] safer credential-handler 500s
 - [x] auth/client/credential/frontend/orders guard tests
 - [x] GitHub scheduled production crons disabled
+- [x] first runtime RBAC permission guard for `/users`, settings, and credential surfaces
 - [~] live production auth smoke tests
 - [ ] deeper raw-error route audit
 - [ ] formal RBAC/client-scope enforcement
@@ -182,14 +183,16 @@
 - [ ] remaining legacy JWT/CORS copies cleanup
 - [ ] carrier/store endpoint policy final verification
 
-### Phase 12 - Enterprise Readiness: 53%
+### Phase 12 - Enterprise Readiness: 58%
 
 - [x] `ENTERPRISE_READINESS_AUDIT.md`
 - [x] critical/high/medium issue buckets scoped
 - [x] `RBAC_CLIENT_SCOPE_MATRIX.md`
 - [x] canonical enterprise role names defined
 - [x] RBAC/client-scope route matrix completed for planning
-- [ ] runtime RBAC/client-scope permission middleware
+- [x] first runtime RBAC permission middleware for `/users`, settings, carrier accounts, and carrier verification
+- [x] `npm run test:rbac-permissions`
+- [ ] client/store row-scope middleware and query filters
 - [ ] secrets governance
 - [ ] audit logging
 - [ ] reconciliation reports
@@ -224,7 +227,8 @@
    - Label side-effect status reporting.
 5. Continue Phase 12.
    - Review `RBAC_CLIENT_SCOPE_MATRIX.md` with DJ/OpenClaw.
-   - Implement runtime RBAC/client-scope middleware in a small follow-up batch.
+   - Deploy and smoke-test the first runtime RBAC permission layer.
+   - Implement client/store row scoping in a separate reviewed batch.
    - Audit logging.
    - Reconciliation reports.
    - Observability alerts.
@@ -235,6 +239,7 @@
 - `npm run typecheck`
 - `npm run build:web`
 - `npm run test:auth-coverage`
+- `npm run test:rbac-permissions`
 - `npm run test:client-redaction`
 - `npm run test:credential-accounts`
 - `npm run test:rate-system-hardening`

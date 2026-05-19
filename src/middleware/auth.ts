@@ -11,6 +11,42 @@ export type AuthVars = {
   userId: string;
   email?: string;
   role?: string;
+  permissions?: string[];
+};
+
+export const APP_ROLES = [
+  'admin',
+  'operator',
+  'warehouse',
+  'client_user',
+  'read_only_support',
+] as const;
+
+export type AppRole = (typeof APP_ROLES)[number];
+
+export const APP_PERMISSIONS = [
+  'users:manage',
+  'settings:read',
+  'settings:write',
+  'credentials:read',
+  'credentials:write',
+] as const;
+
+export type AppPermission = (typeof APP_PERMISSIONS)[number];
+
+const APP_ROLE_SET = new Set<string>(APP_ROLES);
+
+const ROLE_PERMISSIONS: Record<AppRole, readonly AppPermission[]> = {
+  admin: APP_PERMISSIONS,
+  operator: [
+    'settings:read',
+    'settings:write',
+    'credentials:read',
+    'credentials:write',
+  ],
+  warehouse: ['settings:read', 'credentials:read'],
+  client_user: ['settings:read'],
+  read_only_support: ['settings:read', 'credentials:read'],
 };
 
 // Paths that are served unauthenticated even when they sit under an auth-gated
@@ -34,12 +70,35 @@ function payloadToAuthVars(payload: JWTPayload): AuthVars | null {
       : typeof payload.role === 'string'
         ? payload.role
         : undefined;
+  const rawPermissions = Array.isArray(appMetadata?.permissions)
+    ? appMetadata.permissions
+    : Array.isArray(payload.permissions)
+      ? payload.permissions
+      : [];
+  const permissions = rawPermissions.filter(
+    (permission): permission is string => typeof permission === 'string'
+  );
 
   return {
     userId: payload.sub,
     email,
     role,
+    permissions,
   };
+}
+
+export function isAppRole(role: string | undefined): role is AppRole {
+  return Boolean(role && APP_ROLE_SET.has(role));
+}
+
+export function hasAppPermission(
+  auth: Pick<AuthVars, 'email' | 'role' | 'permissions'>,
+  permission: AppPermission
+): boolean {
+  if (isAdminEmail(auth.email)) return true;
+  if (auth.permissions?.includes(permission)) return true;
+  if (!isAppRole(auth.role)) return false;
+  return ROLE_PERMISSIONS[auth.role].includes(permission);
 }
 
 export const requireAuth = createMiddleware<{ Variables: AuthVars }>(
@@ -69,6 +128,7 @@ export const requireAuth = createMiddleware<{ Variables: AuthVars }>(
     c.set('userId', authVars.userId);
     c.set('email', authVars.email);
     c.set('role', authVars.role);
+    c.set('permissions', authVars.permissions);
     await next();
   }
 );
@@ -85,3 +145,49 @@ export const requireAdmin = createMiddleware<{ Variables: AuthVars }>(
     await next();
   }
 );
+
+export function requirePermission(permission: AppPermission) {
+  return createMiddleware<{ Variables: AuthVars }>(async (c, next) => {
+    if (
+      hasAppPermission(
+        {
+          email: c.get('email'),
+          role: c.get('role'),
+          permissions: c.get('permissions'),
+        },
+        permission
+      )
+    ) {
+      await next();
+      return;
+    }
+
+    return c.json({ error: 'Permission required' }, 403);
+  });
+}
+
+export const requireCredentialAccountPermission = createMiddleware<{
+  Variables: AuthVars;
+}>(async (c, next) => {
+  const method = c.req.method.toUpperCase();
+  const permission: AppPermission =
+    method === 'GET' || method === 'HEAD' || method === 'OPTIONS'
+      ? 'credentials:read'
+      : 'credentials:write';
+
+  if (
+    hasAppPermission(
+      {
+        email: c.get('email'),
+        role: c.get('role'),
+        permissions: c.get('permissions'),
+      },
+      permission
+    )
+  ) {
+    await next();
+    return;
+  }
+
+  return c.json({ error: 'Permission required' }, 403);
+});
