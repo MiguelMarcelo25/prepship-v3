@@ -4,7 +4,7 @@
 
 This plan tracks the immediate security patch work discussed by DJ/OpenClaw. It focuses on route auth coverage, admin enforcement, secret redaction, safer public errors, JWT hardening, unsafe route review, JWT/session expiration policy, and production smoke tests.
 
-Several patches are already implemented and guarded locally. The first runtime RBAC permission layer is also implemented for `/users`, settings, carrier accounts, and carrier verification, with explicit client/store scope filtering started for `/clients`, `/init`, `/dashboard`, `/analysis`, `/inventory`, `/billing`, and `/print-queue` list/action ownership. The first secrets governance, audit logging, and reconciliation plan matrices are also created. Remaining work is mostly production verification, remaining operational route scoping, runtime audit/reconciliation implementation, credential rotation/last-used tracking, and deeper raw-error review.
+Several patches are already implemented and guarded locally. The first runtime RBAC permission layer is also implemented for `/users`, settings, carrier accounts, and carrier verification, with explicit client/store scope filtering started for `/clients`, `/init`, `/dashboard`, `/analysis`, `/inventory`, `/billing`, and `/print-queue` list/action ownership. The first secrets governance, audit logging, reconciliation plan matrices, and `RAW_ERROR_RESPONSE_AUDIT.md` are also created. Remaining work is mostly production verification, remaining operational route scoping, runtime audit/reconciliation implementation, credential rotation/last-used tracking, and route-by-route raw-error patching.
 
 Phase 13 adds `JWT_SESSION_EXPIRATION_PLAN.md`: PrepShip should enforce a 7-day maximum login session through Supabase Auth time-boxed sessions while keeping access JWTs short-lived.
 
@@ -28,7 +28,7 @@ Phase 13 adds `JWT_SESSION_EXPIRATION_PLAN.md`: PrepShip should enforce a 7-day 
 | client redaction | [x] `/clients` and `/init/init-data` guarded by mapper tests | future endpoints can return raw clients if not audited | route audit for all client-returning endpoints |
 | JWT strict claims | [x] optional strict issuer/audience support exists | strict mode needs staged token compatibility check | enable `STRICT_JWT_CLAIMS=true` only after login/token test |
 | JWT session expiration | [x] 7-day session policy documented, Supabase time-box set to `168` hours, and production logout/login smoke passed | Expired-session UX still needs staging short-timebox proof | keep access JWTs short-lived and prove expired sessions return to login cleanly |
-| safe errors | [~] credential handlers use safer generic 500s | wider route handlers may still return `err.message` | audit and patch raw error responses |
+| safe errors | [~] credential handlers use safer generic 500s and `RAW_ERROR_RESPONSE_AUDIT.md` now maps remaining raw-error surfaces | wider route handlers may still return `err.message` | patch raw error responses in small route groups |
 | unsafe proxy | [x] `/aws-api` rewrite removed | confirm no external workflow depends on it | production route/rewrite smoke test |
 | mock labels | [x] signed/expiring mock label URLs | confirm no real PII enters mock labels | route review and sample response check |
 
@@ -56,7 +56,10 @@ Phase 13 adds `JWT_SESSION_EXPIRATION_PLAN.md`: PrepShip should enforce a 7-day 
 - [x] Remove unsafe `/aws-api` raw-IP rewrite.
 - [x] Make mock label URLs signed/expiring.
 - [~] Return generic production-safe 500s for credential handlers.
-- [ ] Audit remaining route handlers that return raw `err.message`.
+- [x] Audit remaining route handlers that return raw `err.message`.
+- [x] Add `RAW_ERROR_RESPONSE_AUDIT.md`.
+- [x] Add `npm run test:raw-error-response-audit`.
+- [ ] Patch remaining raw-error route groups.
 - [ ] Run production auth smoke tests.
 - [x] Decide and enforce admin/user-management policy for `/users` root list.
 - [x] Build first formal RBAC permission middleware.
@@ -137,6 +140,7 @@ Phase 13 adds `JWT_SESSION_EXPIRATION_PLAN.md`: PrepShip should enforce a 7-day 
 - `npm run typecheck`
 - `npm run build:web`
 - `npm run test:auth-coverage`
+- `npm run test:raw-error-response-audit`
 - `npm run test:rbac-permissions`
 - `npm run test:client-store-scope`
 - `npm run test:dashboard-client-scope`

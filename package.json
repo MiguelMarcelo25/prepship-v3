@@ -34,6 +34,7 @@
     "test:runtime-ddl": "node scripts/runtime-ddl-guard.mjs",
     "test:vercel-function-imports": "node scripts/vercel-function-imports-guard.mjs",
     "test:auth-coverage": "node scripts/auth-coverage-guard.mjs",
+    "test:raw-error-response-audit": "node scripts/raw-error-response-audit-guard.mjs",
     "test:rbac-permissions": "node scripts/rbac-permissions-guard.mjs",
     "test:client-store-scope": "node scripts/client-store-scope-guard.mjs",
     "test:marketplace-order-auth-cors": "node scripts/marketplace-order-auth-cors-guard.mjs",

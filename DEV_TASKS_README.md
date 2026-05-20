@@ -42,7 +42,7 @@
 | Phase 7 - Billing + Packages | Partial/good progress | 64% | Billing read surfaces now have client/store scope and billing reference-rate fetch latest-run durability; needs reconciliation, billing summary read model completion, package usage metrics, and package ledger hardening |
 | Phase 8 - Shared Frontend Data Layer | Partial/good progress | 68% | Fresh-browser Inventory now defaults to active stock rows, and Receive Inventory loads the full selected-client SKU set with a guarded wide picker; needs standardized React Query hooks and remaining broad `safe()` fallback cleanup |
 | Phase 9 - Lazy Loading + UI Performance | Partial | 74% | Awaiting Shipment startup-load risks are scoped, Orders support data is gated by user intent, global SKU lookup and daily stats are noncritical/lazy, first-page exact order counts are delayed until after the table paints, legacy sidebar counts no longer block first paint, Orders sync/worker polling is delayed and hidden-tab gated, global markups/settings hydration is delayed on Orders routes, New Order/order detail/tracking modal code loads only after user intent, Analysis table code is split into an on-demand chunk, Analysis rows paint before chart hydration, and Orders/Inventory/Analysis/Billing/Packages order-detail drawers lazy-load after user intent; needs fuller table-first loading, more lazy-loaded charts/export tools, remaining request timing evidence, and all-tool browser audit |
-| Phase 10 - DJ/OpenClaw Security + Failure-State Hardening | Mostly complete | 95% | Unauthenticated production auth smoke checks passed and first runtime permission layer exists; dashboard/analysis/inventory/billing/print-queue/client/init/orders/manifests scoping started; needs authenticated secret checks, deeper raw-error route audit, and label/shipment runtime enforcement after review |
+| Phase 10 - DJ/OpenClaw Security + Failure-State Hardening | Mostly complete | 96% | Unauthenticated production auth smoke checks passed and first runtime permission layer exists; dashboard/analysis/inventory/billing/print-queue/client/init/orders/manifests scoping started; raw-error response audit is mapped and guarded; needs authenticated secret checks, route-by-route raw-error patches, and label/shipment runtime enforcement after review |
 | Phase 11 - Source-of-Truth + Duplication Audit | In progress | 98% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, `order_items`/`analytics_cache`, low-risk orders/inventory indexes, durable job strategy, ShipStation Awaiting parity status, rate backfill status, billing reference-rate status, print queue latest-run status, inventory source-of-truth policy, inventory dry-run reconciliation, dry-run artifact persistence, mismatch classification, and inventory repair/apply policy moved to documented ownership; actual inventory repair implementation, labels, full job events/artifacts, and shipment-adjacent DDL still remain |
 | Phase 12 - Enterprise Readiness | Scoped/started | 98% | Dashboard, Analysis, Inventory, Billing, Print Queue, Orders, Manifests, and label/shipment-sensitive route policy are mapped; read/action ownership is implemented for explicit client/store JWT claims on key surfaces; `financials:read` now protects Analysis/Dashboard SKU financials, Inventory SKU-order shipping costs, Billing routes, Orders export/list label costs, Manifests label costs, Packages unit costs, and Rate Browser rate-result DTOs; Rate Browser account source metadata requires `credentials:read`; secrets governance, audit logging, reconciliation reporting, observability/alerting, runbook/DR planning, privacy/compliance, and production signoff are mapped; needs label/shipment runtime enforcement, broader runtime audit/reconciliation/alert implementation, DR drills, and owner signoff evidence |
 | Phase 13 - JWT Session Expiration | Production setting applied | 75% | 7-day session policy is documented and guarded, Supabase Auth time-box is set to `168` hours, and production logout/login smoke passed; staging expiry proof and forced re-login evidence remain open |
@@ -205,7 +205,7 @@
 - [ ] split very large frontend views
 - [ ] browser audit all tool pages
 
-### Phase 10 - DJ/OpenClaw Security + Failure-State Hardening: 95%
+### Phase 10 - DJ/OpenClaw Security + Failure-State Hardening: 96%
 
 - [x] `/users` gated
 - [x] protected root + wildcard route gates
@@ -226,8 +226,11 @@
 - [x] first Print Queue action/job ownership guard
 - [x] first Orders read/list/export client/store scope guard
 - [x] first Manifests generate client/store scope guard
+- [x] `RAW_ERROR_RESPONSE_AUDIT.md`
+- [x] `npm run test:raw-error-response-audit`
 - [~] live production auth smoke tests
-- [ ] deeper raw-error route audit
+- [x] deeper raw-error route audit
+- [ ] route-by-route raw-error response patches
 - [ ] formal RBAC/client-scope enforcement
 
 ### Phase 11 - Source-of-Truth + Duplication Audit: 98%
@@ -437,6 +440,7 @@
 - `npm run typecheck`
 - `npm run build:web`
 - `npm run test:auth-coverage`
+- `npm run test:raw-error-response-audit`
 - `npm run test:rbac-permissions`
 - `npm run test:client-store-scope`
 - `npm run test:dashboard-client-scope`
