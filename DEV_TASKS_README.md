@@ -5,7 +5,7 @@
 - Branch: `prepshipv4-stable`
 - Latest pushed commit before this inventory classification batch: `fe86fb5f`
 - Worktree at last update: clean
-- Latest implementation batch tracked here: Phase 9 Orders startup support-data, sidebar count, and markup settings deferral
+- Latest implementation batch tracked here: Phase 9 table-first/lazy-load pass for Orders, Analysis, Inventory, Billing, and Packages
 - Latest production read from user: Rate Browser and live app behavior look healthy after the recent deploys
 - GitHub Actions:
   - `Keep Render API warm`: manual only now
@@ -41,7 +41,7 @@
 | Phase 6 - Inventory Metrics | Partial | 65% | Inventory source-of-truth policy, read-only dry-run reconciliation, JSON/CSV artifact persistence, mismatch classification, and repair/apply control plan are documented and guarded; needs owner-approved repair implementation and precomputed sold/velocity/restock metrics |
 | Phase 7 - Billing + Packages | Partial/good progress | 64% | Billing read surfaces now have client/store scope and billing reference-rate fetch latest-run durability; needs reconciliation, billing summary read model completion, package usage metrics, and package ledger hardening |
 | Phase 8 - Shared Frontend Data Layer | Partial/good progress | 67% | Fresh-browser Inventory now defaults to active stock rows, and Receive Inventory loads the full selected-client SKU set with a wide picker; needs standardized React Query hooks and remaining broad `safe()` fallback cleanup |
-| Phase 9 - Lazy Loading + UI Performance | Partial | 70% | Awaiting Shipment startup-load risks are scoped, Orders support data is gated by user intent, first-page exact order counts are delayed until after the table paints, legacy sidebar counts no longer block first paint, Orders sync/worker polling is delayed and hidden-tab gated, global markups/settings hydration is delayed on Orders routes, New Order/order detail/tracking modal code loads only after user intent, Analysis table code is split into an on-demand chunk, Analysis rows paint before chart hydration, and Billing/Packages order-detail drawers lazy-load after user intent; needs fuller table-first loading, more lazy-loaded charts/export tools, delayed remaining noncritical requests, and all-tool browser audit |
+| Phase 9 - Lazy Loading + UI Performance | Partial | 71% | Awaiting Shipment startup-load risks are scoped, Orders support data is gated by user intent, first-page exact order counts are delayed until after the table paints, legacy sidebar counts no longer block first paint, Orders sync/worker polling is delayed and hidden-tab gated, global markups/settings hydration is delayed on Orders routes, New Order/order detail/tracking modal code loads only after user intent, Analysis table code is split into an on-demand chunk, Analysis rows paint before chart hydration, and Orders/Inventory/Analysis/Billing/Packages order-detail drawers lazy-load after user intent; needs fuller table-first loading, more lazy-loaded charts/export tools, delayed remaining noncritical requests, and all-tool browser audit |
 | Phase 10 - DJ/OpenClaw Security + Failure-State Hardening | Mostly complete | 95% | Unauthenticated production auth smoke checks passed and first runtime permission layer exists; dashboard/analysis/inventory/billing/print-queue/client/init/orders/manifests scoping started; needs authenticated secret checks, deeper raw-error route audit, and label/shipment runtime enforcement after review |
 | Phase 11 - Source-of-Truth + Duplication Audit | In progress | 98% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, `order_items`/`analytics_cache`, low-risk orders/inventory indexes, durable job strategy, ShipStation Awaiting parity status, rate backfill status, billing reference-rate status, print queue latest-run status, inventory source-of-truth policy, inventory dry-run reconciliation, dry-run artifact persistence, mismatch classification, and inventory repair/apply policy moved to documented ownership; actual inventory repair implementation, labels, full job events/artifacts, and shipment-adjacent DDL still remain |
 | Phase 12 - Enterprise Readiness | Scoped/started | 98% | Dashboard, Analysis, Inventory, Billing, Print Queue, Orders, Manifests, and label/shipment-sensitive route policy are mapped; read/action ownership is implemented for explicit client/store JWT claims on key surfaces; `financials:read` now protects Analysis/Dashboard SKU financials, Inventory SKU-order shipping costs, Billing routes, Orders export/list label costs, Manifests label costs, Packages unit costs, and Rate Browser rate-result DTOs; Rate Browser account source metadata requires `credentials:read`; secrets governance, audit logging, reconciliation reporting, observability/alerting, runbook/DR planning, privacy/compliance, and production signoff are mapped; needs label/shipment runtime enforcement, broader runtime audit/reconciliation/alert implementation, DR drills, and owner signoff evidence |
@@ -165,7 +165,7 @@
 - [ ] remove remaining broad `safe()` fallbacks
 - [ ] visible retry/error states for every tool page
 
-### Phase 9 - Lazy Loading + UI Performance: 70%
+### Phase 9 - Lazy Loading + UI Performance: 71%
 
 - [x] major route/view lazy loading
 - [x] Orders side data delayed/lazy-loaded
@@ -184,6 +184,7 @@
 - [x] Analysis data table lazy-loaded into its own chunk
 - [x] Analysis table rows load before chart hydration
 - [x] Billing and Packages order-detail drawers lazy-loaded behind user intent
+- [x] Inventory and Analysis order-detail drawers lazy-loaded behind user intent
 - [ ] Make Awaiting page table load first
 - [~] Defer sidebar counts, daily stats, sync status, settings, locations, and packages until after first paint or user intent
 - [x] Make exact order count delayed or optional when slow
@@ -192,7 +193,7 @@
 - [ ] split very large frontend views
 - [ ] browser audit all tool pages
 
-### Phase 10 - DJ/OpenClaw Security + Failure-State Hardening: 94%
+### Phase 10 - DJ/OpenClaw Security + Failure-State Hardening: 95%
 
 - [x] `/users` gated
 - [x] protected root + wildcard route gates

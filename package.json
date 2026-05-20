@@ -73,6 +73,7 @@
     "test:orders-ux": "node scripts/orders-ux-guard.mjs",
     "test:orders-startup-requests": "node scripts/orders-startup-requests-guard.mjs",
     "test:secondary-order-detail-lazy": "node scripts/secondary-order-detail-lazy-guard.mjs",
+    "test:order-detail-drawer-lazy": "node scripts/order-detail-drawer-lazy-guard.mjs",
     "test:orders-ux:browser": "playwright test web/e2e/orders-ux.spec.js --reporter=line",
     "test:inventory-ux:browser": "playwright test web/e2e/inventory-ux.spec.js --reporter=line"
   },

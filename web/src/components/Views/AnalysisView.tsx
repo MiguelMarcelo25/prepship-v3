@@ -41,13 +41,13 @@ import {
 import { AnalysisPagination } from './AnalysisPagination'
 import type { AnalysisTableColumn, ColumnWidths } from './AnalysisTableHeader'
 import { AnalysisTopSkusChart } from './AnalysisTopSkusChart'
-import OrderDetailDrawer from '../OrderDetailDrawer'
 import { SortableHeader, nextSortState, sortRows } from '../SortableTable'
 import { ColumnResizeHandle } from './ColumnResizeHandle'
 import './InventoryView.css'
 import './AnalysisView.css'
 
 const AnalysisDataTable = lazy(() => import('./AnalysisDataTable').then((module) => ({ default: module.AnalysisDataTable })))
+const OrderDetailDrawer = lazy(() => import('../OrderDetailDrawer'))
 
 // SKU drawer's "Recent Orders" table — user-resizable columns. Widths persist
 // per-browser via localStorage so the layout sticks across page loads. Defaults
@@ -1981,12 +1981,16 @@ export default function AnalysisView({
         </div>
       ) : null}
 
-      <OrderDetailDrawer
-        orderId={orderDetailDrawer?.orderId ?? null}
-        displayStatus={orderDetailDrawer?.status ?? undefined}
-        presentation="centered"
-        onClose={() => setOrderDetailDrawer(null)}
-      />
+      {orderDetailDrawer ? (
+        <Suspense fallback={null}>
+          <OrderDetailDrawer
+            orderId={orderDetailDrawer.orderId}
+            displayStatus={orderDetailDrawer.status ?? undefined}
+            presentation="centered"
+            onClose={() => setOrderDetailDrawer(null)}
+          />
+        </Suspense>
+      ) : null}
 
       {orderModal.open ? (
         <div

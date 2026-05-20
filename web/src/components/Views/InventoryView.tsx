@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { lazy, Suspense, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -25,7 +25,6 @@ import {
 import { api } from '../../lib/api'
 import { ToastContext } from '../../contexts/ToastContext'
 import { useInitStores } from '../../hooks'
-import OrderDetailDrawer from '../OrderDetailDrawer'
 import { SortableHeader, nextSortState, sortRows } from '../SortableTable'
 import type {
   ClientDto,
@@ -63,6 +62,8 @@ import { AnalysisPagination } from './AnalysisPagination'
 // component file header for the full rationale.
 import Autosuggest, { type AutosuggestOption } from '../Autosuggest'
 import './InventoryView.css'
+
+const OrderDetailDrawer = lazy(() => import('../OrderDetailDrawer'))
 
 // 2026-05-14: per-tab accent palette for the new Settings-style tab
 // rail + section header. Lifted from SettingsView so the two pages
@@ -4787,14 +4788,18 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
         </div>
       ) : null}
 
-      <OrderDetailDrawer
-        orderId={orderDetailModal?.orderId ?? null}
-        displayStatus={orderDetailModal?.status ?? undefined}
-        presentation="modal"
-        closeLabel="Close"
-        closeTitle="Close order details"
-        onClose={() => setOrderDetailModal(null)}
-      />
+      {orderDetailModal ? (
+        <Suspense fallback={null}>
+          <OrderDetailDrawer
+            orderId={orderDetailModal.orderId}
+            displayStatus={orderDetailModal.status ?? undefined}
+            presentation="modal"
+            closeLabel="Close"
+            closeTitle="Close order details"
+            onClose={() => setOrderDetailModal(null)}
+          />
+        </Suspense>
+      ) : null}
 
       {thumbnailPreview ? (
         <div
