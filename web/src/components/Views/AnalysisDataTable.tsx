@@ -214,7 +214,6 @@ export function AnalysisDataTable({
   columnSize,
   rows,
   totals,
-  maxQty,
   loading,
   error,
   emptyMessage,
@@ -303,7 +302,6 @@ export function AnalysisDataTable({
             </tr>
           ) : showRows ? (
             rows.map((row) => {
-              const qtyBarWidth = Math.round((row.qty / maxQty) * 80)
               const isClickable = Boolean(row.invSkuId)
               // Per-UNIT shipping average (boss directive 2026-05-07):
               // divide by total UNITS shipped via this class, not by
@@ -450,23 +448,10 @@ export function AnalysisDataTable({
                           </td>
                         )
                       case 'qty':
-                        // 2026-05-13: cell + inner flex both flipped
-                        // from right → center so the bar+number pair
-                        // sits in the middle of the column, matching
-                        // the centered TOTAL QTY header. Inner number
-                        // span lost its text-center + min-width nudge
-                        // for the same reason — the pair is now
-                        // composed as a centered group.
                         return (
                           <td key="qty" className={`${cellPadding} text-center whitespace-nowrap tabular-nums ${TD_BASE}`}>
-                            <span className="inline-flex items-center justify-center gap-[7px]">
-                              <span
-                                className="h-1.5 rounded-[3px] opacity-65 min-w-[1px] bg-gradient-to-r from-brand to-[#5b8def]"
-                                style={{ width: qtyBarWidth }}
-                              />
-                              <span className="font-semibold text-[14px] tabular-nums">
-                                {row.qty.toLocaleString()}
-                              </span>
+                            <span className="font-semibold text-[14px] tabular-nums">
+                              {row.qty.toLocaleString()}
                             </span>
                           </td>
                         )
