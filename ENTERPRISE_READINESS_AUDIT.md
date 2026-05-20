@@ -250,6 +250,7 @@ Deliverable table:
 
 - [x] Create `OBSERVABILITY_ALERTING_PLAN.md`.
 - [x] Add `npm run test:observability-alerting`.
+- [x] Scope Awaiting Shipment lag investigation in `AWAITING_SHIPMENTS_PERFORMANCE_PLAN.md`.
 - [ ] Include request IDs in backend logs.
 - [ ] Use structured error logs for API failures.
 - [ ] Capture frontend errors.
@@ -270,6 +271,7 @@ The detailed signal plan now lives in `OBSERVABILITY_ALERTING_PLAN.md`. The cond
 | API 5xx and latency | timing logs and `Server-Timing` | route/status/duration p95/p99 counters | 5xx spike and hot-route latency spike | API |
 | API 499/timeouts | Render logs/manual review | request-id and route aggregation | timeout/499 spike | API |
 | Slow DB and Supabase pressure | manual Supabase dashboard | slow query, pool saturation, route correlation | slow query and connection saturation | DB |
+| Awaiting Shipment first-load lag | scoped plan only | browser waterfall plus `/orders`, `/init/counts`, `/orders/daily-stats`, `/orders/distinct-skus` p95/p99 correlation | Awaiting load latency spike | API/Frontend/DB |
 | Worker/sync/reporting jobs | `/worker/status` and logs | stale heartbeat, failed/stuck job counters | stale heartbeat and failed job | Worker |
 | Rate/label provider health | rate diagnostics and provider logs | provider/account success/failure/timeout counters | rate/label failure spike | Fulfillment/Rates |
 | Frontend runtime errors | browser console/manual | release-tagged frontend error capture | frontend error spike | Frontend |
@@ -435,6 +437,7 @@ Critical workflows:
 
 ### Performance / Scale
 
+- [x] Scope Awaiting Shipment performance investigation in `AWAITING_SHIPMENTS_PERFORMANCE_PLAN.md`.
 - [ ] Unpaginated endpoints.
 - [ ] N+1 frontend API calls.
 - [ ] Slow DB queries.
@@ -451,6 +454,7 @@ Deliverable table:
 
 | Endpoint/Workflow | Current Bottleneck | Expected Scale | Observed Query/API Pattern | Optimization |
 |---|---|---|---|---|
+| Awaiting Shipment first load | unknown until browser/API/DB timings are correlated | operational orders page should show quickly under normal warehouse use | suspected `/orders` count/enrichment, sidebar counts, daily stats, distinct SKUs, settings/locations/packages, or worker overlap | measure first, then table-first load, delayed exact counts, cached counts/stats, deferred support data, or configurable hot window |
 
 ### Deployment / Rollback
 

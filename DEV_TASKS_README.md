@@ -5,7 +5,7 @@
 - Branch: `prepshipv4-stable`
 - Latest pushed commit before this inventory classification batch: `fe86fb5f`
 - Worktree at last update: clean
-- Latest implementation batch tracked here: Phase 6 / Phase 11 inventory reconciliation mismatch classification
+- Latest implementation batch tracked here: Phase 2 / Phase 9 Awaiting Shipment performance investigation planning
 - Latest production read from user: Rate Browser and live app behavior look healthy after the recent deploys
 - GitHub Actions:
   - `Keep Render API warm`: manual only now
@@ -34,14 +34,14 @@
 | Phase | Status | Percent | Why Not 100% Yet |
 |---|---|---:|---|
 | Phase 1 - Runtime Architecture | Complete | 100% | Done |
-| Phase 2 - Observability | Good start | 70% | Observability/alerting signal plan now exists; needs runtime emitters, external alerts, p95/p99 dashboards, slow-query dashboard, and status panel |
+| Phase 2 - Observability | Good start | 72% | Observability/alerting signal plan now exists and Awaiting Shipment lag investigation is scoped; needs runtime emitters, external alerts, p95/p99 dashboards, slow-query dashboard, and status panel |
 | Phase 3 - Dashboard + Analysis Cleanup | Mostly complete | 85% | Needs production parity checks, remaining Analysis JSONB audit, and regression tests |
 | Phase 4 - `order_items` Normalization | Mostly complete | 83% | Runtime schema bootstrap now checks migrations; needs production trigger/backfill verification and parity tests |
 | Phase 5 - Reporting Read Models | Started | 30% | `analytics_cache` exists, but full dashboard/daily/SKU/inventory/billing read models are not complete |
 | Phase 6 - Inventory Metrics | Partial | 64% | Inventory source-of-truth policy, read-only dry-run reconciliation, mismatch classification, and repair/apply control plan are documented and guarded; needs saved dry-run artifacts, owner-approved repair implementation, and precomputed sold/velocity/restock metrics |
 | Phase 7 - Billing + Packages | Partial/good progress | 64% | Billing read surfaces now have client/store scope and billing reference-rate fetch latest-run durability; needs reconciliation, billing summary read model completion, package usage metrics, and package ledger hardening |
 | Phase 8 - Shared Frontend Data Layer | Partial/good progress | 66% | Fresh-browser Inventory now defaults to active stock rows; needs standardized React Query hooks and remaining broad `safe()` fallback cleanup |
-| Phase 9 - Lazy Loading + UI Performance | Partial | 55% | Needs more lazy-loaded drawers/modals/charts/export tools and all-tool browser audit |
+| Phase 9 - Lazy Loading + UI Performance | Partial | 58% | Awaiting Shipment startup-load risks are scoped; needs table-first loading, more lazy-loaded drawers/modals/charts/export tools, delayed noncritical requests, and all-tool browser audit |
 | Phase 10 - DJ/OpenClaw Security + Failure-State Hardening | Mostly complete | 95% | Unauthenticated production auth smoke checks passed and first runtime permission layer exists; dashboard/analysis/inventory/billing/print-queue/client/init/orders/manifests scoping started; needs authenticated secret checks, deeper raw-error route audit, and label/shipment runtime enforcement after review |
 | Phase 11 - Source-of-Truth + Duplication Audit | In progress | 98% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, `order_items`/`analytics_cache`, low-risk orders/inventory indexes, durable job strategy, ShipStation Awaiting parity status, rate backfill status, billing reference-rate status, print queue latest-run status, inventory source-of-truth policy, inventory dry-run reconciliation, mismatch classification, and inventory repair/apply policy moved to documented ownership; actual inventory repair implementation, labels, full job events/artifacts, dry-run artifacts, and shipment-adjacent DDL still remain |
 | Phase 12 - Enterprise Readiness | Scoped/started | 98% | Dashboard, Analysis, Inventory, Billing, Print Queue, Orders, Manifests, and label/shipment-sensitive route policy are mapped; read/action ownership is implemented for explicit client/store JWT claims on key surfaces; `financials:read` now protects Analysis/Dashboard SKU financials, Inventory SKU-order shipping costs, Billing routes, Orders export/list label costs, Manifests label costs, Packages unit costs, and Rate Browser rate-result DTOs; Rate Browser account source metadata requires `credentials:read`; secrets governance, audit logging, reconciliation reporting, observability/alerting, runbook/DR planning, privacy/compliance, and production signoff are mapped; needs label/shipment runtime enforcement, broader runtime audit/reconciliation/alert implementation, DR drills, and owner signoff evidence |
@@ -59,7 +59,7 @@
 - [x] Worker owns background sync
 - [x] Pg-boss/job queue foundation
 
-### Phase 2 - Observability: 70%
+### Phase 2 - Observability: 72%
 
 - [x] API timing logs
 - [x] `Server-Timing`
@@ -69,6 +69,12 @@
 - [x] GitHub scheduled cron noise removed
 - [x] `OBSERVABILITY_ALERTING_PLAN.md`
 - [x] `npm run test:observability-alerting`
+- [x] Awaiting Shipment lag investigation scoped
+- [x] `AWAITING_SHIPMENTS_PERFORMANCE_PLAN.md`
+- [ ] Capture browser Network timing for Awaiting page
+- [ ] Correlate Render `[api:timing]` and `[orders:list]` logs
+- [ ] Correlate Supabase slow-query logs for the same timestamps
+- [ ] Add p95/p99 visibility for `/orders`, `/init/counts`, `/orders/daily-stats`, and `/orders/distinct-skus`
 - [~] external alerts
 - [~] p95/p99 dashboard
 - [~] slow DB query dashboard
@@ -152,11 +158,16 @@
 - [ ] remove remaining broad `safe()` fallbacks
 - [ ] visible retry/error states for every tool page
 
-### Phase 9 - Lazy Loading + UI Performance: 55%
+### Phase 9 - Lazy Loading + UI Performance: 58%
 
 - [x] major route/view lazy loading
 - [x] Orders side data delayed/lazy-loaded
 - [x] Rate Browser cached/progressive direction started
+- [x] Awaiting Shipment startup request audit scoped
+- [ ] Make Awaiting page table load first
+- [ ] Defer sidebar counts, daily stats, sync status, settings, locations, and packages until after first paint or user intent
+- [ ] Make exact order count delayed or optional when slow
+- [ ] Add startup request guard for Orders page
 - [ ] lazy-load more drawers/modals/charts/export tools
 - [ ] split very large frontend views
 - [ ] browser audit all tool pages
@@ -342,7 +353,13 @@
    - [ ] `/clients` and `/init/init-data` with a valid token do not expose ShipStation secrets.
 3. Browser-audit all tools.
    - Orders, Dashboard, Inventory, Clients, Packages, Rate Shop, Analysis, Settings, Billing, Manifests.
-4. Continue Phase 11 with the next safest batch.
+4. Run the Awaiting Shipment performance investigation before any AWS or archive decision.
+   - Capture Browser Network timing for first load.
+   - Correlate Render `[api:timing]` and `[orders:list]` logs.
+   - Correlate Supabase slow-query logs for the same timestamp.
+   - Confirm whether the blocker is `/orders`, `/init/counts`, `/orders/daily-stats`, `/orders/distinct-skus`, settings/locations/packages, worker pressure, or frontend render.
+   - Only implement table-first loading, delayed exact counts, or archive/hot-window changes after the confirmed bottleneck is known.
+5. Continue Phase 11 with the next safest batch.
    - Apply and smoke-test `drizzle/0030_store_orders.sql` before marketplace order imports rely on it.
    - Apply and smoke-test `drizzle/0031_credential_accounts_rls.sql` before carrier/store credential routes rely on it.
    - Apply and smoke-test `drizzle/0024_order_items_phase2.sql` and `drizzle/0025_order_items_sync_trigger.sql` before order item analytics/backfill rely on them.
@@ -353,7 +370,7 @@
    - Review `DURABLE_JOBS_PLAN.md` with DJ/OpenClaw and approve durable job storage target.
    - Durable job state implementation for print queue/rate backfill/ref-rate jobs.
    - Label side-effect status reporting.
-5. Continue Phase 12.
+6. Continue Phase 12.
    - Review `RBAC_CLIENT_SCOPE_MATRIX.md` with DJ/OpenClaw.
    - Review `SECRETS_GOVERNANCE_MATRIX.md` with DJ/OpenClaw and assign credential owners.
    - Review `AUDIT_LOGGING_MATRIX.md` with DJ/OpenClaw and approve audit event names.
@@ -368,7 +385,7 @@
    - Reconciliation reports.
    - Observability alerts.
    - Runbooks and disaster recovery.
-6. Continue Phase 13.
+7. Continue Phase 13.
    - Production Supabase Auth time-box is set to `168` hours / 7 days.
    - Keep access JWT expiry short; do not set access JWT lifetime to 7 days.
    - Run staging short-timebox proof before production rollout.
