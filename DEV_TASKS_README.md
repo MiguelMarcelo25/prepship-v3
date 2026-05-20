@@ -3,9 +3,9 @@
 ## Current State
 
 - Branch: `prepshipv4-stable`
-- Latest pushed commit before this inventory source-of-truth batch: `fc3b0996`
+- Latest pushed commit before this inventory reconciliation dry-run batch: `f718dcbe`
 - Worktree at last update: clean
-- Latest implementation batch tracked here: Phase 11 Batch 13 inventory source-of-truth plan and guard
+- Latest implementation batch tracked here: Phase 6 / Phase 11 inventory reconciliation dry-run
 - Latest production read from user: Rate Browser and live app behavior look healthy after the recent deploys
 - GitHub Actions:
   - `Keep Render API warm`: manual only now
@@ -18,7 +18,7 @@
 
 | Document | Status | Percent | Why Not 100% |
 |---|---|---:|---|
-| `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md` | Created / active | 95% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, `order_items`/`analytics_cache`, low-risk orders/inventory indexes, durable job strategy, ShipStation Awaiting parity status, rate backfill status, billing reference-rate status, print queue batch/merge latest-run status, and inventory source-of-truth policy moved to documented ownership; inventory dry-run reconciliation, label side effects, full job progress/events, artifact storage, and shipment-adjacent DDL cleanup still open |
+| `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md` | Created / active | 96% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, `order_items`/`analytics_cache`, low-risk orders/inventory indexes, durable job strategy, ShipStation Awaiting parity status, rate backfill status, billing reference-rate status, print queue batch/merge latest-run status, inventory source-of-truth policy, and inventory dry-run reconciliation moved to documented ownership; owner-approved inventory repair, label side effects, full job progress/events, artifact storage, and shipment-adjacent DDL cleanup still open |
 | `ENTERPRISE_READINESS_AUDIT.md` | Created / active | 96% | Dashboard, Analysis, Inventory, Billing, Print Queue, Orders, Manifests, and label/shipment-sensitive route policy are now mapped; secrets governance, audit logging, reconciliation reporting, observability/alerting, runbook/DR planning, privacy/compliance, and production signoff are mapped; marketplace awaiting-count reconciliation and key operational latest-run statuses have guarded paths; still needs label/shipment runtime enforcement, broader runtime audit/reconciliation/alert implementation, DR drills, artifact durability, and authenticated production verification |
 | `SECURITY_PATCH_PLAN.md` | Created / mostly implemented | 95% | Needs live auth smoke tests, strict JWT production rollout, label/shipment runtime enforcement after review, and broader field-level role/client-scope rollout |
 | `RATE_SYSTEM_HARDENING_PLAN.md` | Created / mostly implemented | 78% | Needs browser production verification, duplicate-name UX polish, provider/account metrics, and full backfill progress/events beyond latest-run durability |
@@ -38,12 +38,12 @@
 | Phase 3 - Dashboard + Analysis Cleanup | Mostly complete | 85% | Needs production parity checks, remaining Analysis JSONB audit, and regression tests |
 | Phase 4 - `order_items` Normalization | Mostly complete | 83% | Runtime schema bootstrap now checks migrations; needs production trigger/backfill verification and parity tests |
 | Phase 5 - Reporting Read Models | Started | 30% | `analytics_cache` exists, but full dashboard/daily/SKU/inventory/billing read models are not complete |
-| Phase 6 - Inventory Metrics | Partial | 55% | Inventory source-of-truth policy is documented and guarded; needs dry-run ledger/cache reconciliation and precomputed sold/velocity/restock metrics |
+| Phase 6 - Inventory Metrics | Partial | 60% | Inventory source-of-truth policy and read-only dry-run reconciliation are documented and guarded; needs owner-approved repair workflow and precomputed sold/velocity/restock metrics |
 | Phase 7 - Billing + Packages | Partial/good progress | 64% | Billing read surfaces now have client/store scope and billing reference-rate fetch latest-run durability; needs reconciliation, billing summary read model completion, package usage metrics, and package ledger hardening |
 | Phase 8 - Shared Frontend Data Layer | Partial/good progress | 66% | Fresh-browser Inventory now defaults to active stock rows; needs standardized React Query hooks and remaining broad `safe()` fallback cleanup |
 | Phase 9 - Lazy Loading + UI Performance | Partial | 55% | Needs more lazy-loaded drawers/modals/charts/export tools and all-tool browser audit |
 | Phase 10 - DJ/OpenClaw Security + Failure-State Hardening | Mostly complete | 95% | Unauthenticated production auth smoke checks passed and first runtime permission layer exists; dashboard/analysis/inventory/billing/print-queue/client/init/orders/manifests scoping started; needs authenticated secret checks, deeper raw-error route audit, and label/shipment runtime enforcement after review |
-| Phase 11 - Source-of-Truth + Duplication Audit | In progress | 95% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, `order_items`/`analytics_cache`, low-risk orders/inventory indexes, durable job strategy, ShipStation Awaiting parity status, rate backfill status, billing reference-rate status, print queue latest-run status, and inventory source-of-truth policy moved to documented ownership; inventory dry-run reconciliation, labels, full job events/artifacts, and shipment-adjacent DDL still remain |
+| Phase 11 - Source-of-Truth + Duplication Audit | In progress | 96% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, `order_items`/`analytics_cache`, low-risk orders/inventory indexes, durable job strategy, ShipStation Awaiting parity status, rate backfill status, billing reference-rate status, print queue latest-run status, inventory source-of-truth policy, and inventory dry-run reconciliation moved to documented ownership; owner-approved inventory repair, labels, full job events/artifacts, and shipment-adjacent DDL still remain |
 | Phase 12 - Enterprise Readiness | Scoped/started | 98% | Dashboard, Analysis, Inventory, Billing, Print Queue, Orders, Manifests, and label/shipment-sensitive route policy are mapped; read/action ownership is implemented for explicit client/store JWT claims on key surfaces; `financials:read` now protects Analysis/Dashboard SKU financials, Inventory SKU-order shipping costs, Billing routes, Orders export/list label costs, Manifests label costs, Packages unit costs, and Rate Browser rate-result DTOs; Rate Browser account source metadata requires `credentials:read`; secrets governance, audit logging, reconciliation reporting, observability/alerting, runbook/DR planning, privacy/compliance, and production signoff are mapped; needs label/shipment runtime enforcement, broader runtime audit/reconciliation/alert implementation, DR drills, and owner signoff evidence |
 | Phase 13 - JWT Session Expiration | Production setting applied | 65% | 7-day session policy is documented and guarded, and Supabase Auth time-box is set to `168` hours; staging expiry proof and forced re-login evidence remain open |
 
@@ -106,7 +106,7 @@
 - [ ] inventory risk metrics
 - [ ] billing summary metrics
 
-### Phase 6 - Inventory Metrics: 55%
+### Phase 6 - Inventory Metrics: 60%
 
 - [x] `order_items` used in important inventory paths
 - [x] lower-SKU index support started
@@ -115,8 +115,12 @@
 - [x] `inventory_ledger` source-of-truth ownership documented
 - [x] `inventory.stockQty` documented as materialized/cache balance
 - [x] `npm run test:inventory-source-of-truth`
+- [x] `inventory:reconcile:dry-run`
+- [x] `npm run test:inventory-reconciliation-dry-run`
+- [x] read-only ledger/cache/effective-stock reconciliation report
 - [~] `inventory_ledger` source-of-truth enforcement
-- [ ] inventory reconciliation service
+- [~] inventory reconciliation service
+- [ ] owner-approved inventory repair/apply workflow
 - [ ] precomputed sold/velocity/days-supply/restock metrics
 
 ### Phase 7 - Billing + Packages: 64%
@@ -176,7 +180,7 @@
 - [ ] deeper raw-error route audit
 - [ ] formal RBAC/client-scope enforcement
 
-### Phase 11 - Source-of-Truth + Duplication Audit: 95%
+### Phase 11 - Source-of-Truth + Duplication Audit: 96%
 
 - [x] `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md`
 - [x] shared JWT verifier
@@ -218,6 +222,8 @@
 - [x] `INVENTORY_SOURCE_OF_TRUTH_PLAN.md`
 - [x] inventory source-of-truth policy and guard
 - [x] `npm run test:inventory-source-of-truth`
+- [x] `inventory:reconcile:dry-run`
+- [x] `npm run test:inventory-reconciliation-dry-run`
 - [~] runtime DDL migration cleanup
 - [~] inventory source-of-truth cleanup
 - [~] full durable job progress/events and artifact storage
@@ -332,7 +338,7 @@
    - Apply and smoke-test `drizzle/0024_order_items_phase2.sql` and `drizzle/0025_order_items_sync_trigger.sql` before order item analytics/backfill rely on them.
    - Confirm existing performance migrations `0021`, `0022`, `0023`, and `0026` are applied before relying on runtime maintenance cleanup.
    - Keep label/outbox/shipment-adjacent DDL deferred to a separate reviewed plan.
-   - Add dry-run inventory ledger/cache/effective-stock reconciliation.
+   - Review inventory dry-run reconciliation output with DJ/OpenClaw before designing any repair/apply mode.
    - Review `DURABLE_JOBS_PLAN.md` with DJ/OpenClaw and approve durable job storage target.
    - Durable job state implementation for print queue/rate backfill/ref-rate jobs.
    - Label side-effect status reporting.
@@ -384,6 +390,7 @@
 - `npm run test:production-signoff`
 - `npm run test:durable-jobs-plan`
 - `npm run test:inventory-source-of-truth`
+- `npm run test:inventory-reconciliation-dry-run`
 - `npm run test:client-redaction`
 - `npm run test:credential-accounts`
 - `npm run test:rate-system-hardening`

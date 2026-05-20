@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-This Phase 6 / Phase 11 deliverable defines the canonical ownership model for PrepShip inventory quantities. It is a planning and guard batch only: it does not mutate stock, orders, shipments, labels, shipped rows, or cancelled rows.
+This Phase 6 / Phase 11 deliverable defines the canonical ownership model for PrepShip inventory quantities and adds a read-only dry-run reconciliation report. It does not mutate stock, orders, shipments, labels, shipped rows, or cancelled rows.
 
 Canonical rule:
 
@@ -17,7 +17,7 @@ Canonical rule:
 | Blocker | Risk | Required Outcome | Verification |
 |---|---|---|---|
 | Inventory truth is split across ledger, cache, and order-derived calculations | Operators may see stock values that disagree between pages | One documented source-of-truth model | `npm run test:inventory-source-of-truth` |
-| `inventory.stockQty` can drift from ledger/effective stock | Fast UI cache can become stale after imports, labels, voids, or manual changes | Approved dry-run reconciliation report before any repair | future inventory reconciliation test |
+| `inventory.stockQty` can drift from ledger/effective stock | Fast UI cache can become stale after imports, labels, voids, or manual changes | Approved dry-run reconciliation report before any repair | `npm run inventory:reconcile:dry-run`; `npm run test:inventory-reconciliation-dry-run` |
 | Sold/velocity metrics can require expensive live scans | Inventory page can slow down under volume | Worker-generated reporting metrics for sold/velocity/days-supply | reporting metrics test and browser smoke |
 | Returns/voids are not fully modeled into effective stock | Edge cases may require manual repair | explicit reconciliation workflow and owner approval | reconciliation report evidence |
 
@@ -55,7 +55,8 @@ Canonical rule:
 - [x] Document `inventory.stockQty` as materialized/cache balance.
 - [x] Document Inventory page preference for `effectiveStock`.
 - [x] Add static guard for inventory source-of-truth policy.
-- [ ] Add dry-run inventory ledger/cache reconciliation report.
+- [x] Add dry-run inventory ledger/cache reconciliation report.
+- [x] Add static guard for dry-run-only reconciliation behavior.
 - [ ] Add owner-approved cache rebuild path with before/after evidence.
 - [ ] Move sold/velocity/days-supply/restock to worker-generated reporting metrics.
 - [ ] Add browser smoke evidence for Inventory after reporting metrics rollout.
@@ -64,17 +65,19 @@ Canonical rule:
 
 - [x] Keep `applyMovement()` as the shared service for normal inventory movement writes.
 - [x] Keep the Inventory page displaying `effectiveStock` when the backend provides it.
-- [ ] Add a dry-run reconciliation script that compares:
+- [x] Add a dry-run reconciliation script that compares:
   - ledger-derived stock
   - cached `inventory.stockQty`
   - backend `effectiveStock`
   - visible Inventory page stock
+- [x] Keep the dry-run script read-only with no repair/apply mode.
 - [ ] Require approval before applying any cache repair.
 - [ ] Add worker-generated inventory metrics for velocity/restock.
 
 ## Test Plan
 
 - `npm run test:inventory-source-of-truth`
+- `npm run test:inventory-reconciliation-dry-run`
 - `npm run test:inventory-client-scope`
 - `npm run test:reconciliation-plan`
 - `npm run test:frontend-failure-states`
@@ -84,6 +87,9 @@ Canonical rule:
 Future implementation tests:
 
 - dry-run reconciliation reports row count, mismatch count, and no mutation
+- `npm run inventory:reconcile:dry-run -- --limit 50`
+- `npm run inventory:reconcile:dry-run -- --client-id 3 --json`
+- `npm run inventory:reconcile:dry-run -- --sku "ABC-123"`
 - apply mode updates only `inventory.stockQty` after approval
 - Inventory page uses `effectiveStock` and exposes cached stock only as audit/tooltip fallback
 - shipped/cancelled order rows and `shipments` are not mutated by inventory reconciliation
@@ -91,6 +97,7 @@ Future implementation tests:
 ## Deployment / Rollback Notes
 
 - This batch is safe to deploy because it adds documentation and a static guard only.
+- No stock repair/apply mode is added yet.
 - Future inventory reconciliation apply mode must be deployed separately and reviewed with production dry-run output.
 - Rollback for future cache repairs should be based on a saved before/after reconciliation report.
 - Do not modify shipped/cancelled order rows or the `shipments` table as part of inventory cache repair.
@@ -98,8 +105,8 @@ Future implementation tests:
 ## Recommended Implementation Order
 
 1. Land this source-of-truth plan and static guard.
-2. Add dry-run reconciliation report for ledger/cache/effective stock.
+2. Land the read-only dry-run reconciliation report for ledger/cache/effective stock.
 3. Review dry-run output with DJ/OpenClaw and assign an inventory owner.
-4. Add approved cache rebuild/apply mode.
+4. Add approved cache rebuild/apply mode in a separate reviewed batch.
 5. Move sold/velocity/days-supply/restock into worker-generated reporting metrics.
 6. Browser-audit Inventory and Dashboard after reporting metrics are live.

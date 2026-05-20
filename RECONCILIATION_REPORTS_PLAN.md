@@ -4,7 +4,7 @@
 
 This Phase 12 deliverable scopes the reconciliation reports PrepShip needs before it can be called enterprise-ready. Reconciliation is different from normal page loading: it proves that local PrepShip data agrees with canonical external systems, generated outputs, and internal ledgers.
 
-This is a planning/control batch only. It does not modify order, shipment, label, inventory, package, billing, or fulfillment logic. The goal is to define canonical sources, mismatch detection, repair workflow, and tests before implementation starts. Inventory reconciliation now references `INVENTORY_SOURCE_OF_TRUTH_PLAN.md` for the rule that `inventory_ledger` is canonical movement history and `inventory.stockQty` is a materialized/cache balance.
+This is a planning/control batch only. It does not modify order, shipment, label, inventory, package, billing, or fulfillment logic. The goal is to define canonical sources, mismatch detection, repair workflow, and tests before implementation starts. Inventory reconciliation now references `INVENTORY_SOURCE_OF_TRUTH_PLAN.md` for the rule that `inventory_ledger` is canonical movement history and `inventory.stockQty` is a materialized/cache balance, and exposes `npm run inventory:reconcile:dry-run` as the first read-only report. This is the dry-run reconcile path for ledger/cache/effective-stock drift.
 
 ## Critical Blockers
 
@@ -43,7 +43,7 @@ This is a planning/control batch only. It does not modify order, shipment, label
 | ShipStation shipments vs local shipments | ShipStation shipments/labels API | `shipments` | missing shipment, tracking mismatch, cost mismatch | resync shipment by id/order | Fulfillment owner | shipment mismatch report |
 | Labels vs billing line items | label/provider cost + package usage | billing line items | missing line item, cost mismatch, duplicate charge | regenerate billing lines for range/client | Billing owner | billing-label parity test |
 | Billing summaries vs billing line items | generated line items | summary/read-model tables/API | summary total/order count/client mismatch | rebuild summary/read model | Billing owner | summary parity test |
-| Inventory ledger vs displayed stock | `inventory_ledger` | `inventory.stockQty` / effective stock | ledger total differs from displayed/cache stock | dry-run reconcile, then approved cache rebuild | Inventory owner | ledger-stock parity test |
+| Inventory ledger vs displayed stock | `inventory_ledger` | `inventory.stockQty` / effective stock | ledger total differs from displayed/cache stock | `npm run inventory:reconcile:dry-run`, then approved cache rebuild | Inventory owner | `npm run test:inventory-reconciliation-dry-run` |
 | Package ledger vs package stock | package ledger/mutations | package stock/cache | stock quantity and usage mismatch | package stock rebuild from ledger | Package owner | package-stock parity test |
 | Rate cache vs actual label cost | label purchase cost | `rate_cache` / best-rate fields | selected cached/best rate differs from paid label cost | mark stale cache and refresh future rates | Rate owner | rate-label cost report |
 | Fulfillment outbox vs sent confirmations | marketplace/provider confirmation state | fulfillment outbox/job state | sent missing, duplicate, failed without retry | replay idempotently or mark terminal failure | Fulfillment owner | outbox confirmation report |
@@ -56,6 +56,8 @@ This is a planning/control batch only. It does not modify order, shipment, label
 - [ ] Add read-only reconciliation query services before any repair operation.
 - [ ] Add dry-run repair mode for inventory/package/billing/order_items.
 - [x] Add `INVENTORY_SOURCE_OF_TRUTH_PLAN.md` as the prerequisite inventory ownership policy.
+- [x] Add `npm run inventory:reconcile:dry-run` as the read-only inventory ledger/cache/effective-stock report.
+- [x] Add `npm run test:inventory-reconciliation-dry-run` to guard no mutation and no apply mode.
 - [ ] Add operator-facing reports for mismatch counts and CSV export.
 - [ ] Add worker scheduled reconciliation for low-risk reports.
 - [ ] Keep label/shipment/order repair operations behind explicit human review and role checks.
@@ -63,6 +65,7 @@ This is a planning/control batch only. It does not modify order, shipment, label
 ## Test Plan
 
 - `npm run test:reconciliation-plan`
+- `npm run test:inventory-reconciliation-dry-run`
 - Future implementation tests:
   - seeded `orders.items` vs `order_items` mismatch is detected
   - billing summary mismatch against line items is detected
@@ -83,7 +86,7 @@ This is a planning/control batch only. It does not modify order, shipment, label
 
 1. Review this matrix with DJ/OpenClaw and approve report ownership.
 2. Implement read-only `order_items` parity and billing summary parity reports first.
-3. Implement inventory/package ledger parity reports.
+3. Review `npm run inventory:reconcile:dry-run` output, then implement package ledger parity reports.
 4. Implement rate cache vs label cost report.
 5. Implement external orders/shipments/client-store reconciliation.
 6. Add repair dry-runs only after report correctness is proven.
