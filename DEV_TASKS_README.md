@@ -35,7 +35,7 @@
 |---|---|---:|---|
 | Phase 1 - Runtime Architecture | Complete | 100% | Done |
 | Phase 2 - Observability | Good start | 76% | Observability/alerting signal plan exists, Awaiting Shipment lag investigation is scoped, browser/API request IDs now flow through request headers, response headers, timing/error logs, and detailed Orders list logs, and opt-in browser API timing diagnostics exist; needs external alerts, p95/p99 dashboards, slow-query dashboard, and status panel |
-| Phase 3 - Dashboard + Analysis Cleanup | Mostly complete | 85% | Needs production parity checks, remaining Analysis JSONB audit, and regression tests |
+| Phase 3 - Dashboard + Analysis Cleanup | Mostly complete | 86% | Dashboard Orders / Units KPI guard exists; needs production parity checks, remaining Analysis JSONB audit, and broader regression tests |
 | Phase 4 - `order_items` Normalization | Mostly complete | 83% | Runtime schema bootstrap now checks migrations; needs production trigger/backfill verification and parity tests |
 | Phase 5 - Reporting Read Models | Started | 30% | `analytics_cache` exists, but full dashboard/daily/SKU/inventory/billing read models are not complete |
 | Phase 6 - Inventory Metrics | Partial | 65% | Inventory source-of-truth policy, read-only dry-run reconciliation, JSON/CSV artifact persistence, mismatch classification, and repair/apply control plan are documented and guarded; needs owner-approved repair implementation and precomputed sold/velocity/restock metrics |
@@ -84,12 +84,13 @@
 - [~] slow DB query dashboard
 - [ ] internal status panel
 
-### Phase 3 - Dashboard + Analysis Cleanup: 85%
+### Phase 3 - Dashboard + Analysis Cleanup: 86%
 
 - [x] `/dashboard` route
 - [x] dashboard summary/trends/top SKUs/inventory-risk endpoints
 - [x] panel-level dashboard loading/errors
 - [x] dashboard avoids giant raw order pulls
+- [x] dashboard KPI cards show Orders / Units and have regression guard
 - [ ] production parity checks
 - [ ] remaining Analysis JSONB cleanup
 - [ ] dashboard/analysis regression tests
