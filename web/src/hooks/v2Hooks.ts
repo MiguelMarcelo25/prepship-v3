@@ -615,6 +615,10 @@ export interface UseLocationsResult {
   error: Error | null;
 }
 
+type SharedDataHookOptions = {
+  enabled?: boolean;
+};
+
 type V4LocationRow = {
   id: number;
   name: string;
@@ -630,10 +634,12 @@ type V4LocationRow = {
   active: boolean;
 };
 
-export function useLocations(): UseLocationsResult {
+export function useLocations(options: SharedDataHookOptions = {}): UseLocationsResult {
+  const enabled = options.enabled ?? true;
   const query = useQuery<V4LocationRow[]>({
     queryKey: ['v2-hooks:locations'],
     queryFn: () => api.get<V4LocationRow[]>('/locations'),
+    enabled,
     staleTime: SHARED_DATA_STALE_MS,
     gcTime: SHARED_DATA_CACHE_MS,
     refetchOnWindowFocus: false,
@@ -660,7 +666,7 @@ export function useLocations(): UseLocationsResult {
 
   return {
     locations,
-    isLoading: query.isLoading,
+    isLoading: enabled && query.isLoading,
     error: (query.error as Error | null) ?? null,
   };
 }
@@ -763,10 +769,12 @@ async function fetchDirectCarrierAccounts(): Promise<V4DirectCarriersResponse> {
   return json;
 }
 
-export function useShippingAccounts(): UseShippingAccountsResult {
+export function useShippingAccounts(options: SharedDataHookOptions = {}): UseShippingAccountsResult {
+  const enabled = options.enabled ?? true;
   const query = useQuery<V4CarriersResponse>({
     queryKey: ['v2-hooks:carriers'],
     queryFn: () => api.get<V4CarriersResponse>('/rates/multi'),
+    enabled,
     staleTime: SHARED_DATA_STALE_MS,
     gcTime: SHARED_DATA_CACHE_MS,
     refetchOnWindowFocus: false,
@@ -775,6 +783,7 @@ export function useShippingAccounts(): UseShippingAccountsResult {
   const directQuery = useQuery<V4DirectCarriersResponse>({
     queryKey: ['v2-hooks:carrier-accounts'],
     queryFn: fetchDirectCarrierAccounts,
+    enabled,
     staleTime: SHARED_DATA_STALE_MS,
     gcTime: SHARED_DATA_CACHE_MS,
     refetchOnWindowFocus: false,
@@ -831,7 +840,7 @@ export function useShippingAccounts(): UseShippingAccountsResult {
 
   return {
     accounts,
-    isLoading: query.isLoading || directQuery.isLoading,
+    isLoading: enabled && (query.isLoading || directQuery.isLoading),
     error: mergedError,
   };
 }

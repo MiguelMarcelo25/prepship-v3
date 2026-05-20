@@ -6,6 +6,8 @@ PrepShip should not jump straight to AWS migration or order archiving until the 
 
 Current status: investigation scoped. No runtime behavior changes are included in this document.
 
+Phase 9 follow-up: the first low-risk startup guard now prevents Orders from fetching locations and carrier accounts until an order action, drawer, queue, rate browser, new-order flow, or shipping-account sort actually needs those shared records.
+
 ## Critical Blockers
 
 - [ ] Browser Network timing for Awaiting Shipment first load is not yet captured.
@@ -19,6 +21,7 @@ Current status: investigation scoped. No runtime behavior changes are included i
 - `/init/counts` may compete with the main table request if sidebar counts scan large order sets.
 - `/orders/daily-stats` and `/orders/distinct-skus` can add avoidable pressure if they run before user intent or before the table paints.
 - Global boot reads such as settings, locations, packages, sync status, and worker status can make the app feel stuck when Supabase is under memory pressure.
+- Locations and carrier accounts are now guarded on Orders startup, but settings, sidebar counts, status polling, and daily stats still need timing evidence before deeper changes.
 - Worker sync/reporting jobs can overlap with user-facing reads unless logs prove they are quiet during the incident window.
 
 ## Medium-Risk Issues

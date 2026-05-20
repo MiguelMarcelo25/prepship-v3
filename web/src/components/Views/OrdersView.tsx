@@ -2124,8 +2124,15 @@ export default function OrdersView({
   const { order: activeOrderDetail, isLoading: activeOrderLoading, error: activeOrderError } = useOrderDetail(
     activeOrderId != null ? String(activeOrderId) : '',
   )
-  const { locations } = useLocations()
-  const { accounts: shippingAccounts } = useShippingAccounts()
+  const ordersSupportDataEnabled =
+    activeOrderId != null ||
+    selectedOrderIds.length > 0 ||
+    rateBrowserOpen ||
+    newOrderOpen ||
+    queueOpen ||
+    sortState.key === 'custcarrier'
+  const { locations } = useLocations({ enabled: ordersSupportDataEnabled })
+  const { accounts: shippingAccounts } = useShippingAccounts({ enabled: ordersSupportDataEnabled })
   const { markups } = useMarkups()
 
   const orderDetailsById = useMemo(() => (
