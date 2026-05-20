@@ -397,6 +397,10 @@ function formatInt(value: number) {
   return Math.round(value).toLocaleString('en-US')
 }
 
+function formatOrdersUnits(orders: number, units: number) {
+  return `${formatInt(orders)} / ${formatInt(units)}`
+}
+
 function formatMoney(value: number) {
   return value.toLocaleString('en-US', {
     style: 'currency',
@@ -423,6 +427,13 @@ function dateOffsetFrom(day: string, daysBack: number) {
   const d = new Date(`${day}T00:00:00.000Z`)
   d.setUTCDate(d.getUTCDate() - daysBack)
   return d.toISOString().slice(0, 10)
+}
+
+function inclusiveRangeDays(from: string, to: string) {
+  const fromTime = new Date(from).getTime()
+  const toTime = new Date(to).getTime()
+  if (!Number.isFinite(fromTime) || !Number.isFinite(toTime) || toTime < fromTime) return 1
+  return Math.max(1, Math.round((toTime - fromTime) / 86_400_000) + 1)
 }
 
 function formatDayLabel(day: string) {
@@ -453,6 +464,14 @@ function relativePct(current: number, prior: number) {
 
 function sumValues(values: number[]) {
   return values.reduce((sum, value) => sum + num(value), 0)
+}
+
+function sumDailyOrders(rows: DailyOrderCount[], fromDay?: string) {
+  return safeArray<DailyOrderCount>(rows).reduce((sum, row) => {
+    const day = String(row?.day ?? '').slice(0, 10)
+    if (fromDay && (!day || day < fromDay)) return sum
+    return sum + num(row?.total)
+  }, 0)
 }
 
 function last(values: number[], count: number) {
@@ -1772,17 +1791,11 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
       const prior = priorRange(dateRange)
       const priorFrom = prior.from
       const priorTo = prior.to
-      // "7-day" KPI is now derived as "last ~25% of the chosen
-      // range" so it scales with the operator's picked window:
-      // last-30 → 7-day; last-90 → ~22-day; etc. Falls back to
-      // 7 days for safety.
-      const rangeLengthDays = Math.max(
-        1,
-        Math.round((new Date(currentTo).getTime() - new Date(currentFrom).getTime()) / 86_400_000) + 1,
-      )
-      const sevenDayOffset = Math.min(Math.max(1, Math.round(rangeLengthDays * 0.25)), rangeLengthDays) - 1
-      const sevenFrom = dateOffsetFrom(currentTo, sevenDayOffset)
-      const priorSevenFrom = dateOffsetFrom(priorTo, sevenDayOffset)
+      // Keep the 7-day KPI literal: last seven calendar days inside
+      // the active dashboard window, not a percentage of the range.
+      const rangeLengthDays = inclusiveRangeDays(currentFrom, currentTo)
+      const sevenFrom = dateOffsetFrom(currentTo, Math.min(6, rangeLengthDays - 1))
+      const priorSevenFrom = dateOffsetFrom(priorTo, Math.min(6, rangeLengthDays - 1))
       const cid = selectedClientId ?? undefined
 
       const clientsPromise = apiClient
@@ -2151,11 +2164,21 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
 
   const visibleColumnCount = 4 + COLUMN_OPTIONS.filter((option) => visibleColumns[option.key]).length
 
+  const rangeDays = useMemo(() => inclusiveRangeDays(dateRange.from, dateRange.to), [dateRange.from, dateRange.to])
+  const rangeLabel = rangeDays === 1 ? '1-Day' : `${rangeDays}-Day`
+
   const kpis = useMemo(() => {
-    const currentUnits30 = currentAgg.units
-    const priorUnits30 = priorAgg.units
+    const currentUnitsRange = currentAgg.units
+    const priorUnitsRange = priorAgg.units
     const currentUnits7 = [...currentAgg.bySku.values()].reduce((sum, row) => sum + row.units7, 0)
     const priorUnits7 = [...priorAgg.bySku.values()].reduce((sum, row) => sum + row.units7, 0)
+    const sevenFrom = dateOffsetFrom(dateRange.to, Math.min(6, rangeDays - 1))
+    const prior = priorRange(dateRange)
+    const priorSevenFrom = dateOffsetFrom(prior.to, Math.min(6, rangeDays - 1))
+    const currentOrdersRange = sumDailyOrders(currentDailyCounts)
+    const priorOrdersRange = sumDailyOrders(priorDailyCounts)
+    const currentOrders7 = sumDailyOrders(currentDailyCounts, sevenFrom)
+    const priorOrders7 = sumDailyOrders(priorDailyCounts, priorSevenFrom)
     const inStock = inventoryRows.filter((item) => {
       const stock = num(item.currentStock ?? item.stockQty)
       const min = num(item.minStock ?? item.reorderLevel)
@@ -2170,10 +2193,14 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
     const totalStockSkus = Math.max(1, inventoryRows.length)
 
     return {
-      currentUnits30,
-      priorUnits30,
+      currentUnitsRange,
+      priorUnitsRange,
       currentUnits7,
       priorUnits7,
+      currentOrdersRange,
+      priorOrdersRange,
+      currentOrders7,
+      priorOrders7,
       revenue30: currentAgg.revenue,
       priorRevenue30: priorAgg.revenue,
       inStock,
@@ -2181,7 +2208,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
       outStock,
       totalStockSkus,
     }
-  }, [currentAgg, inventoryRows, priorAgg])
+  }, [currentAgg, currentDailyCounts, dateRange, inventoryRows, priorAgg, priorDailyCounts, rangeDays])
 
   const maxTopSku = Math.max(...topSkuRows.map((row) => row.units30), 1)
   const metricsLoading = panelLoading.metrics || panelLoading.inventory
@@ -2391,16 +2418,18 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           ) : (
             <>
               <KpiCard
-                title="Total 7-Day Units"
-                value={formatInt(kpis.currentUnits7)}
-                helper={<ChangeText pct={relativePct(kpis.currentUnits7, kpis.priorUnits7)} label="prior 7 days" />}
-                spark={last(unitsTrend.map((point) => point.current), 10)}
+                title="Last 7 Days Orders / Units"
+                value={formatOrdersUnits(kpis.currentOrders7, kpis.currentUnits7)}
+                suffix="orders / units"
+                helper={<ChangeText pct={relativePct(kpis.currentOrders7, kpis.priorOrders7)} label="prior 7 days orders" />}
+                spark={last(trend.map((point) => point.current), 10)}
               />
               <KpiCard
-                title="Total 30-Day Units"
-                value={formatInt(kpis.currentUnits30)}
-                helper={<ChangeText pct={relativePct(kpis.currentUnits30, kpis.priorUnits30)} />}
-                spark={unitsTrend.map((point) => point.current)}
+                title={`${rangeLabel} Orders / Units`}
+                value={formatOrdersUnits(kpis.currentOrdersRange, kpis.currentUnitsRange)}
+                suffix="orders / units"
+                helper={<ChangeText pct={relativePct(kpis.currentOrdersRange, kpis.priorOrdersRange)} label={`prior ${rangeDays} days orders`} />}
+                spark={trend.map((point) => point.current)}
               />
               <KpiCard
                 title="Total Revenue"

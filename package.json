@@ -37,6 +37,7 @@
     "test:rbac-permissions": "node scripts/rbac-permissions-guard.mjs",
     "test:client-store-scope": "node scripts/client-store-scope-guard.mjs",
     "test:dashboard-client-scope": "node scripts/dashboard-client-store-scope-guard.mjs",
+    "test:dashboard-orders-units": "node scripts/dashboard-orders-units-guard.mjs",
     "test:analysis-client-scope": "node scripts/analysis-client-store-scope-guard.mjs",
     "test:inventory-client-scope": "node scripts/inventory-client-store-scope-guard.mjs",
     "test:inventory-default-view": "node scripts/inventory-default-view-guard.mjs",
