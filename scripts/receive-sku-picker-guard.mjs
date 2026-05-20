@@ -40,8 +40,10 @@ assert(
 );
 
 assert(
-  inventory.includes("width: 'min(760px, calc(100vw - 2rem))'"),
-  'Receive SKU dropdown has at least 4x wider horizontal viewing space',
+  inventory.includes("flex: '4 1 960px'") &&
+    inventory.includes('minWidth: 760') &&
+    inventory.includes("width: 'min(1040px, calc(100vw - 2rem))'"),
+  'Receive SKU picker has at least 4x wider horizontal viewing space',
 );
 
 assert(

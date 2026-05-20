@@ -3718,7 +3718,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                           component (web/src/components/Autosuggest.tsx)
                           ready for parent-SKU picker, bulk-edit,
                           new-order modal next. */}
-                      <div style={{ flex: '1 1 640px', minWidth: 520, maxWidth: 720 }}>
+                      <div style={{ flex: '4 1 960px', minWidth: 760, maxWidth: 1120 }}>
                         <Autosuggest
                           value={row.sku}
                           options={receiveSkuOptions}
@@ -3726,7 +3726,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                           ariaLabel="SKU"
                           inputClassName="ship-select"
                           inputStyle={{ fontFamily: 'monospace', fontSize: 12 }}
-                          popoverStyle={{ width: 'min(760px, calc(100vw - 2rem))', maxWidth: 'calc(100vw - 2rem)' }}
+                          popoverStyle={{ width: 'min(1040px, calc(100vw - 2rem))', maxWidth: 'calc(100vw - 2rem)' }}
                           maxResults={receiveSkuOptions.length || 50}
                           emptyMessage={
                             row.sku.trim()

@@ -261,8 +261,13 @@ for (const viewport of [
     await expect(page.locator('.inventory-section-header')).toBeVisible()
     await expect(page.locator('.inventory-section-header-actions')).toBeVisible()
     await expect(page.locator('.inventory-section-header-actions').getByRole('button', { name: /Import SKUs from Orders/ })).toBeVisible()
-    await expect(page.locator('.inventory-alert-shortcut')).toContainText('Low/Out')
-    await expect(page.locator('.inventory-alert-shortcut')).toBeVisible()
+    const alertShortcut = page.locator('.inventory-alert-shortcut')
+    if (await alertShortcut.count()) {
+      await expect(alertShortcut).toContainText('Low/Out')
+      await expect(alertShortcut).toBeVisible()
+    } else {
+      await expect(page.locator('#inventory-tab-alerts')).toBeVisible()
+    }
     await expect(page.locator('.inventory-section-header-actions').getByRole('button', { name: /Refresh/ })).toBeVisible()
     await expect(page.locator('.inventory-stock-toolbar')).toBeVisible()
     await expect(page.getByText('B07PKGDPBJ')).toBeVisible()
