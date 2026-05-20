@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { motion } from 'framer-motion'
 import { BarChart3, Loader2 } from 'lucide-react'
@@ -38,7 +38,6 @@ import {
   ANALYSIS_SORT_LABELS,
   type AnalysisColumnLayout,
 } from './analysis-parity'
-import { AnalysisDataTable } from './AnalysisDataTable'
 import { AnalysisPagination } from './AnalysisPagination'
 import type { AnalysisTableColumn, ColumnWidths } from './AnalysisTableHeader'
 import { AnalysisTopSkusChart } from './AnalysisTopSkusChart'
@@ -47,6 +46,8 @@ import { SortableHeader, nextSortState, sortRows } from '../SortableTable'
 import { ColumnResizeHandle } from './ColumnResizeHandle'
 import './InventoryView.css'
 import './AnalysisView.css'
+
+const AnalysisDataTable = lazy(() => import('./AnalysisDataTable').then((module) => ({ default: module.AnalysisDataTable })))
 
 // SKU drawer's "Recent Orders" table — user-resizable columns. Widths persist
 // per-browser via localStorage so the layout sticks across page loads. Defaults
@@ -1551,24 +1552,31 @@ export default function AnalysisView({
         </div>
       ) : null}
 
-      <AnalysisDataTable
-        columns={displayColumns}
-        sortKey={sortKey}
-        sortDir={sortDir}
-        onSort={handleSort}
-        columnWidths={columnWidths}
-        onResizeColumn={handleResizeColumn}
-        onResetColumn={handleResetColumn}
-        columnSize={columnSize}
-        rows={dataState.loading ? [] : pagedRows}
-        totals={totals}
-        maxQty={maxQty}
-        loading={dataState.loading}
-        error={dataState.error}
-        emptyMessage={getAnalysisEmptyMessage(search)}
-        onRowClick={(invSkuId) => void openSkuDrawer(invSkuId)}
-        onReorder={handleReorderColumns}
-      />
+      <Suspense fallback={
+        <div className="analysis-table-wrap border border-line rounded-[10px] bg-surface p-6 text-sm text-ink-3 shadow-[0_1px_3px_rgba(15,23,42,.05),0_1px_2px_rgba(15,23,42,.03)]">
+          <Loader2 size={14} strokeWidth={2.5} className="mr-2 inline animate-spin" aria-hidden />
+          Loading table...
+        </div>
+      }>
+        <AnalysisDataTable
+          columns={displayColumns}
+          sortKey={sortKey}
+          sortDir={sortDir}
+          onSort={handleSort}
+          columnWidths={columnWidths}
+          onResizeColumn={handleResizeColumn}
+          onResetColumn={handleResetColumn}
+          columnSize={columnSize}
+          rows={dataState.loading ? [] : pagedRows}
+          totals={totals}
+          maxQty={maxQty}
+          loading={dataState.loading}
+          error={dataState.error}
+          emptyMessage={getAnalysisEmptyMessage(search)}
+          onRowClick={(invSkuId) => void openSkuDrawer(invSkuId)}
+          onReorder={handleReorderColumns}
+        />
+      </Suspense>
 
       {!dataState.loading && !dataState.error && sortedRows.length > 0 ? (
         <AnalysisPagination
