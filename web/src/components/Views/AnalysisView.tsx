@@ -1026,29 +1026,41 @@ export default function AnalysisView({
     setPage((currentPage) => Math.min(currentPage, maxPage))
   }, [pageSize, sortedRows.length])
 
-  // Main load: SKU breakdown + daily sales chart data, in parallel.
+  // Main load: paint SKU rows first, then hydrate the heavier daily chart.
   useEffect(() => {
     let active = true
     const loadAnalysis = async () => {
-      setDataState((current) => ({ ...current, loading: true, error: null }))
+      setDataState((current) => ({ ...current, loading: true, error: null, chartData: null }))
       try {
         const query = {
           from: from || undefined,
           to: to || undefined,
           clientId: clientId ? Number.parseInt(clientId, 10) : undefined,
         }
-        const [skuData, chartData] = await Promise.all([
-          apiClient.fetchAnalysisSkus(query),
-          apiClient.fetchAnalysisDailySales(query).catch(() => null),
-        ])
+        const skuData = await apiClient.fetchAnalysisSkus(query)
         if (!active) return
         setDataState({
           loading: false,
           error: null,
           rows: skuData.skus || [],
           orderCount: skuData.orderCount || 0,
-          chartData,
+          chartData: null,
         })
+        void apiClient.fetchAnalysisDailySales(query)
+          .then((chartData) => {
+            if (!active) return
+            setDataState((current) => ({
+              ...current,
+              chartData,
+            }))
+          })
+          .catch(() => {
+            if (!active) return
+            setDataState((current) => ({
+              ...current,
+              chartData: null,
+            }))
+          })
       } catch (error) {
         if (!active) return
         setDataState((current) => ({
