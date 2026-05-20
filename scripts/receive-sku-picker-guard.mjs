@@ -25,30 +25,29 @@ assert(
 );
 
 assert(
-  inventory.includes('apiClient.fetchInventory({') && inventory.includes('includeInactive: true'),
-  'Receive SKU loader fetches all client inventory rows, including inactive SKUs',
+  inventory.includes('includeInactive: true') &&
+    inventory.includes('clientId: Number.parseInt(receiveClientId, 10)') &&
+    inventory.includes('setReceiveSkuMap(nextMap)'),
+  'Receive Inventory SKU lookup loads the full selected-client inventory set, including inactive rows',
 );
 
 assert(
-  !inventory.includes('const clientPage = await apiClient.fetchInventoryPage({\n          clientId: Number.parseInt(receiveClientId, 10),\n          active: true,\n          page: 1,\n          pageSize: 2000,'),
-  'Receive SKU loader no longer uses one active-only inventory page',
-);
-
-assert(
-  autosuggest.includes('popoverClassName?: string') && autosuggest.includes('popoverStyle?: CSSProperties'),
-  'Autosuggest supports wider custom popover sizing',
+  inventory.includes('maxResults={receiveSkuOptions.length || 50}'),
+  'Receive Inventory SKU picker does not cap selected-client SKU results to the default small list',
 );
 
 assert(
   inventory.includes("flex: '4 1 960px'") &&
     inventory.includes('minWidth: 760') &&
     inventory.includes("width: 'min(1040px, calc(100vw - 2rem))'"),
-  'Receive SKU picker has at least 4x wider horizontal viewing space',
+  'Receive Inventory SKU field and popover stay wide for operator scanning',
 );
 
 assert(
-  inventory.includes('maxResults={receiveSkuOptions.length || 50}'),
-  'Receive SKU dropdown can show the full selected-client SKU result set',
+  autosuggest.includes('maxResults = 8') &&
+    autosuggest.includes('showOnFocus ? options.slice(0, maxResults)') &&
+    autosuggest.includes('max-h-72 overflow-y-auto'),
+  'Autosuggest still supports caller-controlled full-list display with bounded scrolling',
 );
 
 if (process.exitCode) {
