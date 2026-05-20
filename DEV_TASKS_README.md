@@ -78,6 +78,7 @@
 - [x] `AWAITING_SHIPMENTS_PERFORMANCE_PLAN.md`
 - [x] Render restart/startup maintenance bottleneck hypothesis added to the Awaiting plan
 - [x] Startup orders performance maintenance no longer inherits from `RUN_SYNC_SCHEDULER`
+- [x] orders performance maintenance is now explicit opt-in with `RUN_ORDERS_PERFORMANCE_MAINTENANCE=true`
 - [x] `RUN_ORDERS_PERFORMANCE_MAINTENANCE=true` is required to run orders performance maintenance
 - [x] `npm run test:orders-maintenance-startup`
 - [x] `X-Request-Id` response header and timing/error log correlation
