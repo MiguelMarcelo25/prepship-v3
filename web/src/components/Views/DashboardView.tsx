@@ -784,6 +784,30 @@ function MiniSparkline({ values, positive = true, size = 'md' }: { values: numbe
   )
 }
 
+function OrdersUnitsValue({ orders, units }: { orders: number; units: number }) {
+  return (
+    <div className="flex items-center gap-3">
+      <div className="flex flex-col items-start">
+        <span className="text-[20px] font-extrabold leading-none tracking-[-0.02em] text-ink font-mono tabular-nums sm:text-[22px]">
+          {formatInt(orders)}
+        </span>
+        <span className="mt-1 text-[10px] font-bold uppercase tracking-wider text-ink-3">
+          orders
+        </span>
+      </div>
+      <div className="h-6 w-px bg-line/80 self-center" />
+      <div className="flex flex-col items-start">
+        <span className="text-[20px] font-extrabold leading-none tracking-[-0.02em] text-ink font-mono tabular-nums sm:text-[22px]">
+          {formatInt(units)}
+        </span>
+        <span className="mt-1 text-[10px] font-bold uppercase tracking-wider text-ink-3">
+          units
+        </span>
+      </div>
+    </div>
+  )
+}
+
 function KpiCard({
   title,
   value,
@@ -795,7 +819,7 @@ function KpiCard({
   progress,
 }: {
   title: string
-  value: string
+  value: React.ReactNode
   suffix?: string
   helper: React.ReactNode
   tone?: 'green' | 'orange' | 'red' | 'blue'
@@ -845,10 +869,10 @@ function KpiCard({
               far right of the value row so the number stays
               left-anchored with the title above it. */}
           <div className="mt-3 flex items-end gap-3 text-[24px] font-extrabold leading-none tracking-[-0.02em] text-ink font-mono tabular-nums sm:text-[26px]">
-            <span className="inline-flex items-end gap-1.5">
+            <div className="inline-flex items-end gap-1.5">
               {value}
               {suffix ? <span className="pb-0.5 text-xs font-bold tracking-normal text-ink-2">{suffix}</span> : null}
-            </span>
+            </div>
             {spark ? (
               <span className="ml-auto pb-0.5">
                 <MiniSparkline values={spark} positive={tone !== 'red'} size="md" />
@@ -2419,15 +2443,13 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             <>
               <KpiCard
                 title="Last 7 Days Orders / Units"
-                value={formatOrdersUnits(kpis.currentOrders7, kpis.currentUnits7)}
-                suffix="orders / units"
+                value={<OrdersUnitsValue orders={kpis.currentOrders7} units={kpis.currentUnits7} />}
                 helper={<ChangeText pct={relativePct(kpis.currentOrders7, kpis.priorOrders7)} label="prior 7 days orders" />}
                 spark={last(trend.map((point) => point.current), 10)}
               />
               <KpiCard
                 title={`${rangeLabel} Orders / Units`}
-                value={formatOrdersUnits(kpis.currentOrdersRange, kpis.currentUnitsRange)}
-                suffix="orders / units"
+                value={<OrdersUnitsValue orders={kpis.currentOrdersRange} units={kpis.currentUnitsRange} />}
                 helper={<ChangeText pct={relativePct(kpis.currentOrdersRange, kpis.priorOrdersRange)} label={`prior ${rangeDays} days orders`} />}
                 spark={trend.map((point) => point.current)}
               />
