@@ -27,7 +27,7 @@ Phase 13 adds `JWT_SESSION_EXPIRATION_PLAN.md`: PrepShip should enforce a 7-day 
 | `/admin` enforcement | [x] `requireAdmin` root and wildcard guarded | production non-admin smoke test still needed | test non-admin token returns `403` |
 | client redaction | [x] `/clients` and `/init/init-data` guarded by mapper tests | future endpoints can return raw clients if not audited | route audit for all client-returning endpoints |
 | JWT strict claims | [x] optional strict issuer/audience support exists | strict mode needs staged token compatibility check | enable `STRICT_JWT_CLAIMS=true` only after login/token test |
-| JWT session expiration | [x] 7-day session policy documented and Supabase time-box set to `168` hours | Expired-session UX still needs staging/prod proof | keep access JWTs short-lived and prove expired sessions return to login cleanly |
+| JWT session expiration | [x] 7-day session policy documented, Supabase time-box set to `168` hours, and production logout/login smoke passed | Expired-session UX still needs staging short-timebox proof | keep access JWTs short-lived and prove expired sessions return to login cleanly |
 | safe errors | [~] credential handlers use safer generic 500s | wider route handlers may still return `err.message` | audit and patch raw error responses |
 | unsafe proxy | [x] `/aws-api` rewrite removed | confirm no external workflow depends on it | production route/rewrite smoke test |
 | mock labels | [x] signed/expiring mock label URLs | confirm no real PII enters mock labels | route review and sample response check |
@@ -129,7 +129,8 @@ Phase 13 adds `JWT_SESSION_EXPIRATION_PLAN.md`: PrepShip should enforce a 7-day 
 - [ ] strict JWT claims tested before production enablement
 - [x] Supabase Auth time-box user sessions is set to `168` hours / 7 days
 - [ ] access JWT expiry remains short-lived, preferably current/default 1 hour
-- [ ] expired-session behavior returns users to login cleanly
+- [x] normal production logout/login smoke works after the `168` hour setting
+- [ ] expired-session behavior returns users to login cleanly after staging short-timebox proof
 
 ## Test Plan
 

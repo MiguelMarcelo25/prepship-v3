@@ -70,7 +70,7 @@ This is a planning/control batch only. It does not change runtime behavior, data
 | Browser smoke passed | |
 | API auth/security smoke passed | |
 | Render/Supabase health reviewed | |
-| Supabase session policy reviewed | 2026-05-20 screenshot shows time-box user sessions = `168` hours |
+| Supabase session policy reviewed | 2026-05-20 screenshot shows time-box user sessions = `168` hours; user-confirmed production logout/login smoke passed after setting change |
 | Known issues/deferred risks | |
 | Rollback plan | |
 | Final owner approval | |
@@ -84,6 +84,7 @@ This is a planning/control batch only. It does not change runtime behavior, data
 - [ ] Add migration-applied evidence to every schema-changing deploy.
 - [ ] Add owner approval fields for security, platform, data, ops, and product.
 - [x] Record Phase 13 Supabase session policy evidence: production dashboard shows `168` hours.
+- [x] Record Phase 13 production logout/login smoke evidence after the session policy change.
 
 ## Test Plan
 

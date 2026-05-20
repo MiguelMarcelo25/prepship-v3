@@ -71,7 +71,7 @@ Primary Supabase reference: https://supabase.com/docs/guides/auth/sessions
 | Supabase Auth time-box user sessions | Complete | User-provided production dashboard screenshot on 2026-05-20 shows `168` hours |
 | Refresh token reuse interval | Observed | Screenshot shows `10` seconds |
 | Expired-session forced re-login | Open | Requires staging short-timebox proof or real expiry evidence |
-| Normal logout/login after setting | Open | Run immediate browser smoke after the dashboard save |
+| Normal logout/login after setting | Complete | User-confirmed production logout/login smoke on 2026-05-20 after the `168` hour setting |
 
 ## Test Plan
 

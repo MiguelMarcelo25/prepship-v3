@@ -90,7 +90,7 @@ Current readiness read:
 |---|---|---:|
 | Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, rate cache diagnostics/bulk semantics, runtime DDL inventory/guard, reporting metrics migration, Walmart selling-fee index cleanup, `store_orders` migration, credential-account DDL cleanup, `order_items` / `analytics_cache` readiness cleanup, low-risk orders/inventory index cleanup, ShipStation Awaiting parity latest-run status, rate backfill latest-run status, billing reference-rate latest-run status, print queue send/merge latest-run status, inventory source-of-truth plan/guard, and durable job strategy documented | 95% |
 | Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated, RBAC/client-scope route matrix documented, first runtime permission layer implemented, low-risk client/init payload scoping added, dashboard/analysis/inventory/billing/print-queue/orders/manifests read/action scoping started, label/shipment-sensitive route policy review completed, extended `financials:read` field-level guard added for Orders, Manifests, Packages, and Rate Browser, secrets governance matrix added, audit logging matrix added, reconciliation reports plan added, marketplace awaiting-count reconciliation guarded, observability/alerting plan added, operational runbooks/DR plan added, privacy/compliance plan added, production signoff checklist added, and key operational jobs now persist latest-run status | 98% |
-| Phase 13 JWT/session expiration | 7-day maximum login session policy documented and guarded; Supabase time-box set to `168` hours; access JWTs remain short-lived | 65% |
+| Phase 13 JWT/session expiration | 7-day maximum login session policy documented and guarded; Supabase time-box set to `168` hours; production logout/login smoke passed; access JWTs remain short-lived | 75% |
 
 ## Critical Blockers
 
@@ -182,7 +182,8 @@ The full route matrix now lives in `RBAC_CLIENT_SCOPE_MATRIX.md`. The condensed 
 - [x] Document that Supabase dashboard value must be `168` hours for 7 days.
 - [x] Set Supabase Auth time-box user sessions to `168` hours / 7 days.
 - [ ] Verify expired-session behavior in staging with a short temporary time-box.
-- [ ] Capture production login and forced re-login evidence.
+- [x] Capture production logout/login smoke evidence after the `168` hour setting.
+- [ ] Capture forced re-login evidence after staging short-timebox or real expiry.
 
 Deliverable table:
 
