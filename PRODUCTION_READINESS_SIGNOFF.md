@@ -50,6 +50,7 @@ This is a planning/control batch only. It does not change runtime behavior, data
 | Version parity | Vercel frontend, Render API, Render worker on expected commit | Release owner | required | deploy evidence |
 | Render logs | no repeated 30s timeouts, 499 storm, or API 5xx spike | Platform owner | required | log review |
 | Supabase health | CPU, memory, connections stable | DB owner | required | dashboard review |
+| Supabase session policy | Auth time-box user sessions set to `168` hours / 7 days; access JWT remains short-lived | Security owner | required | Supabase Auth settings screenshot + login smoke |
 | Migration status | required Drizzle migrations applied | DB owner | required when schema changes | migration log |
 | Reconciliation checks | required parity reports reviewed or deferred with owner approval | Data owner | required before enterprise signoff | report evidence |
 | Alert/runbook readiness | owners assigned for alerts/runbooks | Ops owner | required before enterprise signoff | owner table |
@@ -69,6 +70,7 @@ This is a planning/control batch only. It does not change runtime behavior, data
 | Browser smoke passed | |
 | API auth/security smoke passed | |
 | Render/Supabase health reviewed | |
+| Supabase session policy reviewed | 2026-05-20 screenshot shows time-box user sessions = `168` hours |
 | Known issues/deferred risks | |
 | Rollback plan | |
 | Final owner approval | |
@@ -81,6 +83,7 @@ This is a planning/control batch only. It does not change runtime behavior, data
 - [ ] Add a browser smoke checklist for every tool page.
 - [ ] Add migration-applied evidence to every schema-changing deploy.
 - [ ] Add owner approval fields for security, platform, data, ops, and product.
+- [x] Record Phase 13 Supabase session policy evidence: production dashboard shows `168` hours.
 
 ## Test Plan
 

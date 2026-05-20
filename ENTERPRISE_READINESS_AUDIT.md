@@ -88,7 +88,7 @@ Current readiness read:
 |---|---|---:|
 | Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, rate cache diagnostics/bulk semantics, runtime DDL inventory/guard, reporting metrics migration, Walmart selling-fee index cleanup, `store_orders` migration, credential-account DDL cleanup, `order_items` / `analytics_cache` readiness cleanup, low-risk orders/inventory index cleanup, ShipStation Awaiting parity latest-run status, rate backfill latest-run status, billing reference-rate latest-run status, print queue send/merge latest-run status, and durable job strategy documented | 94% |
 | Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated, RBAC/client-scope route matrix documented, first runtime permission layer implemented, low-risk client/init payload scoping added, dashboard/analysis/inventory/billing/print-queue/orders/manifests read/action scoping started, label/shipment-sensitive route policy review completed, extended `financials:read` field-level guard added for Orders, Manifests, Packages, and Rate Browser, secrets governance matrix added, audit logging matrix added, reconciliation reports plan added, marketplace awaiting-count reconciliation guarded, observability/alerting plan added, operational runbooks/DR plan added, privacy/compliance plan added, production signoff checklist added, and key operational jobs now persist latest-run status | 98% |
-| Phase 13 JWT/session expiration | 7-day maximum login session policy documented and guarded; access JWTs remain short-lived; dashboard value clarified as `168` hours | 50% |
+| Phase 13 JWT/session expiration | 7-day maximum login session policy documented and guarded; Supabase time-box set to `168` hours; access JWTs remain short-lived | 65% |
 
 ## Critical Blockers
 
@@ -100,7 +100,7 @@ Current readiness read:
 | User-visible jobs are not all durable | Restart/multi-instance can lose or duplicate work | DB-backed job state, idempotency, locks, failure state | Restart and dual-worker tests |
 | Audit logging is not comprehensive | Cannot prove who changed business-critical data | Append-only audit events for credentials, labels, orders, inventory, billing, settings | Audit table/API/event tests |
 | Reconciliation reports are missing | Inventory, billing, label, and fulfillment truth can diverge silently | Scheduled reconciliation reports with repair process | Reconciliation queries and mismatch test data |
-| 7-day session policy requires Supabase admin action | Code/docs cannot set the hosted Supabase Auth time-box by themselves | Supabase Auth time-box user sessions set to `168` hours / 7 days with short-lived access JWTs | `npm run test:jwt-session-policy` plus staging/production smoke evidence |
+| 7-day session policy requires expired-session proof | Hosted Supabase time-box is set, but forced re-login still needs evidence | Supabase Auth time-box user sessions set to `168` hours / 7 days with short-lived access JWTs | `npm run test:jwt-session-policy` plus staging short-timebox proof and production login smoke |
 
 ## High-Risk Issues
 
@@ -178,7 +178,7 @@ The full route matrix now lives in `RBAC_CLIENT_SCOPE_MATRIX.md`. The condensed 
 - [x] Keep backend JWT `exp` validation through `jose`.
 - [x] Keep access JWTs short-lived rather than extending them to 7 days.
 - [x] Document that Supabase dashboard value must be `168` hours for 7 days.
-- [ ] Set Supabase Auth time-box user sessions to `168` hours / 7 days.
+- [x] Set Supabase Auth time-box user sessions to `168` hours / 7 days.
 - [ ] Verify expired-session behavior in staging with a short temporary time-box.
 - [ ] Capture production login and forced re-login evidence.
 
@@ -187,7 +187,7 @@ Deliverable table:
 | Control | Current State | Gap | Required Fix | Test |
 |---|---|---|---|---|
 | Access JWT expiry | verified by `jose`; should remain short-lived | production Auth setting needs review | keep/prefer 1-hour access JWT expiry | auth smoke and Supabase settings review |
-| Session max lifetime | policy documented | Supabase time-box setting must be set by project admin | set time-box user sessions to `168` hours / 7 days | staging short-timebox proof and production signoff |
+| Session max lifetime | production time-box set to `168` hours | expired-session behavior still needs proof | run staging short-timebox and production login smoke | staging short-timebox proof and production signoff |
 | Strict issuer/audience | optional env flag exists | not yet enabled in production | test then enable `STRICT_JWT_CLAIMS=true` separately | login/API token compatibility smoke |
 
 ### Secrets / Credential Management

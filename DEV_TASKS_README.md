@@ -27,7 +27,7 @@
 
 | Document | Status | Percent | Why Not 100% |
 |---|---|---:|---|
-| `JWT_SESSION_EXPIRATION_PLAN.md` | Created / policy ready | 50% | Repo policy and guard exist and now document that Supabase dashboard needs `168` hours for 7 days; Supabase Auth setting, staging short-timebox proof, and production verification still require admin dashboard action |
+| `JWT_SESSION_EXPIRATION_PLAN.md` | Created / production setting applied | 65% | Repo policy and guard exist, and production Supabase dashboard evidence shows `168` hours; staging short-timebox proof and expired-session verification remain open |
 
 ## Phase Summary
 
@@ -45,7 +45,7 @@
 | Phase 10 - DJ/OpenClaw Security + Failure-State Hardening | Mostly complete | 95% | Unauthenticated production auth smoke checks passed and first runtime permission layer exists; dashboard/analysis/inventory/billing/print-queue/client/init/orders/manifests scoping started; needs authenticated secret checks, deeper raw-error route audit, and label/shipment runtime enforcement after review |
 | Phase 11 - Source-of-Truth + Duplication Audit | In progress | 94% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, `order_items`/`analytics_cache`, low-risk orders/inventory indexes, durable job strategy, ShipStation Awaiting parity status, rate backfill status, billing reference-rate status, and print queue latest-run status moved to documented ownership; inventory truth, labels, full job events/artifacts, and shipment-adjacent DDL still remain |
 | Phase 12 - Enterprise Readiness | Scoped/started | 98% | Dashboard, Analysis, Inventory, Billing, Print Queue, Orders, Manifests, and label/shipment-sensitive route policy are mapped; read/action ownership is implemented for explicit client/store JWT claims on key surfaces; `financials:read` now protects Analysis/Dashboard SKU financials, Inventory SKU-order shipping costs, Billing routes, Orders export/list label costs, Manifests label costs, Packages unit costs, and Rate Browser rate-result DTOs; Rate Browser account source metadata requires `credentials:read`; secrets governance, audit logging, reconciliation reporting, observability/alerting, runbook/DR planning, privacy/compliance, and production signoff are mapped; needs label/shipment runtime enforcement, broader runtime audit/reconciliation/alert implementation, DR drills, and owner signoff evidence |
-| Phase 13 - JWT Session Expiration | Policy ready | 50% | 7-day session policy is documented and guarded, including `168`-hour dashboard value; Supabase Auth time-box setting, staging expiry proof, and production evidence are still manual/admin verification steps |
+| Phase 13 - JWT Session Expiration | Production setting applied | 65% | 7-day session policy is documented and guarded, and Supabase Auth time-box is set to `168` hours; staging expiry proof and forced re-login evidence remain open |
 
 ## Phase Checklist
 
@@ -292,7 +292,7 @@
 - [~] privacy/compliance checklist
 - [~] production readiness signoff checklist
 
-### Phase 13 - JWT Session Expiration: 50%
+### Phase 13 - JWT Session Expiration: 65%
 
 - [x] Policy chosen: 7-day maximum Supabase session lifetime
 - [x] Access JWTs remain short-lived, preferably current/default 1 hour
@@ -301,7 +301,7 @@
 - [x] Backend keeps current JWT `exp` validation through `jose`
 - [x] `STRICT_JWT_CLAIMS` stays staged behind env flag
 - [x] Supabase dashboard value documented as `168` hours for 7 days
-- [ ] Configure Supabase Auth time-box user sessions to `168` hours / 7 days
+- [x] Configure Supabase Auth time-box user sessions to `168` hours / 7 days
 - [ ] Verify expired-session behavior in staging with a short temporary time-box
 - [ ] Verify production login and forced re-login behavior after rollout
 - [ ] Add production evidence to `PRODUCTION_READINESS_SIGNOFF.md`
@@ -345,7 +345,7 @@
    - Observability alerts.
    - Runbooks and disaster recovery.
 6. Continue Phase 13.
-   - Have DJ/admin set Supabase Auth time-box user sessions to `168` hours / 7 days.
+   - Production Supabase Auth time-box is set to `168` hours / 7 days.
    - Keep access JWT expiry short; do not set access JWT lifetime to 7 days.
    - Run staging short-timebox proof before production rollout.
    - Capture production login and expired-session evidence in the signoff checklist.

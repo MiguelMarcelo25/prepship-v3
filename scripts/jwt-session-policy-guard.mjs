@@ -7,6 +7,7 @@ const plan = fs.readFileSync(path.join(root, planPath), 'utf8');
 const devTasks = fs.readFileSync(path.join(root, 'DEV_TASKS_README.md'), 'utf8');
 const securityPlan = fs.readFileSync(path.join(root, 'SECURITY_PATCH_PLAN.md'), 'utf8');
 const enterpriseAudit = fs.readFileSync(path.join(root, 'ENTERPRISE_READINESS_AUDIT.md'), 'utf8');
+const productionSignoff = fs.readFileSync(path.join(root, 'PRODUCTION_READINESS_SIGNOFF.md'), 'utf8');
 const verifier = fs.readFileSync(path.join(root, 'src/lib/auth/verify-supabase-jwt.ts'), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
@@ -29,6 +30,7 @@ const requiredHeadings = [
   '## Test Plan',
   '## Deployment / Rollback Notes',
   '## Recommended Implementation Order',
+  '## Production Evidence',
 ];
 
 for (const heading of requiredHeadings) {
@@ -74,6 +76,13 @@ assert(
     enterpriseAudit.includes('Phase 13 JWT/session expiration') &&
     enterpriseAudit.includes('168'),
   'ENTERPRISE_READINESS_AUDIT.md references JWT session policy and 168-hour dashboard value',
+);
+
+assert(
+  productionSignoff.includes('Supabase session policy') &&
+    productionSignoff.includes('168') &&
+    productionSignoff.includes('2026-05-20'),
+  'PRODUCTION_READINESS_SIGNOFF.md records Supabase session policy evidence',
 );
 
 assert(
