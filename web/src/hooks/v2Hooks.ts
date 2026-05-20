@@ -38,11 +38,14 @@ export interface UseOrdersOptions {
   dateEnd?: string;
   hideTestOrders?: boolean;
   includeInactiveClients?: boolean;
+  search?: string;
+  sku?: string;
 }
 
 export interface UseOrdersResult {
   orders: OrderSummaryDto[];
   total: number;
+  totalApproximate: boolean;
   pages: number;
   currentPage: number;
   loading: boolean;
@@ -440,6 +443,8 @@ export function useOrders(
     dateEnd,
     hideTestOrders = false,
     includeInactiveClients = false,
+    search,
+    sku,
   } = options;
 
   const [currentPage, setCurrentPage] = useState<number>(page);
@@ -461,6 +466,8 @@ export function useOrders(
 
   const isoFrom = toIsoStart(dateStart);
   const isoTo = toIsoEnd(dateEnd);
+  const trimmedSearch = search?.trim() ?? '';
+  const trimmedSku = sku?.trim() ?? '';
 
   // Test clients can appear in the sidebar without a real ShipStation store.
   // /init/stores represents those rows with a negative synthetic store id
@@ -478,6 +485,32 @@ export function useOrders(
       ? [...HIDDEN_CLIENT_IDS].join(',')
       : undefined;
 
+  const [exactTotalReady, setExactTotalReady] = useState(false);
+  useEffect(() => {
+    setExactTotalReady(false);
+    const timerId = window.setTimeout(() => setExactTotalReady(true), 2500);
+    return () => window.clearTimeout(timerId);
+  }, [
+    status,
+    currentPage,
+    pageSize,
+    effectiveClientId,
+    effectiveStoreId,
+    excludeClientId,
+    hideTestOrders,
+    includeInactiveClients,
+    isoFrom,
+    isoTo,
+    trimmedSearch,
+    trimmedSku,
+  ]);
+
+  const delayExactTotal =
+    currentPage === 1 &&
+    !exactTotalReady &&
+    trimmedSearch.length === 0 &&
+    trimmedSku.length === 0;
+
   const query = useQuery<Paginated<OrderSummaryDto>>({
     queryKey: [
       'v2-hooks:orders',
@@ -491,6 +524,9 @@ export function useOrders(
       includeInactiveClients,
       isoFrom,
       isoTo,
+      trimmedSearch,
+      trimmedSku,
+      delayExactTotal,
     ],
     queryFn: () =>
       api.get<Paginated<OrderSummaryDto>>(
@@ -505,6 +541,9 @@ export function useOrders(
           includeInactiveClients,
           dateFrom: isoFrom,
           dateTo: isoTo,
+          search: trimmedSearch || undefined,
+          sku: trimmedSku || undefined,
+          includeTotal: delayExactTotal ? false : undefined,
         })}`
       ),
     staleTime: ORDERS_STALE_MS,
@@ -550,6 +589,7 @@ export function useOrders(
   return {
     orders: transformedOrders,
     total: query.data?.pagination.total ?? 0,
+    totalApproximate: Boolean(query.data?.pagination.totalApproximate),
     pages: query.data?.pagination.totalPages ?? 0,
     currentPage,
     loading: query.isLoading && !hasOrdersPayload,

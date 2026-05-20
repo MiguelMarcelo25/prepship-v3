@@ -2102,7 +2102,7 @@ export default function OrdersView({
   const hideTestOrdersInAllAwaiting =
     activeStore == null && !showTestOrders
 
-  const { orders, total, pages, currentPage, loading, error, refetch: refetchOrders } = useOrders(currentStatus, {
+  const { orders, total, totalApproximate, pages, currentPage, loading, error, refetch: refetchOrders } = useOrders(currentStatus, {
     page,
     pageSize,
     storeId: activeStore ?? undefined,
@@ -8872,7 +8872,7 @@ export default function OrdersView({
         </span>
         <span className="w-px h-4 bg-line-2" aria-hidden />
         <span id="totalInfo" className="text-tiny text-ink-3 font-mono tabular-nums">
-          <span className="font-semibold text-ink-2">{total.toLocaleString()}</span> total
+          <span className="font-semibold text-ink-2">{total.toLocaleString()}{totalApproximate ? '+' : ''}</span> total
         </span>
 
         {/* Page-size selector — operator picks 5/20/50/100/200 rows per

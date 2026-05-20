@@ -1048,6 +1048,7 @@ const listQuery = paginationSchema.extend({
   dateFrom: z.string().datetime().optional(),
   dateTo: z.string().datetime().optional(),
   search: z.string().optional(),
+  includeTotal: z.coerce.boolean().optional(),
   // Filter to orders containing at least one items[] entry whose
   // sku exactly matches. The FE used to apply this client-side over
   // the in-memory page, which silently broke pagination — picking
@@ -1233,10 +1234,12 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       .offset(offset)
   );
 
+  const includeExactTotal = q.includeTotal !== false;
   const canInferTotal = joined.length < q.pageSize && (q.page === 1 || joined.length > 0);
   let total = canInferTotal ? offset + joined.length : 0;
+  let totalApproximate = false;
   let countWasSkipped = canInferTotal;
-  if (!canInferTotal) {
+  if (!canInferTotal && includeExactTotal) {
     const countRows = await timedOrdersStep(timings, 'ordersCount', () =>
       db
         .select({ count: sql<number>`count(*)::int` })
@@ -1245,6 +1248,10 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     );
     total = countRows[0]?.count ?? 0;
     countWasSkipped = false;
+  } else if (!canInferTotal) {
+    total = offset + joined.length + (joined.length >= q.pageSize ? 1 : 0);
+    totalApproximate = joined.length >= q.pageSize;
+    countWasSkipped = true;
   }
 
   // v2-parity enrichment: the Shipped grid expects `order.label` and
@@ -1695,11 +1702,20 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   logSlowOrdersList(q, requestIdFromContext(c), timings, totalMs, {
     rows: rows.length,
     total,
+    totalApproximate,
     countWasSkipped,
     shipmentsByOrderId: latestShipByOrderId.size,
     shipmentsByOrderNumber: latestShipByOrderNumber.size,
   });
-  return c.json(paginated(rows, total, q));
+  const response = paginated(rows, total, q) as ReturnType<typeof paginated<typeof rows[number]>> & {
+    pagination: ReturnType<typeof paginated<typeof rows[number]>>['pagination'] & {
+      totalApproximate?: boolean;
+      hasNextPage?: boolean;
+    };
+  };
+  response.pagination.totalApproximate = totalApproximate;
+  response.pagination.hasNextPage = joined.length >= q.pageSize;
+  return c.json(response);
   } catch (err) {
     const totalMs = msSince(routeStartedAt);
     console.error('[orders:list] failed', {

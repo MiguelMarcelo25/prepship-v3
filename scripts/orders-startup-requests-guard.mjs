@@ -59,6 +59,14 @@ const checks = [
       ordersView.includes('}, 3000)'),
   },
   {
+    name: 'Orders exact total count is delayed until after first paint',
+    pass: hooks.includes('const [exactTotalReady, setExactTotalReady] = useState(false)') &&
+      hooks.includes('window.setTimeout(() => setExactTotalReady(true), 2500)') &&
+      hooks.includes('const delayExactTotal =') &&
+      hooks.includes('includeTotal: delayExactTotal ? false : undefined') &&
+      ordersView.includes('totalApproximate ?'),
+  },
+  {
     name: 'Legacy sidebar counts do not block Orders first paint',
     pass: sidebarOrders.includes('const initialTimerId = window.setTimeout(() =>') &&
       sidebarOrders.includes('}, 2500)') &&
