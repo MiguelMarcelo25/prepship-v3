@@ -47,13 +47,14 @@ import {
 import OrderDetailDrawer from '../OrderDetailDrawer'
 import TrackingModal from '../TrackingModal'
 import HoverImage from '../HoverImage'
-import NewOrderModal, { type NewOrderPayload } from '../NewOrderModal'
+import type { NewOrderPayload } from '../NewOrderModal'
 // Shared carrier badge — renders official UPS/USPS SVG logos plus
 // fallback pills for FedEx/DHL/etc. Replaces the previous text-only
 // carrier-badge spans throughout the orders table + side panel.
 import CarrierBadge from '../CarrierBadge'
 import { apiClient } from '../../api/client'
 import { TEST_CLIENT_IDS } from '../../lib/v2-apiClient'
+const NewOrderModal = lazy(() => import('../NewOrderModal'))
 const RateBrowserModal = lazy(() => import('../RateBrowserModal'))
 import { ToastContext } from '../../contexts/ToastContext'
 import { useLocations, useOrderDetail, useOrders, useShippingAccounts } from '../../hooks'
@@ -9211,19 +9212,23 @@ export default function OrdersView({
 
       {/* Manual order creation modal. Creates a local awaiting-shipment
           order under the Manual Orders sandbox client. */}
-      <NewOrderModal
-        open={newOrderOpen}
-        onClose={() => setNewOrderOpen(false)}
-        onSave={async (payload: NewOrderPayload) => {
-          const result = await apiClient.createManualOrder(payload)
-          const orderNumber = result?.data?.order?.orderNumber ?? payload.orderNumber
-          setNewOrderOpen(false)
-          showToast(`Manual order created${orderNumber ? `: ${orderNumber}` : ''}`, 'success')
-          await refetchOrders()
-          window.dispatchEvent(new Event('prepship:client-active-changed'))
-          return true
-        }}
-      />
+      {newOrderOpen ? (
+        <Suspense fallback={null}>
+          <NewOrderModal
+            open={newOrderOpen}
+            onClose={() => setNewOrderOpen(false)}
+            onSave={async (payload: NewOrderPayload) => {
+              const result = await apiClient.createManualOrder(payload)
+              const orderNumber = result?.data?.order?.orderNumber ?? payload.orderNumber
+              setNewOrderOpen(false)
+              showToast(`Manual order created${orderNumber ? `: ${orderNumber}` : ''}`, 'success')
+              await refetchOrders()
+              window.dispatchEvent(new Event('prepship:client-active-changed'))
+              return true
+            }}
+          />
+        </Suspense>
+      ) : null}
 
       {rateBrowserOpen ? (
         <Suspense fallback={null}>

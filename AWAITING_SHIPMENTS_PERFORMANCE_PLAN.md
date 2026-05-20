@@ -6,7 +6,7 @@ PrepShip should not jump straight to AWS migration or order archiving until the 
 
 Current status: investigation scoped. Browser API calls now send `X-Request-Id`, and that same ID flows through the response header, `[api:timing]` / `[api:error]` logs, and detailed `[orders:list]` logs so Network requests and console errors can be correlated with Render route and segment timings. When debugging a slow browser, enable opt-in timing logs with `localStorage.setItem('prepship:apiTiming', '1')` and reload.
 
-Phase 9 follow-up: the first low-risk startup guard now prevents Orders from fetching locations and carrier accounts until an order action, drawer, queue, rate browser, new-order flow, or shipping-account sort actually needs those shared records. The first Orders page can skip the expensive exact count and show an approximate `+` total until the delayed exact count refresh completes. The legacy sidebar count path waits until after first paint, slows polling, and skips hidden tabs. Orders sync and worker status polling are delayed and hidden-tab gated. Global markups/settings hydration is delayed on Orders routes while Settings/Rates direct visits stay immediate.
+Phase 9 follow-up: the first low-risk startup guard now prevents Orders from fetching locations and carrier accounts until an order action, drawer, queue, rate browser, new-order flow, or shipping-account sort actually needs those shared records. The first Orders page can skip the expensive exact count and show an approximate `+` total until the delayed exact count refresh completes. The legacy sidebar count path waits until after first paint, slows polling, and skips hidden tabs. Orders sync and worker status polling are delayed and hidden-tab gated. Global markups/settings hydration is delayed on Orders routes while Settings/Rates direct visits stay immediate. The New Order modal is now code-split and only loads after the operator clicks `+ New Order`.
 
 ## Critical Blockers
 
@@ -21,7 +21,7 @@ Phase 9 follow-up: the first low-risk startup guard now prevents Orders from fet
 - `/init/counts` may compete with the main table request if sidebar counts scan large order sets. Initial legacy sidebar counts are now delayed, but the endpoint still needs timing/caching evidence before deeper changes.
 - `/orders/daily-stats` and `/orders/distinct-skus` can add avoidable pressure if they run before user intent or before the table paints.
 - Global boot reads such as settings, locations, packages, sync status, and worker status can make the app feel stuck when Supabase is under memory pressure.
-- Locations, carrier accounts, exact first-page counts, legacy sidebar counts, status polling, worker polling, and markup settings hydration are now guarded on Orders startup, but daily stats still need timing evidence before deeper changes.
+- Locations, carrier accounts, exact first-page counts, legacy sidebar counts, status polling, worker polling, markup settings hydration, and New Order modal code are now guarded on Orders startup, but daily stats still need timing evidence before deeper changes.
 - Worker sync/reporting jobs can overlap with user-facing reads unless logs prove they are quiet during the incident window.
 
 ## Medium-Risk Issues

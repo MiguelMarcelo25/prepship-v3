@@ -67,6 +67,14 @@ const checks = [
       ordersView.includes('totalApproximate ?'),
   },
   {
+    name: 'New Order modal chunk is loaded only after user intent',
+    pass: ordersView.includes("import type { NewOrderPayload } from '../NewOrderModal'") &&
+      !ordersView.includes("import NewOrderModal, { type NewOrderPayload } from '../NewOrderModal'") &&
+      ordersView.includes("const NewOrderModal = lazy(() => import('../NewOrderModal'))") &&
+      ordersView.includes('{newOrderOpen ? (') &&
+      ordersView.includes('<NewOrderModal'),
+  },
+  {
     name: 'Legacy sidebar counts do not block Orders first paint',
     pass: sidebarOrders.includes('const initialTimerId = window.setTimeout(() =>') &&
       sidebarOrders.includes('}, 2500)') &&
