@@ -78,7 +78,7 @@ Confirmed gaps from repo search:
 - Secrets governance is mapped, but rotation, last-used tracking, audit events, and production log/response smoke tests are not complete yet.
 - Audit logging is mapped, but the append-only table/service and runtime event writers are not implemented yet.
 - Reconciliation reporting is mapped, and marketplace awaiting-count repair now has a dry-run/apply path; broader report queries, scheduled runs, artifacts, and non-marketplace repair dry-runs are not implemented yet.
-- Observability and alerting are mapped, and request IDs now flow from browser API calls through response headers, timing/error logs, and detailed Orders list segment timing logs; runtime metric emitters, dashboards, thresholds, alert destinations, and runbook links still need implementation.
+- Observability and alerting are mapped, request IDs now flow from browser API calls through response headers, timing/error logs, and detailed Orders list segment timing logs, and opt-in browser API timing diagnostics exist; runtime metric emitters, dashboards, thresholds, alert destinations, and runbook links still need implementation.
 - Operational runbooks and DR are mapped, but dedicated runbook pages, owner approval, restore drills, and rollback drills are not complete yet.
 - Privacy and compliance are mapped, but retention/deletion policy, field-level privacy rules, access reviews, and log redaction scans are not complete yet.
 - Production signoff gates are mapped, but the checklist has not yet been used against a full manual release with evidence links.

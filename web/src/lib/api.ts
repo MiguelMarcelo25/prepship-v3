@@ -65,6 +65,27 @@ function isAbortError(err: unknown): boolean {
   return err instanceof Error && err.name === 'AbortError';
 }
 
+function getClientApiTimingThresholdMs(): number {
+  if (typeof localStorage === 'undefined') return Number.POSITIVE_INFINITY;
+  if (localStorage.getItem('prepship:apiTiming') !== '1') return Number.POSITIVE_INFINITY;
+  const configured = Number.parseInt(localStorage.getItem('prepship:apiTimingMs') ?? '3000', 10);
+  return Number.isFinite(configured) && configured >= 0 ? configured : 3000;
+}
+
+function logClientApiTiming(event: {
+  method: string;
+  path: string;
+  status?: number;
+  durationMs: number;
+  requestId: string;
+  error?: string;
+}): void {
+  const thresholdMs = getClientApiTimingThresholdMs();
+  if (!event.error && event.durationMs < thresholdMs) return;
+  const log = event.error ? console.warn : console.info;
+  log('[api:client-timing]', event);
+}
+
 async function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
@@ -114,6 +135,7 @@ async function request<T>(path: string, init: Init = {}): Promise<T> {
   let timedOut = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const abortFromCaller = () => controller.abort();
+  const startedAt = performance.now();
 
   if (signal?.aborted) {
     controller.abort();
@@ -135,22 +157,43 @@ async function request<T>(path: string, init: Init = {}): Promise<T> {
       signal: controller.signal,
     });
   } catch (err) {
+    const durationMs = Math.round(performance.now() - startedAt);
     if (timedOut) {
+      logClientApiTiming({ method, path, durationMs, requestId, error: 'timeout' });
       throw timeoutError(`API ${method} ${path}`, timeoutMs, requestId);
     }
     if (isAbortError(err)) {
+      logClientApiTiming({ method, path, durationMs, requestId, error: 'cancelled' });
       throw new Error(withRequestId(`API ${method} ${path} was cancelled.`, requestId));
     }
+    logClientApiTiming({
+      method,
+      path,
+      durationMs,
+      requestId,
+      error: err instanceof Error ? err.message : String(err),
+    });
     throw err;
   } finally {
     if (timer) clearTimeout(timer);
     signal?.removeEventListener('abort', abortFromCaller);
   }
 
+  const durationMs = Math.round(performance.now() - startedAt);
+  const responseRequestId = res.headers.get('x-request-id') ?? requestId;
+  logClientApiTiming({
+    method,
+    path,
+    status: res.status,
+    durationMs,
+    requestId: responseRequestId,
+    error: res.ok ? undefined : `${res.status} ${res.statusText}`,
+  });
+
   if (res.status === 401) {
     throw new ApiRequestError('Not authenticated', {
       status: res.status,
-      requestId: res.headers.get('x-request-id') ?? requestId,
+      requestId: responseRequestId,
       method,
       path,
     });
@@ -166,7 +209,7 @@ async function request<T>(path: string, init: Init = {}): Promise<T> {
     }
     throw new ApiRequestError(msg, {
       status: res.status,
-      requestId: res.headers.get('x-request-id') ?? requestId,
+      requestId: responseRequestId,
       method,
       path,
     });

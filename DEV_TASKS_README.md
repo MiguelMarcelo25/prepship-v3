@@ -34,7 +34,7 @@
 | Phase | Status | Percent | Why Not 100% Yet |
 |---|---|---:|---|
 | Phase 1 - Runtime Architecture | Complete | 100% | Done |
-| Phase 2 - Observability | Good start | 75% | Observability/alerting signal plan exists, Awaiting Shipment lag investigation is scoped, and browser/API request IDs now flow through request headers, response headers, timing/error logs, and detailed Orders list logs; needs external alerts, p95/p99 dashboards, slow-query dashboard, and status panel |
+| Phase 2 - Observability | Good start | 76% | Observability/alerting signal plan exists, Awaiting Shipment lag investigation is scoped, browser/API request IDs now flow through request headers, response headers, timing/error logs, and detailed Orders list logs, and opt-in browser API timing diagnostics exist; needs external alerts, p95/p99 dashboards, slow-query dashboard, and status panel |
 | Phase 3 - Dashboard + Analysis Cleanup | Mostly complete | 85% | Needs production parity checks, remaining Analysis JSONB audit, and regression tests |
 | Phase 4 - `order_items` Normalization | Mostly complete | 83% | Runtime schema bootstrap now checks migrations; needs production trigger/backfill verification and parity tests |
 | Phase 5 - Reporting Read Models | Started | 30% | `analytics_cache` exists, but full dashboard/daily/SKU/inventory/billing read models are not complete |
@@ -59,7 +59,7 @@
 - [x] Worker owns background sync
 - [x] Pg-boss/job queue foundation
 
-### Phase 2 - Observability: 75%
+### Phase 2 - Observability: 76%
 
 - [x] API timing logs
 - [x] `Server-Timing`
@@ -74,6 +74,7 @@
 - [x] `X-Request-Id` response header and timing/error log correlation
 - [x] Request ID correlation for detailed `[orders:list]` segment timings
 - [x] Browser API calls send request IDs and failed API errors include them
+- [x] Opt-in browser `[api:client-timing]` diagnostics for slow/failed requests
 - [ ] Capture browser Network timing for Awaiting page
 - [~] Correlate Render `[api:timing]` and `[orders:list]` logs
 - [ ] Correlate Supabase slow-query logs for the same timestamps

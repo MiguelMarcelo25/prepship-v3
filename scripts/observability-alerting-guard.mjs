@@ -90,5 +90,7 @@ assert(ordersRoute.includes('requestId: requestId'), 'orders list logs include r
 assert(browserApi.includes('class ApiRequestError'), 'browser API errors preserve request IDs');
 assert(browserApi.includes("finalHeaders['X-Request-Id']"), 'browser API sends X-Request-Id');
 assert(browserApi.includes("res.headers.get('x-request-id')"), 'browser API reads response request ID');
+assert(browserApi.includes("localStorage.getItem('prepship:apiTiming')"), 'browser API has opt-in timing diagnostics');
+assert(browserApi.includes("'[api:client-timing]'"), 'browser API emits opt-in timing log marker');
 assert(corsHelper.includes('X-Request-Id'), 'shared CORS helper allows request ID header');
 assert(corsHelper.includes('Access-Control-Expose-Headers'), 'shared CORS helper exposes response request ID header');

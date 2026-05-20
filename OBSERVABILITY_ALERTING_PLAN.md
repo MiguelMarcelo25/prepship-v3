@@ -4,7 +4,7 @@
 
 This Phase 12 deliverable defines the production signals, metrics, alerts, dashboards, and ownership needed for PrepShip to be enterprise-ready. The goal is to make failures visible before operators or clients discover them in the browser.
 
-This started as a planning/control batch. Runtime implementation has now begun with additive browser/API request ID propagation: the frontend sends `X-Request-Id`, the API exposes `X-Request-Id` / `Server-Timing`, and API timing/error plus detailed Orders list logs include the same request ID. It does not change external API behavior or shipped/cancelled order logic. Remaining implementation should follow this matrix in small batches after owners and alert thresholds are approved.
+This started as a planning/control batch. Runtime implementation has now begun with additive browser/API request ID propagation: the frontend sends `X-Request-Id`, the API exposes `X-Request-Id` / `Server-Timing`, API timing/error plus detailed Orders list logs include the same request ID, and opt-in browser timing logs can be enabled with `localStorage.setItem('prepship:apiTiming', '1')`. It does not change external API behavior or shipped/cancelled order logic. Remaining implementation should follow this matrix in small batches after owners and alert thresholds are approved.
 
 ## Critical Blockers
 
@@ -23,7 +23,7 @@ This started as a planning/control batch. Runtime implementation has now begun w
 | External APIs | Rate/label/sync clients have partial diagnostics | Carrier/store outages can hide in generic UI failures | Add provider/account metrics and alert thresholds |
 | Database | Pool and timeout protections exist | Slow queries can still create page timeouts | Add slow query signal and route-to-query correlation |
 | Worker/jobs | Worker status and heartbeat exist | Failed/stuck jobs can require manual log hunting | Add job success/failure/stuck counters and alerting |
-| Frontend | Failure states improved for key fetches | Browser errors may not be captured centrally | Add frontend error reporting and release/version tags |
+| Frontend | Failure states improved for key fetches and opt-in browser timing logs exist | Browser errors are not yet captured centrally | Add frontend error reporting and release/version tags |
 
 ## Medium-Risk Issues
 
@@ -57,6 +57,7 @@ This started as a planning/control batch. Runtime implementation has now begun w
 - [x] Add a shared request-id middleware and propagate request IDs to logs and response headers.
 - [x] Add request IDs to detailed `/orders` list segment timing logs.
 - [x] Add browser-side request IDs to API calls and failed request errors.
+- [x] Add opt-in browser API timing diagnostics for slow or failed requests.
 - [ ] Standardize structured logs for API errors, external API failures, and worker jobs.
 - [ ] Add route-level metrics for status, duration, and response-size buckets.
 - [ ] Add provider/account-level metrics for ShipStation, direct carriers, and marketplace APIs.
