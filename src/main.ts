@@ -5,6 +5,7 @@ import { logger } from 'hono/logger';
 import { cors } from 'hono/cors';
 import { env } from './lib/env';
 import { isAllowedCorsOrigin } from './lib/http/cors';
+import { observeApiTiming } from './lib/http/api-metrics';
 import { requireAdmin, requireAuth } from './middleware/auth';
 import health from './routes/health';
 import ordersRoute from './routes/orders';
@@ -31,6 +32,7 @@ import carrierAccountsRoute from './routes/carrier-accounts';
 import carriersRoute from './routes/carriers';
 import usersRoute from './routes/users';
 import workerRoute from './routes/worker';
+import observabilityRoute from './routes/observability';
 
 type AppVars = {
   requestId: string;
@@ -65,11 +67,19 @@ app.use('*', async (c, next) => {
     const slowThresholdMs = Number.isFinite(thresholdMs) && thresholdMs > 0 ? thresholdMs : 750;
     c.header('Server-Timing', `app;dur=${durationMs}`);
 
+    const url = new URL(c.req.url);
+    const contentLength = c.res.headers.get('content-length');
+    const responseBytes =
+      contentLength && /^\d+$/.test(contentLength) ? Number(contentLength) : null;
+    observeApiTiming({
+      method: c.req.method,
+      path: url.pathname,
+      status: c.res.status,
+      durationMs,
+      responseBytes,
+    });
+
     if (durationMs >= slowThresholdMs) {
-      const url = new URL(c.req.url);
-      const contentLength = c.res.headers.get('content-length');
-      const responseBytes =
-        contentLength && /^\d+$/.test(contentLength) ? Number(contentLength) : null;
       console.info('[api:timing]', {
         requestId: c.get('requestId'),
         method: c.req.method,
@@ -118,6 +128,7 @@ const protectedPrefixes = [
   '/carriers',
   '/users',
   '/worker',
+  '/observability',
 ];
 
 for (const prefix of protectedPrefixes) {
@@ -127,6 +138,8 @@ for (const prefix of protectedPrefixes) {
 
 app.use('/admin', requireAdmin);
 app.use('/admin/*', requireAdmin);
+app.use('/observability', requireAdmin);
+app.use('/observability/*', requireAdmin);
 
 app.route('/orders', ordersRoute);
 app.route('/shipments', shipmentsRoute);
@@ -151,6 +164,7 @@ app.route('/carrier-accounts', carrierAccountsRoute);
 app.route('/carriers', carriersRoute);
 app.route('/users', usersRoute);
 app.route('/worker', workerRoute);
+app.route('/observability', observabilityRoute);
 
 app.notFound((c) => c.json({ error: 'Not found' }, 404));
 

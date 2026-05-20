@@ -60,7 +60,7 @@ Implemented:
 - Audit logging matrix added as `AUDIT_LOGGING_MATRIX.md`, covering credentials, admin/user changes, labels, orders, inventory, packages, billing, settings, sync/backfill, and print queue events. `npm run test:audit-logging` guards the deliverable.
 - Reconciliation reports plan added as `RECONCILIATION_REPORTS_PLAN.md`, covering order, order-item, shipment, label, billing, inventory, package, rate, fulfillment, client/store, and carrier account reconciliation. `npm run test:reconciliation-plan` guards the deliverable.
 - Marketplace order status reconciliation added as a guarded dry-run/apply path for Walmart/eBay awaiting-count drift. `npm run test:marketplace-reconciliation` guards the status mapping, synthetic-row prevention, and apply-safety contract.
-- Observability and alerting plan added as `OBSERVABILITY_ALERTING_PLAN.md`, covering API, DB, Supabase, worker, sync, rate, label, billing, reporting, and frontend runtime signals. `npm run test:observability-alerting` guards the deliverable.
+- Observability and alerting plan added as `OBSERVABILITY_ALERTING_PLAN.md`, covering API, DB, Supabase, worker, sync, rate, label, billing, reporting, and frontend runtime signals. `npm run test:observability-alerting` guards the deliverable, and `npm run test:api-observability-metrics` guards the admin-only `/observability/api-timing` route snapshot.
 - Operational runbooks and disaster recovery plan added as `OPERATIONAL_RUNBOOKS_AND_DR_PLAN.md`, covering rates, labels, sync, inventory, billing, print queue, frontend, users, credentials, database restore, rollback, suspicious access, deployment, and DR. `npm run test:operational-runbooks` guards the deliverable.
 - Privacy and compliance plan added as `PRIVACY_COMPLIANCE_PLAN.md`, covering customer PII, order identifiers, label artifacts, billing data, credentials, logs, user metadata, generated reports, retention, deletion, and access review. `npm run test:privacy-compliance` guards the deliverable.
 - Production readiness signoff checklist added as `PRODUCTION_READINESS_SIGNOFF.md`, covering local checks, browser smoke, API auth/security smoke, version parity, Render logs, Supabase health, migration status, reconciliation, alert/runbook readiness, rollback, and owner approval. `npm run test:production-signoff` guards the deliverable.
@@ -78,7 +78,7 @@ Confirmed gaps from repo search:
 - Secrets governance is mapped, but rotation, last-used tracking, audit events, and production log/response smoke tests are not complete yet.
 - Audit logging is mapped, but the append-only table/service and runtime event writers are not implemented yet.
 - Reconciliation reporting is mapped, and marketplace awaiting-count repair now has a dry-run/apply path; broader report queries, scheduled runs, artifacts, and non-marketplace repair dry-runs are not implemented yet.
-- Observability and alerting are mapped, request IDs now flow from browser API calls through response headers, timing/error logs, and detailed Orders list segment timing logs, and opt-in browser API timing diagnostics exist; runtime metric emitters, dashboards, thresholds, alert destinations, and runbook links still need implementation.
+- Observability and alerting are mapped, request IDs now flow from browser API calls through response headers, timing/error logs, and detailed Orders list segment timing logs, opt-in browser API timing diagnostics exist, and admins can inspect bounded p95/p99 route snapshots through `/observability/api-timing`; external metric emitters, dashboards, thresholds, alert destinations, and runbook links still need implementation.
 - Operational runbooks and DR are mapped, but dedicated runbook pages, owner approval, restore drills, and rollback drills are not complete yet.
 - Privacy and compliance are mapped, but retention/deletion policy, field-level privacy rules, access reviews, and log redaction scans are not complete yet.
 - Production signoff gates are mapped, but the checklist has not yet been used against a full manual release with evidence links.
@@ -255,6 +255,8 @@ Deliverable table:
 - [x] Include request IDs in backend timing/error logs.
 - [x] Track Render restart/startup maintenance overlap as an Awaiting Shipment incident hypothesis.
 - [x] Require explicit `RUN_ORDERS_PERFORMANCE_MAINTENANCE=true` before startup orders maintenance runs.
+- [x] Add admin-only `/observability/api-timing` p95/p99 API timing snapshot.
+- [x] Add `npm run test:api-observability-metrics`.
 - [ ] Use structured error logs for API failures.
 - [ ] Capture frontend errors.
 - [ ] Count external API failures by provider/account.
@@ -271,7 +273,7 @@ The detailed signal plan now lives in `OBSERVABILITY_ALERTING_PLAN.md`. The cond
 
 | Signal | Current Visibility | Missing Metric/Log | Alert Needed | Owner |
 |---|---|---|---|---|
-| API 5xx and latency | timing logs and `Server-Timing` | route/status/duration p95/p99 counters | 5xx spike and hot-route latency spike | API |
+| API 5xx and latency | timing logs, `Server-Timing`, and `/observability/api-timing` | external route/status/duration alert counters | 5xx spike and hot-route latency spike | API |
 | API 499/timeouts | Render logs/manual review | request-id and route aggregation | timeout/499 spike | API |
 | Slow DB and Supabase pressure | manual Supabase dashboard | slow query, pool saturation, route correlation | slow query and connection saturation | DB |
 | Awaiting Shipment first-load lag | scoped plan plus request IDs and explicit opt-in startup maintenance | browser waterfall plus `/orders`, `/init/counts`, `/orders/daily-stats`, `/orders/distinct-skus`, `[orders:maintenance]`, and Supabase p95/p99 correlation | Awaiting load latency spike | API/Frontend/DB |
@@ -567,6 +569,7 @@ The detailed privacy/compliance plan now lives in `PRIVACY_COMPLIANCE_PLAN.md`. 
 - `npm run test:reconciliation-plan`
 - `npm run test:marketplace-reconciliation`
 - `npm run test:observability-alerting`
+- `npm run test:api-observability-metrics`
 - `npm run test:operational-runbooks`
 - `npm run test:privacy-compliance`
 - `npm run test:production-signoff`

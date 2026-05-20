@@ -4,7 +4,7 @@
 
 This Phase 12 deliverable defines the production signals, metrics, alerts, dashboards, and ownership needed for PrepShip to be enterprise-ready. The goal is to make failures visible before operators or clients discover them in the browser.
 
-This started as a planning/control batch. Runtime implementation has now begun with additive browser/API request ID propagation: the frontend sends `X-Request-Id`, the API exposes `X-Request-Id` / `Server-Timing`, API timing/error plus detailed Orders list logs include the same request ID, and opt-in browser timing logs can be enabled with `localStorage.setItem('prepship:apiTiming', '1')`. It does not change external API behavior or shipped/cancelled order logic. Remaining implementation should follow this matrix in small batches after owners and alert thresholds are approved.
+This started as a planning/control batch. Runtime implementation has now begun with additive browser/API request ID propagation: the frontend sends `X-Request-Id`, the API exposes `X-Request-Id` / `Server-Timing`, API timing/error plus detailed Orders list logs include the same request ID, opt-in browser timing logs can be enabled with `localStorage.setItem('prepship:apiTiming', '1')`, and admins can inspect bounded in-process route latency snapshots at `/observability/api-timing`. It does not change external API behavior or shipped/cancelled order logic. Remaining implementation should follow this matrix in small batches after owners and alert thresholds are approved.
 
 ## Critical Blockers
 
@@ -19,7 +19,7 @@ This started as a planning/control batch. Runtime implementation has now begun w
 
 | Area | Current State | Risk If Unchanged | Required Fix |
 |---|---|---|---|
-| API requests | Timing logs and `Server-Timing` exist | No consistent p95/p99 or alert thresholds | Add request metrics by route, status, and duration bucket |
+| API requests | Timing logs, `Server-Timing`, request IDs, and `/observability/api-timing` exist | No external alert thresholds or centralized dashboard | Add request metrics by route, status, and duration bucket to the external monitoring layer |
 | External APIs | Rate/label/sync clients have partial diagnostics | Carrier/store outages can hide in generic UI failures | Add provider/account metrics and alert thresholds |
 | Database | Pool and timeout protections exist | Slow queries can still create page timeouts | Add slow query signal and route-to-query correlation |
 | Worker/jobs | Worker status and heartbeat exist | Failed/stuck jobs can require manual log hunting | Add job success/failure/stuck counters and alerting |
@@ -39,8 +39,8 @@ This started as a planning/control batch. Runtime implementation has now begun w
 
 | Signal | Current Visibility | Missing Metric / Log | Alert Needed | Owner | Test |
 |---|---|---|---|---|---|
-| API 5xx rate | server logs | route/status p95/p99 error counters | API 5xx spike | API owner | force test route error in staging |
-| API latency | timing middleware and `Server-Timing` | p95/p99 dashboard by route | p95 over threshold for hot routes | API owner | slow route fixture emits metric |
+| API 5xx rate | server logs and `/observability/api-timing` error counts | external route/status alert counters | API 5xx spike | API owner | force test route error in staging |
+| API latency | timing middleware, `Server-Timing`, and `/observability/api-timing` | external p95/p99 dashboard by route | p95 over threshold for hot routes | API owner | slow route fixture emits metric |
 | API 499/timeouts | Render logs | route/client/request-id aggregation | 499 spike or 30s timeout spike | API owner | production log review checklist |
 | Slow DB queries | partial route timing | query duration, table, route correlation | slow query over threshold | DB owner | slow query smoke test |
 | Supabase pool pressure | Supabase dashboard/manual | connection count and saturation alert | high connections/pool timeout | DB owner | Supabase metric review |
@@ -58,6 +58,7 @@ This started as a planning/control batch. Runtime implementation has now begun w
 - [x] Add request IDs to detailed `/orders` list segment timing logs.
 - [x] Add browser-side request IDs to API calls and failed request errors.
 - [x] Add opt-in browser API timing diagnostics for slow or failed requests.
+- [x] Add admin-only `/observability/api-timing` for bounded in-process p95/p99 API timing snapshots by method/path.
 - [ ] Standardize structured logs for API errors, external API failures, and worker jobs.
 - [ ] Add route-level metrics for status, duration, and response-size buckets.
 - [ ] Add provider/account-level metrics for ShipStation, direct carriers, and marketplace APIs.
@@ -69,6 +70,7 @@ This started as a planning/control batch. Runtime implementation has now begun w
 ## Test Plan
 
 - `npm run test:observability-alerting`
+- `npm run test:api-observability-metrics`
 - Future implementation tests:
   - API request emits request ID, route, status, and duration
   - simulated 500 emits safe structured error without secrets
