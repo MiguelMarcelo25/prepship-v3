@@ -32,6 +32,7 @@ export const APP_PERMISSIONS = [
   'settings:write',
   'credentials:read',
   'credentials:write',
+  'financials:read',
   'scope:global',
 ] as const;
 
@@ -46,6 +47,7 @@ const ROLE_PERMISSIONS: Record<AppRole, readonly AppPermission[]> = {
     'settings:write',
     'credentials:read',
     'credentials:write',
+    'financials:read',
   ],
   warehouse: ['settings:read', 'credentials:read'],
   client_user: ['settings:read'],

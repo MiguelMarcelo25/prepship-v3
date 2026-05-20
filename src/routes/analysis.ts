@@ -5,6 +5,7 @@ import { sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
 import { EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
+import { hasAppPermission } from '../middleware/auth';
 
 // v2-parity: exact list from apps/api/src/common/prepship-config.ts.
 // v4 previously used a broad regex `(priority|express|overnight|expedited|...)`
@@ -27,6 +28,7 @@ const app = new Hono();
 
 app.get('/overview', async (c) => {
   const scope = analysisScopeFromContext(c);
+  const canViewFinancials = canViewAnalysisFinancials(c);
   // 2026-05-12 visibility fix: every sub-query excludes rows tied to
   // either (a) is_test clients (sandbox / smoke-test data) or (b)
   // inactive clients (operator disabled them via Settings → Clients).
@@ -115,7 +117,7 @@ app.get('/overview', async (c) => {
     shippedToday: r.shipped_today,
     shippedWeek: r.shipped_week,
     shippedMonth: r.shipped_month,
-    shippingCostMonth: r.shipping_cost_month,
+    shippingCostMonth: canViewFinancials ? r.shipping_cost_month : '0',
   });
 });
 
@@ -129,6 +131,7 @@ app.get('/daily-shipments', zValidator('query', rangeQuery), async (c) => {
   const fromIso = new Date(q.dateFrom).toISOString();
   const toIso = new Date(q.dateTo).toISOString();
   const dailyShipmentsScope = analysisScopeFromContext(c);
+  const canViewFinancials = canViewAnalysisFinancials(c);
   const rows = await db.execute<{
     day: string;
     count: number;
@@ -171,7 +174,11 @@ app.get('/daily-shipments', zValidator('query', rangeQuery), async (c) => {
     group by date_trunc('day', s.ship_date)
     order by date_trunc('day', s.ship_date) desc
   `);
-  return c.json({ data: rows });
+  return c.json({
+    data: canViewFinancials
+      ? rows
+      : rows.map((row) => ({ ...row, total_cost: '0' })),
+  });
 });
 
 const topSkusQuery = rangeQuery.extend({
@@ -203,6 +210,7 @@ type ClientStoreScopeQuery = {
   clientIds?: number[];
   storeIds?: number[];
   scopeRestricted?: boolean;
+  canViewFinancials?: boolean;
 };
 type AnalysisScopeInput = ClientStoreScopeQuery & { storeId?: number; isRestricted?: boolean };
 
@@ -242,6 +250,17 @@ function analysisScopeFromContext(c: Context): ClientStoreScope {
   });
 }
 
+function canViewAnalysisFinancials(c: Context): boolean {
+  return hasAppPermission(
+    {
+      email: c.get('email' as never) as string | undefined,
+      role: c.get('role' as never) as string | undefined,
+      permissions: c.get('permissions' as never) as string[] | undefined,
+    },
+    'financials:read'
+  );
+}
+
 function withAnalysisScope<T extends object>(c: Context, q: T): T & ClientStoreScopeQuery {
   const scope = analysisScopeFromContext(c);
   return {
@@ -249,6 +268,7 @@ function withAnalysisScope<T extends object>(c: Context, q: T): T & ClientStoreS
     clientIds: scope.clientIds,
     storeIds: scope.storeIds,
     scopeRestricted: scope.isRestricted,
+    canViewFinancials: canViewAnalysisFinancials(c),
   };
 }
 
@@ -694,6 +714,7 @@ export async function getSkuBreakdownFromOrderItems(q: SkuBreakdownQuery) {
   `);
 
   const dateBuckets = buildDateBuckets(fromIso, toIso);
+  const canViewFinancials = q.canViewFinancials !== false;
   const enrichedRows = rows.map((r) => {
     const map = (r.daily_qty_map ?? {}) as Record<string, number>;
     const dailyQty = dateBuckets.map((day) => {
@@ -703,7 +724,14 @@ export async function getSkuBreakdownFromOrderItems(q: SkuBreakdownQuery) {
     const { daily_qty_map: _omit, ...rest } = r as SkuBreakdownRow & {
       daily_qty_map?: unknown;
     };
-    return { ...rest, daily_qty: dailyQty };
+    return {
+      ...rest,
+      std_total: canViewFinancials ? rest.std_total : '0',
+      exp_total: canViewFinancials ? rest.exp_total : '0',
+      total_shipping: canViewFinancials ? rest.total_shipping : '0',
+      total_selling_fee: canViewFinancials ? rest.total_selling_fee : '0',
+      daily_qty: dailyQty,
+    };
   });
 
   return {

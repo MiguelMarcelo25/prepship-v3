@@ -10,6 +10,7 @@ import { orders } from '../db/schema/orders';
 import { parentSkus } from '../db/schema/parent-skus';
 import { offsetOf, paginated, paginationSchema } from '../lib/pagination';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
+import { hasAppPermission } from '../middleware/auth';
 import { applyMovement, inventoryStats } from '../services/inventory';
 import {
   importSkusFromOrders,
@@ -104,6 +105,17 @@ function inventoryScopeFromContext(c: Context): ClientStoreScope {
     clientIds: c.get('clientIds' as never) as number[] | undefined,
     storeIds: c.get('storeIds' as never) as number[] | undefined,
   });
+}
+
+function canViewInventoryFinancials(c: Context): boolean {
+  return hasAppPermission(
+    {
+      email: c.get('email' as never) as string | undefined,
+      role: c.get('role' as never) as string | undefined,
+      permissions: c.get('permissions' as never) as string[] | undefined,
+    },
+    'financials:read'
+  );
 }
 
 function inventoryScopePredicate(scope: ClientStoreScope): SQL {
@@ -584,6 +596,7 @@ app.get(
     const id = Number(c.req.param('id'));
     const { days, dateFrom, dateTo } = c.req.valid('query');
     const skuOrdersScope = inventoryScopeFromContext(c);
+    const canViewFinancials = canViewInventoryFinancials(c);
 
     const [row] = await db
       .select({ sku: inventory.sku, name: inventory.name, clientId: inventory.clientId })
@@ -928,16 +941,27 @@ app.get(
       limit 200
     `);
 
+    const visibleShippingSummary = canViewFinancials ? shippingSummary : null;
+    const visibleRows = canViewFinancials
+      ? rows
+      : rows.map((orderRow) => ({
+          ...orderRow,
+          shipping_cost: null,
+          shipping_total: null,
+          standard_shipping_cost: null,
+          standard_shipping_total: null,
+        }));
+
     return c.json({
       sku: row.sku,
       name: row.name,
       clientId: row.clientId,
       totalUnits: dailySales.reduce((sum, r) => sum + r.units, 0),
-      standardShipCount: shippingSummary?.standard_ship_count ?? 0,
-      standardShippingTotal: shippingSummary?.standard_shipping_total ?? '0',
-      avgStandardShippingCost: shippingSummary?.avg_standard_shipping_cost ?? '0',
+      standardShipCount: visibleShippingSummary?.standard_ship_count ?? 0,
+      standardShippingTotal: visibleShippingSummary?.standard_shipping_total ?? '0',
+      avgStandardShippingCost: visibleShippingSummary?.avg_standard_shipping_cost ?? '0',
       dailySales,
-      orders: rows,
+      orders: visibleRows,
     });
   }
 );

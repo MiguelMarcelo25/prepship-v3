@@ -16,8 +16,11 @@ import {
   upsertBillingConfig,
 } from '../services/billing';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
+import { requirePermission } from '../middleware/auth';
 
 const app = new Hono();
+
+app.use('*', requirePermission('financials:read'));
 
 // v2 skips these synthetic/system clients from both the Config and Summary
 // grids (sqlite-billing-repository.ts listBillableClients / listSummary).

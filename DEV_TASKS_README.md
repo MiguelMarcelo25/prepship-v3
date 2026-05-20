@@ -44,7 +44,7 @@
 | Phase 9 - Lazy Loading + UI Performance | Partial | 55% | Needs more lazy-loaded drawers/modals/charts/export tools and all-tool browser audit |
 | Phase 10 - DJ/OpenClaw Security + Failure-State Hardening | Mostly complete | 95% | Unauthenticated production auth smoke checks passed and first runtime permission layer exists; dashboard/analysis/inventory/billing/print-queue/client/init/orders/manifests scoping started; needs authenticated secret checks, deeper raw-error route audit, and label/shipment-sensitive scope review |
 | Phase 11 - Source-of-Truth + Duplication Audit | In progress | 94% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, `order_items`/`analytics_cache`, low-risk orders/inventory indexes, durable job strategy, ShipStation Awaiting parity status, rate backfill status, billing reference-rate status, and print queue latest-run status moved to documented ownership; inventory truth, labels, full job events/artifacts, and shipment-adjacent DDL still remain |
-| Phase 12 - Enterprise Readiness | Scoped/started | 95% | Dashboard, Analysis, Inventory, Billing, Print Queue, Orders, and Manifests read/action ownership are implemented for explicit client/store JWT claims on key surfaces; secrets governance, audit logging, reconciliation reporting, observability/alerting, runbook/DR planning, privacy/compliance, and production signoff are mapped; marketplace awaiting-count reconciliation and key durable latest-run status paths exist; needs label/shipment-sensitive scope review, broader runtime audit/reconciliation/alert implementation, DR drills, and owner signoff evidence |
+| Phase 12 - Enterprise Readiness | Scoped/started | 96% | Dashboard, Analysis, Inventory, Billing, Print Queue, Orders, and Manifests read/action ownership are implemented for explicit client/store JWT claims on key surfaces; first `financials:read` field-level guard now protects Analysis/Dashboard SKU financials, Inventory SKU-order shipping costs, and Billing routes; secrets governance, audit logging, reconciliation reporting, observability/alerting, runbook/DR planning, privacy/compliance, and production signoff are mapped; needs label/shipment-sensitive scope review, remaining field-level DTO review, broader runtime audit/reconciliation/alert implementation, DR drills, and owner signoff evidence |
 | Phase 13 - JWT Session Expiration | Policy ready | 45% | 7-day session policy is documented and guarded; Supabase Auth time-box setting, staging expiry proof, and production evidence are still manual/admin verification steps |
 
 ## Phase Checklist
@@ -217,7 +217,7 @@
 - [ ] remaining legacy JWT/CORS copies cleanup
 - [ ] carrier/store endpoint policy final verification
 
-### Phase 12 - Enterprise Readiness: 95%
+### Phase 12 - Enterprise Readiness: 96%
 
 - [x] `ENTERPRISE_READINESS_AUDIT.md`
 - [x] critical/high/medium issue buckets scoped
@@ -246,6 +246,11 @@
 - [x] `/orders` list/daily-counts/dashboard-sales/ids/store-counts/daily-stats/picklist/distinct-skus/by-number/detail/full/export scope filtering for scoped users
 - [x] `/manifests/generate` GET/POST scope filtering for scoped users
 - [x] `npm run test:orders-manifests-scope`
+- [x] `financials:read` permission added for financial field visibility
+- [x] Analysis/Dashboard top-SKU financial fields redact without `financials:read`
+- [x] Inventory SKU-order shipping-cost fields redact without `financials:read`
+- [x] Billing routes require `financials:read`
+- [x] `npm run test:field-level-rbac`
 - [x] `SECRETS_GOVERNANCE_MATRIX.md`
 - [x] `npm run test:secrets-governance`
 - [x] `AUDIT_LOGGING_MATRIX.md`

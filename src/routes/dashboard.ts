@@ -11,6 +11,7 @@ import { analyticsCacheKey, getAnalyticsCache, setAnalyticsCache } from '../serv
 import { EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
 import { isAdminEmail } from '../lib/admin-emails';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
+import { hasAppPermission } from '../middleware/auth';
 import { getFreshInventoryRiskMetrics } from '../services/reporting-metrics';
 import { getSkuBreakdownFromOrderItems, getSkuDailyFromOrderItems } from './analysis';
 
@@ -109,6 +110,17 @@ function dashboardScopeFromContext(c: Context): ClientStoreScope {
     clientIds: c.get('clientIds' as never) as number[] | undefined,
     storeIds: c.get('storeIds' as never) as number[] | undefined,
   });
+}
+
+function canViewDashboardFinancials(c: Context): boolean {
+  return hasAppPermission(
+    {
+      email: c.get('email' as never) as string | undefined,
+      role: c.get('role' as never) as string | undefined,
+      permissions: c.get('permissions' as never) as string[] | undefined,
+    },
+    'financials:read'
+  );
 }
 
 function intArraySql(values: number[]): SQL {
@@ -442,6 +454,7 @@ app.get('/top-skus', zValidator('query', dashboardTopSkusQuery), async (c) => {
   const q = c.req.valid('query');
   const scope = dashboardScopeFromContext(c);
   const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
+  const canViewFinancials = canViewDashboardFinancials(c);
   type DashboardTopSkusPayload = {
     data: unknown[];
     dateBuckets: string[];
@@ -458,6 +471,7 @@ app.get('/top-skus', zValidator('query', dashboardTopSkusQuery), async (c) => {
     includeInactiveClients,
     hideTestOrders: q.hideTestOrders === true,
     caller: dashboardCallerCacheScope(c, scope),
+    financials: canViewFinancials,
   });
   const cached = await getAnalyticsCache<DashboardTopSkusPayload>(cacheKey);
   if (cached) return c.json(cached);
@@ -470,6 +484,7 @@ app.get('/top-skus', zValidator('query', dashboardTopSkusQuery), async (c) => {
     clientIds: scope.clientIds,
     storeIds: scope.storeIds,
     scopeRestricted: scope.isRestricted,
+    canViewFinancials,
     limit: q.limit,
     hideTestOrders: q.hideTestOrders === true,
     includeCancelled: q.includeCancelled,
