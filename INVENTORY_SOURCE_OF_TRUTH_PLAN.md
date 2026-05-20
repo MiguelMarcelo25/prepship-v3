@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-This Phase 6 / Phase 11 deliverable defines the canonical ownership model for PrepShip inventory quantities, adds a read-only dry-run reconciliation report, and points future repair work to `INVENTORY_REPAIR_APPLY_PLAN.md`. It does not mutate stock, orders, shipments, labels, shipped rows, or cancelled rows.
+This Phase 6 / Phase 11 deliverable defines the canonical ownership model for PrepShip inventory quantities, adds a read-only dry-run reconciliation report with mismatch classification, and points future repair work to `INVENTORY_REPAIR_APPLY_PLAN.md`. It does not mutate stock, orders, shipments, labels, shipped rows, or cancelled rows.
 
 Canonical rule:
 
@@ -57,6 +57,7 @@ Canonical rule:
 - [x] Add static guard for inventory source-of-truth policy.
 - [x] Add dry-run inventory ledger/cache reconciliation report.
 - [x] Add static guard for dry-run-only reconciliation behavior.
+- [x] Add mismatch classifications, recommended actions, and classification counts to the dry-run report.
 - [x] Add `INVENTORY_REPAIR_APPLY_PLAN.md` before any repair/apply implementation.
 - [x] Add static guard for inventory repair/apply planning.
 - [ ] Add owner-approved cache rebuild path with before/after evidence.
@@ -73,6 +74,7 @@ Canonical rule:
   - backend `effectiveStock`
   - visible Inventory page stock
 - [x] Keep the dry-run script read-only with no repair/apply mode.
+- [x] Report `classificationCounts`, row-level `classification`, `recommendedAction`, and `safeToAutoRepair=false`.
 - [x] Document owner approval, saved artifacts, rollback, and prohibited mutations in `INVENTORY_REPAIR_APPLY_PLAN.md`.
 - [ ] Require approval before applying any cache repair.
 - [ ] Add worker-generated inventory metrics for velocity/restock.

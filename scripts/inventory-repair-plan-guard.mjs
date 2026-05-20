@@ -38,11 +38,16 @@ for (const heading of [
 }
 
 for (const text of [
-  'Rows scanned | 967',
+  'Rows scanned | 968',
   'Mismatch rows | 107',
   'Total `inventory.stockQty` vs `inventory_ledger` delta | -1',
   'Total `inventory.stockQty` vs `effectiveStock` delta | -425',
   'Total `inventory_ledger` vs `effectiveStock` delta | 424',
+  '`client_sku_collision_risk` classifications | 93',
+  '`sold_exceeds_received` classifications | 14',
+  'classificationCounts',
+  'recommendedAction',
+  'safeToAutoRepair=false',
   'No stock repair/apply mode is added yet',
   'No mutation of `orders`',
   'No mutation of shipped/cancelled order rows',

@@ -14,30 +14,46 @@ type DbRow = {
   client_id: number | null;
   sku: string;
   name: string | null;
+  active: boolean;
   stock_qty: number;
   ledger_stock: number;
   total_received: number;
   total_sold: number;
   ledger_entries: number;
+  sku_client_count: number;
   last_ledger_at: string | null;
 };
+
+type MismatchClassification =
+  | 'match'
+  | 'missing_receive_ledger'
+  | 'sold_exceeds_received'
+  | 'cache_differs_from_ledger'
+  | 'client_sku_collision_risk'
+  | 'inactive_or_deactivated_sku'
+  | 'reporting_effective_stock_review';
 
 type ReconciliationRow = {
   inventoryId: number;
   clientId: number | null;
   sku: string;
   name: string | null;
+  active: boolean;
   currentStockQty: number;
   ledgerStock: number;
   effectiveStock: number;
   totalReceived: number;
   totalSold: number;
   ledgerEntries: number;
+  skuClientCount: number;
   lastLedgerAt: string | null;
   cacheVsLedgerDelta: number;
   cacheVsEffectiveDelta: number;
   ledgerVsEffectiveDelta: number;
   status: 'match' | 'cache_vs_ledger' | 'cache_vs_effective' | 'ledger_vs_effective';
+  classification: MismatchClassification;
+  recommendedAction: string;
+  safeToAutoRepair: false;
 };
 
 function argValue(name: string): string | null {
@@ -105,6 +121,74 @@ function classify(row: Omit<ReconciliationRow, 'status'>): ReconciliationRow['st
   return 'cache_vs_effective';
 }
 
+function classifyMismatch(row: {
+  active: boolean;
+  currentStockQty: number;
+  ledgerStock: number;
+  totalReceived: number;
+  totalSold: number;
+  ledgerEntries: number;
+  skuClientCount: number;
+  cacheVsLedgerDelta: number;
+  cacheVsEffectiveDelta: number;
+  ledgerVsEffectiveDelta: number;
+}): MismatchClassification {
+  if (!row.active) return 'inactive_or_deactivated_sku';
+  if (row.cacheVsLedgerDelta === 0 && row.cacheVsEffectiveDelta === 0 && row.ledgerVsEffectiveDelta === 0) {
+    return 'match';
+  }
+  if (row.skuClientCount > 1 && row.ledgerVsEffectiveDelta !== 0) {
+    return 'client_sku_collision_risk';
+  }
+  if (row.ledgerEntries === 0 && row.totalSold > 0) {
+    return 'missing_receive_ledger';
+  }
+  if (row.totalSold > row.totalReceived) {
+    return 'sold_exceeds_received';
+  }
+  if (row.cacheVsLedgerDelta !== 0) {
+    return 'cache_differs_from_ledger';
+  }
+  return 'reporting_effective_stock_review';
+}
+
+function recommendedActionFor(classification: MismatchClassification): string {
+  switch (classification) {
+    case 'match':
+      return 'No action needed.';
+    case 'missing_receive_ledger':
+      return 'Review receive/import history before any repair; shipped sales exist without receive ledger coverage.';
+    case 'sold_exceeds_received':
+      return 'Review shipped order history versus receive ledger; do not auto-repair stock from effectiveStock.';
+    case 'cache_differs_from_ledger':
+      return 'Possible cache repair candidate after owner approval and saved dry-run evidence.';
+    case 'client_sku_collision_risk':
+      return 'Confirm client/SKU mapping before repair; same SKU appears across multiple client scopes.';
+    case 'inactive_or_deactivated_sku':
+      return 'Confirm active/deactivated SKU handling before including this row in any repair.';
+    case 'reporting_effective_stock_review':
+      return 'Review effectiveStock formula/source data before changing stock cache.';
+  }
+}
+
+function countByClassification(rows: ReconciliationRow[]): Record<MismatchClassification, number> {
+  const classificationCounts: Record<MismatchClassification, number> = {
+    match: 0,
+    missing_receive_ledger: 0,
+    sold_exceeds_received: 0,
+    cache_differs_from_ledger: 0,
+    client_sku_collision_risk: 0,
+    inactive_or_deactivated_sku: 0,
+    reporting_effective_stock_review: 0,
+  };
+
+  for (const row of rows) {
+    classificationCounts[row.classification] += 1;
+  }
+
+  return classificationCounts;
+}
+
 function toReportRow(row: DbRow): ReconciliationRow {
   const currentStockQty = Number(row.stock_qty) || 0;
   const ledgerStock = Number(row.ledger_stock) || 0;
@@ -116,21 +200,27 @@ function toReportRow(row: DbRow): ReconciliationRow {
     clientId: row.client_id,
     sku: row.sku,
     name: row.name,
+    active: row.active,
     currentStockQty,
     ledgerStock,
     effectiveStock,
     totalReceived,
     totalSold,
     ledgerEntries: Number(row.ledger_entries) || 0,
+    skuClientCount: Number(row.sku_client_count) || 0,
     lastLedgerAt: row.last_ledger_at,
     cacheVsLedgerDelta: ledgerStock - currentStockQty,
     cacheVsEffectiveDelta: effectiveStock - currentStockQty,
     ledgerVsEffectiveDelta: ledgerStock - effectiveStock,
   };
+  const classification = classifyMismatch(base);
 
   return {
     ...base,
     status: classify(base),
+    classification,
+    recommendedAction: recommendedActionFor(classification),
+    safeToAutoRepair: false,
   };
 }
 
@@ -153,6 +243,7 @@ async function loadRows(sql: postgres.Sql, args: Args): Promise<DbRow[]> {
         i.client_id,
         i.sku,
         i.name,
+        i.active,
         i.stock_qty
       from inventory i
       where i.active = true
@@ -188,21 +279,31 @@ async function loadRows(sql: postgres.Sql, args: Args): Promise<DbRow[]> {
       where oi.quantity > 0
         and o.order_status = 'shipped'
       group by i.id
+    ),
+    sku_scope as (
+      select
+        lower(sku) as normalized_sku,
+        count(distinct coalesce(client_id, -1))::int as sku_client_count
+      from scoped_inventory
+      group by lower(sku)
     )
     select
       i.id as inventory_id,
       i.client_id,
       i.sku,
       i.name,
+      i.active,
       i.stock_qty,
       coalesce(ledger.ledger_stock, 0)::int as ledger_stock,
       coalesce(ledger.total_received, 0)::int as total_received,
       coalesce(sold.total_sold, 0)::int as total_sold,
       coalesce(ledger.ledger_entries, 0)::int as ledger_entries,
+      coalesce(sku_scope.sku_client_count, 0)::int as sku_client_count,
       ledger.last_ledger_at
     from scoped_inventory i
     left join ledger on ledger.inventory_id = i.id
     left join sold on sold.inventory_id = i.id
+    left join sku_scope on sku_scope.normalized_sku = lower(i.sku)
   `;
 }
 
@@ -238,6 +339,7 @@ async function main(): Promise<void> {
       totalCacheVsLedgerDelta: mismatches.reduce((sum, row) => sum + row.cacheVsLedgerDelta, 0),
       totalCacheVsEffectiveDelta: mismatches.reduce((sum, row) => sum + row.cacheVsEffectiveDelta, 0),
       totalLedgerVsEffectiveDelta: mismatches.reduce((sum, row) => sum + row.ledgerVsEffectiveDelta, 0),
+      classificationCounts: countByClassification(rows),
       filters: {
         clientId: args.clientId ?? null,
         sku: args.sku ?? null,
@@ -257,6 +359,7 @@ async function main(): Promise<void> {
     console.log(
       `delta(cache-ledger)=${summary.totalCacheVsLedgerDelta} delta(cache-effective)=${summary.totalCacheVsEffectiveDelta} delta(ledger-effective)=${summary.totalLedgerVsEffectiveDelta}`,
     );
+    console.log(`classificationCounts=${JSON.stringify(summary.classificationCounts)}`);
     console.log('No rows changed.');
 
     if (visibleRows.length) {
@@ -272,6 +375,9 @@ async function main(): Promise<void> {
           cacheVsEffective: row.cacheVsEffectiveDelta,
           ledgerVsEffective: row.ledgerVsEffectiveDelta,
           status: row.status,
+          classification: row.classification,
+          safeToAutoRepair: row.safeToAutoRepair,
+          recommendedAction: row.recommendedAction,
         })),
       );
     } else {

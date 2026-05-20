@@ -53,6 +53,16 @@ const requiredScriptText = [
   'cacheVsLedgerDelta',
   'cacheVsEffectiveDelta',
   'ledgerVsEffectiveDelta',
+  'classification',
+  'classificationCounts',
+  'recommendedAction',
+  'safeToAutoRepair',
+  'missing_receive_ledger',
+  'sold_exceeds_received',
+  'cache_differs_from_ledger',
+  'client_sku_collision_risk',
+  'inactive_or_deactivated_sku',
+  'reporting_effective_stock_review',
 ];
 
 for (const text of requiredScriptText) {

@@ -4,7 +4,7 @@
 
 This Phase 12 deliverable scopes the reconciliation reports PrepShip needs before it can be called enterprise-ready. Reconciliation is different from normal page loading: it proves that local PrepShip data agrees with canonical external systems, generated outputs, and internal ledgers.
 
-This is a planning/control batch only. It does not modify order, shipment, label, inventory, package, billing, or fulfillment logic. The goal is to define canonical sources, mismatch detection, repair workflow, and tests before implementation starts. Inventory reconciliation now references `INVENTORY_SOURCE_OF_TRUTH_PLAN.md` for the rule that `inventory_ledger` is canonical movement history and `inventory.stockQty` is a materialized/cache balance, exposes `npm run inventory:reconcile:dry-run` as the first read-only report, and gates future repair through `INVENTORY_REPAIR_APPLY_PLAN.md`. This is the dry-run reconcile path for ledger/cache/effective-stock drift.
+This is a planning/control batch only. It does not modify order, shipment, label, inventory, package, billing, or fulfillment logic. The goal is to define canonical sources, mismatch detection, repair workflow, and tests before implementation starts. Inventory reconciliation now references `INVENTORY_SOURCE_OF_TRUTH_PLAN.md` for the rule that `inventory_ledger` is canonical movement history and `inventory.stockQty` is a materialized/cache balance, exposes `npm run inventory:reconcile:dry-run` as the first read-only report, classifies mismatch causes, and gates future repair through `INVENTORY_REPAIR_APPLY_PLAN.md`. This is the dry-run reconcile path for ledger/cache/effective-stock drift.
 
 ## Critical Blockers
 
@@ -59,6 +59,7 @@ This is a planning/control batch only. It does not modify order, shipment, label
 - [x] Add `npm run inventory:reconcile:dry-run` as the read-only inventory ledger/cache/effective-stock report.
 - [x] Add `npm run test:inventory-reconciliation-dry-run` to guard no mutation and no apply mode.
 - [x] Add `INVENTORY_REPAIR_APPLY_PLAN.md` and `npm run test:inventory-repair-plan` before any inventory repair/apply implementation.
+- [x] Add inventory mismatch classification counts and row-level recommended actions before any repair/apply implementation.
 - [ ] Add operator-facing reports for mismatch counts and CSV export.
 - [ ] Add worker scheduled reconciliation for low-risk reports.
 - [ ] Keep label/shipment/order repair operations behind explicit human review and role checks.

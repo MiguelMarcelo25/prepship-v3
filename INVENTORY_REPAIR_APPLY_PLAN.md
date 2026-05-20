@@ -8,14 +8,16 @@ Latest read-only dry-run evidence from May 20, 2026:
 
 | Metric | Value |
 |---|---:|
-| Rows scanned | 967 |
-| Matched rows | 860 |
+| Rows scanned | 968 |
+| Matched rows | 861 |
 | Mismatch rows | 107 |
 | Total `inventory.stockQty` vs `inventory_ledger` delta | -1 |
 | Total `inventory.stockQty` vs `effectiveStock` delta | -425 |
 | Total `inventory_ledger` vs `effectiveStock` delta | 424 |
+| `client_sku_collision_risk` classifications | 93 |
+| `sold_exceeds_received` classifications | 14 |
 
-Interpretation: `inventory.stockQty` and `inventory_ledger` are nearly aligned. The larger drift is between ledger/cache stock and order-derived `effectiveStock`, so the first fix should not blindly rewrite stock cache. The next engineering step is to classify why shipped-order-derived sold history exceeds received/ledger movement for specific client/SKU pairs.
+Interpretation: `inventory.stockQty` and `inventory_ledger` are nearly aligned. The larger drift is between ledger/cache stock and order-derived `effectiveStock`, and the first classification pass shows most mismatches are client/SKU collision risk rather than simple cache-repair candidates. The next engineering step is to save reviewable dry-run artifacts and inspect the 14 `sold_exceeds_received` rows with the inventory owner before any apply mode exists.
 
 ## Critical Blockers
 
@@ -48,13 +50,14 @@ Interpretation: `inventory.stockQty` and `inventory_ledger` are nearly aligned. 
 - [x] Add `npm run test:inventory-reconciliation-dry-run`.
 - [x] Document latest dry-run evidence and client impact.
 - [x] Add this owner-approval plan before any repair/apply code.
-- [ ] Add JSON/CSV artifact capture for dry-run output.
-- [ ] Add mismatch classification:
+- [x] Add mismatch classification:
   - missing receive ledger
   - order-derived sold exceeds received
   - cache differs from ledger
   - client/SKU collision risk
   - inactive/deactivated SKU
+- [x] Add `classificationCounts`, `recommendedAction`, and `safeToAutoRepair=false` to dry-run output.
+- [ ] Add JSON/CSV artifact capture for dry-run output.
 - [ ] Add owner-approved apply mode in a separate reviewed batch only after dry-run evidence is accepted.
 
 ## Allowed Future Apply Scope
@@ -108,8 +111,7 @@ Future apply-mode tests before any repair code can ship:
 ## Recommended Implementation Order
 
 1. Review this plan and the latest dry-run evidence with DJ/OpenClaw.
-2. Add mismatch classification to the dry-run report.
+2. Review classified mismatch output by client and SKU.
 3. Persist dry-run JSON/CSV artifacts.
-4. Review classified mismatch output by client and SKU.
-5. Implement an owner-approved cache repair mode in a separate batch if still needed.
-6. Add worker-generated sold/velocity/restock reporting metrics after reconciliation ownership is settled.
+4. Implement an owner-approved cache repair mode in a separate batch if still needed.
+5. Add worker-generated sold/velocity/restock reporting metrics after reconciliation ownership is settled.
