@@ -19,13 +19,40 @@ export type Paginated<T> = {
 
 type Init = Omit<RequestInit, 'body'> & { body?: unknown; timeoutMs?: number };
 
+export class ApiRequestError extends Error {
+  status?: number;
+  requestId?: string;
+  method: string;
+  path: string;
+
+  constructor(
+    message: string,
+    options: { status?: number; requestId?: string | null; method: string; path: string }
+  ) {
+    const requestId = options.requestId?.trim() || undefined;
+    super(requestId ? `${message} (Request ID: ${requestId})` : message);
+    this.name = 'ApiRequestError';
+    this.status = options.status;
+    this.requestId = requestId;
+    this.method = options.method;
+    this.path = options.path;
+  }
+}
+
 function seconds(ms: number): number {
   return Math.round(ms / 1000);
 }
 
-function timeoutError(label: string, timeoutMs: number): Error {
+function withRequestId(message: string, requestId?: string): string {
+  return requestId ? `${message} (Request ID: ${requestId})` : message;
+}
+
+function timeoutError(label: string, timeoutMs: number, requestId?: string): Error {
   return new Error(
-    `${label} timed out after ${seconds(timeoutMs)}s. Please retry; if it repeats, Render or Supabase is not responding.`
+    withRequestId(
+      `${label} timed out after ${seconds(timeoutMs)}s. Please retry; if it repeats, Render or Supabase is not responding.`,
+      requestId
+    )
   );
 }
 
@@ -72,6 +99,13 @@ async function request<T>(path: string, init: Init = {}): Promise<T> {
     'Content-Type': 'application/json',
     ...(headers as Record<string, string> | undefined),
   };
+  const requestId =
+    finalHeaders['X-Request-Id'] ||
+    finalHeaders['x-request-id'] ||
+    (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`);
+  finalHeaders['X-Request-Id'] = requestId;
   if (session?.access_token) {
     finalHeaders['Authorization'] = `Bearer ${session.access_token}`;
   }
@@ -102,10 +136,10 @@ async function request<T>(path: string, init: Init = {}): Promise<T> {
     });
   } catch (err) {
     if (timedOut) {
-      throw timeoutError(`API ${method} ${path}`, timeoutMs);
+      throw timeoutError(`API ${method} ${path}`, timeoutMs, requestId);
     }
     if (isAbortError(err)) {
-      throw new Error(`API ${method} ${path} was cancelled.`);
+      throw new Error(withRequestId(`API ${method} ${path} was cancelled.`, requestId));
     }
     throw err;
   } finally {
@@ -114,7 +148,12 @@ async function request<T>(path: string, init: Init = {}): Promise<T> {
   }
 
   if (res.status === 401) {
-    throw new Error('Not authenticated');
+    throw new ApiRequestError('Not authenticated', {
+      status: res.status,
+      requestId: res.headers.get('x-request-id') ?? requestId,
+      method,
+      path,
+    });
   }
 
   if (!res.ok) {
@@ -125,7 +164,12 @@ async function request<T>(path: string, init: Init = {}): Promise<T> {
     } catch {
       // ignore
     }
-    throw new Error(msg);
+    throw new ApiRequestError(msg, {
+      status: res.status,
+      requestId: res.headers.get('x-request-id') ?? requestId,
+      method,
+      path,
+    });
   }
 
   return res.json() as Promise<T>;

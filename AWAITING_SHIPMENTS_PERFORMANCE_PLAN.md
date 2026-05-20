@@ -4,7 +4,7 @@
 
 PrepShip should not jump straight to AWS migration or order archiving until the Awaiting Shipment delay is traced from browser to API to Supabase. The immediate goal is to prove where the page stalls, then fix the confirmed hot path.
 
-Current status: investigation scoped. API request IDs now flow through the `X-Request-Id` response header, `[api:timing]` / `[api:error]` logs, and detailed `[orders:list]` logs so browser Network requests can be correlated with Render route and segment timings.
+Current status: investigation scoped. Browser API calls now send `X-Request-Id`, and that same ID flows through the response header, `[api:timing]` / `[api:error]` logs, and detailed `[orders:list]` logs so Network requests and console errors can be correlated with Render route and segment timings.
 
 Phase 9 follow-up: the first low-risk startup guard now prevents Orders from fetching locations and carrier accounts until an order action, drawer, queue, rate browser, new-order flow, or shipping-account sort actually needs those shared records. The legacy sidebar count path also waits until after first paint, slows polling, and skips hidden tabs. Global markups/settings hydration is delayed on Orders routes while Settings/Rates direct visits stay immediate.
 
@@ -34,7 +34,7 @@ Phase 9 follow-up: the first low-risk startup guard now prevents Orders from fet
 
 1. Capture the browser Network waterfall for a cold Awaiting Shipment load.
 2. Record the exact timestamp, active status, store filter, date range, page size, and whether DevTools cache is disabled.
-3. Copy the browser `X-Request-Id` response header for the slow `/orders` request.
+3. Copy the browser `X-Request-Id` request or response header for the slow `/orders` request.
 4. Pull Render logs for the same timestamp/request ID and compare route durations for:
    - `/orders`
    - `/init/counts`

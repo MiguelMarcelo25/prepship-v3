@@ -64,7 +64,8 @@ export function corsHeaders(
     'Access-Control-Allow-Methods':
       options.methods ?? 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
     'Access-Control-Allow-Headers':
-      options.headers ?? 'Authorization, Content-Type',
+      options.headers ?? 'Authorization, Content-Type, X-Request-Id, X-Correlation-Id',
+    'Access-Control-Expose-Headers': 'X-Request-Id, Server-Timing',
   };
 
   if (options.maxAge) {

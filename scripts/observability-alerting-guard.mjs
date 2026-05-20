@@ -6,6 +6,8 @@ const planPath = 'OBSERVABILITY_ALERTING_PLAN.md';
 const plan = fs.readFileSync(path.join(root, planPath), 'utf8');
 const main = fs.readFileSync(path.join(root, 'src/main.ts'), 'utf8');
 const ordersRoute = fs.readFileSync(path.join(root, 'src/routes/orders.ts'), 'utf8');
+const browserApi = fs.readFileSync(path.join(root, 'web/src/lib/api.ts'), 'utf8');
+const corsHelper = fs.readFileSync(path.join(root, 'src/lib/http/cors.ts'), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
 function assert(condition, message) {
@@ -78,9 +80,15 @@ assert(
 assert(main.includes('X-Request-Id'), 'API returns X-Request-Id response header');
 assert(main.includes('normalizeRequestId'), 'API normalizes incoming request IDs');
 assert(main.includes("c.get('requestId')"), 'API timing/error logs include request ID');
+assert(main.includes('exposeHeaders'), 'API exposes request/timing headers to browsers');
 assert(main.includes("'[api:error]'"), 'API has structured error log marker');
 assert(main.includes("'[api:timing]'"), 'API has structured timing log marker');
 assert(ordersRoute.includes('requestIdFromContext'), 'orders list timing logs read request ID');
 assert(ordersRoute.includes("'[orders:list] completed'"), 'orders list has structured completed log marker');
 assert(ordersRoute.includes("'[orders:list] failed'"), 'orders list has structured failed log marker');
 assert(ordersRoute.includes('requestId: requestId'), 'orders list logs include request ID');
+assert(browserApi.includes('class ApiRequestError'), 'browser API errors preserve request IDs');
+assert(browserApi.includes("finalHeaders['X-Request-Id']"), 'browser API sends X-Request-Id');
+assert(browserApi.includes("res.headers.get('x-request-id')"), 'browser API reads response request ID');
+assert(corsHelper.includes('X-Request-Id'), 'shared CORS helper allows request ID header');
+assert(corsHelper.includes('Access-Control-Expose-Headers'), 'shared CORS helper exposes response request ID header');

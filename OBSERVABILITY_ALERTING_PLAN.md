@@ -4,7 +4,7 @@
 
 This Phase 12 deliverable defines the production signals, metrics, alerts, dashboards, and ownership needed for PrepShip to be enterprise-ready. The goal is to make failures visible before operators or clients discover them in the browser.
 
-This started as a planning/control batch. Runtime implementation has now begun with an additive `X-Request-Id` response header and request ID fields in API timing/error logs plus detailed Orders list timing logs. It does not change external API behavior or shipped/cancelled order logic. Remaining implementation should follow this matrix in small batches after owners and alert thresholds are approved.
+This started as a planning/control batch. Runtime implementation has now begun with additive browser/API request ID propagation: the frontend sends `X-Request-Id`, the API exposes `X-Request-Id` / `Server-Timing`, and API timing/error plus detailed Orders list logs include the same request ID. It does not change external API behavior or shipped/cancelled order logic. Remaining implementation should follow this matrix in small batches after owners and alert thresholds are approved.
 
 ## Critical Blockers
 
@@ -29,7 +29,7 @@ This started as a planning/control batch. Runtime implementation has now begun w
 
 | Area | Concern | Recommended Patch |
 |---|---|---|
-| Request IDs | Request IDs now exist on API responses, API timing/error logs, and detailed Orders list timing logs; worker/frontend propagation is not complete | Extend request ID propagation into worker/job logs and frontend support tooling |
+| Request IDs | Request IDs now exist on browser requests, API responses, API timing/error logs, and detailed Orders list timing logs; worker/job propagation is not complete | Extend request ID propagation into worker/job logs and frontend support tooling |
 | Response size | Large responses can hurt browser speed and bandwidth | Log response-size buckets for heavy routes |
 | Cache health | Cache hits/misses are not fully visible | Track analytics/rate/reporting cache hit ratio |
 | Status panel | Operators need a quick internal health view | Add internal status panel backed by lightweight status APIs |
@@ -56,6 +56,7 @@ This started as a planning/control batch. Runtime implementation has now begun w
 
 - [x] Add a shared request-id middleware and propagate request IDs to logs and response headers.
 - [x] Add request IDs to detailed `/orders` list segment timing logs.
+- [x] Add browser-side request IDs to API calls and failed request errors.
 - [ ] Standardize structured logs for API errors, external API failures, and worker jobs.
 - [ ] Add route-level metrics for status, duration, and response-size buckets.
 - [ ] Add provider/account-level metrics for ShipStation, direct carriers, and marketplace APIs.
