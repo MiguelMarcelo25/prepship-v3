@@ -5,12 +5,14 @@ const root = process.cwd();
 const ordersViewPath = path.join(root, 'web/src/components/Views/OrdersView.tsx');
 const hooksPath = path.join(root, 'web/src/hooks/v2Hooks.ts');
 const sidebarOrdersPath = path.join(root, 'web/src/components/Sidebar/SidebarOrders.tsx');
+const markupsContextPath = path.join(root, 'web/src/contexts/MarkupsContext.tsx');
 const packagePath = path.join(root, 'package.json');
 
-const [ordersView, hooks, sidebarOrders, packageJsonRaw] = await Promise.all([
+const [ordersView, hooks, sidebarOrders, markupsContext, packageJsonRaw] = await Promise.all([
   readFile(ordersViewPath, 'utf8'),
   readFile(hooksPath, 'utf8'),
   readFile(sidebarOrdersPath, 'utf8'),
+  readFile(markupsContextPath, 'utf8'),
   readFile(packagePath, 'utf8'),
 ]);
 
@@ -65,6 +67,18 @@ const checks = [
     name: 'Legacy sidebar count polling pauses while hidden and stays slow',
     pass: sidebarOrders.includes("document.visibilityState !== 'visible'") &&
       sidebarOrders.includes('}, 180_000)'),
+  },
+  {
+    name: 'Orders route delays global markup settings hydration',
+    pass: markupsContext.includes('function getInitialMarkupHydrationDelayMs') &&
+      markupsContext.includes("pathname.startsWith('/orders') ? 3500 : 0") &&
+      markupsContext.includes("api.get<any>('/settings')"),
+  },
+  {
+    name: 'Markup settings hydration is cancellable and hidden-tab gated',
+    pass: markupsContext.includes("document.visibilityState !== 'visible'") &&
+      markupsContext.includes('window.clearTimeout(timerId)') &&
+      markupsContext.includes("document.removeEventListener('visibilitychange', onVisibilityChange)"),
   },
   {
     name: 'Guard is wired into package scripts',

@@ -40,6 +40,10 @@ const MarkupsContext = createContext<MarkupsContextValue | null>(null)
 // individual PUTs for updates.
 const MARKUP_PREFIX = 'markup.'
 
+function getInitialMarkupHydrationDelayMs(pathname: string): number {
+  return pathname.startsWith('/orders') ? 3500 : 0
+}
+
 function keyFor(pidOrCarrier: number | string): string {
   return `${MARKUP_PREFIX}${pidOrCarrier}`
 }
@@ -105,14 +109,33 @@ export function MarkupsProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
-  // Hydrate from /settings on mount so markup edits survive reload.
+  // Hydrate from /settings after auth so markup edits survive reload.
   // Gate on auth: /settings is Supabase-authed, so fire only once auth has
   // resolved AND a session token exists (the MarkupsProvider sits inside
   // AuthProvider but mounts synchronously, before supabase.auth.getSession
   // finishes — firing too early produces a 401 on every page load).
   useEffect(() => {
     if (authLoading || !session?.access_token) return
-    void refreshMarkups()
+
+    let cancelled = false
+    let started = false
+
+    const start = () => {
+      if (cancelled || started || document.visibilityState !== 'visible') return
+      started = true
+      void refreshMarkups()
+    }
+
+    const delayMs = getInitialMarkupHydrationDelayMs(window.location.pathname)
+    const timerId = window.setTimeout(start, delayMs)
+    const onVisibilityChange = () => start()
+    document.addEventListener('visibilitychange', onVisibilityChange)
+
+    return () => {
+      cancelled = true
+      window.clearTimeout(timerId)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
   }, [authLoading, session?.access_token, refreshMarkups])
 
   const saveMarkup = useCallback(
