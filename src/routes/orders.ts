@@ -24,6 +24,7 @@ import {
 import { EXCLUDED_STORE_IDS, EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
 import { isAdminEmail } from '../lib/admin-emails';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
+import { hasAppPermission } from '../middleware/auth';
 
 const app = new Hono();
 
@@ -198,6 +199,58 @@ function ordersScopeFromContext(c: Context): ClientStoreScope {
     clientIds: c.get('clientIds' as never) as number[] | undefined,
     storeIds: c.get('storeIds' as never) as number[] | undefined,
   });
+}
+
+function canViewOrderFinancials(c: Context): boolean {
+  return hasAppPermission(
+    {
+      email: c.get('email' as never) as string | undefined,
+      role: c.get('role' as never) as string | undefined,
+      permissions: c.get('permissions' as never) as string[] | undefined,
+    },
+    'financials:read'
+  );
+}
+
+const RATE_MONEY_FIELD_KEYS = new Set([
+  'amount',
+  'cost',
+  'shipmentCost',
+  'otherCost',
+  'labelCost',
+  'rawCost',
+  'rateCost',
+  'totalCost',
+  'shippingCost',
+  'shippingTotal',
+  'standardShippingCost',
+  'standardShippingTotal',
+]);
+
+function redactRateMoneyFields<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((item) => redactRateMoneyFields(item)) as T;
+  }
+  if (!value || typeof value !== 'object') return value;
+  const out: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    out[key] = RATE_MONEY_FIELD_KEYS.has(key)
+      ? null
+      : redactRateMoneyFields(nested);
+  }
+  return out as T;
+}
+
+function redactOrderFinancials<T extends Record<string, unknown>>(row: T, canViewFinancials: boolean): T {
+  if (canViewFinancials) return row;
+  return {
+    ...row,
+    label: redactRateMoneyFields(row.label),
+    selectedRate: redactRateMoneyFields(row.selectedRate),
+    bestRate: redactRateMoneyFields(row.bestRate),
+    shipping: redactRateMoneyFields(row.shipping),
+    canonicalOrder: redactRateMoneyFields(row.canonicalOrder),
+  };
 }
 
 function orderScopePredicate(scope: ClientStoreScope): SQL | undefined {
@@ -1043,6 +1096,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   const routeStartedAt = performance.now();
   const timings: OrdersListTimings = {};
   const orderScope = ordersScopeFromContext(c);
+  const canViewFinancials = canViewOrderFinancials(c);
   const search = q.search?.trim();
   const searchPattern = search ? `%${search}%` : null;
   const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
@@ -1562,15 +1616,15 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       trackingNumber: canonicalTrackingNumber,
       providerAccountId: canonicalProviderAccountId,
       accountNickname: canonicalAccountNickname,
-      selectedRateAmount,
-      bestRateAmount: bestRatePick.value,
-      labelCost,
+      selectedRateAmount: canViewFinancials ? selectedRateAmount : null,
+      bestRateAmount: canViewFinancials ? bestRatePick.value : null,
+      labelCost: canViewFinancials ? labelCost : null,
       labelCreatedAt,
       shipDate: ship?.ship_date ?? null,
       shipmentId: ship?.label_shipment_id ?? null,
       source: ship ? 'shipment' : overrideBestRate ? 'order_override' : null,
-      selectedRate,
-      bestRate,
+      selectedRate: canViewFinancials ? selectedRate : redactRateMoneyFields(selectedRate),
+      bestRate: canViewFinancials ? bestRate : redactRateMoneyFields(bestRate),
       sourceMap: {
         'shipping.carrierCode': carrierPick.source,
         'shipping.serviceCode': servicePick.source,
@@ -1617,13 +1671,19 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       orderStatus: effectiveOrderStatus,
       legacyClientId,
       overrides: r.overrides,
-      label,
-      selectedRate,
-      bestRate,
+      label: label
+        ? {
+            ...label,
+            cost: canViewFinancials ? labelCost : null,
+            rawCost: canViewFinancials ? baseShipmentCost : null,
+          }
+        : null,
+      selectedRate: canViewFinancials ? selectedRate : redactRateMoneyFields(selectedRate),
+      bestRate: canViewFinancials ? bestRate : redactRateMoneyFields(bestRate),
       shipping,
       canonicalOrder,
     };
-  });
+  }).map((row) => redactOrderFinancials(row, canViewFinancials));
   const totalMs = msSince(routeStartedAt);
   logSlowOrdersList(q, timings, totalMs, {
     rows: rows.length,
@@ -2923,6 +2983,7 @@ function formatCsvSkuList(items: Array<Record<string, unknown>>): string {
 app.get('/export', zValidator('query', exportQuery), async (c) => {
   const q = c.req.valid('query');
   const exportScope = ordersScopeFromContext(c);
+  const canViewFinancials = canViewOrderFinancials(c);
 
   // Auto-exclude is_test clients unless one is explicitly requested — keeps
   // sandbox orders out of the CSV. Mirrors the logic in GET / and
@@ -3128,6 +3189,9 @@ app.get('/export', zValidator('query', exportQuery), async (c) => {
       const m = Number(labelCost) - Number(bestRateAmount);
       if (Number.isFinite(m)) shipMargin = m.toFixed(2);
     }
+    const exportBestRateAmount = canViewFinancials ? bestRateAmount : '';
+    const exportLabelCost = canViewFinancials ? labelCost : '';
+    const exportShipMargin = canViewFinancials ? shipMargin : '';
 
     let ageHrs: string | number = '';
     if (order.orderDate) {
@@ -3167,9 +3231,9 @@ app.get('/export', zValidator('query', exportQuery), async (c) => {
         tracking,
         order.orderTotal,
         order.shippingAmount,
-        bestRateAmount,
-        labelCost,
-        shipMargin,
+        exportBestRateAmount,
+        exportLabelCost,
+        exportShipMargin,
         labelCreated,
         ship?.ship_date ?? '',
         ageHrs,

@@ -5,6 +5,7 @@ import { and, asc, eq, gte, inArray, lte, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
 import { shipments } from '../db/schema/shipments';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
+import { hasAppPermission } from '../middleware/auth';
 
 const app = new Hono();
 
@@ -35,6 +36,7 @@ type ManifestFilters = {
   carrierCode?: string;
   clientId?: number;
   scope?: ClientStoreScope;
+  canViewFinancials?: boolean;
 };
 
 function manifestScopeFromContext(c: Context): ClientStoreScope {
@@ -45,6 +47,17 @@ function manifestScopeFromContext(c: Context): ClientStoreScope {
     clientIds: c.get('clientIds' as never) as number[] | undefined,
     storeIds: c.get('storeIds' as never) as number[] | undefined,
   });
+}
+
+function canViewManifestFinancials(c: Context): boolean {
+  return hasAppPermission(
+    {
+      email: c.get('email' as never) as string | undefined,
+      role: c.get('role' as never) as string | undefined,
+      permissions: c.get('permissions' as never) as string[] | undefined,
+    },
+    'financials:read'
+  );
 }
 
 function manifestClientScopePredicate(scope: ClientStoreScope): SQL | undefined {
@@ -102,8 +115,12 @@ async function loadManifest(filters: ManifestFilters) {
     )
     .orderBy(asc(shipments.shipDate), asc(shipments.id));
 
+  const canViewFinancials = filters.canViewFinancials !== false;
   return {
-    data: rows,
+    data: rows.map((row) => ({
+      ...row,
+      labelCost: canViewFinancials ? row.labelCost : null,
+    })),
     generatedAt: new Date().toISOString(),
     count: rows.length,
   };
@@ -117,6 +134,7 @@ app.get('/generate', zValidator('query', query), async (c) => {
     carrierCode: q.carrierCode,
     clientId: q.clientId,
     scope: manifestScopeFromContext(c),
+    canViewFinancials: canViewManifestFinancials(c),
   });
   return c.json(result);
 });
@@ -138,6 +156,7 @@ app.post('/generate', zValidator('json', postBody), async (c) => {
     carrierCode: b.carrierCode ?? b.carrierId,
     clientId: b.clientId,
     scope: manifestScopeFromContext(c),
+    canViewFinancials: canViewManifestFinancials(c),
   });
   return c.json(result);
 });

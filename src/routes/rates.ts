@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, eq, or, sql } from 'drizzle-orm';
@@ -16,6 +16,7 @@ import { ssRequest } from '../lib/shipstation';
 import type { CarriersResponse } from '../lib/shipstation/types';
 import multiCarrierHandler from '../lib/imported-handlers/rates-multi';
 import { runNodeHandler } from '../lib/node-handler';
+import { hasAppPermission } from '../middleware/auth';
 
 const app = new Hono();
 
@@ -30,6 +31,79 @@ const rateCachePublicColumns = {
   weightVersion: rateCache.weightVersion,
   fetchedAt: rateCache.fetchedAt,
 };
+
+const RATE_MONEY_FIELD_KEYS = [
+  'shipping_amount',
+  'other_amount',
+  'insurance_amount',
+  'confirmation_amount',
+  'original_amount',
+  'list_amount',
+  'retail_amount',
+  'negotiated_amount',
+  'cost',
+  'labelCost',
+  'rawCost',
+  'amount',
+] as const;
+
+function canViewRateFinancials(c: Context): boolean {
+  return hasAppPermission(
+    {
+      email: c.get('email' as never) as string | undefined,
+      role: c.get('role' as never) as string | undefined,
+      permissions: c.get('permissions' as never) as string[] | undefined,
+    },
+    'financials:read'
+  );
+}
+
+function canViewRateAccountMetadata(c: Context): boolean {
+  return hasAppPermission(
+    {
+      email: c.get('email' as never) as string | undefined,
+      role: c.get('role' as never) as string | undefined,
+      permissions: c.get('permissions' as never) as string[] | undefined,
+    },
+    'credentials:read'
+  );
+}
+
+function redactRateMoneyFields<T>(value: T): T {
+  if (value === null || value === undefined) return value;
+  if (Array.isArray(value)) {
+    return value.map((entry) => redactRateMoneyFields(entry)) as T;
+  }
+  if (typeof value !== 'object') return value;
+  const source = value as Record<string, unknown>;
+  const redacted: Record<string, unknown> = {};
+  for (const [key, nestedValue] of Object.entries(source)) {
+    redacted[key] = RATE_MONEY_FIELD_KEYS.includes(key as never)
+      ? null
+      : redactRateMoneyFields(nestedValue);
+  }
+  return redacted as T;
+}
+
+function publicRatesResult<T extends { rates?: unknown; bestRate?: unknown }>(
+  result: T,
+  canViewFinancials: boolean
+): T {
+  if (canViewFinancials) return result;
+  return {
+    ...result,
+    rates: redactRateMoneyFields(result.rates),
+    bestRate: redactRateMoneyFields(result.bestRate),
+  };
+}
+
+function publicRateCacheRow<T extends { rates?: unknown; bestRate?: unknown }>(
+  row: T | null | undefined,
+  canViewFinancials: boolean
+): T | null {
+  if (!row) return null;
+  return publicRatesResult(row, canViewFinancials);
+}
 
 const rateBody = z.object({
   weightOz: z.number().positive(),
@@ -53,12 +127,13 @@ const rateBody = z.object({
 
 app.post('/', zValidator('json', rateBody), async (c) => {
   const body = c.req.valid('json');
+  const canViewFinancials = canViewRateFinancials(c);
   const { forceRefresh, signature, confirmation, ...input } = body;
   const result = await getRates(
     { ...input, confirmation: confirmation ?? signature ?? null },
     { forceRefresh }
   );
-  return c.json(result);
+  return c.json(publicRatesResult(result, canViewFinancials));
 });
 
 const browseBody = rateBody.extend({
@@ -84,6 +159,7 @@ function orderedCarrierIds(carrierIds: string[] | undefined, preferredCarrierId?
 
 app.post('/browse', zValidator('json', browseBody), async (c) => {
   const body = c.req.valid('json');
+  const canViewFinancials = canViewRateFinancials(c);
   const {
     forceRefresh,
     forceLive,
@@ -132,7 +208,7 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
   const statusWhenFound = result.cached ? 'cached' : 'live';
   const isCachedOnlyLookup = Boolean(cachedOnly && !forceRefresh && !forceLive);
   const missingStatus = isCachedOnlyLookup ? 'loading' : 'unavailable';
-  return c.json({
+  const payload = {
     ...result,
     requestKey: result.cacheKey,
     source: result.cached ? 'cache' : filtered.length ? 'live' : 'live',
@@ -162,7 +238,8 @@ app.post('/browse', zValidator('json', browseBody), async (c) => {
         error: diagnostic?.error,
       };
     }),
-  });
+  };
+  return c.json(publicRatesResult(payload, canViewFinancials));
 });
 
 // v2-parity: supports v2's param aliases (wt, zip, l, w, h) AND the modern
@@ -241,6 +318,7 @@ const bulkBody = z.object({
 
 app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
   const { items } = c.req.valid('json');
+  const canViewFinancials = canViewRateFinancials(c);
   const exactKeys = [
     ...new Set(
       items
@@ -343,7 +421,7 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
         cacheKey: computedCacheKey,
         weightOz: it.weightOz,
         toZip: it.toZip,
-        hit: exactHit,
+        hit: publicRateCacheRow(exactHit, canViewFinancials),
         matchQuality: 'exact' as const,
         approximate: false,
       };
@@ -355,7 +433,7 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
       cacheKey: computedCacheKey,
       hit:
         it.weightOz !== undefined && toZip
-          ? rowsByPair.get(`${it.weightOz}|${toZip}`) ?? null
+          ? publicRateCacheRow(rowsByPair.get(`${it.weightOz}|${toZip}`) ?? null, canViewFinancials)
           : null,
       matchQuality: 'rough' as const,
       approximate: true,
@@ -366,6 +444,7 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
 
 app.get('/cached', zValidator('query', cachedQuery), async (c) => {
   const q = c.req.valid('query');
+  const canViewFinancials = canViewRateFinancials(c);
   // weightOz + toZip are required by the schema, so the non-null
   // assertion is safe.
   const rows = await db
@@ -378,7 +457,7 @@ app.get('/cached', zValidator('query', cachedQuery), async (c) => {
       )
     )
     .limit(25);
-  return c.json({ data: rows });
+  return c.json({ data: rows.map((row) => publicRateCacheRow(row, canViewFinancials)) });
 });
 
 app.get('/carriers', async (c) => {
@@ -398,24 +477,30 @@ const carriersForStoreQuery = z.object({
 
 app.get('/carriers-for-store', zValidator('query', carriersForStoreQuery), async (c) => {
   const { storeId, clientId } = c.req.valid('query');
+  const canViewAccountMetadata = canViewRateAccountMetadata(c);
   const carriers = await getCarrierAccountsForRateContext({
     storeId: storeId ?? null,
     clientId: clientId ?? null,
   });
+  const publicCarriers = carriers.map((ca) => ({
+    ...ca,
+    source_client_id: canViewAccountMetadata ? ca.source_client_id : null,
+    source_client_name: canViewAccountMetadata ? ca.source_client_name : null,
+  }));
   const data = carriers.map((ca) => ({
     carrierId: ca.carrier_id,
     carrierCode: ca.carrier_code,
     nickname: ca.nickname ?? ca.friendly_name ?? null,
     friendlyName: ca.friendly_name ?? ca.nickname ?? null,
-    sourceClientId: ca.source_client_id,
-    sourceClientName: ca.source_client_name,
+    sourceClientId: canViewAccountMetadata ? ca.source_client_id : null,
+    sourceClientName: canViewAccountMetadata ? ca.source_client_name : null,
     carrier_id: ca.carrier_id,
     carrier_code: ca.carrier_code,
     friendly_name: ca.friendly_name ?? ca.nickname ?? null,
-    source_client_id: ca.source_client_id,
-    source_client_name: ca.source_client_name,
+    source_client_id: canViewAccountMetadata ? ca.source_client_id : null,
+    source_client_name: canViewAccountMetadata ? ca.source_client_name : null,
   }));
-  return c.json({ carriers, data, storeId: storeId ?? null, clientId: clientId ?? null });
+  return c.json({ carriers: publicCarriers, data, storeId: storeId ?? null, clientId: clientId ?? null });
 });
 
 app.post(

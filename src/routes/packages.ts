@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, desc, eq, lte, sql } from 'drizzle-orm';
@@ -8,6 +8,7 @@ import { packageLedger } from '../db/schema/package-ledger';
 import { ssRequest } from '../lib/shipstation';
 import type { CarriersResponse } from '../lib/shipstation/types';
 import { importStandardPackageDimensions } from '../services/package-dimension-importer';
+import { hasAppPermission } from '../middleware/auth';
 
 const app = new Hono();
 const PACKAGE_START_BACKFILL_DATE = new Date('2026-04-01T00:00:00.000Z');
@@ -53,7 +54,25 @@ function parsePositiveIntQuery(
   return Math.min(Math.floor(parsed), max);
 }
 
-function publicPackageListRow(row: typeof packages.$inferSelect) {
+function canViewPackageFinancials(c: Context): boolean {
+  return hasAppPermission(
+    {
+      email: c.get('email' as never) as string | undefined,
+      role: c.get('role' as never) as string | undefined,
+      permissions: c.get('permissions' as never) as string[] | undefined,
+    },
+    'financials:read'
+  );
+}
+
+function publicPackageRow(row: typeof packages.$inferSelect, canViewFinancials: boolean) {
+  return {
+    ...row,
+    unitCost: canViewFinancials ? row.unitCost : null,
+  };
+}
+
+function publicPackageListRow(row: typeof packages.$inferSelect, canViewFinancials: boolean) {
   return {
     id: row.id,
     name: row.name,
@@ -66,8 +85,28 @@ function publicPackageListRow(row: typeof packages.$inferSelect) {
     packageCode: row.packageCode,
     stockQty: row.stockQty,
     reorderLevel: row.reorderLevel,
-    unitCost: row.unitCost,
+    unitCost: canViewFinancials ? row.unitCost : null,
     isDefault: row.isDefault,
+  };
+}
+
+function publicPackageLedgerRow(row: typeof packageLedger.$inferSelect, canViewFinancials: boolean) {
+  return {
+    ...row,
+    unitCost: canViewFinancials ? row.unitCost : null,
+  };
+}
+
+function redactPackageMutationResult<T extends { package: typeof packages.$inferSelect; ledgerEntry?: typeof packageLedger.$inferSelect }>(
+  result: T,
+  canViewFinancials: boolean,
+) {
+  return {
+    ...result,
+    package: publicPackageRow(result.package, canViewFinancials),
+    ledgerEntry: result.ledgerEntry
+      ? publicPackageLedgerRow(result.ledgerEntry, canViewFinancials)
+      : result.ledgerEntry,
   };
 }
 
@@ -88,6 +127,7 @@ async function listPackagesCached() {
 
 app.get('/', async (c) => {
   const rows = await listPackagesCached();
+  const canViewFinancials = canViewPackageFinancials(c);
   const wantsPaged =
     c.req.query('page') !== undefined ||
     c.req.query('pageSize') !== undefined ||
@@ -99,7 +139,7 @@ app.get('/', async (c) => {
     const lightweight = boolQuery(c.req.query('lightweight'));
     const data = rows
       .slice(start, start + pageSize)
-      .map((row) => (lightweight ? publicPackageListRow(row) : row));
+      .map((row) => (lightweight ? publicPackageListRow(row, canViewFinancials) : publicPackageRow(row, canViewFinancials)));
     return c.json({
       data,
       pagination: {
@@ -110,24 +150,28 @@ app.get('/', async (c) => {
       },
     });
   }
-  return c.json(rows);
+  return c.json(rows.map((row) => publicPackageRow(row, canViewFinancials)));
 });
 
 app.get('/:id{[0-9]+}', async (c) => {
+  const canViewFinancials = canViewPackageFinancials(c);
   const id = Number(c.req.param('id'));
   const [row] = await db.select().from(packages).where(eq(packages.id, id)).limit(1);
   if (!row) return c.json({ error: 'Package not found' }, 404);
-  return c.json(row);
+  return c.json(publicPackageRow(row, canViewFinancials));
 });
 
 app.post('/', zValidator('json', body), async (c) => {
+  const canViewFinancials = canViewPackageFinancials(c);
   const v = c.req.valid('json');
   const [row] = await db.insert(packages).values(v).returning();
+  if (!row) return c.json({ error: 'Package could not be created' }, 500);
   invalidatePackagesCache();
-  return c.json(row, 201);
+  return c.json(publicPackageRow(row, canViewFinancials), 201);
 });
 
 app.patch('/:id{[0-9]+}', zValidator('json', body.partial()), async (c) => {
+  const canViewFinancials = canViewPackageFinancials(c);
   const id = Number(c.req.param('id'));
   const v = c.req.valid('json');
   const [row] = await db
@@ -137,7 +181,7 @@ app.patch('/:id{[0-9]+}', zValidator('json', body.partial()), async (c) => {
     .returning();
   if (!row) return c.json({ error: 'Package not found' }, 404);
   invalidatePackagesCache();
-  return c.json(row);
+  return c.json(publicPackageRow(row, canViewFinancials));
 });
 
 app.delete('/:id{[0-9]+}', async (c) => {
@@ -221,6 +265,7 @@ const receiveBody = z.object({
 });
 
 app.post('/:id{[0-9]+}/receive', zValidator('json', receiveBody), async (c) => {
+  const canViewFinancials = canViewPackageFinancials(c);
   const id = Number(c.req.param('id'));
   const { qty, unitCost, note } = c.req.valid('json');
 
@@ -257,12 +302,13 @@ app.post('/:id{[0-9]+}/receive', zValidator('json', receiveBody), async (c) => {
       })
       .returning();
 
+    if (!updated || !entry) return null;
     return { package: updated, ledgerEntry: entry };
   });
 
   if (!result) return c.json({ error: 'Package not found' }, 404);
   invalidatePackagesCache();
-  return c.json({ data: result });
+  return c.json({ data: redactPackageMutationResult(result, canViewFinancials) });
 });
 
 const adjustBody = z.object({
@@ -271,6 +317,7 @@ const adjustBody = z.object({
 });
 
 app.post('/:id{[0-9]+}/adjust', zValidator('json', adjustBody), async (c) => {
+  const canViewFinancials = canViewPackageFinancials(c);
   const id = Number(c.req.param('id'));
   const { qtyDelta, note } = c.req.valid('json');
 
@@ -300,15 +347,17 @@ app.post('/:id{[0-9]+}/adjust', zValidator('json', adjustBody), async (c) => {
       })
       .returning();
 
+    if (!updated || !entry) return null;
     return { package: updated, ledgerEntry: entry };
   });
 
   if (!result) return c.json({ error: 'Package not found' }, 404);
   invalidatePackagesCache();
-  return c.json({ data: result });
+  return c.json({ data: redactPackageMutationResult(result, canViewFinancials) });
 });
 
 app.get('/:id{[0-9]+}/ledger', async (c) => {
+  const canViewFinancials = canViewPackageFinancials(c);
   const id = Number(c.req.param('id'));
   const rawLimit = Number(c.req.query('limit'));
   const limit = Number.isFinite(rawLimit) && rawLimit > 0
@@ -322,7 +371,7 @@ app.get('/:id{[0-9]+}/ledger', async (c) => {
     .orderBy(desc(packageLedger.createdAt))
     .limit(limit);
 
-  return c.json({ data: rows });
+  return c.json({ data: rows.map((row) => publicPackageLedgerRow(row, canViewFinancials)) });
 });
 
 // GET /packages/usage-summary?days=30
@@ -368,6 +417,7 @@ app.get('/usage-summary', async (c) => {
 
 // v2-parity: PUT /packages/:id — alias for PATCH. v2 apiClient sends PUT.
 app.put('/:id{[0-9]+}', zValidator('json', body.partial()), async (c) => {
+  const canViewFinancials = canViewPackageFinancials(c);
   const id = Number(c.req.param('id'));
   const v = c.req.valid('json');
   const [row] = await db
@@ -377,7 +427,7 @@ app.put('/:id{[0-9]+}', zValidator('json', body.partial()), async (c) => {
     .returning();
   if (!row) return c.json({ error: 'Package not found' }, 404);
   invalidatePackagesCache();
-  return c.json(row);
+  return c.json(publicPackageRow(row, canViewFinancials));
 });
 
 // v2-parity: PATCH /packages/:id/reorder-level {reorderLevel}. Dedicated path so
@@ -386,6 +436,7 @@ app.patch(
   '/:id{[0-9]+}/reorder-level',
   zValidator('json', z.object({ reorderLevel: z.number().int().nonnegative() })),
   async (c) => {
+    const canViewFinancials = canViewPackageFinancials(c);
     const id = Number(c.req.param('id'));
     const { reorderLevel } = c.req.valid('json');
     const [row] = await db
@@ -395,7 +446,7 @@ app.patch(
       .returning();
     if (!row) return c.json({ error: 'Package not found' }, 404);
     invalidatePackagesCache();
-    return c.json(row);
+    return c.json(publicPackageRow(row, canViewFinancials));
   }
 );
 
@@ -415,6 +466,7 @@ app.post(
     })
   ),
   async (c) => {
+    const canViewFinancials = canViewPackageFinancials(c);
     const { length, width, height, name, tareWeightOz } = c.req.valid('json');
     const tol = 0.1;
     const [existing] = await db
@@ -428,7 +480,7 @@ app.post(
         )
       )
       .limit(1);
-    if (existing) return c.json({ data: existing, created: false });
+    if (existing) return c.json({ data: publicPackageRow(existing, canViewFinancials), created: false });
 
     const genName = name ?? `Custom ${length}x${width}x${height}`;
     const [row] = await db
@@ -443,8 +495,9 @@ app.post(
         source: 'custom',
       })
       .returning();
+    if (!row) return c.json({ error: 'Package could not be created' }, 500);
     invalidatePackagesCache();
-    return c.json({ data: row, created: true }, 201);
+    return c.json({ data: publicPackageRow(row, canViewFinancials), created: true }, 201);
   }
 );
 
@@ -462,12 +515,13 @@ app.post('/import-standard-dimensions', async (c) => {
 // v2-parity: GET /packages/low-stock — packages whose stockQty is at or
 // below reorderLevel. Used by the Packages view's "needs reorder" badge.
 app.get('/low-stock', async (c) => {
+  const canViewFinancials = canViewPackageFinancials(c);
   const rows = await db
     .select()
     .from(packages)
     .where(lte(packages.stockQty, packages.reorderLevel))
     .orderBy(packages.stockQty);
-  return c.json({ data: rows });
+  return c.json({ data: rows.map((row) => publicPackageRow(row, canViewFinancials)) });
 });
 
 // v2-parity: GET /packages/find-by-dims?length=&width=&height=
@@ -484,6 +538,7 @@ app.get(
     })
   ),
   async (c) => {
+    const canViewFinancials = canViewPackageFinancials(c);
     const { length, width, height } = c.req.valid('query');
     const tol = 0.1;
     const [row] = await db
@@ -497,7 +552,7 @@ app.get(
         )
       )
       .limit(1);
-    return c.json({ package: row ?? null });
+    return c.json({ package: row ? publicPackageRow(row, canViewFinancials) : null });
   }
 );
 
