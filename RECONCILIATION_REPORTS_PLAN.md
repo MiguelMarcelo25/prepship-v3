@@ -38,7 +38,8 @@ This is a planning/control batch only. It does not modify order, shipment, label
 
 | Reconciliation | Canonical Source | Local Source | Mismatch Detection | Repair Process | Owner | Test |
 |---|---|---|---|---|---|---|
-| ShipStation orders vs local orders | ShipStation/store APIs | `orders` | missing local, missing upstream, stale status/date/store/client | resync by external id/date range | Sync owner | seeded missing/stale order report |
+| ShipStation orders vs local orders | ShipStation API | `orders` | missing local, missing upstream, stale status/date/store/client | resync by external id/date range | Sync owner | seeded missing/stale order report |
+| Marketplace orders vs local orders | Walmart/eBay `store_orders` | `orders` | marketplace terminal status while local order remains awaiting, duplicate synthetic/direct rows | `npm run marketplace:reconcile` dry-run, then reviewed apply | Marketplace sync owner | `npm run test:marketplace-reconciliation` |
 | `orders.items` vs `order_items` | `orders.items` ingestion payload | `order_items` | order item count/qty/revenue mismatch | rerun order_items repair/backfill | Analytics owner | order_items parity test |
 | ShipStation shipments vs local shipments | ShipStation shipments/labels API | `shipments` | missing shipment, tracking mismatch, cost mismatch | resync shipment by id/order | Fulfillment owner | shipment mismatch report |
 | Labels vs billing line items | label/provider cost + package usage | billing line items | missing line item, cost mismatch, duplicate charge | regenerate billing lines for range/client | Billing owner | billing-label parity test |
@@ -61,6 +62,8 @@ This is a planning/control batch only. It does not modify order, shipment, label
 - [x] Add `INVENTORY_REPAIR_APPLY_PLAN.md` and `npm run test:inventory-repair-plan` before any inventory repair/apply implementation.
 - [x] Add inventory mismatch classification counts and row-level recommended actions before any repair/apply implementation.
 - [x] Add dry-run JSON/CSV artifacts through `--out-json` and `--out-csv`.
+- [x] Add Walmart/eBay marketplace status reconciliation dry-run/apply for awaiting-count drift.
+- [x] Allow stale synthetic direct marketplace rows to reconcile only when no real ShipStation row owns the order number.
 - [ ] Add operator-facing reports for mismatch counts and downloadable CSV export.
 - [ ] Add worker scheduled reconciliation for low-risk reports.
 - [ ] Keep label/shipment/order repair operations behind explicit human review and role checks.
@@ -70,6 +73,7 @@ This is a planning/control batch only. It does not modify order, shipment, label
 - `npm run test:reconciliation-plan`
 - `npm run test:inventory-reconciliation-dry-run`
 - `npm run test:inventory-repair-plan`
+- `npm run test:marketplace-reconciliation`
 - Future implementation tests:
   - seeded `orders.items` vs `order_items` mismatch is detected
   - billing summary mismatch against line items is detected
@@ -83,6 +87,7 @@ This is a planning/control batch only. It does not modify order, shipment, label
 - This matrix is planning-only and safe to deploy with documentation and guard changes.
 - Reconciliation reporting should be read-only first.
 - Repair workflows must be separate from detection workflows and should require explicit operator/admin action.
+- For direct marketplace drift, dry-run first with `npm run marketplace:reconcile -- --provider ebay --order-number 12-14640-05489`; only apply after the candidate table proves the row is still awaiting and `store_orders` has a terminal status.
 - Shipment/order repair work must be reviewed separately because it can touch locked operational surfaces.
 - Rollback for report code should disable scheduled runs without deleting historical report output.
 
@@ -92,5 +97,5 @@ This is a planning/control batch only. It does not modify order, shipment, label
 2. Implement read-only `order_items` parity and billing summary parity reports first.
 3. Review `npm run inventory:reconcile:dry-run` output and `INVENTORY_REPAIR_APPLY_PLAN.md`, then implement package ledger parity reports.
 4. Implement rate cache vs label cost report.
-5. Implement external orders/shipments/client-store reconciliation.
+5. Continue external orders/shipments/client-store reconciliation, starting with dry-run marketplace status repairs.
 6. Add repair dry-runs only after report correctness is proven.

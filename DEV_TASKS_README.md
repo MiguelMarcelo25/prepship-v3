@@ -290,6 +290,9 @@
 - [x] dry-run classification counts and row-level recommended actions
 - [x] Walmart/eBay marketplace order pullers use shared JWT/CORS helpers
 - [x] `npm run test:marketplace-order-auth-cors`
+- [x] Direct eBay/Walmart marketplace status drift is separated from ShipStation PS-001
+- [x] Stale synthetic marketplace awaiting rows can reconcile to shipped/cancelled when `store_orders` has a terminal status and no real ShipStation row owns the order number
+- [x] `npm run test:marketplace-reconciliation`
 - [~] runtime DDL migration cleanup
 - [~] inventory source-of-truth cleanup
 - [~] full durable job progress/events and artifact storage
@@ -346,6 +349,7 @@
 - [x] `RECONCILIATION_REPORTS_PLAN.md`
 - [x] `npm run test:reconciliation-plan`
 - [x] marketplace status reconciliation dry-run/apply script
+- [x] direct eBay marketplace awaiting drift is tracked as marketplace reconciliation, not ShipStation sync
 - [x] `npm run test:marketplace-reconciliation`
 - [x] `OBSERVABILITY_ALERTING_PLAN.md`
 - [x] `npm run test:observability-alerting`

@@ -49,8 +49,10 @@ function printUsage(): void {
   console.log(`
 Usage:
   npm run marketplace:reconcile -- --provider walmart --order-number 200014896300359
+  npm run marketplace:reconcile -- --provider ebay --order-number 12-14640-05489
   npm run marketplace:reconcile -- --provider walmart --store-account-id 1
   npm run marketplace:reconcile:apply -- --provider walmart --store-account-id 1
+  npm run marketplace:reconcile:apply -- --provider ebay --order-number 12-14640-05489
 
 Defaults:
   --provider all
@@ -58,7 +60,8 @@ Defaults:
 
 Safety:
   Only orders currently awaiting_shipment can be updated.
-  Synthetic marketplace mirror rows are ignored.
+  Real ShipStation/non-synthetic rows win first.
+  Synthetic marketplace rows are reconciled only when no real ShipStation row owns the order number.
 `);
 }
 

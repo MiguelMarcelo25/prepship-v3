@@ -196,7 +196,7 @@ export async function reconcileMarketplaceOrderStatuses(
       continue;
     }
 
-    const candidates = await sql<Array<{
+    const realRows = await sql<Array<{
       id: number;
       orderNumber: string;
       externalOrderId: string;
@@ -214,10 +214,45 @@ export async function reconcileMarketplaceOrderStatuses(
       ORDER BY id
     `;
 
+    let candidates = realRows.filter((row) => shouldUpdateMarketplaceOrderStatus(row.currentStatus, targetStatus));
+    if (realRows.length > 0 && candidates.length === 0) {
+      result.skipped.push({
+        orderNumber,
+        reason: 'real ShipStation row already owns order number or is not awaiting',
+        sourceStatuses,
+        targetStatus,
+      });
+      continue;
+    }
+
+    if (!realRows.length) {
+      // Direct marketplace-only orders can exist as a synthetic marketplace row.
+      // Reconcile that row only when no real ShipStation/non-synthetic row owns the order number.
+      const syntheticRows = await sql<Array<{
+        id: number;
+        orderNumber: string;
+        externalOrderId: string;
+        currentStatus: string;
+      }>>`
+        SELECT
+          id,
+          order_number AS "orderNumber",
+          external_order_id AS "externalOrderId",
+          order_status AS "currentStatus"
+        FROM orders
+        WHERE order_number = ${orderNumber}
+          AND order_status = 'awaiting_shipment'
+          AND external_order_id LIKE ${syntheticPrefix}
+        ORDER BY id
+      `;
+
+      candidates = syntheticRows.filter((row) => shouldUpdateMarketplaceOrderStatus(row.currentStatus, targetStatus));
+    }
+
     if (!candidates.length) {
       result.skipped.push({
         orderNumber,
-        reason: 'no visible awaiting ShipStation row matched',
+        reason: 'no visible awaiting marketplace row matched',
         sourceStatuses,
         targetStatus,
       });

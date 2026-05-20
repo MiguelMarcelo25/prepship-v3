@@ -44,6 +44,18 @@ const script = readFileSync('scripts/reconcile-marketplace-order-status.ts', 'ut
 assert.match(script, /dryRun:\s*!apply/);
 assert.match(script, /Only orders currently awaiting_shipment can be updated/);
 assert.match(script, /marketplace:reconcile:apply/);
+assert.match(script, /--provider ebay --order-number 12-14640-05489/);
+assert.match(
+  script,
+  /Synthetic marketplace rows are reconciled only when no real ShipStation row owns the order number/,
+);
+
+const reconciliationSource = readFileSync('api/_lib/marketplace-status-reconciliation.ts', 'utf8');
+assert.match(reconciliationSource, /synthetic marketplace row/i);
+assert.ok(
+  reconciliationSource.includes('external_order_id LIKE ${syntheticPrefix}'),
+  'direct marketplace synthetic rows must be eligible when no real ShipStation row owns the order number',
+);
 
 for (const file of ['api/carriers/walmart/orders.ts', 'api/carriers/ebay/orders.ts']) {
   const source = readFileSync(file, 'utf8');
