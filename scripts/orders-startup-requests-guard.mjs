@@ -4,13 +4,15 @@ import path from 'node:path';
 const root = process.cwd();
 const ordersViewPath = path.join(root, 'web/src/components/Views/OrdersView.tsx');
 const hooksPath = path.join(root, 'web/src/hooks/v2Hooks.ts');
+const homePath = path.join(root, 'web/src/Home.tsx');
 const sidebarOrdersPath = path.join(root, 'web/src/components/Sidebar/SidebarOrders.tsx');
 const markupsContextPath = path.join(root, 'web/src/contexts/MarkupsContext.tsx');
 const packagePath = path.join(root, 'package.json');
 
-const [ordersView, hooks, sidebarOrders, markupsContext, packageJsonRaw] = await Promise.all([
+const [ordersView, hooks, home, sidebarOrders, markupsContext, packageJsonRaw] = await Promise.all([
   readFile(ordersViewPath, 'utf8'),
   readFile(hooksPath, 'utf8'),
+  readFile(homePath, 'utf8'),
   readFile(sidebarOrdersPath, 'utf8'),
   readFile(markupsContextPath, 'utf8'),
   readFile(packagePath, 'utf8'),
@@ -67,6 +69,21 @@ const checks = [
     name: 'Legacy sidebar count polling pauses while hidden and stays slow',
     pass: sidebarOrders.includes("document.visibilityState !== 'visible'") &&
       sidebarOrders.includes('}, 180_000)'),
+  },
+  {
+    name: 'Orders sync status polling is delayed and hidden-tab gated',
+    pass: home.includes("if (displayView !== 'orders') return") &&
+      home.includes('}, 5000)') &&
+      home.includes('apiClient.fetchLegacySyncStatus()') &&
+      home.includes("document.visibilityState !== 'visible'") &&
+      home.includes('}, 120_000)'),
+  },
+  {
+    name: 'Worker status polling is delayed and hidden-tab gated',
+    pass: home.includes('apiClient.fetchSyncWorkerStatus()') &&
+      home.includes('}, 7000)') &&
+      home.includes("document.visibilityState !== 'visible'") &&
+      home.includes('}, 120_000)'),
   },
   {
     name: 'Orders route delays global markup settings hydration',
