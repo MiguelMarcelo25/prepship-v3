@@ -396,6 +396,7 @@ interface InventoryColumnLayout {
 }
 
 const INVENTORY_COLUMN_LAYOUT_KEY = 'inventory_column_layout'
+const INVENTORY_ACTIVE_ONLY_KEY = 'inventory_active_only'
 const INVENTORY_COLUMN_KEY_SET = new Set<InventoryColumnKey>(INVENTORY_DEFAULT_COLUMN_ORDER)
 
 function isInventoryColumnKey(value: unknown): value is InventoryColumnKey {
@@ -443,6 +444,25 @@ function writeStoredInventoryColumnLayout(layout: InventoryColumnLayout): void {
       INVENTORY_COLUMN_LAYOUT_KEY,
       JSON.stringify({ order: layout.order, hidden: layout.hidden }),
     )
+  } catch { /* best-effort */ }
+}
+
+function readStoredInventoryActiveOnly(): boolean {
+  if (typeof window === 'undefined') return true
+  try {
+    const raw = window.localStorage.getItem(INVENTORY_ACTIVE_ONLY_KEY)
+    // Fresh browsers should open the normal stock view. Operators can
+    // still flip to the deactivated-only view and keep that preference.
+    return raw === null ? true : raw === 'true'
+  } catch {
+    return true
+  }
+}
+
+function writeStoredInventoryActiveOnly(activeOnly: boolean): void {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(INVENTORY_ACTIVE_ONLY_KEY, String(activeOnly))
   } catch { /* best-effort */ }
 }
 
@@ -895,22 +915,12 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
   const [stockSearch, setStockSearch] = useState('')
   const [stockClientId, setStockClientId] = useState('')
   const [alertOnly, setAlertOnly] = useState(false)
-  // "Active only" toggle — DEFAULT FLIPPED to OFF 2026-05-12 per
-  // operator request: deactivated SKUs should stay VISIBLE but
-  // greyscale-styled + clustered at the bottom (not hidden). The
-  // <Table>'s pinRowToBottom prop + .inventory-row-inactive CSS
-  // class implement that look. Operators who prefer the old
-  // "hide inactive entirely" behavior can still flip this toggle
-  // ON via the toolbar. Persisted to localStorage.
-  const [activeOnly, setActiveOnly] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false
-    const raw = window.localStorage.getItem('inventory_active_only')
-    // Default to OFF if nothing is stored. Explicit 'true' turns it on.
-    return raw === null ? false : raw === 'true'
-  })
+  // Status mode defaults to Active only so a fresh browser opens the
+  // normal Stock Levels view. Operators can still flip to the
+  // deactivated-only view, and that preference is persisted locally.
+  const [activeOnly, setActiveOnly] = useState<boolean>(readStoredInventoryActiveOnly)
   useEffect(() => {
-    if (typeof window === 'undefined') return
-    window.localStorage.setItem('inventory_active_only', String(activeOnly))
+    writeStoredInventoryActiveOnly(activeOnly)
   }, [activeOnly])
   const [stockPage, setStockPage] = useState(1)
   const [stockPageSize, setStockPageSize] = useState<number>(readStoredInventoryPageSize)
