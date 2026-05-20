@@ -19,6 +19,7 @@ Companion DJ/OpenClaw documents:
 - `PRODUCTION_READINESS_SIGNOFF.md`
 - `DURABLE_JOBS_PLAN.md`
 - `JWT_SESSION_EXPIRATION_PLAN.md`
+- `INVENTORY_SOURCE_OF_TRUTH_PLAN.md`
 - `LABEL_SHIPMENT_SCOPE_REVIEW.md`
 - `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md`
 - `SECURITY_PATCH_PLAN.md`
@@ -65,6 +66,7 @@ Implemented:
 - Production readiness signoff checklist added as `PRODUCTION_READINESS_SIGNOFF.md`, covering local checks, browser smoke, API auth/security smoke, version parity, Render logs, Supabase health, migration status, reconciliation, alert/runbook readiness, rollback, and owner approval. `npm run test:production-signoff` guards the deliverable.
 - Durable jobs plan added as `DURABLE_JOBS_PLAN.md`, covering sync, reporting refresh, rate backfill, billing reference-rate fetch, print queue batch send, print queue PDF merge, and fulfillment outbox durable status strategy. `npm run test:durable-jobs-plan` guards the deliverable.
 - JWT/session expiration plan added as `JWT_SESSION_EXPIRATION_PLAN.md`, documenting the 7-day Supabase Auth time-box session policy while keeping access JWTs short-lived. `npm run test:jwt-session-policy` guards the deliverable.
+- Inventory source-of-truth plan added as `INVENTORY_SOURCE_OF_TRUTH_PLAN.md`, documenting `inventory_ledger` as canonical movement history, `inventory.stockQty` as materialized/cache stock, and `effectiveStock` as the operator-facing display preference. `npm run test:inventory-source-of-truth` guards the deliverable.
 - Label/shipment-sensitive route policy review is completed as `LABEL_SHIPMENT_SCOPE_REVIEW.md`, mapping label create/batch/void/return/retrieve and shipment read/sync routes before any runtime side-effect changes. `npm run test:label-shipment-scope-review` guards the deliverable.
 
 Confirmed gaps from repo search:
@@ -86,7 +88,7 @@ Current readiness read:
 
 | Track | Status | Percent |
 |---|---|---:|
-| Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, rate cache diagnostics/bulk semantics, runtime DDL inventory/guard, reporting metrics migration, Walmart selling-fee index cleanup, `store_orders` migration, credential-account DDL cleanup, `order_items` / `analytics_cache` readiness cleanup, low-risk orders/inventory index cleanup, ShipStation Awaiting parity latest-run status, rate backfill latest-run status, billing reference-rate latest-run status, print queue send/merge latest-run status, and durable job strategy documented | 94% |
+| Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, rate cache diagnostics/bulk semantics, runtime DDL inventory/guard, reporting metrics migration, Walmart selling-fee index cleanup, `store_orders` migration, credential-account DDL cleanup, `order_items` / `analytics_cache` readiness cleanup, low-risk orders/inventory index cleanup, ShipStation Awaiting parity latest-run status, rate backfill latest-run status, billing reference-rate latest-run status, print queue send/merge latest-run status, inventory source-of-truth plan/guard, and durable job strategy documented | 95% |
 | Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated, RBAC/client-scope route matrix documented, first runtime permission layer implemented, low-risk client/init payload scoping added, dashboard/analysis/inventory/billing/print-queue/orders/manifests read/action scoping started, label/shipment-sensitive route policy review completed, extended `financials:read` field-level guard added for Orders, Manifests, Packages, and Rate Browser, secrets governance matrix added, audit logging matrix added, reconciliation reports plan added, marketplace awaiting-count reconciliation guarded, observability/alerting plan added, operational runbooks/DR plan added, privacy/compliance plan added, production signoff checklist added, and key operational jobs now persist latest-run status | 98% |
 | Phase 13 JWT/session expiration | 7-day maximum login session policy documented and guarded; Supabase time-box set to `168` hours; access JWTs remain short-lived | 65% |
 
@@ -110,7 +112,7 @@ Current readiness read:
 | Secrets | Multiple credential types exist across clients, carrier accounts, store accounts, direct carriers | Backend-only access, no browser exposure, rotation/audit | Central credential service and audit events |
 | External APIs | ShipStation/direct carrier failures affect rates, labels, sync, billing | Per-provider/account resilience and diagnostics | Timeout/retry/circuit metrics per account |
 | Jobs | Sync, print queue, rate backfill, fulfillment outbox have different state models | Durable status, retries, dead-letter, cancellation, locks | Shared job runner or pg-boss-only pattern |
-| Inventory truth | Ledger, cached stock, effective stock, sold metrics can disagree | Ledger canonical, cache reconciled, metrics precomputed | Inventory reconciliation and reporting metrics |
+| Inventory truth | Ledger, cached stock, effective stock, sold metrics can disagree | Ledger canonical, cache reconciled, metrics precomputed | `INVENTORY_SOURCE_OF_TRUTH_PLAN.md`, dry-run inventory reconciliation, and reporting metrics |
 | Billing truth | Generated line items can exist but summaries may not reflect expected values without explicit generation/backfill | Billing reads generated outputs with clear stale/empty states | Billing generation status and reconciliation |
 | Label side effects | Label creation touches shipments, package/inventory deductions, print queue, fulfillment outbox | Side-effect status and recovery workflow | Return and persist side-effect warnings |
 | Frontend reliability | Some screens still need full failure-state audit | Visible error, retry, stale-data preservation | Page-by-page failure-mode tests |
@@ -370,7 +372,7 @@ The detailed report plan now lives in `RECONCILIATION_REPORTS_PLAN.md`. The cond
 |---|---|---|---|---|---|
 | `orders.items` vs `order_items` | order ingestion payload | normalized `order_items` | count/qty/revenue mismatch | rerun order item repair/backfill | Analytics |
 | billing summaries vs billing line items | generated line items | summary/read-model output | totals/order count/client mismatch | rebuild billing summary/read model | Billing |
-| inventory ledger vs displayed stock | `inventory_ledger` | `inventory.stockQty` / effective stock | ledger/cache mismatch | dry-run approved cache rebuild | Inventory |
+| inventory ledger vs displayed stock | `inventory_ledger` | `inventory.stockQty` / effective stock | ledger/cache mismatch | `INVENTORY_SOURCE_OF_TRUTH_PLAN.md`, dry-run approved cache rebuild | Inventory |
 | package ledger vs package stock | package ledger/mutations | package stock/cache | quantity/usage mismatch | package stock rebuild | Packages |
 | rate cache vs actual label cost | label purchase cost | `rate_cache` / best-rate fields | cached/best rate differs from paid label cost | mark stale and refresh future rates | Rates |
 

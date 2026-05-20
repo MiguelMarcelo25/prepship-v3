@@ -4,7 +4,7 @@
 
 This Phase 12 deliverable scopes the reconciliation reports PrepShip needs before it can be called enterprise-ready. Reconciliation is different from normal page loading: it proves that local PrepShip data agrees with canonical external systems, generated outputs, and internal ledgers.
 
-This is a planning/control batch only. It does not modify order, shipment, label, inventory, package, billing, or fulfillment logic. The goal is to define canonical sources, mismatch detection, repair workflow, and tests before implementation starts.
+This is a planning/control batch only. It does not modify order, shipment, label, inventory, package, billing, or fulfillment logic. The goal is to define canonical sources, mismatch detection, repair workflow, and tests before implementation starts. Inventory reconciliation now references `INVENTORY_SOURCE_OF_TRUTH_PLAN.md` for the rule that `inventory_ledger` is canonical movement history and `inventory.stockQty` is a materialized/cache balance.
 
 ## Critical Blockers
 
@@ -21,7 +21,7 @@ This is a planning/control batch only. It does not modify order, shipment, label
 |---|---|---|---|
 | Orders | Sync paths exist and `order_items` normalization is mostly in place | Missing/duplicated/stale orders can hide behind normal pagination | Reconcile local orders against ShipStation/store sources |
 | Shipments/labels | Label and shipment data flows through provider APIs and local tables | Label exists but shipment/billing/fulfillment state diverges | Reconcile labels, shipments, billing, and fulfillment outbox |
-| Inventory | `inventory_ledger`, cached stock, effective stock, and sales metrics all exist | Stock trust erodes when values disagree | Ledger canonical report and stock cache repair workflow |
+| Inventory | `inventory_ledger`, cached stock, effective stock, and sales metrics all exist | Stock trust erodes when values disagree | `INVENTORY_SOURCE_OF_TRUTH_PLAN.md`, ledger canonical report, and stock cache repair workflow |
 | Packages | Package library, usage, and package stock can diverge | Box cost/usage/billing can be wrong | Package ledger and package usage reconciliation |
 | Billing | Generated line items exist, summaries/read models are partial | Zero or stale billing totals can look valid | Reconcile summaries against generated line items |
 
@@ -55,6 +55,7 @@ This is a planning/control batch only. It does not modify order, shipment, label
 - [ ] Add a `reconciliation_runs` table to persist report metadata, status, counts, and downloadable artifact location.
 - [ ] Add read-only reconciliation query services before any repair operation.
 - [ ] Add dry-run repair mode for inventory/package/billing/order_items.
+- [x] Add `INVENTORY_SOURCE_OF_TRUTH_PLAN.md` as the prerequisite inventory ownership policy.
 - [ ] Add operator-facing reports for mismatch counts and CSV export.
 - [ ] Add worker scheduled reconciliation for low-risk reports.
 - [ ] Keep label/shipment/order repair operations behind explicit human review and role checks.
