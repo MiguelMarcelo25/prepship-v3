@@ -45,6 +45,7 @@ import {
   verifySupabaseJwt,
 } from '../auth/verify-supabase-jwt';
 import { corsHeaders } from '../http/cors';
+import { sendInternalServerError } from '../../../api/_lib/safe-error';
 
 type ProviderType =
   | 'shipstation'
@@ -724,7 +725,11 @@ export default async function handler(req: any, res: any): Promise<void> {
   if (carrierAccountId !== null) {
     const dbUrl = process.env.DATABASE_URL;
     if (!dbUrl) {
-      res.status(500).json({ error: 'DATABASE_URL not configured' });
+      sendInternalServerError(
+        res,
+        'imported-carriers-verify:config',
+        new Error('DATABASE_URL not configured'),
+      );
       return;
     }
     const sql = postgres(dbUrl, { max: 1, prepare: false, idle_timeout: 5, connect_timeout: 5 });
@@ -742,11 +747,7 @@ export default async function handler(req: any, res: any): Promise<void> {
         ? (row.credentials as Record<string, unknown>)
         : {});
     } catch (err) {
-      console.error(
-        '[carriers-verify] failed to load carrier account:',
-        err instanceof Error ? err.message : err,
-      );
-      res.status(500).json({ error: 'Failed to load carrier account' });
+      sendInternalServerError(res, 'imported-carriers-verify:load-account', err);
       return;
     } finally {
       try { await sql.end({ timeout: 1 }); } catch { /* ignore */ }
@@ -779,10 +780,6 @@ export default async function handler(req: any, res: any): Promise<void> {
     }
     res.status(200).json(result);
   } catch (err) {
-    console.error(
-      '[carriers-verify] provider verification failed:',
-      err instanceof Error ? err.message : err,
-    );
-    res.status(500).json({ ok: false, error: 'Carrier verification failed' });
+    sendInternalServerError(res, 'imported-carriers-verify:provider', err);
   }
 }

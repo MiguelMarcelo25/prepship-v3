@@ -67,6 +67,8 @@ for (const file of [
   'api/carriers/ebay/orders.ts',
   'api/carriers/rates.ts',
   'api/carriers/verify.ts',
+  'src/lib/imported-handlers/carrier-accounts.ts',
+  'src/lib/imported-handlers/carriers-verify.ts',
   'api/migrate-from.ts',
   'api/admin/fix-marketplace-timestamps.ts',
 ]) {

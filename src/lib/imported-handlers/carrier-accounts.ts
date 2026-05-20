@@ -14,6 +14,7 @@ import {
   extractBearerToken,
   verifySupabaseJwt,
 } from '../auth/verify-supabase-jwt';
+import { sendInternalServerError } from '../../../api/_lib/safe-error';
 import {
   ALLOWED_ACCOUNT_SOURCES,
   CREDENTIAL_PROVIDER_PATTERN,
@@ -69,7 +70,11 @@ export default async function handler(req: any, res: any): Promise<void> {
 
   const dbUrl = process.env.DATABASE_URL;
   if (!dbUrl) {
-    res.status(500).json({ error: 'DATABASE_URL not configured' });
+    sendInternalServerError(
+      res,
+      'imported-carrier-accounts:config',
+      new Error('DATABASE_URL not configured'),
+    );
     return;
   }
   const sql = postgres(dbUrl, {
@@ -274,9 +279,7 @@ export default async function handler(req: any, res: any): Promise<void> {
 
     res.status(405).json({ error: 'Method not allowed' });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error('[carrier-accounts]', msg);
-    res.status(500).json({ error: 'Carrier account request failed' });
+    sendInternalServerError(res, 'imported-carrier-accounts', err);
   } finally {
     try {
       await sql.end({ timeout: 1 });
