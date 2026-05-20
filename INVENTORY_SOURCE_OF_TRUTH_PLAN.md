@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-This Phase 6 / Phase 11 deliverable defines the canonical ownership model for PrepShip inventory quantities and adds a read-only dry-run reconciliation report. It does not mutate stock, orders, shipments, labels, shipped rows, or cancelled rows.
+This Phase 6 / Phase 11 deliverable defines the canonical ownership model for PrepShip inventory quantities, adds a read-only dry-run reconciliation report, and points future repair work to `INVENTORY_REPAIR_APPLY_PLAN.md`. It does not mutate stock, orders, shipments, labels, shipped rows, or cancelled rows.
 
 Canonical rule:
 
@@ -17,7 +17,7 @@ Canonical rule:
 | Blocker | Risk | Required Outcome | Verification |
 |---|---|---|---|
 | Inventory truth is split across ledger, cache, and order-derived calculations | Operators may see stock values that disagree between pages | One documented source-of-truth model | `npm run test:inventory-source-of-truth` |
-| `inventory.stockQty` can drift from ledger/effective stock | Fast UI cache can become stale after imports, labels, voids, or manual changes | Approved dry-run reconciliation report before any repair | `npm run inventory:reconcile:dry-run`; `npm run test:inventory-reconciliation-dry-run` |
+| `inventory.stockQty` can drift from ledger/effective stock | Fast UI cache can become stale after imports, labels, voids, or manual changes | Approved dry-run reconciliation report and owner-approved repair plan before any repair | `npm run inventory:reconcile:dry-run`; `npm run test:inventory-reconciliation-dry-run`; `npm run test:inventory-repair-plan` |
 | Sold/velocity metrics can require expensive live scans | Inventory page can slow down under volume | Worker-generated reporting metrics for sold/velocity/days-supply | reporting metrics test and browser smoke |
 | Returns/voids are not fully modeled into effective stock | Edge cases may require manual repair | explicit reconciliation workflow and owner approval | reconciliation report evidence |
 
@@ -57,6 +57,8 @@ Canonical rule:
 - [x] Add static guard for inventory source-of-truth policy.
 - [x] Add dry-run inventory ledger/cache reconciliation report.
 - [x] Add static guard for dry-run-only reconciliation behavior.
+- [x] Add `INVENTORY_REPAIR_APPLY_PLAN.md` before any repair/apply implementation.
+- [x] Add static guard for inventory repair/apply planning.
 - [ ] Add owner-approved cache rebuild path with before/after evidence.
 - [ ] Move sold/velocity/days-supply/restock to worker-generated reporting metrics.
 - [ ] Add browser smoke evidence for Inventory after reporting metrics rollout.
@@ -71,6 +73,7 @@ Canonical rule:
   - backend `effectiveStock`
   - visible Inventory page stock
 - [x] Keep the dry-run script read-only with no repair/apply mode.
+- [x] Document owner approval, saved artifacts, rollback, and prohibited mutations in `INVENTORY_REPAIR_APPLY_PLAN.md`.
 - [ ] Require approval before applying any cache repair.
 - [ ] Add worker-generated inventory metrics for velocity/restock.
 
@@ -78,6 +81,7 @@ Canonical rule:
 
 - `npm run test:inventory-source-of-truth`
 - `npm run test:inventory-reconciliation-dry-run`
+- `npm run test:inventory-repair-plan`
 - `npm run test:inventory-client-scope`
 - `npm run test:reconciliation-plan`
 - `npm run test:frontend-failure-states`
@@ -98,6 +102,7 @@ Future implementation tests:
 
 - This batch is safe to deploy because it adds documentation and a static guard only.
 - No stock repair/apply mode is added yet.
+- Repair/apply implementation is now gated by `INVENTORY_REPAIR_APPLY_PLAN.md`.
 - Future inventory reconciliation apply mode must be deployed separately and reviewed with production dry-run output.
 - Rollback for future cache repairs should be based on a saved before/after reconciliation report.
 - Do not modify shipped/cancelled order rows or the `shipments` table as part of inventory cache repair.
@@ -106,7 +111,7 @@ Future implementation tests:
 
 1. Land this source-of-truth plan and static guard.
 2. Land the read-only dry-run reconciliation report for ledger/cache/effective stock.
-3. Review dry-run output with DJ/OpenClaw and assign an inventory owner.
-4. Add approved cache rebuild/apply mode in a separate reviewed batch.
+3. Review dry-run output and `INVENTORY_REPAIR_APPLY_PLAN.md` with DJ/OpenClaw and assign an inventory owner.
+4. Add approved cache rebuild/apply mode in a separate reviewed batch only after saved dry-run evidence is accepted.
 5. Move sold/velocity/days-supply/restock into worker-generated reporting metrics.
 6. Browser-audit Inventory and Dashboard after reporting metrics are live.

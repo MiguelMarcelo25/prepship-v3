@@ -39,6 +39,7 @@
     "test:inventory-default-view": "node scripts/inventory-default-view-guard.mjs",
     "test:inventory-source-of-truth": "node scripts/inventory-source-of-truth-guard.mjs",
     "test:inventory-reconciliation-dry-run": "node scripts/inventory-reconciliation-dry-run-guard.mjs",
+    "test:inventory-repair-plan": "node scripts/inventory-repair-plan-guard.mjs",
     "test:billing-client-scope": "node scripts/billing-client-store-scope-guard.mjs",
     "test:print-queue-client-scope": "node scripts/print-queue-client-store-scope-guard.mjs",
     "test:orders-manifests-scope": "node scripts/orders-manifests-client-store-scope-guard.mjs",
