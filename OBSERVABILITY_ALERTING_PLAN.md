@@ -4,7 +4,7 @@
 
 This Phase 12 deliverable defines the production signals, metrics, alerts, dashboards, and ownership needed for PrepShip to be enterprise-ready. The goal is to make failures visible before operators or clients discover them in the browser.
 
-This started as a planning/control batch. Runtime implementation has now begun with additive browser/API request ID propagation: the frontend sends `X-Request-Id`, the API exposes `X-Request-Id` / `Server-Timing`, API timing/error plus detailed Orders list logs include the same request ID, opt-in browser timing logs can be enabled with `localStorage.setItem('prepship:apiTiming', '1')`, admins can inspect bounded in-process route latency snapshots at `/observability/api-timing`, `/observability/status` summarizes process memory, runtime scheduler flags, and hot routes, and Settings now includes a lazy Settings System Status panel backed by that payload. It does not change external API behavior or shipped/cancelled order logic. Remaining implementation should follow this matrix in small batches after owners and alert thresholds are approved.
+This started as a planning/control batch. Runtime implementation has now begun with additive browser/API request ID propagation: the frontend sends `X-Request-Id`, the API exposes `X-Request-Id` / `Server-Timing`, API timing/error plus detailed Orders list logs include the same request ID, opt-in browser timing logs can be enabled with `localStorage.setItem('prepship:apiTiming', '1')`, admins can inspect bounded in-process route latency snapshots at `/observability/api-timing`, `/observability/status` summarizes process memory, runtime scheduler flags, hot routes, and lightweight DB ping timing, and Settings now includes a lazy Settings System Status panel backed by that payload. It does not change external API behavior or shipped/cancelled order logic. Remaining implementation should follow this matrix in small batches after owners and alert thresholds are approved.
 
 ## Critical Blockers
 
@@ -42,7 +42,7 @@ This started as a planning/control batch. Runtime implementation has now begun w
 | API 5xx rate | server logs and `/observability/api-timing` error counts | external route/status alert counters | API 5xx spike | API owner | force test route error in staging |
 | API latency | timing middleware, `Server-Timing`, and `/observability/api-timing` | external p95/p99 dashboard by route | p95 over threshold for hot routes | API owner | slow route fixture emits metric |
 | API 499/timeouts | Render logs | route/client/request-id aggregation | 499 spike or 30s timeout spike | API owner | production log review checklist |
-| Slow DB queries | partial route timing | query duration, table, route correlation | slow query over threshold | DB owner | slow query smoke test |
+| Slow DB queries | partial route timing plus lightweight `/observability/status` DB ping | query duration, table, route correlation | slow query over threshold | DB owner | slow query smoke test |
 | Supabase pool pressure | Supabase dashboard/manual | connection count and saturation alert | high connections/pool timeout | DB owner | Supabase metric review |
 | Worker heartbeat | `/worker/status` | stale heartbeat alert | heartbeat stale | Worker owner | stop worker in staging |
 | Sync jobs | `/sync/status` and worker logs | success/failure duration counters | sync failure/stuck job | Sync owner | failed sync fixture |
@@ -59,7 +59,7 @@ This started as a planning/control batch. Runtime implementation has now begun w
 - [x] Add browser-side request IDs to API calls and failed request errors.
 - [x] Add opt-in browser API timing diagnostics for slow or failed requests.
 - [x] Add admin-only `/observability/api-timing` for bounded in-process p95/p99 API timing snapshots by method/path.
-- [x] Add admin-only `/observability/status` for process memory, runtime scheduler flags, and hot-route status.
+- [x] Add admin-only `/observability/status` for process memory, runtime scheduler flags, hot-route status, and lightweight DB ping timing.
 - [x] Add Settings System Status panel backed by `/observability/status`.
 - [ ] Standardize structured logs for API errors, external API failures, and worker jobs.
 - [ ] Add route-level metrics for status, duration, and response-size buckets.

@@ -1,14 +1,39 @@
 import { Hono } from 'hono';
 import { getApiTimingSnapshot } from '../lib/http/api-metrics';
 import { env } from '../lib/env';
+import { sql } from '../db/client';
 
 const app = new Hono();
 
 app.get('/api-timing', (c) => c.json(getApiTimingSnapshot()));
 
-app.get('/status', (c) => {
+async function getDatabaseStatus() {
+  const startedAt = performance.now();
+  try {
+    await Promise.race([
+      sql`select 1 as ok`,
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('database health check timed out')), 2_500),
+      ),
+    ]);
+
+    return {
+      ok: true,
+      durationMs: Math.round(performance.now() - startedAt),
+    };
+  } catch {
+    return {
+      ok: false,
+      durationMs: Math.round(performance.now() - startedAt),
+      error: 'Database health check failed',
+    };
+  }
+}
+
+app.get('/status', async (c) => {
   const memory = process.memoryUsage();
   const timing = getApiTimingSnapshot();
+  const database = await getDatabaseStatus();
   const hotRoutes = timing.routes.slice(0, 10).map((route) => ({
     method: route.method,
     path: route.path,
@@ -43,6 +68,7 @@ app.get('/status', (c) => {
       rateBackfillSchedulerEnabled: env.ENABLE_RATE_BACKFILL_SCHEDULER,
       rateBackfillSchedulerDisabled: env.DISABLE_RATE_BACKFILL_SCHEDULER,
     },
+    database,
     apiTiming: {
       routeCount: timing.routeCount,
       window: timing.window,

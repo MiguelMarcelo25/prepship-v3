@@ -34,7 +34,7 @@
 | Phase | Status | Percent | Why Not 100% Yet |
 |---|---|---:|---|
 | Phase 1 - Runtime Architecture | Complete | 100% | Done |
-| Phase 2 - Observability | Good start | 86% | Observability/alerting signal plan exists, Awaiting Shipment lag investigation is scoped, browser/API request IDs now flow through request headers, response headers, timing/error logs, detailed Orders list logs, opt-in browser API timing diagnostics, admin-only `/observability/api-timing` p95/p99 snapshots, an admin `/observability/status` status payload, and a Settings System Status panel; needs external alerts, slow-query dashboard, and broader worker/DB/rate/label health widgets |
+| Phase 2 - Observability | Good start | 87% | Observability/alerting signal plan exists, Awaiting Shipment lag investigation is scoped, browser/API request IDs now flow through request headers, response headers, timing/error logs, detailed Orders list logs, opt-in browser API timing diagnostics, admin-only `/observability/api-timing` p95/p99 snapshots, an admin `/observability/status` status payload with lightweight DB ping, and a Settings System Status panel; needs external alerts, slow-query dashboard, and broader worker/rate/label health widgets |
 | Phase 3 - Dashboard + Analysis Cleanup | Mostly complete | 86% | Dashboard Orders / Units KPI guard exists; needs production parity checks, remaining Analysis JSONB audit, and broader regression tests |
 | Phase 4 - `order_items` Normalization | Mostly complete | 83% | Runtime schema bootstrap now checks migrations; needs production trigger/backfill verification and parity tests |
 | Phase 5 - Reporting Read Models | Started | 30% | `analytics_cache` exists, but full dashboard/daily/SKU/inventory/billing read models are not complete |
@@ -59,7 +59,7 @@
 - [x] Worker owns background sync
 - [x] Pg-boss/job queue foundation
 
-### Phase 2 - Observability: 86%
+### Phase 2 - Observability: 87%
 
 - [x] API timing logs
 - [x] `Server-Timing`
@@ -71,6 +71,7 @@
 - [x] `npm run test:observability-alerting`
 - [x] Admin-only `/observability/api-timing` p95/p99 API timing snapshot
 - [x] Admin-only `/observability/status` runtime/API status payload
+- [x] `/observability/status` includes lightweight DB ping timing
 - [x] Settings System Status panel reads `/observability/status` lazily
 - [x] `npm run test:api-observability-metrics`
 - [x] Awaiting Shipment lag investigation scoped
@@ -92,6 +93,7 @@
 - [~] external alerts
 - [x] p95/p99 API timing snapshot
 - [~] slow DB query dashboard
+- [x] Lightweight DB ping visible in Settings System Status
 - [x] Settings System Status panel
 - [ ] Broader internal status panel for worker, DB, sync, queue, rates, labels, billing, and reporting health
 

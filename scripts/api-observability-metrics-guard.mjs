@@ -51,6 +51,8 @@ expect(
 expect(
   'observability route exposes admin status endpoint',
   route.includes("app.get('/status'") &&
+    route.includes('getDatabaseStatus') &&
+    route.includes('sql`select 1 as ok`') &&
     route.includes('runSyncScheduler') &&
     route.includes('hotRoutes') &&
     route.includes('heapUsedBytes')
@@ -61,6 +63,7 @@ expect(
   settingsView.includes("label: 'System Status'") &&
     settingsView.includes("'/observability/status'") &&
     settingsView.includes('systemStatus') &&
+    settingsView.includes('DB Check') &&
     settingsView.includes('Hot API Routes') &&
     settingsView.includes('Runtime Flags')
 );

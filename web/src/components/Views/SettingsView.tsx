@@ -373,6 +373,11 @@ export default function SettingsView() {
       }
     }
     runtime?: Record<string, boolean | string | number | null | undefined>
+    database?: {
+      ok: boolean
+      durationMs: number
+      error?: string
+    }
     apiTiming?: {
       routeCount?: number
       hotRoutes?: Array<{
@@ -1237,7 +1242,7 @@ export default function SettingsView() {
 
                   {systemStatus ? (
                     <div className="space-y-4">
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
                         <div className="rounded-xl bg-surface ring-1 ring-line px-4 py-3 shadow-sm">
                           <div className="text-[10.5px] uppercase tracking-wider font-bold text-ink-3">
                             API Routes
@@ -1269,6 +1274,27 @@ export default function SettingsView() {
                           </div>
                           <div className="mt-1 text-[11.5px] text-ink-3">
                             {systemStatus.process?.nodeEnv ?? 'runtime'} environment
+                          </div>
+                        </div>
+                        <div className="rounded-xl bg-surface ring-1 ring-line px-4 py-3 shadow-sm">
+                          <div className="text-[10.5px] uppercase tracking-wider font-bold text-ink-3">
+                            DB Check
+                          </div>
+                          <div className={`mt-1 text-2xl font-extrabold tabular-nums ${
+                            systemStatus.database?.ok === true
+                              ? 'text-emerald-700'
+                              : systemStatus.database?.ok === false
+                                ? 'text-rose-700'
+                                : 'text-ink'
+                          }`}>
+                            {systemStatus.database?.ok === true
+                              ? 'OK'
+                              : systemStatus.database?.ok === false
+                                ? 'Slow'
+                                : 'n/a'}
+                          </div>
+                          <div className="mt-1 text-[11.5px] text-ink-3">
+                            {systemStatus.database?.durationMs ?? 0}ms ping
                           </div>
                         </div>
                       </div>
