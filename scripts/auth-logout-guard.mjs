@@ -26,8 +26,8 @@ const signOutBlock =
 
 assert(signOutBlock.length > 0, 'auth provider exposes signOut implementation');
 assert(
-  authSource.includes('LOGOUT_REMOTE_TIMEOUT_MS'),
-  'logout uses a bounded remote sign-out timeout',
+  !authSource.includes('LOGOUT_REMOTE_TIMEOUT_MS'),
+  'logout does not keep a background remote sign-out timer',
 );
 assert(
   signOutBlock.includes('setSession(null)') && signOutBlock.includes('setLoading(false)'),
@@ -35,18 +35,25 @@ assert(
 );
 assert(
   signOutBlock.includes('setSession(null)') &&
-    signOutBlock.includes('const remoteSignOut = supabase.auth') &&
-    signOutBlock.indexOf('setSession(null)') <
-      signOutBlock.indexOf('const remoteSignOut = supabase.auth'),
-  'local auth state clears before waiting on remote Supabase sign-out',
+    signOutBlock.includes('clearLocalSession()') &&
+    signOutBlock.indexOf('setSession(null)') < signOutBlock.indexOf('clearLocalSession()'),
+  'local auth state clears before local Supabase cleanup',
 );
 assert(
   authSource.includes("scope: 'local'") && signOutBlock.includes('clearLocalSession()'),
-  'logout falls back to local-scope Supabase cleanup',
+  'logout uses local-scope Supabase cleanup',
 );
 assert(
-  signOutBlock.includes('Promise.race'),
-  'logout does not await remote Supabase sign-out indefinitely',
+  !signOutBlock.includes('remoteSignOut') && !signOutBlock.includes('Promise.race'),
+  'logout does not leave a late remote sign-out that can clear the next login',
+);
+assert(
+  /signIn:\s*async\s*\(email,\s*password\)\s*=>\s*{[\s\S]*const\s+{\s*data,\s*error\s*}\s*=\s*await\s+supabase\.auth\.signInWithPassword/.test(authSource),
+  'sign-in captures the returned Supabase session',
+);
+assert(
+  /if\s*\(data\.session\)\s*setSession\(data\.session\)/.test(authSource),
+  'sign-in applies the returned session immediately',
 );
 assert(
   sidebarSource.includes("navigate('/login', { replace: true })"),

@@ -25,17 +25,10 @@ type AuthState = {
 };
 
 const Ctx = createContext<AuthState | null>(null);
-const LOGOUT_REMOTE_TIMEOUT_MS = 1500;
 
 function buildRedirect(path: string): string {
   if (typeof window === 'undefined') return path;
   return `${window.location.origin}${path}`;
-}
-
-function wait(ms: number): Promise<'timeout'> {
-  return new Promise((resolve) => {
-    window.setTimeout(() => resolve('timeout'), ms);
-  });
 }
 
 // Wipes the stale refresh-token entry from localStorage without
@@ -123,11 +116,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user: session?.user ?? null,
       loading,
       signIn: async (email, password) => {
-        const { error } = await supabase.auth.signInWithPassword({
+        const { data, error } = await supabase.auth.signInWithPassword({
           email,
           password,
         });
         if (error) throw error;
+        if (data.session) setSession(data.session);
       },
       signUp: async (email, password) => {
         const { data, error } = await supabase.auth.signUp({
@@ -146,29 +140,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signOut: async () => {
         setSession(null);
         setLoading(false);
-
-        const remoteSignOut = supabase.auth
-          .signOut()
-          .then(({ error }) => {
-            if (error) {
-              console.warn('[auth] Remote sign-out failed:', error.message);
-              return 'error' as const;
-            }
-            return 'ok' as const;
-          })
-          .catch((err) => {
-            console.warn('[auth] Remote sign-out threw:', err);
-            return 'error' as const;
-          });
-
-        const outcome = await Promise.race([
-          remoteSignOut,
-          wait(LOGOUT_REMOTE_TIMEOUT_MS),
-        ]);
-
-        if (outcome !== 'ok') {
-          await clearLocalSession();
-        }
+        await clearLocalSession();
       },
       resetPasswordForEmail: async (email) => {
         const { error } = await supabase.auth.resetPasswordForEmail(email, {
