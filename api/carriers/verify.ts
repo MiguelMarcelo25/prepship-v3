@@ -45,6 +45,7 @@ import {
   verifySupabaseJwt,
 } from '../../src/lib/auth/verify-supabase-jwt.js';
 import { corsHeaders } from '../../src/lib/http/cors.js';
+import { sendInternalServerError } from '../_lib/safe-error.js';
 
 type ProviderType =
   | 'simulator'
@@ -967,7 +968,7 @@ export default async function handler(req: any, res: any): Promise<void> {
         ? (row.credentials as Record<string, unknown>)
         : {});
     } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+      sendInternalServerError(res, 'carriers/verify:account-lookup', err);
       return;
     } finally {
       try { await sql.end({ timeout: 1 }); } catch { /* ignore */ }
@@ -1064,6 +1065,6 @@ export default async function handler(req: any, res: any): Promise<void> {
     }
     res.status(200).json(result);
   } catch (err) {
-    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    sendInternalServerError(res, 'carriers/verify', err);
   }
 }

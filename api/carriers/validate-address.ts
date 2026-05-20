@@ -26,6 +26,7 @@ import {
   verifySupabaseJwt,
 } from '../../src/lib/auth/verify-supabase-jwt.js';
 import { corsHeaders } from '../../src/lib/http/cors.js';
+import { sendInternalServerError } from '../_lib/safe-error.js';
 
 function readBody(req: any): Promise<unknown> {
   if (req.body) {
@@ -196,9 +197,7 @@ export default async function handler(req: any, res: any): Promise<void> {
       raw: data,
     });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error('[carriers/validate-address]', msg);
-    res.status(500).json({ ok: false, error: msg });
+    sendInternalServerError(res, 'carriers/validate-address', err);
   } finally {
     try { await sql.end({ timeout: 1 }); } catch { /* ignore */ }
   }

@@ -9,6 +9,8 @@
 //   /api/carriers/ups/probe?clientId=...&clientSecret=...
 //   /api/carriers/ups/probe?clientId=&clientSecret=    (just shows it's alive)
 
+import { sendInternalServerError } from '../../_lib/safe-error.js';
+
 export default async function handler(req: any, res: any): Promise<void> {
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('Content-Type', 'application/json');
@@ -50,6 +52,6 @@ export default async function handler(req: any, res: any): Promise<void> {
       },
     });
   } catch (err) {
-    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    sendInternalServerError(res, 'carriers/ups/probe', err);
   }
 }

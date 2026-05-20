@@ -22,6 +22,7 @@ import {
   hasExistingMarketplaceOrderRow,
   reconcileMarketplaceOrderStatuses,
 } from '../../_lib/marketplace-status-reconciliation.js';
+import { sendInternalServerError } from '../../_lib/safe-error.js';
 import {
   extractBearerToken,
   verifySupabaseJwt,
@@ -116,7 +117,7 @@ export default async function handler(req: any, res: any): Promise<void> {
   );
   if (!tok) { res.status(401).json({ error: 'Missing Authorization' }); return; }
   const verified = await verifySupabaseJwt(tok);
-  if (!verified.ok) { res.status(401).json({ error: 'Invalid token', reason: verified.reason }); return; }
+  if (!verified.ok) { res.status(401).json({ error: 'Invalid token' }); return; }
 
   const dbUrl = process.env.DATABASE_URL;
   if (!dbUrl) { res.status(500).json({ error: 'DATABASE_URL not configured' }); return; }
@@ -496,9 +497,7 @@ export default async function handler(req: any, res: any): Promise<void> {
       total: data?.total ?? null,
     });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error('[carriers/ebay/orders]', msg);
-    res.status(500).json({ ok: false, error: msg });
+    sendInternalServerError(res, 'carriers/ebay/orders', err);
   } finally {
     try { await sql.end({ timeout: 1 }); } catch { /* ignore */ }
   }

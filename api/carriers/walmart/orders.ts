@@ -26,6 +26,7 @@ import {
   hasExistingMarketplaceOrderRow,
   reconcileMarketplaceOrderStatuses,
 } from '../../_lib/marketplace-status-reconciliation.js';
+import { sendInternalServerError } from '../../_lib/safe-error.js';
 import {
   extractBearerToken,
   verifySupabaseJwt,
@@ -138,7 +139,7 @@ export default async function handler(req: any, res: any): Promise<void> {
   }
   const verified = await verifySupabaseJwt(token);
   if (!verified.ok) {
-    res.status(401).json({ error: 'Invalid token', reason: verified.reason });
+    res.status(401).json({ error: 'Invalid token' });
     return;
   }
 
@@ -610,9 +611,7 @@ export default async function handler(req: any, res: any): Promise<void> {
       meta: data?.list?.meta ?? null,
     });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error('[carriers/walmart/orders]', msg);
-    res.status(500).json({ ok: false, error: msg });
+    sendInternalServerError(res, 'carriers/walmart/orders', err);
   } finally {
     try {
       await sql.end({ timeout: 1 });

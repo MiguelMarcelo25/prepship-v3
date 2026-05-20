@@ -23,6 +23,7 @@ import {
   verifySupabaseJwt,
 } from '../../src/lib/auth/verify-supabase-jwt.js';
 import { corsHeaders } from '../../src/lib/http/cors.js';
+import { sendInternalServerError } from '../_lib/safe-error.js';
 
 function readBody(req: any): Promise<unknown> {
   if (req.body) {
@@ -2571,9 +2572,7 @@ export default async function handler(req: any, res: any): Promise<void> {
       error: `Rate quoter for "${provider}" is not implemented yet.`,
     });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error('[carriers/rates]', msg);
-    res.status(500).json({ ok: false, error: msg });
+    sendInternalServerError(res, 'carriers/rates', err);
   } finally {
     try { await sql.end({ timeout: 1 }); } catch { /* ignore */ }
   }

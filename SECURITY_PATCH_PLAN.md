@@ -28,7 +28,7 @@ Phase 13 adds `JWT_SESSION_EXPIRATION_PLAN.md`: PrepShip should enforce a 7-day 
 | client redaction | [x] `/clients` and `/init/init-data` guarded by mapper tests | future endpoints can return raw clients if not audited | route audit for all client-returning endpoints |
 | JWT strict claims | [x] optional strict issuer/audience support exists | strict mode needs staged token compatibility check | enable `STRICT_JWT_CLAIMS=true` only after login/token test |
 | JWT session expiration | [x] 7-day session policy documented, Supabase time-box set to `168` hours, and production logout/login smoke passed | Expired-session UX still needs staging short-timebox proof | keep access JWTs short-lived and prove expired sessions return to login cleanly |
-| safe errors | [~] credential handlers use safer generic 500s and `RAW_ERROR_RESPONSE_AUDIT.md` now maps remaining raw-error surfaces | wider route handlers may still return `err.message` | patch raw error responses in small route groups |
+| safe errors | [~] credential handlers and first non-shipment Vercel handler batch use safer generic 500s; `RAW_ERROR_RESPONSE_AUDIT.md` maps remaining raw-error surfaces | label/shipment-sensitive handlers still need separate review | patch remaining label/shipment-adjacent raw error responses after review |
 | unsafe proxy | [x] `/aws-api` rewrite removed | confirm no external workflow depends on it | production route/rewrite smoke test |
 | mock labels | [x] signed/expiring mock label URLs | confirm no real PII enters mock labels | route review and sample response check |
 
@@ -59,7 +59,8 @@ Phase 13 adds `JWT_SESSION_EXPIRATION_PLAN.md`: PrepShip should enforce a 7-day 
 - [x] Audit remaining route handlers that return raw `err.message`.
 - [x] Add `RAW_ERROR_RESPONSE_AUDIT.md`.
 - [x] Add `npm run test:raw-error-response-audit`.
-- [ ] Patch remaining raw-error route groups.
+- [x] Patch first non-shipment Vercel raw-error route group.
+- [ ] Patch remaining label/shipment-sensitive raw-error route groups after separate review.
 - [ ] Run production auth smoke tests.
 - [x] Decide and enforce admin/user-management policy for `/users` root list.
 - [x] Build first formal RBAC permission middleware.

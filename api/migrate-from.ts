@@ -18,6 +18,7 @@
 
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import postgres from 'postgres';
+import { errorMessage, sendInternalServerError } from './_lib/safe-error.js';
 
 let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 function getJwks() {
@@ -85,7 +86,7 @@ export default async function handler(req: any, res: any): Promise<void> {
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
   if (!token) { res.status(401).json({ error: 'Missing Authorization' }); return; }
   const verified = await verifySupabaseJwt(token);
-  if (!verified.ok) { res.status(401).json({ error: 'Invalid token', reason: verified.reason }); return; }
+  if (!verified.ok) { res.status(401).json({ error: 'Invalid token' }); return; }
 
   const body = (await readBody(req)) as Record<string, unknown>;
   const sourceUrl = typeof body?.sourceUrl === 'string' ? body.sourceUrl : '';
@@ -188,12 +189,13 @@ export default async function handler(req: any, res: any): Promise<void> {
 
         results.push({ table, sourceRows: rows.length, copied });
       } catch (tableErr) {
-        results.push({ table, error: tableErr instanceof Error ? tableErr.message : String(tableErr) });
+        console.error(`[migrate-from] ${table} copy failed:`, errorMessage(tableErr));
+        results.push({ table, error: 'table copy failed' });
       }
     }
     res.status(200).json({ ok: true, results });
   } catch (err) {
-    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    sendInternalServerError(res, 'migrate-from', err);
   } finally {
     try { await source.end({ timeout: 1 }); } catch { /* ignore */ }
     try { await dest.end({ timeout: 1 }); } catch { /* ignore */ }

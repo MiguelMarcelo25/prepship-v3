@@ -19,6 +19,7 @@ import {
   verifySupabaseJwt,
 } from '../../../src/lib/auth/verify-supabase-jwt.js';
 import { corsHeaders } from '../../../src/lib/http/cors.js';
+import { sendInternalServerError } from '../../_lib/safe-error.js';
 
 function readBody(req: any): Promise<unknown> {
   if (req.body) {
@@ -158,7 +159,7 @@ export default async function handler(req: any, res: any): Promise<void> {
         : `Shipping API returned ${carriersRes.status}. If 401/403 → the developer app is missing Shipping API permission (developer.walmart.com → My Apps → API Permissions). If 500 → seller account isn't enrolled in Walmart Shipping Solutions. Either way, the issue is on Walmart's side, not in our request.`,
     });
   } catch (err) {
-    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    sendInternalServerError(res, 'walmart-probe-carriers', err);
   } finally {
     try { await sql.end({ timeout: 1 }); } catch { /* ignore */ }
   }

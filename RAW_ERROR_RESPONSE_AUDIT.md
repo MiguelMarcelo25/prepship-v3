@@ -37,9 +37,9 @@ This is a planning and guard deliverable first. It does not change shipped/cance
 - [x] Keep credential-account handlers returning generic `500` public bodies.
 - [x] Add `RAW_ERROR_RESPONSE_AUDIT.md`.
 - [x] Add `npm run test:raw-error-response-audit`.
-- [ ] Create a shared `safePublicError()` / `sendSafeError()` helper for Vercel compatibility handlers.
-- [ ] Patch non-shipment Vercel handlers first: marketplace fees/orders, migrate/admin utilities, carrier probe/validate endpoints.
-- [ ] Patch direct carrier rate/verify handlers while preserving sanitized operator diagnostics.
+- [x] Create a shared `sendInternalServerError()` helper for Vercel compatibility handlers.
+- [x] Patch non-shipment Vercel handlers first: marketplace fees/orders, migrate/admin utilities, carrier probe/validate endpoints.
+- [x] Patch direct carrier rate/verify top-level `500` handlers while preserving sanitized operator diagnostics.
 - [ ] Review label/shipment-sensitive handlers in a separate shipped-data-safe batch.
 - [ ] Add forced-failure tests that confirm public `500` bodies do not include raw SQL/provider text.
 

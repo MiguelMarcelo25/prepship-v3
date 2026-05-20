@@ -27,6 +27,7 @@
 
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import postgres from 'postgres';
+import { sendInternalServerError } from '../_lib/safe-error.js';
 
 let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 function getJwks() {
@@ -68,10 +69,10 @@ export default async function handler(req: any, res: any): Promise<void> {
     const queryToken = url.searchParams.get('token') ?? '';
     if (!queryToken) { res.status(401).json({ error: 'Missing Authorization' }); return; }
     const verified = await verifySupabaseJwt(queryToken);
-    if (!verified.ok) { res.status(401).json({ error: 'Invalid token', reason: verified.reason }); return; }
+    if (!verified.ok) { res.status(401).json({ error: 'Invalid token' }); return; }
   } else {
     const verified = await verifySupabaseJwt(token);
-    if (!verified.ok) { res.status(401).json({ error: 'Invalid token', reason: verified.reason }); return; }
+    if (!verified.ok) { res.status(401).json({ error: 'Invalid token' }); return; }
   }
 
   const dbUrl = process.env.DATABASE_URL;
@@ -121,7 +122,7 @@ export default async function handler(req: any, res: any): Promise<void> {
       note: 'Order_date timestamps shifted from raw-UTC to PT-clockface-stamped-Z so the FE displays them at the correct Pacific time, matching ShipStation-derived rows. This endpoint is one-shot — running it twice will double-shift the timestamps. Disable it once verified.',
     });
   } catch (err) {
-    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+    sendInternalServerError(res, 'admin/fix-marketplace-timestamps', err);
   } finally {
     try { await sql.end({ timeout: 1 }); } catch { /* ignore */ }
   }

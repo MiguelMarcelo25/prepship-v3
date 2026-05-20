@@ -1,10 +1,11 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 const audit = readFileSync('RAW_ERROR_RESPONSE_AUDIT.md', 'utf8');
 const security = readFileSync('SECURITY_PATCH_PLAN.md', 'utf8');
 const devTasks = readFileSync('DEV_TASKS_README.md', 'utf8');
 const enterprise = readFileSync('ENTERPRISE_READINESS_AUDIT.md', 'utf8');
 const packageJson = JSON.parse(readFileSync('package.json', 'utf8'));
+const safeErrorHelperPath = 'api/_lib/safe-error.ts';
 
 const checks = [];
 
@@ -32,7 +33,7 @@ for (const phrase of [
   'api/carriers/walmart/orders.ts',
   'api/carriers/ebay/orders.ts',
   'src/routes/labels.ts',
-  'safePublicError',
+  'sendInternalServerError',
   'forced-failure tests',
   'Label and shipment handlers need separate review',
 ]) {
@@ -44,6 +45,34 @@ expect(
   packageJson.scripts?.['test:raw-error-response-audit'] ===
     'node scripts/raw-error-response-audit-guard.mjs'
 );
+
+expect('safe error helper exists', existsSync(safeErrorHelperPath));
+if (existsSync(safeErrorHelperPath)) {
+  const safeErrorHelper = readFileSync(safeErrorHelperPath, 'utf8');
+  expect(
+    'safe error helper keeps public 500 generic',
+    safeErrorHelper.includes('INTERNAL_SERVER_ERROR') &&
+      safeErrorHelper.includes('sendInternalServerError') &&
+      safeErrorHelper.includes('Internal server error')
+  );
+}
+
+for (const file of [
+  'api/carriers/validate-address.ts',
+  'api/carriers/ups/probe.ts',
+  'api/carriers/walmart/probe-carriers.ts',
+  'api/carriers/walmart/fees.ts',
+  'api/cron/sync-walmart-fees.ts',
+  'api/carriers/walmart/orders.ts',
+  'api/carriers/ebay/orders.ts',
+  'api/carriers/rates.ts',
+  'api/carriers/verify.ts',
+  'api/migrate-from.ts',
+  'api/admin/fix-marketplace-timestamps.ts',
+]) {
+  const content = readFileSync(file, 'utf8');
+  expect(`${file} uses safe 500 helper`, content.includes('sendInternalServerError'));
+}
 
 expect(
   'security plan references raw error response audit',

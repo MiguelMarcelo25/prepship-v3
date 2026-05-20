@@ -21,6 +21,7 @@
 // ──────────────────────────────────────────────────────────────────
 
 import postgres from 'postgres';
+import { sendInternalServerError } from '../_lib/safe-error.js';
 
 function corsHeaders(origin: string | null): Record<string, string> {
   const allowed = new Set([
@@ -371,9 +372,7 @@ export default async function handler(req: any, res: any): Promise<void> {
       accountResults,
     });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error('[cron/sync-walmart-fees]', msg);
-    res.status(500).json({ ok: false, error: msg });
+    sendInternalServerError(res, 'cron/sync-walmart-fees', err);
   } finally {
     try { await sql.end({ timeout: 1 }); } catch { /* ignore */ }
   }

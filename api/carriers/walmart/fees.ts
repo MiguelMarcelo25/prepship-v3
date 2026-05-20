@@ -31,6 +31,7 @@
 
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import postgres from 'postgres';
+import { sendInternalServerError } from '../../_lib/safe-error.js';
 
 let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 function getJwks() {
@@ -326,7 +327,7 @@ export default async function handler(req: any, res: any): Promise<void> {
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
   if (!token) { res.status(401).json({ error: 'Missing Authorization' }); return; }
   const verified = await verifySupabaseJwt(token);
-  if (!verified.ok) { res.status(401).json({ error: 'Invalid token', reason: verified.reason }); return; }
+  if (!verified.ok) { res.status(401).json({ error: 'Invalid token' }); return; }
 
   const dbUrl = process.env.DATABASE_URL;
   if (!dbUrl) { res.status(500).json({ error: 'DATABASE_URL not configured' }); return; }
@@ -442,9 +443,7 @@ export default async function handler(req: any, res: any): Promise<void> {
       fetchedAt: new Date().toISOString(),
     });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error('[walmart/fees]', msg);
-    res.status(500).json({ ok: false, error: msg });
+    sendInternalServerError(res, 'walmart/fees', err);
   } finally {
     try { await sql.end({ timeout: 1 }); } catch { /* ignore */ }
   }
