@@ -2028,13 +2028,10 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
       }
 
       try {
-        const clientPage = await apiClient.fetchInventoryPage({
+        const clientRows = await apiClient.fetchInventory({
           clientId: Number.parseInt(receiveClientId, 10),
-          active: true,
-          page: 1,
-          pageSize: 2000,
+          includeInactive: true,
         })
-        const clientRows = clientPage.items
         if (!active) return
         const nextMap: Record<string, ReceiveSkuLookup> = {}
         for (const row of clientRows) {
@@ -3689,7 +3686,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
 
       {activeTab === 'receive' ? (
         <div id="inv-panel-receive">
-          <div style={{ maxWidth: 640 }}>
+          <div style={{ maxWidth: 1320, width: '100%' }}>
             <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
               <select className="ship-select" value={receiveClientId} style={{ flex: 1, maxWidth: 240 }} onChange={(event) => setReceiveClientId(event.target.value)}>
                 <option value="">Select Client…</option>
@@ -3709,7 +3706,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                 const hints = getReceiveRowHints(row, lookup)
                 return (
                   <div key={row.id} className="inventory-recv-row">
-                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                       {/* 2026-05-15: Was a native <input list=
                           "react-recv-sku-datalist">. Chrome rendered
                           that as an unstyleable, unfilterable 300+
@@ -3721,7 +3718,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                           component (web/src/components/Autosuggest.tsx)
                           ready for parent-SKU picker, bulk-edit,
                           new-order modal next. */}
-                      <div style={{ flex: 1 }}>
+                      <div style={{ flex: '1 1 640px', minWidth: 520, maxWidth: 720 }}>
                         <Autosuggest
                           value={row.sku}
                           options={receiveSkuOptions}
@@ -3729,7 +3726,8 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                           ariaLabel="SKU"
                           inputClassName="ship-select"
                           inputStyle={{ fontFamily: 'monospace', fontSize: 12 }}
-                          maxResults={10}
+                          popoverStyle={{ width: 'min(760px, calc(100vw - 2rem))', maxWidth: 'calc(100vw - 2rem)' }}
+                          maxResults={receiveSkuOptions.length || 50}
                           emptyMessage={
                             row.sku.trim()
                               ? `No SKU matches "${row.sku.trim()}"`
@@ -3760,7 +3758,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                         type="text"
                         className="ship-select"
                         placeholder="Product name (auto-fills)"
-                        style={{ fontSize: 12, flex: 2 }}
+                        style={{ fontSize: 12, flex: '1 1 420px', minWidth: 320 }}
                         value={row.name}
                         onChange={(event) => {
                           const nextName = event.target.value

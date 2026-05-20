@@ -76,6 +76,10 @@ interface Props {
   inputClassName?: string
   /** Inline style overrides for the input element. */
   inputStyle?: CSSProperties
+  /** Optional className applied to the suggestion popover. */
+  popoverClassName?: string
+  /** Inline style overrides for the suggestion popover. */
+  popoverStyle?: CSSProperties
   /** Should suggestions appear when the input is focused but empty?
    *  Default true — matches operator expectation of "click the field
    *  to see what's available, then narrow by typing." Set false on
@@ -168,6 +172,8 @@ const Autosuggest = forwardRef<AutosuggestHandle, Props>(function Autosuggest(
     emptyMessage = null,
     inputClassName = 'ship-select',
     inputStyle,
+    popoverClassName,
+    popoverStyle,
     showOnFocus = true,
     ariaLabel,
     disabled = false,
@@ -390,12 +396,14 @@ const Autosuggest = forwardRef<AutosuggestHandle, Props>(function Autosuggest(
           ref={listboxRef}
           id={listboxId}
           role="listbox"
-          className="
-            absolute left-0 right-0 top-full mt-1 z-50
+          className={`
+            absolute left-0 top-full mt-1 z-50
             max-h-72 overflow-y-auto
             rounded-lg bg-surface ring-1 ring-line shadow-lg
             text-left
-          "
+            ${popoverClassName ?? 'right-0'}
+          `}
+          style={popoverStyle}
         >
           {matches.length === 0 && emptyMessage ? (
             <div className="px-3 py-2 text-[12px] text-ink-3 italic">
