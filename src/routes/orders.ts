@@ -61,8 +61,14 @@ function orderListRequestMeta(q: z.infer<typeof listQuery>) {
   };
 }
 
+function requestIdFromContext(c: Context<any, any, any>): string | null {
+  const requestId = c.get('requestId');
+  return typeof requestId === 'string' && requestId.trim() ? requestId : null;
+}
+
 function logSlowOrdersList(
   q: z.infer<typeof listQuery>,
+  requestId: string | null,
   timings: OrdersListTimings,
   totalMs: number,
   extra: Record<string, unknown>,
@@ -70,6 +76,7 @@ function logSlowOrdersList(
   const slowestStepMs = Math.max(0, ...Object.values(timings));
   if (totalMs < 750 && slowestStepMs < 500) return;
   console.info('[orders:list] completed', {
+    requestId: requestId ?? undefined,
     ...orderListRequestMeta(q),
     ...extra,
     totalMs,
@@ -1685,7 +1692,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     };
   }).map((row) => redactOrderFinancials(row, canViewFinancials));
   const totalMs = msSince(routeStartedAt);
-  logSlowOrdersList(q, timings, totalMs, {
+  logSlowOrdersList(q, requestIdFromContext(c), timings, totalMs, {
     rows: rows.length,
     total,
     countWasSkipped,
@@ -1696,6 +1703,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   } catch (err) {
     const totalMs = msSince(routeStartedAt);
     console.error('[orders:list] failed', {
+      requestId: requestIdFromContext(c) ?? undefined,
       ...orderListRequestMeta(q),
       totalMs,
       timings,

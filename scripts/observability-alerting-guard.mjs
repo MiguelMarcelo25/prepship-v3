@@ -5,6 +5,7 @@ const root = process.cwd();
 const planPath = 'OBSERVABILITY_ALERTING_PLAN.md';
 const plan = fs.readFileSync(path.join(root, planPath), 'utf8');
 const main = fs.readFileSync(path.join(root, 'src/main.ts'), 'utf8');
+const ordersRoute = fs.readFileSync(path.join(root, 'src/routes/orders.ts'), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
 function assert(condition, message) {
@@ -79,3 +80,7 @@ assert(main.includes('normalizeRequestId'), 'API normalizes incoming request IDs
 assert(main.includes("c.get('requestId')"), 'API timing/error logs include request ID');
 assert(main.includes("'[api:error]'"), 'API has structured error log marker');
 assert(main.includes("'[api:timing]'"), 'API has structured timing log marker');
+assert(ordersRoute.includes('requestIdFromContext'), 'orders list timing logs read request ID');
+assert(ordersRoute.includes("'[orders:list] completed'"), 'orders list has structured completed log marker');
+assert(ordersRoute.includes("'[orders:list] failed'"), 'orders list has structured failed log marker');
+assert(ordersRoute.includes('requestId: requestId'), 'orders list logs include request ID');

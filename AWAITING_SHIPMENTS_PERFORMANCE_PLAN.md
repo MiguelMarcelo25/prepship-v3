@@ -4,14 +4,14 @@
 
 PrepShip should not jump straight to AWS migration or order archiving until the Awaiting Shipment delay is traced from browser to API to Supabase. The immediate goal is to prove where the page stalls, then fix the confirmed hot path.
 
-Current status: investigation scoped. API request IDs now flow through the `X-Request-Id` response header and `[api:timing]` / `[api:error]` logs so browser Network requests can be correlated with Render logs.
+Current status: investigation scoped. API request IDs now flow through the `X-Request-Id` response header, `[api:timing]` / `[api:error]` logs, and detailed `[orders:list]` logs so browser Network requests can be correlated with Render route and segment timings.
 
 Phase 9 follow-up: the first low-risk startup guard now prevents Orders from fetching locations and carrier accounts until an order action, drawer, queue, rate browser, new-order flow, or shipping-account sort actually needs those shared records. The legacy sidebar count path also waits until after first paint, slows polling, and skips hidden tabs. Global markups/settings hydration is delayed on Orders routes while Settings/Rates direct visits stay immediate.
 
 ## Critical Blockers
 
 - [ ] Browser Network timing for Awaiting Shipment first load is not yet captured.
-- [ ] Render `[api:timing]` and `[orders:list]` logs are not yet correlated to the slow browser load.
+- [x] Render `[api:timing]` and `[orders:list]` logs now carry the request ID needed for browser-to-backend correlation.
 - [ ] Supabase slow-query logs are not yet correlated to the same timestamp.
 - [ ] p95/p99 visibility for the hot routes is not yet available.
 
@@ -45,7 +45,7 @@ Phase 9 follow-up: the first low-risk startup guard now prevents Orders from fet
    - `/packages`
    - `/orders/sync/status`
    - `/worker/status`
-5. Check `[orders:list]` timings for `ordersPage`, `ordersCount`, `shipmentsByOrderId`, `shipmentsByOrderNumber`, and total route time.
+5. Check `[orders:list]` timings with the same request ID for `ordersPage`, `ordersCount`, `shipmentsByOrderId`, `shipmentsByOrderNumber`, and total route time.
 6. Check Supabase slow-query and connection/pool pressure for the same timestamp.
 7. Check worker logs for overlapping sync, reporting refresh, rate backfill, or reconciliation jobs.
 8. Classify the blocker as browser, API, database, worker overlap, or frontend render.
