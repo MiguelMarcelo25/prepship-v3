@@ -31,12 +31,44 @@ function buildRedirect(path: string): string {
   return `${window.location.origin}${path}`;
 }
 
-// Wipes the stale refresh-token entry from localStorage without
-// waiting on /auth/v1/logout. We use this when the browser needs to
-// become logged out even if remote session revocation is slow or fails.
-async function clearLocalSession() {
+function getSupabaseStorageKeyPrefix(): string | null {
   try {
-    await supabase.auth.signOut({ scope: 'local' });
+    const host = new URL(import.meta.env.VITE_SUPABASE_URL).hostname;
+    const projectRef = host.split('.')[0];
+    return projectRef ? `sb-${projectRef}-auth-token` : null;
+  } catch {
+    return null;
+  }
+}
+
+function removeSupabaseSessionKeys(storage: Storage) {
+  const keyPrefix = getSupabaseStorageKeyPrefix();
+  const keysToRemove: string[] = [];
+  for (let i = 0; i < storage.length; i += 1) {
+    const key = storage.key(i);
+    if (!key) continue;
+    if (
+      key === 'supabase.auth.token' ||
+      key === 'sb-auth-token' ||
+      (keyPrefix && (key === keyPrefix || key.startsWith(`${keyPrefix}-`)))
+    ) {
+      keysToRemove.push(key);
+    }
+  }
+
+  for (const key of keysToRemove) {
+    storage.removeItem(key);
+  }
+}
+
+// Wipes the stale refresh-token entry from browser storage without
+// calling /auth/v1/logout. Logout must not leave a pending network
+// revocation request that can block the next sign-in.
+function clearLocalSession() {
+  if (typeof window === 'undefined') return;
+  try {
+    removeSupabaseSessionKeys(window.localStorage);
+    removeSupabaseSessionKeys(window.sessionStorage);
   } catch {
     // Best effort: the next session refresh attempt will retry cleanup.
   }
@@ -53,9 +85,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // hitting /auth/v1/logout. We use this when we know the token the
     // browser is holding is already invalid — calling the server to
     // revoke an already-invalid token would just produce another 4xx.
-    async function clearLocalSession() {
+    async function clearInvalidStoredSession() {
       try {
-        await supabase.auth.signOut({ scope: 'local' });
+        clearLocalSession();
       } catch {
         // The local-scope signOut is best-effort; if it fails we just
         // leave localStorage alone — the next session refresh attempt
@@ -74,7 +106,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // Clear it locally so the background autoRefresh loop doesn't
           // keep hitting the 400 on every page load.
           console.warn('[auth] Stored session invalid, clearing:', error.message);
-          await clearLocalSession();
+          await clearInvalidStoredSession();
           setSession(null);
         } else {
           setSession(data.session);
@@ -84,7 +116,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // getSession itself shouldn't throw (it just reads localStorage),
         // but a hard catch is cheap insurance against SDK changes.
         console.warn('[auth] getSession threw:', err);
-        await clearLocalSession();
+        await clearInvalidStoredSession();
         setSession(null);
       } finally {
         if (!cancelled) setLoading(false);

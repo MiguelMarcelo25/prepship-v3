@@ -40,8 +40,14 @@ assert(
   'local auth state clears before local Supabase cleanup',
 );
 assert(
-  authSource.includes("scope: 'local'") && signOutBlock.includes('clearLocalSession()'),
-  'logout uses local-scope Supabase cleanup',
+  !authSource.includes('supabase.auth.signOut'),
+  'logout never calls Supabase signOut because it can leave a pending logout request',
+);
+assert(
+  authSource.includes('removeSupabaseSessionKeys(window.localStorage)') &&
+    authSource.includes('removeSupabaseSessionKeys(window.sessionStorage)') &&
+    signOutBlock.includes('clearLocalSession()'),
+  'logout clears Supabase session keys from browser storage directly',
 );
 assert(
   !signOutBlock.includes('remoteSignOut') && !signOutBlock.includes('Promise.race'),
