@@ -2514,6 +2514,37 @@ const patchBody = z.object({
   externallyShippedSource: z.string().nullable().optional(),
 });
 
+function parseBestRateDimsLabel(value: unknown): { length: number; width: number; height: number } | null {
+  if (typeof value !== 'string') return null;
+  const parts = value
+    .trim()
+    .toLowerCase()
+    .split('x')
+    .map((part) => Number(part.trim()));
+  if (parts.length !== 3) return null;
+  const length = parts[0];
+  const width = parts[1];
+  const height = parts[2];
+  if (length == null || width == null || height == null) return null;
+  if (![length, width, height].every((part) => Number.isFinite(part) && part > 0)) return null;
+  return { length, width, height };
+}
+
+const bestRateDimsSchema = z.string().trim().refine(
+  (value) => parseBestRateDimsLabel(value) != null,
+  'Complete dimensions are required before saving a best rate',
+);
+
+function validateBestRateDimsForPersistedRate(
+  bestRateJson: unknown,
+  bestRateDims: unknown,
+): string | null {
+  if (bestRateJson === undefined || bestRateJson === null) return null;
+  const parsed = bestRateDimsSchema.safeParse(bestRateDims);
+  if (!parsed.success) return 'Complete dimensions are required before saving a best rate';
+  return parsed.data;
+}
+
 app.patch('/:id{[0-9]+}', zValidator('json', patchBody), async (c) => {
   const id = Number(c.req.param('id'));
   const body = c.req.valid('json');
@@ -2539,6 +2570,14 @@ app.patch('/:id{[0-9]+}', zValidator('json', patchBody), async (c) => {
   // v2-parity: canonicalize incoming bestRateJson before persisting.
   // Accepts raw ShipStation shapes (snake_case) or the already-normalized DTO.
   if (overridesBody.bestRateJson !== undefined && overridesBody.bestRateJson !== null) {
+    const validatedDims = validateBestRateDimsForPersistedRate(
+      overridesBody.bestRateJson,
+      overridesBody.bestRateDims,
+    );
+    if (!validatedDims) {
+      return c.json({ error: 'Complete dimensions are required before saving a best rate' }, 400);
+    }
+    overridesBody.bestRateDims = validatedDims;
     try {
       overridesBody.bestRateJson = normalizeOrderBestRateDto(
         overridesBody.bestRateJson,
@@ -2568,7 +2607,11 @@ app.patch('/:id{[0-9]+}', zValidator('json', patchBody), async (c) => {
       .where(eq(orders.id, id));
   }
 
-  const bestRateAt = overridesBody.bestRateJson !== undefined ? new Date() : undefined;
+  const bestRateAt = overridesBody.bestRateJson === undefined
+    ? undefined
+    : overridesBody.bestRateJson === null
+      ? null
+      : new Date();
   const [row] = await db
     .insert(orderOverrides)
     .values({ orderId: id, ...overridesBody, bestRateAt, updatedAt: new Date() })
@@ -2596,7 +2639,11 @@ async function applyOverridesPatch(
     .where(eq(orders.id, id))
     .limit(1);
   if (!existing) return null;
-  const bestRateAt = patch.bestRateJson !== undefined ? new Date() : undefined;
+  const bestRateAt = patch.bestRateJson === undefined
+    ? undefined
+    : patch.bestRateJson === null
+      ? null
+      : new Date();
   const [row] = await db
     .insert(orderOverrides)
     .values({ orderId: id, ...patch, bestRateAt, updatedAt: new Date() })
@@ -2662,7 +2709,7 @@ app.post(
   zValidator(
     'json',
     z.object({
-      bestRateJson: z.unknown(),
+      bestRateJson: z.unknown().nullable(),
       bestRateDims: z.string().nullable().optional(),
     })
   ),
@@ -2671,6 +2718,23 @@ app.post(
     const guard = await assertOrderEditable(c, id);
     if (!guard.ok) return guard.response;
     const body = c.req.valid('json');
+
+    if (body.bestRateJson === null) {
+      const row = await applyOverridesPatch(id, {
+        bestRateJson: null,
+        bestRateDims: null,
+      });
+      if (!row) return c.json({ error: 'Order not found' }, 404);
+      return c.json({ data: row });
+    }
+
+    const validatedDims = validateBestRateDimsForPersistedRate(
+      body.bestRateJson,
+      body.bestRateDims,
+    );
+    if (!validatedDims) {
+      return c.json({ error: 'Complete dimensions are required before saving a best rate' }, 400);
+    }
 
     // v2-parity: canonicalize + hard-assert that persisted best rate has
     // carrierCode + serviceCode. Downstream label creation and invoicing
@@ -2688,7 +2752,7 @@ app.post(
 
     const row = await applyOverridesPatch(id, {
       bestRateJson: canonical,
-      bestRateDims: body.bestRateDims ?? null,
+      bestRateDims: validatedDims,
     });
     if (!row) return c.json({ error: 'Order not found' }, 404);
     return c.json({ data: row });

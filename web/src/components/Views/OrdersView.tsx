@@ -4286,7 +4286,35 @@ export default function OrdersView({
     )
     const requestDims = normalizeDimsLabel(request.dimsLabel)
 
-    return !savedDims || savedDims === requestDims
+    return Boolean(savedDims && savedDims === requestDims)
+  }
+
+  function getSavedBestRateDimsLabel(order: OrderSummaryDto) {
+    return normalizeDimsLabel(
+      toRecord(order.overrides)?.bestRateDims ??
+      order.bestRateDims ??
+      getShippingModel(order)?.bestRateDims,
+    )
+  }
+
+  function getCurrentBestRateDimsLabel(order: OrderSummaryDto) {
+    const detail = orderDetailsById.get(order.orderId) ?? null
+    const dims = getDimensions(order, detail)
+    if (!hasCompleteDims(dims)) return null
+    return normalizeDimsLabel(`${dims.length}x${dims.width}x${dims.height}`)
+  }
+
+  function hasValidBestRateForCurrentDims(order: OrderSummaryDto) {
+    const savedRate =
+      toRecord(order.bestRate) ??
+      toRecord(getShippingModel(order)?.bestRate) ??
+      toRecord(toRecord(order.overrides)?.bestRateJson)
+    if (!savedRate) return false
+    if (getRateBaseAmount(savedRate) <= 0) return false
+
+    const savedDims = getSavedBestRateDimsLabel(order)
+    const currentDims = getCurrentBestRateDimsLabel(order)
+    return Boolean(savedDims && currentDims && savedDims === currentDims)
   }
 
   function getRateBaseAmount(rate: Record<string, unknown>) {
@@ -4302,6 +4330,7 @@ export default function OrdersView({
     const serviceCode = toStringValue(rate.serviceCode)
     const carrierCode = toStringValue(rate.carrierCode)
     const carrierNickname = toStringValue(rate.carrierNickname)
+    const bestRateDims = getCurrentBestRateDimsLabel(order)
     const shippingModel = toRecord(getShippingModel(order)) ?? {}
     const canonicalOrder = toRecord(order.canonicalOrder)
     const canonicalShipping = toRecord(canonicalOrder?.shipping) ?? {}
@@ -4314,11 +4343,13 @@ export default function OrdersView({
       serviceCode: serviceCode ?? toStringValue(shippingModel.serviceCode) ?? toStringValue(canonicalShipping.serviceCode),
       carrierCode: carrierCode ?? toStringValue(shippingModel.carrierCode) ?? toStringValue(canonicalShipping.carrierCode),
       accountNickname: carrierNickname ?? toStringValue(shippingModel.accountNickname) ?? toStringValue(canonicalShipping.accountNickname),
+      bestRateDims,
     }
 
     return {
       ...order,
       bestRate: rate,
+      bestRateDims,
       shipping,
       canonicalOrder: canonicalOrder
         ? {
@@ -4364,6 +4395,9 @@ export default function OrdersView({
   ) {
     const dims = getAppliedRateDims(rate) ?? options.fallbackDims ?? null
     const weightOz = getAppliedRateWeightOz(rate) ?? options.fallbackWeightOz ?? null
+    if (!hasCompleteDims(dims)) {
+      throw new Error('Complete dimensions are required before saving a best rate')
+    }
     const dimsLabel = dims ? `${dims.length || 0}x${dims.width || 0}x${dims.height || 0}` : null
     const shippingProviderId = toNumberValue(rate.shippingProviderId)
 
@@ -5779,14 +5813,17 @@ export default function OrdersView({
       )
     }
 
-    const hasDims = getDimensions(displayOrder, null) != null
-    if (!displayOrder.bestRate && (!(displayOrder.weight?.value && displayOrder.weight.value > 0) || !hasDims)) {
+    const dims = getDimensions(displayOrder, null)
+    const hasDims = hasCompleteDims(dims)
+    const hasWeight = Boolean(displayOrder.weight?.value && displayOrder.weight.value > 0)
+    const hasDisplayableBestRate = hasValidBestRateForCurrentDims(displayOrder)
+    if (!hasDisplayableBestRate && (!hasWeight || !hasDims)) {
       return <span style={{ fontSize: 10.5, color: 'var(--text3)' }}>— add dims</span>
     }
     if (hasMatchingAutoEntry && !autoEntry?.rate) {
       return <span style={{ color: 'var(--text3)', fontSize: 11 }}>--</span>
     }
-    if (!displayOrder.bestRate) {
+    if (!hasDisplayableBestRate) {
       return <span style={{ color: 'var(--text3)', fontSize: 11 }}>--</span>
     }
     if (bestRateBaseCost == null) {
@@ -5893,11 +5930,14 @@ export default function OrdersView({
       )
     }
 
-    const hasDims = getDimensions(displayOrder, null) != null
-    if (!displayOrder.bestRate && (!(displayOrder.weight?.value && displayOrder.weight.value > 0) || !hasDims)) {
+    const dims = getDimensions(displayOrder, null)
+    const hasDims = hasCompleteDims(dims)
+    const hasWeight = Boolean(displayOrder.weight?.value && displayOrder.weight.value > 0)
+    const hasDisplayableBestRate = hasValidBestRateForCurrentDims(displayOrder)
+    if (!hasDisplayableBestRate && (!hasWeight || !hasDims)) {
       return <span style={{ fontSize: 10.5, color: 'var(--text3)' }}>— add dims</span>
     }
-    if (!displayOrder.bestRate) {
+    if (!hasDisplayableBestRate) {
       return <div className="spin-center"><span className="spin-sm" /></div>
     }
 
@@ -5946,11 +5986,14 @@ export default function OrdersView({
       )
     }
 
-    const hasDims = getDimensions(displayOrder, null) != null
-    if (!displayOrder.bestRate && (!(displayOrder.weight?.value && displayOrder.weight.value > 0) || !hasDims)) {
+    const dims = getDimensions(displayOrder, null)
+    const hasDims = hasCompleteDims(dims)
+    const hasWeight = Boolean(displayOrder.weight?.value && displayOrder.weight.value > 0)
+    const hasDisplayableBestRate = hasValidBestRateForCurrentDims(displayOrder)
+    if (!hasDisplayableBestRate && (!hasWeight || !hasDims)) {
       return <span style={{ fontSize: 10.5, color: 'var(--text3)' }}>— add dims</span>
     }
-    if (!displayOrder.bestRate) {
+    if (!hasDisplayableBestRate) {
       return <div className="spin-center"><span className="spin-sm" /></div>
     }
 

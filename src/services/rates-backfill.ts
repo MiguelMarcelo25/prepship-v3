@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import { and, desc, eq, isNull, lt, notInArray, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orders, orderOverrides } from '../db/schema/orders';
-import { packages } from '../db/schema/packages';
 import { settings } from '../db/schema/settings';
 import { getRates } from './rates';
 import type { Rate } from '../lib/shipstation';
@@ -41,6 +40,28 @@ function pickBestForTier(rates: Rate[], tier: ServiceTier): Rate | null {
   return [...candidates].sort(
     (a, b) => a.shipping_amount.amount - b.shipping_amount.amount
   )[0]!;
+}
+
+function toPositiveNumber(value: unknown): number | null {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function getBackfillOrderDims(row: {
+  rateDimsL: number | null;
+  rateDimsW: number | null;
+  rateDimsH: number | null;
+  raw: Record<string, unknown> | null;
+}): { length: number; width: number; height: number } | null {
+  const raw = row.raw ?? {};
+  const rawDims = raw.dimensions && typeof raw.dimensions === 'object'
+    ? raw.dimensions as Record<string, unknown>
+    : {};
+  const length = toPositiveNumber(row.rateDimsL) ?? toPositiveNumber(rawDims.length);
+  const width = toPositiveNumber(row.rateDimsW) ?? toPositiveNumber(rawDims.width);
+  const height = toPositiveNumber(row.rateDimsH) ?? toPositiveNumber(rawDims.height);
+  if (length == null || width == null || height == null) return null;
+  return { length, width, height };
 }
 
 export type BackfillJob = {
@@ -254,6 +275,9 @@ async function runBackfill(
         shipToCity: orders.shipToCity,
         serviceCode: orders.serviceCode,
         raw: orders.raw,
+        rateDimsL: orderOverrides.rateDimsL,
+        rateDimsW: orderOverrides.rateDimsW,
+        rateDimsH: orderOverrides.rateDimsH,
         overridesBestRateAt: orderOverrides.bestRateAt,
       })
       .from(orders)
@@ -279,23 +303,6 @@ async function runBackfill(
     job.message = `Found ${rows.length} orders; fetching rates…`;
     await persistBackfillJobSnapshot(job, opts);
 
-    // Resolve a default L/W/H once per job — every carrier requires dims.
-    // Prefer the packages row marked default; otherwise a safe 6×6×6.
-    const [defaultPkg] = await db
-      .select({
-        length: packages.length,
-        width: packages.width,
-        height: packages.height,
-      })
-      .from(packages)
-      .where(eq(packages.isDefault, true))
-      .limit(1);
-    const fallbackDims = {
-      length: defaultPkg?.length && defaultPkg.length > 0 ? defaultPkg.length : 6,
-      width: defaultPkg?.width && defaultPkg.width > 0 ? defaultPkg.width : 6,
-      height: defaultPkg?.height && defaultPkg.height > 0 ? defaultPkg.height : 6,
-    };
-
     const CONCURRENCY = 4;
     const processOne = async (row: (typeof rows)[number]) => {
       if (jobs.get(jobId)?.status !== 'running') return;
@@ -305,12 +312,24 @@ async function runBackfill(
         dimensions?: { length?: number; width?: number; height?: number; units?: string };
       };
       const toCountry = raw.shipTo?.country ?? 'US';
-      // ShipStation dimensions are almost always in inches; if any are 0/missing,
-      // use the default-package fallback for that axis.
-      const rawDims = raw.dimensions ?? {};
-      const dimsL = rawDims.length && rawDims.length > 0 ? rawDims.length : fallbackDims.length;
-      const dimsW = rawDims.width && rawDims.width > 0 ? rawDims.width : fallbackDims.width;
-      const dimsH = rawDims.height && rawDims.height > 0 ? rawDims.height : fallbackDims.height;
+      const dims = getBackfillOrderDims(row);
+      if (!dims) {
+        job.skipped++;
+        if (job.failureSamples.length < 5) {
+          job.failureSamples.push(
+            `order ${row.id} (${row.orderNumber}, w=${row.weightOz}, ${row.shipToCity}, ${row.shipToState} ${row.shipToPostalCode}): missing real dimensions`
+          );
+        }
+        job.processed++;
+        if (job.processed % 10 === 0 || job.processed === job.total) {
+          job.message = `${job.processed}/${job.total} — ${job.updated} updated, ${job.skipped} skipped, ${job.failed} failed`;
+        }
+        if (job.processed % 50 === 0 || job.processed === job.total) {
+          void persistBackfillJobSnapshot(job, opts);
+        }
+        return;
+      }
+      const dimsLabel = `${dims.length}x${dims.width}x${dims.height}`;
       try {
         const result = await withTimeout(
           getRates({
@@ -320,9 +339,9 @@ async function runBackfill(
             toCity: row.shipToCity ?? undefined,
             toCountry,
             residential: raw.shipTo?.residential ?? undefined,
-            dimsL,
-            dimsW,
-            dimsH,
+            dimsL: dims.length,
+            dimsW: dims.width,
+            dimsH: dims.height,
             storeId: row.storeId,
             clientId: row.clientId,
           }),
@@ -346,6 +365,7 @@ async function runBackfill(
             .values({
               orderId: row.id,
               bestRateJson: best as unknown,
+              bestRateDims: dimsLabel,
               bestRateAt: now,
               updatedAt: now,
             })
@@ -353,6 +373,7 @@ async function runBackfill(
               target: orderOverrides.orderId,
               set: {
                 bestRateJson: best as unknown,
+                bestRateDims: dimsLabel,
                 bestRateAt: now,
                 updatedAt: now,
               },
