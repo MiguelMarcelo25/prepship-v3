@@ -60,7 +60,8 @@ This is a planning/control batch only. It does not modify order, shipment, label
 - [x] Add `npm run test:inventory-reconciliation-dry-run` to guard no mutation and no apply mode.
 - [x] Add `INVENTORY_REPAIR_APPLY_PLAN.md` and `npm run test:inventory-repair-plan` before any inventory repair/apply implementation.
 - [x] Add inventory mismatch classification counts and row-level recommended actions before any repair/apply implementation.
-- [ ] Add operator-facing reports for mismatch counts and CSV export.
+- [x] Add dry-run JSON/CSV artifacts through `--out-json` and `--out-csv`.
+- [ ] Add operator-facing reports for mismatch counts and downloadable CSV export.
 - [ ] Add worker scheduled reconciliation for low-risk reports.
 - [ ] Keep label/shipment/order repair operations behind explicit human review and role checks.
 

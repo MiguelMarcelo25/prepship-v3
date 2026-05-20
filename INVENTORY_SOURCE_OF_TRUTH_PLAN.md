@@ -76,6 +76,7 @@ Canonical rule:
 - [x] Keep the dry-run script read-only with no repair/apply mode.
 - [x] Report `classificationCounts`, row-level `classification`, `recommendedAction`, and `safeToAutoRepair=false`.
 - [x] Document owner approval, saved artifacts, rollback, and prohibited mutations in `INVENTORY_REPAIR_APPLY_PLAN.md`.
+- [x] Support saved dry-run artifacts with `--out-json` and `--out-csv`.
 - [ ] Require approval before applying any cache repair.
 - [ ] Add worker-generated inventory metrics for velocity/restock.
 
@@ -96,6 +97,8 @@ Future implementation tests:
 - `npm run inventory:reconcile:dry-run -- --limit 50`
 - `npm run inventory:reconcile:dry-run -- --client-id 3 --json`
 - `npm run inventory:reconcile:dry-run -- --sku "ABC-123"`
+- `npm run inventory:reconcile:dry-run -- --limit 100 --out-json artifacts/inventory-reconcile.json`
+- `npm run inventory:reconcile:dry-run -- --limit 100 --out-csv artifacts/inventory-reconcile.csv`
 - apply mode updates only `inventory.stockQty` after approval
 - Inventory page uses `effectiveStock` and exposes cached stock only as audit/tooltip fallback
 - shipped/cancelled order rows and `shipments` are not mutated by inventory reconciliation

@@ -1,4 +1,6 @@
 import 'dotenv/config';
+import { mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
 import postgres from 'postgres';
 
 type Args = {
@@ -7,6 +9,8 @@ type Args = {
   includeMatched: boolean;
   json: boolean;
   limit: number;
+  outJson?: string;
+  outCsv?: string;
 };
 
 type DbRow = {
@@ -92,6 +96,8 @@ function parseArgs(): Args {
     includeMatched: hasFlag('include-matched'),
     json: hasFlag('json'),
     limit: parsePositiveInt('limit', 50),
+    outJson: argValue('out-json')?.trim() || undefined,
+    outCsv: argValue('out-csv')?.trim() || undefined,
   };
 }
 
@@ -103,6 +109,8 @@ Usage:
   npm run inventory:reconcile:dry-run -- --sku "ABC-123" --limit 100
   npm run inventory:reconcile:dry-run -- --json
   npm run inventory:reconcile:dry-run -- --include-matched --limit 100
+  npm run inventory:reconcile:dry-run -- --out-json artifacts/inventory-reconcile.json
+  npm run inventory:reconcile:dry-run -- --out-csv artifacts/inventory-reconcile.csv
 
 Safety:
   This command is read-only and dry-run only.
@@ -110,6 +118,53 @@ Safety:
   It does not modify inventory, orders, shipped/cancelled rows, or shipments.
   It intentionally has no apply mode; any future repair must be separate.
 `);
+}
+
+async function writeTextArtifact(filePath: string, contents: string): Promise<string> {
+  const resolved = path.resolve(process.cwd(), filePath);
+  await mkdir(path.dirname(resolved), { recursive: true });
+  await writeFile(resolved, contents, 'utf8');
+  return resolved;
+}
+
+function csvCell(value: unknown): string {
+  const text = value == null ? '' : String(value);
+  if (!/[",\r\n]/.test(text)) return text;
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function rowsToCsv(rows: ReconciliationRow[]): string {
+  const headers = [
+    'inventoryId',
+    'clientId',
+    'sku',
+    'name',
+    'active',
+    'currentStockQty',
+    'ledgerStock',
+    'effectiveStock',
+    'totalReceived',
+    'totalSold',
+    'ledgerEntries',
+    'skuClientCount',
+    'lastLedgerAt',
+    'cacheVsLedgerDelta',
+    'cacheVsEffectiveDelta',
+    'ledgerVsEffectiveDelta',
+    'status',
+    'classification',
+    'safeToAutoRepair',
+    'recommendedAction',
+  ] as const;
+
+  return [
+    headers.join(','),
+    ...rows.map((row) =>
+      headers
+        .map((header) => csvCell(row[header]))
+        .join(','),
+    ),
+  ].join('\n') + '\n';
 }
 
 function classify(row: Omit<ReconciliationRow, 'status'>): ReconciliationRow['status'] {
@@ -347,8 +402,17 @@ async function main(): Promise<void> {
       limit: args.limit,
     };
 
+    const report = { summary, rows: visibleRows };
+    const artifactPaths: string[] = [];
+    if (args.outJson) {
+      artifactPaths.push(await writeTextArtifact(args.outJson, JSON.stringify(report, null, 2) + '\n'));
+    }
+    if (args.outCsv) {
+      artifactPaths.push(await writeTextArtifact(args.outCsv, rowsToCsv(visibleRows)));
+    }
+
     if (args.json) {
-      console.log(JSON.stringify({ summary, rows: visibleRows }, null, 2));
+      console.log(JSON.stringify({ ...report, artifactPaths }, null, 2));
       return;
     }
 
@@ -361,6 +425,9 @@ async function main(): Promise<void> {
     );
     console.log(`classificationCounts=${JSON.stringify(summary.classificationCounts)}`);
     console.log('No rows changed.');
+    for (const artifactPath of artifactPaths) {
+      console.log(`artifact=${artifactPath}`);
+    }
 
     if (visibleRows.length) {
       console.table(
