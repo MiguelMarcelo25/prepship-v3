@@ -1,4 +1,5 @@
 import { serve } from '@hono/node-server';
+import { randomUUID } from 'node:crypto';
 import { Hono } from 'hono';
 import { logger } from 'hono/logger';
 import { cors } from 'hono/cors';
@@ -31,8 +32,28 @@ import carriersRoute from './routes/carriers';
 import usersRoute from './routes/users';
 import workerRoute from './routes/worker';
 
-const app = new Hono();
+type AppVars = {
+  requestId: string;
+};
 
+const app = new Hono<{ Variables: AppVars }>();
+
+function normalizeRequestId(value: string | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) return null;
+  if (!/^[A-Za-z0-9._:-]{1,128}$/.test(trimmed)) return null;
+  return trimmed;
+}
+
+app.use('*', async (c, next) => {
+  const requestId =
+    normalizeRequestId(c.req.header('x-request-id')) ??
+    normalizeRequestId(c.req.header('x-correlation-id')) ??
+    randomUUID();
+  c.set('requestId', requestId);
+  c.header('X-Request-Id', requestId);
+  await next();
+});
 app.use('*', logger());
 app.use('*', async (c, next) => {
   const startedAt = Date.now();
@@ -50,6 +71,7 @@ app.use('*', async (c, next) => {
       const responseBytes =
         contentLength && /^\d+$/.test(contentLength) ? Number(contentLength) : null;
       console.info('[api:timing]', {
+        requestId: c.get('requestId'),
         method: c.req.method,
         path: url.pathname,
         status: c.res.status,
@@ -131,8 +153,16 @@ app.route('/worker', workerRoute);
 app.notFound((c) => c.json({ error: 'Not found' }, 404));
 
 app.onError((err, c) => {
-  console.error(err);
   const status = (err as { status?: number }).status ?? 500;
+  const url = new URL(c.req.url);
+  console.error('[api:error]', {
+    requestId: c.get('requestId'),
+    method: c.req.method,
+    path: url.pathname,
+    status,
+    error: err instanceof Error ? err.message : String(err),
+  });
+  if (err instanceof Error && err.stack) console.error(err.stack);
   const isSafeClientError = status >= 400 && status < 500;
   const message =
     isSafeClientError && err.message ? err.message : 'Internal server error';

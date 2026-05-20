@@ -78,7 +78,7 @@ Confirmed gaps from repo search:
 - Secrets governance is mapped, but rotation, last-used tracking, audit events, and production log/response smoke tests are not complete yet.
 - Audit logging is mapped, but the append-only table/service and runtime event writers are not implemented yet.
 - Reconciliation reporting is mapped, and marketplace awaiting-count repair now has a dry-run/apply path; broader report queries, scheduled runs, artifacts, and non-marketplace repair dry-runs are not implemented yet.
-- Observability and alerting are mapped, but runtime metric emitters, dashboards, thresholds, alert destinations, and runbook links are not implemented yet.
+- Observability and alerting are mapped, and API request IDs now flow through response headers plus timing/error logs; runtime metric emitters, dashboards, thresholds, alert destinations, and runbook links still need implementation.
 - Operational runbooks and DR are mapped, but dedicated runbook pages, owner approval, restore drills, and rollback drills are not complete yet.
 - Privacy and compliance are mapped, but retention/deletion policy, field-level privacy rules, access reviews, and log redaction scans are not complete yet.
 - Production signoff gates are mapped, but the checklist has not yet been used against a full manual release with evidence links.
@@ -251,7 +251,7 @@ Deliverable table:
 - [x] Create `OBSERVABILITY_ALERTING_PLAN.md`.
 - [x] Add `npm run test:observability-alerting`.
 - [x] Scope Awaiting Shipment lag investigation in `AWAITING_SHIPMENTS_PERFORMANCE_PLAN.md`.
-- [ ] Include request IDs in backend logs.
+- [x] Include request IDs in backend timing/error logs.
 - [ ] Use structured error logs for API failures.
 - [ ] Capture frontend errors.
 - [ ] Count external API failures by provider/account.

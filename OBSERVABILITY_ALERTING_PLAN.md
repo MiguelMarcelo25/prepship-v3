@@ -4,7 +4,7 @@
 
 This Phase 12 deliverable defines the production signals, metrics, alerts, dashboards, and ownership needed for PrepShip to be enterprise-ready. The goal is to make failures visible before operators or clients discover them in the browser.
 
-This is a planning/control batch only. It does not change runtime logging, request handling, external API behavior, or shipped/cancelled order logic. Implementation should follow this matrix in small batches after owners and alert thresholds are approved.
+This started as a planning/control batch. Runtime implementation has now begun with an additive `X-Request-Id` response header and request ID fields in API timing/error logs. It does not change external API behavior or shipped/cancelled order logic. Remaining implementation should follow this matrix in small batches after owners and alert thresholds are approved.
 
 ## Critical Blockers
 
@@ -29,7 +29,7 @@ This is a planning/control batch only. It does not change runtime logging, reque
 
 | Area | Concern | Recommended Patch |
 |---|---|---|
-| Request IDs | Logs are harder to correlate across frontend/API/worker | Add request ID propagation and include it in structured logs |
+| Request IDs | Request IDs now exist on API responses and API timing/error logs; worker/frontend propagation is not complete | Extend request ID propagation into worker/job logs and frontend support tooling |
 | Response size | Large responses can hurt browser speed and bandwidth | Log response-size buckets for heavy routes |
 | Cache health | Cache hits/misses are not fully visible | Track analytics/rate/reporting cache hit ratio |
 | Status panel | Operators need a quick internal health view | Add internal status panel backed by lightweight status APIs |
@@ -54,7 +54,7 @@ This is a planning/control batch only. It does not change runtime logging, reque
 
 ## Recommended Patches
 
-- [ ] Add a shared request-id middleware and propagate request IDs to logs and response headers.
+- [x] Add a shared request-id middleware and propagate request IDs to logs and response headers.
 - [ ] Standardize structured logs for API errors, external API failures, and worker jobs.
 - [ ] Add route-level metrics for status, duration, and response-size buckets.
 - [ ] Add provider/account-level metrics for ShipStation, direct carriers, and marketplace APIs.

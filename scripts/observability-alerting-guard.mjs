@@ -4,6 +4,7 @@ import path from 'node:path';
 const root = process.cwd();
 const planPath = 'OBSERVABILITY_ALERTING_PLAN.md';
 const plan = fs.readFileSync(path.join(root, planPath), 'utf8');
+const main = fs.readFileSync(path.join(root, 'src/main.ts'), 'utf8');
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
 function assert(condition, message) {
@@ -72,3 +73,9 @@ assert(
     'node scripts/observability-alerting-guard.mjs',
   'package exposes observability alerting guard'
 );
+
+assert(main.includes('X-Request-Id'), 'API returns X-Request-Id response header');
+assert(main.includes('normalizeRequestId'), 'API normalizes incoming request IDs');
+assert(main.includes("c.get('requestId')"), 'API timing/error logs include request ID');
+assert(main.includes("'[api:error]'"), 'API has structured error log marker');
+assert(main.includes("'[api:timing]'"), 'API has structured timing log marker');
