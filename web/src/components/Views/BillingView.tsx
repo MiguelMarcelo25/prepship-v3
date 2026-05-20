@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useContext, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
+import { lazy, Suspense, useContext, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
 import { motion } from 'framer-motion'
 import { Check, ListFilter, Loader2, Receipt, SlidersHorizontal, X } from 'lucide-react'
 import { apiClient } from '../../api/client'
@@ -40,10 +40,11 @@ import {
   type BillingPresetId,
 } from './billing-parity'
 import { AnalysisPagination } from './AnalysisPagination'
-import OrderDetailDrawer from '../OrderDetailDrawer'
 import { SortableHeader, nextSortState, sortRows } from '../SortableTable'
 import { Table, type TableColumn } from '../ui/Table'
 import './BillingView.css'
+
+const OrderDetailDrawer = lazy(() => import('../OrderDetailDrawer'))
 
 interface BillingDetailState {
   open: boolean
@@ -1500,13 +1501,17 @@ export default function BillingView() {
           </div>
         ) : null}
       </div>
-      <OrderDetailDrawer
-        orderId={orderDetailModalId}
-        presentation="modal"
-        closeLabel="Close"
-        closeTitle="Close order details"
-        onClose={() => setOrderDetailModalId(null)}
-      />
+      {orderDetailModalId != null ? (
+        <Suspense fallback={null}>
+          <OrderDetailDrawer
+            orderId={orderDetailModalId}
+            presentation="modal"
+            closeLabel="Close"
+            closeTitle="Close order details"
+            onClose={() => setOrderDetailModalId(null)}
+          />
+        </Suspense>
+      ) : null}
     </div>
   )
 }

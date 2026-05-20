@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { lazy, Suspense, useContext, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { motion } from 'framer-motion'
 import { Box, CalendarClock, CalendarPlus, Plus, RefreshCw, Ruler, Search, X } from 'lucide-react'
 import { apiClient } from '../../api/client'
@@ -34,8 +34,9 @@ import {
 } from './PackagesDataTable'
 import { AnalysisPagination } from './AnalysisPagination'
 import { LowStockBanner } from './LowStockBanner'
-import OrderDetailDrawer from '../OrderDetailDrawer'
 import './PackagesView.css'
+
+const OrderDetailDrawer = lazy(() => import('../OrderDetailDrawer'))
 
 const PACKAGES_PAGE_SIZE_OPTIONS = [25, 50, 100]
 const PACKAGES_DEFAULT_PAGE_SIZE = 50
@@ -1631,12 +1632,16 @@ export default function PackagesView({ onOpenOrder }: PackagesViewProps) {
           a dim backdrop and click-to-close. The drawer fetches its
           own order/shipment data based on orderId, so we just need
           to flip the state and let it do the work. */}
-      <OrderDetailDrawer
-        orderId={orderDetailModal?.orderId ?? null}
-        displayStatus={orderDetailModal?.status ?? undefined}
-        presentation="centered"
-        onClose={() => setOrderDetailModal(null)}
-      />
+      {orderDetailModal ? (
+        <Suspense fallback={null}>
+          <OrderDetailDrawer
+            orderId={orderDetailModal.orderId}
+            displayStatus={orderDetailModal.status ?? undefined}
+            presentation="centered"
+            onClose={() => setOrderDetailModal(null)}
+          />
+        </Suspense>
+      ) : null}
     </>
   )
 }
