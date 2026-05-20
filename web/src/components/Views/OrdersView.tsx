@@ -44,7 +44,6 @@ import {
   Tag,
   Plus,
 } from 'lucide-react'
-import OrderDetailDrawer from '../OrderDetailDrawer'
 import TrackingModal from '../TrackingModal'
 import HoverImage from '../HoverImage'
 import type { NewOrderPayload } from '../NewOrderModal'
@@ -54,6 +53,7 @@ import type { NewOrderPayload } from '../NewOrderModal'
 import CarrierBadge from '../CarrierBadge'
 import { apiClient } from '../../api/client'
 import { TEST_CLIENT_IDS } from '../../lib/v2-apiClient'
+const OrderDetailDrawer = lazy(() => import('../OrderDetailDrawer'))
 const NewOrderModal = lazy(() => import('../NewOrderModal'))
 const RateBrowserModal = lazy(() => import('../RateBrowserModal'))
 import { ToastContext } from '../../contexts/ToastContext'
@@ -9194,14 +9194,18 @@ export default function OrdersView({
         </div>
       ) : null}
 
-      <OrderDetailDrawer
-        orderId={detailDrawerOrderId}
-        displayStatus={currentStatus}
-        presentation={detailDrawerFromQueue ? 'modal' : 'drawer'}
-        closeLabel={detailDrawerFromQueue ? 'Back' : undefined}
-        closeTitle={detailDrawerFromQueue ? 'Back to print queue' : undefined}
-        onClose={closeDetailDrawer}
-      />
+      {detailDrawerOrderId != null ? (
+        <Suspense fallback={null}>
+          <OrderDetailDrawer
+            orderId={detailDrawerOrderId}
+            displayStatus={currentStatus}
+            presentation={detailDrawerFromQueue ? 'modal' : 'drawer'}
+            closeLabel={detailDrawerFromQueue ? 'Back' : undefined}
+            closeTitle={detailDrawerFromQueue ? 'Back to print queue' : undefined}
+            onClose={closeDetailDrawer}
+          />
+        </Suspense>
+      ) : null}
 
       <TrackingModal
         open={trackingModal != null}

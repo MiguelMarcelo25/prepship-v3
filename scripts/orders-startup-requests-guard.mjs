@@ -75,6 +75,13 @@ const checks = [
       ordersView.includes('<NewOrderModal'),
   },
   {
+    name: 'Order detail drawer chunk is loaded only after order-number intent',
+    pass: !ordersView.includes("import OrderDetailDrawer from '../OrderDetailDrawer'") &&
+      ordersView.includes("const OrderDetailDrawer = lazy(() => import('../OrderDetailDrawer'))") &&
+      ordersView.includes('{detailDrawerOrderId != null ? (') &&
+      ordersView.includes('<OrderDetailDrawer'),
+  },
+  {
     name: 'Legacy sidebar counts do not block Orders first paint',
     pass: sidebarOrders.includes('const initialTimerId = window.setTimeout(() =>') &&
       sidebarOrders.includes('}, 2500)') &&
