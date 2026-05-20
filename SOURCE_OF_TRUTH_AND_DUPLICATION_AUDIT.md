@@ -47,7 +47,9 @@ Current progress: 98%. This is not 100% because owner-approved inventory repair/
 - [x] Add shared credential-account request helper and DB service.
 - [x] Add auth coverage and frontend failure-state guards.
 - [x] Move carrier/store PATCH rename/approval behavior behind shared service functions.
-- [ ] Replace remaining JWT/CORS copies in legacy/maintenance handlers.
+- [~] Replace remaining JWT/CORS copies in legacy/maintenance handlers.
+- [x] Marketplace order pullers now use the shared JWT verifier and CORS helper (`api/carriers/walmart/orders.ts`, `api/carriers/ebay/orders.ts`).
+- [x] Add `npm run test:marketplace-order-auth-cors`.
 - [x] Add `RUNTIME_DDL_MIGRATION_AUDIT.md` inventory and static guard.
 - [x] Move reporting metrics table/index ownership to `drizzle/0029_reporting_metrics.sql`.
 - [x] Move Walmart selling-fee source index ownership to `drizzle/0019_selling_fees.sql`.
@@ -99,6 +101,8 @@ Current progress: 98%. This is not 100% because owner-approved inventory repair/
 - [x] Shared JWT verifier with strict-claims option.
 - [~] Duplicated verifier replacement in active handlers.
 - [x] Shared CORS helper.
+- [x] Walmart/eBay direct order pullers use the shared JWT verifier and shared CORS helper.
+- [x] Static guard for marketplace order puller auth/CORS consolidation.
 - [x] Static guard for protected root/wildcard auth gates.
 - [x] Static guard for `/admin` root/wildcard admin gates.
 - [ ] Live API tests for unauthenticated paths and non-admin admin denial.

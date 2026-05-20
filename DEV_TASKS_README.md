@@ -275,6 +275,8 @@
 - [x] `npm run test:inventory-repair-plan`
 - [x] classified inventory reconciliation mismatches
 - [x] dry-run classification counts and row-level recommended actions
+- [x] Walmart/eBay marketplace order pullers use shared JWT/CORS helpers
+- [x] `npm run test:marketplace-order-auth-cors`
 - [~] runtime DDL migration cleanup
 - [~] inventory source-of-truth cleanup
 - [~] full durable job progress/events and artifact storage

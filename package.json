@@ -36,6 +36,7 @@
     "test:auth-coverage": "node scripts/auth-coverage-guard.mjs",
     "test:rbac-permissions": "node scripts/rbac-permissions-guard.mjs",
     "test:client-store-scope": "node scripts/client-store-scope-guard.mjs",
+    "test:marketplace-order-auth-cors": "node scripts/marketplace-order-auth-cors-guard.mjs",
     "test:dashboard-client-scope": "node scripts/dashboard-client-store-scope-guard.mjs",
     "test:dashboard-orders-units": "node scripts/dashboard-orders-units-guard.mjs",
     "test:analysis-lazy-table": "node scripts/analysis-lazy-table-guard.mjs",
