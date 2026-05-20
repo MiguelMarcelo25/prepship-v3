@@ -40,6 +40,7 @@
     "test:orders-manifests-scope": "node scripts/orders-manifests-client-store-scope-guard.mjs",
     "test:field-level-rbac": "node scripts/field-level-rbac-guard.mjs",
     "test:field-level-rbac-extended": "node scripts/field-level-rbac-extended-guard.mjs",
+    "test:label-shipment-scope-review": "node scripts/label-shipment-scope-review-guard.mjs",
     "test:print-queue-ownership": "node scripts/print-queue-ownership-guard.mjs",
     "test:secrets-governance": "node scripts/secrets-governance-guard.mjs",
     "test:audit-logging": "node scripts/audit-logging-guard.mjs",

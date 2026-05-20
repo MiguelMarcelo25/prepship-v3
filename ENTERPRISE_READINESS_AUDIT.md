@@ -19,6 +19,7 @@ Companion DJ/OpenClaw documents:
 - `PRODUCTION_READINESS_SIGNOFF.md`
 - `DURABLE_JOBS_PLAN.md`
 - `JWT_SESSION_EXPIRATION_PLAN.md`
+- `LABEL_SHIPMENT_SCOPE_REVIEW.md`
 - `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md`
 - `SECURITY_PATCH_PLAN.md`
 - `RATE_SYSTEM_HARDENING_PLAN.md`
@@ -64,10 +65,11 @@ Implemented:
 - Production readiness signoff checklist added as `PRODUCTION_READINESS_SIGNOFF.md`, covering local checks, browser smoke, API auth/security smoke, version parity, Render logs, Supabase health, migration status, reconciliation, alert/runbook readiness, rollback, and owner approval. `npm run test:production-signoff` guards the deliverable.
 - Durable jobs plan added as `DURABLE_JOBS_PLAN.md`, covering sync, reporting refresh, rate backfill, billing reference-rate fetch, print queue batch send, print queue PDF merge, and fulfillment outbox durable status strategy. `npm run test:durable-jobs-plan` guards the deliverable.
 - JWT/session expiration plan added as `JWT_SESSION_EXPIRATION_PLAN.md`, documenting the 7-day Supabase Auth time-box session policy while keeping access JWTs short-lived. `npm run test:jwt-session-policy` guards the deliverable.
+- Label/shipment-sensitive route policy review is completed as `LABEL_SHIPMENT_SCOPE_REVIEW.md`, mapping label create/batch/void/return/retrieve and shipment read/sync routes before any runtime side-effect changes. `npm run test:label-shipment-scope-review` guards the deliverable.
 
 Confirmed gaps from repo search:
 
-- RBAC/client-scope rules are now documented in a route matrix, the first runtime permission middleware is implemented for safer admin/settings/credential surfaces, low-risk client/init payload scoping exists, dashboard/analysis/inventory/billing/print-queue/orders/manifests read/action scoping has started, and `financials:read` now protects key Analysis, Dashboard, Inventory, Billing, Orders, Manifests, Packages, and Rate Browser outputs. Remaining label/shipment-sensitive policy enforcement and production smoke evidence are still incomplete.
+- RBAC/client-scope rules are now documented in a route matrix, the first runtime permission middleware is implemented for safer admin/settings/credential surfaces, low-risk client/init payload scoping exists, dashboard/analysis/inventory/billing/print-queue/orders/manifests read/action scoping has started, label/shipment-sensitive route policy review is completed, and `financials:read` now protects key Analysis, Dashboard, Inventory, Billing, Orders, Manifests, Packages, and Rate Browser outputs. Remaining label/shipment runtime enforcement and production smoke evidence are still incomplete.
 - Runtime DDL remains in some production-capable paths, but the request/job-time DDL inventory and static guard now exist. Reporting metrics table/index ownership has moved into `drizzle/0029_reporting_metrics.sql`, the Walmart selling-fee source index is owned by `drizzle/0019_selling_fees.sql`, marketplace `store_orders` is owned by `drizzle/0030_store_orders.sql`, credential-account RLS/readiness is owned by `drizzle/0031_credential_accounts_rls.sql`, `order_items` / `analytics_cache` readiness is owned by `drizzle/0024_order_items_phase2.sql` plus `drizzle/0025_order_items_sync_trigger.sql`, and low-risk orders/inventory performance indexes are owned by migrations `0021`, `0022`, `0023`, and `0026`.
 - Durable job state is now mapped in `DURABLE_JOBS_PLAN.md`. ShipStation Awaiting parity, rate backfill, billing reference-rate fetch, and print queue send/merge now persist latest-run status; full job progress/events, idempotency, and PDF artifact durability still need runtime restart-safe guarantees.
 - Broad frontend `safe()` fallback usage remains and needs a failure-mode sweep.
@@ -85,14 +87,14 @@ Current readiness read:
 | Track | Status | Percent |
 |---|---|---:|
 | Phase 11 duplication/source-of-truth | Auth/CORS, credential-account service, auth guard, billing/rates frontend failure-state guards, rate cache diagnostics/bulk semantics, runtime DDL inventory/guard, reporting metrics migration, Walmart selling-fee index cleanup, `store_orders` migration, credential-account DDL cleanup, `order_items` / `analytics_cache` readiness cleanup, low-risk orders/inventory index cleanup, ShipStation Awaiting parity latest-run status, rate backfill latest-run status, billing reference-rate latest-run status, print queue send/merge latest-run status, and durable job strategy documented | 94% |
-| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated, RBAC/client-scope route matrix documented, first runtime permission layer implemented, low-risk client/init payload scoping added, dashboard/analysis/inventory/billing/print-queue/orders/manifests read/action scoping started, extended `financials:read` field-level guard added for Orders, Manifests, Packages, and Rate Browser, secrets governance matrix added, audit logging matrix added, reconciliation reports plan added, marketplace awaiting-count reconciliation guarded, observability/alerting plan added, operational runbooks/DR plan added, privacy/compliance plan added, production signoff checklist added, and key operational jobs now persist latest-run status | 97% |
+| Phase 12 enterprise readiness | Critical gaps confirmed, first security/credential/auth/frontend billing guard work implemented, runtime DDL backlog clearer with six low-risk classes migrated, RBAC/client-scope route matrix documented, first runtime permission layer implemented, low-risk client/init payload scoping added, dashboard/analysis/inventory/billing/print-queue/orders/manifests read/action scoping started, label/shipment-sensitive route policy review completed, extended `financials:read` field-level guard added for Orders, Manifests, Packages, and Rate Browser, secrets governance matrix added, audit logging matrix added, reconciliation reports plan added, marketplace awaiting-count reconciliation guarded, observability/alerting plan added, operational runbooks/DR plan added, privacy/compliance plan added, production signoff checklist added, and key operational jobs now persist latest-run status | 98% |
 | Phase 13 JWT/session expiration | 7-day maximum login session policy documented and guarded; access JWTs remain short-lived | 45% |
 
 ## Critical Blockers
 
 | Blocker | Risk | Required Outcome | Verification |
 |---|---|---|---|
-| RBAC and client scoping are partially enforced | First permission middleware covers `/users`, settings, and credential surfaces; low-risk client/init payload scoping exists; dashboard, analysis, inventory, billing, print-queue, orders, and manifests read/action scoping started; `financials:read` protects expanded financial DTOs; label/shipment-sensitive policy and production smoke evidence are still missing | Runtime role and client-scope enforcement based on `RBAC_CLIENT_SCOPE_MATRIX.md` | API tests for admin, operator, warehouse, client user, support/read-only |
+| RBAC and client scoping are partially enforced | First permission middleware covers `/users`, settings, and credential surfaces; low-risk client/init payload scoping exists; dashboard, analysis, inventory, billing, print-queue, orders, and manifests read/action scoping started; `financials:read` protects expanded financial DTOs; label/shipment policy is reviewed but runtime enforcement and production smoke evidence are still missing | Runtime role and client-scope enforcement based on `RBAC_CLIENT_SCOPE_MATRIX.md` and `LABEL_SHIPMENT_SCOPE_REVIEW.md` | API tests for admin, operator, warehouse, client user, support/read-only |
 | Credential governance is incomplete | Carrier/store/ShipStation secrets can be mishandled, logged, or hard to rotate | Redaction, protected storage, rotation, audit log, last-used tracking | Secret scan, API response tests, credential update audit test |
 | Runtime DDL still exists in some production paths | Request latency, schema drift, unpredictable deploys | Schema managed by Drizzle migrations | `RUNTIME_DDL_MIGRATION_AUDIT.md`, `npm run test:runtime-ddl`, and migration backlog |
 | User-visible jobs are not all durable | Restart/multi-instance can lose or duplicate work | DB-backed job state, idempotency, locks, failure state | Restart and dual-worker tests |
@@ -140,7 +142,8 @@ Current readiness read:
 - [x] Add first Print Queue action/job ownership filters.
 - [x] Add first Orders read/list/export client/store scope filters.
 - [x] Add first Manifests generate client/store scope filters.
-- [ ] Add remaining client-scoped access rules for labels/shipments and sensitive mutation paths.
+- [x] Review remaining client-scoped access rules for labels/shipments and sensitive mutation paths in `LABEL_SHIPMENT_SCOPE_REVIEW.md`.
+- [ ] Implement runtime label/shipment scope enforcement after review.
 - [x] Add first field-level protection for financial data via `financials:read`.
 - [x] Finish field-level protection review for Orders export/list label costs, Manifests label cost, Packages cost fields, and Rate Browser account/rate-result DTOs.
 - [ ] Verify frontend hides restricted actions.
@@ -160,9 +163,11 @@ The full route matrix now lives in `RBAC_CLIENT_SCOPE_MATRIX.md`. The condensed 
 | `/dashboard`, `/dashboard/*` | admin/operator/warehouse/client user/support | client/store scoped aggregate rows | `requireAuth`; dashboard summary/daily/SKU/inventory-risk scope filters for explicit JWT claims | production smoke tests and finer field policy still needed | add API tests and keep extending scope policy | client user dashboard excludes other clients |
 | `/analysis`, `/analysis/*` | admin/operator/warehouse/client user/support | client/store scoped analytics rows | `requireAuth`; overview/daily shipments/top SKUs/SKU detail scope filters for explicit JWT claims; `financials:read` redacts shipping and selling-fee totals | production smoke tests still needed | add restricted-role DTO smoke tests | client user analysis excludes other clients; restricted users do not see financial fields |
 | `/orders`, `/orders/*` | admin/operator/warehouse/client user | client/store scoped rows; label/best-rate costs require `financials:read` | `requireAuth`; list/daily-counts/dashboard-sales/ids/store-counts/daily-stats/picklist/distinct-skus/by-number/detail/full/export filter explicit JWT `clientIds` / `storeIds`; list/export costs redact without `financials:read`; shipped/cancelled mutation guards exist | mutation permission policy and production smoke tests still needed | add mutation role policy without weakening locked surfaces | client user cannot read another client's orders; shipped/cancelled guard still passes; restricted users cannot see label costs |
+| `/shipments`, `/shipments/*` | admin/operator/warehouse/client user/support | shipment reads scoped through related order/client/store | `requireAuth`; `LABEL_SHIPMENT_SCOPE_REVIEW.md` maps shipment read/sync policy | runtime read/sync enforcement still needs reviewed implementation | add `shipments:read` and `shipments:sync` checks without changing locked mutation paths | scoped user cannot read another client's shipments; non-ops user cannot start sync |
 | `/inventory`, `/inventory/*` | admin/operator/warehouse/client user | client scoped SKUs | `requireAuth`; list/ledger/stats/alerts/detail/detail-ledger/parents/SKU-orders scope filters for explicit JWT claims | production smoke tests and mutation permission policy still needed | add API tests and mutation permission review in a separate batch | client user cannot read another client's inventory |
 | `/billing`, `/billing/*` | admin/operator/accounting | client scoped billing | `requireAuth`; route requires `financials:read`; config/summary/details/invoice/package-prices scope filters for explicit JWT claims | billing mutation/generation write permission still needs finer split | add billing write permission if needed | warehouse/client user denied from billing unless explicitly granted |
 | `/manifests`, `/manifests/*` | admin/operator/warehouse/support | client scoped manifest shipments; label costs require `financials:read` | `requireAuth`; GET/POST generate filter explicit JWT `clientIds` / `storeIds`; labelCost redacts without `financials:read` | location policy and production smoke tests still need review | add location-aware tests if assignments are enabled | scoped user cannot access another client's manifest rows or restricted label costs |
+| `/labels`, `/labels/*` | admin/operator/warehouse | label actions scoped through assigned order/client/store; artifacts are PII | `requireAuth`; signed mock labels; `LABEL_SHIPMENT_SCOPE_REVIEW.md` maps create/batch/void/return/retrieve policy | runtime label preflight enforcement still needs side-effect review | add `labels:create`, `labels:void`, `labels:return`, and `labels:read` preflight checks before service calls | scoped user cannot create/retrieve/void/return another client's label |
 | `/print-queue`, `/print-queue/*` | admin/operator/warehouse/support | client scoped queue entries and queue jobs | `requireAuth`; list/add/clear/delete/print/status/download and batch-send startup/status scope checks for explicit JWT claims | durable job state, location policy, and production smoke tests still need review | move job progress to durable state and add browser/API smoke tests | client user/support cannot read or mutate another client's queue entries or jobs |
 | `/carrier-accounts`, `/store-accounts`, `/settings/*` | admin/operator with credential/settings permission | account/client assignment scope | Render carrier-account route has method-aware credential permission; settings have read/write permission gates | Vercel compatibility and audit logging still need follow-up | central credential service + audit events | non-credential role cannot write credential endpoints |
 
@@ -546,6 +551,7 @@ The detailed privacy/compliance plan now lives in `PRIVACY_COMPLIANCE_PLAN.md`. 
 - `npm run test:print-queue-client-scope`
 - `npm run test:print-queue-ownership`
 - `npm run test:orders-manifests-scope`
+- `npm run test:label-shipment-scope-review`
 - `npm run test:secrets-governance`
 - `npm run test:audit-logging`
 - `npm run test:reconciliation-plan`
@@ -610,7 +616,7 @@ The detailed privacy/compliance plan now lives in `PRIVACY_COMPLIANCE_PLAN.md`. 
 6. Review `OPERATIONAL_RUNBOOKS_AND_DR_PLAN.md` and approve runbook owners.
 7. Review `PRIVACY_COMPLIANCE_PLAN.md` and approve data-class owners.
 8. Review `PRODUCTION_READINESS_SIGNOFF.md` and approve release gates.
-9. Implement remaining label/shipment-sensitive and remaining field-level route policy from `RBAC_CLIENT_SCOPE_MATRIX.md`.
+9. Implement label/shipment runtime scope enforcement from `LABEL_SHIPMENT_SCOPE_REVIEW.md`.
 10. Secrets and credential audit, including audit events.
 11. Migration/runtime DDL cleanup plan.
 12. Review `DURABLE_JOBS_PLAN.md` and approve durable job storage target.

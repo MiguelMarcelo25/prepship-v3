@@ -3,9 +3,9 @@
 ## Current State
 
 - Branch: `prepshipv4-stable`
-- Latest pushed commit before this Orders/Manifests scope batch: `5878e2ed`
+- Latest pushed commit before this label/shipment scope review batch: `4230ee1c`
 - Worktree at last update: clean
-- Latest implementation batch tracked here: Phase 13 JWT/session expiration policy
+- Latest implementation batch tracked here: Phase 12 Batch 3J label/shipment scope review
 - Latest production read from user: Rate Browser and live app behavior look healthy after the recent deploys
 - GitHub Actions:
   - `Keep Render API warm`: manual only now
@@ -19,8 +19,8 @@
 | Document | Status | Percent | Why Not 100% |
 |---|---|---:|---|
 | `SOURCE_OF_TRUTH_AND_DUPLICATION_AUDIT.md` | Created / active | 94% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, `order_items`/`analytics_cache`, low-risk orders/inventory indexes, durable job strategy, ShipStation Awaiting parity status, rate backfill status, billing reference-rate status, and print queue batch/merge latest-run status moved to documented ownership; inventory truth, label side effects, full job progress/events, artifact storage, and shipment-adjacent DDL cleanup still open |
-| `ENTERPRISE_READINESS_AUDIT.md` | Created / active | 95% | Dashboard, Analysis, Inventory, Billing, Print Queue, Orders, and Manifests now apply explicit JWT client/store claims on key read surfaces; secrets governance, audit logging, reconciliation reporting, observability/alerting, runbook/DR planning, privacy/compliance, and production signoff are mapped; marketplace awaiting-count reconciliation and key operational latest-run statuses have guarded paths; still needs label/shipment-sensitive policy, broader runtime audit/reconciliation/alert implementation, DR drills, artifact durability, and authenticated production verification |
-| `SECURITY_PATCH_PLAN.md` | Created / mostly implemented | 95% | Needs live auth smoke tests, strict JWT production rollout, label/shipment-sensitive scope review, and broader field-level role/client-scope rollout |
+| `ENTERPRISE_READINESS_AUDIT.md` | Created / active | 96% | Dashboard, Analysis, Inventory, Billing, Print Queue, Orders, Manifests, and label/shipment-sensitive route policy are now mapped; secrets governance, audit logging, reconciliation reporting, observability/alerting, runbook/DR planning, privacy/compliance, and production signoff are mapped; marketplace awaiting-count reconciliation and key operational latest-run statuses have guarded paths; still needs label/shipment runtime enforcement, broader runtime audit/reconciliation/alert implementation, DR drills, artifact durability, and authenticated production verification |
+| `SECURITY_PATCH_PLAN.md` | Created / mostly implemented | 95% | Needs live auth smoke tests, strict JWT production rollout, label/shipment runtime enforcement after review, and broader field-level role/client-scope rollout |
 | `RATE_SYSTEM_HARDENING_PLAN.md` | Created / mostly implemented | 78% | Needs browser production verification, duplicate-name UX polish, provider/account metrics, and full backfill progress/events beyond latest-run durability |
 
 ## Additional Phase 13 Doc
@@ -42,9 +42,9 @@
 | Phase 7 - Billing + Packages | Partial/good progress | 64% | Billing read surfaces now have client/store scope and billing reference-rate fetch latest-run durability; needs reconciliation, billing summary read model completion, package usage metrics, and package ledger hardening |
 | Phase 8 - Shared Frontend Data Layer | Partial/good progress | 65% | Needs standardized React Query hooks and remaining broad `safe()` fallback cleanup |
 | Phase 9 - Lazy Loading + UI Performance | Partial | 55% | Needs more lazy-loaded drawers/modals/charts/export tools and all-tool browser audit |
-| Phase 10 - DJ/OpenClaw Security + Failure-State Hardening | Mostly complete | 95% | Unauthenticated production auth smoke checks passed and first runtime permission layer exists; dashboard/analysis/inventory/billing/print-queue/client/init/orders/manifests scoping started; needs authenticated secret checks, deeper raw-error route audit, and label/shipment-sensitive scope review |
+| Phase 10 - DJ/OpenClaw Security + Failure-State Hardening | Mostly complete | 95% | Unauthenticated production auth smoke checks passed and first runtime permission layer exists; dashboard/analysis/inventory/billing/print-queue/client/init/orders/manifests scoping started; needs authenticated secret checks, deeper raw-error route audit, and label/shipment runtime enforcement after review |
 | Phase 11 - Source-of-Truth + Duplication Audit | In progress | 94% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, `order_items`/`analytics_cache`, low-risk orders/inventory indexes, durable job strategy, ShipStation Awaiting parity status, rate backfill status, billing reference-rate status, and print queue latest-run status moved to documented ownership; inventory truth, labels, full job events/artifacts, and shipment-adjacent DDL still remain |
-| Phase 12 - Enterprise Readiness | Scoped/started | 97% | Dashboard, Analysis, Inventory, Billing, Print Queue, Orders, and Manifests read/action ownership are implemented for explicit client/store JWT claims on key surfaces; `financials:read` now protects Analysis/Dashboard SKU financials, Inventory SKU-order shipping costs, Billing routes, Orders export/list label costs, Manifests label costs, Packages unit costs, and Rate Browser rate-result DTOs; Rate Browser account source metadata requires `credentials:read`; secrets governance, audit logging, reconciliation reporting, observability/alerting, runbook/DR planning, privacy/compliance, and production signoff are mapped; needs label/shipment-sensitive scope review, broader runtime audit/reconciliation/alert implementation, DR drills, and owner signoff evidence |
+| Phase 12 - Enterprise Readiness | Scoped/started | 98% | Dashboard, Analysis, Inventory, Billing, Print Queue, Orders, Manifests, and label/shipment-sensitive route policy are mapped; read/action ownership is implemented for explicit client/store JWT claims on key surfaces; `financials:read` now protects Analysis/Dashboard SKU financials, Inventory SKU-order shipping costs, Billing routes, Orders export/list label costs, Manifests label costs, Packages unit costs, and Rate Browser rate-result DTOs; Rate Browser account source metadata requires `credentials:read`; secrets governance, audit logging, reconciliation reporting, observability/alerting, runbook/DR planning, privacy/compliance, and production signoff are mapped; needs label/shipment runtime enforcement, broader runtime audit/reconciliation/alert implementation, DR drills, and owner signoff evidence |
 | Phase 13 - JWT Session Expiration | Policy ready | 45% | 7-day session policy is documented and guarded; Supabase Auth time-box setting, staging expiry proof, and production evidence are still manual/admin verification steps |
 
 ## Phase Checklist
@@ -217,7 +217,7 @@
 - [ ] remaining legacy JWT/CORS copies cleanup
 - [ ] carrier/store endpoint policy final verification
 
-### Phase 12 - Enterprise Readiness: 97%
+### Phase 12 - Enterprise Readiness: 98%
 
 - [x] `ENTERPRISE_READINESS_AUDIT.md`
 - [x] critical/high/medium issue buckets scoped
@@ -257,6 +257,8 @@
 - [x] Rate Browser rate money fields redact without `financials:read`
 - [x] Rate Browser account source metadata requires `credentials:read`
 - [x] `npm run test:field-level-rbac-extended`
+- [x] `LABEL_SHIPMENT_SCOPE_REVIEW.md`
+- [x] `npm run test:label-shipment-scope-review`
 - [x] `SECRETS_GOVERNANCE_MATRIX.md`
 - [x] `npm run test:secrets-governance`
 - [x] `AUDIT_LOGGING_MATRIX.md`
@@ -278,7 +280,7 @@
 - [x] `npm run test:ref-rates-durable`
 - [x] Print queue latest-run durable status in `settings`
 - [x] `npm run test:print-queue-durable`
-- [ ] remaining label/shipment-sensitive route scope review
+- [ ] label/shipment runtime scope enforcement after review
 - [~] secrets governance
 - [~] audit logging
 - [~] reconciliation reports
@@ -335,7 +337,7 @@
    - Review `PRIVACY_COMPLIANCE_PLAN.md` with DJ/OpenClaw and approve data-class owners.
    - Review `PRODUCTION_READINESS_SIGNOFF.md` with DJ/OpenClaw and approve release gates.
    - Deploy and smoke-test the runtime RBAC, client/init scope, dashboard scope, analysis scope, inventory scope, billing scope, and print-queue list/action scope layer.
-   - Implement remaining label/shipment-sensitive route query scoping in a separate reviewed batch.
+   - Implement remaining label/shipment runtime scope enforcement in a separate reviewed batch.
    - Audit logging.
    - Reconciliation reports.
    - Observability alerts.
@@ -362,6 +364,7 @@
 - `npm run test:orders-manifests-scope`
 - `npm run test:field-level-rbac`
 - `npm run test:field-level-rbac-extended`
+- `npm run test:label-shipment-scope-review`
 - `npm run test:secrets-governance`
 - `npm run test:audit-logging`
 - `npm run test:reconciliation-plan`
