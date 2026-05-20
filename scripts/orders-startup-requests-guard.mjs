@@ -82,6 +82,13 @@ const checks = [
       ordersView.includes('<OrderDetailDrawer'),
   },
   {
+    name: 'Tracking modal chunk is loaded only after tracking-number intent',
+    pass: !ordersView.includes("import TrackingModal from '../TrackingModal'") &&
+      ordersView.includes("const TrackingModal = lazy(() => import('../TrackingModal'))") &&
+      ordersView.includes('{trackingModal != null ? (') &&
+      ordersView.includes('<TrackingModal'),
+  },
+  {
     name: 'Legacy sidebar counts do not block Orders first paint',
     pass: sidebarOrders.includes('const initialTimerId = window.setTimeout(() =>') &&
       sidebarOrders.includes('}, 2500)') &&

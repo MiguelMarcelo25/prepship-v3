@@ -44,7 +44,6 @@ import {
   Tag,
   Plus,
 } from 'lucide-react'
-import TrackingModal from '../TrackingModal'
 import HoverImage from '../HoverImage'
 import type { NewOrderPayload } from '../NewOrderModal'
 // Shared carrier badge — renders official UPS/USPS SVG logos plus
@@ -56,6 +55,7 @@ import { TEST_CLIENT_IDS } from '../../lib/v2-apiClient'
 const OrderDetailDrawer = lazy(() => import('../OrderDetailDrawer'))
 const NewOrderModal = lazy(() => import('../NewOrderModal'))
 const RateBrowserModal = lazy(() => import('../RateBrowserModal'))
+const TrackingModal = lazy(() => import('../TrackingModal'))
 import { ToastContext } from '../../contexts/ToastContext'
 import { useLocations, useOrderDetail, useOrders, useShippingAccounts } from '../../hooks'
 import { useMarkups } from '../../contexts/MarkupsContext'
@@ -9207,12 +9207,16 @@ export default function OrdersView({
         </Suspense>
       ) : null}
 
-      <TrackingModal
-        open={trackingModal != null}
-        trackingNumber={trackingModal?.tracking ?? null}
-        carrierCode={trackingModal?.carrierCode ?? null}
-        onClose={() => setTrackingModal(null)}
-      />
+      {trackingModal != null ? (
+        <Suspense fallback={null}>
+          <TrackingModal
+            open
+            trackingNumber={trackingModal.tracking}
+            carrierCode={trackingModal.carrierCode}
+            onClose={() => setTrackingModal(null)}
+          />
+        </Suspense>
+      ) : null}
 
       {/* Manual order creation modal. Creates a local awaiting-shipment
           order under the Manual Orders sandbox client. */}
