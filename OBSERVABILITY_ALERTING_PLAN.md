@@ -4,7 +4,7 @@
 
 This Phase 12 deliverable defines the production signals, metrics, alerts, dashboards, and ownership needed for PrepShip to be enterprise-ready. The goal is to make failures visible before operators or clients discover them in the browser.
 
-This started as a planning/control batch. Runtime implementation has now begun with additive browser/API request ID propagation: the frontend sends `X-Request-Id`, the API exposes `X-Request-Id` / `Server-Timing`, API timing/error plus detailed Orders list logs include the same request ID, opt-in browser timing logs can be enabled with `localStorage.setItem('prepship:apiTiming', '1')`, admins can inspect bounded in-process route latency snapshots at `/observability/api-timing`, and `/observability/status` summarizes process memory, runtime scheduler flags, and hot routes. It does not change external API behavior or shipped/cancelled order logic. Remaining implementation should follow this matrix in small batches after owners and alert thresholds are approved.
+This started as a planning/control batch. Runtime implementation has now begun with additive browser/API request ID propagation: the frontend sends `X-Request-Id`, the API exposes `X-Request-Id` / `Server-Timing`, API timing/error plus detailed Orders list logs include the same request ID, opt-in browser timing logs can be enabled with `localStorage.setItem('prepship:apiTiming', '1')`, admins can inspect bounded in-process route latency snapshots at `/observability/api-timing`, `/observability/status` summarizes process memory, runtime scheduler flags, and hot routes, and Settings now includes a lazy Settings System Status panel backed by that payload. It does not change external API behavior or shipped/cancelled order logic. Remaining implementation should follow this matrix in small batches after owners and alert thresholds are approved.
 
 ## Critical Blockers
 
@@ -32,7 +32,7 @@ This started as a planning/control batch. Runtime implementation has now begun w
 | Request IDs | Request IDs now exist on browser requests, API responses, API timing/error logs, and detailed Orders list timing logs; worker/job propagation is not complete | Extend request ID propagation into worker/job logs and frontend support tooling |
 | Response size | Large responses can hurt browser speed and bandwidth | Log response-size buckets for heavy routes |
 | Cache health | Cache hits/misses are not fully visible | Track analytics/rate/reporting cache hit ratio |
-| Status panel | Operators need a quick internal health view | Add internal status panel backed by lightweight status APIs |
+| Status panel | Settings System Status now shows API timing, memory, uptime, and runtime flags | Expand the panel with worker, DB, sync, queue, rate, label, billing, and reporting health |
 | Runbooks | Alerts need clear actions | Link every alert to a runbook and escalation owner |
 
 ## Signal Matrix
@@ -60,13 +60,14 @@ This started as a planning/control batch. Runtime implementation has now begun w
 - [x] Add opt-in browser API timing diagnostics for slow or failed requests.
 - [x] Add admin-only `/observability/api-timing` for bounded in-process p95/p99 API timing snapshots by method/path.
 - [x] Add admin-only `/observability/status` for process memory, runtime scheduler flags, and hot-route status.
+- [x] Add Settings System Status panel backed by `/observability/status`.
 - [ ] Standardize structured logs for API errors, external API failures, and worker jobs.
 - [ ] Add route-level metrics for status, duration, and response-size buckets.
 - [ ] Add provider/account-level metrics for ShipStation, direct carriers, and marketplace APIs.
 - [ ] Add job health metrics for worker heartbeat, sync, rate backfill, print queue, reporting refresh, and fulfillment outbox.
 - [ ] Add slow DB query visibility linked to route/request ID where practical.
 - [ ] Add frontend error capture with release/build version.
-- [ ] Add an internal status panel that summarizes API, worker, sync, queue, DB, rates, labels, billing, and reporting health.
+- [ ] Expand the internal status panel to summarize worker, sync, queue, DB, rates, labels, billing, and reporting health.
 
 ## Test Plan
 

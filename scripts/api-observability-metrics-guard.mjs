@@ -14,6 +14,7 @@ const packageJson = read('package.json');
 const main = read('src/main.ts');
 const route = read('src/routes/observability.ts');
 const metrics = read('src/lib/http/api-metrics.ts');
+const settingsView = read('web/src/components/Views/SettingsView.tsx');
 const devTasks = read('DEV_TASKS_README.md');
 const enterprise = read('ENTERPRISE_READINESS_AUDIT.md');
 const observability = read('OBSERVABILITY_ALERTING_PLAN.md');
@@ -56,6 +57,15 @@ expect(
 );
 
 expect(
+  'settings exposes system status panel backed by observability status',
+  settingsView.includes("label: 'System Status'") &&
+    settingsView.includes("'/observability/status'") &&
+    settingsView.includes('systemStatus') &&
+    settingsView.includes('Hot API Routes') &&
+    settingsView.includes('Runtime Flags')
+);
+
+expect(
   'api timing snapshot includes p95 and p99 route stats',
   metrics.includes('p95Ms') &&
     metrics.includes('p99Ms') &&
@@ -68,6 +78,7 @@ expect(
   'phase tracker references api timing endpoint',
   devTasks.includes('/observability/api-timing') &&
     devTasks.includes('/observability/status') &&
+    devTasks.includes('Settings System Status') &&
     devTasks.includes('test:api-observability-metrics')
 );
 
@@ -81,7 +92,8 @@ expect(
 expect(
   'observability plan references api timing endpoint',
   observability.includes('/observability/api-timing') &&
-    observability.includes('/observability/status')
+    observability.includes('/observability/status') &&
+    observability.includes('Settings System Status')
 );
 
 const failed = checks.filter((check) => !check.condition);
