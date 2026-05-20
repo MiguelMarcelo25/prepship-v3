@@ -44,6 +44,8 @@ const requiredPolicyText = [
   'STRICT_JWT_CLAIMS',
   'jose',
   '1 hour',
+  '168',
+  'hours',
 ];
 
 for (const text of requiredPolicyText) {
@@ -53,22 +55,25 @@ for (const text of requiredPolicyText) {
 assert(
   devTasks.includes('Phase 13 - JWT Session Expiration') &&
     devTasks.includes('JWT_SESSION_EXPIRATION_PLAN.md') &&
-    devTasks.includes('npm run test:jwt-session-policy'),
-  'DEV_TASKS_README.md tracks Phase 13 and its guard',
+    devTasks.includes('npm run test:jwt-session-policy') &&
+    devTasks.includes('168'),
+  'DEV_TASKS_README.md tracks Phase 13, its guard, and the 168-hour dashboard value',
 );
 
 assert(
   securityPlan.includes('JWT_SESSION_EXPIRATION_PLAN.md') &&
     securityPlan.includes('Supabase Auth time-box') &&
-    securityPlan.includes('access JWT expiry remains short-lived'),
-  'SECURITY_PATCH_PLAN.md references JWT session policy',
+    securityPlan.includes('access JWT expiry remains short-lived') &&
+    securityPlan.includes('168'),
+  'SECURITY_PATCH_PLAN.md references JWT session policy and 168-hour dashboard value',
 );
 
 assert(
   enterpriseAudit.includes('JWT_SESSION_EXPIRATION_PLAN.md') &&
     enterpriseAudit.includes('### JWT Session Expiration') &&
-    enterpriseAudit.includes('Phase 13 JWT/session expiration'),
-  'ENTERPRISE_READINESS_AUDIT.md references JWT session policy',
+    enterpriseAudit.includes('Phase 13 JWT/session expiration') &&
+    enterpriseAudit.includes('168'),
+  'ENTERPRISE_READINESS_AUDIT.md references JWT session policy and 168-hour dashboard value',
 );
 
 assert(
@@ -85,4 +90,3 @@ assert(
 if (process.exitCode) {
   process.exit(process.exitCode);
 }
-

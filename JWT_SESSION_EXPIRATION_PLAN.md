@@ -6,13 +6,16 @@ Phase 13 adds a formal authentication session-expiration policy for PrepShip: al
 
 This is a Supabase Auth session-lifetime policy, not a 7-day access-token policy. Access JWTs should stay short-lived, preferably the current/default 1-hour lifetime, while Supabase time-boxed sessions enforce the 7-day maximum login window.
 
+Important dashboard detail: the Supabase Auth **Time-box user sessions** field is shown in **hours** in the production dashboard. For a 7-day maximum session, enter `168` hours, not `7`.
+
 Primary Supabase reference: https://supabase.com/docs/guides/auth/sessions
 
 ## Critical Blockers
 
 | Blocker | Risk | Required Outcome | Verification |
 |---|---|---|---|
-| Supabase session time-box is not configured | Users can remain signed in longer than the desired 7-day business policy | Supabase Auth time-box user sessions is set to 7 days | Supabase dashboard screenshot or owner confirmation |
+| Supabase session time-box is not configured | Users can remain signed in longer than the desired 7-day business policy | Supabase Auth time-box user sessions is set to `168` hours / 7 days | Supabase dashboard screenshot or owner confirmation |
+| Dashboard unit is misread | Setting `7` in the dashboard field means 7 hours, not 7 days | production value is `168` hours | Supabase dashboard screenshot showing `168` |
 | Access JWT lifetime is confused with session lifetime | Long-lived bearer tokens increase risk if a token leaks | Access JWT expiry remains short-lived; 7-day limit is enforced through session settings | Auth settings review and this guard |
 | Expired-session UX is not verified | Operators may see stale local auth or confusing failures after session expiry | Expired refresh/session returns user to login cleanly | Staging short-timebox test |
 | Strict JWT claims rollout is not verified | Enabling issuer/audience checks without token compatibility testing could break login | `STRICT_JWT_CLAIMS` remains staged until tested | Login smoke test before enabling strict mode |
@@ -23,7 +26,7 @@ Primary Supabase reference: https://supabase.com/docs/guides/auth/sessions
 |---|---|---|---|
 | Backend JWT validation | `jose` verifies token signature and JWT `exp`; optional strict issuer/audience exists | backend cannot enforce original 7-day session age from access-token `iat` alone because tokens refresh | keep backend validation as-is; enforce 7-day limit in Supabase session settings |
 | Frontend session handling | Supabase client persists sessions and auto-refreshes tokens | stale refresh failures must not leave the app looking authenticated | keep local stale-session cleanup and verify expired-session redirect behavior |
-| Production rollout | Supabase dashboard change requires admin access | code deploy alone cannot complete this phase | assign DJ/admin to set session time-box to 7 days |
+| Production rollout | Supabase dashboard change requires admin access | code deploy alone cannot complete this phase | assign DJ/admin to set session time-box to `168` hours |
 | Documentation drift | future devs may set access JWT to 7 days by mistake | longer token exposure and stale authorization claims | guard docs and phase tracker with `npm run test:jwt-session-policy` |
 
 ## Medium-Risk Issues
@@ -44,7 +47,8 @@ Primary Supabase reference: https://supabase.com/docs/guides/auth/sessions
 - [x] Update `SECURITY_PATCH_PLAN.md`.
 - [x] Update `ENTERPRISE_READINESS_AUDIT.md`.
 - [x] Add `npm run test:jwt-session-policy`.
-- [ ] Configure Supabase Auth time-box user sessions to 7 days.
+- [x] Document that Supabase dashboard value must be `168` hours for 7 days.
+- [ ] Configure Supabase Auth time-box user sessions to `168` hours / 7 days.
 - [ ] Verify expired-session behavior in staging with a short temporary time-box.
 - [ ] Verify production login and forced re-login behavior after rollout.
 - [ ] Decide when to enable `STRICT_JWT_CLAIMS=true` in production.
@@ -55,7 +59,7 @@ Primary Supabase reference: https://supabase.com/docs/guides/auth/sessions
 - [x] Keep `STRICT_JWT_CLAIMS` behind an environment flag.
 - [x] Document Supabase Auth time-box session setting as the 7-day enforcement point.
 - [x] Add a guard test so future changes do not convert this into a 7-day access-token policy.
-- [ ] In Supabase Auth settings, set time-box user sessions to 7 days.
+- [ ] In Supabase Auth settings, set time-box user sessions to `168` hours / 7 days.
 - [ ] Keep or set access token / JWT expiry to a short value, preferably 1 hour.
 - [ ] Run a staging short-timebox test to confirm expired sessions send users back to login.
 - [ ] Add production evidence to `PRODUCTION_READINESS_SIGNOFF.md` after DJ/admin configures Supabase.
@@ -71,7 +75,8 @@ Primary Supabase reference: https://supabase.com/docs/guides/auth/sessions
 Manual Supabase verification:
 
 - In staging, set a short time-box value temporarily and confirm the app forces re-login after expiry.
-- In production, set Supabase Auth time-box user sessions to 7 days.
+- In production, set Supabase Auth time-box user sessions to `168` hours / 7 days.
+- Confirm the dashboard value is `168`; do not leave it at `7`, because the dashboard field is in hours.
 - Confirm access JWT expiry remains short-lived and is not set to 7 days.
 - Confirm normal login works after the setting change.
 - Confirm expired-session refresh failure clears local session and returns the user to login.
@@ -88,8 +93,7 @@ Manual Supabase verification:
 
 1. Land this documentation and static guard.
 2. Have DJ/admin configure staging with a short time-box and validate forced re-login.
-3. Configure production Supabase Auth time-box user sessions to 7 days.
+3. Configure production Supabase Auth time-box user sessions to `168` hours / 7 days.
 4. Run login, API auth, and browser smoke tests.
 5. Add evidence to production signoff.
 6. Separately test `STRICT_JWT_CLAIMS=true` before enabling it in production.
-
