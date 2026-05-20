@@ -8,7 +8,7 @@ Current status: investigation scoped. Browser API calls now send `X-Request-Id`,
 
 DJ/OpenClaw escalation added on May 20, 2026: the site was fast earlier the same day, so this must be treated as a live incident investigation before any AWS migration or broad archive plan. The key question is what changed or overlapped: Render restart/deploy, Supabase pressure, worker/sync overlap, exact count slowdown, startup maintenance/backfill/analyze work, or frontend boot overfetching.
 
-Phase 9 follow-up: the first low-risk startup guard now prevents Orders from fetching locations and carrier accounts until an order action, drawer, queue, rate browser, new-order flow, or shipping-account sort actually needs those shared records. The first Orders page can skip the expensive exact count and show an approximate `+` total until the delayed exact count refresh completes. The legacy sidebar count path waits until after first paint, slows polling, and skips hidden tabs. Orders sync and worker status polling are delayed and hidden-tab gated. Global markups/settings hydration is delayed on Orders routes while Settings/Rates direct visits stay immediate. The New Order modal, order-detail drawer, and tracking modal are now code-split and only load after the operator asks for them.
+Phase 9 follow-up: the first low-risk startup guard now prevents Orders from fetching locations and carrier accounts until an order action, drawer, queue, rate browser, new-order flow, or shipping-account sort actually needs those shared records. The first Orders page can skip the expensive exact count and show an approximate `+` total until the delayed exact count refresh completes. The legacy sidebar count path waits until after first paint, slows polling, and skips hidden tabs. Orders sync and worker status polling are delayed and hidden-tab gated. Global markups/settings hydration is delayed on Orders routes while Settings/Rates direct visits stay immediate. The New Order modal, order-detail drawer, and tracking modal are now code-split and only load after the operator asks for them. Orders performance maintenance is now explicit opt-in with `RUN_ORDERS_PERFORMANCE_MAINTENANCE=true`; it must stay disabled on the user-facing API unless an operator intentionally runs a maintenance window.
 
 ## Critical Blockers
 
@@ -16,6 +16,7 @@ Phase 9 follow-up: the first low-risk startup guard now prevents Orders from fet
 - [x] Render `[api:timing]` and `[orders:list]` logs now carry the request ID needed for browser-to-backend correlation.
 - [ ] Supabase slow-query logs are not yet correlated to the same timestamp.
 - [ ] Render logs have not yet been checked for `[orders:maintenance]` overlap during the slowdown window.
+- [x] Startup orders performance maintenance now requires explicit opt-in instead of inheriting from `RUN_SYNC_SCHEDULER`.
 - [ ] Production env ownership for `RUN_ORDERS_PERFORMANCE_MAINTENANCE` and `RUN_SYNC_SCHEDULER` still needs confirmation.
 - [ ] p95/p99 visibility for the hot routes is not yet available.
 
@@ -27,7 +28,7 @@ Phase 9 follow-up: the first low-risk startup guard now prevents Orders from fet
 - Global boot reads such as settings, locations, packages, sync status, and worker status can make the app feel stuck when Supabase is under memory pressure.
 - Locations, carrier accounts, exact first-page counts, legacy sidebar counts, status polling, worker polling, markup settings hydration, New Order modal code, order-detail drawer code, and tracking modal code are now guarded on Orders startup, but daily stats still need timing evidence before deeper changes.
 - Worker sync/reporting jobs can overlap with user-facing reads unless logs prove they are quiet during the incident window.
-- Startup/redeploy maintenance can also overlap user traffic if enabled for the running process. In current code, `src/main.ts` starts `orders-performance-maintenance` when `RUN_ORDERS_PERFORMANCE_MAINTENANCE` is true, or when that env is unset and `RUN_SYNC_SCHEDULER` is true. That maintenance path runs concurrent index checks, `order_items` backfill/repair, and `ANALYZE` on hot tables. Check for `[orders:maintenance] ensured index`, `backfilled`, `repaired`, and `refreshed planner stats` log lines during any slowdown.
+- Startup/redeploy maintenance can also overlap user traffic if enabled for the running process. The runtime now requires explicit opt-in with `RUN_ORDERS_PERFORMANCE_MAINTENANCE=true`; it no longer inherits from `RUN_SYNC_SCHEDULER`. If that flag is enabled, the maintenance path runs concurrent index checks, `order_items` backfill/repair, and `ANALYZE` on hot tables. Check for `[orders:maintenance] ensured index`, `backfilled`, `repaired`, and `refreshed planner stats` log lines during any slowdown.
 
 ## Medium-Risk Issues
 
@@ -99,7 +100,7 @@ Task for Lawrence:
 - If settings/locations/packages are competing, defer them until the order panel, rate browser, label action, or package control needs them.
 - If Supabase slow queries show historical scans, add a configurable hot window before moving data to archive tables.
 - If worker overlap is present, add job throttles, queue visibility, or user-traffic quiet windows before scaling infrastructure.
-- If startup maintenance overlaps user traffic, keep it disabled on the user-facing API and move the backfill/analyze path to an explicit worker/admin job with visible status.
+- If startup maintenance overlaps user traffic, keep the explicit opt-in flag disabled on the user-facing API and move the backfill/analyze path to an explicit worker/admin job with visible status.
 
 ## Test Plan
 

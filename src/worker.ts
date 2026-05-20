@@ -71,11 +71,12 @@ async function main(): Promise<void> {
     return;
   }
 
-  const runMaintenance =
-    env.RUN_ORDERS_PERFORMANCE_MAINTENANCE ?? env.RUN_SYNC_SCHEDULER;
+  const runMaintenance = env.RUN_ORDERS_PERFORMANCE_MAINTENANCE === true;
 
   if (runMaintenance) {
-    console.log('[worker] starting orders performance maintenance');
+    console.log(
+      '[worker] RUN_ORDERS_PERFORMANCE_MAINTENANCE=true; starting orders performance maintenance'
+    );
     ensureOrdersPerformanceIndexes();
     void ensureReportingMetricsTables()
       .then(() => console.log('[worker] reporting metrics tables ready'))
@@ -86,7 +87,9 @@ async function main(): Promise<void> {
         )
       );
   } else {
-    console.log('[worker] orders performance maintenance disabled');
+    console.log(
+      '[worker] orders performance maintenance disabled; set RUN_ORDERS_PERFORMANCE_MAINTENANCE=true to run explicitly'
+    );
   }
 
   if (env.RUN_SYNC_SCHEDULER) {

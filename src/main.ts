@@ -213,15 +213,17 @@ serve({ fetch: app.fetch, port: env.PORT }, (info) => {
     console.log('[runtime] RUN_SYNC_SCHEDULER=false; API scheduler disabled');
   }
 
-  const runMaintenance =
-    env.RUN_ORDERS_PERFORMANCE_MAINTENANCE ?? env.RUN_SYNC_SCHEDULER;
+  const runMaintenance = env.RUN_ORDERS_PERFORMANCE_MAINTENANCE === true;
   if (runMaintenance) {
+    console.log(
+      '[runtime] RUN_ORDERS_PERFORMANCE_MAINTENANCE=true; starting orders performance maintenance'
+    );
     void import('./services/orders-performance-maintenance').then(
       ({ ensureOrdersPerformanceIndexes }) => ensureOrdersPerformanceIndexes()
     );
   } else {
     console.log(
-      '[runtime] orders performance maintenance disabled for this process'
+      '[runtime] orders performance maintenance disabled for this process; set RUN_ORDERS_PERFORMANCE_MAINTENANCE=true to run explicitly'
     );
   }
 });

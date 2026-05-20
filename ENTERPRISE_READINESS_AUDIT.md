@@ -254,6 +254,7 @@ Deliverable table:
 - [x] Scope Awaiting Shipment lag investigation in `AWAITING_SHIPMENTS_PERFORMANCE_PLAN.md`.
 - [x] Include request IDs in backend timing/error logs.
 - [x] Track Render restart/startup maintenance overlap as an Awaiting Shipment incident hypothesis.
+- [x] Require explicit `RUN_ORDERS_PERFORMANCE_MAINTENANCE=true` before startup orders maintenance runs.
 - [ ] Use structured error logs for API failures.
 - [ ] Capture frontend errors.
 - [ ] Count external API failures by provider/account.
@@ -273,7 +274,7 @@ The detailed signal plan now lives in `OBSERVABILITY_ALERTING_PLAN.md`. The cond
 | API 5xx and latency | timing logs and `Server-Timing` | route/status/duration p95/p99 counters | 5xx spike and hot-route latency spike | API |
 | API 499/timeouts | Render logs/manual review | request-id and route aggregation | timeout/499 spike | API |
 | Slow DB and Supabase pressure | manual Supabase dashboard | slow query, pool saturation, route correlation | slow query and connection saturation | DB |
-| Awaiting Shipment first-load lag | scoped plan plus request IDs and startup-maintenance hypothesis | browser waterfall plus `/orders`, `/init/counts`, `/orders/daily-stats`, `/orders/distinct-skus`, `[orders:maintenance]`, and Supabase p95/p99 correlation | Awaiting load latency spike | API/Frontend/DB |
+| Awaiting Shipment first-load lag | scoped plan plus request IDs and explicit opt-in startup maintenance | browser waterfall plus `/orders`, `/init/counts`, `/orders/daily-stats`, `/orders/distinct-skus`, `[orders:maintenance]`, and Supabase p95/p99 correlation | Awaiting load latency spike | API/Frontend/DB |
 | Worker/sync/reporting jobs | `/worker/status` and logs | stale heartbeat, failed/stuck job counters | stale heartbeat and failed job | Worker |
 | Rate/label provider health | rate diagnostics and provider logs | provider/account success/failure/timeout counters | rate/label failure spike | Fulfillment/Rates |
 | Frontend runtime errors | browser console/manual | release-tagged frontend error capture | frontend error spike | Frontend |
@@ -456,7 +457,7 @@ Deliverable table:
 
 | Endpoint/Workflow | Current Bottleneck | Expected Scale | Observed Query/API Pattern | Optimization |
 |---|---|---|---|---|
-| Awaiting Shipment first load | unknown until browser/API/DB timings are correlated | operational orders page should show quickly under normal warehouse use | suspected `/orders` count/enrichment, sidebar counts, daily stats, distinct SKUs, settings/locations/packages, worker overlap, or Render startup maintenance/backfill/analyze overlap | measure first, check `[orders:maintenance]` logs and env ownership, then table-first load, delayed exact counts, cached counts/stats, deferred support data, explicit worker/admin maintenance, or configurable hot window |
+| Awaiting Shipment first load | unknown until browser/API/DB timings are correlated | operational orders page should show quickly under normal warehouse use | suspected `/orders` count/enrichment, sidebar counts, daily stats, distinct SKUs, settings/locations/packages, worker overlap, or explicit startup maintenance/backfill/analyze overlap | measure first, check `[orders:maintenance]` logs and env ownership, then table-first load, delayed exact counts, cached counts/stats, deferred support data, explicit worker/admin maintenance, or configurable hot window |
 
 ### Deployment / Rollback
 
