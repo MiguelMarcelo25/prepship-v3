@@ -34,7 +34,7 @@
 | Phase | Status | Percent | Why Not 100% Yet |
 |---|---|---:|---|
 | Phase 1 - Runtime Architecture | Complete | 100% | Done |
-| Phase 2 - Observability | Good start | 76% | Observability/alerting signal plan exists, Awaiting Shipment lag investigation is scoped, browser/API request IDs now flow through request headers, response headers, timing/error logs, and detailed Orders list logs, and opt-in browser API timing diagnostics exist; needs external alerts, p95/p99 dashboards, slow-query dashboard, and status panel |
+| Phase 2 - Observability | Good start | 77% | Observability/alerting signal plan exists, Awaiting Shipment lag investigation is scoped, browser/API request IDs now flow through request headers, response headers, timing/error logs, and detailed Orders list logs, opt-in browser API timing diagnostics exist, and the Render restart/startup maintenance hypothesis is now tracked; needs external alerts, p95/p99 dashboards, slow-query dashboard, and status panel |
 | Phase 3 - Dashboard + Analysis Cleanup | Mostly complete | 86% | Dashboard Orders / Units KPI guard exists; needs production parity checks, remaining Analysis JSONB audit, and broader regression tests |
 | Phase 4 - `order_items` Normalization | Mostly complete | 83% | Runtime schema bootstrap now checks migrations; needs production trigger/backfill verification and parity tests |
 | Phase 5 - Reporting Read Models | Started | 30% | `analytics_cache` exists, but full dashboard/daily/SKU/inventory/billing read models are not complete |
@@ -59,7 +59,7 @@
 - [x] Worker owns background sync
 - [x] Pg-boss/job queue foundation
 
-### Phase 2 - Observability: 76%
+### Phase 2 - Observability: 77%
 
 - [x] API timing logs
 - [x] `Server-Timing`
@@ -71,10 +71,13 @@
 - [x] `npm run test:observability-alerting`
 - [x] Awaiting Shipment lag investigation scoped
 - [x] `AWAITING_SHIPMENTS_PERFORMANCE_PLAN.md`
+- [x] Render restart/startup maintenance bottleneck hypothesis added to the Awaiting plan
 - [x] `X-Request-Id` response header and timing/error log correlation
 - [x] Request ID correlation for detailed `[orders:list]` segment timings
 - [x] Browser API calls send request IDs and failed API errors include them
 - [x] Opt-in browser `[api:client-timing]` diagnostics for slow/failed requests
+- [ ] Check Render logs for `[orders:maintenance] ensured index`, `backfilled`, `repaired`, and `refreshed planner stats`
+- [ ] Confirm `RUN_ORDERS_PERFORMANCE_MAINTENANCE` / `RUN_SYNC_SCHEDULER` production env ownership for API vs worker
 - [ ] Capture browser Network timing for Awaiting page
 - [~] Correlate Render `[api:timing]` and `[orders:list]` logs
 - [ ] Correlate Supabase slow-query logs for the same timestamps
@@ -172,6 +175,8 @@
 - [x] Rate Browser cached/progressive direction started
 - [x] Awaiting Shipment startup request audit scoped
 - [x] Orders startup request guard added
+- [ ] Confirm `/orders/distinct-skus` is not required for initial Awaiting table paint
+- [ ] Confirm `/orders/daily-stats` is not blocking initial Awaiting table paint
 - [x] Orders locations/carrier-account support data deferred until user intent
 - [x] Legacy SidebarOrders initial counts delayed until after first paint
 - [x] Legacy SidebarOrders count polling slowed and hidden-tab gated
@@ -378,6 +383,8 @@
 4. Run the Awaiting Shipment performance investigation before any AWS or archive decision.
    - Capture Browser Network timing for first load.
    - Correlate Render `[api:timing]` and `[orders:list]` logs.
+   - Search Render logs for `[orders:maintenance]` during the slowdown window and confirm whether startup index/backfill/analyze work overlapped user traffic.
+   - Confirm API `RUN_ORDERS_PERFORMANCE_MAINTENANCE` and `RUN_SYNC_SCHEDULER` settings so maintenance is not unexpectedly running on user-facing API restarts.
    - Correlate Supabase slow-query logs for the same timestamp.
    - Confirm whether the blocker is `/orders`, `/init/counts`, `/orders/daily-stats`, `/orders/distinct-skus`, settings/locations/packages, worker pressure, or frontend render.
    - Only implement table-first loading, delayed exact counts, or archive/hot-window changes after the confirmed bottleneck is known.
