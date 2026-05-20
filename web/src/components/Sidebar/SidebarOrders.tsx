@@ -185,24 +185,30 @@ export function SidebarOrders({
   )
 
   useEffect(() => {
+    let disposed = false
     const load = async () => {
+      if (disposed || document.visibilityState !== 'visible') return
       try {
-        setCounts(await apiClient.fetchCounts())
+        const nextCounts = await apiClient.fetchCounts()
+        if (!disposed) setCounts(nextCounts)
       } catch (error) {
         console.error('Failed to fetch sidebar counts:', error)
       }
     }
-    void load()
-    const id = window.setInterval(() => {
-      if (document.visibilityState !== 'visible') return
+    const initialTimerId = window.setTimeout(() => {
       void load()
-    }, 120_000)
+    }, 2500)
+    const id = window.setInterval(() => {
+      void load()
+    }, 180_000)
     // Real-time refresh on client active-toggle (dispatched from
     // InventoryView). Mirrors the listener in useSidebarController so
     // BOTH sidebar implementations refresh immediately on toggle.
     const onClientActiveChanged = () => void load()
     window.addEventListener('prepship:client-active-changed', onClientActiveChanged)
     return () => {
+      disposed = true
+      window.clearTimeout(initialTimerId)
       window.clearInterval(id)
       window.removeEventListener('prepship:client-active-changed', onClientActiveChanged)
     }

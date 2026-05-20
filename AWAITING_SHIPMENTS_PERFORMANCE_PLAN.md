@@ -6,7 +6,7 @@ PrepShip should not jump straight to AWS migration or order archiving until the 
 
 Current status: investigation scoped. No runtime behavior changes are included in this document.
 
-Phase 9 follow-up: the first low-risk startup guard now prevents Orders from fetching locations and carrier accounts until an order action, drawer, queue, rate browser, new-order flow, or shipping-account sort actually needs those shared records.
+Phase 9 follow-up: the first low-risk startup guard now prevents Orders from fetching locations and carrier accounts until an order action, drawer, queue, rate browser, new-order flow, or shipping-account sort actually needs those shared records. The legacy sidebar count path also waits until after first paint, slows polling, and skips hidden tabs.
 
 ## Critical Blockers
 
@@ -18,7 +18,7 @@ Phase 9 follow-up: the first low-risk startup guard now prevents Orders from fet
 ## High-Risk Issues
 
 - `/orders` can spend time in `ordersPage`, `ordersCount`, and shipment enrichment before the table can finish loading.
-- `/init/counts` may compete with the main table request if sidebar counts scan large order sets.
+- `/init/counts` may compete with the main table request if sidebar counts scan large order sets. Initial legacy sidebar counts are now delayed, but the endpoint still needs timing/caching evidence before deeper changes.
 - `/orders/daily-stats` and `/orders/distinct-skus` can add avoidable pressure if they run before user intent or before the table paints.
 - Global boot reads such as settings, locations, packages, sync status, and worker status can make the app feel stuck when Supabase is under memory pressure.
 - Locations and carrier accounts are now guarded on Orders startup, but settings, sidebar counts, status polling, and daily stats still need timing evidence before deeper changes.
@@ -52,7 +52,7 @@ Phase 9 follow-up: the first low-risk startup guard now prevents Orders from fet
 ## Recommended Patches
 
 - If `/orders` count is slow, delay exact total count and return page data first with `hasMore`.
-- If sidebar counts are slow, cache `/init/counts` and load it after the table paints.
+- If sidebar counts are slow, cache `/init/counts`, keep it after table paint, and preserve stale count data on refresh failures.
 - If daily stats or SKU lists are slow, fetch them only after first paint or user interaction.
 - If settings/locations/packages are competing, defer them until the order panel, rate browser, label action, or package control needs them.
 - If Supabase slow queries show historical scans, add a configurable hot window before moving data to archive tables.

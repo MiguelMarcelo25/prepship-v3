@@ -4,11 +4,13 @@ import path from 'node:path';
 const root = process.cwd();
 const ordersViewPath = path.join(root, 'web/src/components/Views/OrdersView.tsx');
 const hooksPath = path.join(root, 'web/src/hooks/v2Hooks.ts');
+const sidebarOrdersPath = path.join(root, 'web/src/components/Sidebar/SidebarOrders.tsx');
 const packagePath = path.join(root, 'package.json');
 
-const [ordersView, hooks, packageJsonRaw] = await Promise.all([
+const [ordersView, hooks, sidebarOrders, packageJsonRaw] = await Promise.all([
   readFile(ordersViewPath, 'utf8'),
   readFile(hooksPath, 'utf8'),
+  readFile(sidebarOrdersPath, 'utf8'),
   readFile(packagePath, 'utf8'),
 ]);
 
@@ -51,6 +53,18 @@ const checks = [
     pass: ordersView.includes('scheduleNonCriticalOrdersWork(() =>') &&
       ordersView.includes('void loadDailyStats()') &&
       ordersView.includes('}, 3000)'),
+  },
+  {
+    name: 'Legacy sidebar counts do not block Orders first paint',
+    pass: sidebarOrders.includes('const initialTimerId = window.setTimeout(() =>') &&
+      sidebarOrders.includes('}, 2500)') &&
+      sidebarOrders.includes('window.clearTimeout(initialTimerId)') &&
+      !sidebarOrders.includes('    void load()\n    const id = window.setInterval'),
+  },
+  {
+    name: 'Legacy sidebar count polling pauses while hidden and stays slow',
+    pass: sidebarOrders.includes("document.visibilityState !== 'visible'") &&
+      sidebarOrders.includes('}, 180_000)'),
   },
   {
     name: 'Guard is wired into package scripts',
