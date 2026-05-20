@@ -34,7 +34,7 @@
 | Phase | Status | Percent | Why Not 100% Yet |
 |---|---|---:|---|
 | Phase 1 - Runtime Architecture | Complete | 100% | Done |
-| Phase 2 - Observability | Good start | 82% | Observability/alerting signal plan exists, Awaiting Shipment lag investigation is scoped, browser/API request IDs now flow through request headers, response headers, timing/error logs, detailed Orders list logs, opt-in browser API timing diagnostics, and an admin-only `/observability/api-timing` p95/p99 snapshot; needs external alerts, slow-query dashboard, and status panel |
+| Phase 2 - Observability | Good start | 84% | Observability/alerting signal plan exists, Awaiting Shipment lag investigation is scoped, browser/API request IDs now flow through request headers, response headers, timing/error logs, detailed Orders list logs, opt-in browser API timing diagnostics, admin-only `/observability/api-timing` p95/p99 snapshots, and an admin `/observability/status` status payload; needs external alerts, slow-query dashboard, and a frontend status panel |
 | Phase 3 - Dashboard + Analysis Cleanup | Mostly complete | 86% | Dashboard Orders / Units KPI guard exists; needs production parity checks, remaining Analysis JSONB audit, and broader regression tests |
 | Phase 4 - `order_items` Normalization | Mostly complete | 83% | Runtime schema bootstrap now checks migrations; needs production trigger/backfill verification and parity tests |
 | Phase 5 - Reporting Read Models | Started | 30% | `analytics_cache` exists, but full dashboard/daily/SKU/inventory/billing read models are not complete |
@@ -59,7 +59,7 @@
 - [x] Worker owns background sync
 - [x] Pg-boss/job queue foundation
 
-### Phase 2 - Observability: 82%
+### Phase 2 - Observability: 84%
 
 - [x] API timing logs
 - [x] `Server-Timing`
@@ -70,6 +70,7 @@
 - [x] `OBSERVABILITY_ALERTING_PLAN.md`
 - [x] `npm run test:observability-alerting`
 - [x] Admin-only `/observability/api-timing` p95/p99 API timing snapshot
+- [x] Admin-only `/observability/status` runtime/API status payload
 - [x] `npm run test:api-observability-metrics`
 - [x] Awaiting Shipment lag investigation scoped
 - [x] `AWAITING_SHIPMENTS_PERFORMANCE_PLAN.md`
@@ -90,7 +91,7 @@
 - [~] external alerts
 - [x] p95/p99 API timing snapshot
 - [~] slow DB query dashboard
-- [ ] internal status panel
+- [~] internal status panel
 
 ### Phase 3 - Dashboard + Analysis Cleanup: 86%
 
@@ -339,6 +340,7 @@
 - [x] `OBSERVABILITY_ALERTING_PLAN.md`
 - [x] `npm run test:observability-alerting`
 - [x] `/observability/api-timing` API timing snapshot
+- [x] `/observability/status` runtime/API status payload
 - [x] `npm run test:api-observability-metrics`
 - [x] `OPERATIONAL_RUNBOOKS_AND_DR_PLAN.md`
 - [x] `npm run test:operational-runbooks`

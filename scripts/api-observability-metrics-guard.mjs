@@ -48,6 +48,14 @@ expect(
 );
 
 expect(
+  'observability route exposes admin status endpoint',
+  route.includes("app.get('/status'") &&
+    route.includes('runSyncScheduler') &&
+    route.includes('hotRoutes') &&
+    route.includes('heapUsedBytes')
+);
+
+expect(
   'api timing snapshot includes p95 and p99 route stats',
   metrics.includes('p95Ms') &&
     metrics.includes('p99Ms') &&
@@ -59,18 +67,21 @@ expect(
 expect(
   'phase tracker references api timing endpoint',
   devTasks.includes('/observability/api-timing') &&
+    devTasks.includes('/observability/status') &&
     devTasks.includes('test:api-observability-metrics')
 );
 
 expect(
   'enterprise audit references api timing endpoint',
   enterprise.includes('/observability/api-timing') &&
+    enterprise.includes('/observability/status') &&
     enterprise.includes('test:api-observability-metrics')
 );
 
 expect(
   'observability plan references api timing endpoint',
-  observability.includes('/observability/api-timing')
+  observability.includes('/observability/api-timing') &&
+    observability.includes('/observability/status')
 );
 
 const failed = checks.filter((check) => !check.condition);
