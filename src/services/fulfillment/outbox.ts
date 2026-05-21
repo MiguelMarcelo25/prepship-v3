@@ -1,6 +1,6 @@
 import { sql as pg } from '../../db/client';
 import { loadClientCredentials } from '../../lib/shipstation/credentials';
-import { storeConnectors } from '../../connectors/registry';
+import { resolveStoreConnector } from '../../connectors/store-resolution';
 
 type OrderForConfirmation = {
   id: number;
@@ -340,11 +340,12 @@ async function failOutboxRow(row: OutboxRow, err: unknown, retryable: boolean): 
 }
 
 async function processOutboxRow(row: OutboxRow): Promise<boolean> {
-  const connector = storeConnectors[row.provider as keyof typeof storeConnectors];
-  if (!connector) {
+  const resolvedStoreConnector = resolveStoreConnector(row.provider, 'shipment.confirm');
+  if (!resolvedStoreConnector) {
     await failOutboxRow(row, new Error(`No store connector registered for ${row.provider}`), false);
     return false;
   }
+  const { connector, connectorCapabilities } = resolvedStoreConnector;
 
   const payload = row.payload ?? {};
   const credentials = await loadStoreCredentials(
@@ -375,7 +376,12 @@ async function processOutboxRow(row: OutboxRow): Promise<boolean> {
 
   if (result.ok) {
     await completeOutboxRow(row);
-    console.info(`[fulfillment-outbox] confirmed shipment orderId=${row.order_id} shipmentId=${row.shipment_id} provider=${row.provider}`);
+    console.info('[fulfillment-outbox] confirmed shipment', {
+      orderId: row.order_id,
+      shipmentId: row.shipment_id,
+      provider: row.provider,
+      connectorCapabilities,
+    });
     return true;
   }
 

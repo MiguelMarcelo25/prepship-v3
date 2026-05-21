@@ -10,6 +10,7 @@ const types = read('src/connectors/types.ts');
 const matrix = read('src/connectors/matrix.ts');
 const registry = read('src/connectors/registry.ts');
 const carrierResolution = read('src/connectors/carrier-resolution.ts');
+const storeResolution = read('src/connectors/store-resolution.ts');
 const migration = read('drizzle/0032_connector_architecture.sql');
 const ordersSchema = read('src/db/schema/orders.ts');
 const shipmentsSchema = read('src/db/schema/shipments.ts');
@@ -17,6 +18,7 @@ const orderSync = read('src/services/order-sync.ts');
 const directLabelPersistence = read('src/services/direct-label-persistence.ts');
 const carrierLabels = read('api/carriers/labels.ts');
 const carrierRates = read('api/carriers/rates.ts');
+const fulfillmentOutbox = read('src/services/fulfillment/outbox.ts');
 const packageJson = JSON.parse(read('package.json'));
 
 for (const iface of [
@@ -115,6 +117,11 @@ for (const key of ['shipstation', 'shipp', 'easypost', 'walmart_shipping', 'ups'
 assert(carrierResolution.includes('resolveCarrierConnector'), 'missing carrier connector resolver');
 assert(carrierResolution.includes('carrierConnectors'), 'carrier resolver must use carrier registry');
 assert(carrierResolution.includes('connectorCapabilityMatrix'), 'carrier resolver must use capability matrix');
+assert(storeResolution.includes('resolveStoreConnector'), 'missing store connector resolver');
+assert(storeResolution.includes('storeConnectors'), 'store resolver must use store registry');
+assert(storeResolution.includes('connectorCapabilityMatrix'), 'store resolver must use capability matrix');
+assert(fulfillmentOutbox.includes('resolveStoreConnector'), 'fulfillment outbox must resolve confirmation providers through store connector resolver');
+assert(fulfillmentOutbox.includes('connectorCapabilities'), 'fulfillment outbox must expose store connector capabilities in logs or payload');
 
 for (const source of [carrierLabels, carrierRates]) {
   assert(source.includes('resolveCarrierConnector'), 'direct carrier endpoint must resolve providers through connector registry');
