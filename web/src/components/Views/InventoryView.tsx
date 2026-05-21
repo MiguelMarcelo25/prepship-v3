@@ -174,6 +174,9 @@ const INVENTORY_TAB_META: Array<{
 const INVENTORY_PAGE_SIZE_OPTIONS = [10, 20, 50, 100, 200] as const
 const INVENTORY_DEFAULT_PAGE_SIZE = 50
 const INVENTORY_PAGE_SIZE_KEY = 'inventory_page_size'
+const RECEIVE_INPUT_CLASS = 'h-8 w-full rounded-md border border-line bg-surface px-3 text-[12px] text-ink outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/15 disabled:cursor-not-allowed disabled:opacity-60'
+const RECEIVE_LABEL_CLASS = 'text-[10.5px] font-extrabold uppercase tracking-[0.04em] text-ink-3'
+const RECEIVE_FIELD_CLASS = 'flex min-w-0 flex-col gap-1.5'
 
 function readStoredInventoryPageSize(): number {
   if (typeof window === 'undefined') return INVENTORY_DEFAULT_PAGE_SIZE
@@ -2915,7 +2918,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -4 }}
                 transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-                className={`inventory-section-header flex items-start gap-4 px-5 pt-5 ${activeMeta.id === 'receive' ? 'inventory-section-header--receive' : ''}`}
+                className={`inventory-section-header flex items-start gap-4 px-5 pt-5 ${activeMeta.id === 'receive' ? 'px-7 pb-[22px] pt-6 max-md:px-5 max-md:pb-[18px] max-md:pt-5' : ''}`}
               >
                 <motion.div
                   initial={{ scale: 0.6, rotate: -8, opacity: 0 }}
@@ -3686,34 +3689,34 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
       ) : null}
 
       {activeTab === 'receive' ? (
-        <div id="inv-panel-receive">
-          <div className="inventory-receive-card">
-            <div className="inventory-receive-toolbar">
-              <label className="inventory-receive-field inventory-receive-field--client">
-                <span>Client</span>
-                <select className="ship-select" value={receiveClientId} onChange={(event) => setReceiveClientId(event.target.value)}>
+        <div id="inv-panel-receive" className="px-[18px] pb-6 max-md:px-3 max-md:pb-5">
+          <div className="w-full max-w-[980px] rounded-lg border border-line bg-surface p-[18px] shadow-sm max-md:p-3.5">
+            <div className="mb-3.5 grid grid-cols-[minmax(220px,280px)_minmax(280px,1fr)_minmax(170px,210px)] items-end gap-3 max-md:grid-cols-1">
+              <label className={RECEIVE_FIELD_CLASS}>
+                <span className={RECEIVE_LABEL_CLASS}>Client</span>
+                <select className={`${RECEIVE_INPUT_CLASS} pr-8`} value={receiveClientId} onChange={(event) => setReceiveClientId(event.target.value)}>
                   <option value="">Select Client...</option>
                   {clients.map((client) => (
                     <option key={client.clientId} value={client.clientId}>{client.name}</option>
                   ))}
                 </select>
               </label>
-              <label className="inventory-receive-field inventory-receive-field--note">
-                <span>Reference</span>
-                <input type="text" value={receiveNote} onChange={(event) => setReceiveNote(event.target.value)} className="ship-select" placeholder="PO, shipment ref, or note" />
+              <label className={RECEIVE_FIELD_CLASS}>
+                <span className={RECEIVE_LABEL_CLASS}>Reference</span>
+                <input type="text" value={receiveNote} onChange={(event) => setReceiveNote(event.target.value)} className={RECEIVE_INPUT_CLASS} placeholder="PO, shipment ref, or note" />
               </label>
-              <label className="inventory-receive-field inventory-receive-field--date">
-                <span>Received on</span>
-                <input type="date" value={receiveDate} onChange={(event) => setReceiveDate(event.target.value)} className="ship-select" />
+              <label className={RECEIVE_FIELD_CLASS}>
+                <span className={RECEIVE_LABEL_CLASS}>Received on</span>
+                <input type="date" value={receiveDate} onChange={(event) => setReceiveDate(event.target.value)} className={RECEIVE_INPUT_CLASS} />
               </label>
             </div>
-            <div id="inv-recv-rows" className="inventory-receive-rows">
+            <div id="inv-recv-rows" className="flex flex-col gap-2.5">
               {receiveRows.map((row) => {
                 const lookup = row.sku.trim() ? receiveSkuMap[row.sku.trim()] ?? null : null
                 const hints = getReceiveRowHints(row, lookup)
                 return (
-                  <div key={row.id} className="inventory-recv-row">
-                    <div className="inventory-receive-row-fields">
+                  <div key={row.id} className="flex flex-col gap-1.5 rounded-lg border border-line bg-surface-2 p-3">
+                    <div className="grid grid-cols-[minmax(360px,440px)_minmax(260px,1fr)_76px_auto_28px] items-start gap-2.5 max-md:grid-cols-1">
                       {/* 2026-05-15: Was a native <input list=
                           "react-recv-sku-datalist">. Chrome rendered
                           that as an unstyleable, unfilterable 300+
@@ -3725,14 +3728,13 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                           component (web/src/components/Autosuggest.tsx)
                           ready for parent-SKU picker, bulk-edit,
                           new-order modal next. */}
-                      <div className="inventory-receive-sku-cell">
+                      <div className="min-w-0 max-w-[440px]">
                         <Autosuggest
                           value={row.sku}
                           options={receiveSkuOptions}
                           placeholder="SKU"
                           ariaLabel="SKU"
-                          inputClassName="ship-select"
-                          inputStyle={{ fontFamily: 'monospace', fontSize: 12 }}
+                          inputClassName={`${RECEIVE_INPUT_CLASS} font-mono`}
                           maxResults={receiveSkuOptions.length || 50}
                           emptyMessage={
                             row.sku.trim()
@@ -3762,29 +3764,27 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                       </div>
                       <input
                         type="text"
-                        className="ship-select"
+                        className={RECEIVE_INPUT_CLASS}
                         placeholder="Product name (auto-fills)"
-                        style={{ fontSize: 12 }}
                         value={row.name}
                         onChange={(event) => {
                           const nextName = event.target.value
                           setReceiveRows((current) => current.map((entry) => entry.id === row.id ? { ...entry, name: nextName, autofilledName: false } : entry))
                         }}
                       />
-                      <div className="inventory-receive-qty-cell">
+                      <div className="flex flex-col items-end gap-[3px]">
                         <input
                           type="number"
-                          className="ship-select"
+                          className={`${RECEIVE_INPUT_CLASS} text-center`}
                           placeholder="Qty"
                           min="1"
-                          style={{ fontSize: 12, textAlign: 'center' }}
                           value={row.qty}
                           onChange={(event) => setReceiveRows((current) => current.map((entry) => entry.id === row.id ? { ...entry, qty: event.target.value } : entry))}
                         />
-                        {hints.totalHint ? <span style={{ fontSize: 10, color: 'var(--ss-blue)', fontWeight: 700, whiteSpace: 'nowrap' }}>{hints.totalHint}</span> : null}
+                        {hints.totalHint ? <span className="whitespace-nowrap text-[10px] font-bold text-brand">{hints.totalHint}</span> : null}
                       </div>
-                      {hints.packHint ? <span className="inventory-receive-pack-hint">{hints.packHint}</span> : null}
-                      <button className="btn btn-ghost btn-xs inventory-receive-remove" type="button" onClick={() => setReceiveRows((current) => current.length === 1 ? [createReceiveDraftRow()] : current.filter((entry) => entry.id !== row.id))} title="Remove row">x</button>
+                      {hints.packHint ? <span className="self-center whitespace-nowrap text-[10px] text-ink-3">{hints.packHint}</span> : null}
+                      <button className="self-start rounded-md px-2 py-1 text-[11px] font-bold text-ink-3 transition hover:bg-surface hover:text-ink" type="button" onClick={() => setReceiveRows((current) => current.length === 1 ? [createReceiveDraftRow()] : current.filter((entry) => entry.id !== row.id))} title="Remove row">x</button>
                     </div>
                   </div>
                 )
@@ -3795,14 +3795,14 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                   unfiltered; the new combobox filters as you type
                   and is keyboard-navigable. */}
             </div>
-            <div className="inventory-receive-actions">
-              <button className="btn btn-outline btn-sm" type="button" onClick={() => setReceiveRows((current) => [...current, createReceiveDraftRow()])}>+ Add SKU</button>
-              <button className="btn btn-primary btn-sm" type="button" onClick={handleReceiveSubmit}>Receive All</button>
+            <div className="mt-3.5 flex justify-between gap-2 max-md:flex-col max-md:items-stretch">
+              <button className="rounded-md border border-line bg-surface px-3 py-1.5 text-[12px] font-bold text-ink transition hover:bg-surface-2" type="button" onClick={() => setReceiveRows((current) => [...current, createReceiveDraftRow()])}>+ Add SKU</button>
+              <button className="rounded-md bg-brand px-3 py-1.5 text-[12px] font-bold text-white shadow-sm transition hover:bg-brand/90" type="button" onClick={handleReceiveSubmit}>Receive All</button>
             </div>
             {receiveResultMessage ? (
-              <div className="inventory-receive-result">
+              <div className="mt-3 text-[12.5px] text-emerald-600">
                 {receiveResultMessage}{' '}
-                <button type="button" className="inventory-inline-button" style={{ color: 'var(--ss-blue)', textDecoration: 'underline' }} onClick={() => setActiveTab('history')}>
+                <button type="button" className="text-brand underline" onClick={() => setActiveTab('history')}>
                   View History
                 </button>
               </div>
