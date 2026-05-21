@@ -26,6 +26,7 @@
 // boundary, white screen.
 
 import { Component, type ErrorInfo, type ReactNode } from 'react';
+import MaintenanceModePage from './MaintenanceModePage';
 
 const RELOAD_FLAG = 'prepship.preloadErrorReload';
 
@@ -147,35 +148,15 @@ export default class ChunkErrorBoundary extends Component<Props, State> {
       //     the message detail beneath. Don't pretend it was a
       //     deploy issue if it wasn't — that misleads incident triage.
       return (
-        <div className="min-h-screen bg-page flex items-center justify-center p-6">
-          <div className="max-w-md w-full bg-surface ring-1 ring-line rounded-card p-6 shadow-sm">
-            <h1 className="text-[18px] font-extrabold text-ink font-display tracking-tight m-0">
-              {isChunk ? 'New version available' : 'Something went wrong'}
-            </h1>
-            <p className="text-[13px] text-ink-2 mt-2 leading-relaxed">
-              {isChunk
-                ? 'PrepShip was updated while this tab was open. Reload to pick up the new version.'
-                : 'PrepShip ran into a problem rendering this page. Reloading usually fixes it.'}
-            </p>
-            {!isChunk && this.state.errorMessage ? (
-              <pre className="mt-3 p-2 rounded bg-surface-2 ring-1 ring-line text-[11px] text-ink-3 overflow-auto max-h-32 whitespace-pre-wrap">
-                {this.state.errorMessage}
-              </pre>
-            ) : null}
-            <button
-              type="button"
-              onClick={this.handleManualReload}
-              className="mt-4 inline-flex items-center justify-center h-9 px-4 rounded-lg bg-gradient-to-br from-brand to-indigo-600 text-white text-[12.5px] font-extrabold shadow-md ring-1 ring-brand/30 hover:shadow-lg transition-shadow"
-            >
-              Reload
-            </button>
-            {!isChunk ? (
-              <p className="text-[11px] text-ink-3 mt-3">
-                If this keeps happening, contact PrepShip support and include the error message above.
-              </p>
-            ) : null}
-          </div>
-        </div>
+        <MaintenanceModePage
+          mode={isChunk ? 'frontend' : 'checking'}
+          detail={
+            isChunk
+              ? 'This tab is holding an older frontend bundle while a new deployment is publishing.'
+              : this.state.errorMessage
+          }
+          onRetry={this.handleManualReload}
+        />
       );
     }
 

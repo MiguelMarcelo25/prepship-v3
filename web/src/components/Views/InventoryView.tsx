@@ -3774,10 +3774,9 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
             </div>
             <div className="overflow-x-auto">
               <div className="min-w-0 md:min-w-[900px]">
-                <div className="grid grid-cols-[32px_minmax(0,1fr)_42px] items-center border-b border-line bg-surface-2 px-4 py-2 text-[10px] font-extrabold uppercase tracking-[0.04em] text-ink-3 md:grid-cols-[44px_minmax(420px,1fr)_minmax(220px,0.8fr)_96px_150px_48px]">
+                <div className="grid grid-cols-[32px_minmax(0,1fr)_42px] items-center border-b border-line bg-surface-2 px-4 py-2 text-[10px] font-extrabold uppercase tracking-[0.04em] text-ink-3 md:grid-cols-[44px_minmax(520px,1fr)_96px_150px_48px]">
                   <div>#</div>
                   <div>SKU or product</div>
-                  <div className="hidden md:block">Product name</div>
                   <div className="hidden text-right md:block">Qty</div>
                   <div className="hidden text-right md:block">Units</div>
                   <div />
@@ -3796,7 +3795,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                 const unitsPerPack = Math.max(1, Number.parseInt(String(lookup?.unitsPerPack ?? 1), 10) || 1)
                 const rowTotalUnits = packQty > 0 ? packQty * unitsPerPack : 0
                 return (
-                  <div key={row.id} className="grid grid-cols-[32px_minmax(0,1fr)_42px] items-start gap-3 px-4 py-3 transition-colors hover:bg-surface-2/70 md:grid-cols-[44px_minmax(420px,1fr)_minmax(220px,0.8fr)_96px_150px_48px]">
+                  <div key={row.id} className="grid grid-cols-[32px_minmax(0,1fr)_42px] items-start gap-3 px-4 py-3 transition-colors hover:bg-surface-2/70 md:grid-cols-[44px_minmax(520px,1fr)_96px_150px_48px]">
                     <div className="contents">
                       <div className="pt-2 text-[11px] font-bold tabular-nums text-ink-3">{index + 1}</div>
                       {/* 2026-05-15: Was a native <input list=
@@ -3846,21 +3845,17 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                             void option
                           }}
                         />
-                      </div>
-                      <div className="min-w-0 pt-0.5 max-md:col-span-2 max-md:col-start-2">
                         {row.name ? (
-                          <div className="truncate text-[12px] font-semibold text-ink" title={row.name}>
+                          <div className="mt-1 truncate pl-1 text-[11.5px] font-semibold text-ink" title={row.name}>
                             {row.name}
                           </div>
                         ) : (
-                          <div className="text-[12px] text-ink-3">Select a SKU to fill this field</div>
+                          <div className="mt-1 pl-1 text-[11.5px] text-ink-3">Select a SKU to fill details</div>
                         )}
                         <div className="mt-1 flex min-h-[18px] flex-wrap items-center gap-1.5 text-[10.5px] text-ink-3">
                           {hints.packHint ? (
                             <span className="rounded bg-emerald-50 px-1.5 py-0.5 font-bold text-emerald-700 ring-1 ring-emerald-200">{hints.packHint}</span>
-                          ) : (
-                            <span>Each qty adds one unit</span>
-                          )}
+                          ) : null}
                         </div>
                       </div>
                       <div className="max-md:col-start-2 max-md:w-28">

@@ -315,6 +315,9 @@ for (const viewport of [
     }))
     expect(Math.abs(receiveListboxState.width - receiveInputWidth)).toBeLessThanOrEqual(2)
     expect(receiveListboxState.height).toBeGreaterThan(70)
+    await expect(page.locator('#inv-panel-receive').getByText('Product name', { exact: true })).toHaveCount(0)
+    await receiveListbox.getByRole('option').first().click()
+    await expect(page.locator('#inv-recv-rows').getByText('Bacchus-d Energy Drink 10 X 100ml')).toBeVisible()
     await page.keyboard.press('Escape')
     await page.screenshot({ path: path.join(screenshotDir, `${viewport.name}-03-receive-layout.png`), fullPage: true })
 
