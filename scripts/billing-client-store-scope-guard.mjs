@@ -59,6 +59,14 @@ assert(
   'billing invoice applies client/store scope before rendering',
 );
 assert(
+  routeSource.includes('const totalQty = baseQty + addlQty') &&
+    routeSource.includes('<th class="num">Qty</th>') &&
+    !routeSource.includes('<th class="num">Base Qty</th>') &&
+    routeSource.includes('${addlQty > 0 ? fmt(additionalAmt) :') &&
+    !routeSource.includes('${addlQty > 0 ? `${addlQty} (${fmt(additionalAmt)})`'),
+  'billing invoice renders total quantity and addl-unit fee without quantity parentheses',
+);
+assert(
   routeSource.includes('packagePriceScope') &&
     (routeSource.includes('billingClientScopePredicate(packagePriceScope)') ||
       routeSource.includes('billingClientIdScopePredicate(packagePriceScope)')),

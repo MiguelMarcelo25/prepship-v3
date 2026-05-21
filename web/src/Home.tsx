@@ -1427,7 +1427,7 @@ export default function Home() {
                       <div>
                         <div className="text-[12px] font-extrabold text-ink">Hot API Routes</div>
                         <div className="text-[11.5px] text-ink-3">
-                          Health colors follow the latest request. p95 and max stay visible as historical spike signals.
+                          Current shows what is happening now. Typical and spike columns show recent history.
                         </div>
                       </div>
                       {apiTimingLoading ? (
@@ -1443,11 +1443,11 @@ export default function Home() {
                           <tr>
                             <th className="px-4 py-2 font-bold">Route</th>
                             <th className="px-3 py-2 text-right font-bold">Count</th>
-                            <th className="px-3 py-2 text-right font-bold">p50</th>
-                            <th className="px-3 py-2 text-right font-bold">p95</th>
-                            <th className="px-3 py-2 text-right font-bold">p99</th>
-                            <th className="px-3 py-2 text-right font-bold">Max</th>
-                            <th className="px-3 py-2 text-right font-bold">Last</th>
+                            <th className="px-3 py-2 text-right font-bold" title="Normal request speed. Half of recent requests were faster than this.">Typical</th>
+                            <th className="px-3 py-2 text-right font-bold" title="Slow-but-not-rare spike. 95% of recent requests were faster than this.">Slow Spike</th>
+                            <th className="px-3 py-2 text-right font-bold" title="Rare slow spike. 99% of recent requests were faster than this.">Rare Spike</th>
+                            <th className="px-3 py-2 text-right font-bold" title="Slowest request still remembered by the API timing window.">Worst</th>
+                            <th className="px-3 py-2 text-right font-bold" title="Most recent request speed. This controls the green/red health color.">Current</th>
                             <th className="px-4 py-2 text-right font-bold">Status</th>
                           </tr>
                         </thead>

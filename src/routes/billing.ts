@@ -388,6 +388,7 @@ app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
     .map((d) => {
       const baseQty = Number(d.base_qty);
       const addlQty = Number(d.addl_qty);
+      const totalQty = baseQty + addlQty;
       const pickpackAmt = Number(d.pickpack_amt);
       const additionalAmt = Number(d.additional_amt);
       const shippingAmt = Number(d.shipping_amt);
@@ -398,9 +399,9 @@ app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
         <td>${escHtml(d.ship_date ?? '')}</td>
         <td class="mono">${escHtml(d.order_number ?? d.order_id ?? '')}</td>
         <td class="sku">${escHtml(d.skus ?? '—')}</td>
-        <td class="num">${baseQty}</td>
+        <td class="num">${totalQty}</td>
         <td class="num">${fmt(pickpackAmt)}</td>
-        <td class="num">${addlQty > 0 ? `${addlQty} (${fmt(additionalAmt)})` : '—'}</td>
+        <td class="num">${addlQty > 0 ? fmt(additionalAmt) : '—'}</td>
         <td class="num">${shippingAmt > 0 ? fmt(shippingAmt) : '—'}</td>
         <td class="num">${storageAmt > 0 ? fmt(storageAmt) : '—'}</td>
         <td class="num bold">${fmt(rowTotal)}</td>
@@ -477,7 +478,7 @@ app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
         <th>Ship Date</th>
         <th>Order #</th>
         <th>SKU(s)</th>
-        <th class="num">Base Qty</th>
+        <th class="num">Qty</th>
         <th class="num">Pick &amp; Pack</th>
         <th class="num">Add'l Units</th>
         <th class="num">Shipping</th>
