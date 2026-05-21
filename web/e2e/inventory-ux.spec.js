@@ -247,6 +247,18 @@ async function setup(page) {
   })
 }
 
+async function expectPanelGutter(page, selector) {
+  const padding = await page.locator(selector).evaluate((element) => {
+    const style = window.getComputedStyle(element)
+    return {
+      left: Number.parseFloat(style.paddingLeft),
+      right: Number.parseFloat(style.paddingRight),
+    }
+  })
+  expect(padding.left).toBeGreaterThanOrEqual(16)
+  expect(padding.right).toBeGreaterThanOrEqual(16)
+}
+
 for (const viewport of [
   { name: 'desktop', width: 1440, height: 900 },
   { name: 'tablet', width: 1024, height: 768 },
@@ -270,6 +282,7 @@ for (const viewport of [
     }
     await expect(page.locator('.inventory-section-header-actions').getByRole('button', { name: /Refresh/ })).toBeVisible()
     await expect(page.locator('.inventory-stock-toolbar')).toBeVisible()
+    await expectPanelGutter(page, '#inv-panel-stock')
     await expect(page.getByText('B07PKGDPBJ')).toBeVisible()
     await page.screenshot({ path: path.join(screenshotDir, `${viewport.name}-01-stock-layout.png`), fullPage: true })
 
@@ -281,6 +294,7 @@ for (const viewport of [
 
     await page.locator('#inventory-tab-receive').click()
     await expect(page.getByText('Receive Inventory')).toBeVisible()
+    await expectPanelGutter(page, '#inv-panel-receive')
     await expect(page.locator('.inventory-section-header-actions').getByRole('button', { name: /Import SKUs from Orders/ })).toHaveCount(0)
     await page.locator('#inv-panel-receive select').first().selectOption('1')
     const receiveSkuInput = page.getByRole('combobox', { name: 'SKU or product name' }).first()
@@ -306,16 +320,19 @@ for (const viewport of [
 
     await page.locator('#inventory-tab-alerts').click()
     await expect(page.locator('#inv-panel-alerts')).toBeVisible()
+    await expectPanelGutter(page, '#inv-panel-alerts')
     await expect(page.locator('#inv-panel-alerts')).toContainText('out of stock')
     await page.screenshot({ path: path.join(screenshotDir, `${viewport.name}-04-alerts-layout.png`), fullPage: true })
 
     await page.locator('#inventory-tab-parents').click()
     await expect(page.locator('#inv-panel-parents')).toBeVisible()
+    await expectPanelGutter(page, '#inv-panel-parents')
     await expect(page.locator('#inv-panel-parents')).toContainText('Create Parent SKU')
     await page.screenshot({ path: path.join(screenshotDir, `${viewport.name}-05-parents-layout.png`), fullPage: true })
 
     await page.locator('#inventory-tab-history').click()
     await expect(page.locator('#inv-panel-history')).toBeVisible()
+    await expectPanelGutter(page, '#inv-panel-history')
     await expect(page.locator('#inv-panel-history')).toContainText('Recent Movements')
     await page.screenshot({ path: path.join(screenshotDir, `${viewport.name}-06-history-layout.png`), fullPage: true })
   })

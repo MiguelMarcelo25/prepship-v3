@@ -182,6 +182,7 @@ const RECEIVE_LABEL_CLASS = 'text-[10.5px] font-extrabold uppercase tracking-[0.
 const RECEIVE_FIELD_CLASS = 'flex min-w-0 flex-col gap-1.5'
 const INVENTORY_HEADER_CLASS = 'inventory-section-header flex flex-wrap items-start gap-4 px-7 pb-4 pt-6 max-md:px-5 max-md:pb-4 max-md:pt-5'
 const INVENTORY_HEADER_ACTIONS_CLASS = 'inventory-section-header-actions ml-auto flex max-w-[min(760px,56vw)] flex-wrap items-center justify-end gap-2 pt-0.5 max-md:flex-[1_1_100%] max-md:justify-start max-md:max-w-none max-md:pt-0 max-[520px]:w-full max-[520px]:[&_.btn]:w-full'
+const INVENTORY_PANEL_CLASS = 'px-7 pb-8 max-md:px-4 max-md:pb-5'
 
 function readStoredInventoryPageSize(): number {
   if (typeof window === 'undefined') return INVENTORY_DEFAULT_PAGE_SIZE
@@ -3076,7 +3077,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
       ) : null}
 
       {activeTab === 'stock' ? (
-        <div id="inv-panel-stock">
+        <div id="inv-panel-stock" className={INVENTORY_PANEL_CLASS}>
           <div className="inventory-stock-toolbar">
             <div className="search-wrap inventory-stock-search">
               <input
@@ -3723,7 +3724,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
       ) : null}
 
       {activeTab === 'receive' ? (
-        <div id="inv-panel-receive" className="px-7 pb-8 max-md:px-4 max-md:pb-5">
+        <div id="inv-panel-receive" className={INVENTORY_PANEL_CLASS}>
           <div id="inv-receive-worksheet" className="w-full max-w-[1280px] rounded-lg border border-line bg-surface shadow-sm">
             <div className="flex flex-wrap items-center gap-3 border-b border-line bg-surface-2 px-4 py-3">
               <div className="flex min-w-[220px] flex-1 items-center gap-2">
@@ -4232,7 +4233,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
       ) : null}
 
       {activeTab === 'history' ? (
-        <div id="inv-panel-history">
+        <div id="inv-panel-history" className={INVENTORY_PANEL_CLASS}>
           <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
             <select className="filter-sel" value={historyClientId} onChange={(event) => setHistoryClientId(event.target.value)}>
               <option value="">All Clients</option>
@@ -4322,7 +4323,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
       ) : null}
 
       {activeTab === 'alerts' ? (
-        <div id="inv-panel-alerts">
+        <div id="inv-panel-alerts" className={INVENTORY_PANEL_CLASS}>
           <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
             <select className="filter-sel" value={alertsClientId} onChange={(event) => setAlertsClientId(event.target.value)}>
               <option value="">All Clients</option>
@@ -4432,7 +4433,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
       ) : null}
 
       {activeTab === 'parents' ? (
-        <div id="inv-panel-parents">
+        <div id="inv-panel-parents" className={INVENTORY_PANEL_CLASS}>
           <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap', alignItems: 'center' }}>
             <select className="filter-sel" value={parentsClientId} onChange={(event) => setParentsClientId(event.target.value)}>
               <option value="">All Clients</option>
