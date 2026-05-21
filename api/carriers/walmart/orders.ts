@@ -32,6 +32,7 @@ import {
   verifySupabaseJwt,
 } from '../../../src/lib/auth/verify-supabase-jwt.js';
 import { corsHeaders } from '../../../src/lib/http/cors.js';
+import { timedFetch } from '../../../src/lib/http/timing.js';
 
 function readBody(req: any): Promise<unknown> {
   if (req.body) {
@@ -101,7 +102,7 @@ async function getWalmartAccessToken(creds: Record<string, unknown>): Promise<st
     'WM_SVC.NAME': 'Walmart Marketplace',
   };
   if (channelType) headers['WM_CONSUMER.CHANNEL.TYPE'] = channelType;
-  const res = await fetch('https://marketplace.walmartapis.com/v3/token', {
+  const res = await timedFetch('api.carriers.walmart.orders.external', 'https://marketplace.walmartapis.com/v3/token', {
     method: 'POST',
     headers,
     body: 'grant_type=client_credentials',
@@ -236,7 +237,7 @@ export default async function handler(req: any, res: any): Promise<void> {
     url.searchParams.set('limit', String(limit));
     url.searchParams.set('productInfo', 'true');
 
-    const ordersRes = await fetch(url.toString(), { headers: ordersHeaders });
+    const ordersRes = await timedFetch('api.carriers.walmart.orders.external', url.toString(), { headers: ordersHeaders });
     if (!ordersRes.ok) {
       const t = await ordersRes.text().then((s) => s.slice(0, 400)).catch(() => '');
       res.status(400).json({

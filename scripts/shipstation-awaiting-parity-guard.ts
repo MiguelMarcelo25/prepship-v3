@@ -129,5 +129,10 @@ assert.match(
   'shipment sync must not mark orders shipped from voided or return shipments',
 );
 assert.match(shipmentSync, /Per user override `unlock shipped data`/);
+assert.match(
+  shipmentSync,
+  /prepshipOrderIds\.has\(ord\.id\)[\s\S]+Boolean\(s\.voided\) === false[\s\S]+Boolean\(s\.isReturnLabel\) === false[\s\S]+shippedOrderIds\.push\(ord\.id\)[\s\S]+continue;/,
+  'PrepShip-duplicate shipment rows must promote only active outbound awaiting labels before skipping insertion',
+);
 
 console.log('ShipStation awaiting parity guard passed');

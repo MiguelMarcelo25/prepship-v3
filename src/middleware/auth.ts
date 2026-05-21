@@ -6,6 +6,7 @@ import {
   verifySupabaseJwt,
 } from '../lib/auth/verify-supabase-jwt';
 import { env } from '../lib/env';
+import { elapsedMs, nowMs } from '../lib/http/timing';
 
 export type AuthVars = {
   userId: string;
@@ -14,6 +15,7 @@ export type AuthVars = {
   permissions?: string[];
   clientIds?: number[];
   storeIds?: number[];
+  authDurationMs?: number;
 };
 
 export const APP_ROLES = [
@@ -143,12 +145,16 @@ export function hasAppPermission(
 
 export const requireAuth = createMiddleware<{ Variables: AuthVars }>(
   async (c, next) => {
+    const authStartedAt = nowMs();
+    const finishAuthTiming = () => c.set('authDurationMs', elapsedMs(authStartedAt));
     if (AUTH_BYPASS_PREFIXES.some((p) => c.req.path.startsWith(p))) {
+      finishAuthTiming();
       await next();
       return;
     }
     const token = extractBearerToken(c.req.header('authorization'));
     if (!token) {
+      finishAuthTiming();
       return c.json({ error: 'Missing bearer token' }, 401);
     }
     const verified = await verifySupabaseJwt(token, {
@@ -158,11 +164,13 @@ export const requireAuth = createMiddleware<{ Variables: AuthVars }>(
     });
     if (!verified.ok) {
       console.warn('[auth] Invalid Supabase JWT:', verified.reason);
+      finishAuthTiming();
       return c.json({ error: 'Invalid token' }, 401);
     }
     const authVars = payloadToAuthVars(verified.payload);
     if (!authVars) {
       console.warn('[auth] Verified Supabase JWT missing subject');
+      finishAuthTiming();
       return c.json({ error: 'Invalid token' }, 401);
     }
     c.set('userId', authVars.userId);
@@ -171,6 +179,7 @@ export const requireAuth = createMiddleware<{ Variables: AuthVars }>(
     c.set('permissions', authVars.permissions);
     c.set('clientIds', authVars.clientIds);
     c.set('storeIds', authVars.storeIds);
+    finishAuthTiming();
     await next();
   }
 );

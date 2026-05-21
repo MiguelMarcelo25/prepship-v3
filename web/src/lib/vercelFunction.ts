@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { getCachedAuthToken } from './auth-session-cache';
 
 // Calls a same-origin Vercel serverless function under /api/<path>. Differs
 // from the regular `api` client (which targets the Render backend via
@@ -14,14 +14,12 @@ export async function callVercelFunction<T>(
   init: { method?: string; body?: unknown; headers?: Record<string, string> } = {}
 ): Promise<T> {
   const url = `/api${path.startsWith('/') ? path : `/${path}`}`;
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
+  const accessToken = await getCachedAuthToken();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     ...(init.headers ?? {}),
   };
-  if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
   const res = await fetch(url, {
     method: init.method ?? 'GET',
     headers,

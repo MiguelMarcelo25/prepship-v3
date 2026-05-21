@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, qs, type Paginated } from '../lib/api';
+import { getCachedAuthToken } from '../lib/auth-session-cache';
 import { HIDDEN_CLIENT_IDS } from '../lib/v2-apiClient';
 
 /**
@@ -784,12 +785,9 @@ const STORE_PROVIDER_KEYS = new Set<string>([
 // directly here so we don't have to thread callVercelFunction through
 // the React Query queryFn — same-origin /api/* path + Supabase JWT.
 async function fetchDirectCarrierAccounts(): Promise<V4DirectCarriersResponse> {
-  const { supabase } = await import('../lib/supabase');
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
+  const accessToken = await getCachedAuthToken();
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (session?.access_token) headers.Authorization = `Bearer ${session.access_token}`;
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
   const res = await fetch('/api/carrier-accounts?source=admin', { headers });
   if (!res.ok) {
     let msg = `${res.status} ${res.statusText}`;

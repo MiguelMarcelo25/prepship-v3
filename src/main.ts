@@ -6,6 +6,7 @@ import { cors } from 'hono/cors';
 import { env } from './lib/env';
 import { isAllowedCorsOrigin } from './lib/http/cors';
 import { observeApiTiming } from './lib/http/api-metrics';
+import { appendServerTiming, elapsedMs, nowMs } from './lib/http/timing';
 import { requireAdmin, requireAuth } from './middleware/auth';
 import health from './routes/health';
 import ordersRoute from './routes/orders';
@@ -36,6 +37,7 @@ import observabilityRoute from './routes/observability';
 
 type AppVars = {
   requestId: string;
+  authDurationMs?: number;
 };
 
 const app = new Hono<{ Variables: AppVars }>();
@@ -58,14 +60,21 @@ app.use('*', async (c, next) => {
 });
 app.use('*', logger());
 app.use('*', async (c, next) => {
-  const startedAt = Date.now();
+  const startedAt = nowMs();
   try {
     await next();
   } finally {
-    const durationMs = Date.now() - startedAt;
+    const durationMs = elapsedMs(startedAt);
     const thresholdMs = Number.parseInt(process.env.API_TIMING_LOG_MS ?? '750', 10);
     const slowThresholdMs = Number.isFinite(thresholdMs) && thresholdMs > 0 ? thresholdMs : 750;
-    c.header('Server-Timing', `app;dur=${durationMs}`);
+    const authDurationMs = Number(c.get('authDurationMs') ?? 0);
+    c.header(
+      'Server-Timing',
+      appendServerTiming(c.res.headers.get('Server-Timing'), {
+        app: durationMs,
+        auth: Number.isFinite(authDurationMs) ? authDurationMs : 0,
+      })
+    );
 
     const url = new URL(c.req.url);
     const contentLength = c.res.headers.get('content-length');

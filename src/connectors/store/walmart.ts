@@ -3,6 +3,7 @@ import type {
   ShipmentConfirmationInput,
   StoreConnector,
 } from '../../domain/fulfillment/types';
+import { timedFetch } from '../../lib/http/timing';
 
 function firstString(...values: unknown[]): string {
   for (const value of values) {
@@ -31,7 +32,7 @@ async function getWalmartAccessToken(creds: Record<string, unknown>): Promise<st
   }
 
   const basic = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
-  const res = await fetch('https://marketplace.walmartapis.com/v3/token', {
+  const res = await timedFetch('walmart.token', 'https://marketplace.walmartapis.com/v3/token', {
     method: 'POST',
     headers: {
       Authorization: `Basic ${basic}`,
@@ -144,13 +145,15 @@ export function createWalmartStoreConnector(): StoreConnector {
       }
 
       const token = await getWalmartAccessToken(creds);
-      const res = await fetch(
+      const res = await timedFetch(
+        'walmart.ship-confirm',
         `https://marketplace.walmartapis.com/v3/orders/${encodeURIComponent(purchaseOrderId)}/shipping`,
         {
           method: 'POST',
           headers: walmartHeaders(creds, token),
           body: JSON.stringify({ orderLines }),
         },
+        { purchaseOrderId },
       );
       if (!res.ok) {
         throw new Error(`Walmart Ship Confirm ${res.status}: ${await readWalmartError(res)}`);

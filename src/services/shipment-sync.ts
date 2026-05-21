@@ -235,7 +235,20 @@ async function upsertShipmentsBatch(pageShipments: SSShipment[]): Promise<{
 
     // v2-parity PrepShip guard: if the order already has a non-voided
     // PrepShip label, the SS-sourced shipment is a duplicate — skip it.
-    if (ord && prepshipOrderIds.has(ord.id)) continue;
+    // Per user override `unlock shipped data` on 2026-05-21: an active
+    // outbound ShipStation label may still promote an awaiting order before
+    // we skip inserting the duplicate SS shipment row.
+    if (ord && prepshipOrderIds.has(ord.id)) {
+      matched += 1;
+      if (
+        ord.status === 'awaiting_shipment' &&
+        Boolean(s.voided) === false &&
+        Boolean(s.isReturnLabel) === false
+      ) {
+        shippedOrderIds.push(ord.id);
+      }
+      continue;
+    }
 
     if (ord) matched += 1;
 

@@ -1,4 +1,5 @@
 import { env } from '../env';
+import { timedFetch } from '../http/timing';
 import { TokenBucket } from './rate-limiter';
 import { CircuitBreaker } from './circuit-breaker';
 
@@ -52,7 +53,7 @@ export async function ssRequest<T>(path: string, opts: RequestOpts = {}): Promis
         const signal = opts.signal
           ? AbortSignal.any([opts.signal, timeoutSignal])
           : timeoutSignal;
-        const res = await fetch(`${BASE_URL}${path}`, {
+        const res = await timedFetch('shipstation.v2.request', `${BASE_URL}${path}`, {
           method: opts.method ?? 'GET',
           headers: {
             'API-Key': key,
@@ -60,7 +61,7 @@ export async function ssRequest<T>(path: string, opts: RequestOpts = {}): Promis
           },
           body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
           signal,
-        });
+        }, { path, attempt });
 
         if (res.status === 429) {
           if (attempt >= maxRetries) {

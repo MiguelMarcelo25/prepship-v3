@@ -13,15 +13,13 @@
 
 import { api, qs } from './api';
 import { API_BASE } from './api-base';
-import { supabase } from './supabase';
+import { getCachedAuthToken } from './auth-session-cache';
 import { callVercelFunction } from './vercelFunction';
 
 async function authHeaders(): Promise<Record<string, string>> {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
+  const accessToken = await getCachedAuthToken();
   const h: Record<string, string> = {};
-  if (session?.access_token) h['Authorization'] = `Bearer ${session.access_token}`;
+  if (accessToken) h['Authorization'] = `Bearer ${accessToken}`;
   return h;
 }
 
@@ -2443,14 +2441,12 @@ export const apiClient = {
     // Step 4: API-origin URL — proxy through fetch with Bearer auth so
     // the response actually arrives, then open as a blob: URL.
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
+      const accessToken = await getCachedAuthToken();
       const headers: Record<string, string> = {
         Accept: 'application/pdf,application/octet-stream,*/*',
       };
-      if (session?.access_token) {
-        headers.Authorization = `Bearer ${session.access_token}`;
+      if (accessToken) {
+        headers.Authorization = `Bearer ${accessToken}`;
       }
 
       const res = await fetch(target, { headers });
@@ -2586,17 +2582,15 @@ export const apiClient = {
     const toIsoEnd = (d: string) =>
       d.includes('T') ? d : new Date(`${d}T23:59:59.999Z`).toISOString();
     try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (!session?.access_token) throw new Error('Not authenticated');
+      const accessToken = await getCachedAuthToken();
+      if (!accessToken) throw new Error('Not authenticated');
       const qs = new URLSearchParams({
         clientId: String(clientId),
         dateFrom: toIsoStart(from),
         dateTo: toIsoEnd(to),
       }).toString();
       const res = await fetch(`${API_BASE}/billing/invoice?${qs}`, {
-        headers: { Authorization: `Bearer ${session.access_token}` },
+        headers: { Authorization: `Bearer ${accessToken}` },
       });
       if (!res.ok) {
         const msg = await res.text().catch(() => res.statusText);

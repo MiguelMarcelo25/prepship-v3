@@ -1,5 +1,5 @@
-import { supabase } from './supabase';
 import { API_BASE } from './api-base';
+import { getCachedAuthToken } from './auth-session-cache';
 
 const SESSION_TIMEOUT_MS = 5_000;
 const READ_TIMEOUT_MS = 30_000;
@@ -68,9 +68,19 @@ function isAbortError(err: unknown): boolean {
 }
 
 function getClientApiTimingThresholdMs(): number {
-  if (typeof localStorage === 'undefined') return Number.POSITIVE_INFINITY;
-  if (localStorage.getItem('prepship:apiTiming') !== '1') return Number.POSITIVE_INFINITY;
-  const configured = Number.parseInt(localStorage.getItem('prepship:apiTimingMs') ?? '3000', 10);
+  const envEnabled = String(import.meta.env.VITE_API_TIMING ?? '').toLowerCase() === 'true'
+    || import.meta.env.VITE_API_TIMING === '1';
+  const localEnabled =
+    typeof localStorage !== 'undefined' && localStorage.getItem('prepship:apiTiming') === '1';
+  if (!envEnabled && !localEnabled) return Number.POSITIVE_INFINITY;
+  const configured =
+    typeof localStorage === 'undefined'
+      ? Number.parseInt(String(import.meta.env.VITE_API_TIMING_MS ?? '3000'), 10)
+      : Number.parseInt(
+          localStorage.getItem('prepship:apiTimingMs')
+            ?? String(import.meta.env.VITE_API_TIMING_MS ?? '3000'),
+          10
+        );
   return Number.isFinite(configured) && configured >= 0 ? configured : 3000;
 }
 
@@ -79,6 +89,9 @@ function logClientApiTiming(event: {
   path: string;
   status?: number;
   durationMs: number;
+  authDurationMs: number;
+  fetchDurationMs?: number;
+  totalDurationMs: number;
   requestId: string;
   error?: string;
 }): void {
@@ -107,16 +120,17 @@ async function withTimeout<T>(
 }
 
 async function request<T>(path: string, init: Init = {}): Promise<T> {
+  const totalStartedAt = performance.now();
   const { body, headers, signal, timeoutMs: explicitTimeoutMs, ...rest } = init;
   const method = (rest.method ?? 'GET').toUpperCase();
   const timeoutMs = explicitTimeoutMs ?? (isReadMethod(method) ? READ_TIMEOUT_MS : WRITE_TIMEOUT_MS);
-  const {
-    data: { session },
-  } = await withTimeout(
-    supabase.auth.getSession(),
+  const authStartedAt = performance.now();
+  const accessToken = await withTimeout(
+    getCachedAuthToken(),
     SESSION_TIMEOUT_MS,
     'Authentication session'
   );
+  const authDurationMs = Math.round(performance.now() - authStartedAt);
 
   const finalHeaders: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -129,15 +143,15 @@ async function request<T>(path: string, init: Init = {}): Promise<T> {
       ? crypto.randomUUID()
       : `web-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`);
   finalHeaders['X-Request-Id'] = requestId;
-  if (session?.access_token) {
-    finalHeaders['Authorization'] = `Bearer ${session.access_token}`;
+  if (accessToken) {
+    finalHeaders['Authorization'] = `Bearer ${accessToken}`;
   }
 
   const controller = new AbortController();
   let timedOut = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const abortFromCaller = () => controller.abort();
-  const startedAt = performance.now();
+  let fetchStartedAt = performance.now();
 
   if (signal?.aborted) {
     controller.abort();
@@ -159,19 +173,41 @@ async function request<T>(path: string, init: Init = {}): Promise<T> {
       signal: controller.signal,
     });
   } catch (err) {
-    const durationMs = Math.round(performance.now() - startedAt);
+    const fetchDurationMs = Math.round(performance.now() - fetchStartedAt);
+    const totalDurationMs = Math.round(performance.now() - totalStartedAt);
     if (timedOut) {
-      logClientApiTiming({ method, path, durationMs, requestId, error: 'timeout' });
+      logClientApiTiming({
+        method,
+        path,
+        durationMs: totalDurationMs,
+        authDurationMs,
+        fetchDurationMs,
+        totalDurationMs,
+        requestId,
+        error: 'timeout',
+      });
       throw timeoutError(`API ${method} ${path}`, timeoutMs, requestId);
     }
     if (isAbortError(err)) {
-      logClientApiTiming({ method, path, durationMs, requestId, error: 'cancelled' });
+      logClientApiTiming({
+        method,
+        path,
+        durationMs: totalDurationMs,
+        authDurationMs,
+        fetchDurationMs,
+        totalDurationMs,
+        requestId,
+        error: 'cancelled',
+      });
       throw new Error(withRequestId(`API ${method} ${path} was cancelled.`, requestId));
     }
     logClientApiTiming({
       method,
       path,
-      durationMs,
+      durationMs: totalDurationMs,
+      authDurationMs,
+      fetchDurationMs,
+      totalDurationMs,
       requestId,
       error: err instanceof Error ? err.message : String(err),
     });
@@ -181,13 +217,17 @@ async function request<T>(path: string, init: Init = {}): Promise<T> {
     signal?.removeEventListener('abort', abortFromCaller);
   }
 
-  const durationMs = Math.round(performance.now() - startedAt);
+  const fetchDurationMs = Math.round(performance.now() - fetchStartedAt);
+  const totalDurationMs = Math.round(performance.now() - totalStartedAt);
   const responseRequestId = res.headers.get('x-request-id') ?? requestId;
   logClientApiTiming({
     method,
     path,
     status: res.status,
-    durationMs,
+    durationMs: totalDurationMs,
+    authDurationMs,
+    fetchDurationMs,
+    totalDurationMs,
     requestId: responseRequestId,
     error: res.ok ? undefined : `${res.status} ${res.statusText}`,
   });

@@ -30,9 +30,9 @@ export interface StoreConnector {
   confirmShipment(input: ShipmentConfirmationInput): Promise<ConfirmationResult>;
 }
 
-export interface CarrierConnector<LabelInput = unknown, LabelResult = unknown> {
+export interface CarrierConnector<RateInput = unknown, RateResult = unknown, LabelInput = unknown, LabelResult = unknown> {
   provider: FulfillmentProvider;
-  getRates?(input: unknown): Promise<unknown[]>;
+  getRates(input: RateInput): Promise<RateResult[]>;
   createLabel(input: LabelInput): Promise<LabelResult>;
   voidLabel?(input: unknown): Promise<unknown>;
   trackShipment?(trackingNumber: string): Promise<unknown>;

@@ -29,6 +29,8 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { PDFDocument } from 'pdf-lib';
 import postgres from 'postgres';
+import { timedFetch } from '../../src/lib/http/timing.js';
+import { persistDirectCarrierLabel } from '../../src/services/direct-label-persistence.js';
 
 let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 function getJwks() {
@@ -217,7 +219,7 @@ async function getUpsAccessToken(creds: Record<string, unknown>): Promise<string
   const clientSecret = String(creds?.clientSecret ?? '').trim();
   if (!clientId || !clientSecret) throw new Error('UPS clientId + clientSecret required');
   const basic = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
-  const res = await fetch('https://onlinetools.ups.com/security/v1/oauth/token', {
+  const res = await timedFetch('api.carriers.labels.external', 'https://onlinetools.ups.com/security/v1/oauth/token', {
     method: 'POST',
     headers: {
       Authorization: `Basic ${basic}`,
@@ -406,7 +408,7 @@ async function buyLabelUps(
     },
   };
 
-  const res = await fetch('https://onlinetools.ups.com/api/shipments/v2403/ship', {
+  const res = await timedFetch('api.carriers.labels.external', 'https://onlinetools.ups.com/api/shipments/v2403/ship', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -507,7 +509,7 @@ async function buyLabelEasyPost(
       },
     },
   };
-  const createRes = await fetch('https://api.easypost.com/v2/shipments', {
+  const createRes = await timedFetch('api.carriers.labels.external', 'https://api.easypost.com/v2/shipments', {
     method: 'POST', headers, body: JSON.stringify(shipBody),
   });
   if (!createRes.ok) {
@@ -534,7 +536,7 @@ async function buyLabelEasyPost(
   }
 
   // Step 3: buy the chosen rate
-  const buyRes = await fetch(`https://api.easypost.com/v2/shipments/${shipment.id}/buy`, {
+  const buyRes = await timedFetch('api.carriers.labels.external', `https://api.easypost.com/v2/shipments/${shipment.id}/buy`, {
     method: 'POST', headers, body: JSON.stringify({ rate: { id: rate.id } }),
   });
   if (!buyRes.ok) {
@@ -705,7 +707,7 @@ async function getWalmartAccessTokenForLabels(creds: Record<string, unknown>): P
     'WM_SVC.NAME': 'Walmart Marketplace',
   };
   if (channelType) headers['WM_CONSUMER.CHANNEL.TYPE'] = channelType;
-  const res = await fetch('https://marketplace.walmartapis.com/v3/token', {
+  const res = await timedFetch('api.carriers.labels.external', 'https://marketplace.walmartapis.com/v3/token', {
     method: 'POST',
     headers,
     body: 'grant_type=client_credentials',
@@ -772,7 +774,7 @@ async function lookupWalmartOrderByCustomerOrderIdForLabels(
   url.searchParams.set('productInfo', 'true');
 
   try {
-    const res = await fetch(url.toString(), {
+    const res = await timedFetch('api.carriers.labels.external', url.toString(), {
       headers: walmartMarketplaceHeaders(creds, token),
     });
     if (!res.ok) {
@@ -1010,7 +1012,7 @@ async function fetchWalmartEstimatesForLabel(
     addOns: false,
     hasBattery: false,
   };
-  const res = await fetch('https://marketplace.walmartapis.com/v3/shipping/labels/shipping-estimates', {
+  const res = await timedFetch('api.carriers.labels.external', 'https://marketplace.walmartapis.com/v3/shipping/labels/shipping-estimates', {
     method: 'POST',
     headers: walmartMarketplaceHeaders(creds, token, 'application/json', true),
     body: JSON.stringify(estimateBody),
@@ -1104,7 +1106,7 @@ async function confirmWalmartOrderShipped(
     throw new Error('Walmart shipment confirmation has no shippable order lines');
   }
 
-  const res = await fetch(
+  const res = await timedFetch('api.carriers.labels.external', 
     `https://marketplace.walmartapis.com/v3/orders/${encodeURIComponent(input.purchaseOrderId)}/shipping`,
     {
       method: 'POST',
@@ -1131,7 +1133,7 @@ async function downloadWalmartLabelPdf(
   trackingNumber: string,
 ): Promise<string> {
   const url = `https://marketplace.walmartapis.com/v3/shipping/labels/carriers/${encodeURIComponent(carrierName)}/trackings/${encodeURIComponent(trackingNumber)}`;
-  const res = await fetch(url, {
+  const res = await timedFetch('api.carriers.labels.external', url, {
     headers: walmartMarketplaceHeaders(creds, token, 'application/pdf'),
   });
   if (!res.ok) {
@@ -1199,7 +1201,7 @@ async function downloadWalmartLabelPdfFromUrl(
   url: string,
 ): Promise<string> {
   if (!/^https?:\/\//i.test(url)) return '';
-  const res = await fetch(url, {
+  const res = await timedFetch('api.carriers.labels.external', url, {
     headers: walmartMarketplaceHeaders(creds, token, 'application/pdf,application/json,image/png,*/*'),
   });
   if (!res.ok) {
@@ -1227,7 +1229,7 @@ async function downloadWalmartLabelPdfById(
   token: string,
   labelId: string,
 ): Promise<string> {
-  const res = await fetch(
+  const res = await timedFetch('api.carriers.labels.external', 
     `https://marketplace.walmartapis.com/v3/shipping/labels/${encodeURIComponent(labelId)}`,
     {
       headers: walmartMarketplaceHeaders(creds, token, 'application/pdf,application/json'),
@@ -1486,7 +1488,7 @@ async function buyLabelWalmartShipping(
   const accountType = firstString(input.body?.accountType, creds?.accountType);
   if (accountType) labelBody.accountType = accountType;
 
-  const res = await fetch('https://marketplace.walmartapis.com/v3/shipping/labels', {
+  const res = await timedFetch('api.carriers.labels.external', 'https://marketplace.walmartapis.com/v3/shipping/labels', {
     method: 'POST',
     headers: walmartMarketplaceHeaders(creds, token, 'application/json', true),
     body: JSON.stringify(labelBody),
@@ -1603,65 +1605,31 @@ async function persistWalmartShipment(
     cost: args.result.cost,
     shipmentCost: args.result.cost,
     otherCost: 0,
-    deliveryDays: Number(args.result.selectedRate?.transitTime?.businessDays ?? args.result.selectedRate?.transitDays ?? args.result.selectedRate?.deliveryDays ?? 0) || null,
+      deliveryDays: Number(args.result.selectedRate?.transitTime?.businessDays ?? args.result.selectedRate?.transitDays ?? args.result.selectedRate?.deliveryDays ?? 0) || null,
   };
 
-  return sql.begin(async (tx: any) => {
-    const [order] = await tx`
-      SELECT id, client_id, order_number, order_status
-      FROM orders
-      WHERE id = ${Math.trunc(orderId)}
-      FOR UPDATE
-    `;
-    if (!order) throw new Error('Order not found');
-    if (order.order_status === 'shipped' || order.order_status === 'cancelled') {
-      throw new Error(`Cannot create Walmart Shipping label for ${order.order_status} order`);
-    }
-
-    const [shipment] = await tx`
-      INSERT INTO shipments (
-        order_id, client_id, order_number,
-        carrier_code, service_code, tracking_number,
-        ship_date, create_date, weight_oz, dims_l, dims_w, dims_h,
-        cost, other_cost, label_url, label_created_at, label_format,
-        label_carrier, label_service, label_tracking, label_cost,
-        label_ship_date, label_provider, label_shipment_id,
-        selected_rate_json, selected_pid, selected_package_id,
-        provider_account_id, provider_account_nickname,
-        voided, source, is_return, created_at, updated_at
-      )
-      VALUES (
-        ${order.id}, ${order.client_id}, ${order.order_number},
-        ${args.result.carrierCode}, ${args.result.serviceCode}, ${args.result.trackingNumber},
-        NOW(), NOW(), ${Number(args.body.weightOz ?? 0)}, ${Number(args.body.dimsL ?? args.body.length ?? 0) || null},
-        ${Number(args.body.dimsW ?? args.body.width ?? 0) || null}, ${Number(args.body.dimsH ?? args.body.height ?? 0) || null},
-        ${args.result.cost.toFixed(2)}, ${'0.00'}, ${args.result.labelUrl || null}, NOW(), ${args.result.labelUrl?.startsWith('data:application/pdf') ? 'pdf' : null},
-        ${args.result.carrierCode}, ${args.result.serviceCode}, ${args.result.trackingNumber}, ${args.result.cost.toFixed(2)},
-        NOW(), ${args.syntheticProviderId}, ${null},
-        ${sql.json(selectedRateJson)}, ${args.syntheticProviderId}, ${args.body.customPackageId != null ? String(args.body.customPackageId) : null},
-        ${args.syntheticProviderId}, ${args.carrierLabel ?? 'Walmart Shipping'},
-        ${false}, ${'walmart_shipping'}, ${false}, NOW(), NOW()
-      )
-      RETURNING id
-    `;
-
-    await tx`
-      UPDATE orders
-      SET order_status = 'shipped', updated_at = NOW()
-      WHERE id = ${order.id}
-    `;
-
-    await tx`
-      DELETE FROM print_queue_orders
-      WHERE order_id = ${String(order.id)}
-    `;
-
-    return {
-      localShipmentId: shipment.id,
-      orderNumber: order.order_number,
-      clientId: order.client_id,
-      orderStatus: 'shipped',
-    };
+  return persistDirectCarrierLabel(sql, {
+    orderId,
+    carrierProvider: 'Walmart Shipping',
+    carrierAccountId: args.syntheticProviderId,
+    carrierLabel: args.carrierLabel ?? 'Walmart Shipping',
+    carrierCode: args.result.carrierCode,
+    serviceCode: args.result.serviceCode,
+    trackingNumber: args.result.trackingNumber,
+    labelUrl: args.result.labelUrl || null,
+    labelFormat: args.result.labelUrl?.startsWith('data:application/pdf') ? 'pdf' : null,
+    cost: args.result.cost,
+    currency: args.result.currency,
+    weightOz: Number(args.body.weightOz ?? 0),
+    dimsL: Number(args.body.dimsL ?? args.body.length ?? 0) || null,
+    dimsW: Number(args.body.dimsW ?? args.body.width ?? 0) || null,
+    dimsH: Number(args.body.dimsH ?? args.body.height ?? 0) || null,
+    selectedRateJson,
+    labelProvider: args.syntheticProviderId,
+    labelShipmentId: null,
+    selectedPid: args.syntheticProviderId,
+    selectedPackageId: args.body.customPackageId != null ? String(args.body.customPackageId) : null,
+    source: 'walmart_shipping',
   });
 }
 
@@ -1733,7 +1701,7 @@ async function shippLookupUsZip(zip: unknown): Promise<{ city?: string; state?: 
   if (cached) return cached;
 
   try {
-    const res = await fetch(`https://api.zippopotam.us/us/${five}`, {
+    const res = await timedFetch('api.carriers.labels.external', `https://api.zippopotam.us/us/${five}`, {
       headers: { Accept: 'application/json' },
     });
     if (!res.ok) {
@@ -1932,7 +1900,7 @@ async function shippLogin(creds: Record<string, unknown>): Promise<{ apiKey: str
     throw new Error('Shipp requires apiKey, email, and password on the carrier account credentials.');
   }
 
-  const res = await fetch('https://shipp.to/api/supabase/login', {
+  const res = await timedFetch('api.carriers.labels.external', 'https://shipp.to/api/supabase/login', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -2033,7 +2001,7 @@ async function quoteShippRates(
     ],
   };
 
-  const res = await fetch('https://shipp.to/api/shipping/quote', {
+  const res = await timedFetch('api.carriers.labels.external', 'https://shipp.to/api/shipping/quote', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -2195,7 +2163,7 @@ async function buyLabelShipp(
     throw new Error('Shipp selected rate is missing serviceType. Please browse rates again.');
   }
 
-  const labelRes = await fetch('https://shipp.to/api/shipping/label/create', {
+  const labelRes = await timedFetch('api.carriers.labels.external', 'https://shipp.to/api/shipping/label/create', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -2278,64 +2246,28 @@ async function persistShippShipment(
     deliveryDays: shippDateDays(args.result.selectedRate?.deliveryDate, args.result.selectedRate?.deliveryDay),
   };
 
-  // Per user override `unlock shipped data` on 2026-05-14: direct Shipp
-  // labels never enter ShipStation, so this function persists the canonical
-  // PrepShip shipment and advances only currently-awaiting orders to shipped.
-  return sql.begin(async (tx: any) => {
-    const [order] = await tx`
-      SELECT id, client_id, order_number, order_status
-      FROM orders
-      WHERE id = ${orderId}
-      FOR UPDATE
-    `;
-    if (!order) throw new Error('Order not found');
-    if (order.order_status === 'shipped' || order.order_status === 'cancelled') {
-      throw new Error(`Cannot create Shipp label for ${order.order_status} order`);
-    }
-
-    const [shipment] = await tx`
-      INSERT INTO shipments (
-        order_id, client_id, order_number,
-        carrier_code, service_code, tracking_number,
-        ship_date, create_date, weight_oz, dims_l, dims_w, dims_h,
-        cost, other_cost, label_url, label_created_at, label_format,
-        label_carrier, label_service, label_tracking, label_cost,
-        label_ship_date, label_provider, label_shipment_id,
-        selected_rate_json, selected_pid, selected_package_id,
-        provider_account_id, provider_account_nickname,
-        voided, source, is_return, created_at, updated_at
-      )
-      VALUES (
-        ${order.id}, ${order.client_id}, ${order.order_number},
-        ${args.result.carrierCode}, ${args.result.serviceCode}, ${args.result.trackingNumber},
-        NOW(), NOW(), ${Number(args.body.weightOz ?? 0)}, ${Number(args.body.dimsL ?? args.body.length ?? 0) || null},
-        ${Number(args.body.dimsW ?? args.body.width ?? 0) || null}, ${Number(args.body.dimsH ?? args.body.height ?? 0) || null},
-        ${args.result.cost.toFixed(2)}, ${'0.00'}, ${args.result.labelUrl}, NOW(), ${args.result.labelUrl?.startsWith('data:application/pdf') ? 'pdf' : 'image'},
-        ${args.result.carrierCode}, ${args.result.serviceCode}, ${args.result.trackingNumber}, ${args.result.cost.toFixed(2)},
-        NOW(), ${args.syntheticProviderId}, ${null},
-        ${sql.json(selectedRateJson)}, ${args.syntheticProviderId}, ${args.body.customPackageId != null ? String(args.body.customPackageId) : null},
-        ${args.syntheticProviderId}, ${args.carrierLabel ?? 'Shipp'},
-        ${false}, ${'shipp'}, ${false}, NOW(), NOW()
-      )
-      RETURNING id
-    `;
-
-    await tx`
-      UPDATE orders
-      SET order_status = 'shipped', updated_at = NOW()
-      WHERE id = ${order.id}
-    `;
-
-    await tx`
-      DELETE FROM print_queue_orders
-      WHERE order_id = ${String(order.id)}
-    `;
-
-    return {
-      localShipmentId: shipment.id,
-      orderNumber: order.order_number,
-      clientId: order.client_id,
-    };
+  return persistDirectCarrierLabel(sql, {
+    orderId,
+    carrierProvider: 'Shipp',
+    carrierAccountId: args.syntheticProviderId,
+    carrierLabel: args.carrierLabel ?? 'Shipp',
+    carrierCode: args.result.carrierCode,
+    serviceCode: args.result.serviceCode,
+    trackingNumber: args.result.trackingNumber,
+    labelUrl: args.result.labelUrl,
+    labelFormat: args.result.labelUrl?.startsWith('data:application/pdf') ? 'pdf' : 'image',
+    cost: args.result.cost,
+    currency: args.result.currency,
+    weightOz: Number(args.body.weightOz ?? 0),
+    dimsL: Number(args.body.dimsL ?? args.body.length ?? 0) || null,
+    dimsW: Number(args.body.dimsW ?? args.body.width ?? 0) || null,
+    dimsH: Number(args.body.dimsH ?? args.body.height ?? 0) || null,
+    selectedRateJson,
+    labelProvider: args.syntheticProviderId,
+    labelShipmentId: null,
+    selectedPid: args.syntheticProviderId,
+    selectedPackageId: args.body.customPackageId != null ? String(args.body.customPackageId) : null,
+    source: 'shipp',
   });
 }
 
@@ -2713,17 +2645,48 @@ export default async function handler(req: any, res: any): Promise<void> {
     const shipFrom = resolveShipFrom(creds);
 
     let result: any = null;
+    let directServiceCode: string | null = null;
     if (providerKey === 'ups') {
+      if (!Number.isFinite(orderId) || orderId <= 0) {
+        res.status(400).json({ ok: false, error: 'orderId is required for UPS label creation' });
+        return;
+      }
+      if (orderLookupError) {
+        throw new Error(`Could not load order before buying UPS label: ${orderLookupError}`);
+      }
+      if (!orderRow) {
+        res.status(404).json({ ok: false, error: `Order ${Math.trunc(orderId)} not found` });
+        return;
+      }
+      if (orderRow.order_status === 'shipped' || orderRow.order_status === 'cancelled') {
+        res.status(409).json({ ok: false, error: `Cannot create UPS label for ${orderRow.order_status} order` });
+        return;
+      }
       // UPS service code default: "03" = Ground. Caller can pass
       // serviceCode like "01" (Next Day Air), "02" (2nd Day Air), etc.
-      const serviceCode = String(body?.serviceCode ?? '03');
+      directServiceCode = String(body?.serviceCode ?? '03');
       result = await buyLabelUps(creds, {
-        weightOz, dimsL, dimsW, dimsH, serviceCode, shipFrom, shipTo,
+        weightOz, dimsL, dimsW, dimsH, serviceCode: directServiceCode, shipFrom, shipTo,
       });
     } else if (providerKey === 'easypost') {
-      const serviceCode = String(body?.serviceCode ?? 'USPS Priority');
+      if (!Number.isFinite(orderId) || orderId <= 0) {
+        res.status(400).json({ ok: false, error: 'orderId is required for EasyPost label creation' });
+        return;
+      }
+      if (orderLookupError) {
+        throw new Error(`Could not load order before buying EasyPost label: ${orderLookupError}`);
+      }
+      if (!orderRow) {
+        res.status(404).json({ ok: false, error: `Order ${Math.trunc(orderId)} not found` });
+        return;
+      }
+      if (orderRow.order_status === 'shipped' || orderRow.order_status === 'cancelled') {
+        res.status(409).json({ ok: false, error: `Cannot create EasyPost label for ${orderRow.order_status} order` });
+        return;
+      }
+      directServiceCode = String(body?.serviceCode ?? 'USPS Priority');
       result = await buyLabelEasyPost(creds, {
-        weightOz, dimsL, dimsW, dimsH, serviceCode, shipFrom, shipTo,
+        weightOz, dimsL, dimsW, dimsH, serviceCode: directServiceCode, shipFrom, shipTo,
       });
     } else {
       res.status(400).json({
@@ -2732,43 +2695,67 @@ export default async function handler(req: any, res: any): Promise<void> {
       return;
     }
 
-    // Persist the shipment row so PrepShip has a record outside the
-    // carrier's own dashboard. Lightweight schema — just enough to look
-    // up by tracking number and reprint the label later.
-    try {
-      await sql`
-        CREATE TABLE IF NOT EXISTS shipments (
-          id SERIAL PRIMARY KEY,
-          provider TEXT NOT NULL,
-          carrier_account_id INTEGER,
-          external_order_id TEXT,
-          tracking_number TEXT NOT NULL,
-          label_url TEXT,
-          cost NUMERIC(10,2),
-          currency TEXT DEFAULT 'USD',
-          weight_oz NUMERIC(10,2),
-          dims_l NUMERIC(8,2), dims_w NUMERIC(8,2), dims_h NUMERIC(8,2),
-          raw JSONB,
-          created_at TIMESTAMPTZ DEFAULT NOW()
-        )
-      `;
-      await sql`
-        INSERT INTO shipments (
-          provider, carrier_account_id, external_order_id, tracking_number,
-          label_url, cost, currency, weight_oz, dims_l, dims_w, dims_h, raw
-        )
-        VALUES (
-          ${provider}, ${carrierAccountId}, ${externalOrderId},
-          ${result.trackingNumber}, ${result.labelUrl}, ${result.cost},
-          ${result.currency}, ${weightOz}, ${dimsL}, ${dimsW}, ${dimsH},
-          ${result.raw as Record<string, unknown>}
-        )
-      `;
-    } catch (persistErr) {
-      console.warn('[carriers/labels] shipments insert failed:',
-        persistErr instanceof Error ? persistErr.message : persistErr);
-      // Non-fatal — the label itself was purchased successfully.
-    }
+    const selectedRateJson = {
+      carrierCode: providerKey,
+      serviceCode: directServiceCode,
+      serviceName: directServiceCode,
+      carrierNickname: label ?? providerKey,
+      providerAccountNickname: label ?? providerKey,
+      providerAccountId: carrierAccountId,
+      shippingProviderId: carrierAccountId,
+      provider: providerKey,
+      source: 'carrier_accounts',
+      amount: result.cost,
+      cost: result.cost,
+      shipmentCost: result.cost,
+      otherCost: 0,
+      raw: result.raw,
+    };
+    const persisted = await persistDirectCarrierLabel(sql, {
+      orderId,
+      carrierProvider: providerKey === 'ups' ? 'UPS' : 'EasyPost',
+      carrierAccountId,
+      carrierLabel: label ?? providerKey,
+      carrierCode: providerKey,
+      serviceCode: directServiceCode,
+      trackingNumber: result.trackingNumber,
+      labelUrl: result.labelUrl,
+      labelFormat: providerKey === 'ups' ? 'gif' : 'pdf',
+      cost: result.cost,
+      currency: result.currency,
+      weightOz,
+      dimsL,
+      dimsW,
+      dimsH,
+      selectedRateJson,
+      labelProvider: carrierAccountId,
+      labelShipmentId: null,
+      selectedPid: carrierAccountId,
+      selectedPackageId: body?.customPackageId != null ? String(body.customPackageId) : null,
+      source: providerKey,
+    });
+    const confirmation = await enqueueShipmentConfirmationSql(sql, {
+      orderId,
+      shipmentId: persisted.localShipmentId,
+      externalOrderId,
+      clientId: persisted.clientId,
+      orderNumber: persisted.orderNumber,
+      trackingNumber: result.trackingNumber,
+      carrierCode: providerKey,
+      carrierProvider: providerKey,
+      carrierAccountId,
+      shipDate: new Date().toISOString().slice(0, 10),
+      payload: {
+        purchaseOrderId: sourceOrderIdFromExternalId(externalOrderId),
+        rawOrder,
+        carrierName: providerKey === 'ups' ? 'UPS' : 'EasyPost',
+        trackingUrl: null,
+        serviceCode: directServiceCode,
+      },
+    }).catch((err) => {
+      console.warn('[carriers/labels] confirmation outbox enqueue failed:', err instanceof Error ? err.message : err);
+      return { queued: false, provider: inferStoreProviderFromExternalId(externalOrderId), error: err instanceof Error ? err.message : String(err) };
+    });
 
     res.status(200).json({
       ok: true,
@@ -2779,8 +2766,18 @@ export default async function handler(req: any, res: any): Promise<void> {
       labelFormat: provider === 'ups' ? 'GIF' : 'PDF',
       cost: result.cost,
       currency: result.currency,
-      shipmentId: result.shipmentId ?? null,
-      meta: { externalOrderId, hasRawOrder: rawOrder != null },
+      shipmentId: persisted.localShipmentId,
+      localShipmentId: persisted.localShipmentId,
+      orderStatus: persisted.orderStatus,
+      meta: {
+        externalOrderId,
+        hasRawOrder: rawOrder != null,
+        carrierAccountId,
+        carrierShipmentId: result.shipmentId ?? null,
+        confirmationQueued: confirmation.queued,
+        confirmationProvider: confirmation.provider,
+        confirmationError: confirmation.error ?? null,
+      },
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

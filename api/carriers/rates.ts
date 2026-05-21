@@ -23,6 +23,7 @@ import {
   verifySupabaseJwt,
 } from '../../src/lib/auth/verify-supabase-jwt.js';
 import { corsHeaders } from '../../src/lib/http/cors.js';
+import { timedFetch } from '../../src/lib/http/timing.js';
 import { sendInternalServerError } from '../_lib/safe-error.js';
 
 function readBody(req: any): Promise<unknown> {
@@ -72,7 +73,7 @@ async function getUpsAccessToken(creds: Record<string, unknown>): Promise<string
     throw new Error('UPS clientId and clientSecret are required');
   }
   const basic = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
-  const res = await fetch('https://onlinetools.ups.com/security/v1/oauth/token', {
+  const res = await timedFetch('api.carriers.rates.external', 'https://onlinetools.ups.com/security/v1/oauth/token', {
     method: 'POST',
     headers: {
       Authorization: `Basic ${basic}`,
@@ -152,7 +153,7 @@ async function ratesFromUps(
     },
   };
 
-  const res = await fetch('https://onlinetools.ups.com/api/rating/v2403/Shop', {
+  const res = await timedFetch('api.carriers.rates.external', 'https://onlinetools.ups.com/api/rating/v2403/Shop', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -227,7 +228,7 @@ async function getFedexAccessToken(creds: Record<string, unknown>): Promise<stri
     client_id: apiKey,
     client_secret: apiSecret,
   });
-  const res = await fetch(tokenUrl, {
+  const res = await timedFetch('api.carriers.rates.external', tokenUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
@@ -293,7 +294,7 @@ async function ratesFromFedex(
     },
   };
 
-  const res = await fetch(ratesUrl, {
+  const res = await timedFetch('api.carriers.rates.external', ratesUrl, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -364,7 +365,7 @@ async function getUspsAccessToken(creds: Record<string, unknown>): Promise<strin
     client_id: consumerKey,
     client_secret: consumerSecret,
   });
-  const res = await fetch('https://apis.usps.com/oauth2/v3/token', {
+  const res = await timedFetch('api.carriers.rates.external', 'https://apis.usps.com/oauth2/v3/token', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
@@ -419,7 +420,7 @@ async function ratesFromUsps(
           destinationEntryFacilityType: 'NONE',
           priceType: 'COMMERCIAL',
         };
-        const res = await fetch('https://apis.usps.com/prices/v3/base-rates/search', {
+        const res = await timedFetch('api.carriers.rates.external', 'https://apis.usps.com/prices/v3/base-rates/search', {
           method: 'POST',
           headers: {
             Authorization: `Bearer ${token}`,
@@ -478,7 +479,7 @@ async function getWalmartAccessTokenForRates(creds: Record<string, unknown>): Pr
     'WM_SVC.NAME': 'Walmart Marketplace',
   };
   if (channelType) headers['WM_CONSUMER.CHANNEL.TYPE'] = channelType;
-  const res = await fetch('https://marketplace.walmartapis.com/v3/token', {
+  const res = await timedFetch('api.carriers.rates.external', 'https://marketplace.walmartapis.com/v3/token', {
     method: 'POST',
     headers,
     body: 'grant_type=client_credentials',
@@ -545,7 +546,7 @@ async function lookupWalmartOrderByCustomerOrderId(
   url.searchParams.set('productInfo', 'true');
 
   try {
-    const res = await fetch(url.toString(), { headers });
+    const res = await timedFetch('api.carriers.rates.external', url.toString(), { headers });
     if (!res.ok) {
       const t = await res.text().then((s) => s.slice(0, 200)).catch(() => '');
       console.warn(`[carriers/rates] walmart /v3/orders lookup ${res.status}: ${t || res.statusText}`);
@@ -721,7 +722,7 @@ async function ratesFromWalmartShipping(
   };
 
   const url = 'https://marketplace.walmartapis.com/v3/shipping/labels/shipping-estimates';
-  const res = await fetch(url, {
+  const res = await timedFetch('api.carriers.rates.external', url, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
@@ -904,7 +905,7 @@ async function ratesFromEasyPost(
     },
   };
 
-  const res = await fetch('https://api.easypost.com/v2/shipments', {
+  const res = await timedFetch('api.carriers.rates.external', 'https://api.easypost.com/v2/shipments', {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
@@ -1000,7 +1001,7 @@ async function shippLookupUsZip(zip: unknown): Promise<{ city?: string; state?: 
   if (cached) return cached;
 
   try {
-    const res = await fetch(`https://api.zippopotam.us/us/${five}`, {
+    const res = await timedFetch('api.carriers.rates.external', `https://api.zippopotam.us/us/${five}`, {
       headers: { Accept: 'application/json' },
     });
     if (!res.ok) {
@@ -1090,7 +1091,7 @@ async function shippLogin(creds: Record<string, unknown>): Promise<{ apiKey: str
     throw new Error('Shipp requires apiKey, email, and password on the carrier account credentials.');
   }
 
-  const res = await fetch('https://shipp.to/api/supabase/login', {
+  const res = await timedFetch('api.carriers.rates.external', 'https://shipp.to/api/supabase/login', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -1195,7 +1196,7 @@ async function ratesFromShipp(
     ],
   };
 
-  const res = await fetch('https://shipp.to/api/shipping/quote', {
+  const res = await timedFetch('api.carriers.rates.external', 'https://shipp.to/api/shipping/quote', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -1252,7 +1253,7 @@ async function shipEngineCarrierIds(creds: Record<string, unknown>): Promise<str
 
   const apiKey = String(creds?.apiKey ?? '').trim();
   if (!apiKey) throw new Error('ShipEngine apiKey is required.');
-  const res = await fetch('https://api.shipengine.com/v1/carriers', {
+  const res = await timedFetch('api.carriers.rates.external', 'https://api.shipengine.com/v1/carriers', {
     headers: { 'API-Key': apiKey, Accept: 'application/json' },
   });
   if (!res.ok) {
@@ -1411,7 +1412,7 @@ async function ratesFromShipEngine(
     },
   };
 
-  const res = await fetch('https://api.shipengine.com/v1/rates', {
+  const res = await timedFetch('api.carriers.rates.external', 'https://api.shipengine.com/v1/rates', {
     method: 'POST',
     headers: {
       'API-Key': apiKey,
@@ -1476,7 +1477,7 @@ async function getEbayLogisticsAccessToken(creds: Record<string, unknown>): Prom
     refresh_token: refreshToken,
     scope: 'https://api.ebay.com/oauth/api_scope/sell.logistics',
   });
-  const res = await fetch(tokenUrl, {
+  const res = await timedFetch('api.carriers.rates.external', tokenUrl, {
     method: 'POST',
     headers: {
       Authorization: `Basic ${basic}`,
@@ -1615,7 +1616,7 @@ async function ratesFromEbayShipping(
     shipTo,
   };
 
-  const res = await fetch(`${apiBase}/sell/logistics/v1_beta/shipping_quote`, {
+  const res = await timedFetch('api.carriers.rates.external', `${apiBase}/sell/logistics/v1_beta/shipping_quote`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -1692,7 +1693,7 @@ async function ratesFromAmazonBuyShipping(
     client_id: lwaClientId,
     client_secret: lwaClientSecret,
   });
-  const lwaRes = await fetch('https://api.amazon.com/auth/o2/token', {
+  const lwaRes = await timedFetch('api.carriers.rates.external', 'https://api.amazon.com/auth/o2/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' },
     body: lwaBody.toString(),
@@ -1785,7 +1786,7 @@ async function ratesFromAmazonBuyShipping(
   // marketplaceId ATVPDKIKX0DER (US) is the only one we currently support.
   // If the seller adds non-NA marketplaces, route on marketplaceId here.
   const url = 'https://sellingpartnerapi-na.amazon.com/shipping/v2/shipments/rates';
-  const apiRes = await fetch(url, {
+  const apiRes = await timedFetch('api.carriers.rates.external', url, {
     method: 'POST',
     headers: {
       'x-amz-access-token': lwaJson.access_token!,

@@ -1,4 +1,5 @@
 import { env } from '../env';
+import { timedFetch } from '../http/timing';
 import { TokenBucket } from './rate-limiter';
 import { CircuitBreaker } from './circuit-breaker';
 import { ShipStationError } from './client';
@@ -48,7 +49,7 @@ export async function ssV1Request<T>(path: string, opts: Opts = {}): Promise<T> 
         const signal = opts.signal
           ? AbortSignal.any([opts.signal, timeoutSignal])
           : timeoutSignal;
-        const res = await fetch(`${V1_BASE}${path}`, {
+        const res = await timedFetch('shipstation.v1.request', `${V1_BASE}${path}`, {
           method: opts.method ?? 'GET',
           headers: {
             Authorization: basicAuth(key, secret),
@@ -56,7 +57,7 @@ export async function ssV1Request<T>(path: string, opts: Opts = {}): Promise<T> 
           },
           body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
           signal,
-        });
+        }, { path, attempt });
 
         if (res.status === 429) {
           if (attempt >= maxRetries) {

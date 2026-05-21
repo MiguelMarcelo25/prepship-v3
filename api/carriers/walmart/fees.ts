@@ -32,6 +32,7 @@
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import postgres from 'postgres';
 import { sendInternalServerError } from '../../_lib/safe-error.js';
+import { timedFetch } from '../../../src/lib/http/timing.js';
 
 let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 function getJwks() {
@@ -111,7 +112,7 @@ async function getWalmartAccessToken(creds: Record<string, unknown>): Promise<st
     'WM_SVC.NAME': 'Walmart Marketplace',
   };
   if (channelType) headers['WM_CONSUMER.CHANNEL.TYPE'] = channelType;
-  const res = await fetch('https://marketplace.walmartapis.com/v3/token', {
+  const res = await timedFetch('api.carriers.walmart.fees.external', 'https://marketplace.walmartapis.com/v3/token', {
     method: 'POST',
     headers,
     body: 'grant_type=client_credentials',
@@ -259,7 +260,7 @@ async function fetchOneEndpoint(
     url.searchParams.set('toDate', toDate);
     url.searchParams.set('limit', String(PAGE_LIMIT));
     url.searchParams.set('offset', String(offset));
-    const res = await fetch(url, { method: 'GET', headers });
+    const res = await timedFetch('api.carriers.walmart.fees.external', url, { method: 'GET', headers });
     if (!res.ok) {
       const txt = await res.text().then((s) => s.slice(0, 400)).catch(() => '');
       throw new Error(`Walmart ${path} ${res.status}: ${txt || res.statusText}`);
