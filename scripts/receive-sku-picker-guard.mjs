@@ -37,9 +37,9 @@ assert(
 );
 
 assert(
-  inventory.includes("flex: '4 1 960px'") &&
-    inventory.includes('minWidth: 760') &&
-    inventory.includes("width: 'min(1040px, calc(100vw - 2rem))'"),
+  inventory.includes('grid-cols-[44px_minmax(420px,1fr)_minmax(220px,0.8fr)_96px_150px_48px]') &&
+    inventory.includes('min-w-[760px]') &&
+    inventory.includes("width: 'min(860px, calc(100vw - 2rem))'"),
   'Receive Inventory SKU field and popover stay wide for operator scanning',
 );
 
@@ -48,6 +48,14 @@ assert(
     autosuggest.includes('showOnFocus ? options.slice(0, maxResults)') &&
     autosuggest.includes('max-h-72 overflow-y-auto'),
   'Autosuggest still supports caller-controlled full-list display with bounded scrolling',
+);
+
+assert(
+  inventory.includes('id="inv-receive-worksheet"') &&
+    inventory.includes('id="inv-receive-summary"') &&
+    inventory.includes('Batch worksheet') &&
+    inventory.includes('Total units'),
+  'Receive Inventory uses the new Tailwind worksheet layout with a batch summary bar',
 );
 
 if (process.exitCode) {

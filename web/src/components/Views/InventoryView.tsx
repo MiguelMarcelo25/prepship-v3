@@ -12,8 +12,11 @@ import {
   History as HistoryIcon,
   Download,
   Pencil,
+  Plus,
   RefreshCw,
   Ruler,
+  CheckCircle2,
+  ClipboardList,
   Trash2,
   type LucideIcon,
 } from 'lucide-react'
@@ -177,8 +180,8 @@ const INVENTORY_PAGE_SIZE_KEY = 'inventory_page_size'
 const RECEIVE_INPUT_CLASS = 'h-8 w-full rounded-md border border-line bg-surface px-3 text-[12px] text-ink outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/15 disabled:cursor-not-allowed disabled:opacity-60'
 const RECEIVE_LABEL_CLASS = 'text-[10.5px] font-extrabold uppercase tracking-[0.04em] text-ink-3'
 const RECEIVE_FIELD_CLASS = 'flex min-w-0 flex-col gap-1.5'
-const INVENTORY_HEADER_CLASS = 'flex flex-wrap items-start gap-4 px-7 pb-[22px] pt-12 max-md:px-5 max-md:pb-[18px] max-md:pt-5'
-const INVENTORY_HEADER_ACTIONS_CLASS = 'ml-auto flex max-w-[min(760px,56vw)] flex-wrap items-center justify-end gap-2 pt-0.5 max-md:flex-[1_1_100%] max-md:justify-start max-md:max-w-none max-md:pt-0 max-[520px]:w-full max-[520px]:[&_.btn]:w-full'
+const INVENTORY_HEADER_CLASS = 'inventory-section-header flex flex-wrap items-start gap-4 px-7 pb-[22px] pt-12 max-md:px-5 max-md:pb-[18px] max-md:pt-5'
+const INVENTORY_HEADER_ACTIONS_CLASS = 'inventory-section-header-actions ml-auto flex max-w-[min(760px,56vw)] flex-wrap items-center justify-end gap-2 pt-0.5 max-md:flex-[1_1_100%] max-md:justify-start max-md:max-w-none max-md:pt-0 max-[520px]:w-full max-[520px]:[&_.btn]:w-full'
 
 function readStoredInventoryPageSize(): number {
   if (typeof window === 'undefined') return INVENTORY_DEFAULT_PAGE_SIZE
@@ -1146,6 +1149,35 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
         .sort((a, b) => a.value.localeCompare(b.value)),
     [receiveSkuMap],
   )
+  const selectedReceiveClient = useMemo(
+    () => clients.find((client) => String(client.clientId) === receiveClientId) ?? null,
+    [clients, receiveClientId],
+  )
+  const receiveSummary = useMemo(() => {
+    let validSkuCount = 0
+    let totalUnits = 0
+
+    for (const row of receiveRows) {
+      const sku = row.sku.trim()
+      if (!sku) continue
+      const lookup =
+        receiveSkuMap[sku] ??
+        Object.entries(receiveSkuMap).find(([candidate]) => candidate.toLowerCase() === sku.toLowerCase())?.[1] ??
+        null
+      const packQty = Number.parseInt(row.qty, 10) || 0
+      if (lookup && packQty > 0) validSkuCount += 1
+      if (packQty > 0) {
+        const unitsPerPack = Math.max(1, Number.parseInt(String(lookup?.unitsPerPack ?? 1), 10) || 1)
+        totalUnits += packQty * unitsPerPack
+      }
+    }
+
+    return {
+      rowCount: receiveRows.length,
+      validSkuCount,
+      totalUnits,
+    }
+  }, [receiveRows, receiveSkuMap])
   const [historyClientId, setHistoryClientId] = useState('')
   const [historyType, setHistoryType] = useState('')
   const [historyFrom, setHistoryFrom] = useState(historyDefaults.from)
@@ -3691,9 +3723,36 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
       ) : null}
 
       {activeTab === 'receive' ? (
-        <div id="inv-panel-receive" className="px-[18px] pb-6 max-md:px-3 max-md:pb-5">
-          <div className="w-full max-w-[980px] rounded-lg border border-line bg-surface p-[18px] shadow-sm max-md:p-3.5">
-            <div className="mb-3.5 grid grid-cols-[minmax(220px,280px)_minmax(280px,1fr)_minmax(170px,210px)] items-end gap-3 max-md:grid-cols-1">
+        <div id="inv-panel-receive" className="px-7 pb-8 max-md:px-4 max-md:pb-5">
+          <div id="inv-receive-worksheet" className="w-full max-w-[1280px] rounded-lg border border-line bg-surface shadow-sm">
+            <div className="flex flex-wrap items-center gap-3 border-b border-line bg-surface-2 px-4 py-3">
+              <div className="flex min-w-[220px] flex-1 items-center gap-2">
+                <span className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-emerald-50 text-emerald-600 ring-1 ring-emerald-200">
+                  <ClipboardList size={17} strokeWidth={2.1} />
+                </span>
+                <div className="min-w-0">
+                  <div className="text-[13px] font-extrabold text-ink">Batch worksheet</div>
+                  <div className="truncate text-[11px] text-ink-3">
+                    {selectedReceiveClient ? selectedReceiveClient.name : 'Choose a client to load SKU options'}
+                  </div>
+                </div>
+              </div>
+              <div className="ml-auto grid grid-cols-3 gap-2 text-right max-sm:w-full max-sm:text-left">
+                <div className="rounded-md bg-surface px-3 py-1.5 ring-1 ring-line">
+                  <div className="text-[10px] font-bold uppercase tracking-[0.04em] text-ink-3">Rows</div>
+                  <div className="text-[15px] font-extrabold text-ink">{receiveSummary.rowCount}</div>
+                </div>
+                <div className="rounded-md bg-surface px-3 py-1.5 ring-1 ring-line">
+                  <div className="text-[10px] font-bold uppercase tracking-[0.04em] text-ink-3">Valid SKUs</div>
+                  <div className="text-[15px] font-extrabold text-ink">{receiveSummary.validSkuCount}</div>
+                </div>
+                <div className="rounded-md bg-surface px-3 py-1.5 ring-1 ring-line">
+                  <div className="text-[10px] font-bold uppercase tracking-[0.04em] text-ink-3">Total units</div>
+                  <div className="text-[15px] font-extrabold text-ink">{receiveSummary.totalUnits}</div>
+                </div>
+              </div>
+            </div>
+            <div className="grid grid-cols-[minmax(220px,300px)_minmax(260px,1fr)_minmax(170px,210px)] items-end gap-3 border-b border-line px-4 py-3 max-md:grid-cols-1">
               <label className={RECEIVE_FIELD_CLASS}>
                 <span className={RECEIVE_LABEL_CLASS}>Client</span>
                 <select className={`${RECEIVE_INPUT_CLASS} pr-8`} value={receiveClientId} onChange={(event) => setReceiveClientId(event.target.value)}>
@@ -3712,13 +3771,33 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                 <input type="date" value={receiveDate} onChange={(event) => setReceiveDate(event.target.value)} className={RECEIVE_INPUT_CLASS} />
               </label>
             </div>
-            <div id="inv-recv-rows" className="flex flex-col gap-2.5">
-              {receiveRows.map((row) => {
-                const lookup = row.sku.trim() ? receiveSkuMap[row.sku.trim()] ?? null : null
+            <div className="overflow-x-auto">
+              <div className="min-w-0 md:min-w-[900px]">
+                <div className="grid grid-cols-[32px_minmax(0,1fr)_42px] items-center border-b border-line bg-surface-2 px-4 py-2 text-[10px] font-extrabold uppercase tracking-[0.04em] text-ink-3 md:grid-cols-[44px_minmax(420px,1fr)_minmax(220px,0.8fr)_96px_150px_48px]">
+                  <div>#</div>
+                  <div>SKU or product</div>
+                  <div className="hidden md:block">Product name</div>
+                  <div className="hidden text-right md:block">Qty</div>
+                  <div className="hidden text-right md:block">Units</div>
+                  <div />
+                </div>
+            <div id="inv-recv-rows" className="divide-y divide-line">
+              {receiveRows.map((row, index) => {
+                const rawSku = row.sku.trim()
+                const lookup =
+                  rawSku
+                    ? receiveSkuMap[rawSku] ??
+                      Object.entries(receiveSkuMap).find(([candidate]) => candidate.toLowerCase() === rawSku.toLowerCase())?.[1] ??
+                      null
+                    : null
                 const hints = getReceiveRowHints(row, lookup)
+                const packQty = Number.parseInt(row.qty, 10) || 0
+                const unitsPerPack = Math.max(1, Number.parseInt(String(lookup?.unitsPerPack ?? 1), 10) || 1)
+                const rowTotalUnits = packQty > 0 ? packQty * unitsPerPack : 0
                 return (
-                  <div key={row.id} className="flex flex-col gap-1.5 rounded-lg border border-line bg-surface-2 p-3">
-                    <div className="grid grid-cols-[minmax(360px,440px)_76px_auto_28px] items-start gap-2.5 max-md:grid-cols-1">
+                  <div key={row.id} className="grid grid-cols-[32px_minmax(0,1fr)_42px] items-start gap-3 px-4 py-3 transition-colors hover:bg-surface-2/70 md:grid-cols-[44px_minmax(420px,1fr)_minmax(220px,0.8fr)_96px_150px_48px]">
+                    <div className="contents">
+                      <div className="pt-2 text-[11px] font-bold tabular-nums text-ink-3">{index + 1}</div>
                       {/* 2026-05-15: Was a native <input list=
                           "react-recv-sku-datalist">. Chrome rendered
                           that as an unstyleable, unfilterable 300+
@@ -3730,13 +3809,15 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                           component (web/src/components/Autosuggest.tsx)
                           ready for parent-SKU picker, bulk-edit,
                           new-order modal next. */}
-                      <div className="min-w-0 max-w-[440px]">
+                      <div className="min-w-0 max-md:col-span-2">
                         <Autosuggest
                           value={row.sku}
                           options={receiveSkuOptions}
-                          placeholder="SKU or product name"
+                          placeholder="Search SKU or name"
                           ariaLabel="SKU or product name"
-                          inputClassName={`${RECEIVE_INPUT_CLASS} font-mono`}
+                          inputClassName={`${RECEIVE_INPUT_CLASS} h-9 font-mono`}
+                          popoverClassName="right-auto min-w-[760px] max-w-[calc(100vw-2rem)]"
+                          popoverStyle={{ width: 'min(860px, calc(100vw - 2rem))' }}
                           maxResults={receiveSkuOptions.length || 50}
                           emptyMessage={
                             row.sku.trim()
@@ -3763,29 +3844,40 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                             void option
                           }}
                         />
+                      </div>
+                      <div className="min-w-0 pt-0.5 max-md:col-span-2 max-md:col-start-2">
                         {row.name ? (
-                          <div className="mt-1 min-h-[16px] truncate rounded-md bg-surface px-2 py-1 text-[11px] text-ink-2 ring-1 ring-line/70">
+                          <div className="truncate text-[12px] font-semibold text-ink" title={row.name}>
                             {row.name}
                           </div>
                         ) : (
-                          <div className="mt-1 min-h-[16px] px-2 py-1 text-[11px] text-ink-3">
-                            Select a SKU to fill the product name
-                          </div>
+                          <div className="text-[12px] text-ink-3">Select a SKU to fill this field</div>
                         )}
+                        <div className="mt-1 flex min-h-[18px] flex-wrap items-center gap-1.5 text-[10.5px] text-ink-3">
+                          {hints.packHint ? (
+                            <span className="rounded bg-emerald-50 px-1.5 py-0.5 font-bold text-emerald-700 ring-1 ring-emerald-200">{hints.packHint}</span>
+                          ) : (
+                            <span>Each qty adds one unit</span>
+                          )}
+                        </div>
                       </div>
-                      <div className="flex flex-col items-end gap-[3px]">
+                      <div className="max-md:col-start-2 max-md:w-28">
                         <input
                           type="number"
-                          className={`${RECEIVE_INPUT_CLASS} text-center`}
-                          placeholder="Qty"
+                          className={`${RECEIVE_INPUT_CLASS} h-9 text-right tabular-nums`}
+                          placeholder="0"
                           min="1"
                           value={row.qty}
                           onChange={(event) => setReceiveRows((current) => current.map((entry) => entry.id === row.id ? { ...entry, qty: event.target.value } : entry))}
                         />
-                        {hints.totalHint ? <span className="whitespace-nowrap text-[10px] font-bold text-brand">{hints.totalHint}</span> : null}
                       </div>
-                      {hints.packHint ? <span className="self-center whitespace-nowrap text-[10px] text-ink-3">{hints.packHint}</span> : null}
-                      <button className="self-start rounded-md px-2 py-1 text-[11px] font-bold text-ink-3 transition hover:bg-surface hover:text-ink" type="button" onClick={() => setReceiveRows((current) => current.length === 1 ? [createReceiveDraftRow()] : current.filter((entry) => entry.id !== row.id))} title="Remove row">x</button>
+                      <div className="pt-1.5 text-right max-md:col-start-2 max-md:text-left">
+                        <div className="text-[13px] font-extrabold tabular-nums text-ink">{rowTotalUnits || '-'}</div>
+                        <div className="mt-0.5 min-h-[14px] text-[10px] font-bold text-brand">{hints.totalHint ?? ''}</div>
+                      </div>
+                      <button className="mt-1 inline-flex h-8 w-8 items-center justify-center rounded-md text-ink-3 transition hover:bg-danger-bg hover:text-danger focus:outline-none focus:ring-2 focus:ring-danger/20 max-md:col-start-3 max-md:row-start-1" type="button" onClick={() => setReceiveRows((current) => current.length === 1 ? [createReceiveDraftRow()] : current.filter((entry) => entry.id !== row.id))} title="Remove row" aria-label={`Remove receive row ${index + 1}`}>
+                        <Trash2 size={15} strokeWidth={2} />
+                      </button>
                     </div>
                   </div>
                 )
@@ -3796,14 +3888,28 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                   unfiltered; the new combobox filters as you type
                   and is keyboard-navigable. */}
             </div>
-            <div className="mt-3.5 flex justify-between gap-2 max-md:flex-col max-md:items-stretch">
-              <button className="rounded-md border border-line bg-surface px-3 py-1.5 text-[12px] font-bold text-ink transition hover:bg-surface-2" type="button" onClick={() => setReceiveRows((current) => [...current, createReceiveDraftRow()])}>+ Add SKU</button>
-              <button className="rounded-md bg-brand px-3 py-1.5 text-[12px] font-bold text-white shadow-sm transition hover:bg-brand/90" type="button" onClick={handleReceiveSubmit}>Receive All</button>
+              </div>
+            </div>
+            <div id="inv-receive-summary" className="flex flex-wrap items-center gap-3 border-t border-line bg-surface-2 px-4 py-3">
+              <div className="flex min-w-[220px] flex-1 items-center gap-2 text-[11.5px] text-ink-2">
+                <CheckCircle2 size={16} className="text-emerald-600" />
+                <span>
+                  Ready to receive <strong className="text-ink">{receiveSummary.totalUnits}</strong> total units across <strong className="text-ink">{receiveSummary.validSkuCount}</strong> validated SKU row(s).
+                </span>
+              </div>
+              <button className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-line bg-surface px-3 text-[12px] font-bold text-ink transition hover:bg-surface-2" type="button" onClick={() => setReceiveRows((current) => [...current, createReceiveDraftRow()])}>
+                <Plus size={14} strokeWidth={2.2} />
+                Add SKU
+              </button>
+              <button className="inline-flex h-8 items-center justify-center gap-1.5 rounded-md bg-brand px-3.5 text-[12px] font-bold text-white shadow-sm transition hover:bg-brand/90" type="button" onClick={handleReceiveSubmit}>
+                <CheckCircle2 size={14} strokeWidth={2.2} />
+                Receive All
+              </button>
             </div>
             {receiveResultMessage ? (
-              <div className="mt-3 text-[12.5px] text-emerald-600">
+              <div className="border-t border-emerald-200 bg-emerald-50 px-4 py-3 text-[12px] font-medium text-emerald-700">
                 {receiveResultMessage}{' '}
-                <button type="button" className="text-brand underline" onClick={() => setActiveTab('history')}>
+                <button type="button" className="font-bold text-brand underline" onClick={() => setActiveTab('history')}>
                   View History
                 </button>
               </div>
