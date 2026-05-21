@@ -4,6 +4,7 @@ type MaintenanceModePageProps = {
   mode?: 'api' | 'frontend' | 'checking';
   detail?: string | null;
   onRetry?: () => void;
+  onContinue?: () => void;
   retrying?: boolean;
 };
 
@@ -35,6 +36,7 @@ export default function MaintenanceModePage({
   mode = 'api',
   detail,
   onRetry,
+  onContinue,
   retrying = false,
 }: MaintenanceModePageProps) {
   const content = copy[mode];
@@ -90,6 +92,15 @@ export default function MaintenanceModePage({
                   >
                     <RefreshCw className={retrying ? 'h-4 w-4 animate-spin' : 'h-4 w-4'} />
                     Check again
+                  </button>
+                ) : null}
+                {onContinue ? (
+                  <button
+                    type="button"
+                    onClick={onContinue}
+                    className="inline-flex h-10 items-center justify-center rounded-lg border border-line bg-surface px-4 text-[13px] font-extrabold text-ink-2 transition hover:bg-surface-2"
+                  >
+                    Continue to app
                   </button>
                 ) : null}
                 <a

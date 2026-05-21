@@ -5,6 +5,7 @@ import MaintenanceModePage from './MaintenanceModePage';
 const HEALTH_PATH = '/health/ready';
 const PROBE_TIMEOUT_MS = 4_500;
 const RETRY_INTERVAL_MS = 15_000;
+const INITIAL_FAILURES_BEFORE_MAINTENANCE = 3;
 
 type Availability = 'checking' | 'online' | 'offline';
 
@@ -49,6 +50,7 @@ export default function ServiceAvailabilityGate({ children }: { children: ReactN
   const [availability, setAvailability] = useState<Availability>('checking');
   const [lastError, setLastError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
+  const [bypassMaintenance, setBypassMaintenance] = useState(false);
   const failureCountRef = useRef(0);
   const availabilityRef = useRef<Availability>('checking');
 
@@ -64,16 +66,25 @@ export default function ServiceAvailabilityGate({ children }: { children: ReactN
         await probeApiHealth();
         failureCountRef.current = 0;
         setLastError(null);
+        setBypassMaintenance(false);
         setNextAvailability('online');
       } catch (error) {
         failureCountRef.current += 1;
         const message = error instanceof Error ? error.message : String(error);
         setLastError(message);
 
-        // First load should show maintenance immediately when the API is down.
+        // First load waits for several failed probes before showing maintenance.
+        // Render can report a deploy "live" before HTTP is actually responsive,
+        // and a single slow start should not permanently trap the operator.
         // After a healthy app is already visible, require two failed probes so
         // one transient network hiccup does not replace the operator workspace.
-        if (availabilityRef.current !== 'online' || failureCountRef.current >= 2) {
+        const isHttpUnhealthy = /^Health check returned \d+/.test(message);
+        const threshold = isHttpUnhealthy
+          ? 1
+          : availabilityRef.current === 'online'
+            ? 2
+            : INITIAL_FAILURES_BEFORE_MAINTENANCE;
+        if (failureCountRef.current >= threshold) {
           setNextAvailability('offline');
         }
       } finally {
@@ -103,12 +114,16 @@ export default function ServiceAvailabilityGate({ children }: { children: ReactN
     };
   }, [check]);
 
-  if (availability === 'offline') {
+  if ((availability === 'offline' || (availability === 'checking' && lastError)) && !bypassMaintenance) {
     return (
       <MaintenanceModePage
         mode="api"
         detail={getMaintenanceDetail(lastError)}
         onRetry={() => void check(true)}
+        onContinue={() => {
+          setBypassMaintenance(true);
+          setNextAvailability('online');
+        }}
         retrying={retrying}
       />
     );

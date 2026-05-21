@@ -55,5 +55,6 @@ test('protected app shows maintenance page while API health is unavailable', asy
   await expect(page.getByRole('heading', { name: "We'll be back soon" })).toBeVisible()
   await expect(page.getByText('Waiting for backend services')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Check again' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Continue to app' })).toBeVisible()
   await expect(page.locator('#view-orders')).toHaveCount(0)
 })
