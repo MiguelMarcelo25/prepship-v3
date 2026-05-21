@@ -2915,7 +2915,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -4 }}
                 transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-                className="inventory-section-header flex items-start gap-4 px-5 pt-5"
+                className={`inventory-section-header flex items-start gap-4 px-5 pt-5 ${activeMeta.id === 'receive' ? 'inventory-section-header--receive' : ''}`}
               >
                 <motion.div
                   initial={{ scale: 0.6, rotate: -8, opacity: 0 }}
@@ -3687,27 +3687,33 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
 
       {activeTab === 'receive' ? (
         <div id="inv-panel-receive">
-          <div style={{ maxWidth: 1320, width: '100%' }}>
-            <div style={{ display: 'flex', gap: 8, marginBottom: 12, flexWrap: 'wrap', alignItems: 'center' }}>
-              <select className="ship-select" value={receiveClientId} style={{ flex: 1, maxWidth: 240 }} onChange={(event) => setReceiveClientId(event.target.value)}>
-                <option value="">Select Client…</option>
-                {clients.map((client) => (
-                  <option key={client.clientId} value={client.clientId}>{client.name}</option>
-                ))}
-              </select>
-              <input type="text" value={receiveNote} onChange={(event) => setReceiveNote(event.target.value)} className="ship-select" placeholder="Note (e.g. PO#, shipment ref)" style={{ flex: 1, maxWidth: 240 }} />
-              <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11.5, color: 'var(--text2)', whiteSpace: 'nowrap' }}>
-                📅 Received On:
-                <input type="date" value={receiveDate} onChange={(event) => setReceiveDate(event.target.value)} className="ship-select" style={{ fontSize: 11.5, padding: '4px 6px', width: 'auto' }} />
+          <div className="inventory-receive-card">
+            <div className="inventory-receive-toolbar">
+              <label className="inventory-receive-field inventory-receive-field--client">
+                <span>Client</span>
+                <select className="ship-select" value={receiveClientId} onChange={(event) => setReceiveClientId(event.target.value)}>
+                  <option value="">Select Client...</option>
+                  {clients.map((client) => (
+                    <option key={client.clientId} value={client.clientId}>{client.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="inventory-receive-field inventory-receive-field--note">
+                <span>Reference</span>
+                <input type="text" value={receiveNote} onChange={(event) => setReceiveNote(event.target.value)} className="ship-select" placeholder="PO, shipment ref, or note" />
+              </label>
+              <label className="inventory-receive-field inventory-receive-field--date">
+                <span>Received on</span>
+                <input type="date" value={receiveDate} onChange={(event) => setReceiveDate(event.target.value)} className="ship-select" />
               </label>
             </div>
-            <div id="inv-recv-rows">
+            <div id="inv-recv-rows" className="inventory-receive-rows">
               {receiveRows.map((row) => {
                 const lookup = row.sku.trim() ? receiveSkuMap[row.sku.trim()] ?? null : null
                 const hints = getReceiveRowHints(row, lookup)
                 return (
                   <div key={row.id} className="inventory-recv-row">
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <div className="inventory-receive-row-fields">
                       {/* 2026-05-15: Was a native <input list=
                           "react-recv-sku-datalist">. Chrome rendered
                           that as an unstyleable, unfilterable 300+
@@ -3719,7 +3725,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                           component (web/src/components/Autosuggest.tsx)
                           ready for parent-SKU picker, bulk-edit,
                           new-order modal next. */}
-                      <div style={{ flex: '4 1 960px', minWidth: 760, maxWidth: 1120 }}>
+                      <div className="inventory-receive-sku-cell">
                         <Autosuggest
                           value={row.sku}
                           options={receiveSkuOptions}
@@ -3727,7 +3733,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                           ariaLabel="SKU"
                           inputClassName="ship-select"
                           inputStyle={{ fontFamily: 'monospace', fontSize: 12 }}
-                          popoverStyle={{ width: 'min(1040px, calc(100vw - 2rem))', maxWidth: 'calc(100vw - 2rem)' }}
+                          popoverStyle={{ width: 'min(1120px, calc(100vw - 2rem))', maxWidth: 'calc(100vw - 2rem)' }}
                           maxResults={receiveSkuOptions.length || 50}
                           emptyMessage={
                             row.sku.trim()
@@ -3759,27 +3765,27 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                         type="text"
                         className="ship-select"
                         placeholder="Product name (auto-fills)"
-                        style={{ fontSize: 12, flex: '1 1 420px', minWidth: 320 }}
+                        style={{ fontSize: 12 }}
                         value={row.name}
                         onChange={(event) => {
                           const nextName = event.target.value
                           setReceiveRows((current) => current.map((entry) => entry.id === row.id ? { ...entry, name: nextName, autofilledName: false } : entry))
                         }}
                       />
-                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2, flexShrink: 0 }}>
+                      <div className="inventory-receive-qty-cell">
                         <input
                           type="number"
                           className="ship-select"
                           placeholder="Qty"
                           min="1"
-                          style={{ width: 72, fontSize: 12, textAlign: 'center' }}
+                          style={{ fontSize: 12, textAlign: 'center' }}
                           value={row.qty}
                           onChange={(event) => setReceiveRows((current) => current.map((entry) => entry.id === row.id ? { ...entry, qty: event.target.value } : entry))}
                         />
                         {hints.totalHint ? <span style={{ fontSize: 10, color: 'var(--ss-blue)', fontWeight: 700, whiteSpace: 'nowrap' }}>{hints.totalHint}</span> : null}
                       </div>
-                      {hints.packHint ? <span style={{ fontSize: 10, color: 'var(--text3)', whiteSpace: 'nowrap', alignSelf: 'flex-start', paddingTop: 6 }}>{hints.packHint}</span> : null}
-                      <button className="btn btn-ghost btn-xs" type="button" onClick={() => setReceiveRows((current) => current.length === 1 ? [createReceiveDraftRow()] : current.filter((entry) => entry.id !== row.id))} title="Remove row" style={{ alignSelf: 'flex-start' }}>✕</button>
+                      {hints.packHint ? <span className="inventory-receive-pack-hint">{hints.packHint}</span> : null}
+                      <button className="btn btn-ghost btn-xs inventory-receive-remove" type="button" onClick={() => setReceiveRows((current) => current.length === 1 ? [createReceiveDraftRow()] : current.filter((entry) => entry.id !== row.id))} title="Remove row">x</button>
                     </div>
                   </div>
                 )
@@ -3790,12 +3796,12 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                   unfiltered; the new combobox filters as you type
                   and is keyboard-navigable. */}
             </div>
-            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
-              <button className="btn btn-outline btn-sm" type="button" onClick={() => setReceiveRows((current) => [...current, createReceiveDraftRow()])}>＋ Add SKU</button>
-              <button className="btn btn-primary btn-sm" type="button" onClick={handleReceiveSubmit} style={{ marginLeft: 'auto' }}>✅ Receive All</button>
+            <div className="inventory-receive-actions">
+              <button className="btn btn-outline btn-sm" type="button" onClick={() => setReceiveRows((current) => [...current, createReceiveDraftRow()])}>+ Add SKU</button>
+              <button className="btn btn-primary btn-sm" type="button" onClick={handleReceiveSubmit}>Receive All</button>
             </div>
             {receiveResultMessage ? (
-              <div style={{ marginTop: 10, fontSize: 12.5, color: 'var(--green)' }}>
+              <div className="inventory-receive-result">
                 {receiveResultMessage}{' '}
                 <button type="button" className="inventory-inline-button" style={{ color: 'var(--ss-blue)', textDecoration: 'underline' }} onClick={() => setActiveTab('history')}>
                   View History
