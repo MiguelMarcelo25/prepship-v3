@@ -58,3 +58,66 @@ test('protected app shows maintenance page while API health is unavailable', asy
   await expect(page.getByRole('button', { name: 'Continue to app' })).toBeVisible()
   await expect(page.locator('#view-orders')).toHaveCount(0)
 })
+
+test('protected app does not show maintenance for health probe network failure when app APIs work', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await seedSession(page)
+
+  await page.route('**/*', async (route) => {
+    const url = new URL(route.request().url())
+    if (url.hostname.endsWith('supabase.co')) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ user: null }) })
+      return
+    }
+    if (url.pathname === '/health/ready') {
+      await route.abort('failed')
+      return
+    }
+    if (url.origin !== baseUrl || url.pathname.startsWith('/api/')) {
+      if (url.pathname === '/clients') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
+        return
+      }
+      if (url.pathname === '/clients/order-stats') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [] }) })
+        return
+      }
+      if (url.pathname === '/users') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ users: [] }) })
+        return
+      }
+      if (url.pathname === '/init/stores') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: [] }) })
+        return
+      }
+      if (url.pathname === '/init/counts') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ awaiting_shipment: 0, shipped: 0, cancelled: 0 }) })
+        return
+      }
+      if (url.pathname === '/orders') {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ data: [], pagination: { page: 1, pageSize: 50, total: 0, totalPages: 1 } }),
+        })
+        return
+      }
+      if (url.pathname === '/orders/sync/status' || url.pathname === '/shipments/status') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'idle' }) })
+        return
+      }
+      if (url.pathname === '/settings/orders.columnPrefs') {
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ value: null }) })
+        return
+      }
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({}) })
+      return
+    }
+    await route.continue()
+  })
+
+  await page.goto(`${baseUrl}/orders/awaiting_shipment`)
+
+  await expect(page.getByRole('heading', { name: "We'll be back soon" })).toHaveCount(0)
+  await expect(page.locator('#view-orders')).toBeVisible()
+})

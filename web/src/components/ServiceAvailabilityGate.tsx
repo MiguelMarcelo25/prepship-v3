@@ -5,7 +5,6 @@ import MaintenanceModePage from './MaintenanceModePage';
 const HEALTH_PATH = '/health/ready';
 const PROBE_TIMEOUT_MS = 4_500;
 const RETRY_INTERVAL_MS = 15_000;
-const INITIAL_FAILURES_BEFORE_MAINTENANCE = 3;
 
 type Availability = 'checking' | 'online' | 'offline';
 
@@ -20,10 +19,7 @@ async function probeApiHealth(): Promise<void> {
   try {
     const response = await fetch(buildHealthUrl(), {
       cache: 'no-store',
-      headers: {
-        Accept: 'application/json',
-        'X-Prepship-Health-Probe': '1',
-      },
+      headers: { Accept: 'application/json' },
       signal: controller.signal,
     });
 
@@ -73,18 +69,12 @@ export default function ServiceAvailabilityGate({ children }: { children: ReactN
         const message = error instanceof Error ? error.message : String(error);
         setLastError(message);
 
-        // First load waits for several failed probes before showing maintenance.
-        // Render can report a deploy "live" before HTTP is actually responsive,
-        // and a single slow start should not permanently trap the operator.
-        // After a healthy app is already visible, require two failed probes so
-        // one transient network hiccup does not replace the operator workspace.
+        // Only an actual HTTP unhealthy response should show maintenance.
+        // Network/CORS/timeout failures can be caused by transient browser or
+        // extension behavior while normal app API calls are succeeding, so do
+        // not trap operators behind maintenance for those failures.
         const isHttpUnhealthy = /^Health check returned \d+/.test(message);
-        const threshold = isHttpUnhealthy
-          ? 1
-          : availabilityRef.current === 'online'
-            ? 2
-            : INITIAL_FAILURES_BEFORE_MAINTENANCE;
-        if (failureCountRef.current >= threshold) {
+        if (isHttpUnhealthy) {
           setNextAvailability('offline');
         }
       } finally {
@@ -114,7 +104,7 @@ export default function ServiceAvailabilityGate({ children }: { children: ReactN
     };
   }, [check]);
 
-  if ((availability === 'offline' || (availability === 'checking' && lastError)) && !bypassMaintenance) {
+  if (availability === 'offline' && !bypassMaintenance) {
     return (
       <MaintenanceModePage
         mode="api"
