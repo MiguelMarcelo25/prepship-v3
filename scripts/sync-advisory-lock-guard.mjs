@@ -4,18 +4,28 @@ import { readFileSync } from 'node:fs';
 const scheduler = readFileSync('src/services/sync-scheduler.ts', 'utf8');
 
 assert(
-  scheduler.includes('pg_try_advisory_xact_lock'),
-  'sync scheduler must use transaction-scoped advisory locks so pooled connections cannot leak scheduler locks',
+  scheduler.includes('const reserved = await pg.reserve()'),
+  'sync scheduler must reserve one pooled connection before taking a session advisory lock',
 );
 
 assert(
-  !scheduler.includes('pg_try_advisory_lock(hashtext'),
-  'sync scheduler must not use session-scoped pg_try_advisory_lock with pooled connections',
+  scheduler.includes('pg_try_advisory_lock'),
+  'sync scheduler must take the scheduler advisory lock on the reserved connection',
 );
 
 assert(
-  !scheduler.includes('pg_advisory_unlock(hashtext'),
-  'sync scheduler must not rely on session-scoped pg_advisory_unlock with pooled connections',
+  scheduler.includes('pg_advisory_unlock'),
+  'sync scheduler must unlock the scheduler advisory lock on the reserved connection',
+);
+
+assert(
+  scheduler.includes('reserved.release()'),
+  'sync scheduler must release the reserved connection after unlocking',
+);
+
+assert(
+  !scheduler.includes('pg_try_advisory_xact_lock'),
+  'sync scheduler must not hold a transaction open while external sync work runs',
 );
 
 console.log('PASS sync advisory lock guard');
