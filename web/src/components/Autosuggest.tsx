@@ -191,7 +191,7 @@ const Autosuggest = forwardRef<AutosuggestHandle, Props>(function Autosuggest(
   const listboxRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
-  const [portalPosition, setPortalPosition] = useState<{ left: number; top: number } | null>(null)
+  const [portalPosition, setPortalPosition] = useState<{ left: number; top: number; width: number } | null>(null)
   // 2026-05-15: floating large-preview overlay state. Set on
   // mouseenter of an option's thumbnail, cleared on mouseleave OR
   // when the popover closes (effect below). pointer-events:none on
@@ -260,6 +260,7 @@ const Autosuggest = forwardRef<AutosuggestHandle, Props>(function Autosuggest(
     setPortalPosition({
       left: Math.max(8, Math.min(rect.left, window.innerWidth - 24)),
       top: Math.min(rect.bottom + 4, window.innerHeight - 16),
+      width: rect.width,
     })
   }, [renderInPortal])
 
@@ -442,6 +443,7 @@ const Autosuggest = forwardRef<AutosuggestHandle, Props>(function Autosuggest(
                   ...popoverStyle,
                   left: portalPosition?.left ?? 8,
                   top: portalPosition?.top ?? 8,
+                  width: portalPosition?.width ?? inputRef.current?.getBoundingClientRect().width,
                   zIndex: 1000,
                 }
               : popoverStyle

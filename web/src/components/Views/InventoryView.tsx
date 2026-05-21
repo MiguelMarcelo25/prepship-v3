@@ -3816,8 +3816,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                           placeholder="Search SKU or name"
                           ariaLabel="SKU or product name"
                           inputClassName={`${RECEIVE_INPUT_CLASS} h-9 font-mono`}
-                          popoverClassName="right-auto min-w-[760px] max-w-[calc(100vw-2rem)]"
-                          popoverStyle={{ width: 'min(860px, calc(100vw - 2rem))' }}
+                          popoverClassName="right-auto max-w-[calc(100vw-2rem)]"
                           // Receive Inventory SKU dropdown escapes worksheet overflow clipping.
                           renderInPortal
                           maxResults={receiveSkuOptions.length || 50}

@@ -291,12 +291,15 @@ for (const viewport of [
     const receiveListboxState = await receiveListbox.evaluate((element) => ({
       parentTag: element.parentElement?.tagName,
       position: window.getComputedStyle(element).position,
+      width: element.getBoundingClientRect().width,
       height: element.getBoundingClientRect().height,
     }))
+    const receiveInputWidth = await receiveSkuInput.evaluate((element) => element.getBoundingClientRect().width)
     expect(receiveListboxState).toEqual(expect.objectContaining({
       parentTag: 'BODY',
       position: 'fixed',
     }))
+    expect(Math.abs(receiveListboxState.width - receiveInputWidth)).toBeLessThanOrEqual(2)
     expect(receiveListboxState.height).toBeGreaterThan(70)
     await page.keyboard.press('Escape')
     await page.screenshot({ path: path.join(screenshotDir, `${viewport.name}-03-receive-layout.png`), fullPage: true })
