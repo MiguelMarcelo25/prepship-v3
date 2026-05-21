@@ -1,34 +1,22 @@
 import type { Config } from 'tailwindcss';
 
-// Accent palette names used by the spec-driven sidebar template (variants F–Y).
-// Listed once here so the safelist knows which color names are allowed in
-// dynamic class strings like `bg-${accent}-500`.
-const ACCENT_PALETTES = [
-  'indigo', 'violet', 'purple', 'fuchsia', 'pink', 'rose',
-  'red', 'orange', 'amber', 'yellow', 'lime', 'green',
-  'emerald', 'teal', 'cyan', 'sky', 'blue', 'slate', 'zinc', 'stone',
-].join('|')
+const RUNTIME_SAFE_CLASSES = [
+  'bg-brand',
+  'bg-brand/10',
+  'bg-brand/20',
+  'text-brand',
+  'border-brand',
+  'ring-brand/30',
+  'from-brand',
+  'to-brand',
+]
 
 export default {
   content: [
     './web/index.html',
     './web/src/**/*.{ts,tsx}',
   ],
-  // Spec-driven sidebar variants (SidebarTemplated.tsx) compose Tailwind
-  // classes at runtime like `bg-${accent}-500/20`. Tailwind's JIT can't see
-  // those strings during the build, so the patterns must be whitelisted.
-  safelist: [
-    {
-      pattern: new RegExp(
-        `(bg|text|ring|border|shadow|from|via|to)-(${ACCENT_PALETTES})-(50|100|200|300|400|500|600|700|800|900)(/[0-9]{1,3})?`,
-      ),
-    },
-    {
-      pattern: new RegExp(
-        `(bg|text|ring|border)-(${ACCENT_PALETTES})-(50|100|200|300|400|500|600|700|800|900)`,
-      ),
-    },
-  ],
+  safelist: RUNTIME_SAFE_CLASSES,
   theme: {
     extend: {
       // All semantic tokens reference CSS variables that ThemeProvider

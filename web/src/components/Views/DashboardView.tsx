@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { motion } from 'framer-motion'
 import {
   AlertTriangle,
@@ -23,15 +23,6 @@ import {
   Search,
   Star,
 } from 'lucide-react'
-import {
-  CartesianGrid,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts'
 import { apiClient } from '../../api/client'
 import HoverImage from '../HoverImage'
 import {
@@ -44,6 +35,8 @@ import { DateRangePicker, defaultLast30, priorRange, type DateRange } from '../D
 import { SyncStatusChip, type SyncStatusChipData } from '../SyncStatusChip'
 import { FilterSelect } from '../FilterSelect'
 import { getAnalysisPresetRange } from './analysis-parity'
+
+const DashboardCharts = lazy(() => import('./DashboardCharts'))
 
 type Client = { clientId: number; name: string }
 
@@ -120,6 +113,21 @@ const createDashboardPanelErrors = (value: string | null = null): Record<Dashboa
   heatmap: value,
   table: value,
 })
+
+function scheduleDashboardNonCriticalWork(callback: () => void) {
+  if (typeof window === 'undefined') {
+    const timeoutId = setTimeout(callback, 0)
+    return () => clearTimeout(timeoutId)
+  }
+
+  if ('requestIdleCallback' in window) {
+    const idleId = window.requestIdleCallback(callback, { timeout: 1200 })
+    return () => window.cancelIdleCallback?.(idleId)
+  }
+
+  const timeoutId = window.setTimeout(callback, 0)
+  return () => window.clearTimeout(timeoutId)
+}
 
 type TrendPoint = {
   day: string
@@ -1843,79 +1851,97 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           if (loadSeq === dashboardLoadSeqRef.current) setClients([])
         })
 
-      const corePromise = Promise.all([
+      const criticalMetricsPromise = Promise.all([
         // Keep initial dashboard paint on dedicated aggregate endpoints.
         // The heavier SKU breakdown table loads as its own panel payload.
-        apiClient.fetchDashboardSkuTrends({ from: currentFrom, to: currentTo, topN: 15, clientId: cid, hideTestOrders: true }),
-        apiClient.fetchDashboardSkuTrends({ from: priorFrom, to: priorTo, topN: 15, clientId: cid, hideTestOrders: true }),
         apiClient.fetchDashboardDailyCounts({ from: currentFrom, to: currentTo, clientId: cid, hideTestOrders: true }),
         apiClient.fetchDashboardDailyCounts({ from: priorFrom, to: priorTo, clientId: cid, hideTestOrders: true }),
         apiClient.fetchDashboardSummary({ from: currentFrom, to: currentTo, sevenFrom, clientId: cid, hideTestOrders: true }),
         apiClient.fetchDashboardSummary({ from: priorFrom, to: priorTo, sevenFrom: priorSevenFrom, clientId: cid, hideTestOrders: true }),
       ])
         .then(([
-          currentSalesRes,
-          priorSalesRes,
           currentDailyCountsRes,
           priorDailyCountsRes,
           currentOrderAggRes,
           priorOrderAggRes,
         ]) => {
           if (loadSeq !== dashboardLoadSeqRef.current) return
-          setCurrentSales(currentSalesRes ?? { dates: [], topSkus: [], series: {} })
-          setPriorSales(priorSalesRes ?? { dates: [], topSkus: [], series: {} })
           setCurrentDailyCounts(safeArray<DailyOrderCount>(currentDailyCountsRes?.data))
           setPriorDailyCounts(safeArray<DailyOrderCount>(priorDailyCountsRes?.data))
           setCurrentOrderAgg(normalizeDashboardOrderAgg(currentOrderAggRes))
           setPriorOrderAgg(normalizeDashboardOrderAgg(priorOrderAggRes))
           setPage(1)
-          finishPanels(['metrics', 'trend', 'topSkus', 'heatmap'])
+          finishPanels(['metrics'])
         })
         .catch((loadError) => {
           if (loadSeq !== dashboardLoadSeqRef.current) return
-          setCurrentSales({ dates: [], topSkus: [], series: {} })
-          setPriorSales({ dates: [], topSkus: [], series: {} })
           setCurrentDailyCounts([])
           setPriorDailyCounts([])
           setCurrentOrderAgg(emptyDashboardOrderAgg())
           setPriorOrderAgg(emptyDashboardOrderAgg())
-          failPanels(['metrics', 'trend', 'topSkus', 'heatmap'], loadError, 'Failed to load dashboard metrics')
+          failPanels(['metrics'], loadError, 'Failed to load dashboard metrics')
         })
 
-      const inventoryPromise = apiClient
-        .fetchDashboardInventoryRisk({ ...(cid ? { clientId: cid } : {}), active: true, pageSize: 300 })
-        .then((inventoryRes: any) => {
-          if (loadSeq !== dashboardLoadSeqRef.current) return
-          setInventoryRows(safeArray<InventoryItem>(inventoryRes?.items))
-          finishPanels(['inventory'])
-        })
-        .catch((loadError) => {
-          if (loadSeq !== dashboardLoadSeqRef.current) return
-          setInventoryRows([])
-          failPanels(['inventory'], loadError, 'Failed to load inventory snapshot')
-        })
+      const runNonCriticalDashboardWork = () => {
+        if (loadSeq !== dashboardLoadSeqRef.current) return
 
-      const analysisPromise = apiClient
-        .fetchDashboardTopSkus({ from: currentFrom, to: currentTo, limit: 200, clientId: cid, hideTestOrders: true })
-        .then((analysisRes: any) => {
-          if (loadSeq !== dashboardLoadSeqRef.current) return
-          setAnalysisRows(safeArray<AnalysisSku>(analysisRes?.skus))
-          finishPanels(['table'])
-        })
-        .catch((loadError) => {
-          if (loadSeq !== dashboardLoadSeqRef.current) return
-          setAnalysisRows([])
-          failPanels(['table'], loadError, 'Failed to load SKU performance summary')
-        })
+        const trendPromise = Promise.all([
+          apiClient.fetchDashboardSkuTrends({ from: currentFrom, to: currentTo, topN: 15, clientId: cid, hideTestOrders: true }),
+          apiClient.fetchDashboardSkuTrends({ from: priorFrom, to: priorTo, topN: 15, clientId: cid, hideTestOrders: true }),
+        ])
+          .then(([currentSalesRes, priorSalesRes]) => {
+            if (loadSeq !== dashboardLoadSeqRef.current) return
+            setCurrentSales(currentSalesRes ?? { dates: [], topSkus: [], series: {} })
+            setPriorSales(priorSalesRes ?? { dates: [], topSkus: [], series: {} })
+            finishPanels(['trend', 'topSkus', 'heatmap'])
+          })
+          .catch((loadError) => {
+            if (loadSeq !== dashboardLoadSeqRef.current) return
+            setCurrentSales({ dates: [], topSkus: [], series: {} })
+            setPriorSales({ dates: [], topSkus: [], series: {} })
+            failPanels(['trend', 'topSkus', 'heatmap'], loadError, 'Failed to load dashboard trends')
+          })
 
-      await Promise.allSettled([clientsPromise, corePromise, inventoryPromise, analysisPromise])
+        const inventoryPromise = apiClient
+          .fetchDashboardInventoryRisk({ ...(cid ? { clientId: cid } : {}), active: true, pageSize: 300 })
+          .then((inventoryRes: any) => {
+            if (loadSeq !== dashboardLoadSeqRef.current) return
+            setInventoryRows(safeArray<InventoryItem>(inventoryRes?.items))
+            finishPanels(['inventory'])
+          })
+          .catch((loadError) => {
+            if (loadSeq !== dashboardLoadSeqRef.current) return
+            setInventoryRows([])
+            failPanels(['inventory'], loadError, 'Failed to load inventory snapshot')
+          })
+
+        const analysisPromise = apiClient
+          .fetchDashboardTopSkus({ from: currentFrom, to: currentTo, limit: 200, clientId: cid, hideTestOrders: true })
+          .then((analysisRes: any) => {
+            if (loadSeq !== dashboardLoadSeqRef.current) return
+            setAnalysisRows(safeArray<AnalysisSku>(analysisRes?.skus))
+            finishPanels(['table'])
+          })
+          .catch((loadError) => {
+            if (loadSeq !== dashboardLoadSeqRef.current) return
+            setAnalysisRows([])
+            failPanels(['table'], loadError, 'Failed to load SKU performance summary')
+          })
+
+        void Promise.allSettled([trendPromise, inventoryPromise, analysisPromise])
+      }
+
+      void clientsPromise
+      await criticalMetricsPromise
+      if (loadSeq === dashboardLoadSeqRef.current) {
+        setLoading(false)
+        setRefreshing(false)
+        scheduleDashboardNonCriticalWork(runNonCriticalDashboardWork)
+      }
     } catch (loadError) {
       if (loadSeq === dashboardLoadSeqRef.current) {
         setError(loadError instanceof Error ? loadError.message : 'Failed to load dashboard')
         setPanelLoading(createDashboardPanelLoading(false))
-      }
-    } finally {
-      if (loadSeq === dashboardLoadSeqRef.current) {
         setLoading(false)
         setRefreshing(false)
       }
@@ -2235,8 +2261,8 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   }, [currentAgg, currentDailyCounts, dateRange, inventoryRows, priorAgg, priorDailyCounts, rangeDays])
 
   const maxTopSku = Math.max(...topSkuRows.map((row) => row.units30), 1)
-  const metricsLoading = panelLoading.metrics || panelLoading.inventory
-  const metricsError = panelErrors.metrics || panelErrors.inventory
+  const metricsLoading = panelLoading.metrics
+  const metricsError = panelErrors.metrics
   const tableLoading = panelLoading.table || panelLoading.inventory || panelLoading.metrics
   const tableError = panelErrors.table || panelErrors.inventory || panelErrors.metrics
 
@@ -2653,74 +2679,9 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             ) : panelErrors.trend ? (
               <PanelError message={panelErrors.trend} className="min-h-full" />
             ) : (
-            <ResponsiveContainer width="100%" height="100%">
-              {/* 2026-05-13:
-                  • left margin -12 → 8 — previous value was pulling
-                    the Y-axis off-canvas which clipped the topmost
-                    tick label ("120" in the screenshot). Positive 8
-                    gives the axis room to draw labels without
-                    competing with the panel border.
-                  • Added a second YAxis (yAxisId="revenue", orientation
-                    right) for the order-value series, with its own
-                    auto-scaling domain. The original axis got an
-                    explicit yAxisId="orders" so both lines map to the
-                    right scale. ResponsiveContainer keeps the chart
-                    box size constant — only the axis tick values
-                    rescale to fit the data.
-                  • Added a third <Line> for currentRevenue, anchored
-                    to the revenue axis. Emerald color so it visually
-                    distinguishes from the orders (brand-blue) and
-                    prior (gray dashed) lines. */}
-              <LineChart data={trend} margin={{ top: 8, right: 8, bottom: 4, left: 8 }}>
-                <CartesianGrid stroke="var(--line)" strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="day" tickFormatter={formatDayLabel} tick={{ fontSize: 10, fill: 'var(--text3)' }} tickLine={false} axisLine={{ stroke: 'var(--line)' }} minTickGap={24} />
-                <YAxis
-                  yAxisId="orders"
-                  tick={{ fontSize: 10, fill: 'var(--text3)' }}
-                  tickLine={false}
-                  axisLine={false}
-                  allowDecimals={false}
-                  width={48}
-                />
-                <YAxis
-                  yAxisId="revenue"
-                  orientation="right"
-                  tick={{ fontSize: 10, fill: 'var(--text3)' }}
-                  tickLine={false}
-                  axisLine={false}
-                  allowDecimals={false}
-                  width={56}
-                  tickFormatter={(value: number) => `$${formatInt(value)}`}
-                />
-                <Tooltip
-                  labelFormatter={formatDayLabel}
-                  // 2026-05-13: 'prior' branch removed — that line was
-                  // taken off the chart per operator request, so there's
-                  // no longer a hover entry for it. Only the two visible
-                  // series ('current' units and 'currentRevenue' $)
-                  // need a tooltip formatter case.
-                  formatter={(value: number, name: string) => {
-                    if (name === 'currentRevenue') return [`$${formatInt(num(value))}`, 'Order value']
-                    return [formatInt(num(value)), 'Orders']
-                  }}
-                  contentStyle={{
-                    background: 'var(--surface)',
-                    border: '1px solid var(--line)',
-                    borderRadius: 8,
-                    boxShadow: '0 12px 28px rgba(15,23,42,0.08)',
-                    fontSize: 12,
-                  }}
-                />
-                {/* 2026-05-13: removed the prior-period <Line> per
-                    operator request. The data is still on each trend
-                    point (point.prior) but nothing renders it on this
-                    chart now. Heatmap + KPI vs-prior arrows still
-                    consume priorSales elsewhere — no data plumbing
-                    change needed. */}
-                <Line yAxisId="orders" type="monotone" dataKey="current" stroke="var(--brand)" strokeWidth={2.25} dot={{ r: 2 }} activeDot={{ r: 5, strokeWidth: 2, stroke: 'var(--surface)' }} />
-                <Line yAxisId="revenue" type="monotone" dataKey="currentRevenue" stroke="rgb(16 185 129)" strokeWidth={2} dot={{ r: 2 }} activeDot={{ r: 5, strokeWidth: 2, stroke: 'var(--surface)' }} />
-              </LineChart>
-            </ResponsiveContainer>
+            <Suspense fallback={<PanelSkeleton className="min-h-full" />}>
+              <DashboardCharts trend={trend} />
+            </Suspense>
             )}
           </div>
         </section>
