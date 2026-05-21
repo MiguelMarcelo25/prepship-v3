@@ -3,6 +3,7 @@ import path from 'node:path';
 
 const root = process.cwd();
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+const lockJson = JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8'));
 
 const sourcePaths = [
   'web/src/lib/api.ts',
@@ -62,6 +63,15 @@ assert(
   packageJson.scripts?.['test:frontend-auth-cache'] ===
     'node scripts/frontend-auth-cache-guard.mjs',
   'package exposes frontend auth cache guard',
+);
+
+assert(
+  packageJson.dependencies?.['@supabase/supabase-js'] === '^2.106.1',
+  'package uses upgraded Supabase JS dependency',
+);
+assert(
+  lockJson.packages?.['node_modules/@supabase/supabase-js']?.version === '2.106.1',
+  'package lock pins upgraded Supabase JS dependency',
 );
 
 if (process.exitCode) {

@@ -361,15 +361,14 @@ Timing diagnostics are partially implemented, but visibility is still incomplete
 
 ### Current State
 
-- `src/main.ts` already has request IDs via `X-Request-Id`.
-- `src/main.ts` already exposes `Server-Timing`.
-- `src/main.ts` already logs slow API requests with `[api:timing]`.
-- `web/src/lib/api.ts` already sends `X-Request-Id`.
-- `web/src/lib/api.ts` already supports opt-in `[api:client-timing]`.
-- Some hot routes, such as `src/routes/orders.ts` and `src/routes/inventory.ts`, already have step timing.
-- External API timing and DB timing are not standardized.
-- Auth timing is not separately visible.
-- Timeout logs do not consistently include auth/fetch breakdowns.
+- Complete for this remediation.
+- `src/main.ts` has request IDs via `X-Request-Id`.
+- `src/main.ts` exposes `Server-Timing`.
+- `src/main.ts` logs slow API requests with `[api:timing]`.
+- `web/src/lib/api.ts` sends `X-Request-Id`.
+- `web/src/lib/api.ts` supports opt-in `[api:client-timing]`.
+- Hot routes, such as `src/routes/orders.ts` and `src/routes/inventory.ts`, have step timing.
+- External API timing, DB timing, auth timing, frontend timing, and timeout breakdowns are guarded by `npm run test:api-observability-metrics`.
 
 ### Checklist Items
 
@@ -505,10 +504,11 @@ npm run typecheck
 
 ### Current State
 
-- `web/src/lib/api.ts` currently calls `supabase.auth.getSession()` inside the shared request function.
-- `web/src/lib/v2-apiClient.ts`, `web/src/lib/vercelFunction.ts`, and `web/src/hooks/v2Hooks.ts` also call `supabase.auth.getSession()` directly.
-- Frontend API timing exists in `web/src/lib/api.ts`, but auth duration and fetch duration are not separated.
-- `@supabase/supabase-js` is currently pinned as `^2.47.10`.
+- Complete.
+- `web/src/lib/api.ts` uses the cached auth token helper.
+- `web/src/lib/v2-apiClient.ts`, `web/src/lib/vercelFunction.ts`, and `web/src/hooks/v2Hooks.ts` use the same cached auth token helper.
+- Frontend API timing separates auth, fetch, and total duration.
+- `@supabase/supabase-js` is upgraded to `^2.106.1`.
 
 ### Checklist Items
 
@@ -520,7 +520,7 @@ npm run typecheck
 - [x] Frontend timing logs include auth duration.
 - [x] Frontend timing logs include fetch and total duration breakdowns.
 - [x] Timeout errors include request ID.
-- [~] Supabase package is updated. Deferred by implementation plan: leave `@supabase/supabase-js` at `^2.47.10` to avoid dependency/lockfile churn in this remediation batch.
+- [x] Supabase package is updated to `^2.106.1`.
 - [x] Static guard prevents direct frontend `getSession()` calls in shared API clients.
 
 ### Fixes
