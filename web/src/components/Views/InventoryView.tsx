@@ -177,6 +177,8 @@ const INVENTORY_PAGE_SIZE_KEY = 'inventory_page_size'
 const RECEIVE_INPUT_CLASS = 'h-8 w-full rounded-md border border-line bg-surface px-3 text-[12px] text-ink outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/15 disabled:cursor-not-allowed disabled:opacity-60'
 const RECEIVE_LABEL_CLASS = 'text-[10.5px] font-extrabold uppercase tracking-[0.04em] text-ink-3'
 const RECEIVE_FIELD_CLASS = 'flex min-w-0 flex-col gap-1.5'
+const INVENTORY_HEADER_CLASS = 'flex flex-wrap items-start gap-4 px-7 pb-[22px] pt-6 max-md:px-5 max-md:pb-[18px] max-md:pt-5'
+const INVENTORY_HEADER_ACTIONS_CLASS = 'ml-auto flex max-w-[min(760px,56vw)] flex-wrap items-center justify-end gap-2 pt-0.5 max-md:flex-[1_1_100%] max-md:justify-start max-md:max-w-none max-md:pt-0 max-[520px]:w-full max-[520px]:[&_.btn]:w-full'
 
 function readStoredInventoryPageSize(): number {
   if (typeof window === 'undefined') return INVENTORY_DEFAULT_PAGE_SIZE
@@ -2918,7 +2920,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -4 }}
                 transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-                className={`inventory-section-header flex items-start gap-4 px-5 pt-5 ${activeMeta.id === 'receive' ? 'px-7 pb-[22px] pt-6 max-md:px-5 max-md:pb-[18px] max-md:pt-5' : ''}`}
+                className={INVENTORY_HEADER_CLASS}
               >
                 <motion.div
                   initial={{ scale: 0.6, rotate: -8, opacity: 0 }}
@@ -2945,7 +2947,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                     {activeMeta.description}
                   </p>
                 </div>
-                <div className="inventory-section-header-actions">
+                <div className={INVENTORY_HEADER_ACTIONS_CLASS}>
                   {activeTab === 'stock' ? (
                     <>
                       <span ref={setColumnsAnchor} className="inventory-columns-anchor" />
@@ -3716,7 +3718,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                 const hints = getReceiveRowHints(row, lookup)
                 return (
                   <div key={row.id} className="flex flex-col gap-1.5 rounded-lg border border-line bg-surface-2 p-3">
-                    <div className="grid grid-cols-[minmax(360px,440px)_minmax(260px,1fr)_76px_auto_28px] items-start gap-2.5 max-md:grid-cols-1">
+                    <div className="grid grid-cols-[minmax(360px,440px)_76px_auto_28px] items-start gap-2.5 max-md:grid-cols-1">
                       {/* 2026-05-15: Was a native <input list=
                           "react-recv-sku-datalist">. Chrome rendered
                           that as an unstyleable, unfilterable 300+
@@ -3732,8 +3734,8 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                         <Autosuggest
                           value={row.sku}
                           options={receiveSkuOptions}
-                          placeholder="SKU"
-                          ariaLabel="SKU"
+                          placeholder="SKU or product name"
+                          ariaLabel="SKU or product name"
                           inputClassName={`${RECEIVE_INPUT_CLASS} font-mono`}
                           maxResults={receiveSkuOptions.length || 50}
                           emptyMessage={
@@ -3761,17 +3763,16 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                             void option
                           }}
                         />
+                        {row.name ? (
+                          <div className="mt-1 min-h-[16px] truncate rounded-md bg-surface px-2 py-1 text-[11px] text-ink-2 ring-1 ring-line/70">
+                            {row.name}
+                          </div>
+                        ) : (
+                          <div className="mt-1 min-h-[16px] px-2 py-1 text-[11px] text-ink-3">
+                            Select a SKU to fill the product name
+                          </div>
+                        )}
                       </div>
-                      <input
-                        type="text"
-                        className={RECEIVE_INPUT_CLASS}
-                        placeholder="Product name (auto-fills)"
-                        value={row.name}
-                        onChange={(event) => {
-                          const nextName = event.target.value
-                          setReceiveRows((current) => current.map((entry) => entry.id === row.id ? { ...entry, name: nextName, autofilledName: false } : entry))
-                        }}
-                      />
                       <div className="flex flex-col items-end gap-[3px]">
                         <input
                           type="number"
