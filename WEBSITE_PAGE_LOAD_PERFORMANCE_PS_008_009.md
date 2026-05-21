@@ -20,7 +20,33 @@ This task is frontend/build-performance focused.
 
 Do not weaken auth, RBAC, client/store scope, secret redaction, shipped/cancelled lockdown, or existing production safeguards. Respect `AGENTS.md`. Do not modify shipped/cancelled logic. Do not make backend data mutations.
 
+## Current Status
+
+- Status: Implemented and browser-measured.
+- Latest local verification command: `npm run perf:web`
+- Measurement target: production Vite build served locally at `http://127.0.0.1:4173/`.
+- Measurement runs: `5`.
+- Current browser timing result:
+  - FCP average: `89 ms`
+  - FCP p50 / p95: `84 ms` / `128 ms`
+  - LCP average: `134 ms`
+  - LCP p50 / p95: `128 ms` / `172 ms`
+  - DOMContentLoaded average: `69 ms`
+  - Load event average: `70 ms`
+  - Transfer bytes: `275,632`
+  - CLS: `0`
+- Report output: `reports/web-performance-current.json`.
+- Repeatable command added:
+
+```bash
+npm run perf:web
+```
+
+Note: this measures the current production bundle locally. The exact pre-fix browser timing was not captured before PS-008/PS-009 landed, so the verified before/after comparison remains bundle-size based while current browser timing is now measurable and repeatable.
+
 ## Confirmed Repo Findings
+
+Historical pre-fix findings:
 
 - `tailwind.config.ts` still has the broad `ACCENT_PALETTES` safelist.
 - `web/src/components/Views/DashboardView.tsx` still directly imports `recharts`.

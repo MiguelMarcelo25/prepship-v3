@@ -14,6 +14,7 @@
     "start:api": "tsx src/main.ts",
     "start:worker": "tsx src/worker.ts",
     "build:web": "vite build",
+    "perf:web": "npm run build:web && node scripts/web-performance-measure.mjs --serve",
     "preview:web": "vite preview",
     "test:web-bundle-budget": "npm run build:web && node scripts/web-bundle-budget-guard.mjs",
     "test:tailwind-safelist": "node scripts/tailwind-safelist-guard.mjs",
