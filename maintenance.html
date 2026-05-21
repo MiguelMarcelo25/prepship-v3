@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Maintenance Mode</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              ink: '#172033',
+              muted: '#64748b',
+              line: '#dbe3ef',
+              brand: '#0ea5e9',
+              brandDark: '#0369a1',
+              calm: '#f6f9fc',
+            },
+            boxShadow: {
+              soft: '0 24px 80px rgba(15, 23, 42, 0.12)',
+            },
+          },
+        },
+      }
+    </script>
+  </head>
+  <body class="min-h-screen bg-calm text-ink antialiased">
+    <main class="relative flex min-h-screen items-center justify-center overflow-hidden px-5 py-10 sm:px-6">
+      <div class="absolute inset-0 -z-10 bg-[radial-gradient(circle_at_top_left,rgba(14,165,233,0.18),transparent_34%),radial-gradient(circle_at_bottom_right,rgba(16,185,129,0.14),transparent_34%)]"></div>
+      <div class="absolute inset-0 -z-10 opacity-[0.45] [background-image:linear-gradient(rgba(15,23,42,0.06)_1px,transparent_1px),linear-gradient(90deg,rgba(15,23,42,0.06)_1px,transparent_1px)] [background-size:48px_48px]"></div>
+
+      <section class="w-full max-w-3xl rounded-3xl border border-white/80 bg-white/90 p-6 shadow-soft backdrop-blur sm:p-8 lg:p-10">
+        <div class="flex flex-col gap-8 md:flex-row md:items-start">
+          <div class="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-sky-50 text-brand ring-1 ring-sky-100">
+            <svg class="h-9 w-9" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+              <path d="M33.5 9.5a10 10 0 0 0-12.43 12.78L9.88 33.47a4.6 4.6 0 0 0 6.51 6.51l11.2-11.19A10 10 0 0 0 40.5 16.5l-6.13 6.13-6.5-2.5-2.5-6.5L31.5 7.5c.67.5 1.34 1.12 2 2Z" fill="currentColor" opacity=".14" />
+              <path d="M33.5 9.5a10 10 0 0 0-12.43 12.78L9.88 33.47a4.6 4.6 0 0 0 6.51 6.51l11.2-11.19A10 10 0 0 0 40.5 16.5l-6.13 6.13-6.5-2.5-2.5-6.5L31.5 7.5c.67.5 1.34 1.12 2 2Z" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" />
+              <path d="m13.12 36.2.03.03" stroke="currentColor" stroke-width="4" stroke-linecap="round" />
+            </svg>
+          </div>
+
+          <div class="min-w-0 flex-1">
+            <p class="text-sm font-semibold uppercase tracking-[0.16em] text-brandDark">Scheduled maintenance</p>
+            <h1 class="mt-3 text-4xl font-extrabold tracking-tight text-ink sm:text-5xl">We&apos;ll be back soon.</h1>
+            <p class="mt-4 max-w-2xl text-base leading-7 text-muted sm:text-lg">
+              We&apos;re making a few updates to keep the service fast, reliable, and secure. Thanks for your patience while we finish this work.
+            </p>
+
+            <div class="mt-8 rounded-2xl border border-line bg-slate-50/80 p-4 sm:p-5">
+              <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p class="text-sm font-bold text-ink">Estimated return</p>
+                  <p id="returnTime" class="mt-1 text-sm text-muted">Calculating return time...</p>
+                </div>
+                <div id="countdown" class="grid grid-cols-4 gap-2 text-center" aria-live="polite">
+                  <div class="rounded-xl bg-white px-3 py-2 ring-1 ring-line">
+                    <div id="days" class="text-xl font-extrabold tabular-nums text-ink">00</div>
+                    <div class="mt-0.5 text-[10px] font-bold uppercase tracking-[0.12em] text-muted">Days</div>
+                  </div>
+                  <div class="rounded-xl bg-white px-3 py-2 ring-1 ring-line">
+                    <div id="hours" class="text-xl font-extrabold tabular-nums text-ink">00</div>
+                    <div class="mt-0.5 text-[10px] font-bold uppercase tracking-[0.12em] text-muted">Hours</div>
+                  </div>
+                  <div class="rounded-xl bg-white px-3 py-2 ring-1 ring-line">
+                    <div id="minutes" class="text-xl font-extrabold tabular-nums text-ink">00</div>
+                    <div class="mt-0.5 text-[10px] font-bold uppercase tracking-[0.12em] text-muted">Mins</div>
+                  </div>
+                  <div class="rounded-xl bg-white px-3 py-2 ring-1 ring-line">
+                    <div id="seconds" class="text-xl font-extrabold tabular-nums text-ink">00</div>
+                    <div class="mt-0.5 text-[10px] font-bold uppercase tracking-[0.12em] text-muted">Secs</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="mt-6 grid gap-3 text-sm text-muted sm:grid-cols-3">
+              <div class="rounded-2xl border border-line bg-white p-4">
+                <div class="font-bold text-ink">Status</div>
+                <div class="mt-1">Maintenance in progress</div>
+              </div>
+              <div class="rounded-2xl border border-line bg-white p-4">
+                <div class="font-bold text-ink">Data</div>
+                <div class="mt-1">Your information is safe</div>
+              </div>
+              <div class="rounded-2xl border border-line bg-white p-4">
+                <div class="font-bold text-ink">Support</div>
+                <a class="mt-1 inline-block text-brandDark underline-offset-4 hover:underline" href="mailto:support@example.com">support@example.com</a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script>
+      // Configure this for production, for example:
+      // const RETURN_AT_ISO = '2026-05-21T14:00:00-07:00'
+      const RETURN_AT_ISO = ''
+      const fallbackReturnMinutes = 90
+      const target = RETURN_AT_ISO ? new Date(RETURN_AT_ISO) : new Date(Date.now() + fallbackReturnMinutes * 60 * 1000)
+      const formatter = new Intl.DateTimeFormat(undefined, {
+        weekday: 'short',
+        hour: 'numeric',
+        minute: '2-digit',
+        timeZoneName: 'short',
+      })
+
+      const ids = ['days', 'hours', 'minutes', 'seconds']
+      const elements = Object.fromEntries(ids.map((id) => [id, document.getElementById(id)]))
+      const returnTime = document.getElementById('returnTime')
+
+      function pad(value) {
+        return String(value).padStart(2, '0')
+      }
+
+      function updateCountdown() {
+        const remaining = target.getTime() - Date.now()
+        if (!Number.isFinite(remaining) || remaining <= 0) {
+          returnTime.textContent = 'We are completing final checks now.'
+          ids.forEach((id) => {
+            elements[id].textContent = '00'
+          })
+          return
+        }
+
+        const totalSeconds = Math.floor(remaining / 1000)
+        const days = Math.floor(totalSeconds / 86400)
+        const hours = Math.floor((totalSeconds % 86400) / 3600)
+        const minutes = Math.floor((totalSeconds % 3600) / 60)
+        const seconds = totalSeconds % 60
+
+        elements.days.textContent = pad(days)
+        elements.hours.textContent = pad(hours)
+        elements.minutes.textContent = pad(minutes)
+        elements.seconds.textContent = pad(seconds)
+        returnTime.textContent = formatter.format(target)
+      }
+
+      updateCountdown()
+      window.setInterval(updateCountdown, 1000)
+    </script>
+  </body>
+</html>
