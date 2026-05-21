@@ -7,6 +7,7 @@ import { ssV1Request } from '../lib/shipstation/v1-client';
 import { getSettingNumber, setSetting } from './settings';
 import { isExcludedStoreId } from '../config/prepship';
 import { replaceOrderItemsForExternalOrderIds } from './order-items';
+import { buildShipStationOrderSource } from './normalized-order-persistence';
 
 const LAST_SYNC_KEY = 'order_sync.last_modified_ms';
 const DEFAULT_LOOKBACK_MS = 1000 * 60 * 60 * 24 * 30; // 30 days on first run
@@ -182,13 +183,19 @@ async function upsertOrdersBatch(
         storeToClient.newPairs?.push({ storeId, clientId: fallbackClientId });
       }
     }
+    const source = buildShipStationOrderSource({
+      orderId: o.orderId,
+      orderNumber: o.orderNumber,
+      storeId,
+      raw: o as unknown as Record<string, unknown>,
+    });
     rows.push({
       externalOrderId: String(o.orderId),
-      sourceProvider: 'shipstation',
-      sourceAccountId: storeId !== null ? `store:${storeId}` : 'shipstation-default',
-      sourceOrderId: String(o.orderId),
-      sourceOrderNumber: o.orderNumber,
-      rawSourcePayload: o as unknown as Record<string, unknown>,
+      sourceProvider: source.sourceProvider,
+      sourceAccountId: source.sourceAccountId,
+      sourceOrderId: source.sourceOrderId,
+      sourceOrderNumber: source.sourceOrderNumber,
+      rawSourcePayload: source.rawSourcePayload,
       orderNumber: o.orderNumber,
       orderStatus: o.orderStatus,
       orderDate: parseShipStationDate(o.orderDate),

@@ -14,6 +14,7 @@ const storeResolution = read('src/connectors/store-resolution.ts');
 const migration = read('drizzle/0032_connector_architecture.sql');
 const ordersSchema = read('src/db/schema/orders.ts');
 const shipmentsSchema = read('src/db/schema/shipments.ts');
+const normalizedOrderPersistence = read('src/services/normalized-order-persistence.ts');
 const orderSync = read('src/services/order-sync.ts');
 const directLabelPersistence = read('src/services/direct-label-persistence.ts');
 const carrierLabels = read('api/carriers/labels.ts');
@@ -86,6 +87,10 @@ for (const schemaField of [
   assert(ordersSchema.includes(`${schemaField}:`), `orders schema missing ${schemaField}`);
   assert(orderSync.includes(`${schemaField}:`), `ShipStation order sync must write ${schemaField}`);
 }
+
+assert(normalizedOrderPersistence.includes('buildShipStationOrderSource'), 'missing ShipStation normalized order source helper');
+assert(normalizedOrderPersistence.includes('sourceProvider'), 'normalized order helper must return sourceProvider');
+assert(orderSync.includes('buildShipStationOrderSource'), 'ShipStation order sync must use normalized order source helper');
 
 for (const schemaField of [
   'carrierProvider',

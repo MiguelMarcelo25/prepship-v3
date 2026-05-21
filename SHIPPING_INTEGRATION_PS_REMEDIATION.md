@@ -690,7 +690,7 @@ Goal: move PrepShip from ShipStation-centric workflows to normalized connector-b
 - ShipStation, Shipp, EasyPost, Walmart Shipping, and UPS are registered as carrier connectors.
 - Provider capabilities are documented in `src/connectors/matrix.ts`.
 - Non-destructive connector-account, sync-state, event, order-source, and shipment-source schema additions are captured in `drizzle/0032_connector_architecture.sql`.
-- ShipStation order sync now writes canonical source fields on imported orders.
+- ShipStation order sync now writes canonical source fields on imported orders through `src/services/normalized-order-persistence.ts`.
 - Direct carrier label persistence now writes canonical shipment carrier, carrier-account, label-provider, and confirmation-status fields.
 - Direct carrier rate and label endpoints now resolve registered providers through a carrier connector resolver and expose connector capabilities in response metadata.
 - Fulfillment outbox shipment confirmation now resolves providers through a store connector resolver and logs store connector capabilities.
@@ -714,7 +714,7 @@ Goal: move PrepShip from ShipStation-centric workflows to normalized connector-b
 ### Checklist Items
 
 - [~] Every order enters through a `StoreConnector`. Foundation exists; ShipStation import writes canonical source fields, and eBay/Shopify/Amazon have registered connector stubs, but their live imports still need implementation.
-- [~] Every imported order is normalized into a canonical PrepShip order model. `NormalizedOrder` exists; ShipStation import now persists canonical source fields.
+- [~] Every imported order is normalized into a canonical PrepShip order model. `NormalizedOrder` exists; ShipStation import now persists canonical source fields through a reusable source helper.
 - [x] Every order can store `sourceProvider`, `sourceAccountId`, `sourceOrderId`, and raw source payload.
 - [~] Every rate request goes through a `CarrierConnector`. Carrier registry, capability matrix, and connector-backed provider resolution exist; direct endpoints still own live provider behavior.
 - [~] Every label purchase goes through a `CarrierConnector`. Carrier registry, connector-backed provider resolution, and direct-label persistence exist, and direct labels now persist canonical shipment provider fields; direct endpoints still own live provider behavior.
