@@ -177,7 +177,7 @@ const INVENTORY_PAGE_SIZE_KEY = 'inventory_page_size'
 const RECEIVE_INPUT_CLASS = 'h-8 w-full rounded-md border border-line bg-surface px-3 text-[12px] text-ink outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/15 disabled:cursor-not-allowed disabled:opacity-60'
 const RECEIVE_LABEL_CLASS = 'text-[10.5px] font-extrabold uppercase tracking-[0.04em] text-ink-3'
 const RECEIVE_FIELD_CLASS = 'flex min-w-0 flex-col gap-1.5'
-const INVENTORY_HEADER_CLASS = 'flex flex-wrap items-start gap-4 px-7 pb-[22px] pt-6 max-md:px-5 max-md:pb-[18px] max-md:pt-5'
+const INVENTORY_HEADER_CLASS = 'flex flex-wrap items-start gap-4 px-7 pb-[22px] pt-12 max-md:px-5 max-md:pb-[18px] max-md:pt-5'
 const INVENTORY_HEADER_ACTIONS_CLASS = 'ml-auto flex max-w-[min(760px,56vw)] flex-wrap items-center justify-end gap-2 pt-0.5 max-md:flex-[1_1_100%] max-md:justify-start max-md:max-w-none max-md:pt-0 max-[520px]:w-full max-[520px]:[&_.btn]:w-full'
 
 function readStoredInventoryPageSize(): number {
