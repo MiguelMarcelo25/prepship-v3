@@ -24,8 +24,26 @@ import {
 } from '../../src/lib/auth/verify-supabase-jwt.js';
 import { corsHeaders } from '../../src/lib/http/cors.js';
 import { timedFetch } from '../../src/lib/http/timing.js';
-import { resolveCarrierConnector } from '../../src/connectors/carrier-resolution.js';
 import { sendInternalServerError } from '../_lib/safe-error.js';
+
+// Keep this endpoint self-contained for Vercel cold starts. Importing the
+// connector registry here pulls a wider src/ tree into the serverless bundle;
+// other carrier functions already hit FUNCTION_INVOCATION_FAILED from similar
+// shared-helper paths. The canonical registry is still guarded elsewhere; this
+// map only exposes response metadata for the direct rate preview endpoint.
+const DIRECT_CARRIER_CONNECTOR_CAPABILITIES: Record<string, string[]> = {
+  shipstation: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read'],
+  shipp: ['rates.quote', 'labels.create', 'tracking.read', 'credentials.verify'],
+  easypost: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read', 'credentials.verify', 'webhooks.receive'],
+  easy_post: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read', 'credentials.verify', 'webhooks.receive'],
+  walmart_shipping: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read', 'credentials.verify'],
+  walmartshipping: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read', 'credentials.verify'],
+  ups: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read', 'credentials.verify'],
+};
+
+function directCarrierConnectorCapabilities(provider: string): string[] {
+  return DIRECT_CARRIER_CONNECTOR_CAPABILITIES[provider] ?? [];
+}
 
 function readBody(req: any): Promise<unknown> {
   if (req.body) {
@@ -1941,8 +1959,7 @@ export default async function handler(req: any, res: any): Promise<void> {
     if (useStoreTable && provider === 'walmart' && requestedProvider === 'walmart_shipping') {
       provider = 'walmart_shipping';
     }
-    const resolvedCarrierConnector = resolveCarrierConnector(provider, 'rates.quote');
-    const connectorCapabilities = resolvedCarrierConnector?.connectorCapabilities ?? [];
+    const connectorCapabilities = directCarrierConnectorCapabilities(provider);
     const creds = (row.credentials && typeof row.credentials === 'object'
       ? (row.credentials as Record<string, unknown>)
       : {});

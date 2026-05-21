@@ -137,9 +137,20 @@ assert(fulfillmentOutbox.includes('resolveStoreConnector'), 'fulfillment outbox 
 assert(fulfillmentOutbox.includes('connectorCapabilities'), 'fulfillment outbox must expose store connector capabilities in logs or payload');
 
 for (const source of [carrierLabels, carrierRates]) {
-  assert(source.includes('resolveCarrierConnector'), 'direct carrier endpoint must resolve providers through connector registry');
   assert(source.includes('connectorCapabilities'), 'direct carrier endpoint response metadata must expose connector capabilities');
 }
+assert(
+  carrierLabels.includes('resolveCarrierConnector'),
+  'direct carrier label endpoint must resolve providers through connector registry',
+);
+assert(
+  carrierRates.includes('DIRECT_CARRIER_CONNECTOR_CAPABILITIES'),
+  'direct carrier rates endpoint must keep Vercel-safe inline connector capability metadata',
+);
+assert(
+  !carrierRates.includes("from '../../src/connectors/carrier-resolution.js'"),
+  'direct carrier rates endpoint must not import connector registry at Vercel cold start',
+);
 
 for (const file of [
   'src/connectors/carrier/shipstation.ts',
