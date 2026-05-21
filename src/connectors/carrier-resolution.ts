@@ -1,5 +1,6 @@
 import { carrierConnectors } from './registry';
 import { connectorCapabilityMatrix } from './matrix';
+import { getConnectorImplementationStatus, type ConnectorImplementationInfo } from './implementation-status';
 import type { CarrierConnector, ConnectorCapability, ConnectorProvider } from './types';
 
 const providerAliases: Record<string, ConnectorProvider> = {
@@ -16,6 +17,7 @@ export type ResolvedCarrierConnector = {
   provider: ConnectorProvider;
   connector: CarrierConnector;
   connectorCapabilities: ConnectorCapability[];
+  implementation: ConnectorImplementationInfo;
 };
 
 export function normalizeCarrierProviderKey(provider: string | null | undefined): ConnectorProvider | null {
@@ -40,5 +42,6 @@ export function resolveCarrierConnector(
     provider: normalized,
     connector,
     connectorCapabilities,
+    implementation: getConnectorImplementationStatus(normalized),
   };
 }

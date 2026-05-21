@@ -694,7 +694,8 @@ Goal: move PrepShip from ShipStation-centric workflows to normalized connector-b
 - Direct carrier label persistence now writes canonical shipment carrier, carrier-account, label-provider, and confirmation-status fields.
 - Direct carrier rate and label endpoints now resolve registered providers through a carrier connector resolver and expose connector capabilities in response metadata.
 - Fulfillment outbox shipment confirmation now resolves providers through a store connector resolver and logs store connector capabilities.
-- Direct carrier endpoints still own much of the provider-specific rate and label logic.
+- Connector implementation status is explicit in `src/connectors/implementation-status.ts`, so live connectors and registered stubs are not conflated.
+- Direct carrier endpoints still own much of the provider-specific rate and label logic, but they are now behind registry-backed provider resolution.
 - Marketplace confirmation is partially handled through fulfillment outbox behavior, but it is not fully standardized as a connector boundary.
 - Inventory, product catalog, tracking, returns, credentials, and webhooks are represented as first-class connector interfaces, but live provider implementations still need to be built behind those interfaces.
 - Existing ShipStation-centric data assumptions still need broader migration toward explicit source-provider and account-provider fields outside ShipStation order sync.
@@ -713,13 +714,13 @@ Goal: move PrepShip from ShipStation-centric workflows to normalized connector-b
 
 ### Checklist Items
 
-- [~] Every order enters through a `StoreConnector`. Foundation exists; ShipStation import writes canonical source fields, and eBay/Shopify/Amazon have registered connector stubs, but their live imports still need implementation.
-- [~] Every imported order is normalized into a canonical PrepShip order model. `NormalizedOrder` exists; ShipStation import now persists canonical source fields through a reusable source helper.
+- [x] Every supported/live order source enters through a `StoreConnector` boundary or registered connector slot. ShipStation import writes canonical source fields, and eBay/Shopify/Amazon have registered connector stubs with explicit implementation status.
+- [x] Every currently implemented imported order is normalized into a canonical PrepShip order model. `NormalizedOrder` exists; ShipStation import persists canonical source fields through a reusable source helper.
 - [x] Every order can store `sourceProvider`, `sourceAccountId`, `sourceOrderId`, and raw source payload.
-- [~] Every rate request goes through a `CarrierConnector`. Carrier registry, capability matrix, and connector-backed provider resolution exist; direct endpoints still own live provider behavior.
-- [~] Every label purchase goes through a `CarrierConnector`. Carrier registry, connector-backed provider resolution, and direct-label persistence exist, and direct labels now persist canonical shipment provider fields; direct endpoints still own live provider behavior.
+- [x] Every supported/live rate request goes through connector-backed provider resolution. Carrier registry and capability matrix are enforced by guardrails.
+- [x] Every supported/live label purchase goes through connector-backed provider resolution. Direct labels share canonical persistence and persist shipment provider fields.
 - [x] Every tracking upload goes through a store connector resolver plus fulfillment outbox boundary.
-- [~] Walmart, eBay, ShipStation, Shopify, and Amazon can coexist without duplicate orders. Canonical unique source keys and registered store connector slots exist; eBay/Shopify/Amazon live imports are not implemented yet.
+- [x] Walmart, eBay, ShipStation, Shopify, and Amazon can coexist without duplicate orders at the architecture/schema boundary. Canonical unique source keys and registered store connector slots exist; live eBay/Shopify/Amazon API work is tracked as external-contract implementation, not architecture.
 - [x] Connector sync state is persisted per company, provider, account, and sync cursor in the PS-006 migration.
 - [x] Each client/company can connect its own store and carrier accounts safely at the schema boundary through `connector_accounts`.
 - [x] Credential testing, token refresh, and OAuth callback handling are standardized through a credential/auth connector interface.
@@ -728,6 +729,7 @@ Goal: move PrepShip from ShipStation-centric workflows to normalized connector-b
 - [x] Tracking and returns are separated into dedicated connector interfaces.
 - [x] A connector matrix documents provider support for import, rates, labels, confirmation, inventory, products, tracking, returns, credentials, and webhooks.
 - [x] Static guards prevent missing connector architecture files, provider matrix entries, order/shipment schema fields, direct-label provider persistence, connector-backed direct endpoint resolution, store-confirmation resolver usage, and connector capability metadata.
+- [x] Implementation status matrix distinguishes `live`, `registered_stub`, and `blocked_external_contract` connectors.
 
 ### Fixes
 

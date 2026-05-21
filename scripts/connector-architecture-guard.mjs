@@ -8,6 +8,7 @@ function read(path) {
 
 const types = read('src/connectors/types.ts');
 const matrix = read('src/connectors/matrix.ts');
+const statusMatrix = read('src/connectors/implementation-status.ts');
 const registry = read('src/connectors/registry.ts');
 const carrierResolution = read('src/connectors/carrier-resolution.ts');
 const storeResolution = read('src/connectors/store-resolution.ts');
@@ -47,6 +48,7 @@ for (const provider of [
   'shopify',
 ]) {
   assert(matrix.includes(`${provider}:`), `connector matrix missing ${provider}`);
+  assert(statusMatrix.includes(`${provider}:`), `implementation status matrix missing ${provider}`);
 }
 
 for (const capability of [
@@ -59,6 +61,11 @@ for (const capability of [
 ]) {
   assert(matrix.includes(capability), `connector matrix missing capability ${capability}`);
 }
+
+for (const status of ['live', 'registered_stub', 'blocked_external_contract']) {
+  assert(statusMatrix.includes(status), `implementation status matrix missing status ${status}`);
+}
+assert(statusMatrix.includes('getConnectorImplementationStatus'), 'missing connector implementation status lookup');
 
 for (const table of ['connector_accounts', 'connector_sync_state', 'connector_events']) {
   assert(migration.includes(`CREATE TABLE IF NOT EXISTS ${table}`), `migration missing ${table}`);

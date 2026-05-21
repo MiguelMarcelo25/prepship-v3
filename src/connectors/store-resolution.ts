@@ -1,4 +1,5 @@
 import { connectorCapabilityMatrix } from './matrix';
+import { getConnectorImplementationStatus, type ConnectorImplementationInfo } from './implementation-status';
 import { storeConnectors } from './registry';
 import type { StoreConnector } from '../domain/fulfillment/types';
 import type { ConnectorCapability, ConnectorProvider } from './types';
@@ -15,6 +16,7 @@ export type ResolvedStoreConnector = {
   provider: ConnectorProvider;
   connector: StoreConnector;
   connectorCapabilities: ConnectorCapability[];
+  implementation: ConnectorImplementationInfo;
 };
 
 export function normalizeStoreProviderKey(provider: string | null | undefined): ConnectorProvider | null {
@@ -39,5 +41,6 @@ export function resolveStoreConnector(
     provider: normalized,
     connector,
     connectorCapabilities,
+    implementation: getConnectorImplementationStatus(normalized),
   };
 }
