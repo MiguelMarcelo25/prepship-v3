@@ -3733,7 +3733,6 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                           ariaLabel="SKU"
                           inputClassName="ship-select"
                           inputStyle={{ fontFamily: 'monospace', fontSize: 12 }}
-                          popoverStyle={{ width: 'min(1120px, calc(100vw - 2rem))', maxWidth: 'calc(100vw - 2rem)' }}
                           maxResults={receiveSkuOptions.length || 50}
                           emptyMessage={
                             row.sku.trim()

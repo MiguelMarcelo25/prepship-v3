@@ -286,7 +286,7 @@
 }
 
 .inventory-receive-card{
-  width:min(100%, 1180px);
+  width:min(100%, 980px);
   background:var(--surface);
   border:1px solid var(--border);
   border-radius:8px;
@@ -340,13 +340,14 @@
 
 .inventory-receive-row-fields{
   display:grid;
-  grid-template-columns:minmax(640px, 4fr) minmax(280px, 1.25fr) 80px auto 28px;
+  grid-template-columns:minmax(360px, 440px) minmax(260px, 1fr) 76px auto 28px;
   gap:10px;
   align-items:start;
 }
 
 .inventory-receive-sku-cell{
   min-width:0;
+  max-width:440px;
 }
 
 .inventory-receive-qty-cell{
