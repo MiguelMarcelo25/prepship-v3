@@ -66,19 +66,19 @@ async function withSchedulerAdvisoryLock<T>(
   fn: () => Promise<T>,
 ): Promise<T | null> {
   const lockName = `prepship.scheduler.${name}`;
-  const [row] = await pg<{ acquired: boolean }[]>`
-    select pg_try_advisory_lock(hashtext(${lockName})) as acquired
-  `;
-  if (!row?.acquired) {
-    console.log(`[scheduler] ${name} skipped - another process holds the scheduler lock`);
-    await recordWorkerJobSkipped(name, 'scheduler lock held by another process');
-    return null;
-  }
-  try {
-    return await fn();
-  } finally {
-    await pg`select pg_advisory_unlock(hashtext(${lockName}))`;
-  }
+  const result = await pg.begin(async (tx) => {
+    const [row] = await tx<{ acquired: boolean }[]>`
+      select pg_try_advisory_xact_lock(hashtext(${lockName})) as acquired
+    `;
+    if (!row?.acquired) {
+      console.log(`[scheduler] ${name} skipped - another process holds the scheduler lock`);
+      await recordWorkerJobSkipped(name, 'scheduler lock held by another process');
+      return null;
+    }
+
+    return fn();
+  });
+  return result as T | null;
 }
 
 function isRateBackfillSchedulerEnabled(): boolean {

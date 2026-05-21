@@ -79,6 +79,7 @@
     "test:connector-architecture": "node scripts/connector-architecture-guard.mjs",
     "status:sync": "tsx scripts/status-sync.ts",
     "test:status:sync": "tsx scripts/status-sync.ts --check",
+    "test:sync-advisory-lock": "node scripts/sync-advisory-lock-guard.mjs",
     "status:carriers": "tsx scripts/status-carriers.ts",
     "test:status:carriers": "tsx scripts/status-carriers.ts --check",
     "test:jwt-session-policy": "node scripts/jwt-session-policy-guard.mjs",
