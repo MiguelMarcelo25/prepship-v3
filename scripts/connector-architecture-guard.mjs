@@ -11,7 +11,9 @@ const matrix = read('src/connectors/matrix.ts');
 const registry = read('src/connectors/registry.ts');
 const migration = read('drizzle/0032_connector_architecture.sql');
 const ordersSchema = read('src/db/schema/orders.ts');
+const shipmentsSchema = read('src/db/schema/shipments.ts');
 const orderSync = read('src/services/order-sync.ts');
+const directLabelPersistence = read('src/services/direct-label-persistence.ts');
 const packageJson = JSON.parse(read('package.json'));
 
 for (const iface of [
@@ -63,7 +65,7 @@ for (const column of [
   'raw_source_payload',
   'carrier_provider',
   'carrier_account_id',
-  'label_provider',
+  'label_provider_key',
   'confirmation_provider',
 ]) {
   assert(migration.includes(column), `migration missing ${column}`);
@@ -78,6 +80,26 @@ for (const schemaField of [
 ]) {
   assert(ordersSchema.includes(`${schemaField}:`), `orders schema missing ${schemaField}`);
   assert(orderSync.includes(`${schemaField}:`), `ShipStation order sync must write ${schemaField}`);
+}
+
+for (const schemaField of [
+  'carrierProvider',
+  'carrierAccountId',
+  'labelProviderKey',
+  'confirmationProvider',
+  'confirmationStatus',
+]) {
+  assert(shipmentsSchema.includes(`${schemaField}:`), `shipments schema missing ${schemaField}`);
+}
+
+for (const sqlColumn of [
+  'carrier_provider',
+  'carrier_account_id',
+  'label_provider_key',
+  'confirmation_provider',
+  'confirmation_status',
+]) {
+  assert(directLabelPersistence.includes(sqlColumn), `direct label persistence must write ${sqlColumn}`);
 }
 
 for (const key of ['shipstation', 'walmart']) {

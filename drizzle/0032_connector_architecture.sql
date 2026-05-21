@@ -64,6 +64,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS orders_source_unique_idx
 ALTER TABLE shipments
   ADD COLUMN IF NOT EXISTS carrier_provider text,
   ADD COLUMN IF NOT EXISTS carrier_account_id text,
-  ADD COLUMN IF NOT EXISTS label_provider text,
+  ADD COLUMN IF NOT EXISTS label_provider_key text,
   ADD COLUMN IF NOT EXISTS confirmation_provider text,
   ADD COLUMN IF NOT EXISTS confirmation_status text;

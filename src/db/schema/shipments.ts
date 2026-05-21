@@ -47,6 +47,14 @@ export const shipments = pgTable(
     selectedPackageId: text(),
     providerAccountId: integer(),
     providerAccountNickname: text(),
+    carrierProvider: text(),
+    carrierAccountId: text(),
+    labelProviderKey: text(),
+    confirmationProvider: text(),
+    confirmationStatus: text(),
+    confirmationAttempts: integer().default(0).notNull(),
+    confirmationLastError: text(),
+    marketplaceConfirmedAt: timestamp({ withTimezone: true }),
     voided: boolean().default(false).notNull(),
     source: text(),
     isReturn: boolean().default(false).notNull(),
@@ -65,6 +73,8 @@ export const shipments = pgTable(
     index('shipments_order_number_latest_idx')
       .on(t.orderNumber, t.id.desc())
       .where(sql`${t.orderNumber} is not null and ${t.orderId} is null and coalesce(${t.voided}, false) = false`),
+    index('shipments_confirmation_status_idx').on(t.confirmationStatus),
+    index('shipments_carrier_provider_idx').on(t.carrierProvider),
   ]
 );
 

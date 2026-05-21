@@ -60,6 +60,8 @@ export async function persistDirectCarrierLabel(
         label_ship_date, label_provider, label_shipment_id,
         selected_rate_json, selected_pid, selected_package_id,
         provider_account_id, provider_account_nickname,
+        carrier_provider, carrier_account_id, label_provider_key,
+        confirmation_provider, confirmation_status,
         voided, source, is_return, created_at, updated_at
       )
       VALUES (
@@ -71,6 +73,8 @@ export async function persistDirectCarrierLabel(
         NOW(), ${input.labelProvider}, ${input.labelShipmentId ?? null},
         ${sql.json(input.selectedRateJson)}, ${input.selectedPid}, ${input.selectedPackageId},
         ${input.carrierAccountId}, ${input.carrierLabel},
+        ${input.carrierProvider}, ${input.carrierAccountId == null ? null : String(input.carrierAccountId)}, ${input.carrierProvider},
+        ${null}, ${input.trackingNumber ? 'pending' : 'not_required'},
         ${false}, ${input.source}, ${false}, NOW(), NOW()
       )
       RETURNING id
