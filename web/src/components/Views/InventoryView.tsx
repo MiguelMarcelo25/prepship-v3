@@ -180,7 +180,7 @@ const INVENTORY_PAGE_SIZE_KEY = 'inventory_page_size'
 const RECEIVE_INPUT_CLASS = 'h-8 w-full rounded-md border border-line bg-surface px-3 text-[12px] text-ink outline-none transition focus:border-brand focus:ring-2 focus:ring-brand/15 disabled:cursor-not-allowed disabled:opacity-60'
 const RECEIVE_LABEL_CLASS = 'text-[10.5px] font-extrabold uppercase tracking-[0.04em] text-ink-3'
 const RECEIVE_FIELD_CLASS = 'flex min-w-0 flex-col gap-1.5'
-const INVENTORY_HEADER_CLASS = 'inventory-section-header flex flex-wrap items-start gap-4 px-7 pb-[22px] pt-12 max-md:px-5 max-md:pb-[18px] max-md:pt-5'
+const INVENTORY_HEADER_CLASS = 'inventory-section-header flex flex-wrap items-start gap-4 px-7 pb-4 pt-6 max-md:px-5 max-md:pb-4 max-md:pt-5'
 const INVENTORY_HEADER_ACTIONS_CLASS = 'inventory-section-header-actions ml-auto flex max-w-[min(760px,56vw)] flex-wrap items-center justify-end gap-2 pt-0.5 max-md:flex-[1_1_100%] max-md:justify-start max-md:max-w-none max-md:pt-0 max-[520px]:w-full max-[520px]:[&_.btn]:w-full'
 
 function readStoredInventoryPageSize(): number {
@@ -2760,7 +2760,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
   return (
     <div
       id="view-inventory"
-      className="view-content inventory-page-shell !p-5 !overflow-y-auto"
+      className="view-content inventory-page-shell !p-0 !overflow-y-auto relative"
       style={!hideTabs ? {
         background:
           'radial-gradient(900px 500px at 8% 0%, rgb(var(--brand-rgb, 42 91 215) / 0.04), transparent 60%), radial-gradient(700px 400px at 100% 100%, rgb(var(--brand-rgb, 42 91 215) / 0.035), transparent 65%), rgb(var(--bg-rgb, 240 242 245))',
@@ -2794,7 +2794,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
         const activeMeta = INVENTORY_TAB_META.find((t) => t.id === activeTab) ?? INVENTORY_TAB_META[0]
         const ActiveIcon = activeMeta.icon
         return (
-          <div className="-mx-5 -mt-5 mb-4">
+          <div className="mb-4">
             {/* ─── HORIZONTAL ICON RAIL ─────────────────────────────
                 Sticky strip across the top of the panel (negative
                 margin pulls it flush with the page edges since the
