@@ -10,6 +10,7 @@ import type { CarriersResponse } from '../lib/shipstation/types';
 import { publicClient } from '../lib/public-client';
 import { filterClientsForScope, getClientStoreScope } from '../lib/client-store-scope';
 import { EXCLUDED_STORE_IDS, EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
+import { walmartDirectDuplicateSuppressionPredicate } from '../lib/walmart-order-dedupe';
 
 const app = new Hono();
 
@@ -136,9 +137,9 @@ app.get('/counts', async (c) => {
     )
   ) and coalesce(c.active, true) = true`;
   const visibleAwaitingOrdersPredicate = sql`not (
-    coalesce(o.external_order_id, '') ilike 'walmart-%'
-    or coalesce(o.external_order_id, '') ilike 'ebay-%'
+    coalesce(o.external_order_id, '') ilike 'ebay-%'
   )`;
+  const walmartCanonicalOrderPredicate = walmartDirectDuplicateSuppressionPredicate('o');
 
   const loadCounts = (async (): Promise<CountsPayload> => {
     const [rows, byStatus, byStatusStore] = await Promise.all([
@@ -157,6 +158,7 @@ app.get('/counts', async (c) => {
           where o.order_status = 'awaiting_shipment'
             and ${visibleOrderPredicate}
             and ${visibleAwaitingOrdersPredicate}
+            and ${walmartCanonicalOrderPredicate}
             ${orderDateFilter()}
             and not exists (
               select 1 from clients hidden_client
@@ -169,6 +171,7 @@ app.get('/counts', async (c) => {
           left join clients c on c.id = o.client_id
           where o.order_status = 'shipped'
             and ${visibleOrderPredicate}
+            and ${walmartCanonicalOrderPredicate}
             ${orderDateFilter()}
             and not exists (
               select 1 from clients hidden_client
@@ -181,6 +184,7 @@ app.get('/counts', async (c) => {
           left join clients c on c.id = o.client_id
           where o.order_status = 'cancelled'
             and ${visibleOrderPredicate}
+            and ${walmartCanonicalOrderPredicate}
             ${orderDateFilter()}
             and not exists (
               select 1 from clients hidden_client
@@ -193,6 +197,7 @@ app.get('/counts', async (c) => {
           left join clients c on c.id = o.client_id
           where o.order_status = 'on_hold'
             and ${visibleOrderPredicate}
+            and ${walmartCanonicalOrderPredicate}
             ${orderDateFilter()}
             and not exists (
               select 1 from clients hidden_client
@@ -220,6 +225,7 @@ app.get('/counts', async (c) => {
       from orders o
       left join clients c on c.id = o.client_id
         where ${visibleOrderPredicate}
+        and ${walmartCanonicalOrderPredicate}
         ${orderDateFilter()}
         and (
           o.order_status is distinct from 'awaiting_shipment'
@@ -243,6 +249,7 @@ app.get('/counts', async (c) => {
       from orders o
       left join clients c on c.id = o.client_id
         where ${visibleOrderPredicate}
+        and ${walmartCanonicalOrderPredicate}
         ${orderDateFilter()}
         and (
           o.order_status is distinct from 'awaiting_shipment'

@@ -25,6 +25,12 @@ import { EXCLUDED_STORE_IDS, EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
 import { isAdminEmail } from '../lib/admin-emails';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 import { hasAppPermission } from '../middleware/auth';
+import {
+  WALMART_DIRECT_STORE_ID,
+  WALMART_SHIPSTATION_STORE_ID,
+  walmartDirectDuplicateSuppressionPredicate,
+  walmartDirectStoreDebugInfo,
+} from '../lib/walmart-order-dedupe';
 
 const app = new Hono();
 
@@ -193,8 +199,7 @@ const visibleStorePredicate = sql`${visibleStoreBasePredicate} and ${activeOrder
 function visibleAwaitingOrdersPredicate(alias: 'orders' | 'o' = 'orders') {
   const externalOrderId = sql.raw(`${alias}.external_order_id`);
   return sql`not (
-    coalesce(${externalOrderId}, '') ilike 'walmart-%'
-    or coalesce(${externalOrderId}, '') ilike 'ebay-%'
+    coalesce(${externalOrderId}, '') ilike 'ebay-%'
   )`;
 }
 
@@ -1066,6 +1071,10 @@ const orderListSelect = {
   orderStatus: orders.orderStatus,
   orderDate: orders.orderDate,
   storeId: orders.storeId,
+  sourceProvider: orders.sourceProvider,
+  sourceAccountId: orders.sourceAccountId,
+  sourceOrderId: orders.sourceOrderId,
+  sourceOrderNumber: orders.sourceOrderNumber,
   customerEmail: orders.customerEmail,
   shipToName: orders.shipToName,
   shipToCity: orders.shipToCity,
@@ -1145,6 +1154,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     ...[
       statusPredicate,
       q.status === 'awaiting_shipment' ? visibleAwaitingOrdersPredicate('orders') : undefined,
+      walmartDirectDuplicateSuppressionPredicate('orders'),
       orderScopePredicate(orderScope),
       assigneeFilter,
       q.clientId !== undefined ? eq(orders.clientId, q.clientId) : undefined,
@@ -1269,6 +1279,48 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   ];
   const latestShipByOrderId = new Map<number, LatestShipmentRow>();
   const latestShipByOrderNumber = new Map<string, LatestShipmentRow>();
+  const walmartDirectDuplicateByOrderNumber = new Map<string, {
+    id: number;
+    external_order_id: string | null;
+    source_provider: string | null;
+    source_account_id: string | null;
+    order_status: string | null;
+  }>();
+  const walmartShipStationPageOrderNumbers = [
+    ...new Set(
+      joined
+        .filter((r) => r.order.storeId === WALMART_SHIPSTATION_STORE_ID)
+        .map((r) => r.order.orderNumber)
+        .filter((n): n is string => Boolean(n)),
+    ),
+  ];
+  if (walmartShipStationPageOrderNumbers.length) {
+    const directRows = await timedOrdersStep(timings, 'walmartDirectDuplicates', () =>
+      db.execute<{
+        id: number;
+        order_number: string;
+        external_order_id: string | null;
+        source_provider: string | null;
+        source_account_id: string | null;
+        order_status: string | null;
+      }>(sql`
+        select distinct on (order_number)
+          id,
+          order_number,
+          external_order_id,
+          source_provider,
+          source_account_id,
+          order_status
+        from orders
+        where store_id = ${WALMART_DIRECT_STORE_ID}
+          and order_number in (${sql.join(walmartShipStationPageOrderNumbers.map((n) => sql`${n}`), sql`, `)})
+        order by order_number, order_date desc nulls last, id desc
+      `)
+    );
+    for (const row of directRows) {
+      walmartDirectDuplicateByOrderNumber.set(row.order_number, row);
+    }
+  }
   if (pageOrderIds.length) {
     const shipRowsById = await timedOrdersStep(timings, 'shipmentsByOrderId', () =>
       db.execute<LatestShipmentRow>(sql`
@@ -1460,6 +1512,26 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           }
         : null;
     const bestRate = !isShippedBucket ? normalizeListBestRate(overrideBestRate) : null;
+    const walmartDirectDuplicate =
+      r.order.storeId === WALMART_SHIPSTATION_STORE_ID
+        ? walmartDirectDuplicateByOrderNumber.get(r.order.orderNumber)
+        : undefined;
+    const walmartSourceLink = walmartDirectDuplicate
+      ? {
+          provider: 'walmart',
+          canonicalVisibleStoreId: WALMART_SHIPSTATION_STORE_ID,
+          hiddenDuplicateStoreId: WALMART_DIRECT_STORE_ID,
+          identity: r.order.orderNumber,
+          hasShipStationSource: true,
+          hasDirectWalmartSource: true,
+          directDuplicateOrderId: walmartDirectDuplicate.id,
+          directDuplicateExternalOrderId: walmartDirectDuplicate.external_order_id,
+          directDuplicateStatus: walmartDirectDuplicate.order_status,
+          directDuplicateSourceProvider: walmartDirectDuplicate.source_provider,
+          directDuplicateSourceAccountId: walmartDirectDuplicate.source_account_id,
+          mapping: walmartDirectStoreDebugInfo(),
+        }
+      : null;
     const bestRateRecord = recordOrNull(bestRate);
     const v2BestRateRecord = overrideBestRate ? bestRateRecord : null;
     const selectedRateRecord = recordOrNull(selectedRate);
@@ -1696,6 +1768,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       bestRate: canViewFinancials ? bestRate : redactRateMoneyFields(bestRate),
       shipping,
       canonicalOrder,
+      sourceLink: walmartSourceLink,
     };
   }).map((row) => redactOrderFinancials(row, canViewFinancials));
   const totalMs = msSince(routeStartedAt);
@@ -1704,6 +1777,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     total,
     totalApproximate,
     countWasSkipped,
+    walmartDirectDuplicatesOnPage: walmartDirectDuplicateByOrderNumber.size,
     shipmentsByOrderId: latestShipByOrderId.size,
     shipmentsByOrderNumber: latestShipByOrderNumber.size,
   });

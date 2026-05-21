@@ -89,6 +89,7 @@
     "test:maintenance-page": "node scripts/maintenance-page-guard.mjs",
     "test:maintenance-gate:browser": "playwright test web/e2e/maintenance-gate.spec.js --reporter=line",
     "test:orders-ux": "node scripts/orders-ux-guard.mjs",
+    "test:walmart-dual-dedupe": "node scripts/walmart-dual-dedupe-guard.mjs",
     "test:orders-startup-requests": "node scripts/orders-startup-requests-guard.mjs",
     "test:orders-maintenance-startup": "node scripts/orders-maintenance-startup-guard.mjs",
     "test:secondary-order-detail-lazy": "node scripts/secondary-order-detail-lazy-guard.mjs",
