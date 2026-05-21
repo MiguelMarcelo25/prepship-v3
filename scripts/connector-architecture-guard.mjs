@@ -20,6 +20,7 @@ const orderSync = read('src/services/order-sync.ts');
 const directLabelPersistence = read('src/services/direct-label-persistence.ts');
 const carrierLabels = read('api/carriers/labels.ts');
 const carrierRates = read('api/carriers/rates.ts');
+const carrierStatus = read('scripts/status-carriers.ts');
 const fulfillmentOutbox = read('src/services/fulfillment/outbox.ts');
 const packageJson = JSON.parse(read('package.json'));
 
@@ -161,3 +162,19 @@ assert.equal(
   'node scripts/connector-architecture-guard.mjs',
   'package.json missing test:connector-architecture script',
 );
+assert.equal(
+  packageJson.scripts?.['status:carriers'],
+  'tsx scripts/status-carriers.ts',
+  'package.json missing status:carriers script',
+);
+assert.equal(
+  packageJson.scripts?.['test:status:carriers'],
+  'tsx scripts/status-carriers.ts --check',
+  'package.json missing test:status:carriers script',
+);
+assert(carrierStatus.includes('connectorCapabilityMatrix'), 'carrier status checker must read connector capability matrix');
+assert(carrierStatus.includes('connectorImplementationStatus'), 'carrier status checker must read connector implementation status');
+assert(carrierStatus.includes('carrierConnectors'), 'carrier status checker must inspect carrier registry keys');
+assert(carrierStatus.includes('storeConnectors'), 'carrier status checker must inspect store registry keys');
+assert(carrierStatus.includes('--json'), 'carrier status checker must support JSON output');
+assert(carrierStatus.includes('--check'), 'carrier status checker must support check mode');
