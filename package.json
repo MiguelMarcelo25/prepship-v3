@@ -72,6 +72,7 @@
     "test:shipstation-awaiting-parity": "tsx scripts/shipstation-awaiting-parity-guard.ts",
     "test:direct-carrier-labels": "node scripts/direct-carrier-label-guard.mjs",
     "test:connector-registry": "node scripts/connector-registry-guard.mjs",
+    "test:connector-architecture": "node scripts/connector-architecture-guard.mjs",
     "test:jwt-session-policy": "node scripts/jwt-session-policy-guard.mjs",
     "test:auth-logout": "node scripts/auth-logout-guard.mjs",
     "test:frontend-auth-cache": "node scripts/frontend-auth-cache-guard.mjs",

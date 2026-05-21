@@ -1,6 +1,6 @@
 # Shipping Integration Remediation Checklist
 
-This document tracks the executable remediation checklist for shipping integration problem statements PS-001 through PS-005.
+This document tracks the executable remediation checklist for shipping integration problem statements PS-001 through PS-006.
 
 ## PS-001: Shipment Sync Stuck in Awaiting Shipment
 
@@ -672,4 +672,377 @@ npm run typecheck
 npm run test:frontend-auth-cache
 npm run typecheck
 npm run build:web
+```
+
+## PS-006: Standardize PrepShip Connector Architecture
+
+### Problem Statement
+
+PrepShip still has ShipStation-centric assumptions in the order, carrier, confirmation, inventory, and credential workflows. To become a clean multi-company SaaS platform, every external system must plug into PrepShip through normalized connector boundaries instead of custom platform-specific code paths.
+
+Goal: move PrepShip from ShipStation-centric workflows to normalized connector-based workflows.
+
+### Current State
+
+- Foundation implemented.
+- `StoreConnector`, `CarrierConnector`, and the broader connector interface set now exist in `src/connectors/types.ts`.
+- ShipStation and Walmart are registered as store connectors.
+- ShipStation, Shipp, EasyPost, Walmart Shipping, and UPS are registered as carrier connectors.
+- Provider capabilities are documented in `src/connectors/matrix.ts`.
+- Non-destructive connector-account, sync-state, event, order-source, and shipment-source schema additions are captured in `drizzle/0032_connector_architecture.sql`.
+- ShipStation order sync now writes canonical source fields on imported orders.
+- Direct carrier endpoints still own much of the provider-specific rate and label logic.
+- Marketplace confirmation is partially handled through fulfillment outbox behavior, but it is not fully standardized as a connector boundary.
+- Inventory, product catalog, tracking, returns, credentials, and webhooks are represented as first-class connector interfaces, but live provider implementations still need to be built behind those interfaces.
+- Existing ShipStation-centric data assumptions still need broader migration toward explicit source-provider and account-provider fields outside ShipStation order sync.
+
+### Required Connector Interfaces
+
+- `StoreConnector`
+- `CarrierConnector`
+- `MarketplaceConfirmationConnector`
+- `InventoryConnector`
+- `ProductCatalogConnector`
+- `TrackingConnector`
+- `ReturnConnector`
+- `Credential/AuthConnector`
+- `WebhookConnector`
+
+### Checklist Items
+
+- [~] Every order enters through a `StoreConnector`. Foundation exists; existing ShipStation import now writes canonical source fields, but all future store imports still need to be routed through connector implementations.
+- [~] Every imported order is normalized into a canonical PrepShip order model. `NormalizedOrder` exists; ShipStation import now persists canonical source fields.
+- [x] Every order can store `sourceProvider`, `sourceAccountId`, `sourceOrderId`, and raw source payload.
+- [~] Every rate request goes through a `CarrierConnector`. Carrier registry and capability matrix exist; direct endpoints still own live provider behavior.
+- [~] Every label purchase goes through a `CarrierConnector`. Carrier registry and direct-label persistence exist; direct endpoints still own live provider behavior.
+- [x] Every tracking upload goes through a `MarketplaceConfirmationConnector` or fulfillment outbox boundary in the target architecture.
+- [~] Walmart, eBay, ShipStation, and Shopify can coexist without duplicate orders. Canonical unique source keys are defined; eBay/Shopify live imports are not implemented yet.
+- [x] Connector sync state is persisted per company, provider, account, and sync cursor in the PS-006 migration.
+- [x] Each client/company can connect its own store and carrier accounts safely at the schema boundary through `connector_accounts`.
+- [x] Credential testing, token refresh, and OAuth callback handling are standardized through a credential/auth connector interface.
+- [x] Webhook verification and event normalization are standardized through a webhook connector interface.
+- [x] Inventory and product catalog sync are separated into dedicated connector interfaces.
+- [x] Tracking and returns are separated into dedicated connector interfaces.
+- [x] A connector matrix documents provider support for import, rates, labels, confirmation, inventory, products, tracking, returns, credentials, and webhooks.
+- [x] Static guards prevent missing connector architecture files, provider matrix entries, schema fields, and connector capability metadata.
+
+### Fixes
+
+- Add canonical connector type definitions -> create `src/connectors/types.ts`:
+
+  ```ts
+  export type ConnectorProvider =
+    | 'shipstation'
+    | 'walmart'
+    | 'walmart_shipping'
+    | 'shipp'
+    | 'easypost'
+    | 'ups'
+    | 'ebay'
+    | 'shopify'
+    | 'amazon'
+    | 'tiktok_shop'
+    | 'woocommerce';
+
+  export type ConnectorCapability =
+    | 'orders.import'
+    | 'orders.statusSync'
+    | 'shipment.confirm'
+    | 'rates.quote'
+    | 'labels.create'
+    | 'labels.void'
+    | 'tracking.read'
+    | 'returns.create'
+    | 'inventory.import'
+    | 'inventory.push'
+    | 'products.import'
+    | 'credentials.verify'
+    | 'credentials.refresh'
+    | 'webhooks.receive';
+
+  export type NormalizedOrder = {
+    sourceProvider: ConnectorProvider;
+    sourceAccountId: string;
+    sourceOrderId: string;
+    sourceOrderNumber: string | null;
+    marketplace: string | null;
+    storeId: string | null;
+    canonicalStatus: 'awaiting_shipment' | 'shipped' | 'cancelled' | 'on_hold';
+    customerName: string | null;
+    shippingPaid: number | null;
+    rawPayload: unknown;
+  };
+
+  export interface StoreConnector {
+    provider: ConnectorProvider;
+    capabilities: ConnectorCapability[];
+    importOrders(input: { companyId: number; accountId: string; cursor?: string | null }): Promise<NormalizedOrder[]>;
+    syncOrderStatuses(input: { companyId: number; accountId: string }): Promise<void>;
+    normalizeOrder(raw: unknown): NormalizedOrder;
+    confirmShipment(input: MarketplaceShipmentConfirmationInput): Promise<MarketplaceShipmentConfirmationResult>;
+    cancelOrder?(input: { companyId: number; accountId: string; sourceOrderId: string }): Promise<void>;
+    fetchOrder?(input: { companyId: number; accountId: string; sourceOrderId: string }): Promise<NormalizedOrder | null>;
+  }
+
+  export interface CarrierConnector {
+    provider: ConnectorProvider;
+    capabilities: ConnectorCapability[];
+    getRates(input: CarrierRateInput): Promise<NormalizedRate[]>;
+    createLabel(input: CarrierLabelInput): Promise<NormalizedLabel>;
+    voidLabel?(input: { labelId: string; trackingNumber?: string | null }): Promise<void>;
+    trackShipment?(input: { trackingNumber: string }): Promise<NormalizedTrackingStatus>;
+  }
+
+  export interface MarketplaceConfirmationConnector {
+    provider: ConnectorProvider;
+    capabilities: ConnectorCapability[];
+    confirmShipment(input: MarketplaceShipmentConfirmationInput): Promise<MarketplaceShipmentConfirmationResult>;
+    retryConfirmation(input: { outboxId: number }): Promise<MarketplaceShipmentConfirmationResult>;
+    normalizeConfirmationError(error: unknown): { code: string; message: string; retryable: boolean };
+  }
+
+  export interface InventoryConnector {
+    provider: ConnectorProvider;
+    capabilities: ConnectorCapability[];
+    importProducts(input: { companyId: number; accountId: string }): Promise<NormalizedInventoryItem[]>;
+    syncStockLevels(input: { companyId: number; accountId: string }): Promise<void>;
+    pushStockUpdates(input: InventoryStockUpdate[]): Promise<void>;
+    normalizeSku(raw: unknown): string;
+    normalizeProduct(raw: unknown): NormalizedInventoryItem;
+  }
+
+  export interface ProductCatalogConnector {
+    provider: ConnectorProvider;
+    capabilities: ConnectorCapability[];
+    importProducts(input: { companyId: number; accountId: string }): Promise<NormalizedProduct[]>;
+    normalizeProduct(raw: unknown): NormalizedProduct;
+    mapMarketplaceSkuToInternalSku(input: { marketplaceSku: string; accountId: string }): Promise<string | null>;
+    fetchImages?(input: { sourceProductId: string; accountId: string }): Promise<string[]>;
+    fetchDimensions?(input: { sourceProductId: string; accountId: string }): Promise<NormalizedDimensions | null>;
+  }
+
+  export interface TrackingConnector {
+    provider: ConnectorProvider;
+    capabilities: ConnectorCapability[];
+    trackShipment(input: { trackingNumber: string; carrierCode?: string | null }): Promise<NormalizedTrackingStatus>;
+    normalizeTrackingStatus(raw: unknown): NormalizedTrackingStatus;
+    detectDelivered(status: NormalizedTrackingStatus): boolean;
+    detectException(status: NormalizedTrackingStatus): boolean;
+    detectReturnToSender(status: NormalizedTrackingStatus): boolean;
+  }
+
+  export interface ReturnConnector {
+    provider: ConnectorProvider;
+    capabilities: ConnectorCapability[];
+    createReturnLabel(input: ReturnLabelInput): Promise<NormalizedReturnLabel>;
+    syncReturns(input: { companyId: number; accountId: string; cursor?: string | null }): Promise<NormalizedReturn[]>;
+    receiveReturnStatus(input: { sourceReturnId: string; accountId: string }): Promise<NormalizedReturn>;
+    confirmReturnReceived(input: { sourceReturnId: string; accountId: string }): Promise<void>;
+  }
+
+  export interface CredentialAuthConnector {
+    provider: ConnectorProvider;
+    capabilities: ConnectorCapability[];
+    verifyCredentials(input: { companyId: number; accountId: string }): Promise<{ ok: boolean; message?: string }>;
+    refreshToken?(input: { companyId: number; accountId: string }): Promise<void>;
+    storeAccount(input: StoreConnectorAccountInput): Promise<void>;
+    mapAccountToClient(input: { companyId: number; accountId: string; clientId: number }): Promise<void>;
+    handleOAuthCallback?(input: { companyId: number; code: string; state: string }): Promise<void>;
+  }
+
+  export interface WebhookConnector {
+    provider: ConnectorProvider;
+    capabilities: ConnectorCapability[];
+    verifySignature(input: { headers: Record<string, string>; body: string }): Promise<boolean>;
+    parseWebhook(input: { headers: Record<string, string>; body: string }): Promise<unknown>;
+    normalizeEvent(raw: unknown): NormalizedConnectorEvent;
+    enqueueSyncJob(event: NormalizedConnectorEvent): Promise<void>;
+  }
+  ```
+
+- Add connector matrix -> create `src/connectors/matrix.ts`:
+
+  ```ts
+  import type { ConnectorCapability, ConnectorProvider } from './types';
+
+  export const connectorCapabilityMatrix: Record<ConnectorProvider, ConnectorCapability[]> = {
+    shipstation: ['orders.import', 'shipment.confirm', 'rates.quote', 'labels.create', 'labels.void', 'tracking.read', 'products.import', 'credentials.verify', 'webhooks.receive'],
+    walmart: ['orders.import', 'orders.statusSync', 'shipment.confirm', 'inventory.import', 'inventory.push', 'products.import', 'credentials.verify'],
+    walmart_shipping: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read', 'credentials.verify'],
+    shipp: ['rates.quote', 'labels.create', 'tracking.read', 'credentials.verify'],
+    easypost: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read', 'credentials.verify', 'webhooks.receive'],
+    ups: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read', 'credentials.verify'],
+    ebay: ['orders.import', 'orders.statusSync', 'shipment.confirm', 'inventory.import', 'products.import', 'credentials.verify', 'credentials.refresh', 'webhooks.receive'],
+    shopify: ['orders.import', 'orders.statusSync', 'shipment.confirm', 'inventory.import', 'inventory.push', 'products.import', 'credentials.verify', 'credentials.refresh', 'webhooks.receive'],
+    amazon: ['orders.import', 'orders.statusSync', 'shipment.confirm', 'inventory.import', 'inventory.push', 'products.import', 'credentials.verify', 'credentials.refresh'],
+    tiktok_shop: ['orders.import', 'orders.statusSync', 'shipment.confirm', 'inventory.import', 'products.import', 'credentials.verify', 'credentials.refresh', 'webhooks.receive'],
+    woocommerce: ['orders.import', 'orders.statusSync', 'shipment.confirm', 'inventory.import', 'products.import', 'credentials.verify', 'credentials.refresh', 'webhooks.receive'],
+  };
+  ```
+
+- Add canonical persistence tables through a migration:
+
+  ```sql
+  CREATE TABLE IF NOT EXISTS connector_accounts (
+    id bigserial PRIMARY KEY,
+    company_id bigint NOT NULL,
+    client_id bigint,
+    provider text NOT NULL,
+    account_name text NOT NULL,
+    account_type text NOT NULL CHECK (account_type IN ('store', 'carrier', 'inventory', 'catalog')),
+    credentials_ref text,
+    status text NOT NULL DEFAULT 'active',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+  );
+
+  CREATE UNIQUE INDEX IF NOT EXISTS connector_accounts_company_provider_name_idx
+    ON connector_accounts (company_id, provider, account_name);
+
+  CREATE TABLE IF NOT EXISTS connector_sync_state (
+    id bigserial PRIMARY KEY,
+    company_id bigint NOT NULL,
+    connector_account_id bigint NOT NULL REFERENCES connector_accounts(id),
+    provider text NOT NULL,
+    sync_type text NOT NULL,
+    cursor text,
+    last_started_at timestamptz,
+    last_finished_at timestamptz,
+    last_error text,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+  );
+
+  CREATE UNIQUE INDEX IF NOT EXISTS connector_sync_state_unique_idx
+    ON connector_sync_state (company_id, connector_account_id, provider, sync_type);
+
+  CREATE TABLE IF NOT EXISTS connector_events (
+    id bigserial PRIMARY KEY,
+    company_id bigint NOT NULL,
+    connector_account_id bigint,
+    provider text NOT NULL,
+    event_type text NOT NULL,
+    source_event_id text,
+    payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+    status text NOT NULL DEFAULT 'pending',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    processed_at timestamptz
+  );
+  ```
+
+- Add canonical source fields to orders in a non-destructive migration:
+
+  ```sql
+  ALTER TABLE orders
+    ADD COLUMN IF NOT EXISTS source_provider text,
+    ADD COLUMN IF NOT EXISTS source_account_id text,
+    ADD COLUMN IF NOT EXISTS source_order_id text,
+    ADD COLUMN IF NOT EXISTS source_order_number text,
+    ADD COLUMN IF NOT EXISTS raw_source_payload jsonb;
+
+  CREATE UNIQUE INDEX IF NOT EXISTS orders_source_unique_idx
+    ON orders (source_provider, source_account_id, source_order_id)
+    WHERE source_provider IS NOT NULL
+      AND source_account_id IS NOT NULL
+      AND source_order_id IS NOT NULL;
+  ```
+
+- Add canonical shipment/label source fields in a non-destructive migration:
+
+  ```sql
+  ALTER TABLE shipments
+    ADD COLUMN IF NOT EXISTS carrier_provider text,
+    ADD COLUMN IF NOT EXISTS carrier_account_id text,
+    ADD COLUMN IF NOT EXISTS label_provider text,
+    ADD COLUMN IF NOT EXISTS confirmation_provider text,
+    ADD COLUMN IF NOT EXISTS confirmation_status text;
+  ```
+
+- Update order import paths:
+
+  ```text
+  src/services/order-sync.ts
+  src/connectors/store/shipstation.ts
+  src/connectors/store/walmart.ts
+  ```
+
+  Implement all order writes through a new helper:
+
+  ```text
+  src/services/normalized-order-persistence.ts
+  ```
+
+  The helper must upsert by `(source_provider, source_account_id, source_order_id)` and must not rely only on ShipStation `external_order_id`.
+
+- Update label/rate paths:
+
+  ```text
+  api/carriers/rates.ts
+  api/carriers/labels.ts
+  src/connectors/registry.ts
+  ```
+
+  Replace provider switchboard business logic with connector lookup:
+
+  ```ts
+  const connector = carrierConnectors[providerKey];
+  if (!connector) throw new Error(`Unsupported carrier provider: ${providerKey}`);
+  const label = await connector.createLabel(input);
+  ```
+
+- Update shipment confirmation:
+
+  ```text
+  src/services/fulfillment/outbox.ts
+  src/connectors/store/shipstation.ts
+  src/connectors/store/walmart.ts
+  ```
+
+  Route tracking upload by `orders.source_provider` and `orders.source_account_id`, not by inferred string prefixes alone.
+
+- Add static guard -> create `scripts/connector-architecture-guard.mjs`:
+
+  ```js
+  import assert from 'node:assert/strict';
+  import { readFileSync } from 'node:fs';
+
+  const types = readFileSync('src/connectors/types.ts', 'utf8');
+  const matrix = readFileSync('src/connectors/matrix.ts', 'utf8');
+
+  for (const iface of [
+    'StoreConnector',
+    'CarrierConnector',
+    'MarketplaceConfirmationConnector',
+    'InventoryConnector',
+    'ProductCatalogConnector',
+    'TrackingConnector',
+    'ReturnConnector',
+    'CredentialAuthConnector',
+    'WebhookConnector',
+  ]) {
+    assert(types.includes(`interface ${iface}`), `missing connector interface ${iface}`);
+  }
+
+  for (const provider of ['shipstation', 'walmart', 'walmart_shipping', 'shipp', 'easypost', 'ups', 'ebay', 'shopify']) {
+    assert(matrix.includes(`${provider}:`), `connector matrix missing ${provider}`);
+  }
+
+  for (const capability of ['orders.import', 'rates.quote', 'labels.create', 'shipment.confirm', 'credentials.verify']) {
+    assert(matrix.includes(capability), `connector matrix missing capability ${capability}`);
+  }
+  ```
+
+- `package.json` test script -> add:
+
+  ```json
+  "test:connector-architecture": "node scripts/connector-architecture-guard.mjs"
+  ```
+
+### Verification Commands
+
+```bash
+npm run test:connector-architecture
+npm run test:connector-registry
+npm run test:direct-carrier-labels
+npm run typecheck
 ```

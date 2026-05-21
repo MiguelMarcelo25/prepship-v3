@@ -109,6 +109,7 @@ function walmartOrderLines(rawOrder: unknown, input: {
 export function createWalmartStoreConnector(): StoreConnector {
   return {
     provider: 'walmart',
+    capabilities: ['orders.import', 'orders.statusSync', 'shipment.confirm', 'inventory.import', 'inventory.push', 'products.import'],
     async confirmShipment(input: ShipmentConfirmationInput): Promise<ConfirmationResult> {
       const creds = input.credentials ?? {};
       const payload = input.payload ?? {};

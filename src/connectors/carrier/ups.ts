@@ -3,6 +3,7 @@ import type { CarrierConnector } from '../../domain/fulfillment/types';
 export function createUpsCarrierConnector(): CarrierConnector {
   return {
     provider: 'ups',
+    capabilities: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read'],
     getRates: async () => {
       throw new Error('UPS rates are handled by api/carriers/rates.ts');
     },

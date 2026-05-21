@@ -18,6 +18,11 @@ export const orders = pgTable(
   {
     id: serial().primaryKey(),
     externalOrderId: text().unique(),
+    sourceProvider: text(),
+    sourceAccountId: text(),
+    sourceOrderId: text(),
+    sourceOrderNumber: text(),
+    rawSourcePayload: jsonb().$type<Record<string, unknown> | null>(),
     clientId: integer().references(() => clients.id),
     orderNumber: text().notNull(),
     orderStatus: text().notNull().default('awaiting_shipment'),
@@ -70,6 +75,7 @@ export const orders = pgTable(
     index('orders_store_status_date_idx')
       .on(t.storeId, t.orderStatus, t.orderDate.desc())
       .where(sql`${t.storeId} is not null`),
+    index('orders_source_idx').on(t.sourceProvider, t.sourceAccountId, t.sourceOrderId),
     index('orders_dashboard_sales_date_idx')
       .on(t.orderDate.desc())
       .where(sql`${t.orderStatus} <> 'cancelled'`),

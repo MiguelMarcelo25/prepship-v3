@@ -11,6 +11,7 @@ import type {
 export function createShipStationStoreConnector(): StoreConnector {
   return {
     provider: 'shipstation',
+    capabilities: ['orders.import', 'shipment.confirm', 'products.import'],
     async confirmShipment(input: ShipmentConfirmationInput): Promise<ConfirmationResult> {
       const upstreamOrderId = asSSUpstreamOrderId(input.externalOrderId);
       if (!upstreamOrderId) {

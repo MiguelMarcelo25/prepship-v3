@@ -184,6 +184,11 @@ async function upsertOrdersBatch(
     }
     rows.push({
       externalOrderId: String(o.orderId),
+      sourceProvider: 'shipstation',
+      sourceAccountId: storeId !== null ? `store:${storeId}` : 'shipstation-default',
+      sourceOrderId: String(o.orderId),
+      sourceOrderNumber: o.orderNumber,
+      rawSourcePayload: o as unknown as Record<string, unknown>,
       orderNumber: o.orderNumber,
       orderStatus: o.orderStatus,
       orderDate: parseShipStationDate(o.orderDate),
@@ -218,6 +223,11 @@ async function upsertOrdersBatch(
       target: orders.externalOrderId,
       set: {
         orderNumber: sql`excluded.order_number`,
+        sourceProvider: sql`excluded.source_provider`,
+        sourceAccountId: sql`excluded.source_account_id`,
+        sourceOrderId: sql`excluded.source_order_id`,
+        sourceOrderNumber: sql`excluded.source_order_number`,
+        rawSourcePayload: sql`excluded.raw_source_payload`,
         // ─── SHIPPED-STATUS RACE PROTECTION ─────────────────────────────
         // Once an order is locally marked 'shipped' or 'cancelled' (via
         // labels.ts createLabelV2 → markOrderShipped), it must NOT be

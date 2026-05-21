@@ -1,0 +1,153 @@
+<mxfile host="app.diagrams.net" agent="Codex">
+  <diagram id="store-to-prepship" name="Store To PrepShip">
+    <mxGraphModel dx="614" dy="308" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;html=1;strokeColor=none;fillColor=none;fontSize=28;fontStyle=1;align=center;verticalAlign=middle;" value="Unified Store Connector Flow To PrepShip" vertex="1">
+          <mxGeometry height="50" width="900" x="320" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="stores_label" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=18;fontStyle=1;fillColor=#dae8fc;strokeColor=#6c8ebf;" value="Individual Stores" vertex="1">
+          <mxGeometry height="50" width="190" x="40" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="connectors_label" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=18;fontStyle=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="Store Connector Layer" vertex="1">
+          <mxGeometry height="50" width="230" x="300" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="prepship_label" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=18;fontStyle=1;fillColor=#fff2cc;strokeColor=#d6b656;" value="PrepShip Core" vertex="1">
+          <mxGeometry height="50" width="280" x="600" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="carrier_label" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=18;fontStyle=1;fillColor=#f8cecc;strokeColor=#b85450;" value="Carrier Connector Layer" vertex="1">
+          <mxGeometry height="50" width="270" x="1070" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="store_walmart" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;fillColor=#ffffff;strokeColor=#6c8ebf;" value="Walmart Store&#xa;Marketplace orders" vertex="1">
+          <mxGeometry height="70" width="190" x="40" y="170" as="geometry" />
+        </mxCell>
+        <mxCell id="store_shipstation" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;fillColor=#ffffff;strokeColor=#6c8ebf;" value="ShipStation Store&#xa;Imported store orders" vertex="1">
+          <mxGeometry height="70" width="190" x="40" y="260" as="geometry" />
+        </mxCell>
+        <mxCell id="store_ebay" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;dashed=1;fillColor=#ffffff;strokeColor=#6c8ebf;" value="eBay Store&#xa;Future source connector" vertex="1">
+          <mxGeometry height="70" width="190" x="40" y="350" as="geometry" />
+        </mxCell>
+        <mxCell id="store_amazon" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;dashed=1;fillColor=#ffffff;strokeColor=#6c8ebf;" value="Amazon Store&#xa;Future source connector" vertex="1">
+          <mxGeometry height="70" width="190" x="40" y="440" as="geometry" />
+        </mxCell>
+        <mxCell id="store_shopify" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;dashed=1;fillColor=#ffffff;strokeColor=#6c8ebf;" value="Shopify Store&#xa;Future source connector" vertex="1">
+          <mxGeometry height="70" width="190" x="40" y="530" as="geometry" />
+        </mxCell>
+        <mxCell id="connector_walmart" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=13;fillColor=#ffffff;strokeColor=#82b366;" value="Walmart Store Connector&#xa;pull orders&#xa;read paid shipping cost&#xa;send tracking back" vertex="1">
+          <mxGeometry height="90" width="230" x="300" y="160" as="geometry" />
+        </mxCell>
+        <mxCell id="connector_shipstation" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=13;fillColor=#ffffff;strokeColor=#82b366;" value="ShipStation Store Connector&#xa;pull orders&#xa;read order shipping cost&#xa;mark shipped" vertex="1">
+          <mxGeometry height="90" width="230" x="300" y="270" as="geometry" />
+        </mxCell>
+        <mxCell id="connector_future" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=13;dashed=1;fillColor=#ffffff;strokeColor=#82b366;" value="Future Store Connectors&#xa;eBay / Amazon / Shopify&#xa;same order import contract&#xa;same notify contract" vertex="1">
+          <mxGeometry height="115" width="230" x="300" y="405" as="geometry" />
+        </mxCell>
+        <mxCell id="prepship_orders" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=15;fontStyle=1;fillColor=#fff2cc;strokeColor=#d6b656;" value="PrepShip Orders&#xa;orders table&#xa;customer name&#xa;source provider&#xa;store shipping_cost&#xa;order status" vertex="1">
+          <mxGeometry height="130" width="260" x="610" y="210" as="geometry" />
+        </mxCell>
+        <mxCell id="best_rate" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=15;fontStyle=1;fillColor=#ffe6cc;strokeColor=#d79b00;" value="Best Rate Engine&#xa;uses destination + package + store shipping_cost&#xa;compares available carrier rates" vertex="1">
+          <mxGeometry height="110" width="240" x="620" y="390" as="geometry" />
+        </mxCell>
+        <mxCell id="shipment_result" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=15;fontStyle=1;fillColor=#e1d5e7;strokeColor=#9673a6;" value="Shipment Result&#xa;shipments table&#xa;label URL&#xa;tracking number&#xa;actual carrier cost" vertex="1">
+          <mxGeometry height="120" width="240" x="620" y="560" as="geometry" />
+        </mxCell>
+        <mxCell id="notify_marketplace" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=15;fontStyle=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="Notify Marketplace&#xa;send carrier + tracking&#xa;confirm shipment to original store source" vertex="1">
+          <mxGeometry height="100" width="260" x="330" y="635" as="geometry" />
+        </mxCell>
+        <mxCell id="carrier_shipstation" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;fillColor=#ffffff;strokeColor=#b85450;" value="ShipStation Carrier&#xa;rates / labels" vertex="1">
+          <mxGeometry height="60" width="270" x="1070" y="165" as="geometry" />
+        </mxCell>
+        <mxCell id="carrier_shipp" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;fillColor=#ffffff;strokeColor=#b85450;" value="Shipp&#xa;rates / labels through api/carriers" vertex="1">
+          <mxGeometry height="60" width="270" x="1070" y="245" as="geometry" />
+        </mxCell>
+        <mxCell id="carrier_easypost" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;fillColor=#ffffff;strokeColor=#b85450;" value="EasyPost&#xa;rates / labels through api/carriers" vertex="1">
+          <mxGeometry height="60" width="270" x="1070" y="325" as="geometry" />
+        </mxCell>
+        <mxCell id="carrier_ups" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;fillColor=#ffffff;strokeColor=#b85450;" value="UPS&#xa;rates / labels through api/carriers" vertex="1">
+          <mxGeometry height="60" width="270" x="1070" y="405" as="geometry" />
+        </mxCell>
+        <mxCell id="carrier_walmart" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;fillColor=#ffffff;strokeColor=#b85450;" value="Walmart Shipping&#xa;rates / labels through api/carriers" vertex="1">
+          <mxGeometry height="60" width="270" x="1070" y="485" as="geometry" />
+        </mxCell>
+        <mxCell id="rule_box" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fontSize=14;fillColor=#f5f5f5;strokeColor=#666666;" value="Organization rule&#xa;1. Store connectors import orders and notify the marketplace.&#xa;2. Carrier connectors quote rates and buy labels.&#xa;3. PrepShip keeps one canonical order and shipment record no matter which store or carrier is used." vertex="1">
+          <mxGeometry height="125" width="430" x="910" y="610" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_store_walmart" edge="1" parent="1" source="store_walmart" style="endArrow=block;html=1;rounded=0;strokeWidth=2;strokeColor=#6c8ebf;" target="connector_walmart">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_store_shipstation" edge="1" parent="1" source="store_shipstation" style="endArrow=block;html=1;rounded=0;strokeWidth=2;strokeColor=#6c8ebf;" target="connector_shipstation">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_store_ebay" edge="1" parent="1" source="store_ebay" style="endArrow=block;html=1;rounded=0;strokeWidth=2;strokeColor=#6c8ebf;dashed=1;" target="connector_future">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_store_amazon" edge="1" parent="1" source="store_amazon" style="endArrow=block;html=1;rounded=0;strokeWidth=2;strokeColor=#6c8ebf;dashed=1;" target="connector_future">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_store_shopify" edge="1" parent="1" source="store_shopify" style="endArrow=block;html=1;rounded=0;strokeWidth=2;strokeColor=#6c8ebf;dashed=1;" target="connector_future">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_walmart_orders" edge="1" parent="1" source="connector_walmart" style="endArrow=block;html=1;rounded=0;strokeWidth=2;strokeColor=#82b366;" target="prepship_orders" value="normalize order">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_shipstation_orders" edge="1" parent="1" source="connector_shipstation" style="endArrow=block;html=1;rounded=0;strokeWidth=2;strokeColor=#82b366;" target="prepship_orders" value="normalize order">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_future_orders" edge="1" parent="1" source="connector_future" style="endArrow=block;html=1;rounded=0;strokeWidth=2;strokeColor=#82b366;dashed=1;" target="prepship_orders" value="same contract">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_orders_rate" edge="1" parent="1" source="prepship_orders" style="endArrow=block;html=1;rounded=0;strokeWidth=2;strokeColor=#d79b00;" target="best_rate" value="rate request">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_rate_shipstation" edge="1" parent="1" source="best_rate" style="endArrow=block;html=1;rounded=0;strokeWidth=2;strokeColor=#b85450;" target="carrier_shipstation">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_rate_shipp" edge="1" parent="1" source="best_rate" style="endArrow=block;html=1;rounded=0;strokeWidth=2;strokeColor=#b85450;" target="carrier_shipp">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_rate_easypost" edge="1" parent="1" source="best_rate" style="endArrow=block;html=1;rounded=0;strokeWidth=2;strokeColor=#b85450;" target="carrier_easypost">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_rate_ups" edge="1" parent="1" source="best_rate" style="endArrow=block;html=1;rounded=0;strokeWidth=2;strokeColor=#b85450;" target="carrier_ups">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_rate_walmart" edge="1" parent="1" source="best_rate" style="endArrow=block;html=1;rounded=0;strokeWidth=2;strokeColor=#b85450;" target="carrier_walmart">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_carrier_shipstation_result" edge="1" parent="1" source="carrier_shipstation" style="endArrow=block;html=1;rounded=0;strokeWidth=2;strokeColor=#9673a6;" target="shipment_result">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_carrier_shipp_result" edge="1" parent="1" source="carrier_shipp" style="endArrow=block;html=1;rounded=0;strokeWidth=2;strokeColor=#9673a6;" target="shipment_result">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_carrier_easypost_result" edge="1" parent="1" source="carrier_easypost" style="endArrow=block;html=1;rounded=0;strokeWidth=2;strokeColor=#9673a6;" target="shipment_result">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_carrier_ups_result" edge="1" parent="1" source="carrier_ups" style="endArrow=block;html=1;rounded=0;strokeWidth=2;strokeColor=#9673a6;" target="shipment_result">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_carrier_walmart_result" edge="1" parent="1" source="carrier_walmart" style="endArrow=block;html=1;rounded=0;strokeWidth=2;strokeColor=#9673a6;" target="shipment_result">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_result_notify" edge="1" parent="1" source="shipment_result" style="endArrow=block;html=1;rounded=0;strokeWidth=2;strokeColor=#82b366;" target="notify_marketplace" value="tracking + carrier">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_notify_walmart" edge="1" parent="1" source="notify_marketplace" style="endArrow=block;html=1;rounded=0;strokeWidth=2;strokeColor=#82b366;" target="connector_walmart" value="confirmation">
+          <mxGeometry relative="1" x="0.055" y="87" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="edge_notify_shipstation" edge="1" parent="1" source="notify_marketplace" style="endArrow=block;html=1;rounded=0;strokeWidth=2;strokeColor=#82b366;" target="connector_shipstation" value="mark shipped">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_notify_future" edge="1" parent="1" source="notify_marketplace" style="endArrow=block;html=1;rounded=0;strokeWidth=2;strokeColor=#82b366;dashed=1;" target="connector_future" value="same notify contract">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="tRykx4W0BIV65WaGmGeb-1" edge="1" parent="1" source="notify_marketplace" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" target="notify_marketplace">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

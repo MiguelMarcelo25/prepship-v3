@@ -14,6 +14,7 @@ export function createShipStationCarrierConnector(): CarrierConnector<
 > {
   return {
     provider: 'shipstation',
+    capabilities: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read'],
     getRates: async () => {
       throw new Error('ShipStation connector rates are handled by the existing rate service');
     },

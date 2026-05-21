@@ -3,6 +3,7 @@ import type { CarrierConnector } from '../../domain/fulfillment/types';
 export function createEasyPostCarrierConnector(): CarrierConnector {
   return {
     provider: 'easypost',
+    capabilities: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read'],
     getRates: async () => {
       throw new Error('EasyPost rates are handled by api/carriers/rates.ts');
     },
