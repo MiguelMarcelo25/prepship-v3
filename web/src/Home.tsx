@@ -119,6 +119,13 @@ function timingTone(ms: number) {
   return 'text-emerald-700'
 }
 
+function timingHealthTone(route: ApiTimingRoute | null | undefined) {
+  if (!route) return 'text-ink'
+  if (route.lastStatus >= 500) return 'text-rose-700'
+  if (route.lastStatus >= 400) return 'text-amber-700'
+  return timingTone(route.lastDurationMs)
+}
+
 function getResolvedDateRange(filter: OrdersDateFilter) {
   const range = getOrdersDateRange(filter)
   if (!range) return { start: undefined, end: undefined }
@@ -1384,21 +1391,21 @@ export default function Home() {
                     </div>
                     <div className="rounded-xl bg-surface-2 px-4 py-3 ring-1 ring-line">
                       <div className="text-[10px] font-bold uppercase tracking-wider text-ink-3">
-                        Orders p95
+                        Orders current
                       </div>
-                      <div className={`mt-1 text-2xl font-extrabold tabular-nums ${timingTone(ordersApiRoute?.p95Ms ?? 0)}`}>
-                        {ordersApiRoute ? formatTimingMs(ordersApiRoute.p95Ms) : '-'}
+                      <div className={`mt-1 text-2xl font-extrabold tabular-nums ${timingHealthTone(ordersApiRoute)}`}>
+                        {ordersApiRoute ? formatTimingMs(ordersApiRoute.lastDurationMs) : '-'}
                       </div>
                       <div className="mt-1 text-[11.5px] text-ink-3">
-                        last {ordersApiRoute ? formatTimingMs(ordersApiRoute.lastDurationMs) : '-'}
+                        p95 {ordersApiRoute ? formatTimingMs(ordersApiRoute.p95Ms) : '-'}
                       </div>
                     </div>
                     <div className="rounded-xl bg-surface-2 px-4 py-3 ring-1 ring-line">
                       <div className="text-[10px] font-bold uppercase tracking-wider text-ink-3">
-                        Slowest p95
+                        Slowest current
                       </div>
-                      <div className={`mt-1 text-2xl font-extrabold tabular-nums ${timingTone(slowestApiRoute?.p95Ms ?? 0)}`}>
-                        {slowestApiRoute ? formatTimingMs(slowestApiRoute.p95Ms) : '-'}
+                      <div className={`mt-1 text-2xl font-extrabold tabular-nums ${timingHealthTone(slowestApiRoute)}`}>
+                        {slowestApiRoute ? formatTimingMs(slowestApiRoute.lastDurationMs) : '-'}
                       </div>
                       <div className="mt-1 truncate text-[11.5px] text-ink-3">
                         {slowestApiRoute ? `${slowestApiRoute.method} ${slowestApiRoute.path}` : 'no samples yet'}
@@ -1420,7 +1427,7 @@ export default function Home() {
                       <div>
                         <div className="text-[12px] font-extrabold text-ink">Hot API Routes</div>
                         <div className="text-[11.5px] text-ink-3">
-                          Sorted by p95. Use max and last to separate old spikes from current slowness.
+                          Health colors follow the latest request. p95 and max stay visible as historical spike signals.
                         </div>
                       </div>
                       {apiTimingLoading ? (
@@ -1463,10 +1470,10 @@ export default function Home() {
                                 </td>
                                 <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">{route.count}</td>
                                 <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">{formatTimingMs(route.p50Ms)}</td>
-                                <td className={`px-3 py-2.5 text-right tabular-nums font-bold ${timingTone(route.p95Ms)}`}>{formatTimingMs(route.p95Ms)}</td>
+                                <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">{formatTimingMs(route.p95Ms)}</td>
                                 <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">{formatTimingMs(route.p99Ms)}</td>
                                 <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">{formatTimingMs(route.maxMs)}</td>
-                                <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">{formatTimingMs(route.lastDurationMs)}</td>
+                                <td className={`px-3 py-2.5 text-right tabular-nums font-bold ${timingHealthTone(route)}`}>{formatTimingMs(route.lastDurationMs)}</td>
                                 <td className="px-4 py-2.5 text-right">
                                   <span className={[
                                     'inline-flex min-w-[42px] justify-center rounded-full px-2 py-0.5 text-[10.5px] font-bold tabular-nums',
