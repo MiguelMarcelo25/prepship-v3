@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { ToastContext } from './contexts/ToastContext'
 import { apiClient } from './api/client'
+import { api } from './lib/api'
 import type { SyncWorkerStatusDto } from './types/api'
 import { useInitStores } from './hooks'
 import PageSkeleton from './components/PageSkeleton'
@@ -57,6 +58,26 @@ type AnalysisOpenContext = {
   clientId?: number | null
   requestId: number
 }
+type ApiTimingRoute = {
+  method: string
+  path: string
+  count: number
+  errorCount: number
+  avgMs: number
+  p50Ms: number
+  p95Ms: number
+  p99Ms: number
+  maxMs: number
+  lastDurationMs: number
+  lastStatus: number
+  lastObservedAt: string
+}
+type ApiTimingSnapshot = {
+  startedAt: string
+  generatedAt: string
+  routeCount: number
+  routes: ApiTimingRoute[]
+}
 
 const ZOOM_OPTIONS = [
   { value: 75, label: '75% — Very Compact' },
@@ -71,6 +92,31 @@ const STATUS_LABELS: Record<OrderStatus, string> = {
   awaiting_shipment: 'Awaiting Shipment',
   shipped: 'Shipped',
   cancelled: 'Cancelled',
+}
+
+function formatTimingMs(value: unknown) {
+  const ms = typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : 0
+  if (ms >= 1000) return `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)}s`
+  return `${ms}ms`
+}
+
+function formatTimingDate(value: string | null | undefined) {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '-'
+  return new Intl.DateTimeFormat('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: true,
+    timeZone: 'America/Los_Angeles',
+  }).format(date)
+}
+
+function timingTone(ms: number) {
+  if (ms >= 1000) return 'text-rose-700'
+  if (ms >= 500) return 'text-amber-700'
+  return 'text-emerald-700'
 }
 
 function getResolvedDateRange(filter: OrdersDateFilter) {
@@ -384,6 +430,10 @@ export default function Home() {
     if (typeof window === 'undefined') return false
     return window.localStorage.getItem('prepship_hide_empty_panel') === 'true'
   })
+  const [apiTimingOpen, setApiTimingOpen] = useState(false)
+  const [apiTimingLoading, setApiTimingLoading] = useState(false)
+  const [apiTimingError, setApiTimingError] = useState<string | null>(null)
+  const [apiTimingSnapshot, setApiTimingSnapshot] = useState<ApiTimingSnapshot | null>(null)
   useEffect(() => {
     if (typeof window === 'undefined') return
     window.localStorage.setItem('prepship_hide_empty_panel', String(hideEmptyPanel))
@@ -607,6 +657,34 @@ export default function Home() {
   }, [])
 
   const syncPill = useMemo(() => formatSyncPill(syncStatus), [syncStatus])
+  const apiTimingRoutes = apiTimingSnapshot?.routes ?? []
+  const slowestApiRoute = apiTimingRoutes[0] ?? null
+  const ordersApiRoute =
+    apiTimingRoutes.find((route) => route.method === 'GET' && route.path === '/orders') ?? null
+  const apiTimingErrorCount = apiTimingRoutes.reduce(
+    (sum, route) => sum + Number(route.errorCount ?? 0),
+    0,
+  )
+
+  const refreshApiTiming = async () => {
+    setApiTimingLoading(true)
+    setApiTimingError(null)
+    try {
+      const snapshot = await api.get<ApiTimingSnapshot>('/observability/api-timing', {
+        timeoutMs: 8_000,
+      })
+      setApiTimingSnapshot(snapshot)
+    } catch (error) {
+      setApiTimingError(error instanceof Error ? error.message : 'Failed to load API timing')
+    } finally {
+      setApiTimingLoading(false)
+    }
+  }
+
+  const openApiTiming = () => {
+    setApiTimingOpen(true)
+    void refreshApiTiming()
+  }
 
   const applyCompletedSync = (mode: 'incremental' | 'full', result: any) => {
     const lastSync = result?.lastSync
@@ -858,9 +936,13 @@ export default function Home() {
               id="topbarActions"
             >
               {/* Sync status pill */}
-              <div
-                className={`hidden md:inline-flex items-center gap-1.5 h-8 pl-2.5 pr-3 rounded-full text-[11.5px] font-medium font-mono tabular-nums whitespace-nowrap transition-colors ${syncPill.className}`}
+              <button
+                type="button"
+                className={`hidden md:inline-flex items-center gap-1.5 h-8 pl-2.5 pr-3 rounded-full text-[11.5px] font-medium font-mono tabular-nums whitespace-nowrap transition-colors hover:ring-1 hover:ring-brand/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand/40 ${syncPill.className}`}
                 id="syncPill"
+                onClick={openApiTiming}
+                aria-label="Open API timing"
+                title="Click to view API timing"
               >
                 <span className="sync-dot" aria-hidden />
                 <span id="syncText">
@@ -869,7 +951,7 @@ export default function Home() {
                     <span className="ml-1 opacity-70">({syncStatus.page}/{syncStatus.total})</span>
                   ) : null}
                 </span>
-              </div>
+              </button>
 
               {/* Worker pill */}
               {workerPill ? (
@@ -1221,6 +1303,196 @@ export default function Home() {
           </Suspense>
         ) : null}
       </div>
+
+      {createPortal(
+        <AnimatePresence>
+          {apiTimingOpen ? (
+            <motion.div
+              className="fixed inset-0 z-[10000] flex items-start justify-center bg-black/30 px-4 py-16 backdrop-blur-sm"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="apiTimingTitle"
+              onMouseDown={(event) => {
+                if (event.target === event.currentTarget) setApiTimingOpen(false)
+              }}
+            >
+              <motion.div
+                initial={{ opacity: 0, y: -10, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -8, scale: 0.98 }}
+                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+                className="w-full max-w-5xl overflow-hidden rounded-2xl bg-surface text-ink shadow-2xl ring-1 ring-line"
+              >
+                <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
+                  <div>
+                    <div className="text-[10.5px] font-bold uppercase tracking-[0.14em] text-brand">
+                      Production API timing
+                    </div>
+                    <h2 id="apiTimingTitle" className="mt-1 text-[20px] font-extrabold tracking-tight text-ink">
+                      Timing from the last sync toolbar
+                    </h2>
+                    <div className="mt-1 text-[12px] text-ink-3">
+                      {apiTimingSnapshot?.generatedAt
+                        ? `Updated ${formatTimingDate(apiTimingSnapshot.generatedAt)} CA`
+                        : 'Click refresh to load the latest backend timing snapshot.'}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void refreshApiTiming()}
+                      disabled={apiTimingLoading}
+                      className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-surface-2 px-3 text-[12px] font-semibold text-ink ring-1 ring-line transition-colors hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {apiTimingLoading ? (
+                        <Loader2 size={13} strokeWidth={2.4} className="animate-spinSlow text-brand" />
+                      ) : (
+                        <RotateCw size={13} strokeWidth={2.3} />
+                      )}
+                      Refresh
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setApiTimingOpen(false)}
+                      aria-label="Close API timing"
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-surface text-ink-2 ring-1 ring-line transition-colors hover:bg-surface-2 hover:text-ink"
+                    >
+                      <XIcon size={15} strokeWidth={2.4} />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="max-h-[72vh] overflow-y-auto px-5 py-4">
+                  {apiTimingError ? (
+                    <div className="mb-4 rounded-xl bg-rose-50 px-4 py-3 text-[12px] font-semibold text-rose-700 ring-1 ring-rose-200">
+                      {apiTimingError}
+                    </div>
+                  ) : null}
+
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+                    <div className="rounded-xl bg-surface-2 px-4 py-3 ring-1 ring-line">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-ink-3">
+                        Routes
+                      </div>
+                      <div className="mt-1 text-2xl font-extrabold tabular-nums text-ink">
+                        {apiTimingSnapshot?.routeCount ?? 0}
+                      </div>
+                      <div className="mt-1 text-[11.5px] text-ink-3">tracked in memory</div>
+                    </div>
+                    <div className="rounded-xl bg-surface-2 px-4 py-3 ring-1 ring-line">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-ink-3">
+                        Orders p95
+                      </div>
+                      <div className={`mt-1 text-2xl font-extrabold tabular-nums ${timingTone(ordersApiRoute?.p95Ms ?? 0)}`}>
+                        {ordersApiRoute ? formatTimingMs(ordersApiRoute.p95Ms) : '-'}
+                      </div>
+                      <div className="mt-1 text-[11.5px] text-ink-3">
+                        last {ordersApiRoute ? formatTimingMs(ordersApiRoute.lastDurationMs) : '-'}
+                      </div>
+                    </div>
+                    <div className="rounded-xl bg-surface-2 px-4 py-3 ring-1 ring-line">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-ink-3">
+                        Slowest p95
+                      </div>
+                      <div className={`mt-1 text-2xl font-extrabold tabular-nums ${timingTone(slowestApiRoute?.p95Ms ?? 0)}`}>
+                        {slowestApiRoute ? formatTimingMs(slowestApiRoute.p95Ms) : '-'}
+                      </div>
+                      <div className="mt-1 truncate text-[11.5px] text-ink-3">
+                        {slowestApiRoute ? `${slowestApiRoute.method} ${slowestApiRoute.path}` : 'no samples yet'}
+                      </div>
+                    </div>
+                    <div className="rounded-xl bg-surface-2 px-4 py-3 ring-1 ring-line">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-ink-3">
+                        Errors
+                      </div>
+                      <div className={`mt-1 text-2xl font-extrabold tabular-nums ${apiTimingErrorCount > 0 ? 'text-rose-700' : 'text-emerald-700'}`}>
+                        {apiTimingErrorCount}
+                      </div>
+                      <div className="mt-1 text-[11.5px] text-ink-3">5xx samples</div>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 overflow-hidden rounded-xl bg-surface ring-1 ring-line">
+                    <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-3">
+                      <div>
+                        <div className="text-[12px] font-extrabold text-ink">Hot API Routes</div>
+                        <div className="text-[11.5px] text-ink-3">
+                          Sorted by p95. Use max and last to separate old spikes from current slowness.
+                        </div>
+                      </div>
+                      {apiTimingLoading ? (
+                        <div className="inline-flex items-center gap-1.5 text-[11.5px] font-semibold text-ink-3">
+                          <Loader2 size={13} strokeWidth={2.4} className="animate-spinSlow text-brand" />
+                          Loading
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="overflow-x-auto">
+                      <table className="min-w-full text-left text-[12px]">
+                        <thead className="bg-surface-2 text-[10px] uppercase tracking-wider text-ink-3">
+                          <tr>
+                            <th className="px-4 py-2 font-bold">Route</th>
+                            <th className="px-3 py-2 text-right font-bold">Count</th>
+                            <th className="px-3 py-2 text-right font-bold">p50</th>
+                            <th className="px-3 py-2 text-right font-bold">p95</th>
+                            <th className="px-3 py-2 text-right font-bold">p99</th>
+                            <th className="px-3 py-2 text-right font-bold">Max</th>
+                            <th className="px-3 py-2 text-right font-bold">Last</th>
+                            <th className="px-4 py-2 text-right font-bold">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-line">
+                          {apiTimingRoutes.length === 0 && !apiTimingLoading ? (
+                            <tr>
+                              <td colSpan={8} className="px-4 py-6 text-center text-ink-3">
+                                No API timing samples yet.
+                              </td>
+                            </tr>
+                          ) : (
+                            apiTimingRoutes.slice(0, 12).map((route) => (
+                              <tr key={`${route.method}:${route.path}`} className="hover:bg-brand-bg/30">
+                                <td className="max-w-[360px] px-4 py-2.5 font-semibold text-ink">
+                                  <span className="mr-2 text-ink-3">{route.method}</span>
+                                  <span className="break-all">{route.path}</span>
+                                  <div className="mt-0.5 text-[10.5px] font-medium text-ink-3">
+                                    last seen {formatTimingDate(route.lastObservedAt)} CA
+                                  </div>
+                                </td>
+                                <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">{route.count}</td>
+                                <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">{formatTimingMs(route.p50Ms)}</td>
+                                <td className={`px-3 py-2.5 text-right tabular-nums font-bold ${timingTone(route.p95Ms)}`}>{formatTimingMs(route.p95Ms)}</td>
+                                <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">{formatTimingMs(route.p99Ms)}</td>
+                                <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">{formatTimingMs(route.maxMs)}</td>
+                                <td className="px-3 py-2.5 text-right tabular-nums text-ink-2">{formatTimingMs(route.lastDurationMs)}</td>
+                                <td className="px-4 py-2.5 text-right">
+                                  <span className={[
+                                    'inline-flex min-w-[42px] justify-center rounded-full px-2 py-0.5 text-[10.5px] font-bold tabular-nums',
+                                    route.lastStatus >= 500
+                                      ? 'bg-rose-100 text-rose-700'
+                                      : route.lastStatus >= 400
+                                        ? 'bg-amber-100 text-amber-700'
+                                        : 'bg-emerald-100 text-emerald-700',
+                                  ].join(' ')}>
+                                    {route.lastStatus || '-'}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            </motion.div>
+          ) : null}
+        </AnimatePresence>,
+        document.body
+      )}
 
       {/* Zoom dropdown — portal-rendered at document.body level so it
           escapes EVERY ancestor stacking context, transform,
