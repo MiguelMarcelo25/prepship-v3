@@ -51,6 +51,14 @@ assert(
 );
 
 assert(
+  autosuggest.includes('renderInPortal') &&
+    autosuggest.includes('createPortal') &&
+    inventory.includes('renderInPortal') &&
+    inventory.includes('Receive Inventory SKU dropdown escapes worksheet overflow clipping'),
+  'Receive Inventory SKU dropdown escapes worksheet overflow clipping',
+);
+
+assert(
   inventory.includes('id="inv-receive-worksheet"') &&
     inventory.includes('id="inv-receive-summary"') &&
     inventory.includes('Batch worksheet') &&

@@ -282,6 +282,23 @@ for (const viewport of [
     await page.locator('#inventory-tab-receive').click()
     await expect(page.getByText('Receive Inventory')).toBeVisible()
     await expect(page.locator('.inventory-section-header-actions').getByRole('button', { name: /Import SKUs from Orders/ })).toHaveCount(0)
+    await page.locator('#inv-panel-receive select').first().selectOption('1')
+    const receiveSkuInput = page.getByRole('combobox', { name: 'SKU or product name' }).first()
+    await receiveSkuInput.click()
+    const receiveListbox = page.getByRole('listbox')
+    await expect(receiveListbox).toBeVisible()
+    await expect(receiveListbox.getByRole('option')).toHaveCount(2)
+    const receiveListboxState = await receiveListbox.evaluate((element) => ({
+      parentTag: element.parentElement?.tagName,
+      position: window.getComputedStyle(element).position,
+      height: element.getBoundingClientRect().height,
+    }))
+    expect(receiveListboxState).toEqual(expect.objectContaining({
+      parentTag: 'BODY',
+      position: 'fixed',
+    }))
+    expect(receiveListboxState.height).toBeGreaterThan(70)
+    await page.keyboard.press('Escape')
     await page.screenshot({ path: path.join(screenshotDir, `${viewport.name}-03-receive-layout.png`), fullPage: true })
 
     await page.locator('#inventory-tab-alerts').click()

@@ -39,6 +39,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from 'react'
+import { createPortal } from 'react-dom'
 
 export interface AutosuggestOption {
   /** Primary identifier — what gets stored when the user picks this option. */
@@ -80,6 +81,9 @@ interface Props {
   popoverClassName?: string
   /** Inline style overrides for the suggestion popover. */
   popoverStyle?: CSSProperties
+  /** Render the popover in document.body so parent overflow containers
+   *  cannot clip it. Use for comboboxes embedded in scrollable tables. */
+  renderInPortal?: boolean
   /** Should suggestions appear when the input is focused but empty?
    *  Default true — matches operator expectation of "click the field
    *  to see what's available, then narrow by typing." Set false on
@@ -174,6 +178,7 @@ const Autosuggest = forwardRef<AutosuggestHandle, Props>(function Autosuggest(
     inputStyle,
     popoverClassName,
     popoverStyle,
+    renderInPortal = false,
     showOnFocus = true,
     ariaLabel,
     disabled = false,
@@ -186,6 +191,7 @@ const Autosuggest = forwardRef<AutosuggestHandle, Props>(function Autosuggest(
   const listboxRef = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(false)
   const [activeIndex, setActiveIndex] = useState(0)
+  const [portalPosition, setPortalPosition] = useState<{ left: number; top: number } | null>(null)
   // 2026-05-15: floating large-preview overlay state. Set on
   // mouseenter of an option's thumbnail, cleared on mouseleave OR
   // when the popover closes (effect below). pointer-events:none on
@@ -248,6 +254,26 @@ const Autosuggest = forwardRef<AutosuggestHandle, Props>(function Autosuggest(
     if (!open) setThumbnailPreview(null)
   }, [open])
 
+  const updatePortalPosition = useCallback(() => {
+    if (!renderInPortal || typeof window === 'undefined' || !inputRef.current) return
+    const rect = inputRef.current.getBoundingClientRect()
+    setPortalPosition({
+      left: Math.max(8, Math.min(rect.left, window.innerWidth - 24)),
+      top: Math.min(rect.bottom + 4, window.innerHeight - 16),
+    })
+  }, [renderInPortal])
+
+  useEffect(() => {
+    if (!open || !renderInPortal) return
+    updatePortalPosition()
+    window.addEventListener('resize', updatePortalPosition)
+    window.addEventListener('scroll', updatePortalPosition, true)
+    return () => {
+      window.removeEventListener('resize', updatePortalPosition)
+      window.removeEventListener('scroll', updatePortalPosition, true)
+    }
+  }, [open, renderInPortal, updatePortalPosition])
+
   const handleThumbnailEnter = useCallback(
     (event: ReactMouseEvent<HTMLImageElement>, src: string) => {
       if (!src) return
@@ -270,6 +296,7 @@ const Autosuggest = forwardRef<AutosuggestHandle, Props>(function Autosuggest(
     function handlePointerDown(event: MouseEvent) {
       if (!wrapperRef.current) return
       if (wrapperRef.current.contains(event.target as Node)) return
+      if (listboxRef.current?.contains(event.target as Node)) return
       setOpen(false)
     }
     function handleKey(event: KeyboardEvent) {
@@ -315,6 +342,7 @@ const Autosuggest = forwardRef<AutosuggestHandle, Props>(function Autosuggest(
     // standard combobox behavior.
     if ((event.key === 'ArrowDown' || event.key === 'ArrowUp') && !open) {
       event.preventDefault()
+      updatePortalPosition()
       setOpen(true)
       return
     }
@@ -384,26 +412,40 @@ const Autosuggest = forwardRef<AutosuggestHandle, Props>(function Autosuggest(
         spellCheck={false}
         onChange={(event) => {
           onChange(event.target.value)
+          updatePortalPosition()
           setOpen(true)
         }}
         onFocus={() => {
-          if (showOnFocus) setOpen(true)
+          if (showOnFocus) {
+            updatePortalPosition()
+            setOpen(true)
+          }
         }}
         onKeyDown={handleKeyDown}
       />
-      {showPopover ? (
+      {(() => {
+        const popover = showPopover ? (
         <div
           ref={listboxRef}
           id={listboxId}
           role="listbox"
           className={`
-            absolute left-0 top-full mt-1 z-50
+            ${renderInPortal ? 'fixed' : 'absolute left-0 top-full mt-1'} z-50
             max-h-72 overflow-y-auto
             rounded-lg bg-surface ring-1 ring-line shadow-lg
             text-left
             ${popoverClassName ?? 'right-0'}
           `}
-          style={popoverStyle}
+          style={
+            renderInPortal
+              ? {
+                  ...popoverStyle,
+                  left: portalPosition?.left ?? 8,
+                  top: portalPosition?.top ?? 8,
+                  zIndex: 1000,
+                }
+              : popoverStyle
+          }
         >
           {matches.length === 0 && emptyMessage ? (
             <div className="px-3 py-2 text-[12px] text-ink-3 italic">
@@ -505,7 +547,11 @@ const Autosuggest = forwardRef<AutosuggestHandle, Props>(function Autosuggest(
             })
           )}
         </div>
-      ) : null}
+        ) : null
+        return renderInPortal && typeof document !== 'undefined'
+          ? createPortal(popover, document.body)
+          : popover
+      })()}
       {/* 2026-05-15: Floating large-preview overlay shown when the
           operator hovers an option's thumbnail. Position-fixed so it
           floats above EVERY ancestor (including overflow:hidden
