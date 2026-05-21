@@ -30,6 +30,7 @@ import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { PDFDocument } from 'pdf-lib';
 import postgres from 'postgres';
 import { timedFetch } from '../../src/lib/http/timing.js';
+import { resolveCarrierConnector } from '../../src/connectors/carrier-resolution.js';
 import { persistDirectCarrierLabel } from '../../src/services/direct-label-persistence.js';
 
 let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
@@ -2316,6 +2317,15 @@ export default async function handler(req: any, res: any): Promise<void> {
     }
     const { provider, credentials, label } = carrierRows[0];
     const providerKey = normalizeProviderKey(provider);
+    const resolvedCarrierConnector = resolveCarrierConnector(providerKey, 'labels.create');
+    if (!resolvedCarrierConnector) {
+      res.status(400).json({
+        ok: false,
+        error: `Label purchase for "${provider}" is not registered as a carrier connector.`,
+      });
+      return;
+    }
+    const connectorCapabilities = resolvedCarrierConnector.connectorCapabilities;
     const creds = (credentials ?? {}) as Record<string, unknown>;
 
     // Fetch the saved order's raw payload to derive ship-to (when caller
@@ -2502,6 +2512,7 @@ export default async function handler(req: any, res: any): Promise<void> {
           marketplaceCredentialSource,
           shippShipmentId: result.shipmentId,
           selectedServiceCode: result.serviceCode,
+          connectorCapabilities,
         },
       });
       return;
@@ -2636,6 +2647,7 @@ export default async function handler(req: any, res: any): Promise<void> {
           labelPdfReturned: Boolean(result.labelUrl),
           walmartShipmentConfirmed: result.shipmentConfirmed,
           walmartShipmentConfirmError: result.shipmentConfirmError,
+          connectorCapabilities,
         },
       });
       return;
@@ -2777,6 +2789,7 @@ export default async function handler(req: any, res: any): Promise<void> {
         confirmationQueued: confirmation.queued,
         confirmationProvider: confirmation.provider,
         confirmationError: confirmation.error ?? null,
+        connectorCapabilities,
       },
     });
   } catch (err) {

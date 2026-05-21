@@ -692,6 +692,7 @@ Goal: move PrepShip from ShipStation-centric workflows to normalized connector-b
 - Non-destructive connector-account, sync-state, event, order-source, and shipment-source schema additions are captured in `drizzle/0032_connector_architecture.sql`.
 - ShipStation order sync now writes canonical source fields on imported orders.
 - Direct carrier label persistence now writes canonical shipment carrier, carrier-account, label-provider, and confirmation-status fields.
+- Direct carrier rate and label endpoints now resolve registered providers through a carrier connector resolver and expose connector capabilities in response metadata.
 - Direct carrier endpoints still own much of the provider-specific rate and label logic.
 - Marketplace confirmation is partially handled through fulfillment outbox behavior, but it is not fully standardized as a connector boundary.
 - Inventory, product catalog, tracking, returns, credentials, and webhooks are represented as first-class connector interfaces, but live provider implementations still need to be built behind those interfaces.
@@ -714,8 +715,8 @@ Goal: move PrepShip from ShipStation-centric workflows to normalized connector-b
 - [~] Every order enters through a `StoreConnector`. Foundation exists; existing ShipStation import now writes canonical source fields, but all future store imports still need to be routed through connector implementations.
 - [~] Every imported order is normalized into a canonical PrepShip order model. `NormalizedOrder` exists; ShipStation import now persists canonical source fields.
 - [x] Every order can store `sourceProvider`, `sourceAccountId`, `sourceOrderId`, and raw source payload.
-- [~] Every rate request goes through a `CarrierConnector`. Carrier registry and capability matrix exist; direct endpoints still own live provider behavior.
-- [~] Every label purchase goes through a `CarrierConnector`. Carrier registry and direct-label persistence exist, and direct labels now persist canonical shipment provider fields; direct endpoints still own live provider behavior.
+- [~] Every rate request goes through a `CarrierConnector`. Carrier registry, capability matrix, and connector-backed provider resolution exist; direct endpoints still own live provider behavior.
+- [~] Every label purchase goes through a `CarrierConnector`. Carrier registry, connector-backed provider resolution, and direct-label persistence exist, and direct labels now persist canonical shipment provider fields; direct endpoints still own live provider behavior.
 - [x] Every tracking upload goes through a `MarketplaceConfirmationConnector` or fulfillment outbox boundary in the target architecture.
 - [~] Walmart, eBay, ShipStation, and Shopify can coexist without duplicate orders. Canonical unique source keys are defined; eBay/Shopify live imports are not implemented yet.
 - [x] Connector sync state is persisted per company, provider, account, and sync cursor in the PS-006 migration.
@@ -725,7 +726,7 @@ Goal: move PrepShip from ShipStation-centric workflows to normalized connector-b
 - [x] Inventory and product catalog sync are separated into dedicated connector interfaces.
 - [x] Tracking and returns are separated into dedicated connector interfaces.
 - [x] A connector matrix documents provider support for import, rates, labels, confirmation, inventory, products, tracking, returns, credentials, and webhooks.
-- [x] Static guards prevent missing connector architecture files, provider matrix entries, order/shipment schema fields, direct-label provider persistence, and connector capability metadata.
+- [x] Static guards prevent missing connector architecture files, provider matrix entries, order/shipment schema fields, direct-label provider persistence, connector-backed direct endpoint resolution, and connector capability metadata.
 
 ### Fixes
 

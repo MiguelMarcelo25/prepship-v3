@@ -24,6 +24,7 @@ import {
 } from '../../src/lib/auth/verify-supabase-jwt.js';
 import { corsHeaders } from '../../src/lib/http/cors.js';
 import { timedFetch } from '../../src/lib/http/timing.js';
+import { resolveCarrierConnector } from '../../src/connectors/carrier-resolution.js';
 import { sendInternalServerError } from '../_lib/safe-error.js';
 
 function readBody(req: any): Promise<unknown> {
@@ -1940,6 +1941,8 @@ export default async function handler(req: any, res: any): Promise<void> {
     if (useStoreTable && provider === 'walmart' && requestedProvider === 'walmart_shipping') {
       provider = 'walmart_shipping';
     }
+    const resolvedCarrierConnector = resolveCarrierConnector(provider, 'rates.quote');
+    const connectorCapabilities = resolvedCarrierConnector?.connectorCapabilities ?? [];
     const creds = (row.credentials && typeof row.credentials === 'object'
       ? (row.credentials as Record<string, unknown>)
       : {});
@@ -1954,13 +1957,14 @@ export default async function handler(req: any, res: any): Promise<void> {
 
     if (provider === 'simulator') {
       const rates = simulatorRates({ weightOz, toZip });
-      res.status(200).json({
-        ok: true,
-        provider,
-        simulated: true,
-        rates,
-        fetchedAt: new Date().toISOString(),
-      });
+        res.status(200).json({
+          ok: true,
+          provider,
+          simulated: true,
+          rates,
+          fetchedAt: new Date().toISOString(),
+          meta: { connectorCapabilities },
+        });
       return;
     }
 
@@ -1980,6 +1984,7 @@ export default async function handler(req: any, res: any): Promise<void> {
           simulated: false,
           rates,
           fetchedAt: new Date().toISOString(),
+          meta: { connectorCapabilities },
         });
       } catch (err) {
         res.status(200).json({
@@ -2449,7 +2454,7 @@ export default async function handler(req: any, res: any): Promise<void> {
         res.status(200).json({
           ok: true, provider, simulated: false, rates,
           fetchedAt: new Date().toISOString(),
-          meta: { externalOrderId, hasRawOrder: rawOrder != null, rateCount: rates.length },
+          meta: { externalOrderId, hasRawOrder: rawOrder != null, rateCount: rates.length, connectorCapabilities },
         });
       } catch (err) {
         res.status(200).json({
@@ -2539,7 +2544,7 @@ export default async function handler(req: any, res: any): Promise<void> {
           simulated: false,
           rates,
           fetchedAt: new Date().toISOString(),
-          meta: { orderId, externalOrderId, orderNumber, hasRawOrder: rawOrder != null, rateCount: rates.length },
+          meta: { orderId, externalOrderId, orderNumber, hasRawOrder: rawOrder != null, rateCount: rates.length, connectorCapabilities },
         });
       } catch (err) {
         res.status(200).json({
