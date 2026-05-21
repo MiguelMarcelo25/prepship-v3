@@ -77,6 +77,8 @@
     "test:direct-carrier-labels": "node scripts/direct-carrier-label-guard.mjs",
     "test:connector-registry": "node scripts/connector-registry-guard.mjs",
     "test:connector-architecture": "node scripts/connector-architecture-guard.mjs",
+    "status:sync": "tsx scripts/status-sync.ts",
+    "test:status:sync": "tsx scripts/status-sync.ts --check",
     "status:carriers": "tsx scripts/status-carriers.ts",
     "test:status:carriers": "tsx scripts/status-carriers.ts --check",
     "test:jwt-session-policy": "node scripts/jwt-session-policy-guard.mjs",

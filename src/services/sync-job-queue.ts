@@ -215,6 +215,14 @@ export async function startQueuedSyncScheduler(): Promise<void> {
     console.log(
       '[job-queue] SHIPSTATION_API_KEY/SECRET not set - ShipStation sync jobs disabled'
     );
+    await recordWorkerJobSkipped(
+      JOBS.orders,
+      'SHIPSTATION_API_KEY/SECRET not set; order sync disabled'
+    );
+    await recordWorkerJobSkipped(
+      JOBS.shipments,
+      'SHIPSTATION_API_KEY/SECRET not set; shipment sync disabled'
+    );
     return;
   }
 

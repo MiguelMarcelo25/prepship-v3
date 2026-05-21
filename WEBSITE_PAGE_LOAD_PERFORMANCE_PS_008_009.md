@@ -256,3 +256,179 @@ When done, reply with:
 - Tests run with pass/fail results
 - Any deferred performance items with reason
 - Any browser smoke findings if tested manually
+
+---
+
+# PS-007: Investigate and Restore PrepShip V4 Order Sync
+
+@Lawrence
+
+You are working on PrepShip V4.
+
+- Repo: `https://github.com/drprepperusa-org/prepship-v4`
+- Branch: `prepshipv4-stable`
+- Task ID: `PS-007`
+- Title: `Investigate and restore order sync after no new orders visible since ~11 PM PDT`
+
+## Context
+
+DJ reported that the website does not show any orders that came in since about 11 PM last night.
+
+Initial investigation found:
+
+- Local repo was pulled and was already up to date.
+- Render API health endpoint is alive:
+  - `GET https://prepshipv4-api-l5xc.onrender.com/health`
+  - returned status `ok` and db `ok`.
+- Public sync status endpoints require bearer auth:
+  - `/sync/status`
+  - `/orders/sync/status`
+- `.github/workflows/sync-cron.yml` says automatic GitHub schedules are disabled and Render worker scheduler owns background sync.
+- Manual GitHub Actions recovery sync was triggered:
+  - workflow: `sync-cron.yml`
+  - mode: `all`
+  - `since_days`: `1`
+  - run: `https://github.com/drprepperusa-org/prepship-v4/actions/runs/26250335270`
+  - result: failed almost immediately.
+- GitHub failed log retrieval returned `log not found`, but the job failed in about 3 seconds, suggesting workflow/secret/config failure before a real sync run.
+- Treat this as likely sync broken/stale until proven otherwise.
+
+## Safety Rules
+
+- Do not weaken auth, RBAC, client/store scoping, secret redaction, shipped/cancelled lockdown, or production safety policies.
+- Do not expose secrets in logs, Discord, commits, or return output.
+- Do not modify shipped/cancelled order mutation logic unless DJ explicitly says `unlock shipped data`.
+- Prefer investigation first. Do not make broad changes without root cause.
+
+## Files To Inspect
+
+- `.github/workflows/sync-cron.yml`
+- `.github/workflows/render-keepalive.yml`
+- `src/routes/cron.ts`
+- `src/routes/sync.ts`
+- `src/services/order-sync.ts`
+- `src/services/shipment-sync.ts`
+- `src/services/sync-scheduler.ts`
+- `src/services/sync-job-queue.ts`
+- `src/services/worker-status.ts`
+- `src/main.ts`
+- `src/worker.ts`
+- `src/lib/env.ts`
+- Render service config, env vars, and logs, if accessible
+
+## Investigation Requirements
+
+1. Verify whether the Render worker scheduler is running.
+   - Check worker heartbeat/status if available.
+   - Check Render logs for scheduler startup, sync attempts, and errors.
+   - Confirm whether sync is owned by API process, worker process, or external cron.
+
+2. Inspect failed GitHub Actions manual sync run `26250335270`.
+   - Determine why it failed immediately.
+   - Check whether `CRON_SECRET` is missing, invalid, inaccessible, or whether the workflow is failing before `curl`.
+   - Do not print secret values.
+
+3. Verify actual order freshness.
+   - Query the production DB/API safely.
+   - Check latest `orders.order_date`, `orders.created_at`, and `orders.updated_at`.
+   - Specifically check whether any orders exist after `2026-05-21T06:00:00Z`, which is 11 PM PDT May 20.
+   - Compare latest `order_sync.last_modified_ms` settings/watermarks if accessible.
+   - Check per-account watermark keys:
+     - `order_sync.last_modified_ms`
+     - `order_sync.last_modified_ms:client:*`
+
+4. Check if ShipStation has new awaiting shipment orders that PrepShip has not imported.
+   - Use existing sync code paths or safe read-only ShipStation queries.
+   - Do not dump customer PII into logs/output.
+   - Report only counts, store IDs/client names if safe, latest timestamps, and redacted sample order numbers if needed.
+
+5. Identify root cause before changing code.
+   - Validate whether the issue is Render worker not running.
+   - Validate whether `RUN_SYNC_SCHEDULER` is disabled or wrong.
+   - Validate whether worker placeholder mode is enabled accidentally.
+   - Validate whether `CRON_SECRET` is missing/invalid.
+   - Validate whether ShipStation credentials are missing/invalid.
+   - Validate whether GitHub workflow is stale or still scheduled unexpectedly.
+   - Validate whether the sync job queue is stuck/disabled.
+   - Validate whether watermark advanced incorrectly.
+   - Validate whether per-client ShipStation credential failure is blocking imports.
+   - Validate whether store/client scoping mismatch causes imported orders to be hidden.
+   - Validate whether this is a frontend filter/date/status issue.
+
+## Implementation Requirements
+
+- If root cause is config/env/deployment:
+  - Document the exact config issue and safe fix steps.
+  - Do not commit secrets.
+  - If a code-side guard/logging improvement is needed, make a minimal change.
+
+- If root cause is code:
+  - Make the smallest targeted fix.
+  - Preserve auth, RBAC, client/store scope, and shipped/cancelled lockdown.
+  - Add diagnostic logging only if it redacts secrets and avoids PII.
+  - Add or update tests where practical.
+
+- If sync can be safely recovered without code changes:
+  - Run or recommend the safest recovery sync path.
+  - Prefer a bounded backfill window first, such as `since_days=1` or `sinceMs` around 11 PM PDT.
+  - Avoid full historical resync unless clearly needed.
+
+## Verification Commands And Checks
+
+- `git status --short --branch`
+- `npm run status:sync`
+- `npm run typecheck`
+- Run relevant tests if available for sync/order services.
+- Confirm Render API health remains ok:
+  - `GET /health`
+- Confirm sync status/worker status shows fresh heartbeat or successful order sync.
+- Confirm orders after 11 PM PDT are visible/imported, using redacted output.
+- If running GitHub Actions recovery sync, confirm the run succeeds and include URL.
+- If running cron endpoint directly, confirm HTTP 2xx and summarize redacted response.
+
+## Definition Of Done
+
+- Root cause is identified with evidence.
+- New orders since ~11 PM PDT are either confirmed imported/visible or a clear blocker is documented.
+- Background sync ownership is confirmed:
+  - Render worker scheduler, API scheduler, or external cron.
+- Failed GitHub Actions run `26250335270` is explained.
+- If a fix was needed, it is minimal, verified, and does not expose secrets or weaken security.
+- DJ receives a concise summary with:
+  - cause
+  - fix/recovery performed
+  - latest successful sync timestamp
+  - latest imported order timestamp
+  - whether orders after 11 PM are now visible
+  - any follow-up needed
+
+## Return Format
+
+```md
+PS-007 Result
+
+Status:
+fixed / partially fixed / blocked
+
+Root cause:
+...
+
+Evidence:
+API health:
+worker/scheduler status:
+GitHub Actions run:
+DB/order freshness:
+ShipStation comparison:
+
+Actions taken:
+...
+
+Verification:
+npm/typecheck/tests:
+sync result:
+latest successful sync:
+latest order after 11 PM PDT:
+
+Risks / follow-up:
+...
+```

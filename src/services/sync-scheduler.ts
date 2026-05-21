@@ -340,6 +340,14 @@ export function startSyncScheduler(
     console.log(
       '[scheduler] SHIPSTATION_API_KEY/SECRET not set — in-process sync disabled'
     );
+    void recordWorkerJobSkipped(
+      'orders sync',
+      'SHIPSTATION_API_KEY/SECRET not set; order sync disabled'
+    );
+    void recordWorkerJobSkipped(
+      'shipments sync',
+      'SHIPSTATION_API_KEY/SECRET not set; shipment sync disabled'
+    );
     return;
   }
 
