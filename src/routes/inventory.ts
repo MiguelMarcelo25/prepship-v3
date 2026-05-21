@@ -11,6 +11,7 @@ import { parentSkus } from '../db/schema/parent-skus';
 import { offsetOf, paginated, paginationSchema } from '../lib/pagination';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 import { hasAppPermission } from '../middleware/auth';
+import { walmartDirectDuplicateSuppressionPredicate } from '../lib/walmart-order-dedupe';
 import { applyMovement, inventoryStats } from '../services/inventory';
 import {
   importSkusFromOrders,
@@ -636,6 +637,7 @@ app.get(
       )
       and ${inventoryOrderScopePredicate(skuOrdersScope)}
     `;
+    const walmartCanonicalOrderFilter = walmartDirectDuplicateSuppressionPredicate('o');
 
     const dailyRows = since || until
       ? await db.execute<{ day: string; units: number }>(sql`
@@ -649,6 +651,7 @@ app.get(
             and coalesce(o.order_status, '') <> 'cancelled'
             and oi.quantity > 0
             ${activeClientOrderFilter}
+            and ${walmartCanonicalOrderFilter}
           group by date_trunc('day', o.order_date)
           order by date_trunc('day', o.order_date) asc
         `)
@@ -686,6 +689,7 @@ app.get(
           and coalesce(o.order_status, '') <> 'cancelled'
           and oi.quantity > 0
           ${activeClientOrderFilter}
+          and ${walmartCanonicalOrderFilter}
       ),
       item_rows as (
         select
@@ -819,6 +823,7 @@ app.get(
           and coalesce(o.order_status, '') <> 'cancelled'
           and oi.quantity > 0
           ${activeClientOrderFilter}
+          and ${walmartCanonicalOrderFilter}
       ),
       item_rows as (
         select

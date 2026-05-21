@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 const helper = readFileSync('src/lib/walmart-order-dedupe.ts', 'utf8');
 const ordersRoute = readFileSync('src/routes/orders.ts', 'utf8');
 const initRoute = readFileSync('src/routes/init.ts', 'utf8');
+const inventoryRoute = readFileSync('src/routes/inventory.ts', 'utf8');
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
 
 assert(
@@ -30,6 +31,14 @@ assert(
   initRoute.includes('walmartDirectDuplicateSuppressionPredicate') &&
     initRoute.includes('walmartCanonicalOrderPredicate'),
   '/init/counts must apply the same Walmart canonical dedupe rule as /orders',
+);
+
+assert(
+  inventoryRoute.includes("import { walmartDirectDuplicateSuppressionPredicate }") &&
+    inventoryRoute.includes("walmartDirectDuplicateSuppressionPredicate('o')") &&
+    inventoryRoute.includes('walmartCanonicalOrderFilter') &&
+    inventoryRoute.includes("'/:id{[0-9]+}/sku-orders'"),
+  '/inventory/:id/sku-orders must apply Walmart canonical dedupe for Analysis SKU drawer data',
 );
 
 assert(
