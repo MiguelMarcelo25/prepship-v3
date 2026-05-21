@@ -6,6 +6,9 @@ import type { ConnectorCapability, ConnectorProvider } from './types';
 const providerAliases: Record<string, ConnectorProvider> = {
   shipstation: 'shipstation',
   walmart: 'walmart',
+  ebay: 'ebay',
+  shopify: 'shopify',
+  amazon: 'amazon',
 };
 
 export type ResolvedStoreConnector = {

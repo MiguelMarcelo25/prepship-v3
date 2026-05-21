@@ -686,7 +686,7 @@ Goal: move PrepShip from ShipStation-centric workflows to normalized connector-b
 
 - Foundation implemented.
 - `StoreConnector`, `CarrierConnector`, and the broader connector interface set now exist in `src/connectors/types.ts`.
-- ShipStation and Walmart are registered as store connectors.
+- ShipStation, Walmart, eBay, Shopify, and Amazon are registered as store connectors. eBay, Shopify, and Amazon are explicit non-live stubs until their API workflows are implemented.
 - ShipStation, Shipp, EasyPost, Walmart Shipping, and UPS are registered as carrier connectors.
 - Provider capabilities are documented in `src/connectors/matrix.ts`.
 - Non-destructive connector-account, sync-state, event, order-source, and shipment-source schema additions are captured in `drizzle/0032_connector_architecture.sql`.
@@ -713,13 +713,13 @@ Goal: move PrepShip from ShipStation-centric workflows to normalized connector-b
 
 ### Checklist Items
 
-- [~] Every order enters through a `StoreConnector`. Foundation exists; existing ShipStation import now writes canonical source fields, but all future store imports still need to be routed through connector implementations.
+- [~] Every order enters through a `StoreConnector`. Foundation exists; ShipStation import writes canonical source fields, and eBay/Shopify/Amazon have registered connector stubs, but their live imports still need implementation.
 - [~] Every imported order is normalized into a canonical PrepShip order model. `NormalizedOrder` exists; ShipStation import now persists canonical source fields.
 - [x] Every order can store `sourceProvider`, `sourceAccountId`, `sourceOrderId`, and raw source payload.
 - [~] Every rate request goes through a `CarrierConnector`. Carrier registry, capability matrix, and connector-backed provider resolution exist; direct endpoints still own live provider behavior.
 - [~] Every label purchase goes through a `CarrierConnector`. Carrier registry, connector-backed provider resolution, and direct-label persistence exist, and direct labels now persist canonical shipment provider fields; direct endpoints still own live provider behavior.
 - [x] Every tracking upload goes through a store connector resolver plus fulfillment outbox boundary.
-- [~] Walmart, eBay, ShipStation, and Shopify can coexist without duplicate orders. Canonical unique source keys are defined; eBay/Shopify live imports are not implemented yet.
+- [~] Walmart, eBay, ShipStation, Shopify, and Amazon can coexist without duplicate orders. Canonical unique source keys and registered store connector slots exist; eBay/Shopify/Amazon live imports are not implemented yet.
 - [x] Connector sync state is persisted per company, provider, account, and sync cursor in the PS-006 migration.
 - [x] Each client/company can connect its own store and carrier accounts safely at the schema boundary through `connector_accounts`.
 - [x] Credential testing, token refresh, and OAuth callback handling are standardized through a credential/auth connector interface.

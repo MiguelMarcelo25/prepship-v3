@@ -107,7 +107,7 @@ for (const sqlColumn of [
   assert(directLabelPersistence.includes(sqlColumn), `direct label persistence must write ${sqlColumn}`);
 }
 
-for (const key of ['shipstation', 'walmart']) {
+for (const key of ['shipstation', 'walmart', 'ebay', 'shopify', 'amazon']) {
   assert(registry.includes(`${key}:`), `store connector registry missing ${key}`);
 }
 for (const key of ['shipstation', 'shipp', 'easypost', 'walmart_shipping', 'ups']) {
@@ -136,6 +136,9 @@ for (const file of [
   'src/connectors/carrier/walmart-shipping.ts',
   'src/connectors/store/shipstation.ts',
   'src/connectors/store/walmart.ts',
+  'src/connectors/store/ebay.ts',
+  'src/connectors/store/shopify.ts',
+  'src/connectors/store/amazon.ts',
 ]) {
   const source = read(file);
   assert(source.includes('capabilities:'), `${file} must declare connector capabilities`);
