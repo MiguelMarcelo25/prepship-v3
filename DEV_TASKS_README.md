@@ -615,6 +615,124 @@ Return:
 Summary of what the certification harness proves, what it does not prove without live-gated checks, files changed, critical workflows covered, API requests/payload contracts covered, failure states covered, role/scope cases covered, scripts added, verification pass/fail results, remaining uncovered actions with reason, and confirmation that no real labels/postage/live marketplace notifications/production mutations occurred.
 ```
 
+## Official PS-023 Post-Certification Codebase Cleanup Task
+
+DJ approved PS-023 as the cleanup/refactor task to run only after PS-022 full-site workflow certification is implemented and passing. The goal is to reduce spaghetti hotspots without rewriting the app or changing product behavior.
+
+| Task | Title | Priority | Sequence | Root Problem | Implementation Notes | Completion Gate |
+|---|---|---|---|---|---|---|
+| PS-023 | Post-Certification Codebase Architecture Cleanup: Reduce Spaghetti Hotspots Without Rewriting the App | High maintainability | Start only after PS-022 passes | PrepShip V4 has good overall structure, but operator-critical behavior is concentrated in very large files such as `OrdersView.tsx`, `InventoryView.tsx`, `v2-apiClient.ts`, carrier label/rate handlers, and order routes. | Make small, reviewable extractions after PS-022 provides a safety net. Prioritize `OrdersView.tsx`; extract pure helpers, presentational components, typed mappers, isolated hooks, and response normalizers; reduce high-risk `any`; centralize provider/API shape normalization; preserve behavior exactly. | Must prove PS-022 was passing before refactor begins, then pass typecheck, web build, site-action guard, browser workflow tests, PS-022 certification scripts, and any touched shipping/rate/label/print-queue targeted guards. |
+
+### PS-023 Copy/Paste Handoff
+
+```md
+PS-023 - Post-Certification Codebase Architecture Cleanup: Reduce Spaghetti Hotspots Without Rewriting the App
+
+Assignee: Lawrence
+Repo: https://github.com/drprepperusa-org/prepship-v4.git
+Branch: prepshipv4-stable
+Sequence: Start only after PS-022 full-site workflow certification is implemented and passing.
+
+Context:
+PrepShip V4 is not globally spaghetti code, but several operator-critical workflows have become too large and fragile. The repo has good structure overall: `src/routes`, `src/services`, `src/lib`, `src/connectors`, `web/src/components`, `web/e2e`, and many safety guards. The risk is that major business behavior is concentrated in oversized files.
+
+Known hotspots:
+- `web/src/components/Views/OrdersView.tsx` - roughly 9k+ lines
+- `web/src/components/Views/InventoryView.tsx` - roughly 4k+ lines
+- `web/src/lib/v2-apiClient.ts`
+- `web/src/components/Views/DashboardView.tsx`
+- `web/src/components/Settings/CarrierIntegrationsCard.tsx`
+- `web/src/components/RateBrowserModal.tsx`
+- `src/routes/orders.ts`
+- `src/services/labels.ts`
+- `api/carriers/labels.ts`
+- `api/carriers/rates.ts`
+
+Goal:
+Do not rewrite the app. Reduce regression risk after PS-022 gives us a workflow safety net.
+
+Inspect first:
+- `web/src/components/Views/OrdersView.tsx`
+- `web/src/components/Views/InventoryView.tsx`
+- `web/src/lib/v2-apiClient.ts`
+- `web/src/components/RateBrowserModal.tsx`
+- `web/src/components/Settings/CarrierIntegrationsCard.tsx`
+- `src/routes/orders.ts`
+- `src/services/labels.ts`
+- `api/carriers/labels.ts`
+- `api/carriers/rates.ts`
+- `web/e2e/site-actions.spec.js`
+- PS-022 workflow certification files/tests once available
+- Existing hooks/utilities in `web/src/hooks`, `web/src/lib`, `web/src/utils`, `src/services`, `src/lib`, and `src/connectors`
+
+Implementation requirements:
+
+1. Do not rewrite the app.
+- Allowed: extract pure helper functions, presentational subcomponents, typed mappers/normalizers, hooks for isolated UI state, API response types, shared domain helpers, and duplicated logic.
+- Forbidden: full page rewrites, routing architecture replacement, wholesale React Query/API client replacement, database schema changes unless explicitly necessary and approved, provider behavior changes unless covered by failing workflow evidence.
+
+2. Prioritize `OrdersView.tsx`.
+- Start with low-risk extractions such as order status/tab helpers, column definitions, date/filter helpers, row formatting helpers, selection/bulk-action helpers, print queue UI helpers, toast/message formatters, pure mapping functions, and small presentational components.
+- Avoid touching label purchase behavior unless protected by PS-022 and existing shipping tests.
+
+3. Preserve behavior exactly.
+- This is cleanup/refactor, not a feature task.
+- UI, API calls, order actions, label behavior, queue behavior, auth behavior, and error states must remain functionally identical.
+- If behavior changes are discovered as necessary, stop and document them instead of silently changing them.
+
+4. Improve type safety.
+- Reduce high-risk `any` usage where practical, especially around orders, shipments, rates, labels, provider payloads, print queue entries, and marketplace confirmation payloads.
+- Do not chase every `any` in the repo. Focus on types that reduce real workflow risk.
+
+5. Centralize provider/API shape normalization.
+- Where safe, introduce or improve typed normalization helpers so frontend and backend are not guessing provider payload shapes separately.
+- Priority areas: rate response shape, label creation response shape, print queue entry shape, shipment/label URL shape, and marketplace confirmation status shape.
+
+6. Keep business rules out of giant React components.
+- Move low-risk business logic out of view files into hooks, pure utilities, service helpers, and typed mappers.
+- React components should become more focused on rendering and interaction wiring.
+
+7. Do not weaken safety boundaries.
+- Do not weaken or bypass auth, RBAC, client/store scope, source-of-truth constraints, secret redaction, financial redaction, shipped/cancelled lockdown, label safety, credential protections, or production safeguards.
+- Do not expose secrets, API keys, provider credentials, raw labels, raw customer data, or cross-client data in logs, tests, screenshots, or summaries.
+
+Required verification:
+- Confirm PS-022 certification is already passing before starting.
+- `npm run typecheck`
+- `npm run build:web`
+- `npm run guard:site-actions`
+- `npm run test:site-actions:browser`
+- PS-022 commands once available, likely:
+  - `npm run test:workflow-certification:browser`
+  - `npm run test:api-contracts`
+  - `npm run test:full-site-certification`
+- Relevant targeted guards depending on touched files:
+  - `npm run guard:shipping-certification`
+  - `npm run test:direct-carrier-labels`
+  - `npm run test:print-queue-invalid-label`
+  - `npm run test:ebay-confirmation:mocked`
+  - `npm run test:production-watchdog`
+  - `npm run test:health-deep-readiness`
+
+If any test fails, fix the issue and rerun the failed command plus the relevant surrounding suite.
+
+Definition of done:
+- PS-022 is already passing before this task begins.
+- The largest hotspot files are measurably improved or have a documented staged refactor plan.
+- At minimum, `OrdersView.tsx` has meaningful low-risk extraction/refactor work completed.
+- Behavior is preserved.
+- No auth/RBAC/client-scope/shipping/label/marketplace safety boundary is weakened.
+- Typecheck passes.
+- Web build passes.
+- Existing site-action guard passes.
+- Browser workflow test passes.
+- PS-022 full-site certification still passes after refactor.
+- Any touched shipping/rate/label/print queue code is covered by relevant targeted guards.
+
+Return:
+Summary of what was refactored, files changed, behavior preserved or changed, risk areas reviewed, type-safety improvements, commands run with pass/fail results, follow-up refactor recommendations, and confirmation that PS-022 certification still passes.
+```
+
 ## Phase Summary
 
 | Phase | Status | Percent | Why Not 100% Yet |
