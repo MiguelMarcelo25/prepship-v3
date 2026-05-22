@@ -6,6 +6,7 @@ const requiredFiles = [
   'scripts/inspect-shipping-order.ts',
   'scripts/smoke-shipping-preflight.ts',
   'scripts/smoke-shipping-test-label.ts',
+  'scripts/smoke-shipping-real-label.ts',
   'scripts/smoke-marketplace-confirm.ts',
 ];
 
@@ -27,6 +28,7 @@ for (const name of [
   'inspect:shipping-order',
   'smoke:shipping:preflight',
   'smoke:shipping:test-label',
+  'smoke:shipping:real-label',
   'smoke:marketplace-confirm',
   'guard:shipping-certification',
 ]) {
@@ -42,6 +44,9 @@ const preflight = existsSync('scripts/smoke-shipping-preflight.ts')
 const testLabel = existsSync('scripts/smoke-shipping-test-label.ts')
   ? readFileSync('scripts/smoke-shipping-test-label.ts', 'utf8')
   : '';
+const realLabel = existsSync('scripts/smoke-shipping-real-label.ts')
+  ? readFileSync('scripts/smoke-shipping-real-label.ts', 'utf8')
+  : '';
 const confirm = existsSync('scripts/smoke-marketplace-confirm.ts')
   ? readFileSync('scripts/smoke-marketplace-confirm.ts', 'utf8')
   : '';
@@ -54,9 +59,15 @@ assert(preflight.includes('READ_ONLY_PREFLIGHT'), 'preflight must declare read-o
 assert(!/fetch\s*\(\s*['"`]https?:\/\/(api\.shipstation|ssapi\.shipstation|api\.ebay|marketplace\.walmartapis)/i.test(preflight), 'preflight must not call external carrier or marketplace APIs');
 assert(testLabel.includes('--fixture'), 'test-label smoke must require fixture mode');
 assert(testLabel.includes('refuses to create real labels'), 'test-label smoke must explicitly refuse real labels');
+assert(realLabel.includes('--live-approved'), 'real-label smoke must require --live-approved');
+assert(realLabel.includes('LIVE_LABEL_APPROVAL_REQUIRED'), 'real-label smoke must declare live approval gating');
+assert(realLabel.includes('Cannot create label for shipped/cancelled order'), 'real-label smoke must refuse shipped/cancelled orders');
+assert(realLabel.includes('Label already exists for this order'), 'real-label smoke must refuse duplicate active labels');
+assert(realLabel.includes('No secrets, PII, raw labels, or provider payloads are printed'), 'real-label smoke must document output redaction');
 assert(confirm.includes('READ_ONLY_BY_DEFAULT'), 'marketplace confirm smoke must be read-only by default');
 assert(confirm.includes('--mock-process-once'), 'marketplace confirm processing must be mock-gated only');
 assert(/No automated test may create real labels/i.test(docs), 'docs must state no real labels');
+assert(/smoke:shipping:real-label/i.test(docs), 'docs must document the real-label certification command');
 assert(/static guards are not enough/i.test(docs), 'docs must explain static guards are not enough');
 assert(/duplicate active/i.test(inspector + preflight + docs), 'harness must mention duplicate active label protection');
 assert(/shipped|cancelled/i.test(preflight + testLabel), 'harness must check shipped/cancelled protection');

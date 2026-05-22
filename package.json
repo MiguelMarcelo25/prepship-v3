@@ -52,6 +52,7 @@
     "inspect:shipping-order": "tsx scripts/inspect-shipping-order.ts",
     "smoke:shipping:preflight": "tsx scripts/smoke-shipping-preflight.ts",
     "smoke:shipping:test-label": "tsx scripts/smoke-shipping-test-label.ts",
+    "smoke:shipping:real-label": "tsx scripts/smoke-shipping-real-label.ts",
     "smoke:marketplace-confirm": "tsx scripts/smoke-marketplace-confirm.ts",
     "test:auth-coverage": "node scripts/auth-coverage-guard.mjs",
     "test:raw-error-response-audit": "node scripts/raw-error-response-audit-guard.mjs",

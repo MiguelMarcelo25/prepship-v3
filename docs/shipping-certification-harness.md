@@ -26,6 +26,14 @@ Default modes are read-only, mocked, offline, fixture-based, or sandbox-only.
 - Proves expected state transitions in memory.
 - Refuses to create real labels.
 
+`npm run smoke:shipping:real-label -- --order-id <approved-test-order> --live-approved --api-base <url>`
+
+- Live certification path for an explicitly approved test order only.
+- Requires `--live-approved`, an explicit `--order-id`, and API context.
+- Refuses shipped/cancelled orders and duplicate active labels before calling the label endpoint.
+- Verifies label response, shipment persistence, order status, label retrieval, and fulfillment outbox state.
+- Prints only redacted tracking/status/timing data. It must not print secrets, full customer data, raw labels, or raw provider payloads.
+
 `npm run smoke:marketplace-confirm -- --order-id <id>`
 
 - Read-only by default.
