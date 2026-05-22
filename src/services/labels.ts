@@ -29,6 +29,7 @@ import { packages } from '../db/schema/packages';
 import { carrierConnectors } from '../connectors/registry';
 import {
   enqueueShipmentConfirmation,
+  ensureFulfillmentSchema,
   inferStoreProvider,
   processFulfillmentOutboxOnce,
 } from './fulfillment/outbox';
@@ -818,6 +819,7 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
   }
 
   const timer = createLabelTimer(body.orderId);
+  await timer.task('fulfillment schema readiness', () => ensureFulfillmentSchema());
   const order = await timer.task('order load', () => loadOrderRecord(body.orderId));
   if (!order) throw new Error('Order not found');
   if (order.orderStatus === 'shipped' || order.orderStatus === 'cancelled') {

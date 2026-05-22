@@ -81,6 +81,7 @@ async function ensureFulfillmentOutboxSql(sql: any): Promise<void> {
     `CREATE INDEX IF NOT EXISTS orders_canonical_status_idx ON orders (canonical_status)`,
     `ALTER TABLE shipments ADD COLUMN IF NOT EXISTS carrier_provider TEXT`,
     `ALTER TABLE shipments ADD COLUMN IF NOT EXISTS carrier_account_id TEXT`,
+    `ALTER TABLE shipments ADD COLUMN IF NOT EXISTS label_provider_key TEXT`,
     `ALTER TABLE shipments ADD COLUMN IF NOT EXISTS confirmation_status TEXT`,
     `ALTER TABLE shipments ADD COLUMN IF NOT EXISTS confirmation_provider TEXT`,
     `ALTER TABLE shipments ADD COLUMN IF NOT EXISTS confirmation_attempts INTEGER NOT NULL DEFAULT 0`,

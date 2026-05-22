@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
 const labelsService = readFileSync('src/services/labels.ts', 'utf8');
+const fulfillmentOutbox = readFileSync('src/services/fulfillment/outbox.ts', 'utf8');
+const carrierLabels = readFileSync('api/carriers/labels.ts', 'utf8');
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
 
 assert(
@@ -32,6 +34,18 @@ assert(
   labelsService.includes('body.testLabel ? 1 : 0') &&
     labelsService.includes('if (body.testLabel === true)'),
   'Backend test labels must have a safe fallback weight before mock label creation',
+);
+
+assert(
+  labelsService.includes('ensureFulfillmentSchema') &&
+    labelsService.includes("timer.task('fulfillment schema readiness'"),
+  'Label creation must ensure fulfillment/shipment schema readiness before writing shipments',
+);
+
+assert(
+  fulfillmentOutbox.includes('label_provider_key') &&
+    carrierLabels.includes('label_provider_key'),
+  'Fulfillment schema fallback must add label_provider_key for production DBs missing connector columns',
 );
 
 assert(

@@ -63,6 +63,7 @@ export async function ensureFulfillmentSchema(): Promise<void> {
 
     await pg`ALTER TABLE shipments ADD COLUMN IF NOT EXISTS carrier_provider TEXT`;
     await pg`ALTER TABLE shipments ADD COLUMN IF NOT EXISTS carrier_account_id TEXT`;
+    await pg`ALTER TABLE shipments ADD COLUMN IF NOT EXISTS label_provider_key TEXT`;
     await pg`ALTER TABLE shipments ADD COLUMN IF NOT EXISTS confirmation_status TEXT`;
     await pg`ALTER TABLE shipments ADD COLUMN IF NOT EXISTS confirmation_provider TEXT`;
     await pg`ALTER TABLE shipments ADD COLUMN IF NOT EXISTS confirmation_attempts INTEGER NOT NULL DEFAULT 0`;
