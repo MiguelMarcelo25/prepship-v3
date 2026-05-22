@@ -129,7 +129,7 @@ async function enqueueShipmentConfirmationSql(
 ): Promise<{ queued: boolean; provider: string }> {
   await ensureFulfillmentOutboxSql(sql);
   const provider = args.confirmationProvider ?? inferStoreProviderFromExternalId(args.externalOrderId);
-  const supported = provider === 'shipstation' || provider === 'walmart';
+  const supported = provider === 'shipstation' || provider === 'walmart' || provider === 'ebay';
   await sql`
     UPDATE orders
     SET

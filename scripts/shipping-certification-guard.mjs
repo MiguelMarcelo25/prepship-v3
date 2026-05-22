@@ -1,0 +1,68 @@
+import { readFileSync, existsSync } from 'node:fs';
+
+const requiredFiles = [
+  'docs/prepship-shipping-production-audit.md',
+  'docs/shipping-certification-harness.md',
+  'scripts/inspect-shipping-order.ts',
+  'scripts/smoke-shipping-preflight.ts',
+  'scripts/smoke-shipping-test-label.ts',
+  'scripts/smoke-marketplace-confirm.ts',
+];
+
+const packageJson = JSON.parse(readFileSync('package.json', 'utf8'));
+const scripts = packageJson.scripts ?? {};
+
+function assert(condition, message) {
+  if (!condition) {
+    console.error(`shipping-certification guard failed: ${message}`);
+    process.exitCode = 1;
+  }
+}
+
+for (const file of requiredFiles) {
+  assert(existsSync(file), `${file} must exist`);
+}
+
+for (const name of [
+  'inspect:shipping-order',
+  'smoke:shipping:preflight',
+  'smoke:shipping:test-label',
+  'smoke:marketplace-confirm',
+  'guard:shipping-certification',
+]) {
+  assert(typeof scripts[name] === 'string', `package.json missing ${name}`);
+}
+
+const inspector = existsSync('scripts/inspect-shipping-order.ts')
+  ? readFileSync('scripts/inspect-shipping-order.ts', 'utf8')
+  : '';
+const preflight = existsSync('scripts/smoke-shipping-preflight.ts')
+  ? readFileSync('scripts/smoke-shipping-preflight.ts', 'utf8')
+  : '';
+const testLabel = existsSync('scripts/smoke-shipping-test-label.ts')
+  ? readFileSync('scripts/smoke-shipping-test-label.ts', 'utf8')
+  : '';
+const confirm = existsSync('scripts/smoke-marketplace-confirm.ts')
+  ? readFileSync('scripts/smoke-marketplace-confirm.ts', 'utf8')
+  : '';
+const docs = existsSync('docs/shipping-certification-harness.md')
+  ? readFileSync('docs/shipping-certification-harness.md', 'utf8')
+  : '';
+
+assert(inspector.includes('READ_ONLY_INSPECTOR'), 'inspector must declare read-only mode');
+assert(preflight.includes('READ_ONLY_PREFLIGHT'), 'preflight must declare read-only mode');
+assert(!/fetch\s*\(\s*['"`]https?:\/\/(api\.shipstation|ssapi\.shipstation|api\.ebay|marketplace\.walmartapis)/i.test(preflight), 'preflight must not call external carrier or marketplace APIs');
+assert(testLabel.includes('--fixture'), 'test-label smoke must require fixture mode');
+assert(testLabel.includes('refuses to create real labels'), 'test-label smoke must explicitly refuse real labels');
+assert(confirm.includes('READ_ONLY_BY_DEFAULT'), 'marketplace confirm smoke must be read-only by default');
+assert(confirm.includes('--mock-process-once'), 'marketplace confirm processing must be mock-gated only');
+assert(/No automated test may create real labels/i.test(docs), 'docs must state no real labels');
+assert(/static guards are not enough/i.test(docs), 'docs must explain static guards are not enough');
+assert(/duplicate active/i.test(inspector + preflight + docs), 'harness must mention duplicate active label protection');
+assert(/shipped|cancelled/i.test(preflight + testLabel), 'harness must check shipped/cancelled protection');
+
+if (process.exitCode) {
+  process.exit(process.exitCode);
+}
+
+console.log('shipping-certification guard passed');

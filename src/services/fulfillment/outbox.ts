@@ -153,7 +153,7 @@ export async function enqueueShipmentConfirmation(
   }
 
   const provider = input.confirmationProvider ?? inferStoreProvider(input.order.externalOrderId);
-  const supported = provider === 'shipstation' || provider === 'walmart';
+  const supported = provider === 'shipstation' || provider === 'walmart' || provider === 'ebay';
   if (!supported) {
     await markShipmentConfirmationState({
       shipmentId: input.shipmentId,
@@ -228,16 +228,20 @@ async function loadStoreCredentials(provider: string, payload: Record<string, un
     };
   }
 
-  if (provider !== 'walmart') return {};
+  if (provider !== 'walmart' && provider !== 'ebay') return {};
 
   const explicitId = Number(payload.storeAccountId ?? payload.sourceAccountId ?? payload.marketplaceAccountId);
   let accountId = Number.isFinite(explicitId) && explicitId > 0 ? Math.trunc(explicitId) : null;
-  const purchaseOrderId = String(payload.purchaseOrderId ?? '').trim();
-  if (!accountId && purchaseOrderId) {
+  const marketplaceOrderId = String(
+    provider === 'walmart'
+      ? payload.purchaseOrderId ?? ''
+      : payload.ebayOrderId ?? sourceOrderId(String(payload.externalOrderId ?? '')) ?? '',
+  ).trim();
+  if (!accountId && marketplaceOrderId) {
     const rows = await pg`
       SELECT carrier_account_id
       FROM store_orders
-      WHERE provider = 'walmart' AND external_order_id = ${purchaseOrderId}
+      WHERE provider = ${provider} AND external_order_id = ${marketplaceOrderId}
       LIMIT 1
     ` as Array<{ carrier_account_id: number | null }>;
     accountId = rows[0]?.carrier_account_id ?? null;

@@ -23,6 +23,8 @@
     "guard:frontend-failure-states": "npm run test:frontend-failure-states",
     "guard:orders-startup-requests": "npm run test:orders-startup-requests",
     "guard:source-of-truth": "node scripts/source-of-truth-guard.mjs",
+    "guard:shipping-certification": "node scripts/shipping-certification-guard.mjs",
+    "guard:site-actions": "node scripts/site-action-functionality-guard.mjs",
     "test:web-bundle-budget": "npm run build:web && node scripts/web-bundle-budget-guard.mjs",
     "test:tailwind-safelist": "node scripts/tailwind-safelist-guard.mjs",
     "test:dashboard-chart-lazy": "node scripts/dashboard-chart-lazy-guard.mjs",
@@ -45,6 +47,11 @@
     "test:best-rate-dims": "node scripts/best-rate-dims-guard.mjs",
     "test:runtime-ddl": "node scripts/runtime-ddl-guard.mjs",
     "test:vercel-function-imports": "node scripts/vercel-function-imports-guard.mjs",
+    "test:ebay-confirmation:mocked": "tsx scripts/ebay-confirmation-mocked-guard.ts",
+    "inspect:shipping-order": "tsx scripts/inspect-shipping-order.ts",
+    "smoke:shipping:preflight": "tsx scripts/smoke-shipping-preflight.ts",
+    "smoke:shipping:test-label": "tsx scripts/smoke-shipping-test-label.ts",
+    "smoke:marketplace-confirm": "tsx scripts/smoke-marketplace-confirm.ts",
     "test:auth-coverage": "node scripts/auth-coverage-guard.mjs",
     "test:raw-error-response-audit": "node scripts/raw-error-response-audit-guard.mjs",
     "test:rbac-permissions": "node scripts/rbac-permissions-guard.mjs",
@@ -106,7 +113,8 @@
     "test:secondary-order-detail-lazy": "node scripts/secondary-order-detail-lazy-guard.mjs",
     "test:order-detail-drawer-lazy": "node scripts/order-detail-drawer-lazy-guard.mjs",
     "test:orders-ux:browser": "playwright test web/e2e/orders-ux.spec.js --reporter=line",
-    "test:inventory-ux:browser": "playwright test web/e2e/inventory-ux.spec.js --reporter=line"
+    "test:inventory-ux:browser": "playwright test web/e2e/inventory-ux.spec.js --reporter=line",
+    "test:site-actions:browser": "playwright test web/e2e/site-actions.spec.js --reporter=line"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",

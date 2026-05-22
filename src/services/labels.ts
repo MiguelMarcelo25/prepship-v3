@@ -560,7 +560,7 @@ async function loadOrderRecord(orderId: number) {
   return order ?? null;
 }
 
-type MarketplaceConfirmationProvider = 'shipstation' | 'walmart';
+type MarketplaceConfirmationProvider = 'shipstation' | 'walmart' | 'ebay';
 
 function firstText(...values: unknown[]): string {
   for (const value of values) {
@@ -574,6 +574,7 @@ function normalizeConfirmationProvider(value: unknown): MarketplaceConfirmationP
   const text = firstText(value).toLowerCase().replace(/[\s-]+/g, '_');
   if (!text) return null;
   if (text.includes('walmart')) return 'walmart';
+  if (text.includes('ebay')) return 'ebay';
   if (text.includes('shipstation')) return 'shipstation';
   return null;
 }
@@ -648,6 +649,29 @@ function marketplaceConfirmationPayload(
     payload.rawOrder = raw;
     payload.carrierName = carrierNameForMarketplace(created.carrierCode);
     payload.trackingUrl = trackingUrlForCarrier(created.carrierCode, created.trackingNumber) || undefined;
+    payload.serviceCode = created.serviceCode;
+  }
+
+  if (provider === 'ebay') {
+    payload.storeAccountId = firstText(
+      raw.accountId,
+      raw.storeAccountId,
+      raw.sourceAccountId,
+      raw.marketplaceAccountId
+    ) || undefined;
+    payload.ebayOrderId = firstText(
+      raw.orderId,
+      stripProviderPrefix(order.externalOrderId, 'ebay'),
+      raw.id
+    ) || undefined;
+    payload.rawOrder = raw;
+    payload.lineItems = Array.isArray(raw.lineItems)
+      ? raw.lineItems.map((line: any) => ({
+          lineItemId: firstText(line?.lineItemId, line?.line_item_id),
+          quantity: Number(line?.quantity ?? 1) || 1,
+        })).filter((line: any) => line.lineItemId)
+      : undefined;
+    payload.shippingCarrierCode = carrierNameForMarketplace(created.carrierCode);
     payload.serviceCode = created.serviceCode;
   }
 

@@ -140,8 +140,13 @@ for (const source of [carrierLabels, carrierRates]) {
   assert(source.includes('connectorCapabilities'), 'direct carrier endpoint response metadata must expose connector capabilities');
 }
 assert(
-  carrierLabels.includes('resolveCarrierConnector'),
-  'direct carrier label endpoint must resolve providers through connector registry',
+  carrierLabels.includes('LABEL_CREATE_CONNECTOR_CAPABILITIES') &&
+    carrierLabels.includes('labelCreateConnectorCapabilities'),
+  'direct carrier label endpoint must keep Vercel-safe inline connector capability metadata',
+);
+assert(
+  !carrierLabels.includes("from '../../src/connectors/carrier-resolution.js'"),
+  'direct carrier label endpoint must not import connector registry at Vercel cold start',
 );
 assert(
   carrierRates.includes('DIRECT_CARRIER_CONNECTOR_CAPABILITIES'),
