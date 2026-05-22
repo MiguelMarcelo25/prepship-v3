@@ -127,6 +127,31 @@ function parseDims(
   };
 }
 
+export function extractShipstationLabelUrl(labelDownload: unknown): string | null {
+  const seen = new Set<unknown>();
+  const pick = (value: unknown, depth = 0): string | null => {
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      return trimmed || null;
+    }
+    if (!value || typeof value !== 'object' || depth > 3 || seen.has(value)) return null;
+    seen.add(value);
+
+    const record = value as Record<string, unknown>;
+    return (
+      pick(record.pdf, depth + 1) ??
+      pick(record.href, depth + 1) ??
+      pick(record.url, depth + 1) ??
+      pick(record.downloadUrl, depth + 1) ??
+      pick(record.download_url, depth + 1) ??
+      pick(record.labelUrl, depth + 1) ??
+      pick(record.label_url, depth + 1)
+    );
+  };
+
+  return pick(labelDownload);
+}
+
 export async function ssCreateLabel(input: CreateExternalLabelInput): Promise<CreatedExternalLabel> {
   const pkg: Record<string, unknown> = {
     weight: { value: Number(input.weightOz.toFixed(2)), unit: 'ounce' },
@@ -168,12 +193,16 @@ export async function ssCreateLabel(input: CreateExternalLabelInput): Promise<Cr
   const shipmentCost = payload.shipment_cost as Record<string, unknown> | undefined;
   const providerAccountId = stripSePrefix(input.carrierId);
   const shipmentId = stripSePrefix(payload.shipment_id) ?? 0;
+  // Per user override `unlock shipped data` on 2026-05-22:
+  // ShipStation can nest Walmart label URLs under object-shaped fields.
+  // Normalize before shipment persistence so text columns never receive objects.
+  const labelUrl = extractShipstationLabelUrl(labelDownload);
 
   return {
     labelId: payload.label_id ? String(payload.label_id) : null,
     shipmentId,
     trackingNumber: payload.tracking_number ? String(payload.tracking_number) : null,
-    labelUrl: ((labelDownload.pdf ?? labelDownload.href) as string | undefined) ?? null,
+    labelUrl,
     labelFormat: payload.label_format ? String(payload.label_format) : 'pdf',
     cost: Number(shipmentCost?.amount ?? 0),
     voided: Boolean(payload.voided),
@@ -225,7 +254,7 @@ export async function ssCreateReturnLabel(
     returnShipmentId: stripSePrefix(payload.shipment_id),
     returnTrackingNumber: String(payload.tracking_number ?? ''),
     cost: Number(shipmentCost?.amount ?? 0),
-    labelUrl: ((labelDownload.pdf ?? labelDownload.href) as string | undefined) ?? null,
+    labelUrl: extractShipstationLabelUrl(labelDownload),
   };
 }
 
@@ -241,7 +270,7 @@ export async function ssListRecentLabels(apiKeyV2?: string): Promise<Shipstation
         labelId: label.label_id ? String(label.label_id) : null,
         shipmentId: stripSePrefix(label.shipment_id),
         trackingNumber: label.tracking_number ? String(label.tracking_number) : null,
-        labelUrl: ((labelDownload.pdf ?? labelDownload.href) as string | undefined) ?? null,
+        labelUrl: extractShipstationLabelUrl(labelDownload),
       };
     });
   } catch {
@@ -275,7 +304,7 @@ export async function ssGetShipmentV1(
       otherCost: Number(shipment.otherCost ?? 0),
       shipDate: shipment.shipDate ? String(shipment.shipDate) : null,
       voided: Boolean(shipment.voided),
-      labelUrl: ((labelDownload.pdf ?? labelDownload.href) as string | undefined) ?? null,
+      labelUrl: extractShipstationLabelUrl(labelDownload),
       createDate: shipment.createDate ? String(shipment.createDate) : null,
       weightOz: parseWeightOz(shipment.weight as Record<string, unknown> | undefined),
       dimsLength: dims.length,
