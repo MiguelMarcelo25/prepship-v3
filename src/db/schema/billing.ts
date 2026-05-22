@@ -13,6 +13,8 @@ import { clients } from './clients';
 import { orders } from './orders';
 import { shipments } from './shipments';
 
+// Source-of-truth note: billing_config owns mutable billing rules. Generated
+// billing_line_items should be treated as frozen billable records.
 export const billingConfig = pgTable('billing_config', {
   clientId: integer()
     .primaryKey()

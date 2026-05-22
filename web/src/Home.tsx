@@ -44,13 +44,18 @@ const SettingsView = lazy(() => import('./components/Views/SettingsView'))
 const BillingView = lazy(() => import('./components/Views/BillingView'))
 const ManifestsView = lazy(() => import('./components/Views/ManifestsView'))
 import { formatSyncPill } from './components/Views/orders-parity'
-import { getOrdersDateRange } from './components/Views/orders-view-filters'
-
-type ViewType = 'orders' | 'dashboard' | 'inventory' | 'clients' | 'locations' | 'packages' | 'rates' | 'analysis' | 'settings' | 'billing' | 'manifests'
-type ContentView = Exclude<ViewType, 'manifests'>
-type OrderStatus = 'awaiting_shipment' | 'shipped' | 'cancelled'
-type InventoryRouteTab = 'stock' | 'receive' | 'alerts' | 'parents' | 'history'
-type OrdersDateFilter = '' | 'this-month' | 'last-month' | 'last-30' | 'last-90' | 'custom'
+import {
+  getResolvedDateRange,
+  INVENTORY_TAB_PATHS,
+  pathToRoute,
+  VALID_STATUSES,
+  VIEW_PATHS,
+  type ContentView,
+  type InventoryRouteTab,
+  type OrderStatus,
+  type OrdersDateFilter,
+  type ViewType,
+} from './app-shell/routes'
 type AnalysisOpenContext = {
   sku: string
   from?: string
@@ -126,15 +131,6 @@ function timingHealthTone(route: ApiTimingRoute | null | undefined) {
   return timingTone(route.lastDurationMs)
 }
 
-function getResolvedDateRange(filter: OrdersDateFilter) {
-  const range = getOrdersDateRange(filter)
-  if (!range) return { start: undefined, end: undefined }
-  return {
-    start: range.start.toISOString().split('T')[0],
-    end: range.end.toISOString().split('T')[0],
-  }
-}
-
 const VIEW_LABELS: Record<Exclude<ViewType, 'orders' | 'manifests'>, string> = {
   dashboard: 'Dashboard',
   inventory: 'Inventory',
@@ -146,107 +142,7 @@ const VIEW_LABELS: Record<Exclude<ViewType, 'orders' | 'manifests'>, string> = {
   billing: 'Billing',
 }
 
-// 2026-05-13: 'locations' was removed from this map when Ship-From
-// Locations moved into Settings. The useEffect in Home rewrites old
-// /locations URLs to /settings/locations before pathToRoute sees
-// them, so no path entry is needed.
-const VIEW_PATHS: Record<Exclude<ViewType, 'orders' | 'locations'>, string> = {
-  dashboard: '/dashboard',
-  inventory: '/inventory/stock-levels',
-  clients: '/clients',
-  packages: '/packages',
-  rates: '/rates',
-  analysis: '/analysis',
-  settings: '/settings',
-  billing: '/billing',
-  manifests: '/manifest',
-}
-
-const VALID_STATUSES: OrderStatus[] = ['awaiting_shipment', 'shipped', 'cancelled']
 const TEST_ORDERS_VISIBILITY_KEY = 'prepship_show_test_orders'
-const INVENTORY_TAB_PATHS: Record<InventoryRouteTab, string> = {
-  stock: '/inventory/stock-levels',
-  receive: '/inventory/received',
-  alerts: '/inventory/alerts',
-  parents: '/inventory/parent-skus',
-  history: '/inventory/history',
-}
-const INVENTORY_SEGMENT_TO_TAB: Record<string, InventoryRouteTab> = {
-  '': 'stock',
-  stock: 'stock',
-  'stock-levels': 'stock',
-  levels: 'stock',
-  receive: 'receive',
-  received: 'receive',
-  alerts: 'alerts',
-  parents: 'parents',
-  'parent-skus': 'parents',
-  history: 'history',
-}
-
-// Parses URLs of the form:
-//   /orders                           → awaiting_shipment, no order
-//   /orders/awaiting_shipment         → awaiting_shipment, no order
-//   /orders/awaiting_shipment/12345   → awaiting_shipment, drawer open on order 12345
-//   /orders/shipped/87765             → shipped, drawer open on order 87765
-//   /inventory                        → inventory tool, no order
-//
-// The orderId capture is optional — when present, Home.tsx opens the
-// OrderDetailDrawer for that order on mount, and the URL stays in
-// sync as the user navigates around.
-function pathToRoute(pathname: string): {
-  view: ViewType
-  status: OrderStatus | null
-  orderId: number | null
-  inventoryTab: InventoryRouteTab | null
-} {
-  if (pathname === '/' || pathname === '/orders' || pathname === '/orders/') {
-    return { view: 'orders', status: 'awaiting_shipment', orderId: null, inventoryTab: null }
-  }
-  // 2026-05-13: /locations was removed from the sidebar — it's now
-  // a tab inside Settings (Ship-From Locations). Old bookmarks /
-  // external links still need to resolve, so map any /locations[/*]
-  // path to the settings view. SettingsView's own URL-binding then
-  // jumps to the locations section because /settings/locations is
-  // a registered alias there.
-  if (pathname === '/locations' || pathname.startsWith('/locations/')) {
-    return { view: 'settings', status: null, orderId: null, inventoryTab: null }
-  }
-  const inventoryMatch = pathname.match(/^\/inventory(?:\/([^/]+))?\/?$/)
-  if (inventoryMatch) {
-    const segment = (inventoryMatch[1] ?? '').toLowerCase()
-    return {
-      view: 'inventory',
-      status: null,
-      orderId: null,
-      inventoryTab: INVENTORY_SEGMENT_TO_TAB[segment] ?? 'stock',
-    }
-  }
-  // /orders/:status/:orderId? — orderId is optional and must be all digits.
-  // Anything else after the status (e.g. /orders/awaiting_shipment/foo) is
-  // ignored and treated as if the orderId weren't there.
-  const ordersMatch = pathname.match(/^\/orders\/([^/]+)(?:\/(\d+))?\/?$/)
-  if (ordersMatch) {
-    const candidate = ordersMatch[1] as OrderStatus
-    const status: OrderStatus = VALID_STATUSES.includes(candidate)
-      ? candidate
-      : 'awaiting_shipment'
-    const idStr = ordersMatch[2]
-    const orderId = idStr ? Number.parseInt(idStr, 10) : null
-    return {
-      view: 'orders',
-      status,
-      orderId: Number.isFinite(orderId) && (orderId ?? 0) > 0 ? orderId : null,
-      inventoryTab: null,
-    }
-  }
-  for (const [view, path] of Object.entries(VIEW_PATHS) as [Exclude<ViewType, 'orders'>, string][]) {
-    if (pathname === path || pathname.startsWith(path + '/')) {
-      return { view, status: null, orderId: null, inventoryTab: null }
-    }
-  }
-  return { view: 'orders', status: 'awaiting_shipment', orderId: null, inventoryTab: null }
-}
 
 function PlaceholderView({ title }: { title: string }) {
   return (

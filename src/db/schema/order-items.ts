@@ -12,6 +12,8 @@ import { sql } from 'drizzle-orm';
 import { clients } from './clients';
 import { orders } from './orders';
 
+// Source-of-truth note: order_items is the canonical table for SKU/item
+// analytics. orders.items remains raw import compatibility.
 export const orderItems = pgTable(
   'order_items',
   {

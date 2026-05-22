@@ -35,6 +35,8 @@ export const carrierAccounts = pgTable(
   ],
 );
 
+// Source-of-truth note: carrier_accounts stores provider account records;
+// carrier_account_clients owns account-to-client assignment going forward.
 // Many-to-many junction: a carrier account can be assigned to
 // multiple clients (operators reuse the same UPS/USPS/FedEx
 // credentials across several DR Prepper sub-stores). The legacy

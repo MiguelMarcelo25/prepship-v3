@@ -8,6 +8,8 @@ import {
   timestamp,
 } from 'drizzle-orm/pg-core';
 
+// Source-of-truth note: rate_cache is a performance cache only. Purchased
+// label billing/audit should use the frozen selected rate on shipments.
 export const rateCache = pgTable(
   'rate_cache',
   {

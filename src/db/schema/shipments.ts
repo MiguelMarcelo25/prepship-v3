@@ -14,6 +14,9 @@ import { sql } from 'drizzle-orm';
 import { clients } from './clients';
 import { orders } from './orders';
 
+// Source-of-truth note: shipments owns durable label/shipment records.
+// Selected rate, provider, account, tracking, and cost fields are frozen
+// operational snapshots for the action that created the label.
 export const shipments = pgTable(
   'shipments',
   {

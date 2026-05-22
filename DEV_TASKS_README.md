@@ -29,6 +29,23 @@
 |---|---|---:|---|
 | `JWT_SESSION_EXPIRATION_PLAN.md` | Created / production setting applied | 75% | Repo policy and guard exist, production Supabase dashboard evidence shows `168` hours, and production logout/login smoke passed; staging short-timebox proof and expired-session verification remain open |
 
+## Official PS-010 Through PS-013 Task Track
+
+These tasks are fixable, but they should be handled with different levels of scope and access.
+
+| Task | Title | Fixability | Implementation Notes |
+|---|---|---|---|
+| PS-010 | Home/App Shell Chunk Split + Route Performance Pass | Directly fixable in code | Split the large `web/src/Home.tsx` shell into focused route, topbar, shell, status, and view-renderer modules. Preserve route behavior, lazy loading, RBAC, scope, and existing UI semantics. |
+| PS-011 | Production Performance & Smoke Benchmarking | Directly fixable in tooling/docs | Add repeatable local performance and smoke benchmark commands plus production-safe documentation. This proves page-load improvements with evidence instead of relying only on bundle-size estimates. |
+| PS-012 | Enterprise Readiness Closeout: Smoke, Audit, Alerts, Durable Jobs | Fixable in phases | Code/docs/guards can be added locally, but production evidence, CI billing/spend-limit resolution, Render/Supabase checks, alert destinations, restore drills, and secrets rotation may require DJ or account-owner access. |
+| PS-013 | Source of Truth Matrix + Domain Ownership Hardening | Architecture hardening task | Define who owns truth for orders, order items, inventory, rates, carriers, labels/shipments, manifests, billing, reporting, clients/stores, sync, and settings. Add guardrails so future code does not create more source-of-truth drift. |
+
+Recommended handling:
+
+- PS-010 and PS-011 can be implemented directly by Lawrence/Codex with normal repo verification.
+- PS-012 should be split into local hardening work plus access-dependent production evidence.
+- PS-013 should start with a source-of-truth matrix and lightweight guards before any broad migration/refactor.
+
 ## Phase Summary
 
 | Phase | Status | Percent | Why Not 100% Yet |
