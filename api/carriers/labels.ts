@@ -30,7 +30,6 @@ import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { PDFDocument } from 'pdf-lib';
 import postgres from 'postgres';
 import { timedFetch } from '../../src/lib/http/timing.js';
-import { resolveCarrierConnector } from '../../src/connectors/carrier-resolution.js';
 import { persistDirectCarrierLabel } from '../../src/services/direct-label-persistence.js';
 
 let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
@@ -561,6 +560,17 @@ const SHIPP_PROVIDER_ID_OFFSET = 10_000_000;
 
 function normalizeProviderKey(value: unknown): string {
   return String(value ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+const LABEL_CREATE_CONNECTOR_CAPABILITIES: Record<string, string[]> = {
+  shipp: ['rates.quote', 'labels.create', 'tracking.read', 'credentials.verify'],
+  walmart_shipping: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read', 'credentials.verify'],
+  ups: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read', 'credentials.verify'],
+  easypost: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read', 'credentials.verify', 'webhooks.receive'],
+};
+
+function labelCreateConnectorCapabilities(providerKey: string): string[] | null {
+  return LABEL_CREATE_CONNECTOR_CAPABILITIES[providerKey] ?? null;
 }
 
 function slugRateService(value: string): string {
@@ -2318,15 +2328,14 @@ export default async function handler(req: any, res: any): Promise<void> {
     }
     const { provider, credentials, label } = carrierRows[0];
     const providerKey = normalizeProviderKey(provider);
-    const resolvedCarrierConnector = resolveCarrierConnector(providerKey, 'labels.create');
-    if (!resolvedCarrierConnector) {
+    const connectorCapabilities = labelCreateConnectorCapabilities(providerKey);
+    if (!connectorCapabilities) {
       res.status(400).json({
         ok: false,
         error: `Label purchase for "${provider}" is not registered as a carrier connector.`,
       });
       return;
     }
-    const connectorCapabilities = resolvedCarrierConnector.connectorCapabilities;
     const creds = (credentials ?? {}) as Record<string, unknown>;
 
     // Fetch the saved order's raw payload to derive ship-to (when caller

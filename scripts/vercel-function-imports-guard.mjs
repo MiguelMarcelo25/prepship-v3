@@ -40,6 +40,13 @@ if (offenders.length) {
   pass('Vercel function shared src imports use runtime-safe .js specifiers');
 }
 
+const directCarrierLabels = fs.readFileSync(path.join(root, 'api/carriers/labels.ts'), 'utf8');
+if (directCarrierLabels.includes('src/connectors/carrier-resolution')) {
+  fail('api/carriers/labels.ts must not import connector-resolution; Vercel cannot load its extensionless transitive imports');
+} else {
+  pass('direct carrier labels avoid connector-resolution runtime import');
+}
+
 if (process.exitCode) {
   process.exit(process.exitCode);
 }
