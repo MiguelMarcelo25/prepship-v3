@@ -430,6 +430,191 @@ Return:
 Root cause proven, whether issue was outgoing payload or incoming response shape, files changed, sanitized payload fields confirmed/corrected, tests added, verification results, and remaining DJ-present production validation.
 ```
 
+## Official PS-022 Full-Site Workflow Certification Task
+
+DJ approved PS-022 after PS-018 revealed that the first site-action harness was useful but not strict enough. PS-022 supersedes and strengthens PS-018: a passing suite should mean the website works against controlled fixtures, critical actions are covered, expected API requests and payloads are verified, and live/provider actions remain separately gated.
+
+| Task | Title | Priority | Root Problem | Implementation Notes | Completion Gate |
+|---|---|---|---|---|---|
+| PS-022 | Full-Site Workflow Certification Harness | Critical workflow certification | Current browser/action coverage can still pass while critical buttons are missing, expected API calls do not fire, payloads are not deeply asserted, or state transitions are only loosely mocked. | Convert PS-018 into a strict workflow certification gate: required action contracts, request ledger assertions, forbidden external-provider blocking, full shipping workflow fixture test, failure-state variants, role/scope checks, backend API contract guards, aggregate certification scripts, and docs clarifying mocked versus live-gated proof. | Must pass `npm run guard:site-actions`, `npm run test:site-actions:browser`, `npm run test:workflow-certification:browser`, `npm run test:api-contracts`, `npm run test:full-site-certification`, browser UX suites, frontend failure guards, shipping/label guards, typecheck, and build. No real labels, postage, live marketplace notifications, production mutations, secrets, raw labels, or PII exposure. |
+
+### PS-022 Copy/Paste Handoff
+
+```md
+PS-022 - Full-Site Workflow Certification Harness
+
+Assignee: Lawrence
+Repo: https://github.com/drprepperusa-org/prepship-v4.git
+Branch: prepshipv4-stable
+
+Status:
+This supersedes and strengthens PS-018. PS-018 started the site-action harness, but PS-022 turns it into a workflow certification gate.
+
+Context:
+DJ wants a full website functionality test where a pass means the app works against controlled fixtures. The goal is not just "buttons exist" or "buttons click." Every critical user-facing action must have a defined outcome, expected API request(s), expected request payload, success/loading/failure UI behavior, role/scope behavior, and forbidden side-effect rules.
+
+Current gaps:
+- Critical actions can be optional with patterns like "if button exists, click it."
+- Missing critical buttons can still pass.
+- Expected API requests and payloads are not strict enough.
+- State transitions such as shipment/outbox/queue status are loosely mocked.
+- The suite is not yet a "full pass = working website against controlled fixtures" certification gate.
+
+Safety distinction:
+Automated tests may prove the website works against mocked/sandbox fixtures. They must not create real labels, buy postage, send real marketplace notifications, mutate live production orders, update shipped/cancelled records, generate real invoices, expose secrets, or call live external providers. Any live provider or production certification must be a separate gated/manual command with explicit DJ approval.
+
+Inspect first:
+- `docs/site-action-functionality-matrix.md`
+- `docs/site-action-testing.md`
+- `web/e2e/site-actions.spec.js`
+- `web/e2e/orders-ux.spec.js`
+- `web/e2e/inventory-ux.spec.js`
+- `web/e2e/maintenance-gate.spec.js`
+- `scripts/site-action-functionality-guard.mjs`
+- `scripts/frontend-failure-states-guard.mjs`
+- `scripts/shipping-certification-guard.mjs`
+- `scripts/direct-carrier-label-guard.mjs`
+- `scripts/print-queue-invalid-label-guard.mjs`
+- `scripts/smoke-shipping-preflight.ts`
+- `scripts/smoke-shipping-test-label.ts`
+- `scripts/smoke-marketplace-confirm.ts`
+- `package.json`
+- Main UI/action surfaces: Orders, Inventory, Packages, Billing, Settings/carrier/store account, Clients, Auth/session, Dashboard/navigation.
+- Backend/API surfaces used by workflows: orders, carrier labels/rates, print queue, fulfillment outbox, inventory, packages, billing, account verify, health/deep readiness.
+
+Implementation requirements:
+
+1. Replace optional click coverage with required workflow contracts.
+- Critical selectors must exist.
+- If absent, the test must fail clearly.
+- If intentionally unavailable for a role/status, assert that absence as expected behavior.
+
+2. Upgrade `docs/site-action-functionality-matrix.md` into a strict action contract matrix.
+- Required columns: page/view, action label, selector/test id, allowed roles, denied roles, fixture state before action, intended outcome, backend/API dependency, expected method/path, required payload fields, expected success response, loading state, success UI state, failure UI state, state transition, side-effect classification, test mode, covered spec/test name, uncovered/manual reason.
+- Guard must fail if critical actions are missing required fields.
+
+3. Add stable selectors/test IDs for critical actions where needed.
+- Cover app shell navigation, auth/session, dashboard retry, orders search/filter/sort, order detail, rate browser, create/print label, reprint label, send to queue, batch actions, print queue merge/download/status, inventory receive/restock/edit, packages add/edit, clients filters/scope/actions, billing actions, carrier/store verify/sync, and maintenance/error retry controls.
+- Do not weaken shipped/cancelled lockdown or re-enable forbidden controls.
+
+4. Build a request ledger for Playwright tests.
+- Record all API requests made during each workflow.
+- Assert expected requests occurred.
+- Assert method/path and important payload fields.
+- Assert unexpected live external/provider requests did not occur.
+- Assert payloads do not contain `[object Object]`.
+- Assert no secrets/tokens/raw labels/base64 PDFs/customer PII are leaked into visible UI errors.
+- Block live provider hosts including Walmart, eBay, ShipStation, and live carrier APIs unless intentionally mocked through route interception.
+
+5. Add full shipping workflow certification test.
+- Awaiting Shipment order -> detail -> rate/service if applicable -> create label -> shipment/label response -> send to print queue -> print queue merge/download/status -> fulfillment outbox/marketplace confirmation state -> row refresh/recovery state.
+- Assert order appears, create-label button exists, create-label request fires with expected payload, response contains tracking and valid label URL, label URL is not `[object Object]`, queue request fires with expected payload, print/merge request fires, final job state succeeds, outbox state reaches queued/succeeded or expected mocked state, and UI loading/success states appear.
+
+6. Add failure-state workflow variants.
+- Label creation failure.
+- Missing/invalid label URL.
+- Object-shaped URL that would become `[object Object]` if unguarded.
+- Print queue add failure.
+- Print queue merge/PDF failure.
+- Carrier/rate timeout.
+- Orders API failure.
+- Orders stuck/loading recovery with retry.
+- Permission denied / scoped user cannot see or mutate another client/store.
+- Shipped/cancelled rows do not expose forbidden mutation controls.
+
+7. Add full-page smoke/navigation certification.
+- Visit every critical route under mocked authenticated state.
+- Assert page renders, no uncaught exceptions, no console errors except explicit allowlist, expected initial API requests fire, loading resolves, empty/error states are readable, and navigation works.
+- Minimum pages: dashboard/home, orders/awaiting shipment, orders/shipped, orders/cancelled, inventory, packages, print queue, billing, clients, settings/integrations, maintenance/error page if present.
+
+8. Add backend/API contract checks.
+- Cover `/health`, `/health/ready` or `/health/deep`, `/init/stores`, `/init/counts`, `/orders`, `/orders/:id/full`, label create endpoints, rate endpoints, print queue add/print/merge/status/download, fulfillment outbox/marketplace status, inventory, packages, billing, and carrier/store account verify/test connection paths.
+- Run against mocked/test fixtures or safe local test mode. Do not require production credentials.
+
+9. Strengthen `scripts/site-action-functionality-guard.mjs`.
+- Fail if the matrix misses required columns, critical actions lack selectors/test names, browser specs have optional skip logic for critical actions, request ledger assertions are missing, forbidden external host blocking is missing, loading/success/failure checks are missing, role/scope checks are missing, or package scripts are missing.
+
+10. Add package scripts.
+- Add or update: `guard:site-actions`, `test:site-actions:browser`, `test:workflow-certification:browser`, `test:api-contracts`, `test:full-site-certification`.
+- `npm run test:full-site-certification` should run the site-action guard, API contract guard, browser workflow certification, orders UX browser test, inventory UX browser test, maintenance gate browser test, and frontend failure-state guard.
+- Keep safe/mocked by default.
+
+11. Keep live/sandbox provider checks separate and gated.
+- Any live/sandbox command must require an explicit flag such as `--live-approved`, require explicit order/client/provider inputs, never default to production mutation, and document that DJ must approve/coordinate live order/label checks in the moment.
+
+12. Update docs.
+- Update `docs/site-action-testing.md`.
+- Explain what full-site certification proves and what it does not prove.
+- Include mocked versus sandbox versus live-gated modes, request ledger guidance, forbidden side effects, and pass/fail interpretation.
+
+Full automated pass means:
+- app shell loads
+- auth/session works under fixture
+- critical pages render
+- critical actions exist or are correctly hidden by role/status
+- expected API requests fire
+- request payload contracts match
+- loading/success/failure UI states work
+- role/scope restrictions work
+- forbidden external calls do not happen
+- no secrets/PII/raw labels leak
+- shipping workflow works against controlled fixtures
+
+Full automated pass does NOT mean:
+- every live carrier works right now
+- every live marketplace credential is valid
+- production DB has no bad data
+- live postage/marketplace notification was tested
+
+Guardrails:
+- Do not create real labels.
+- Do not buy postage.
+- Do not send real marketplace notifications.
+- Do not mutate live production orders.
+- Do not update shipped/cancelled production records.
+- Do not generate real invoices/charges.
+- Do not expose secrets, tokens, credentials, raw provider payloads, raw label PDFs/base64, customer PII, or cross-client data.
+- Do not weaken auth/RBAC/client/store scope.
+- Do not weaken shipped/cancelled lockdown.
+- Do not make critical actions optional in tests unless absence is the expected behavior being asserted.
+- Do not use production credentials or live provider endpoints in automated certification.
+
+Verification:
+- `npm run guard:site-actions`
+- `npm run test:site-actions:browser`
+- `npm run test:workflow-certification:browser`
+- `npm run test:api-contracts`
+- `npm run test:full-site-certification`
+- `npm run test:orders-ux:browser`
+- `npm run test:inventory-ux:browser`
+- `npm run test:maintenance-gate:browser`
+- `npm run test:frontend-failure-states`
+- `npm run guard:shipping-certification`
+- `npm run test:direct-carrier-labels`
+- `npm run test:print-queue-invalid-label`
+- `npm run typecheck`
+- `npm run build:web`
+
+If a listed script does not exist before this task, add it or document the exact replacement command. If any command fails, fix the issue, rerun the failed command, and rerun the relevant surrounding suite. Do not mark complete until all required checks pass or a non-code environmental blocker is clearly documented.
+
+Definition of done:
+- PS-018's loose coverage is replaced/strengthened by strict workflow certification.
+- Critical actions cannot silently skip because a button is missing.
+- Every critical action has a matrix contract.
+- Browser tests assert required API requests and payloads.
+- Browser tests block unexpected live external provider calls.
+- Full shipping workflow is covered from order to label to queue to print to confirmation/outbox using safe fixtures.
+- Failure/retry states are covered.
+- Role/scope and shipped/cancelled controls are covered.
+- Backend/API contracts used by the UI are covered.
+- Aggregate full-site certification command exists and passes.
+- Docs clearly explain what a full pass proves and what still needs live-gated validation.
+- No real labels, postage, marketplace notifications, production mutations, secrets, raw labels, or PII exposure occurred.
+
+Return:
+Summary of what the certification harness proves, what it does not prove without live-gated checks, files changed, critical workflows covered, API requests/payload contracts covered, failure states covered, role/scope cases covered, scripts added, verification pass/fail results, remaining uncovered actions with reason, and confirmation that no real labels/postage/live marketplace notifications/production mutations occurred.
+```
+
 ## Phase Summary
 
 | Phase | Status | Percent | Why Not 100% Yet |
