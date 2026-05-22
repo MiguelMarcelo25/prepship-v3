@@ -5213,16 +5213,18 @@ export default function OrdersView({
       const shippingProviderId = toNumberValue(bestRate?.shippingProviderId) ?? selectedRate?.shippingProviderId ?? order.label?.shippingProviderId ?? null
       const serviceCode = getShippingString(order, 'serviceCode') ?? toStringValue(bestRate?.serviceCode) ?? selectedRate?.serviceCode
       const carrierCode = getShippingString(order, 'carrierCode') ?? toStringValue(bestRate?.carrierCode) ?? selectedRate?.carrierCode
-      const weightOz = order.weight?.value ?? 0
-      const dims = getDimensions(order, null)
+      const orderDetail = orderDetailsById.get(order.orderId) ?? null
+      const dims = getDimensions(order, orderDetail)
+      const weightOz = getOrderWeightOz(order, orderDetail)
 
       // Test-client orders bypass the rate-fetch requirement — the backend
       // forces a VOID mock label regardless, so we just need to reach the
       // endpoint with a serviceCode + carrierCode. Use the order's stored
       // defaults when no rate has been shopped.
-      const orderIsTest = isTestOrder(order, orderDetailsById.get(order.orderId) ?? null)
+      const orderIsTest = isTestOrder(order, orderDetail)
       const effectiveServiceCode = serviceCode ?? (orderIsTest ? TEST_SERVICE_CODE : null)
       const effectiveCarrierCode = carrierCode ?? (orderIsTest ? TEST_CARRIER_CODE : null)
+      const effectiveWeightOz = weightOz > 0 ? weightOz : orderIsTest ? 1 : 0
 
       // Real-postage path still requires shippingProviderId. For test orders
       // the backend never makes that call, so we omit the field entirely
@@ -5250,7 +5252,7 @@ export default function OrdersView({
           serviceCode: effectiveServiceCode,
           carrierCode: effectiveCarrierCode,
           packageCode: 'package',
-          weightOz,
+          weightOz: effectiveWeightOz,
           length: dims?.length,
           width: dims?.width,
           height: dims?.height,
@@ -5560,11 +5562,13 @@ export default function OrdersView({
       const shippingProviderId = toNumberValue(bestRate?.shippingProviderId) ?? selectedRate?.shippingProviderId ?? order.label?.shippingProviderId ?? null
       const serviceCode = getShippingString(order, 'serviceCode') ?? toStringValue(bestRate?.serviceCode) ?? selectedRate?.serviceCode
       const carrierCode = getShippingString(order, 'carrierCode') ?? toStringValue(bestRate?.carrierCode) ?? selectedRate?.carrierCode
-      const weightOz = order.weight?.value ?? 0
-      const dims = getDimensions(order, null)
-      const orderIsTest = isTestOrder(order, orderDetailsById.get(order.orderId) ?? null)
+      const orderDetail = orderDetailsById.get(order.orderId) ?? null
+      const dims = getDimensions(order, orderDetail)
+      const weightOz = getOrderWeightOz(order, orderDetail)
+      const orderIsTest = isTestOrder(order, orderDetail)
       const effectiveServiceCode = serviceCode ?? (orderIsTest ? TEST_SERVICE_CODE : null)
       const effectiveCarrierCode = carrierCode ?? (orderIsTest ? TEST_CARRIER_CODE : null)
+      const effectiveWeightOz = weightOz > 0 ? weightOz : orderIsTest ? 1 : 0
 
       if (!orderIsTest && shippingProviderId == null) {
         failed += 1
@@ -5584,7 +5588,7 @@ export default function OrdersView({
           serviceCode: effectiveServiceCode,
           carrierCode: effectiveCarrierCode,
           packageCode: 'package',
-          weightOz,
+          weightOz: effectiveWeightOz,
           length: dims?.length,
           width: dims?.width,
           height: dims?.height,
