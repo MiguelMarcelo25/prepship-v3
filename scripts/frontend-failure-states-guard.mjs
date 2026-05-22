@@ -107,6 +107,13 @@ assert(
   'OrdersView validates labelUrl before queueing existing labels and newly-created labels',
 );
 
+assert(
+  /Failed to load orders/.test(ordersViewSource) &&
+    /onClick=\{\(\)\s*=>\s*void refetchOrders\(\)\}/.test(ordersViewSource) &&
+    />\s*Retry\s*</.test(ordersViewSource),
+  'OrdersView shows a recoverable Retry action when the Orders API fails',
+);
+
 if (process.exitCode) {
   process.exit(process.exitCode);
 }

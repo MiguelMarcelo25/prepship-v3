@@ -52,6 +52,29 @@ This started as a planning/control batch. Runtime implementation has now begun w
 | Inventory/reporting refresh | worker/reporting logs | refresh duration and failed refresh counters | reporting refresh failed/stale | Reporting owner | failed refresh fixture |
 | Frontend runtime errors | browser console/manual | release-tagged frontend error capture | frontend error spike | Frontend owner | client error fixture |
 
+## Production Watchdog Alerting
+
+`npm run watchdog:production` emits one sanitized alert payload when the Vercel shell, Render `/health`, and Render `/health/ready` or `/health/deep` checks are unhealthy. The default behavior is alert-only. Automated Render recovery requires `WATCHDOG_ALLOW_RESTARTS=true` plus either `RENDER_DEPLOY_HOOK_URL` or `RENDER_API_KEY` and `RENDER_SERVICE_ID`.
+
+Alert fields:
+
+| Field | Meaning |
+|---|---|
+| `service` | Fixed service label: `prepship-v4`. |
+| `status` | `healthy` or `unhealthy`. |
+| `mode` | `alert-only`, `render-deploy-hook`, or `render-api`. |
+| `action` | `alert`, `restart-requested`, or `restart-request-failed`. |
+| `reason` | Why recovery did or did not run, such as consecutive failure threshold, cooldown, max restarts per hour, or Render HTTP status. |
+| `consecutiveFailures` | Current failure count from `WATCHDOG_STATE_FILE`. |
+| `threshold` | `WATCHDOG_FAILURE_THRESHOLD` value. |
+| `cooldownMs` | `WATCHDOG_RESTART_COOLDOWN_MS` value. |
+| `maxRestartsPerHour` | `WATCHDOG_MAX_RESTARTS_PER_HOUR` value. |
+| `failingChecks` | Failed logical checks, with `/health/ready` and `/health/deep` grouped as an either/or readiness check. |
+| `checks` | Sanitized check results with target host/path only, status, duration, and safe error string. |
+| `runbook` | Pointer to the Production Watchdog section in `OPERATIONAL_RUNBOOKS_AND_DR_PLAN.md`. |
+
+No alert should include secrets, deploy hook query strings, bearer tokens, raw Render API keys, customer data, label URLs, addresses, or provider credentials. Render deploy hook setup follows Render's service Settings deploy hook flow; Render API recovery uses the documented Create Deploy endpoint.
+
 ## Recommended Patches
 
 - [x] Add a shared request-id middleware and propagate request IDs to logs and response headers.
@@ -73,6 +96,7 @@ This started as a planning/control batch. Runtime implementation has now begun w
 
 - `npm run test:observability-alerting`
 - `npm run test:api-observability-metrics`
+- `npm run test:production-watchdog`
 - Future implementation tests:
   - API request emits request ID, route, status, and duration
   - simulated 500 emits safe structured error without secrets

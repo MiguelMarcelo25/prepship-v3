@@ -1,11 +1,14 @@
 import { Hono } from 'hono';
 import postgres from 'postgres';
+import { performance } from 'node:perf_hooks';
 import { env } from '../lib/env';
 
 const app = new Hono();
 const DB_HEALTH_TIMEOUT_MS = env.DB_HEALTH_TIMEOUT_MS;
 const DB_HEALTH_STATEMENT_TIMEOUT_MS = Math.max(1_000, DB_HEALTH_TIMEOUT_MS - 1_000);
 const DB_HEALTH_CONNECT_TIMEOUT_SECONDS = Math.max(1, Math.ceil(DB_HEALTH_TIMEOUT_MS / 1_000));
+const EVENT_LOOP_HEALTH_TIMEOUT_MS = 500;
+const EVENT_LOOP_DELAY_BUDGET_MS = 250;
 
 const healthSql = postgres(env.DATABASE_URL, {
   prepare: false,
@@ -17,9 +20,14 @@ const healthSql = postgres(env.DATABASE_URL, {
 
 type CancelableQuery<T> = Promise<T> & { cancel?: () => void };
 
-type DbHealth =
-  | { ok: true; latencyMs: number }
-  | { ok: false; latencyMs: number; error: string };
+type ReadinessComponentName = 'db' | 'orders' | 'printQueue' | 'eventLoop';
+
+type ReadinessComponent = {
+  name: ReadinessComponentName;
+  status: 'ok' | 'fail';
+  latencyMs: number;
+  details?: Record<string, number | string>;
+};
 
 async function withTimeout<T>(
   query: CancelableQuery<T>,
@@ -43,61 +51,97 @@ async function withTimeout<T>(
   }
 }
 
-async function checkDbHealth(): Promise<DbHealth> {
+async function checkComponent(
+  name: ReadinessComponentName,
+  action: () => Promise<{ details?: Record<string, number | string> } | void>
+): Promise<ReadinessComponent> {
   const startedAt = Date.now();
   try {
-    await withTimeout(healthSql`select 1`, DB_HEALTH_TIMEOUT_MS);
-    return { ok: true, latencyMs: Date.now() - startedAt };
-  } catch (err) {
+    const result = await action();
     return {
-      ok: false,
+      name,
+      status: 'ok',
       latencyMs: Date.now() - startedAt,
-      error: String(err),
+      ...(result?.details ? { details: result.details } : {}),
+    };
+  } catch {
+    return {
+      name,
+      status: 'fail',
+      latencyMs: Date.now() - startedAt,
     };
   }
 }
 
-app.get('/', async (c) => {
-  const dbHealth = await checkDbHealth();
-  if (dbHealth.ok) {
-    return c.json({
-      status: 'ok',
-      db: 'ok',
-      latencyMs: dbHealth.latencyMs,
-      ts: new Date().toISOString(),
-    });
-  }
+async function checkDeepReadiness() {
+  const components = await Promise.all([
+    checkComponent('db', async () => {
+      await withTimeout(healthSql`select 1`, DB_HEALTH_TIMEOUT_MS);
+    }),
+    checkComponent('orders', async () => {
+      await withTimeout(healthSql`select 1 from orders limit 1`, DB_HEALTH_TIMEOUT_MS);
+    }),
+    checkComponent('printQueue', async () => {
+      const [summary] = await withTimeout(
+        healthSql`
+          select
+            count(*)::int as total_count,
+            count(*) filter (where status = 'queued')::int as queued_count
+          from print_queue_orders
+        `,
+        DB_HEALTH_TIMEOUT_MS
+      );
 
-  return c.json({
-    status: 'ok',
-    db: 'unavailable',
-    latencyMs: dbHealth.latencyMs,
-    warning: dbHealth.error,
+      return {
+        details: {
+          totalCount: Number(summary?.total_count ?? 0),
+          queuedCount: Number(summary?.queued_count ?? 0),
+        },
+      };
+    }),
+    checkComponent('eventLoop', async () => {
+      const startedAt = performance.now();
+      await withTimeout(
+        new Promise<void>((resolve) => setTimeout(resolve, 0)) as CancelableQuery<void>,
+        EVENT_LOOP_HEALTH_TIMEOUT_MS
+      );
+      const delayMs = Math.round(performance.now() - startedAt);
+      if (delayMs > EVENT_LOOP_DELAY_BUDGET_MS) {
+        throw new Error('event loop delay budget exceeded');
+      }
+      return { details: { delayMs, budgetMs: EVENT_LOOP_DELAY_BUDGET_MS } };
+    }),
+  ]);
+
+  return {
+    ok: components.every((component) => component.status === 'ok'),
+    components,
+  };
+}
+
+function readinessResponseBody(readiness: Awaited<ReturnType<typeof checkDeepReadiness>>) {
+  return {
+    status: readiness.ok ? 'ready' : 'degraded',
+    components: readiness.components,
     ts: new Date().toISOString(),
-  });
-});
+  };
+}
+
+app.get('/', (c) =>
+  c.json({
+    status: 'ok',
+    ts: new Date().toISOString(),
+  })
+);
 
 app.get('/ready', async (c) => {
-  const dbHealth = await checkDbHealth();
-  if (dbHealth.ok) {
-    return c.json({
-      status: 'ready',
-      db: 'ok',
-      latencyMs: dbHealth.latencyMs,
-      ts: new Date().toISOString(),
-    });
-  }
+  const readiness = await checkDeepReadiness();
+  return c.json(readinessResponseBody(readiness), readiness.ok ? 200 : 503);
+});
 
-  return c.json(
-    {
-      status: 'degraded',
-      db: 'down',
-      latencyMs: dbHealth.latencyMs,
-      error: dbHealth.error,
-      ts: new Date().toISOString(),
-    },
-    503
-  );
+app.get('/deep', async (c) => {
+  const readiness = await checkDeepReadiness();
+  return c.json(readinessResponseBody(readiness), readiness.ok ? 200 : 503);
 });
 
 export default app;

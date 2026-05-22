@@ -65,6 +65,48 @@ This is a planning/control batch only. It does not change runtime code, deployme
 | Strict JWT rollout | users cannot authenticate | set `STRICT_JWT_CLAIMS=false` | Security owner | login/API smoke |
 | Alert rollout | noisy/incorrect alerts | set alert to notify-only or disable emitter | Observability owner | alert quiet and logs intact |
 
+## Production Watchdog
+
+The production watchdog is a one-shot, read-first safety script for external uptime checks and controlled Render recovery. Run it from an approved scheduler or Render Shell with `npm run watchdog:production`. It checks the Vercel shell URL, Render `/health`, and Render `/health/ready` plus `/health/deep`; readiness is considered acceptable when either deep readiness endpoint passes after `/health` passes.
+
+Required read-only env vars:
+
+| Env var | Purpose |
+|---|---|
+| `VERCEL_SHELL_URL` | Public Vercel app shell URL to fetch. 5xx/network failures count as unhealthy; 3xx/4xx auth gates are acceptable for the shell. |
+| `RENDER_BASE_URL` | Render API base URL. The watchdog appends `/health`, `/health/ready`, and `/health/deep`. |
+| `WATCHDOG_ALERT_WEBHOOK_URL` | Optional alert destination. If missing, the sanitized alert is written to process logs only. |
+| `WATCHDOG_STATE_FILE` | Optional persistent JSON state path for consecutive failure and restart counters. Defaults under `outputs/`. |
+
+Restart/redeploy is disabled unless explicitly enabled. With no restart credentials, or without `WATCHDOG_ALLOW_RESTARTS=true`, the script stays in alert-only mode and never calls Render recovery APIs.
+
+Controlled recovery env vars:
+
+| Env var | Purpose |
+|---|---|
+| `WATCHDOG_ALLOW_RESTARTS=true` | Explicit gate for any automated Render redeploy/restart request. |
+| `WATCHDOG_FAILURE_THRESHOLD` | Consecutive failure threshold before recovery is considered. Default: `3`. |
+| `WATCHDOG_RESTART_COOLDOWN_MS` | Cooldown after a recovery request. Default: `900000` ms. |
+| `WATCHDOG_MAX_RESTARTS_PER_HOUR` | Max restarts per hour. Default: `2`. |
+| `RENDER_DEPLOY_HOOK_URL` | Preferred low-friction deploy hook. Render documents deploy hooks as service-specific secret URLs from the Settings tab. |
+| `RENDER_API_KEY` + `RENDER_SERVICE_ID` | Alternative Render API recovery path. The watchdog calls `POST https://api.render.com/v1/services/{serviceId}/deploys`. |
+
+Render dashboard restart:
+
+1. Open the affected Render service.
+2. Confirm current deploy, logs, and health status.
+3. Use the dashboard Manual Deploy or Restart action for the API/worker service.
+4. Re-run `/health`, `/health/ready` or `/health/deep`, and the relevant user smoke.
+5. Preserve timestamps, deploy id, request IDs, and sanitized logs in the incident record.
+
+Manual fallback:
+
+1. If the watchdog is alert-only or blocked by consecutive failure, cooldown, or max restarts per hour limits, page the API/Platform owner.
+2. Verify the Vercel shell and Render health endpoints manually from a clean shell.
+3. Use Render dashboard restart first when credentials or deploy hook/API env vars are unavailable.
+4. If dashboard recovery fails, rollback the Render deploy or pause noisy workers according to the Deployment / Rollback Matrix.
+5. No secrets, deploy hook URLs, API keys, customer data, labels, or raw provider credentials should be pasted into incident notes or alerts.
+
 ## Disaster Recovery Matrix
 
 | DR Area | Required Control | Current Gap | Owner | Verification |
@@ -89,6 +131,7 @@ This is a planning/control batch only. It does not change runtime code, deployme
 ## Test Plan
 
 - `npm run test:operational-runbooks`
+- `npm run test:production-watchdog`
 - Future operational tests:
   - deployment rollback dry-run checklist is completed
   - database restore drill is recorded

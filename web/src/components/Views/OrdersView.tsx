@@ -8618,6 +8618,15 @@ export default function OrdersView({
                   </motion.div>
                   <div className="text-sm2 font-semibold text-danger font-display tracking-tight">Failed to load orders</div>
                   <div className="text-xs2 text-ink-3 max-w-md text-center leading-relaxed">{error.message}</div>
+                  {/* Per user override unlock shipped data on 2026-05-23: add a non-mutating Orders recovery action for PS-020 API failure states. */}
+                  <button
+                    type="button"
+                    onClick={() => void refetchOrders()}
+                    className="inline-flex items-center gap-2 h-8 px-3 rounded-md bg-surface text-ink text-xs2 font-semibold ring-1 ring-line hover:bg-surface-2 hover:ring-brand/30 active:scale-95 transition"
+                  >
+                    <RefreshCcw size={13} strokeWidth={2.4} />
+                    Retry
+                  </button>
                 </motion.div>
               ) : null}
 
