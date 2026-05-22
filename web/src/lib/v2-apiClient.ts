@@ -3210,7 +3210,7 @@ export const apiClient = {
   fetchParentSkuDetail(parentSkuId: number): Promise<any> {
     return safe(
       'fetchParentSkuDetail',
-      () => api.get<any>(`/inventory/parent/${parentSkuId}`),
+      () => api.get<any>(`/parent-skus/${parentSkuId}/detail`),
       null
     );
   },

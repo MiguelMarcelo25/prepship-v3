@@ -51,6 +51,12 @@ Read-only gap analysis. Partial port already in place (see bottom of doc).
 
 ## 2. Backend gaps
 
+> 2026-05-22 update: the rows below are historical audit notes. Current
+> backend connectivity is now covered by `npm run guard:backend-connectivity`.
+> The guard confirms the active frontend API surface maps to Render/Hono or
+> Vercel handlers. Previously listed backend gaps for saved dims, rates browse,
+> CSV export, and daily stats have since been implemented.
+
 | Endpoint | v2 Ref | v4 Status |
 |---|---|---|
 | `POST /api/orders/:id/save-dims` | `order-routes.ts:93-95` | **missing** — cannot save package dims |

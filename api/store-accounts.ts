@@ -7,6 +7,9 @@
 //   GET  /api/store-accounts            → list (filterable by source/pending)
 //   POST /api/store-accounts            → upsert by (clientId, provider, accountIdentifier)
 //
+//   PATCH /api/store-accounts?id=N      -> partial update, including label/source
+//   DELETE /api/store-accounts?id=N     -> delete a store account row
+//
 // Auth: Supabase JWT in Authorization: Bearer <token>.
 
 import postgres from 'postgres';

@@ -18,6 +18,7 @@
     "perf:smoke": "node scripts/perf-smoke.mjs",
     "preview:web": "vite preview",
     "guard:bundle-size": "npm run test:web-bundle-budget",
+    "guard:backend-connectivity": "node scripts/backend-connectivity-guard.mjs",
     "guard:enterprise-readiness-closeout": "node scripts/enterprise-readiness-closeout-guard.mjs",
     "guard:frontend-failure-states": "npm run test:frontend-failure-states",
     "guard:orders-startup-requests": "npm run test:orders-startup-requests",

@@ -7,6 +7,10 @@
 //   GET  /api/carrier-accounts            → list (filterable by source/pending)
 //   POST /api/carrier-accounts            → upsert by (clientId, provider, accountIdentifier)
 //
+//   PUT  /api/carrier-accounts?id=N     -> replace/update connection metadata
+//   PATCH /api/carrier-accounts?id=N    -> partial update, including label/source
+//   DELETE /api/carrier-accounts?id=N   -> delete a carrier account row
+//
 // Auth: Supabase JWT in Authorization: Bearer <token>.
 
 import postgres from 'postgres';
