@@ -67,6 +67,10 @@ for (const status of ['live', 'registered_stub', 'blocked_external_contract']) {
   assert(statusMatrix.includes(status), `implementation status matrix missing status ${status}`);
 }
 assert(statusMatrix.includes('getConnectorImplementationStatus'), 'missing connector implementation status lookup');
+assert(
+  /ebay:\s*\{[\s\S]*?status:\s*'live'/.test(statusMatrix),
+  'eBay connector implementation status must be live when shipment confirmation is implemented',
+);
 
 for (const table of ['connector_accounts', 'connector_sync_state', 'connector_events']) {
   assert(migration.includes(`CREATE TABLE IF NOT EXISTS ${table}`), `migration missing ${table}`);

@@ -109,6 +109,21 @@ async function run() {
   }, () => connector.confirmShipment(baseInput()));
   assert(!retryable.ok && retryable.retryable === true, '5xx fulfillment failure must be retryable');
 
+  const redactedOAuth = await withMockFetch((url) => {
+    if (url.includes('/identity/v1/oauth2/token')) {
+      return jsonResponse(400, {
+        errors: [
+          {
+            message: 'invalid refresh_token refresh-token access_token mock-access-token Bearer secret-token',
+          },
+        ],
+      });
+    }
+    return jsonResponse(500, { errors: [{ message: 'fulfillment should not be called' }] });
+  }, () => connector.confirmShipment(baseInput()));
+  assert(!redactedOAuth.ok, 'OAuth failure should fail safely');
+  assert(!/refresh-token|mock-access-token|secret-token/i.test(redactedOAuth.message ?? ''), 'OAuth failure must redact tokens');
+
   console.log('ebay confirmation mocked guard passed');
 }
 
