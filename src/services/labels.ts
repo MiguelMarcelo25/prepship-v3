@@ -865,7 +865,7 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
   }
 
   const overrides = await loadOrderDimsOverride(order.id);
-  const effectiveWeightOz = Number(body.weightOz ?? overrides?.rateWeightOz ?? order.weightOz ?? 0);
+  const effectiveWeightOz = Number(body.weightOz ?? overrides?.rateWeightOz ?? order.weightOz ?? (body.testLabel ? 1 : 0));
   if (!effectiveWeightOz) throw new Error('Order weight required to create label');
 
   const length = Number(body.length ?? overrides?.rateDimsL ?? 0) || null;

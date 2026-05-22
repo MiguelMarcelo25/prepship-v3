@@ -3769,18 +3769,20 @@ export default function OrdersView({
       const shippingProviderId = toNumberValue(bestRate?.shippingProviderId) ?? selectedRate?.shippingProviderId ?? order.label?.shippingProviderId ?? null
       const serviceCode = getShippingString(order, 'serviceCode') ?? toStringValue(bestRate?.serviceCode) ?? selectedRate?.serviceCode
       const carrierCode = getShippingString(order, 'carrierCode') ?? toStringValue(bestRate?.carrierCode) ?? selectedRate?.carrierCode
-      const dims = getDimensions(order, null)
-      const weightOz = order.weight?.value ?? 0
-      const orderIsTest = isTestOrder(order, orderDetailsById.get(order.orderId) ?? null)
+      const orderDetail = orderDetailsById.get(order.orderId) ?? null
+      const dims = getDimensions(order, orderDetail)
+      const weightOz = getOrderWeightOz(order, orderDetail)
+      const orderIsTest = isTestOrder(order, orderDetail)
       const effectiveServiceCode = serviceCode ?? (orderIsTest ? TEST_SERVICE_CODE : undefined)
       const effectiveCarrierCode = carrierCode ?? (orderIsTest ? TEST_CARRIER_CODE : undefined)
+      const effectiveWeightOz = weightOz > 0 ? weightOz : orderIsTest ? 1 : 0
 
       payload.label = {
         serviceCode: effectiveServiceCode,
         carrierCode: effectiveCarrierCode,
         packageCode: 'package',
         shippingProviderId: shippingProviderId ?? undefined,
-        weightOz: weightOz > 0 ? weightOz : undefined,
+        weightOz: effectiveWeightOz > 0 ? effectiveWeightOz : undefined,
         length: dims?.length,
         width: dims?.width,
         height: dims?.height,
