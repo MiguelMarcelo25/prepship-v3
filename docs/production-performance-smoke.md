@@ -111,6 +111,43 @@ For production evidence, include:
 - slowest route timing
 - artifact path or sanitized artifact
 
+## Production Evidence Log
+
+### 2026-05-22 - Production Shell Smoke
+
+Command:
+
+```powershell
+$env:PERF_BASE_URL="https://prepshipv4.vercel.app"
+npm run perf:smoke
+```
+
+Result:
+
+| Route | Status | Duration |
+|---|---:|---:|
+| `/` | 200 | 192 ms |
+| `/orders/awaiting_shipment` | 200 | 42 ms |
+| `/orders/shipped` | 200 | 49 ms |
+| `/inventory/stock-levels` | 200 | 46 ms |
+| `/dashboard` | 200 | 44 ms |
+| `/settings` | 200 | 47 ms |
+| `/billing` | 200 | 101 ms |
+| `/manifest` | 200 | 49 ms |
+
+Summary:
+
+- pass: 8
+- auth-gated: 0
+- warn: 0
+- fail: 0
+- slow: 0
+- average duration: 71 ms
+- max duration: 192 ms
+
+User also confirmed the deployed UI had no visible console/API errors after
+the `28fb0f85` deployment.
+
 ## Deferred Checks
 
 This smoke command is intentionally lightweight. It does not replace:

@@ -25,7 +25,7 @@ Current overall status: [PARTIAL] Partial.
 
 Primary production signoff blockers:
 
-- [MUST-FIX] Production smoke evidence is incomplete until approved production/staging checks are run and attached.
+- [PARTIAL] Production shell smoke evidence is attached; authenticated production actions still need approved operator checks.
 - [MUST-FIX] CI status may be externally blocked by GitHub billing/spend-limit/account status and must be resolved by the account owner.
 - [PARTIAL] Alert thresholds and destinations need final operator approval.
 - [PARTIAL] Restore/rollback drill evidence needs an approved, non-destructive drill.
@@ -40,7 +40,7 @@ Primary production signoff blockers:
 | RBAC enforcement | [PARTIAL] Partial | Auth middleware and permission checks exist; frontend and backend routes use role-aware behavior. | Create a route matrix listing required permission per admin/manager/worker/customer-facing operation. |
 | Secret redaction | [PARTIAL] Partial | Redaction guard scripts and credential account patterns exist. | Confirm all error responses, carrier-account APIs, logs, and diagnostics redact secrets and never return raw credentials. |
 | Shipped/cancelled lockdown | [OK] Complete | `AGENTS.md` explicitly locks shipped/cancelled mutation paths and shipped/cancelled UI batch actions. | Keep guardrails active; any future change requires explicit human override phrase and review. |
-| Production smoke evidence | [MUST-FIX] Must fix before production | Local build/typecheck/guards can prove static readiness. | Run approved staging/production smoke checks and attach sanitized evidence for login, orders, rates, carriers, labels, inventory, settings, billing, and manifests. |
+| Production smoke evidence | [PARTIAL] Partial | Local build/typecheck/guards pass, user confirmed no visible production UI errors, and credential-free production shell smoke passed for 8 core routes on 2026-05-22. | Run authenticated operator smoke checks for real protected workflows such as label creation, sync freshness, carrier settings, and billing evidence. |
 | Secrets rotation / last-used / audit | [PARTIAL] Partial | Credential-account architecture exists and redaction requirements are known. | Confirm last-used tracking, rotation audit events, actor capture, and secret update history for ShipStation, carrier accounts, marketplace accounts, Supabase, Render, and GitHub secrets. |
 | Append-only audit logging | [PARTIAL] Partial | Audit logging matrix/guard exists in the repo. | Prove append-only enforcement at DB/service level, or document missing DB-level constraints as a follow-up blocker. |
 | Durable jobs | [PARTIAL] Partial | Durable jobs planning guard exists. Sync scheduler, fulfillment outbox, and print queue paths are known. | Add operator-visible job progress/events/artifacts for critical sync, label, billing, reporting, and outbox jobs where missing. |
@@ -174,7 +174,15 @@ The repository policy in `AGENTS.md` defines shipped/cancelled order data, shipm
 
 ## Production Smoke Evidence
 
-Status: [MUST-FIX] Must fix before production.
+Status: [PARTIAL] Partial.
+
+Attached evidence:
+
+- 2026-05-22 credential-free production shell smoke against `https://prepshipv4.vercel.app` passed 8/8 routes with no slow warnings.
+- Route coverage: `/`, `/orders/awaiting_shipment`, `/orders/shipped`, `/inventory/stock-levels`, `/dashboard`, `/settings`, `/billing`, `/manifest`.
+- Average duration: 71 ms.
+- Max duration: 192 ms.
+- User confirmed the deployed UI had no visible console/API errors after the `28fb0f85` deployment.
 
 Required smoke areas:
 
@@ -382,4 +390,3 @@ Do not paste Supabase keys, JWT secrets, connection strings, or private project 
 Current recommendation: no-go for enterprise production signoff until the [MUST-FIX] and [BLOCKED] items are either completed or formally accepted by DJ/account owner.
 
 Code readiness may be materially ahead of evidence readiness. The immediate closeout work should focus on sanitized proof, alert ownership, restore/rollback drill approval, CI account blocker resolution, and final source-of-truth documentation.
-
