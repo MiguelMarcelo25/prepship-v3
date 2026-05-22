@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const DEFAULT_TIMEOUT_MS = 10_000;
+const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_FAILURE_THRESHOLD = 3;
 const DEFAULT_RESTART_COOLDOWN_MS = 15 * 60 * 1000;
 const DEFAULT_MAX_RESTARTS_PER_HOUR = 2;

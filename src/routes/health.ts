@@ -12,7 +12,7 @@ const EVENT_LOOP_DELAY_BUDGET_MS = 250;
 
 const healthSql = postgres(env.DATABASE_URL, {
   prepare: false,
-  max: 1,
+  max: 3,
   idle_timeout: 10,
   connect_timeout: DB_HEALTH_CONNECT_TIMEOUT_SECONDS,
   connection: { statement_timeout: DB_HEALTH_STATEMENT_TIMEOUT_MS },

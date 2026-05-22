@@ -5,12 +5,16 @@ const root = process.cwd();
 const watchdogPath = 'scripts/production-watchdog.mjs';
 const operationalRunbookPath = 'OPERATIONAL_RUNBOOKS_AND_DR_PLAN.md';
 const observabilityPlanPath = 'OBSERVABILITY_ALERTING_PLAN.md';
+const healthRoutePath = 'src/routes/health.ts';
 
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const operationalRunbook = fs.readFileSync(path.join(root, operationalRunbookPath), 'utf8');
 const observabilityPlan = fs.readFileSync(path.join(root, observabilityPlanPath), 'utf8');
 const watchdog = fs.existsSync(path.join(root, watchdogPath))
   ? fs.readFileSync(path.join(root, watchdogPath), 'utf8')
+  : '';
+const healthRoute = fs.existsSync(path.join(root, healthRoutePath))
+  ? fs.readFileSync(path.join(root, healthRoutePath), 'utf8')
   : '';
 
 function assert(condition, message) {
@@ -23,6 +27,7 @@ function assert(condition, message) {
 }
 
 assert(watchdog.length > 0, `${watchdogPath} exists`);
+assert(healthRoute.length > 0, `${healthRoutePath} exists`);
 
 const requiredWatchdogTokens = [
   'VERCEL_SHELL_URL',
@@ -52,6 +57,16 @@ for (const token of requiredWatchdogTokens) {
 assert(
   watchdog.includes('WATCHDOG_ALLOW_RESTARTS') || watchdog.includes('WATCHDOG_RESTART_MODE'),
   `${watchdogPath} requires an explicit restart/redeploy env gate`
+);
+
+assert(
+  /const DEFAULT_TIMEOUT_MS = 15_000/.test(watchdog),
+  `${watchdogPath} default timeout must exceed the 12s deep-health component timeout`
+);
+
+assert(
+  /max:\s*[3-9]/.test(healthRoute),
+  `${healthRoutePath} health SQL pool must allow concurrent db/orders/printQueue checks`
 );
 
 assert(
