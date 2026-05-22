@@ -51,6 +51,7 @@
     "test:analysis-client-scope": "node scripts/analysis-client-store-scope-guard.mjs",
     "test:inventory-client-scope": "node scripts/inventory-client-store-scope-guard.mjs",
     "test:inventory-default-view": "node scripts/inventory-default-view-guard.mjs",
+    "test:inventory-auto-deduct": "node scripts/inventory-auto-deduct-guard.mjs",
     "test:inventory-source-of-truth": "node scripts/inventory-source-of-truth-guard.mjs",
     "test:inventory-reconciliation-dry-run": "node scripts/inventory-reconciliation-dry-run-guard.mjs",
     "test:inventory-repair-plan": "node scripts/inventory-repair-plan-guard.mjs",

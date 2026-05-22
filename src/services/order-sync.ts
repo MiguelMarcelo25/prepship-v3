@@ -8,6 +8,7 @@ import { getSettingNumber, setSetting } from './settings';
 import { isExcludedStoreId } from '../config/prepship';
 import { replaceOrderItemsForExternalOrderIds } from './order-items';
 import { buildShipStationOrderSource } from './normalized-order-persistence';
+import { deductInventoryForOrder } from './fulfillment-deductions';
 
 const LAST_SYNC_KEY = 'order_sync.last_modified_ms';
 const DEFAULT_LOOKBACK_MS = 1000 * 60 * 60 * 24 * 30; // 30 days on first run
@@ -319,8 +320,23 @@ async function updateExistingOrderStatusesBatch(
           eq(orders.orderStatus, 'awaiting_shipment')
         )
       )
-      .returning({ id: orders.id });
+      .returning();
     updated += rows.length;
+
+    if (orderStatus === 'shipped') {
+      for (const row of rows) {
+        try {
+          // Per user override `unlock shipped data` on 2026-05-21: this
+          // catch-up path is a forward-only awaiting -> shipped transition.
+          // It must mirror label/shipment-sync inventory side effects so
+          // orders closed by ShipStation status sync do not skip stock
+          // deduction while still respecting INVENTORY_AUTO_DEDUCT.
+          await deductInventoryForOrder(row, { source: 'order_sync_status' });
+        } catch (err) {
+          console.warn('[order-sync] inventory deduction failed:', err);
+        }
+      }
+    }
 
     // Auto-cleanup print queue: any orders we just flipped to
     // shipped/cancelled should have their pending queue entries
