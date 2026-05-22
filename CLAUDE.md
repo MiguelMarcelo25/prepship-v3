@@ -69,6 +69,60 @@ The pseudo-bypass `?force=1&admin=true` on the API routes is for
 **runtime** human overrides, not for AI agents to invoke during
 development. AI agents cannot self-authorize this bypass.
 
+### Current narrow override for PS-016 through PS-021
+
+DJ typed the override phrase `unlock shipped data` on 2026-05-23 for
+the current shipping reliability track only. This is not a blanket
+permission to refactor shipped/cancelled logic.
+
+Agents may touch locked areas only when required to fix or verify:
+
+- PS-016 shipping certification harness
+- PS-017 eBay marketplace confirmation connector/recovery tests
+- PS-018 full-site button/user-outcome functionality tests
+- PS-019 Walmart direct label, print queue, and Orders recovery
+- PS-020 deep health/watchdog/ops restart safeguards
+- PS-021 Walmart Shipping payload/response handling
+
+Allowed, only if needed:
+
+- `web/src/components/Views/OrdersView.tsx` for shipped label
+  reprint/queue validation, bad label URL handling, and recovery UI.
+- `src/routes/print-queue.ts` for validating shipped label URLs before
+  queue/print and returning safe errors.
+- `src/services/print-queue.ts` for rejecting `[object Object]` or
+  invalid label URLs, per-label merge failures, and safe handling of
+  existing shipped labels.
+- `src/db/schema/shipments.ts` for read/type additions only when needed
+  for diagnostics or tests.
+
+Still forbidden without separate confirmation:
+
+- SQL UPDATE/DELETE against real shipped/cancelled production orders.
+- Deleting or rewriting shipment history.
+- Dropping/renaming `orders` or `shipments` columns.
+- Bulk migrations that change historical shipped/cancelled meaning.
+- Re-enabling destructive shipped/cancelled edit or batch mutation
+  controls.
+
+Every use of this override must report:
+
+- exact locked files touched
+- why the override was necessary
+- proof shipped/cancelled protections were not weakened
+- tests run and pass/fail results
+- confirmation that no real labels, postage, live marketplace
+  notifications, or production shipped/cancelled mutations occurred
+  unless DJ separately approved them
+
+Any code change made under this override must include a nearby comment:
+
+`Per user override unlock shipped data on 2026-05-23: ...`
+
+Any commit containing such a change must mention:
+
+`Per user override unlock shipped data on 2026-05-23`
+
 ---
 
 ## Other repository conventions (not locked, but expected)
@@ -103,3 +157,4 @@ cp AGENTS.md .cursorrules
 `Write` — both .CLAUDE.md and .cursorrules are intentionally
 file-identical to AGENTS.md so a human can verify with
 `diff AGENTS.md CLAUDE.md`.)
+

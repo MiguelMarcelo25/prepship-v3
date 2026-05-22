@@ -46,6 +46,390 @@ Recommended handling:
 - PS-012 should be split into local hardening work plus access-dependent production evidence.
 - PS-013 should start with a source-of-truth matrix and lightweight guards before any broad migration/refactor.
 
+## Official PS-016 Through PS-018 Shipping + Site Functionality Test Track
+
+DJ approved these as standalone tasks after confirming that code changes are not enough unless the real user workflow is tested. These tasks focus on shipping certification, marketplace confirmation, and full-site button/user-outcome coverage.
+
+> Functionality rule: every critical-path task must build, then test the actual user workflow. A task is not complete until build/typecheck, unit/static guards, targeted functionality tests, and workflow/browser smoke tests pass. If the workflow still fails, iterate and retest before marking complete.
+
+## Testing Gate Policy For All New Tasks
+
+DJ's standing requirement for all projects and all future developer tasks:
+
+- Build/typecheck must pass.
+- Unit/static guards must pass.
+- Targeted functionality tests must pass.
+- Workflow/e2e/smoke tests must pass for the actual user outcome.
+- If any check fails, the developer must iterate on the fix and rerun the failed check plus relevant surrounding coverage.
+- A task is complete only with evidence: exact commands run, pass/fail results, and any manual/production validation still required.
+- Code changes alone are not completion. The user-facing workflow must be proven.
+
+This policy exists because previous changes could pass static guards while real PrepShip workflows still failed, especially shipping labels, print queue, marketplace confirmation, and Orders recovery.
+
+## Shipped Data Unlock Safety Plan
+
+DJ provided the explicit override phrase `unlock shipped data` on 2026-05-23 for the current shipping reliability work only. This unlock is narrow: it exists so PS-016 through PS-021 can fix or test label, queue, shipment, marketplace confirmation, and Orders recovery behavior where shipped/shipment paths are genuinely involved.
+
+Rules:
+
+- Touch shipped/cancelled or `shipments` paths only when the fix cannot be completed safely elsewhere.
+- Keep `assertOrderEditable`, `LOCKED_STATUSES`, queue ownership, client/store scope, RBAC, secret redaction, and financial redaction intact.
+- Do not re-enable destructive shipped/cancelled edit or batch mutation controls.
+- Do not run SQL updates/deletes against real shipped/cancelled production orders.
+- Do not delete/rewrite shipment history or destructively alter `orders` / `shipments` schema.
+- Add a nearby code comment for any locked logic change: `Per user override unlock shipped data on 2026-05-23: ...`.
+- Commit messages for locked logic changes must include: `Per user override unlock shipped data on 2026-05-23`.
+
+Allowed if needed:
+
+- `OrdersView.tsx`: shipped label reprint/queue validation, bad label URL handling, failure recovery, and Retry/error UI.
+- `print-queue` routes/services: validate existing shipped label URLs, reject `[object Object]`, return clean per-label failures, and safely handle shipped-label queue/print flows.
+- `shipments` schema/types: read/type additions only for diagnostics/tests, never destructive changes.
+
+Required reporting for any task using the unlock:
+
+- exact locked files touched
+- why the unlock was necessary
+- proof protections were not weakened
+- tests run and pass/fail results
+- confirmation no real labels/postage/live marketplace notifications occurred unless DJ approved
+- confirmation no production shipped/cancelled data mutation occurred unless DJ separately approved
+
+| Task | Title | Priority | Root Problem | Implementation Notes | Completion Gate |
+|---|---|---|---|---|---|
+| PS-016 | Shipping Label + Marketplace Confirmation Certification Harness | Critical | Static guards pass while core shipping can still hang or fail in real use. | Add read-only shipping inspector, preflight smoke, offline/test-label smoke, gated real-label certification, marketplace confirmation smoke, certification guard, and docs. | Must prove label creation, shipment persistence, status transition, label retrieval/reprint, outbox/marketplace confirmation state, and safe failure diagnostics without leaking secrets/PII or buying postage unless explicitly approved. |
+| PS-017 | eBay Marketplace Shipment Confirmation Connector + Recovery Tests | Critical | eBay label purchase and eBay marketplace shipment notification are separate outcomes; eBay confirmation may be unsupported/incomplete in the outbox path. | Implement eBay `confirmShipment` support through the connector/outbox architecture, safe credential resolution, redacted errors, retry/idempotency handling where practical, tests/guards, and marketplace confirmation docs. | Must pass mocked/safe eBay confirmation tests proving success, missing credentials, missing tracking, redacted failure, outbox status transitions, shipment confirmation status, and no token/PII leaks. |
+| PS-018 | Full-Site Button + User-Outcome Functionality Test Harness | High | Buttons can exist and click, but still fail the recipient/user's intended workflow. | Add site action matrix, stable selectors, Playwright full-site action suite, mocked API fixtures, site-action guard, and docs requiring every new user-facing action to define outcome/loading/success/error/role/scope coverage. | Must pass site-action guard, browser tests for critical actions, failure-state coverage, typecheck, and build. No real postage, marketplace notification, destructive production action, or shipped/cancelled mutation in tests. |
+
+Recommended order:
+
+1. PS-016 first - proves exactly where shipping breaks.
+2. PS-017 second - fixes/guards the eBay marketplace notification gap.
+3. PS-018 third - broadens coverage so broken buttons/workflows do not pass silently.
+
+### PS-016 Copy/Paste Handoff
+
+```md
+PS-016 - Shipping Label + Marketplace Confirmation Certification Harness
+
+Assignee: Lawrence
+Repo: https://github.com/drprepperusa-org/prepship-v4.git
+Branch: prepshipv4-stable
+Priority: Critical
+
+Context:
+PrepShip V4 needs a safe certification harness for the full shipping critical path. Static/unit guards are not enough because label creation, shipment persistence, order status updates, label retrieval, marketplace confirmation, and UI loading states can still fail in real workflows.
+
+Implementation:
+- Add `scripts/inspect-shipping-order.ts` and `npm run inspect:shipping-order`.
+- Add `scripts/smoke-shipping-preflight.ts` and `npm run smoke:shipping:preflight`.
+- Add `scripts/smoke-shipping-test-label.ts` and `npm run smoke:shipping:test-label`.
+- Add `scripts/smoke-shipping-real-label.ts` and `npm run smoke:shipping:real-label` with hard `--live-approved` safety.
+- Add `scripts/smoke-marketplace-confirm.ts` and `npm run smoke:marketplace-confirm`.
+- Add `scripts/shipping-certification-guard.mjs` and `npm run guard:shipping-certification`.
+- Add `docs/shipping-certification-harness.md`.
+
+Safety:
+- Inspector/preflight must be read-only.
+- No secrets, API keys, OAuth tokens, credentials, customer PII, raw labels, raw provider payloads, or cross-client data in logs/output.
+- No real postage or live marketplace notification unless explicitly approved and gated.
+- Do not weaken auth, RBAC, scope, shipped/cancelled lockdown, label safety, or credential protections.
+
+Verification:
+- `npm run guard:shipping-certification`
+- `npm run inspect:shipping-order -- --help`
+- `npm run smoke:shipping:preflight -- --help`
+- `npm run smoke:shipping:test-label -- --help`
+- `npm run smoke:shipping:real-label -- --help`
+- `npm run smoke:marketplace-confirm -- --help`
+- `npm run typecheck`
+- `npm run build:web`
+- `npm run test:test-order-queue-label`
+- `npm run test:direct-carrier-labels`
+- `npm run test:connector-architecture`
+- `npm run test:runtime-ddl`
+- `npm run test:raw-error-response-audit`
+
+Return:
+Files changed, new commands, what each command verifies, safety protections, redacted example output, commands run with pass/fail, and any live-label checks requiring DJ approval.
+```
+
+### PS-017 Copy/Paste Handoff
+
+```md
+PS-017 - eBay Marketplace Shipment Confirmation Connector + Recovery Tests
+
+Assignee: Lawrence
+Repo: https://github.com/drprepperusa-org/prepship-v4.git
+Branch: prepshipv4-stable
+Priority: Critical
+
+Context:
+eBay label creation and eBay marketplace shipment confirmation are separate outcomes. The fulfillment outbox can recognize marketplace providers, but eBay confirmation must be implemented and tested so eBay orders are marked shipped/fulfilled with tracking when supported.
+
+Implementation:
+- Confirm the current eBay support gap before changing code.
+- Add/extend the eBay store connector with `confirmShipment`.
+- Use existing credential/account resolution patterns; do not hardcode secrets.
+- Wire `provider === 'ebay'` into fulfillment outbox state transitions.
+- Persist success/failure to fulfillment outbox and shipment confirmation fields.
+- Add mocked eBay tests/guards for success, missing credentials, missing tracking, redacted failure, retry/idempotency behavior, and unsupported provider behavior.
+- Update marketplace confirmation docs and PS-016 smoke support if PS-016 is merged.
+
+Safety:
+- Do not expose OAuth tokens, refresh tokens, credentials, raw marketplace payloads, customer PII, or cross-client data.
+- Do not weaken auth, RBAC, scope, shipped/cancelled lockdown, label safety, or credential protections.
+
+Verification:
+- `npm run guard:shipping-certification` if PS-016 exists
+- `npm run smoke:marketplace-confirm -- --help`
+- eBay mocked connector tests/guard
+- `npm run test:connector-architecture`
+- `npm run test:direct-carrier-labels`
+- `npm run test:test-order-queue-label`
+- `npm run test:raw-error-response-audit`
+- `npm run typecheck`
+- `npm run build:web`
+
+Return:
+Files changed, eBay connector behavior, outbox state transitions, tests/guards added, pass/fail commands, live eBay checks requiring DJ approval, and known limitations.
+```
+
+### PS-018 Copy/Paste Handoff
+
+```md
+PS-018 - Full-Site Button + User-Outcome Functionality Test Harness
+
+Assignee: Lawrence
+Repo: https://github.com/drprepperusa-org/prepship-v4.git
+Branch: prepshipv4-stable
+Priority: High
+
+Context:
+DJ wants a full functionality test of each button/action on the site. The goal is not only to prove that buttons exist or click, but that each button is coded according to what the recipient/user needs and that success, failure, loading, role, and scope behavior are correct.
+
+Implementation:
+- Create `docs/site-action-functionality-matrix.md`.
+- Add stable `data-testid` selectors for critical actions where safe.
+- Create `web/e2e/site-actions.spec.js`.
+- Add `npm run test:site-actions:browser`.
+- Create `scripts/site-action-functionality-guard.mjs`.
+- Add `npm run guard:site-actions`.
+- Add safe mocked Playwright fixtures for awaiting, shipped, cancelled, eBay, Walmart, existing-label, external-label, inventory, package, and client rows.
+- Add `docs/site-action-testing.md`.
+- Update dev policy: any new user-facing button/action must update the matrix and have coverage or an explicit manual/blocked reason.
+
+Minimum coverage:
+- Navigation/shell/auth/logout.
+- Orders search/filter/sort/detail drawer.
+- Print Label, Reprint Label, Send to Queue, Print Queue, batch actions.
+- Inventory receive/restock/edit.
+- Packages add/edit.
+- Clients filters/actions/scope.
+- Billing/invoice actions if present.
+- Settings/carrier verify/test connection where present.
+- Failure states for label creation and recoverable UI errors.
+
+Safety:
+- No real postage.
+- No real marketplace notification.
+- No destructive production actions.
+- No shipped/cancelled mutation.
+- Preserve auth, RBAC, scope, secret redaction, and label safety.
+
+Verification:
+- `npm run guard:site-actions`
+- `npm run test:site-actions:browser`
+- `npm run test:orders-ux:browser`
+- `npm run test:inventory-ux:browser`
+- `npm run test:maintenance-gate:browser`
+- `npm run test:frontend-failure-states`
+- `npm run typecheck`
+- `npm run build:web`
+
+Return:
+Files changed, action matrix coverage, Playwright coverage, mock fixtures, guardrails, pass/fail commands, remaining uncovered actions with reason, and manual/live checks requiring DJ approval.
+```
+
+## Official PS-019 Through PS-021 Operations Reliability Task Track
+
+DJ approved these tasks after the Walmart rates/label/print-queue incident and the temporary stuck Orders workflow. These are critical reliability tasks, and the completion rule is stricter than code-only completion:
+
+> A task is not complete when code changes are written. It is complete only after build/typecheck, unit/static guards, targeted functionality tests, and workflow/smoke tests pass. If any check fails, iterate on the fix and rerun the failed check plus the relevant surrounding suite until passing.
+
+| Task | Title | Priority | Root Problem | Implementation Notes | Completion Gate |
+|---|---|---|---|---|---|
+| PS-019 | Harden Walmart Direct Label + Print Queue + Orders Recovery Flow | Critical shipping reliability | Walmart/direct-carrier rates and labels can hang or return unsupported label payload shapes; print-to-queue can surface raw object/string/Buffer errors; Orders can appear stuck after the failed flow. | Add timeout support to `web/src/lib/vercelFunction.ts`; harden Walmart/direct label payload normalization; validate label URLs before queueing; harden print-queue merge input handling; improve request/job observability; make Orders recover with clear Retry/error states instead of endless skeletons. | Must pass `npm run typecheck`, `npm run build:web`, relevant label/queue/order guards, new targeted Walmart label/queue tests, and safe mocked workflow tests. |
+| PS-020 | Production Self-Healing Watchdog + Deep Health + Ops Restart Runbook | Critical 24/7 operations reliability | Public `/health` and the Vercel app shell can be OK while the real operator workflow is wedged, leaving ops without dev coverage after hours. | Add `/health/ready` or `/health/deep`; add app-level Orders/queue readiness checks; add `scripts/production-watchdog.mjs`; support alert-only and restart-capable modes with thresholds/cooldowns; document Render restart/deploy-hook runbook; improve Orders UI failure recovery. | Must pass build/typecheck, existing observability/health/static guards, new deep-health/watchdog tests, safe mocked restart workflow tests, and no-secrets verification. |
+| PS-021 | Verify and Fix Walmart Shipping Label Payload/Response Handling | Critical Walmart label reliability | Evidence suggests the outgoing Walmart payload may be valid, but incoming Walmart label/download response shapes can be object-shaped and unsafe extraction can turn them into `[object Object]`. | Inspect and document Walmart estimate/label request shapes; add sanitized diagnostics; replace unsafe `String(object)` label extraction in `api/carriers/labels.ts`; support nested URL/base64 label response shapes; prevent invalid label values from persistence or print queue; add direct Vercel timeout handling where needed. | Must pass `npm run typecheck`, `npm run test:direct-carrier-labels`, `npm run guard:shipping-certification`, `npm run guard:site-actions`, updated/new Walmart extraction guards, and safe mocked workflow verification. |
+
+### PS-019 Copy/Paste Handoff
+
+```md
+PS-019 - Harden Walmart Direct Label + Print Queue + Orders Recovery Flow
+
+Assignee: Lawrence
+Repo: https://github.com/drprepperusa-org/prepship-v4.git
+Branch: prepshipv4-stable
+
+Context:
+DJ reported Walmart rates eventually loaded, then Print to Queue failed with:
+
+The "string" argument must be of type string or an instance of Buffer or ArrayBuffer. Received an instance of Object.
+
+Observed Request ID:
+`0cae0a34-9bcc-4014-b263-3f161a49dc43`
+
+After that, Awaiting Shipment appeared stuck on LOADING ORDERS. Render `/health` was still OK, so this appears to be a workflow/API hang and recovery issue rather than a full backend death.
+
+Primary code paths:
+- `web/src/lib/vercelFunction.ts`
+- `web/src/lib/v2-apiClient.ts`
+- `web/src/components/Views/OrdersView.tsx`
+- `api/carriers/labels.ts`
+- `src/routes/print-queue.ts`
+- `src/services/print-queue.ts`
+- `web/src/hooks/v2Hooks.ts`
+- `src/routes/orders.ts`
+
+Suspected details:
+- `callVercelFunction()` currently has no explicit timeout, while direct carrier rates/labels use that path.
+- Walmart/direct label responses may include nested objects such as `{ pdf: { href: "..." } }` or `{ labelUrl: { href: "..." } }`.
+- `api/carriers/labels.ts` uses Walmart label helpers including `buyLabelWalmartShipping()`, `walmartLabelDataUrlFromPayload()`, `findWalmartLabelString()`, and `firstString()`.
+- Unsafe stringification can turn object-shaped payloads into `[object Object]`.
+- Print queue paths such as `resolveLabelFetchUrl()`, `PDFDocument.load()`, and `Buffer.from()` need stricter input validation and clean per-label errors.
+
+Implementation:
+- Add bounded timeout handling to direct Vercel function calls.
+- Harden Walmart/direct label payload extraction so objects cannot become `[object Object]`.
+- Validate `response.labelUrl` before queueing.
+- Harden print queue label URL/PDF handling with clear per-label failures.
+- Add safe request/job logging with request IDs and no secrets/PII/raw labels.
+- Ensure Orders recovers from label/queue failures with a clear error or Retry state.
+
+Completion rule:
+Not complete until build, unit/static guards, targeted functionality tests, and mocked workflow tests all pass. Iterate until passing.
+
+Verification:
+- `npm run typecheck`
+- `npm run build:web`
+- `npm run test:shipstation-label-url`
+- `npm run test:direct-carrier-labels`
+- `npm run test:test-order-queue-label`
+- `npm run test:print-queue-durable`
+- `npm run test:frontend-failure-states`
+- `npm run test:orders-startup-requests`
+- `npm run guard:shipping-certification`
+- New Walmart/direct-label and queue failure tests
+
+Targeted functionality tests must prove:
+- nested Walmart/direct label payloads normalize to a queueable URL/PDF
+- `[object Object]` is rejected
+- invalid/short base64 is rejected
+- Vercel function timeout path returns a clear error
+- print queue rejects invalid label URLs without raw Buffer/string/Object errors
+- Orders/label failure path does not enqueue bad labels and does not remain indefinitely loading
+
+Return:
+Root cause, files changed, implementation notes, exact commands and pass/fail results, workflow evidence, remaining risks, and confirmation no real labels/postage/live orders were used.
+```
+
+### PS-020 Copy/Paste Handoff
+
+```md
+PS-020 - Production Self-Healing Watchdog + Deep Health + Ops Restart Runbook
+
+Assignee: Lawrence
+Repo: https://github.com/drprepperusa-org/prepship-v4.git
+Branch: prepshipv4-stable
+
+Context:
+PrepShip can be operationally stuck while public checks still pass:
+- Render `/health` returns 200
+- Vercel app shell loads
+
+DJ needs 24/7 safeguards for ops hours when devs are unavailable.
+
+Approval note:
+PS-020 was first discussed as a proposed task only. It became official after DJ explicitly approved: "create 020 as a task." Future task creation still requires explicit DJ approval before assigning a new official PS number.
+
+Implementation:
+- Add `/health/ready` or `/health/deep` for app-level readiness.
+- Include safe DB, Orders-query, print-queue, worker heartbeat, and timeout-budget checks.
+- Add `scripts/production-watchdog.mjs`.
+- Support alert-only mode and restart/redeploy mode only when Render credentials/deploy hook env vars are configured.
+- Add thresholds, cooldowns, and max restarts to prevent loops.
+- Document Render dashboard/API/deploy-hook restart steps.
+- Improve Orders UI so failed API loads do not show endless skeletons.
+
+Completion rule:
+Not complete until build, unit/static guards, targeted functionality tests, and workflow/smoke tests all pass. Iterate until passing.
+
+Verification:
+- `npm run typecheck`
+- `npm run build:web`
+- `npm run test:observability-alerting`
+- `npm run test:api-observability-metrics`
+- `npm run test:operational-runbooks`
+- `npm run guard:backend-connectivity`
+- `npm run test:frontend-failure-states`
+- `npm run test:orders-startup-requests`
+- New deep-health/watchdog/restart-mode tests
+
+Return:
+Safeguards added, files changed, Render/Vercel config required, exact verification results, workflow evidence, manual ops steps, and confirmation no secrets/customer data/live labels were used.
+```
+
+### PS-021 Copy/Paste Handoff
+
+```md
+PS-021 - Verify and Fix Walmart Shipping Label Payload/Response Handling
+
+Assignee: Lawrence
+Repo: https://github.com/drprepperusa-org/prepship-v4.git
+Branch: prepshipv4-stable
+
+Context:
+The Walmart Shipping label flow may not be sending a bad request. Evidence points to PrepShip mishandling Walmart's incoming label response shape. `api/carriers/labels.ts` has unsafe extraction behavior where object-shaped fields can become `[object Object]`.
+
+Example problematic shape:
+
+{
+  "data": {
+    "labelUrl": {
+      "href": "https://example.com/label.pdf"
+    }
+  }
+}
+
+Implementation:
+- Inspect and document Walmart estimate and label purchase request payload fields.
+- Confirm sanitized outgoing Walmart fields including `purchaseOrderId`, `boxDimensions`, `boxItems`, `fromAddress`, `toAddress` where applicable, `returnAddress`, `packageType`, `carrierName`, `carrierServiceType`, `addOns`, `hasBattery`, `hazmat`, and `accountType`.
+- Add sanitized diagnostics for request/response boundaries, logging only structural keys and timings.
+- Replace unsafe `String(object)` label extraction.
+- Support nested URL/base64/download shapes.
+- Reject empty strings, `[object Object]`, non-string values, and unsupported shapes with sanitized operator-facing errors.
+- Prevent invalid label values from persistence or print queue.
+- Add/extend regression guards for nested Walmart label responses.
+
+Important distinction:
+This task must prove whether the problem is the outgoing Walmart request payload, the incoming Walmart response shape, or both. Do not blindly change Walmart request fields unless the field mismatch is proven by docs, existing repo comments, or sanitized diagnostics.
+
+Completion rule:
+Not complete until build, unit/static guards, targeted functionality tests, and workflow/smoke tests all pass. Iterate until passing.
+
+Verification:
+- `npm run typecheck`
+- `npm run test:direct-carrier-labels`
+- `npm run guard:shipping-certification`
+- `npm run guard:site-actions`
+- Updated/new Walmart extraction guard
+- Safe mocked workflow test proving no live labels/postage/live order mutation occurred
+
+Return:
+Root cause proven, whether issue was outgoing payload or incoming response shape, files changed, sanitized payload fields confirmed/corrected, tests added, verification results, and remaining DJ-present production validation.
+```
+
 ## Phase Summary
 
 | Phase | Status | Percent | Why Not 100% Yet |
@@ -62,8 +446,7 @@ Recommended handling:
 | Phase 10 - DJ/OpenClaw Security + Failure-State Hardening | Mostly complete | 98% | Unauthenticated production auth smoke checks passed and first runtime permission layer exists; dashboard/analysis/inventory/billing/print-queue/client/init/orders/manifests scoping started; raw-error response audit is mapped and guarded; non-shipment Vercel plus imported carrier compatibility raw-error route batches are patched; needs authenticated secret checks, label/shipment raw-error review, and label/shipment runtime enforcement after review |
 | Phase 11 - Source-of-Truth + Duplication Audit | In progress | 98% | Reporting metrics, Walmart selling-fee index, `store_orders`, credential-account DDL, `order_items`/`analytics_cache`, low-risk orders/inventory indexes, durable job strategy, ShipStation Awaiting parity status, rate backfill status, billing reference-rate status, print queue latest-run status, inventory source-of-truth policy, inventory dry-run reconciliation, dry-run artifact persistence, mismatch classification, and inventory repair/apply policy moved to documented ownership; actual inventory repair implementation, labels, full job events/artifacts, and shipment-adjacent DDL still remain |
 | Phase 12 - Enterprise Readiness | Scoped/started | 98% | Dashboard, Analysis, Inventory, Billing, Print Queue, Orders, Manifests, and label/shipment-sensitive route policy are mapped; read/action ownership is implemented for explicit client/store JWT claims on key surfaces; `financials:read` now protects Analysis/Dashboard SKU financials, Inventory SKU-order shipping costs, Billing routes, Orders export/list label costs, Manifests label costs, Packages unit costs, and Rate Browser rate-result DTOs; Rate Browser account source metadata requires `credentials:read`; secrets governance, audit logging, reconciliation reporting, observability/alerting, runbook/DR planning, privacy/compliance, and production signoff are mapped; needs label/shipment runtime enforcement, broader runtime audit/reconciliation/alert implementation, DR drills, and owner signoff evidence |
-| Phase 13 - JWT Session Expiration | Production setting applied | 75% | 7-day session policy is documented and guarded, Supabase Auth time-box is set to `168` hours, and production logout/login smoke passed; staging expiry proof and forced re-login evidence remain open |
-
+| Phase 13 - JWT Session Expiration | Production setting applied | 75% | 7-day session policy is documented and guarded, Supabase Auth time-box is set to `168` hours, and production logout/login smoke passed; staging expiry proof and forced re-login evidence remain open | 
 ## Phase Checklist
 
 ### Phase 1 - Runtime Architecture: 100%
