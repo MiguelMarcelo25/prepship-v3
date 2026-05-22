@@ -1024,6 +1024,13 @@ async function fetchWalmartEstimatesForLabel(
     addOns: false,
     hasBattery: false,
   };
+  console.info('[carriers/labels] walmart shipping estimate request', {
+    hasPurchaseOrderId: Boolean(input.purchaseOrderId),
+    weightUnit: 'LB',
+    dimensionUnit: 'IN',
+    boxItemCount: input.boxItems.length,
+    requestKeys: walmartSafeObjectKeys(estimateBody),
+  });
   const res = await timedFetch('api.carriers.labels.external', 'https://marketplace.walmartapis.com/v3/shipping/labels/shipping-estimates', {
     method: 'POST',
     headers: walmartMarketplaceHeaders(creds, token, 'application/json', true),
@@ -1033,7 +1040,13 @@ async function fetchWalmartEstimatesForLabel(
     throw new Error(`Walmart Shipping Estimates ${res.status}: ${await readWalmartError(res)}`);
   }
   const data = await res.json();
-  return { token, rates: walmartEstimateList(data).filter((rate) => walmartEstimateCost(rate) > 0) };
+  const rates = walmartEstimateList(data).filter((rate) => walmartEstimateCost(rate) > 0);
+  console.info('[carriers/labels] walmart shipping estimate response', {
+    responseKeys: walmartSafeObjectKeys(data),
+    dataKeys: walmartSafeObjectKeys(data?.data),
+    usableRateCount: rates.length,
+  });
+  return { token, rates };
 }
 
 function selectWalmartEstimateRate(rates: any[], serviceCode: unknown): any | null {
@@ -1161,44 +1174,184 @@ async function downloadWalmartLabelPdf(
   return `data:application/pdf;base64,${buffer.toString('base64')}`;
 }
 
-function findWalmartLabelString(value: unknown, keys: string[], depth = 0): string {
-  if (depth > 5 || value == null) return '';
-  if (typeof value === 'string') return '';
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = findWalmartLabelString(item, keys, depth + 1);
+const WALMART_LABEL_BASE64_KEYS = new Set([
+  'labeldata',
+  'label_data',
+  'labelbase64',
+  'labelpdf',
+  'pdffile',
+  'pdfdata',
+  'pdf_data',
+  'pdfbase64',
+]);
+
+const WALMART_LABEL_URL_KEYS = new Set([
+  'labelurl',
+  'label_url',
+  'labeldownloadurl',
+  'label_download_url',
+  'downloadurl',
+  'download_url',
+  'labeldownload',
+  'label_download',
+  'href',
+  'url',
+]);
+
+const WALMART_LABEL_BASE64_CHILD_KEYS = new Set([
+  'data',
+  'content',
+  'pdf',
+  'base64',
+  'labeldata',
+  'label_data',
+  'labelbase64',
+  'pdfbase64',
+]);
+
+const WALMART_LABEL_URL_CHILD_KEYS = new Set([
+  'href',
+  'url',
+  'pdf',
+  'download',
+  'downloadurl',
+  'download_url',
+  'labelurl',
+  'label_url',
+]);
+
+function walmartLabelKeySummary(value: unknown): string {
+  if (value == null) return 'null';
+  if (Array.isArray(value)) return `array(${value.length})`;
+  if (typeof value !== 'object') return typeof value;
+  const keys = Object.keys(value as Record<string, unknown>).slice(0, 6);
+  return `object(${keys.join(',') || 'no_keys'})`;
+}
+
+function walmartSafeObjectKeys(value: unknown): string[] {
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) return [];
+  return Object.keys(value as Record<string, unknown>).slice(0, 8);
+}
+
+function walmartLabelPath(parent: string, key: string): string {
+  if (!parent || parent === 'response') return key;
+  return `${parent}.${key}`;
+}
+
+function walmartLabelReject(diagnostics: string[], path: string, value: unknown, reason: string): void {
+  diagnostics.push(`${path}:${walmartLabelKeySummary(value)}_${reason}`);
+}
+
+function validateWalmartLabelString(
+  value: string,
+  mode: 'base64' | 'url',
+  path: string,
+  diagnostics: string[],
+): { value: string; path: string } | null {
+  const text = value.trim();
+  if (!text) {
+    walmartLabelReject(diagnostics, path, value, 'empty');
+    return null;
+  }
+  if (text === '[object Object]') {
+    walmartLabelReject(diagnostics, path, value, 'invalid');
+    return null;
+  }
+  if (mode === 'url') {
+    if (/^https?:\/\//i.test(text)) return { value: text, path };
+    walmartLabelReject(diagnostics, path, value, 'unsupported');
+    return null;
+  }
+  const compact = text.replace(/\s+/g, '');
+  if (/^data:application\/pdf/i.test(compact)) return { value: compact, path };
+  if (/^[A-Za-z0-9+/=]+$/.test(compact) && compact.length > 100) {
+    return { value: compact, path };
+  }
+  walmartLabelReject(diagnostics, path, value, 'unsupported');
+  return null;
+}
+
+function extractWalmartLabelReference(
+  payload: unknown,
+  mode: 'base64' | 'url',
+): { value: string; path: string; diagnostics: string[] } {
+  const diagnostics: string[] = [];
+  const rootKeys = mode === 'base64' ? WALMART_LABEL_BASE64_KEYS : WALMART_LABEL_URL_KEYS;
+  const childKeys = mode === 'base64' ? WALMART_LABEL_BASE64_CHILD_KEYS : WALMART_LABEL_URL_CHILD_KEYS;
+
+  const scan = (value: unknown, path: string, depth: number, withinCandidate: boolean): { value: string; path: string } | null => {
+    if (depth > 8 || value == null) return null;
+    if (typeof value === 'string') {
+      return withinCandidate ? validateWalmartLabelString(value, mode, path, diagnostics) : null;
+    }
+    if (Array.isArray(value)) {
+      for (const [index, item] of value.entries()) {
+        const found = scan(item, `${path}[${index}]`, depth + 1, withinCandidate);
+        if (found) return found;
+      }
+      return null;
+    }
+    if (typeof value !== 'object') {
+      if (withinCandidate) walmartLabelReject(diagnostics, path, value, 'unsupported');
+      return null;
+    }
+
+    const record = value as Record<string, unknown>;
+    for (const [key, raw] of Object.entries(record)) {
+      const normalized = key.toLowerCase();
+      const keyPath = walmartLabelPath(path, key);
+      if (rootKeys.has(normalized) || (withinCandidate && childKeys.has(normalized))) {
+        const found = scan(raw, keyPath, depth + 1, true);
+        if (found) return found;
+        if (raw == null || typeof raw !== 'object') {
+          walmartLabelReject(diagnostics, keyPath, raw, 'unsupported');
+        }
+      }
+    }
+
+    for (const [key, raw] of Object.entries(record)) {
+      const found = scan(raw, walmartLabelPath(path, key), depth + 1, withinCandidate);
       if (found) return found;
     }
+    return null;
+  };
+
+  const found = scan(payload, 'response', 0, false);
+  if (found) return { ...found, diagnostics };
+  if (diagnostics.length) {
+    throw new Error(`Walmart label ${mode} extraction rejected unsupported fields: ${diagnostics.slice(0, 8).join('; ')}`);
+  }
+  return { value: '', path: '', diagnostics };
+}
+
+export function __test_extractWalmartLabelReference(payload: unknown, mode: 'base64' | 'url') {
+  return extractWalmartLabelReference(payload, mode);
+}
+
+function walmartLabelExtractionErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : 'Walmart label extraction failed';
+}
+
+function findWalmartLabelString(value: unknown, keys: string[], depth = 0): string {
+  void depth;
+  const normalized = new Set(keys.map((key) => key.toLowerCase()));
+  const mode = [...normalized].some((key) => WALMART_LABEL_BASE64_KEYS.has(key)) ? 'base64' : 'url';
+  try {
+    return extractWalmartLabelReference(value, mode).value;
+  } catch (err) {
+    console.warn('[carriers/labels] walmart label extraction rejected:', walmartLabelExtractionErrorMessage(err));
     return '';
   }
-  if (typeof value !== 'object') return '';
-
-  const record = value as Record<string, unknown>;
-  const wanted = new Set(keys.map((key) => key.toLowerCase()));
-  for (const [key, raw] of Object.entries(record)) {
-    if (wanted.has(key.toLowerCase())) {
-      const text = firstString(raw);
-      if (text) return text;
-    }
-  }
-  for (const raw of Object.values(record)) {
-    const found = findWalmartLabelString(raw, keys, depth + 1);
-    if (found) return found;
-  }
-  return '';
 }
 
 function walmartLabelDataUrlFromPayload(payload: unknown): string {
-  const base64 = findWalmartLabelString(payload, [
-    'labelData',
-    'label_data',
-    'labelBase64',
-    'labelPDF',
-    'labelPdf',
-    'pdfData',
-    'pdf_data',
-    'pdfBase64',
-  ]).replace(/\s+/g, '');
+  let base64 = '';
+  try {
+    base64 = extractWalmartLabelReference(payload, 'base64').value.replace(/\s+/g, '');
+  } catch (err) {
+    console.warn('[carriers/labels] walmart label data extraction rejected:', walmartLabelExtractionErrorMessage(err));
+    return '';
+  }
   if (!base64) return '';
   if (/^data:application\/pdf/i.test(base64)) return base64;
   if (/^[A-Za-z0-9+/=]+$/.test(base64) && base64.length > 100) {
@@ -1500,6 +1653,13 @@ async function buyLabelWalmartShipping(
   const accountType = firstString(input.body?.accountType, creds?.accountType);
   if (accountType) labelBody.accountType = accountType;
 
+  console.info('[carriers/labels] walmart create label request', {
+    hasPurchaseOrderId: Boolean(context.purchaseOrderId),
+    carrierName: Boolean(carrierName),
+    carrierServiceType: Boolean(carrierServiceType),
+    boxItemCount: boxItems.length,
+    requestKeys: walmartSafeObjectKeys(labelBody),
+  });
   const res = await timedFetch('api.carriers.labels.external', 'https://marketplace.walmartapis.com/v3/shipping/labels', {
     method: 'POST',
     headers: walmartMarketplaceHeaders(creds, token, 'application/json', true),
@@ -1511,6 +1671,11 @@ async function buyLabelWalmartShipping(
 
   const data = await res.json();
   const details = data?.data && typeof data.data === 'object' ? data.data : data;
+  console.info('[carriers/labels] walmart create label response', {
+    responseKeys: walmartSafeObjectKeys(data),
+    detailKeys: walmartSafeObjectKeys(details),
+    responseShape: walmartLabelKeySummary(data),
+  });
   const labelId = firstString(
     details?.labelId,
     details?.labelID,

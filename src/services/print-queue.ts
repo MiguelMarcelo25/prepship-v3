@@ -10,7 +10,7 @@ export type AddToQueueInput = {
   clientId: number;
   orderId: string;
   orderNumber?: string | null;
-  labelUrl: string;
+  labelUrl: unknown;
   skuGroupId: string;
   primarySku?: string | null;
   itemDescription?: string | null;
@@ -38,7 +38,7 @@ export type QueueSendOrderInput = {
   orderId: number;
   clientId: number;
   orderNumber?: string | null;
-  labelUrl?: string | null;
+  labelUrl?: unknown | null;
   label?: Omit<CreateLabelInputDto, 'orderId' | 'orderNumber'> & {
     orderId?: number;
     orderNumber?: string;
@@ -139,6 +139,58 @@ export type PrintQueueListScope = {
 const mergeJobs = new Map<string, MergeJob>();
 const queueSendJobs = new Map<string, QueueSendJob>();
 const QUEUE_SEND_ORDER_TIMEOUT_MS = 30_000;
+
+export class PrintQueueLabelUrlError extends Error {
+  status = 400 as const;
+  code = 'INVALID_LABEL_URL' as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'PrintQueueLabelUrlError';
+  }
+}
+
+export function isPrintQueueLabelUrlError(err: unknown): err is PrintQueueLabelUrlError {
+  return err instanceof PrintQueueLabelUrlError;
+}
+
+// Per user override unlock shipped data on 2026-05-23: shipped-label queue
+// handling rejects object/empty label URLs before queueing or merging labels.
+function normalizePrintQueueLabelUrl(labelUrl: unknown): string {
+  if (typeof labelUrl !== 'string') {
+    throw new PrintQueueLabelUrlError('Label URL must be a string.');
+  }
+  const trimmed = labelUrl.trim();
+  if (trimmed.length === 0) {
+    throw new PrintQueueLabelUrlError('Label URL is required.');
+  }
+  if (trimmed === '[object Object]') {
+    throw new PrintQueueLabelUrlError('Label URL is invalid. Re-create the label and try again.');
+  }
+  return trimmed;
+}
+
+function formatLabelUrlError(entry: PrintQueueEntry, err: unknown): string {
+  const orderRef = entry.orderNumber ?? entry.orderId;
+  const message = isPrintQueueLabelUrlError(err)
+    ? err.message
+    : err instanceof Error
+      ? err.message
+      : 'Invalid label URL.';
+  return `Invalid label URL for order ${orderRef}: ${message}`;
+}
+
+function collectInvalidLabelErrors(entries: PrintQueueEntry[]): string[] {
+  const errors: string[] = [];
+  for (const entry of entries) {
+    try {
+      normalizePrintQueueLabelUrl(entry.labelUrl);
+    } catch (err) {
+      errors.push(formatLabelUrlError(entry, err));
+    }
+  }
+  return errors;
+}
 
 function toQueueSendSnapshot(job: QueueSendJob): QueueSendJobSnapshot {
   return {
@@ -435,7 +487,7 @@ function timeoutAfter(ms: number, message: string): Promise<never> {
 async function processQueueSendOrder(
   order: QueueSendOrderInput
 ): Promise<QueueSendJobResult> {
-  let labelUrl = order.labelUrl ?? null;
+  let labelUrl: unknown = order.labelUrl ?? null;
   let trackingNumber: string | null = null;
 
   if (!labelUrl) {
@@ -456,12 +508,13 @@ async function processQueueSendOrder(
   }
 
   if (!labelUrl) throw new Error('Label was created without a queueable URL');
+  const queueableLabelUrl = normalizePrintQueueLabelUrl(labelUrl);
 
   const { entry, alreadyQueued } = await addToQueue({
     clientId: order.clientId,
     orderId: String(order.orderId),
     orderNumber: order.orderNumber ?? null,
-    labelUrl,
+    labelUrl: queueableLabelUrl,
     skuGroupId: order.skuGroupId,
     primarySku: order.primarySku ?? null,
     itemDescription: order.itemDescription ?? null,
@@ -474,7 +527,7 @@ async function processQueueSendOrder(
     success: true,
     queueEntryId: entry.id,
     alreadyQueued,
-    labelUrl,
+    labelUrl: queueableLabelUrl,
     trackingNumber,
   };
 }
@@ -519,6 +572,7 @@ export async function addToQueue(
   input: AddToQueueInput
 ): Promise<{ entry: PrintQueueEntry; alreadyQueued: boolean }> {
   await assertPrintQueueClientsVisible([input.clientId], input.scope);
+  const labelUrl = normalizePrintQueueLabelUrl(input.labelUrl);
 
   const [existing] = await db
     .select()
@@ -541,7 +595,7 @@ export async function addToQueue(
       clientId: input.clientId,
       orderId: input.orderId,
       orderNumber: input.orderNumber ?? null,
-      labelUrl: input.labelUrl,
+      labelUrl,
       skuGroupId: input.skuGroupId,
       primarySku: input.primarySku ?? null,
       itemDescription: input.itemDescription ?? null,
@@ -554,7 +608,7 @@ export async function addToQueue(
     .onConflictDoUpdate({
       target: [printQueue.orderId, printQueue.clientId],
       set: {
-        labelUrl: input.labelUrl,
+        labelUrl,
         skuGroupId: input.skuGroupId,
         primarySku: input.primarySku ?? null,
         itemDescription: input.itemDescription ?? null,
@@ -744,6 +798,12 @@ export async function startPrintJob(input: {
   if (entries.length !== input.queueEntryIds.length) {
     throw new Error('One or more queue entries not found or unauthorized');
   }
+  const invalidLabelErrors = collectInvalidLabelErrors(entries);
+  if (invalidLabelErrors.length === entries.length) {
+    throw new PrintQueueLabelUrlError(
+      `All selected labels have invalid URLs. ${invalidLabelErrors.slice(0, 3).join(' ')}`
+    );
+  }
 
   cleanOldJobs();
   const jobId = randomUUID();
@@ -808,8 +868,16 @@ async function runMergeJob(
       job.message = `Merging label ${i + 1} of ${sorted.length}…`;
 
       let pdfBytes: Uint8Array | null = null;
-      const labelFetchUrl = resolveLabelFetchUrl(e.labelUrl, requestOrigin);
-      const isMockLabel = isMockLabelUrl(e.labelUrl) || isMockLabelUrl(labelFetchUrl);
+      let labelFetchUrl: string;
+      let isMockLabel = false;
+      try {
+        labelFetchUrl = resolveLabelFetchUrl(e.labelUrl, requestOrigin);
+        isMockLabel = isMockLabelUrl(e.labelUrl) || isMockLabelUrl(labelFetchUrl);
+      } catch (err) {
+        job.labelErrors!.push(formatLabelUrlError(e, err));
+        failedEntryIds.add(e.id);
+        continue;
+      }
       const addGroupHeaderIfNeeded = () => {
         const groupId = e.skuGroupId ?? '__ungrouped__';
         if (mergeHeaders && groupId !== lastGroup) {
@@ -952,8 +1020,8 @@ function resolveApiOrigin(requestOrigin?: string): string {
   return `http://localhost:${process.env.PORT || '3000'}`;
 }
 
-function resolveLabelFetchUrl(labelUrl: string, requestOrigin?: string): string {
-  const trimmed = labelUrl.trim();
+function resolveLabelFetchUrl(labelUrl: unknown, requestOrigin?: string): string {
+  const trimmed = normalizePrintQueueLabelUrl(labelUrl);
   try {
     return new URL(trimmed).toString();
   } catch {
@@ -962,7 +1030,8 @@ function resolveLabelFetchUrl(labelUrl: string, requestOrigin?: string): string 
   }
 }
 
-function isMockLabelUrl(labelUrl: string): boolean {
+function isMockLabelUrl(labelUrl: unknown): boolean {
+  if (typeof labelUrl !== 'string') return false;
   return /(?:^|\/)(?:api\/)?labels\/mock\/-?\d+(?:$|[?#/])/.test(labelUrl);
 }
 

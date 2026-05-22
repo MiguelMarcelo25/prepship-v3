@@ -10,6 +10,7 @@ import {
   getLatestMergeJobSnapshot,
   getLatestQueueSendJobSnapshot,
   getQueueSendJobStatus,
+  isPrintQueueLabelUrlError,
   getMergeJobStatus,
   listQueue,
   removeFromQueue,
@@ -36,6 +37,11 @@ function printQueueScopeFromContext(c: Context): PrintQueueListScope {
   };
 }
 
+function printQueueLabelUrlErrorResponse(c: Context, err: unknown) {
+  if (!isPrintQueueLabelUrlError(err)) throw err;
+  return c.json({ error: err.message, code: err.code }, err.status);
+}
+
 const listQ = z.object({
   clientId: z.coerce.number().int().optional(),
   includePrinted: z
@@ -53,7 +59,9 @@ const addBody = z.object({
   client_id: z.number().int(),
   order_id: z.string().min(1),
   order_number: z.string().nullable().optional(),
-  label_url: z.string().min(1),
+  // Per user override unlock shipped data on 2026-05-23: route accepts unknown
+  // label payloads so service validation can return a typed queue-label error.
+  label_url: z.unknown(),
   sku_group_id: z.string().min(1),
   primary_sku: z.string().nullable().optional(),
   item_description: z.string().nullable().optional(),
@@ -66,23 +74,27 @@ const addBody = z.object({
 
 app.post('/add', zValidator('json', addBody), async (c) => {
   const b = c.req.valid('json');
-  const { entry, alreadyQueued } = await addToQueue({
-    clientId: b.client_id,
-    orderId: b.order_id,
-    orderNumber: b.order_number ?? null,
-    labelUrl: b.label_url,
-    skuGroupId: b.sku_group_id,
-    primarySku: b.primary_sku ?? null,
-    itemDescription: b.item_description ?? null,
-    orderQty: b.order_qty ?? 1,
-    multiSkuData: b.multi_sku_data ?? null,
-    scope: printQueueScopeFromContext(c),
-  });
-  return c.json({
-    queue_entry_id: entry.id,
-    queued_at: entry.queuedAt.toISOString(),
-    already_queued: alreadyQueued,
-  });
+  try {
+    const { entry, alreadyQueued } = await addToQueue({
+      clientId: b.client_id,
+      orderId: b.order_id,
+      orderNumber: b.order_number ?? null,
+      labelUrl: b.label_url,
+      skuGroupId: b.sku_group_id,
+      primarySku: b.primary_sku ?? null,
+      itemDescription: b.item_description ?? null,
+      orderQty: b.order_qty ?? 1,
+      multiSkuData: b.multi_sku_data ?? null,
+      scope: printQueueScopeFromContext(c),
+    });
+    return c.json({
+      queue_entry_id: entry.id,
+      queued_at: entry.queuedAt.toISOString(),
+      already_queued: alreadyQueued,
+    });
+  } catch (err) {
+    return printQueueLabelUrlErrorResponse(c, err);
+  }
 });
 
 const queueSendLabelBody = z.object({
@@ -209,14 +221,18 @@ app.post(
   ),
   async (c) => {
     const b = c.req.valid('json');
-    const result = await startPrintJob({
-      clientId: b.client_id,
-      queueEntryIds: b.queue_entry_ids,
-      mergeHeaders: b.merge_headers,
-      requestOrigin: new URL(c.req.url).origin,
-      scope: printQueueScopeFromContext(c),
-    });
-    return c.json({ job_id: result.jobId, total: result.total });
+    try {
+      const result = await startPrintJob({
+        clientId: b.client_id,
+        queueEntryIds: b.queue_entry_ids,
+        mergeHeaders: b.merge_headers,
+        requestOrigin: new URL(c.req.url).origin,
+        scope: printQueueScopeFromContext(c),
+      });
+      return c.json({ job_id: result.jobId, total: result.total });
+    } catch (err) {
+      return printQueueLabelUrlErrorResponse(c, err);
+    }
   }
 );
 

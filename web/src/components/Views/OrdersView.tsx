@@ -833,6 +833,21 @@ function toStringValue(value: unknown) {
   return typeof value === 'string' ? value : null
 }
 
+// Per user override unlock shipped data on 2026-05-23: queue/recovery paths must reject corrupt saved label URLs without weakening shipped/cancelled edit locks.
+function getQueueableLabelUrl(value: unknown) {
+  const labelUrl = toStringValue(value)?.trim()
+  if (!labelUrl || labelUrl === '[object Object]') return null
+  return labelUrl
+}
+
+function getQueuePayloadEntries(payload: unknown): PrintQueueEntryDto[] {
+  if (payload == null || typeof payload !== 'object') return []
+  const record = payload as Record<string, unknown>
+  if (Array.isArray(record.queuedOrders)) return record.queuedOrders as PrintQueueEntryDto[]
+  if (Array.isArray(record.entries)) return record.entries as PrintQueueEntryDto[]
+  return []
+}
+
 function toNumberValue(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
@@ -2674,7 +2689,7 @@ export default function OrdersView({
       try {
         const payload = await apiClient.fetchQueue(queueClientId, queueHistoryVisible)
         if (!cancelled) {
-          setQueueEntries(payload.queuedOrders)
+          setQueueEntries(getQueuePayloadEntries(payload))
           setQueueEntriesClientId(queueClientId)
         }
       } catch (error) {
@@ -3721,7 +3736,7 @@ export default function OrdersView({
     setQueueLoading(true)
     try {
       const payload = await apiClient.fetchQueue(queueClientId, queueHistoryVisible)
-      setQueueEntries(payload.queuedOrders)
+      setQueueEntries(getQueuePayloadEntries(payload))
       setQueueEntriesClientId(queueClientId)
       if (forceOpen) setQueueOpen(true)
     } catch (error) {
@@ -3736,7 +3751,7 @@ export default function OrdersView({
       return { payload: null, items: [], error: 'Missing client id', order }
     }
 
-    const labelUrl = toStringValue(order.label?.labelUrl)
+    const labelUrl = getQueueableLabelUrl(order.label?.labelUrl)
     const queuePayload = buildQueueAddPayload(order, labelUrl ?? '')
     const multiSkuData = Array.isArray(queuePayload.multi_sku_data)
       ? queuePayload.multi_sku_data
@@ -3761,7 +3776,7 @@ export default function OrdersView({
       payload.label_url = labelUrl
     } else {
       if (options.existingLabelOnly) {
-        return { payload: null, items: [], error: 'No existing label URL', order }
+        return { payload: null, items: [], error: 'Label URL is not queueable for this order', order }
       }
 
       const bestRate = order.bestRate
@@ -3839,7 +3854,7 @@ export default function OrdersView({
     setQueueLoading(true)
     try {
       const payload = await apiClient.fetchQueue(clientId, queueHistoryVisible)
-      setQueueEntries(payload.queuedOrders)
+      setQueueEntries(getQueuePayloadEntries(payload))
       setQueueEntriesClientId(clientId)
       setQueueOpen(true)
     } finally {
@@ -3862,6 +3877,9 @@ export default function OrdersView({
     })
     const prepared = jobOrders.map((order) => buildQueueSendOrderPayload(order, options))
     const skipped = prepared.filter((entry) => !entry.payload)
+    const skippedErrors = skipped
+      .map((entry) => toStringValue(entry.error))
+      .filter((message): message is string => Boolean(message))
     const queueOrders = prepared.filter((entry) => entry.payload).map((entry) => entry.payload as Record<string, unknown>)
     const skippedFailed = skipped.length
     const fallbackClientId = toNumberValue(queueOrders[0]?.client_id) ?? null
@@ -3917,6 +3935,7 @@ export default function OrdersView({
       queued: toNumberValue(finalStatus?.queued) ?? 0,
       failed: skippedFailed + (toNumberValue(finalStatus?.failed) ?? 0),
       queuedItems,
+      skippedErrors,
     }
   }
 
@@ -3940,6 +3959,8 @@ export default function OrdersView({
       })
       if (result.queued > 0) {
         showToast(formatQueuedOrdersToast(result.queued, result.queuedItems, result.failed), 'success')
+      } else if (result.failed > 0) {
+        showToast(result.skippedErrors[0] ?? 'Label URL is not queueable - nothing was added to the print queue', 'error')
       } else {
         showToast('No orders added - create labels first')
       }
@@ -4132,8 +4153,17 @@ export default function OrdersView({
       const labelRequestStarted = performance.now()
       const response = await apiClient.createLabel(payload)
       console.info(`[label-create] frontend apiClient.createLabel ${Math.round(performance.now() - labelRequestStarted)}ms`)
-      if (mode === 'queue' && response.labelUrl && order.clientId != null) {
-        await apiClient.addToQueue(buildQueueAddPayload(order, response.labelUrl))
+      const queueableLabelUrl = getQueueableLabelUrl(response.labelUrl)
+      if (mode === 'queue') {
+        if (!queueableLabelUrl) {
+          showToast('Label URL is not queueable - the label may have been created, but it was not added to the print queue. Refresh Orders and retry reprint/queue.', 'error')
+          return schedulePostLabelFollowups(response)
+        }
+        if (order.clientId == null) {
+          showToast('Missing client id - label was not added to the print queue', 'error')
+          return schedulePostLabelFollowups(response)
+        }
+        await apiClient.addToQueue(buildQueueAddPayload(order, queueableLabelUrl))
         await hydrateQueue(true)
         showToast(
           formatQueuedOrderToast(
@@ -4142,8 +4172,8 @@ export default function OrdersView({
           ),
           'success',
         )
-      } else if (response.labelUrl) {
-        openLabelPdfUrl(response.labelUrl, labelPopup)
+      } else if (queueableLabelUrl) {
+        openLabelPdfUrl(queueableLabelUrl, labelPopup)
         if (response?.meta?.walmartShipmentConfirmed === false) {
           const confirmError = toStringValue(response.meta.walmartShipmentConfirmError)
           showToast(
@@ -4155,7 +4185,7 @@ export default function OrdersView({
         showToast(mode === 'test' ? `🧪 Test label created${response.trackingNumber ? `: ${response.trackingNumber}` : ''}` : `✅ Label created${response.trackingNumber ? `: ${response.trackingNumber}` : ''}`, 'success')
       } else {
         showLabelPdfPlaceholderMessage(labelPopup, 'Label created, but no PDF URL returned', 'ShipStation created the label but did not return a downloadable PDF URL. Try Reprint Label or open it in ShipStation.')
-        showToast('Label created but no PDF returned', 'info')
+        showToast(response.labelUrl ? 'Label URL is not queueable' : 'Label created but no PDF returned', response.labelUrl ? 'error' : 'info')
       }
 
       return schedulePostLabelFollowups(response)
@@ -5268,17 +5298,18 @@ export default function OrdersView({
           payload.shippingProviderId = shippingProviderId
         }
         const response = await apiClient.createLabel(payload)
+        const queueableLabelUrl = getQueueableLabelUrl(response.labelUrl)
 
-        if (mode === 'queue' && response.labelUrl && order.clientId != null) {
-          await apiClient.addToQueue(buildQueueAddPayload(order, response.labelUrl))
+        if (mode === 'queue' && queueableLabelUrl && order.clientId != null) {
+          await apiClient.addToQueue(buildQueueAddPayload(order, queueableLabelUrl))
           queuedItems.push(...getActiveItems(order, orderDetailsById.get(order.orderId) ?? null))
-        } else if (response.labelUrl) {
+        } else if (queueableLabelUrl) {
           // 2026-05-14: routed through apiClient.openLabelPdf so
           // auth-gated label URLs proxy through a Bearer-authed
           // fetch + blob: open instead of failing silently with the
           // misleading "Check internet connection" Chrome error.
           // Same fix template as the per-order reprint path above.
-          await apiClient.openLabelPdf(response.labelUrl)
+          await apiClient.openLabelPdf(queueableLabelUrl)
         }
         created += 1
         // Mark this row for the 5s strikethrough transition. It'll
@@ -5538,14 +5569,15 @@ export default function OrdersView({
     }
 
     const processExistingLabelOrder = async (order: OrderSummaryDto) => {
-      if (!order?.label?.labelUrl || order.clientId == null) {
+      const labelUrl = getQueueableLabelUrl(order.label?.labelUrl)
+      if (!labelUrl || order.clientId == null) {
         failed += 1
         markAndAdvance(order, true)
         return
       }
 
       try {
-        await apiClient.addToQueue(buildQueueAddPayload(order, order.label.labelUrl))
+        await apiClient.addToQueue(buildQueueAddPayload(order, labelUrl))
         sent += 1
         queueClient = queueClient ?? order.clientId
         queuedItems.push(...getActiveItems(order, orderDetailsById.get(order.orderId) ?? null))
@@ -5600,11 +5632,12 @@ export default function OrdersView({
         }
 
         const response = await apiClient.createLabel(payload)
-        if (!response.labelUrl || order.clientId == null) {
-          throw new Error('Label was created without a queueable URL')
+        const queueableLabelUrl = getQueueableLabelUrl(response.labelUrl)
+        if (!queueableLabelUrl || order.clientId == null) {
+          throw new Error('Label URL is not queueable - label was not added to the print queue')
         }
 
-        await apiClient.addToQueue(buildQueueAddPayload(order, response.labelUrl))
+        await apiClient.addToQueue(buildQueueAddPayload(order, queueableLabelUrl))
         sent += 1
         queueClient = queueClient ?? order.clientId
         queuedItems.push(...getActiveItems(order, orderDetailsById.get(order.orderId) ?? null))
@@ -5632,7 +5665,7 @@ export default function OrdersView({
         setQueueLoading(true)
         try {
           const payload = await apiClient.fetchQueue(queueClient, queueHistoryVisible)
-          setQueueEntries(payload.queuedOrders)
+          setQueueEntries(getQueuePayloadEntries(payload))
           setQueueEntriesClientId(queueClient)
           setQueueOpen(true)
         } finally {
@@ -6924,10 +6957,14 @@ export default function OrdersView({
     const shipped = panelOrder.orderStatus !== 'awaiting_shipment'
     const trackingNumber = toStringValue(panelOrder.label?.trackingNumber)
     const shippedHasPrepShipLabel = shipped && !getIsExternallyFulfilled(panelOrder)
-    const canQueueShippedLabel = Boolean(panelOrder.label?.labelUrl && panelOrder.clientId != null)
+    // Per user override unlock shipped data on 2026-05-23: keep shipped queue recovery non-destructive, but disable corrupt saved label URLs.
+    const shippedQueueableLabelUrl = getQueueableLabelUrl(panelOrder.label?.labelUrl)
+    const canQueueShippedLabel = Boolean(shippedQueueableLabelUrl && panelOrder.clientId != null)
     const shippedLabelUnavailableCopy = getIsExternallyFulfilled(panelOrder)
       ? 'External label - reprint in marketplace or carrier'
-      : 'No saved PrepShip label URL yet'
+      : shippedQueueableLabelUrl
+        ? 'No client selected for print queue'
+        : 'No saved queueable PrepShip label URL yet'
     const deliveryLine = panelOrder.label?.shipDate
       ? `Shipped: ${formatDateOnly(panelOrder.label.shipDate, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}`
       : 'Delivery: —'

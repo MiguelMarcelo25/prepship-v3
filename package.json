@@ -88,6 +88,7 @@
     "test:rate-backfill-durable": "node scripts/rate-backfill-durable-guard.mjs",
     "test:ref-rates-durable": "node scripts/ref-rates-durable-guard.mjs",
     "test:print-queue-durable": "node scripts/print-queue-durable-guard.mjs",
+    "test:print-queue-invalid-label": "node scripts/print-queue-invalid-label-guard.mjs",
     "test:marketplace-reconciliation": "tsx scripts/marketplace-status-reconciliation-guard.ts",
     "test:shipstation-awaiting-parity": "tsx scripts/shipstation-awaiting-parity-guard.ts",
     "test:shipstation-label-url": "tsx scripts/shipstation-label-url-guard.mjs",

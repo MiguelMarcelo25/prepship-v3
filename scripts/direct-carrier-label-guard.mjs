@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { tsImport } from 'tsx/esm/api';
 
 const labels = readFileSync('api/carriers/labels.ts', 'utf8');
 
@@ -10,3 +11,72 @@ assert(labels.includes('enqueueShipmentConfirmationSql'), 'direct labels must en
 for (const provider of ['shipp', 'walmart_shipping', 'ups', 'easypost']) {
   assert(labels.includes(`providerKey === '${provider}'`), `direct labels missing ${provider} branch`);
 }
+
+const {
+  __test_extractWalmartLabelReference,
+} = await tsImport('../api/carriers/labels.ts', import.meta.url);
+
+const nestedUrl = __test_extractWalmartLabelReference({
+  data: {
+    labels: [
+      {
+        labelUrl: {
+          href: 'https://example.test/walmart-label.pdf',
+        },
+      },
+    ],
+  },
+}, 'url');
+assert.equal(nestedUrl.value, 'https://example.test/walmart-label.pdf', 'walmart label extractor must read labelUrl.href in arrays');
+
+const nestedDownloadUrl = __test_extractWalmartLabelReference({
+  data: {
+    downloadUrl: {
+      url: 'https://example.test/downloaded-label.pdf',
+    },
+  },
+}, 'url');
+assert.equal(nestedDownloadUrl.value, 'https://example.test/downloaded-label.pdf', 'walmart label extractor must read downloadUrl.url');
+
+const labelDownloadPdfHref = __test_extractWalmartLabelReference({
+  label_download: {
+    pdf: {
+      href: 'https://example.test/label-download-pdf.pdf',
+    },
+  },
+}, 'url');
+assert.equal(labelDownloadPdfHref.value, 'https://example.test/label-download-pdf.pdf', 'walmart label extractor must read label_download.pdf.href');
+
+const nestedBase64 = __test_extractWalmartLabelReference({
+  data: {
+    labelData: {
+      pdf: 'JVBERi0xLjQK'.repeat(12),
+    },
+  },
+}, 'base64');
+assert.equal(nestedBase64.value, 'JVBERi0xLjQK'.repeat(12), 'walmart label extractor must read data.labelData.pdf');
+
+const dataPdfBase64 = __test_extractWalmartLabelReference({
+  data: {
+    pdfBase64: 'JVBERi0xLjUK'.repeat(12),
+  },
+}, 'base64');
+assert.equal(dataPdfBase64.value, 'JVBERi0xLjUK'.repeat(12), 'walmart label extractor must read data.pdfBase64');
+
+assert.throws(
+  () => __test_extractWalmartLabelReference({ data: { labelData: { pdf: '[object Object]' } } }, 'base64'),
+  /labelData\.pdf:string_invalid/,
+  'walmart label extractor must reject object-stringified label payloads',
+);
+
+assert.throws(
+  () => __test_extractWalmartLabelReference({ data: { downloadUrl: { url: 12345 } } }, 'url'),
+  /downloadUrl\.url:number_unsupported/,
+  'walmart label extractor must reject non-string label URL values with sanitized type summaries',
+);
+
+assert.throws(
+  () => __test_extractWalmartLabelReference({ data: { pdfBase64: '   ' } }, 'base64'),
+  /pdfBase64:string_empty/,
+  'walmart label extractor must reject empty label payload strings',
+);

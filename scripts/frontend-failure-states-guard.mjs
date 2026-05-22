@@ -3,6 +3,8 @@ import path from 'node:path';
 
 const root = process.cwd();
 const source = fs.readFileSync(path.join(root, 'web/src/lib/v2-apiClient.ts'), 'utf8');
+const vercelFunctionSource = fs.readFileSync(path.join(root, 'web/src/lib/vercelFunction.ts'), 'utf8');
+const ordersViewSource = fs.readFileSync(path.join(root, 'web/src/components/Views/OrdersView.tsx'), 'utf8');
 
 function fail(message) {
   console.error(`FAIL ${message}`);
@@ -68,6 +70,41 @@ assert(
 assert(
   methodBlock('fetchBillingSummary').includes('throwOnError: true'),
   'fetchBillingSummary keeps stale cached data but rethrows first-load failures',
+);
+
+assert(
+  /timeoutMs\?:\s*number/.test(vercelFunctionSource) &&
+    /READ_TIMEOUT_MS\s*=\s*30_000/.test(vercelFunctionSource) &&
+    /WRITE_TIMEOUT_MS\s*=\s*60_000/.test(vercelFunctionSource),
+  'callVercelFunction exposes bounded timeout support with 30s read and 60s write defaults',
+);
+
+assert(
+  /new\s+AbortController\(\)/.test(vercelFunctionSource) &&
+    /window\.setTimeout\(\(\)\s*=>\s*controller\.abort\(\),\s*timeoutMs\)/.test(vercelFunctionSource) &&
+    /window\.clearTimeout\(timeoutId\)/.test(vercelFunctionSource),
+  'callVercelFunction aborts timed-out direct Vercel fetches and clears the timer',
+);
+
+assert(
+  vercelFunctionSource.includes('The carrier provider may still be processing') &&
+    vercelFunctionSource.includes('retry from Orders in a moment') &&
+    /Timed out after \$\{timeoutSeconds\}s calling \$\{method\} \$\{url\}/.test(vercelFunctionSource),
+  'callVercelFunction throws safe timeout errors with method, API path, timeout seconds, and provider retry advice',
+);
+
+assert(
+  /function getQueueableLabelUrl\(/.test(ordersViewSource) &&
+    ordersViewSource.includes('[object Object]') &&
+    ordersViewSource.includes('Label URL is not queueable'),
+  'OrdersView has an explicit queueable label URL validator for empty, object, and [object Object] responses',
+);
+
+assert(
+  /const labelUrl = getQueueableLabelUrl\(order\.label\?\.labelUrl\)/.test(ordersViewSource) &&
+    /const queueableLabelUrl = getQueueableLabelUrl\(response\.labelUrl\)/.test(ordersViewSource) &&
+    /await apiClient\.addToQueue\(buildQueueAddPayload\(order, queueableLabelUrl\)\)/.test(ordersViewSource),
+  'OrdersView validates labelUrl before queueing existing labels and newly-created labels',
 );
 
 if (process.exitCode) {
