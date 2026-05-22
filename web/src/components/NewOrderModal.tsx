@@ -82,6 +82,8 @@ interface NewOrderModalProps {
   initial?: Partial<NewOrderPayload>
   /** Pre-fill the From ZIP if known; defaults to a sensible US ZIP. */
   defaultFromZip?: string
+  /** Saved locations from Settings > Ship-From Locations, used as recipient address templates. */
+  locations?: Array<Record<string, any>>
 }
 
 export interface NewOrderPayload {
@@ -157,6 +159,7 @@ export default function NewOrderModal({
   onSave,
   initial,
   defaultFromZip = '90248',
+  locations = [],
 }: NewOrderModalProps) {
   // Form state — flat for simplicity. Sub-objects would be cleaner but
   // every field is a string anyway and a flat shape is trivial to spread
@@ -173,6 +176,9 @@ export default function NewOrderModal({
   const [zip, setZip] = useState(initial?.shipToPostalCode ?? '')
   const [phone, setPhone] = useState(initial?.shipToPhone ?? '')
   const [email, setEmail] = useState(initial?.customerEmail ?? '')
+  const [locationQuery, setLocationQuery] = useState('')
+  const [locationPickerOpen, setLocationPickerOpen] = useState(false)
+  const [selectedLocationId, setSelectedLocationId] = useState<string>('')
 
   const [orderNumber, setOrderNumber] = useState(initial?.orderNumber ?? '')
   const [orderNumberAuto, setOrderNumberAuto] = useState(initial?.orderNumberAuto ?? true)
@@ -218,6 +224,58 @@ export default function NewOrderModal({
       return sum + qty * price
     }, 0)
   }, [items])
+
+  const locationOptions = useMemo(() => {
+    const query = locationQuery.trim().toLowerCase()
+    const activeLocations = (Array.isArray(locations) ? locations : []).filter((location) => location?.active !== false)
+
+    const scored = activeLocations
+      .map((location) => {
+        const searchable = [
+          location.name,
+          location.company,
+          location.street1,
+          location.street2,
+          location.city,
+          location.state,
+          location.postalCode,
+          location.country,
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase()
+        const matches = !query || searchable.includes(query)
+        return { location, matches }
+      })
+      .filter((entry) => entry.matches)
+      .map((entry) => entry.location)
+
+    return scored.slice(0, 8)
+  }, [locationQuery, locations])
+
+  function formatLocationLine(location: Record<string, any>) {
+    return [location.street1, location.city, location.state, location.postalCode]
+      .filter(Boolean)
+      .join(', ')
+  }
+
+  function applyRecipientLocation(location: Record<string, any>) {
+    const id = String(location.locationId ?? location.id ?? '')
+    setSelectedLocationId(id)
+    setLocationQuery(location.name ?? location.company ?? formatLocationLine(location))
+
+    setName((current) => current || location.name || location.company || '')
+    setCompany(location.company ?? location.name ?? '')
+    setCountry(location.country ?? 'US')
+    setAddress1(location.street1 ?? '')
+    setAddress2(location.street2 ?? '')
+    setAddress3('')
+    setCity(location.city ?? '')
+    setState(location.state ?? '')
+    setZip(location.postalCode ?? '')
+    setPhone(location.phone ?? '')
+    setLocationPickerOpen(false)
+  }
 
   // ESC closes the modal — standard modal contract.
   useEffect(() => {
@@ -452,6 +510,77 @@ export default function NewOrderModal({
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
+                    <div className="col-span-2">
+                      <label className={labelCls}>
+                        <MapPin size={10} strokeWidth={2.5} /> Saved Location
+                      </label>
+                      <div className="relative">
+                        <input
+                          className={fieldCls}
+                          value={locationQuery}
+                          onChange={(e) => {
+                            setLocationQuery(e.target.value)
+                            setSelectedLocationId('')
+                            setLocationPickerOpen(true)
+                          }}
+                          onFocus={() => setLocationPickerOpen(true)}
+                          onBlur={() => window.setTimeout(() => setLocationPickerOpen(false), 120)}
+                          placeholder={locations.length ? 'Search saved locations...' : 'No saved locations loaded yet'}
+                          disabled={locations.length === 0}
+                        />
+                        {selectedLocationId ? (
+                          <button
+                            type="button"
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => {
+                              setSelectedLocationId('')
+                              setLocationQuery('')
+                            }}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md px-1.5 py-0.5 text-[10px] font-bold text-ink-3 hover:bg-surface-2 hover:text-ink"
+                            aria-label="Clear saved location"
+                          >
+                            Clear
+                          </button>
+                        ) : null}
+                        {locationPickerOpen && locationOptions.length > 0 ? (
+                          <div className="absolute left-0 right-0 top-[calc(100%+4px)] z-20 max-h-56 overflow-y-auto rounded-lg border border-line bg-surface shadow-xl">
+                            {locationOptions.map((location) => {
+                              const id = String(location.locationId ?? location.id ?? location.name)
+                              return (
+                                <button
+                                  key={id}
+                                  type="button"
+                                  onMouseDown={(event) => event.preventDefault()}
+                                  onClick={() => applyRecipientLocation(location)}
+                                  className="w-full px-3 py-2 text-left hover:bg-brand-bg/70 focus:bg-brand-bg/70 focus:outline-none"
+                                >
+                                  <div className="flex items-center justify-between gap-3">
+                                    <span className="truncate text-[12px] font-bold text-ink">
+                                      {location.name ?? location.company ?? 'Saved location'}
+                                    </span>
+                                    {location.isDefault ? (
+                                      <span className="shrink-0 rounded-full bg-brand-bg px-1.5 py-0.5 text-[9px] font-extrabold uppercase text-brand ring-1 ring-brand-border">
+                                        Default
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                  <div className="mt-0.5 truncate text-[11px] text-ink-3">
+                                    {formatLocationLine(location) || location.company || 'No address saved'}
+                                  </div>
+                                </button>
+                              )
+                            })}
+                          </div>
+                        ) : locationPickerOpen && locationQuery.trim() && locations.length > 0 ? (
+                          <div className="absolute left-0 right-0 top-[calc(100%+4px)] z-20 rounded-lg border border-line bg-surface px-3 py-2 text-[11px] text-ink-3 shadow-xl">
+                            No matching locations.
+                          </div>
+                        ) : null}
+                      </div>
+                      <p className="mt-1 text-[10px] text-ink-3">
+                        Pick a saved location to fill the recipient address fields.
+                      </p>
+                    </div>
                     <div className="col-span-2">
                       <label className={labelCls}>
                         <User size={10} strokeWidth={2.5} /> Name <span className="text-danger">*</span>

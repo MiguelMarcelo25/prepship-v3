@@ -9230,6 +9230,7 @@ export default function OrdersView({
         <Suspense fallback={null}>
           <NewOrderModal
             open={newOrderOpen}
+            locations={locations}
             onClose={() => setNewOrderOpen(false)}
             onSave={async (payload: NewOrderPayload) => {
               const result = await apiClient.createManualOrder(payload)
