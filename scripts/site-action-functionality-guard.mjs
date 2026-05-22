@@ -35,6 +35,10 @@ for (const phrase of [
 
 assert(/mock/i.test(spec), 'site action spec must use mocked API behavior');
 assert(/failure/i.test(spec), 'site action spec must cover failure states');
+assert(/labelCreateShouldFail/.test(spec), 'site action spec must include a mocked label creation failure mode');
+assert(/Provider label service timed out/.test(spec), 'site action spec must assert a readable label creation failure message');
+assert(/await expect\(printAction\)\.toBeVisible/.test(spec), 'site action spec must require the Print Label action to be visible before clicking');
+assert(/await expect\(queueAction\)\.toBeVisible/.test(spec), 'site action spec must require the Send to Queue action to be visible before clicking');
 assert(/No real postage|no real postage|mocked only/i.test(spec + matrix), 'site action coverage must forbid real postage');
 assert(!/live-approved|real-label|marketplace\.walmartapis\.com|api\.ebay\.com|ssapi\.shipstation\.com/i.test(spec), 'site action spec must not call live providers');
 

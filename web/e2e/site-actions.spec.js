@@ -3,6 +3,7 @@ import { test, expect } from 'playwright/test'
 const baseUrl = 'http://127.0.0.1:5177'
 const apiOrigin = 'http://127.0.0.1:3000'
 const supabaseProjectRef = 'fdkseckgfuvdczzqmnac'
+let labelCreateShouldFail = false
 
 const clients = [
   { id: 1, name: 'Mock PrepShip Client', active: true, isTest: true, storeId: 101 },
@@ -160,6 +161,9 @@ function responseFor(url, method) {
     return json({ ok: true, queued: 1, entries: [{ id: 'q1' }] })
   }
   if (url.pathname.includes('/labels') && method === 'POST') {
+    if (labelCreateShouldFail) {
+      return json({ error: 'Provider label service timed out' }, 500)
+    }
     return json({
       ok: true,
       shipmentId: 9001,
@@ -179,6 +183,7 @@ function responseFor(url, method) {
 }
 
 test.beforeEach(async ({ page }) => {
+  labelCreateShouldFail = false
   await page.addInitScript((projectRef) => {
     const expiresAt = Math.floor(Date.now() / 1000) + 60 * 60
     window.localStorage.setItem(
@@ -211,17 +216,24 @@ test.beforeEach(async ({ page }) => {
   })
 })
 
+async function openAwaitingOrderPanel(page) {
+  await page.goto(`${baseUrl}/orders/awaiting_shipment`)
+  const orderLink = page.getByText('MOCK-EBAY-101').first()
+  await expect(orderLink).toBeVisible({ timeout: 15000 })
+  const orderRow = page.getByRole('row', { name: /MOCK-EBAY-101/ }).last()
+  await expect(orderRow).toBeVisible({ timeout: 15000 })
+  await orderRow.click({ position: { x: 220, y: 18 } })
+  await expect(page.getByText(/MOCK-EBAY-101|Ship Acct|Create \+ Print Label/i).first()).toBeVisible({ timeout: 15000 })
+}
+
 test('orders actions are mocked only and show success/failure states', async ({ page }) => {
   // No real postage, no live provider calls, mocked only.
-  await page.goto(`${baseUrl}/orders/awaiting_shipment`)
-
-  await expect(page.getByText(/MOCK-EBAY-101|Awaiting/i).first()).toBeVisible({ timeout: 15000 })
+  await openAwaitingOrderPanel(page)
 
   const printAction = page.getByRole('button', { name: /Print Label|Create.*Print Label/i }).first()
-  if (await printAction.count()) {
-    await printAction.click()
-    await expect(page.getByText(/Creating label PDF|Label|MOCKTRACK/i).first()).toBeVisible({ timeout: 15000 })
-  }
+  await expect(printAction).toBeVisible({ timeout: 15000 })
+  await printAction.click()
+  await expect(page.getByText(/Creating label PDF|Label|MOCKTRACK/i).first()).toBeVisible({ timeout: 15000 })
 
   const reprintAction = page.getByRole('button', { name: /Reprint Label/i }).first()
   if (await reprintAction.count()) {
@@ -229,13 +241,25 @@ test('orders actions are mocked only and show success/failure states', async ({ 
     await expect(page.getByText(/label|pdf|popup/i).first()).toBeVisible({ timeout: 15000 })
   }
 
-  const queueAction = page.getByRole('button', { name: /Send to Queue|Print Queue/i }).first()
-  if (await queueAction.count()) {
-    await queueAction.click()
-    await expect(page.locator('body')).toBeVisible()
-  }
+  await openAwaitingOrderPanel(page)
+  const queueAction = page.getByRole('button', { name: /Print to Queue|Send to Queue|Print Queue/i }).first()
+  await expect(queueAction).toBeVisible({ timeout: 15000 })
+  await queueAction.click()
+  await expect(page.locator('body')).toBeVisible()
 
   await expect(page.getByText(/MOCK-EBAY-101|Awaiting/i).first()).toBeVisible()
+})
+
+test('label creation failure shows a readable recovery message without live postage', async ({ page }) => {
+  // No real postage, no live provider calls, mocked only.
+  labelCreateShouldFail = true
+  await openAwaitingOrderPanel(page)
+
+  const printAction = page.getByRole('button', { name: /Print Label|Create.*Print Label/i }).first()
+  await expect(printAction).toBeVisible({ timeout: 15000 })
+  await printAction.click()
+  await expect(page.getByText(/Provider label service timed out|Label failed|failed/i).first()).toBeVisible({ timeout: 15000 })
+  await expect(page.getByText('MOCK-EBAY-101').first()).toBeVisible()
 })
 
 test('inventory, package, client, auth, and maintenance actions use mocked APIs', async ({ page }) => {
