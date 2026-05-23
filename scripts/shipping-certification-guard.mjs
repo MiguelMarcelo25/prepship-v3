@@ -8,6 +8,7 @@ const requiredFiles = [
   'scripts/smoke-shipping-test-label.ts',
   'scripts/smoke-shipping-real-label.ts',
   'scripts/smoke-marketplace-confirm.ts',
+  'scripts/walmart-confirmation-payload-guard.ts',
 ];
 
 const packageJson = JSON.parse(readFileSync('package.json', 'utf8'));
@@ -30,6 +31,7 @@ for (const name of [
   'smoke:shipping:test-label',
   'smoke:shipping:real-label',
   'smoke:marketplace-confirm',
+  'test:walmart-confirmation:payload',
   'guard:shipping-certification',
 ]) {
   assert(typeof scripts[name] === 'string', `package.json missing ${name}`);

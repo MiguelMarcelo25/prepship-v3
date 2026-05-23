@@ -49,6 +49,7 @@
     "test:runtime-ddl": "node scripts/runtime-ddl-guard.mjs",
     "test:vercel-function-imports": "node scripts/vercel-function-imports-guard.mjs",
     "test:ebay-confirmation:mocked": "tsx scripts/ebay-confirmation-mocked-guard.ts",
+    "test:walmart-confirmation:payload": "tsx scripts/walmart-confirmation-payload-guard.ts",
     "inspect:shipping-order": "tsx scripts/inspect-shipping-order.ts",
     "smoke:shipping:preflight": "tsx scripts/smoke-shipping-preflight.ts",
     "smoke:shipping:test-label": "tsx scripts/smoke-shipping-test-label.ts",

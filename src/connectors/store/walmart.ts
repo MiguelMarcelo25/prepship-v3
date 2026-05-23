@@ -66,7 +66,7 @@ function walmartHeaders(creds: Record<string, unknown>, token: string): Record<s
 }
 
 function walmartMethodCode(rawOrder: unknown): string {
-  return firstString((rawOrder as any)?.shippingInfo?.methodCode, 'VALUE').toUpperCase();
+  return firstString((rawOrder as any)?.shippingInfo?.methodCode, 'VALUE');
 }
 
 function walmartShipDateTime(shipDate: string | null | undefined): string {
@@ -75,19 +75,32 @@ function walmartShipDateTime(shipDate: string | null | undefined): string {
   return String(Number.isFinite(parsed) ? parsed : Date.now());
 }
 
-function walmartOrderLines(rawOrder: unknown, input: {
+function walmartStatusQuantity(line: any): Record<string, string> {
+  const lineQuantity = line?.orderLineQuantity;
+  const statuses = Array.isArray(line?.orderLineStatuses?.orderLineStatus)
+    ? line.orderLineStatuses.orderLineStatus
+    : [];
+  const statusQuantity = statuses.find((status: any) => status?.statusQuantity)?.statusQuantity;
+  const quantity = statusQuantity ?? lineQuantity ?? {};
+  return {
+    unitOfMeasurement: firstString(quantity.unitOfMeasurement, 'EACH'),
+    amount: firstString(quantity.amount, '1'),
+  };
+}
+
+export function buildWalmartShipmentConfirmationBody(rawOrder: unknown, input: {
   carrierName: string;
   methodCode: string;
   shipDateTime: string;
   trackingNumber: string;
   trackingUrl: string;
-}): Array<Record<string, unknown>> {
+}): { orderShipment: { orderLines: { orderLine: Array<Record<string, unknown>> } } } {
   const orderLines = Array.isArray((rawOrder as any)?.orderLines?.orderLine)
     ? (rawOrder as any).orderLines.orderLine
     : [];
   const sourceLines = orderLines.length > 0 ? orderLines : [{ lineNumber: '1' }];
 
-  return sourceLines
+  const orderLine = sourceLines
     .filter((line: any) => {
       const statuses = Array.isArray(line?.orderLineStatuses?.orderLineStatus)
         ? line.orderLineStatuses.orderLineStatus
@@ -96,14 +109,30 @@ function walmartOrderLines(rawOrder: unknown, input: {
     })
     .map((line: any) => ({
       lineNumber: String(line?.lineNumber ?? '1'),
-      trackingInfo: {
-        shipDateTime: input.shipDateTime,
-        carrierName: input.carrierName,
-        methodCode: input.methodCode,
-        trackingNumber: input.trackingNumber,
-        ...(input.trackingUrl ? { trackingURL: input.trackingUrl } : {}),
+      orderLineStatuses: {
+        orderLineStatus: [
+          {
+            status: 'Shipped',
+            statusQuantity: walmartStatusQuantity(line),
+            trackingInfo: {
+              shipDateTime: input.shipDateTime,
+              carrierName: input.carrierName,
+              methodCode: input.methodCode,
+              trackingNumber: input.trackingNumber,
+              ...(input.trackingUrl ? { trackingURL: input.trackingUrl } : {}),
+            },
+          },
+        ],
       },
     }));
+
+  return {
+    orderShipment: {
+      orderLines: {
+        orderLine,
+      },
+    },
+  };
 }
 
 export function createWalmartStoreConnector(): StoreConnector {
@@ -129,14 +158,14 @@ export function createWalmartStoreConnector(): StoreConnector {
       const rawOrder = payload.rawOrder;
       const carrierName = firstString(payload.carrierName, input.carrierCode, 'Other');
       const trackingUrl = firstString(payload.trackingUrl);
-      const orderLines = walmartOrderLines(rawOrder, {
+      const shipmentBody = buildWalmartShipmentConfirmationBody(rawOrder, {
         carrierName,
         methodCode: walmartMethodCode(rawOrder),
         shipDateTime: walmartShipDateTime(input.shipDate),
         trackingNumber: input.trackingNumber,
         trackingUrl,
       });
-      if (!orderLines.length) {
+      if (!shipmentBody.orderShipment.orderLines.orderLine.length) {
         return {
           ok: false,
           provider: 'walmart',
@@ -152,7 +181,7 @@ export function createWalmartStoreConnector(): StoreConnector {
         {
           method: 'POST',
           headers: walmartHeaders(creds, token),
-          body: JSON.stringify({ orderLines }),
+          body: JSON.stringify(shipmentBody),
         },
         { purchaseOrderId },
       );
