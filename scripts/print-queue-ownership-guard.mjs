@@ -42,11 +42,13 @@ assert(
   'print-queue batch-send validates requested client ids before work starts',
 );
 assert(
-  routeSource.includes('canViewQueueSendJob(job, printQueueScopeFromContext(c))'),
+  routeSource.includes('const scope = printQueueScopeFromContext(c)') &&
+    routeSource.includes('canViewQueueSendJob(job, scope)') &&
+    routeSource.includes('canViewQueueSendSnapshot(durableJob, scope)'),
   'print-queue batch-send status checks job visibility',
 );
 assert(
-  routeSource.includes('clearQueue(body?.client_id, printQueueScopeFromContext(c))'),
+  routeSource.includes('clearQueue(body.client_id, printQueueScopeFromContext(c))'),
   'print-queue clear passes auth scope into service',
 );
 assert(

@@ -7,6 +7,7 @@ import {
   canViewMergeJob,
   canViewQueueSendJob,
   clearQueue,
+  confirmPrintedQueueEntries,
   getLatestMergeJobSnapshot,
   getLatestQueueSendJobSnapshot,
   getQueueSendJobStatus,
@@ -263,12 +264,39 @@ app.post(
   '/clear',
   zValidator(
     'json',
-    z.object({ client_id: z.number().int().optional() }).optional()
+    z.object({
+      client_id: z.number().int().optional(),
+      confirmation: z.literal('REMOVE_UNPRINTED_LABELS'),
+    })
   ),
   async (c) => {
     const body = c.req.valid('json');
-    const cleared = await clearQueue(body?.client_id, printQueueScopeFromContext(c));
+    const cleared = await clearQueue(body.client_id, printQueueScopeFromContext(c));
     return c.json({ cleared_count: cleared });
+  }
+);
+
+app.post(
+  '/confirm-printed',
+  zValidator(
+    'json',
+    z.object({
+      client_id: z.number().int().optional(),
+      queue_entry_ids: z.array(z.string().min(1)).min(1),
+      confirmation: z.literal('PRINTED'),
+    })
+  ),
+  async (c) => {
+    const body = c.req.valid('json');
+    const result = await confirmPrintedQueueEntries({
+      entryIds: body.queue_entry_ids,
+      clientId: body.client_id,
+      scope: printQueueScopeFromContext(c),
+    });
+    return c.json({
+      confirmed_count: result.confirmedCount,
+      confirmed_entry_ids: result.confirmedEntryIds,
+    });
   }
 );
 

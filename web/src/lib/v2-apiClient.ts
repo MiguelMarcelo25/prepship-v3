@@ -2512,8 +2512,23 @@ export const apiClient = {
   clearQueue(clientId: number): Promise<any> {
     return safe(
       'clearQueue',
-      () => api.post<any>('/print-queue/clear', { client_id: clientId }),
+      () => api.post<any>('/print-queue/clear', {
+        client_id: clientId,
+        confirmation: 'REMOVE_UNPRINTED_LABELS',
+      }),
       { cleared_count: 0 }
+    );
+  },
+
+  confirmPrintedQueueEntries(clientId: number, entryIds: string[]): Promise<any> {
+    return safe(
+      'confirmPrintedQueueEntries',
+      () => api.post<any>('/print-queue/confirm-printed', {
+        client_id: clientId,
+        queue_entry_ids: entryIds,
+        confirmation: 'PRINTED',
+      }),
+      { confirmed_count: 0, confirmed_entry_ids: [] }
     );
   },
 

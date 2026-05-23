@@ -756,25 +756,42 @@ export async function clearQueue(clientId?: number, scope: PrintQueueListScope =
   return rows.length;
 }
 
+export async function confirmPrintedQueueEntries(input: {
+  entryIds: string[];
+  clientId?: number;
+  scope?: PrintQueueListScope;
+}) {
+  if (!input.entryIds.length) return { confirmedCount: 0, confirmedEntryIds: [] as string[] };
+  const conds: SQL[] = [
+    inArray(printQueue.id, input.entryIds),
+    eq(printQueue.status, 'queued'),
+  ];
+  if (input.clientId !== undefined) conds.push(eq(printQueue.clientId, input.clientId));
+  conds.push(printQueueScopePredicate(input.scope ?? {}));
+  const now = new Date();
+  const rows = await db
+    .update(printQueue)
+    .set({
+      status: 'printed',
+      lastPrintedAt: now,
+      printCount: sql`${printQueue.printCount} + 1`,
+    })
+    .where(and(...conds))
+    .returning({ id: printQueue.id });
+  return {
+    confirmedCount: rows.length,
+    confirmedEntryIds: rows.map((row) => row.id),
+  };
+}
+
 /**
- * Remove all queue entries for a given order. Called automatically by
- * markOrderShipped (services/labels.ts) when an order moves to
- * 'shipped' or 'cancelled' so the queue doesn't accumulate orphaned
- * entries pointing at orders that no longer need printing.
- *
- * Fire-and-forget safe: failures here must not roll back the
- * order-status update or the label creation. The caller wraps this
- * in a try/catch so any DB hiccup just logs and moves on.
- *
- * orderId is stringified because print_queue_orders.orderId is text
- * (mirror of how addToQueue stores it via String(order.orderId)).
+ * Legacy no-op retained for old imports: print queue persists until explicit
+ * operator action confirms printed or removes entries. Shipped/cancelled order
+ * status alone must never delete active unprinted queue rows.
  */
 export async function removeQueueEntriesForOrder(orderId: number): Promise<number> {
-  const rows = await db
-    .delete(printQueue)
-    .where(eq(printQueue.orderId, String(orderId)))
-    .returning({ id: printQueue.id });
-  return rows.length;
+  void orderId;
+  return 0;
 }
 
 // ─── PDF MERGE ────────────────────────────────────────────────────────
@@ -970,12 +987,8 @@ async function runMergeJob(
     const ts = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`;
     job.fileName = `batch_print_${ts}.pdf`;
 
-    if (successfulEntryIds.length > 0) {
-      await db
-        .update(printQueue)
-        .set({ status: 'printed', lastPrintedAt: now, printCount: 1 })
-        .where(inArray(printQueue.id, successfulEntryIds));
-    }
+    // PDF generation/open/download is not proof of physical printing. Entries
+    // remain active until the operator explicitly confirms they printed.
 
     const failed = failedEntryIds.size;
     const success = successfulEntryIds.length;

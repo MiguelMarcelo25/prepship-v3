@@ -5159,6 +5159,22 @@ export default function OrdersView({
     }
   }
 
+  async function confirmQueueEntriesPrinted(entryIds: string[]) {
+    if (queueClientId == null || entryIds.length === 0) return
+    const ok = window.confirm(
+      `Confirm ${entryIds.length} label${entryIds.length === 1 ? '' : 's'} printed successfully? This removes them from the active Print Queue.`
+    )
+    if (!ok) return
+    try {
+      const result = await apiClient.confirmPrintedQueueEntries(queueClientId, entryIds)
+      await hydrateQueue()
+      const count = result?.confirmed_count ?? entryIds.length
+      showToast(`Confirmed ${count} printed label${count === 1 ? '' : 's'}`, 'success')
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Failed to confirm printed labels', 'error')
+    }
+  }
+
   async function handleAssignSelectedOrders() {
     if (!callerIsAdmin) {
       showToast('Only admins can assign orders', 'error')
@@ -9013,10 +9029,12 @@ export default function OrdersView({
                 type="button"
                 onClick={() =>
                   queueClientId != null
-                    ? void apiClient
-                        .clearQueue(queueClientId)
-                        .then(() => hydrateQueue())
-                        .catch((error) => showToast(error instanceof Error ? error.message : 'Failed to clear queue', 'error'))
+                    ? window.confirm('This removes all unprinted labels from the active print queue for this client. Use only if you are sure these labels should not be printed from PrepShip. Continue?')
+                      ? void apiClient
+                          .clearQueue(queueClientId)
+                          .then(() => hydrateQueue())
+                          .catch((error) => showToast(error instanceof Error ? error.message : 'Failed to clear queue', 'error'))
+                      : undefined
                     : undefined
                 }
               >
@@ -9228,6 +9246,7 @@ export default function OrdersView({
             {/* Print All hidden while History is being viewed (it would print
                 from the active queue, which is irrelevant in history view). */}
             {!queueHistoryVisible ? (
+              <>
               <button
                 className="btn btn-primary btn-sm"
                 id="pq-print-all-btn"
@@ -9237,6 +9256,15 @@ export default function OrdersView({
               >
                 🖨️ Print All
               </button>
+              <button
+                className="btn btn-secondary btn-sm"
+                type="button"
+                disabled={queueCount === 0 || queuePrintInFlight}
+                onClick={() => void confirmQueueEntriesPrinted(queuedEntries.map((entry) => entry.queue_entry_id))}
+              >
+                Confirm Printed
+              </button>
+              </>
             ) : (
               <div className="text-[11px] text-ink-3 italic px-1">
                 Viewing history · {visiblePrintedEntries.length}{pqSearchLower && visiblePrintedEntries.length !== printedEntries.length ? ` of ${printedEntries.length}` : ''} record{printedEntries.length === 1 ? '' : 's'}

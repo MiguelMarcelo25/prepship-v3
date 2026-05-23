@@ -24,7 +24,6 @@ import {
   type MockLabelData,
 } from './mock-label-generator';
 import { deductInventoryForOrder, deductPackageForShipment } from './fulfillment-deductions';
-import { removeQueueEntriesForOrder } from './print-queue';
 import { packages } from '../db/schema/packages';
 import { carrierConnectors } from '../connectors/registry';
 import {
@@ -758,6 +757,7 @@ async function markOrderShipped(
   trackingNumber: string | null,
   options: { cleanupQueue?: boolean } = {}
 ): Promise<void> {
+  void options;
   await db
     .update(orders)
     .set({ orderStatus: 'shipped', updatedAt: new Date() })
@@ -772,25 +772,10 @@ async function markOrderShipped(
       });
   }
 
-  if (options.cleanupQueue === false) return;
+  // Print Queue persistence: shipped status means a label exists, not that an
+  // operator physically printed it. Queue entries persist until explicit
+  // operator action confirms printed or removes them.
 
-  // Auto-cleanup print queue: remove any pending queue entries for
-  // this order. Without this, "Send to Queue" entries stayed in the
-  // queue panel forever even after the order shipped — operators
-  // saw stale entries cluttering the queue. Fire-and-forget: a queue
-  // cleanup failure must NOT roll back the shipped-status update or
-  // the label creation that triggered it.
-  try {
-    const removed = await removeQueueEntriesForOrder(orderId);
-    if (removed > 0) {
-      console.info(`[labels] markOrderShipped: removed ${removed} queue entries for orderId=${orderId}`);
-    }
-  } catch (err) {
-    console.warn(
-      `[labels] markOrderShipped: queue cleanup failed for orderId=${orderId} (non-fatal):`,
-      err instanceof Error ? err.message : err
-    );
-  }
 }
 
 async function recordFulfillmentDeductions(args: {
@@ -822,15 +807,6 @@ async function recordFulfillmentDeductions(args: {
   } catch (err) {
     console.warn('[labels] fulfillment deduction failed:', err);
   }
-}
-
-function scheduleQueueCleanupAfterLabel(orderId: number, timer: LabelTimer) {
-  timer.background('queue cleanup', async () => {
-    const removed = await removeQueueEntriesForOrder(orderId);
-    if (removed > 0) {
-      console.info(`[labels] queue cleanup: removed ${removed} queue entries for orderId=${orderId}`);
-    }
-  });
 }
 
 /**
@@ -1009,7 +985,6 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
       });
 
     await timer.task('markOrderShipped', () => markOrderShipped(order.id, fakeTracking, { cleanupQueue: false }));
-    scheduleQueueCleanupAfterLabel(order.id, timer);
     timer.background('inventory/package deduction', () => recordFulfillmentDeductions({
       order,
       shipmentId: fakeShipmentId,
@@ -1068,7 +1043,6 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
   }));
 
   await timer.task('markOrderShipped', () => markOrderShipped(order.id, created.trackingNumber, { cleanupQueue: false }));
-  scheduleQueueCleanupAfterLabel(order.id, timer);
   timer.background('inventory/package deduction', () => recordFulfillmentDeductions({
     order,
     shipmentId: localShipmentId,
