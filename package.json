@@ -119,7 +119,10 @@
     "test:order-detail-drawer-lazy": "node scripts/order-detail-drawer-lazy-guard.mjs",
     "test:orders-ux:browser": "playwright test web/e2e/orders-ux.spec.js --reporter=line",
     "test:inventory-ux:browser": "playwright test web/e2e/inventory-ux.spec.js --reporter=line",
-    "test:site-actions:browser": "playwright test web/e2e/site-actions.spec.js --reporter=line"
+    "test:site-actions:browser": "playwright test web/e2e/site-actions.spec.js --reporter=line",
+    "test:workflow-certification:browser": "playwright test web/e2e/site-actions.spec.js --reporter=line",
+    "test:api-contracts": "node scripts/api-contracts-guard.mjs",
+    "test:full-site-certification": "npm run guard:site-actions && npm run test:api-contracts && npm run test:workflow-certification:browser && npm run test:orders-ux:browser && npm run test:inventory-ux:browser && npm run test:maintenance-gate:browser && npm run test:frontend-failure-states"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
