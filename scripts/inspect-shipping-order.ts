@@ -38,6 +38,56 @@ function mask(value: unknown): string | null {
   return `${'*'.repeat(Math.min(8, text.length - 4))}${text.slice(-4)}`;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function rawOrderLines(rawOrder: unknown): string[] {
+  const record = asRecord(rawOrder);
+  const orderLines = asRecord(record?.orderLines)?.orderLine;
+  return Array.isArray(orderLines)
+    ? orderLines
+        .map((line) => String(asRecord(line)?.lineNumber ?? '').trim())
+        .filter(Boolean)
+    : [];
+}
+
+function rawPurchaseOrderId(rawOrder: unknown): string | null {
+  const text = String(asRecord(rawOrder)?.purchaseOrderId ?? '').trim();
+  return text || null;
+}
+
+function rawCustomerOrderId(rawOrder: unknown): string | null {
+  const text = String(asRecord(rawOrder)?.customerOrderId ?? '').trim();
+  return text || null;
+}
+
+function rawMethodCode(rawOrder: unknown): string | null {
+  const method = asRecord(asRecord(rawOrder)?.shippingInfo)?.methodCode;
+  const text = typeof method === 'string' ? method.trim() : '';
+  return text || null;
+}
+
+function outboxPayloadSummary(payload: unknown) {
+  const record = asRecord(payload) ?? {};
+  const rawOrder = record.rawOrder;
+  return {
+    keys: Object.keys(record).sort(),
+    purchaseOrderId: typeof record.purchaseOrderId === 'string' ? record.purchaseOrderId : null,
+    rawPurchaseOrderId: rawPurchaseOrderId(rawOrder),
+    rawCustomerOrderId: rawCustomerOrderId(rawOrder),
+    rawOrderLineCount: rawOrderLines(rawOrder).length,
+    lineNumbers: rawOrderLines(rawOrder),
+    carrierName: typeof record.carrierName === 'string' ? record.carrierName : null,
+    serviceCode: typeof record.serviceCode === 'string' ? record.serviceCode : null,
+    methodCode: rawMethodCode(rawOrder),
+    trackingNumber: mask(record.trackingNumber),
+    trackingUrlPresent: typeof record.trackingUrl === 'string' && record.trackingUrl.trim().length > 0,
+  };
+}
+
 function providerFromOrder(row: Record<string, unknown>): string {
   const explicit = String(row.source_provider ?? '').trim();
   if (explicit) return explicit;
@@ -64,6 +114,38 @@ async function main() {
     return;
   }
 
+  const storeOrderRowsForLookup = async (lookup: string) => sql`
+    SELECT provider, external_order_id, customer_order_id, carrier_account_id,
+           source_status, shipment_status, tracking_number, raw, updated_at
+    FROM store_orders
+    WHERE provider = 'walmart'
+      AND (
+        external_order_id = ${lookup}
+        OR customer_order_id = ${lookup}
+        OR raw->>'purchaseOrderId' = ${lookup}
+        OR raw->>'customerOrderId' = ${lookup}
+      )
+    ORDER BY updated_at DESC
+    LIMIT 10
+  `.catch(() => []) as Promise<Array<Record<string, unknown>>>;
+
+  const summarizeStoreOrders = (rows: Array<Record<string, unknown>>) => rows.map((row) => ({
+    provider: row.provider,
+    externalOrderId: row.external_order_id,
+    customerOrderId: row.customer_order_id,
+    carrierAccountId: row.carrier_account_id,
+    sourceStatus: row.source_status,
+    shipmentStatus: row.shipment_status,
+    trackingNumber: mask(row.tracking_number),
+    hasRaw: Boolean(row.raw),
+    rawPurchaseOrderId: rawPurchaseOrderId(row.raw),
+    rawCustomerOrderId: rawCustomerOrderId(row.raw),
+    rawOrderLineCount: rawOrderLines(row.raw).length,
+    lineNumbers: rawOrderLines(row.raw),
+    methodCode: rawMethodCode(row.raw),
+    updatedAt: row.updated_at,
+  }));
+
   const orderRows = args.orderId
     ? await sql`
         SELECT id, external_order_id, source_provider, source_order_id, client_id, store_id,
@@ -87,11 +169,43 @@ async function main() {
 
   const order = orderRows[0];
   if (!order) {
-    console.log(JSON.stringify({ ok: false, error: 'order_not_found' }, null, 2));
+    const lookup = String(args.orderNumber ?? '').trim();
+    const storeOrders = lookup ? await storeOrderRowsForLookup(lookup) : [];
+    console.log(JSON.stringify({
+      ok: false,
+      error: 'order_not_found',
+      readOnly: READ_ONLY_INSPECTOR,
+      lookup,
+      storeOrders: summarizeStoreOrders(storeOrders),
+      note: storeOrders.length
+        ? 'No PrepShip order matched this value directly, but Walmart store_orders rows did match.'
+        : 'No PrepShip order or Walmart store_orders rows matched this value.',
+    }, null, 2));
     return;
   }
 
   const orderId = Number(order.id);
+  const orderRaw = order.raw;
+  const lookupA = String(order.order_number ?? '').trim();
+  const lookupB = String(order.external_order_id ?? '').trim().replace(/^walmart-/, '');
+  const lookupC = String(order.source_order_id ?? '').trim().replace(/^walmart-/, '');
+  const lookupD = rawPurchaseOrderId(orderRaw) ?? '';
+
+  const storeOrders = await sql`
+    SELECT provider, external_order_id, customer_order_id, carrier_account_id,
+           source_status, shipment_status, tracking_number, raw, updated_at
+    FROM store_orders
+    WHERE provider = 'walmart'
+      AND (
+        external_order_id IN (${lookupA}, ${lookupB}, ${lookupC}, ${lookupD})
+        OR customer_order_id IN (${lookupA}, ${lookupB}, ${lookupC}, ${lookupD})
+        OR raw->>'purchaseOrderId' IN (${lookupA}, ${lookupB}, ${lookupC}, ${lookupD})
+        OR raw->>'customerOrderId' IN (${lookupA}, ${lookupB}, ${lookupC}, ${lookupD})
+      )
+    ORDER BY updated_at DESC
+    LIMIT 10
+  `.catch(() => []) as Array<Record<string, unknown>>;
+
   const shipments = await sql`
     SELECT id, carrier_code, service_code, tracking_number, label_url,
            confirmation_provider, confirmation_status, confirmation_attempts,
@@ -104,7 +218,7 @@ async function main() {
   ` as Array<Record<string, unknown>>;
 
   const outbox = await sql`
-    SELECT id, shipment_id, provider, status, attempts, last_error, next_run_at, updated_at
+    SELECT id, shipment_id, provider, status, attempts, last_error, next_run_at, updated_at, payload
     FROM fulfillment_outbox
     WHERE order_id = ${orderId}
     ORDER BY id DESC
@@ -137,7 +251,16 @@ async function main() {
         carrierCode: order.carrier_code ?? null,
         serviceCode: order.service_code ?? null,
       },
+      rawSummary: {
+        hasRaw: Boolean(orderRaw),
+        purchaseOrderId: rawPurchaseOrderId(orderRaw),
+        customerOrderId: rawCustomerOrderId(orderRaw),
+        rawOrderLineCount: rawOrderLines(orderRaw).length,
+        lineNumbers: rawOrderLines(orderRaw),
+        methodCode: rawMethodCode(orderRaw),
+      },
     },
+    storeOrders: summarizeStoreOrders(storeOrders),
     duplicateActiveLabelRisk: Boolean(activeShipment),
     retryingLabelCreationAppearsSafe: retrySafe,
     shipments: shipments.map((row) => ({
@@ -164,6 +287,7 @@ async function main() {
       lastError: row.last_error,
       nextRunAt: row.next_run_at,
       updatedAt: row.updated_at,
+      payload: outboxPayloadSummary(row.payload),
     })),
     warnings: [
       activeShipment ? 'duplicate active label risk: do not create another label until reviewed' : null,
