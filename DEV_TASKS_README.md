@@ -733,6 +733,159 @@ Return:
 Summary of what was refactored, files changed, behavior preserved or changed, risk areas reviewed, type-safety improvements, commands run with pass/fail results, follow-up refactor recommendations, and confirmation that PS-022 certification still passes.
 ```
 
+## Official PS-024 Walmart Shipment Confirmation Follow-Up Task
+
+DJ approved PS-024 after a live Walmart Shipping label/print-queue test showed that label creation and print queue can work while Walmart Seller Center still shows the order as not fully marked shipped. This task is a critical real-test follow-up and is scoped only to Walmart shipment confirmation after Walmart Shipping label creation.
+
+| Task | Title | Priority | Live signal | Scope | Required evidence |
+|---|---|---|---|---|---|
+| PS-024 | Verify and Harden Walmart Shipment Confirmation After Walmart Shipping Label Creation | Critical real-test follow-up | Live Walmart test for order `200014621589900` created/printed a label and tracking, but Walmart Seller Center still appeared to expose `Mark as shipped`. | Read-only inspect the existing order first; classify whether confirmation succeeded, failed, stayed pending, or was never enqueued; harden Walmart confirmation so live payloads use verified Walmart PO/order-line data and do not silently guess. | No duplicate label/postage; no unsafe duplicate Walmart confirmation without DJ approval; sanitized inspection evidence; hardened Walmart confirmation payload/diagnostics; targeted tests/guards; typecheck/build and relevant PS-022/site/shipping checks pass. |
+
+### PS-024 Copy/Paste Handoff
+
+```text
+PS-024 - Verify and Harden Walmart Shipment Confirmation After Walmart Shipping Label Creation
+
+Assignee: <@714064895963955211>
+Repo: https://github.com/drprepperusa-org/prepship-v4.git
+Branch: prepshipv4-stable
+Priority: Critical real-test follow-up
+Status: New task from live Walmart label/print-queue test.
+
+Context:
+DJ performed a live controlled Walmart test:
+- Walmart order/customer order reference: 200014621589900
+- The order came from ShipStation.
+- DJ used the Walmart carrier / Walmart Shipping path.
+- Print to queue worked.
+- Walmart shows a tracking number.
+- However, Walmart Seller Center still appears to show the "Mark as shipped" action as active/not completed.
+
+PrepShip currently has code intended to mark Walmart shipped after label creation:
+- api/carriers/labels.ts: confirmWalmartOrderShipped(...), confirmWalmartSourceOrderAfterLabelSql(...), and the Walmart Shipping label path around provider walmart_shipping.
+- src/connectors/store/walmart.ts: confirmShipment(...).
+- src/services/fulfillment/outbox.ts: retryable fulfillment_outbox shipment confirmation worker.
+
+Goal:
+Do not create another label. Inspect the existing live order safely, determine exactly where confirmation state is stuck, and harden the Walmart confirmation path so "label created" does not falsely imply "Walmart marked shipped."
+
+Safety guardrails:
+- Do not create another live label for this order.
+- Do not buy postage.
+- Do not void labels unless DJ explicitly approves.
+- Do not send duplicate Walmart marketplace shipment confirmations unless DJ explicitly approves the exact retry.
+- Do not expose Walmart credentials, tokens, raw customer address, customer PII, raw provider payloads containing PII, raw labels/PDF/base64, or full tracking numbers in public logs unless already approved by DJ.
+- Use sanitized summaries only.
+- Read-only inspection first.
+
+Files to inspect first:
+- api/carriers/labels.ts
+- src/connectors/store/walmart.ts
+- src/services/fulfillment/outbox.ts
+- scripts/inspect-shipping-order.ts
+- scripts/smoke-marketplace-confirm.ts
+- scripts/direct-carrier-label-guard.mjs
+- scripts/test-order-queue-label-guard.mjs
+- docs/prepship-shipping-production-audit.md
+- docs/marketplace-confirmation.md
+- web/src/components/Views/OrdersView.tsx
+
+Relevant functions/areas:
+- resolveWalmartLabelContext(...)
+- walmartBoxItems(...)
+- walmartShipmentOrderLines(...) / Walmart confirmation body builder
+- confirmWalmartOrderShipped(...)
+- confirmWalmartSourceOrderAfterLabelSql(...)
+- buyLabelWalmartShipping(...)
+- Walmart Shipping path around providerKey === 'walmart_shipping'
+- createWalmartStoreConnector().confirmShipment(...)
+- enqueueShipmentConfirmation(...)
+- processFulfillmentOutboxOnce(...)
+
+Phase 1 - Read-only production inspection:
+For order 200014621589900, inspect live state without mutation:
+npm run inspect:shipping-order -- --order-number 200014621589900
+
+If the script requires env vars, run it only in the production-capable environment. Do not print secrets.
+
+Inspect and report sanitized values for orders, store_orders, shipments, and fulfillment_outbox, including IDs, provider/status fields, whether raw Walmart order data and line numbers exist, masked tracking, confirmation status/error, payload purchaseOrderId, payload line numbers, carrier/service, and timestamps. Do not print PII, raw labels, tokens, or raw payloads.
+
+Phase 2 - Decide current failure mode:
+Classify the live order as one of:
+1. confirmation_status = succeeded and marketplace_confirmed_at populated -> likely Walmart Seller Center delay/UI confusion.
+2. confirmation_status = pending and outbox pending -> worker/outbox processing issue.
+3. confirmation_status = failed or outbox failed -> payload/credential/API issue.
+4. No Walmart confirmation row/metadata exists -> enqueue/confirmation path did not run.
+5. Payload used guessed/fallback data -> harden runtime logic to avoid blind confirmation.
+
+Phase 3 - Harden Walmart confirmation payload:
+For live Walmart shipment confirmation, do not silently guess if real Walmart order data is unavailable.
+
+Implement safer behavior:
+1. Require a real Walmart purchaseOrderId.
+2. Require real Walmart order lines for live confirmation: rawOrder.orderLines.orderLine[] and valid lineNumber for each shippable line.
+3. If raw order lines are missing, attempt to fetch/refresh the Walmart order using purchaseOrderId, customerOrderId, orders.order_number, and store_orders.
+4. If order lines still cannot be resolved, do not send guessed Walmart /shipping payload. Mark shipment confirmation as failed or blocked with a sanitized error: Cannot mark Walmart shipped: missing Walmart order line numbers.
+5. Keep label/print queue intact and surface manual-action-required messaging.
+6. Preserve fallback behavior only for mocked tests or explicitly marked fixture mode, not live marketplace confirmation.
+7. Ensure purchaseOrderId is the Walmart purchase order ID, not ShipStation ID or customer order number unless Walmart lookup confirms it.
+
+Phase 4 - Improve diagnostics:
+Add sanitized logs/metadata for Walmart confirmation attempts: endpoint name, has purchase order ID, purchase order source, order line count, line numbers only, has method code, carrier name, masked tracking presence, Walmart HTTP status, and Walmart correlation/request ID if available. Do not log raw addresses, raw order payload, buyer data, tokens, credentials, labels, or full tracking numbers.
+
+Phase 5 - Tests / guards:
+Add or update mocked tests/guards for:
+1. Walmart confirmation payload builder uses real Walmart line numbers from raw order.
+2. Multi-line Walmart orders send all shippable non-cancelled lines.
+3. Cancelled lines are excluded.
+4. Missing raw order lines in live mode refuses to send guessed lineNumber "1".
+5. Missing purchaseOrderId fails clearly.
+6. Missing trackingNumber fails clearly.
+7. Existing mocked fixture mode can still use simple fixture data safely.
+8. Outbox row failure records clear sanitized error.
+9. UI/API response distinguishes label created, Walmart shipped confirmation succeeded, failed/manual action required, and queued/pending.
+
+Relevant commands to run:
+- npm run typecheck
+- npm run build:web
+- npm run test:direct-carrier-labels
+- npm run test:test-order-queue-label
+- npm run test:print-queue-invalid-label
+- npm run smoke:marketplace-confirm -- --mock-process-once
+- npm run guard:shipping-certification
+- npm run guard:site-actions
+- npm run test:site-actions:browser
+- npm run test:api-contracts
+- npm run test:workflow-certification:browser
+- npm run test:full-site-certification
+
+Use the actual script names in package.json.
+
+Definition of done:
+- Live order 200014621589900 has been inspected read-only.
+- We know whether Walmart confirmation succeeded, failed, stayed pending, or used bad/missing payload data.
+- No duplicate label was created.
+- No unsafe duplicate Walmart confirmation was sent without DJ approval.
+- Walmart confirmation payload generation is hardened.
+- Live confirmation no longer silently guesses line number 1 when real Walmart order lines are missing.
+- Confirmation failures produce clear manual-action-required messaging.
+- Outbox/shipments status accurately reflect pending, succeeded, failed, and not required.
+- Tests/guards cover the Walmart payload and failure states.
+- Typecheck passes.
+- Web build passes.
+- Relevant direct carrier, print queue, marketplace, site-action, and PS-022 certification tests pass.
+
+Return format:
+1. Read-only inspection summary for order 200014621589900
+2. Current shipment confirmation state
+3. Whether Walmart Seller Center should already be marked shipped based on DB/API evidence
+4. Actual failure mode found
+5. Sanitized Walmart payload shape before/after fix
+6. Files changed
+7. Tests/commands run with pass/fail results
+8. Any manual action DJ still needs to take in Walmart Seller Center
+```
+
 ## Phase Summary
 
 | Phase | Status | Percent | Why Not 100% Yet |

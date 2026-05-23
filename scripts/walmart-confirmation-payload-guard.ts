@@ -1,4 +1,4 @@
-import { createWalmartStoreConnector } from '../src/connectors/store/walmart';
+import { buildWalmartShipmentConfirmationBody, createWalmartStoreConnector } from '../src/connectors/store/walmart';
 
 const originalFetch = globalThis.fetch;
 
@@ -11,6 +11,55 @@ function jsonResponse(status: number, body: unknown) {
     status,
     headers: { 'content-type': 'application/json' },
   });
+}
+
+function assertWalmartLineSelection() {
+  const body = buildWalmartShipmentConfirmationBody({
+    shippingInfo: { methodCode: 'Standard' },
+    orderLines: {
+      orderLine: [
+        {
+          lineNumber: '1',
+          orderLineQuantity: { unitOfMeasurement: 'EACH', amount: '1' },
+          orderLineStatuses: {
+            orderLineStatus: [
+              { status: 'Acknowledged', statusQuantity: { unitOfMeasurement: 'EACH', amount: '1' } },
+            ],
+          },
+        },
+        {
+          lineNumber: '2',
+          orderLineQuantity: { unitOfMeasurement: 'EACH', amount: '2' },
+          orderLineStatuses: {
+            orderLineStatus: [
+              { status: 'Created', statusQuantity: { unitOfMeasurement: 'EACH', amount: '2' } },
+            ],
+          },
+        },
+        {
+          lineNumber: '3',
+          orderLineQuantity: { unitOfMeasurement: 'EACH', amount: '1' },
+          orderLineStatuses: {
+            orderLineStatus: [
+              { status: 'Cancelled', statusQuantity: { unitOfMeasurement: 'EACH', amount: '1' } },
+            ],
+          },
+        },
+      ],
+    },
+  }, {
+    carrierName: 'FedEx',
+    methodCode: 'Standard',
+    shipDateTime: '1779408000000',
+    trackingNumber: '381526072689',
+    trackingUrl: 'https://www.fedex.com/fedextrack/?trknbr=381526072689',
+  });
+
+  const lines = body.orderShipment.orderLines.orderLine;
+  assert(lines.length === 2, 'multi-line payload must include only shippable non-cancelled Walmart lines');
+  assert(lines.map((line) => line.lineNumber).join(',') === '1,2', 'payload must preserve all shippable Walmart line numbers and exclude cancelled lines');
+  const secondStatus = (lines[1] as any).orderLineStatuses?.orderLineStatus?.[0];
+  assert(secondStatus?.statusQuantity?.amount === '2', 'payload must preserve per-line shipped quantity for multi-line Walmart orders');
 }
 
 async function withMockFetch<T>(handler: (url: string, init?: RequestInit) => Response | Promise<Response>, run: () => Promise<T>): Promise<T> {
@@ -26,6 +75,8 @@ async function withMockFetch<T>(handler: (url: string, init?: RequestInit) => Re
 }
 
 async function run() {
+  assertWalmartLineSelection();
+
   const connector = createWalmartStoreConnector();
   const calls: Array<{ url: string; body?: string }> = [];
 
@@ -90,6 +141,153 @@ async function run() {
   assert(status?.trackingInfo?.carrierName === 'FedEx', 'payload must include carrier name');
   assert(status?.trackingInfo?.methodCode === 'Standard', 'payload must preserve Walmart shipping method');
   assert(!shipCall.body.includes('client-secret'), 'payload must not leak credentials');
+
+  const multilineCalls: Array<{ url: string; body?: string }> = [];
+  const multiline = await withMockFetch((url, init) => {
+    multilineCalls.push({ url, body: typeof init?.body === 'string' ? init.body : undefined });
+    if (url.includes('/v3/token')) {
+      return jsonResponse(200, { access_token: 'mock-walmart-token' });
+    }
+    if (url.includes('/v3/orders/129114381893181/shipping')) {
+      return jsonResponse(200, { ok: true });
+    }
+    return jsonResponse(404, { error: [{ description: 'unexpected mock call' }] });
+  }, () => connector.confirmShipment({
+    orderId: 1057590,
+    shipmentId: 24545,
+    externalOrderId: 'walmart-129114381893181',
+    clientId: 10,
+    orderNumber: '200014621589900',
+    trackingNumber: '381526072690',
+    carrierCode: 'FedEx',
+    shipDate: '2026-05-23T00:36:02.850Z',
+    credentials: {
+      clientId: 'client-id',
+      clientSecret: 'client-secret',
+      serviceName: 'Walmart Marketplace',
+    },
+    payload: {
+      purchaseOrderId: '129114381893181',
+      carrierName: 'FedEx',
+      rawOrder: {
+        shippingInfo: { methodCode: 'Standard' },
+        orderLines: {
+          orderLine: [
+            {
+              lineNumber: '1',
+              orderLineQuantity: { unitOfMeasurement: 'EACH', amount: '1' },
+              orderLineStatuses: { orderLineStatus: [{ status: 'Acknowledged', statusQuantity: { unitOfMeasurement: 'EACH', amount: '1' } }] },
+            },
+            {
+              lineNumber: '2',
+              orderLineQuantity: { unitOfMeasurement: 'EACH', amount: '2' },
+              orderLineStatuses: { orderLineStatus: [{ status: 'Created', statusQuantity: { unitOfMeasurement: 'EACH', amount: '2' } }] },
+            },
+            {
+              lineNumber: '3',
+              orderLineQuantity: { unitOfMeasurement: 'EACH', amount: '1' },
+              orderLineStatuses: { orderLineStatus: [{ status: 'Cancelled', statusQuantity: { unitOfMeasurement: 'EACH', amount: '1' } }] },
+            },
+          ],
+        },
+      },
+    },
+  }));
+  assert(multiline.ok, 'mocked multiline Walmart confirmation should succeed');
+  const multilineShipCall = multilineCalls.find((call) => call.url.includes('/v3/orders/129114381893181/shipping'));
+  assert(multilineShipCall?.body, 'multiline ship-confirm call must include a body');
+  const multilineBody = JSON.parse(multilineShipCall.body);
+  const multilineNumbers = multilineBody.orderShipment.orderLines.orderLine.map((line: { lineNumber: string }) => line.lineNumber);
+  assert(JSON.stringify(multilineNumbers) === JSON.stringify(['1', '2']), 'payload must include all non-cancelled Walmart line numbers and exclude cancelled lines');
+  const secondLineStatus = multilineBody.orderShipment.orderLines.orderLine[1].orderLineStatuses.orderLineStatus[0];
+  assert(secondLineStatus.statusQuantity.amount === '2', 'payload must preserve per-line shipped quantity');
+
+  const missingLinesCalls: Array<string> = [];
+  const missingLines = await withMockFetch((url) => {
+    missingLinesCalls.push(url);
+    if (url.includes('/v3/token')) {
+      return jsonResponse(200, { access_token: 'mock-walmart-token' });
+    }
+    if (url.includes('/shipping')) {
+      return jsonResponse(500, { error: [{ description: 'shipping should not be called without real Walmart line numbers' }] });
+    }
+    return jsonResponse(404, { error: [{ description: 'unexpected mock call' }] });
+  }, () => connector.confirmShipment({
+    orderId: 1057591,
+    shipmentId: 24546,
+    externalOrderId: 'walmart-129114381893181',
+    clientId: 10,
+    orderNumber: '200014621589901',
+    trackingNumber: '381526072691',
+    carrierCode: 'FedEx',
+    shipDate: '2026-05-23T00:36:02.850Z',
+    credentials: {
+      clientId: 'client-id',
+      clientSecret: 'client-secret',
+      serviceName: 'Walmart Marketplace',
+    },
+    payload: {
+      purchaseOrderId: '129114381893181',
+      carrierName: 'FedEx',
+      rawOrder: {
+        shippingInfo: { methodCode: 'Standard' },
+      },
+    },
+  }));
+  assert(!missingLines.ok && missingLines.retryable === false, 'missing Walmart line numbers must fail safely');
+  assert(/line/i.test(missingLines.message ?? ''), 'missing line-number failure must be clear');
+  assert(!missingLinesCalls.some((url) => url.includes('/shipping')), 'connector must not call Walmart shipping without real line numbers');
+
+  const missingTracking = await connector.confirmShipment({
+    orderId: 1057592,
+    shipmentId: 24547,
+    externalOrderId: 'walmart-129114381893181',
+    clientId: 10,
+    orderNumber: '200014621589902',
+    trackingNumber: '',
+    carrierCode: 'FedEx',
+    shipDate: '2026-05-23T00:36:02.850Z',
+    credentials: {
+      clientId: 'client-id',
+      clientSecret: 'client-secret',
+      serviceName: 'Walmart Marketplace',
+    },
+    payload: {
+      purchaseOrderId: '129114381893181',
+      carrierName: 'FedEx',
+      rawOrder: {
+        shippingInfo: { methodCode: 'Standard' },
+        orderLines: { orderLine: [{ lineNumber: '1' }] },
+      },
+    },
+  });
+  assert(!missingTracking.ok && missingTracking.retryable === false, 'missing tracking number must fail safely');
+  assert(/tracking/i.test(missingTracking.message ?? ''), 'missing tracking failure must be clear');
+
+  const missingPurchaseOrder = await connector.confirmShipment({
+    orderId: 1057593,
+    shipmentId: 24548,
+    externalOrderId: '288420079',
+    clientId: 10,
+    orderNumber: '200014621589903',
+    trackingNumber: '381526072692',
+    carrierCode: 'FedEx',
+    shipDate: '2026-05-23T00:36:02.850Z',
+    credentials: {
+      clientId: 'client-id',
+      clientSecret: 'client-secret',
+      serviceName: 'Walmart Marketplace',
+    },
+    payload: {
+      carrierName: 'FedEx',
+      rawOrder: {
+        shippingInfo: { methodCode: 'Standard' },
+        orderLines: { orderLine: [{ lineNumber: '1' }] },
+      },
+    },
+  });
+  assert(!missingPurchaseOrder.ok && missingPurchaseOrder.retryable === false, 'missing purchaseOrderId must fail safely');
+  assert(/purchaseOrderId/i.test(missingPurchaseOrder.message ?? ''), 'missing purchaseOrderId failure must be clear');
 
   console.log('walmart confirmation payload guard passed');
 }

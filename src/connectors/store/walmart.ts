@@ -75,6 +75,10 @@ function walmartShipDateTime(shipDate: string | null | undefined): string {
   return String(Number.isFinite(parsed) ? parsed : Date.now());
 }
 
+function walmartLineNumber(line: any): string {
+  return firstString(line?.lineNumber);
+}
+
 function walmartStatusQuantity(line: any): Record<string, string> {
   const lineQuantity = line?.orderLineQuantity;
   const statuses = Array.isArray(line?.orderLineStatuses?.orderLineStatus)
@@ -98,17 +102,16 @@ export function buildWalmartShipmentConfirmationBody(rawOrder: unknown, input: {
   const orderLines = Array.isArray((rawOrder as any)?.orderLines?.orderLine)
     ? (rawOrder as any).orderLines.orderLine
     : [];
-  const sourceLines = orderLines.length > 0 ? orderLines : [{ lineNumber: '1' }];
 
-  const orderLine = sourceLines
+  const orderLine = orderLines
     .filter((line: any) => {
       const statuses = Array.isArray(line?.orderLineStatuses?.orderLineStatus)
         ? line.orderLineStatuses.orderLineStatus
         : [];
-      return !statuses.length || statuses.some((status: any) => !/cancel/i.test(String(status?.status ?? '')));
+      return walmartLineNumber(line) && (!statuses.length || statuses.some((status: any) => !/cancel/i.test(String(status?.status ?? ''))));
     })
     .map((line: any) => ({
-      lineNumber: String(line?.lineNumber ?? '1'),
+      lineNumber: walmartLineNumber(line),
       orderLineStatuses: {
         orderLineStatus: [
           {
@@ -158,6 +161,14 @@ export function createWalmartStoreConnector(): StoreConnector {
       const rawOrder = payload.rawOrder;
       const carrierName = firstString(payload.carrierName, input.carrierCode, 'Other');
       const trackingUrl = firstString(payload.trackingUrl);
+      if (!firstString(input.trackingNumber)) {
+        return {
+          ok: false,
+          provider: 'walmart',
+          retryable: false,
+          message: 'Walmart confirmation missing tracking number',
+        };
+      }
       const shipmentBody = buildWalmartShipmentConfirmationBody(rawOrder, {
         carrierName,
         methodCode: walmartMethodCode(rawOrder),
@@ -170,7 +181,7 @@ export function createWalmartStoreConnector(): StoreConnector {
           ok: false,
           provider: 'walmart',
           retryable: false,
-          message: 'Walmart confirmation has no shippable order lines',
+          message: 'Cannot mark Walmart shipped: missing Walmart order line numbers',
         };
       }
 

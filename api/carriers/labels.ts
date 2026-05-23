@@ -944,16 +944,18 @@ function walmartBoxItems(rawOrder: any): any[] {
     ? rawOrder.orderLines.orderLine
     : [];
   const items = orderLines.map((line: any) => {
+    const lineNumber = firstString(line?.lineNumber);
+    if (!lineNumber) return null;
     const item: Record<string, unknown> = {
-      lineNumber: String(line?.lineNumber ?? '1'),
+      lineNumber,
       sku: String(line?.item?.sku ?? ''),
       quantity: Number(line?.orderLineQuantity?.amount ?? 1) || 1,
     };
     const productName = firstString(line?.item?.productName, line?.item?.productNameInLocale);
     if (productName) item.productName = productName;
     return item;
-  });
-  return items.length > 0 ? items : [{ lineNumber: '1', sku: 'UNKNOWN', quantity: 1 }];
+  }).filter(Boolean);
+  return items;
 }
 
 function walmartLabelFromAddress(creds: Record<string, unknown>, shipFrom: any): Record<string, unknown> {
@@ -1107,6 +1109,10 @@ function walmartShipmentStatusQuantity(line: any): Record<string, string> {
   };
 }
 
+function walmartShipmentLineNumber(line: any): string {
+  return firstString(line?.lineNumber);
+}
+
 function walmartShipmentConfirmationBody(
   rawOrder: any,
   input: {
@@ -1120,16 +1126,15 @@ function walmartShipmentConfirmationBody(
   const orderLines = Array.isArray(rawOrder?.orderLines?.orderLine)
     ? rawOrder.orderLines.orderLine
     : [];
-  const sourceLines = orderLines.length > 0 ? orderLines : [{ lineNumber: '1' }];
-  const orderLine = sourceLines
+  const orderLine = orderLines
     .filter((line: any) => {
       const statuses = Array.isArray(line?.orderLineStatuses?.orderLineStatus)
         ? line.orderLineStatuses.orderLineStatus
         : [];
-      return !statuses.length || statuses.some((status: any) => !/cancel/i.test(String(status?.status ?? '')));
+      return walmartShipmentLineNumber(line) && (!statuses.length || statuses.some((status: any) => !/cancel/i.test(String(status?.status ?? ''))));
     })
     .map((line: any) => ({
-      lineNumber: String(line?.lineNumber ?? '1'),
+      lineNumber: walmartShipmentLineNumber(line),
       orderLineStatuses: {
         orderLineStatus: [
           {
@@ -1167,6 +1172,9 @@ async function confirmWalmartOrderShipped(
     shipDate?: string | null;
   },
 ): Promise<any> {
+  if (!firstString(input.trackingNumber)) {
+    throw new Error('Walmart shipment confirmation missing tracking number');
+  }
   const methodCode = walmartShipmentMethodCode(input.rawOrder);
   const parsedShipDate = input.shipDate ? Date.parse(input.shipDate) : NaN;
   const shipmentBody = walmartShipmentConfirmationBody(input.rawOrder, {
@@ -1655,6 +1663,9 @@ async function buyLabelWalmartShipping(
   const context = await resolveWalmartLabelContext(sql, creds, input.body, input.orderRow, input.rawOrder);
   const fromAddress = walmartLabelFromAddress(creds, input.body?.shipFrom);
   const boxItems = walmartBoxItems(context.rawOrder);
+  if (!boxItems.length) {
+    throw new Error('Cannot create Walmart Shipping label: missing Walmart order line numbers');
+  }
   const { token, rates } = await fetchWalmartEstimatesForLabel(creds, {
     weightOz: input.weightOz,
     dimsL: input.dimsL,
