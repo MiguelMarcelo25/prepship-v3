@@ -32,6 +32,21 @@ assert(
 );
 
 assert(
+  ordersView.includes('Per user override unlock shipped data on 2026-05-23') &&
+    ordersView.includes('orderById.set(panelOrder.orderId, panelOrder)') &&
+    ordersView.includes('orderIds.includes(panelOrder.orderId)'),
+  'Shipped side-panel Print to Queue must fall back to the open panel order when the current page list lookup misses it',
+);
+
+assert(
+  ordersView.includes("const [queueScope, setQueueScope] = useState<'all' | 'client'>('all')") &&
+    ordersView.includes("const queueClientId = queueScope === 'client' ? inferredQueueClientId : null") &&
+    ordersView.includes('apiClient.fetchQueue(queueClientId, queueHistoryVisible)') &&
+    ordersView.includes("Switch to Current client before clearing a queue"),
+  'Print Queue must default to all authorized clients and make current-client scoping explicit',
+);
+
+assert(
   labelsService.includes('body.testLabel ? 1 : 0') &&
     labelsService.includes('if (body.testLabel === true)'),
   'Backend test labels must have a safe fallback weight before mock label creation',

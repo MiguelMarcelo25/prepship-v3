@@ -2480,13 +2480,13 @@ export const apiClient = {
   },
 
   // ─── Print queue ───────────────────────────────────────────────────────────
-  fetchQueue(clientId: number, historyVisible = false): Promise<any> {
+  fetchQueue(clientId?: number | null, historyVisible = false): Promise<any> {
     return safe(
       'fetchQueue',
       () =>
         api.get<any>(
           `/print-queue${qs({
-            clientId,
+            clientId: clientId ?? undefined,
             includePrinted: historyVisible ? '1' : undefined,
           })}`
         ),
@@ -2520,11 +2520,11 @@ export const apiClient = {
     );
   },
 
-  confirmPrintedQueueEntries(clientId: number, entryIds: string[]): Promise<any> {
+  confirmPrintedQueueEntries(clientId: number | null | undefined, entryIds: string[]): Promise<any> {
     return safe(
       'confirmPrintedQueueEntries',
       () => api.post<any>('/print-queue/confirm-printed', {
-        client_id: clientId,
+        client_id: clientId ?? undefined,
         queue_entry_ids: entryIds,
         confirmation: 'PRINTED',
       }),
@@ -2532,7 +2532,7 @@ export const apiClient = {
     );
   },
 
-  removeFromQueue(entryId: string, _clientId: number): Promise<any> {
+  removeFromQueue(entryId: string, _clientId?: number | null): Promise<any> {
     // v4's api.delete helper doesn't accept a body; v4 endpoint treats
     // client_id in the body as optional so omitting it is safe.
     return safe(
@@ -2543,12 +2543,12 @@ export const apiClient = {
   },
 
   startQueuePrintJob(
-    clientId: number,
+    clientId: number | null | undefined,
     entryIds: string[],
     combine = true
   ): Promise<any> {
     return api.post<any>('/print-queue/print', {
-      client_id: clientId,
+      client_id: clientId ?? undefined,
       queue_entry_ids: entryIds,
       merge_headers: combine,
     });

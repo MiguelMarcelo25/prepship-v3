@@ -354,7 +354,7 @@ interface OrdersViewProps {
   // panel itself (the × close button) or from the vertical edge tab
   // ("Show panel"). Updates the same localStorage-backed pref in Home.tsx.
   onHideEmptyPanelChange?: (hide: boolean) => void
-  stores?: Array<{ storeId?: number | null; clientId?: number | null }>
+  stores?: Array<{ storeId?: number | null; clientId?: number | null; storeName?: string | null; name?: string | null }>
 }
 
 interface TableColumn {
@@ -1864,6 +1864,7 @@ export default function OrdersView({
   // plus sort direction for the printed-history list (newest first by default).
   const [pqSearch, setPqSearch] = useState('')
   const [pqHistoryAsc, setPqHistoryAsc] = useState(false)
+  const [queueScope, setQueueScope] = useState<'all' | 'client'>('all')
   const [queueEntries, setQueueEntries] = useState<PrintQueueEntryDto[]>([])
   const [queueEntriesClientId, setQueueEntriesClientId] = useState<number | null>(null)
   const [queueLoading, setQueueLoading] = useState(false)
@@ -2426,13 +2427,24 @@ export default function OrdersView({
     const store = stores.find((row) => row.storeId === activeStore)
     return typeof store?.clientId === 'number' ? store.clientId : null
   }, [activeStore, stores])
-  const queueClientId = useMemo(() => {
+  const inferredQueueClientId = useMemo(() => {
     const selected = orders.find((order) => selectedIdSet.has(order.orderId) && order.clientId != null)
     if (selected?.clientId != null) return selected.clientId
     if (panelOrder?.clientId != null) return panelOrder.clientId
     if (activeStoreClientId != null) return activeStoreClientId
     return orders.find((order) => order.clientId != null)?.clientId ?? null
   }, [activeStoreClientId, orders, panelOrder, selectedIdSet])
+  const queueClientId = queueScope === 'client' ? inferredQueueClientId : null
+  const queueClientLabel = useMemo(() => {
+    if (inferredQueueClientId == null) return 'Current client'
+    const matchingOrder = [
+      panelOrder,
+      ...orders,
+    ].find((order) => order?.clientId === inferredQueueClientId)
+    if (matchingOrder?.clientName) return matchingOrder.clientName
+    const matchingStore = stores.find((store) => store.clientId === inferredQueueClientId)
+    return matchingStore?.storeName || matchingStore?.name || `Client ${inferredQueueClientId}`
+  }, [inferredQueueClientId, orders, panelOrder, stores])
 
   useEffect(() => {
     setPage(1)
@@ -2710,7 +2722,7 @@ export default function OrdersView({
 
   useEffect(() => {
     if (!queueOpen) return
-    if (queueClientId == null) {
+    if (queueScope === 'client' && queueClientId == null) {
       setQueueLoading(false)
       return
     }
@@ -2743,7 +2755,7 @@ export default function OrdersView({
       cancelled = true
       window.clearInterval(interval)
     }
-  }, [queueOpen, queueClientId, queueHistoryVisible, toastContext])
+  }, [queueOpen, queueClientId, queueHistoryVisible, queueScope, toastContext])
 
   useEffect(() => {
     if (!queueOpen) return
@@ -3761,7 +3773,7 @@ export default function OrdersView({
   }
 
   async function hydrateQueue(forceOpen = false) {
-    if (queueClientId == null) {
+    if (queueScope === 'client' && queueClientId == null) {
       if (forceOpen) showToast('No client selected for print queue', 'error')
       return
     }
@@ -3880,8 +3892,10 @@ export default function OrdersView({
 
   async function refreshQueueAfterBackendStatus(status: any, fallbackClientId: number | null) {
     const queued = toNumberValue(status?.queued) ?? 0
-    const clientId = toNumberValue(status?.client_id) ?? fallbackClientId
-    if (queued <= 0 || clientId == null) return
+    const clientId = queueScope === 'client'
+      ? toNumberValue(status?.client_id) ?? fallbackClientId
+      : null
+    if (queued <= 0 || (queueScope === 'client' && clientId == null)) return
 
     setQueueActionProgressLabel('Refreshing queue')
     setQueueLoading(true)
@@ -3980,9 +3994,17 @@ export default function OrdersView({
 
     // O(1) lookups instead of N×O(N) `orders.find` inside the loop.
     const orderById = new Map(orders.map((order) => [order.orderId, order]))
+    // Per user override unlock shipped data on 2026-05-23: shipped side-panel queueing must use the open panel order even when it is not on the current page list.
+    if (panelOrder && orderIds.includes(panelOrder.orderId)) {
+      orderById.set(panelOrder.orderId, panelOrder)
+    }
     const jobOrders = orderIds
       .map((orderId) => orderById.get(orderId))
       .filter(Boolean) as OrderSummaryDto[]
+    if (jobOrders.length === 0) {
+      showToast('Could not find the selected order to queue. Reopen the order and try again.', 'error')
+      return
+    }
 
     try {
       const result = await sendOrdersToQueueBackend(jobOrders, {
@@ -5113,7 +5135,7 @@ export default function OrdersView({
   }
 
   async function printQueueEntries(entryIds: string[]) {
-    if (queueClientId == null || entryIds.length === 0) return
+    if (entryIds.length === 0) return
 
     const printWindow = openQueuePrintWindow()
     let pdfOpened = false
@@ -5193,7 +5215,7 @@ export default function OrdersView({
   }
 
   async function confirmQueueEntriesPrinted(entryIds: string[]) {
-    if (queueClientId == null || entryIds.length === 0) return
+    if (entryIds.length === 0) return
     const ok = window.confirm(
       `Confirm ${entryIds.length} label${entryIds.length === 1 ? '' : 's'} printed successfully? This removes them from the active Print Queue.`
     )
@@ -5709,13 +5731,14 @@ export default function OrdersView({
       })
       setQueueLoading(false)
 
-      if (sent > 0 && queueClient != null) {
+      if (sent > 0 && (queueScope !== 'client' || queueClient != null)) {
         setQueueActionProgressLabel('Refreshing queue')
         setQueueLoading(true)
         try {
-          const payload = await apiClient.fetchQueue(queueClient, queueHistoryVisible)
+          const refreshClientId = queueScope === 'client' ? queueClient : null
+          const payload = await apiClient.fetchQueue(refreshClientId, queueHistoryVisible)
           setQueueEntries(getQueuePayloadEntries(payload))
-          setQueueEntriesClientId(queueClient)
+          setQueueEntriesClientId(refreshClientId)
           setQueueOpen(true)
         } finally {
           setQueueLoading(false)
@@ -9047,8 +9070,22 @@ export default function OrdersView({
         >
           {/* Header */}
           <div className="flex items-center justify-between gap-2 px-3 py-2.5 border-b border-line">
-            <strong className="text-ink text-[13px]">Print Queue</strong>
-            <div className="flex gap-1.5">
+            <div className="min-w-0">
+              <strong className="block text-ink text-[13px]">Print Queue</strong>
+              <select
+                className="mt-1 h-7 max-w-[210px] rounded-md bg-surface-2 px-2 text-[11px] text-ink ring-1 ring-line focus:outline-none focus:ring-2 focus:ring-brand/40"
+                value={queueScope}
+                onChange={(event) => setQueueScope(event.target.value === 'client' ? 'client' : 'all')}
+                aria-label="Print Queue scope"
+                title={queueScope === 'all' ? 'Showing all authorized client queues' : `Showing ${queueClientLabel} only`}
+              >
+                <option value="all">All clients</option>
+                {inferredQueueClientId != null ? (
+                  <option value="client">Current client: {queueClientLabel}</option>
+                ) : null}
+              </select>
+            </div>
+            <div className="flex shrink-0 gap-1.5">
               <button
                 className="btn btn-ghost btn-xs"
                 type="button"
@@ -9060,8 +9097,10 @@ export default function OrdersView({
               <button
                 className="btn btn-ghost btn-xs"
                 type="button"
+                disabled={queueScope !== 'client' || queueClientId == null}
+                title={queueScope === 'client' ? 'Clear active queue entries for this client' : 'Switch to Current client before clearing a queue'}
                 onClick={() =>
-                  queueClientId != null
+                  queueScope === 'client' && queueClientId != null
                     ? window.confirm('This removes all unprinted labels from the active print queue for this client. Use only if you are sure these labels should not be printed from PrepShip. Continue?')
                       ? void apiClient
                           .clearQueue(queueClientId)
@@ -9137,6 +9176,7 @@ export default function OrdersView({
             <div><span className="font-semibold text-ink">{queueCount}</span> Orders</div>
             <div><span className="font-semibold text-ink">{queuedEntries.reduce((sum, entry) => sum + (entry.order_qty ?? 1), 0)}</span> Total Qty</div>
             <div><span className="font-semibold text-ink">{visibleQueueGroups.length}</span> SKU Groups</div>
+            <div className="hidden sm:block text-ink-3">{queueScope === 'all' ? 'All clients' : queueClientLabel}</div>
             {pqSearchLower ? (
               <div className="ml-auto text-ink-3 italic">filtered</div>
             ) : null}
@@ -9217,11 +9257,9 @@ export default function OrdersView({
                           className="pq-remove-btn inline-flex items-center justify-center w-6 h-6 rounded-md text-ink-3 hover:text-rose-600 hover:bg-rose-50 ring-1 ring-transparent hover:ring-rose-200 transition opacity-60 group-hover/row:opacity-100"
                           type="button"
                           title="Remove from queue"
-                          onClick={() => queueClientId != null
-                            ? void apiClient.removeFromQueue(entry.queue_entry_id, queueClientId)
-                                .then(() => hydrateQueue())
-                                .catch((error) => showToast(error instanceof Error ? error.message : 'Failed to remove queue entry', 'error'))
-                            : undefined}
+                          onClick={() => void apiClient.removeFromQueue(entry.queue_entry_id, queueClientId)
+                            .then(() => hydrateQueue())
+                            .catch((error) => showToast(error instanceof Error ? error.message : 'Failed to remove queue entry', 'error'))}
                         >
                           ✕
                         </button>
