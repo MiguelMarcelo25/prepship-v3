@@ -1380,6 +1380,18 @@ Return format:
 8. Any remaining risks or follow-up tasks
 ```
 
+## Official PS-027 Production Performance / Infrastructure Diagnosis Task
+
+DJ approved PS-027 as the Phase 0 diagnostic before deciding whether to migrate PrepShip V4 from Vercel/Render/Supabase to AWS/nginx/RDS/SQS/etc. This task is evidence-gathering only: do not migrate production infrastructure in this task.
+
+| Task | Title | Priority | Problem | Scope | Definition of Done |
+|---|---|---|---|---|---|
+| PS-027 | Phase 0 Production Performance & Infrastructure Diagnosis Before AWS Migration | Critical operations diagnosis | Production slowness/hangs may be caused by platform, DB/pool contention, slow SQL, worker pressure, external provider latency, frontend behavior, or queue/status design. Moving to AWS without evidence risks moving the same bottlenecks. | Measure public production baseline, verify API/worker/env split where possible, inspect hot route timing and DB risk areas, analyze worker/scheduler cadence, separate provider latency from app/DB latency, review frontend polling/loading behavior, and produce an AWS decision matrix. | Current production baseline measured; protected metrics/dashboard gaps listed; DB/worker/provider/frontend risks ranked; immediate stabilizing fixes listed; clear migrate-now/partial/no recommendation; no production mutations or live labels/marketplace actions. |
+
+### PS-027 Diagnosis Output
+
+See `docs/ps-027-production-performance-diagnosis.md`.
+
 ## Phase Summary
 
 | Phase | Status | Percent | Why Not 100% Yet |
