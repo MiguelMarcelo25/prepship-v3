@@ -69,10 +69,10 @@ function walmartMethodCode(rawOrder: unknown): string {
   return firstString((rawOrder as any)?.shippingInfo?.methodCode, 'VALUE');
 }
 
-function walmartShipDateTime(shipDate: string | null | undefined): string {
+function walmartShipDateTime(shipDate: string | null | undefined): number {
   const parsed = shipDate ? Date.parse(shipDate) : NaN;
   // Walmart's JSON shipping API rejects ISO strings here; it expects epoch ms.
-  return String(Number.isFinite(parsed) ? parsed : Date.now());
+  return Number.isFinite(parsed) ? parsed : Date.now();
 }
 
 function walmartLineNumber(line: any): string {
@@ -95,7 +95,7 @@ function walmartStatusQuantity(line: any): Record<string, string> {
 export function buildWalmartShipmentConfirmationBody(rawOrder: unknown, input: {
   carrierName: string;
   methodCode: string;
-  shipDateTime: string;
+  shipDateTime: number;
   trackingNumber: string;
   trackingUrl: string;
 }): { orderShipment: { orderLines: { orderLine: Array<Record<string, unknown>> } } } {
@@ -119,7 +119,7 @@ export function buildWalmartShipmentConfirmationBody(rawOrder: unknown, input: {
             statusQuantity: walmartStatusQuantity(line),
             trackingInfo: {
               shipDateTime: input.shipDateTime,
-              carrierName: input.carrierName,
+              carrierName: { carrier: input.carrierName },
               methodCode: input.methodCode,
               trackingNumber: input.trackingNumber,
               ...(input.trackingUrl ? { trackingURL: input.trackingUrl } : {}),

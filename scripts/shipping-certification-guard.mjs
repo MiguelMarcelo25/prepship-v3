@@ -8,6 +8,7 @@ const requiredFiles = [
   'scripts/smoke-shipping-test-label.ts',
   'scripts/smoke-shipping-real-label.ts',
   'scripts/smoke-marketplace-confirm.ts',
+  'scripts/retry-marketplace-confirmation.ts',
   'scripts/walmart-confirmation-payload-guard.ts',
 ];
 
@@ -31,6 +32,7 @@ for (const name of [
   'smoke:shipping:test-label',
   'smoke:shipping:real-label',
   'smoke:marketplace-confirm',
+  'marketplace:confirm:retry',
   'test:walmart-confirmation:payload',
   'guard:shipping-certification',
 ]) {
@@ -52,6 +54,9 @@ const realLabel = existsSync('scripts/smoke-shipping-real-label.ts')
 const confirm = existsSync('scripts/smoke-marketplace-confirm.ts')
   ? readFileSync('scripts/smoke-marketplace-confirm.ts', 'utf8')
   : '';
+const retryConfirm = existsSync('scripts/retry-marketplace-confirmation.ts')
+  ? readFileSync('scripts/retry-marketplace-confirmation.ts', 'utf8')
+  : '';
 const docs = existsSync('docs/shipping-certification-harness.md')
   ? readFileSync('docs/shipping-certification-harness.md', 'utf8')
   : '';
@@ -68,6 +73,10 @@ assert(realLabel.includes('Label already exists for this order'), 'real-label sm
 assert(realLabel.includes('No secrets, PII, raw labels, or provider payloads are printed'), 'real-label smoke must document output redaction');
 assert(confirm.includes('READ_ONLY_BY_DEFAULT'), 'marketplace confirm smoke must be read-only by default');
 assert(confirm.includes('--mock-process-once'), 'marketplace confirm processing must be mock-gated only');
+assert(retryConfirm.includes('--live-approved'), 'live marketplace confirmation retry must require --live-approved');
+assert(retryConfirm.includes('--outbox-id'), 'live marketplace confirmation retry must require exact --outbox-id');
+assert(retryConfirm.includes("provider !== 'walmart'"), 'live marketplace confirmation retry must be scoped to Walmart');
+assert(retryConfirm.includes('dryRun'), 'live marketplace confirmation retry must support dry-run inspection');
 assert(/No automated test may create real labels/i.test(docs), 'docs must state no real labels');
 assert(/smoke:shipping:real-label/i.test(docs), 'docs must document the real-label certification command');
 assert(/static guards are not enough/i.test(docs), 'docs must explain static guards are not enough');

@@ -35,6 +35,7 @@
     "db:studio": "drizzle-kit studio",
     "marketplace:reconcile": "tsx scripts/reconcile-marketplace-order-status.ts",
     "marketplace:reconcile:apply": "tsx scripts/reconcile-marketplace-order-status.ts --apply",
+    "marketplace:confirm:retry": "tsx scripts/retry-marketplace-confirmation.ts",
     "shipstation:awaiting:diff": "tsx scripts/reconcile-shipstation-awaiting.ts --diff",
     "shipstation:awaiting:reconcile": "tsx scripts/reconcile-shipstation-awaiting.ts",
     "shipstation:awaiting:reconcile:apply": "tsx scripts/reconcile-shipstation-awaiting.ts --apply",

@@ -30,4 +30,11 @@ The connector must never log OAuth tokens, raw eBay payloads with buyer PII, raw
 
 ## Recovery
 
-Use `npm run smoke:marketplace-confirm -- --order-id <id>` to inspect current state. Live marketplace processing is not automated; any live-order recovery must be coordinated with DJ.
+Use `npm run smoke:marketplace-confirm -- --order-id <id>` to inspect current state. Live marketplace retry is exact-row gated:
+
+```bash
+npm run marketplace:confirm:retry -- --outbox-id <id> --dry-run
+npm run marketplace:confirm:retry -- --outbox-id <id> --order-number <orderNumber> --shipment-id <shipmentId> --provider walmart --live-approved
+```
+
+The retry command is Walmart-only, requires an exact outbox row, defaults to dry-run, and must not be used without DJ approving the live marketplace side effect.

@@ -1118,7 +1118,7 @@ function walmartShipmentConfirmationBody(
   input: {
     carrierName: string;
     methodCode: string;
-    shipDateTime: string;
+    shipDateTime: number;
     trackingNumber: string;
     trackingUrl: string;
   },
@@ -1142,7 +1142,7 @@ function walmartShipmentConfirmationBody(
             statusQuantity: walmartShipmentStatusQuantity(line),
             trackingInfo: {
               shipDateTime: input.shipDateTime,
-              carrierName: input.carrierName,
+              carrierName: { carrier: input.carrierName },
               methodCode: input.methodCode,
               trackingNumber: input.trackingNumber,
               ...(input.trackingUrl ? { trackingURL: input.trackingUrl } : {}),
@@ -1180,7 +1180,7 @@ async function confirmWalmartOrderShipped(
   const shipmentBody = walmartShipmentConfirmationBody(input.rawOrder, {
     carrierName: input.carrierName,
     methodCode,
-    shipDateTime: String(Number.isFinite(parsedShipDate) ? parsedShipDate : Date.now()),
+    shipDateTime: Number.isFinite(parsedShipDate) ? parsedShipDate : Date.now(),
     trackingNumber: input.trackingNumber,
     trackingUrl: input.trackingUrl,
   });

@@ -230,7 +230,7 @@ async function loadStoreCredentials(provider: string, payload: Record<string, un
 
   if (provider !== 'walmart' && provider !== 'ebay') return {};
 
-  const explicitId = Number(payload.storeAccountId ?? payload.sourceAccountId ?? payload.marketplaceAccountId);
+  const explicitId = Number(payload.storeAccountId ?? payload.sourceAccountId ?? payload.marketplaceAccountId ?? payload.carrierAccountId);
   let accountId = Number.isFinite(explicitId) && explicitId > 0 ? Math.trunc(explicitId) : null;
   const marketplaceOrderId = String(
     provider === 'walmart'
@@ -277,6 +277,33 @@ async function claimDueOutboxRows(limit: number, orderId?: number): Promise<Outb
     )
     RETURNING id, order_id, shipment_id, provider, payload, attempts
   ` as Promise<OutboxRow[]>;
+}
+
+async function claimOutboxRowById(options: {
+  outboxId: number;
+  orderId?: number;
+  shipmentId?: number;
+  provider?: string;
+}): Promise<OutboxRow | null> {
+  await ensureFulfillmentSchema();
+  const rows = await pg`
+    UPDATE fulfillment_outbox
+    SET status = 'processing', updated_at = NOW()
+    WHERE id IN (
+      SELECT id
+      FROM fulfillment_outbox
+      WHERE id = ${options.outboxId}
+        AND event_type = 'shipment_confirmation_requested'
+        AND status IN ('pending', 'failed')
+        ${options.orderId ? pg`AND order_id = ${options.orderId}` : pg``}
+        ${options.shipmentId ? pg`AND shipment_id = ${options.shipmentId}` : pg``}
+        ${options.provider ? pg`AND provider = ${options.provider}` : pg``}
+      LIMIT 1
+      FOR UPDATE SKIP LOCKED
+    )
+    RETURNING id, order_id, shipment_id, provider, payload, attempts
+  ` as OutboxRow[];
+  return rows[0] ?? null;
 }
 
 function retryDelayMinutes(attempts: number): number {
@@ -417,4 +444,35 @@ export async function processFulfillmentOutboxOnce(options: {
   }
 
   return { processed: rows.length, succeeded, failed };
+}
+
+export async function processFulfillmentOutboxById(options: {
+  outboxId: number;
+  orderId?: number;
+  shipmentId?: number;
+  provider?: string;
+}): Promise<{ processed: number; succeeded: number; failed: number; message?: string }> {
+  // Per user override unlock shipped data on 2026-05-23: exact-row retry is
+  // limited to shipment confirmation recovery and preserves shipped locks.
+  const row = await claimOutboxRowById(options);
+  if (!row) {
+    return {
+      processed: 0,
+      succeeded: 0,
+      failed: 0,
+      message: 'No pending/failed fulfillment outbox row matched the supplied identifiers.',
+    };
+  }
+
+  try {
+    const succeeded = await processOutboxRow(row);
+    return { processed: 1, succeeded: succeeded ? 1 : 0, failed: succeeded ? 0 : 1 };
+  } catch (err) {
+    await failOutboxRow(row, err, true);
+    console.warn(
+      `[fulfillment-outbox] exact retry failed orderId=${row.order_id} shipmentId=${row.shipment_id} provider=${row.provider}:`,
+      err instanceof Error ? err.message : err,
+    );
+    return { processed: 1, succeeded: 0, failed: 1 };
+  }
 }
