@@ -1138,6 +1138,248 @@ Return format:
 8. Any deploy/CI blocker remaining
 ```
 
+## Official PS-026 Print Queue Persistence Task
+
+DJ approved PS-026 after confirming the intended warehouse workflow: labels sent to Print Queue must persist until an operator explicitly confirms they were printed or explicitly removes/clears them. This supersedes any previous assumption that shipped/cancelled orders should automatically clear active Print Queue entries.
+
+| Task | Title | Priority | Operations signal | Scope | Required evidence |
+|---|---|---|---|---|---|
+| PS-026 | Fix Print Queue Persistence: Labels Must Not Disappear Until Confirmed Printed | Critical operations workflow | Operators may create labels, hold them in Print Queue, refresh, log out, log back in, or hit browser/popup/printer issues. Active labels disappearing before physical print creates warehouse risk. | Stop automatic cleanup of active unprinted queue entries; stop marking printed on PDF generation; add explicit Confirm Printed workflow; harden Clear/Remove confirmations; preserve queue persistence across refresh/session/restart/status changes. | Typecheck/build plus print queue durable/ownership/invalid-label, direct carrier, queue-label, shipping certification, API contract, and workflow/browser tests pass. Browser workflow proves send-to-queue -> refresh -> print/PDF -> still active -> confirm printed. |
+
+### PS-026 Copy/Paste Handoff
+
+```text
+PS-026 - Fix Print Queue Persistence: Labels Must Not Disappear Until Confirmed Printed
+
+Assignee: Lawrence
+Repo: https://github.com/drprepperusa-org/prepship-v4.git
+Branch: prepshipv4-stable
+Priority: Critical operations workflow
+Status: New approved task from DJ. This supersedes any previous assumptions that shipped/cancelled orders should auto-clear from Print Queue.
+
+Context:
+DJ stated the intended workflow clearly:
+
+When an order is sent to print to queue, it should show up in print queue and stay ready to be printed. If it is not printed, it should not disappear. This would cause a huge issue with operations if operators are holding labels in print queue and suddenly they disappear. It should not disappear even if they log out and log back in, or refresh the page. It should persist across sessions until printed.
+
+Current code has multiple paths that may violate this:
+
+- src/services/labels.ts
+  - markOrderShipped(...) can remove queue entries via removeQueueEntriesForOrder(...) unless cleanupQueue: false.
+  - scheduleQueueCleanupAfterLabel(...) removes queue entries in the background after label creation.
+  - Real and test label flows call scheduleQueueCleanupAfterLabel(order.id, timer) after marking the order shipped.
+  - This can remove a queued label before the operator physically prints it.
+- src/services/order-sync.ts
+  - updateExistingOrderStatusesBatch(...) deletes printQueue rows when sync flips orders to shipped or cancelled.
+  - This assumes shipped/cancelled orders do not need queue entries, but for ops a shipped order can still have an unprinted label waiting in Print Queue.
+- src/services/print-queue.ts
+  - runMergeJob(...) marks entries as status: 'printed' after the PDF merge succeeds.
+  - This happens before knowing whether the operator actually printed the labels.
+- src/services/print-queue.ts
+  - listQueue(...) defaults to only status = 'queued', so anything prematurely marked printed disappears from the normal queue view.
+- web/src/components/Views/OrdersView.tsx
+  - The Print Queue has a Clear button that deletes all active queued rows for the client with no strong workflow confirmation. This is dangerous for ops.
+
+Files to inspect first:
+- src/db/schema/print-queue.ts
+- src/services/print-queue.ts
+- src/routes/print-queue.ts
+- src/services/labels.ts
+- src/services/order-sync.ts
+- scripts/cleanup-stale-queue-entries.ts
+- scripts/print-queue-durable-guard.mjs
+- scripts/print-queue-ownership-guard.mjs
+- scripts/print-queue-invalid-label-guard.mjs
+- web/src/components/Views/OrdersView.tsx
+- web/src/lib/v2-apiClient.ts
+- any existing browser/API certification tests around print queue, labels, and Orders workflow
+
+Required behavior:
+Print Queue must be durable and session-independent:
+- Sending an order to Print Queue creates/persists a DB-backed queue entry.
+- Active queue entries survive page refresh.
+- Active queue entries survive logout/login.
+- Active queue entries survive Render restart/process memory loss.
+- Active queue entries survive order status changing to shipped after label creation.
+- Active queue entries survive marketplace sync seeing the order as shipped or cancelled, unless an operator explicitly removed/cleared/confirmed them.
+- Active queue entries do not disappear just because a PDF merge/download job succeeded.
+
+A label should be removed from the active queue only after one of these explicit actions:
+- Operator confirms printed successfully.
+- Operator manually removes that individual queue item.
+- Admin/operator intentionally clears queue after a strong confirmation dialog.
+
+Implementation requirements:
+
+1. Stop auto-removing active queue entries on shipped status
+
+Remove or change all automatic queue cleanup behavior that deletes active unprinted labels solely because an order became shipped/cancelled.
+
+Specifically inspect and fix:
+- src/services/labels.ts
+  - markOrderShipped(...)
+  - scheduleQueueCleanupAfterLabel(...)
+  - calls after mock/real label creation
+- src/services/order-sync.ts
+  - updateExistingOrderStatusesBatch(...) queue deletion block
+- scripts/cleanup-stale-queue-entries.ts
+  - It must not delete active unprinted queue entries solely because the order is shipped/cancelled.
+  - Either update it to only affect explicitly printed/removed/stale-safe states or clearly mark it unsafe/deprecated for active ops queue cleanup.
+
+Correct principle:
+Order status shipped/cancelled does not imply label was physically printed.
+
+If an order is shipped but label is still queued, the queue UI can show a badge/warning like "Order status: shipped", but it must remain printable.
+
+2. Do not mark printed on PDF merge/download readiness
+
+In src/services/print-queue.ts, runMergeJob(...) currently updates successful entries to:
+status: 'printed', lastPrintedAt: now, printCount: 1
+
+Change this workflow.
+
+Required behavior:
+- PDF generation/merge success should not equal printed.
+- Use a recoverable state such as pdf_ready, print_ready, print_job_completed, or keep queued plus metadata, whichever fits the current schema/migration strategy best.
+- Active queue should still show entries after PDF generation until operator confirms printed.
+- If schema changes are needed, add a proper migration and update Drizzle schema.
+
+Recommended model:
+- queued = ready to print, active queue
+- pdf_ready = PDF generated/downloadable/reopenable, still active/recoverable
+- printed_confirmed = operator confirmed printed, hidden from active queue/history-visible
+- removed = manually removed/cancelled from queue
+- failed = print/PDF failed, visible/retryable
+
+Minimal alternative is acceptable if it preserves the workflow:
+- queued
+- printed
+- removed
+- failed
+
+But printed must only be set after operator confirmation.
+
+3. Add explicit Confirm Printed endpoint/action
+
+Add a backend route and service method to explicitly confirm queue entries as printed.
+
+Requirements:
+- Accept selected queue entry IDs and client/store auth scope.
+- Verify ownership/scope just like print/download/remove routes.
+- Update only those entries to printed/confirmed state.
+- Set lastPrintedAt and increment printCount safely.
+- Return count and IDs updated.
+
+Frontend requirements:
+- After PDF opens/downloads, show clear UI actions:
+  - Confirm Printed
+  - Reopen PDF if PDF/job is still recoverable
+  - Keep in Queue / no-op default if operator is not sure
+- Do not auto-remove/hide entries when PDF opens.
+- If browser popup is blocked or PDF download fails, entries remain in active queue.
+
+4. Recoverability across refresh/login
+
+If a PDF was generated but not confirmed printed:
+- Queue item must still appear after refresh/login.
+- Operator should be able to print again or re-run merge for selected entries.
+- If the old generated PDF is not durable after process restart, that is acceptable only if the queue entry still remains and can generate a new PDF from the stored label URL.
+
+5. Harden Clear/Remove behavior
+
+Individual remove can remain, but must be explicit.
+
+For Clear:
+- Add a strong confirmation modal/dialog.
+- Wording must communicate operational risk, for example:
+  "This removes all unprinted labels from the active print queue for this client. Use only if you are sure these labels should not be printed from PrepShip. Continue?"
+- Do not clear printed history unless explicitly in history/admin mode.
+- Log/return how many active queue entries were removed.
+
+6. Preserve idempotency and duplicate safety
+
+- Sending the same order to queue again should not create duplicate active queue rows.
+- Current unique constraint is by (orderId, clientId) in print_queue_orders; preserve or improve this.
+- If an active queue entry already exists, return alreadyQueued: true and keep it active.
+- Retrying after a timeout must not buy duplicate labels if an existing label/queue entry can be reused.
+- If a previous entry was explicitly confirmed printed, define whether requeue is allowed and make it intentional/traceable.
+
+7. Make batch-send status non-destructive and diagnosable
+
+The recent Heritage failure showed:
+API GET /print-queue/batch-send/status/<jobId> timed out after 30s
+
+Do not solve this by deleting/clearing rows.
+
+Requirements:
+- /batch-send/status/:jobId should never block for 30s on optional durable snapshot DB reads.
+- Bound/timeout optional snapshot reads or return in-memory status immediately with durableJob: null if unavailable.
+- Surface partial success safely: queued count, already-queued count, failed orders, and retry-safe guidance.
+- Queue entries created before timeout must persist.
+
+Guardrails / forbidden changes:
+- Do not create real labels or buy postage in automated tests.
+- Do not remove active unprinted queue entries as cleanup just because order status is shipped/cancelled.
+- Do not mark printed just because a PDF was generated, downloaded, opened, or popup attempted.
+- Do not weaken auth/RBAC/client/store scope.
+- Do not expose customer PII, label PDFs/base64, raw provider payloads, tracking numbers, tokens, credentials, or cross-client queue entries.
+- Do not rely on frontend state/localStorage as source of truth for queue persistence. DB must be source of truth.
+
+Verification commands:
+Run at minimum:
+- npm run typecheck
+- npm run build:web
+- npm run test:print-queue-durable
+- npm run test:print-queue-ownership
+- npm run test:print-queue-invalid-label
+- npm run test:direct-carrier-labels
+- npm run test:test-order-queue-label
+- npm run guard:shipping-certification
+- npm run test:api-contracts
+- npm run test:workflow-certification:browser
+- npm run test:site-actions:browser
+
+Add/update tests if existing commands do not cover the required scenarios.
+
+Required tests / certification scenarios:
+- Send order to queue -> DB row exists with active status.
+- Refresh/reload equivalent -> fetch queue returns same row.
+- Simulated logout/login/new session equivalent -> fetch queue returns same row.
+- Create label / mark order shipped -> active queue row remains.
+- Order sync flips order shipped/cancelled -> active queue row remains.
+- Start print/PDF merge -> PDF generation succeeds -> active queue row still visible and not printed.
+- Popup blocked / download failure simulation -> active queue row remains.
+- Operator confirms printed -> row changes to printed/confirmed and disappears from default active queue but appears in history if history is enabled.
+- Individual remove -> row removed/marked removed only by explicit action.
+- Clear queue -> requires confirmation and only removes active queue rows for authorized client/scope.
+- Batch send timeout/partial success -> successful queue entries persist and retry does not duplicate rows.
+- Cross-client/client-store scope: user cannot see/confirm/remove another client/store queue entry.
+
+Browser workflow test must include:
+send-to-queue -> queue visible -> refresh page -> queue still visible -> run print/PDF -> queue still visible pending confirmation -> confirm printed -> active queue no longer shows item/history shows printed
+
+Definition of done:
+- Active unprinted Print Queue entries persist in DB and remain visible across refresh/logout/login.
+- No automatic cleanup deletes active queue entries based only on order status shipped/cancelled.
+- PDF generation/open/download does not mark entries printed.
+- Operator confirmation is required before active queue entries become printed/hidden.
+- Clear/remove actions are explicit, scoped, and guarded.
+- Queue retry/idempotency prevents duplicate active entries and duplicate label purchase where possible.
+- Batch status timeout cannot cause silent queue disappearance.
+- Tests prove the workflow end-to-end, not only static source checks.
+- All verification commands pass or failures are clearly documented with root cause.
+
+Return format:
+1. Summary of queue persistence bug(s) fixed
+2. Files changed
+3. Schema/migration changes, if any
+4. New/updated API routes
+5. New/updated UI behavior
+6. Commands run with pass/fail results
+7. Browser workflow evidence
+8. Any remaining risks or follow-up tasks
+```
+
 ## Phase Summary
 
 | Phase | Status | Percent | Why Not 100% Yet |
