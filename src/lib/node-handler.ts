@@ -29,6 +29,25 @@ export function runNodeHandler(handler: NodeStyleHandler) {
     let statusCode = 200;
     let body: string | Uint8Array | null = null;
 
+    function setBody(payload?: unknown) {
+      if (payload == null) {
+        body = null;
+        return;
+      }
+      if (typeof payload === 'string' || payload instanceof Uint8Array) {
+        body = payload;
+        return;
+      }
+      if (payload instanceof ArrayBuffer) {
+        body = new Uint8Array(payload);
+        return;
+      }
+      if (!responseHeaders.has('Content-Type')) {
+        responseHeaders.set('Content-Type', 'application/json');
+      }
+      body = JSON.stringify(payload);
+    }
+
     const res = {
       setHeader(name: string, value: string | number | readonly string[]) {
         responseHeaders.set(name, Array.isArray(value) ? value.join(', ') : String(value));
@@ -39,11 +58,11 @@ export function runNodeHandler(handler: NodeStyleHandler) {
       },
       json(payload: unknown) {
         responseHeaders.set('Content-Type', 'application/json');
-        body = JSON.stringify(payload);
+        setBody(payload);
         return res;
       },
-      end(payload?: string | Uint8Array | Buffer | null) {
-        body = payload ?? null;
+      end(payload?: unknown) {
+        setBody(payload);
         return res;
       },
     };
