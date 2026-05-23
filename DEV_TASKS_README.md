@@ -886,6 +886,258 @@ Return format:
 8. Any manual action DJ still needs to take in Walmart Seller Center
 ```
 
+## Official PS-025 Walmart Mark-as-Shipped Deployment + Live Failure Diagnosis Task
+
+DJ approved PS-025 after repeated live Walmart label tests showed that label purchase and print queue can work while Walmart Seller Center still appears to leave `Mark as shipped` active. This task follows PS-024 and focuses on proving whether the relevant fix was actually deployed, then diagnosing the exact remaining Walmart shipment-confirmation failure mode from read-only production evidence.
+
+| Task | Title | Priority | Live signal | Scope | Required evidence |
+|---|---|---|---|---|---|
+| PS-025 | Diagnose Walmart Mark-as-Shipped Failure After Live Label Purchase | Critical real-test follow-up | Live Walmart PO/order reference `129114381477093` had label creation and print/queue success, but Walmart Seller Center still appeared not marked shipped. | Confirm deployment/version first, inspect production state read-only, locate the exact confirmation failure source, and implement only the fix supported by evidence. | Production deployment status for commit `22ab7df` verified; no duplicate label/postage; no duplicate Walmart confirmation without DJ approval; sanitized inspection evidence; targeted fix; typecheck/build and relevant Walmart/site/shipping/PS-022 checks pass. |
+
+### PS-025 Copy/Paste Handoff
+
+```text
+PS-025 - Diagnose Walmart Mark-as-Shipped Failure After Live Label Purchase
+
+Assignee: Lawrence
+Repo: https://github.com/drprepperusa-org/prepship-v4.git
+Branch: prepshipv4-stable
+Priority: Critical real-test follow-up
+Status: New task from repeated live Walmart label tests.
+
+Context:
+DJ performed another live Walmart label/print-queue test:
+- Walmart PO / order reference: 129114381477093
+- Label creation worked.
+- Print/queue path worked.
+- Walmart shows tracking/label activity.
+- Walmart Seller Center still appears to show "Mark as shipped" as not completed / still active.
+
+This happened after the earlier similar test on order/customer reference 200014621589900 and after commit:
+22ab7df Harden Walmart shipment confirmation
+
+Important:
+GitHub Actions CI for recent commits is failing because the job is not starting due to billing/spending-limit, not because tests failed. Verify whether 22ab7df is actually deployed to production before assuming the fix is live.
+
+Goal:
+Determine why Walmart marketplace shipment confirmation is still not marking orders shipped after successful Walmart label creation, and fix the exact failure mode.
+
+The label/tracking path and the marketplace confirmation path are separate:
+- Walmart Shipping label purchase: POST /v3/shipping/labels
+- Walmart order shipment confirmation: POST /v3/orders/{purchaseOrderId}/shipping
+
+This task is about the Walmart order shipment confirmation path.
+
+Safety guardrails:
+- Do not create another live label for PO 129114381477093.
+- Do not buy postage.
+- Do not void labels unless DJ explicitly approves.
+- Do not send duplicate Walmart marketplace shipment confirmations unless DJ explicitly approves the exact retry.
+- Read-only inspection first.
+- Do not expose Walmart tokens, credentials, raw customer address, buyer PII, raw provider payloads containing PII, raw labels/PDF/base64, or full tracking numbers in logs/task output.
+- Use sanitized summaries only.
+
+Files to inspect first:
+- api/carriers/labels.ts
+- src/connectors/store/walmart.ts
+- src/services/fulfillment/outbox.ts
+- scripts/inspect-shipping-order.ts
+- scripts/smoke-marketplace-confirm.ts
+- scripts/walmart-confirmation-payload-guard.ts
+- scripts/direct-carrier-label-guard.mjs
+- scripts/shipping-certification-guard.mjs
+- web/src/components/Views/OrdersView.tsx
+- docs/marketplace-confirmation.md
+- docs/prepship-shipping-production-audit.md
+
+Relevant functions:
+- confirmWalmartOrderShipped(...)
+- confirmWalmartSourceOrderAfterLabelSql(...)
+- walmartShipmentConfirmationBody(...)
+- buildWalmartShipmentConfirmationBody(...)
+- markWalmartConfirmationAttemptSql(...)
+- createWalmartStoreConnector().confirmShipment(...)
+- processFulfillmentOutboxOnce(...)
+- enqueueShipmentConfirmation(...)
+
+Phase 1 - Confirm deployment/version:
+Determine whether the code containing 22ab7df Harden Walmart shipment confirmation is actually deployed to production.
+
+Check:
+- Vercel deployment state
+- Render deployment state
+- GitHub Actions/deploy pipeline status
+- whether CI/deploy was blocked by billing/spending-limit
+
+If production is still running older Walmart confirmation code, report that directly and do not over-debug the new code as if it is live.
+
+Phase 2 - Read-only production inspection:
+For PO / order reference 129114381477093, run the read-only inspector in a production-capable environment:
+npm run inspect:shipping-order -- --order-number 129114381477093
+
+If order-number lookup is not enough, inspect by matching Walmart/store order references around:
+129114381477093
+
+Inspect sanitized values only.
+
+orders:
+- id
+- order_number
+- external_order_id
+- source_provider
+- source_order_id
+- client_id/store_id
+- order_status
+- canonical_status
+- whether raw exists
+- whether raw.purchaseOrderId exists
+- whether raw.orderLines.orderLine[] exists
+- count of raw order lines
+- line numbers only
+
+store_orders:
+Find matching Walmart rows by:
+- external_order_id
+- customer_order_id
+- purchaseOrderId
+- order number 129114381477093
+
+Report:
+- provider
+- external_order_id
+- customer_order_id
+- carrier_account_id
+- whether raw exists
+- whether raw order lines exist
+- line numbers only
+- whether shippingInfo.methodCode exists
+
+shipments:
+For latest active shipment on the order:
+- id
+- carrier_code
+- service_code
+- masked tracking number only
+- label_url presence only
+- confirmation_provider
+- confirmation_status
+- confirmation_attempts
+- confirmation_last_error
+- marketplace_confirmed_at
+- created_at
+
+fulfillment_outbox:
+For this order/shipment:
+- id
+- shipment_id
+- provider
+- status
+- attempts
+- last_error
+- next_run_at
+- updated_at
+- sanitized payload keys
+- payload.purchaseOrderId
+- whether payload.rawOrder.orderLines.orderLine[] exists
+- line numbers only
+- payload.carrierName
+- payload.serviceCode
+- masked tracking presence only
+
+Phase 3 - Locate the error:
+Find the actual failure source. Expected places:
+- shipments.confirmation_last_error
+- fulfillment_outbox.last_error
+- Render logs containing:
+  - [carriers/labels] walmart immediate confirmation failed:
+  - Walmart Ship Confirm ...
+- API response meta from label creation:
+  - meta.walmartShipmentConfirmed
+  - meta.walmartShipmentConfirmError
+  - meta.confirmationQueued
+  - meta.confirmationProvider
+  - meta.confirmationError
+
+Classify the result:
+- Latest fix not deployed.
+- Confirmation succeeded but Seller Center UI delayed/confusing.
+- Confirmation failed due to Walmart API error - include sanitized HTTP status/message.
+- Confirmation failed due to missing Walmart order line numbers.
+- Confirmation failed due to missing/wrong purchaseOrderId.
+- Confirmation failed due to missing/wrong Walmart store credentials.
+- Confirmation is pending because outbox worker is not processing.
+- Print-to-Queue UI is hiding confirmation failure/pending state.
+
+Phase 4 - Fix the root cause:
+Implement only the fix supported by the inspected evidence.
+
+Likely fixes may include:
+
+A. Deployment blocker:
+If 22ab7df is not deployed, fix the deploy/CI blocker or provide manual deploy instructions. Current known blocker: GitHub Actions not starting because billing/spending-limit needs attention.
+
+B. Missing raw Walmart order lines:
+If raw lines are missing, ensure confirmation fetches/refreshes Walmart/store order data before sending /shipping. Do not use guessed lineNumber "1" for live marketplace confirmation.
+
+C. Wrong purchaseOrderId:
+Ensure the /v3/orders/{purchaseOrderId}/shipping path uses Walmart purchaseOrderId, not ShipStation ID or customer order number unless Walmart lookup confirms it.
+
+D. Store credentials mismatch:
+Ensure Walmart marketplace confirmation loads the correct Walmart store account credentials, not only the Walmart Shipping/carrier account credentials.
+
+E. Outbox worker issue:
+If outbox is pending/failed and not processing, diagnose worker/scheduler registration and production runtime. Confirm processFulfillmentOutboxOnce(...) or production worker is running.
+
+F. UI visibility issue:
+If Print-to-Queue succeeds but Walmart confirmation fails/pends, surface that clearly in the operator UI. Do not show only "queued successfully" if Walmart confirmation failed or is pending.
+
+Suggested UI behavior:
+- Label queued + Walmart confirmation succeeded -> success.
+- Label queued + Walmart confirmation pending -> warning/info: queued, Walmart confirmation pending.
+- Label queued + Walmart confirmation failed -> warning/error: label queued, Walmart not marked shipped; manual action may be required.
+
+Phase 5 - Tests / verification:
+Run relevant commands:
+- npm run typecheck
+- npm run build:web
+- npm run test:walmart-confirmation:payload
+- npm run test:direct-carrier-labels
+- npm run test:test-order-queue-label
+- npm run test:print-queue-invalid-label
+- npm run smoke:marketplace-confirm -- --mock-process-once
+- npm run guard:shipping-certification
+- npm run guard:site-actions
+- npm run test:site-actions:browser
+
+Also run PS-022 certification commands from current package.json:
+- npm run test:api-contracts
+- npm run test:workflow-certification:browser
+- npm run test:full-site-certification
+
+If a browser certification test is known to be failing for unrelated fixture reasons, report it explicitly and do not claim full certification complete.
+
+Definition of done:
+- Production deployment status for 22ab7df is confirmed.
+- PO 129114381477093 is inspected read-only.
+- Exact Walmart confirmation failure mode is identified.
+- No duplicate label is created.
+- No duplicate Walmart confirmation is sent without DJ approval.
+- Any code fix is targeted to the proven failure mode.
+- Print-to-Queue does not hide Walmart confirmation failure/pending state.
+- Shipment/outbox state accurately reports succeeded, failed, pending, or not_required.
+- Tests/guards pass or failures are clearly documented with reason.
+
+Return format:
+1. Whether 22ab7df was deployed when DJ tested PO 129114381477093
+2. Read-only inspection summary for PO 129114381477093
+3. Actual error found, sanitized
+4. Root cause classification
+5. Files changed
+6. Commands run with pass/fail results
+7. Whether Walmart Seller Center still requires manual action
+8. Any deploy/CI blocker remaining
+```
+
 ## Phase Summary
 
 | Phase | Status | Percent | Why Not 100% Yet |

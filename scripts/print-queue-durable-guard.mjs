@@ -71,6 +71,20 @@ assert(
 );
 
 assert(
+  routeSource.includes('DURABLE_STATUS_TIMEOUT_MS') &&
+    routeSource.includes('withDurableStatusTimeout') &&
+    routeSource.includes('Promise.race'),
+  'print queue status routes must bound durable snapshot reads so polling cannot hang',
+);
+
+assert(
+  routeSource.includes('durableJob?.jobId === jobId') &&
+    routeSource.includes("status: durableJob.status") &&
+    routeSource.includes('results: durableJob.resultSamples'),
+  'batch-send status route must fall back to the durable snapshot when the in-memory job is gone',
+);
+
+assert(
   packageJson.scripts?.['test:print-queue-durable'] ===
     'node scripts/print-queue-durable-guard.mjs',
   'package exposes print queue durable guard',

@@ -16,11 +16,14 @@ import {
   removeFromQueue,
   startQueueSendJob,
   startPrintJob,
+  type MergeJobSnapshot,
   type PrintQueueListScope,
+  type QueueSendJobSnapshot,
 } from '../services/print-queue';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 
 const app = new Hono();
+const DURABLE_STATUS_TIMEOUT_MS = 1500;
 
 function printQueueScopeFromContext(c: Context): PrintQueueListScope {
   const scope: ClientStoreScope = getClientStoreScope({
@@ -40,6 +43,44 @@ function printQueueScopeFromContext(c: Context): PrintQueueListScope {
 function printQueueLabelUrlErrorResponse(c: Context, err: unknown) {
   if (!isPrintQueueLabelUrlError(err)) throw err;
   return c.json({ error: err.message, code: err.code }, err.status);
+}
+
+async function withDurableStatusTimeout<T>(read: () => Promise<T>): Promise<T | null> {
+  let timeout: NodeJS.Timeout | null = null;
+  try {
+    return await Promise.race([
+      read(),
+      new Promise<null>((resolve) => {
+        timeout = setTimeout(() => resolve(null), DURABLE_STATUS_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+async function canViewQueueSendSnapshot(
+  snapshot: QueueSendJobSnapshot,
+  scope: PrintQueueListScope,
+): Promise<boolean> {
+  try {
+    await assertPrintQueueClientsVisible(snapshot.clientIds, scope);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function canViewMergeSnapshot(
+  snapshot: MergeJobSnapshot,
+  scope: PrintQueueListScope,
+): Promise<boolean> {
+  try {
+    await assertPrintQueueClientsVisible(snapshot.clientIds, scope);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 const listQ = z.object({
@@ -174,11 +215,33 @@ app.post('/batch-send', zValidator('json', queueSendBody), async (c) => {
 });
 
 app.get('/batch-send/status/:jobId', async (c) => {
-  const job = getQueueSendJobStatus(c.req.param('jobId'));
-  if (!job || !(await canViewQueueSendJob(job, printQueueScopeFromContext(c)))) {
+  const jobId = c.req.param('jobId');
+  const scope = printQueueScopeFromContext(c);
+  const job = getQueueSendJobStatus(jobId);
+  const durableJob = await withDurableStatusTimeout(getLatestQueueSendJobSnapshot);
+  if (!job) {
+    if (durableJob?.jobId === jobId && await canViewQueueSendSnapshot(durableJob, scope)) {
+      return c.json({
+        job_id: durableJob.jobId,
+        status: durableJob.status,
+        progress: durableJob.progress,
+        total: durableJob.total,
+        current: durableJob.current,
+        queued: durableJob.queued,
+        failed: durableJob.failed,
+        message: durableJob.message,
+        client_id: durableJob.clientId,
+        queued_entry_ids: durableJob.queuedEntryIds,
+        results: durableJob.resultSamples,
+        error: durableJob.errorMessage,
+        durableJob,
+      });
+    }
     return c.json({ error: 'Job not found' }, 404);
   }
-  const durableJob = await getLatestQueueSendJobSnapshot();
+  if (!(await canViewQueueSendJob(job, scope))) {
+    return c.json({ error: 'Job not found' }, 404);
+  }
   return c.json({
     job_id: job.jobId,
     status: job.status,
@@ -237,11 +300,30 @@ app.post(
 );
 
 app.get('/print/status/:jobId', async (c) => {
-  const job = getMergeJobStatus(c.req.param('jobId'));
-  if (!job || !(await canViewMergeJob(job, printQueueScopeFromContext(c)))) {
+  const jobId = c.req.param('jobId');
+  const scope = printQueueScopeFromContext(c);
+  const job = getMergeJobStatus(jobId);
+  const durableJob = await withDurableStatusTimeout(getLatestMergeJobSnapshot);
+  if (!job) {
+    if (durableJob?.jobId === jobId && await canViewMergeSnapshot(durableJob, scope)) {
+      return c.json({
+        job_id: durableJob.jobId,
+        status: durableJob.status,
+        progress: durableJob.progress,
+        total: durableJob.total,
+        current: durableJob.current,
+        message: durableJob.message,
+        file_name: durableJob.fileName,
+        error: durableJob.errorMessage,
+        label_errors: durableJob.labelErrors,
+        durableJob,
+      });
+    }
     return c.json({ error: 'Job not found' }, 404);
   }
-  const durableJob = await getLatestMergeJobSnapshot();
+  if (!(await canViewMergeJob(job, scope))) {
+    return c.json({ error: 'Job not found' }, 404);
+  }
   return c.json({
     job_id: job.jobId,
     status: job.status,
