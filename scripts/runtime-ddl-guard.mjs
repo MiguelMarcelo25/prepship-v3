@@ -49,6 +49,11 @@ const inventoryLowerSkuMigration = fs.readFileSync(
   path.join(root, inventoryLowerSkuMigrationPath),
   'utf8',
 );
+const ordersListCountIndexesMigrationPath = 'drizzle/0033_orders_list_count_indexes.sql';
+const ordersListCountIndexesMigration = fs.readFileSync(
+  path.join(root, ordersListCountIndexesMigrationPath),
+  'utf8',
+);
 const scanRoots = ['src', 'api'];
 const ddlPattern =
   /(?:create\s+(?:unique\s+)?(?:table|index)(?:\s+concurrently)?\s+if\s+not\s+exists|alter\s+table\s+[\s\S]{0,160}?add\s+column\s+if\s+not\s+exists)/i;
@@ -116,6 +121,16 @@ const lowRiskPerformanceIndexes = [
     indexName: 'orders_store_status_date_idx',
     migrationPath: ordersEndpointPerformanceMigrationPath,
     migration: ordersEndpointPerformanceMigration,
+  },
+  {
+    indexName: 'orders_walmart_shipstation_order_number_idx',
+    migrationPath: ordersListCountIndexesMigrationPath,
+    migration: ordersListCountIndexesMigration,
+  },
+  {
+    indexName: 'orders_walmart_direct_order_number_latest_idx',
+    migrationPath: ordersListCountIndexesMigrationPath,
+    migration: ordersListCountIndexesMigration,
   },
   {
     indexName: 'orders_dashboard_sales_date_idx',

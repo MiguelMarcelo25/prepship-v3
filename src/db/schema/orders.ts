@@ -72,9 +72,16 @@ export const orders = pgTable(
     index('orders_date_idx').on(t.orderDate),
     index('orders_assigned_user_idx').on(t.assignedToUserId),
     index('orders_status_date_id_idx').on(t.orderStatus, t.orderDate.desc(), t.id.desc()),
+    index('orders_client_status_date_idx').on(t.clientId, t.orderStatus, t.orderDate.desc()),
     index('orders_store_status_date_idx')
       .on(t.storeId, t.orderStatus, t.orderDate.desc())
       .where(sql`${t.storeId} is not null`),
+    index('orders_walmart_shipstation_order_number_idx')
+      .on(t.orderNumber, t.id)
+      .where(sql`${t.storeId} = 376661`),
+    index('orders_walmart_direct_order_number_latest_idx')
+      .on(t.orderNumber, t.orderDate.desc(), t.id.desc())
+      .where(sql`${t.storeId} = 9000001`),
     index('orders_source_idx').on(t.sourceProvider, t.sourceAccountId, t.sourceOrderId),
     index('orders_dashboard_sales_date_idx')
       .on(t.orderDate.desc())

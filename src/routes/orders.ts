@@ -1149,12 +1149,14 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   if (q.status) {
     statusPredicate = sql`${orders.orderStatus} = ${q.status}`;
   }
+  const shouldApplyWalmartDedupe =
+    q.storeId === undefined || q.storeId === WALMART_DIRECT_STORE_ID;
 
   const where = and(
     ...[
       statusPredicate,
       q.status === 'awaiting_shipment' ? visibleAwaitingOrdersPredicate('orders') : undefined,
-      walmartDirectDuplicateSuppressionPredicate('orders'),
+      shouldApplyWalmartDedupe ? walmartDirectDuplicateSuppressionPredicate('orders') : undefined,
       orderScopePredicate(orderScope),
       assigneeFilter,
       q.clientId !== undefined ? eq(orders.clientId, q.clientId) : undefined,
@@ -1239,7 +1241,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       .from(orders)
       .leftJoin(orderOverrides, eq(orderOverrides.orderId, orders.id))
       .where(where)
-      .orderBy(desc(orders.orderDate))
+      .orderBy(desc(orders.orderDate), desc(orders.id))
       .limit(q.pageSize)
       .offset(offset)
   );

@@ -5,6 +5,8 @@ const helper = readFileSync('src/lib/walmart-order-dedupe.ts', 'utf8');
 const ordersRoute = readFileSync('src/routes/orders.ts', 'utf8');
 const initRoute = readFileSync('src/routes/init.ts', 'utf8');
 const inventoryRoute = readFileSync('src/routes/inventory.ts', 'utf8');
+const ordersSchema = readFileSync('src/db/schema/orders.ts', 'utf8');
+const listCountIndexesMigration = readFileSync('drizzle/0033_orders_list_count_indexes.sql', 'utf8');
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
 
 assert(
@@ -22,9 +24,19 @@ assert(
 
 assert(
   ordersRoute.includes('walmartDirectDuplicateSuppressionPredicate') &&
+    ordersRoute.includes('const shouldApplyWalmartDedupe =') &&
+    ordersRoute.includes('shouldApplyWalmartDedupe ? walmartDirectDuplicateSuppressionPredicate') &&
     ordersRoute.includes('sourceLink') &&
     ordersRoute.includes('walmartDirectDuplicates'),
   '/orders must apply Walmart direct duplicate suppression and expose source-link diagnostics',
+);
+
+assert(
+  ordersSchema.includes("index('orders_walmart_shipstation_order_number_idx')") &&
+    ordersSchema.includes("index('orders_walmart_direct_order_number_latest_idx')") &&
+    listCountIndexesMigration.includes('"orders_walmart_shipstation_order_number_idx"') &&
+    listCountIndexesMigration.includes('"orders_walmart_direct_order_number_latest_idx"'),
+  'Walmart dedupe hot paths must have migration-owned order_number indexes',
 );
 
 assert(

@@ -1,6 +1,6 @@
 // @ts-nocheck
 import './OrdersView.css'
-import { lazy, Suspense, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
@@ -1728,6 +1728,17 @@ async function runWithConcurrency<T>(
   }))
 }
 
+function useDebouncedValue<T>(value: T, delayMs: number): T {
+  const [debounced, setDebounced] = useState(value)
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebounced(value), delayMs)
+    return () => window.clearTimeout(timer)
+  }, [delayMs, value])
+
+  return debounced
+}
+
 export default function OrdersView({
   currentStatus,
   searchQuery = '',
@@ -1908,6 +1919,8 @@ export default function OrdersView({
   // the refresh drops the row from the awaiting list naturally.
   const [transitionalShippedIds, setTransitionalShippedIds] = useState<Set<number>>(new Set())
   const transitionalTimeoutsRef = useRef<Map<number, number>>(new Map())
+  const transitionalRefetchTimerRef = useRef<number | null>(null)
+  const lastHandledRefreshVersionRef = useRef(0)
   // Tracks which order# pill in the batch panel was just copied. Set on
   // click, cleared after ~1.2s so the pill flashes a "Copied!" check
   // and reverts. Single string at a time — clicking another pill
@@ -2075,6 +2088,10 @@ export default function OrdersView({
         window.clearTimeout(t)
       }
       transitionalTimeoutsRef.current.clear()
+      if (transitionalRefetchTimerRef.current !== null) {
+        window.clearTimeout(transitionalRefetchTimerRef.current)
+        transitionalRefetchTimerRef.current = null
+      }
     }
   }, [])
 
@@ -2117,6 +2134,7 @@ export default function OrdersView({
   // the Test Orders client directly always shows its rows.
   const hideTestOrdersInAllAwaiting =
     activeStore == null && !showTestOrders
+  const debouncedSearchQuery = useDebouncedValue(searchQuery, 350)
 
   const { orders, total, totalApproximate, pages, currentPage, loading, error, refetch: refetchOrders } = useOrders(currentStatus, {
     page,
@@ -2126,12 +2144,25 @@ export default function OrdersView({
     dateEnd: dateRange.end,
     hideTestOrders: hideTestOrdersInAllAwaiting,
     includeInactiveClients,
-    search: searchQuery,
+    search: debouncedSearchQuery,
     // Forwarded so the backend filters by SKU exactly. Replaces the
     // old client-side filter (now removed below) which only ran over
     // the current paginated page and missed matches on later pages.
     sku: skuFilter,
   })
+  const refetchOrdersRef = useRef(refetchOrders)
+  useEffect(() => {
+    refetchOrdersRef.current = refetchOrders
+  }, [refetchOrders])
+  const scheduleOrdersRefetch = useCallback((delayMs = 0) => {
+    if (transitionalRefetchTimerRef.current !== null) {
+      window.clearTimeout(transitionalRefetchTimerRef.current)
+    }
+    transitionalRefetchTimerRef.current = window.setTimeout(() => {
+      transitionalRefetchTimerRef.current = null
+      void refetchOrdersRef.current()
+    }, delayMs)
+  }, [])
 
   useEffect(() => {
     onResolvedDateRangeChange?.(dateRange)
@@ -2405,12 +2436,12 @@ export default function OrdersView({
 
   useEffect(() => {
     setPage(1)
-  }, [currentStatus, activeStore, dateFilter, customDateFrom, customDateTo, hideTestOrdersInAllAwaiting, searchQuery])
+  }, [currentStatus, activeStore, dateFilter, customDateFrom, customDateTo, hideTestOrdersInAllAwaiting, debouncedSearchQuery])
 
   useEffect(() => {
     setPreSkuSortSnapshot(null)
     setSkuSortActive(false)
-  }, [currentStatus, activeStore, dateFilter, customDateFrom, customDateTo, skuFilter, searchQuery])
+  }, [currentStatus, activeStore, dateFilter, customDateFrom, customDateTo, skuFilter, debouncedSearchQuery])
 
   useEffect(() => {
     const visibleIds = new Set(orders.map((order) => order.orderId))
@@ -2531,11 +2562,13 @@ export default function OrdersView({
 
   useEffect(() => {
     if (refreshVersion === 0) return
-    void refetchOrders()
+    if (lastHandledRefreshVersionRef.current === refreshVersion) return
+    lastHandledRefreshVersionRef.current = refreshVersion
+    void refetchOrdersRef.current()
     if (panelOrderId != null) {
       void queryClient.invalidateQueries({ queryKey: ['v2-hooks:order-detail', panelOrderId] })
     }
-  }, [refreshVersion, refetchOrders, panelOrderId, queryClient])
+  }, [refreshVersion, panelOrderId, queryClient])
 
   // Sidebar nav resets — Home bumps `filterResetVersion` whenever the
   // user clicks a sidebar entry. We clear all OrdersView-local filters
@@ -5365,7 +5398,7 @@ export default function OrdersView({
               return next
             })
             transitionalTimeoutsRef.current.delete(order.orderId)
-            void refetchOrders()
+            scheduleOrdersRefetch(250)
           }, TRANSITION_MS)
 
           transitionalTimeoutsRef.current.set(order.orderId, timer)
