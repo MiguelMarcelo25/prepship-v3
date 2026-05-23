@@ -1392,6 +1392,18 @@ DJ approved PS-027 as the Phase 0 diagnostic before deciding whether to migrate 
 
 See `docs/ps-027-production-performance-diagnosis.md`.
 
+## Official PS-028 Authenticated Production Timing + Supabase Pool Capture
+
+DJ approved proceeding from PS-027 into authenticated production timing and Supabase pool/slow-query capture during real operations. This task is read-only diagnostics only.
+
+| Task | Title | Priority | Problem | Scope | Definition of Done |
+|---|---|---|---|---|---|
+| PS-028 | Authenticated Production Timing + Supabase Pool/Slow Query Capture | Critical operations diagnosis | PS-027 could not collect protected production p95/p99 route timing or Supabase pool/slow-query data without an admin bearer token and database access. | Add/run a safe capture script for protected `/observability/status`, `/observability/api-timing`, `/sync/status`, `/worker/status`, public health, and read-only Supabase/Postgres activity/lock/slow-query aggregates. | At least one healthy baseline and one slow/hung incident capture are collected, reviewed, and used to decide whether to tune current stack, upgrade plans, or stage AWS migration. |
+
+Docs and command:
+- `docs/ps-028-authenticated-production-timing.md`
+- `npm run diagnose:production-timing`
+
 ## Phase Summary
 
 | Phase | Status | Percent | Why Not 100% Yet |

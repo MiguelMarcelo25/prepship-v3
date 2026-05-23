@@ -26,6 +26,7 @@
     "guard:shipping-certification": "node scripts/shipping-certification-guard.mjs",
     "guard:site-actions": "node scripts/site-action-functionality-guard.mjs",
     "watchdog:production": "node scripts/production-watchdog.mjs",
+    "diagnose:production-timing": "tsx scripts/capture-production-timing.ts",
     "test:web-bundle-budget": "npm run build:web && node scripts/web-bundle-budget-guard.mjs",
     "test:tailwind-safelist": "node scripts/tailwind-safelist-guard.mjs",
     "test:dashboard-chart-lazy": "node scripts/dashboard-chart-lazy-guard.mjs",
