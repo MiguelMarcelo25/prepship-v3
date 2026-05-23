@@ -5,6 +5,7 @@ const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8
 const labelsService = readFileSync('src/services/labels.ts', 'utf8');
 const fulfillmentOutbox = readFileSync('src/services/fulfillment/outbox.ts', 'utf8');
 const carrierLabels = readFileSync('api/carriers/labels.ts', 'utf8');
+const fulfillmentSchemaReadiness = readFileSync('src/services/fulfillment/schema-readiness.ts', 'utf8');
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
 
 assert(
@@ -43,9 +44,10 @@ assert(
 );
 
 assert(
-  fulfillmentOutbox.includes('label_provider_key') &&
-    carrierLabels.includes('label_provider_key'),
-  'Fulfillment schema fallback must add label_provider_key for production DBs missing connector columns',
+  fulfillmentOutbox.includes('assertFulfillmentSchemaReady') &&
+    carrierLabels.includes('assertFulfillmentSchemaReady') &&
+    fulfillmentSchemaReadiness.includes('label_provider_key'),
+  'Fulfillment schema readiness must require label_provider_key without running request-time DDL',
 );
 
 assert(

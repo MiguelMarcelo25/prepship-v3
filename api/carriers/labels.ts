@@ -31,6 +31,7 @@ import { PDFDocument } from 'pdf-lib';
 import postgres from 'postgres';
 import { timedFetch } from '../../src/lib/http/timing.js';
 import { persistDirectCarrierLabel } from '../../src/services/direct-label-persistence.js';
+import { assertFulfillmentSchemaReady } from '../../src/services/fulfillment/schema-readiness.js';
 
 let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 function getJwks() {
@@ -69,45 +70,9 @@ function sourceOrderIdFromExternalId(externalOrderId: string | null | undefined)
 }
 
 async function ensureFulfillmentOutboxSql(sql: any): Promise<void> {
-  const statements = [
-    `ALTER TABLE orders ADD COLUMN IF NOT EXISTS source_provider TEXT`,
-    `ALTER TABLE orders ADD COLUMN IF NOT EXISTS source_account_id TEXT`,
-    `ALTER TABLE orders ADD COLUMN IF NOT EXISTS source_order_id TEXT`,
-    `ALTER TABLE orders ADD COLUMN IF NOT EXISTS source_order_number TEXT`,
-    `ALTER TABLE orders ADD COLUMN IF NOT EXISTS source_status TEXT`,
-    `ALTER TABLE orders ADD COLUMN IF NOT EXISTS canonical_status TEXT`,
-    `CREATE INDEX IF NOT EXISTS orders_source_provider_idx ON orders (source_provider)`,
-    `CREATE INDEX IF NOT EXISTS orders_canonical_status_idx ON orders (canonical_status)`,
-    `ALTER TABLE shipments ADD COLUMN IF NOT EXISTS carrier_provider TEXT`,
-    `ALTER TABLE shipments ADD COLUMN IF NOT EXISTS carrier_account_id TEXT`,
-    `ALTER TABLE shipments ADD COLUMN IF NOT EXISTS label_provider_key TEXT`,
-    `ALTER TABLE shipments ADD COLUMN IF NOT EXISTS confirmation_status TEXT`,
-    `ALTER TABLE shipments ADD COLUMN IF NOT EXISTS confirmation_provider TEXT`,
-    `ALTER TABLE shipments ADD COLUMN IF NOT EXISTS confirmation_attempts INTEGER NOT NULL DEFAULT 0`,
-    `ALTER TABLE shipments ADD COLUMN IF NOT EXISTS confirmation_last_error TEXT`,
-    `ALTER TABLE shipments ADD COLUMN IF NOT EXISTS marketplace_confirmed_at TIMESTAMPTZ`,
-    `CREATE INDEX IF NOT EXISTS shipments_confirmation_status_idx ON shipments (confirmation_status)`,
-    `CREATE TABLE IF NOT EXISTS fulfillment_outbox (
-      id SERIAL PRIMARY KEY,
-      order_id INTEGER NOT NULL,
-      shipment_id INTEGER,
-      event_type TEXT NOT NULL,
-      provider TEXT NOT NULL,
-      dedupe_key TEXT NOT NULL,
-      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-      status TEXT NOT NULL DEFAULT 'pending',
-      attempts INTEGER NOT NULL DEFAULT 0,
-      last_error TEXT,
-      next_run_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS fulfillment_outbox_dedupe_idx ON fulfillment_outbox (dedupe_key)`,
-    `CREATE INDEX IF NOT EXISTS fulfillment_outbox_due_idx ON fulfillment_outbox (status, next_run_at)`,
-  ];
-  for (const statement of statements) {
-    await sql.unsafe(statement);
-  }
+  // Per user override unlock shipped data on 2026-05-23: remove
+  // request-time shipment/outbox DDL and require migration-owned schema.
+  await assertFulfillmentSchemaReady(sql);
 }
 
 async function enqueueShipmentConfirmationSql(

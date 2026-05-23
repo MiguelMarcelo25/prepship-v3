@@ -51,12 +51,14 @@ const inventoryLowerSkuMigration = fs.readFileSync(
 );
 const scanRoots = ['src', 'api'];
 const ddlPattern =
-  /create\s+(?:unique\s+)?(?:table|index)(?:\s+concurrently)?\s+if\s+not\s+exists/i;
+  /(?:create\s+(?:unique\s+)?(?:table|index)(?:\s+concurrently)?\s+if\s+not\s+exists|alter\s+table\s+[\s\S]{0,160}?add\s+column\s+if\s+not\s+exists)/i;
 
 const expectedRuntimeDdlFiles = [
-  'api/carriers/labels.ts',
-  'src/services/fulfillment/outbox.ts',
+  'api/_lib/walmart-fees-sync.ts',
+  'api/carriers/walmart/fees.ts',
+  'api/cron/sync-walmart-fees.ts',
   'src/services/orders-performance-maintenance.ts',
+  'src/routes/analysis.ts',
 ];
 
 const requiredClassifications = [
@@ -213,9 +215,9 @@ for (const classification of requiredClassifications) {
 }
 
 assert(
-  audit.includes('Do not change without a label/shipment-specific plan') &&
-    audit.includes('Do not refactor in this batch'),
-  `${auditPath} keeps label/shipment-adjacent DDL out of generic cleanup`,
+  audit.includes('Move to migration-readiness only after shipped-fee') &&
+    audit.includes('settled-fee side-effect paths'),
+  `${auditPath} keeps shipped-fee DDL out of generic cleanup`,
 );
 
 for (const table of reportingMetricTables) {
@@ -291,6 +293,14 @@ assert(
     audit.includes(ordersEndpointPerformanceMigrationPath) &&
     audit.includes(inventoryListPerformanceMigrationPath),
   `${auditPath} documents low-risk performance index runtime DDL migration resolution`,
+);
+
+assert(
+  audit.includes('src/services/fulfillment/outbox.ts') &&
+    audit.includes('api/carriers/labels.ts') &&
+    audit.includes('drizzle/0020_fulfillment_outbox.sql') &&
+    audit.includes('drizzle/0032_connector_architecture.sql'),
+  `${auditPath} documents fulfillment outbox/direct-label runtime DDL migration resolution`,
 );
 
 if (process.exitCode) process.exit(process.exitCode);

@@ -1,6 +1,7 @@
 import { sql as pg } from '../../db/client';
 import { loadClientCredentials } from '../../lib/shipstation/credentials';
 import { resolveStoreConnector } from '../../connectors/store-resolution';
+import { assertFulfillmentSchemaReady } from './schema-readiness';
 
 type OrderForConfirmation = {
   id: number;
@@ -52,44 +53,9 @@ function sourceOrderId(externalOrderId: string | null | undefined): string | nul
 
 export async function ensureFulfillmentSchema(): Promise<void> {
   schemaEnsured ??= (async () => {
-    await pg`ALTER TABLE orders ADD COLUMN IF NOT EXISTS source_provider TEXT`;
-    await pg`ALTER TABLE orders ADD COLUMN IF NOT EXISTS source_account_id TEXT`;
-    await pg`ALTER TABLE orders ADD COLUMN IF NOT EXISTS source_order_id TEXT`;
-    await pg`ALTER TABLE orders ADD COLUMN IF NOT EXISTS source_order_number TEXT`;
-    await pg`ALTER TABLE orders ADD COLUMN IF NOT EXISTS source_status TEXT`;
-    await pg`ALTER TABLE orders ADD COLUMN IF NOT EXISTS canonical_status TEXT`;
-    await pg`CREATE INDEX IF NOT EXISTS orders_source_provider_idx ON orders (source_provider)`;
-    await pg`CREATE INDEX IF NOT EXISTS orders_canonical_status_idx ON orders (canonical_status)`;
-
-    await pg`ALTER TABLE shipments ADD COLUMN IF NOT EXISTS carrier_provider TEXT`;
-    await pg`ALTER TABLE shipments ADD COLUMN IF NOT EXISTS carrier_account_id TEXT`;
-    await pg`ALTER TABLE shipments ADD COLUMN IF NOT EXISTS label_provider_key TEXT`;
-    await pg`ALTER TABLE shipments ADD COLUMN IF NOT EXISTS confirmation_status TEXT`;
-    await pg`ALTER TABLE shipments ADD COLUMN IF NOT EXISTS confirmation_provider TEXT`;
-    await pg`ALTER TABLE shipments ADD COLUMN IF NOT EXISTS confirmation_attempts INTEGER NOT NULL DEFAULT 0`;
-    await pg`ALTER TABLE shipments ADD COLUMN IF NOT EXISTS confirmation_last_error TEXT`;
-    await pg`ALTER TABLE shipments ADD COLUMN IF NOT EXISTS marketplace_confirmed_at TIMESTAMPTZ`;
-    await pg`CREATE INDEX IF NOT EXISTS shipments_confirmation_status_idx ON shipments (confirmation_status)`;
-
-    await pg`
-      CREATE TABLE IF NOT EXISTS fulfillment_outbox (
-        id SERIAL PRIMARY KEY,
-        order_id INTEGER NOT NULL,
-        shipment_id INTEGER,
-        event_type TEXT NOT NULL,
-        provider TEXT NOT NULL,
-        dedupe_key TEXT NOT NULL,
-        payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-        status TEXT NOT NULL DEFAULT 'pending',
-        attempts INTEGER NOT NULL DEFAULT 0,
-        last_error TEXT,
-        next_run_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
-    `;
-    await pg`CREATE UNIQUE INDEX IF NOT EXISTS fulfillment_outbox_dedupe_idx ON fulfillment_outbox (dedupe_key)`;
-    await pg`CREATE INDEX IF NOT EXISTS fulfillment_outbox_due_idx ON fulfillment_outbox (status, next_run_at)`;
+    // Per user override unlock shipped data on 2026-05-23: remove
+    // request-time shipment/outbox DDL and require migration-owned schema.
+    await assertFulfillmentSchemaReady(pg);
   })();
 
   return schemaEnsured;

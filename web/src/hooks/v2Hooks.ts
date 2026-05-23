@@ -571,14 +571,15 @@ export function useOrders(
     );
   }, [query.data, clientsQuery.data]);
 
+  const queryRefetch = query.refetch;
   const refetch = useCallback(async () => {
     setRefreshing(true);
     try {
-      await query.refetch();
+      await queryRefetch();
     } finally {
       setRefreshing(false);
     }
-  }, [query]);
+  }, [queryRefetch]);
 
   const goToPage = useCallback(async (pageNum: number) => {
     setCurrentPage(pageNum);
