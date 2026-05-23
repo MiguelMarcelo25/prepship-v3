@@ -14,6 +14,7 @@ for (const provider of ['shipp', 'walmart_shipping', 'ups', 'easypost']) {
 
 const {
   __test_extractWalmartLabelReference,
+  __test_selectWalmartOrderByCustomerOrderId,
 } = await tsImport('../api/carriers/labels.ts', import.meta.url);
 
 const nestedUrl = __test_extractWalmartLabelReference({
@@ -79,4 +80,42 @@ assert.throws(
   () => __test_extractWalmartLabelReference({ data: { pdfBase64: '   ' } }, 'base64'),
   /pdfBase64:string_empty/,
   'walmart label extractor must reject empty label payload strings',
+);
+
+const walmartLookupPayload = {
+  list: {
+    elements: {
+      order: [
+        {
+          customerOrderId: '200014621111111',
+          purchaseOrderId: '129114381111111',
+        },
+        {
+          customerOrderId: '200014621589900',
+          purchaseOrderId: '129114381893181',
+          orderLines: { orderLine: [{ lineNumber: '1' }] },
+        },
+      ],
+    },
+  },
+};
+const exactWalmartOrder = __test_selectWalmartOrderByCustomerOrderId(walmartLookupPayload, '200014621589900');
+assert.equal(
+  exactWalmartOrder?.purchaseOrderId,
+  '129114381893181',
+  'walmart live PO lookup must select the exact customerOrderId match',
+);
+const missingWalmartOrder = __test_selectWalmartOrderByCustomerOrderId(walmartLookupPayload, '200014629999999');
+assert.equal(
+  missingWalmartOrder,
+  null,
+  'walmart live PO lookup must not fall back to the first returned order when customerOrderId does not match',
+);
+assert(
+  labels.includes('walmart live PO verification replaced cached purchaseOrderId'),
+  'walmart labels must log when live PO verification replaces cached purchaseOrderId',
+);
+assert(
+  labels.includes('Could not verify live Walmart PO#'),
+  'walmart labels must stop label purchase when live PO verification cannot prove the mapping',
 );

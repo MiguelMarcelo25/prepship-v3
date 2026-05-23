@@ -795,15 +795,24 @@ async function lookupWalmartOrderByCustomerOrderIdForLabels(
       return null;
     }
     const data = (await res.json()) as { list?: { elements?: { order?: unknown[] | unknown } } };
-    const ordersRaw = (data?.list?.elements as { order?: unknown[] | unknown } | undefined)?.order;
-    const orders = Array.isArray(ordersRaw) ? ordersRaw : ordersRaw ? [ordersRaw] : [];
-    const match = orders.find((order) => String((order as any)?.customerOrderId ?? '') === trimmed) ?? orders[0];
-    const purchaseOrderId = String((match as any)?.purchaseOrderId ?? '').trim();
-    return purchaseOrderId ? { purchaseOrderId, rawOrder: match } : null;
+    return selectWalmartOrderByCustomerOrderId(data, trimmed);
   } catch (err) {
     console.warn('[carriers/labels] walmart /v3/orders lookup error:', err instanceof Error ? err.message : err);
     return null;
   }
+}
+
+function selectWalmartOrderByCustomerOrderId(
+  data: unknown,
+  customerOrderId: string,
+): { purchaseOrderId: string; rawOrder: any } | null {
+  const trimmed = customerOrderId.trim();
+  const ordersRaw = ((data as any)?.list?.elements as { order?: unknown[] | unknown } | undefined)?.order;
+  const orders = Array.isArray(ordersRaw) ? ordersRaw : ordersRaw ? [ordersRaw] : [];
+  const match = orders.find((order) => String((order as any)?.customerOrderId ?? '').trim() === trimmed);
+  if (!match) return null;
+  const purchaseOrderId = String((match as any)?.purchaseOrderId ?? '').trim();
+  return purchaseOrderId ? { purchaseOrderId, rawOrder: match } : null;
 }
 
 function walmartRawOrderUsable(rawOrder: any): boolean {
@@ -875,17 +884,30 @@ async function resolveWalmartLabelContext(
   }
 
   const candidateCustomerOrderId = (() => {
+    const rawCustomerOrderId = firstString(rawOrder?.customerOrderId);
     if (lookupC && /^\d{8,}$/.test(lookupC.trim())) return lookupC.trim();
-    if (lookupB && /^\d{8,}$/.test(lookupB.trim())) return lookupB.trim();
-    if (lookupA && /^\d{8,}$/.test(lookupA.trim())) return lookupA.trim();
+    if (rawCustomerOrderId && /^\d{8,}$/.test(rawCustomerOrderId.trim())) return rawCustomerOrderId.trim();
     return null;
   })();
-  if ((!purchaseOrderId || !walmartRawOrderUsable(rawOrder)) && candidateCustomerOrderId) {
+  if (candidateCustomerOrderId) {
     const looked = await lookupWalmartOrderByCustomerOrderIdForLabels(creds, candidateCustomerOrderId);
     if (looked) {
-      if (!purchaseOrderId) purchaseOrderSource = 'walmart_marketplace_api';
+      if (purchaseOrderId && purchaseOrderId !== looked.purchaseOrderId) {
+        console.warn('[carriers/labels] walmart live PO verification replaced cached purchaseOrderId', {
+          customerOrderId: candidateCustomerOrderId,
+          previousPurchaseOrderId: purchaseOrderId,
+          livePurchaseOrderId: looked.purchaseOrderId,
+        });
+      }
+      purchaseOrderSource = 'walmart_marketplace_api';
       purchaseOrderId = looked.purchaseOrderId;
       rawOrder = looked.rawOrder ?? rawOrder;
+      orderNumber = String((looked.rawOrder as any)?.customerOrderId ?? candidateCustomerOrderId);
+      externalOrderId = `walmart-${purchaseOrderId}`;
+    } else {
+      throw new Error(
+        `Could not verify live Walmart PO# for customerOrderId ${candidateCustomerOrderId}. Label not purchased.`,
+      );
     }
   }
 
@@ -1353,6 +1375,10 @@ function extractWalmartLabelReference(
 
 export function __test_extractWalmartLabelReference(payload: unknown, mode: 'base64' | 'url') {
   return extractWalmartLabelReference(payload, mode);
+}
+
+export function __test_selectWalmartOrderByCustomerOrderId(data: unknown, customerOrderId: string) {
+  return selectWalmartOrderByCustomerOrderId(data, customerOrderId);
 }
 
 function walmartLabelExtractionErrorMessage(err: unknown): string {
