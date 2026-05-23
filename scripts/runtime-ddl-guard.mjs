@@ -54,6 +54,11 @@ const ordersListCountIndexesMigration = fs.readFileSync(
   path.join(root, ordersListCountIndexesMigrationPath),
   'utf8',
 );
+const ordersQueryRound2IndexesMigrationPath = 'drizzle/0034_orders_query_round2_indexes.sql';
+const ordersQueryRound2IndexesMigration = fs.readFileSync(
+  path.join(root, ordersQueryRound2IndexesMigrationPath),
+  'utf8',
+);
 const scanRoots = ['src', 'api'];
 const ddlPattern =
   /(?:create\s+(?:unique\s+)?(?:table|index)(?:\s+concurrently)?\s+if\s+not\s+exists|alter\s+table\s+[\s\S]{0,160}?add\s+column\s+if\s+not\s+exists)/i;
@@ -131,6 +136,26 @@ const lowRiskPerformanceIndexes = [
     indexName: 'orders_walmart_direct_order_number_latest_idx',
     migrationPath: ordersListCountIndexesMigrationPath,
     migration: ordersListCountIndexesMigration,
+  },
+  {
+    indexName: 'orders_store_status_date_id_idx',
+    migrationPath: ordersQueryRound2IndexesMigrationPath,
+    migration: ordersQueryRound2IndexesMigration,
+  },
+  {
+    indexName: 'orders_client_status_date_id_idx',
+    migrationPath: ordersQueryRound2IndexesMigrationPath,
+    migration: ordersQueryRound2IndexesMigration,
+  },
+  {
+    indexName: 'clients_test_client_id_idx',
+    migrationPath: ordersQueryRound2IndexesMigrationPath,
+    migration: ordersQueryRound2IndexesMigration,
+  },
+  {
+    indexName: 'clients_active_client_id_idx',
+    migrationPath: ordersQueryRound2IndexesMigrationPath,
+    migration: ordersQueryRound2IndexesMigration,
   },
   {
     indexName: 'orders_dashboard_sales_date_idx',

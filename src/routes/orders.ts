@@ -21,7 +21,7 @@ import {
   normalizeOrderBestRateDto,
   normalizeOrderSelectedRateDto,
 } from '../services/order-rate-dto';
-import { EXCLUDED_STORE_IDS, EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
+import { EXCLUDED_STORE_IDS, EXCLUDED_STORE_IDS_SQL, isExcludedStoreId } from '../config/prepship';
 import { isAdminEmail } from '../lib/admin-emails';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
 import { hasAppPermission } from '../middleware/auth';
@@ -178,23 +178,30 @@ async function assertOrderEditable(
 // legacy null rows to visible.
 const visibleStoreBasePredicate = sql`(
   (${orders.storeId} is not null and ${orders.storeId} not in (${sql.raw(EXCLUDED_STORE_IDS_SQL)}))
-  or exists (
-    select 1 from ${clients} test_client
-    where test_client.id = ${orders.clientId}
-      and test_client.is_test = true
+  or ${orders.clientId} in (
+    select test_client.id
+    from ${clients} test_client
+    where test_client.is_test = true
   )
 )`;
 
 const activeOrderClientPredicate = sql`(
   ${orders.clientId} is null
-  or exists (
-    select 1 from ${clients} owner_client
-    where owner_client.id = ${orders.clientId}
-      and coalesce(owner_client.active, true) = true
+  or ${orders.clientId} in (
+    select owner_client.id
+    from ${clients} owner_client
+    where coalesce(owner_client.active, true) = true
   )
 )`;
 
 const visibleStorePredicate = sql`${visibleStoreBasePredicate} and ${activeOrderClientPredicate}`;
+
+function visiblePredicateForOrdersList(q: { storeId?: number; includeInactiveClients?: boolean }): SQL | undefined {
+  if (typeof q.storeId === 'number' && !isExcludedStoreId(q.storeId)) {
+    return q.includeInactiveClients === true ? undefined : activeOrderClientPredicate;
+  }
+  return q.includeInactiveClients === true ? visibleStoreBasePredicate : visibleStorePredicate;
+}
 
 function visibleAwaitingOrdersPredicate(alias: 'orders' | 'o' = 'orders') {
   const externalOrderId = sql.raw(`${alias}.external_order_id`);
@@ -865,7 +872,7 @@ app.get('/dashboard-sales', zValidator('query', dashboardSalesQuery), async (c) 
       orderScopePredicate(dashboardSalesScope),
       q.clientId !== undefined ? eq(orders.clientId, q.clientId) : undefined,
       q.storeId !== undefined ? eq(orders.storeId, q.storeId) : undefined,
-      includeInactiveClients ? visibleStoreBasePredicate : visibleStorePredicate,
+      visiblePredicateForOrdersList(q),
       q.hideTestOrders === true && q.clientId === undefined && q.storeId === undefined
         ? sql`not ${testOrderPredicate}`
         : undefined,

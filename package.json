@@ -119,6 +119,7 @@
     "test:walmart-dual-dedupe": "node scripts/walmart-dual-dedupe-guard.mjs",
     "test:orders-startup-requests": "node scripts/orders-startup-requests-guard.mjs",
     "test:orders-request-pressure": "node scripts/orders-request-pressure-guard.mjs",
+    "test:orders-query-round2": "node scripts/orders-query-round2-guard.mjs",
     "test:orders-maintenance-startup": "node scripts/orders-maintenance-startup-guard.mjs",
     "test:secondary-order-detail-lazy": "node scripts/secondary-order-detail-lazy-guard.mjs",
     "test:order-detail-drawer-lazy": "node scripts/order-detail-drawer-lazy-guard.mjs",
