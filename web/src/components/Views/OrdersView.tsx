@@ -44,6 +44,7 @@ import {
   Tag,
   Plus,
 } from 'lucide-react'
+import { FcPrint } from 'react-icons/fc'
 import HoverImage from '../HoverImage'
 import type { NewOrderPayload } from '../NewOrderModal'
 // Shared carrier badge — renders official UPS/USPS SVG logos plus
@@ -9289,7 +9290,7 @@ export default function OrdersView({
                     type="button"
                     onClick={() => void printQueueEntries(group.orders.map((entry) => entry.queue_entry_id))}
                   >
-                    🖨️ Print Group
+                    <FcPrint size={15} aria-hidden className="shrink-0" /> Print Group
                   </button>
                 </div>
                 <div className="pq-group-orders flex flex-col gap-1.5 p-2 bg-page/40">
@@ -9414,7 +9415,7 @@ export default function OrdersView({
                 disabled={queueCount === 0 || queuePrintInFlight}
                 onClick={() => void printQueueEntries(queuedEntries.map((entry) => entry.queue_entry_id))}
               >
-                <PrinterIcon size={12.5} strokeWidth={2.75} className="text-amber-200 drop-shadow-sm" />
+                <FcPrint size={16} aria-hidden className="shrink-0 drop-shadow-sm" />
                 Print All
               </button>
               <button

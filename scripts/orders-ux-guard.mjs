@@ -18,6 +18,8 @@ const [ordersView, orderDetailDrawer, v2Hooks, ordersRoute, home, shellCss] = aw
   readFile(shellCssPath, 'utf8'),
 ])
 
+const normalizedOrdersView = ordersView.replace(/\r\n/g, '\n')
+
 const checks = [
   {
     name: 'row click opens the detail drawer instead of entering bulk selection',
@@ -72,8 +74,8 @@ const checks = [
   {
     name: 'print queue badge hydrates on page load before the drawer opens',
     pass:
-      !ordersView.includes('useEffect(() => {\n    if (!queueOpen) return\n    if (queueScope') &&
-      ordersView.includes('void hydrateQueue()\n    if (!queueOpen)') &&
+      !normalizedOrdersView.includes('useEffect(() => {\n    if (!queueOpen) return\n    if (queueScope') &&
+      normalizedOrdersView.includes('void hydrateQueue()\n    if (!queueOpen)') &&
       ordersView.includes('if (queueOpen) setQueueLoading(true)') &&
       ordersView.includes('if (!cancelled && queueOpen)'),
   },
