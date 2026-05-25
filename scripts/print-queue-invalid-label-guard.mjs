@@ -38,10 +38,11 @@ assert(
 );
 
 assert(
-  serviceSource.includes("typeof labelUrl !== 'string'") &&
+  serviceSource.includes('extractShipstationLabelUrl(labelUrl)') &&
+    serviceSource.includes("typeof normalized !== 'string'") &&
     serviceSource.includes('trimmed.length === 0') &&
     serviceSource.includes("trimmed === '[object Object]'"),
-  'print queue service rejects non-string, empty, and object-sentinel label URLs',
+  'print queue service unwraps known label URL objects and rejects empty/object-sentinel label URLs',
 );
 
 assert(

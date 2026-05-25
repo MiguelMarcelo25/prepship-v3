@@ -835,7 +835,24 @@ function toStringValue(value: unknown) {
 
 // Per user override unlock shipped data on 2026-05-23: queue/recovery paths must reject corrupt saved label URLs without weakening shipped/cancelled edit locks.
 function getQueueableLabelUrl(value: unknown) {
-  const labelUrl = toStringValue(value)?.trim()
+  const seen = new Set<unknown>()
+  const pick = (candidate: unknown, depth = 0): string | null => {
+    const direct = toStringValue(candidate)?.trim()
+    if (direct) return direct
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate) || depth > 3 || seen.has(candidate)) return null
+    seen.add(candidate)
+    const record = candidate as Record<string, unknown>
+    return (
+      pick(record.pdf, depth + 1) ??
+      pick(record.href, depth + 1) ??
+      pick(record.url, depth + 1) ??
+      pick(record.downloadUrl, depth + 1) ??
+      pick(record.download_url, depth + 1) ??
+      pick(record.labelUrl, depth + 1) ??
+      pick(record.label_url, depth + 1)
+    )
+  }
+  const labelUrl = pick(value)
   if (!labelUrl || labelUrl === '[object Object]') return null
   return labelUrl
 }

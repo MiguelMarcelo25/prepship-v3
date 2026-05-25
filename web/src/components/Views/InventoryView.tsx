@@ -635,13 +635,13 @@ function formatWeight(ounces: number | null | undefined) {
 // dates (orderDate — naive-PT-stamped-Z). The ledger paths use UTC
 // helpers; order paths use naive-PT helpers.
 import {
-  formatCaDateTime,
+  formatCaDateTimeLabeled,
   formatNaivePtDateLong,
 } from '../../lib/ca-time'
 
 function formatDateTime(value: number | string | null | undefined) {
   // Ledger entries use createdAt (true UTC). Render in CA TZ.
-  return formatCaDateTime(value)
+  return formatCaDateTimeLabeled(value)
 }
 
 function formatDateOnly(value: string | null | undefined) {

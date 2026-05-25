@@ -4,6 +4,7 @@ import { db } from '../db/client';
 import { clients } from '../db/schema/clients';
 import { printQueue, type PrintQueueEntry } from '../db/schema/print-queue';
 import { settings } from '../db/schema/settings';
+import { extractShipstationLabelUrl } from '../lib/shipstation/labels';
 import { createLabelV2, type CreateLabelInputDto } from './labels';
 
 export type AddToQueueInput = {
@@ -155,12 +156,15 @@ export function isPrintQueueLabelUrlError(err: unknown): err is PrintQueueLabelU
 }
 
 // Per user override unlock shipped data on 2026-05-23: shipped-label queue
-// handling rejects object/empty label URLs before queueing or merging labels.
+// handling unwraps known provider label URL objects while still rejecting empty/corrupt values.
 function normalizePrintQueueLabelUrl(labelUrl: unknown): string {
-  if (typeof labelUrl !== 'string') {
-    throw new PrintQueueLabelUrlError('Label URL must be a string.');
+  const normalized = typeof labelUrl === 'string'
+    ? labelUrl
+    : extractShipstationLabelUrl(labelUrl);
+  if (typeof normalized !== 'string') {
+    throw new PrintQueueLabelUrlError('Label URL must resolve to a string.');
   }
-  const trimmed = labelUrl.trim();
+  const trimmed = normalized.trim();
   if (trimmed.length === 0) {
     throw new PrintQueueLabelUrlError('Label URL is required.');
   }

@@ -6,6 +6,7 @@ import { orders, orderOverrides } from '../db/schema/orders';
 import { clients } from '../db/schema/clients';
 import { ssRequest } from '../lib/shipstation/client';
 import {
+  extractShipstationLabelUrl,
   ssCreateReturnLabel,
   ssGetShipmentV1,
   ssListRecentLabels,
@@ -453,6 +454,8 @@ async function persistLabelFromRate(label: Label, orderId: number, clientId?: nu
   const shipDate = label.ship_date ? new Date(label.ship_date) : null;
   const createdAt = label.created_at ? new Date(label.created_at) : new Date();
   const ssShipmentId = Number(String(label.shipment_id ?? '').replace(/^se-/, ''));
+  // Per user override unlock shipped data on 2026-05-23: normalize nested ShipStation label downloads before shipment persistence so queue recovery receives a plain URL string.
+  const labelUrl = extractShipstationLabelUrl(label.label_download);
   const [row] = await db
     .insert(shipments)
     .values({
@@ -463,7 +466,7 @@ async function persistLabelFromRate(label: Label, orderId: number, clientId?: nu
       trackingNumber: label.tracking_number,
       shipDate,
       createDate: createdAt,
-      labelUrl: label.label_download?.pdf ?? label.label_download?.href ?? null,
+      labelUrl,
       labelCreatedAt: createdAt,
       labelFormat: label.label_format ?? 'pdf',
       labelCarrier: label.carrier_code,
