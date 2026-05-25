@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const screenshotDir = path.resolve(__dirname, '../../reports/inventory-ux')
-const baseUrl = 'http://127.0.0.1:5177'
+const baseUrl = process.env.PREPSHIP_E2E_BASE_URL ?? 'http://127.0.0.1:5177'
 const apiOrigin = 'http://127.0.0.1:3000'
 const supabaseProjectRef = 'fdkseckgfuvdczzqmnac'
 
@@ -344,6 +344,9 @@ for (const viewport of [
 test('inventory stock table fits desktop viewport and shows active page number', async ({ page }) => {
   await page.setViewportSize({ width: 1365, height: 768 })
   await setup(page)
+  await page.addInitScript(() => {
+    window.localStorage.setItem('inventory_page_size', '20')
+  })
 
   const manyRows = Array.from({ length: 75 }, (_, index) => {
     const source = inventoryRows[index % 3]
@@ -357,7 +360,7 @@ test('inventory stock table fits desktop viewport and shows active page number',
     }
   })
 
-  await page.route('**/inventory?**', async (route) => {
+  await page.route((url) => url.pathname === '/inventory' && url.search.length > 0, async (route) => {
     const url = new URL(route.request().url())
     const pageNumber = Number(url.searchParams.get('page') || 1)
     const pageSize = Number(url.searchParams.get('pageSize') || 50)
@@ -380,8 +383,14 @@ test('inventory stock table fits desktop viewport and shows active page number',
   const overflow = await tableScroll.evaluate((element) => ({
     clientWidth: element.clientWidth,
     scrollWidth: element.scrollWidth,
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+    overflowY: window.getComputedStyle(element).overflowY,
   }))
   expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth + 2)
+  expect(overflow.scrollHeight).toBeLessThanOrEqual(overflow.clientHeight + 2)
+  expect(overflow.overflowY).toBe('visible')
+  await expect(page.locator('.inventory-stock-table-shell tbody > tr')).toHaveCount(20)
 
   const actionsCellOverflow = await page.locator('td[data-col-key="actions"]').first().evaluate((element) => ({
     clientWidth: element.clientWidth,
@@ -391,6 +400,21 @@ test('inventory stock table fits desktop viewport and shows active page number',
 
   const pagination = page.locator('.inventory-stock-table-shell > .data-table-pagination-bar')
   await expect(pagination).toBeVisible()
+  const view = page.locator('#view-inventory')
+  const viewMetrics = await view.evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+  }))
+  expect(viewMetrics.scrollHeight).toBeGreaterThan(viewMetrics.clientHeight)
+  await view.evaluate((element) => {
+    element.scrollTop = Math.round(element.scrollHeight / 3)
+  })
+  await page.waitForTimeout(50)
+  const viewBox = await view.boundingBox()
+  expect(viewBox).not.toBeNull()
+  const paginationBox = await pagination.boundingBox()
+  expect(paginationBox).not.toBeNull()
+  expect(Math.abs((paginationBox.y + paginationBox.height) - (viewBox.y + viewBox.height))).toBeLessThanOrEqual(6)
   const pageOne = pagination.getByRole('button', { name: '1' })
   await expect(pageOne).toBeVisible()
   await expect(pageOne).toHaveText('1')
