@@ -9330,26 +9330,48 @@ export default function OrdersView({
               </div>
             ) : null}
           </div>
-          <div style={{ display: 'flex', gap: 8, padding: 12, borderTop: '1px solid var(--border)' }}>
+          <div className="flex items-center gap-2 p-3 border-t border-line bg-surface/95">
             {/* Print All hidden while History is being viewed (it would print
                 from the active queue, which is irrelevant in history view). */}
             {!queueHistoryVisible ? (
               <>
               <button
-                className="btn btn-primary btn-sm"
+                className="
+                  inline-flex items-center justify-center gap-1.5
+                  h-8 px-3 rounded-lg
+                  text-[12px] font-bold text-white
+                  bg-gradient-to-br from-brand to-indigo-600
+                  shadow-md hover:shadow-lg active:scale-95
+                  ring-1 ring-brand/30
+                  transition-all duration-150
+                  disabled:cursor-not-allowed disabled:opacity-55
+                  disabled:shadow-none disabled:active:scale-100
+                "
                 id="pq-print-all-btn"
                 type="button"
                 disabled={queueCount === 0 || queuePrintInFlight}
                 onClick={() => void printQueueEntries(queuedEntries.map((entry) => entry.queue_entry_id))}
               >
-                🖨️ Print All
+                <PrinterIcon size={12.5} strokeWidth={2.75} />
+                Print All
               </button>
               <button
-                className="btn btn-secondary btn-sm"
+                className="
+                  inline-flex items-center justify-center gap-1.5
+                  h-8 px-3 rounded-lg
+                  text-[12px] font-bold text-white
+                  bg-gradient-to-br from-brand to-indigo-600
+                  shadow-md hover:shadow-lg active:scale-95
+                  ring-1 ring-brand/30
+                  transition-all duration-150
+                  disabled:cursor-not-allowed disabled:opacity-55
+                  disabled:shadow-none disabled:active:scale-100
+                "
                 type="button"
                 disabled={queueCount === 0 || queuePrintInFlight}
                 onClick={() => void confirmQueueEntriesPrinted(queuedEntries.map((entry) => entry.queue_entry_id))}
               >
+                <CheckIcon size={12.5} strokeWidth={2.75} />
                 Confirm Printed
               </button>
               </>
