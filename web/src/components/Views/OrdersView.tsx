@@ -8148,7 +8148,7 @@ export default function OrdersView({
           ) : null}
 
           {/* SKU filter dropdown */}
-          <div className="relative inline-flex items-center">
+          <div className="relative inline-flex items-center w-full max-w-[280px] sm:w-[280px]">
             <Filter size={11} strokeWidth={2.25} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-3 pointer-events-none" aria-hidden />
             <select
               id="skuFilter"
@@ -8159,7 +8159,7 @@ export default function OrdersView({
               aria-label="Filter by SKU"
               className="
                 appearance-none cursor-pointer
-                h-8 pl-7 pr-7
+                w-full h-8 pl-7 pr-7
                 rounded-lg
                 bg-surface ring-1 ring-line
                 text-[12px] font-medium text-ink-2
