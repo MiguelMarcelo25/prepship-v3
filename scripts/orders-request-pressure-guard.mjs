@@ -28,8 +28,11 @@ assert(
 );
 
 assert(
-  ordersRoute.includes('.orderBy(desc(orders.orderDate), desc(orders.id))'),
-  '/orders page query must use deterministic order_date/id ordering aligned to orders_status_date_id_idx',
+  ordersRoute.includes('const orderByClauses = q.sort === \'sku\'') &&
+    ordersRoute.includes('primary_sku_for_sort') &&
+    ordersRoute.includes(': [desc(orders.orderDate), desc(orders.id)]') &&
+    ordersRoute.includes('.orderBy(...orderByClauses)'),
+  '/orders page query must keep deterministic date/id ordering by default and only add SKU ordering before pagination when requested',
 );
 
 assert(
