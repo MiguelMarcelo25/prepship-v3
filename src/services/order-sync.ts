@@ -5,8 +5,11 @@ import { clients } from '../db/schema/clients';
 import { ssV1Request } from '../lib/shipstation/v1-client';
 import { getSettingNumber, setSetting } from './settings';
 import { isExcludedStoreId } from '../config/prepship';
-import { replaceOrderItemsForExternalOrderIds } from './order-items';
 import { buildShipStationOrderSource } from './normalized-order-persistence';
+import {
+  upsertNormalizedStoreOrders,
+  type NormalizedStoreOrder,
+} from './store-order-import';
 import { deductInventoryForOrder } from './fulfillment-deductions';
 
 const LAST_SYNC_KEY = 'order_sync.last_modified_ms';
@@ -158,6 +161,42 @@ async function flushNewStorePairs(
 //   - fallbackClientId auto-attaches orders to their owner account
 //   - externallyShipped is only overwritten when the incoming row
 //     affirmatively sets it (preserves user-set flags on routine syncs)
+function toShipStationNormalizedStoreOrder(
+  o: SSOrder,
+  args: {
+    clientId: number | null;
+    storeId: number | null;
+  },
+): NormalizedStoreOrder {
+  return {
+    externalOrderId: String(o.orderId),
+    source: buildShipStationOrderSource({
+      orderId: o.orderId,
+      orderNumber: o.orderNumber,
+      storeId: args.storeId,
+      raw: o as unknown as Record<string, unknown>,
+    }),
+    orderNumber: o.orderNumber,
+    orderStatus: o.orderStatus,
+    orderDate: parseShipStationDate(o.orderDate),
+    clientId: args.clientId,
+    storeId: args.storeId,
+    customerEmail: o.customerEmail ?? null,
+    shipToName: o.shipTo?.name ?? null,
+    shipToCity: o.shipTo?.city ?? null,
+    shipToState: o.shipTo?.state ?? null,
+    shipToPostalCode: o.shipTo?.postalCode ?? null,
+    carrierCode: o.carrierCode ?? null,
+    serviceCode: o.serviceCode ?? null,
+    weightOz: toOunces(o.weight),
+    orderTotal: toNumericString(o.orderTotal),
+    shippingAmount: toNumericString(o.shippingAmount),
+    items: (o.items as unknown[]) ?? [],
+    raw: o as unknown as Record<string, unknown>,
+    externallyShipped: externallyShippedFromRaw(o),
+  };
+}
+
 async function upsertOrdersBatch(
   ordersIn: SSOrder[],
   storeToClient: {
@@ -168,9 +207,7 @@ async function upsertOrdersBatch(
 ): Promise<number> {
   if (!ordersIn.length) return 0;
 
-  type Row = typeof orders.$inferInsert;
-  const rows: Row[] = [];
-
+  const normalizedOrders: NormalizedStoreOrder[] = [];
   for (const o of ordersIn) {
     const storeId = o.advancedOptions?.storeId ?? null;
     if (isExcludedStoreId(storeId)) continue;
@@ -183,112 +220,11 @@ async function upsertOrdersBatch(
         storeToClient.newPairs?.push({ storeId, clientId: fallbackClientId });
       }
     }
-    const source = buildShipStationOrderSource({
-      orderId: o.orderId,
-      orderNumber: o.orderNumber,
-      storeId,
-      raw: o as unknown as Record<string, unknown>,
-    });
-    rows.push({
-      externalOrderId: String(o.orderId),
-      sourceProvider: source.sourceProvider,
-      sourceAccountId: source.sourceAccountId,
-      sourceOrderId: source.sourceOrderId,
-      sourceOrderNumber: source.sourceOrderNumber,
-      rawSourcePayload: source.rawSourcePayload,
-      orderNumber: o.orderNumber,
-      orderStatus: o.orderStatus,
-      orderDate: parseShipStationDate(o.orderDate),
-      clientId,
-      storeId,
-      customerEmail: o.customerEmail ?? null,
-      shipToName: o.shipTo?.name ?? null,
-      shipToCity: o.shipTo?.city ?? null,
-      shipToState: o.shipTo?.state ?? null,
-      shipToPostalCode: o.shipTo?.postalCode ?? null,
-      carrierCode: o.carrierCode ?? null,
-      serviceCode: o.serviceCode ?? null,
-      weightOz: toOunces(o.weight),
-      orderTotal: toNumericString(o.orderTotal),
-      shippingAmount: toNumericString(o.shippingAmount),
-      items: (o.items as unknown[]) ?? [],
-      raw: o as unknown as Record<string, unknown>,
-      externallyShipped: externallyShippedFromRaw(o),
-      updatedAt: new Date(),
-    });
+    normalizedOrders.push(toShipStationNormalizedStoreOrder(o, { clientId, storeId }));
   }
 
-  if (!rows.length) return 0;
+  return upsertNormalizedStoreOrders(normalizedOrders);
 
-  // EXCLUDED-based ON CONFLICT DO UPDATE. The externally_shipped CASE
-  // preserves any already-true DB value when the incoming row is false
-  // (matches the old per-row logic).
-  await db
-    .insert(orders)
-    .values(rows)
-    .onConflictDoUpdate({
-      target: orders.externalOrderId,
-      set: {
-        orderNumber: sql`excluded.order_number`,
-        sourceProvider: sql`excluded.source_provider`,
-        sourceAccountId: sql`excluded.source_account_id`,
-        sourceOrderId: sql`excluded.source_order_id`,
-        sourceOrderNumber: sql`excluded.source_order_number`,
-        rawSourcePayload: sql`excluded.raw_source_payload`,
-        // ─── SHIPPED-STATUS RACE PROTECTION ─────────────────────────────
-        // Once an order is locally marked 'shipped' or 'cancelled' (via
-        // labels.ts createLabelV2 → markOrderShipped), it must NOT be
-        // downgraded back to 'awaiting_shipment' by a subsequent sync.
-        // Why this matters: when we print a label, our local UPDATE flips
-        // status to 'shipped' instantly, and a background v1 mark-shipped
-        // call tells ShipStation. ShipStation typically takes 30-60
-        // seconds to reflect that change in its read APIs. Any sync run
-        // in that window pulls the order back as 'awaiting_shipment' and
-        // the previous unconditional `excluded.order_status` overwrote
-        // our local 'shipped' — leaving the user looking at a print
-        // queue that won't clear, and causing the inventory ledger to
-        // double-deduct on a repeat print.
-        //
-        // The CASE statement below preserves our local terminal state
-        // when ShipStation reports the order as still awaiting; in every
-        // other transition path (awaiting → shipped via SS, awaiting →
-        // cancelled, or shipped → cancelled), we accept ShipStation's
-        // view as the source of truth.
-        //
-        // Per user override `unlock shipped data` on 2026-05-06.
-        orderStatus: sql`case
-          when ${orders.orderStatus} in ('shipped', 'cancelled')
-            and excluded.order_status = 'awaiting_shipment'
-            then ${orders.orderStatus}
-          else excluded.order_status
-        end`,
-        orderDate: sql`excluded.order_date`,
-        clientId: sql`excluded.client_id`,
-        storeId: sql`excluded.store_id`,
-        customerEmail: sql`excluded.customer_email`,
-        shipToName: sql`excluded.ship_to_name`,
-        shipToCity: sql`excluded.ship_to_city`,
-        shipToState: sql`excluded.ship_to_state`,
-        shipToPostalCode: sql`excluded.ship_to_postal_code`,
-        carrierCode: sql`excluded.carrier_code`,
-        serviceCode: sql`excluded.service_code`,
-        weightOz: sql`excluded.weight_oz`,
-        orderTotal: sql`excluded.order_total`,
-        shippingAmount: sql`excluded.shipping_amount`,
-        items: sql`excluded.items`,
-        raw: sql`excluded.raw`,
-        externallyShipped: sql`case when excluded.externally_shipped = true then true else orders.externally_shipped end`,
-        updatedAt: sql`excluded.updated_at`,
-      },
-    });
-
-  await replaceOrderItemsForExternalOrderIds(
-    rows
-      .map((row) => row.externalOrderId)
-      .filter((id): id is string => Boolean(id))
-  );
-
-  return rows.length;
 }
 
 async function updateExistingOrderStatusesBatch(

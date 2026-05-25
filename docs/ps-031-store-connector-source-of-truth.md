@@ -1,6 +1,6 @@
 # PS-031 Store Connector Source of Truth Plan
 
-Status: Phase 0 plan plus first architecture safeguards.
+Status: Connector-first persistence staged behind the existing ShipStation sync, plus architecture safeguards.
 
 ## Source-of-Truth Matrix
 
@@ -29,15 +29,16 @@ Raw JSON is never the hidden authoritative source for new logic. It is compatibi
 
 Current production order import remains ShipStation-first through `syncOrders({})` while PS-031 stages the abstraction. ShipStation continues to work as a store connector and as a carrier connector. Existing DR Prepper / KF Goods flows continue using the same ShipStation V1 order import, V2 rate/label, shipment sync, print queue, and marketplace confirmation paths.
 
-Safe now:
+Implemented now:
 
 - Centralize normalized source identity construction so ShipStation uses the same helper future store connectors will use.
+- Route ShipStation order persistence through a provider-agnostic `store-order-import` service that writes `orders` plus `order_items`.
 - Treat unsupported marketplace confirmation as explicit `not_supported` instead of successful/not-required.
 - Add guards proving carrier account identity fields remain visible and distinct.
 
 Future migration:
 
-- Move `syncOrders` behind a provider-agnostic store order sync orchestrator.
+- Move scheduler account discovery behind a provider-agnostic store order sync orchestrator.
 - Add live import implementations for Shopify/Amazon/TikTok/WooCommerce only after credentials, paging, rate limits, and status mapping are specified.
 - Add DB uniqueness enforcement on `(source_provider, source_account_id, source_order_id)` only after historical duplicate analysis.
 
