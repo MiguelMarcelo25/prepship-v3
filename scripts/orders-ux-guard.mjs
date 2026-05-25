@@ -86,6 +86,15 @@ const checks = [
       ordersView.includes('Click Print All first') &&
       ordersView.includes('disabled={queueCount === 0 || queuePrintInFlight || !queueConfirmPrintedReady}'),
   },
+  {
+    name: 'print queue search matches visible item names and SKU text',
+    pass:
+      ordersView.includes('matchesQueueGroupSearch') &&
+      ordersView.includes('const label = group.label.toLowerCase()') &&
+      ordersView.includes('const description = group.description.toLowerCase()') &&
+      ordersView.includes('itemDescription.includes(pqSearchLower)') &&
+      ordersView.includes('queueGroups.filter(matchesQueueGroupSearch)'),
+  },
 ]
 
 const failures = checks.filter((check) => !check.pass)

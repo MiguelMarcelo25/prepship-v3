@@ -5884,11 +5884,24 @@ export default function OrdersView({
     const id = String(entry.order_id ?? '').toLowerCase()
     return num.includes(pqSearchLower) || id.includes(pqSearchLower)
   }
+  const matchesQueueGroupSearch = (group: PrintQueueGroup) => {
+    if (!pqSearchLower) return true
+    const label = group.label.toLowerCase()
+    const description = group.description.toLowerCase()
+    const searchableOrders = group.orders.some((entry) => {
+      const primarySku = String(entry.primary_sku ?? '').toLowerCase()
+      const skuGroup = String(entry.sku_group_id ?? '').toLowerCase()
+      const itemDescription = String(entry.item_description ?? '').toLowerCase()
+      return matchesPqSearch(entry) ||
+        primarySku.includes(pqSearchLower) ||
+        skuGroup.includes(pqSearchLower) ||
+        itemDescription.includes(pqSearchLower)
+    })
+    return label.includes(pqSearchLower) || description.includes(pqSearchLower) || searchableOrders
+  }
   const visibleQueueGroups = useMemo<PrintQueueGroup[]>(() => {
     if (!pqSearchLower) return queueGroups
-    return queueGroups
-      .map((group) => ({ ...group, orders: group.orders.filter(matchesPqSearch) }))
-      .filter((group) => group.orders.length > 0)
+    return queueGroups.filter(matchesQueueGroupSearch)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queueGroups, pqSearchLower])
   const visiblePrintedEntries = useMemo(() => {
