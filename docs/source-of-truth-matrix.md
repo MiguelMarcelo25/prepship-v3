@@ -790,6 +790,248 @@ Suggested package script name:
 }
 ```
 
+## PS-032 Modular Boundary Matrix
+
+PS-032 defines the boundary PrepShip should preserve before splitting into
+Shipping Core, WMS, Billing, Analytics, Client Portal, and Admin/Platform
+modules. This is not a broad refactor plan. It is the source-of-truth contract
+future refactors must follow.
+
+| Domain/module | Authoritative source of truth | Derived/read-model sources | Cache-only sources | Frozen snapshot sources | Mutation owner | Read owner | Current coupling risks | Target boundary |
+|---|---|---|---|---|---|---|---|---|
+| Orders / order import | External store order plus normalized `orders` row with source identity fields | Order list APIs, sidebar counts, dashboard summaries | None | Terminal local workflow facts and import provenance | Store connector/order sync services and editable order routes | Orders API, dashboard, analysis, inventory reads | ShipStation-first sync still exists; raw payload/prefix inference can leak into new logic | `shipping-core` import boundary with connector-first identity |
+| Order items | `order_items` canonical line-level truth | SKU analytics, billing previews, dashboard SKU metrics | None | Imported line facts at sync time; billed line copies after generation | Normalized persistence and order item service | Dashboard, inventory, analysis, billing | `orders.items` is still used by billing, analysis, inventory seeding, and frontend compatibility | `shipping-core` writes canonical items; `billing` and `analytics` consume read models |
+| Shipping selections / order overrides | `order_overrides` and editable shipping fields before label creation | Rate browser DTOs and order detail display | None | Final selected rate/package/account on `shipments` | Shipping/rate/order override services | Orders UI and label routes | Pre-label selected rate can be mistaken for final billing truth | `shipping-core` owns selections until shipment snapshot |
+| Rates / rate cache | Live carrier or ShipStation quote response at request time | Rate browser display and diagnostics | `rate_cache` only | `shipments.selectedRateJson` after label purchase | Rate service and label purchase flow | Rate routes and Orders UI | Billing must not read cache as invoice/audit truth | `shipping-core`; cache remains performance-only |
+| Labels / shipments | `shipments` durable label, tracking, carrier, cost, and provider account snapshot | Reprint, tracking, billing, manifest, reporting views | Mock/test label stores only in non-production flows | Shipment row itself | Label service and shipment sync | Orders, print queue, billing, marketplace confirmation | Shipping label creation currently triggers WMS deductions directly | `shipping-core` emits shipment events; WMS/Billing consume |
+| Print queue | `print_queue_orders` active/printed/removed status in DB | Queue drawer grouping and history view | None | Queue status transitions and print confirmation timestamps | Print queue service/routes | Orders UI print queue drawer | Frontend must never be queue source of truth | `shipping-core` print workflow |
+| Marketplace confirmation / outbox | `fulfillment_outbox` plus shipment confirmation status fields | Marketplace status/retry UI | None | Provider response/status history at processing time | Fulfillment outbox service and store confirmation connectors | Orders/ops status views | Unsupported providers need explicit not-supported state, not silent success | `shipping-core` event/outbox boundary |
+| Inventory | `inventory` operational stock/config row | Stock tables, low/out badges, receiving UI | None | Ledger entries for each stock movement | WMS inventory services/routes | Inventory UI, reporting, billing read models | Shipping services call fulfillment deductions directly | `wms` event consumer; Shipping emits shipment/deduction intent |
+| Inventory ledger | `inventory_ledger` movement history | History panel, reconciliation reports, storage billing inputs | None | Ledger row with quantity/source/reason | WMS receive/deduct/adjust services | Inventory history, billing/reporting | Some repair/admin scripts can touch ledger and must stay scoped | `wms` immutable movement log |
+| Inventory balance / read model | Current `inventory.stockQty`; target single balance projection | Stock-level table, dashboard counts, alerts | Reporting caches with generation metadata | Ledger history remains proof | WMS balance service | Inventory/dashboard/analytics | Pages can recalculate stock/velocity differently | `wms` owns balance projection; others read it |
+| Products / SKU defaults | `products` canonical SKU defaults; `product_defaults` compatibility/read model | Inventory/product forms and defaults display | None | Defaults copied into order/shipment/billing snapshots when used | Product/WMS services | Inventory, products, rate/package helpers | Product route mirrors into `product_defaults`; dual writes need a single service | `wms` product catalog boundary |
+| Packages / package stock | Package catalog/package stock tables and package ledger where applicable | Package UI and shipping package choices | None | Package choice frozen on shipment; package movement ledger | WMS package service and shipping package selection service | Packages UI, Orders rate/label UI | Label creation can deduct package stock directly | `wms` owns stock; `shipping-core` owns chosen package snapshot |
+| Billing config | Billing config/rate tables | Billing preview DTOs | None | Billing config copied into generated line items/invoices | Billing service/routes | Billing UI and exports | Billing reads across live domains and raw order JSON in places | `billing` module consumes stable read models/snapshots |
+| Billing line items / invoices | `billing_line_items` and invoice records after generation | Billing summaries, invoice UI, exports | None | Generated invoice/line-item rows are frozen unless adjusted | Billing generation/adjustment services | Billing UI/admin exports | Recalculating historical invoices from live orders can drift | `billing` frozen financial snapshot boundary |
+| Analytics / reporting / dashboard | Operational tables plus generated reporting projections | Dashboard cards, analysis tables, reporting metrics | Reporting caches only with `generatedAt` and window | None unless reports are explicitly exported/finalized | Reporting refresh services | Dashboard/analysis UI | Duplicate formulas in routes/frontend can diverge or slow production | `analytics` projections/read models |
+| Clients / stores / accounts | Clients, stores/accounts, carrier account assignment, credentials resolver | Sidebar counts, filters, store/client selectors | None | Shipment/provider account snapshots and audit records | Admin/platform account services and credential resolver | Shipping, sync, billing, dashboard | Legacy client ShipStation credential fields coexist with carrier account tables | `admin/platform` owns identity/credentials; modules consume resolver |
+| Frontend / app shell / module entitlements | Backend APIs and entitlement decisions | Sidebar/routes/buttons and local UI state | Browser state only for UX | None | App shell and backend entitlement services | Operators/admin users | Sidebar hiding is not an API authorization boundary; large views contain business logic | `client-portal` owns UI intent; backend modules own business truth |
+
+## Dependency Classification
+
+Correct dependencies:
+- Shipping reads orders, order items, selected package/rate state, carrier
+  credentials through approved services, and writes durable shipments and print
+  queue/outbox records.
+- WMS reads shipment/order events to maintain inventory and package stock.
+- Billing reads shipment snapshots, billing config, order item read models, and
+  inventory/package movement snapshots.
+- Analytics reads operational tables or reporting projections, never mutates
+  shipping/WMS/billing truth.
+
+Risky/tangled dependencies:
+- `src/services/labels.ts` imports `src/services/fulfillment-deductions.ts`.
+  Shipping label creation therefore directly invokes WMS inventory/package
+  deduction instead of emitting an event that WMS consumes.
+- `src/services/order-sync.ts`, `src/services/shipment-sync.ts`, and
+  `src/routes/orders.ts` also call fulfillment deductions. These remain
+  protected by `INVENTORY_AUTO_DEDUCT`, but they are still cross-module
+  coupling.
+- `src/services/billing.ts`, `src/routes/analysis.ts`,
+  `src/routes/inventory.ts`, `web/src/lib/v2-apiClient.ts`, and some frontend
+  views still reference raw `orders.items` compatibility data.
+- `src/routes/analysis.ts` contains route-time `ALTER TABLE` compatibility DDL.
+  Schema changes should live in migrations/scripts, not request handlers.
+- `src/routes/products.ts` mirrors product data into `product_defaults`.
+  Product defaults need one WMS service boundary that owns both current and
+  compatibility writes.
+
+Should become event consumers:
+- Inventory deductions and package stock deductions should consume shipment
+  events from Shipping Core.
+- Billing line item generation should consume shipment/order item/package
+  snapshots and billing config snapshots.
+- Dashboard and analysis should consume reporting projections.
+- Marketplace confirmation should consume shipment-created events through
+  capability-aware store connectors.
+
+Should become backend service boundaries:
+- Label purchase, queue/reprint, rate selection, marketplace confirmation,
+  inventory receive/deduct/adjust, billing generation, product defaults,
+  package stock, and reporting refresh.
+- Frontend components should send operator intent and render API responses;
+  they should not compute invoice truth, stock truth, or provider state.
+
+Should become read models/projections:
+- Dashboard KPIs and trend charts.
+- Analysis tables and billing previews where expensive joins are needed.
+- Inventory balance/velocity/day-supply calculations.
+- Client/store/sidebar counts.
+
+Should be cache-only:
+- `rate_cache`, browser query caches, and any temporary API memoization.
+- Cache rows must not be used as billing, audit, shipment, inventory, or
+  marketplace confirmation truth.
+
+Should be frozen snapshots:
+- `shipments` selected rate, carrier account, label provider, tracking, package,
+  cost, and provider response summary.
+- `billing_line_items` and invoice rows after generation.
+- `inventory_ledger` movement rows.
+- Print queue printed/removed confirmation events.
+- Fulfillment outbox attempts and provider confirmation status history.
+
+## Target Module Boundaries
+
+### shipping-core
+
+Owns:
+- order import/normalization for Shipping users;
+- rates, selected rate/order override workflow, label purchase, shipments;
+- print queue, reprint/retrieve label, manifests where applicable;
+- marketplace confirmation outbox and connector dispatch;
+- carrier account selection through the platform credential resolver.
+
+Consumes:
+- client/store/account assignments from Admin/Platform;
+- WMS package/product defaults when enabled;
+- billing eligibility/config read APIs only when displaying billing-adjacent
+  shipping information.
+
+Does not own:
+- inventory balance, product catalog maintenance, billing invoice truth, or
+  dashboard formulas.
+
+### wms
+
+Owns:
+- inventory, inventory ledger, stock balance/read model, receiving, adjustments;
+- product/SKU defaults and package/package-stock lifecycle;
+- WMS-specific analytics inputs such as velocity and days supply.
+
+Consumes:
+- shipment/order events emitted by Shipping Core.
+
+Does not own:
+- label purchase, carrier credentials, marketplace confirmation, or invoice
+  finalization.
+
+### billing
+
+Owns:
+- billing config, billing preview/generation services, billing line items,
+  invoices, credits, and adjustments.
+
+Consumes:
+- shipment snapshots, order item read models, package/stock movement snapshots,
+  and frozen billing config copies.
+
+Does not own:
+- live rate cache, live order mutation, inventory mutation, or shipping labels.
+
+### analytics
+
+Owns:
+- reporting projections, dashboard/analysis read models, refresh cadence, and
+  generated-at/window metadata.
+
+Consumes:
+- operational events/tables from Shipping Core, WMS, Billing, and Platform.
+
+Does not own:
+- operational mutation of orders, labels, inventory, billing, credentials, or
+  marketplace confirmations.
+
+### client-portal
+
+Owns:
+- UI routes, form state, local filters, operator intent, and presentation
+  components.
+
+Consumes:
+- backend APIs and feature entitlement responses.
+
+Does not own:
+- business truth, invoice truth, stock truth, credential truth, or shipment
+  truth. Sidebar hiding is not sufficient authorization.
+
+### admin/platform
+
+Owns:
+- clients, stores/accounts, users, roles/RBAC, module entitlements, credential
+  governance, audit policy, and service configuration.
+
+Consumes:
+- status/read models from other modules for admin operations.
+
+Does not own:
+- domain-specific shipment, inventory, billing, or analytics calculations except
+  through admin-safe orchestration.
+
+## Non-Negotiable Architecture Rules
+
+- Frontend owns UI state and operator intent only; backend owns business truth.
+- `rate_cache` cannot be billing/audit truth.
+- `shipments` owns label/tracking/cost snapshots.
+- `order_items` should be canonical item-level truth for analytics/billing where
+  possible; raw `orders.items` is compatibility/fallback unless documented.
+- Inventory display, billing, and analytics should read one balance/read model,
+  not recalculate stock differently per page.
+- Shipping can emit events; WMS, Billing, and Analytics respond if enabled.
+  Shipping should not require WMS to be enabled.
+- Billing/invoices need frozen generated snapshots. Finalized billing should
+  not silently change when upstream data changes.
+- Module visibility and API access must eventually be controlled by feature
+  entitlements, not only sidebar hiding.
+- Shipped/cancelled lockdown, client/store scope, RBAC, credential redaction,
+  label safety, and financial redaction are architectural constraints, not UI
+  preferences.
+
+## PS-032 Confirmed Coupling Risks
+
+- Shipping -> WMS deduction coupling:
+  `src/services/labels.ts`, `src/services/order-sync.ts`,
+  `src/services/shipment-sync.ts`, and `src/routes/orders.ts` invoke
+  `src/services/fulfillment-deductions.ts`. The kill switch is correct, but the
+  target boundary is a WMS event consumer.
+- Raw order JSON compatibility:
+  `src/services/billing.ts`, `src/routes/analysis.ts`,
+  `src/routes/inventory.ts`, `web/src/lib/v2-apiClient.ts`, and frontend views
+  still use `orders.items`. This is allowed temporarily but should not expand.
+- Route-time schema DDL:
+  `src/routes/analysis.ts` has `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`
+  compatibility logic. Future schema changes should be migrations or explicit
+  maintenance scripts.
+- Product defaults dual-write:
+  `src/routes/products.ts` mirrors into `product_defaults`. The target is one
+  WMS product-defaults service that owns canonical and compatibility writes.
+- Reporting formula duplication:
+  Dashboard/analysis/frontend text and route queries still encode business
+  formulas. The target is analytics read models with documented formulas and
+  generation windows.
+
+## PS-032 Follow-Up Recommendations
+
+P0:
+- Extract a Shipping -> WMS event contract for shipment-created, shipment-voided,
+  inventory-deduction-requested, and package-deduction-requested.
+- Add a no-production-backdoor entitlement model so module access is enforced by
+  backend APIs, not only sidebar visibility.
+
+P1:
+- Move billing SKU/unit reads from raw `orders.items` to `order_items` or frozen
+  billing snapshots.
+- Move analysis route-time DDL into migrations/maintenance scripts.
+- Create one WMS product-defaults service for `products`, `product_defaults`,
+  and inventory default synchronization.
+
+P2:
+- Promote dashboard/analysis calculations into reporting projections.
+- Add module-boundary guards for new frontend financial/stock truth
+  calculations.
+- Stage connector-first order import behind existing ShipStation-compatible
+  flows.
+
 ## Recommended Follow-Up Tasks
 
 - Implement the carrier credential resolver contract and migrate rates/labels

@@ -52,6 +52,39 @@ const requiredSections = [
   'Reporting Cache vs Operational Tables',
   'Mock/In-Memory Labels vs Durable `shipments`',
   'Frozen Snapshot Rules',
+  '## PS-032 Modular Boundary Matrix',
+  '| Domain/module | Authoritative source of truth | Derived/read-model sources | Cache-only sources | Frozen snapshot sources | Mutation owner | Read owner | Current coupling risks | Target boundary |',
+  '| Orders / order import |',
+  '| Order items |',
+  '| Shipping selections / order overrides |',
+  '| Rates / rate cache |',
+  '| Labels / shipments |',
+  '| Print queue |',
+  '| Marketplace confirmation / outbox |',
+  '| Inventory |',
+  '| Inventory ledger |',
+  '| Inventory balance / read model |',
+  '| Products / SKU defaults |',
+  '| Packages / package stock |',
+  '| Billing config |',
+  '| Billing line items / invoices |',
+  '| Analytics / reporting / dashboard |',
+  '| Clients / stores / accounts |',
+  '| Frontend / app shell / module entitlements |',
+  '## Dependency Classification',
+  '## Target Module Boundaries',
+  '### shipping-core',
+  '### wms',
+  '### billing',
+  '### analytics',
+  '### client-portal',
+  '### admin/platform',
+  '## Non-Negotiable Architecture Rules',
+  'Frontend owns UI state and operator intent only; backend owns business truth.',
+  '`rate_cache` cannot be billing/audit truth.',
+  '`shipments` owns label/tracking/cost snapshots.',
+  'Shipping can emit events; WMS, Billing, and Analytics respond if enabled.',
+  '## PS-032 Confirmed Coupling Risks',
 ];
 
 for (const section of requiredSections) {
@@ -167,6 +200,47 @@ const patterns = [
       'web/src/lib/v2-apiClient.ts',
     ],
   },
+  {
+    name: 'route-time-schema-ddl',
+    regex: /ALTER\s+TABLE/i,
+    suggestion: 'Schema changes should live in migrations or explicit maintenance scripts, not request handlers.',
+    whitelist: [
+      'docs/source-of-truth-matrix.md',
+      'src/routes/analysis.ts',
+      'scripts/apply-order-assignment-migration.ts',
+      'scripts/apply-rls-hardening.ts',
+      'scripts/apply-selling-fees-migration.ts',
+      'scripts/credential-accounts-guard.mjs',
+      'scripts/migrate-supabase.ts',
+      'scripts/rate-system-hardening-guard.mjs',
+    ],
+  },
+  {
+    name: 'shipping-to-wms-deduction-coupling',
+    regex: /fulfillment-deductions|deductInventoryForOrder|deductPackageForShipment/,
+    suggestion: 'Shipping should emit events and WMS should consume deductions; keep current coupling explicit and kill-switch guarded.',
+    whitelist: [
+      'docs/source-of-truth-matrix.md',
+      'src/services/fulfillment-deductions.ts',
+      'src/services/labels.ts',
+      'src/services/order-sync.ts',
+      'src/services/shipment-sync.ts',
+      'src/routes/orders.ts',
+      'scripts/backfill-inventory-ledger.ts',
+      'scripts/inventory-auto-deduct-guard.mjs',
+      'web/src/components/Views/OrdersView.tsx',
+    ],
+  },
+  {
+    name: 'billing-raw-orders-items',
+    regex: /orders\.items|orderItems:\s*orders\.items/i,
+    suggestion: 'Billing should consume order_items or frozen billing snapshots; raw orders.items is compatibility only.',
+    appliesTo: (file) => file.startsWith('src/services/billing') || file.startsWith('src/routes/billing'),
+    whitelist: [
+      'docs/source-of-truth-matrix.md',
+      'src/services/billing.ts',
+    ],
+  },
 ];
 
 const warnings = [];
@@ -174,6 +248,7 @@ const warnings = [];
 for (const file of scanFiles) {
   const content = read(file);
   for (const pattern of patterns) {
+    if (pattern.appliesTo && !pattern.appliesTo(file)) continue;
     if (!pattern.regex.test(content)) continue;
     if (pattern.whitelist.includes(file)) continue;
     warnings.push({
