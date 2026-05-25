@@ -10,7 +10,7 @@
   --analysis-table-sticky-top: 0px;
   overflow-x: auto;
   padding-top: 0;
-  padding-bottom: 24px;
+  padding-bottom: 0;
 }
 
 .analysis-sticky-panel {
@@ -19,9 +19,27 @@
   isolation: isolate;
 }
 
+.analysis-pagination-sticky {
+  position: sticky;
+  bottom: 0;
+  z-index: 35;
+  margin-top: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-top: 0;
+  border-radius: 0 0 10px 10px;
+  background: rgb(var(--surface-rgb, 255 255 255) / 0.96);
+  box-shadow: 0 -8px 20px rgba(15, 23, 42, 0.08);
+  backdrop-filter: blur(8px);
+}
+
 @media (max-width: 900px) {
   #view-analysis.view-content {
-    padding-bottom: 20px;
+    padding-bottom: 0;
+  }
+
+  .analysis-pagination-sticky {
+    padding: 8px 10px;
   }
 }
 

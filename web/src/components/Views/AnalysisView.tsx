@@ -1591,17 +1591,19 @@ export default function AnalysisView({
       </Suspense>
 
       {!dataState.loading && !dataState.error && sortedRows.length > 0 ? (
-        <AnalysisPagination
-          page={page}
-          pageSize={pageSize}
-          pageSizeOptions={ANALYSIS_PAGE_SIZE_OPTIONS}
-          totalItems={sortedRows.length}
-          onPageChange={setPage}
-          onPageSizeChange={(nextPageSize) => {
-            setPageSize(nextPageSize)
-            setPage(1)
-          }}
-        />
+        <div className="analysis-pagination-sticky">
+          <AnalysisPagination
+            page={page}
+            pageSize={pageSize}
+            pageSizeOptions={ANALYSIS_PAGE_SIZE_OPTIONS}
+            totalItems={sortedRows.length}
+            onPageChange={setPage}
+            onPageSizeChange={(nextPageSize) => {
+              setPageSize(nextPageSize)
+              setPage(1)
+            }}
+          />
+        </div>
       ) : null}
 
       {skuDrawerOpen ? (
