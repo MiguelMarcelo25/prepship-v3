@@ -76,6 +76,7 @@ const patterns = [
     suggestion: 'Use order_items for analytics/reporting; keep orders.items as raw import compatibility.',
     whitelist: [
       'docs/source-of-truth-matrix.md',
+      'docs/ps-031-store-connector-source-of-truth.md',
       'docs/prepship-runtime-domain-architecture.md',
       'docs/dashboard-formulas.md',
       'src/db/schema/order-items.ts',

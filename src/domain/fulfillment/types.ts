@@ -1,7 +1,13 @@
 export type FulfillmentProvider = string;
 export type FulfillmentCapability = string;
 
-export type ConfirmationStatus = 'not_required' | 'pending' | 'processing' | 'succeeded' | 'failed';
+export type ConfirmationStatus =
+  | 'not_required'
+  | 'not_supported'
+  | 'pending'
+  | 'processing'
+  | 'succeeded'
+  | 'failed';
 
 export type ConfirmationResult = {
   ok: boolean;

@@ -81,7 +81,7 @@ export async function markShipmentConfirmationState(args: {
   carrierProvider: string;
   carrierAccountId?: string | number | null;
   confirmationProvider: string;
-  status: 'not_required' | 'pending' | 'processing' | 'succeeded' | 'failed';
+  status: 'not_required' | 'not_supported' | 'pending' | 'processing' | 'succeeded' | 'failed';
   attempts?: number;
   lastError?: string | null;
 }): Promise<void> {
@@ -119,15 +119,18 @@ export async function enqueueShipmentConfirmation(
   }
 
   const provider = input.confirmationProvider ?? inferStoreProvider(input.order.externalOrderId);
-  const supported = provider === 'shipstation' || provider === 'walmart' || provider === 'ebay';
-  if (!supported) {
+  const resolvedStoreConnector = resolveStoreConnector(provider, 'shipment.confirm');
+  if (!resolvedStoreConnector || resolvedStoreConnector.implementation.status !== 'live') {
+    const reason = !resolvedStoreConnector
+      ? `No shipment confirmation connector registered for ${provider}`
+      : `${provider} shipment confirmation connector is ${resolvedStoreConnector.implementation.status}`;
     await markShipmentConfirmationState({
       shipmentId: input.shipmentId,
       carrierProvider: String(input.payload?.carrierProvider ?? 'unknown'),
       carrierAccountId: input.payload?.carrierAccountId as string | number | null | undefined,
       confirmationProvider: provider,
-      status: 'not_required',
-      lastError: `${provider} confirmation connector is not implemented yet`,
+      status: 'not_supported',
+      lastError: reason,
     });
     return { queued: false, provider };
   }

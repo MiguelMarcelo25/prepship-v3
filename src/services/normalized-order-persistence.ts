@@ -6,17 +6,33 @@ export type NormalizedOrderSource = {
   rawSourcePayload: Record<string, unknown>;
 };
 
+export function buildNormalizedOrderSource(input: {
+  sourceProvider: string;
+  sourceAccountId: string;
+  sourceOrderId: number | string;
+  sourceOrderNumber?: string | null;
+  raw: Record<string, unknown>;
+}): NormalizedOrderSource {
+  return {
+    sourceProvider: input.sourceProvider,
+    sourceAccountId: input.sourceAccountId,
+    sourceOrderId: String(input.sourceOrderId),
+    sourceOrderNumber: input.sourceOrderNumber ?? null,
+    rawSourcePayload: input.raw,
+  };
+}
+
 export function buildShipStationOrderSource(input: {
   orderId: number | string;
   orderNumber?: string | null;
   storeId?: number | null;
   raw: Record<string, unknown>;
 }): NormalizedOrderSource {
-  return {
+  return buildNormalizedOrderSource({
     sourceProvider: 'shipstation',
     sourceAccountId: input.storeId != null ? `store:${input.storeId}` : 'shipstation-default',
-    sourceOrderId: String(input.orderId),
+    sourceOrderId: input.orderId,
     sourceOrderNumber: input.orderNumber ?? null,
-    rawSourcePayload: input.raw,
-  };
+    raw: input.raw,
+  });
 }

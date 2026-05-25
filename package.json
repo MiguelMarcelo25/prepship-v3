@@ -102,6 +102,8 @@
     "test:direct-carrier-labels": "node scripts/direct-carrier-label-guard.mjs",
     "test:connector-registry": "node scripts/connector-registry-guard.mjs",
     "test:connector-architecture": "node scripts/connector-architecture-guard.mjs",
+    "test:store-connector-source": "node scripts/store-connector-source-guard.mjs",
+    "test:shipstation-carrier-account-identity": "node scripts/shipstation-carrier-account-identity-guard.mjs",
     "test:health-deep-readiness": "node scripts/health-deep-readiness-guard.mjs",
     "status:sync": "tsx scripts/status-sync.ts",
     "test:status:sync": "tsx scripts/status-sync.ts --check",
