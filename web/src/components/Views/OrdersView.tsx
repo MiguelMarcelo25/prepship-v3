@@ -5943,7 +5943,7 @@ export default function OrdersView({
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           {selectedRateCarrierCode ? (
-            <CarrierBadge code={selectedRateCarrierCode} size="xs" />
+            <CarrierBadge code={selectedRateCarrierCode} size="sm" />
           ) : null}
           {renderRateAmountWithMarkup(selectedRateBase, displayMarked)}
         </div>
