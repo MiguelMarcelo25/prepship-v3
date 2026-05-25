@@ -3,11 +3,13 @@ import path from 'node:path'
 
 const root = process.cwd()
 const ordersViewPath = path.join(root, 'web/src/components/Views/OrdersView.tsx')
+const orderDetailDrawerPath = path.join(root, 'web/src/components/OrderDetailDrawer.tsx')
 const homePath = path.join(root, 'web/src/Home.tsx')
 const shellCssPath = path.join(root, 'web/src/app-shell.css')
 
-const [ordersView, home, shellCss] = await Promise.all([
+const [ordersView, orderDetailDrawer, home, shellCss] = await Promise.all([
   readFile(ordersViewPath, 'utf8'),
+  readFile(orderDetailDrawerPath, 'utf8'),
   readFile(homePath, 'utf8'),
   readFile(shellCssPath, 'utf8'),
 ])
@@ -47,6 +49,12 @@ const checks = [
   {
     name: 'order detail drawer status badge uses fetched order status, not the active sidebar route',
     pass: !ordersView.includes('displayStatus={currentStatus}'),
+  },
+  {
+    name: 'order detail drawer prefers PrepShip local status over raw provider status',
+    pass:
+      orderDetailDrawer.includes('payload?.orderStatus') &&
+      orderDetailDrawer.indexOf('payload?.orderStatus') < orderDetailDrawer.indexOf('raw.orderStatus'),
   },
 ]
 

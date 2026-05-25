@@ -400,7 +400,9 @@ export default function OrderDetailDrawer({
   if (orderId == null) return null;
 
   const raw: OrderFull = (payload?.raw ?? payload ?? {}) as OrderFull;
-  const effectiveStatus = displayStatus ?? raw.orderStatus;
+  // Per user override unlock shipped data on 2026-05-25: status badges must use
+  // PrepShip's local order status before stale marketplace/ShipStation raw data.
+  const effectiveStatus = displayStatus ?? payload?.orderStatus ?? payload?.local?.orderStatus ?? raw.orderStatus;
   const shipTo: ShipTo = raw.shipTo ?? {};
   const items: OrderItem[] = (raw.items ?? []).filter(
     (it) => (it as any)?.adjustment !== true
