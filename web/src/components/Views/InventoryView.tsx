@@ -635,13 +635,28 @@ function formatWeight(ounces: number | null | undefined) {
 // dates (orderDate — naive-PT-stamped-Z). The ledger paths use UTC
 // helpers; order paths use naive-PT helpers.
 import {
-  formatCaDateTimeLabeled,
   formatNaivePtDateLong,
 } from '../../lib/ca-time'
 
+const LOCAL_DATE_TIME_FORMATTER = new Intl.DateTimeFormat('en-US', {
+  month: '2-digit',
+  day: '2-digit',
+  year: '2-digit',
+  hour: 'numeric',
+  minute: '2-digit',
+  hour12: true,
+})
+
 function formatDateTime(value: number | string | null | undefined) {
-  // Ledger entries use createdAt (true UTC). Render in CA TZ.
-  return formatCaDateTimeLabeled(value)
+  if (value == null) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return '—'
+  const parts = Object.fromEntries(
+    LOCAL_DATE_TIME_FORMATTER.formatToParts(date)
+      .filter((part) => part.type !== 'literal')
+      .map((part) => [part.type, part.value]),
+  )
+  return `${parts.month}/${parts.day}/${parts.year} ${parts.hour}:${parts.minute} ${parts.dayPeriod}`
 }
 
 function formatDateOnly(value: string | null | undefined) {
@@ -4289,7 +4304,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                 >
                   <thead>
                     <tr>
-                      <SortableHeader sortKey="date" sortState={historySort} onSort={handleHistorySort}>Date</SortableHeader>
+                      <SortableHeader sortKey="date" sortState={historySort} onSort={handleHistorySort}>Date (Local)</SortableHeader>
                       <SortableHeader sortKey="sku" sortState={historySort} onSort={handleHistorySort}>SKU</SortableHeader>
                       <SortableHeader sortKey="type" sortState={historySort} onSort={handleHistorySort}>Type</SortableHeader>
                       <SortableHeader sortKey="qty" sortState={historySort} onSort={handleHistorySort} align="right" style={{ textAlign: 'right' }}>Qty</SortableHeader>
