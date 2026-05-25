@@ -4,12 +4,16 @@ import path from 'node:path'
 const root = process.cwd()
 const ordersViewPath = path.join(root, 'web/src/components/Views/OrdersView.tsx')
 const orderDetailDrawerPath = path.join(root, 'web/src/components/OrderDetailDrawer.tsx')
+const v2HooksPath = path.join(root, 'web/src/hooks/v2Hooks.ts')
+const ordersRoutePath = path.join(root, 'src/routes/orders.ts')
 const homePath = path.join(root, 'web/src/Home.tsx')
 const shellCssPath = path.join(root, 'web/src/app-shell.css')
 
-const [ordersView, orderDetailDrawer, home, shellCss] = await Promise.all([
+const [ordersView, orderDetailDrawer, v2Hooks, ordersRoute, home, shellCss] = await Promise.all([
   readFile(ordersViewPath, 'utf8'),
   readFile(orderDetailDrawerPath, 'utf8'),
+  readFile(v2HooksPath, 'utf8'),
+  readFile(ordersRoutePath, 'utf8'),
   readFile(homePath, 'utf8'),
   readFile(shellCssPath, 'utf8'),
 ])
@@ -55,6 +59,15 @@ const checks = [
     pass:
       orderDetailDrawer.includes('payload?.orderStatus') &&
       orderDetailDrawer.indexOf('payload?.orderStatus') < orderDetailDrawer.indexOf('raw.orderStatus'),
+  },
+  {
+    name: 'SKU Sort is server-side before pagination, not page-local only',
+    pass:
+      v2Hooks.includes('sort: sortBy') &&
+      ordersView.includes("sortBy: skuSortActive ? 'sku' : undefined") &&
+      ordersRoute.includes("sort: z.enum(['sku']).optional()") &&
+      ordersRoute.includes('primary_sku_for_sort') &&
+      ordersRoute.indexOf('primary_sku_for_sort') < ordersRoute.indexOf('.limit(q.pageSize)'),
   },
 ]
 

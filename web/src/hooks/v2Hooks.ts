@@ -41,6 +41,7 @@ export interface UseOrdersOptions {
   includeInactiveClients?: boolean;
   search?: string;
   sku?: string;
+  sortBy?: 'sku';
 }
 
 export interface UseOrdersResult {
@@ -446,6 +447,7 @@ export function useOrders(
     includeInactiveClients = false,
     search,
     sku,
+    sortBy,
   } = options;
 
   const [currentPage, setCurrentPage] = useState<number>(page);
@@ -504,6 +506,7 @@ export function useOrders(
     isoTo,
     trimmedSearch,
     trimmedSku,
+    sortBy,
   ]);
 
   const delayExactTotal =
@@ -527,6 +530,7 @@ export function useOrders(
       isoTo,
       trimmedSearch,
       trimmedSku,
+      sortBy,
       delayExactTotal,
     ],
     queryFn: () =>
@@ -544,6 +548,7 @@ export function useOrders(
           dateTo: isoTo,
           search: trimmedSearch || undefined,
           sku: trimmedSku || undefined,
+          sort: sortBy,
           includeTotal: delayExactTotal ? false : undefined,
         })}`
       ),

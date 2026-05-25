@@ -1060,6 +1060,7 @@ const listQuery = paginationSchema.extend({
   dateFrom: z.string().datetime().optional(),
   dateTo: z.string().datetime().optional(),
   search: z.string().optional(),
+  sort: z.enum(['sku']).optional(),
   includeTotal: z.coerce.boolean().optional(),
   // Filter to orders containing at least one items[] entry whose
   // sku exactly matches. The FE used to apply this client-side over
@@ -1242,13 +1243,25 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   // are legitimately distinct (different store / orderId) — v2 never collapses
   // by order_number and neither should we.
   const offset = offsetOf(q);
+  const primary_sku_for_sort = sql<string>`(
+    select lower(trim(oi.sku))
+    from order_items oi
+    where oi.order_id = ${orders.id}
+      and oi.quantity > 0
+      and trim(coalesce(oi.sku, '')) <> ''
+    order by lower(trim(oi.sku)) asc
+    limit 1
+  )`;
+  const orderByClauses = q.sort === 'sku'
+    ? [sql`${primary_sku_for_sort} asc nulls last`, desc(orders.orderDate), desc(orders.id)]
+    : [desc(orders.orderDate), desc(orders.id)];
   const joined = await timedOrdersStep(timings, 'ordersPage', () =>
     db
       .select({ order: orderListSelect, overrides: orderOverrides })
       .from(orders)
       .leftJoin(orderOverrides, eq(orderOverrides.orderId, orders.id))
       .where(where)
-      .orderBy(desc(orders.orderDate), desc(orders.id))
+      .orderBy(...orderByClauses)
       .limit(q.pageSize)
       .offset(offset)
   );

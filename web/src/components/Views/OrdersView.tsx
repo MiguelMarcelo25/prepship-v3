@@ -2163,6 +2163,7 @@ export default function OrdersView({
     hideTestOrders: hideTestOrdersInAllAwaiting,
     includeInactiveClients,
     search: debouncedSearchQuery,
+    sortBy: skuSortActive ? 'sku' : undefined,
     // Forwarded so the backend filters by SKU exactly. Replaces the
     // old client-side filter (now removed below) which only ran over
     // the current paginated page and missed matches on later pages.
