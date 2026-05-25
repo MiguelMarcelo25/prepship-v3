@@ -9364,9 +9364,9 @@ export default function OrdersView({
 
       {detailDrawerOrderId != null ? (
         <Suspense fallback={null}>
+          {/* Per user override unlock shipped data on 2026-05-25: do not force the active sidebar route as the detail status. */}
           <OrderDetailDrawer
             orderId={detailDrawerOrderId}
-            displayStatus={currentStatus}
             presentation={detailDrawerFromQueue ? 'modal' : 'drawer'}
             closeLabel={detailDrawerFromQueue ? 'Back' : undefined}
             closeTitle={detailDrawerFromQueue ? 'Back to print queue' : undefined}

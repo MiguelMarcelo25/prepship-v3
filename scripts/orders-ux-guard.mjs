@@ -44,6 +44,10 @@ const checks = [
     name: 'global topbar no longer owns visible selection actions',
     pass: home.includes('Orders selection actions now live next to the table') || home.includes('{false ? ('),
   },
+  {
+    name: 'order detail drawer status badge uses fetched order status, not the active sidebar route',
+    pass: !ordersView.includes('displayStatus={currentStatus}'),
+  },
 ]
 
 const failures = checks.filter((check) => !check.pass)
