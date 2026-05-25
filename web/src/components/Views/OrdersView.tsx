@@ -9414,7 +9414,7 @@ export default function OrdersView({
                 disabled={queueCount === 0 || queuePrintInFlight}
                 onClick={() => void printQueueEntries(queuedEntries.map((entry) => entry.queue_entry_id))}
               >
-                <PrinterIcon size={12.5} strokeWidth={2.75} />
+                <PrinterIcon size={12.5} strokeWidth={2.75} className="text-amber-200 drop-shadow-sm" />
                 Print All
               </button>
               <button
