@@ -1,6 +1,28 @@
 # Site Action Testing
 
-PS-022 makes site-action testing a workflow certification gate. Every new user-facing button/action must update `docs/site-action-functionality-matrix.md` and add automated coverage or document why the action is manual-gated/blocked.
+PS-022 makes site-action testing a workflow certification gate. PS-030 rebuilt that gate for the current PrepShip V4 app shell, auth bootstrap, mocked API fixtures, and browser routes. Every new user-facing button/action must update `docs/site-action-functionality-matrix.md` and add automated coverage or document why the action is manual-gated/blocked.
+
+## Primary Command
+
+Run this before claiming a workflow-changing branch is safe to ship:
+
+```bash
+npm run test:full-site-certification
+```
+
+That command runs, in order:
+
+- TypeScript checks
+- Web production build
+- static site-action/API contract guards
+- ShipStation/Print Queue label URL guards
+- Playwright workflow certification
+- Orders UX browser checks
+- Inventory UX browser checks
+- maintenance-gate browser checks
+- frontend failure-state guards
+
+Do not run multiple Playwright certification suites in parallel against the same Vite dev server. The primary command runs them sequentially and is the supported pass/fail gate.
 
 ## Required Action Checklist
 
@@ -35,6 +57,12 @@ Each critical workflow should assert:
 ## Mocked, Sandbox, And Live-Gated Modes
 
 Mocked mode is the default for `npm run test:full-site-certification`. It uses controlled fixtures and route interception.
+
+## Test Auth / Session Mechanics
+
+The browser specs seed a local Supabase-shaped session in `localStorage` before app boot. Supabase auth calls are route-intercepted and fulfilled from fixtures. This is not a production bypass: it exists only inside Playwright test code and requires the local browser test route interception layer. Production auth/RBAC code is not weakened or changed by the certification harness.
+
+The mocked API layer also blocks known live provider hosts by default, including Walmart Marketplace, eBay APIs, and ShipStation APIs. Any unexpected live provider request is a test failure.
 
 Sandbox mode may be used only when credentials and data are explicitly sandboxed and the command is separate from the default certification suite.
 
