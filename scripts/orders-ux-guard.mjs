@@ -69,6 +69,14 @@ const checks = [
       ordersRoute.includes('primary_sku_for_sort') &&
       ordersRoute.indexOf('primary_sku_for_sort') < ordersRoute.indexOf('.limit(q.pageSize)'),
   },
+  {
+    name: 'print queue badge hydrates on page load before the drawer opens',
+    pass:
+      !ordersView.includes('useEffect(() => {\n    if (!queueOpen) return\n    if (queueScope') &&
+      ordersView.includes('void hydrateQueue()\n    if (!queueOpen)') &&
+      ordersView.includes('if (queueOpen) setQueueLoading(true)') &&
+      ordersView.includes('if (!cancelled && queueOpen)'),
+  },
 ]
 
 const failures = checks.filter((check) => !check.pass)

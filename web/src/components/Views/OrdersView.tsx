@@ -2739,8 +2739,9 @@ export default function OrdersView({
   }, [queueEntries, queueOpen, onQueueStateChange])
 
   useEffect(() => {
-    if (!queueOpen) return
     if (queueScope === 'client' && queueClientId == null) {
+      setQueueEntries([])
+      setQueueEntriesClientId(queueClientId)
       setQueueLoading(false)
       return
     }
@@ -2748,7 +2749,7 @@ export default function OrdersView({
     let cancelled = false
 
     const hydrateQueue = async () => {
-      setQueueLoading(true)
+      if (queueOpen) setQueueLoading(true)
       try {
         const payload = await apiClient.fetchQueue(queueClientId, queueHistoryVisible)
         if (!cancelled) {
@@ -2756,15 +2757,21 @@ export default function OrdersView({
           setQueueEntriesClientId(queueClientId)
         }
       } catch (error) {
-        if (!cancelled) {
+        if (!cancelled && queueOpen) {
           toastContext?.addToast(error instanceof Error ? error.message : 'Failed to load print queue', 'error')
         }
       } finally {
-        if (!cancelled) setQueueLoading(false)
+        if (!cancelled && queueOpen) setQueueLoading(false)
       }
     }
 
     void hydrateQueue()
+    if (!queueOpen) {
+      return () => {
+        cancelled = true
+      }
+    }
+
     const interval = window.setInterval(() => {
       void hydrateQueue()
     }, 30000)
