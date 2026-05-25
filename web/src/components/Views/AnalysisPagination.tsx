@@ -88,7 +88,7 @@ export function AnalysisPagination({
                 type="button"
                 className={`${BTN_BASE} ${
                   isActive
-                    ? 'border-brand bg-brand text-white hover:bg-brand hover:text-white hover:border-brand'
+                    ? '!border-brand !bg-brand !text-white hover:!bg-brand hover:!text-white hover:!border-brand'
                     : BTN_HOVER
                 }`}
                 onClick={() => onPageChange(pageNumber)}

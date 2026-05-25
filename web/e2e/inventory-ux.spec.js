@@ -340,3 +340,59 @@ for (const viewport of [
     await page.screenshot({ path: path.join(screenshotDir, `${viewport.name}-06-history-layout.png`), fullPage: true })
   })
 }
+
+test('inventory stock table fits desktop viewport and shows active page number', async ({ page }) => {
+  await page.setViewportSize({ width: 1365, height: 768 })
+  await setup(page)
+
+  const manyRows = Array.from({ length: 75 }, (_, index) => {
+    const source = inventoryRows[index % 3]
+    return {
+      ...source,
+      id: 1000 + index,
+      sku: `SKU-${String(index + 1).padStart(3, '0')}`,
+      name: `${source.name} ${index + 1}`,
+      stockQty: index % 4 === 0 ? -3 : index,
+      soldLast30Days: index % 11,
+    }
+  })
+
+  await page.route('**/inventory?**', async (route) => {
+    const url = new URL(route.request().url())
+    const pageNumber = Number(url.searchParams.get('page') || 1)
+    const pageSize = Number(url.searchParams.get('pageSize') || 50)
+    const start = (pageNumber - 1) * pageSize
+    await route.fulfill(json({
+      data: manyRows.slice(start, start + pageSize),
+      pagination: {
+        page: pageNumber,
+        pageSize,
+        total: manyRows.length,
+        totalPages: Math.ceil(manyRows.length / pageSize),
+      },
+    }))
+  })
+
+  await page.goto(`${baseUrl}/inventory/stock-levels`)
+
+  const tableScroll = page.locator('.inventory-stock-table-shell > .ps-data-table-scroll')
+  await expect(tableScroll).toBeVisible()
+  const overflow = await tableScroll.evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }))
+  expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth + 2)
+
+  const actionsCellOverflow = await page.locator('td[data-col-key="actions"]').first().evaluate((element) => ({
+    clientWidth: element.clientWidth,
+    scrollWidth: element.scrollWidth,
+  }))
+  expect(actionsCellOverflow.scrollWidth).toBeLessThanOrEqual(actionsCellOverflow.clientWidth + 2)
+
+  const pagination = page.locator('.inventory-stock-table-shell > .data-table-pagination-bar')
+  await expect(pagination).toBeVisible()
+  const pageOne = pagination.getByRole('button', { name: '1' })
+  await expect(pageOne).toBeVisible()
+  await expect(pageOne).toHaveText('1')
+  await expect(pageOne).toHaveCSS('color', 'rgb(255, 255, 255)')
+})

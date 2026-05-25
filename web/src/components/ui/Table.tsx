@@ -773,6 +773,23 @@ export function Table<Row>({
     return pinnedRows.length > 0 ? [...slice, ...pinnedRows] : slice
   }, [paginated, usingServerPagination, sortedRows, unpinnedRows, pinnedRows, page, pageSize])
 
+  useEffect(() => {
+    const el = tableScrollRef.current
+    if (!el) return
+    const nextWidth = el.clientWidth
+    setTableViewportWidth((current) => (Math.abs(current - nextWidth) > 1 ? nextWidth : current))
+  }, [
+    pagedRows.length,
+    orderedColumns.length,
+    loading,
+    paginated,
+    usingServerPagination,
+    page,
+    pageSize,
+    serverPagination?.page,
+    serverPagination?.pageSize,
+  ])
+
   // Density tokens — picked here once, applied to every cell so
   // the row rhythm stays consistent.
   const padding = density === 'compact' ? 'px-3 py-1.5' : density === 'comfortable' ? 'px-4 py-3.5' : 'px-3 py-2.5'
@@ -973,7 +990,7 @@ export function Table<Row>({
               headers that "following you while you scroll" feel. */}
           <thead ref={theadRef}>
             <tr>
-              {orderedColumns.map((col) => {
+              {orderedColumns.map((col, columnIndex) => {
                 const isActive = sort?.key === col.key
                 const align = col.align ?? 'left'
                 const alignCls = 'text-left'
@@ -981,6 +998,7 @@ export function Table<Row>({
                 const isDragging = draggingKey === col.key
                 const isDragTarget = dragOverKey === col.key && draggingKey !== null && draggingKey !== col.key
                 const reorderable = !col.pinned
+                const isLastColumn = columnIndex === orderedColumns.length - 1
                 return (
                   <th
                     key={col.key}
@@ -1077,7 +1095,7 @@ export function Table<Row>({
                         onDoubleClick={(e) => { e.stopPropagation(); autoFitColumn(col) }}
                         draggable={false}
                         onDragStart={(e) => { e.preventDefault(); e.stopPropagation() }}
-                        className="absolute top-0 bottom-0 -right-[7px] w-[14px] cursor-col-resize z-20 group/handle flex items-center justify-center hover:bg-brand/10 transition-colors"
+                        className={`absolute top-0 bottom-0 ${isLastColumn ? 'right-0 w-[10px]' : '-right-[7px] w-[14px]'} cursor-col-resize z-20 group/handle flex items-center justify-center hover:bg-brand/10 transition-colors`}
                         style={{ touchAction: 'none' }}
                         title={`Drag to resize ${col.label} · double-click to auto-fit`}
                       >

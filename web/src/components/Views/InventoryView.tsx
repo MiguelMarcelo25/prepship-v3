@@ -1572,7 +1572,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
       width: 200,
       sortable: false,
       render: (row) => (
-        <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', maxWidth: '100%' }}>
           <button
             className="btn btn-ghost btn-xs"
             type="button"
