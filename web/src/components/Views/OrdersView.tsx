@@ -1889,6 +1889,7 @@ export default function OrdersView({
   const [queuePrintMessage, setQueuePrintMessage] = useState<string | null>(null)
   const [queuePrintProgress, setQueuePrintProgress] = useState<number | null>(null)
   const [queuePrintInFlight, setQueuePrintInFlight] = useState(false)
+  const [queuePrintReadyEntryIds, setQueuePrintReadyEntryIds] = useState<Set<string>>(new Set())
   const [rateBrowserOpen, setRateBrowserOpen] = useState(false)
   const [detailDrawerOrderId, setDetailDrawerOrderId] = useState<number | null>(null)
   const [detailDrawerFromQueue, setDetailDrawerFromQueue] = useState(false)
@@ -5222,6 +5223,13 @@ export default function OrdersView({
       }
 
       await hydrateQueue()
+      if (pdfOpened) {
+        setQueuePrintReadyEntryIds((current) => {
+          const next = new Set(current)
+          entryIds.forEach((entryId) => next.add(entryId))
+          return next
+        })
+      }
       showToast(
         pdfOpened
           ? `✅ ${entryIds.length} label${entryIds.length === 1 ? '' : 's'} — opened in new tab`
@@ -5241,6 +5249,13 @@ export default function OrdersView({
 
   async function confirmQueueEntriesPrinted(entryIds: string[]) {
     if (entryIds.length === 0) return
+    const notPrintedCount = entryIds.filter((entryId) => !queuePrintReadyEntryIds.has(entryId)).length
+    if (notPrintedCount > 0) {
+      window.alert(
+        `${notPrintedCount} queued label${notPrintedCount === 1 ? '' : 's'} not printed yet. Click Print All first, then confirm printed after the PDF opens.`
+      )
+      return
+    }
     const ok = window.confirm(
       `Confirm ${entryIds.length} label${entryIds.length === 1 ? '' : 's'} printed successfully? This removes them from the active Print Queue.`
     )
@@ -5248,6 +5263,11 @@ export default function OrdersView({
     try {
       const result = await apiClient.confirmPrintedQueueEntries(queueClientId, entryIds)
       await hydrateQueue()
+      setQueuePrintReadyEntryIds((current) => {
+        const next = new Set(current)
+        entryIds.forEach((entryId) => next.delete(entryId))
+        return next
+      })
       const count = result?.confirmed_count ?? entryIds.length
       showToast(`Confirmed ${count} printed label${count === 1 ? '' : 's'}`, 'success')
     } catch (error) {
@@ -5832,6 +5852,10 @@ export default function OrdersView({
     () => activeQueueEntries.filter((entry) => entry.status === 'queued'),
     [activeQueueEntries],
   )
+  const queuedEntryIds = useMemo(
+    () => queuedEntries.map((entry) => entry.queue_entry_id),
+    [queuedEntries],
+  )
   const printedEntries = useMemo(
     () => queueHistoryVisible ? activeQueueEntries.filter((entry) => entry.status === 'printed') : [],
     [activeQueueEntries, queueHistoryVisible],
@@ -5841,6 +5865,15 @@ export default function OrdersView({
     [activeQueueEntries],
   )
   const queueCount = queuedEntries.length
+  const queueConfirmPrintedReady = queueCount > 0 && queuedEntryIds.every((entryId) => queuePrintReadyEntryIds.has(entryId))
+  const unprintedQueueCount = queuedEntryIds.filter((entryId) => !queuePrintReadyEntryIds.has(entryId)).length
+  useEffect(() => {
+    const activeIds = new Set(queuedEntryIds)
+    setQueuePrintReadyEntryIds((current) => {
+      const next = new Set([...current].filter((entryId) => activeIds.has(entryId)))
+      return next.size === current.size ? current : next
+    })
+  }, [queuedEntryIds])
   // Search & sort applied to the queue and history lists. Search matches the
   // order number OR the order_id (cast to string) — covers both how users
   // type queries (full order #, partial digits, etc.).
@@ -9338,6 +9371,14 @@ export default function OrdersView({
               </div>
             ) : null}
           </div>
+          {!queueHistoryVisible && queueCount > 0 && !queueConfirmPrintedReady ? (
+            <div
+              role="status"
+              className="mx-3 mb-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[11px] font-semibold text-amber-900"
+            >
+              {unprintedQueueCount} queued label{unprintedQueueCount === 1 ? '' : 's'} not printed yet. Click Print All first, then Confirm Printed after the PDF opens.
+            </div>
+          ) : null}
           <div className="flex items-center gap-2 p-3 border-t border-line bg-surface/95">
             {/* Print All hidden while History is being viewed (it would print
                 from the active queue, which is irrelevant in history view). */}
@@ -9376,7 +9417,8 @@ export default function OrdersView({
                   disabled:shadow-none disabled:active:scale-100
                 "
                 type="button"
-                disabled={queueCount === 0 || queuePrintInFlight}
+                title={queueConfirmPrintedReady ? 'Confirm all printed labels' : 'Print all queued labels before confirming printed'}
+                disabled={queueCount === 0 || queuePrintInFlight || !queueConfirmPrintedReady}
                 onClick={() => void confirmQueueEntriesPrinted(queuedEntries.map((entry) => entry.queue_entry_id))}
               >
                 <CheckIcon size={12.5} strokeWidth={2.75} />

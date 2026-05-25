@@ -77,6 +77,15 @@ const checks = [
       ordersView.includes('if (queueOpen) setQueueLoading(true)') &&
       ordersView.includes('if (!cancelled && queueOpen)'),
   },
+  {
+    name: 'Confirm Printed stays disabled until queued labels are printed first',
+    pass:
+      ordersView.includes('queuePrintReadyEntryIds') &&
+      ordersView.includes('queueConfirmPrintedReady') &&
+      ordersView.includes('queued label{unprintedQueueCount === 1 ?') &&
+      ordersView.includes('Click Print All first') &&
+      ordersView.includes('disabled={queueCount === 0 || queuePrintInFlight || !queueConfirmPrintedReady}'),
+  },
 ]
 
 const failures = checks.filter((check) => !check.pass)
