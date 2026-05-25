@@ -3238,6 +3238,8 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                 return classes.join(' ') || undefined
               }}
               loading={stockLoading}
+              className="inventory-stock-table-shell"
+              stickyHeader={false}
               emptyMessage={
                 alertOnly
                   ? 'No low/out stock'

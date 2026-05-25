@@ -40,8 +40,9 @@ function formatDayLabel(day: string) {
 
 export default function DashboardCharts({ trend }: DashboardChartsProps) {
   return (
-    <ResponsiveContainer width="100%" height="100%">
-      <LineChart data={trend} margin={{ top: 8, right: 8, bottom: 4, left: 8 }}>
+    <div className="h-full min-h-0 w-full overflow-hidden rounded-md [&_.recharts-wrapper]:!overflow-hidden [&_.recharts-surface]:!overflow-hidden">
+      <ResponsiveContainer width="100%" height="100%">
+      <LineChart data={trend} margin={{ top: 10, right: 14, bottom: 8, left: 8 }}>
         <CartesianGrid stroke="var(--line)" strokeDasharray="3 3" vertical={false} />
         <XAxis
           dataKey="day"
@@ -57,6 +58,7 @@ export default function DashboardCharts({ trend }: DashboardChartsProps) {
           tickLine={false}
           axisLine={false}
           allowDecimals={false}
+          domain={[0, 'dataMax']}
           width={48}
         />
         <YAxis
@@ -66,6 +68,7 @@ export default function DashboardCharts({ trend }: DashboardChartsProps) {
           tickLine={false}
           axisLine={false}
           allowDecimals={false}
+          domain={[0, 'dataMax']}
           width={56}
           tickFormatter={(value: number) => `$${formatInt(value)}`}
         />
@@ -85,7 +88,7 @@ export default function DashboardCharts({ trend }: DashboardChartsProps) {
         />
         <Line
           yAxisId="orders"
-          type="monotone"
+          type="linear"
           dataKey="current"
           stroke="var(--brand)"
           strokeWidth={2.25}
@@ -94,7 +97,7 @@ export default function DashboardCharts({ trend }: DashboardChartsProps) {
         />
         <Line
           yAxisId="revenue"
-          type="monotone"
+          type="linear"
           dataKey="currentRevenue"
           stroke="rgb(16 185 129)"
           strokeWidth={2}
@@ -102,6 +105,7 @@ export default function DashboardCharts({ trend }: DashboardChartsProps) {
           activeDot={{ r: 5, strokeWidth: 2, stroke: 'var(--surface)' }}
         />
       </LineChart>
-    </ResponsiveContainer>
+      </ResponsiveContainer>
+    </div>
   )
 }

@@ -1172,7 +1172,7 @@ export function Table<Row>({
           Only renders when there's at least one row, so empty-state
           messages stay clean. */}
       {paginated && !loading && paginationTotalItems > 0 ? (
-        <div className="border-t border-line bg-surface-2/40 px-3 py-2">
+        <div className="data-table-pagination-bar border-t border-line bg-surface-2/40 px-3 py-2">
           {/* totalItems counts only UNPINNED rows so the pagination
               math ("Showing 1-50 of 200 rows") reflects what's
               actually being paginated. Pinned rows live as a footer

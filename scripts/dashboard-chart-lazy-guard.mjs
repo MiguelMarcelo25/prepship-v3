@@ -55,6 +55,20 @@ assert(
 );
 
 assert(
+  charts.includes('overflow-hidden rounded-md') &&
+    charts.includes('[&_.recharts-wrapper]:!overflow-hidden') &&
+    charts.includes('[&_.recharts-surface]:!overflow-hidden'),
+  'DashboardCharts clips the trend chart so lines and dots cannot spill outside the panel',
+);
+
+assert(
+  charts.includes('type="linear"') &&
+    !charts.includes('type="monotone"') &&
+    charts.includes("domain={[0, 'dataMax']}"),
+  'DashboardCharts avoids smoothed-line overshoot and keeps both Y axes bounded at zero',
+);
+
+assert(
   packageJson.scripts?.['test:dashboard-chart-lazy'] === 'node scripts/dashboard-chart-lazy-guard.mjs',
   'package.json exposes test:dashboard-chart-lazy',
 );

@@ -4,6 +4,8 @@ import path from 'node:path';
 const root = process.cwd();
 const inventoryView = fs.readFileSync(path.join(root, 'web/src/components/Views/InventoryView.tsx'), 'utf8');
 const inventoryParity = fs.readFileSync(path.join(root, 'web/src/components/Views/inventory-parity.ts'), 'utf8');
+const inventoryCss = fs.readFileSync(path.join(root, 'web/src/components/Views/InventoryView.css'), 'utf8');
+const tableSource = fs.readFileSync(path.join(root, 'web/src/components/ui/Table.tsx'), 'utf8');
 const compactView = inventoryView.replace(/\s+/g, ' ');
 
 function fail(message) {
@@ -68,6 +70,27 @@ assert(
 assert(
   inventoryParity.includes('Defaults to') && inventoryParity.includes('true in the view'),
   'Inventory parity helper documents Active-only as the default view',
+);
+
+assert(
+  inventoryView.includes('className="inventory-stock-table-shell"') &&
+    inventoryView.includes('stickyHeader={false}'),
+  'Stock Levels uses the constrained table shell with horizontal scrolling enabled',
+);
+
+assert(
+  tableSource.includes('data-table-pagination-bar') &&
+    inventoryCss.includes('.inventory-stock-table-shell > .data-table-pagination-bar') &&
+    inventoryCss.includes('position:sticky') &&
+    inventoryCss.includes('bottom:0'),
+  'Stock Levels pagination bar stays visible at the bottom of the table shell',
+);
+
+assert(
+  inventoryCss.includes('.inventory-stock-table-shell > .ps-data-table-scroll') &&
+    inventoryCss.includes('overflow:auto') &&
+    inventoryCss.includes('max-height:clamp(380px, calc(100dvh - 360px), 720px)'),
+  'Stock Levels table body scrolls within laptop-sized viewports',
 );
 
 if (process.exitCode) {
