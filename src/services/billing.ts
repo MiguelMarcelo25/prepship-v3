@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, lte, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lte, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
 import {
   billingConfig,
@@ -1220,8 +1220,8 @@ export async function billingDetails(input: GenerateInput & { limit?: number }) 
         billingLineItemScopePredicate(input)
       )
     )
-    .orderBy(billingLineItems.shipDate)
-    .limit(input.limit ?? 500);
+    .orderBy(desc(billingLineItems.shipDate), desc(billingLineItems.id))
+    .limit(input.limit ?? 2000);
 
   const packageRows = await db
     .select({

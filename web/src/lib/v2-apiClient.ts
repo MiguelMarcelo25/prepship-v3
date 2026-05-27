@@ -3677,7 +3677,7 @@ export const apiClient = {
       'fetchBillingDetails',
       async () => {
         const res = await api.get<any>(
-          `/billing/details${qs({ dateFrom, dateTo, clientId })}`
+          `/billing/details${qs({ dateFrom, dateTo, clientId, limit: 2000 })}`
         );
         if (Array.isArray(res)) return res;
         if (Array.isArray(res?.data)) return res.data;
