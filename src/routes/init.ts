@@ -5,8 +5,8 @@ import { db } from '../db/client';
 import { clients } from '../db/schema/clients';
 import { locations } from '../db/schema/locations';
 import { packages } from '../db/schema/packages';
-import { ssRequest } from '../lib/shipstation';
 import type { CarriersResponse } from '../lib/shipstation/types';
+import { listCarrierAccounts } from '../services/carrier-connector-orchestrator';
 import { publicClient } from '../lib/public-client';
 import { filterClientsForScope, getClientStoreScope } from '../lib/client-store-scope';
 import { EXCLUDED_STORE_IDS, EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
@@ -52,9 +52,9 @@ app.get('/init-data', async (c) => {
 
   let carriers: CarriersResponse['carriers'] = [];
   try {
-    const res = await ssRequest<CarriersResponse>('/v2/carriers', {
+    const res = await listCarrierAccounts('shipstation', {
       dedupeKey: 'carriers:list',
-    });
+    }) as CarriersResponse;
     carriers = res.carriers;
   } catch {
     // ShipStation may be down or creds missing — return what we have.
@@ -297,9 +297,9 @@ app.get('/counts', async (c) => {
 // Direct alias for /rates/carriers — old API exposed it under /init too.
 app.get('/carrier-accounts', async (c) => {
   try {
-    const res = await ssRequest<CarriersResponse>('/v2/carriers', {
+    const res = await listCarrierAccounts('shipstation', {
       dedupeKey: 'carriers:list',
-    });
+    }) as CarriersResponse;
     return c.json(res);
   } catch (err) {
     console.warn(
@@ -398,9 +398,9 @@ app.get('/shipstation-accounts', async (c) => {
 // v2 parity: GET /carriers — slimmer projection of /carrier-accounts keyed by carrier_code.
 app.get('/carriers', async (c) => {
   try {
-    const res = await ssRequest<CarriersResponse>('/v2/carriers', {
+    const res = await listCarrierAccounts('shipstation', {
       dedupeKey: 'carriers:list',
-    });
+    }) as CarriersResponse;
     return c.json({
       data: res.carriers.map((c) => ({
         carrierId: c.carrier_id,

@@ -204,6 +204,12 @@ Phase 4 ShipStation package-sync slice added on 2026-05-28:
 - `src/connectors/carrier/shipstation.ts` owns the ShipStation `/v2/carriers` call used for package metadata.
 - The packages route still owns PrepShip package persistence, stock fields, and ledger behavior.
 
+Phase 4 ShipStation init carrier bootstrap slice added on 2026-05-28:
+
+- `src/routes/init.ts` now routes init carrier bootstrap endpoints through `listCarrierAccounts('shipstation', ...)`.
+- `src/connectors/carrier/shipstation.ts` owns the ShipStation `/v2/carriers` calls used by `/init-data`, `/carrier-accounts`, and `/carriers`.
+- The init route still owns app-shell DB bootstrap, scope filtering, and public response shaping.
+
 Phase 5: Tighten guards.
 
 - Remove files from the transitional debt list as they are migrated.
