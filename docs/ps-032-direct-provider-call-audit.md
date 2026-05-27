@@ -210,6 +210,12 @@ Phase 4 ShipStation init carrier bootstrap slice added on 2026-05-28:
 - `src/connectors/carrier/shipstation.ts` owns the ShipStation `/v2/carriers` calls used by `/init-data`, `/carrier-accounts`, and `/carriers`.
 - The init route still owns app-shell DB bootstrap, scope filtering, and public response shaping.
 
+Phase 4 ShipStation label carrier-nickname slice added on 2026-05-28:
+
+- `src/services/labels.ts` now routes carrier nickname ShipStation carrier-list lookup through `listCarrierAccounts('shipstation', ...)`.
+- `src/connectors/carrier/shipstation.ts` owns the ShipStation `/v2/carriers` call used for nickname resolution.
+- ShipStation label creation and label-from-rate calls in `src/services/labels.ts` remain transitional debt until the label purchase slice moves fully through CarrierConnector orchestration.
+
 Phase 5: Tighten guards.
 
 - Remove files from the transitional debt list as they are migrated.

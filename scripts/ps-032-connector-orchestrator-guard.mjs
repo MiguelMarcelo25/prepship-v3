@@ -14,6 +14,7 @@ const storeOrchestrator = read('src/services/store-connector-orchestrator.ts');
 const carrierOrchestrator = read('src/services/carrier-connector-orchestrator.ts');
 const orderSync = read('src/services/order-sync.ts');
 const ratesService = read('src/services/rates.ts');
+const labelsService = read('src/services/labels.ts');
 const shipStationStoreConnector = read('src/connectors/store/shipstation.ts');
 const ratesRoute = read('src/routes/rates.ts');
 const packagesRoute = read('src/routes/packages.ts');
@@ -250,6 +251,11 @@ assert(
 assert(
   initRoute.includes('listCarrierAccounts') && !initRoute.includes('ssRequest'),
   'init route ShipStation carrier bootstrap must use CarrierConnector orchestration, not direct ShipStation API calls',
+);
+assert(
+  labelsService.includes('listCarrierAccounts') &&
+    !labelsService.includes("ssRequest<CarriersResponse>('/v2/carriers'"),
+  'labels service carrier nickname resolver must use CarrierConnector orchestration, not direct ShipStation /v2/carriers calls',
 );
 
 assert.equal(

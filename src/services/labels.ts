@@ -27,6 +27,7 @@ import {
 import { deductInventoryForOrder, deductPackageForShipment } from './fulfillment-deductions';
 import { packages } from '../db/schema/packages';
 import { carrierConnectors } from '../connectors/registry';
+import { listCarrierAccounts } from './carrier-connector-orchestrator';
 import {
   enqueueShipmentConfirmation,
   ensureFulfillmentSchema,
@@ -1609,9 +1610,9 @@ async function loadCarriersList(): Promise<Carrier[]> {
     return carriersCache.data;
   }
   try {
-    const res = await ssRequest<CarriersResponse>('/v2/carriers', {
+    const res = await listCarrierAccounts('shipstation', {
       dedupeKey: 'carriers:list',
-    });
+    }) as CarriersResponse;
     carriersCache = { at: now, data: res.carriers };
     return res.carriers;
   } catch {
