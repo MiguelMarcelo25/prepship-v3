@@ -26,6 +26,17 @@ export type GenerateInput = {
   scopeRestricted?: boolean;
 };
 
+export type BillingGenerationStatus = {
+  upToDate: boolean;
+  dateFrom: string;
+  dateTo: string;
+  clientId?: number;
+  latestBillingShipDate: string | null;
+  latestSourceShipDate: string | null;
+  missingFrom: string | null;
+  missingTo: string | null;
+};
+
 // v2 parity constant: the first unit on every order is included in the pick/pack
 // fee; every subsequent unit is billed at additionalUnitFee. v2 hardcodes this
 // to 1 (see apps/api/src/modules/billing/data/sqlite-billing-repository.ts:216).
@@ -107,6 +118,137 @@ function billingLineItemScopePredicate(input: GenerateInput): SQL {
   }
   if (predicates.length === 1) return predicates[0]!;
   return sql`(${sql.join(predicates, sql` or `)})`;
+}
+
+function isoDayStart(value: Date): string {
+  return new Date(
+    Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate())
+  ).toISOString();
+}
+
+function isoDayEnd(value: Date): string {
+  return new Date(
+    Date.UTC(
+      value.getUTCFullYear(),
+      value.getUTCMonth(),
+      value.getUTCDate(),
+      23,
+      59,
+      59,
+      999
+    )
+  ).toISOString();
+}
+
+function addUtcDays(value: Date, days: number): Date {
+  const next = new Date(value);
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+export async function billingGenerationStatus(
+  input: GenerateInput
+): Promise<BillingGenerationStatus> {
+  const fromIso = new Date(input.dateFrom).toISOString();
+  const toIso = new Date(input.dateTo).toISOString();
+
+  const [billingRow] = await db.execute<{
+    latest_billing_ship_date: string | null;
+  }>(sql`
+    select max(b.ship_date)::text as latest_billing_ship_date
+    from billing_line_items b
+    where b.ship_date >= ${fromIso}::timestamptz
+      and b.ship_date <= ${toIso}::timestamptz
+      and b.order_id is not null
+      ${input.clientId !== undefined ? sql`and b.client_id = ${input.clientId}` : sql``}
+      and ${billingLineItemScopePredicate(input)}
+  `);
+
+  const latestBilling = billingRow?.latest_billing_ship_date
+    ? new Date(billingRow.latest_billing_ship_date)
+    : null;
+
+  const sourceLowerBound = latestBilling?.toISOString() ?? fromIso;
+  const [sourceRow] = await db.execute<{
+    latest_source_ship_date: string | null;
+  }>(sql`
+    with scoped_clients as (
+      select c.id, c.store_ids
+      from clients c
+      where c.active = true
+        and c.name not in ('Manual Orders', 'Rate Browser', 'Api Shipments')
+        ${input.clientId !== undefined ? sql`and c.id = ${input.clientId}` : sql``}
+        and ${billingClientScopePredicate(input)}
+    )
+    select max(coalesce(s.ship_date, o.order_date))::text as latest_source_ship_date
+    from orders o
+    left join shipments s on s.order_id = o.id and s.voided = false
+    where o.order_status = 'shipped'
+      and o.externally_shipped = false
+      and coalesce(o.raw->>'externallyFulfilled', 'false') <> 'true'
+      and coalesce(s.ship_date, o.order_date) <= ${toIso}::timestamptz
+      ${latestBilling
+        ? sql`and coalesce(s.ship_date, o.order_date) > ${sourceLowerBound}::timestamptz`
+        : sql`and coalesce(s.ship_date, o.order_date) >= ${sourceLowerBound}::timestamptz`}
+      and exists (
+        select 1
+        from scoped_clients sc
+        where o.client_id = sc.id
+           or (o.store_id is not null and o.store_id = any(sc.store_ids))
+           or (
+             coalesce(
+               case
+                 when coalesce(o.raw->>'storeId', '') ~ '^[0-9]+$'
+                   then (o.raw->>'storeId')::int
+                 else null
+               end,
+               case
+                 when coalesce(o.raw->'advancedOptions'->>'storeId', '') ~ '^[0-9]+$'
+                   then (o.raw->'advancedOptions'->>'storeId')::int
+                 else null
+               end
+             ) = any(sc.store_ids)
+           )
+      )
+  `);
+
+  const latestSource = sourceRow?.latest_source_ship_date
+    ? new Date(sourceRow.latest_source_ship_date)
+    : null;
+
+  if (!latestSource) {
+    return {
+      upToDate: true,
+      dateFrom: fromIso,
+      dateTo: toIso,
+      clientId: input.clientId,
+      latestBillingShipDate: billingRow?.latest_billing_ship_date ?? null,
+      latestSourceShipDate: billingRow?.latest_billing_ship_date ?? null,
+      missingFrom: null,
+      missingTo: null,
+    };
+  }
+
+  const from = new Date(fromIso);
+  const latestBillingDay = latestBilling ? isoDayStart(latestBilling) : null;
+  const latestSourceDay = isoDayStart(latestSource);
+  const missingFrom =
+    !latestBilling
+      ? isoDayStart(from)
+      : latestBillingDay === latestSourceDay
+        ? latestBillingDay
+        : isoDayStart(addUtcDays(latestBilling, 1));
+
+  return {
+    upToDate: false,
+    dateFrom: fromIso,
+    dateTo: toIso,
+    clientId: input.clientId,
+    latestBillingShipDate: billingRow?.latest_billing_ship_date ?? null,
+    latestSourceShipDate: sourceRow?.latest_source_ship_date ?? null,
+    missingFrom,
+    missingTo: isoDayEnd(latestSource),
+  };
 }
 
 function stringOrNull(value: unknown): string | null {

@@ -3598,6 +3598,16 @@ export const apiClient = {
     );
   },
 
+  fetchBillingGenerationStatus(from: string, to: string, clientId?: number): Promise<any> {
+    const dateFrom = toIsoDayStart(from);
+    const dateTo = toIsoDayEnd(to);
+    return safe(
+      'fetchBillingGenerationStatus',
+      () => api.get<any>(`/billing/generate/status${qs({ dateFrom, dateTo, clientId })}`),
+      { upToDate: false, missingFrom: from, missingTo: to }
+    );
+  },
+
   fetchBillingSummary(from: string, to: string, clientId?: number): Promise<any[]> {
     // v4's /billing/summary validates `dateFrom`/`dateTo` as ISO datetime
     // (z.string().datetime()) — plain `YYYY-MM-DD` or the legacy `from`/`to`

@@ -11,6 +11,7 @@ import {
 import { clients } from '../db/schema/clients';
 import {
   billingDetails,
+  billingGenerationStatus,
   billingSummary,
   generateLineItems,
   upsertBillingConfig,
@@ -237,6 +238,16 @@ app.post('/generate', zValidator('json', generateSchema), async (c) => {
     dateFrom: body.dateFrom!,
     dateTo: body.dateTo!,
   });
+  return c.json(result);
+});
+
+app.get('/generate/status', zValidator('query', generateSchema), async (c) => {
+  const q = c.req.valid('query');
+  const result = await billingGenerationStatus(withBillingScope(c, {
+    clientId: q.clientId,
+    dateFrom: q.dateFrom!,
+    dateTo: q.dateTo!,
+  }));
   return c.json(result);
 });
 

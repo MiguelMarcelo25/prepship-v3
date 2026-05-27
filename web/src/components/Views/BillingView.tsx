@@ -181,6 +181,13 @@ function splitBillingRangeIntoBatches(fromValue: string, toValue: string, batchD
   return batches
 }
 
+function isoToDateInput(value: string | null | undefined) {
+  if (!value) return null
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return null
+  return formatDateInputUtc(date)
+}
+
 function readBillingClientFilterIds() {
   if (typeof window === 'undefined') return []
   try {
@@ -708,7 +715,7 @@ export default function BillingView() {
     }
   }
 
-  async function handleGenerateBilling() {
+  async function handleGenerateBilling(forceRegenerate = false) {
     if (!from || !to) {
       toastContext?.addToast('Select a date range first', 'error')
       return
@@ -722,42 +729,83 @@ export default function BillingView() {
         ? selectedBillingClientIds.filter((clientId) => allBillingClientIds.includes(clientId))
         : []
       let generated = 0
-      const batches = splitBillingRangeIntoBatches(from, to)
-      if (!batches.length) {
-        toastContext?.addToast('Select a valid billing date range first', 'error')
-        return
-      }
+      let alreadyCurrent = 0
 
       if (targetClientIds.length > 0) {
-        const totalSteps = targetClientIds.length * batches.length
-        let step = 0
+        const batchPlan: Array<{ clientId: number; clientName: string; batches: Array<{ from: string; to: string }> }> = []
+
         for (let index = 0; index < targetClientIds.length; index += 1) {
           const clientId = targetClientIds[index]
           const clientName = availableBillingClients.find((client) => client.clientId === clientId)?.clientName ?? 'client'
-          for (const batch of batches) {
+          let batchFrom = from
+          let batchTo = to
+
+          if (!forceRegenerate) {
+            setGenerateStatus(`Checking ${clientName} (${index + 1}/${targetClientIds.length})...`)
+            const status = await apiClient.fetchBillingGenerationStatus(from, to, clientId)
+            if (status?.upToDate) {
+              alreadyCurrent += 1
+              continue
+            }
+            batchFrom = isoToDateInput(status?.missingFrom) ?? from
+            batchTo = isoToDateInput(status?.missingTo) ?? to
+          }
+
+          const batches = splitBillingRangeIntoBatches(batchFrom, batchTo)
+          if (batches.length) batchPlan.push({ clientId, clientName, batches })
+        }
+
+        const totalSteps = batchPlan.reduce((sum, plan) => sum + plan.batches.length, 0)
+        let step = 0
+        for (const plan of batchPlan) {
+          for (const batch of plan.batches) {
             step += 1
-            setGenerateStatus(`Generating ${clientName}: ${batch.from} to ${batch.to} (${step}/${totalSteps})...`)
-            const result = await apiClient.generateBilling(batch.from, batch.to, clientId)
+            setGenerateStatus(`${forceRegenerate ? 'Regenerating' : 'Updating'} ${plan.clientName}: ${batch.from} to ${batch.to} (${step}/${totalSteps})...`)
+            const result = await apiClient.generateBilling(batch.from, batch.to, plan.clientId)
             generated += Number(result.generated ?? result.count ?? 0)
           }
         }
       } else {
+        let batchFrom = from
+        let batchTo = to
+
+        if (!forceRegenerate) {
+          setGenerateStatus('Checking billing freshness...')
+          const status = await apiClient.fetchBillingGenerationStatus(from, to)
+          if (status?.upToDate) {
+            alreadyCurrent = 1
+          } else {
+            batchFrom = isoToDateInput(status?.missingFrom) ?? from
+            batchTo = isoToDateInput(status?.missingTo) ?? to
+          }
+        }
+
+        const batches = alreadyCurrent && !forceRegenerate ? [] : splitBillingRangeIntoBatches(batchFrom, batchTo)
+        if (!alreadyCurrent && !batches.length) {
+          toastContext?.addToast('Select a valid billing date range first', 'error')
+          return
+        }
+
         for (let index = 0; index < batches.length; index += 1) {
           const batch = batches[index]
-          setGenerateStatus(`Generating all clients: ${batch.from} to ${batch.to} (${index + 1}/${batches.length})...`)
+          setGenerateStatus(`${forceRegenerate ? 'Regenerating' : 'Updating'} all clients: ${batch.from} to ${batch.to} (${index + 1}/${batches.length})...`)
           const result = await apiClient.generateBilling(batch.from, batch.to)
           generated += Number(result.generated ?? result.count ?? 0)
         }
       }
       const result = { generated }
-      toastContext?.addToast(`✅ Generated ${result.generated} billing line items`, 'success')
+      if (generated > 0) {
+        toastContext?.addToast(`Billing ${forceRegenerate ? 'regenerated' : 'updated'}: ${result.generated} line items`, 'success')
+      } else {
+        toastContext?.addToast('Billing is already up to date', 'success')
+      }
 
       const rows = await apiClient.fetchBillingSummary(from, to)
       const rowsForStatus = targetClientIds.length > 0
         ? rows.filter((row) => targetClientIds.includes(Number(row.clientId)))
         : rows
       const totals = buildBillingSummaryTotals(rowsForStatus)
-      setGenerateStatus(buildGenerateBillingStatus(result.generated, totals.grand))
+      setGenerateStatus(generated > 0 ? buildGenerateBillingStatus(result.generated, totals.grand) : `Billing already up to date - total ${formatBillingMoney(totals.grand)}`)
       setSummaryRows(rows)
       setSummaryError(null)
       const detailTarget =
@@ -768,7 +816,7 @@ export default function BillingView() {
         await handleLoadDetails(detailTarget.clientId, detailTarget.clientName)
       }
     } catch (error) {
-      toastContext?.addToast(error instanceof Error ? error.message : 'Failed to generate billing', 'error')
+      toastContext?.addToast(error instanceof Error ? error.message : 'Failed to update billing', 'error')
     } finally {
       setGenerateLoading(false)
     }
@@ -1220,11 +1268,14 @@ export default function BillingView() {
             {generateLoading ? (
               <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                 <Loader2 size={12} strokeWidth={2.5} className="animate-spin" aria-hidden />
-                Generating…
+                Updating...
               </span>
             ) : (
-              '⚡ Generate Invoices'
+              'Update Billing'
             )}
+          </button>
+          <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleGenerateBilling(true)} disabled={generateLoading} title="Rebuild every billing row in the selected date range. Use this only when pricing rules changed or history needs repair.">
+            Regenerate Range
           </button>
           <button
             className="btn btn-ghost btn-sm"
