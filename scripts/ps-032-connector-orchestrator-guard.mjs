@@ -13,6 +13,7 @@ const carrierResolution = read('src/connectors/carrier-resolution.ts');
 const storeOrchestrator = read('src/services/store-connector-orchestrator.ts');
 const carrierOrchestrator = read('src/services/carrier-connector-orchestrator.ts');
 const orderSync = read('src/services/order-sync.ts');
+const ratesService = read('src/services/rates.ts');
 const shipStationStoreConnector = read('src/connectors/store/shipstation.ts');
 const ratesRoute = read('src/routes/rates.ts');
 const shipStationCarrierConnector = read('src/connectors/carrier/shipstation.ts');
@@ -226,6 +227,10 @@ assert(
   shipStationCarrierConnector.includes('/v2/carriers') &&
     shipStationCarrierConnector.includes('listCarrierAccounts'),
   'ShipStation CarrierConnector must own ShipStation carrier account listing calls',
+);
+assert(
+  ratesService.includes('listCarrierAccounts') && !ratesService.includes("ssRequest<CarriersResponse>('/v2/carriers'"),
+  'rates service carrier discovery must use CarrierConnector orchestration, not direct ShipStation /v2/carriers calls',
 );
 
 assert.equal(

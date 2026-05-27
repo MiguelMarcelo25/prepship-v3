@@ -186,6 +186,12 @@ Phase 4 ShipStation carrier-list slice added on 2026-05-28:
 - `src/connectors/carrier/shipstation.ts` owns the ShipStation `/v2/carriers` API call for carrier account listing.
 - ShipStation rate estimation in `src/services/rates.ts` remains transitional debt until the cached rate engine is moved behind the carrier connector.
 
+Phase 4 ShipStation rate-service carrier-discovery slice added on 2026-05-28:
+
+- `src/services/rates.ts` now routes cached-rate carrier discovery through `listCarrierAccounts('shipstation', ...)`.
+- `src/connectors/carrier/shipstation.ts` remains the owner of ShipStation `/v2/carriers` calls.
+- ShipStation `/v2/rates/estimate` calls in `src/services/rates.ts` remain transitional debt for the next cached-rate engine slice.
+
 Phase 5: Tighten guards.
 
 - Remove files from the transitional debt list as they are migrated.

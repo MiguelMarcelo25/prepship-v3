@@ -6,7 +6,6 @@ import { rateCache } from '../db/schema/rates';
 import { settings } from '../db/schema/settings';
 import {
   ssRequest,
-  type RatesResponse,
   type Rate,
   type Address,
   type Parcel,
@@ -14,6 +13,7 @@ import {
 import type { CarriersResponse } from '../lib/shipstation/types';
 import { loadClientCredentials } from '../lib/shipstation/credentials';
 import { getDefaultShipFrom } from '../lib/ship-from';
+import { listCarrierAccounts } from './carrier-connector-orchestrator';
 
 type Markup = { type: 'amount' | 'percent'; value: number };
 
@@ -166,9 +166,9 @@ async function getAllCarrierIds(): Promise<string[]> {
   ) {
     return cachedCarrierIds;
   }
-  const res = await ssRequest<CarriersResponse>('/v2/carriers', {
+  const res = await listCarrierAccounts('shipstation', {
     dedupeKey: 'carriers:list',
-  });
+  }) as CarriersResponse;
   // Only include carriers that can rate arbitrary orders. Skip:
   //  - amazon_*: requires amazon_order_item_id per line — fails for non-Amazon orders
   //  - voucher-*: client-shared carriers that don't respond to the rate API
@@ -443,10 +443,10 @@ async function getAllCarriers(apiKeyV2?: string | null): Promise<CarrierInfo[]> 
   }
   let carriers: CarrierInfo[] = [];
   try {
-    const res = await ssRequest<CarriersResponse>('/v2/carriers', {
+    const res = await listCarrierAccounts('shipstation', {
       apiKey: apiKeyV2 ?? undefined,
       dedupeKey: `carriers:list:${cacheKey}`,
-    });
+    }) as CarriersResponse;
     carriers = (res.carriers ?? [])
       .filter((c) => !c.disabled_by_billing_plan)
       .filter((c) => RATEABLE_CARRIER_CODES.has((c.carrier_code ?? '').toLowerCase()))
