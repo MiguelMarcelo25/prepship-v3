@@ -16,6 +16,8 @@ const providerAliases: Record<string, ConnectorProvider> = {
   shipengine: 'shipengine',
   ebay_shipping: 'ebay_shipping',
   ebayshipping: 'ebay_shipping',
+  amazon_shipping: 'amazon_shipping',
+  amazonshipping: 'amazon_shipping',
 };
 
 export type ResolvedCarrierConnector = {

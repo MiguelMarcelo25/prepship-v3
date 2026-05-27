@@ -29,6 +29,7 @@ export const connectorCapabilityMatrix: Record<ConnectorProvider, ConnectorCapab
   usps: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read', 'credentials.verify'],
   shipengine: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read', 'credentials.verify'],
   ebay_shipping: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read', 'credentials.verify'],
+  amazon_shipping: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read', 'credentials.verify'],
   ebay: [
     'orders.import',
     'orders.statusSync',

@@ -17,6 +17,8 @@ const providerPatterns = [
   /api\.shipengine\.com/,
   /api\.usps\.com/,
   /apis\.usps\.com/,
+  /api\.amazon\.com/,
+  /sellingpartnerapi-na\.amazon\.com/,
 ];
 
 const approvedConnectorOwned = new Set([
@@ -32,6 +34,7 @@ const approvedConnectorOwned = new Set([
   'src/connectors/carrier/usps.ts',
   'src/connectors/carrier/shipengine.ts',
   'src/connectors/carrier/ebay-shipping.ts',
+  'src/connectors/carrier/amazon-shipping.ts',
   'src/lib/shipstation/client.ts',
   'src/lib/shipstation/credentials.ts',
   'src/lib/shipstation/labels.ts',
