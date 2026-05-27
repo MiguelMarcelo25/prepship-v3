@@ -45,7 +45,6 @@ const approvedConnectorOwned = new Set([
 const transitionalDebt = new Set([
   'api/_lib/walmart-fees-sync.ts',
   'api/carriers/labels.ts',
-  'api/carriers/rates.ts',
   'api/carriers/ups/probe.ts',
   'api/carriers/validate-address.ts',
   'api/carriers/verify.ts',
@@ -61,13 +60,9 @@ const transitionalDebt = new Set([
   'src/lib/imported-handlers/carriers-verify.ts',
   'src/lib/imported-handlers/rates-multi.ts',
   'src/routes/clients.ts',
-  'src/routes/init.ts',
   'src/routes/locations.ts',
-  'src/routes/packages.ts',
-  'src/routes/rates.ts',
   'src/services/inventory-enrichment.ts',
   'src/services/labels.ts',
-  'src/services/rates.ts',
   'src/services/shipment-sync.ts',
 ]);
 
@@ -105,6 +100,10 @@ const audit = readFileSync(AUDIT_DOC, 'utf8');
 
 for (const file of transitionalDebt) {
   assert(audit.includes(file), `PS-032 audit must document transitional provider call file: ${file}`);
+  assert(
+    existsSync(file) && hasProviderCall(readFileSync(file, 'utf8')),
+    `PS-032 transitional debt file no longer has direct provider calls and should be removed: ${file}`,
+  );
 }
 for (const file of approvedConnectorOwned) {
   assert(audit.includes(file), `PS-032 audit must document connector-owned provider call file: ${file}`);

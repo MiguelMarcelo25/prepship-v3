@@ -53,7 +53,6 @@ These files currently contain direct provider calls or provider-client usage out
 | --- | --- | --- | --- |
 | `api/_lib/walmart-fees-sync.ts` | Walmart fees | Walmart StoreConnector or connector-owned helper | Phase 3 |
 | `api/carriers/labels.ts` | Carrier labels | CarrierConnector label orchestration | Phase 4 |
-| `api/carriers/rates.ts` | Carrier rates | CarrierConnector rate orchestration | Phase 4 |
 | `api/carriers/ups/probe.ts` | UPS probe | UPS CarrierConnector diagnostics | Phase 4 |
 | `api/carriers/validate-address.ts` | Carrier address validation | CarrierConnector validation capability or connector-owned helper | Phase 4 |
 | `api/carriers/verify.ts` | Carrier verification | CarrierConnector diagnostics | Phase 4 |
@@ -69,13 +68,9 @@ These files currently contain direct provider calls or provider-client usage out
 | `src/lib/imported-handlers/carriers-verify.ts` | Carrier verification | CarrierConnector diagnostics | Phase 4 |
 | `src/lib/imported-handlers/rates-multi.ts` | Carrier rates | CarrierConnector rate orchestration | Phase 4 |
 | `src/routes/clients.ts` | ShipStation stores/accounts | StoreConnector/account orchestration | Phase 2 |
-| `src/routes/init.ts` | ShipStation initialization | Connector/account bootstrap orchestration | Phase 2 |
 | `src/routes/locations.ts` | ShipStation locations | ShipStation connector-owned helper | Phase 2 |
-| `src/routes/packages.ts` | ShipStation package metadata | CarrierConnector/account metadata orchestration | Phase 4 |
-| `src/routes/rates.ts` | ShipStation rates | CarrierConnector rate orchestration | Phase 4 |
 | `src/services/inventory-enrichment.ts` | ShipStation product/order enrichment | ShipStation StoreConnector or connector-owned helper | Phase 2 |
 | `src/services/labels.ts` | ShipStation label creation | CarrierConnector label orchestration | Phase 4 |
-| `src/services/rates.ts` | ShipStation rates | CarrierConnector rate orchestration | Phase 4 |
 | `src/services/shipment-sync.ts` | ShipStation shipment sync | StoreConnector/CarrierConnector sync orchestration | Phase 2 |
 
 ## Migration Map
