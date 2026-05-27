@@ -1767,6 +1767,18 @@ Docs and command:
 - [ ] Verify production login and forced re-login behavior after rollout
 - [ ] Add production evidence to `PRODUCTION_READINESS_SIGNOFF.md`
 
+## Official PS-032 Connector Boundary Hardening Task
+
+DJ approved PS-032 after confirming the architectural distinction that order pulling is still directly coded to ShipStation/Walmart/eBay paths rather than consistently routing through StoreConnector, and normal label creation is primarily routed through the ShipStation CarrierConnector rather than a provider-neutral carrier orchestrator.
+
+| ID | Title | Risk | Why It Matters | Scope | Completion Evidence |
+| --- | --- | --- | --- | --- | --- |
+| PS-032 | Enforce StoreConnector/CarrierConnector Boundary for Orders, Rates, Labels, and Marketplace Confirmation | Critical architecture hardening | Future stores/carriers will keep bypassing the modular connector model unless direct provider API calls are isolated behind StoreConnector/CarrierConnector contracts and guarded. | Reconcile connector contracts, move order import/status sync through StoreConnector orchestration, move rates/labels/tracking/voids through CarrierConnector orchestration, preserve marketplace confirmation through fulfillment outbox, add guards/docs/tests. | Typecheck/build, connector architecture/registry guards, relevant direct-carrier/marketplace/label guards, mocked confirmation tests, and targeted tests proving no direct provider API calls from core routes/services. No real labels, postage, provider mutations, or live marketplace notifications. |
+
+### PS-032 Copy/Paste Handoff
+
+See [docs/ps-032-connector-boundary-task.md](docs/ps-032-connector-boundary-task.md) for the full task prompt, phasing, verification commands, definition of done, and return format.
+
 ## Recommended Next Order
 
 1. Finish production verification after this batch deploys.
