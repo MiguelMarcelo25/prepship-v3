@@ -13,9 +13,11 @@ for (const provider of ['shipp', 'walmart_shipping', 'ups', 'easypost']) {
 }
 
 const {
-  __test_extractWalmartLabelReference,
   __test_selectWalmartOrderByCustomerOrderId,
 } = await tsImport('../api/carriers/labels.ts', import.meta.url);
+const {
+  __test_extractWalmartLabelReference,
+} = await tsImport('../src/connectors/carrier/walmart-shipping.ts', import.meta.url);
 
 const nestedUrl = __test_extractWalmartLabelReference({
   data: {

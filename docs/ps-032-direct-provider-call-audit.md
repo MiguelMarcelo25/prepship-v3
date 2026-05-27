@@ -235,6 +235,12 @@ Phase 4 Shipp direct-label slice added on 2026-05-28:
 - `src/connectors/carrier/shipp.ts` owns Shipp login, quote, label creation, and label document normalization.
 - The labels route still owns order editability checks, direct-label persistence, marketplace outbox enqueueing, Walmart post-label confirmation recovery, and response shaping.
 
+Phase 4 Walmart Shipping direct-label slice added on 2026-05-28:
+
+- `api/carriers/labels.ts` now routes Walmart Shipping direct-label purchases through `createCarrierLabel('walmart_shipping', ...)`.
+- `src/connectors/carrier/walmart-shipping.ts` owns Walmart Shipping label estimates, label creation, label download fallback paths, and label response extraction.
+- The labels route still owns local order-context lookup, order editability checks, direct-label persistence, marketplace outbox enqueueing, Walmart post-label confirmation recovery, and response shaping.
+
 Phase 5: Tighten guards.
 
 - Remove files from the transitional debt list as they are migrated.

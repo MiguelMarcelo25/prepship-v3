@@ -202,6 +202,20 @@ assert(
   'Walmart Shipping CarrierConnector must own Walmart Shipping Estimates API calls',
 );
 assert(
+  carrierLabelsRoute.includes("createCarrierLabel('walmart_shipping'") &&
+    !carrierLabelsRoute.includes('buyLabelWalmartShipping') &&
+    !carrierLabelsRoute.includes('/v3/shipping/labels/shipping-estimates') &&
+    !carrierLabelsRoute.includes('/v3/shipping/labels/carriers/') &&
+    !carrierLabelsRoute.includes('/v3/shipping/labels/${encodeURIComponent(labelId)}') &&
+    !carrierLabelsRoute.includes("'https://marketplace.walmartapis.com/v3/shipping/labels'"),
+  'Walmart Shipping labels must route through CarrierConnector orchestration, not direct Walmart Shipping label API calls from api/carriers/labels.ts',
+);
+assert(
+  walmartShippingCarrierConnector.includes('/v3/shipping/labels') &&
+    !walmartShippingCarrierConnector.includes('Walmart Shipping labels are handled by api/carriers/labels.ts'),
+  'Walmart Shipping CarrierConnector must own Walmart Shipping label API calls',
+);
+assert(
   !carrierRatesRoute.includes('ratesFromFedex') &&
     !carrierRatesRoute.includes('getFedexAccessToken') &&
     !carrierRatesRoute.includes('apis.fedex.com'),

@@ -51,6 +51,607 @@ function toWalmartIsoDate(value: unknown, fallbackDays: number): string {
   return new Date(Date.now() + fallbackDays * 24 * 60 * 60 * 1000).toISOString();
 }
 
+function normalizeProviderKey(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+function slugRateService(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 80) || 'rate';
+}
+
+function normalizeCarrierCodeForDirectRate(value: unknown): string | null {
+  const raw = String(value ?? '').trim();
+  if (!raw) return null;
+  const normalized = normalizeProviderKey(raw);
+  const compact = normalized.replace(/[^a-z0-9]+/g, '');
+  if (compact.includes('fedex')) return 'fedex';
+  if (compact.includes('usps') || compact.includes('postal')) return 'stamps_com';
+  if (compact.includes('ups')) return 'ups';
+  if (compact.includes('dhl')) return 'dhl_express';
+  if (compact.includes('walmart')) return 'walmart_shipping';
+  if (compact.includes('amazon')) return 'amazon_shipping';
+  if (compact.includes('ebay')) return 'ebay_shipping';
+  return normalized || null;
+}
+
+function inferCarrierCodeForDirectRate(provider: string, service: string): string {
+  const p = normalizeProviderKey(provider);
+  const s = service.toLowerCase();
+  if (s.includes('usps') || s.includes('postal')) return 'stamps_com';
+  if (s.includes('fedex')) return 'fedex';
+  if (s.includes('ups')) return 'ups';
+  if (s.includes('dhl')) return 'dhl_express';
+  return p || 'direct_carrier';
+}
+
+function walmartMarketplaceHeaders(
+  creds: Record<string, unknown>,
+  token: string,
+  accept = 'application/json',
+  includeJsonContentType = false,
+): Record<string, string> {
+  const channelType = firstString(creds.channelType, creds.channel_type);
+  const partnerId = firstString(creds.partnerId, creds.sellerId);
+  const headers: Record<string, string> = {
+    'WM_SEC.ACCESS_TOKEN': token,
+    'WM_QOS.CORRELATION_ID': crypto.randomUUID(),
+    'WM_SVC.NAME': firstString(creds.serviceName, creds.service_name, 'Walmart Marketplace'),
+    'WM_MARKET': 'us',
+    Accept: accept,
+  };
+  if (includeJsonContentType) headers['Content-Type'] = 'application/json';
+  if (channelType) headers['WM_CONSUMER.CHANNEL.TYPE'] = channelType;
+  if (partnerId) headers['WM_PARTNER.ID'] = partnerId;
+  return headers;
+}
+
+async function readWalmartError(res: Response): Promise<string> {
+  const text = await res.text().then((s) => s.slice(0, 800)).catch(() => '');
+  if (!text) return res.statusText;
+  try {
+    const parsed = JSON.parse(text) as { errors?: Array<{ info?: string; code?: string; description?: string }> };
+    const first = parsed.errors?.[0];
+    return first?.info || first?.description || first?.code || text;
+  } catch {
+    return text;
+  }
+}
+
+function walmartEstimateCarrierName(rate: any): string {
+  return firstString(
+    rate?.carrierName,
+    rate?.carrier?.shortName,
+    rate?.carrierShortName,
+    rate?.carrier,
+    rate?.carrierDisplayName,
+  );
+}
+
+function walmartEstimateServiceType(rate: any): string {
+  return firstString(
+    rate?.name,
+    rate?.serviceType,
+    rate?.carrierServiceType,
+    rate?.carrierServiceName,
+    rate?.serviceLevel,
+    rate?.method,
+    rate?.displayName,
+  );
+}
+
+function walmartEstimateServiceName(rate: any): string {
+  const carrier = firstString(
+    rate?.carrierDisplayName,
+    rate?.carrierFullName,
+    rate?.carrierName,
+    rate?.carrier?.shortName,
+    rate?.carrierShortName,
+    rate?.carrier,
+    'Walmart',
+  );
+  const service = firstString(
+    rate?.displayName,
+    rate?.serviceTypeGroupDisplayName,
+    rate?.serviceType,
+    rate?.carrierServiceType,
+    rate?.serviceLevel,
+    rate?.method,
+    rate?.name,
+  );
+  return service ? `${carrier} ${service}` : carrier;
+}
+
+function walmartEstimateServiceCode(rate: any): string {
+  const provider = 'walmart_shipping';
+  const serviceName = walmartEstimateServiceName(rate);
+  const explicitCarrierCode = normalizeCarrierCodeForDirectRate(
+    rate?.carrierCode ?? rate?.carrierType ?? rate?.carrierName ?? rate?.carrierDisplayName,
+  );
+  const carrierCode = explicitCarrierCode ?? inferCarrierCodeForDirectRate(provider, serviceName);
+  const carrierServicePrefix = carrierCode && carrierCode !== provider ? `${carrierCode}_` : '';
+  return `${provider}_${carrierServicePrefix}${slugRateService(serviceName)}`;
+}
+
+function walmartEstimateCost(rate: any): number {
+  return Number(
+    rate?.estimatedRate?.amount ??
+    rate?.totalCost?.amount ??
+    rate?.cost?.amount ??
+    rate?.totalCost ??
+    rate?.cost ??
+    rate?.amount ??
+    0,
+  ) || 0;
+}
+
+function walmartEstimateCurrency(rate: any): string {
+  return String(
+    rate?.estimatedRate?.currency ??
+    rate?.totalCost?.currency ??
+    rate?.cost?.currency ??
+    rate?.currency ??
+    'USD',
+  );
+}
+
+function walmartEstimateList(data: any): any[] {
+  return (
+    (Array.isArray(data?.data?.estimates) && data.data.estimates) ||
+    (Array.isArray(data?.shippingEstimates) && data.shippingEstimates) ||
+    (Array.isArray(data?.rates) && data.rates) ||
+    (Array.isArray(data?.estimates) && data.estimates) ||
+    (Array.isArray(data?.payload) && data.payload) ||
+    (Array.isArray(data) ? data : [])
+  );
+}
+
+function walmartSafeObjectKeys(value: unknown): string[] {
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) return [];
+  return Object.keys(value as Record<string, unknown>).slice(0, 8);
+}
+
+function walmartLabelKeySummary(value: unknown): string {
+  if (value == null) return 'null';
+  if (Array.isArray(value)) return `array(${value.length})`;
+  if (typeof value !== 'object') return typeof value;
+  const keys = Object.keys(value as Record<string, unknown>).slice(0, 6);
+  return `object(${keys.join(',') || 'no_keys'})`;
+}
+
+function walmartBoxItems(rawOrder: any): any[] {
+  const orderLines = Array.isArray(rawOrder?.orderLines?.orderLine)
+    ? rawOrder.orderLines.orderLine
+    : [];
+  return orderLines.map((line: any) => {
+    const lineNumber = firstString(line?.lineNumber);
+    if (!lineNumber) return null;
+    const item: Record<string, unknown> = {
+      lineNumber,
+      sku: String(line?.item?.sku ?? ''),
+      quantity: Number(line?.orderLineQuantity?.amount ?? 1) || 1,
+    };
+    const productName = firstString(line?.item?.productName, line?.item?.productNameInLocale);
+    if (productName) item.productName = productName;
+    return item;
+  }).filter(Boolean);
+}
+
+function walmartLabelFromAddress(creds: Record<string, unknown>, shipFrom: any): Record<string, unknown> {
+  const from = shipFrom && typeof shipFrom === 'object' ? shipFrom : {};
+  const addressLine1 = firstString(creds.shipFromAddress1, from?.addressLine1, from?.street1, 'Warehouse');
+  const addressLine2 = firstString(creds.shipFromAddress2, from?.addressLine2, from?.street2);
+  const result: Record<string, unknown> = {
+    addressLine1,
+    city: firstString(creds.shipFromCity, from?.city, 'Carson'),
+    contactName: firstString(creds.shipFromName, from?.name, 'Seller'),
+    country: firstString(from?.country, 'US').toUpperCase(),
+    phone: firstString(creds.shipFromPhone, from?.phone, '0000000000'),
+    postalCode: firstString(creds.shipFromZip, from?.postalCode, from?.zip, '90248').replace(/[^0-9]/g, '').slice(0, 5),
+    state: firstString(creds.shipFromState, from?.state, 'CA'),
+  };
+  const companyName = firstString(creds.shipFromCompany, from?.company);
+  const email = firstString(creds.shipFromEmail, from?.email);
+  if (addressLine2) result.addressLine2 = addressLine2;
+  if (companyName) result.companyName = companyName;
+  if (email) result.email = email;
+  return result;
+}
+
+function walmartEstimateFromAddress(labelAddress: Record<string, unknown>): Record<string, unknown> {
+  return {
+    addressLines: [labelAddress.addressLine1, labelAddress.addressLine2].map((v) => String(v ?? '').trim()).filter(Boolean),
+    city: String(labelAddress.city ?? ''),
+    state: String(labelAddress.state ?? ''),
+    postalCode: String(labelAddress.postalCode ?? ''),
+    countryCode: String(labelAddress.country ?? 'US'),
+  };
+}
+
+function walmartShipToForLabel(body: Record<string, any>, rawOrder: any) {
+  if (body?.shipTo && typeof body.shipTo === 'object') {
+    return {
+      street1: firstString(body.shipTo.street1, body.shipTo.address1),
+      street2: firstString(body.shipTo.street2, body.shipTo.address2),
+      city: firstString(body.shipTo.city),
+      state: firstString(body.shipTo.state),
+      zip: firstString(body.shipTo.zip, body.shipTo.postalCode),
+      country: firstString(body.shipTo.country, body.shipTo.countryCode, 'US'),
+    };
+  }
+  const wmAddr = rawOrder?.shippingInfo?.postalAddress;
+  if (wmAddr) {
+    return {
+      street1: firstString(wmAddr.address1),
+      street2: firstString(wmAddr.address2),
+      city: firstString(wmAddr.city),
+      state: firstString(wmAddr.state),
+      zip: firstString(wmAddr.postalCode),
+      country: firstString(wmAddr.country, 'US'),
+    };
+  }
+  throw new Error('Could not resolve Walmart Shipping ship-to address');
+}
+
+function walmartEstimateToAddress(body: Record<string, any>, rawOrder: any): Record<string, unknown> {
+  const shipTo = walmartShipToForLabel(body, rawOrder);
+  return {
+    addressLines: [shipTo.street1, shipTo.street2].filter(Boolean),
+    city: shipTo.city,
+    state: shipTo.state,
+    postalCode: shipTo.zip,
+    countryCode: shipTo.country || 'US',
+  };
+}
+
+async function fetchWalmartEstimatesForLabel(
+  creds: Record<string, unknown>,
+  input: {
+    weightOz: number;
+    dimsL: number;
+    dimsW: number;
+    dimsH: number;
+    purchaseOrderId: string;
+    rawOrder: any;
+    body: Record<string, any>;
+    fromAddress: Record<string, unknown>;
+    boxItems: any[];
+  },
+): Promise<{ token: string; rates: any[] }> {
+  const token = await getWalmartAccessToken(creds);
+  const weightLb = Math.max(0.1, Math.round((input.weightOz / 16) * 10) / 10);
+  const estimateBody = {
+    purchaseOrderId: input.purchaseOrderId,
+    boxDimensions: {
+      boxWeight: weightLb,
+      boxWeightUnit: 'LB',
+      boxLength: input.dimsL,
+      boxWidth: input.dimsW,
+      boxHeight: input.dimsH,
+      boxDimensionUnit: 'IN',
+    },
+    fromAddress: walmartEstimateFromAddress(input.fromAddress),
+    toAddress: walmartEstimateToAddress(input.body, input.rawOrder),
+    packageType: 'CUSTOM_PACKAGE',
+    shipByDate: toWalmartIsoDate(input.rawOrder?.shippingInfo?.estimatedShipDate, 1),
+    deliverByDate: toWalmartIsoDate(input.rawOrder?.shippingInfo?.estimatedDeliveryDate, 5),
+    includeServicesNotMeetingDeliveryPromise: true,
+    boxItems: input.boxItems,
+    addOns: false,
+    hasBattery: false,
+  };
+  console.info('[walmart-shipping connector] label estimate request', {
+    hasPurchaseOrderId: Boolean(input.purchaseOrderId),
+    weightUnit: 'LB',
+    dimensionUnit: 'IN',
+    boxItemCount: input.boxItems.length,
+    requestKeys: walmartSafeObjectKeys(estimateBody),
+  });
+  const res = await timedFetch('walmart-shipping.labels.estimates', 'https://marketplace.walmartapis.com/v3/shipping/labels/shipping-estimates', {
+    method: 'POST',
+    headers: walmartMarketplaceHeaders(creds, token, 'application/json', true),
+    body: JSON.stringify(estimateBody),
+  });
+  if (!res.ok) {
+    throw new Error(`Walmart Shipping Estimates ${res.status}: ${await readWalmartError(res)}`);
+  }
+  const data = await res.json() as any;
+  const rates = walmartEstimateList(data).filter((rate) => walmartEstimateCost(rate) > 0);
+  console.info('[walmart-shipping connector] label estimate response', {
+    responseKeys: walmartSafeObjectKeys(data),
+    dataKeys: walmartSafeObjectKeys((data as any)?.data),
+    usableRateCount: rates.length,
+  });
+  return { token, rates };
+}
+
+function selectWalmartEstimateRate(rates: any[], serviceCode: unknown): any | null {
+  const wanted = normalizeProviderKey(serviceCode);
+  if (!wanted) return null;
+  const exact = rates.find((rate) => normalizeProviderKey(walmartEstimateServiceCode(rate)) === wanted);
+  if (exact) return exact;
+  return rates.find((rate) => {
+    const serviceSlug = slugRateService(walmartEstimateServiceName(rate));
+    return serviceSlug && wanted.endsWith(serviceSlug);
+  }) ?? null;
+}
+
+function walmartTrackingUrl(carrierName: string, trackingNumber: string): string {
+  const carrier = normalizeProviderKey(carrierName);
+  const encoded = encodeURIComponent(trackingNumber);
+  if (carrier.includes('fedex')) return `https://www.fedex.com/fedextrack/?trknbr=${encoded}`;
+  if (carrier.includes('ups')) return `https://www.ups.com/track?tracknum=${encoded}`;
+  if (carrier.includes('usps') || carrier.includes('postal')) return `https://tools.usps.com/go/TrackConfirmAction?tLabels=${encoded}`;
+  return '';
+}
+
+async function downloadWalmartLabelPdf(
+  creds: Record<string, unknown>,
+  token: string,
+  carrierName: string,
+  trackingNumber: string,
+): Promise<string> {
+  const url = `https://marketplace.walmartapis.com/v3/shipping/labels/carriers/${encodeURIComponent(carrierName)}/trackings/${encodeURIComponent(trackingNumber)}`;
+  const res = await timedFetch('walmart-shipping.labels.download-tracking', url, {
+    headers: walmartMarketplaceHeaders(creds, token, 'application/pdf'),
+  });
+  if (!res.ok) {
+    console.warn(`[walmart-shipping connector] label download ${res.status}: ${await readWalmartError(res)}`);
+    return '';
+  }
+  const contentType = res.headers.get('content-type') || 'application/pdf';
+  if (!/pdf/i.test(contentType)) {
+    console.warn(`[walmart-shipping connector] label download returned ${contentType}`);
+    return '';
+  }
+  const buffer = Buffer.from(await res.arrayBuffer());
+  return `data:application/pdf;base64,${buffer.toString('base64')}`;
+}
+
+const WALMART_LABEL_BASE64_KEYS = new Set([
+  'labeldata',
+  'label_data',
+  'labelbase64',
+  'labelpdf',
+  'pdffile',
+  'pdfdata',
+  'pdf_data',
+  'pdfbase64',
+]);
+
+const WALMART_LABEL_URL_KEYS = new Set([
+  'labelurl',
+  'label_url',
+  'labeldownloadurl',
+  'label_download_url',
+  'downloadurl',
+  'download_url',
+  'labeldownload',
+  'label_download',
+  'href',
+  'url',
+]);
+
+const WALMART_LABEL_BASE64_CHILD_KEYS = new Set([
+  'data',
+  'content',
+  'pdf',
+  'base64',
+  'labeldata',
+  'label_data',
+  'labelbase64',
+  'pdfbase64',
+]);
+
+const WALMART_LABEL_URL_CHILD_KEYS = new Set([
+  'href',
+  'url',
+  'pdf',
+  'download',
+  'downloadurl',
+  'download_url',
+  'labelurl',
+  'label_url',
+]);
+
+function walmartLabelPath(parent: string, key: string): string {
+  if (!parent || parent === 'response') return key;
+  return `${parent}.${key}`;
+}
+
+function walmartLabelReject(diagnostics: string[], path: string, value: unknown, reason: string): void {
+  diagnostics.push(`${path}:${walmartLabelKeySummary(value)}_${reason}`);
+}
+
+function validateWalmartLabelString(
+  value: string,
+  mode: 'base64' | 'url',
+  path: string,
+  diagnostics: string[],
+): { value: string; path: string } | null {
+  const text = value.trim();
+  if (!text) {
+    walmartLabelReject(diagnostics, path, value, 'empty');
+    return null;
+  }
+  if (text === '[object Object]') {
+    walmartLabelReject(diagnostics, path, value, 'invalid');
+    return null;
+  }
+  if (mode === 'url') {
+    if (/^https?:\/\//i.test(text)) return { value: text, path };
+    walmartLabelReject(diagnostics, path, value, 'unsupported');
+    return null;
+  }
+  const compact = text.replace(/\s+/g, '');
+  if (/^data:application\/pdf/i.test(compact)) return { value: compact, path };
+  if (/^[A-Za-z0-9+/=]+$/.test(compact) && compact.length > 100) {
+    return { value: compact, path };
+  }
+  walmartLabelReject(diagnostics, path, value, 'unsupported');
+  return null;
+}
+
+function extractWalmartLabelReference(
+  payload: unknown,
+  mode: 'base64' | 'url',
+): { value: string; path: string; diagnostics: string[] } {
+  const diagnostics: string[] = [];
+  const rootKeys = mode === 'base64' ? WALMART_LABEL_BASE64_KEYS : WALMART_LABEL_URL_KEYS;
+  const childKeys = mode === 'base64' ? WALMART_LABEL_BASE64_CHILD_KEYS : WALMART_LABEL_URL_CHILD_KEYS;
+
+  const scan = (value: unknown, path: string, depth: number, withinCandidate: boolean): { value: string; path: string } | null => {
+    if (depth > 8 || value == null) return null;
+    if (typeof value === 'string') {
+      return withinCandidate ? validateWalmartLabelString(value, mode, path, diagnostics) : null;
+    }
+    if (Array.isArray(value)) {
+      for (const [index, item] of value.entries()) {
+        const found = scan(item, `${path}[${index}]`, depth + 1, withinCandidate);
+        if (found) return found;
+      }
+      return null;
+    }
+    if (typeof value !== 'object') {
+      if (withinCandidate) walmartLabelReject(diagnostics, path, value, 'unsupported');
+      return null;
+    }
+
+    const record = value as Record<string, unknown>;
+    for (const [key, raw] of Object.entries(record)) {
+      const normalized = key.toLowerCase();
+      const keyPath = walmartLabelPath(path, key);
+      if (rootKeys.has(normalized) || (withinCandidate && childKeys.has(normalized))) {
+        const found = scan(raw, keyPath, depth + 1, true);
+        if (found) return found;
+        if (raw == null || typeof raw !== 'object') {
+          walmartLabelReject(diagnostics, keyPath, raw, 'unsupported');
+        }
+      }
+    }
+
+    for (const [key, raw] of Object.entries(record)) {
+      const found = scan(raw, walmartLabelPath(path, key), depth + 1, withinCandidate);
+      if (found) return found;
+    }
+    return null;
+  };
+
+  const found = scan(payload, 'response', 0, false);
+  if (found) return { ...found, diagnostics };
+  if (diagnostics.length) {
+    throw new Error(`Walmart label ${mode} extraction rejected unsupported fields: ${diagnostics.slice(0, 8).join('; ')}`);
+  }
+  return { value: '', path: '', diagnostics };
+}
+
+export function __test_extractWalmartLabelReference(payload: unknown, mode: 'base64' | 'url') {
+  return extractWalmartLabelReference(payload, mode);
+}
+
+function walmartLabelExtractionErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : 'Walmart label extraction failed';
+}
+
+function findWalmartLabelString(value: unknown, keys: string[]): string {
+  const normalized = new Set(keys.map((key) => key.toLowerCase()));
+  const mode = [...normalized].some((key) => WALMART_LABEL_BASE64_KEYS.has(key)) ? 'base64' : 'url';
+  try {
+    return extractWalmartLabelReference(value, mode).value;
+  } catch (err) {
+    console.warn('[walmart-shipping connector] label extraction rejected:', walmartLabelExtractionErrorMessage(err));
+    return '';
+  }
+}
+
+function walmartLabelDataUrlFromPayload(payload: unknown): string {
+  let base64 = '';
+  try {
+    base64 = extractWalmartLabelReference(payload, 'base64').value.replace(/\s+/g, '');
+  } catch (err) {
+    console.warn('[walmart-shipping connector] label data extraction rejected:', walmartLabelExtractionErrorMessage(err));
+    return '';
+  }
+  if (!base64) return '';
+  if (/^data:application\/pdf/i.test(base64)) return base64;
+  if (/^[A-Za-z0-9+/=]+$/.test(base64) && base64.length > 100) {
+    return `data:application/pdf;base64,${base64}`;
+  }
+  return '';
+}
+
+async function downloadWalmartLabelPdfFromUrl(
+  creds: Record<string, unknown>,
+  token: string,
+  url: string,
+): Promise<string> {
+  if (!/^https?:\/\//i.test(url)) return '';
+  const res = await timedFetch('walmart-shipping.labels.download-url', url, {
+    headers: walmartMarketplaceHeaders(creds, token, 'application/pdf,application/json,image/png,*/*'),
+  });
+  if (!res.ok) {
+    console.warn(`[walmart-shipping connector] label download url ${res.status}: ${await readWalmartError(res)}`);
+    return '';
+  }
+
+  const contentType = res.headers.get('content-type') || '';
+  if (/pdf/i.test(contentType)) {
+    const buffer = Buffer.from(await res.arrayBuffer());
+    return `data:application/pdf;base64,${buffer.toString('base64')}`;
+  }
+  if (/json/i.test(contentType)) {
+    return walmartLabelDataUrlFromPayload(await res.json().catch(() => null));
+  }
+  if (/image\/png/i.test(contentType)) {
+    const buffer = Buffer.from(await res.arrayBuffer());
+    return `data:image/png;base64,${buffer.toString('base64')}`;
+  }
+  return '';
+}
+
+async function downloadWalmartLabelPdfById(
+  creds: Record<string, unknown>,
+  token: string,
+  labelId: string,
+): Promise<string> {
+  const res = await timedFetch(
+    'walmart-shipping.labels.download-id',
+    `https://marketplace.walmartapis.com/v3/shipping/labels/${encodeURIComponent(labelId)}`,
+    {
+      headers: walmartMarketplaceHeaders(creds, token, 'application/pdf,application/json'),
+    },
+  );
+  if (!res.ok) {
+    console.warn(`[walmart-shipping connector] label download by id ${res.status}: ${await readWalmartError(res)}`);
+    return '';
+  }
+
+  const contentType = res.headers.get('content-type') || '';
+  if (/pdf/i.test(contentType)) {
+    const buffer = Buffer.from(await res.arrayBuffer());
+    return `data:application/pdf;base64,${buffer.toString('base64')}`;
+  }
+
+  const text = await res.text().catch(() => '');
+  if (!text) return '';
+  try {
+    const parsed = JSON.parse(text);
+    const labelUrl = walmartLabelDataUrlFromPayload(parsed);
+    if (labelUrl) return labelUrl;
+    const directUrl = findWalmartLabelString(parsed, ['labelUrl', 'labelURL', 'downloadUrl', 'downloadURL', 'href', 'url']);
+    return directUrl ? downloadWalmartLabelPdfFromUrl(creds, token, directUrl) : '';
+  } catch {
+    const compact = text.trim().replace(/\s+/g, '');
+    if (/^[A-Za-z0-9+/=]+$/.test(compact) && compact.length > 100) {
+      return `data:application/pdf;base64,${compact}`;
+    }
+    return '';
+  }
+}
+
 async function ratesFromWalmartShipping(input: Record<string, unknown>): Promise<Array<{
   service: string;
   cost: number;
@@ -233,14 +834,180 @@ async function ratesFromWalmartShipping(input: Record<string, unknown>): Promise
     .filter((rate) => rate.cost > 0);
 }
 
+async function createLabelWalmartShipping(input: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const creds = input.credentials && typeof input.credentials === 'object'
+    ? input.credentials as Record<string, unknown>
+    : {};
+  const body = input.body && typeof input.body === 'object' ? input.body as Record<string, any> : {};
+  const contextInput = input.context && typeof input.context === 'object' ? input.context as any : {};
+  const rawOrder = contextInput.rawOrder ?? input.rawOrder;
+  const purchaseOrderId = firstString(contextInput.purchaseOrderId, input.purchaseOrderId);
+  if (!purchaseOrderId) {
+    throw new Error('Walmart Shipping labels require a Walmart purchaseOrderId');
+  }
+
+  const weightOz = Number(input.weightOz ?? body.weightOz ?? 0);
+  const dimsL = Number(input.dimsL ?? body.dimsL ?? body.length ?? 0);
+  const dimsW = Number(input.dimsW ?? body.dimsW ?? body.width ?? 0);
+  const dimsH = Number(input.dimsH ?? body.dimsH ?? body.height ?? 0);
+  if (!weightOz || !dimsL || !dimsW || !dimsH) {
+    throw new Error('Walmart Shipping label creation requires weightOz and dimsL/W/H');
+  }
+
+  const fromAddress = walmartLabelFromAddress(creds, body.shipFrom ?? input.shipFrom);
+  const boxItems = walmartBoxItems(rawOrder);
+  if (!boxItems.length) {
+    throw new Error('Cannot create Walmart Shipping label: missing Walmart order line numbers');
+  }
+  const { token, rates } = await fetchWalmartEstimatesForLabel(creds, {
+    weightOz,
+    dimsL,
+    dimsW,
+    dimsH,
+    purchaseOrderId,
+    rawOrder,
+    body,
+    fromAddress,
+    boxItems,
+  });
+
+  if (!rates.length) {
+    throw new Error('Walmart returned 0 rates for this order. Browse Rates again with a different package size or confirm Ship With Walmart is enabled in Seller Center.');
+  }
+
+  const selectedRate = selectWalmartEstimateRate(rates, body.serviceCode ?? input.serviceCode);
+  if (!selectedRate) {
+    throw new Error('Selected Walmart Shipping service is no longer available. Click Browse Rates again and select one of the current Walmart rates.');
+  }
+
+  const carrierName = walmartEstimateCarrierName(selectedRate);
+  const carrierServiceType = walmartEstimateServiceType(selectedRate);
+  if (!carrierName || !carrierServiceType) {
+    throw new Error('Walmart did not return the carrierName/carrierServiceType required to buy this label. Click Browse Rates again and choose another Walmart rate.');
+  }
+
+  const addOns = /signature/i.test(String(body.confirmation ?? input.confirmation ?? '')) ? ['SIGNATURE'] : [];
+  const labelBody: Record<string, unknown> = {
+    boxDimensions: {
+      boxWeight: Math.max(1, Math.round(weightOz)),
+      boxWeightUnit: 'OZ',
+      boxLength: dimsL,
+      boxWidth: dimsW,
+      boxHeight: dimsH,
+      boxDimensionUnit: 'IN',
+    },
+    boxItems,
+    carrierName,
+    carrierServiceType,
+    packageType: 'CUSTOM_PACKAGE',
+    purchaseOrderId,
+    fromAddress,
+    returnAddress: fromAddress,
+    addOns,
+    hasBattery: false,
+    hazmat: false,
+  };
+  const accountType = firstString(body.accountType, creds.accountType);
+  if (accountType) labelBody.accountType = accountType;
+
+  console.info('[walmart-shipping connector] create label request', {
+    hasPurchaseOrderId: Boolean(purchaseOrderId),
+    carrierName: Boolean(carrierName),
+    carrierServiceType: Boolean(carrierServiceType),
+    boxItemCount: boxItems.length,
+    requestKeys: walmartSafeObjectKeys(labelBody),
+  });
+  const res = await timedFetch('walmart-shipping.labels.create', 'https://marketplace.walmartapis.com/v3/shipping/labels', {
+    method: 'POST',
+    headers: walmartMarketplaceHeaders(creds, token, 'application/json', true),
+    body: JSON.stringify(labelBody),
+  });
+  if (!res.ok) {
+    throw new Error(`Walmart Create Label ${res.status}: ${await readWalmartError(res)}`);
+  }
+
+  const data = await res.json() as any;
+  const details = data?.data && typeof data.data === 'object' ? data.data : data;
+  console.info('[walmart-shipping connector] create label response', {
+    responseKeys: walmartSafeObjectKeys(data),
+    detailKeys: walmartSafeObjectKeys(details),
+    responseShape: walmartLabelKeySummary(data),
+  });
+  const labelId = firstString(
+    details?.labelId,
+    details?.labelID,
+    details?.label_id,
+    details?.id,
+    data?.labelId,
+  );
+  const trackingNumber = firstString(
+    details?.trackingNo,
+    details?.trackingNumber,
+    details?.tracking_number,
+    details?.tracking,
+  );
+  if (!trackingNumber) {
+    throw new Error('Walmart created a label response without a tracking number');
+  }
+
+  const responseCarrierName = firstString(details?.carrierName, carrierName);
+  let labelUrl = walmartLabelDataUrlFromPayload(data);
+  if (!labelUrl) {
+    const directUrl = findWalmartLabelString(data, ['labelUrl', 'labelURL', 'downloadUrl', 'downloadURL', 'href', 'url']);
+    if (directUrl) {
+      labelUrl = await downloadWalmartLabelPdfFromUrl(creds, token, directUrl).catch((err) => {
+        console.warn('[walmart-shipping connector] label PDF download url failed:', err instanceof Error ? err.message : err);
+        return '';
+      });
+    }
+  }
+  if (!labelUrl && labelId) {
+    labelUrl = await downloadWalmartLabelPdfById(creds, token, labelId).catch((err) => {
+      console.warn('[walmart-shipping connector] label PDF download by id failed:', err instanceof Error ? err.message : err);
+      return '';
+    });
+  }
+  if (!labelUrl) {
+    labelUrl = await downloadWalmartLabelPdf(creds, token, responseCarrierName, trackingNumber).catch((err) => {
+      console.warn('[walmart-shipping connector] label PDF download failed:', err instanceof Error ? err.message : err);
+      return '';
+    });
+  }
+  const serviceName = walmartEstimateServiceName(selectedRate);
+  const serviceCode = walmartEstimateServiceCode(selectedRate);
+  const carrierCode = normalizeCarrierCodeForDirectRate(responseCarrierName) ?? inferCarrierCodeForDirectRate('walmart_shipping', serviceName);
+
+  return {
+    trackingNumber,
+    labelUrl,
+    labelFormat: labelUrl?.startsWith('data:application/pdf') ? 'pdf' : null,
+    cost: walmartEstimateCost(selectedRate),
+    currency: walmartEstimateCurrency(selectedRate),
+    shipmentId: trackingNumber,
+    carrierCode,
+    carrierName: responseCarrierName,
+    serviceCode,
+    serviceName,
+    selectedRate,
+    raw: data,
+    context: {
+      ...contextInput,
+      purchaseOrderId,
+      rawOrder,
+    },
+    trackingUrl: walmartTrackingUrl(responseCarrierName, trackingNumber),
+    shipmentConfirmed: null,
+    shipmentConfirmError: null,
+    shipmentConfirmRaw: null,
+  };
+}
+
 export function createWalmartShippingCarrierConnector(): CarrierConnector {
   return {
     provider: 'walmart_shipping',
     capabilities: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read'],
     getRates: ratesFromWalmartShipping,
-    createLabel: async () => {
-      throw new Error('Walmart Shipping labels are handled by api/carriers/labels.ts');
-    },
+    createLabel: createLabelWalmartShipping,
   };
 }
 
