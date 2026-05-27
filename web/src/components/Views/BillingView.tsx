@@ -188,6 +188,13 @@ function isoToDateInput(value: string | null | undefined) {
   return formatDateInputUtc(date)
 }
 
+function billingRangeDays(fromValue: string, toValue: string) {
+  const start = parseDateInput(fromValue)
+  const end = parseDateInput(toValue)
+  if (!start || !end || start > end) return 0
+  return Math.floor((end.getTime() - start.getTime()) / 86_400_000) + 1
+}
+
 function readBillingClientFilterIds() {
   if (typeof window === 'undefined') return []
   try {
@@ -472,6 +479,8 @@ export default function BillingView() {
   const detailPageCount = Math.max(1, Math.ceil(sortedDetailRows.length / detailPageSize))
   const currentDetailPage = Math.min(Math.max(detailPage, 1), detailPageCount)
   const detailRowOffset = (currentDetailPage - 1) * detailPageSize
+  const selectedBillingRangeDays = useMemo(() => billingRangeDays(from, to), [from, to])
+  const regenerateRangeBlocked = activePreset === 'all' || selectedBillingRangeDays > 120
   const pagedDetailRows = useMemo(() => {
     const start = (currentDetailPage - 1) * detailPageSize
     return sortedDetailRows.slice(start, start + detailPageSize)
@@ -718,6 +727,19 @@ export default function BillingView() {
   async function handleGenerateBilling(forceRegenerate = false) {
     if (!from || !to) {
       toastContext?.addToast('Select a date range first', 'error')
+      return
+    }
+
+    if (forceRegenerate && regenerateRangeBlocked) {
+      toastContext?.addToast('Regenerate Range is limited to 120 days. Use Update Billing for All/history.', 'error')
+      return
+    }
+
+    if (
+      forceRegenerate &&
+      typeof window !== 'undefined' &&
+      !window.confirm(`Regenerate billing for ${selectedBillingRangeDays} day(s)? This rebuild is slower than Update Billing.`)
+    ) {
       return
     }
 
@@ -1274,7 +1296,7 @@ export default function BillingView() {
               'Update Billing'
             )}
           </button>
-          <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleGenerateBilling(true)} disabled={generateLoading} title="Rebuild every billing row in the selected date range. Use this only when pricing rules changed or history needs repair.">
+          <button className="btn btn-outline btn-sm" type="button" onClick={() => void handleGenerateBilling(true)} disabled={generateLoading || regenerateRangeBlocked} title={regenerateRangeBlocked ? 'Regenerate Range is limited to 120 days. Use Update Billing for All/history.' : 'Rebuild every billing row in the selected date range. Use this only when pricing rules changed or history needs repair.'}>
             Regenerate Range
           </button>
           <button
