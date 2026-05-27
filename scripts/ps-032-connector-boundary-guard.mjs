@@ -48,7 +48,6 @@ const transitionalDebt = new Set([
   'api/carriers/validate-address.ts',
   'api/carriers/verify.ts',
   'api/carriers/walmart/fees.ts',
-  'api/carriers/walmart/probe-carriers.ts',
   'api/cron/sync-walmart-fees.ts',
   'api/oauth/ebay/callback.ts',
   'scripts/probe-rate-scoping.ts',

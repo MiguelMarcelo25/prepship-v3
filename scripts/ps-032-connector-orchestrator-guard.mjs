@@ -25,6 +25,7 @@ const ebayOrdersRoute = read('api/carriers/ebay/orders.ts');
 const carrierRatesRoute = read('api/carriers/rates.ts');
 const carrierLabelsRoute = read('api/carriers/labels.ts');
 const upsProbeRoute = read('api/carriers/ups/probe.ts');
+const walmartProbeCarriersRoute = read('api/carriers/walmart/probe-carriers.ts');
 const walmartStoreConnector = read('src/connectors/store/walmart.ts');
 const ebayStoreConnector = read('src/connectors/store/ebay.ts');
 const upsCarrierConnector = read('src/connectors/carrier/ups.ts');
@@ -236,6 +237,16 @@ assert(
   walmartShippingCarrierConnector.includes('/v3/shipping/labels') &&
     !walmartShippingCarrierConnector.includes('Walmart Shipping labels are handled by api/carriers/labels.ts'),
   'Walmart Shipping CarrierConnector must own Walmart Shipping label API calls',
+);
+assert(
+  walmartProbeCarriersRoute.includes('probeWalmartShippingCarriers') &&
+    !walmartProbeCarriersRoute.includes('marketplace.walmartapis.com'),
+  'Walmart Shipping carriers probe route must call CarrierConnector-owned probe logic, not Walmart API directly',
+);
+assert(
+  walmartShippingCarrierConnector.includes('probeWalmartShippingCarriers') &&
+    walmartShippingCarrierConnector.includes('/v3/shipping/labels/carriers'),
+  'Walmart Shipping CarrierConnector must own Walmart Shipping carriers probe calls',
 );
 assert(
   !carrierRatesRoute.includes('ratesFromFedex') &&

@@ -56,7 +56,6 @@ These files currently contain direct provider calls or provider-client usage out
 | `api/carriers/validate-address.ts` | Carrier address validation | CarrierConnector validation capability or connector-owned helper | Phase 4 |
 | `api/carriers/verify.ts` | Carrier verification | CarrierConnector diagnostics | Phase 4 |
 | `api/carriers/walmart/fees.ts` | Walmart fees | Walmart StoreConnector or connector-owned helper | Phase 3 |
-| `api/carriers/walmart/probe-carriers.ts` | Walmart Shipping probe | Walmart Shipping CarrierConnector diagnostics | Phase 4 |
 | `api/cron/sync-walmart-fees.ts` | Walmart fee sync cron | Walmart StoreConnector or connector-owned helper | Phase 3 |
 | `api/oauth/ebay/callback.ts` | eBay OAuth/API token flow | eBay connector-owned auth helper | Phase 3 |
 | `scripts/probe-rate-scoping.ts` | ShipStation rate probe | CarrierConnector diagnostics script or connector-owned helper | Phase 4 |
@@ -246,6 +245,12 @@ Phase 4 UPS credential-probe slice added on 2026-05-28:
 - `api/carriers/ups/probe.ts` now routes UPS credential probing through connector-owned `probeUpsCredentials(...)`.
 - `src/connectors/carrier/ups.ts` owns the UPS OAuth credential probe call and safe fingerprint response shape.
 - The probe route still owns query-parameter parsing, no-store JSON headers, and safe error handling.
+
+Phase 4 Walmart Shipping carriers-probe slice added on 2026-05-28:
+
+- `api/carriers/walmart/probe-carriers.ts` now routes Walmart Shipping carrier-access probing through connector-owned `probeWalmartShippingCarriers(...)`.
+- `src/connectors/carrier/walmart-shipping.ts` owns the Walmart OAuth token call and `/v3/shipping/labels/carriers` probe.
+- The probe route still owns Supabase auth, CORS, DB credential lookup, provider validation, and safe error handling.
 
 Phase 5: Tighten guards.
 

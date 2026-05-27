@@ -109,6 +109,52 @@ function walmartMarketplaceHeaders(
   return headers;
 }
 
+export async function probeWalmartShippingCarriers(creds: Record<string, unknown>): Promise<{
+  ok: boolean;
+  step_a_oauth: 'success';
+  step_b_carriers_endpoint: {
+    status: number;
+    ok: boolean;
+    body: unknown;
+  };
+  correlationId: string;
+  interpretation: string;
+}> {
+  const token = await getWalmartAccessToken(creds);
+  const correlationId = `prepship-probe-${Date.now().toString(36)}`;
+  const headers = {
+    ...walmartMarketplaceHeaders(creds, token),
+    'WM_QOS.CORRELATION_ID': correlationId,
+  };
+
+  const carriersRes = await timedFetch(
+    'walmart-shipping.credentials.probe-carriers',
+    'https://marketplace.walmartapis.com/v3/shipping/labels/carriers',
+    { method: 'GET', headers },
+  );
+  const carriersText = await carriersRes.text().catch(() => '');
+  let carriersBody: unknown = carriersText.slice(0, 1500);
+  try {
+    carriersBody = JSON.parse(carriersText);
+  } catch {
+    // Keep the safe text snippet when Walmart does not return JSON.
+  }
+
+  return {
+    ok: carriersRes.ok,
+    step_a_oauth: 'success',
+    step_b_carriers_endpoint: {
+      status: carriersRes.status,
+      ok: carriersRes.ok,
+      body: carriersBody,
+    },
+    correlationId,
+    interpretation: carriersRes.ok
+      ? 'OAuth + Shipping API access both working. The remaining 500 on /shipping-estimates is request-shape or ship-from-mismatch related.'
+      : `Shipping API returned ${carriersRes.status}. If 401/403 -> the developer app is missing Shipping API permission (developer.walmart.com -> My Apps -> API Permissions). If 500 -> seller account isn't enrolled in Walmart Shipping Solutions. Either way, the issue is on Walmart's side, not in our request.`,
+  };
+}
+
 async function readWalmartError(res: Response): Promise<string> {
   const text = await res.text().then((s) => s.slice(0, 800)).catch(() => '');
   if (!text) return res.statusText;
