@@ -3,6 +3,7 @@ import { easyPostCarrierConnector } from './carrier/easypost';
 import { shippCarrierConnector } from './carrier/shipp';
 import { upsCarrierConnector } from './carrier/ups';
 import { walmartShippingCarrierConnector } from './carrier/walmart-shipping';
+import { fedexCarrierConnector } from './carrier/fedex';
 import { shipStationStoreConnector } from './store/shipstation';
 import { walmartStoreConnector } from './store/walmart';
 import { ebayStoreConnector } from './store/ebay';
@@ -15,6 +16,7 @@ export const carrierConnectors = {
   easypost: easyPostCarrierConnector,
   walmart_shipping: walmartShippingCarrierConnector,
   ups: upsCarrierConnector,
+  fedex: fedexCarrierConnector,
 };
 
 export const storeConnectors = {

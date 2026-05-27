@@ -25,6 +25,7 @@ export const connectorCapabilityMatrix: Record<ConnectorProvider, ConnectorCapab
   shipp: ['rates.quote', 'labels.create', 'tracking.read', 'credentials.verify'],
   easypost: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read', 'credentials.verify', 'webhooks.receive'],
   ups: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read', 'credentials.verify'],
+  fedex: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read', 'credentials.verify'],
   ebay: [
     'orders.import',
     'orders.statusSync',

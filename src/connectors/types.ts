@@ -5,6 +5,7 @@ export type ConnectorProvider =
   | 'shipp'
   | 'easypost'
   | 'ups'
+  | 'fedex'
   | 'ebay'
   | 'shopify'
   | 'amazon'

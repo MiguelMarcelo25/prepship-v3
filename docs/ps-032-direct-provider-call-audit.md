@@ -34,6 +34,7 @@ These files currently contain direct provider call markers and are allowed as co
 | `src/connectors/carrier/easypost.ts` | EasyPost | CarrierConnector implementation owns EasyPost carrier behavior. |
 | `src/connectors/carrier/shipp.ts` | Shipp | CarrierConnector implementation owns Shipp carrier behavior. |
 | `src/connectors/carrier/walmart-shipping.ts` | Walmart Shipping | CarrierConnector implementation owns Walmart Shipping behavior. |
+| `src/connectors/carrier/fedex.ts` | FedEx | CarrierConnector implementation owns FedEx carrier behavior. |
 | `src/lib/shipstation/client.ts` | ShipStation low-level wrapper | Allowed provider wrapper, but should be called by connector-owned code only. |
 | `src/lib/shipstation/credentials.ts` | ShipStation low-level wrapper | Allowed provider wrapper, but should be called by connector-owned code only. |
 | `src/lib/shipstation/labels.ts` | ShipStation low-level wrapper | Allowed provider wrapper, but should be called by connector-owned code only. |
@@ -144,6 +145,12 @@ Phase 4 Walmart Shipping rate slice added on 2026-05-27:
 - `src/connectors/carrier/walmart-shipping.ts` owns Walmart Shipping token, shipping-estimates API calls, request shaping, and rate normalization.
 - `src/connectors/store/walmart.ts` owns the Walmart customer-order lookup helper used to resolve purchaseOrderId for ShipStation-ingested Walmart orders.
 - `api/carriers/rates.ts` still owns database order-context lookup and remains transitional debt until the remaining rate providers are moved.
+
+Phase 4 FedEx rate slice added on 2026-05-27:
+
+- `api/carriers/rates.ts` now routes FedEx rate quotes through `quoteCarrierRates('fedex', ...)`.
+- `src/connectors/carrier/fedex.ts` owns FedEx OAuth, rate API calls, request shaping, and rate normalization.
+- `api/carriers/rates.ts` remains transitional debt until all remaining rate providers are moved.
 
 Phase 5: Tighten guards.
 

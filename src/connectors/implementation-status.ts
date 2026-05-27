@@ -32,6 +32,10 @@ export const connectorImplementationStatus: Record<ConnectorProvider, ConnectorI
     status: 'live',
     notes: 'Live UPS rate and label behavior is handled through direct carrier endpoints.',
   },
+  fedex: {
+    status: 'live',
+    notes: 'Live FedEx rate behavior is handled through the carrier connector; labels remain a registered connector capability stub.',
+  },
   ebay: {
     status: 'live',
     notes: 'Live order import and shipment confirmation paths exist; production execution requires valid eBay OAuth store credentials.',

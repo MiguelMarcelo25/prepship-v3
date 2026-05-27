@@ -11,6 +11,7 @@ const providerAliases: Record<string, ConnectorProvider> = {
   walmart_shipping: 'walmart_shipping',
   walmartshipping: 'walmart_shipping',
   ups: 'ups',
+  fedex: 'fedex',
 };
 
 export type ResolvedCarrierConnector = {
