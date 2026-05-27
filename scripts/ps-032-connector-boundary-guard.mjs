@@ -31,6 +31,7 @@ const approvedConnectorOwned = new Set([
   'src/connectors/carrier/fedex.ts',
   'src/connectors/carrier/usps.ts',
   'src/connectors/carrier/shipengine.ts',
+  'src/connectors/carrier/ebay-shipping.ts',
   'src/lib/shipstation/client.ts',
   'src/lib/shipstation/credentials.ts',
   'src/lib/shipstation/labels.ts',

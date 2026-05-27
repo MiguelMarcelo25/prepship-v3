@@ -8,6 +8,7 @@ export type ConnectorProvider =
   | 'fedex'
   | 'usps'
   | 'shipengine'
+  | 'ebay_shipping'
   | 'ebay'
   | 'shopify'
   | 'amazon'

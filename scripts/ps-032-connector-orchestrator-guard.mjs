@@ -26,6 +26,7 @@ const walmartShippingCarrierConnector = read('src/connectors/carrier/walmart-shi
 const fedexCarrierConnector = read('src/connectors/carrier/fedex.ts');
 const uspsCarrierConnector = read('src/connectors/carrier/usps.ts');
 const shipEngineCarrierConnector = read('src/connectors/carrier/shipengine.ts');
+const ebayShippingCarrierConnector = read('src/connectors/carrier/ebay-shipping.ts');
 const packageJson = JSON.parse(read('package.json'));
 
 assert(
@@ -190,6 +191,17 @@ assert(
   shipEngineCarrierConnector.includes('api.shipengine.com') &&
     shipEngineCarrierConnector.includes('getRates'),
   'ShipEngine CarrierConnector must own ShipEngine rate API calls',
+);
+assert(
+  !carrierRatesRoute.includes('ratesFromEbayShipping') &&
+    !carrierRatesRoute.includes('getEbayLogisticsAccessToken') &&
+    !carrierRatesRoute.includes('/sell/logistics/v1_beta/shipping_quote'),
+  'eBay Shipping rates must route through CarrierConnector orchestration, not direct eBay Logistics API calls from api/carriers/rates.ts',
+);
+assert(
+  ebayShippingCarrierConnector.includes('/sell/logistics/v1_beta/shipping_quote') &&
+    ebayShippingCarrierConnector.includes('getRates'),
+  'eBay Shipping CarrierConnector must own eBay Logistics rate API calls',
 );
 
 assert.equal(

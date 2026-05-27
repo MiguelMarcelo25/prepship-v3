@@ -44,6 +44,10 @@ export const connectorImplementationStatus: Record<ConnectorProvider, ConnectorI
     status: 'live',
     notes: 'Live ShipEngine rate behavior is handled through the carrier connector; labels remain a registered connector capability stub.',
   },
+  ebay_shipping: {
+    status: 'live',
+    notes: 'Live eBay Shipping rate behavior is handled through the carrier connector; labels remain a registered connector capability stub.',
+  },
   ebay: {
     status: 'live',
     notes: 'Live order import and shipment confirmation paths exist; production execution requires valid eBay OAuth store credentials.',

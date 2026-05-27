@@ -6,6 +6,7 @@ import { walmartShippingCarrierConnector } from './carrier/walmart-shipping';
 import { fedexCarrierConnector } from './carrier/fedex';
 import { uspsCarrierConnector } from './carrier/usps';
 import { shipEngineCarrierConnector } from './carrier/shipengine';
+import { ebayShippingCarrierConnector } from './carrier/ebay-shipping';
 import { shipStationStoreConnector } from './store/shipstation';
 import { walmartStoreConnector } from './store/walmart';
 import { ebayStoreConnector } from './store/ebay';
@@ -21,6 +22,7 @@ export const carrierConnectors = {
   fedex: fedexCarrierConnector,
   usps: uspsCarrierConnector,
   shipengine: shipEngineCarrierConnector,
+  ebay_shipping: ebayShippingCarrierConnector,
 };
 
 export const storeConnectors = {

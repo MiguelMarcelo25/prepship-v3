@@ -37,6 +37,7 @@ These files currently contain direct provider call markers and are allowed as co
 | `src/connectors/carrier/fedex.ts` | FedEx | CarrierConnector implementation owns FedEx carrier behavior. |
 | `src/connectors/carrier/usps.ts` | USPS | CarrierConnector implementation owns USPS carrier behavior. |
 | `src/connectors/carrier/shipengine.ts` | ShipEngine | CarrierConnector implementation owns ShipEngine carrier behavior. |
+| `src/connectors/carrier/ebay-shipping.ts` | eBay Shipping | CarrierConnector implementation owns eBay Logistics shipping behavior. |
 | `src/lib/shipstation/client.ts` | ShipStation low-level wrapper | Allowed provider wrapper, but should be called by connector-owned code only. |
 | `src/lib/shipstation/credentials.ts` | ShipStation low-level wrapper | Allowed provider wrapper, but should be called by connector-owned code only. |
 | `src/lib/shipstation/labels.ts` | ShipStation low-level wrapper | Allowed provider wrapper, but should be called by connector-owned code only. |
@@ -165,6 +166,12 @@ Phase 4 ShipEngine rate slice added on 2026-05-27:
 - `api/carriers/rates.ts` now routes ShipEngine rate quotes through `quoteCarrierRates('shipengine', ...)`.
 - `src/connectors/carrier/shipengine.ts` owns ShipEngine carrier lookup, rate API calls, request shaping, and rate normalization.
 - `api/carriers/rates.ts` remains transitional debt until all remaining rate providers are moved.
+
+Phase 4 eBay Shipping rate slice added on 2026-05-28:
+
+- `api/carriers/rates.ts` now routes eBay Shipping rate quotes through `quoteCarrierRates('ebay_shipping', ...)`.
+- `src/connectors/carrier/ebay-shipping.ts` owns eBay Logistics OAuth, shipping quote API calls, request shaping, and rate normalization.
+- `api/carriers/rates.ts` still owns local eBay raw-order lookup and remains transitional debt until all remaining rate providers are moved.
 
 Phase 5: Tighten guards.
 

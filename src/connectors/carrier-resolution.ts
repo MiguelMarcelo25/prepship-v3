@@ -14,6 +14,8 @@ const providerAliases: Record<string, ConnectorProvider> = {
   fedex: 'fedex',
   usps: 'usps',
   shipengine: 'shipengine',
+  ebay_shipping: 'ebay_shipping',
+  ebayshipping: 'ebay_shipping',
 };
 
 export type ResolvedCarrierConnector = {
