@@ -12,6 +12,8 @@ const storeResolution = read('src/connectors/store-resolution.ts');
 const carrierResolution = read('src/connectors/carrier-resolution.ts');
 const storeOrchestrator = read('src/services/store-connector-orchestrator.ts');
 const carrierOrchestrator = read('src/services/carrier-connector-orchestrator.ts');
+const orderSync = read('src/services/order-sync.ts');
+const shipStationStoreConnector = read('src/connectors/store/shipstation.ts');
 const packageJson = JSON.parse(read('package.json'));
 
 assert(
@@ -67,6 +69,20 @@ for (const required of [
 ]) {
   assert(carrierOrchestrator.includes(required), `carrier connector orchestrator missing ${required}`);
 }
+
+assert(
+  orderSync.includes('importStoreOrders'),
+  'ShipStation order sync must call StoreConnector import orchestration',
+);
+assert(
+  !orderSync.includes('ssV1Request'),
+  'ShipStation order sync must not call ssV1Request directly from core service code',
+);
+assert(
+  shipStationStoreConnector.includes('ssV1Request') &&
+    shipStationStoreConnector.includes('importOrders'),
+  'ShipStation StoreConnector must own ShipStation order API import calls',
+);
 
 assert.equal(
   packageJson.scripts?.['test:ps-032-connector-orchestrators'],

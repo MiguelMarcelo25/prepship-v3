@@ -21,6 +21,7 @@ const providerPatterns = [
 const approvedConnectorOwned = new Set([
   'src/connectors/store/walmart.ts',
   'src/connectors/store/ebay.ts',
+  'src/connectors/store/shipstation.ts',
   'src/connectors/carrier/shipstation.ts',
   'src/connectors/carrier/ups.ts',
   'src/connectors/carrier/easypost.ts',
@@ -60,7 +61,6 @@ const transitionalDebt = new Set([
   'src/routes/rates.ts',
   'src/services/inventory-enrichment.ts',
   'src/services/labels.ts',
-  'src/services/order-sync.ts',
   'src/services/rates.ts',
   'src/services/shipment-sync.ts',
 ]);
@@ -70,6 +70,7 @@ const ignoredFiles = new Set([
   'scripts/ebay-confirmation-mocked-guard.ts',
   'scripts/parity/extract.mjs',
   'scripts/ps-032-connector-boundary-guard.mjs',
+  'scripts/ps-032-connector-orchestrator-guard.mjs',
 ]);
 
 function normalize(filePath) {

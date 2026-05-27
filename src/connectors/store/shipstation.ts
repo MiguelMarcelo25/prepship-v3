@@ -2,16 +2,173 @@ import {
   asSSUpstreamOrderId,
   ssMarkOrderShippedV1,
 } from '../../lib/shipstation/labels';
+import { ssV1Request } from '../../lib/shipstation/v1-client';
+import { buildShipStationOrderSource } from '../../services/normalized-order-persistence';
 import type {
   ConfirmationResult,
+  NormalizedOrder,
+  NormalizedStoreOrderImportResult,
   ShipmentConfirmationInput,
+  StoreOrderImportInput,
   StoreConnector,
 } from '../../domain/fulfillment/types';
+
+type SSOrder = {
+  orderId: number;
+  orderNumber: string;
+  orderKey?: string;
+  orderStatus: string;
+  orderDate?: string;
+  modifyDate?: string;
+  customerEmail?: string | null;
+  shipTo?: {
+    name?: string;
+    company?: string | null;
+    street1?: string;
+    street2?: string | null;
+    street3?: string | null;
+    city?: string;
+    state?: string;
+    postalCode?: string;
+    country?: string;
+    phone?: string | null;
+    residential?: boolean | null;
+  };
+  weight?: { value: number; units: 'ounces' | 'pounds' | 'grams'; WeightUnits?: number };
+  carrierCode?: string | null;
+  serviceCode?: string | null;
+  orderTotal?: number | null;
+  shippingAmount?: number | null;
+  items?: unknown[];
+  externallyFulfilled?: boolean | null;
+  externally_shipped?: boolean | null;
+  advancedOptions?: {
+    storeId?: number | null;
+    nonMachinable?: boolean | null;
+  } | null;
+};
+
+type SSOrdersList = {
+  orders: SSOrder[];
+  total: number;
+  page: number;
+  pages: number;
+};
+
+function toOunces(w?: SSOrder['weight']): number | null {
+  if (!w || typeof w.value !== 'number') return null;
+  switch (w.units) {
+    case 'ounces':
+      return w.value;
+    case 'pounds':
+      return w.value * 16;
+    case 'grams':
+      return w.value / 28.3495;
+    default:
+      return w.value;
+  }
+}
+
+function parseShipStationDate(value?: string): Date | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  const hasZone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(trimmed);
+  const parsed = new Date(hasZone ? trimmed : `${trimmed}Z`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function toNumericString(n?: number | null): string {
+  return Number.isFinite(n as number) ? (n as number).toFixed(2) : '0';
+}
+
+function externallyShippedFromRaw(o: SSOrder): boolean {
+  return Boolean(
+    o.externallyFulfilled === true ||
+      o.externally_shipped === true ||
+      o.advancedOptions?.nonMachinable === true
+  );
+}
+
+function formatSSDate(ms: number): string {
+  return new Date(ms).toISOString().replace('T', ' ').slice(0, 19);
+}
+
+export function normalizeShipStationOrder(raw: unknown): NormalizedOrder {
+  const o = raw as SSOrder;
+  const storeId = o.advancedOptions?.storeId ?? null;
+  const source = buildShipStationOrderSource({
+    orderId: o.orderId,
+    orderNumber: o.orderNumber,
+    storeId,
+    raw: o as unknown as Record<string, unknown>,
+  });
+
+  return {
+    sourceProvider: 'shipstation',
+    sourceAccountId: source.sourceAccountId,
+    sourceOrderId: source.sourceOrderId,
+    sourceOrderNumber: source.sourceOrderNumber,
+    marketplace: 'shipstation',
+    storeId: storeId == null ? null : String(storeId),
+    canonicalStatus: o.orderStatus === 'cancelled'
+      ? 'cancelled'
+      : o.orderStatus === 'shipped'
+        ? 'shipped'
+        : 'awaiting_shipment',
+    orderDate: parseShipStationDate(o.orderDate),
+    customerName: o.shipTo?.name ?? null,
+    customerEmail: o.customerEmail ?? null,
+    shipToCity: o.shipTo?.city ?? null,
+    shipToState: o.shipTo?.state ?? null,
+    shipToPostalCode: o.shipTo?.postalCode ?? null,
+    carrierCode: o.carrierCode ?? null,
+    serviceCode: o.serviceCode ?? null,
+    weightOz: toOunces(o.weight),
+    orderTotal: toNumericString(o.orderTotal),
+    shippingPaid: Number(toNumericString(o.shippingAmount)),
+    items: (o.items as unknown[]) ?? [],
+    externallyShipped: externallyShippedFromRaw(o),
+    rawPayload: o as unknown as Record<string, unknown>,
+  };
+}
 
 export function createShipStationStoreConnector(): StoreConnector {
   return {
     provider: 'shipstation',
-    capabilities: ['orders.import', 'shipment.confirm', 'products.import'],
+    capabilities: ['orders.import', 'orders.statusSync', 'shipment.confirm', 'products.import'],
+    async importOrders(input: StoreOrderImportInput): Promise<NormalizedStoreOrderImportResult> {
+      if (!input.orderStatus || input.sinceMs == null || input.pageSize == null || input.page == null) {
+        throw new Error('ShipStation importOrders requires orderStatus, sinceMs, pageSize, and page');
+      }
+
+      const q = new URLSearchParams({
+        orderStatus: input.orderStatus,
+        modifyDateStart: formatSSDate(input.sinceMs),
+        pageSize: String(input.pageSize),
+        page: String(input.page),
+        sortBy: 'ModifyDate',
+        sortDir: 'ASC',
+      });
+      if (input.storeId !== undefined) q.set('storeId', String(input.storeId));
+
+      const res = await ssV1Request<SSOrdersList>(`/orders?${q.toString()}`, {
+        apiKey: input.credentials?.apiKey ?? undefined,
+        apiSecret: input.credentials?.apiSecret ?? undefined,
+        dedupeKey: input.dedupeKey,
+      });
+
+      return {
+        provider: 'shipstation',
+        accountId: input.accountId,
+        orders: res.orders.map((order) => normalizeShipStationOrder(order)),
+        page: res.page,
+        pages: res.pages,
+        total: res.total,
+      };
+    },
+    normalizeOrder: normalizeShipStationOrder,
     async confirmShipment(input: ShipmentConfirmationInput): Promise<ConfirmationResult> {
       const upstreamOrderId = asSSUpstreamOrderId(input.externalOrderId);
       if (!upstreamOrderId) {

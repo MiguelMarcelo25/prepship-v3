@@ -23,6 +23,7 @@ const carrierLabels = read('api/carriers/labels.ts');
 const carrierRates = read('api/carriers/rates.ts');
 const carrierStatus = read('scripts/status-carriers.ts');
 const fulfillmentOutbox = read('src/services/fulfillment/outbox.ts');
+const shipStationStoreConnector = read('src/connectors/store/shipstation.ts');
 const packageJson = JSON.parse(read('package.json'));
 
 for (const iface of [
@@ -103,7 +104,10 @@ for (const schemaField of [
 
 assert(normalizedOrderPersistence.includes('buildShipStationOrderSource'), 'missing ShipStation normalized order source helper');
 assert(normalizedOrderPersistence.includes('sourceProvider'), 'normalized order helper must return sourceProvider');
-assert(orderSync.includes('buildShipStationOrderSource'), 'ShipStation order sync must use normalized order source helper');
+assert(
+  shipStationStoreConnector.includes('buildShipStationOrderSource'),
+  'ShipStation store connector must use normalized order source helper',
+);
 assert(orderSync.includes('upsertNormalizedStoreOrders'), 'ShipStation order sync must persist through store-order-import');
 
 for (const schemaField of [

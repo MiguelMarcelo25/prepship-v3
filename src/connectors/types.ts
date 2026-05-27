@@ -41,8 +41,19 @@ export type NormalizedOrder = {
   marketplace: string | null;
   storeId: string | null;
   canonicalStatus: NormalizedOrderStatus;
+  orderDate?: Date | null;
   customerName: string | null;
+  customerEmail?: string | null;
+  shipToCity?: string | null;
+  shipToState?: string | null;
+  shipToPostalCode?: string | null;
+  carrierCode?: string | null;
+  serviceCode?: string | null;
+  weightOz?: number | null;
+  orderTotal?: string | null;
   shippingPaid: number | null;
+  items?: unknown[];
+  externallyShipped?: boolean;
   rawPayload: unknown;
 };
 
@@ -50,6 +61,13 @@ export type StoreOrderImportInput = {
   companyId: number;
   accountId: string;
   cursor?: string | null;
+  orderStatus?: string;
+  sinceMs?: number;
+  pageSize?: number;
+  page?: number;
+  storeId?: number;
+  credentials?: Record<string, string | null | undefined>;
+  dedupeKey?: string;
 };
 
 export type StoreOrderStatusSyncInput = {
@@ -68,6 +86,9 @@ export type NormalizedStoreOrderImportResult = {
   accountId: string;
   orders: NormalizedOrder[];
   cursor?: string | null;
+  page?: number;
+  pages?: number;
+  total?: number;
   diagnostics?: Record<string, unknown>;
 };
 

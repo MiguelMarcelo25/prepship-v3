@@ -3,7 +3,10 @@ export type {
   ConfirmationResult,
   ConnectorCapability as FulfillmentCapability,
   ConnectorProvider as FulfillmentProvider,
+  NormalizedOrder,
+  NormalizedStoreOrderImportResult,
   ShipmentConfirmationInput,
+  StoreOrderImportInput,
   StoreConnector,
 } from '../../connectors/types';
 

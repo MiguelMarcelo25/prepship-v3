@@ -2,109 +2,24 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orders } from '../db/schema/orders';
 import { clients } from '../db/schema/clients';
-import { ssV1Request } from '../lib/shipstation/v1-client';
 import { getSettingNumber, setSetting } from './settings';
 import { isExcludedStoreId } from '../config/prepship';
-import { buildShipStationOrderSource } from './normalized-order-persistence';
 import {
   upsertNormalizedStoreOrders,
   type NormalizedStoreOrder,
 } from './store-order-import';
 import { deductInventoryForOrder } from './fulfillment-deductions';
+import { importStoreOrders } from './store-connector-orchestrator';
+import type { NormalizedOrder } from '../connectors/types';
 
 const LAST_SYNC_KEY = 'order_sync.last_modified_ms';
 const DEFAULT_LOOKBACK_MS = 1000 * 60 * 60 * 24 * 30; // 30 days on first run
 const STATUS_CATCHUP_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
 const AWAITING_CATCHUP_LOOKBACK_MS = STATUS_CATCHUP_LOOKBACK_MS;
 
-type SSOrder = {
-  orderId: number;
-  orderNumber: string;
-  orderKey?: string;
-  orderStatus: string;
-  orderDate?: string;
-  modifyDate?: string;
-  customerEmail?: string | null;
-  shipTo?: {
-    name?: string;
-    company?: string | null;
-    street1?: string;
-    street2?: string | null;
-    street3?: string | null;
-    city?: string;
-    state?: string;
-    postalCode?: string;
-    country?: string;
-    phone?: string | null;
-    residential?: boolean | null;
-  };
-  weight?: { value: number; units: 'ounces' | 'pounds' | 'grams'; WeightUnits?: number };
-  carrierCode?: string | null;
-  serviceCode?: string | null;
-  orderTotal?: number | null;
-  shippingAmount?: number | null;
-  items?: unknown[];
-  externallyFulfilled?: boolean | null;
-  externally_shipped?: boolean | null;
-  advancedOptions?: {
-    storeId?: number | null;
-    nonMachinable?: boolean | null;
-  } | null;
-};
-
-// Derive ShipStation's "externally shipped" / "externally fulfilled" signal
-// from any of three flag names the platform has used over the years. Returns
-// true only when affirmatively set — callers treat a falsy result as "don't
-// touch the DB value" so the sync doesn't clobber a user-set flag.
-function externallyShippedFromRaw(o: SSOrder): boolean {
-  return Boolean(
-    o.externallyFulfilled === true ||
-      o.externally_shipped === true ||
-      o.advancedOptions?.nonMachinable === true
-  );
-}
-
-type SSOrdersList = {
-  orders: SSOrder[];
-  total: number;
-  page: number;
-  pages: number;
-};
-
-function toOunces(w?: SSOrder['weight']): number | null {
-  if (!w || typeof w.value !== 'number') return null;
-  switch (w.units) {
-    case 'ounces':
-      return w.value;
-    case 'pounds':
-      return w.value * 16;
-    case 'grams':
-      return w.value / 28.3495;
-    default:
-      return w.value;
-  }
-}
-
 function formatSSDate(ms: number): string {
   // yyyy-MM-dd HH:mm:ss in UTC
   return new Date(ms).toISOString().replace('T', ' ').slice(0, 19);
-}
-
-function parseShipStationDate(value?: string): Date | null {
-  if (!value) return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-
-  // ShipStation V1 returns timestamps like "2026-04-23T21:35:42.0000000"
-  // with no timezone. Treat those as UTC so local dev and Render do not write
-  // different order_date values into the shared DB.
-  const hasZone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(trimmed);
-  const parsed = new Date(hasZone ? trimmed : `${trimmed}Z`);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
-}
-
-function toNumericString(n?: number | null): string {
-  return Number.isFinite(n as number) ? (n as number).toFixed(2) : '0';
 }
 
 async function buildStoreToClientMap(): Promise<{
@@ -161,44 +76,57 @@ async function flushNewStorePairs(
 //   - fallbackClientId auto-attaches orders to their owner account
 //   - externallyShipped is only overwritten when the incoming row
 //     affirmatively sets it (preserves user-set flags on routine syncs)
+function normalizedStatusToOrderStatus(status: NormalizedOrder['canonicalStatus']): string {
+  return status === 'on_hold' ? 'awaiting_shipment' : status;
+}
+
+function normalizedStoreId(order: NormalizedOrder): number | null {
+  const value = order.storeId == null ? null : Number(order.storeId);
+  return Number.isFinite(value) ? Math.trunc(value as number) : null;
+}
+
 function toShipStationNormalizedStoreOrder(
-  o: SSOrder,
+  o: NormalizedOrder,
   args: {
     clientId: number | null;
     storeId: number | null;
   },
 ): NormalizedStoreOrder {
+  const raw = o.rawPayload && typeof o.rawPayload === 'object'
+    ? o.rawPayload as Record<string, unknown>
+    : {};
   return {
-    externalOrderId: String(o.orderId),
-    source: buildShipStationOrderSource({
-      orderId: o.orderId,
-      orderNumber: o.orderNumber,
-      storeId: args.storeId,
-      raw: o as unknown as Record<string, unknown>,
-    }),
-    orderNumber: o.orderNumber,
-    orderStatus: o.orderStatus,
-    orderDate: parseShipStationDate(o.orderDate),
+    externalOrderId: o.sourceOrderId,
+    source: {
+      sourceProvider: o.sourceProvider,
+      sourceAccountId: o.sourceAccountId,
+      sourceOrderId: o.sourceOrderId,
+      sourceOrderNumber: o.sourceOrderNumber,
+      rawSourcePayload: raw,
+    },
+    orderNumber: o.sourceOrderNumber ?? o.sourceOrderId,
+    orderStatus: normalizedStatusToOrderStatus(o.canonicalStatus),
+    orderDate: o.orderDate ?? null,
     clientId: args.clientId,
     storeId: args.storeId,
     customerEmail: o.customerEmail ?? null,
-    shipToName: o.shipTo?.name ?? null,
-    shipToCity: o.shipTo?.city ?? null,
-    shipToState: o.shipTo?.state ?? null,
-    shipToPostalCode: o.shipTo?.postalCode ?? null,
+    shipToName: o.customerName ?? null,
+    shipToCity: o.shipToCity ?? null,
+    shipToState: o.shipToState ?? null,
+    shipToPostalCode: o.shipToPostalCode ?? null,
     carrierCode: o.carrierCode ?? null,
     serviceCode: o.serviceCode ?? null,
-    weightOz: toOunces(o.weight),
-    orderTotal: toNumericString(o.orderTotal),
-    shippingAmount: toNumericString(o.shippingAmount),
-    items: (o.items as unknown[]) ?? [],
-    raw: o as unknown as Record<string, unknown>,
-    externallyShipped: externallyShippedFromRaw(o),
+    weightOz: o.weightOz ?? null,
+    orderTotal: o.orderTotal ?? '0',
+    shippingAmount: Number.isFinite(o.shippingPaid as number) ? (o.shippingPaid as number).toFixed(2) : '0',
+    items: o.items ?? [],
+    raw,
+    externallyShipped: o.externallyShipped === true,
   };
 }
 
 async function upsertOrdersBatch(
-  ordersIn: SSOrder[],
+  ordersIn: NormalizedOrder[],
   storeToClient: {
     byStore: Map<number, number>;
     newPairs?: Array<{ storeId: number; clientId: number }>;
@@ -209,7 +137,7 @@ async function upsertOrdersBatch(
 
   const normalizedOrders: NormalizedStoreOrder[] = [];
   for (const o of ordersIn) {
-    const storeId = o.advancedOptions?.storeId ?? null;
+    const storeId = normalizedStoreId(o);
     if (isExcludedStoreId(storeId)) continue;
     let clientId =
       storeId !== null ? storeToClient.byStore.get(storeId) ?? null : null;
@@ -228,13 +156,13 @@ async function upsertOrdersBatch(
 }
 
 async function updateExistingOrderStatusesBatch(
-  ordersIn: SSOrder[],
+  ordersIn: NormalizedOrder[],
   orderStatus: 'shipped' | 'cancelled'
 ): Promise<number> {
   const externalIds = Array.from(
     new Set(
       ordersIn
-        .map((o) => (o.orderId == null ? null : String(o.orderId)))
+        .map((o) => o.sourceOrderId || null)
         .filter((v): v is string => Boolean(v))
     )
   );
@@ -368,23 +296,25 @@ async function fetchOrdersPage(
   let total = 0;
 
   while (true) {
-    const q = new URLSearchParams({
+    const res = await importStoreOrders('shipstation', {
+      companyId: 0,
+      accountId: account.label,
+      credentials: {
+        apiKey: account.apiKey,
+        apiSecret: account.apiSecret,
+      },
       orderStatus: args.orderStatus,
-      modifyDateStart: sinceParam,
-      pageSize: String(args.pageSize),
-      page: String(page),
-      sortBy: 'ModifyDate',
-      sortDir: 'ASC',
-    });
-    if (args.storeId !== undefined) q.set('storeId', String(args.storeId));
-
-    const res = await ssV1Request<SSOrdersList>(`/orders?${q.toString()}`, {
-      apiKey: account.apiKey,
-      apiSecret: account.apiSecret,
+      sinceMs: args.sinceMs,
+      pageSize: args.pageSize,
+      page,
+      storeId: args.storeId,
       dedupeKey: `orders:list:${account.label}:${args.orderStatus}:${args.storeId ?? 'all'}:${sinceParam}:${page}:${args.pageSize}`,
     });
 
-    pages = res.pages;
+    pages = res.pages ?? 1;
+    // Per user override unlock shipped data on 2026-05-27: this keeps the
+    // existing forward-only shipped/cancelled catch-up behavior while routing
+    // ShipStation order import through StoreConnector normalized output.
     total += args.statusOnly
       ? await updateExistingOrderStatusesBatch(
           res.orders,
@@ -396,7 +326,7 @@ async function fetchOrdersPage(
           account.ownerClientId,
         );
 
-    if (!res.orders.length || page >= res.pages) break;
+    if (!res.orders.length || page >= pages) break;
     page += 1;
     // v2-parity: 500ms inter-page delay. Matches v1Pages helper.
     await new Promise((r) => setTimeout(r, 500));

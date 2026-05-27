@@ -28,6 +28,7 @@ These files currently contain direct provider call markers and are allowed as co
 | --- | --- | --- |
 | `src/connectors/store/walmart.ts` | Walmart Marketplace | StoreConnector implementation owns Walmart marketplace API details. |
 | `src/connectors/store/ebay.ts` | eBay Marketplace | StoreConnector implementation owns eBay marketplace API details. |
+| `src/connectors/store/shipstation.ts` | ShipStation store/orders | StoreConnector implementation owns ShipStation order API details. |
 | `src/connectors/carrier/shipstation.ts` | ShipStation carrier | CarrierConnector implementation owns ShipStation label/rate behavior. |
 | `src/connectors/carrier/ups.ts` | UPS | CarrierConnector implementation owns UPS carrier behavior. |
 | `src/connectors/carrier/easypost.ts` | EasyPost | CarrierConnector implementation owns EasyPost carrier behavior. |
@@ -71,7 +72,6 @@ These files currently contain direct provider calls or provider-client usage out
 | `src/routes/rates.ts` | ShipStation rates | CarrierConnector rate orchestration | Phase 4 |
 | `src/services/inventory-enrichment.ts` | ShipStation product/order enrichment | ShipStation StoreConnector or connector-owned helper | Phase 2 |
 | `src/services/labels.ts` | ShipStation label creation | CarrierConnector label orchestration | Phase 4 |
-| `src/services/order-sync.ts` | ShipStation order import/status | ShipStation StoreConnector sync orchestration | Phase 2 |
 | `src/services/rates.ts` | ShipStation rates | CarrierConnector rate orchestration | Phase 4 |
 | `src/services/shipment-sync.ts` | ShipStation shipment sync | StoreConnector/CarrierConnector sync orchestration | Phase 2 |
 
@@ -96,6 +96,12 @@ Phase 2: Move ShipStation store/order sync.
 - Move `src/services/order-sync.ts` direct `ssV1Request` usage into `src/connectors/store/shipstation.ts` or connector-owned helpers.
 - Convert scheduler/routes/scripts to call StoreConnector orchestration.
 - Keep canonical `orders` and `store_orders` persistence, but feed it normalized connector output.
+
+Phase 2 slice added on 2026-05-27:
+
+- `src/connectors/store/shipstation.ts` owns ShipStation `/orders` API paging and raw ShipStation order normalization.
+- `src/services/order-sync.ts` calls `importStoreOrders('shipstation', ...)` instead of `ssV1Request`.
+- `src/services/order-sync.ts` remains responsible for account watermarks, client/store attribution, status catch-up, and existing persistence semantics.
 
 Phase 3: Move Walmart/eBay store import and marketplace operations.
 
