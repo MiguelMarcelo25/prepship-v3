@@ -59,6 +59,7 @@ const SUMMARY_COL_COUNT = 8
 const BILLING_SUMMARY_PAGE_SIZE_OPTIONS = [10, 25, 50, 100]
 const BILLING_DETAIL_PAGE_SIZE_OPTIONS = [25, 50, 100, 250]
 const BILLING_CLIENT_FILTER_STORAGE_KEY = 'billing_summary_client_filter_v1'
+const BILLING_GENERATE_BATCH_DAYS = 7
 const SHIPSTATION_BILLING_CLIENT_NAMES = [
   'eBay - DJC',
   'Heritage Kids Press',
@@ -147,6 +148,37 @@ function normalizeBillingClientName(value: string | null | undefined) {
 
 function isShipStationBillingClientName(value: string | null | undefined) {
   return SHIPSTATION_BILLING_CLIENT_NAME_SET.has(normalizeBillingClientName(value))
+}
+
+function parseDateInput(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null
+  const date = new Date(`${value}T00:00:00.000Z`)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+function formatDateInputUtc(value: Date) {
+  return value.toISOString().slice(0, 10)
+}
+
+function splitBillingRangeIntoBatches(fromValue: string, toValue: string, batchDays = BILLING_GENERATE_BATCH_DAYS) {
+  const start = parseDateInput(fromValue)
+  const end = parseDateInput(toValue)
+  if (!start || !end || start > end) return []
+
+  const batches: Array<{ from: string; to: string }> = []
+  const cursor = new Date(start)
+  while (cursor <= end) {
+    const batchStart = new Date(cursor)
+    const batchEnd = new Date(cursor)
+    batchEnd.setUTCDate(batchEnd.getUTCDate() + Math.max(1, batchDays) - 1)
+    if (batchEnd > end) batchEnd.setTime(end.getTime())
+    batches.push({
+      from: formatDateInputUtc(batchStart),
+      to: formatDateInputUtc(batchEnd),
+    })
+    cursor.setUTCDate(cursor.getUTCDate() + Math.max(1, batchDays))
+  }
+  return batches
 }
 
 function readBillingClientFilterIds() {
@@ -690,18 +722,32 @@ export default function BillingView() {
         ? selectedBillingClientIds.filter((clientId) => allBillingClientIds.includes(clientId))
         : []
       let generated = 0
+      const batches = splitBillingRangeIntoBatches(from, to)
+      if (!batches.length) {
+        toastContext?.addToast('Select a valid billing date range first', 'error')
+        return
+      }
 
       if (targetClientIds.length > 0) {
+        const totalSteps = targetClientIds.length * batches.length
+        let step = 0
         for (let index = 0; index < targetClientIds.length; index += 1) {
           const clientId = targetClientIds[index]
           const clientName = availableBillingClients.find((client) => client.clientId === clientId)?.clientName ?? 'client'
-          setGenerateStatus(`Generating ${clientName} (${index + 1}/${targetClientIds.length})...`)
-          const result = await apiClient.generateBilling(from, to, clientId)
-          generated += Number(result.generated ?? result.count ?? 0)
+          for (const batch of batches) {
+            step += 1
+            setGenerateStatus(`Generating ${clientName}: ${batch.from} to ${batch.to} (${step}/${totalSteps})...`)
+            const result = await apiClient.generateBilling(batch.from, batch.to, clientId)
+            generated += Number(result.generated ?? result.count ?? 0)
+          }
         }
       } else {
-        const result = await apiClient.generateBilling(from, to)
-        generated = Number(result.generated ?? result.count ?? 0)
+        for (let index = 0; index < batches.length; index += 1) {
+          const batch = batches[index]
+          setGenerateStatus(`Generating all clients: ${batch.from} to ${batch.to} (${index + 1}/${batches.length})...`)
+          const result = await apiClient.generateBilling(batch.from, batch.to)
+          generated += Number(result.generated ?? result.count ?? 0)
+        }
       }
       const result = { generated }
       toastContext?.addToast(`✅ Generated ${result.generated} billing line items`, 'success')
@@ -1137,6 +1183,7 @@ export default function BillingView() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
           <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
             {([
+              ['all', 'All'],
               ['this_month', 'This Month'],
               ['last_month', 'Last Month'],
               ['last_30', 'Last 30 Days'],
@@ -1159,9 +1206,15 @@ export default function BillingView() {
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: 'var(--text2)' }}>
             <span>From</span>
-            <input type="date" className="ship-select" style={{ width: 140, fontSize: 12 }} value={from} onChange={(event) => setFrom(event.target.value)} />
+            <input type="date" className="ship-select" style={{ width: 140, fontSize: 12 }} value={from} onChange={(event) => {
+              setActivePreset(null)
+              setFrom(event.target.value)
+            }} />
             <span>To</span>
-            <input type="date" className="ship-select" style={{ width: 140, fontSize: 12 }} value={to} onChange={(event) => setTo(event.target.value)} />
+            <input type="date" className="ship-select" style={{ width: 140, fontSize: 12 }} value={to} onChange={(event) => {
+              setActivePreset(null)
+              setTo(event.target.value)
+            }} />
           </div>
           <button className="btn btn-primary btn-sm" type="button" onClick={() => void handleGenerateBilling()} disabled={generateLoading}>
             {generateLoading ? (

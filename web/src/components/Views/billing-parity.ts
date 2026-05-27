@@ -11,7 +11,7 @@ import type {
   UpdateBillingConfigInput,
 } from '../../types/api'
 
-export type BillingPresetId = 'this_month' | 'last_month' | 'last_30' | 'last_90'
+export type BillingPresetId = 'all' | 'this_month' | 'last_month' | 'last_30' | 'last_90'
 
 export interface BillingDateRange {
   from: string
@@ -149,7 +149,10 @@ export function getBillingPresetRange(preset: BillingPresetId, now = new Date())
   let from: Date
   let to: Date
 
-  if (preset === 'this_month') {
+  if (preset === 'all') {
+    from = new Date(2020, 0, 1)
+    to = new Date(now)
+  } else if (preset === 'this_month') {
     from = new Date(now.getFullYear(), now.getMonth(), 1)
     to = new Date(now.getFullYear(), now.getMonth() + 1, 0)
   } else if (preset === 'last_month') {
