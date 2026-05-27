@@ -180,6 +180,17 @@ assert(
   'Shipp CarrierConnector must own Shipp rate API calls',
 );
 assert(
+  carrierLabelsRoute.includes("createCarrierLabel('shipp'") &&
+    !carrierLabelsRoute.includes('buyLabelShipp') &&
+    !carrierLabelsRoute.includes('https://shipp.to/api'),
+  'Shipp labels must route through CarrierConnector orchestration, not direct Shipp API calls from api/carriers/labels.ts',
+);
+assert(
+  shippCarrierConnector.includes('https://shipp.to/api/shipping/label/create') &&
+    !shippCarrierConnector.includes('Shipp labels are handled by api/carriers/labels.ts'),
+  'Shipp CarrierConnector must own Shipp label API calls',
+);
+assert(
   !carrierRatesRoute.includes('ratesFromWalmartShipping') &&
     !carrierRatesRoute.includes('getWalmartAccessTokenForRates') &&
     !carrierRatesRoute.includes('marketplace.walmartapis.com'),

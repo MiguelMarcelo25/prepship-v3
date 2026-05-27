@@ -229,6 +229,12 @@ Phase 4 UPS/EasyPost direct-label slice added on 2026-05-28:
 - `src/connectors/carrier/easypost.ts` owns EasyPost shipment creation and `/buy` label purchase.
 - The labels route still owns order editability checks, direct-label persistence, marketplace outbox enqueueing, and response shaping.
 
+Phase 4 Shipp direct-label slice added on 2026-05-28:
+
+- `api/carriers/labels.ts` now routes Shipp direct-label purchases through `createCarrierLabel('shipp', ...)`.
+- `src/connectors/carrier/shipp.ts` owns Shipp login, quote, label creation, and label document normalization.
+- The labels route still owns order editability checks, direct-label persistence, marketplace outbox enqueueing, Walmart post-label confirmation recovery, and response shaping.
+
 Phase 5: Tighten guards.
 
 - Remove files from the transitional debt list as they are migrated.

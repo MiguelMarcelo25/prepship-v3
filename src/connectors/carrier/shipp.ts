@@ -1,5 +1,6 @@
 import type { CarrierConnector } from '../../domain/fulfillment/types';
 import { timedFetch } from '../../lib/http/timing';
+import { PDFDocument } from 'pdf-lib';
 
 function shippSplitSetCookie(header: string): string[] {
   if (!header) return [];
@@ -152,7 +153,7 @@ function shippHasRawShipTo(rawOrder: any): boolean {
   return false;
 }
 
-function shippShipTo(rawOrder: any, toZip?: string) {
+function shippShipTo(rawOrder: any, toZip?: string, explicitShipTo?: any) {
   const wmAddr = rawOrder?.shippingInfo?.postalAddress ?? null;
   const ebayContact = Array.isArray(rawOrder?.fulfillmentStartInstructions)
     ? rawOrder.fulfillmentStartInstructions[0]?.shippingStep?.shipTo
@@ -160,9 +161,11 @@ function shippShipTo(rawOrder: any, toZip?: string) {
   const ebayAddr = ebayContact?.contactAddress ?? null;
   const amazonAddr = rawOrder?.ShippingAddress ?? null;
   const ssAddr = rawOrder?.shipTo ?? rawOrder?.ship_to ?? null;
-  const addr = wmAddr ?? ebayAddr ?? amazonAddr ?? ssAddr;
+  const explicit = explicitShipTo && typeof explicitShipTo === 'object' ? explicitShipTo : null;
+  const addr = explicit ?? wmAddr ?? ebayAddr ?? amazonAddr ?? ssAddr;
   const postalCode = String(
     addr?.postalCode ??
+      addr?.zip ??
       addr?.PostalCode ??
       addr?.postal_code ??
       toZip ??
@@ -178,7 +181,8 @@ function shippShipTo(rawOrder: any, toZip?: string) {
         'Buyer',
     ),
     phone: String(
-      rawOrder?.shippingInfo?.phone ??
+      addr?.phone ??
+        rawOrder?.shippingInfo?.phone ??
         ebayContact?.primaryPhone?.phoneNumber ??
         addr?.Phone ??
         ssAddr?.phone ??
@@ -186,14 +190,16 @@ function shippShipTo(rawOrder: any, toZip?: string) {
     ),
     company_name: String(addr?.company ?? ebayContact?.companyName ?? addr?.CompanyName ?? ''),
     address_line1: String(
-      addr?.address1 ??
+      addr?.street1 ??
+        addr?.address1 ??
         addr?.addressLine1 ??
         addr?.AddressLine1 ??
         ssAddr?.street1 ??
         '1 Main St',
     ),
     address_line2: String(
-      addr?.address2 ??
+      addr?.street2 ??
+        addr?.address2 ??
         addr?.addressLine2 ??
         addr?.AddressLine2 ??
         ssAddr?.street2 ??
@@ -209,6 +215,7 @@ function shippShipTo(rawOrder: any, toZip?: string) {
     ),
     postal_code: postalCode || '94601',
     country_code: String(addr?.country ?? addr?.countryCode ?? addr?.CountryCode ?? ssAddr?.country ?? 'US'),
+    address_residential_indicator: 'yes',
   };
 }
 
@@ -278,7 +285,10 @@ async function shippLogin(creds: Record<string, unknown>): Promise<{ apiKey: str
   return { apiKey, cookieHeader, email };
 }
 
-async function ratesFromShipp(input: Record<string, unknown>): Promise<Array<{ service: string; cost: number; days: number; currency: string }>> {
+async function quoteShippRatesRaw(input: Record<string, unknown>): Promise<{
+  session: { apiKey: string; cookieHeader: string };
+  rates: any[];
+}> {
   const creds = input.credentials && typeof input.credentials === 'object'
     ? input.credentials as Record<string, unknown>
     : {};
@@ -370,6 +380,11 @@ async function ratesFromShipp(input: Record<string, unknown>): Promise<Array<{ s
     throw new Error(`Shipp returned 0 rates for this shipment.${errors}`);
   }
 
+  return { session, rates: rateList };
+}
+
+async function ratesFromShipp(input: Record<string, unknown>): Promise<Array<{ service: string; cost: number; days: number; currency: string }>> {
+  const { rates: rateList } = await quoteShippRatesRaw(input);
   return rateList
     .map((r: any) => {
       const rawCarrier = r?.carrierType ?? r?.carrier ?? r?.carrierCode ?? r?.carrierName;
@@ -382,12 +397,206 @@ async function ratesFromShipp(input: Record<string, unknown>): Promise<Array<{ s
         carrierName,
         carrierType: rawCarrier ? String(rawCarrier).trim() : null,
         cost: Number(r?.price ?? 0),
+        price: Number(r?.price ?? 0),
         days: shippDateDays(r?.deliveryDate, r?.deliveryDay),
         currency: 'USD',
+        quoted_shipment_id: r?.quoted_shipment_id,
+        serviceType: r?.serviceType,
+        serviceName,
+        deliveryDate: r?.deliveryDate,
+        deliveryDay: r?.deliveryDay,
       };
     })
     .filter((r) => r.cost > 0)
     .sort((a, b) => a.cost - b.cost);
+}
+
+function shippRawCarrier(rate: any): unknown {
+  return rate?.carrierType ?? rate?.carrier ?? rate?.carrierCode ?? rate?.carrierName;
+}
+
+function shippRateServiceName(rate: any): string {
+  return String(rate?.serviceName ?? rate?.serviceType ?? 'Shipp').trim();
+}
+
+function shippSlugRateService(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 80) || 'rate';
+}
+
+function shippServiceCodeForRate(rate: any): string {
+  const carrierCode = shippCarrierCode(shippRawCarrier(rate));
+  const carrierPrefix = carrierCode && carrierCode !== 'shipp' ? `${carrierCode}_` : '';
+  return `shipp_${carrierPrefix}${shippSlugRateService(shippRateServiceName(rate))}`;
+}
+
+function selectShippRate(rates: any[], requestedServiceCode: unknown): any {
+  const wanted = String(requestedServiceCode ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  const sorted = [...rates]
+    .filter((rate) => Number(rate?.price ?? 0) > 0)
+    .sort((a, b) => Number(a?.price ?? 0) - Number(b?.price ?? 0));
+  const exact = sorted.find((rate) => shippServiceCodeForRate(rate) === wanted);
+  if (exact) return exact;
+
+  const wantedSlug = wanted.replace(/^shipp_/, '');
+  const fuzzy = sorted.find((rate) => {
+    const carrierCode = shippCarrierCode(shippRawCarrier(rate));
+    const serviceSlug = shippSlugRateService(shippRateServiceName(rate));
+    return wantedSlug === serviceSlug || wantedSlug === `${carrierCode}_${serviceSlug}`;
+  });
+  if (fuzzy) return fuzzy;
+
+  throw new Error(`Shipp did not return the selected service ${String(requestedServiceCode ?? '')}. Please browse rates again.`);
+}
+
+function shippTrackingFromLabel(label: any): string {
+  return String(
+    label?.data?.tracking_number ??
+      label?.tracking_number ??
+      label?.ShipmentResponse?.ShipmentResults?.ShipmentIdentificationNumber ??
+      label?.output?.transactionShipments?.[0]?.masterTrackingNumber ??
+      '',
+  );
+}
+
+async function pdfDataUrlFromParts(parts: Array<{ base64: string; format?: string }>): Promise<string | null> {
+  const pdf = await PDFDocument.create();
+  let pages = 0;
+
+  for (const part of parts) {
+    const base64 = String(part.base64 ?? '').trim();
+    if (!base64) continue;
+    const format = String(part.format ?? 'application/pdf').toLowerCase();
+    const bytes = Uint8Array.from(Buffer.from(base64, 'base64'));
+    if (format === 'application/pdf' || format === 'pdf') {
+      const src = await PDFDocument.load(bytes);
+      const copied = await pdf.copyPages(src, src.getPageIndices());
+      copied.forEach((page) => {
+        pdf.addPage(page);
+        pages += 1;
+      });
+    } else if (format === 'image/png' || format === 'png') {
+      const image = await pdf.embedPng(bytes);
+      pdf.addPage([image.width, image.height]).drawImage(image, {
+        x: 0,
+        y: 0,
+        width: image.width,
+        height: image.height,
+      });
+      pages += 1;
+    }
+  }
+
+  if (!pages) return null;
+  const merged = await pdf.save();
+  return `data:application/pdf;base64,${Buffer.from(merged).toString('base64')}`;
+}
+
+async function shippLabelUrl(label: any, carrierCode: string | null): Promise<string | null> {
+  if (label?.data?.packages) {
+    const parts = (Array.isArray(label.data.packages) ? label.data.packages : [])
+      .map((pkg: any) => ({
+        base64: String(pkg?.label ?? ''),
+        format: String(pkg?.label_format ?? 'application/pdf'),
+      }));
+    return pdfDataUrlFromParts(parts);
+  }
+
+  if (carrierCode === 'fedex' && label?.output?.transactionShipments?.[0]?.pieceResponses) {
+    const docs = label.output.transactionShipments[0].pieceResponses
+      .flatMap((piece: any) => Array.isArray(piece?.packageDocuments) ? piece.packageDocuments : [])
+      .map((doc: any) => ({
+        base64: String(doc?.encodedLabel ?? ''),
+        format: 'application/pdf',
+      }));
+    return pdfDataUrlFromParts(docs);
+  }
+
+  if (carrierCode === 'ups' && label?.ShipmentResponse?.ShipmentResults?.PackageResults) {
+    const packages = Array.isArray(label.ShipmentResponse.ShipmentResults.PackageResults)
+      ? label.ShipmentResponse.ShipmentResults.PackageResults
+      : [label.ShipmentResponse.ShipmentResults.PackageResults];
+    const firstGraphic = packages
+      .map((pkg: any) => String(pkg?.ShippingLabel?.GraphicImage ?? ''))
+      .find(Boolean);
+    return firstGraphic ? `data:image/gif;base64,${firstGraphic}` : null;
+  }
+
+  return null;
+}
+
+async function createLabelShipp(input: Record<string, unknown>): Promise<Record<string, unknown>> {
+  if (!input.dimsL || !input.dimsW || !input.dimsH) {
+    throw new Error('Shipp label creation requires box dimensions (length, width, height).');
+  }
+
+  const creds = input.credentials && typeof input.credentials === 'object'
+    ? input.credentials as Record<string, unknown>
+    : {};
+  const { session, rates } = await quoteShippRatesRaw(input);
+  const selectedRate = selectShippRate(rates, input.serviceCode);
+  const quotedShipmentId = String(selectedRate?.quoted_shipment_id ?? '').trim();
+  if (!quotedShipmentId) {
+    throw new Error('Shipp selected rate is missing quoted_shipment_id. Please browse rates again.');
+  }
+
+  const serviceType = String(selectedRate?.serviceType ?? selectedRate?.serviceName ?? '').trim();
+  if (!serviceType) {
+    throw new Error('Shipp selected rate is missing serviceType. Please browse rates again.');
+  }
+
+  const labelRes = await timedFetch('shipp.labels', 'https://shipp.to/api/shipping/label/create', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      'x-api-key': session.apiKey,
+      Cookie: session.cookieHeader,
+    },
+    body: JSON.stringify({
+      quoted_shipment_id: quotedShipmentId,
+      serviceType,
+      saturdayDelivery: /saturday/i.test(shippRateServiceName(selectedRate)),
+    }),
+  });
+  const text = await labelRes.text().catch(() => '');
+  let data: any = null;
+  try { data = text ? JSON.parse(text) : null; } catch { /* keep text fallback */ }
+  if (!labelRes.ok) {
+    throw new Error(`Shipp label ${labelRes.status}: ${text.slice(0, 800) || labelRes.statusText}`);
+  }
+
+  const label = data?.label ?? data;
+  const carrierCode = shippCarrierCode(shippRawCarrier(selectedRate));
+  const carrierName = shippCarrierName(shippRawCarrier(selectedRate));
+  const trackingNumber = shippTrackingFromLabel(label);
+  const labelUrl = await shippLabelUrl(label, carrierCode);
+  const serviceCode = shippServiceCodeForRate(selectedRate);
+
+  if (!trackingNumber) {
+    throw new Error('Shipp created a label but did not return a tracking number.');
+  }
+  if (!labelUrl) {
+    throw new Error('Shipp created a label but PrepShip could not read the label PDF.');
+  }
+
+  return {
+    trackingNumber,
+    labelUrl,
+    cost: Number(selectedRate?.price ?? 0),
+    currency: 'USD',
+    shipmentId: quotedShipmentId,
+    carrierCode,
+    carrierName,
+    serviceName: shippRateServiceName(selectedRate),
+    serviceCode,
+    selectedRate,
+    deliveryDays: shippDateDays(selectedRate?.deliveryDate, selectedRate?.deliveryDay),
+    raw: data,
+  };
 }
 
 export function createShippCarrierConnector(): CarrierConnector {
@@ -395,9 +604,7 @@ export function createShippCarrierConnector(): CarrierConnector {
     provider: 'shipp',
     capabilities: ['rates.quote', 'labels.create', 'tracking.read'],
     getRates: ratesFromShipp,
-    createLabel: async () => {
-      throw new Error('Shipp labels are handled by api/carriers/labels.ts');
-    },
+    createLabel: createLabelShipp,
   };
 }
 
