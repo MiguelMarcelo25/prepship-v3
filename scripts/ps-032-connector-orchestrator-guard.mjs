@@ -24,6 +24,7 @@ const walmartOrdersRoute = read('api/carriers/walmart/orders.ts');
 const ebayOrdersRoute = read('api/carriers/ebay/orders.ts');
 const carrierRatesRoute = read('api/carriers/rates.ts');
 const carrierLabelsRoute = read('api/carriers/labels.ts');
+const upsProbeRoute = read('api/carriers/ups/probe.ts');
 const walmartStoreConnector = read('src/connectors/store/walmart.ts');
 const ebayStoreConnector = read('src/connectors/store/ebay.ts');
 const upsCarrierConnector = read('src/connectors/carrier/ups.ts');
@@ -158,6 +159,16 @@ assert(
   upsCarrierConnector.includes('https://onlinetools.ups.com/api/shipments/v2403/ship') &&
     !upsCarrierConnector.includes('UPS labels are handled by api/carriers/labels.ts'),
   'UPS CarrierConnector must own UPS label API calls',
+);
+assert(
+  upsProbeRoute.includes('probeUpsCredentials') &&
+    !upsProbeRoute.includes('onlinetools.ups.com'),
+  'UPS credential probe route must call CarrierConnector-owned probe logic, not UPS OAuth directly',
+);
+assert(
+  upsCarrierConnector.includes('probeUpsCredentials') &&
+    upsCarrierConnector.includes('https://onlinetools.ups.com/security/v1/oauth/token'),
+  'UPS CarrierConnector must own UPS OAuth credential probe calls',
 );
 assert(
   !carrierRatesRoute.includes('ratesFromEasyPost') &&

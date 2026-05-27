@@ -53,7 +53,6 @@ These files currently contain direct provider calls or provider-client usage out
 | --- | --- | --- | --- |
 | `api/_lib/walmart-fees-sync.ts` | Walmart fees | Walmart StoreConnector or connector-owned helper | Phase 3 |
 | `api/carriers/labels.ts` | Carrier labels | CarrierConnector label orchestration | Phase 4 |
-| `api/carriers/ups/probe.ts` | UPS probe | UPS CarrierConnector diagnostics | Phase 4 |
 | `api/carriers/validate-address.ts` | Carrier address validation | CarrierConnector validation capability or connector-owned helper | Phase 4 |
 | `api/carriers/verify.ts` | Carrier verification | CarrierConnector diagnostics | Phase 4 |
 | `api/carriers/walmart/fees.ts` | Walmart fees | Walmart StoreConnector or connector-owned helper | Phase 3 |
@@ -241,6 +240,12 @@ Phase 4 Walmart post-label confirmation slice added on 2026-05-28:
 - `api/carriers/labels.ts` now routes immediate Walmart post-label marketplace confirmation through `confirmStoreShipment('walmart', ...)`.
 - `src/connectors/store/walmart.ts` remains the owner of the Walmart `/v3/orders/{purchaseOrderId}/shipping` marketplace confirmation call.
 - The labels route still owns local shipment/outbox status updates after the StoreConnector confirmation result.
+
+Phase 4 UPS credential-probe slice added on 2026-05-28:
+
+- `api/carriers/ups/probe.ts` now routes UPS credential probing through connector-owned `probeUpsCredentials(...)`.
+- `src/connectors/carrier/ups.ts` owns the UPS OAuth credential probe call and safe fingerprint response shape.
+- The probe route still owns query-parameter parsing, no-store JSON headers, and safe error handling.
 
 Phase 5: Tighten guards.
 

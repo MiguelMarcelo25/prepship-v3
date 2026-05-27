@@ -43,6 +43,55 @@ async function getUpsAccessToken(creds: Record<string, unknown>): Promise<string
   return data.access_token;
 }
 
+export async function probeUpsCredentials(input: {
+  clientId: string;
+  clientSecret: string;
+}): Promise<{
+  ok: boolean;
+  ups_status: number;
+  ups_body: string;
+  sent: {
+    clientId_length: number;
+    clientId_first6: string;
+    clientId_last4: string;
+    clientSecret_length: number;
+    clientId_has_whitespace: boolean;
+    clientSecret_has_whitespace: boolean;
+  };
+}> {
+  const clientId = String(input.clientId ?? '').trim();
+  const clientSecret = String(input.clientSecret ?? '').trim();
+  if (!clientId || !clientSecret) {
+    throw new Error('UPS clientId and clientSecret are required');
+  }
+
+  const basic = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+  const upsRes = await timedFetch('ups.credentials.probe', 'https://onlinetools.ups.com/security/v1/oauth/token', {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${basic}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Accept: 'application/json',
+    },
+    body: 'grant_type=client_credentials',
+  });
+  const upsBody = await upsRes.text();
+
+  return {
+    ok: upsRes.ok,
+    ups_status: upsRes.status,
+    ups_body: upsBody.slice(0, 800),
+    sent: {
+      clientId_length: clientId.length,
+      clientId_first6: clientId.slice(0, 6),
+      clientId_last4: clientId.slice(-4),
+      clientSecret_length: clientSecret.length,
+      clientId_has_whitespace: /\s/.test(clientId),
+      clientSecret_has_whitespace: /\s/.test(clientSecret),
+    },
+  };
+}
+
 async function ratesFromUps(input: Record<string, unknown>): Promise<Array<{ service: string; cost: number; days: number; currency: string }>> {
   const creds = input.credentials && typeof input.credentials === 'object'
     ? input.credentials as Record<string, unknown>

@@ -45,7 +45,6 @@ const approvedConnectorOwned = new Set([
 const transitionalDebt = new Set([
   'api/_lib/walmart-fees-sync.ts',
   'api/carriers/labels.ts',
-  'api/carriers/ups/probe.ts',
   'api/carriers/validate-address.ts',
   'api/carriers/verify.ts',
   'api/carriers/walmart/fees.ts',
