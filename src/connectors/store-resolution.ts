@@ -1,8 +1,7 @@
 import { connectorCapabilityMatrix } from './matrix';
 import { getConnectorImplementationStatus, type ConnectorImplementationInfo } from './implementation-status';
 import { storeConnectors } from './registry';
-import type { StoreConnector } from '../domain/fulfillment/types';
-import type { ConnectorCapability, ConnectorProvider } from './types';
+import type { ConnectorCapability, ConnectorProvider, StoreConnector } from './types';
 
 const providerAliases: Record<string, ConnectorProvider> = {
   shipstation: 'shipstation',

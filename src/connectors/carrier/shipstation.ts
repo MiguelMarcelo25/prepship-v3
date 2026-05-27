@@ -19,7 +19,9 @@ export function createShipStationCarrierConnector(): CarrierConnector<
       throw new Error('ShipStation connector rates are handled by the existing rate service');
     },
     createLabel: ssCreateLabel,
-    voidLabel: ssVoidShipment,
+    voidLabel: async (input) => {
+      await ssVoidShipment(input.labelId, (input as { apiKeyV2?: string }).apiKeyV2);
+    },
   };
 }
 

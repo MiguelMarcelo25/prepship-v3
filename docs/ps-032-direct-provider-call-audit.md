@@ -83,6 +83,14 @@ Phase 1: Reconcile connector contracts and add thin orchestrators.
 - Create one coherent CarrierConnector runtime contract for rate quote, label create, tracking read, and void where supported.
 - Keep the boundary thin: resolve connector, call method, persist normalized output.
 
+Phase 1 baseline added on 2026-05-27:
+
+- Canonical connector contracts live in `src/connectors/types.ts`.
+- Legacy fulfillment-domain imports re-export those contracts from `src/domain/fulfillment/types.ts` so existing confirmation code uses the same runtime model.
+- Store orchestration entry points live in `src/services/store-connector-orchestrator.ts`.
+- Carrier orchestration entry points live in `src/services/carrier-connector-orchestrator.ts`.
+- Guard command: `npm run test:ps-032-connector-orchestrators`.
+
 Phase 2: Move ShipStation store/order sync.
 
 - Move `src/services/order-sync.ts` direct `ssV1Request` usage into `src/connectors/store/shipstation.ts` or connector-owned helpers.

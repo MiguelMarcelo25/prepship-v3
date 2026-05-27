@@ -1783,6 +1783,8 @@ Phase 0 audit baseline: [docs/ps-032-direct-provider-call-audit.md](docs/ps-032-
 
 Targeted guard: `npm run test:ps-032-connector-boundary`
 
+Phase 1 orchestrator guard: `npm run test:ps-032-connector-orchestrators`
+
 ## Recommended Next Order
 
 1. Finish production verification after this batch deploys.

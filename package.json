@@ -103,6 +103,7 @@
     "test:connector-registry": "node scripts/connector-registry-guard.mjs",
     "test:connector-architecture": "node scripts/connector-architecture-guard.mjs",
     "test:ps-032-connector-boundary": "node scripts/ps-032-connector-boundary-guard.mjs",
+    "test:ps-032-connector-orchestrators": "node scripts/ps-032-connector-orchestrator-guard.mjs",
     "test:store-connector-source": "tsx scripts/store-connector-source-guard.ts",
     "test:shipstation-carrier-account-identity": "tsx scripts/shipstation-carrier-account-identity-guard.ts",
     "test:health-deep-readiness": "node scripts/health-deep-readiness-guard.mjs",

@@ -46,10 +46,64 @@ export type NormalizedOrder = {
   rawPayload: unknown;
 };
 
+export type StoreOrderImportInput = {
+  companyId: number;
+  accountId: string;
+  cursor?: string | null;
+};
+
+export type StoreOrderStatusSyncInput = {
+  companyId: number;
+  accountId: string;
+};
+
+export type StoreOrderFetchInput = {
+  companyId: number;
+  accountId: string;
+  sourceOrderId: string;
+};
+
+export type NormalizedStoreOrderImportResult = {
+  provider: ConnectorProvider;
+  accountId: string;
+  orders: NormalizedOrder[];
+  cursor?: string | null;
+  diagnostics?: Record<string, unknown>;
+};
+
+export type NormalizedStoreOrderStatusSyncResult = {
+  provider: ConnectorProvider;
+  accountId: string;
+  updated: number;
+  diagnostics?: Record<string, unknown>;
+};
+
 export type CarrierRateInput = Record<string, unknown>;
 export type CarrierLabelInput = Record<string, unknown>;
 export type NormalizedRate = Record<string, unknown>;
 export type NormalizedLabel = Record<string, unknown>;
+export type CarrierVoidInput = { labelId: string; trackingNumber?: string | null };
+export type CarrierTrackingInput = { trackingNumber: string; carrierCode?: string | null };
+export type NormalizedCarrierRateQuoteResult = {
+  provider: ConnectorProvider;
+  rates: NormalizedRate[];
+  diagnostics?: Record<string, unknown>;
+};
+export type NormalizedCarrierLabelResult = NormalizedLabel & {
+  provider?: ConnectorProvider;
+  trackingNumber?: string | null;
+  labelUrl?: string | null;
+  labelBase64?: string | null;
+  labelFormat?: string | null;
+  cost?: number | null;
+  currency?: string | null;
+  diagnostics?: Record<string, unknown>;
+};
+export type NormalizedCarrierVoidResult = {
+  provider: ConnectorProvider;
+  voided: boolean;
+  diagnostics?: Record<string, unknown>;
+};
 export type NormalizedDimensions = { length: number | null; width: number | null; height: number | null; unit: string };
 export type NormalizedInventoryItem = Record<string, unknown>;
 export type NormalizedProduct = Record<string, unknown>;
@@ -68,12 +122,15 @@ export type NormalizedTrackingStatus = {
 export type MarketplaceShipmentConfirmationInput = {
   orderId: number;
   shipmentId: number;
-  sourceProvider: ConnectorProvider;
-  sourceAccountId: string | null;
-  sourceOrderId: string | null;
+  externalOrderId: string | null;
+  clientId: number | null;
+  orderNumber: string | null;
   trackingNumber: string;
   carrierCode: string | null;
   shipDate: string;
+  notifyCustomer?: boolean;
+  notifyMarketplace?: boolean;
+  credentials?: Record<string, string | null | undefined>;
   payload?: Record<string, unknown>;
 };
 
@@ -84,6 +141,9 @@ export type MarketplaceShipmentConfirmationResult = {
   message?: string;
   raw?: unknown;
 };
+
+export type ShipmentConfirmationInput = MarketplaceShipmentConfirmationInput;
+export type ConfirmationResult = MarketplaceShipmentConfirmationResult;
 
 export type NormalizedConnectorEvent = {
   provider: ConnectorProvider;
@@ -96,21 +156,26 @@ export type NormalizedConnectorEvent = {
 export interface StoreConnector {
   provider: ConnectorProvider;
   capabilities: ConnectorCapability[];
-  importOrders(input: { companyId: number; accountId: string; cursor?: string | null }): Promise<NormalizedOrder[]>;
-  syncOrderStatuses(input: { companyId: number; accountId: string }): Promise<void>;
-  normalizeOrder(raw: unknown): NormalizedOrder;
-  confirmShipment(input: MarketplaceShipmentConfirmationInput): Promise<MarketplaceShipmentConfirmationResult>;
+  importOrders?(input: StoreOrderImportInput): Promise<NormalizedOrder[] | NormalizedStoreOrderImportResult>;
+  syncOrderStatuses?(input: StoreOrderStatusSyncInput): Promise<void | NormalizedStoreOrderStatusSyncResult>;
+  normalizeOrder?(raw: unknown): NormalizedOrder;
+  confirmShipment(input: ShipmentConfirmationInput): Promise<ConfirmationResult>;
   cancelOrder?(input: { companyId: number; accountId: string; sourceOrderId: string }): Promise<void>;
-  fetchOrder?(input: { companyId: number; accountId: string; sourceOrderId: string }): Promise<NormalizedOrder | null>;
+  fetchOrder?(input: StoreOrderFetchInput): Promise<NormalizedOrder | null>;
 }
 
-export interface CarrierConnector {
+export interface CarrierConnector<
+  RateInput = CarrierRateInput,
+  RateResult = NormalizedRate,
+  LabelInput = CarrierLabelInput,
+  LabelResult = NormalizedCarrierLabelResult,
+> {
   provider: ConnectorProvider;
   capabilities: ConnectorCapability[];
-  getRates(input: CarrierRateInput): Promise<NormalizedRate[]>;
-  createLabel(input: CarrierLabelInput): Promise<NormalizedLabel>;
-  voidLabel?(input: { labelId: string; trackingNumber?: string | null }): Promise<void>;
-  trackShipment?(input: { trackingNumber: string }): Promise<NormalizedTrackingStatus>;
+  getRates(input: RateInput): Promise<RateResult[]>;
+  createLabel(input: LabelInput): Promise<LabelResult>;
+  voidLabel?(input: CarrierVoidInput): Promise<void | NormalizedCarrierVoidResult>;
+  trackShipment?(input: CarrierTrackingInput): Promise<NormalizedTrackingStatus>;
 }
 
 export interface MarketplaceConfirmationConnector {
