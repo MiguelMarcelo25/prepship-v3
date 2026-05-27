@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { lazy, Suspense, useContext, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react'
 import { motion } from 'framer-motion'
-import { Check, ListFilter, Loader2, Receipt, SlidersHorizontal, X } from 'lucide-react'
+import { Check, ListFilter, Loader2, Pencil, Receipt, SlidersHorizontal, X } from 'lucide-react'
 import { apiClient } from '../../api/client'
 import { ToastContext } from '../../contexts/ToastContext'
 import type {
@@ -55,6 +55,20 @@ interface BillingDetailState {
   error: string | null
 }
 
+type BillingEditDraft = {
+  pickPack: string
+  additional: string
+  packageCost: string
+  shipping: string
+}
+
+type BillingEditModalState = {
+  row: BillingDetailDto
+  draft: BillingEditDraft
+  saving: boolean
+  error: string | null
+} | null
+
 const SUMMARY_COL_COUNT = 8
 const BILLING_SUMMARY_PAGE_SIZE_OPTIONS = [10, 25, 50, 100]
 const BILLING_DETAIL_PAGE_SIZE_OPTIONS = [25, 50, 100, 250]
@@ -77,6 +91,7 @@ const SHIPSTATION_BILLING_CLIENT_NAME_SET = new Set(
 // Detail-table column default widths (px). Used by the migrated
 // <Table>-driven detail render. Anything not listed defaults to 110.
 const DETAIL_COLUMN_WIDTHS: Partial<Record<BillingDetailColumnId, number>> = {
+  actions: 88,
   orderNumber: 130,
   shipDate: 130,
   carrierNickname: 110,
@@ -108,6 +123,7 @@ const DEFAULT_BILLING_DETAIL_COLUMN_IDS_SET = new Set<BillingDetailColumnId>(get
 function detailSortValueOf(row: BillingDetailDto, key: BillingDetailColumnId): string | number | Date | null | undefined {
   const metrics = computeBillingDetailMetrics(row)
   switch (key) {
+    case 'actions': return ''
     case 'orderNumber': return row.orderNumber || row.orderId
     case 'shipDate': return row.shipDate ? new Date(row.shipDate) : null
     case 'carrierNickname': return row.carrierNickname || row.providerAccountNickname || row.carrier_nickname || row.provider_account_nickname || row.carrierCode || row.carrier_code || ''
@@ -126,6 +142,21 @@ function detailSortValueOf(row: BillingDetailDto, key: BillingDetailColumnId): s
     case 'margin': return metrics.margin
     default: return ''
   }
+}
+
+function createBillingEditDraft(row: BillingDetailDto): BillingEditDraft {
+  const metrics = computeBillingDetailMetrics(row)
+  return {
+    pickPack: metrics.pickPack.toFixed(2),
+    additional: metrics.additional.toFixed(2),
+    packageCost: metrics.packageCost.toFixed(2),
+    shipping: metrics.shipping.toFixed(2),
+  }
+}
+
+function parseMoneyDraft(value: string) {
+  const parsed = Number.parseFloat(value)
+  return Number.isFinite(parsed) ? parsed : 0
 }
 
 function marginColor(value: number) {
@@ -255,6 +286,7 @@ export default function BillingView() {
   const [detailPage, setDetailPage] = useState(1)
   const [detailPageSize, setDetailPageSize] = useState(50)
   const [orderDetailModalId, setOrderDetailModalId] = useState<number | null>(null)
+  const [billingEditModal, setBillingEditModal] = useState<BillingEditModalState>(null)
   const [detailColumnIds, setDetailColumnIds] = useState<BillingDetailColumnId[]>(() => {
     if (typeof window === 'undefined') return readBillingDetailColumnIds()
     return readBillingDetailColumnIds(window.localStorage)
@@ -436,6 +468,8 @@ export default function BillingView() {
       const metrics = computeBillingDetailMetrics(row)
 
       switch (key) {
+        case 'actions':
+          return ''
         case 'orderNumber':
           return row.orderNumber || row.orderId
         case 'shipDate':
@@ -887,6 +921,64 @@ export default function BillingView() {
     }
   }
 
+  function handleOpenBillingEdit(row: BillingDetailDto) {
+    if (!row.orderId || !detailState.clientId) return
+    setBillingEditModal({
+      row,
+      draft: createBillingEditDraft(row),
+      saving: false,
+      error: null,
+    })
+  }
+
+  function handleBillingEditDraftChange(field: keyof BillingEditDraft, value: string) {
+    setBillingEditModal((current) => current ? {
+      ...current,
+      draft: {
+        ...current.draft,
+        [field]: value,
+      },
+      error: null,
+    } : current)
+  }
+
+  async function handleSaveBillingEdit() {
+    if (!billingEditModal || !detailState.clientId) return
+    const orderId = Number(billingEditModal.row.orderId)
+    if (!Number.isFinite(orderId) || orderId <= 0) return
+
+    setBillingEditModal((current) => current ? { ...current, saving: true, error: null } : current)
+    try {
+      await apiClient.updateBillingDetail(orderId, detailState.clientId, {
+        pickPack: parseMoneyDraft(billingEditModal.draft.pickPack),
+        additional: parseMoneyDraft(billingEditModal.draft.additional),
+        packageCost: parseMoneyDraft(billingEditModal.draft.packageCost),
+        shipping: parseMoneyDraft(billingEditModal.draft.shipping),
+      })
+
+      const [rows] = await Promise.all([
+        apiClient.fetchBillingDetails(from, to, detailState.clientId),
+        apiClient.fetchBillingSummary(from, to).then((nextRows) => {
+          setSummaryRows(nextRows)
+          setSummaryError(null)
+        }),
+      ])
+
+      setDetailState((current) => ({
+        ...current,
+        rows,
+        loading: false,
+        error: null,
+      }))
+      setBillingEditModal(null)
+      toastContext?.addToast('Billing detail saved', 'success')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to save billing detail'
+      setBillingEditModal((current) => current ? { ...current, saving: false, error: message } : current)
+      toastContext?.addToast(message, 'error')
+    }
+  }
+
   async function handleSavePackagePrices() {
     if (!selectedPkgClientId) {
       toastContext?.addToast('Select a client first', 'error')
@@ -989,6 +1081,17 @@ export default function BillingView() {
       }
     })
   }
+
+  const billingEditMetrics = billingEditModal ? computeBillingDetailMetrics(billingEditModal.row) : null
+  const billingEditDraftTotal = billingEditModal
+    ? parseMoneyDraft(billingEditModal.draft.pickPack)
+      + parseMoneyDraft(billingEditModal.draft.additional)
+      + parseMoneyDraft(billingEditModal.draft.packageCost)
+      + parseMoneyDraft(billingEditModal.draft.shipping)
+    : 0
+  const billingEditDraftMargin = billingEditModal && billingEditMetrics
+    ? parseMoneyDraft(billingEditModal.draft.shipping) - billingEditMetrics.ourCost
+    : 0
 
   return (
     <div id="view-billing" className="view-content !p-5 !overflow-y-auto">
@@ -1528,19 +1631,33 @@ export default function BillingView() {
                     width: baseWidth,
                     minWidth: 70,
                     align: column.align,
-                    sortable: true,
+                    sortable: column.id !== 'actions',
                     // 2026-05-13: every column toggleable + draggable per
                     // operator request (Awaiting-Shipment parity). The
                     // upstream `column.always` flag in BILLING_DETAIL_COLUMNS
                     // is intentionally ignored here — Columns ▾ picker's
                     // Reset button covers the safety case if an operator
                     // hides too much by accident.
-                    hideable: true,
+                    hideable: column.id !== 'actions',
                     sortValue: (row) => detailSortValueOf(row, column.id),
                     render: (row) => {
                       const metrics = computeBillingDetailMetrics(row)
                       const lineLabel = row.itemNames || row.description || ''
                       switch (column.id) {
+                        case 'actions':
+                          return row.orderId ? (
+                            <button
+                              type="button"
+                              className="billing-detail-edit-button"
+                              title="Edit billing details"
+                              onClick={(event) => { event.stopPropagation(); handleOpenBillingEdit(row) }}
+                            >
+                              <Pencil size={13} aria-hidden="true" />
+                              <span>Edit</span>
+                            </button>
+                          ) : (
+                            <span style={{ color: 'var(--text4)' }}>—</span>
+                          )
                         case 'orderNumber':
                           return row.orderId ? (
                             <button
@@ -1630,7 +1747,7 @@ export default function BillingView() {
                   } satisfies TableColumn<BillingDetailDto>
                 })}
                 rowKey={(row) => row.id ?? `${row.orderId ?? 'storage'}-${row.lineType ?? 'detail'}-${row.description ?? 'row'}`}
-                storageKey="billing-detail-table"
+                storageKey="billing-detail-table-v2"
                 defaultSort={{ key: 'shipDate', direction: 'desc' }}
                 paginated
                 defaultPageSize={50}
@@ -1660,6 +1777,69 @@ export default function BillingView() {
           </div>
         ) : null}
       </div>
+      {billingEditModal ? (
+        <div className="billing-edit-backdrop" role="presentation" onMouseDown={() => !billingEditModal.saving && setBillingEditModal(null)}>
+          <div className="billing-edit-modal" role="dialog" aria-modal="true" aria-label="Edit billing detail" onMouseDown={(event) => event.stopPropagation()}>
+            <div className="billing-edit-head">
+              <div>
+                <h3>Edit Billing Detail</h3>
+                <p>{billingEditModal.row.orderNumber || `Order ${billingEditModal.row.orderId}`}</p>
+              </div>
+              <button className="btn btn-ghost btn-xs" type="button" disabled={billingEditModal.saving} onClick={() => setBillingEditModal(null)}>
+                <X size={14} aria-hidden="true" />
+              </button>
+            </div>
+
+            <div className="billing-edit-readonly-grid">
+              <div><span>Order #</span><strong>{billingEditModal.row.orderNumber || '—'}</strong></div>
+              <div><span>Ship Date</span><strong>{formatBillingDateTime(billingEditModal.row.shipDate)}</strong></div>
+              <div><span>Carrier</span><strong>{billingEditModal.row.carrierNickname || billingEditModal.row.providerAccountNickname || billingEditModal.row.carrierCode || '—'}</strong></div>
+              <div><span>Qty</span><strong>{billingEditModal.row.totalQty || billingEditModal.row.qty || 0}</strong></div>
+              <div><span>Item Name</span><strong>{billingEditModal.row.itemNames || billingEditModal.row.description || '—'}</strong></div>
+              <div><span>SKU</span><strong>{billingEditModal.row.itemSkus || '—'}</strong></div>
+              <div><span>Box Size</span><strong>{billingEditModal.row.packageName || '—'}</strong></div>
+              <div><span>Best Rate</span><strong>{formatBillingMoney(billingEditModal.row.actualLabelCost, { dashIfZero: true })}</strong></div>
+              <div><span>UPS SS</span><strong>{formatBillingMoney(billingEditModal.row.ref_ups_rate, { dashIfZero: true })}</strong></div>
+              <div><span>USPS SS</span><strong>{formatBillingMoney(billingEditModal.row.ref_usps_rate, { dashIfZero: true })}</strong></div>
+            </div>
+
+            <div className="billing-edit-money-grid">
+              <label>
+                <span>Pick & Pack</span>
+                <input type="number" min="0" step="0.01" value={billingEditModal.draft.pickPack} onChange={(event) => handleBillingEditDraftChange('pickPack', event.target.value)} />
+              </label>
+              <label>
+                <span>Addl Units</span>
+                <input type="number" min="0" step="0.01" value={billingEditModal.draft.additional} onChange={(event) => handleBillingEditDraftChange('additional', event.target.value)} />
+              </label>
+              <label>
+                <span>Box Cost</span>
+                <input type="number" min="0" step="0.01" value={billingEditModal.draft.packageCost} onChange={(event) => handleBillingEditDraftChange('packageCost', event.target.value)} />
+              </label>
+              <label>
+                <span>Shipping</span>
+                <input type="number" min="0" step="0.01" value={billingEditModal.draft.shipping} onChange={(event) => handleBillingEditDraftChange('shipping', event.target.value)} />
+              </label>
+            </div>
+
+            <div className="billing-edit-total-row">
+              <div><span>Total</span><strong>{formatBillingMoney(billingEditDraftTotal)}</strong></div>
+              <div><span>Shipping Margin</span><strong style={{ color: marginColor(billingEditDraftMargin) }}>{billingEditDraftMargin > 0 ? '+' : ''}${billingEditDraftMargin.toFixed(2)}</strong></div>
+            </div>
+
+            {billingEditModal.error ? <div className="billing-edit-error">{billingEditModal.error}</div> : null}
+
+            <div className="billing-edit-actions">
+              <button className="btn btn-secondary btn-sm" type="button" disabled={billingEditModal.saving} onClick={() => setBillingEditModal(null)}>Cancel</button>
+              <button className="btn btn-primary btn-sm" type="button" disabled={billingEditModal.saving} onClick={() => void handleSaveBillingEdit()}>
+                {billingEditModal.saving ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <Check size={14} aria-hidden="true" />}
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       {orderDetailModalId != null ? (
         <Suspense fallback={null}>
           <OrderDetailDrawer

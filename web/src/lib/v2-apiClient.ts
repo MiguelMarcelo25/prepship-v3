@@ -3687,6 +3687,16 @@ export const apiClient = {
     );
   },
 
+  updateBillingDetail(orderId: number, clientId: number, data: Record<string, unknown>): Promise<any> {
+    return api.patch<any>(`/billing/details/${orderId}`, {
+      clientId,
+      ...data,
+    }).then((res) => {
+      clearCachedReads('fetchBillingSummary');
+      return res;
+    });
+  },
+
   fetchBillingPackagePrices(clientId: number): Promise<any[]> {
     return cachedSafe(
       'fetchBillingPackagePrices',

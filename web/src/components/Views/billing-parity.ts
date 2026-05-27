@@ -31,6 +31,7 @@ export interface BillingConfigDraft {
 }
 
 export type BillingDetailColumnId =
+  | 'actions'
   | 'orderNumber'
   | 'shipDate'
   | 'carrierNickname'
@@ -89,6 +90,7 @@ export interface BillingPackagePriceRow {
 }
 
 export const BILLING_DETAIL_COLUMNS: BillingDetailColumn[] = [
+  { id: 'actions', label: 'Actions', align: 'center', always: true },
   { id: 'orderNumber', label: 'Order #', align: 'left', always: true },
   { id: 'shipDate', label: 'Ship Date', align: 'left', always: false },
   { id: 'carrierNickname', label: 'Carrier', align: 'left', always: false },
@@ -107,13 +109,14 @@ export const BILLING_DETAIL_COLUMNS: BillingDetailColumn[] = [
   { id: 'margin', label: 'Shipping Margin', align: 'right', always: false },
 ]
 
-// v3 (2026-05-12): defaults now include the Box Cost column AND the
-// stored array doubles as the display order (drag-to-reorder support).
+// v4 (2026-05-27): defaults now expose every billing detail column plus
+// row actions so operators can audit/edit a full invoice line at once.
 // Bumping the storage key resets returning users to the new default
 // order; if they had custom toggles, they re-pick them once.
-const BILLING_DETAIL_COLS_KEY = 'billing_detail_cols_v3'
+const BILLING_DETAIL_COLS_KEY = 'billing_detail_cols_v4'
 
 const DEFAULT_BILLING_DETAIL_COLUMN_IDS: BillingDetailColumnId[] = [
+  'actions',
   'orderNumber',
   'shipDate',
   'carrierNickname',
@@ -123,8 +126,13 @@ const DEFAULT_BILLING_DETAIL_COLUMN_IDS: BillingDetailColumnId[] = [
   'pickpack',
   'additional',
   'packageCost',
+  'packageName',
+  'bestRate',
+  'upsss',
+  'uspsss',
   'shipping',
   'total',
+  'margin',
 ]
 
 function formatDateInput(value: Date) {
