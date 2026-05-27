@@ -16,8 +16,10 @@ const orderSync = read('src/services/order-sync.ts');
 const shipStationStoreConnector = read('src/connectors/store/shipstation.ts');
 const walmartOrdersRoute = read('api/carriers/walmart/orders.ts');
 const ebayOrdersRoute = read('api/carriers/ebay/orders.ts');
+const carrierRatesRoute = read('api/carriers/rates.ts');
 const walmartStoreConnector = read('src/connectors/store/walmart.ts');
 const ebayStoreConnector = read('src/connectors/store/ebay.ts');
+const upsCarrierConnector = read('src/connectors/carrier/ups.ts');
 const packageJson = JSON.parse(read('package.json'));
 
 assert(
@@ -107,6 +109,17 @@ assert(
   ebayStoreConnector.includes('api.ebay.com') &&
     ebayStoreConnector.includes('importOrders'),
   'eBay StoreConnector must own eBay order API import calls',
+);
+assert(
+  carrierRatesRoute.includes('quoteCarrierRates') &&
+    !carrierRatesRoute.includes('ratesFromUps') &&
+    !carrierRatesRoute.includes('onlinetools.ups.com'),
+  'UPS rates must route through CarrierConnector orchestration, not direct UPS API calls from api/carriers/rates.ts',
+);
+assert(
+  upsCarrierConnector.includes('onlinetools.ups.com') &&
+    upsCarrierConnector.includes('getRates'),
+  'UPS CarrierConnector must own UPS rate API calls',
 );
 
 assert.equal(

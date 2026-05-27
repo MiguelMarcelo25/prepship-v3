@@ -120,6 +120,12 @@ Phase 4: Move rates, labels, carrier diagnostics, and direct-carrier handlers.
 - Keep ShipStation, UPS, EasyPost, Shipp, and Walmart Shipping API details inside carrier connectors or connector-owned helpers.
 - Ensure label persistence and print queue consume normalized connector outputs.
 
+Phase 4 UPS rate slice added on 2026-05-27:
+
+- `api/carriers/rates.ts` now routes UPS rate quotes through `quoteCarrierRates('ups', ...)`.
+- `src/connectors/carrier/ups.ts` owns UPS OAuth and Rating API calls.
+- `api/carriers/rates.ts` remains transitional debt until the remaining direct rate providers are moved.
+
 Phase 5: Tighten guards.
 
 - Remove files from the transitional debt list as they are migrated.
