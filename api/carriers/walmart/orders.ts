@@ -2,8 +2,8 @@
 // Vercel serverless function: pull recent orders from Walmart Marketplace API
 // AND persist them into the store_orders table so they're usable in the app.
 //
-// Loads credentials by carrierAccountId, refreshes an OAuth access_token,
-// hits GET /v3/orders, then upserts each order into store_orders keyed on
+// Loads credentials by carrierAccountId, imports orders through the Walmart
+// StoreConnector, then upserts each order into store_orders keyed on
 // (provider, external_order_id) — so re-pulling the same window updates
 // existing rows instead of duplicating them. Bootstraps the table on first
 // call so no separate migration step is needed.
@@ -32,7 +32,7 @@ import {
   verifySupabaseJwt,
 } from '../../../src/lib/auth/verify-supabase-jwt.js';
 import { corsHeaders } from '../../../src/lib/http/cors.js';
-import { timedFetch } from '../../../src/lib/http/timing.js';
+import { importStoreOrders } from '../../../src/services/store-connector-orchestrator.js';
 
 function readBody(req: any): Promise<unknown> {
   if (req.body) {
@@ -80,40 +80,6 @@ function toPacificClockfaceZ(d: Date): string {
   // hour can come back as "24" at midnight in some Intl impls; normalize.
   const hh = get('hour') === '24' ? '00' : get('hour');
   return `${get('year')}-${get('month')}-${get('day')}T${hh}:${get('minute')}:${get('second')}Z`;
-}
-
-// Mint a fresh OAuth access token. Walmart tokens expire in ~15 minutes —
-// we don't bother caching here since the function is short-lived; each
-// invocation starts a new token.
-async function getWalmartAccessToken(creds: Record<string, unknown>): Promise<string> {
-  const clientId = String(creds?.clientId ?? '').trim();
-  const clientSecret = String(creds?.clientSecret ?? '').trim();
-  if (!clientId || !clientSecret) {
-    throw new Error('clientId and clientSecret are required');
-  }
-  const channelType = String(creds?.channelType ?? '').trim();
-  const basic = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
-  const correlationId = `prepship-${Date.now().toString(36)}`;
-  const headers: Record<string, string> = {
-    Authorization: `Basic ${basic}`,
-    'Content-Type': 'application/x-www-form-urlencoded',
-    Accept: 'application/json',
-    'WM_QOS.CORRELATION_ID': correlationId,
-    'WM_SVC.NAME': 'Walmart Marketplace',
-  };
-  if (channelType) headers['WM_CONSUMER.CHANNEL.TYPE'] = channelType;
-  const res = await timedFetch('api.carriers.walmart.orders.external', 'https://marketplace.walmartapis.com/v3/token', {
-    method: 'POST',
-    headers,
-    body: 'grant_type=client_credentials',
-  });
-  if (!res.ok) {
-    const t = await res.text().then((s) => s.slice(0, 300)).catch(() => '');
-    throw new Error(`Walmart OAuth ${res.status}: ${t || res.statusText}`);
-  }
-  const data = (await res.json()) as { access_token?: string };
-  if (!data?.access_token) throw new Error('Walmart OAuth response missing access_token');
-  return data.access_token;
 }
 
 export default async function handler(req: any, res: any): Promise<void> {
@@ -209,51 +175,25 @@ export default async function handler(req: any, res: any): Promise<void> {
       ? (row.credentials as Record<string, unknown>)
       : {});
 
-    let accessToken: string;
+    let imported;
     try {
-      accessToken = await getWalmartAccessToken(creds);
+      imported = await importStoreOrders('walmart', {
+        companyId: 0,
+        accountId: String(accountId),
+        credentials: creds as Record<string, string | null | undefined>,
+        createdStartDate,
+        limit,
+      });
     } catch (err) {
       res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
       return;
     }
 
-    const correlationId = `prepship-${Date.now().toString(36)}`;
-    const channelType = String(creds?.channelType ?? '').trim();
-    const ordersHeaders: Record<string, string> = {
-      'WM_SEC.ACCESS_TOKEN': accessToken,
-      'WM_QOS.CORRELATION_ID': correlationId,
-      'WM_SVC.NAME': 'Walmart Marketplace',
-      Accept: 'application/json',
-    };
-    if (channelType) ordersHeaders['WM_CONSUMER.CHANNEL.TYPE'] = channelType;
+    const elements = imported.orders.map((order: any) => order.rawPayload);
+    const data = { list: { meta: imported.diagnostics?.meta ?? null } };
 
-    // productInfo=true asks Walmart to include the per-line item details
-    // (productName, image_url, weight_kg, etc.) in the list response. Without
-    // this flag the items array can come back lean — productName missing,
-    // recipient name on shipping address sometimes empty too. The flag is
-    // documented but defaults to false.
-    const url = new URL('https://marketplace.walmartapis.com/v3/orders');
-    url.searchParams.set('createdStartDate', createdStartDate);
-    url.searchParams.set('limit', String(limit));
-    url.searchParams.set('productInfo', 'true');
-
-    const ordersRes = await timedFetch('api.carriers.walmart.orders.external', url.toString(), { headers: ordersHeaders });
-    if (!ordersRes.ok) {
-      const t = await ordersRes.text().then((s) => s.slice(0, 400)).catch(() => '');
-      res.status(400).json({
-        ok: false,
-        error: `Walmart /v3/orders ${ordersRes.status}: ${t || ordersRes.statusText}`,
-      });
-      return;
-    }
-    const data = (await ordersRes.json()) as { list?: { meta?: unknown; elements?: { order?: unknown[] | unknown } } };
-    const ordersList = (data?.list?.elements as { order?: unknown[] | unknown } | undefined) ?? {};
-    const elements = Array.isArray((ordersList as any)?.order)
-      ? ((ordersList as any).order as unknown[])
-      : (ordersList as any)?.order
-        ? [(ordersList as any).order]
-        : [];
-
+    // The Walmart StoreConnector requests productInfo=true so the route keeps
+    // receiving the fuller per-line payload it already knows how to persist.
     // Helper: extract overall order status from Walmart's nested structure.
     // Walmart returns status per orderLine; we collapse to a single value
     // (Created / Acknowledged / Shipped / Cancelled) by taking the first.

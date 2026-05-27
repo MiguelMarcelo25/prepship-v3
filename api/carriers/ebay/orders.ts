@@ -3,9 +3,9 @@
 // persist them into store_orders + the canonical orders table so they
 // appear in Awaiting Shipment.
 //
-// Auth flow: refresh_token → access_token at /identity/v1/oauth2/token,
-// then GET /sell/fulfillment/v1/order?filter=lastmodifieddate:[<date>..].
-// eBay's response shape is well-documented and richer than Walmart's:
+// Imports through the eBay StoreConnector, which owns OAuth and the
+// /sell/fulfillment/v1/order provider call. eBay's response shape is richer
+// than Walmart's:
 // per-line items with title + sku, structured shipTo address, full
 // pricing summary. We map directly into the same store_orders + orders
 // shape used for Walmart so the rest of the app doesn't have to know
@@ -28,6 +28,7 @@ import {
   verifySupabaseJwt,
 } from '../../../src/lib/auth/verify-supabase-jwt.js';
 import { corsHeaders } from '../../../src/lib/http/cors.js';
+import { importStoreOrders } from '../../../src/services/store-connector-orchestrator.js';
 
 function readBody(req: any): Promise<unknown> {
   if (req.body) {
@@ -47,7 +48,6 @@ function readBody(req: any): Promise<unknown> {
   });
 }
 
-// Refresh-token → access-token. eBay rotates these only when you redo the
 // Convert real UTC Date → Pacific-time wall-clock string stamped with "Z"
 // so the FE's UTC-mode renderer (kept for ShipStation parity — orders
 // stored as PT-clock-face-stamped-Z) displays it correctly. Without this
@@ -64,44 +64,6 @@ function toPacificClockfaceZ(d: Date): string {
   const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '00';
   const hh = get('hour') === '24' ? '00' : get('hour');
   return `${get('year')}-${get('month')}-${get('day')}T${hh}:${get('minute')}:${get('second')}Z`;
-}
-
-// user-consent flow, so a single refresh-token issue can keep working for
-// 18 months. Scope is restricted to sell.fulfillment which is what
-// /sell/fulfillment/v1/order requires.
-async function getEbayAccessToken(creds: Record<string, unknown>): Promise<string> {
-  const appId = String(creds?.appId ?? '').trim();
-  const certId = String(creds?.certId ?? '').trim();
-  const refreshToken = String(creds?.refreshToken ?? '').trim();
-  if (!appId || !certId || !refreshToken) {
-    throw new Error('eBay appId, certId, and refreshToken are required');
-  }
-  const useSandbox = String(creds?.environment ?? '').toLowerCase() === 'sandbox';
-  const tokenUrl = useSandbox
-    ? 'https://api.sandbox.ebay.com/identity/v1/oauth2/token'
-    : 'https://api.ebay.com/identity/v1/oauth2/token';
-  const basic = Buffer.from(`${appId}:${certId}`).toString('base64');
-  const body = new URLSearchParams({
-    grant_type: 'refresh_token',
-    refresh_token: refreshToken,
-    scope: 'https://api.ebay.com/oauth/api_scope/sell.fulfillment',
-  });
-  const res = await fetch(tokenUrl, {
-    method: 'POST',
-    headers: {
-      Authorization: `Basic ${basic}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-      Accept: 'application/json',
-    },
-    body: body.toString(),
-  });
-  if (!res.ok) {
-    const t = await res.text().then((s) => s.slice(0, 300)).catch(() => '');
-    throw new Error(`eBay OAuth ${res.status}: ${t || res.statusText}`);
-  }
-  const data = (await res.json()) as { access_token?: string };
-  if (!data?.access_token) throw new Error('eBay OAuth response missing access_token');
-  return data.access_token;
 }
 
 export default async function handler(req: any, res: any): Promise<void> {
@@ -167,39 +129,22 @@ export default async function handler(req: any, res: any): Promise<void> {
       ? (row.credentials as Record<string, unknown>)
       : {});
 
-    let accessToken: string;
+    let imported;
     try {
-      accessToken = await getEbayAccessToken(creds);
+      imported = await importStoreOrders('ebay', {
+        companyId: 0,
+        accountId: String(accountId),
+        credentials: creds as Record<string, string | null | undefined>,
+        sinceDate,
+        limit,
+      });
     } catch (err) {
       res.status(400).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
       return;
     }
 
-    const useSandbox = String(creds?.environment ?? '').toLowerCase() === 'sandbox';
-    const apiBase = useSandbox ? 'https://api.sandbox.ebay.com' : 'https://api.ebay.com';
-    const url = new URL(`${apiBase}/sell/fulfillment/v1/order`);
-    url.searchParams.set(
-      'filter',
-      `lastmodifieddate:[${sinceDate}..]`,
-    );
-    url.searchParams.set('limit', String(limit));
-
-    const ordersRes = await fetch(url.toString(), {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Accept: 'application/json',
-      },
-    });
-    if (!ordersRes.ok) {
-      const t = await ordersRes.text().then((s) => s.slice(0, 600)).catch(() => '');
-      res.status(400).json({
-        ok: false,
-        error: `eBay /sell/fulfillment/v1/order ${ordersRes.status}: ${t || ordersRes.statusText}`,
-      });
-      return;
-    }
-    const data = (await ordersRes.json()) as { orders?: any[]; total?: number };
-    const elements: any[] = Array.isArray(data?.orders) ? data.orders : [];
+    const elements: any[] = imported.orders.map((order: any) => order.rawPayload);
+    const data = { total: imported.total ?? elements.length };
 
     // Pre-fetch SKU → weight_oz AND SKU → image_url from inventory in one
     // query. eBay's /sell/fulfillment/v1/order does NOT return product

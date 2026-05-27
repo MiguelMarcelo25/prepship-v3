@@ -68,6 +68,9 @@ export type StoreOrderImportInput = {
   storeId?: number;
   credentials?: Record<string, string | null | undefined>;
   dedupeKey?: string;
+  createdStartDate?: string;
+  sinceDate?: string;
+  limit?: number;
 };
 
 export type StoreOrderStatusSyncInput = {

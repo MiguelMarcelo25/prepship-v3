@@ -47,14 +47,12 @@ These files currently contain direct provider calls or provider-client usage out
 | File | Provider Area | Target Owner | Migration Phase |
 | --- | --- | --- | --- |
 | `api/_lib/walmart-fees-sync.ts` | Walmart fees | Walmart StoreConnector or connector-owned helper | Phase 3 |
-| `api/carriers/ebay/orders.ts` | eBay order import | eBay StoreConnector import orchestration | Phase 3 |
 | `api/carriers/labels.ts` | Carrier labels | CarrierConnector label orchestration | Phase 4 |
 | `api/carriers/rates.ts` | Carrier rates | CarrierConnector rate orchestration | Phase 4 |
 | `api/carriers/ups/probe.ts` | UPS probe | UPS CarrierConnector diagnostics | Phase 4 |
 | `api/carriers/validate-address.ts` | Carrier address validation | CarrierConnector validation capability or connector-owned helper | Phase 4 |
 | `api/carriers/verify.ts` | Carrier verification | CarrierConnector diagnostics | Phase 4 |
 | `api/carriers/walmart/fees.ts` | Walmart fees | Walmart StoreConnector or connector-owned helper | Phase 3 |
-| `api/carriers/walmart/orders.ts` | Walmart order import | Walmart StoreConnector import orchestration | Phase 3 |
 | `api/carriers/walmart/probe-carriers.ts` | Walmart Shipping probe | Walmart Shipping CarrierConnector diagnostics | Phase 4 |
 | `api/cron/sync-walmart-fees.ts` | Walmart fee sync cron | Walmart StoreConnector or connector-owned helper | Phase 3 |
 | `api/oauth/ebay/callback.ts` | eBay OAuth/API token flow | eBay connector-owned auth helper | Phase 3 |
@@ -108,6 +106,13 @@ Phase 3: Move Walmart/eBay store import and marketplace operations.
 - Convert `api/carriers/walmart/orders.ts` and `api/carriers/ebay/orders.ts` into thin wrappers over StoreConnector import orchestration.
 - Move provider token/API payload logic into connector-owned helpers.
 - Keep fulfillment outbox confirmation through StoreConnector.
+
+Phase 3 order-import slice added on 2026-05-27:
+
+- `api/carriers/walmart/orders.ts` now calls `importStoreOrders('walmart', ...)` and no longer calls Walmart Marketplace APIs directly.
+- `api/carriers/ebay/orders.ts` now calls `importStoreOrders('ebay', ...)` and no longer calls eBay APIs directly.
+- `src/connectors/store/walmart.ts` owns Walmart order token/API fetch logic.
+- `src/connectors/store/ebay.ts` owns eBay order token/API fetch logic.
 
 Phase 4: Move rates, labels, carrier diagnostics, and direct-carrier handlers.
 

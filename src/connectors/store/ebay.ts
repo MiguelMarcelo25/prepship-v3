@@ -1,6 +1,9 @@
 import type {
   ConfirmationResult,
+  NormalizedOrder,
+  NormalizedStoreOrderImportResult,
   ShipmentConfirmationInput,
+  StoreOrderImportInput,
   StoreConnector,
 } from '../../domain/fulfillment/types';
 import { timedFetch } from '../../lib/http/timing';
@@ -113,10 +116,66 @@ function isAlreadyFulfilledConflict(status: number, message: string): boolean {
   return status === 409 && /(already|duplicate|maximum tracking|fulfilled)/i.test(message);
 }
 
+function normalizeEbayOrder(raw: unknown, accountId = 'ebay'): NormalizedOrder {
+  const order = raw as any;
+  const orderId = firstString(order?.orderId);
+  const legacyOrderId = firstString(order?.legacyOrderId);
+  const status = firstString(order?.orderFulfillmentStatus).toUpperCase();
+  const ship = Array.isArray(order?.fulfillmentStartInstructions)
+    ? order.fulfillmentStartInstructions[0]?.shippingStep?.shipTo
+    : null;
+  return {
+    sourceProvider: 'ebay',
+    sourceAccountId: accountId,
+    sourceOrderId: orderId,
+    sourceOrderNumber: legacyOrderId || orderId,
+    marketplace: 'ebay',
+    storeId: accountId,
+    canonicalStatus: status === 'FULFILLED'
+      ? 'shipped'
+      : status === 'CANCELED' || status === 'CANCELLED'
+        ? 'cancelled'
+        : 'awaiting_shipment',
+    customerName: firstString(ship?.fullName) || null,
+    customerEmail: firstString(ship?.email) || null,
+    shippingPaid: null,
+    rawPayload: raw,
+  };
+}
+
 export function createEbayStoreConnector(): StoreConnector {
   return {
     provider: 'ebay',
     capabilities: ['orders.import', 'orders.statusSync', 'shipment.confirm', 'products.import'],
+    async importOrders(input: StoreOrderImportInput): Promise<NormalizedStoreOrderImportResult> {
+      const creds = input.credentials ?? {};
+      const accessToken = await getEbayAccessToken(creds);
+      const useSandbox = firstString(creds.environment).toLowerCase() === 'sandbox';
+      const apiBase = useSandbox ? 'https://api.sandbox.ebay.com' : 'https://api.ebay.com';
+      const url = new URL(`${apiBase}/sell/fulfillment/v1/order`);
+      url.searchParams.set('filter', `lastmodifieddate:[${input.sinceDate ?? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()}..]`);
+      url.searchParams.set('limit', String(Math.min(Math.max(Number(input.limit ?? 100), 1), 200)));
+
+      const res = await timedFetch('ebay.orders-import', url.toString(), {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: 'application/json',
+        },
+      });
+      if (!res.ok) {
+        throw new Error(`eBay /sell/fulfillment/v1/order ${res.status}: ${await readEbayError(res)}`);
+      }
+
+      const data = await res.json() as { orders?: unknown[]; total?: number };
+      const elements = Array.isArray(data?.orders) ? data.orders : [];
+      return {
+        provider: 'ebay',
+        accountId: input.accountId,
+        orders: elements.map((order) => normalizeEbayOrder(order, input.accountId)),
+        total: Number(data?.total ?? elements.length),
+      };
+    },
+    normalizeOrder: (raw) => normalizeEbayOrder(raw),
     async confirmShipment(input: ShipmentConfirmationInput): Promise<ConfirmationResult> {
       const trackingNumber = normalizeEbayTrackingNumber(firstString(input.trackingNumber));
       if (!trackingNumber) {

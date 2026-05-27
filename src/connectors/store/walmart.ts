@@ -1,6 +1,9 @@
 import type {
   ConfirmationResult,
+  NormalizedOrder,
+  NormalizedStoreOrderImportResult,
   ShipmentConfirmationInput,
+  StoreOrderImportInput,
   StoreConnector,
 } from '../../domain/fulfillment/types';
 import { timedFetch } from '../../lib/http/timing';
@@ -67,6 +70,33 @@ function walmartHeaders(creds: Record<string, unknown>, token: string): Record<s
 
 function walmartMethodCode(rawOrder: unknown): string {
   return firstString((rawOrder as any)?.shippingInfo?.methodCode, 'VALUE');
+}
+
+function normalizeWalmartOrder(raw: unknown, accountId = 'walmart'): NormalizedOrder {
+  const order = raw as any;
+  const purchaseOrderId = firstString(order?.purchaseOrderId);
+  const customerOrderId = firstString(order?.customerOrderId);
+  const lines = Array.isArray(order?.orderLines?.orderLine) ? order.orderLines.orderLine : [];
+  const firstStatus = lines[0]?.orderLineStatuses?.orderLineStatus?.[0]?.status;
+  const status = firstString(firstStatus).toLowerCase();
+  const address = order?.shippingInfo?.postalAddress ?? {};
+  return {
+    sourceProvider: 'walmart',
+    sourceAccountId: accountId,
+    sourceOrderId: purchaseOrderId,
+    sourceOrderNumber: customerOrderId || purchaseOrderId,
+    marketplace: 'walmart',
+    storeId: accountId,
+    canonicalStatus: status === 'shipped' || status === 'delivered'
+      ? 'shipped'
+      : status === 'cancelled' || status === 'canceled'
+        ? 'cancelled'
+        : 'awaiting_shipment',
+    customerName: firstString(address.name) || null,
+    customerEmail: null,
+    shippingPaid: null,
+    rawPayload: raw,
+  };
 }
 
 function walmartShipDateTime(shipDate: string | null | undefined): number {
@@ -142,6 +172,38 @@ export function createWalmartStoreConnector(): StoreConnector {
   return {
     provider: 'walmart',
     capabilities: ['orders.import', 'orders.statusSync', 'shipment.confirm', 'inventory.import', 'inventory.push', 'products.import'],
+    async importOrders(input: StoreOrderImportInput): Promise<NormalizedStoreOrderImportResult> {
+      const creds = input.credentials ?? {};
+      const token = await getWalmartAccessToken(creds);
+      const url = new URL('https://marketplace.walmartapis.com/v3/orders');
+      url.searchParams.set('createdStartDate', input.createdStartDate ?? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString());
+      url.searchParams.set('limit', String(Math.min(Math.max(Number(input.limit ?? 50), 1), 200)));
+      url.searchParams.set('productInfo', 'true');
+
+      const res = await timedFetch('walmart.orders-import', url.toString(), {
+        headers: walmartHeaders(creds, token),
+      });
+      if (!res.ok) {
+        throw new Error(`Walmart /v3/orders ${res.status}: ${await readWalmartError(res)}`);
+      }
+
+      const data = await res.json() as { list?: { meta?: unknown; elements?: { order?: unknown[] | unknown } } };
+      const ordersList = (data?.list?.elements as { order?: unknown[] | unknown } | undefined) ?? {};
+      const elements = Array.isArray((ordersList as any)?.order)
+        ? ((ordersList as any).order as unknown[])
+        : (ordersList as any)?.order
+          ? [(ordersList as any).order]
+          : [];
+
+      return {
+        provider: 'walmart',
+        accountId: input.accountId,
+        orders: elements.map((order) => normalizeWalmartOrder(order, input.accountId)),
+        total: elements.length,
+        diagnostics: { meta: data?.list?.meta ?? null },
+      };
+    },
+    normalizeOrder: (raw) => normalizeWalmartOrder(raw),
     async confirmShipment(input: ShipmentConfirmationInput): Promise<ConfirmationResult> {
       const creds = input.credentials ?? {};
       const payload = input.payload ?? {};

@@ -14,6 +14,10 @@ const storeOrchestrator = read('src/services/store-connector-orchestrator.ts');
 const carrierOrchestrator = read('src/services/carrier-connector-orchestrator.ts');
 const orderSync = read('src/services/order-sync.ts');
 const shipStationStoreConnector = read('src/connectors/store/shipstation.ts');
+const walmartOrdersRoute = read('api/carriers/walmart/orders.ts');
+const ebayOrdersRoute = read('api/carriers/ebay/orders.ts');
+const walmartStoreConnector = read('src/connectors/store/walmart.ts');
+const ebayStoreConnector = read('src/connectors/store/ebay.ts');
 const packageJson = JSON.parse(read('package.json'));
 
 assert(
@@ -82,6 +86,27 @@ assert(
   shipStationStoreConnector.includes('ssV1Request') &&
     shipStationStoreConnector.includes('importOrders'),
   'ShipStation StoreConnector must own ShipStation order API import calls',
+);
+assert(
+  walmartOrdersRoute.includes('importStoreOrders') &&
+    !walmartOrdersRoute.includes('marketplace.walmartapis.com'),
+  'Walmart order route must call StoreConnector import orchestration, not Walmart API directly',
+);
+assert(
+  ebayOrdersRoute.includes('importStoreOrders') &&
+    !ebayOrdersRoute.includes('api.ebay.com') &&
+    !ebayOrdersRoute.includes('api.sandbox.ebay.com'),
+  'eBay order route must call StoreConnector import orchestration, not eBay API directly',
+);
+assert(
+  walmartStoreConnector.includes('marketplace.walmartapis.com') &&
+    walmartStoreConnector.includes('importOrders'),
+  'Walmart StoreConnector must own Walmart order API import calls',
+);
+assert(
+  ebayStoreConnector.includes('api.ebay.com') &&
+    ebayStoreConnector.includes('importOrders'),
+  'eBay StoreConnector must own eBay order API import calls',
 );
 
 assert.equal(
