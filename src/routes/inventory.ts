@@ -443,59 +443,136 @@ app.get('/ledger', zValidator('query', ledgerQuery), async (c) => {
   const ledgerScope = inventoryScopeFromContext(c);
   const dateStart = q.dateStart != null && Number.isFinite(q.dateStart) ? new Date(q.dateStart) : null;
   const dateEnd = q.dateEnd != null && Number.isFinite(q.dateEnd) ? new Date(q.dateEnd) : null;
-  const where = and(
-    ...[
-      q.clientId !== undefined ? eq(inventory.clientId, q.clientId) : undefined,
-      q.sku ? eq(inventory.sku, q.sku) : undefined,
-      q.type ? eq(inventoryLedger.type, q.type) : undefined,
-      dateStart && !Number.isNaN(dateStart.getTime()) ? gte(inventoryLedger.createdAt, dateStart) : undefined,
-      dateEnd && !Number.isNaN(dateEnd.getTime()) ? lte(inventoryLedger.createdAt, dateEnd) : undefined,
-      activeInventoryClientPredicate,
-      inventoryScopePredicate(ledgerScope),
-    ].filter(<T>(x: T | undefined): x is T => x !== undefined)
-  );
+  const dateStartIso = dateStart && !Number.isNaN(dateStart.getTime()) ? dateStart.toISOString() : null;
+  const dateEndIso = dateEnd && !Number.isNaN(dateEnd.getTime()) ? dateEnd.toISOString() : null;
+  const skuFilter = q.sku?.trim() || null;
+  const includeDerivedShipHistory = (!q.type || q.type === 'ship') && Boolean(dateStartIso || dateEndIso);
+  const pageOffset = offsetOf(q);
 
-  const [rows, countRows] = await timedInventoryStep(timings, 'pageAndCount', () =>
-    Promise.all([
-      db
-        .select({
-          id: inventoryLedger.id,
-          inventoryId: inventoryLedger.inventoryId,
-          sku: inventory.sku,
-          name: inventory.name,
-          clientId: inventory.clientId,
-          type: inventoryLedger.type,
-          qty: inventoryLedger.qty,
-          orderId: inventoryLedger.orderId,
-          note: inventoryLedger.note,
-          createdBy: inventoryLedger.createdBy,
-          createdAt: inventoryLedger.createdAt,
-        })
-        .from(inventoryLedger)
-        .innerJoin(inventory, eq(inventory.id, inventoryLedger.inventoryId))
-        .where(where)
-        .orderBy(desc(inventoryLedger.createdAt))
-        .limit(q.pageSize)
-        .offset(offsetOf(q)),
-      db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(inventoryLedger)
-        .innerJoin(inventory, eq(inventory.id, inventoryLedger.inventoryId))
-        .where(where),
-    ])
-  );
+  const pageRows = await timedInventoryStep(timings, 'pageAndCount', () => db.execute<{
+    id: number;
+    inventoryId: number;
+    sku: string | null;
+    name: string | null;
+    clientId: number | null;
+    type: string;
+    qty: number;
+    orderId: number | null;
+    note: string | null;
+    createdBy: string | null;
+    createdAt: Date;
+    totalCount: number;
+  }>(sql`
+    with ledger_rows as (
+      select
+        ${inventoryLedger.id}::int as id,
+        ${inventoryLedger.inventoryId} as inventory_id,
+        ${inventory.sku} as sku,
+        ${inventory.name} as name,
+        ${inventory.clientId} as client_id,
+        ${inventoryLedger.type} as type,
+        ${inventoryLedger.qty} as qty,
+        ${inventoryLedger.orderId} as order_id,
+        ${inventoryLedger.note} as note,
+        ${inventoryLedger.createdBy} as created_by,
+        ${inventoryLedger.createdAt} as created_at
+      from ${inventoryLedger}
+      inner join ${inventory} on ${inventory.id} = ${inventoryLedger.inventoryId}
+      where (${q.clientId ?? null}::int is null or ${inventory.clientId} = ${q.clientId ?? null}::int)
+        and (${skuFilter}::text is null or lower(${inventory.sku}) = lower(${skuFilter}::text))
+        and (${q.type ?? null}::text is null or ${inventoryLedger.type} = ${q.type ?? null}::text)
+        and (${dateStartIso}::timestamptz is null or ${inventoryLedger.createdAt} >= ${dateStartIso}::timestamptz)
+        and (${dateEndIso}::timestamptz is null or ${inventoryLedger.createdAt} <= ${dateEndIso}::timestamptz)
+        and ${activeInventoryClientPredicate}
+        and ${inventoryScopePredicate(ledgerScope)}
+    ),
+    derived_ship_rows as (
+      select
+        (-1 * row_number() over (order by ${orders.id}, ${inventory.id}))::int as id,
+        ${inventory.id} as inventory_id,
+        ${inventory.sku} as sku,
+        coalesce(${inventory.name}, item->>'name') as name,
+        coalesce(${inventory.clientId}, ${orders.clientId}) as client_id,
+        'ship'::text as type,
+        -1 * greatest(
+          1,
+          case
+            when coalesce(item->>'quantity', '') ~ '^[0-9]+(\\.[0-9]+)?$'
+              then round((item->>'quantity')::numeric)::int
+            else 1
+          end
+        ) as qty,
+        ${orders.id} as order_id,
+        concat('Order ', coalesce(${orders.orderNumber}, ${orders.id}::text)) as note,
+        'order_history'::text as created_by,
+        ${orders.orderDate} as created_at
+      from ${orders}
+      cross join lateral jsonb_array_elements(${orders.items}) item
+      inner join ${inventory}
+        on lower(${inventory.sku}) = lower(item->>'sku')
+        and ${inventory.active} = true
+        and (
+          (${orders.clientId} is not null and ${inventory.clientId} = ${orders.clientId})
+          or ${inventory.clientId} is null
+        )
+      where ${includeDerivedShipHistory}::boolean = true
+        and ${orders.orderStatus} = 'shipped'
+        and ${orders.orderDate} is not null
+        and item ? 'sku'
+        and coalesce(item->>'sku', '') <> ''
+        and lower(coalesce(item->>'adjustment', 'false')) not in ('true', 't', '1', 'yes')
+        and (${q.clientId ?? null}::int is null or ${orders.clientId} = ${q.clientId ?? null}::int)
+        and (${skuFilter}::text is null or lower(${inventory.sku}) = lower(${skuFilter}::text))
+        and (${dateStartIso}::timestamptz is null or ${orders.orderDate} >= ${dateStartIso}::timestamptz)
+        and (${dateEndIso}::timestamptz is null or ${orders.orderDate} <= ${dateEndIso}::timestamptz)
+        and ${activeInventoryClientPredicate}
+        and ${inventoryScopePredicate(ledgerScope)}
+        and not exists (
+          select 1
+          from ${inventoryLedger} existing_ledger
+          where existing_ledger.order_id = ${orders.id}
+            and existing_ledger.inventory_id = ${inventory.id}
+            and existing_ledger.type = 'ship'
+        )
+    ),
+    combined_rows as (
+      select * from ledger_rows
+      union all
+      select * from derived_ship_rows
+    )
+    select
+      id::int as id,
+      inventory_id as "inventoryId",
+      sku,
+      name,
+      client_id as "clientId",
+      type,
+      qty,
+      order_id as "orderId",
+      note,
+      created_by as "createdBy",
+      created_at as "createdAt",
+      count(*) over()::int as "totalCount"
+    from combined_rows
+    order by created_at desc, id desc
+    limit ${q.pageSize}
+    offset ${pageOffset}
+  `));
+
+  const rows = pageRows.map(({ totalCount: _totalCount, ...row }) => row);
+  const totalCount = Number(pageRows[0]?.totalCount ?? 0);
 
   logSlowInventoryRoute('ledger', timings, msSince(routeStartedAt), {
     page: q.page,
     pageSize: q.pageSize,
-    total: countRows[0]?.count ?? 0,
+    total: totalCount,
     rows: rows.length,
     clientId: q.clientId ?? null,
     type: q.type ?? null,
     hasSku: Boolean(q.sku?.trim()),
   });
 
-  return c.json(paginated(rows, countRows[0]?.count ?? 0, q));
+  return c.json(paginated(rows, totalCount, q));
 });
 
 app.get('/stats', async (c) => {
