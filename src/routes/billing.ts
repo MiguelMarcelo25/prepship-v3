@@ -301,6 +301,19 @@ function escHtml(s: string | number | null | undefined): string {
     .replace(/"/g, '&quot;');
 }
 
+function formatInvoiceDate(value: string | Date | null | undefined): string {
+  if (!value) return '';
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: 'UTC',
+    month: 'long',
+    day: '2-digit',
+    year: 'numeric',
+  }).format(date);
+}
+
 app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
   const { clientId, dateFrom, dateTo } = c.req.valid('query');
   const invoiceScope = billingScopeFromContext(c);
@@ -379,8 +392,8 @@ app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
   `);
 
   const fmt = (n: number | string) => `$${(Number(n) || 0).toFixed(2)}`;
-  const fromDisplay = dateFrom.slice(0, 10);
-  const toDisplay = dateTo.slice(0, 10);
+  const fromDisplay = formatInvoiceDate(dateFrom);
+  const toDisplay = formatInvoiceDate(dateTo);
   const generated = new Date().toLocaleDateString('en-US', {
     month: 'long',
     day: 'numeric',
@@ -405,9 +418,10 @@ app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
       const shippingAmt = Number(d.shipping_amt);
       const storageAmt = Number(d.storage_amt);
       const rowTotal = Number(d.row_total);
+      const shipDate = formatInvoiceDate(d.ship_date);
       return `
       <tr>
-        <td>${escHtml(d.ship_date ?? '')}</td>
+        <td>${escHtml(shipDate)}</td>
         <td class="mono">${escHtml(d.order_number ?? d.order_id ?? '')}</td>
         <td class="sku">${escHtml(d.skus ?? '—')}</td>
         <td class="num">${totalQty}</td>
