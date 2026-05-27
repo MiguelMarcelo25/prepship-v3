@@ -126,6 +126,12 @@ Phase 4 UPS rate slice added on 2026-05-27:
 - `src/connectors/carrier/ups.ts` owns UPS OAuth and Rating API calls.
 - `api/carriers/rates.ts` remains transitional debt until the remaining direct rate providers are moved.
 
+Phase 4 EasyPost rate slice added on 2026-05-27:
+
+- `api/carriers/rates.ts` now routes EasyPost rate quotes through `quoteCarrierRates('easypost', ...)`.
+- `src/connectors/carrier/easypost.ts` owns EasyPost shipment/rate API calls.
+- `api/carriers/rates.ts` still owns order-context lookup and remains transitional debt until all remaining rate providers are moved.
+
 Phase 5: Tighten guards.
 
 - Remove files from the transitional debt list as they are migrated.

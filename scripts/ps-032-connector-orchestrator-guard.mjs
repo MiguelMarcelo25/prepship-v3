@@ -20,6 +20,7 @@ const carrierRatesRoute = read('api/carriers/rates.ts');
 const walmartStoreConnector = read('src/connectors/store/walmart.ts');
 const ebayStoreConnector = read('src/connectors/store/ebay.ts');
 const upsCarrierConnector = read('src/connectors/carrier/ups.ts');
+const easyPostCarrierConnector = read('src/connectors/carrier/easypost.ts');
 const packageJson = JSON.parse(read('package.json'));
 
 assert(
@@ -120,6 +121,16 @@ assert(
   upsCarrierConnector.includes('onlinetools.ups.com') &&
     upsCarrierConnector.includes('getRates'),
   'UPS CarrierConnector must own UPS rate API calls',
+);
+assert(
+  !carrierRatesRoute.includes('ratesFromEasyPost') &&
+    !carrierRatesRoute.includes('api.easypost.com'),
+  'EasyPost rates must route through CarrierConnector orchestration, not direct EasyPost API calls from api/carriers/rates.ts',
+);
+assert(
+  easyPostCarrierConnector.includes('api.easypost.com') &&
+    easyPostCarrierConnector.includes('getRates'),
+  'EasyPost CarrierConnector must own EasyPost rate API calls',
 );
 
 assert.equal(
