@@ -415,6 +415,10 @@ export default function BillingView() {
     },
     (row) => row.clientName,
   ), [filteredSummaryRows, summarySort])
+  const selectedDetailSummary = useMemo(() => {
+    if (!detailState.clientId) return null
+    return filteredSummaryRows.find((row) => Number(row.clientId) === Number(detailState.clientId)) ?? null
+  }, [detailState.clientId, filteredSummaryRows])
 
   const summaryTotals = useMemo(() => buildBillingSummaryTotals(filteredSummaryRows), [filteredSummaryRows])
   const visibleDetailColumns = useMemo(() => getVisibleBillingDetailColumns(detailColumnIds), [detailColumnIds])
@@ -1441,6 +1445,10 @@ export default function BillingView() {
             loading={summaryLoading}
             emptyMessage="No billing data. Generate invoices first."
             onRowClick={(row) => void handleLoadDetails(row.clientId, row.clientName)}
+            rowClassName={(row) => {
+              const active = detailState.open && Number(row.clientId) === Number(detailState.clientId)
+              return `billing-summary-row${active ? ' is-detail-selected' : ''}`
+            }}
             // Totals row — sum of the FULL dataset, not just the page.
             // Caller iterates the visible columns so cell positions
             // stay aligned after the operator reorders or hides
@@ -1467,6 +1475,31 @@ export default function BillingView() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
               <h3 style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', margin: 0 }}>Line Items — {detailState.clientName}</h3>
               <button className="btn btn-ghost btn-xs" type="button" onClick={() => setDetailState((current) => ({ ...current, open: false }))}>✕ Close</button>
+            </div>
+
+            <div className="billing-detail-client-strip" aria-label="Line item client selector">
+              <span className="billing-detail-client-strip-label">
+                {sortedSummaryRows.length} visible clients
+                {selectedDetailSummary ? ` · showing ${Number(selectedDetailSummary.orderCount ?? 0)} orders` : ''}
+              </span>
+              {sortedSummaryRows.map((row) => {
+                const active = Number(row.clientId) === Number(detailState.clientId)
+                const orderCount = Number(row.orderCount ?? 0)
+                const rowTotal = Number(row.grandTotal ?? row.total ?? 0)
+                return (
+                  <button
+                    key={row.clientId}
+                    className={`billing-detail-toggle${active ? ' active' : ''}${orderCount === 0 && rowTotal === 0 ? ' is-empty' : ''}`}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => void handleLoadDetails(row.clientId, row.clientName)}
+                  >
+                    <span>{row.clientName}</span>
+                    <span className="billing-detail-toggle-meta">{orderCount} orders</span>
+                    <span className="billing-detail-toggle-total">{formatBillingMoney(rowTotal)}</span>
+                  </button>
+                )
+              })}
             </div>
 
             {/* Detail table — migrated 2026-05-12 to the reusable
