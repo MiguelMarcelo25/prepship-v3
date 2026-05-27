@@ -132,6 +132,12 @@ Phase 4 EasyPost rate slice added on 2026-05-27:
 - `src/connectors/carrier/easypost.ts` owns EasyPost shipment/rate API calls.
 - `api/carriers/rates.ts` still owns order-context lookup and remains transitional debt until all remaining rate providers are moved.
 
+Phase 4 Shipp rate slice added on 2026-05-27:
+
+- `api/carriers/rates.ts` now routes Shipp rate quotes through `quoteCarrierRates('shipp', ...)`.
+- `src/connectors/carrier/shipp.ts` owns Shipp login, ZIP enrichment, quote API calls, and rate normalization.
+- `api/carriers/rates.ts` still owns order-context lookup and remains transitional debt until all remaining rate providers are moved.
+
 Phase 5: Tighten guards.
 
 - Remove files from the transitional debt list as they are migrated.
