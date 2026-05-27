@@ -16,6 +16,7 @@ const orderSync = read('src/services/order-sync.ts');
 const ratesService = read('src/services/rates.ts');
 const shipStationStoreConnector = read('src/connectors/store/shipstation.ts');
 const ratesRoute = read('src/routes/rates.ts');
+const packagesRoute = read('src/routes/packages.ts');
 const shipStationCarrierConnector = read('src/connectors/carrier/shipstation.ts');
 const walmartOrdersRoute = read('api/carriers/walmart/orders.ts');
 const ebayOrdersRoute = read('api/carriers/ebay/orders.ts');
@@ -240,6 +241,10 @@ assert(
   shipStationCarrierConnector.includes('/v2/rates/estimate') &&
     shipStationCarrierConnector.includes('ssRequest<'),
   'ShipStation CarrierConnector must own ShipStation rate estimate API calls',
+);
+assert(
+  packagesRoute.includes('listCarrierAccounts') && !packagesRoute.includes('ssRequest'),
+  'packages route ShipStation package sync must use CarrierConnector orchestration, not direct ShipStation API calls',
 );
 
 assert.equal(

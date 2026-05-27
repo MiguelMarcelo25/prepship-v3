@@ -5,9 +5,9 @@ import { and, desc, eq, lte, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { packages } from '../db/schema/packages';
 import { packageLedger } from '../db/schema/package-ledger';
-import { ssRequest } from '../lib/shipstation';
 import type { CarriersResponse } from '../lib/shipstation/types';
 import { importStandardPackageDimensions } from '../services/package-dimension-importer';
+import { listCarrierAccounts } from '../services/carrier-connector-orchestrator';
 import { hasAppPermission } from '../middleware/auth';
 
 const app = new Hono();
@@ -196,9 +196,9 @@ app.delete('/:id{[0-9]+}', async (c) => {
 // upserts each carrier's package list into our packages table.
 // Dimensions stay 0 — ShipStation's API doesn't expose them; user fills in.
 app.post('/sync', async (c) => {
-  const res = await ssRequest<CarriersResponse>('/v2/carriers', {
+  const res = await listCarrierAccounts('shipstation', {
     dedupeKey: 'carriers:list',
-  });
+  }) as CarriersResponse;
 
   let inserted = 0;
   let skipped = 0;

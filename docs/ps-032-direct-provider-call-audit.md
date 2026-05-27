@@ -198,6 +198,12 @@ Phase 4 ShipStation cached-rate estimate slice added on 2026-05-28:
 - `src/connectors/carrier/shipstation.ts` owns the ShipStation `/v2/rates/estimate` API call.
 - The cached rate service still owns PrepShip-specific cache keys, carrier diagnostics, blocked-service filtering, and markup application.
 
+Phase 4 ShipStation package-sync slice added on 2026-05-28:
+
+- `src/routes/packages.ts` now routes ShipStation carrier package sync through `listCarrierAccounts('shipstation', ...)`.
+- `src/connectors/carrier/shipstation.ts` owns the ShipStation `/v2/carriers` call used for package metadata.
+- The packages route still owns PrepShip package persistence, stock fields, and ledger behavior.
+
 Phase 5: Tighten guards.
 
 - Remove files from the transitional debt list as they are migrated.
