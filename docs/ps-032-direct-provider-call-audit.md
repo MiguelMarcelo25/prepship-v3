@@ -216,6 +216,12 @@ Phase 4 ShipStation label carrier-nickname slice added on 2026-05-28:
 - `src/connectors/carrier/shipstation.ts` owns the ShipStation `/v2/carriers` call used for nickname resolution.
 - ShipStation label creation and label-from-rate calls in `src/services/labels.ts` remain transitional debt until the label purchase slice moves fully through CarrierConnector orchestration.
 
+Phase 4 ShipStation legacy label-purchase slice added on 2026-05-28:
+
+- `src/services/labels.ts` now routes normal V2 label creation plus legacy label-from-rate and label-from-shipment helpers through `createCarrierLabel('shipstation', ...)`.
+- `src/connectors/carrier/shipstation.ts` owns the ShipStation `/v2/labels/rates/{rateId}` and `/v2/labels` API calls used by those helpers.
+- `src/services/labels.ts` still owns PrepShip shipment persistence, fulfillment outbox enqueueing, inventory/package deductions, and label recovery behavior.
+
 Phase 5: Tighten guards.
 
 - Remove files from the transitional debt list as they are migrated.

@@ -257,6 +257,18 @@ assert(
     !labelsService.includes("ssRequest<CarriersResponse>('/v2/carriers'"),
   'labels service carrier nickname resolver must use CarrierConnector orchestration, not direct ShipStation /v2/carriers calls',
 );
+assert(
+  labelsService.includes('createCarrierLabel') &&
+    !labelsService.includes('ssRequest<Label>(`/v2/labels/rates/${input.rateId}`') &&
+    !labelsService.includes("ssRequest<Label>('/v2/labels'"),
+  'labels service ShipStation label purchase helpers must use CarrierConnector orchestration, not direct ShipStation label API calls',
+);
+assert(
+  shipStationCarrierConnector.includes('/v2/labels/rates/') &&
+    shipStationCarrierConnector.includes("'/v2/labels'") &&
+    shipStationCarrierConnector.includes('ssRequest<Label>'),
+  'ShipStation CarrierConnector must own legacy ShipStation label purchase API calls',
+);
 
 assert.equal(
   packageJson.scripts?.['test:ps-032-connector-orchestrators'],

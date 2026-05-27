@@ -26,8 +26,7 @@ import {
 } from './mock-label-generator';
 import { deductInventoryForOrder, deductPackageForShipment } from './fulfillment-deductions';
 import { packages } from '../db/schema/packages';
-import { carrierConnectors } from '../connectors/registry';
-import { listCarrierAccounts } from './carrier-connector-orchestrator';
+import { createCarrierLabel, listCarrierAccounts } from './carrier-connector-orchestrator';
 import {
   enqueueShipmentConfirmation,
   ensureFulfillmentSchema,
@@ -443,11 +442,11 @@ export type CreateFromRateInput = {
 };
 
 export async function createLabelFromRate(input: CreateFromRateInput) {
-  const label = await ssRequest<Label>(`/v2/labels/rates/${input.rateId}`, {
-    method: 'POST',
+  const label = await createCarrierLabel('shipstation', {
+    rateId: input.rateId,
     body: { validate_address: 'no_validation' },
     dedupeKey: `label:rate:${input.rateId}`,
-  });
+  }) as Label;
   return persistLabelFromRate(label, input.orderId, input.clientId);
 }
 
@@ -520,10 +519,7 @@ export async function createLabelFromShipment(input: CreateFromShipmentInput) {
     packages: [parcel],
   };
 
-  const label = await ssRequest<Label>('/v2/labels', {
-    method: 'POST',
-    body: { shipment },
-  });
+  const label = await createCarrierLabel('shipstation', { shipment }) as Label;
   return persistLabelFromRate(label, input.orderId, input.clientId);
 }
 
@@ -1016,22 +1012,25 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
     throw new Error('shippingProviderId required for v2 label creation');
   }
 
-  const created = await timer.task('ShipStation createLabel connector', () => carrierConnectors.shipstation.createLabel({
-    apiKeyV2,
-    carrierId: `se-${body.shippingProviderId}`,
-    serviceCode: body.serviceCode,
-    packageCode: body.packageCode || serviceCodeFitsPackage(body.serviceCode),
-    weightOz: effectiveWeightOz,
-    length,
-    width,
-    height,
-    shipTo,
-    shipFrom,
-    confirmation: body.confirmation ?? null,
-    ssOrderId: order.id,
-    orderNumber: order.orderNumber ?? null,
-    testLabel: false,
-  }));
+  const created = await timer.task('ShipStation createLabel connector', async () => {
+    const label = await createCarrierLabel('shipstation', {
+      apiKeyV2,
+      carrierId: `se-${body.shippingProviderId}`,
+      serviceCode: body.serviceCode,
+      packageCode: body.packageCode || serviceCodeFitsPackage(body.serviceCode),
+      weightOz: effectiveWeightOz,
+      length,
+      width,
+      height,
+      shipTo,
+      shipFrom,
+      confirmation: body.confirmation ?? null,
+      ssOrderId: order.id,
+      orderNumber: order.orderNumber ?? null,
+      testLabel: false,
+    });
+    return label as CreatedExternalLabel;
+  });
 
   const localShipmentId = await timer.task('persistCreatedLabel', () => persistCreatedLabel({
     created,
