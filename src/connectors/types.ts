@@ -109,6 +109,8 @@ export type NormalizedStoreOrderStatusSyncResult = {
 
 export type CarrierRateInput = Record<string, unknown>;
 export type CarrierLabelInput = Record<string, unknown>;
+export type CarrierAccountListInput = Record<string, unknown>;
+export type NormalizedCarrierAccountListResult = Record<string, unknown>;
 export type NormalizedRate = Record<string, unknown>;
 export type NormalizedLabel = Record<string, unknown>;
 export type CarrierVoidInput = { labelId: string; trackingNumber?: string | null };
@@ -205,6 +207,7 @@ export interface CarrierConnector<
   createLabel(input: LabelInput): Promise<LabelResult>;
   voidLabel?(input: CarrierVoidInput): Promise<void | NormalizedCarrierVoidResult>;
   trackShipment?(input: CarrierTrackingInput): Promise<NormalizedTrackingStatus>;
+  listCarrierAccounts?(input: CarrierAccountListInput): Promise<NormalizedCarrierAccountListResult>;
 }
 
 export interface MarketplaceConfirmationConnector {

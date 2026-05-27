@@ -180,6 +180,12 @@ Phase 4 Amazon Shipping rate slice added on 2026-05-28:
 - `src/connectors/carrier/amazon-shipping.ts` owns Amazon LWA auth, SP-API shipping rate calls, request shaping, and rate normalization.
 - `api/carriers/rates.ts` still owns local Amazon raw-order lookup and remains transitional debt until all remaining rate providers are moved.
 
+Phase 4 ShipStation carrier-list slice added on 2026-05-28:
+
+- `src/routes/rates.ts` now routes `/rates/carriers` through `listCarrierAccounts('shipstation', ...)`.
+- `src/connectors/carrier/shipstation.ts` owns the ShipStation `/v2/carriers` API call for carrier account listing.
+- ShipStation rate estimation in `src/services/rates.ts` remains transitional debt until the cached rate engine is moved behind the carrier connector.
+
 Phase 5: Tighten guards.
 
 - Remove files from the transitional debt list as they are migrated.

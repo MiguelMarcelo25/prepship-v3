@@ -14,6 +14,8 @@ const storeOrchestrator = read('src/services/store-connector-orchestrator.ts');
 const carrierOrchestrator = read('src/services/carrier-connector-orchestrator.ts');
 const orderSync = read('src/services/order-sync.ts');
 const shipStationStoreConnector = read('src/connectors/store/shipstation.ts');
+const ratesRoute = read('src/routes/rates.ts');
+const shipStationCarrierConnector = read('src/connectors/carrier/shipstation.ts');
 const walmartOrdersRoute = read('api/carriers/walmart/orders.ts');
 const ebayOrdersRoute = read('api/carriers/ebay/orders.ts');
 const carrierRatesRoute = read('api/carriers/rates.ts');
@@ -80,6 +82,7 @@ for (const required of [
   'createCarrierLabel',
   'voidCarrierLabel',
   'trackCarrierShipment',
+  'listCarrierAccounts',
 ]) {
   assert(carrierOrchestrator.includes(required), `carrier connector orchestrator missing ${required}`);
 }
@@ -214,6 +217,15 @@ assert(
   amazonShippingCarrierConnector.includes('sellingpartnerapi-na.amazon.com/shipping/v2/shipments/rates') &&
     amazonShippingCarrierConnector.includes('getRates'),
   'Amazon Shipping CarrierConnector must own Amazon Shipping rate API calls',
+);
+assert(
+  ratesRoute.includes('listCarrierAccounts') && !ratesRoute.includes('ssRequest'),
+  'rates route carrier listing must use CarrierConnector orchestration, not direct ShipStation API calls',
+);
+assert(
+  shipStationCarrierConnector.includes('/v2/carriers') &&
+    shipStationCarrierConnector.includes('listCarrierAccounts'),
+  'ShipStation CarrierConnector must own ShipStation carrier account listing calls',
 );
 
 assert.equal(

@@ -5,6 +5,7 @@ import { and, eq, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { rateCache } from '../db/schema/rates';
 import { getCarrierAccountsForRateContext, getRates, rateCacheKey } from '../services/rates';
+import { listCarrierAccounts } from '../services/carrier-connector-orchestrator';
 import {
   getActiveBackfillJob,
   getBackfillJob,
@@ -12,8 +13,6 @@ import {
   getLatestBackfillJobSnapshot,
   startBackfillBestRates,
 } from '../services/rates-backfill';
-import { ssRequest } from '../lib/shipstation';
-import type { CarriersResponse } from '../lib/shipstation/types';
 import multiCarrierHandler from '../lib/imported-handlers/rates-multi';
 import { runNodeHandler } from '../lib/node-handler';
 import { hasAppPermission } from '../middleware/auth';
@@ -461,7 +460,7 @@ app.get('/cached', zValidator('query', cachedQuery), async (c) => {
 });
 
 app.get('/carriers', async (c) => {
-  const data = await ssRequest<CarriersResponse>('/v2/carriers', {
+  const data = await listCarrierAccounts('shipstation', {
     dedupeKey: 'carriers:list',
   });
   return c.json(data);

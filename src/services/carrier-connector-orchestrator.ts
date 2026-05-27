@@ -1,10 +1,12 @@
 import { resolveCarrierConnector } from '../connectors/carrier-resolution';
 import type {
   CarrierLabelInput,
+  CarrierAccountListInput,
   CarrierRateInput,
   CarrierTrackingInput,
   CarrierVoidInput,
   ConnectorCapability,
+  NormalizedCarrierAccountListResult,
   NormalizedCarrierLabelResult,
   NormalizedCarrierRateQuoteResult,
   NormalizedCarrierVoidResult,
@@ -73,4 +75,16 @@ export async function trackCarrierShipment(
   }
 
   return resolved.connector.trackShipment(input);
+}
+
+export async function listCarrierAccounts(
+  provider: string | null | undefined,
+  input: CarrierAccountListInput = {},
+): Promise<NormalizedCarrierAccountListResult> {
+  const resolved = resolveCarrierConnector(provider);
+  if (!resolved?.connector.listCarrierAccounts) {
+    throw missingCarrierConnector(provider, 'rates.quote');
+  }
+
+  return resolved.connector.listCarrierAccounts(input);
 }
