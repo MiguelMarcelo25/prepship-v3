@@ -232,6 +232,15 @@ assert(
   ratesService.includes('listCarrierAccounts') && !ratesService.includes("ssRequest<CarriersResponse>('/v2/carriers'"),
   'rates service carrier discovery must use CarrierConnector orchestration, not direct ShipStation /v2/carriers calls',
 );
+assert(
+  ratesService.includes('quoteCarrierRates') && !ratesService.includes("ssRequest<EstimateRate[] | { rates?: EstimateRate[] }>"),
+  'rates service ShipStation estimates must use CarrierConnector orchestration, not direct ShipStation /v2/rates/estimate calls',
+);
+assert(
+  shipStationCarrierConnector.includes('/v2/rates/estimate') &&
+    shipStationCarrierConnector.includes('ssRequest<'),
+  'ShipStation CarrierConnector must own ShipStation rate estimate API calls',
+);
 
 assert.equal(
   packageJson.scripts?.['test:ps-032-connector-orchestrators'],

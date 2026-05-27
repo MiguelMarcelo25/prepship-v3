@@ -5,7 +5,6 @@ import { clients } from '../db/schema/clients';
 import { rateCache } from '../db/schema/rates';
 import { settings } from '../db/schema/settings';
 import {
-  ssRequest,
   type Rate,
   type Address,
   type Parcel,
@@ -13,7 +12,7 @@ import {
 import type { CarriersResponse } from '../lib/shipstation/types';
 import { loadClientCredentials } from '../lib/shipstation/credentials';
 import { getDefaultShipFrom } from '../lib/ship-from';
-import { listCarrierAccounts } from './carrier-connector-orchestrator';
+import { listCarrierAccounts, quoteCarrierRates } from './carrier-connector-orchestrator';
 
 type Markup = { type: 'amount' | 'percent'; value: number };
 
@@ -598,16 +597,12 @@ async function fetchEstimateForCarrier(
   const confirmation = normalizeRateConfirmation(input.confirmation);
   if (confirmation) body.confirmation = confirmation;
   try {
-    const payload = await ssRequest<EstimateRate[] | { rates?: EstimateRate[] }>(
-      '/v2/rates/estimate',
-      {
-        method: 'POST',
-        body,
-        apiKey: input.apiKeyV2 ?? undefined,
-        dedupeKey: `rates-estimate:${carrier.carrier_id}:${rateCacheKey(input)}`,
-      },
-    );
-    const rates = Array.isArray(payload) ? payload : (payload.rates ?? []);
+    const payload = await quoteCarrierRates('shipstation', {
+      body,
+      apiKeyV2: input.apiKeyV2 ?? undefined,
+      dedupeKey: `rates-estimate:${carrier.carrier_id}:${rateCacheKey(input)}`,
+    });
+    const rates = payload.rates as EstimateRate[];
     // Ensure carrier metadata is on every row (ShipStation sometimes omits)
     const override = V2_CARRIER_ACCOUNT_OVERRIDES.get(carrier.carrier_id);
     for (const r of rates) {

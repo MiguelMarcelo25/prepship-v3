@@ -8,17 +8,33 @@ import { ssRequest } from '../../lib/shipstation';
 import type { CarriersResponse } from '../../lib/shipstation/types';
 import type { CarrierConnector } from '../../domain/fulfillment/types';
 
+type ShipStationRateEstimateInput = {
+  body?: Record<string, unknown>;
+  apiKeyV2?: string;
+  apiKey?: string;
+  dedupeKey?: string;
+};
+
 export function createShipStationCarrierConnector(): CarrierConnector<
-  unknown,
-  unknown,
+  ShipStationRateEstimateInput,
+  Record<string, unknown>,
   CreateExternalLabelInput,
   CreatedExternalLabel
 > {
   return {
     provider: 'shipstation',
     capabilities: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read'],
-    getRates: async () => {
-      throw new Error('ShipStation connector rates are handled by the existing rate service');
+    getRates: async (input) => {
+      const payload = await ssRequest<Array<Record<string, unknown>> | { rates?: Array<Record<string, unknown>> }>(
+        '/v2/rates/estimate',
+        {
+          method: 'POST',
+          body: input.body ?? {},
+          apiKey: input.apiKeyV2 ?? input.apiKey,
+          dedupeKey: input.dedupeKey,
+        },
+      );
+      return Array.isArray(payload) ? payload : (payload.rates ?? []);
     },
     createLabel: ssCreateLabel,
     voidLabel: async (input) => {
