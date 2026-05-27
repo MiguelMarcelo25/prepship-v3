@@ -138,6 +138,13 @@ Phase 4 Shipp rate slice added on 2026-05-27:
 - `src/connectors/carrier/shipp.ts` owns Shipp login, ZIP enrichment, quote API calls, and rate normalization.
 - `api/carriers/rates.ts` still owns order-context lookup and remains transitional debt until all remaining rate providers are moved.
 
+Phase 4 Walmart Shipping rate slice added on 2026-05-27:
+
+- `api/carriers/rates.ts` now routes Walmart Shipping rate quotes through `quoteCarrierRates('walmart_shipping', ...)`.
+- `src/connectors/carrier/walmart-shipping.ts` owns Walmart Shipping token, shipping-estimates API calls, request shaping, and rate normalization.
+- `src/connectors/store/walmart.ts` owns the Walmart customer-order lookup helper used to resolve purchaseOrderId for ShipStation-ingested Walmart orders.
+- `api/carriers/rates.ts` still owns database order-context lookup and remains transitional debt until the remaining rate providers are moved.
+
 Phase 5: Tighten guards.
 
 - Remove files from the transitional debt list as they are migrated.

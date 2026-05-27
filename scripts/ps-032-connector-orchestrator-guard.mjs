@@ -22,6 +22,7 @@ const ebayStoreConnector = read('src/connectors/store/ebay.ts');
 const upsCarrierConnector = read('src/connectors/carrier/ups.ts');
 const easyPostCarrierConnector = read('src/connectors/carrier/easypost.ts');
 const shippCarrierConnector = read('src/connectors/carrier/shipp.ts');
+const walmartShippingCarrierConnector = read('src/connectors/carrier/walmart-shipping.ts');
 const packageJson = JSON.parse(read('package.json'));
 
 assert(
@@ -142,6 +143,17 @@ assert(
   shippCarrierConnector.includes('https://shipp.to/api') &&
     shippCarrierConnector.includes('getRates'),
   'Shipp CarrierConnector must own Shipp rate API calls',
+);
+assert(
+  !carrierRatesRoute.includes('ratesFromWalmartShipping') &&
+    !carrierRatesRoute.includes('getWalmartAccessTokenForRates') &&
+    !carrierRatesRoute.includes('marketplace.walmartapis.com'),
+  'Walmart Shipping rates must route through CarrierConnector/StoreConnector-owned code, not direct Walmart API calls from api/carriers/rates.ts',
+);
+assert(
+  walmartShippingCarrierConnector.includes('/v3/shipping/labels/shipping-estimates') &&
+    walmartShippingCarrierConnector.includes('getRates'),
+  'Walmart Shipping CarrierConnector must own Walmart Shipping Estimates API calls',
 );
 
 assert.equal(

@@ -99,6 +99,53 @@ function normalizeWalmartOrder(raw: unknown, accountId = 'walmart'): NormalizedO
   };
 }
 
+export async function lookupWalmartOrderByCustomerOrderId(
+  creds: Record<string, unknown>,
+  customerOrderId: string,
+): Promise<{ purchaseOrderId: string; rawOrder: any } | null> {
+  const trimmed = customerOrderId.trim();
+  if (!/^\d{8,}$/.test(trimmed)) return null;
+
+  let token: string;
+  try {
+    token = await getWalmartAccessToken(creds);
+  } catch (err) {
+    console.warn('[walmart connector] token lookup failed:', err instanceof Error ? err.message : err);
+    return null;
+  }
+
+  const url = new URL('https://marketplace.walmartapis.com/v3/orders');
+  url.searchParams.set('customerOrderId', trimmed);
+  url.searchParams.set('productInfo', 'true');
+
+  try {
+    const res = await timedFetch('walmart.order-lookup', url.toString(), {
+      headers: {
+        ...walmartHeaders(creds, token),
+        'WM_MARKET': 'us',
+      },
+    });
+    if (!res.ok) {
+      console.warn(`[walmart connector] order lookup ${res.status}: ${await readWalmartError(res)}`);
+      return null;
+    }
+    const data = await res.json() as { list?: { elements?: { order?: unknown[] | unknown } } };
+    const elementsRaw = (data?.list?.elements as { order?: unknown[] | unknown } | undefined)?.order;
+    const elements = Array.isArray(elementsRaw)
+      ? elementsRaw
+      : elementsRaw
+        ? [elementsRaw]
+        : [];
+    const match = elements.find((order) => firstString((order as any)?.customerOrderId) === trimmed) ?? elements[0];
+    const purchaseOrderId = firstString((match as any)?.purchaseOrderId);
+    if (!purchaseOrderId) return null;
+    return { purchaseOrderId, rawOrder: match };
+  } catch (err) {
+    console.warn('[walmart connector] order lookup error:', err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
 function walmartShipDateTime(shipDate: string | null | undefined): number {
   const parsed = shipDate ? Date.parse(shipDate) : NaN;
   // Walmart's JSON shipping API rejects ISO strings here; it expects epoch ms.
