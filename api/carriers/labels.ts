@@ -32,6 +32,7 @@ import { timedFetch } from '../../src/lib/http/timing.js';
 import { persistDirectCarrierLabel } from '../../src/services/direct-label-persistence.js';
 import { assertFulfillmentSchemaReady } from '../../src/services/fulfillment/schema-readiness.js';
 import { createCarrierLabel } from '../../src/services/carrier-connector-orchestrator.js';
+import { confirmStoreShipment } from '../../src/services/store-connector-orchestrator.js';
 
 let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 function getJwks() {
@@ -649,121 +650,6 @@ function walmartTrackingUrl(carrierName: string, trackingNumber: string): string
   return '';
 }
 
-function walmartShipmentMethodCode(rawOrder: any): string {
-  return firstString(rawOrder?.shippingInfo?.methodCode, 'VALUE');
-}
-
-function walmartShipmentStatusQuantity(line: any): Record<string, string> {
-  const statuses = Array.isArray(line?.orderLineStatuses?.orderLineStatus)
-    ? line.orderLineStatuses.orderLineStatus
-    : [];
-  const statusQuantity = statuses.find((status: any) => status?.statusQuantity)?.statusQuantity;
-  const quantity = statusQuantity ?? line?.orderLineQuantity ?? {};
-  return {
-    unitOfMeasurement: firstString(quantity?.unitOfMeasurement, 'EACH'),
-    amount: firstString(quantity?.amount, '1'),
-  };
-}
-
-function walmartShipmentLineNumber(line: any): string {
-  return firstString(line?.lineNumber);
-}
-
-function walmartShipmentConfirmationBody(
-  rawOrder: any,
-  input: {
-    carrierName: string;
-    methodCode: string;
-    shipDateTime: number;
-    trackingNumber: string;
-    trackingUrl: string;
-  },
-): { orderShipment: { orderLines: { orderLine: Array<Record<string, unknown>> } } } {
-  const orderLines = Array.isArray(rawOrder?.orderLines?.orderLine)
-    ? rawOrder.orderLines.orderLine
-    : [];
-  const orderLine = orderLines
-    .filter((line: any) => {
-      const statuses = Array.isArray(line?.orderLineStatuses?.orderLineStatus)
-        ? line.orderLineStatuses.orderLineStatus
-        : [];
-      return walmartShipmentLineNumber(line) && (!statuses.length || statuses.some((status: any) => !/cancel/i.test(String(status?.status ?? ''))));
-    })
-    .map((line: any) => ({
-      lineNumber: walmartShipmentLineNumber(line),
-      orderLineStatuses: {
-        orderLineStatus: [
-          {
-            status: 'Shipped',
-            statusQuantity: walmartShipmentStatusQuantity(line),
-            trackingInfo: {
-              shipDateTime: input.shipDateTime,
-              carrierName: { carrier: input.carrierName },
-              methodCode: input.methodCode,
-              trackingNumber: input.trackingNumber,
-              ...(input.trackingUrl ? { trackingURL: input.trackingUrl } : {}),
-            },
-          },
-        ],
-      },
-    }));
-  return {
-    orderShipment: {
-      orderLines: {
-        orderLine,
-      },
-    },
-  };
-}
-
-async function confirmWalmartOrderShipped(
-  creds: Record<string, unknown>,
-  token: string,
-  input: {
-    purchaseOrderId: string;
-    rawOrder: any;
-    carrierName: string;
-    trackingNumber: string;
-    trackingUrl: string;
-    shipDate?: string | null;
-  },
-): Promise<any> {
-  if (!firstString(input.trackingNumber)) {
-    throw new Error('Walmart shipment confirmation missing tracking number');
-  }
-  const methodCode = walmartShipmentMethodCode(input.rawOrder);
-  const parsedShipDate = input.shipDate ? Date.parse(input.shipDate) : NaN;
-  const shipmentBody = walmartShipmentConfirmationBody(input.rawOrder, {
-    carrierName: input.carrierName,
-    methodCode,
-    shipDateTime: Number.isFinite(parsedShipDate) ? parsedShipDate : Date.now(),
-    trackingNumber: input.trackingNumber,
-    trackingUrl: input.trackingUrl,
-  });
-  if (!shipmentBody.orderShipment.orderLines.orderLine.length) {
-    throw new Error('Walmart shipment confirmation has no shippable order lines');
-  }
-
-  const res = await timedFetch('api.carriers.labels.external', 
-    `https://marketplace.walmartapis.com/v3/orders/${encodeURIComponent(input.purchaseOrderId)}/shipping`,
-    {
-      method: 'POST',
-      headers: walmartMarketplaceHeaders(creds, token, 'application/json', true),
-      body: JSON.stringify(shipmentBody),
-    },
-  );
-  if (!res.ok) {
-    throw new Error(`Walmart Ship Confirm ${res.status}: ${await readWalmartError(res)}`);
-  }
-  const text = await res.text().catch(() => '');
-  if (!text) return { ok: true };
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { ok: true, body: text.slice(0, 500) };
-  }
-}
-
 export function __test_selectWalmartOrderByCustomerOrderId(data: unknown, customerOrderId: string) {
   return selectWalmartOrderByCustomerOrderId(data, customerOrderId);
 }
@@ -886,15 +772,26 @@ async function confirmWalmartSourceOrderAfterLabelSql(
     storeAccountId: args.storeAccountId,
     fallbackCreds: args.fallbackCreds,
   });
-  const token = await getWalmartAccessTokenForLabels(loaded.credentials);
-  const raw = await confirmWalmartOrderShipped(loaded.credentials, token, {
-    purchaseOrderId,
-    rawOrder: args.rawOrder,
-    carrierName: args.carrierName,
+  const confirmation = await confirmStoreShipment('walmart', {
+    orderId: args.orderId,
+    shipmentId: args.shipmentId,
+    externalOrderId: `walmart-${purchaseOrderId}`,
+    clientId: null,
+    orderNumber: null,
     trackingNumber: args.trackingNumber,
-    trackingUrl: args.trackingUrl,
-    shipDate: args.shipDate,
+    carrierCode: args.carrierName,
+    shipDate: args.shipDate ?? new Date().toISOString().slice(0, 10),
+    credentials: loaded.credentials as Record<string, string | null | undefined>,
+    payload: {
+      purchaseOrderId,
+      rawOrder: args.rawOrder,
+      carrierName: args.carrierName,
+      trackingUrl: args.trackingUrl,
+    },
   });
+  if (!confirmation.ok) {
+    throw new Error(confirmation.message ?? 'Walmart shipment confirmation failed');
+  }
   await markWalmartConfirmationAttemptSql(sql, {
     orderId: args.orderId,
     shipmentId: args.shipmentId,
@@ -904,7 +801,7 @@ async function confirmWalmartSourceOrderAfterLabelSql(
   return {
     confirmed: true,
     error: null,
-    raw,
+    raw: confirmation.raw,
     storeAccountId: loaded.storeAccountId,
     credentialSource: loaded.source,
   };

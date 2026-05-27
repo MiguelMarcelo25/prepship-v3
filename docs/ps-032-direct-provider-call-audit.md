@@ -241,6 +241,12 @@ Phase 4 Walmart Shipping direct-label slice added on 2026-05-28:
 - `src/connectors/carrier/walmart-shipping.ts` owns Walmart Shipping label estimates, label creation, label download fallback paths, and label response extraction.
 - The labels route still owns local order-context lookup, order editability checks, direct-label persistence, marketplace outbox enqueueing, Walmart post-label confirmation recovery, and response shaping.
 
+Phase 4 Walmart post-label confirmation slice added on 2026-05-28:
+
+- `api/carriers/labels.ts` now routes immediate Walmart post-label marketplace confirmation through `confirmStoreShipment('walmart', ...)`.
+- `src/connectors/store/walmart.ts` remains the owner of the Walmart `/v3/orders/{purchaseOrderId}/shipping` marketplace confirmation call.
+- The labels route still owns local shipment/outbox status updates after the StoreConnector confirmation result.
+
 Phase 5: Tighten guards.
 
 - Remove files from the transitional debt list as they are migrated.

@@ -122,6 +122,17 @@ assert(
   'Walmart StoreConnector must own Walmart order API import calls',
 );
 assert(
+  carrierLabelsRoute.includes("confirmStoreShipment('walmart'") &&
+    !carrierLabelsRoute.includes('confirmWalmartOrderShipped') &&
+    !carrierLabelsRoute.includes('/v3/orders/${encodeURIComponent(input.purchaseOrderId)}/shipping'),
+  'Walmart post-label marketplace confirmation must route through StoreConnector orchestration, not direct Walmart confirmation calls from api/carriers/labels.ts',
+);
+assert(
+  walmartStoreConnector.includes('/v3/orders/${encodeURIComponent(purchaseOrderId)}/shipping') &&
+    walmartStoreConnector.includes('confirmShipment'),
+  'Walmart StoreConnector must own Walmart marketplace shipment confirmation API calls',
+);
+assert(
   ebayStoreConnector.includes('api.ebay.com') &&
     ebayStoreConnector.includes('importOrders'),
   'eBay StoreConnector must own eBay order API import calls',
