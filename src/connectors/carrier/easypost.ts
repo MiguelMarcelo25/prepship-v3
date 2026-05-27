@@ -106,14 +106,108 @@ async function ratesFromEasyPost(input: Record<string, unknown>): Promise<EasyPo
     .sort((a, b) => a.cost - b.cost);
 }
 
+async function createLabelEasyPost(input: Record<string, unknown>): Promise<{
+  trackingNumber: string;
+  labelUrl: string;
+  cost: number;
+  currency: string;
+  shipmentId: string;
+  raw: unknown;
+}> {
+  const creds = input.credentials && typeof input.credentials === 'object'
+    ? input.credentials as Record<string, unknown>
+    : {};
+  const apiKey = firstString(creds.apiKey);
+  if (!apiKey) throw new Error('EasyPost apiKey required');
+  const basic = Buffer.from(`${apiKey}:`).toString('base64');
+  const headers = {
+    Authorization: `Basic ${basic}`,
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  };
+  const shipFrom = input.shipFrom as Record<string, unknown>;
+  const shipTo = input.shipTo as Record<string, unknown>;
+
+  const shipBody = {
+    shipment: {
+      from_address: {
+        name: shipFrom.name,
+        street1: shipFrom.street1,
+        city: shipFrom.city,
+        state: shipFrom.state,
+        zip: shipFrom.zip,
+        country: shipFrom.country,
+        phone: shipFrom.phone,
+      },
+      to_address: {
+        name: shipTo.name,
+        street1: shipTo.street1,
+        street2: shipTo.street2 || '',
+        city: shipTo.city,
+        state: shipTo.state,
+        zip: shipTo.zip,
+        country: shipTo.country,
+        phone: shipTo.phone,
+      },
+      parcel: {
+        length: Number(input.dimsL ?? 0),
+        width: Number(input.dimsW ?? 0),
+        height: Number(input.dimsH ?? 0),
+        weight: Number(input.weightOz ?? 16),
+      },
+    },
+  };
+  const createRes = await timedFetch('easypost.labels', 'https://api.easypost.com/v2/shipments', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(shipBody),
+  });
+  if (!createRes.ok) {
+    const t = await createRes.text().then((s) => s.slice(0, 600)).catch(() => '');
+    throw new Error(`EasyPost create-shipment ${createRes.status}: ${t}`);
+  }
+  const shipment = (await createRes.json()) as any;
+
+  const rates: any[] = Array.isArray(shipment?.rates) ? shipment.rates : [];
+  if (rates.length === 0) throw new Error('EasyPost shipment has no rates - check carrier connections in EasyPost dashboard');
+  const wantSvc = String(input.serviceCode ?? '').toLowerCase();
+  let rate =
+    rates.find((r) => `${r.carrier} ${r.service}`.toLowerCase() === wantSvc) ??
+    rates.find((r) => String(r.service).toLowerCase() === wantSvc) ??
+    rates.find((r) => `${r.carrier}_${r.service}`.toLowerCase() === wantSvc.replace(/\s+/g, '_'));
+  if (!rate) {
+    rate = rates.reduce((cheapest: any, r: any) =>
+      Number(r.rate) < Number(cheapest.rate) ? r : cheapest,
+    rates[0]);
+  }
+
+  const buyRes = await timedFetch('easypost.labels', `https://api.easypost.com/v2/shipments/${shipment.id}/buy`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ rate: { id: rate.id } }),
+  });
+  if (!buyRes.ok) {
+    const t = await buyRes.text().then((s) => s.slice(0, 600)).catch(() => '');
+    throw new Error(`EasyPost buy-shipment ${buyRes.status}: ${t}`);
+  }
+  const purchased = (await buyRes.json()) as any;
+
+  return {
+    trackingNumber: String(purchased.tracking_code ?? ''),
+    labelUrl: String(purchased.postage_label?.label_url ?? ''),
+    cost: Number(purchased.selected_rate?.rate ?? rate.rate ?? 0),
+    currency: String(purchased.selected_rate?.currency ?? rate.currency ?? 'USD'),
+    shipmentId: String(purchased.id ?? shipment.id),
+    raw: purchased,
+  };
+}
+
 export function createEasyPostCarrierConnector(): CarrierConnector {
   return {
     provider: 'easypost',
     capabilities: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read'],
     getRates: ratesFromEasyPost,
-    createLabel: async () => {
-      throw new Error('EasyPost labels are handled by api/carriers/labels.ts');
-    },
+    createLabel: createLabelEasyPost,
   };
 }
 

@@ -32,6 +32,7 @@ import postgres from 'postgres';
 import { timedFetch } from '../../src/lib/http/timing.js';
 import { persistDirectCarrierLabel } from '../../src/services/direct-label-persistence.js';
 import { assertFulfillmentSchemaReady } from '../../src/services/fulfillment/schema-readiness.js';
+import { createCarrierLabel } from '../../src/services/carrier-connector-orchestrator.js';
 
 let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 function getJwks() {
@@ -180,29 +181,6 @@ function readBody(req: any): Promise<unknown> {
 // ─── UPS access-token helper (mirrors the one in rates.ts; we duplicate
 //     to keep this file self-contained — the function is short and the
 //     duplication is preferable to factoring out a shared module).
-async function getUpsAccessToken(creds: Record<string, unknown>): Promise<string> {
-  const clientId = String(creds?.clientId ?? '').trim();
-  const clientSecret = String(creds?.clientSecret ?? '').trim();
-  if (!clientId || !clientSecret) throw new Error('UPS clientId + clientSecret required');
-  const basic = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
-  const res = await timedFetch('api.carriers.labels.external', 'https://onlinetools.ups.com/security/v1/oauth/token', {
-    method: 'POST',
-    headers: {
-      Authorization: `Basic ${basic}`,
-      'Content-Type': 'application/x-www-form-urlencoded',
-      Accept: 'application/json',
-    },
-    body: 'grant_type=client_credentials',
-  });
-  if (!res.ok) {
-    const t = await res.text().then((s) => s.slice(0, 200)).catch(() => '');
-    throw new Error(`UPS OAuth ${res.status}: ${t || res.statusText}`);
-  }
-  const data = (await res.json()) as { access_token?: string };
-  if (!data?.access_token) throw new Error('UPS OAuth response missing access_token');
-  return data.access_token;
-}
-
 // ─── Resolve a ship-to address from various sources ──────────────────
 // Order of preference: explicit body.shipTo → marketplace order's saved
 // raw payload → throw (we genuinely need an address).
@@ -278,249 +256,7 @@ function resolveShipFrom(creds: Record<string, unknown>) {
   };
 }
 
-// ─── UPS label purchase via /api/shipments/v2403/ship ───────────────
-// Returns: { trackingNumber, labelDataBase64, cost, currency }
-// UPS returns the label as base64 GIF. For browser display we wrap it
-// as a data: URL — Vercel function size limits prevent us from saving
-// the bytes anywhere else without a separate object-store dependency.
-async function buyLabelUps(
-  creds: Record<string, unknown>,
-  input: {
-    weightOz: number;
-    dimsL: number; dimsW: number; dimsH: number;
-    serviceCode: string; // e.g. "03" = Ground, "01" = Next Day Air
-    shipFrom: any;
-    shipTo: any;
-  },
-): Promise<{ trackingNumber: string; labelUrl: string; cost: number; currency: string; raw: any }> {
-  const accountNumber = String(creds?.accountNumber ?? '').trim();
-  if (!accountNumber) throw new Error('UPS accountNumber required');
-  const token = await getUpsAccessToken(creds);
-
-  const weightLb = Math.max(0.1, Math.round((input.weightOz / 16) * 10) / 10);
-
-  const body = {
-    ShipmentRequest: {
-      Request: {
-        SubVersion: '2403',
-        RequestOption: 'nonvalidate',
-        TransactionReference: { CustomerContext: 'prepship-label' },
-      },
-      Shipment: {
-        Description: 'Merchandise',
-        Shipper: {
-          Name: input.shipFrom.name,
-          AttentionName: input.shipFrom.name,
-          ShipperNumber: accountNumber,
-          Phone: { Number: input.shipFrom.phone || '0000000000' },
-          Address: {
-            AddressLine: [input.shipFrom.street1],
-            City: input.shipFrom.city,
-            StateProvinceCode: input.shipFrom.state,
-            PostalCode: input.shipFrom.zip,
-            CountryCode: input.shipFrom.country,
-          },
-        },
-        ShipTo: {
-          Name: input.shipTo.name,
-          AttentionName: input.shipTo.name,
-          Phone: { Number: input.shipTo.phone || '0000000000' },
-          Address: {
-            AddressLine: [input.shipTo.street1, input.shipTo.street2].filter(Boolean),
-            City: input.shipTo.city,
-            StateProvinceCode: input.shipTo.state,
-            PostalCode: input.shipTo.zip,
-            CountryCode: input.shipTo.country,
-          },
-        },
-        ShipFrom: {
-          Name: input.shipFrom.name,
-          AttentionName: input.shipFrom.name,
-          Phone: { Number: input.shipFrom.phone || '0000000000' },
-          Address: {
-            AddressLine: [input.shipFrom.street1],
-            City: input.shipFrom.city,
-            StateProvinceCode: input.shipFrom.state,
-            PostalCode: input.shipFrom.zip,
-            CountryCode: input.shipFrom.country,
-          },
-        },
-        PaymentInformation: {
-          ShipmentCharge: {
-            Type: '01', // 01 = transportation charges
-            BillShipper: { AccountNumber: accountNumber },
-          },
-        },
-        Service: { Code: input.serviceCode },
-        Package: {
-          Description: 'Merchandise',
-          Packaging: { Code: '02' }, // 02 = customer-supplied
-          Dimensions: {
-            UnitOfMeasurement: { Code: 'IN' },
-            Length: String(input.dimsL),
-            Width: String(input.dimsW),
-            Height: String(input.dimsH),
-          },
-          PackageWeight: {
-            UnitOfMeasurement: { Code: 'LBS' },
-            Weight: String(weightLb),
-          },
-        },
-      },
-      LabelSpecification: {
-        LabelImageFormat: { Code: 'GIF' },
-        HTTPUserAgent: 'Mozilla/4.5',
-      },
-    },
-  };
-
-  const res = await timedFetch('api.carriers.labels.external', 'https://onlinetools.ups.com/api/shipments/v2403/ship', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-      transId: `prepship-${Date.now().toString(36)}`,
-      transactionSrc: 'prepship',
-    },
-    body: JSON.stringify(body),
-  });
-  const text = await res.text();
-  let data: any = null;
-  try { data = JSON.parse(text); } catch { /* leave as text */ }
-  if (!res.ok) {
-    const errMsg = data?.response?.errors?.[0]?.message ?? text.slice(0, 600);
-    throw new Error(`UPS Shipping ${res.status}: ${errMsg}`);
-  }
-
-  const shipResult = data?.ShipmentResponse?.ShipmentResults;
-  const trackingNumber =
-    shipResult?.PackageResults?.TrackingNumber ??
-    shipResult?.PackageResults?.[0]?.TrackingNumber ??
-    null;
-  const labelImageBase64 =
-    shipResult?.PackageResults?.ShippingLabel?.GraphicImage ??
-    shipResult?.PackageResults?.[0]?.ShippingLabel?.GraphicImage ??
-    null;
-  const cost = Number(
-    shipResult?.ShipmentCharges?.TotalCharges?.MonetaryValue ?? 0,
-  );
-  const currency = String(
-    shipResult?.ShipmentCharges?.TotalCharges?.CurrencyCode ?? 'USD',
-  );
-
-  if (!trackingNumber) throw new Error('UPS Shipping response missing TrackingNumber');
-  if (!labelImageBase64) throw new Error('UPS Shipping response missing label image');
-
-  // Wrap the GIF base64 as a data URL so the FE can directly embed/print
-  // without an extra fetch round-trip. UPS labels are ~30-50KB so this
-  // stays well under any reasonable URL length limit for fetch responses.
-  const labelUrl = `data:image/gif;base64,${labelImageBase64}`;
-
-  return { trackingNumber, labelUrl, cost, currency, raw: data };
-}
-
-// ─── EasyPost label purchase: POST /shipments/{id}/buy ───────────────
-// EasyPost uses a two-step flow: rate quote returns a shipment_id + rate
-// objects with their own ids; buying selects which rate to commit. Since
-// our /carriers/rates endpoint discards the EasyPost ids before
-// returning, we re-quote here to get fresh ids, then buy. Costs nothing
-// extra (rate quotes are free) and avoids stale-id failures.
-async function buyLabelEasyPost(
-  creds: Record<string, unknown>,
-  input: {
-    weightOz: number;
-    dimsL: number; dimsW: number; dimsH: number;
-    serviceCode: string; // e.g. "USPS Priority" — we match on carrier+service
-    shipFrom: any;
-    shipTo: any;
-  },
-): Promise<{ trackingNumber: string; labelUrl: string; cost: number; currency: string; shipmentId: string; raw: any }> {
-  const apiKey = String(creds?.apiKey ?? '').trim();
-  if (!apiKey) throw new Error('EasyPost apiKey required');
-  const basic = Buffer.from(`${apiKey}:`).toString('base64');
-  const headers = {
-    Authorization: `Basic ${basic}`,
-    'Content-Type': 'application/json',
-    Accept: 'application/json',
-  };
-
-  // Step 1: create shipment, get rate ids
-  const shipBody = {
-    shipment: {
-      from_address: {
-        name: input.shipFrom.name,
-        street1: input.shipFrom.street1,
-        city: input.shipFrom.city,
-        state: input.shipFrom.state,
-        zip: input.shipFrom.zip,
-        country: input.shipFrom.country,
-        phone: input.shipFrom.phone,
-      },
-      to_address: {
-        name: input.shipTo.name,
-        street1: input.shipTo.street1,
-        street2: input.shipTo.street2 || '',
-        city: input.shipTo.city,
-        state: input.shipTo.state,
-        zip: input.shipTo.zip,
-        country: input.shipTo.country,
-        phone: input.shipTo.phone,
-      },
-      parcel: {
-        length: input.dimsL,
-        width: input.dimsW,
-        height: input.dimsH,
-        weight: input.weightOz,
-      },
-    },
-  };
-  const createRes = await timedFetch('api.carriers.labels.external', 'https://api.easypost.com/v2/shipments', {
-    method: 'POST', headers, body: JSON.stringify(shipBody),
-  });
-  if (!createRes.ok) {
-    const t = await createRes.text().then((s) => s.slice(0, 600)).catch(() => '');
-    throw new Error(`EasyPost create-shipment ${createRes.status}: ${t}`);
-  }
-  const shipment = (await createRes.json()) as any;
-
-  // Step 2: pick the rate matching serviceCode (or cheapest if no match)
-  const rates: any[] = Array.isArray(shipment?.rates) ? shipment.rates : [];
-  if (rates.length === 0) throw new Error('EasyPost shipment has no rates — check carrier connections in EasyPost dashboard');
-  const wantSvc = String(input.serviceCode ?? '').toLowerCase();
-  let rate =
-    rates.find((r) => `${r.carrier} ${r.service}`.toLowerCase() === wantSvc) ??
-    rates.find((r) => String(r.service).toLowerCase() === wantSvc) ??
-    rates.find((r) => `${r.carrier}_${r.service}`.toLowerCase() === wantSvc.replace(/\s+/g, '_'));
-  if (!rate) {
-    // Fallback: pick the cheapest. The user gets *some* label rather than
-    // a hard failure, and the response includes which service was actually
-    // used so they can adjust if needed.
-    rate = rates.reduce((cheapest: any, r: any) =>
-      Number(r.rate) < Number(cheapest.rate) ? r : cheapest,
-    rates[0]);
-  }
-
-  // Step 3: buy the chosen rate
-  const buyRes = await timedFetch('api.carriers.labels.external', `https://api.easypost.com/v2/shipments/${shipment.id}/buy`, {
-    method: 'POST', headers, body: JSON.stringify({ rate: { id: rate.id } }),
-  });
-  if (!buyRes.ok) {
-    const t = await buyRes.text().then((s) => s.slice(0, 600)).catch(() => '');
-    throw new Error(`EasyPost buy-shipment ${buyRes.status}: ${t}`);
-  }
-  const purchased = (await buyRes.json()) as any;
-
-  return {
-    trackingNumber: String(purchased.tracking_code ?? ''),
-    labelUrl: String(purchased.postage_label?.label_url ?? ''),
-    cost: Number(purchased.selected_rate?.rate ?? rate.rate ?? 0),
-    currency: String(purchased.selected_rate?.currency ?? rate.currency ?? 'USD'),
-    shipmentId: String(purchased.id ?? shipment.id),
-    raw: purchased,
-  };
-}
-
+// Direct carrier label HTTP calls are owned by CarrierConnector implementations.
 const SHIPP_PROVIDER_ID_OFFSET = 10_000_000;
 
 function normalizeProviderKey(value: unknown): string {
@@ -2881,7 +2617,8 @@ export default async function handler(req: any, res: any): Promise<void> {
       // UPS service code default: "03" = Ground. Caller can pass
       // serviceCode like "01" (Next Day Air), "02" (2nd Day Air), etc.
       directServiceCode = String(body?.serviceCode ?? '03');
-      result = await buyLabelUps(creds, {
+      result = await createCarrierLabel('ups', {
+        credentials: creds,
         weightOz, dimsL, dimsW, dimsH, serviceCode: directServiceCode, shipFrom, shipTo,
       });
     } else if (providerKey === 'easypost') {
@@ -2901,7 +2638,8 @@ export default async function handler(req: any, res: any): Promise<void> {
         return;
       }
       directServiceCode = String(body?.serviceCode ?? 'USPS Priority');
-      result = await buyLabelEasyPost(creds, {
+      result = await createCarrierLabel('easypost', {
+        credentials: creds,
         weightOz, dimsL, dimsW, dimsH, serviceCode: directServiceCode, shipFrom, shipTo,
       });
     } else {

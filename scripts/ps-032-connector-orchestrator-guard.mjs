@@ -23,6 +23,7 @@ const shipStationCarrierConnector = read('src/connectors/carrier/shipstation.ts'
 const walmartOrdersRoute = read('api/carriers/walmart/orders.ts');
 const ebayOrdersRoute = read('api/carriers/ebay/orders.ts');
 const carrierRatesRoute = read('api/carriers/rates.ts');
+const carrierLabelsRoute = read('api/carriers/labels.ts');
 const walmartStoreConnector = read('src/connectors/store/walmart.ts');
 const ebayStoreConnector = read('src/connectors/store/ebay.ts');
 const upsCarrierConnector = read('src/connectors/carrier/ups.ts');
@@ -137,6 +138,17 @@ assert(
   'UPS CarrierConnector must own UPS rate API calls',
 );
 assert(
+  carrierLabelsRoute.includes('createCarrierLabel') &&
+    !carrierLabelsRoute.includes('buyLabelUps') &&
+    !carrierLabelsRoute.includes('https://onlinetools.ups.com/api/shipments/v2403/ship'),
+  'UPS labels must route through CarrierConnector orchestration, not direct UPS label API calls from api/carriers/labels.ts',
+);
+assert(
+  upsCarrierConnector.includes('https://onlinetools.ups.com/api/shipments/v2403/ship') &&
+    !upsCarrierConnector.includes('UPS labels are handled by api/carriers/labels.ts'),
+  'UPS CarrierConnector must own UPS label API calls',
+);
+assert(
   !carrierRatesRoute.includes('ratesFromEasyPost') &&
     !carrierRatesRoute.includes('api.easypost.com'),
   'EasyPost rates must route through CarrierConnector orchestration, not direct EasyPost API calls from api/carriers/rates.ts',
@@ -145,6 +157,17 @@ assert(
   easyPostCarrierConnector.includes('api.easypost.com') &&
     easyPostCarrierConnector.includes('getRates'),
   'EasyPost CarrierConnector must own EasyPost rate API calls',
+);
+assert(
+  !carrierLabelsRoute.includes('buyLabelEasyPost') &&
+    !carrierLabelsRoute.includes('https://api.easypost.com/v2/shipments'),
+  'EasyPost labels must route through CarrierConnector orchestration, not direct EasyPost label API calls from api/carriers/labels.ts',
+);
+assert(
+  easyPostCarrierConnector.includes('/v2/shipments') &&
+    easyPostCarrierConnector.includes('/buy') &&
+    !easyPostCarrierConnector.includes('EasyPost labels are handled by api/carriers/labels.ts'),
+  'EasyPost CarrierConnector must own EasyPost label API calls',
 );
 assert(
   !carrierRatesRoute.includes('ratesFromShipp') &&

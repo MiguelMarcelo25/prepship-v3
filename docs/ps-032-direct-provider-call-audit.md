@@ -222,6 +222,13 @@ Phase 4 ShipStation legacy label-purchase slice added on 2026-05-28:
 - `src/connectors/carrier/shipstation.ts` owns the ShipStation `/v2/labels/rates/{rateId}` and `/v2/labels` API calls used by those helpers.
 - `src/services/labels.ts` still owns PrepShip shipment persistence, fulfillment outbox enqueueing, inventory/package deductions, and label recovery behavior.
 
+Phase 4 UPS/EasyPost direct-label slice added on 2026-05-28:
+
+- `api/carriers/labels.ts` now routes UPS and EasyPost direct-label purchases through `createCarrierLabel('ups' | 'easypost', ...)`.
+- `src/connectors/carrier/ups.ts` owns UPS OAuth plus `/api/shipments/v2403/ship` label creation.
+- `src/connectors/carrier/easypost.ts` owns EasyPost shipment creation and `/buy` label purchase.
+- The labels route still owns order editability checks, direct-label persistence, marketplace outbox enqueueing, and response shaping.
+
 Phase 5: Tighten guards.
 
 - Remove files from the transitional debt list as they are migrated.

@@ -137,14 +137,153 @@ async function ratesFromUps(input: Record<string, unknown>): Promise<Array<{ ser
   }).filter((r) => r.cost > 0);
 }
 
+async function createLabelUps(input: Record<string, unknown>): Promise<{
+  trackingNumber: string;
+  labelUrl: string;
+  cost: number;
+  currency: string;
+  raw: unknown;
+}> {
+  const creds = input.credentials && typeof input.credentials === 'object'
+    ? input.credentials as Record<string, unknown>
+    : {};
+  const accountNumber = String(creds?.accountNumber ?? '').trim();
+  if (!accountNumber) throw new Error('UPS accountNumber required');
+  const token = await getUpsAccessToken(creds);
+
+  const weightOz = Number(input.weightOz ?? 16);
+  const weightLb = Math.max(0.1, Math.round((weightOz / 16) * 10) / 10);
+  const dimsL = Number(input.dimsL ?? 0);
+  const dimsW = Number(input.dimsW ?? 0);
+  const dimsH = Number(input.dimsH ?? 0);
+  const serviceCode = String(input.serviceCode ?? '03');
+  const shipFrom = input.shipFrom as Record<string, unknown>;
+  const shipTo = input.shipTo as Record<string, unknown>;
+
+  const body = {
+    ShipmentRequest: {
+      Request: {
+        SubVersion: '2403',
+        RequestOption: 'nonvalidate',
+        TransactionReference: { CustomerContext: 'prepship-label' },
+      },
+      Shipment: {
+        Description: 'Merchandise',
+        Shipper: {
+          Name: shipFrom.name,
+          AttentionName: shipFrom.name,
+          ShipperNumber: accountNumber,
+          Phone: { Number: shipFrom.phone || '0000000000' },
+          Address: {
+            AddressLine: [shipFrom.street1],
+            City: shipFrom.city,
+            StateProvinceCode: shipFrom.state,
+            PostalCode: shipFrom.zip,
+            CountryCode: shipFrom.country,
+          },
+        },
+        ShipTo: {
+          Name: shipTo.name,
+          AttentionName: shipTo.name,
+          Phone: { Number: shipTo.phone || '0000000000' },
+          Address: {
+            AddressLine: [shipTo.street1, shipTo.street2].filter(Boolean),
+            City: shipTo.city,
+            StateProvinceCode: shipTo.state,
+            PostalCode: shipTo.zip,
+            CountryCode: shipTo.country,
+          },
+        },
+        ShipFrom: {
+          Name: shipFrom.name,
+          AttentionName: shipFrom.name,
+          Phone: { Number: shipFrom.phone || '0000000000' },
+          Address: {
+            AddressLine: [shipFrom.street1],
+            City: shipFrom.city,
+            StateProvinceCode: shipFrom.state,
+            PostalCode: shipFrom.zip,
+            CountryCode: shipFrom.country,
+          },
+        },
+        PaymentInformation: {
+          ShipmentCharge: {
+            Type: '01',
+            BillShipper: { AccountNumber: accountNumber },
+          },
+        },
+        Service: { Code: serviceCode },
+        Package: {
+          Description: 'Merchandise',
+          Packaging: { Code: '02' },
+          Dimensions: {
+            UnitOfMeasurement: { Code: 'IN' },
+            Length: String(dimsL),
+            Width: String(dimsW),
+            Height: String(dimsH),
+          },
+          PackageWeight: {
+            UnitOfMeasurement: { Code: 'LBS' },
+            Weight: String(weightLb),
+          },
+        },
+      },
+      LabelSpecification: {
+        LabelImageFormat: { Code: 'GIF' },
+        HTTPUserAgent: 'Mozilla/4.5',
+      },
+    },
+  };
+
+  const res = await timedFetch('ups.labels', 'https://onlinetools.ups.com/api/shipments/v2403/ship', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      transId: `prepship-${Date.now().toString(36)}`,
+      transactionSrc: 'prepship',
+    },
+    body: JSON.stringify(body),
+  });
+  const text = await res.text();
+  let data: any = null;
+  try { data = JSON.parse(text); } catch { /* leave as text */ }
+  if (!res.ok) {
+    const errMsg = data?.response?.errors?.[0]?.message ?? text.slice(0, 600);
+    throw new Error(`UPS Shipping ${res.status}: ${errMsg}`);
+  }
+
+  const shipResult = data?.ShipmentResponse?.ShipmentResults;
+  const trackingNumber =
+    shipResult?.PackageResults?.TrackingNumber ??
+    shipResult?.PackageResults?.[0]?.TrackingNumber ??
+    null;
+  const labelImageBase64 =
+    shipResult?.PackageResults?.ShippingLabel?.GraphicImage ??
+    shipResult?.PackageResults?.[0]?.ShippingLabel?.GraphicImage ??
+    null;
+  const cost = Number(shipResult?.ShipmentCharges?.TotalCharges?.MonetaryValue ?? 0);
+  const currency = String(shipResult?.ShipmentCharges?.TotalCharges?.CurrencyCode ?? 'USD');
+
+  if (!trackingNumber) throw new Error('UPS Shipping response missing TrackingNumber');
+  if (!labelImageBase64) throw new Error('UPS Shipping response missing label image');
+
+  return {
+    trackingNumber,
+    labelUrl: `data:image/gif;base64,${labelImageBase64}`,
+    cost,
+    currency,
+    raw: data,
+  };
+}
+
 export function createUpsCarrierConnector(): CarrierConnector {
   return {
     provider: 'ups',
     capabilities: ['rates.quote', 'labels.create', 'labels.void', 'tracking.read'],
     getRates: ratesFromUps,
-    createLabel: async () => {
-      throw new Error('UPS labels are handled by api/carriers/labels.ts');
-    },
+    createLabel: createLabelUps,
   };
 }
 
