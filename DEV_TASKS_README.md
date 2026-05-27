@@ -1779,6 +1779,10 @@ DJ approved PS-032 after confirming the architectural distinction that order pul
 
 See [docs/ps-032-connector-boundary-task.md](docs/ps-032-connector-boundary-task.md) for the full task prompt, phasing, verification commands, definition of done, and return format.
 
+Phase 0 audit baseline: [docs/ps-032-direct-provider-call-audit.md](docs/ps-032-direct-provider-call-audit.md)
+
+Targeted guard: `npm run test:ps-032-connector-boundary`
+
 ## Recommended Next Order
 
 1. Finish production verification after this batch deploys.

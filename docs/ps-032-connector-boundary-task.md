@@ -147,6 +147,7 @@ Include a short "new Walmart user" walkthrough: add Walmart credentials -> store
 - `npm run build`
 - `npm run test:connector-architecture` or the updated equivalent guard command
 - `npm run test:connector-registry` or the updated equivalent guard command
+- `npm run test:ps-032-connector-boundary`
 - Existing relevant direct-carrier/marketplace/label guards from `package.json`
 - Existing marketplace confirmation smoke/guard tests in mocked/dry-run mode
 - Existing PS-022/full-site workflow certification commands if present and runnable
