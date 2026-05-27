@@ -30,6 +30,7 @@ const approvedConnectorOwned = new Set([
   'src/connectors/carrier/walmart-shipping.ts',
   'src/connectors/carrier/fedex.ts',
   'src/connectors/carrier/usps.ts',
+  'src/connectors/carrier/shipengine.ts',
   'src/lib/shipstation/client.ts',
   'src/lib/shipstation/credentials.ts',
   'src/lib/shipstation/labels.ts',

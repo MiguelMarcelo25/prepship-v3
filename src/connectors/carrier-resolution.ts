@@ -13,6 +13,7 @@ const providerAliases: Record<string, ConnectorProvider> = {
   ups: 'ups',
   fedex: 'fedex',
   usps: 'usps',
+  shipengine: 'shipengine',
 };
 
 export type ResolvedCarrierConnector = {

@@ -25,6 +25,7 @@ const shippCarrierConnector = read('src/connectors/carrier/shipp.ts');
 const walmartShippingCarrierConnector = read('src/connectors/carrier/walmart-shipping.ts');
 const fedexCarrierConnector = read('src/connectors/carrier/fedex.ts');
 const uspsCarrierConnector = read('src/connectors/carrier/usps.ts');
+const shipEngineCarrierConnector = read('src/connectors/carrier/shipengine.ts');
 const packageJson = JSON.parse(read('package.json'));
 
 assert(
@@ -178,6 +179,17 @@ assert(
   uspsCarrierConnector.includes('apis.usps.com') &&
     uspsCarrierConnector.includes('getRates'),
   'USPS CarrierConnector must own USPS rate API calls',
+);
+assert(
+  !carrierRatesRoute.includes('ratesFromShipEngine') &&
+    !carrierRatesRoute.includes('shipEngineCarrierIds') &&
+    !carrierRatesRoute.includes('api.shipengine.com'),
+  'ShipEngine rates must route through CarrierConnector orchestration, not direct ShipEngine API calls from api/carriers/rates.ts',
+);
+assert(
+  shipEngineCarrierConnector.includes('api.shipengine.com') &&
+    shipEngineCarrierConnector.includes('getRates'),
+  'ShipEngine CarrierConnector must own ShipEngine rate API calls',
 );
 
 assert.equal(

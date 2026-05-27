@@ -36,6 +36,7 @@ These files currently contain direct provider call markers and are allowed as co
 | `src/connectors/carrier/walmart-shipping.ts` | Walmart Shipping | CarrierConnector implementation owns Walmart Shipping behavior. |
 | `src/connectors/carrier/fedex.ts` | FedEx | CarrierConnector implementation owns FedEx carrier behavior. |
 | `src/connectors/carrier/usps.ts` | USPS | CarrierConnector implementation owns USPS carrier behavior. |
+| `src/connectors/carrier/shipengine.ts` | ShipEngine | CarrierConnector implementation owns ShipEngine carrier behavior. |
 | `src/lib/shipstation/client.ts` | ShipStation low-level wrapper | Allowed provider wrapper, but should be called by connector-owned code only. |
 | `src/lib/shipstation/credentials.ts` | ShipStation low-level wrapper | Allowed provider wrapper, but should be called by connector-owned code only. |
 | `src/lib/shipstation/labels.ts` | ShipStation low-level wrapper | Allowed provider wrapper, but should be called by connector-owned code only. |
@@ -157,6 +158,12 @@ Phase 4 USPS rate slice added on 2026-05-27:
 
 - `api/carriers/rates.ts` now routes USPS rate quotes through `quoteCarrierRates('usps', ...)`.
 - `src/connectors/carrier/usps.ts` owns USPS OAuth, price API calls, request shaping, and rate normalization.
+- `api/carriers/rates.ts` remains transitional debt until all remaining rate providers are moved.
+
+Phase 4 ShipEngine rate slice added on 2026-05-27:
+
+- `api/carriers/rates.ts` now routes ShipEngine rate quotes through `quoteCarrierRates('shipengine', ...)`.
+- `src/connectors/carrier/shipengine.ts` owns ShipEngine carrier lookup, rate API calls, request shaping, and rate normalization.
 - `api/carriers/rates.ts` remains transitional debt until all remaining rate providers are moved.
 
 Phase 5: Tighten guards.
