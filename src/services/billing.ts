@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, lte, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lte, or, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
 import {
   billingConfig,
@@ -16,6 +16,7 @@ import {
   getFreshBillingSummaryMetrics,
   refreshBillingSummaryMetrics,
 } from './reporting-metrics';
+import { summarizeBillingItemsForDetail } from './billing-detail-utils';
 
 export type GenerateInput = {
   clientId?: number;
@@ -255,17 +256,6 @@ function stringOrNull(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
-function itemSkuOrFallback(record: Record<string, unknown>): string | null {
-  const sku =
-    stringOrNull(record.sku) ??
-    stringOrNull(record.fulfillmentSku) ??
-    stringOrNull(record.warehouseLocation);
-  if (sku) return sku;
-
-  const productId = toFiniteNumber(record.productId);
-  return productId != null ? String(Math.trunc(productId)) : null;
-}
-
 function providerAccountIdOrNull(value: unknown): number | null {
   if (value === null || value === undefined || value === '') return null;
   const normalized =
@@ -281,33 +271,7 @@ function toFiniteNumber(value: unknown): number | null {
 }
 
 function itemSummary(items: unknown) {
-  if (!Array.isArray(items)) {
-    return { itemNames: null, itemSkus: null, totalQty: null };
-  }
-
-  const names: string[] = [];
-  const skus: string[] = [];
-  let totalQty = 0;
-
-  for (const item of items) {
-    if (!item || typeof item !== 'object') continue;
-    const record = item as Record<string, unknown>;
-    if (record.adjustment === true) continue;
-
-    const name = stringOrNull(record.name);
-    const sku = itemSkuOrFallback(record);
-    const qty = toFiniteNumber(record.quantity) ?? 1;
-
-    if (name) names.push(name);
-    if (sku) skus.push(sku);
-    if (qty > 0) totalQty += qty;
-  }
-
-  return {
-    itemNames: names.length ? [...new Set(names)].join(' | ') : null,
-    itemSkus: skus.length ? [...new Set(skus)].join(' | ') : null,
-    totalQty: totalQty > 0 ? totalQty : null,
-  };
+  return summarizeBillingItemsForDetail(items);
 }
 
 function dimsKey(length: unknown, width: unknown, height: unknown) {
@@ -1232,6 +1196,67 @@ export async function billingDetails(input: GenerateInput & { limit?: number }) 
     .orderBy(desc(billingLineItems.shipDate), desc(billingLineItems.id))
     .limit(input.limit ?? 2000);
 
+  const staleOrderIds = Array.from(
+    new Set(
+      rows
+        .filter((row) => row.shipmentId == null && row.orderId != null)
+        .map((row) => row.orderId!)
+    )
+  );
+  const staleOrderNumbers = Array.from(
+    new Set(
+      rows
+        .filter((row) => row.shipmentId == null && row.orderNumber)
+        .map((row) => row.orderNumber!)
+    )
+  );
+  const fallbackShipmentWhere =
+    staleOrderIds.length && staleOrderNumbers.length
+      ? or(
+          inArray(shipments.orderId, staleOrderIds),
+          inArray(shipments.orderNumber, staleOrderNumbers)
+        )
+      : staleOrderIds.length
+        ? inArray(shipments.orderId, staleOrderIds)
+        : staleOrderNumbers.length
+          ? inArray(shipments.orderNumber, staleOrderNumbers)
+          : undefined;
+  const fallbackShipments = fallbackShipmentWhere
+    ? await db
+        .select({
+          id: shipments.id,
+          orderId: shipments.orderId,
+          orderNumber: shipments.orderNumber,
+          carrierCode: shipments.carrierCode,
+          providerAccountId: shipments.providerAccountId,
+          labelProvider: shipments.labelProvider,
+          trackingNumber: shipments.trackingNumber,
+          providerAccountNickname: shipments.providerAccountNickname,
+          selectedRateJson: shipments.selectedRateJson,
+          selectedPackageId: shipments.selectedPackageId,
+          selectedPid: shipments.selectedPid,
+          dimsL: shipments.dimsL,
+          dimsW: shipments.dimsW,
+          dimsH: shipments.dimsH,
+          labelCost: shipments.labelCost,
+          cost: shipments.cost,
+          otherCost: shipments.otherCost,
+        })
+        .from(shipments)
+        .where(and(eq(shipments.voided, false), fallbackShipmentWhere))
+        .orderBy(desc(shipments.id))
+    : [];
+  const fallbackShipmentByOrderId = new Map<number, (typeof fallbackShipments)[number]>();
+  const fallbackShipmentByOrderNumber = new Map<string, (typeof fallbackShipments)[number]>();
+  for (const shipment of fallbackShipments) {
+    if (shipment.orderId != null && !fallbackShipmentByOrderId.has(shipment.orderId)) {
+      fallbackShipmentByOrderId.set(shipment.orderId, shipment);
+    }
+    if (shipment.orderNumber && !fallbackShipmentByOrderNumber.has(shipment.orderNumber)) {
+      fallbackShipmentByOrderNumber.set(shipment.orderNumber, shipment);
+    }
+  }
+
   const packageRows = await db
     .select({
       id: packages.id,
@@ -1257,14 +1282,23 @@ export async function billingDetails(input: GenerateInput & { limit?: number }) 
 
   return Promise.all(
     rows.map(async (row) => {
+      const fallbackShipment =
+        row.shipmentId == null
+          ? (row.orderId != null ? fallbackShipmentByOrderId.get(row.orderId) : undefined) ??
+            (row.orderNumber ? fallbackShipmentByOrderNumber.get(row.orderNumber) : undefined) ??
+            null
+          : null;
       const selectedRate =
-        row.selectedRateJson && typeof row.selectedRateJson === 'object'
-          ? (row.selectedRateJson as Record<string, unknown>)
+        (row.selectedRateJson ?? fallbackShipment?.selectedRateJson) &&
+        typeof (row.selectedRateJson ?? fallbackShipment?.selectedRateJson) === 'object'
+          ? ((row.selectedRateJson ?? fallbackShipment?.selectedRateJson) as Record<string, unknown>)
           : null;
 
       const providerAccountId =
         row.providerAccountId ??
+        fallbackShipment?.providerAccountId ??
         row.labelProvider ??
+        fallbackShipment?.labelProvider ??
         providerAccountIdOrNull(
           selectedRate?.providerAccountId ??
             selectedRate?.shippingProviderId ??
@@ -1272,9 +1306,11 @@ export async function billingDetails(input: GenerateInput & { limit?: number }) 
         );
       const carrierCode =
         row.carrierCode ??
+        fallbackShipment?.carrierCode ??
         stringOrNull(selectedRate?.carrierCode ?? selectedRate?.carrier_code);
       const storedNickname =
         row.providerAccountNickname ??
+        fallbackShipment?.providerAccountNickname ??
         stringOrNull(
           selectedRate?.providerAccountNickname ??
             selectedRate?.carrierNickname ??
@@ -1301,26 +1337,31 @@ export async function billingDetails(input: GenerateInput & { limit?: number }) 
       const lineType = row.lineType ?? '';
       const isShippingLine = lineType === 'shipping';
       const labelCost =
-        toFiniteNumber(row.labelCost) ??
+        toFiniteNumber(row.labelCost ?? fallbackShipment?.labelCost) ??
         (() => {
-          const cost = toFiniteNumber(row.cost);
+          const cost = toFiniteNumber(row.cost ?? fallbackShipment?.cost);
           if (cost == null) return null;
-          return cost + (toFiniteNumber(row.otherCost) ?? 0);
+          return cost + (toFiniteNumber(row.otherCost ?? fallbackShipment?.otherCost) ?? 0);
         })();
       const refUspsRate = toFiniteNumber(row.refUspsRate);
       const refUpsRate = toFiniteNumber(row.refUpsRate);
-      const selectedPackageNumericId = providerAccountIdOrNull(row.selectedPackageId);
+      const selectedPackageId = row.selectedPackageId ?? fallbackShipment?.selectedPackageId ?? null;
+      const selectedPid = row.selectedPid ?? fallbackShipment?.selectedPid ?? null;
+      const dimsL = row.dimsL ?? fallbackShipment?.dimsL ?? null;
+      const dimsW = row.dimsW ?? fallbackShipment?.dimsW ?? null;
+      const dimsH = row.dimsH ?? fallbackShipment?.dimsH ?? null;
+      const selectedPackageNumericId = providerAccountIdOrNull(selectedPackageId);
       const selectedPackage =
-        (row.selectedPid != null ? packagesById.get(row.selectedPid) : undefined) ??
+        (selectedPid != null ? packagesById.get(selectedPid) : undefined) ??
         (selectedPackageNumericId != null ? packagesById.get(selectedPackageNumericId) : undefined) ??
-        (row.selectedPackageId ? packagesByCode.get(row.selectedPackageId) : undefined) ??
-        (dimsKey(row.dimsL, row.dimsW, row.dimsH)
-          ? packagesByDims.get(dimsKey(row.dimsL, row.dimsW, row.dimsH)!)
+        (selectedPackageId ? packagesByCode.get(selectedPackageId) : undefined) ??
+        (dimsKey(dimsL, dimsW, dimsH)
+          ? packagesByDims.get(dimsKey(dimsL, dimsW, dimsH)!)
           : undefined);
       const packageName =
         selectedPackage?.name ??
         row.description.match(/^Box\s+\((.+)\)$/i)?.[1] ??
-        dimsLabel(row.dimsL, row.dimsW, row.dimsH);
+        dimsLabel(dimsL, dimsW, dimsH);
 
       const {
         selectedRateJson: _selectedRateJson,
@@ -1340,6 +1381,7 @@ export async function billingDetails(input: GenerateInput & { limit?: number }) 
       } = row;
       return {
         ...rest,
+        shipmentId: row.shipmentId ?? fallbackShipment?.id ?? null,
         carrierCode,
         providerAccountId,
         providerAccountNickname: carrierNickname,

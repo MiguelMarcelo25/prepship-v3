@@ -77,6 +77,8 @@
     "test:inventory-repair-plan": "node scripts/inventory-repair-plan-guard.mjs",
     "test:billing-client-scope": "node scripts/billing-client-store-scope-guard.mjs",
     "test:billing-formula": "tsx scripts/billing-formula-guard.ts",
+    "test:billing-detail-ps040": "tsx scripts/billing-detail-ps040-guard.ts",
+    "billing:repair-shipment-linkage": "tsx scripts/repair-billing-shipment-linkage.ts",
     "test:print-queue-client-scope": "node scripts/print-queue-client-store-scope-guard.mjs",
     "test:orders-manifests-scope": "node scripts/orders-manifests-client-store-scope-guard.mjs",
     "test:field-level-rbac": "node scripts/field-level-rbac-guard.mjs",
