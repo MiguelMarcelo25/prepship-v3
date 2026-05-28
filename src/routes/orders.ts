@@ -209,6 +209,44 @@ function visibleAwaitingOrdersPredicate(alias: 'orders' | 'o' = 'orders') {
   )`;
 }
 
+function storeFilterPredicate(storeId: number | undefined): SQL | undefined {
+  if (storeId === undefined) return undefined;
+  if (storeId !== WALMART_DIRECT_STORE_ID) return eq(orders.storeId, storeId);
+  return sql`(
+    ${orders.storeId} = ${WALMART_DIRECT_STORE_ID}
+    or (
+      ${orders.storeId} = ${WALMART_SHIPSTATION_STORE_ID}
+      and nullif(${orders.orderNumber}, '') is not null
+      and not exists (
+        select 1
+        from orders walmart_direct_order
+        where walmart_direct_order.store_id = ${WALMART_DIRECT_STORE_ID}
+          and walmart_direct_order.order_number = ${orders.orderNumber}
+      )
+    )
+  )`;
+}
+
+function storeAliasFilterPredicate(alias: 'orders' | 'o', storeId: number | undefined): SQL | undefined {
+  if (storeId === undefined) return undefined;
+  const storeIdColumn = sql.raw(`${alias}.store_id`);
+  const orderNumberColumn = sql.raw(`${alias}.order_number`);
+  if (storeId !== WALMART_DIRECT_STORE_ID) return sql`${storeIdColumn} = ${storeId}`;
+  return sql`(
+    ${storeIdColumn} = ${WALMART_DIRECT_STORE_ID}
+    or (
+      ${storeIdColumn} = ${WALMART_SHIPSTATION_STORE_ID}
+      and nullif(${orderNumberColumn}, '') is not null
+      and not exists (
+        select 1
+        from orders walmart_direct_order
+        where walmart_direct_order.store_id = ${WALMART_DIRECT_STORE_ID}
+          and walmart_direct_order.order_number = ${orderNumberColumn}
+      )
+    )
+  )`;
+}
+
 function ordersScopeFromContext(c: Context): ClientStoreScope {
   return getClientStoreScope({
     email: c.get('email' as never) as string | undefined,
@@ -810,7 +848,7 @@ app.get('/daily-counts', zValidator('query', dailyCountsQuery), async (c) => {
       assigneeFilter,
       orderScopePredicate(dailyCountsScope),
       q.clientId !== undefined ? eq(orders.clientId, q.clientId) : undefined,
-      q.storeId !== undefined ? eq(orders.storeId, q.storeId) : undefined,
+      storeFilterPredicate(q.storeId),
       includeInactiveClients ? visibleStoreBasePredicate : visibleStorePredicate,
       q.hideTestOrders === true && q.clientId === undefined && q.storeId === undefined
         ? sql`not ${testOrderPredicate}`
@@ -870,7 +908,7 @@ app.get('/dashboard-sales', zValidator('query', dashboardSalesQuery), async (c) 
       assigneeFilter,
       orderScopePredicate(dashboardSalesScope),
       q.clientId !== undefined ? eq(orders.clientId, q.clientId) : undefined,
-      q.storeId !== undefined ? eq(orders.storeId, q.storeId) : undefined,
+      storeFilterPredicate(q.storeId),
       visiblePredicateForOrdersList(q),
       q.hideTestOrders === true && q.clientId === undefined && q.storeId === undefined
         ? sql`not ${testOrderPredicate}`
@@ -1163,7 +1201,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       orderScopePredicate(orderScope),
       assigneeFilter,
       q.clientId !== undefined ? eq(orders.clientId, q.clientId) : undefined,
-      q.storeId !== undefined ? eq(orders.storeId, q.storeId) : undefined,
+      storeFilterPredicate(q.storeId),
       includeInactiveClients ? visibleStoreBasePredicate : visibleStorePredicate,
       excludeIds.length > 0 && q.clientId === undefined
         ? notInArray(orders.clientId, excludeIds)
@@ -2220,7 +2258,7 @@ app.get('/picklist', zValidator('query', picklistQuery), async (c) => {
         or c.is_test = true
       )
       and (${cid}::int is null or o.client_id = ${cid}::int)
-      and (${sid}::int is null or o.store_id = ${sid}::int)
+      and ${storeAliasFilterPredicate('o', sid ?? undefined) ?? sql`true`}
       and ${orderAliasScopePredicate('o', picklistScope)}
       and o.order_date >= ${fromIso}::timestamptz
       and o.order_date <= ${toIso}::timestamptz
@@ -2308,7 +2346,7 @@ app.get('/distinct-skus', async (c) => {
       )
       and (${status}::text is null or o.order_status = ${status}::text)
       and (${cid}::int is null or o.client_id = ${cid}::int)
-      and (${sid}::int is null or o.store_id = ${sid}::int)
+      and ${storeAliasFilterPredicate('o', sid ?? undefined) ?? sql`true`}
       and ${orderAliasScopePredicate('o', distinctSkusScope)}
       and (${dateFrom}::timestamptz is null or o.order_date >= ${dateFrom}::timestamptz)
       and (${dateTo}::timestamptz is null or o.order_date <= ${dateTo}::timestamptz)

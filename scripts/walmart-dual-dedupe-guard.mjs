@@ -23,12 +23,13 @@ assert(
 );
 
 assert(
-  ordersRoute.includes('walmartDirectDuplicateSuppressionPredicate') &&
-    ordersRoute.includes('const shouldApplyWalmartDedupe =') &&
-    ordersRoute.includes('shouldApplyWalmartDedupe ? walmartDirectDuplicateSuppressionPredicate') &&
+  ordersRoute.includes('storeFilterPredicate') &&
+    ordersRoute.includes('WALMART_DIRECT_STORE_ID') &&
+    ordersRoute.includes('WALMART_SHIPSTATION_STORE_ID') &&
+    ordersRoute.includes('walmart_direct_order.store_id = ${WALMART_DIRECT_STORE_ID}') &&
     ordersRoute.includes('sourceLink') &&
     ordersRoute.includes('walmartDirectDuplicates'),
-  '/orders must apply Walmart direct duplicate suppression and expose source-link diagnostics',
+  '/orders must let Walmart Store act as a linked view of canonical ShipStation Walmart rows while exposing source-link diagnostics',
 );
 
 assert(
@@ -40,9 +41,11 @@ assert(
 );
 
 assert(
-  initRoute.includes('walmartDirectDuplicateSuppressionPredicate') &&
-    initRoute.includes('walmartCanonicalOrderPredicate'),
-  '/init/counts must apply the same Walmart canonical dedupe rule as /orders',
+  initRoute.includes('walmartDirectAliasCounts') &&
+    initRoute.includes('WALMART_DIRECT_STORE_ID') &&
+    initRoute.includes('WALMART_SHIPSTATION_STORE_ID') &&
+    initRoute.includes('walmart_direct_order.store_id = ${WALMART_DIRECT_STORE_ID}'),
+  '/init/counts must count canonical ShipStation Walmart rows under the linked Walmart Store bucket when no direct row exists',
 );
 
 assert(
