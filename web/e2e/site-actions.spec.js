@@ -11,6 +11,11 @@ const forbiddenExternalHosts = [
   'apiz.ebay.com',
   'ssapi.shipstation.com',
   'api.shipstation.com',
+  'api.easypost.com',
+  'shipp.to',
+  'api.zippopotam.us',
+  'onlinetools.ups.com',
+  'api.ups.com',
 ]
 
 let labelCreateShouldFail = false
@@ -20,6 +25,8 @@ let queueMergeShouldFail = false
 let ratesShouldTimeout = false
 let ordersApiShouldFail = false
 let ordersApiFailedOnce = false
+let rateBrowserPartialFailureMode = false
+let primaryClientIsTest = true
 
 const requestLedger = []
 
@@ -28,12 +35,47 @@ const clients = [
   { id: 2, name: 'Denied Scope Client', active: true, isTest: true, storeId: 202 },
 ]
 
+function visibleClients() {
+  return clients
+    .filter((client) => client.id === 1)
+    .map((client) => ({
+      ...client,
+      isTest: client.id === 1 ? primaryClientIsTest : client.isTest,
+    }))
+}
+
 const packageRows = [
   { id: 1, name: '11x8x6', length: 11, width: 8, height: 6, unitCost: '0.62', source: 'fixture' },
 ]
 
 const inventoryRows = [
   { id: 1, clientId: 1, sku: 'MOCK-SKU-1', name: 'Mock Snack Box', stockQty: 12, reorderLevel: 4, active: true },
+]
+
+const shipStationRateAccounts = [
+  { carrier_id: 'se-4101', carrier_code: 'stamps_com', nickname: 'USPS Chase x7439', friendly_name: 'USPS Chase x7439' },
+  { carrier_id: 'se-4102', carrier_code: 'ups', nickname: 'ROCEL C81F70', friendly_name: 'ROCEL C81F70' },
+  { carrier_id: 'se-4103', carrier_code: 'ups', nickname: 'GG6381', friendly_name: 'GG6381' },
+  { carrier_id: 'se-4104', carrier_code: 'ups', nickname: 'ORI Account', friendly_name: 'ORI Account' },
+  { carrier_id: 'se-4105', carrier_code: 'fedex', nickname: 'FedEx Ground', friendly_name: 'FedEx Ground' },
+  { carrier_id: 'se-4106', carrier_code: 'ups', nickname: 'GREG P...', friendly_name: 'GREG P...' },
+  { carrier_id: 'se-4107', carrier_code: 'fedex', nickname: 'FedEx Express', friendly_name: 'FedEx Express' },
+]
+
+const directRateAccounts = [
+  { id: 1, clientId: 1, provider: 'shipp', label: 'Shipp Carrier', accountIdentifier: 'shipp-test', active: true, assignedClientIds: [1] },
+  { id: 2, clientId: 1, provider: 'easypost', label: 'EasyPost Account', accountIdentifier: 'easypost-test', active: true, assignedClientIds: [1] },
+  { id: 3, clientId: 1, provider: 'ups', label: 'UPS Carrier', accountIdentifier: 'ups-test', active: true, assignedClientIds: [1] },
+]
+
+const shipStationRateRows = [
+  { carrierCode: 'stamps_com', serviceCode: 'usps_ground_advantage', serviceName: 'USPS Ground Advantage', shippingProviderId: 4101, amount: 5.25, cost: 5.25, shipmentCost: 5.25, otherCost: 0, raw: { carrier_id: 'se-4101' } },
+  { carrierCode: 'ups', serviceCode: 'ups_ground_saver', serviceName: 'UPS Ground Saver', shippingProviderId: 4102, amount: 6.1, cost: 6.1, shipmentCost: 6.1, otherCost: 0, raw: { carrier_id: 'se-4102' } },
+  { carrierCode: 'ups', serviceCode: 'ups_ground', serviceName: 'UPS Ground', shippingProviderId: 4103, amount: 7.4, cost: 7.4, shipmentCost: 7.4, otherCost: 0, raw: { carrier_id: 'se-4103' } },
+  { carrierCode: 'fedex', serviceCode: 'fedex_ground', serviceName: 'FedEx Ground', shippingProviderId: 4105, amount: 8.15, cost: 8.15, shipmentCost: 8.15, otherCost: 0, raw: { carrier_id: 'se-4105' } },
+  { carrierCode: 'ups', serviceCode: 'ups_3_day_select', serviceName: 'UPS 3 Day Select', shippingProviderId: 4104, amount: 9.7, cost: 9.7, shipmentCost: 9.7, otherCost: 0, raw: { carrier_id: 'se-4104' } },
+  { carrierCode: 'ups', serviceCode: 'ups_2nd_day_air', serviceName: 'UPS 2nd Day Air', shippingProviderId: 4106, amount: 13.85, cost: 13.85, shipmentCost: 13.85, otherCost: 0, raw: { carrier_id: 'se-4106' } },
+  { carrierCode: 'fedex', serviceCode: 'fedex_2_day', serviceName: 'FedEx 2Day', shippingProviderId: 4107, amount: 15.45, cost: 15.45, shipmentCost: 15.45, otherCost: 0, raw: { carrier_id: 'se-4107' } },
 ]
 
 const orders = [
@@ -236,16 +278,90 @@ function responseFor(url, request) {
   if (pathname === '/health') return json({ status: 'ok' })
   if (pathname === '/health/ready') return json({ status: 'ready', components: [{ name: 'db', status: 'ok' }] })
   if (pathname === '/health/deep') return json({ status: 'ready', components: [{ name: 'orders', status: 'ok' }] })
-  if (pathname === '/clients') return json(clients.filter((client) => client.id === 1))
+  if (pathname === '/clients') return json(visibleClients())
   if (pathname === '/users') return json({ users: [] })
   if (pathname === '/locations') return json([])
   if (pathname === '/packages') return json(packageRows)
   if (pathname === '/billing') return json({ invoices: [{ id: 'inv_mock_1', clientId: 1, total: 12.34 }] })
+  if (pathname === '/rates/carriers-for-store') {
+    return json({ carriers: rateBrowserPartialFailureMode ? shipStationRateAccounts : [] })
+  }
+  if (/^\/orders\/\d+\/dims$/.test(pathname)) {
+    return json({ data: { l: 11, w: 8, h: 6, weightOz: 16 } })
+  }
+  if (pathname === '/rates/browse') {
+    const requested = JSON.parse(request.postData() || '{}')
+    const requestedCarrierIds = Array.isArray(requested.carrierIds)
+      ? requested.carrierIds.map(String)
+      : []
+    const scopedRates = shipStationRateRows.filter((rate) => requestedCarrierIds.length === 0 || requestedCarrierIds.includes(rate.raw.carrier_id))
+    return json({
+      rates: scopedRates,
+      bestRate: scopedRates[0] ?? null,
+      cached: false,
+      source: requested.cachedOnly ? 'cache' : 'live',
+      carrierStatuses: shipStationRateAccounts.map((account) => ({
+        carrierId: account.carrier_id,
+        carrierName: account.nickname,
+        status: requested.cachedOnly ? 'cached' : 'live',
+        rateCount: scopedRates.filter((rate) => rate.raw.carrier_id === account.carrier_id).length,
+      })),
+      carrierDiagnostics: shipStationRateAccounts.map((account) => ({
+        carrierId: account.carrier_id,
+        nickname: account.nickname,
+        source: 'shipstation',
+        status: 'ok',
+        rateCount: scopedRates.filter((rate) => rate.raw.carrier_id === account.carrier_id).length,
+      })),
+    })
+  }
   if (pathname === '/rates/multi' || pathname === '/carriers/rates') {
     if (ratesShouldTimeout) return json({ error: 'Carrier rate provider timed out' }, 504)
+    if (rateBrowserPartialFailureMode && pathname === '/rates/multi') {
+      const requested = JSON.parse(request.postData() || '{}')
+      const requestedCarrierIds = Array.isArray(requested.carrierIds)
+        ? requested.carrierIds.map(String)
+        : []
+      const scopedRates = shipStationRateRows.filter((rate) => requestedCarrierIds.length === 0 || requestedCarrierIds.includes(rate.raw.carrier_id))
+      return json({
+        rates: scopedRates,
+        bestRate: scopedRates[0] ?? null,
+        cached: false,
+        source: 'live',
+        carrierStatuses: shipStationRateAccounts.map((account) => ({
+          carrierId: account.carrier_id,
+          carrierName: account.nickname,
+          status: 'live',
+          rateCount: scopedRates.filter((rate) => rate.raw.carrier_id === account.carrier_id).length,
+        })),
+        carrierDiagnostics: shipStationRateAccounts.map((account) => ({
+          carrierId: account.carrier_id,
+          nickname: account.nickname,
+          source: 'shipstation',
+          status: 'ok',
+          rateCount: scopedRates.filter((rate) => rate.raw.carrier_id === account.carrier_id).length,
+        })),
+      })
+    }
+    if (rateBrowserPartialFailureMode && pathname === '/carriers/rates') {
+      const body = JSON.parse(request.postData() || '{}')
+      const provider = String(body.provider ?? '').toLowerCase()
+      const messages = {
+        shipp: 'Shipp reached the quote API but did not return rates. Confirm the package dimensions, ship-from address, and destination address are valid for your Shipp account.',
+        easypost: 'EasyPost did not return eligible rates for this package and destination.',
+        ups: 'UPS Carrier did not return eligible services for this package and destination.',
+      }
+      return json({
+        ok: false,
+        provider,
+        error: messages[provider] ?? 'Carrier did not return rates',
+      })
+    }
     return json({ rates: [{ carrierCode: 'ups', serviceCode: 'ups_ground', cost: 8.12, shippingProviderId: 1 }] })
   }
-  if (pathname === '/api/carrier-accounts' || pathname === '/carrier-accounts') return json({ data: [] })
+  if (pathname === '/api/carrier-accounts' || pathname === '/carrier-accounts') {
+    return json({ data: rateBrowserPartialFailureMode ? directRateAccounts : [] })
+  }
   if (pathname === '/api/store-accounts' || pathname === '/store-accounts') return json({ data: [] })
   if (pathname === '/markups') return json([])
   if (pathname === '/settings/orders.columnPrefs') return json({ value: null })
@@ -253,7 +369,7 @@ function responseFor(url, request) {
   if (pathname === '/shipments/status') return json({ status: 'idle' })
   if (pathname === '/init/stores') {
     return json({
-      data: clients.filter((client) => client.id === 1).map((client) => ({
+      data: visibleClients().map((client) => ({
         id: client.storeId,
         storeId: client.storeId,
         name: client.name,
@@ -349,6 +465,8 @@ test.beforeEach(async ({ page }) => {
   ratesShouldTimeout = false
   ordersApiShouldFail = false
   ordersApiFailedOnce = false
+  rateBrowserPartialFailureMode = false
+  primaryClientIsTest = true
   requestLedger.length = 0
 
   await page.addInitScript((projectRef) => {
@@ -467,6 +585,56 @@ test('rate, orders API, and scope failure variants remain controlled', async ({ 
   await expect(page.getByText(/Orders API failure|Retry|MOCK-EBAY-101|Awaiting/i).first()).toBeVisible({ timeout: 15000 })
 
   expectRequest('/orders', { method: 'GET' })
+  assertNoObjectObjectPayloads()
+  expectNoForbiddenExternalRequests()
+})
+
+test('Rate Browser partial carrier failures remain readable and keep successful rates selectable', async ({ page }) => {
+  // No real postage, no live provider calls, mocked only.
+  rateBrowserPartialFailureMode = true
+  primaryClientIsTest = false
+  await openAwaitingOrderPanel(page)
+
+  await page.getByRole('button', { name: /Browse Rates/i }).first().click()
+  const rateDialog = page.getByRole('dialog', { name: /Rate Browser/i })
+  await expect(rateDialog).toBeVisible({ timeout: 15000 })
+  const modalNumberInputs = rateDialog.getByRole('spinbutton')
+  await modalNumberInputs.nth(2).fill('11')
+  await modalNumberInputs.nth(3).fill('8')
+  await modalNumberInputs.nth(4).fill('6')
+  const refreshRates = rateDialog.getByRole('button', { name: /Refresh Live Rates/i })
+  await expect(refreshRates).toBeEnabled({ timeout: 5000 })
+  await refreshRates.click()
+  await expect(page.getByText(/10 of 10 carriers checked[\s\S]*7 with rates/)).toBeVisible({ timeout: 20000 })
+  await expect(page.getByText(/\|\s*live/)).toBeVisible({ timeout: 20000 })
+  await expect(page.getByLabel('Hide Unavailable')).toBeChecked()
+
+  await expect(page.getByText('USPS Chase x7439').first()).toBeVisible()
+  await expect(page.getByText('ROCEL C81F70').first()).toBeVisible()
+  await expect(page.locator('span[title*="Shipp reached the quote API"]')).toBeVisible()
+  await expect(page.locator('span[title*="EasyPost did not return eligible rates"]')).toBeVisible()
+  await expect(page.locator('span[title*="UPS Carrier did not return eligible services"]')).toBeVisible()
+
+  await expect(page.getByText('$5.25').first()).toBeVisible()
+  await expect(page.getByText('$6.10').first()).toBeVisible()
+  await expect(page.getByText('$7.40').first()).toBeVisible()
+  const cheapest = await page.locator('strong').filter({ hasText: '$5.25' }).first().boundingBox()
+  const nextCheapest = await page.locator('strong').filter({ hasText: '$6.10' }).first().boundingBox()
+  expect(cheapest?.y ?? 0, 'cheapest rate should render before the next-cheapest rate').toBeLessThan(nextCheapest?.y ?? Number.POSITIVE_INFINITY)
+
+  await rateDialog.getByText('Shipp Carrier').click()
+  await expect(page.getByText(/No rates available for/i)).toBeVisible()
+  await expect(page.getByText(/Shipp reached the quote API but did not return rates/i)).toBeVisible()
+
+  await page.getByRole('button', { name: /Refresh Live Rates/i }).click()
+  await expect(page.getByText(/10 of 10 carriers checked[\s\S]*7 with rates/)).toBeVisible({ timeout: 20000 })
+
+  expectRequest(/rates\/(browse|multi)/, { method: 'POST', payloadIncludes: ['se-4101', 'se-4107'] })
+  await waitForRequest('/carriers/rates', { method: 'POST', payloadIncludes: ['shipp'] })
+  expect(
+    requestLedger.filter((entry) => entry.method === 'POST' && entry.path === '/carriers/rates').length,
+    'expected direct carrier rate calls for failed Shipp/EasyPost/UPS accounts',
+  ).toBeGreaterThanOrEqual(3)
   assertNoObjectObjectPayloads()
   expectNoForbiddenExternalRequests()
 })

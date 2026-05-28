@@ -26,6 +26,8 @@ const route = read('src/routes/rates.ts');
 const schema = read('src/db/schema/rates.ts');
 const migration = read('drizzle/0028_rate_cache_diagnostics.sql');
 const client = read('web/src/lib/v2-apiClient.ts');
+const siteActionsSpec = read('web/e2e/site-actions.spec.js');
+const packageJson = read('package.json');
 
 assert(
   service.includes('export function rateCacheKey'),
@@ -79,6 +81,25 @@ assert(
     client.includes("source: 'direct'") &&
     client.includes("source: 'shipstation'"),
   'Rate Browser client returns normalized ShipStation and direct-carrier diagnostics',
+);
+
+assert(
+  siteActionsSpec.includes('Rate Browser partial carrier failures remain readable and keep successful rates selectable') &&
+    siteActionsSpec.includes('10 of 10 carriers checked') &&
+    siteActionsSpec.includes('7 with rates') &&
+    siteActionsSpec.includes('Hide Unavailable') &&
+    siteActionsSpec.includes('Shipp Carrier') &&
+    siteActionsSpec.includes('EasyPost Account') &&
+    siteActionsSpec.includes('UPS Carrier'),
+  'Rate Browser browser certification covers mixed carrier success/failure diagnostics',
+);
+
+assert(
+  packageJson.includes('test:workflow-certification:browser') &&
+    packageJson.includes('web/e2e/site-actions.spec.js') &&
+    packageJson.includes('test:full-site-certification') &&
+    packageJson.includes('test:workflow-certification:browser'),
+  'full-site certification includes Rate Browser workflow browser coverage',
 );
 
 if (process.exitCode) {
