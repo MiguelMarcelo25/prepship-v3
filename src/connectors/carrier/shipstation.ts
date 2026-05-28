@@ -3,9 +3,9 @@ import {
   ssVoidShipment,
   type CreateExternalLabelInput,
   type CreatedExternalLabel,
-} from '../../lib/shipstation/labels';
-import { ssRequest } from '../../lib/shipstation';
-import type { CarriersResponse, Label } from '../../lib/shipstation/types';
+} from '../../lib/shipstation/labels.js';
+import { ssRequest } from '../../lib/shipstation/client.js';
+import type { CarriersResponse, Label } from '../../lib/shipstation/types.js';
 import type { CarrierConnector } from '../../domain/fulfillment/types';
 
 type ShipStationRateEstimateInput = {

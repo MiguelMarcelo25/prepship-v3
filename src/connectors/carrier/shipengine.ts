@@ -1,5 +1,5 @@
 import type { CarrierConnector } from '../../domain/fulfillment/types';
-import { timedFetch } from '../../lib/http/timing';
+import { timedFetch } from '../../lib/http/timing.js';
 
 async function shipEngineCarrierIds(creds: Record<string, unknown>): Promise<string[]> {
   const explicit = String(creds?.carrierIds ?? creds?.carrier_ids ?? '').trim();

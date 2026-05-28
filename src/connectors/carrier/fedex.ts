@@ -1,5 +1,5 @@
 import type { CarrierConnector } from '../../domain/fulfillment/types';
-import { timedFetch } from '../../lib/http/timing';
+import { timedFetch } from '../../lib/http/timing.js';
 
 const FEDEX_SERVICE_NAMES: Record<string, string> = {
   FEDEX_GROUND: 'FedEx Ground',

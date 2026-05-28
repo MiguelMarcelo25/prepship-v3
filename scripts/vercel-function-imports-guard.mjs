@@ -59,6 +59,44 @@ if (
   pass('direct carrier rates lazy-load connector trees after request validation');
 }
 
+const lazilyLoadedRuntimeFiles = [
+  'src/connectors/store/walmart.ts',
+  'src/connectors/carrier/amazon-shipping.ts',
+  'src/connectors/carrier/easypost.ts',
+  'src/connectors/carrier/ebay-shipping.ts',
+  'src/connectors/carrier/fedex.ts',
+  'src/connectors/carrier/shipengine.ts',
+  'src/connectors/carrier/shipp.ts',
+  'src/connectors/carrier/ups.ts',
+  'src/connectors/carrier/usps.ts',
+  'src/connectors/carrier/walmart-shipping.ts',
+  'src/lib/shipstation/client.ts',
+  'src/lib/shipstation/index.ts',
+  'src/lib/shipstation/labels.ts',
+  'src/lib/shipstation/v1-client.ts',
+];
+
+const extensionlessRuntimeImports = [];
+for (const relPath of lazilyLoadedRuntimeFiles) {
+  const source = fs.readFileSync(path.join(root, relPath), 'utf8');
+  const importPattern = /^import\s+(?!type\b)[\s\S]*?\sfrom\s+['"](\.{1,2}\/[^'"]+)['"]/gm;
+  const exportPattern = /^export\s+\*\s+from\s+['"](\.{1,2}\/[^'"]+)['"]/gm;
+  for (const pattern of [importPattern, exportPattern]) {
+    for (const match of source.matchAll(pattern)) {
+      const specifier = match[1];
+      if (!specifier.endsWith('.js') && !specifier.endsWith('.json')) {
+        extensionlessRuntimeImports.push(`${relPath}: ${specifier}`);
+      }
+    }
+  }
+}
+
+if (extensionlessRuntimeImports.length) {
+  fail(`Vercel lazy-loaded connector files need .js runtime specifiers:\n${extensionlessRuntimeImports.join('\n')}`);
+} else {
+  pass('Vercel lazy-loaded connector files use runtime-safe .js specifiers');
+}
+
 if (process.exitCode) {
   process.exit(process.exitCode);
 }

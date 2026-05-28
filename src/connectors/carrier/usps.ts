@@ -1,5 +1,5 @@
 import type { CarrierConnector } from '../../domain/fulfillment/types';
-import { timedFetch } from '../../lib/http/timing';
+import { timedFetch } from '../../lib/http/timing.js';
 
 const USPS_MAIL_CLASSES = [
   { class: 'USPS_GROUND_ADVANTAGE', label: 'USPS Ground Advantage' },

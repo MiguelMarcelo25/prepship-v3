@@ -1,5 +1,5 @@
 import type { CarrierConnector } from '../../domain/fulfillment/types';
-import { timedFetch } from '../../lib/http/timing';
+import { timedFetch } from '../../lib/http/timing.js';
 import { PDFDocument } from 'pdf-lib';
 
 function shippSplitSetCookie(header: string): string[] {

@@ -1,7 +1,7 @@
-import { env } from '../env';
-import { timedFetch } from '../http/timing';
-import { TokenBucket } from './rate-limiter';
-import { CircuitBreaker } from './circuit-breaker';
+import { env } from '../env.js';
+import { timedFetch } from '../http/timing.js';
+import { TokenBucket } from './rate-limiter.js';
+import { CircuitBreaker } from './circuit-breaker.js';
 
 const BASE_URL = 'https://api.shipstation.com';
 

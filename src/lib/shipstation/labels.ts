@@ -1,6 +1,6 @@
-import { ssRequest } from './client';
-import { ssV1Request } from './v1-client';
-import type { Address } from './types';
+import { ssRequest } from './client.js';
+import { ssV1Request } from './v1-client.js';
+import type { Address } from './types.js';
 
 export type ShipstationAddressInput = {
   name?: string | null;

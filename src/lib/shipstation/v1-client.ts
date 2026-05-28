@@ -1,8 +1,8 @@
-import { env } from '../env';
-import { timedFetch } from '../http/timing';
-import { TokenBucket } from './rate-limiter';
-import { CircuitBreaker } from './circuit-breaker';
-import { ShipStationError } from './client';
+import { env } from '../env.js';
+import { timedFetch } from '../http/timing.js';
+import { TokenBucket } from './rate-limiter.js';
+import { CircuitBreaker } from './circuit-breaker.js';
+import { ShipStationError } from './client.js';
 
 const V1_BASE = 'https://ssapi.shipstation.com';
 

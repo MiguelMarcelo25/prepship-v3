@@ -1,5 +1,5 @@
 import type { CarrierConnector } from '../../domain/fulfillment/types';
-import { timedFetch } from '../../lib/http/timing';
+import { timedFetch } from '../../lib/http/timing.js';
 
 async function getEbayLogisticsAccessToken(creds: Record<string, unknown>): Promise<string> {
   const appId = String(creds?.appId ?? '').trim();
