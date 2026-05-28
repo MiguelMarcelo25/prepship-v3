@@ -24,7 +24,10 @@ import {
 } from '../../src/lib/auth/verify-supabase-jwt.js';
 import { corsHeaders } from '../../src/lib/http/cors.js';
 import { lookupWalmartOrderByCustomerOrderId } from '../../src/connectors/store/walmart.js';
-import { quoteCarrierRates } from '../../src/services/carrier-connector-orchestrator.js';
+import {
+  normalizeDirectRateProvider,
+  quoteCarrierRates,
+} from '../../src/connectors/carrier/direct-rates.js';
 import { sendInternalServerError } from '../_lib/safe-error.js';
 
 // Keep this endpoint self-contained for Vercel cold starts. Importing the
@@ -158,6 +161,7 @@ export default async function handler(req: any, res: any): Promise<void> {
     if (useStoreTable && provider === 'walmart' && requestedProvider === 'walmart_shipping') {
       provider = 'walmart_shipping';
     }
+    provider = normalizeDirectRateProvider(provider) ?? provider;
     const connectorCapabilities = directCarrierConnectorCapabilities(provider);
     const creds = (row.credentials && typeof row.credentials === 'object'
       ? (row.credentials as Record<string, unknown>)

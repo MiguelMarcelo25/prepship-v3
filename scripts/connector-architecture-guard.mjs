@@ -166,6 +166,10 @@ assert(
   !carrierRates.includes("from '../../src/connectors/carrier-resolution.js'"),
   'direct carrier rates endpoint must not import connector registry at Vercel cold start',
 );
+assert(
+  !carrierRates.includes("from '../../src/services/carrier-connector-orchestrator.js'"),
+  'direct carrier rates endpoint must not import the full carrier orchestrator/registry at Vercel cold start',
+);
 
 for (const file of [
   'src/connectors/carrier/shipstation.ts',
