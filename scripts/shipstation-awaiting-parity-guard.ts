@@ -112,13 +112,13 @@ assert.match(script, /updatedOverride/);
 
 const ordersRoute = readFileSync('src/routes/orders.ts', 'utf8');
 assert.match(ordersRoute, /visibleAwaitingOrdersPredicate/);
-assert.match(ordersRoute, /walmartDirectDuplicateSuppressionPredicate/);
+assert.doesNotMatch(ordersRoute, /walmartDirectDuplicateSuppressionPredicate/);
 assert.match(ordersRoute, /external_order_id.+ebay-%/s);
 assert.doesNotMatch(ordersRoute, /real_marketplace_order/s);
 
 const initRoute = readFileSync('src/routes/init.ts', 'utf8');
 assert.match(initRoute, /visibleAwaitingOrdersPredicate/);
-assert.match(initRoute, /walmartDirectDuplicateSuppressionPredicate/);
+assert.doesNotMatch(initRoute, /walmartDirectDuplicateSuppressionPredicate/);
 assert.match(initRoute, /external_order_id.+ebay-%/s);
 assert.doesNotMatch(initRoute, /real_marketplace_order/s);
 

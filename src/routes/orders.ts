@@ -28,7 +28,6 @@ import { hasAppPermission } from '../middleware/auth';
 import {
   WALMART_DIRECT_STORE_ID,
   WALMART_SHIPSTATION_STORE_ID,
-  walmartDirectDuplicateSuppressionPredicate,
   walmartDirectStoreDebugInfo,
 } from '../lib/walmart-order-dedupe';
 
@@ -1157,14 +1156,10 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   if (q.status) {
     statusPredicate = sql`${orders.orderStatus} = ${q.status}`;
   }
-  const shouldApplyWalmartDedupe =
-    q.storeId === undefined || q.storeId === WALMART_DIRECT_STORE_ID;
-
   const where = and(
     ...[
       statusPredicate,
       q.status === 'awaiting_shipment' ? visibleAwaitingOrdersPredicate('orders') : undefined,
-      shouldApplyWalmartDedupe ? walmartDirectDuplicateSuppressionPredicate('orders') : undefined,
       orderScopePredicate(orderScope),
       assigneeFilter,
       q.clientId !== undefined ? eq(orders.clientId, q.clientId) : undefined,
