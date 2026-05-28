@@ -1,9 +1,7 @@
 // @ts-nocheck
-// Address validation via USPS's OAuth Address API. Same credentials as
-// the USPS rate quoter (consumer key + secret), so any user who already
-// added USPS as a carrier gets address validation for free — no extra
-// signup needed. Replicates EasyPost's POST /addresses/{id}/verify
-// behavior using the underlying USPS source data.
+// Address validation through the USPS CarrierConnector. Same credentials as
+// the USPS rate quoter, so any user who already added USPS as a carrier gets
+// address validation without extra signup.
 //
 // Auth: Supabase JWT.
 //
@@ -21,6 +19,7 @@
 // Response (failure): { ok: false, error }.
 
 import postgres from 'postgres';
+import { validateUspsAddress } from '../../src/connectors/carrier/usps.js';
 import {
   extractBearerToken,
   verifySupabaseJwt,
@@ -44,30 +43,6 @@ function readBody(req: any): Promise<unknown> {
     });
     req.on('error', reject);
   });
-}
-
-async function getUspsAccessToken(creds: Record<string, unknown>): Promise<string> {
-  const consumerKey = String(creds?.consumerKey ?? creds?.clientId ?? '').trim();
-  const consumerSecret = String(creds?.consumerSecret ?? creds?.clientSecret ?? '').trim();
-  if (!consumerKey || !consumerSecret) {
-    throw new Error('USPS consumerKey + consumerSecret required');
-  }
-  const res = await fetch('https://api.usps.com/oauth2/v3/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({
-      grant_type: 'client_credentials',
-      client_id: consumerKey,
-      client_secret: consumerSecret,
-    }),
-  });
-  if (!res.ok) {
-    const t = await res.text().then((s) => s.slice(0, 200)).catch(() => '');
-    throw new Error(`USPS OAuth ${res.status}: ${t || res.statusText}`);
-  }
-  const data = (await res.json()) as { access_token?: string };
-  if (!data?.access_token) throw new Error('USPS OAuth response missing access_token');
-  return data.access_token;
 }
 
 export default async function handler(req: any, res: any): Promise<void> {
@@ -115,11 +90,6 @@ export default async function handler(req: any, res: any): Promise<void> {
       return;
     }
 
-    // Caller can target any USPS-capable carrier_account — we only need
-    // valid USPS OAuth credentials. The carrier_account row's provider
-    // is "usps" if added via Settings → USPS, but EasyPost rows also
-    // have valid creds for USPS-equivalent pricing if EasyPost is the
-    // carrier they're shipping with.
     const carrierRows = await sql<Array<{ provider: string; credentials: any }>>`
       SELECT provider, credentials FROM carrier_accounts
       WHERE id = ${carrierAccountId} LIMIT 1
@@ -135,67 +105,15 @@ export default async function handler(req: any, res: any): Promise<void> {
       });
       return;
     }
-    const creds = (credentials ?? {}) as Record<string, unknown>;
 
-    const accessToken = await getUspsAccessToken(creds);
-
-    // USPS Addresses v3 API. The address-validation endpoint accepts
-    // GET with query params (NOT POST — different from older API
-    // versions). Returns the standardized version + DPV (Delivery
-    // Point Validation) flags indicating whether USPS thinks mail
-    // can actually be delivered to that address.
-    const url = new URL('https://api.usps.com/addresses/v3/address');
-    url.searchParams.set('streetAddress', streetAddress);
-    if (body?.secondaryAddress) url.searchParams.set('secondaryAddress', String(body.secondaryAddress));
-    if (city) url.searchParams.set('city', city);
-    if (state) url.searchParams.set('state', state);
-    if (ZIPCode) url.searchParams.set('ZIPCode', ZIPCode);
-
-    const uspsRes = await fetch(url.toString(), {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Accept: 'application/json',
-      },
+    const result = await validateUspsAddress((credentials ?? {}) as Record<string, unknown>, {
+      streetAddress,
+      secondaryAddress: body?.secondaryAddress ? String(body.secondaryAddress) : undefined,
+      city,
+      state,
+      ZIPCode,
     });
-    const text = await uspsRes.text();
-    let data: any = null;
-    try { data = JSON.parse(text); } catch { /* leave as text */ }
-    if (!uspsRes.ok) {
-      const errMsg = data?.error?.message ?? text.slice(0, 600);
-      res.status(uspsRes.status).json({
-        ok: false,
-        error: `USPS Address ${uspsRes.status}: ${errMsg}`,
-      });
-      return;
-    }
-
-    // Map USPS's response to a normalized shape that mirrors EasyPost's
-    // verifications.delivery format — easier for the FE to consume the
-    // same way regardless of which validator backed the call.
-    const addr = data?.address ?? {};
-    const additionalInfo = data?.additionalInfo ?? {};
-    res.status(200).json({
-      ok: true,
-      deliverable: additionalInfo?.DPVConfirmation === 'Y' || additionalInfo?.DPVConfirmation === 'D',
-      standardized: {
-        streetAddress: addr.streetAddress ?? '',
-        secondaryAddress: addr.secondaryAddress ?? '',
-        city: addr.city ?? '',
-        state: addr.state ?? '',
-        ZIPCode: addr.ZIPCode ?? '',
-        ZIPPlus4: addr.ZIPPlus4 ?? '',
-        carrierRoute: addr.carrierRoute ?? null,
-      },
-      additionalInfo: {
-        // DPV (Delivery Point Validation): 'Y' = deliverable, 'N' = not,
-        // 'D' = deliverable but with secondary info issues.
-        DPVConfirmation: additionalInfo.DPVConfirmation ?? null,
-        business: additionalInfo.business ?? null,
-        centralDeliveryPoint: additionalInfo.centralDeliveryPoint ?? null,
-        vacant: additionalInfo.vacant ?? null,
-      },
-      raw: data,
-    });
+    res.status(200).json(result);
   } catch (err) {
     sendInternalServerError(res, 'carriers/validate-address', err);
   } finally {

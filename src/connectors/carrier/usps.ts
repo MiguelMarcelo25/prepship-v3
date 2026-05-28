@@ -36,6 +36,85 @@ async function getUspsAccessToken(creds: Record<string, unknown>): Promise<strin
   return data.access_token;
 }
 
+export async function validateUspsAddress(
+  creds: Record<string, unknown>,
+  input: {
+    streetAddress: string;
+    secondaryAddress?: string;
+    city?: string;
+    state?: string;
+    ZIPCode?: string;
+  },
+): Promise<{
+  ok: true;
+  deliverable: boolean;
+  standardized: {
+    streetAddress: string;
+    secondaryAddress: string;
+    city: string;
+    state: string;
+    ZIPCode: string;
+    ZIPPlus4: string;
+    carrierRoute: string | null;
+  };
+  additionalInfo: {
+    DPVConfirmation: string | null;
+    business: unknown;
+    centralDeliveryPoint: unknown;
+    vacant: unknown;
+  };
+  raw: unknown;
+}> {
+  const token = await getUspsAccessToken(creds);
+  const url = new URL('https://api.usps.com/addresses/v3/address');
+  url.searchParams.set('streetAddress', input.streetAddress);
+  if (input.secondaryAddress) url.searchParams.set('secondaryAddress', input.secondaryAddress);
+  if (input.city) url.searchParams.set('city', input.city);
+  if (input.state) url.searchParams.set('state', input.state);
+  if (input.ZIPCode) url.searchParams.set('ZIPCode', input.ZIPCode);
+
+  const res = await timedFetch('usps.address.validate', url.toString(), {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/json',
+    },
+  });
+  const text = await res.text();
+  let data: any = null;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    // Preserve the text snippet for the normalized error below.
+  }
+  if (!res.ok) {
+    const errMsg = data?.error?.message ?? text.slice(0, 600);
+    throw new Error(`USPS Address ${res.status}: ${errMsg}`);
+  }
+
+  const addr = data?.address ?? {};
+  const additionalInfo = data?.additionalInfo ?? {};
+  return {
+    ok: true,
+    deliverable: additionalInfo?.DPVConfirmation === 'Y' || additionalInfo?.DPVConfirmation === 'D',
+    standardized: {
+      streetAddress: addr.streetAddress ?? '',
+      secondaryAddress: addr.secondaryAddress ?? '',
+      city: addr.city ?? '',
+      state: addr.state ?? '',
+      ZIPCode: addr.ZIPCode ?? '',
+      ZIPPlus4: addr.ZIPPlus4 ?? '',
+      carrierRoute: addr.carrierRoute ?? null,
+    },
+    additionalInfo: {
+      DPVConfirmation: additionalInfo.DPVConfirmation ?? null,
+      business: additionalInfo.business ?? null,
+      centralDeliveryPoint: additionalInfo.centralDeliveryPoint ?? null,
+      vacant: additionalInfo.vacant ?? null,
+    },
+    raw: data,
+  };
+}
+
 async function ratesFromUsps(input: Record<string, unknown>): Promise<Array<{ service: string; cost: number; days: number; currency: string }>> {
   const creds = input.credentials && typeof input.credentials === 'object'
     ? input.credentials as Record<string, unknown>

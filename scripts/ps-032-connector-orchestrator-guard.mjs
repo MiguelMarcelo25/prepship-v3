@@ -24,6 +24,7 @@ const walmartOrdersRoute = read('api/carriers/walmart/orders.ts');
 const ebayOrdersRoute = read('api/carriers/ebay/orders.ts');
 const carrierRatesRoute = read('api/carriers/rates.ts');
 const carrierLabelsRoute = read('api/carriers/labels.ts');
+const validateAddressRoute = read('api/carriers/validate-address.ts');
 const upsProbeRoute = read('api/carriers/ups/probe.ts');
 const walmartProbeCarriersRoute = read('api/carriers/walmart/probe-carriers.ts');
 const walmartStoreConnector = read('src/connectors/store/walmart.ts');
@@ -269,6 +270,17 @@ assert(
   uspsCarrierConnector.includes('apis.usps.com') &&
     uspsCarrierConnector.includes('getRates'),
   'USPS CarrierConnector must own USPS rate API calls',
+);
+assert(
+  validateAddressRoute.includes('validateUspsAddress') &&
+    !validateAddressRoute.includes('api.usps.com') &&
+    !validateAddressRoute.includes('apis.usps.com'),
+  'USPS address validation route must call CarrierConnector-owned validation logic, not USPS API directly',
+);
+assert(
+  uspsCarrierConnector.includes('validateUspsAddress') &&
+    uspsCarrierConnector.includes('/addresses/v3/address'),
+  'USPS CarrierConnector must own USPS address validation API calls',
 );
 assert(
   !carrierRatesRoute.includes('ratesFromShipEngine') &&

@@ -53,7 +53,6 @@ These files currently contain direct provider calls or provider-client usage out
 | --- | --- | --- | --- |
 | `api/_lib/walmart-fees-sync.ts` | Walmart fees | Walmart StoreConnector or connector-owned helper | Phase 3 |
 | `api/carriers/labels.ts` | Carrier labels | CarrierConnector label orchestration | Phase 4 |
-| `api/carriers/validate-address.ts` | Carrier address validation | CarrierConnector validation capability or connector-owned helper | Phase 4 |
 | `api/carriers/verify.ts` | Carrier verification | CarrierConnector diagnostics | Phase 4 |
 | `api/carriers/walmart/fees.ts` | Walmart fees | Walmart StoreConnector or connector-owned helper | Phase 3 |
 | `api/cron/sync-walmart-fees.ts` | Walmart fee sync cron | Walmart StoreConnector or connector-owned helper | Phase 3 |
@@ -251,6 +250,12 @@ Phase 4 Walmart Shipping carriers-probe slice added on 2026-05-28:
 - `api/carriers/walmart/probe-carriers.ts` now routes Walmart Shipping carrier-access probing through connector-owned `probeWalmartShippingCarriers(...)`.
 - `src/connectors/carrier/walmart-shipping.ts` owns the Walmart OAuth token call and `/v3/shipping/labels/carriers` probe.
 - The probe route still owns Supabase auth, CORS, DB credential lookup, provider validation, and safe error handling.
+
+Phase 4 USPS address-validation slice added on 2026-05-28:
+
+- `api/carriers/validate-address.ts` now routes USPS address validation through connector-owned `validateUspsAddress(...)`.
+- `src/connectors/carrier/usps.ts` owns USPS OAuth plus `/addresses/v3/address` normalization.
+- The validation route still owns Supabase auth, CORS, DB credential lookup, provider validation, input validation, and safe error handling.
 
 Phase 5: Tighten guards.
 
