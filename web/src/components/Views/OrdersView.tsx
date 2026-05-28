@@ -5004,10 +5004,7 @@ export default function OrdersView({
     await hydrateQueue(true)
     await refetchOrders()
     showToast(
-      formatQueuedOrderToast(
-        order.orderNumber ?? order.orderId,
-        getActiveItems(order, orderDetailsById.get(order.orderId) ?? null),
-      ),
+      `Existing label added to print queue for ${order.orderNumber ?? order.orderId}`,
       'success',
     )
     return true

@@ -70,11 +70,12 @@ report.check({
   condition: ordersView.includes('queueExistingLabelAfterCreateConflict') &&
     ordersView.includes("mode === 'queue'") &&
     ordersView.includes('apiClient.retrieveLabel(order.orderId') &&
-    ordersView.includes('apiClient.addToQueue(buildQueueAddPayload(order, queueableLabelUrl))'),
+    ordersView.includes('apiClient.addToQueue(buildQueueAddPayload(order, queueableLabelUrl))') &&
+    ordersView.includes('Existing label added to print queue'),
   why: 'This is the SP6744 bug: label creation succeeded, order became shipped, but the label was not queued; retry should queue the existing label.',
-  evidence: 'Queue mode catches the create-label conflict, retrieves the existing label, and calls addToQueue with the queueable URL.',
+  evidence: 'Queue mode catches the create-label conflict, retrieves the existing label, calls addToQueue, and shows an explicit existing-label queue confirmation.',
   failure: 'Retrying Print to Queue can try to buy a second label and show Cannot create label for shipped order.',
-  fix: 'Restore queueExistingLabelAfterCreateConflict and call it only for queue-mode create-label conflicts.',
+  fix: 'Restore queueExistingLabelAfterCreateConflict, queue the stored label, and show the Existing label added to print queue success toast.',
 });
 
 report.check({
