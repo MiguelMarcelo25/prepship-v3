@@ -234,8 +234,9 @@
 .inventory-stock-table-shell > .ps-data-table-scroll{
   flex:0 1 auto;
   min-height:0;
-  overflow:visible;
+  overflow:auto;
   overscroll-behavior:auto;
+  max-height:clamp(380px, calc(100dvh - 360px), 720px);
 }
 
 .inventory-stock-table-shell > .data-table-pagination-bar{

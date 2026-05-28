@@ -60,6 +60,7 @@ type ShipStationAwaitingParityRunStatus = {
   localChecked: number;
   findings: number;
   safeCandidates: number;
+  testFixtureCleanup: number;
   blocked: number;
   needsConfirmation: number;
   shippedOverrideEligible: number;
@@ -152,6 +153,19 @@ function statusFromMarketplace(rows: LocalRow): PrepShipOrderStatus | null {
     if (target && target !== 'awaiting_shipment') return target;
   }
   return null;
+}
+
+function isTestFixtureFinding(
+  finding: ReturnType<typeof classifyShipStationAwaitingParity>[number],
+): boolean {
+  const orderNumber = String(finding.orderNumber ?? '').trim().toUpperCase();
+  const externalOrderId = String(finding.externalOrderId ?? '').trim().toUpperCase();
+  return (
+    finding.kind === 'local_awaiting_missing_from_shipstation' &&
+    (orderNumber.startsWith('TESTING-') ||
+      externalOrderId.startsWith('TEST-ORDER-') ||
+      finding.storeId === null)
+  );
 }
 
 async function loadSyncAccounts(sql: Sql, requestedStoreIds?: number[]): Promise<SyncAccount[]> {
@@ -458,12 +472,15 @@ async function main(): Promise<void> {
     const actionable = findings.filter((finding) => finding.kind !== 'in_sync');
     const safe = actionable.filter(shouldApplyShipStationAwaitingParityCandidate);
     const overrideSafe = actionable.filter(shouldApplyShipStationAwaitingParityOverrideCandidate);
+    const testFixtureCleanup = actionable.filter(isTestFixtureFinding);
     const blocked = actionable.filter((finding) => finding.blockedByLockdown);
-    const needsConfirmation = actionable.filter((finding) => finding.targetStatus === null);
+    const needsConfirmation = actionable.filter(
+      (finding) => finding.targetStatus === null && !isTestFixtureFinding(finding),
+    );
 
     console.log(`\n[shipstation-awaiting] ${apply ? 'APPLY' : 'DRY RUN'}`);
     console.log(
-      `liveAwaiting=${liveAwaiting.length} localChecked=${localRows.length} findings=${actionable.length} safeCandidates=${safe.length} blocked=${blocked.length} needsConfirmation=${needsConfirmation.length}`,
+      `liveAwaiting=${liveAwaiting.length} localChecked=${localRows.length} findings=${actionable.length} safeCandidates=${safe.length} testFixtureCleanup=${testFixtureCleanup.length} blocked=${blocked.length} needsConfirmation=${needsConfirmation.length}`,
     );
 
     if (allowShippedOverride) {
@@ -483,6 +500,8 @@ async function main(): Promise<void> {
           evidence: finding.sourceEvidence.join(', ') || '-',
           apply: shouldApplyShipStationAwaitingParityCandidate(finding)
             ? 'safe'
+            : isTestFixtureFinding(finding)
+              ? 'test-fixture'
             : allowShippedOverride && shouldApplyShipStationAwaitingParityOverrideCandidate(finding)
               ? 'override'
               : 'no',
@@ -508,6 +527,13 @@ async function main(): Promise<void> {
         console.log(
           `- ${finding.orderNumber} (${finding.id}) ${finding.currentStatus} -> ${finding.targetStatus}: ${eligible}; ${finding.reason}`,
         );
+      }
+    }
+
+    if (testFixtureCleanup.length) {
+      console.log('\nTest fixture/data cleanup candidates:');
+      for (const finding of testFixtureCleanup) {
+        console.log(`- ${finding.orderNumber} (${finding.id}): test/non-live awaiting row missing from live ShipStation awaiting`);
       }
     }
 
@@ -547,6 +573,7 @@ async function main(): Promise<void> {
       localChecked: localRows.length,
       findings: actionable.length,
       safeCandidates: safe.length,
+      testFixtureCleanup: testFixtureCleanup.length,
       blocked: blocked.length,
       needsConfirmation: needsConfirmation.length,
       shippedOverrideEligible: overrideSafe.length,
