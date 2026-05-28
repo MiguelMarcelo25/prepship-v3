@@ -1964,6 +1964,7 @@ export default function OrdersView({
   }, [tableDensity])
 
   const [singleActionBusy, setSingleActionBusy] = useState(false)
+  const singleActionBusyRef = useRef(false)
   const [shipmentDetailsSaving, setShipmentDetailsSaving] = useState(false)
   const queueActionProgressTimerRef = useRef<number | null>(null)
   const queueActionHeartbeatTimerRef = useRef<number | null>(null)
@@ -4230,6 +4231,8 @@ export default function OrdersView({
       })()
       return response
     }
+    if (singleActionBusyRef.current) return null
+    singleActionBusyRef.current = true
     setSingleActionBusy(true)
     try {
       const labelRequestStarted = performance.now()
@@ -4272,10 +4275,19 @@ export default function OrdersView({
 
       return schedulePostLabelFollowups(response)
     } catch (error) {
+      if (mode === 'queue') {
+        try {
+          if (await queueExistingLabelAfterCreateConflict(order, error)) return null
+        } catch (queueError) {
+          showToast(queueError instanceof Error ? queueError.message : 'Failed to queue existing label', 'error')
+          return null
+        }
+      }
       showLabelPdfPlaceholderMessage(labelPopup, 'Label creation failed', error instanceof Error ? error.message : 'Label creation failed')
       showToast(error instanceof Error ? error.message : 'Label creation failed', 'error')
       return null
     } finally {
+      singleActionBusyRef.current = false
       setSingleActionBusy(false)
     }
   }
@@ -4958,6 +4970,47 @@ export default function OrdersView({
       showLabelPdfPlaceholderMessage(labelPopup, 'Could not retrieve label', error instanceof Error ? error.message : 'Failed to retrieve label')
       showToast(error instanceof Error ? error.message : 'Failed to retrieve label', 'error')
     }
+  }
+
+  function isExistingLabelCreateConflict(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error ?? '')
+    const lower = message.toLowerCase()
+    return (
+      lower.includes('cannot create label for shipped order') ||
+      lower.includes('cannot create label for cancelled order') ||
+      lower.includes('label already exists for this order')
+    )
+  }
+
+  async function queueExistingLabelAfterCreateConflict(order: OrderSummaryDto, error: unknown) {
+    if (!isExistingLabelCreateConflict(error)) return false
+
+    // Per user override unlock shipped data on 2026-05-23: read the existing
+    // shipped label and queue it; do not create new postage for shipped rows.
+    const data = await apiClient.retrieveLabel(order.orderId, true)
+    const queueableLabelUrl = getQueueableLabelUrl(data.labelUrl)
+    if (!queueableLabelUrl) {
+      throw new Error('Existing label URL is not queueable - reprint the label and try again.')
+    }
+    if (order.clientId == null) {
+      throw new Error('Missing client id - existing label was not added to the print queue')
+    }
+
+    const result = await apiClient.addToQueue(buildQueueAddPayload(order, queueableLabelUrl))
+    if (!result?.queue_entry_id && !result?.already_queued) {
+      throw new Error('Existing label was found, but the queue add was not confirmed. Try Print to Queue again.')
+    }
+
+    await hydrateQueue(true)
+    await refetchOrders()
+    showToast(
+      formatQueuedOrderToast(
+        order.orderNumber ?? order.orderId,
+        getActiveItems(order, orderDetailsById.get(order.orderId) ?? null),
+      ),
+      'success',
+    )
+    return true
   }
 
   async function openRateBrowser() {
@@ -6487,7 +6540,7 @@ export default function OrdersView({
       case 'qty': {
         const totalQuantity = getTotalQuantity(order, detail)
         return (
-          <div style={{ textAlign: 'left', fontWeight: 700, color: 'var(--text2)' }}>
+          <div style={{ display: 'flex', justifyContent: 'center', width: '100%', fontWeight: 700, color: 'var(--text2)' }}>
             {totalQuantity > 1 ? (
               <span style={{ display: 'inline-block', padding: '1px 6px', border: '2px solid var(--red)', borderRadius: 4, color: 'var(--red)' }}>{totalQuantity}</span>
             ) : (

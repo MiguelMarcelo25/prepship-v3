@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { and, eq, inArray, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
 import { clients } from '../db/schema/clients';
 import { printQueue, type PrintQueueEntry } from '../db/schema/print-queue';
 import { settings } from '../db/schema/settings';
+import { shipments } from '../db/schema/shipments';
 import { extractShipstationLabelUrl } from '../lib/shipstation/labels';
 import { createLabelV2, type CreateLabelInputDto } from './labels';
 
@@ -369,6 +370,26 @@ function getExistingLabelUrl(err: unknown): string | null {
   return typeof labelUrl === 'string' && labelUrl ? labelUrl : null;
 }
 
+async function findExistingQueueableLabelForOrder(orderId: number): Promise<string | null> {
+  // Per user override unlock shipped data on 2026-05-23: read-only recovery for
+  // shipped orders whose label exists but was not queued after creation.
+  const [row] = await db
+    .select({ labelUrl: shipments.labelUrl })
+    .from(shipments)
+    .where(
+      and(
+        eq(shipments.orderId, orderId),
+        eq(shipments.voided, false),
+        eq(shipments.isReturn, false)
+      )
+    )
+    .orderBy(desc(shipments.createdAt))
+    .limit(1);
+
+  if (!row?.labelUrl) return null;
+  return normalizePrintQueueLabelUrl(row.labelUrl);
+}
+
 function normalizeScopeIds(values: number[] | undefined): number[] {
   if (!Array.isArray(values)) return [];
   return Array.from(
@@ -495,19 +516,25 @@ async function processQueueSendOrder(
   let trackingNumber: string | null = null;
 
   if (!labelUrl) {
-    if (!order.label) throw new Error('Missing label payload');
-    try {
-      const created = await createLabelV2({
-        ...order.label,
-        orderId: order.orderId,
-        orderNumber: order.orderNumber ?? order.label.orderNumber,
-      });
-      labelUrl = created.labelUrl;
-      trackingNumber = created.trackingNumber;
-    } catch (err) {
-      const existingLabelUrl = getExistingLabelUrl(err);
-      if (!existingLabelUrl) throw err;
+    let existingLabelUrl = await findExistingQueueableLabelForOrder(order.orderId);
+    if (existingLabelUrl) {
       labelUrl = existingLabelUrl;
+    } else if (!order.label) {
+      throw new Error('Missing label payload');
+    } else {
+      try {
+        const created = await createLabelV2({
+          ...order.label,
+          orderId: order.orderId,
+          orderNumber: order.orderNumber ?? order.label.orderNumber,
+        });
+        labelUrl = created.labelUrl;
+        trackingNumber = created.trackingNumber;
+      } catch (err) {
+        existingLabelUrl = getExistingLabelUrl(err);
+        if (!existingLabelUrl) throw err;
+        labelUrl = existingLabelUrl;
+      }
     }
   }
 
