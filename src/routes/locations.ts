@@ -5,7 +5,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import { db } from '../db/client';
 import { locations } from '../db/schema/locations';
 import { setDefaultLocation } from '../services/locations';
-import { ssV1Request } from '../lib/shipstation/v1-client';
+import { listShipStationWarehouses } from '../connectors/store/shipstation';
 
 const app = new Hono();
 
@@ -70,24 +70,7 @@ app.post('/:id{[0-9]+}/default', async (c) => {
 
 // Pull warehouses from ShipStation v1 and upsert into locations.
 app.post('/sync', async (c) => {
-  type SSWarehouse = {
-    warehouseId: number;
-    warehouseName: string;
-    isDefault?: boolean;
-    originAddress?: {
-      name?: string;
-      company?: string | null;
-      street1?: string;
-      street2?: string | null;
-      city?: string;
-      state?: string;
-      postalCode?: string;
-      country?: string;
-      phone?: string | null;
-    };
-  };
-
-  const warehouses = await ssV1Request<SSWarehouse[]>('/warehouses', {
+  const warehouses = await listShipStationWarehouses({
     dedupeKey: 'warehouses:list',
   });
 

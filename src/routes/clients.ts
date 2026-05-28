@@ -6,7 +6,7 @@ import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { clients } from '../db/schema/clients';
 import { orders } from '../db/schema/orders';
-import { ssV1Request } from '../lib/shipstation/v1-client';
+import { listShipStationStores } from '../connectors/store/shipstation';
 import { publicClient } from '../lib/public-client';
 import {
   filterClientsForScope,
@@ -218,18 +218,7 @@ app.post(
 // updated with name/email/phone; otherwise a new client is created with
 // storeIds: [storeId].
 app.post('/sync-stores', async (c) => {
-  type SSStore = {
-    storeId: number;
-    storeName: string;
-    marketplaceName?: string;
-    accountName?: string | null;
-    email?: string | null;
-    phone?: string | null;
-    companyName?: string | null;
-    active?: boolean;
-  };
-
-  const stores = await ssV1Request<SSStore[]>('/stores', {
+  const stores = await listShipStationStores({
     dedupeKey: 'stores:list',
   });
 

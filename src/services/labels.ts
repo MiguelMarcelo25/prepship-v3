@@ -4,7 +4,6 @@ import { db } from '../db/client';
 import { shipments } from '../db/schema/shipments';
 import { orders, orderOverrides } from '../db/schema/orders';
 import { clients } from '../db/schema/clients';
-import { ssRequest } from '../lib/shipstation/client';
 import {
   extractShipstationLabelUrl,
   ssCreateReturnLabel,

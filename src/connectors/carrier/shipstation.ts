@@ -35,12 +35,38 @@ type ShipStationCreateLabelInput =
   | ShipStationCreateLabelFromRateInput
   | ShipStationCreateLabelFromShipmentInput;
 
+type ShipStationV2ListInput = {
+  apiKeyV2?: string;
+  apiKey?: string;
+  dedupeKey?: string;
+};
+
 function isRateLabelInput(input: ShipStationCreateLabelInput): input is ShipStationCreateLabelFromRateInput {
   return 'rateId' in input;
 }
 
 function isShipmentLabelInput(input: ShipStationCreateLabelInput): input is ShipStationCreateLabelFromShipmentInput {
   return 'shipment' in input;
+}
+
+export async function listShipStationV2Shipments<TList>(
+  query: URLSearchParams,
+  input: ShipStationV2ListInput = {},
+): Promise<TList> {
+  return ssRequest<TList>(`/v2/shipments?${query.toString()}`, {
+    apiKey: input.apiKeyV2 ?? input.apiKey,
+    dedupeKey: input.dedupeKey,
+  });
+}
+
+export async function listShipStationV2Labels<TList>(
+  query: URLSearchParams,
+  input: ShipStationV2ListInput = {},
+): Promise<TList> {
+  return ssRequest<TList>(`/v2/labels?${query.toString()}`, {
+    apiKey: input.apiKeyV2 ?? input.apiKey,
+    dedupeKey: input.dedupeKey,
+  });
 }
 
 export function createShipStationCarrierConnector(): CarrierConnector<

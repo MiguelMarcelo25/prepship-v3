@@ -18,6 +18,7 @@ import {
   verifySupabaseJwt,
 } from '../auth/verify-supabase-jwt';
 import { corsHeaders } from '../http/cors';
+import { listCarrierAccounts } from '../../services/carrier-connector-orchestrator';
 
 interface SsCarrier {
   carrier_id: string;
@@ -32,9 +33,6 @@ interface TaggedCarrier extends SsCarrier {
   source_client_id: number | null;
 }
 
-const SHIPSTATION_BASE = 'https://api.shipengine.com/v2';
-const SHIPSTATION_TIMEOUT_MS = 8_000;
-
 interface FetchResult {
   carriers: SsCarrier[];
   error: string | null;
@@ -47,35 +45,21 @@ function publicCarrierFetchError(result: FetchResult): string | null {
   return 'ShipStation carrier request failed';
 }
 
-async function fetchSsCarriers(apiKeyV2: string): Promise<FetchResult> {
+async function fetchSsCarriers(apiKeyV2: string, keySource: string): Promise<FetchResult> {
   if (!apiKeyV2) return { carriers: [], error: 'no key configured', status: null };
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), SHIPSTATION_TIMEOUT_MS);
   try {
-    const res = await fetch(`${SHIPSTATION_BASE}/carriers`, {
-      headers: { 'API-Key': apiKeyV2, 'Accept': 'application/json' },
-      signal: ctrl.signal,
+    const data = await listCarrierAccounts('shipstation', {
+      apiKeyV2,
+      dedupeKey: `imported-rates-multi:carriers:${keySource}`,
     });
-    if (!res.ok) {
-      let body = '';
-      try {
-        body = (await res.text()).slice(0, 200);
-      } catch {
-        /* ignore */
-      }
-      return { carriers: [], error: `ShipStation ${res.status}: ${body || res.statusText}`, status: res.status };
-    }
-    const data = (await res.json()) as { carriers?: SsCarrier[] };
     return {
       carriers: Array.isArray(data?.carriers) ? data.carriers : [],
       error: null,
-      status: res.status,
+      status: 200,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { carriers: [], error: msg, status: null };
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -124,7 +108,7 @@ export default async function handler(req: any, res: any): Promise<void> {
     if (!t.keyValue) return;
     if (seenKeys.has(t.keyValue)) return;
     seenKeys.add(t.keyValue);
-    tasks.push({ ...t, p: fetchSsCarriers(t.keyValue) });
+    tasks.push({ ...t, p: fetchSsCarriers(t.keyValue, t.keySource) });
   };
 
   queueTask({

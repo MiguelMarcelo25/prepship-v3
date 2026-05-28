@@ -3,16 +3,18 @@
 //   1. Inspect the existing rate_cache to see whether old entries are
 //      missing UPS Ground Saver / SurePost (they should be, since the OLD
 //      filter stripped them before caching).
-//   2. Optionally call /v2/rates/estimate against ORION (or another UPS
-//      account) directly via ssRequest, bypassing isBlockedRate, and
+//   2. Optionally quote ShipStation rates against ORION (or another UPS
+//      account) through the CarrierConnector boundary, bypassing isBlockedRate, and
 //      confirm the SS API itself returns ups_surepost_* service codes.
 //      The OLD code would block these; the NEW code passes them through.
 import 'dotenv/config';
 import { sql as pgClient, db } from '../src/db/client';
 import { sql, like } from 'drizzle-orm';
 import { rateCache } from '../src/db/schema/rates';
-import { ssRequest } from '../src/lib/shipstation';
-import type { CarriersResponse } from '../src/lib/shipstation/types';
+import {
+  listCarrierAccounts,
+  quoteCarrierRates,
+} from '../src/services/carrier-connector-orchestrator';
 
 function log(label: string, value: unknown) {
   console.log(`  ${label.padEnd(34)} ${JSON.stringify(value)}`);
@@ -52,12 +54,18 @@ async function main() {
 
   // 2. Live probe of one UPS carrier account to prove SS API actually returns
   //    ups_surepost_* service codes for a typical residential parcel. We
-  //    bypass isBlockedRate entirely — straight raw SS response.
+  //    bypass isBlockedRate entirely via the connector-normalized response.
   console.log('Discovering UPS carriers from ShipStation...');
-  const carriers = await ssRequest<CarriersResponse>('/v2/carriers', {
+  const carriers = await listCarrierAccounts('shipstation', {
     dedupeKey: 'verify-ground-saver:carriers',
   });
-  const upsCarriers = (carriers.carriers ?? []).filter(
+  const upsCarriers = ((carriers.carriers ?? []) as Array<{
+    carrier_id?: string;
+    carrier_code?: string;
+    nickname?: string;
+    friendly_name?: string;
+    disabled_by_billing_plan?: boolean;
+  }>).filter(
     (c) => (c.carrier_code ?? '').toLowerCase() === 'ups' && !c.disabled_by_billing_plan
   );
   log('UPS carriers found', upsCarriers.length);
@@ -91,18 +99,17 @@ async function main() {
     dimensions: { length: 11, width: 8, height: 5, unit: 'inch' as const },
   };
 
-  let payload: EstimateRate[] | { rates?: EstimateRate[] };
+  let rates: EstimateRate[];
   try {
-    payload = await ssRequest('/v2/rates/estimate', {
-      method: 'POST',
+    const payload = await quoteCarrierRates('shipstation', {
       body: probeBody,
       dedupeKey: `verify-ground-saver:estimate:${sample.carrier_id}`,
     });
+    rates = payload.rates as EstimateRate[];
   } catch (err) {
     console.log('  SS API probe failed:', err instanceof Error ? err.message : err);
     return;
   }
-  const rates = Array.isArray(payload) ? payload : (payload.rates ?? []);
   log('rates returned by SS', rates.length);
   console.log('');
 

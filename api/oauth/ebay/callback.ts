@@ -23,6 +23,7 @@
 // already in our store_accounts table the exchange will fail.
 
 import postgres from 'postgres';
+import { exchangeEbayAuthorizationCode } from '../../../src/connectors/store/ebay.js';
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c] as string));
@@ -122,11 +123,6 @@ export default async function handler(req: any, res: any): Promise<void> {
       ));
       return;
     }
-    const useSandbox = String(creds?.environment ?? '').toLowerCase() === 'sandbox';
-    const tokenUrl = useSandbox
-      ? 'https://api.sandbox.ebay.com/identity/v1/oauth2/token'
-      : 'https://api.ebay.com/identity/v1/oauth2/token';
-
     // eBay's OAuth exchange wants redirect_uri to be the RuName, not the
     // callback URL. The RuName itself points eBay to our accept/decline URLs.
     const redirectUri = String(
@@ -147,40 +143,32 @@ export default async function handler(req: any, res: any): Promise<void> {
       return;
     }
 
-    const basic = Buffer.from(`${appId}:${certId}`).toString('base64');
-    const tokenRes = await fetch(tokenUrl, {
-      method: 'POST',
-      headers: {
-        Authorization: `Basic ${basic}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Accept: 'application/json',
-      },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
+    let tokenData: { accessToken?: string; refreshToken?: string; expiresIn?: number; tokenUrl: string };
+    try {
+      tokenData = await exchangeEbayAuthorizationCode({
+        credentials: creds,
         code,
-        redirect_uri: redirectUri,
-      }).toString(),
-    });
-    if (!tokenRes.ok) {
-      const t = await tokenRes.text().then((s) => s.slice(0, 500)).catch(() => '');
+        redirectUri,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       res.status(200).end(htmlPage(
         'Token exchange failed',
         `<h1 class="error">eBay rejected the authorization code</h1>
-         <p>HTTP ${tokenRes.status}: <code>${escapeHtml(t)}</code></p>
+         <p><code>${escapeHtml(message)}</code></p>
          <p>Common causes: the App ID / Cert ID saved in PrepShip don't match the
             keyset used to start the sign-in, or this RuName doesn't match
             the keyset used by the consent page.</p>
          <div class="box">
            <strong>What I tried:</strong><br>
-           <code>POST ${escapeHtml(tokenUrl)}</code><br>
+           <code>POST eBay OAuth token endpoint</code><br>
            <code>App ID: ${escapeHtml(appId.slice(0, 24))}…</code><br>
            <code>redirect_uri/RuName: ${escapeHtml(redirectUri)}</code>
          </div>`,
       ));
       return;
     }
-    const tokenData = (await tokenRes.json()) as { access_token?: string; refresh_token?: string; expires_in?: number };
-    const refreshToken = tokenData?.refresh_token;
+    const refreshToken = tokenData?.refreshToken;
     if (!refreshToken) {
       res.status(200).end(htmlPage(
         'No refresh token returned',
@@ -203,7 +191,7 @@ export default async function handler(req: any, res: any): Promise<void> {
       WHERE id = ${row.id}
     `;
 
-    const expiresIn = Number(tokenData?.expires_in ?? 0);
+    const expiresIn = Number(tokenData?.expiresIn ?? 0);
     res.status(200).end(htmlPage(
       'eBay connected',
       `<h1 class="success">✅ eBay connected to PrepShip</h1>

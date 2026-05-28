@@ -52,22 +52,10 @@ These files currently contain direct provider calls or provider-client usage out
 | File | Provider Area | Target Owner | Migration Phase |
 | --- | --- | --- | --- |
 | `api/_lib/walmart-fees-sync.ts` | Walmart fees | Walmart StoreConnector or connector-owned helper | Phase 3 |
-| `api/carriers/labels.ts` | Carrier labels | CarrierConnector label orchestration | Phase 4 |
 | `api/carriers/verify.ts` | Carrier verification | CarrierConnector diagnostics | Phase 4 |
 | `api/carriers/walmart/fees.ts` | Walmart fees | Walmart StoreConnector or connector-owned helper | Phase 3 |
 | `api/cron/sync-walmart-fees.ts` | Walmart fee sync cron | Walmart StoreConnector or connector-owned helper | Phase 3 |
-| `api/oauth/ebay/callback.ts` | eBay OAuth/API token flow | eBay connector-owned auth helper | Phase 3 |
-| `scripts/reconcile-shipstation-awaiting.ts` | ShipStation order reconciliation | ShipStation StoreConnector status/order sync | Phase 2 |
-| `scripts/recover-marketplace-notifications.ts` | Marketplace notification recovery | StoreConnector confirmation/outbox orchestration | Phase 3 |
-| `scripts/sync-shipstation-products.ts` | ShipStation product sync | ShipStation StoreConnector or connector-owned catalog helper | Phase 2 |
-| `scripts/verify-ground-saver-fix.ts` | ShipStation rate verification | ShipStation CarrierConnector diagnostics | Phase 4 |
 | `src/lib/imported-handlers/carriers-verify.ts` | Carrier verification | CarrierConnector diagnostics | Phase 4 |
-| `src/lib/imported-handlers/rates-multi.ts` | Carrier rates | CarrierConnector rate orchestration | Phase 4 |
-| `src/routes/clients.ts` | ShipStation stores/accounts | StoreConnector/account orchestration | Phase 2 |
-| `src/routes/locations.ts` | ShipStation locations | ShipStation connector-owned helper | Phase 2 |
-| `src/services/inventory-enrichment.ts` | ShipStation product/order enrichment | ShipStation StoreConnector or connector-owned helper | Phase 2 |
-| `src/services/labels.ts` | ShipStation label creation | CarrierConnector label orchestration | Phase 4 |
-| `src/services/shipment-sync.ts` | ShipStation shipment sync | StoreConnector/CarrierConnector sync orchestration | Phase 2 |
 
 ## Migration Map
 
@@ -97,6 +85,13 @@ Phase 2 slice added on 2026-05-27:
 - `src/services/order-sync.ts` calls `importStoreOrders('shipstation', ...)` instead of `ssV1Request`.
 - `src/services/order-sync.ts` remains responsible for account watermarks, client/store attribution, status catch-up, and existing persistence semantics.
 
+Phase 2 ShipStation store/catalog/shipment helper slice added on 2026-05-28:
+
+- `src/connectors/store/shipstation.ts` now owns connector helper calls for ShipStation stores, warehouses, products, order listing, and v1 shipment listing.
+- `src/connectors/carrier/shipstation.ts` now owns connector helper calls for ShipStation v2 shipment and label listing used by provider-account enrichment.
+- `src/routes/clients.ts`, `src/routes/locations.ts`, `src/services/inventory-enrichment.ts`, `scripts/sync-shipstation-products.ts`, `scripts/reconcile-shipstation-awaiting.ts`, and `src/services/shipment-sync.ts` now call connector-owned helpers instead of low-level ShipStation request clients.
+- These routes/services/scripts still own PrepShip persistence, reconciliation decisions, and reporting; only provider API access moved behind the connector boundary.
+
 Phase 3: Move Walmart/eBay store import and marketplace operations.
 
 - Convert `api/carriers/walmart/orders.ts` and `api/carriers/ebay/orders.ts` into thin wrappers over StoreConnector import orchestration.
@@ -109,6 +104,12 @@ Phase 3 order-import slice added on 2026-05-27:
 - `api/carriers/ebay/orders.ts` now calls `importStoreOrders('ebay', ...)` and no longer calls eBay APIs directly.
 - `src/connectors/store/walmart.ts` owns Walmart order token/API fetch logic.
 - `src/connectors/store/ebay.ts` owns eBay order token/API fetch logic.
+
+Phase 3 eBay OAuth callback slice added on 2026-05-28:
+
+- `api/oauth/ebay/callback.ts` now calls connector-owned `exchangeEbayAuthorizationCode(...)` for the authorization-code exchange.
+- `src/connectors/store/ebay.ts` owns the eBay OAuth token endpoint and redacted error handling for that exchange.
+- The callback route still owns redirect HTML rendering, credential row selection, and refresh-token persistence.
 
 Phase 4: Move rates, labels, carrier diagnostics, and direct-carrier handlers.
 
@@ -238,6 +239,12 @@ Phase 4 Walmart post-label confirmation slice added on 2026-05-28:
 - `src/connectors/store/walmart.ts` remains the owner of the Walmart `/v3/orders/{purchaseOrderId}/shipping` marketplace confirmation call.
 - The labels route still owns local shipment/outbox status updates after the StoreConnector confirmation result.
 
+Phase 4 Walmart label-context lookup cleanup added on 2026-05-28:
+
+- `api/carriers/labels.ts` now uses connector-owned `lookupWalmartOrderByCustomerOrderId(...)` for Walmart source-order lookup during Walmart Shipping label creation.
+- `src/connectors/store/walmart.ts` owns the Walmart token and `/v3/orders` lookup calls used by that label context.
+- The labels route still owns local order-context lookup, order editability checks, direct-label persistence, marketplace outbox enqueueing, and response shaping.
+
 Phase 4 UPS credential-probe slice added on 2026-05-28:
 
 - `api/carriers/ups/probe.ts` now routes UPS credential probing through connector-owned `probeUpsCredentials(...)`.
@@ -261,6 +268,13 @@ Phase 4 rate-scoping diagnostic slice added on 2026-05-28:
 - `scripts/probe-rate-scoping.ts` now routes ShipStation carrier-account probing through `listCarrierAccounts('shipstation', ...)`.
 - `src/connectors/carrier/shipstation.ts` remains the owner of the ShipStation `/v2/carriers` call.
 - The diagnostic script still owns client credential-resolution reporting and console output.
+
+Phase 4 diagnostic carrier-orchestration cleanup added on 2026-05-28:
+
+- `src/lib/imported-handlers/rates-multi.ts` now uses `listCarrierAccounts('shipstation', ...)` for multi-account ShipStation carrier fan-out.
+- `scripts/verify-ground-saver-fix.ts` now uses `listCarrierAccounts('shipstation', ...)` and `quoteCarrierRates('shipstation', ...)` for the live diagnostic probe.
+- `src/services/labels.ts` no longer carries a stale direct ShipStation request import after the label-purchase paths moved through `createCarrierLabel('shipstation', ...)`.
+- `scripts/recover-marketplace-notifications.ts` only had stale direct-helper references in comments; those were rewritten without changing recovery behavior.
 
 Phase 5: Tighten guards.
 

@@ -3,8 +3,11 @@ import { db } from '../db/client';
 import { orders } from '../db/schema/orders';
 import { shipments } from '../db/schema/shipments';
 import { clients } from '../db/schema/clients';
-import { ssV1Request } from '../lib/shipstation/v1-client';
-import { ssRequest } from '../lib/shipstation/client';
+import { listShipStationShipments } from '../connectors/store/shipstation';
+import {
+  listShipStationV2Labels,
+  listShipStationV2Shipments,
+} from '../connectors/carrier/shipstation';
 import { deductInventoryForOrder } from './fulfillment-deductions';
 import { getSettingNumber, setSetting } from './settings';
 
@@ -338,7 +341,7 @@ type ShipmentSyncAccount = {
 };
 
 async function loadShipmentSyncAccounts(): Promise<ShipmentSyncAccount[]> {
-  // Main account's V2 key comes from env; ssRequest already falls back to
+  // Main account's V2 key comes from env; the connector-owned ShipStation client falls back to
   // env.SHIPSTATION_API_KEY_V2 when apiKey is undefined, so we mirror that
   // explicitly here so the enrichment pass knows whether it can run for main.
   const { env } = await import('../lib/env');
@@ -424,14 +427,11 @@ export async function syncShipments(
           sortDir: 'ASC',
         });
 
-        const res = await ssV1Request<SSShipmentsList>(
-          `/shipments?${q.toString()}`,
-          {
-            apiKey: acct.apiKey,
-            apiSecret: acct.apiSecret,
-            dedupeKey: `shipments:list:${acct.label}:${sinceParam}:${page}:${pageSize}`,
-          }
-        );
+        const res = await listShipStationShipments<SSShipmentsList>(q, {
+          apiKey: acct.apiKey,
+          apiSecret: acct.apiSecret,
+          dedupeKey: `shipments:list:${acct.label}:${sinceParam}:${page}:${pageSize}`,
+        });
         if (res.pages > maxPages) maxPages = res.pages;
 
         // One batched upsert per page (pre-fetches orders + clients + existing
@@ -599,10 +599,10 @@ async function enrichProviderAccountIds(
     });
     let payload: { shipments?: V2ProviderRow[]; pages?: number };
     try {
-      payload = await ssRequest<{ shipments?: V2ProviderRow[]; pages?: number }>(
-        `/v2/shipments?${qs.toString()}`,
+      payload = await listShipStationV2Shipments<{ shipments?: V2ProviderRow[]; pages?: number }>(
+        qs,
         {
-          apiKey: acct.apiKeyV2,
+          apiKeyV2: acct.apiKeyV2,
           dedupeKey: `v2-shipments:enrich:${acct.label}:${createdAtStart}:${page}`,
         },
       );
@@ -640,10 +640,10 @@ async function enrichProviderAccountIds(
     });
     let payload: { labels?: V2ProviderRow[]; pages?: number };
     try {
-      payload = await ssRequest<{ labels?: V2ProviderRow[]; pages?: number }>(
-        `/v2/labels?${qs.toString()}`,
+      payload = await listShipStationV2Labels<{ labels?: V2ProviderRow[]; pages?: number }>(
+        qs,
         {
-          apiKey: acct.apiKeyV2,
+          apiKeyV2: acct.apiKeyV2,
           dedupeKey: `v2-labels:provider-enrich:${acct.label}:${createdAtStart}:${page}`,
         },
       );
@@ -654,10 +654,10 @@ async function enrichProviderAccountIds(
         sort_dir: 'DESC',
       });
       try {
-        payload = await ssRequest<{ labels?: V2ProviderRow[]; pages?: number }>(
-          `/v2/labels?${fallbackQs.toString()}`,
+        payload = await listShipStationV2Labels<{ labels?: V2ProviderRow[]; pages?: number }>(
+          fallbackQs,
           {
-            apiKey: acct.apiKeyV2,
+            apiKeyV2: acct.apiKeyV2,
             dedupeKey: `v2-labels:provider-enrich:fallback:${acct.label}:${page}`,
           },
         );

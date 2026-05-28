@@ -28,11 +28,11 @@
 
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import postgres from 'postgres';
-import { timedFetch } from '../../src/lib/http/timing.js';
 import { persistDirectCarrierLabel } from '../../src/services/direct-label-persistence.js';
 import { assertFulfillmentSchemaReady } from '../../src/services/fulfillment/schema-readiness.js';
 import { createCarrierLabel } from '../../src/services/carrier-connector-orchestrator.js';
 import { confirmStoreShipment } from '../../src/services/store-connector-orchestrator.js';
+import { lookupWalmartOrderByCustomerOrderId as lookupWalmartOrderByCustomerOrderIdForLabels } from '../../src/connectors/store/walmart.js';
 
 let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 function getJwks() {
@@ -401,106 +401,6 @@ function walmartEstimateList(data: any): any[] {
     (Array.isArray(data?.payload) && data.payload) ||
     (Array.isArray(data) ? data : [])
   );
-}
-
-async function getWalmartAccessTokenForLabels(creds: Record<string, unknown>): Promise<string> {
-  const clientId = String(creds?.clientId ?? '').trim();
-  const clientSecret = String(creds?.clientSecret ?? '').trim();
-  if (!clientId || !clientSecret) {
-    throw new Error('Walmart clientId and clientSecret are required');
-  }
-  const channelType = String(creds?.channelType ?? '').trim();
-  const basic = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
-  const correlationId = `prepship-label-${Date.now().toString(36)}`;
-  const headers: Record<string, string> = {
-    Authorization: `Basic ${basic}`,
-    'Content-Type': 'application/x-www-form-urlencoded',
-    Accept: 'application/json',
-    'WM_QOS.CORRELATION_ID': correlationId,
-    'WM_SVC.NAME': 'Walmart Marketplace',
-  };
-  if (channelType) headers['WM_CONSUMER.CHANNEL.TYPE'] = channelType;
-  const res = await timedFetch('api.carriers.labels.external', 'https://marketplace.walmartapis.com/v3/token', {
-    method: 'POST',
-    headers,
-    body: 'grant_type=client_credentials',
-  });
-  if (!res.ok) {
-    const t = await res.text().then((s) => s.slice(0, 300)).catch(() => '');
-    throw new Error(`Walmart OAuth ${res.status}: ${t || res.statusText}`);
-  }
-  const data = (await res.json()) as { access_token?: string };
-  if (!data?.access_token) throw new Error('Walmart OAuth response missing access_token');
-  return data.access_token;
-}
-
-function walmartMarketplaceHeaders(
-  creds: Record<string, unknown>,
-  token: string,
-  accept = 'application/json',
-  includeJsonContentType = false,
-): Record<string, string> {
-  const channelType = String(creds?.channelType ?? '').trim();
-  const partnerId = String(creds?.partnerId ?? creds?.sellerId ?? '').trim();
-  const headers: Record<string, string> = {
-    'WM_SEC.ACCESS_TOKEN': token,
-    'WM_QOS.CORRELATION_ID': `prepship-label-${Date.now().toString(36)}`,
-    'WM_SVC.NAME': 'Walmart Marketplace',
-    'WM_MARKET': 'us',
-    Accept: accept,
-  };
-  if (includeJsonContentType) headers['Content-Type'] = 'application/json';
-  if (channelType) headers['WM_CONSUMER.CHANNEL.TYPE'] = channelType;
-  if (partnerId) headers['WM_PARTNER.ID'] = partnerId;
-  return headers;
-}
-
-async function readWalmartError(res: Response): Promise<string> {
-  const text = await res.text().then((s) => s.slice(0, 800)).catch(() => '');
-  if (!text) return res.statusText;
-  try {
-    const parsed = JSON.parse(text) as { errors?: Array<{ info?: string; code?: string; description?: string }> };
-    const first = parsed.errors?.[0];
-    return first?.info || first?.description || first?.code || text;
-  } catch {
-    return text;
-  }
-}
-
-async function lookupWalmartOrderByCustomerOrderIdForLabels(
-  creds: Record<string, unknown>,
-  customerOrderId: string,
-): Promise<{ purchaseOrderId: string; rawOrder: any } | null> {
-  const trimmed = customerOrderId.trim();
-  if (!/^\d{8,}$/.test(trimmed)) return null;
-
-  let token: string;
-  try {
-    token = await getWalmartAccessTokenForLabels(creds);
-  } catch (err) {
-    console.warn('[carriers/labels] walmart token (lookup) failed:', err instanceof Error ? err.message : err);
-    return null;
-  }
-
-  const url = new URL('https://marketplace.walmartapis.com/v3/orders');
-  url.searchParams.set('customerOrderId', trimmed);
-  url.searchParams.set('productInfo', 'true');
-
-  try {
-    const res = await timedFetch('api.carriers.labels.external', url.toString(), {
-      headers: walmartMarketplaceHeaders(creds, token),
-    });
-    if (!res.ok) {
-      const msg = await readWalmartError(res);
-      console.warn(`[carriers/labels] walmart /v3/orders lookup ${res.status}: ${msg}`);
-      return null;
-    }
-    const data = (await res.json()) as { list?: { elements?: { order?: unknown[] | unknown } } };
-    return selectWalmartOrderByCustomerOrderId(data, trimmed);
-  } catch (err) {
-    console.warn('[carriers/labels] walmart /v3/orders lookup error:', err instanceof Error ? err.message : err);
-    return null;
-  }
 }
 
 function selectWalmartOrderByCustomerOrderId(

@@ -34,7 +34,7 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { inventory } from '../db/schema/inventory';
 import { clients } from '../db/schema/clients';
-import { ssV1Request } from '../lib/shipstation/v1-client';
+import { listShipStationProducts } from '../connectors/store/shipstation';
 
 export interface ImportSkusFromOrdersResult {
   inserted: number;
@@ -198,14 +198,13 @@ export async function syncShipStationProducts(): Promise<SyncShipStationProducts
 
     try {
       while (true) {
-        const res = await ssV1Request<SSProductsList>(
-          `/products?pageSize=500&page=${page}`,
-          {
-            apiKey: acct.apiKey,
-            apiSecret: acct.apiSecret,
-            dedupeKey: `products:list:${acct.label}:${page}`,
-          }
-        );
+        const res = await listShipStationProducts<SSProduct>({
+          pageSize: 500,
+          page,
+          apiKey: acct.apiKey,
+          apiSecret: acct.apiSecret,
+          dedupeKey: `products:list:${acct.label}:${page}`,
+        });
 
         for (const p of res.products) {
           const sku = (p.sku ?? '').trim();

@@ -12,7 +12,7 @@ import {
   shouldApplyShipStationAwaitingParityCandidate,
   shouldApplyShipStationAwaitingParityOverrideCandidate,
 } from '../api/_lib/shipstation-awaiting-parity.ts';
-import { ssV1Request } from '../src/lib/shipstation/v1-client.ts';
+import { listShipStationOrders } from '../src/connectors/store/shipstation.ts';
 
 type Sql = ReturnType<typeof postgres>;
 
@@ -219,7 +219,7 @@ async function fetchLiveAwaitingForAccount(
       });
       if (storeId !== undefined) q.set('storeId', String(storeId));
 
-      const response = await ssV1Request<SSOrdersList>(`/orders?${q.toString()}`, {
+      const response = await listShipStationOrders<SSOrdersList>(q, {
         apiKey: account.apiKey,
         apiSecret: account.apiSecret,
         dedupeKey: `awaiting-parity:${account.label}:${storeId ?? 'all'}:${page}:${options.pageSize}`,

@@ -9,7 +9,7 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { sql as pgClient, db } from '../src/db/client';
 import { inventory } from '../src/db/schema/inventory';
 import { clients } from '../src/db/schema/clients';
-import { ssV1Request } from '../src/lib/shipstation/v1-client';
+import { listShipStationProducts } from '../src/connectors/store/shipstation';
 
 type SSProduct = {
   productId: number;
@@ -53,10 +53,13 @@ async function main() {
     let acctInserted = 0, acctUpdated = 0;
     try {
       while (true) {
-        const res = await ssV1Request<SSProductsList>(
-          `/products?pageSize=500&page=${page}`,
-          { apiKey: acct.apiKey, apiSecret: acct.apiSecret, dedupeKey: `cli-products:${acct.label}:${page}` }
-        );
+        const res = await listShipStationProducts<SSProduct>({
+          pageSize: 500,
+          page,
+          apiKey: acct.apiKey,
+          apiSecret: acct.apiSecret,
+          dedupeKey: `cli-products:${acct.label}:${page}`,
+        });
         for (const p of res.products) {
           const sku = (p.sku ?? '').trim();
           if (!sku) { skipped += 1; continue; }

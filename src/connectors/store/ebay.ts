@@ -72,6 +72,47 @@ async function getEbayAccessToken(creds: Record<string, unknown>): Promise<strin
   return token;
 }
 
+export async function exchangeEbayAuthorizationCode(input: {
+  credentials: Record<string, unknown>;
+  code: string;
+  redirectUri: string;
+}): Promise<{ accessToken?: string; refreshToken?: string; expiresIn?: number; tokenUrl: string }> {
+  const appId = firstString(input.credentials.appId, input.credentials.app_id);
+  const certId = firstString(input.credentials.certId, input.credentials.cert_id);
+  if (!appId || !certId) {
+    throw new Error('eBay credentials missing appId/certId');
+  }
+
+  const useSandbox = firstString(input.credentials.environment).toLowerCase() === 'sandbox';
+  const tokenUrl = useSandbox
+    ? 'https://api.sandbox.ebay.com/identity/v1/oauth2/token'
+    : 'https://api.ebay.com/identity/v1/oauth2/token';
+  const basic = Buffer.from(`${appId}:${certId}`).toString('base64');
+  const res = await timedFetch('ebay.authorization-code', tokenUrl, {
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${basic}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Accept: 'application/json',
+    },
+    body: new URLSearchParams({
+      grant_type: 'authorization_code',
+      code: input.code,
+      redirect_uri: input.redirectUri,
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(`eBay authorization-code ${res.status}: ${await readEbayError(res)}`);
+  }
+  const data = await res.json() as { access_token?: string; refresh_token?: string; expires_in?: number };
+  return {
+    accessToken: firstString(data.access_token) || undefined,
+    refreshToken: firstString(data.refresh_token) || undefined,
+    expiresIn: Number(data.expires_in ?? 0),
+    tokenUrl,
+  };
+}
+
 function ebayOrderIdFrom(input: ShipmentConfirmationInput): string {
   const payload = input.payload ?? {};
   const explicit = firstString(payload.ebayOrderId, payload.orderIdForMarketplace, payload.sourceOrderId);

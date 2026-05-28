@@ -109,11 +109,11 @@ async function ackOrder(label: string, order: typeof orders.$inferSelect): Promi
   // Per-client creds are PREFERRED but not required. If a client has no
   // v1 keys of its own (common for sub-stores under a master ShipStation
   // account, e.g. Tran Agency at clientId=9), we pass undefined and let
-  // ssV1Request fall back to env.SHIPSTATION_API_KEY/SECRET — the same
+  // the ShipStation v1 client fall back to env.SHIPSTATION_API_KEY/SECRET - the same
   // env-level master credentials the order sync uses successfully.
   // Per the loadClientCredentials docstring contract:
-  //   "If nothing resolves, return all-null — callers fall through to
-  //    env defaults via ssRequest/ssV1Request."
+  //   "If nothing resolves, return all-null - callers fall through to
+  //    env defaults via ShipStation request clients."
   const creds = order.clientId ? await loadClientCredentials(order.clientId) : null;
   const apiKey = creds?.apiKey ?? undefined;
   const apiSecret = creds?.apiSecret ?? undefined;

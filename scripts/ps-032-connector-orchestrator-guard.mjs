@@ -19,15 +19,25 @@ const shipStationStoreConnector = read('src/connectors/store/shipstation.ts');
 const ratesRoute = read('src/routes/rates.ts');
 const packagesRoute = read('src/routes/packages.ts');
 const initRoute = read('src/routes/init.ts');
+const clientsRoute = read('src/routes/clients.ts');
+const locationsRoute = read('src/routes/locations.ts');
+const inventoryEnrichment = read('src/services/inventory-enrichment.ts');
+const syncShipStationProductsScript = read('scripts/sync-shipstation-products.ts');
+const reconcileShipStationAwaitingScript = read('scripts/reconcile-shipstation-awaiting.ts');
+const shipmentSyncService = read('src/services/shipment-sync.ts');
 const probeRateScopingScript = read('scripts/probe-rate-scoping.ts');
 const shipStationCarrierConnector = read('src/connectors/carrier/shipstation.ts');
 const walmartOrdersRoute = read('api/carriers/walmart/orders.ts');
 const ebayOrdersRoute = read('api/carriers/ebay/orders.ts');
+const ebayOauthCallback = read('api/oauth/ebay/callback.ts');
 const carrierRatesRoute = read('api/carriers/rates.ts');
 const carrierLabelsRoute = read('api/carriers/labels.ts');
 const validateAddressRoute = read('api/carriers/validate-address.ts');
 const upsProbeRoute = read('api/carriers/ups/probe.ts');
 const walmartProbeCarriersRoute = read('api/carriers/walmart/probe-carriers.ts');
+const importedRatesMultiHandler = read('src/lib/imported-handlers/rates-multi.ts');
+const verifyGroundSaverScript = read('scripts/verify-ground-saver-fix.ts');
+const recoverMarketplaceNotificationsScript = read('scripts/recover-marketplace-notifications.ts');
 const walmartStoreConnector = read('src/connectors/store/walmart.ts');
 const ebayStoreConnector = read('src/connectors/store/ebay.ts');
 const upsCarrierConnector = read('src/connectors/carrier/ups.ts');
@@ -121,12 +131,20 @@ assert(
   'eBay order route must call StoreConnector import orchestration, not eBay API directly',
 );
 assert(
+  ebayOauthCallback.includes('exchangeEbayAuthorizationCode') &&
+    !ebayOauthCallback.includes('api.ebay.com') &&
+    !ebayOauthCallback.includes('api.sandbox.ebay.com'),
+  'eBay OAuth callback must use connector-owned authorization-code exchange, not eBay API directly',
+);
+assert(
   walmartStoreConnector.includes('marketplace.walmartapis.com') &&
     walmartStoreConnector.includes('importOrders'),
   'Walmart StoreConnector must own Walmart order API import calls',
 );
 assert(
   carrierLabelsRoute.includes("confirmStoreShipment('walmart'") &&
+    carrierLabelsRoute.includes('lookupWalmartOrderByCustomerOrderId') &&
+    !carrierLabelsRoute.includes('marketplace.walmartapis.com') &&
     !carrierLabelsRoute.includes('confirmWalmartOrderShipped') &&
     !carrierLabelsRoute.includes('/v3/orders/${encodeURIComponent(input.purchaseOrderId)}/shipping'),
   'Walmart post-label marketplace confirmation must route through StoreConnector orchestration, not direct Walmart confirmation calls from api/carriers/labels.ts',
@@ -351,12 +369,41 @@ assert(
   'rate scoping probe must use CarrierConnector orchestration, not direct ShipStation API calls',
 );
 assert(
+  clientsRoute.includes('listShipStationStores') && !clientsRoute.includes('ssV1Request'),
+  'clients route ShipStation store sync must use connector-owned store listing helper, not ssV1Request directly',
+);
+assert(
+  locationsRoute.includes('listShipStationWarehouses') && !locationsRoute.includes('ssV1Request'),
+  'locations route ShipStation warehouse sync must use connector-owned warehouse listing helper, not ssV1Request directly',
+);
+assert(
+  inventoryEnrichment.includes('listShipStationProducts') && !inventoryEnrichment.includes('ssV1Request'),
+  'inventory enrichment product sync must use connector-owned ShipStation product helper, not ssV1Request directly',
+);
+assert(
+  syncShipStationProductsScript.includes('listShipStationProducts') && !syncShipStationProductsScript.includes('ssV1Request'),
+  'ShipStation product sync script must use connector-owned product helper, not ssV1Request directly',
+);
+assert(
+  reconcileShipStationAwaitingScript.includes('listShipStationOrders') && !reconcileShipStationAwaitingScript.includes('ssV1Request'),
+  'ShipStation awaiting reconciliation script must use connector-owned order helper, not ssV1Request directly',
+);
+assert(
+  shipmentSyncService.includes('listShipStationShipments') &&
+    shipmentSyncService.includes('listShipStationV2Shipments') &&
+    shipmentSyncService.includes('listShipStationV2Labels') &&
+    !shipmentSyncService.includes('ssV1Request') &&
+    !shipmentSyncService.includes('ssRequest'),
+  'shipment sync must use connector-owned ShipStation shipment helpers, not direct ShipStation request clients',
+);
+assert(
   labelsService.includes('listCarrierAccounts') &&
     !labelsService.includes("ssRequest<CarriersResponse>('/v2/carriers'"),
   'labels service carrier nickname resolver must use CarrierConnector orchestration, not direct ShipStation /v2/carriers calls',
 );
 assert(
   labelsService.includes('createCarrierLabel') &&
+    !labelsService.includes("from '../lib/shipstation/client'") &&
     !labelsService.includes('ssRequest<Label>(`/v2/labels/rates/${input.rateId}`') &&
     !labelsService.includes("ssRequest<Label>('/v2/labels'"),
   'labels service ShipStation label purchase helpers must use CarrierConnector orchestration, not direct ShipStation label API calls',
@@ -366,6 +413,23 @@ assert(
     shipStationCarrierConnector.includes("'/v2/labels'") &&
     shipStationCarrierConnector.includes('ssRequest<Label>'),
   'ShipStation CarrierConnector must own legacy ShipStation label purchase API calls',
+);
+assert(
+  importedRatesMultiHandler.includes('listCarrierAccounts') &&
+    !importedRatesMultiHandler.includes('api.shipengine.com') &&
+    !importedRatesMultiHandler.includes('fetch(`${SHIPSTATION_BASE}/carriers`'),
+  'imported rates-multi carrier fan-out must use CarrierConnector account listing, not direct ShipEngine calls',
+);
+assert(
+  verifyGroundSaverScript.includes('listCarrierAccounts') &&
+    verifyGroundSaverScript.includes('quoteCarrierRates') &&
+    !verifyGroundSaverScript.includes('ssRequest'),
+  'Ground Saver verification script must use CarrierConnector orchestration, not direct ShipStation API calls',
+);
+assert(
+  !recoverMarketplaceNotificationsScript.includes('ssRequest') &&
+    !recoverMarketplaceNotificationsScript.includes('ssV1Request'),
+  'marketplace notification recovery script must not carry stale direct ShipStation helper references',
 );
 
 assert.equal(

@@ -44,22 +44,10 @@ const approvedConnectorOwned = new Set([
 
 const transitionalDebt = new Set([
   'api/_lib/walmart-fees-sync.ts',
-  'api/carriers/labels.ts',
   'api/carriers/verify.ts',
   'api/carriers/walmart/fees.ts',
   'api/cron/sync-walmart-fees.ts',
-  'api/oauth/ebay/callback.ts',
-  'scripts/reconcile-shipstation-awaiting.ts',
-  'scripts/recover-marketplace-notifications.ts',
-  'scripts/sync-shipstation-products.ts',
-  'scripts/verify-ground-saver-fix.ts',
   'src/lib/imported-handlers/carriers-verify.ts',
-  'src/lib/imported-handlers/rates-multi.ts',
-  'src/routes/clients.ts',
-  'src/routes/locations.ts',
-  'src/services/inventory-enrichment.ts',
-  'src/services/labels.ts',
-  'src/services/shipment-sync.ts',
 ]);
 
 const ignoredFiles = new Set([

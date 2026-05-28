@@ -55,6 +55,47 @@ type SSOrdersList = {
   pages: number;
 };
 
+type ShipStationV1RequestOptions = {
+  apiKey?: string;
+  apiSecret?: string;
+  dedupeKey?: string;
+};
+
+type ShipStationStore = {
+  storeId: number;
+  storeName: string;
+  marketplaceName?: string;
+  accountName?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  companyName?: string | null;
+  active?: boolean;
+};
+
+type ShipStationWarehouse = {
+  warehouseId: number;
+  warehouseName: string;
+  isDefault?: boolean;
+  originAddress?: {
+    name?: string;
+    company?: string | null;
+    street1?: string;
+    street2?: string | null;
+    city?: string;
+    state?: string;
+    postalCode?: string;
+    country?: string;
+    phone?: string | null;
+  };
+};
+
+type ShipStationProductsList<TProduct = unknown> = {
+  products: TProduct[];
+  total: number;
+  page: number;
+  pages: number;
+};
+
 function toOunces(w?: SSOrder['weight']): number | null {
   if (!w || typeof w.value !== 'number') return null;
   switch (w.units) {
@@ -93,6 +134,62 @@ function externallyShippedFromRaw(o: SSOrder): boolean {
 
 function formatSSDate(ms: number): string {
   return new Date(ms).toISOString().replace('T', ' ').slice(0, 19);
+}
+
+export async function listShipStationStores(
+  options: ShipStationV1RequestOptions = {},
+): Promise<ShipStationStore[]> {
+  return ssV1Request<ShipStationStore[]>('/stores', {
+    apiKey: options.apiKey,
+    apiSecret: options.apiSecret,
+    dedupeKey: options.dedupeKey ?? 'stores:list',
+  });
+}
+
+export async function listShipStationWarehouses(
+  options: ShipStationV1RequestOptions = {},
+): Promise<ShipStationWarehouse[]> {
+  return ssV1Request<ShipStationWarehouse[]>('/warehouses', {
+    apiKey: options.apiKey,
+    apiSecret: options.apiSecret,
+    dedupeKey: options.dedupeKey ?? 'warehouses:list',
+  });
+}
+
+export async function listShipStationProducts<TProduct = unknown>(
+  input: ShipStationV1RequestOptions & { page: number; pageSize: number },
+): Promise<ShipStationProductsList<TProduct>> {
+  const q = new URLSearchParams({
+    pageSize: String(input.pageSize),
+    page: String(input.page),
+  });
+  return ssV1Request<ShipStationProductsList<TProduct>>(`/products?${q.toString()}`, {
+    apiKey: input.apiKey,
+    apiSecret: input.apiSecret,
+    dedupeKey: input.dedupeKey,
+  });
+}
+
+export async function listShipStationOrders<TList = SSOrdersList>(
+  query: URLSearchParams,
+  options: ShipStationV1RequestOptions = {},
+): Promise<TList> {
+  return ssV1Request<TList>(`/orders?${query.toString()}`, {
+    apiKey: options.apiKey,
+    apiSecret: options.apiSecret,
+    dedupeKey: options.dedupeKey,
+  });
+}
+
+export async function listShipStationShipments<TList>(
+  query: URLSearchParams,
+  options: ShipStationV1RequestOptions = {},
+): Promise<TList> {
+  return ssV1Request<TList>(`/shipments?${query.toString()}`, {
+    apiKey: options.apiKey,
+    apiSecret: options.apiSecret,
+    dedupeKey: options.dedupeKey,
+  });
 }
 
 export function normalizeShipStationOrder(raw: unknown): NormalizedOrder {
@@ -153,7 +250,7 @@ export function createShipStationStoreConnector(): StoreConnector {
       });
       if (input.storeId !== undefined) q.set('storeId', String(input.storeId));
 
-      const res = await ssV1Request<SSOrdersList>(`/orders?${q.toString()}`, {
+      const res = await listShipStationOrders<SSOrdersList>(q, {
         apiKey: input.credentials?.apiKey ?? undefined,
         apiSecret: input.credentials?.apiSecret ?? undefined,
         dedupeKey: input.dedupeKey,
