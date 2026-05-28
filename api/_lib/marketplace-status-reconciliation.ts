@@ -83,6 +83,17 @@ export function shouldUpdateMarketplaceOrderStatus(
   return currentStatus === 'awaiting_shipment' && targetStatus !== null && targetStatus !== 'awaiting_shipment';
 }
 
+function aggregateTerminalDuplicateStatus(statuses: unknown[]): PrepShipOrderStatus | null {
+  const normalized = statuses
+    .map((status) => cleanStatus(status))
+    .filter(Boolean);
+  if (!normalized.length) return null;
+  if (normalized.includes('awaiting_shipment')) return null;
+  if (normalized.includes('shipped')) return 'shipped';
+  if (normalized.every((status) => status === 'cancelled' || status === 'canceled')) return 'cancelled';
+  return null;
+}
+
 export async function hasExistingMarketplaceOrderRow(
   sql: MarketplaceSql,
   provider: MarketplaceProvider,
@@ -187,6 +198,54 @@ export async function reconcileMarketplaceOrderStatuses(
   for (const [orderNumber, sourceStatuses] of statusesByOrderNumber) {
     const targetStatus = aggregateMarketplaceOrderStatus(sourceStatuses, options.provider);
     if (!targetStatus || targetStatus === 'awaiting_shipment') {
+      const realRows = await sql<Array<{ currentStatus: string }>>`
+        SELECT order_status AS "currentStatus"
+        FROM orders
+        WHERE order_number = ${orderNumber}
+          AND external_order_id NOT LIKE ${syntheticPrefix}
+      `;
+      const duplicateTargetStatus = aggregateTerminalDuplicateStatus(
+        realRows.map((row) => row.currentStatus),
+      );
+      if (duplicateTargetStatus) {
+        const syntheticRows = await sql<Array<{
+          id: number;
+          orderNumber: string;
+          externalOrderId: string;
+          currentStatus: string;
+        }>>`
+          SELECT
+            id,
+            order_number AS "orderNumber",
+            external_order_id AS "externalOrderId",
+            order_status AS "currentStatus"
+          FROM orders
+          WHERE order_number = ${orderNumber}
+            AND order_status = 'awaiting_shipment'
+            AND external_order_id LIKE ${syntheticPrefix}
+          ORDER BY id
+        `;
+
+        for (const candidate of syntheticRows) {
+          if (!shouldUpdateMarketplaceOrderStatus(candidate.currentStatus, duplicateTargetStatus)) continue;
+          result.candidates.push({
+            ...candidate,
+            targetStatus: duplicateTargetStatus,
+            sourceStatuses: [...sourceStatuses, `shipstation_duplicate:${duplicateTargetStatus}`],
+          });
+        }
+
+        if (!syntheticRows.length) {
+          result.skipped.push({
+            orderNumber,
+            reason: 'terminal ShipStation duplicate exists but no awaiting synthetic row matched',
+            sourceStatuses,
+            targetStatus: duplicateTargetStatus,
+          });
+        }
+        continue;
+      }
+
       result.skipped.push({
         orderNumber,
         reason: targetStatus === 'awaiting_shipment' ? 'marketplace still open' : 'unrecognized marketplace status',
@@ -271,6 +330,9 @@ export async function reconcileMarketplaceOrderStatuses(
 
   if (!dryRun && result.candidates.length > 0) {
     for (const candidate of result.candidates) {
+      // Per user override unlock shipped data on 2026-05-23: promote only
+      // rows that are still awaiting after marketplace/duplicate evidence
+      // proves they are terminal; never rewrite existing shipped/cancelled rows.
       const rows = await sql<Array<{ id: number }>>`
         UPDATE orders
         SET order_status = ${candidate.targetStatus}, updated_at = NOW()

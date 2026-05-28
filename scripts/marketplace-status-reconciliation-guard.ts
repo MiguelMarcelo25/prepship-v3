@@ -56,6 +56,16 @@ assert.ok(
   reconciliationSource.includes('external_order_id LIKE ${syntheticPrefix}'),
   'direct marketplace synthetic rows must be eligible when no real ShipStation row owns the order number',
 );
+assert.match(
+  reconciliationSource,
+  /shipstation_duplicate:\$\{duplicateTargetStatus\}/,
+  'stale direct marketplace rows must reconcile from terminal ShipStation duplicates',
+);
+assert.match(
+  reconciliationSource,
+  /AND order_status = 'awaiting_shipment'[\s\S]+AND external_order_id LIKE \$\{syntheticPrefix\}/,
+  'terminal duplicate reconciliation must only promote awaiting synthetic marketplace rows',
+);
 
 for (const file of ['api/carriers/walmart/orders.ts', 'api/carriers/ebay/orders.ts']) {
   const source = readFileSync(file, 'utf8');
