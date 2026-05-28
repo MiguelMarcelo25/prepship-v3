@@ -86,9 +86,11 @@ export type BillingSummaryMetricRow = {
   clientName: string;
   pickPackTotal: number;
   additionalTotal: number;
+  pickPackFeeTotal: number;
   packageTotal: number;
   shippingTotal: number;
   storageTotal: number;
+  fulfillmentFeeTotal: number;
   orderCount: number;
   grandTotal: number;
   total: number;
@@ -890,14 +892,19 @@ export async function getFreshBillingSummaryMetrics(options: {
       const storageTotal = num(row.storage_total);
       const grandTotal = num(row.grand_total);
       const orderCount = num(row.order_count);
+      const pickPackFeeTotal = pickPackTotal + additionalTotal;
+      const fulfillmentFeeTotal =
+        shippingTotal + pickPackFeeTotal + packageTotal + storageTotal;
       return {
         clientId: row.client_id,
         clientName: row.client_name,
         pickPackTotal,
         additionalTotal,
+        pickPackFeeTotal,
         packageTotal,
         shippingTotal,
         storageTotal,
+        fulfillmentFeeTotal,
         orderCount,
         grandTotal,
         total: grandTotal,

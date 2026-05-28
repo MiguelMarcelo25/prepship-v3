@@ -966,9 +966,11 @@ export type BillingSummaryRow = {
   clientName: string;
   pickPackTotal: number;
   additionalTotal: number;
+  pickPackFeeTotal: number;
   packageTotal: number;
   shippingTotal: number;
   storageTotal: number;
+  fulfillmentFeeTotal: number;
   orderCount: number;
   grandTotal: number;
   // Back-compat fields for legacy callers of the old shape.
@@ -1072,9 +1074,11 @@ export async function billingSummary(
         clientName: row.client_name,
         pickPackTotal: 0,
         additionalTotal: 0,
+        pickPackFeeTotal: 0,
         packageTotal: 0,
         shippingTotal: 0,
         storageTotal: 0,
+        fulfillmentFeeTotal: 0,
         orderCount: 0,
         grandTotal: 0,
         total: 0,
@@ -1142,14 +1146,19 @@ export async function billingSummary(
     const shippingTotal = toNum(r.shipping_total);
     const storageTotal = toNum(r.storage_total);
     const grandTotal = toNum(r.grand_total);
+    const pickPackFeeTotal = pickPackTotal + additionalTotal;
+    const fulfillmentFeeTotal =
+      shippingTotal + pickPackFeeTotal + packageTotal + storageTotal;
     return {
       clientId: r.client_id,
       clientName: r.client_name,
       pickPackTotal,
       additionalTotal,
+      pickPackFeeTotal,
       packageTotal,
       shippingTotal,
       storageTotal,
+      fulfillmentFeeTotal,
       orderCount: Number(r.order_count ?? 0),
       grandTotal,
       total: grandTotal,

@@ -130,7 +130,7 @@ function detailSortValueOf(row: BillingDetailDto, key: BillingDetailColumnId): s
     case 'itemNames': return row.itemNames || row.description
     case 'itemSkus': return row.itemSkus
     case 'totalQty': return row.totalQty || row.qty
-    case 'pickpack': return metrics.pickPack
+    case 'pickpack': return metrics.pickPackFee
     case 'additional': return metrics.additional
     case 'packageCost': return metrics.packageCost
     case 'packageName': return row.packageName
@@ -440,7 +440,7 @@ export default function BillingView() {
         case 'shipping':
           return row.shippingTotal
         case 'total':
-          return row.grandTotal
+          return row.fulfillmentFeeTotal ?? row.grandTotal
         default:
           return ''
       }
@@ -483,7 +483,7 @@ export default function BillingView() {
         case 'totalQty':
           return row.totalQty || row.qty
         case 'pickpack':
-          return metrics.pickPack
+          return metrics.pickPackFee
         case 'additional':
           return metrics.additional
         case 'packageCost':
@@ -530,11 +530,11 @@ export default function BillingView() {
     return mergedDetailRows.reduce((acc, row) => {
       const metrics = computeBillingDetailMetrics(row)
       return {
-        pickPack: acc.pickPack + metrics.pickPack,
+        pickPack: acc.pickPack + metrics.pickPackFee,
         additional: acc.additional + metrics.additional,
         packageCost: acc.packageCost + metrics.packageCost,
         shipping: acc.shipping + metrics.shipping,
-        total: acc.total + metrics.total,
+        total: acc.total + metrics.fulfillmentFee,
         margin: acc.margin + metrics.margin,
       }
     }, { pickPack: 0, additional: 0, packageCost: 0, shipping: 0, total: 0, margin: 0 })
@@ -865,7 +865,7 @@ export default function BillingView() {
         ? rows.filter((row) => targetClientIds.includes(Number(row.clientId)))
         : rows
       const totals = buildBillingSummaryTotals(rowsForStatus)
-      setGenerateStatus(generated > 0 ? buildGenerateBillingStatus(result.generated, totals.grand) : `Billing already up to date - total ${formatBillingMoney(totals.grand)}`)
+      setGenerateStatus(generated > 0 ? buildGenerateBillingStatus(result.generated, totals.fulfillmentFee) : `Billing already up to date - total ${formatBillingMoney(totals.fulfillmentFee)}`)
       setSummaryRows(rows)
       setSummaryError(null)
       const detailTarget =
@@ -1519,23 +1519,23 @@ export default function BillingView() {
                 ),
               },
               { key: 'orders', label: 'Orders', width: 90, minWidth: 70, align: 'right', sortable: true, sortValue: (row) => Number(row.orderCount ?? 0), render: (row) => row.orderCount || 0 },
-              { key: 'pickPack', label: 'Pick & Pack', width: 110, minWidth: 90, align: 'right', sortable: true, sortValue: (row) => Number(row.pickPackTotal ?? 0), render: (row) => formatBillingMoney(row.pickPackTotal || 0) },
+              { key: 'pickPack', label: 'Pick & Pack', width: 110, minWidth: 90, align: 'right', sortable: true, sortValue: (row) => Number(row.pickPackFeeTotal ?? ((row.pickPackTotal ?? 0) + (row.additionalTotal ?? 0))), render: (row) => formatBillingMoney(row.pickPackFeeTotal ?? ((row.pickPackTotal ?? 0) + (row.additionalTotal ?? 0))) },
               { key: 'additional', label: 'Addl Units', width: 110, minWidth: 90, align: 'right', sortable: true, sortValue: (row) => Number(row.additionalTotal ?? 0), render: (row) => formatBillingMoney(row.additionalTotal || 0) },
               { key: 'package', label: 'Box Cost', width: 110, minWidth: 90, align: 'right', sortable: true, sortValue: (row) => Number(row.packageTotal ?? 0), render: (row) => formatBillingMoney(row.packageTotal || 0, { dashIfZero: true }) },
               { key: 'storage', label: 'Storage', width: 110, minWidth: 90, align: 'right', sortable: true, sortValue: (row) => Number(row.storageTotal ?? 0), render: (row) => formatBillingMoney(row.storageTotal || 0, { dashIfZero: true }) },
               { key: 'shipping', label: 'Shipping', width: 110, minWidth: 90, align: 'right', sortable: true, sortValue: (row) => Number(row.shippingTotal ?? 0), render: (row) => formatBillingMoney(row.shippingTotal || 0) },
               {
                 key: 'total',
-                label: 'Total',
+                label: 'Fulfillment Fee',
                 width: 120,
                 minWidth: 100,
                 align: 'right',
                 sortable: true,
                 // 2026-05-13: every column toggleable + draggable
                 // per operator request (Awaiting-Shipment parity).
-                sortValue: (row) => Number(row.grandTotal ?? 0),
+                sortValue: (row) => Number(row.fulfillmentFeeTotal ?? row.grandTotal ?? 0),
                 render: (row) => (
-                  <span style={{ fontWeight: 700, color: 'var(--green)' }}>{formatBillingMoney(row.grandTotal || 0)}</span>
+                  <span style={{ fontWeight: 700, color: 'var(--green)' }}>{formatBillingMoney(row.fulfillmentFeeTotal ?? row.grandTotal ?? 0)}</span>
                 ),
               },
             ]}
@@ -1561,12 +1561,12 @@ export default function BillingView() {
               switch (c.key) {
                 case 'client': return <td key={c.key} style={tdStyle}>Total</td>
                 case 'orders': return <td key={c.key} style={tdStyle}>{summaryTotals.orders}</td>
-                case 'pickPack': return <td key={c.key} style={tdStyle}>{formatBillingMoney(summaryTotals.pickPack)}</td>
+                case 'pickPack': return <td key={c.key} style={tdStyle}>{formatBillingMoney(summaryTotals.pickPackFee)}</td>
                 case 'additional': return <td key={c.key} style={tdStyle}>{formatBillingMoney(summaryTotals.additional)}</td>
                 case 'package': return <td key={c.key} style={tdStyle}>{formatBillingMoney(summaryTotals.package, { dashIfZero: true })}</td>
                 case 'storage': return <td key={c.key} style={tdStyle}>{formatBillingMoney(summaryTotals.storage, { dashIfZero: true })}</td>
                 case 'shipping': return <td key={c.key} style={tdStyle}>{formatBillingMoney(summaryTotals.shipping)}</td>
-                case 'total': return <td key={c.key} style={{ ...tdStyle, fontWeight: 800, color: 'var(--green)', fontSize: 13 }}>{formatBillingMoney(summaryTotals.grand)}</td>
+                case 'total': return <td key={c.key} style={{ ...tdStyle, fontWeight: 800, color: 'var(--green)', fontSize: 13 }}>{formatBillingMoney(summaryTotals.fulfillmentFee)}</td>
                 default: return <td key={c.key} style={tdStyle} />
               }
             })}
@@ -1588,7 +1588,7 @@ export default function BillingView() {
               {sortedSummaryRows.map((row) => {
                 const active = Number(row.clientId) === Number(detailState.clientId)
                 const orderCount = Number(row.orderCount ?? 0)
-                const rowTotal = Number(row.grandTotal ?? row.total ?? 0)
+                const rowTotal = Number(row.fulfillmentFeeTotal ?? row.grandTotal ?? row.total ?? 0)
                 return (
                   <button
                     key={row.clientId}
@@ -1699,7 +1699,7 @@ export default function BillingView() {
                         case 'totalQty':
                           return <span>{row.totalQty || row.qty || 0}</span>
                         case 'pickpack':
-                          return formatBillingMoney(metrics.pickPack)
+                          return formatBillingMoney(metrics.pickPackFee)
                         case 'additional':
                           return formatBillingMoney(metrics.additional, { dashIfZero: true })
                         case 'packageCost':
@@ -1732,7 +1732,7 @@ export default function BillingView() {
                             </>
                           ) : formatBillingMoney(metrics.shipping)
                         case 'total':
-                          return <span style={{ fontWeight: 700, color: 'var(--green)' }}>{formatBillingMoney(metrics.total)}</span>
+                          return <span style={{ fontWeight: 700, color: 'var(--green)' }}>{formatBillingMoney(metrics.fulfillmentFee)}</span>
                         case 'margin':
                           return (
                             <span style={{ fontSize: 11, color: marginColor(metrics.margin), fontWeight: 600 }}>

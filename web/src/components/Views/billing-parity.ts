@@ -60,17 +60,22 @@ export interface BillingSummaryTotals {
   orders: number
   pickPack: number
   additional: number
+  pickPackFee: number
   package: number
   storage: number
   shipping: number
+  fulfillmentFee: number
   grand: number
 }
 
 export interface BillingDetailMetrics {
   pickPack: number
   additional: number
+  pickPackFee: number
   packageCost: number
   shipping: number
+  storage: number
+  fulfillmentFee: number
   total: number
   ourCost: number
   margin: number
@@ -105,7 +110,7 @@ export const BILLING_DETAIL_COLUMNS: BillingDetailColumn[] = [
   { id: 'upsss', label: 'UPS SS', align: 'right', always: false },
   { id: 'uspsss', label: 'USPS SS', align: 'right', always: false },
   { id: 'shipping', label: 'Shipping', align: 'right', always: false },
-  { id: 'total', label: 'Total', align: 'right', always: true },
+  { id: 'total', label: 'Fulfillment Fee', align: 'right', always: true },
   { id: 'margin', label: 'Shipping Margin', align: 'right', always: false },
 ]
 
@@ -142,6 +147,36 @@ function formatDateInput(value: Date) {
 function parseNumber(value: string) {
   const parsed = Number.parseFloat(value)
   return Number.isNaN(parsed) ? 0 : parsed
+}
+
+function moneyNumber(value: number) {
+  return Number((Number.isFinite(value) ? value : 0).toFixed(2))
+}
+
+export function calculateBillingPickPackFee(input: {
+  baseFee: number
+  additionalUnitFee: number
+  quantity: number
+  includedUnits?: number
+}) {
+  const includedUnits = Math.max(1, Math.floor(input.includedUnits ?? 1))
+  const quantity = Math.max(0, Number(input.quantity) || 0)
+  const extraUnits = Math.max(0, quantity - includedUnits)
+  return moneyNumber((Number(input.baseFee) || 0) + extraUnits * (Number(input.additionalUnitFee) || 0))
+}
+
+export function calculateBillingFulfillmentFee(input: {
+  shippingCharge: number
+  pickPackFee: number
+  boxFee: number
+  storageFee: number
+}) {
+  return moneyNumber(
+    (Number(input.shippingCharge) || 0)
+      + (Number(input.pickPackFee) || 0)
+      + (Number(input.boxFee) || 0)
+      + (Number(input.storageFee) || 0),
+  )
 }
 
 export function getBillingInitialRange(now = new Date()): BillingDateRange {
@@ -219,21 +254,43 @@ export function buildBillingConfigInput(draft: BillingConfigDraft): UpdateBillin
 }
 
 export function buildBillingSummaryTotals(rows: BillingSummaryDto[]): BillingSummaryTotals {
-  return rows.reduce<BillingSummaryTotals>((totals, row) => ({
-    orders: totals.orders + (row.orderCount || 0),
-    pickPack: totals.pickPack + (row.pickPackTotal || 0),
-    additional: totals.additional + (row.additionalTotal || 0),
-    package: totals.package + (row.packageTotal || 0),
-    storage: totals.storage + (row.storageTotal || 0),
-    shipping: totals.shipping + (row.shippingTotal || 0),
-    grand: totals.grand + (row.grandTotal || 0),
-  }), {
+  return rows.reduce<BillingSummaryTotals>((totals, row) => {
+    const pickPack = Number(row.pickPackTotal || 0)
+    const additional = Number(row.additionalTotal || 0)
+    const pickPackFee = Number(row.pickPackFeeTotal ?? row.pick_pack_fee_total ?? pickPack + additional)
+    const shipping = Number(row.shippingTotal || 0)
+    const boxFee = Number(row.packageTotal || 0)
+    const storage = Number(row.storageTotal || 0)
+    const fulfillmentFee = Number(
+      row.fulfillmentFeeTotal
+        ?? row.fulfillment_fee_total
+        ?? calculateBillingFulfillmentFee({
+          shippingCharge: shipping,
+          pickPackFee,
+          boxFee,
+          storageFee: storage,
+        }),
+    )
+    return {
+      orders: totals.orders + (row.orderCount || 0),
+      pickPack: totals.pickPack + pickPack,
+      additional: totals.additional + additional,
+      pickPackFee: totals.pickPackFee + pickPackFee,
+      package: totals.package + boxFee,
+      storage: totals.storage + storage,
+      shipping: totals.shipping + shipping,
+      fulfillmentFee: totals.fulfillmentFee + fulfillmentFee,
+      grand: totals.grand + (row.grandTotal || fulfillmentFee),
+    }
+  }, {
     orders: 0,
     pickPack: 0,
     additional: 0,
+    pickPackFee: 0,
     package: 0,
     storage: 0,
     shipping: 0,
+    fulfillmentFee: 0,
     grand: 0,
   })
 }
@@ -463,7 +520,18 @@ export function computeBillingDetailMetrics(detail: BillingDetailDto): BillingDe
   const packageCost = Number(detail.packageTotal ?? detail.package_total ?? (lineType === 'package_cost' ? lineTotal : 0)) || 0
   const shipping = Number(detail.shippingTotal ?? detail.shipping_total ?? (lineType === 'shipping' ? lineTotal : 0)) || 0
   const storage = Number(detail.storageTotal ?? detail.storage_total ?? (lineType === 'storage' ? lineTotal : 0)) || 0
-  const total = Number(detail.grandTotal ?? detail.grand_total ?? detail.total ?? 0) || pickPack + additional + packageCost + shipping + storage
+  const pickPackFee = Number(detail.pickPackFeeTotal ?? detail.pick_pack_fee_total ?? pickPack + additional) || 0
+  const fulfillmentFee = Number(
+    detail.fulfillmentFeeTotal
+      ?? detail.fulfillment_fee_total
+      ?? calculateBillingFulfillmentFee({
+        shippingCharge: shipping,
+        pickPackFee,
+        boxFee: packageCost,
+        storageFee: storage,
+      }),
+  ) || 0
+  const total = Number(detail.grandTotal ?? detail.grand_total ?? detail.total ?? 0) || fulfillmentFee
   const ourCost = Number(detail.actualLabelCost ?? detail.actual_label_cost ?? 0) || 0
   const margin = shipping - ourCost
   const actualLabelCost = detail.actualLabelCost ?? detail.actual_label_cost
@@ -482,8 +550,11 @@ export function computeBillingDetailMetrics(detail: BillingDetailDto): BillingDe
   return {
     pickPack,
     additional,
+    pickPackFee,
     packageCost,
     shipping,
+    storage,
+    fulfillmentFee,
     total,
     ourCost,
     margin,

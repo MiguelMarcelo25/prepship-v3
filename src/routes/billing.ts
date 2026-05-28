@@ -498,10 +498,13 @@ app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
   const orderCount = s?.order_count ?? 0;
   const pickPackTotal = Number(s?.pickpack_total ?? 0);
   const additionalTotal = Number(s?.additional_total ?? 0);
+  const pickPackFeeTotal = pickPackTotal + additionalTotal;
   const packageTotal = Number(s?.package_total ?? 0);
   const shippingTotal = Number(s?.shipping_total ?? 0);
   const storageTotal = Number(s?.storage_total ?? 0);
   const grandTotal = Number(s?.grand_total ?? 0);
+  const fulfillmentFeeTotal =
+    shippingTotal + pickPackFeeTotal + packageTotal + storageTotal;
   const clientName = clientRow[0]!.name;
 
   const rowsHtml = details
@@ -511,9 +514,13 @@ app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
       const totalQty = baseQty + addlQty;
       const pickpackAmt = Number(d.pickpack_amt);
       const additionalAmt = Number(d.additional_amt);
+      const pickPackFeeAmt = pickpackAmt + additionalAmt;
       const shippingAmt = Number(d.shipping_amt);
       const storageAmt = Number(d.storage_amt);
       const rowTotal = Number(d.row_total);
+      const fulfillmentFeeAmt = rowTotal > 0
+        ? rowTotal
+        : pickPackFeeAmt + shippingAmt + storageAmt;
       const shipDate = formatInvoiceDate(d.ship_date);
       return `
       <tr>
@@ -521,11 +528,11 @@ app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
         <td class="mono">${escHtml(d.order_number ?? d.order_id ?? '')}</td>
         <td class="sku">${escHtml(d.skus ?? '—')}</td>
         <td class="num">${totalQty}</td>
-        <td class="num">${fmt(pickpackAmt)}</td>
+        <td class="num">${fmt(pickPackFeeAmt)}</td>
         <td class="num">${addlQty > 0 ? fmt(additionalAmt) : '—'}</td>
         <td class="num">${shippingAmt > 0 ? fmt(shippingAmt) : '—'}</td>
         <td class="num">${storageAmt > 0 ? fmt(storageAmt) : '—'}</td>
-        <td class="num bold">${fmt(rowTotal)}</td>
+        <td class="num bold">${fmt(fulfillmentFeeAmt)}</td>
       </tr>`;
     })
     .join('');
@@ -547,7 +554,7 @@ app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
     .meta .client-name { font-size: 18px; font-weight: 700; color: #111; }
     .meta .date-range { font-size: 12px; color: #6b7280; margin-top: 2px; }
     .meta .gen-date { font-size: 10px; color: #9ca3af; margin-top: 2px; }
-    .summary-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin-bottom: 20px; }
+    .summary-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; margin-bottom: 20px; }
     .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 10px 14px; }
     .card .cl { font-size: 10px; color: #9ca3af; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 3px; }
     .card .cv { font-size: 16px; font-weight: 700; color: #111; }
@@ -583,15 +590,16 @@ app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
   </div>
   <div class="summary-grid">
     <div class="card"><div class="cl">Orders</div><div class="cv">${orderCount}</div></div>
-    <div class="card"><div class="cl">Pick &amp; Pack</div><div class="cv">${fmt(pickPackTotal)}</div></div>
+    <div class="card"><div class="cl">Pick &amp; Pack</div><div class="cv">${fmt(pickPackFeeTotal)}</div></div>
     <div class="card"><div class="cl">Add'l Units</div><div class="cv">${fmt(additionalTotal)}</div></div>
     <div class="card"><div class="cl">Packages</div><div class="cv">${packageTotal > 0 ? fmt(packageTotal) : '—'}</div></div>
     <div class="card"><div class="cl">Shipping</div><div class="cv">${fmt(shippingTotal)}</div></div>
     <div class="card"><div class="cl">Storage</div><div class="cv">${storageTotal > 0 ? fmt(storageTotal) : '—'}</div></div>
+    <div class="card"><div class="cl">Fulfillment Fee</div><div class="cv">${fmt(fulfillmentFeeTotal || grandTotal)}</div></div>
   </div>
   <div class="grand-total">
     <div class="gtl">Total Amount Due — ${fromDisplay} → ${toDisplay}</div>
-    <div class="gtv">${fmt(grandTotal)}</div>
+    <div class="gtv">${fmt(fulfillmentFeeTotal || grandTotal)}</div>
   </div>
   <table>
     <thead>
@@ -604,18 +612,18 @@ app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
         <th class="num">Add'l Units</th>
         <th class="num">Shipping</th>
         <th class="num">Storage</th>
-        <th class="num">Row Total</th>
+        <th class="num">Fulfillment Fee</th>
       </tr>
     </thead>
     <tbody>${rowsHtml}</tbody>
     <tfoot>
       <tr>
         <td colspan="4">Totals — ${orderCount} orders</td>
-        <td class="num">${fmt(pickPackTotal)}</td>
+        <td class="num">${fmt(pickPackFeeTotal)}</td>
         <td class="num">${fmt(additionalTotal)}</td>
         <td class="num">${fmt(shippingTotal)}</td>
         <td class="num">${storageTotal > 0 ? fmt(storageTotal) : '—'}</td>
-        <td class="num" style="font-size:14px">${fmt(grandTotal)}</td>
+        <td class="num" style="font-size:14px">${fmt(fulfillmentFeeTotal || grandTotal)}</td>
       </tr>
     </tfoot>
   </table>
