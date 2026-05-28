@@ -10,10 +10,6 @@ import { listCarrierAccounts } from '../services/carrier-connector-orchestrator'
 import { publicClient } from '../lib/public-client';
 import { filterClientsForScope, getClientStoreScope } from '../lib/client-store-scope';
 import { EXCLUDED_STORE_IDS, EXCLUDED_STORE_IDS_SQL } from '../config/prepship';
-import {
-  WALMART_DIRECT_STORE_ID,
-  WALMART_SHIPSTATION_STORE_ID,
-} from '../lib/walmart-order-dedupe';
 
 const app = new Hono();
 
@@ -143,7 +139,7 @@ app.get('/counts', async (c) => {
     coalesce(o.external_order_id, '') ilike 'ebay-%'
   )`;
   const loadCounts = (async (): Promise<CountsPayload> => {
-    const [rows, byStatus, byStatusStore, walmartDirectAliasCounts] = await Promise.all([
+    const [rows, byStatus, byStatusStore] = await Promise.all([
     db.execute<{
       awaiting: number;
       shipped: number;
@@ -263,34 +259,6 @@ app.get('/counts', async (c) => {
           end
       order by cnt desc
     `),
-    db.execute<{ orderStatus: string; storeId: number; cnt: number }>(sql`
-      select
-        o.order_status as "orderStatus",
-        ${WALMART_DIRECT_STORE_ID}::int as "storeId",
-        count(*)::int as cnt
-      from orders o
-      left join clients c on c.id = o.client_id
-        where ${visibleOrderPredicate}
-        ${orderDateFilter()}
-        and o.store_id = ${WALMART_SHIPSTATION_STORE_ID}
-        and nullif(o.order_number, '') is not null
-        and not exists (
-          select 1
-          from orders walmart_direct_order
-          where walmart_direct_order.store_id = ${WALMART_DIRECT_STORE_ID}
-            and walmart_direct_order.order_number = o.order_number
-        )
-        and (
-          o.order_status is distinct from 'awaiting_shipment'
-          or ${visibleAwaitingOrdersPredicate}
-        )
-        and not exists (
-          select 1 from clients hidden_client
-          where hidden_client.id = o.client_id
-            and lower(hidden_client.name) = 'api shipments'
-        )
-      group by o.order_status
-    `),
     ]);
     const totals =
       rows[0] ?? {
@@ -301,14 +269,7 @@ app.get('/counts', async (c) => {
         queue: 0,
         inventory: 0,
       };
-    const mergedByStatusStore = new Map<string, { orderStatus: string; storeId: number; cnt: number }>();
-    for (const row of [...byStatusStore, ...walmartDirectAliasCounts]) {
-      const key = `${row.orderStatus}:${row.storeId}`;
-      const existing = mergedByStatusStore.get(key);
-      if (existing) existing.cnt += row.cnt;
-      else mergedByStatusStore.set(key, { ...row });
-    }
-    return { ...totals, byStatus, byStatusStore: [...mergedByStatusStore.values()] };
+    return { ...totals, byStatus, byStatusStore };
   })();
 
   countsInflight.set(cacheKey, loadCounts);
