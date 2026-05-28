@@ -1,0 +1,54 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import {
+  SHIPSTATION_V1_ACCOUNT_TIME_ZONE,
+  formatShipStationV1DateParam,
+} from '../src/lib/shipstation/v1-date';
+
+const affectedWatermark = Date.UTC(2026, 4, 28, 22, 0, 0);
+
+assert.equal(
+  SHIPSTATION_V1_ACCOUNT_TIME_ZONE,
+  'America/Los_Angeles',
+  'ShipStation v1 account-local timezone must be explicit',
+);
+
+assert.equal(
+  formatShipStationV1DateParam(affectedWatermark),
+  '2026-05-28 15:00:00',
+  'UTC watermark must be rendered as account-local/PT wall-clock for ShipStation v1',
+);
+
+assert.notEqual(
+  formatShipStationV1DateParam(affectedWatermark),
+  '2026-05-28 22:00:00',
+  'ShipStation v1 date params must not send stripped UTC wall-clock timestamps',
+);
+
+const connector = readFileSync('src/connectors/store/shipstation.ts', 'utf8');
+const orderSync = readFileSync('src/services/order-sync.ts', 'utf8');
+const shipmentSync = readFileSync('src/services/shipment-sync.ts', 'utf8');
+
+assert.match(
+  connector,
+  /formatShipStationV1DateParam\(input\.sinceMs\)/,
+  'ShipStation store connector must use account-local v1 formatter for modifyDateStart',
+);
+assert.match(
+  shipmentSync,
+  /formatShipStationV1DateParam\(lastSync\)/,
+  'ShipStation shipment sync must use account-local v1 formatter for createDateStart',
+);
+assert.doesNotMatch(
+  connector + orderSync + shipmentSync,
+  /toISOString\(\)\.replace\('T', ' '\)\.slice\(0, 19\)/,
+  'ShipStation v1 sync paths must not strip UTC ISO timezone into timezone-less params',
+);
+
+assert.match(
+  readFileSync('package.json', 'utf8'),
+  /test:shipstation-sync-window/,
+  'package.json must expose the ShipStation sync-window guard',
+);
+
+console.log('PASS ShipStation v1 sync-window timezone guard');

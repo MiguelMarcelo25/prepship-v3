@@ -3,6 +3,7 @@ import {
   ssMarkOrderShippedV1,
 } from '../../lib/shipstation/labels';
 import { ssV1Request } from '../../lib/shipstation/v1-client';
+import { formatShipStationV1DateParam } from '../../lib/shipstation/v1-date';
 import { buildShipStationOrderSource } from '../../services/normalized-order-persistence';
 import type {
   ConfirmationResult,
@@ -132,10 +133,6 @@ function externallyShippedFromRaw(o: SSOrder): boolean {
   );
 }
 
-function formatSSDate(ms: number): string {
-  return new Date(ms).toISOString().replace('T', ' ').slice(0, 19);
-}
-
 export async function listShipStationStores(
   options: ShipStationV1RequestOptions = {},
 ): Promise<ShipStationStore[]> {
@@ -242,7 +239,7 @@ export function createShipStationStoreConnector(): StoreConnector {
 
       const q = new URLSearchParams({
         orderStatus: input.orderStatus,
-        modifyDateStart: formatSSDate(input.sinceMs),
+        modifyDateStart: formatShipStationV1DateParam(input.sinceMs),
         pageSize: String(input.pageSize),
         page: String(input.page),
         sortBy: 'ModifyDate',

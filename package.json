@@ -111,6 +111,8 @@
     "test:ps-032-connector-orchestrators": "node scripts/ps-032-connector-orchestrator-guard.mjs",
     "test:store-connector-source": "tsx scripts/store-connector-source-guard.ts",
     "test:shipstation-carrier-account-identity": "tsx scripts/shipstation-carrier-account-identity-guard.ts",
+    "test:shipstation-sync-window": "tsx scripts/shipstation-sync-window-guard.ts",
+    "test:testing-coverage-standard": "node scripts/testing-coverage-standard-guard.mjs",
     "test:health-deep-readiness": "node scripts/health-deep-readiness-guard.mjs",
     "status:sync": "tsx scripts/status-sync.ts",
     "test:status:sync": "tsx scripts/status-sync.ts --check",

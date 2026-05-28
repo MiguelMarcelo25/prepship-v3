@@ -11,16 +11,12 @@ import {
 import { deductInventoryForOrder } from './fulfillment-deductions';
 import { importStoreOrders } from './store-connector-orchestrator';
 import type { NormalizedOrder } from '../connectors/types';
+import { formatShipStationV1DateParam } from '../lib/shipstation/v1-date';
 
 const LAST_SYNC_KEY = 'order_sync.last_modified_ms';
 const DEFAULT_LOOKBACK_MS = 1000 * 60 * 60 * 24 * 30; // 30 days on first run
 const STATUS_CATCHUP_LOOKBACK_MS = 30 * 24 * 60 * 60 * 1000;
 const AWAITING_CATCHUP_LOOKBACK_MS = STATUS_CATCHUP_LOOKBACK_MS;
-
-function formatSSDate(ms: number): string {
-  // yyyy-MM-dd HH:mm:ss in UTC
-  return new Date(ms).toISOString().replace('T', ' ').slice(0, 19);
-}
 
 async function buildStoreToClientMap(): Promise<{
   byStore: Map<number, number>;
@@ -290,7 +286,7 @@ async function fetchOrdersPage(
     statusOnly?: boolean;
   },
 ): Promise<{ synced: number; pages: number }> {
-  const sinceParam = formatSSDate(args.sinceMs);
+  const sinceParam = formatShipStationV1DateParam(args.sinceMs);
   let page = 1;
   let pages = 1;
   let total = 0;

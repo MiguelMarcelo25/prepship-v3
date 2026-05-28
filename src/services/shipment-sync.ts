@@ -10,6 +10,7 @@ import {
 } from '../connectors/carrier/shipstation';
 import { deductInventoryForOrder } from './fulfillment-deductions';
 import { getSettingNumber, setSetting } from './settings';
+import { formatShipStationV1DateParam } from '../lib/shipstation/v1-date';
 
 const LAST_SYNC_KEY = 'shipment_sync.last_created_ms';
 const DEFAULT_LOOKBACK_MS = 1000 * 60 * 60 * 24 * 7; // 7 days on first run
@@ -53,10 +54,6 @@ type SSShipmentsList = {
   page: number;
   pages: number;
 };
-
-function formatSSDate(ms: number): string {
-  return new Date(ms).toISOString().replace('T', ' ').slice(0, 19);
-}
 
 function toOunces(w?: SSShipment['weight']): number | null {
   if (!w || typeof w.value !== 'number') return null;
@@ -415,7 +412,9 @@ export async function syncShipments(
           : Date.now() - DEFAULT_LOOKBACK_MS);
       const sinceIso = new Date(lastSync).toISOString();
       if (sinceIso < earliestSinceIso) earliestSinceIso = sinceIso;
-      const sinceParam = formatSSDate(lastSync);
+      // Per user override unlock shipped data on 2026-05-29: ShipStation v1
+      // createDateStart is account-local wall-clock text, not stripped UTC.
+      const sinceParam = formatShipStationV1DateParam(lastSync);
 
       let page = 1;
       while (true) {
