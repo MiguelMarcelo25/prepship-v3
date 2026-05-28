@@ -57,7 +57,6 @@ These files currently contain direct provider calls or provider-client usage out
 | `api/carriers/walmart/fees.ts` | Walmart fees | Walmart StoreConnector or connector-owned helper | Phase 3 |
 | `api/cron/sync-walmart-fees.ts` | Walmart fee sync cron | Walmart StoreConnector or connector-owned helper | Phase 3 |
 | `api/oauth/ebay/callback.ts` | eBay OAuth/API token flow | eBay connector-owned auth helper | Phase 3 |
-| `scripts/probe-rate-scoping.ts` | ShipStation rate probe | CarrierConnector diagnostics script or connector-owned helper | Phase 4 |
 | `scripts/reconcile-shipstation-awaiting.ts` | ShipStation order reconciliation | ShipStation StoreConnector status/order sync | Phase 2 |
 | `scripts/recover-marketplace-notifications.ts` | Marketplace notification recovery | StoreConnector confirmation/outbox orchestration | Phase 3 |
 | `scripts/sync-shipstation-products.ts` | ShipStation product sync | ShipStation StoreConnector or connector-owned catalog helper | Phase 2 |
@@ -256,6 +255,12 @@ Phase 4 USPS address-validation slice added on 2026-05-28:
 - `api/carriers/validate-address.ts` now routes USPS address validation through connector-owned `validateUspsAddress(...)`.
 - `src/connectors/carrier/usps.ts` owns USPS OAuth plus `/addresses/v3/address` normalization.
 - The validation route still owns Supabase auth, CORS, DB credential lookup, provider validation, input validation, and safe error handling.
+
+Phase 4 rate-scoping diagnostic slice added on 2026-05-28:
+
+- `scripts/probe-rate-scoping.ts` now routes ShipStation carrier-account probing through `listCarrierAccounts('shipstation', ...)`.
+- `src/connectors/carrier/shipstation.ts` remains the owner of the ShipStation `/v2/carriers` call.
+- The diagnostic script still owns client credential-resolution reporting and console output.
 
 Phase 5: Tighten guards.
 

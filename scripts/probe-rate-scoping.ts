@@ -1,14 +1,13 @@
 #!/usr/bin/env tsx
 // Diagnose why the Rate Browser shows 22 carriers (DRP + KFG mixed).
 // Walks every client through the same credential resolution the Rate
-// Browser uses, then asks ShipStation /v2/carriers via the resolved key
-// to see what each client *should* see.
+// Browser uses, then asks the ShipStation CarrierConnector for carrier
+// accounts via the resolved key to see what each client *should* see.
 import 'dotenv/config';
 import { sql as pgClient, db } from '../src/db/client';
 import { sql } from 'drizzle-orm';
 import { loadClientCredentials } from '../src/lib/shipstation/credentials';
-import { ssRequest } from '../src/lib/shipstation';
-import type { CarriersResponse } from '../src/lib/shipstation/types';
+import { listCarrierAccounts } from '../src/services/carrier-connector-orchestrator';
 
 function pad(s: string, n: number) {
   return (s ?? '').padEnd(n).slice(0, n);
@@ -61,7 +60,7 @@ async function main() {
   // request would see).
   {
     const creds = await loadClientCredentials(null);
-    const carriersRes = await ssRequest<CarriersResponse>('/v2/carriers', {
+    const carriersRes = await listCarrierAccounts('shipstation', {
       apiKey: creds.apiKeyV2 ?? undefined,
       dedupeKey: `probe:carriers:env`,
     });
@@ -75,7 +74,7 @@ async function main() {
     if (!r.active) continue;
     try {
       const creds = await loadClientCredentials(r.id);
-      const carriersRes = await ssRequest<CarriersResponse>('/v2/carriers', {
+      const carriersRes = await listCarrierAccounts('shipstation', {
         apiKey: creds.apiKeyV2 ?? undefined,
         dedupeKey: `probe:carriers:client:${r.id}`,
       });

@@ -19,6 +19,7 @@ const shipStationStoreConnector = read('src/connectors/store/shipstation.ts');
 const ratesRoute = read('src/routes/rates.ts');
 const packagesRoute = read('src/routes/packages.ts');
 const initRoute = read('src/routes/init.ts');
+const probeRateScopingScript = read('scripts/probe-rate-scoping.ts');
 const shipStationCarrierConnector = read('src/connectors/carrier/shipstation.ts');
 const walmartOrdersRoute = read('api/carriers/walmart/orders.ts');
 const ebayOrdersRoute = read('api/carriers/ebay/orders.ts');
@@ -344,6 +345,10 @@ assert(
 assert(
   initRoute.includes('listCarrierAccounts') && !initRoute.includes('ssRequest'),
   'init route ShipStation carrier bootstrap must use CarrierConnector orchestration, not direct ShipStation API calls',
+);
+assert(
+  probeRateScopingScript.includes('listCarrierAccounts') && !probeRateScopingScript.includes('ssRequest'),
+  'rate scoping probe must use CarrierConnector orchestration, not direct ShipStation API calls',
 );
 assert(
   labelsService.includes('listCarrierAccounts') &&
