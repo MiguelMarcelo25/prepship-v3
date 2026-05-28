@@ -28,6 +28,9 @@ const shipmentSyncService = read('src/services/shipment-sync.ts');
 const probeRateScopingScript = read('scripts/probe-rate-scoping.ts');
 const shipStationCarrierConnector = read('src/connectors/carrier/shipstation.ts');
 const walmartOrdersRoute = read('api/carriers/walmart/orders.ts');
+const walmartFeesRoute = read('api/carriers/walmart/fees.ts');
+const walmartFeesCron = read('api/cron/sync-walmart-fees.ts');
+const walmartFeesLib = read('api/_lib/walmart-fees-sync.ts');
 const ebayOrdersRoute = read('api/carriers/ebay/orders.ts');
 const ebayOauthCallback = read('api/oauth/ebay/callback.ts');
 const carrierRatesRoute = read('api/carriers/rates.ts');
@@ -35,10 +38,14 @@ const carrierLabelsRoute = read('api/carriers/labels.ts');
 const validateAddressRoute = read('api/carriers/validate-address.ts');
 const upsProbeRoute = read('api/carriers/ups/probe.ts');
 const walmartProbeCarriersRoute = read('api/carriers/walmart/probe-carriers.ts');
+const carrierVerifyRoute = read('api/carriers/verify.ts');
+const importedCarrierVerifyHandler = read('src/lib/imported-handlers/carriers-verify.ts');
+const carrierCredentialVerification = read('src/connectors/carrier/credential-verification.ts');
 const importedRatesMultiHandler = read('src/lib/imported-handlers/rates-multi.ts');
 const verifyGroundSaverScript = read('scripts/verify-ground-saver-fix.ts');
 const recoverMarketplaceNotificationsScript = read('scripts/recover-marketplace-notifications.ts');
 const walmartStoreConnector = read('src/connectors/store/walmart.ts');
+const walmartFeesConnector = read('src/connectors/store/walmart-fees.ts');
 const ebayStoreConnector = read('src/connectors/store/ebay.ts');
 const upsCarrierConnector = read('src/connectors/carrier/ups.ts');
 const easyPostCarrierConnector = read('src/connectors/carrier/easypost.ts');
@@ -140,6 +147,26 @@ assert(
   walmartStoreConnector.includes('marketplace.walmartapis.com') &&
     walmartStoreConnector.includes('importOrders'),
   'Walmart StoreConnector must own Walmart order API import calls',
+);
+assert(
+  walmartFeesRoute.includes('syncWalmartFeesForAccount') &&
+    !walmartFeesRoute.includes('marketplace.walmartapis.com'),
+  'Walmart fees route must call connector-owned fee sync, not Walmart API directly',
+);
+assert(
+  walmartFeesCron.includes('syncWalmartFeesAllAccounts') &&
+    !walmartFeesCron.includes('marketplace.walmartapis.com'),
+  'Walmart fees cron must call connector-owned fee sync, not Walmart API directly',
+);
+assert(
+  walmartFeesLib.includes('../../src/connectors/store/walmart-fees') &&
+    !walmartFeesLib.includes('marketplace.walmartapis.com'),
+  'legacy Walmart fees API lib must re-export connector-owned fee sync without provider calls',
+);
+assert(
+  walmartFeesConnector.includes('marketplace.walmartapis.com') &&
+    walmartFeesConnector.includes('syncWalmartFeesForAccount'),
+  'Walmart fees connector helper must own Walmart Payments API calls',
 );
 assert(
   carrierLabelsRoute.includes("confirmStoreShipment('walmart'") &&
@@ -262,6 +289,24 @@ assert(
   walmartProbeCarriersRoute.includes('probeWalmartShippingCarriers') &&
     !walmartProbeCarriersRoute.includes('marketplace.walmartapis.com'),
   'Walmart Shipping carriers probe route must call CarrierConnector-owned probe logic, not Walmart API directly',
+);
+assert(
+  carrierVerifyRoute.includes('credential-verification') &&
+    !carrierVerifyRoute.includes('https://') &&
+    !carrierVerifyRoute.includes('fetch('),
+  'carrier verification API route must be a thin wrapper over connector-owned credential verification',
+);
+assert(
+  importedCarrierVerifyHandler.includes('credential-verification') &&
+    !importedCarrierVerifyHandler.includes('https://') &&
+    !importedCarrierVerifyHandler.includes('fetch('),
+  'imported carrier verification handler must be a thin wrapper over connector-owned credential verification',
+);
+assert(
+  carrierCredentialVerification.includes('https://api.shipengine.com') &&
+    carrierCredentialVerification.includes('const VERIFIERS') &&
+    carrierCredentialVerification.includes('export default async function handler'),
+  'connector-owned carrier credential verification module must own provider probe calls',
 );
 assert(
   walmartShippingCarrierConnector.includes('probeWalmartShippingCarriers') &&

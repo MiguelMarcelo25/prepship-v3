@@ -23,6 +23,7 @@ const providerPatterns = [
 
 const approvedConnectorOwned = new Set([
   'src/connectors/store/walmart.ts',
+  'src/connectors/store/walmart-fees.ts',
   'src/connectors/store/ebay.ts',
   'src/connectors/store/shipstation.ts',
   'src/connectors/carrier/shipstation.ts',
@@ -35,6 +36,7 @@ const approvedConnectorOwned = new Set([
   'src/connectors/carrier/shipengine.ts',
   'src/connectors/carrier/ebay-shipping.ts',
   'src/connectors/carrier/amazon-shipping.ts',
+  'src/connectors/carrier/credential-verification.ts',
   'src/lib/shipstation/client.ts',
   'src/lib/shipstation/credentials.ts',
   'src/lib/shipstation/labels.ts',
@@ -43,11 +45,6 @@ const approvedConnectorOwned = new Set([
 ]);
 
 const transitionalDebt = new Set([
-  'api/_lib/walmart-fees-sync.ts',
-  'api/carriers/verify.ts',
-  'api/carriers/walmart/fees.ts',
-  'api/cron/sync-walmart-fees.ts',
-  'src/lib/imported-handlers/carriers-verify.ts',
 ]);
 
 const ignoredFiles = new Set([

@@ -27,6 +27,7 @@ These files currently contain direct provider call markers and are allowed as co
 | File | Provider Area | Reason |
 | --- | --- | --- |
 | `src/connectors/store/walmart.ts` | Walmart Marketplace | StoreConnector implementation owns Walmart marketplace API details. |
+| `src/connectors/store/walmart-fees.ts` | Walmart fees | StoreConnector helper owns Walmart Payments API details. |
 | `src/connectors/store/ebay.ts` | eBay Marketplace | StoreConnector implementation owns eBay marketplace API details. |
 | `src/connectors/store/shipstation.ts` | ShipStation store/orders | StoreConnector implementation owns ShipStation order API details. |
 | `src/connectors/carrier/shipstation.ts` | ShipStation carrier | CarrierConnector implementation owns ShipStation label/rate behavior. |
@@ -39,6 +40,7 @@ These files currently contain direct provider call markers and are allowed as co
 | `src/connectors/carrier/shipengine.ts` | ShipEngine | CarrierConnector implementation owns ShipEngine carrier behavior. |
 | `src/connectors/carrier/ebay-shipping.ts` | eBay Shipping | CarrierConnector implementation owns eBay Logistics shipping behavior. |
 | `src/connectors/carrier/amazon-shipping.ts` | Amazon Shipping | CarrierConnector implementation owns Amazon Shipping behavior. |
+| `src/connectors/carrier/credential-verification.ts` | Carrier credential verification | CarrierConnector-owned helper owns provider credential probe calls. |
 | `src/lib/shipstation/client.ts` | ShipStation low-level wrapper | Allowed provider wrapper, but should be called by connector-owned code only. |
 | `src/lib/shipstation/credentials.ts` | ShipStation low-level wrapper | Allowed provider wrapper, but should be called by connector-owned code only. |
 | `src/lib/shipstation/labels.ts` | ShipStation low-level wrapper | Allowed provider wrapper, but should be called by connector-owned code only. |
@@ -51,11 +53,6 @@ These files currently contain direct provider calls or provider-client usage out
 
 | File | Provider Area | Target Owner | Migration Phase |
 | --- | --- | --- | --- |
-| `api/_lib/walmart-fees-sync.ts` | Walmart fees | Walmart StoreConnector or connector-owned helper | Phase 3 |
-| `api/carriers/verify.ts` | Carrier verification | CarrierConnector diagnostics | Phase 4 |
-| `api/carriers/walmart/fees.ts` | Walmart fees | Walmart StoreConnector or connector-owned helper | Phase 3 |
-| `api/cron/sync-walmart-fees.ts` | Walmart fee sync cron | Walmart StoreConnector or connector-owned helper | Phase 3 |
-| `src/lib/imported-handlers/carriers-verify.ts` | Carrier verification | CarrierConnector diagnostics | Phase 4 |
 
 ## Migration Map
 
@@ -110,6 +107,12 @@ Phase 3 eBay OAuth callback slice added on 2026-05-28:
 - `api/oauth/ebay/callback.ts` now calls connector-owned `exchangeEbayAuthorizationCode(...)` for the authorization-code exchange.
 - `src/connectors/store/ebay.ts` owns the eBay OAuth token endpoint and redacted error handling for that exchange.
 - The callback route still owns redirect HTML rendering, credential row selection, and refresh-token persistence.
+
+Phase 3 Walmart fees slice added on 2026-05-28:
+
+- `src/connectors/store/walmart-fees.ts` now owns Walmart Payments token minting, payment transaction paging, fee aggregation, and fee sync persistence.
+- `api/_lib/walmart-fees-sync.ts` is now a compatibility re-export for scripts/backfills that already imported that path.
+- `api/carriers/walmart/fees.ts` and `api/cron/sync-walmart-fees.ts` are now thin auth/date wrappers over connector-owned fee sync helpers.
 
 Phase 4: Move rates, labels, carrier diagnostics, and direct-carrier handlers.
 
@@ -275,6 +278,12 @@ Phase 4 diagnostic carrier-orchestration cleanup added on 2026-05-28:
 - `scripts/verify-ground-saver-fix.ts` now uses `listCarrierAccounts('shipstation', ...)` and `quoteCarrierRates('shipstation', ...)` for the live diagnostic probe.
 - `src/services/labels.ts` no longer carries a stale direct ShipStation request import after the label-purchase paths moved through `createCarrierLabel('shipstation', ...)`.
 - `scripts/recover-marketplace-notifications.ts` only had stale direct-helper references in comments; those were rewritten without changing recovery behavior.
+
+Phase 4 carrier credential-verification slice added on 2026-05-28:
+
+- `src/connectors/carrier/credential-verification.ts` now owns provider credential probe calls for the carrier verification endpoint.
+- `api/carriers/verify.ts` and `src/lib/imported-handlers/carriers-verify.ts` are thin compatibility wrappers over the connector-owned verification handler.
+- This preserves the existing HTTP contract while removing direct provider probe calls from API/imported-handler surfaces.
 
 Phase 5: Tighten guards.
 
