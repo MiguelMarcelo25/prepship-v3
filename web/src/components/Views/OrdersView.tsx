@@ -8853,7 +8853,11 @@ export default function OrdersView({
                           <th
                             key={column.key}
                             data-col={column.key}
-                            style={{ width: column.width, position: 'relative' }}
+                            style={{
+                              width: column.width,
+                              position: 'relative',
+                              ...(column.key === 'qty' ? { textAlign: 'center' } : null),
+                            }}
                             className={headerClasses || undefined}
                             draggable={column.key !== 'select'}
                             tabIndex={column.key !== 'select' ? 0 : undefined}
