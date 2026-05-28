@@ -47,6 +47,18 @@ if (directCarrierLabels.includes('src/connectors/carrier-resolution')) {
   pass('direct carrier labels avoid connector-resolution runtime import');
 }
 
+const directCarrierRates = fs.readFileSync(path.join(root, 'api/carriers/rates.ts'), 'utf8');
+if (
+  directCarrierRates.includes("from '../../src/connectors/carrier/direct-rates.js'") ||
+  directCarrierRates.includes("from '../../src/connectors/store/walmart.js'") ||
+  directCarrierRates.includes("from '../../src/services/carrier-connector-orchestrator.js'") ||
+  directCarrierRates.includes("from '../../src/connectors/carrier-resolution.js'")
+) {
+  fail('api/carriers/rates.ts must lazy-load rate connectors; Vercel must boot OPTIONS/auth without importing connector trees');
+} else {
+  pass('direct carrier rates lazy-load connector trees after request validation');
+}
+
 if (process.exitCode) {
   process.exit(process.exitCode);
 }

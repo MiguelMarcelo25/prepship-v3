@@ -1,1 +1,1 @@
-export { default } from '../../src/connectors/carrier/credential-verification';
+export { default } from '../../src/connectors/carrier/credential-verification.js';

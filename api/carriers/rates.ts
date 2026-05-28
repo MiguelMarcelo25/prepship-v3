@@ -23,11 +23,6 @@ import {
   verifySupabaseJwt,
 } from '../../src/lib/auth/verify-supabase-jwt.js';
 import { corsHeaders } from '../../src/lib/http/cors.js';
-import { lookupWalmartOrderByCustomerOrderId } from '../../src/connectors/store/walmart.js';
-import {
-  normalizeDirectRateProvider,
-  quoteCarrierRates,
-} from '../../src/connectors/carrier/direct-rates.js';
 import { sendInternalServerError } from '../_lib/safe-error.js';
 
 // Keep this endpoint self-contained for Vercel cold starts. Importing the
@@ -52,6 +47,67 @@ const DIRECT_CARRIER_CONNECTOR_CAPABILITIES: Record<string, string[]> = {
 
 function directCarrierConnectorCapabilities(provider: string): string[] {
   return DIRECT_CARRIER_CONNECTOR_CAPABILITIES[provider] ?? [];
+}
+
+const DIRECT_RATE_PROVIDER_ALIASES: Record<string, string> = {
+  shipstation: 'shipstation',
+  shipp: 'shipp',
+  easypost: 'easypost',
+  easy_post: 'easypost',
+  walmart_shipping: 'walmart_shipping',
+  walmartshipping: 'walmart_shipping',
+  ups: 'ups',
+  fedex: 'fedex',
+  usps: 'usps',
+  shipengine: 'shipengine',
+  ebay_shipping: 'ebay_shipping',
+  ebayshipping: 'ebay_shipping',
+  amazon_shipping: 'amazon_shipping',
+  amazonshipping: 'amazon_shipping',
+};
+
+function normalizeDirectRateProvider(provider: string | null | undefined): string | null {
+  const key = String(provider ?? '').trim().toLowerCase();
+  return DIRECT_RATE_PROVIDER_ALIASES[key] ?? null;
+}
+
+async function quoteCarrierRates(provider: string | null | undefined, input: Record<string, unknown>) {
+  const normalized = normalizeDirectRateProvider(provider);
+  if (!normalized) {
+    throw new Error(`No direct carrier rate connector registered for ${provider ?? '(missing)'}`);
+  }
+
+  let connector: any;
+  if (normalized === 'shipstation') {
+    connector = (await import('../../src/connectors/carrier/shipstation.js')).shipStationCarrierConnector;
+  } else if (normalized === 'shipp') {
+    connector = (await import('../../src/connectors/carrier/shipp.js')).shippCarrierConnector;
+  } else if (normalized === 'easypost') {
+    connector = (await import('../../src/connectors/carrier/easypost.js')).easyPostCarrierConnector;
+  } else if (normalized === 'walmart_shipping') {
+    connector = (await import('../../src/connectors/carrier/walmart-shipping.js')).walmartShippingCarrierConnector;
+  } else if (normalized === 'ups') {
+    connector = (await import('../../src/connectors/carrier/ups.js')).upsCarrierConnector;
+  } else if (normalized === 'fedex') {
+    connector = (await import('../../src/connectors/carrier/fedex.js')).fedexCarrierConnector;
+  } else if (normalized === 'usps') {
+    connector = (await import('../../src/connectors/carrier/usps.js')).uspsCarrierConnector;
+  } else if (normalized === 'shipengine') {
+    connector = (await import('../../src/connectors/carrier/shipengine.js')).shipEngineCarrierConnector;
+  } else if (normalized === 'ebay_shipping') {
+    connector = (await import('../../src/connectors/carrier/ebay-shipping.js')).ebayShippingCarrierConnector;
+  } else if (normalized === 'amazon_shipping') {
+    connector = (await import('../../src/connectors/carrier/amazon-shipping.js')).amazonShippingCarrierConnector;
+  }
+
+  if (!connector?.getRates) {
+    throw new Error(`No direct carrier rate connector registered for ${provider ?? '(missing)'}`);
+  }
+
+  return {
+    provider: normalized,
+    rates: await connector.getRates(input),
+  };
 }
 
 function readBody(req: any): Promise<unknown> {
@@ -426,6 +482,7 @@ export default async function handler(req: any, res: any): Promise<void> {
           return null;
         })();
         if (candidateCustomerOrderId) {
+          const { lookupWalmartOrderByCustomerOrderId } = await import('../../src/connectors/store/walmart.js');
           const looked = await lookupWalmartOrderByCustomerOrderId(creds, candidateCustomerOrderId);
           if (looked) {
             purchaseOrderId = looked.purchaseOrderId;
