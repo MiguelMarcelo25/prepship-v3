@@ -6,7 +6,7 @@ Repo: `https://github.com/drprepperusa-org/prepship-v4.git`
 
 Branch: `prepshipv4-stable`
 
-Status: New architecture-hardening task. This does not supersede PS-024, PS-025, or PS-026. It hardens the connector model those tasks depend on.
+Status: Closeout verification pass. PS-032 implementation has moved the known store and carrier integrations behind connector boundaries; this document now keeps the original task plus a current implementation snapshot for final verification.
 
 ## Copy/Paste Codex Prompt
 
@@ -16,13 +16,24 @@ You are working in PrepShip V4.
 
 Refactor PrepShip so provider-specific store and carrier integrations are isolated behind connector boundaries. PrepShip core must not directly call ShipStation, Walmart, eBay, UPS, EasyPost, Shipp, Walmart Shipping, or future provider APIs from routes/services/UI-facing workflow code. PrepShip should talk to StoreConnector for store/order/marketplace operations and CarrierConnector for rates/labels/tracking/voids. Connectors own provider-specific API calls and normalize all provider-specific payloads into standardized PrepShip values.
 
-### Current Findings / Context
+### Current Implementation Snapshot
 
-- Main order sync currently calls ShipStation directly from `src/services/order-sync.ts` via `ssV1Request('/orders?...')` and writes `sourceProvider: 'shipstation'` through `buildShipStationOrderSource`.
-- Walmart/eBay order pulls currently live in direct endpoint files (`api/carriers/walmart/orders.ts`, `api/carriers/ebay/orders.ts`) and write `store_orders` plus mirrored `orders`; they are not routed through `storeConnectors.walmart.importOrders()` / `storeConnectors.ebay.importOrders()`.
-- `src/domain/fulfillment/types.ts` has a narrow `StoreConnector` only for shipment confirmation; `src/connectors/types.ts` has a richer `StoreConnector` with `importOrders`, `syncOrderStatuses`, `normalizeOrder`, and `confirmShipment`. Reconcile these into one true runtime contract or a clearly layered shared contract.
-- Shipment confirmation already mostly follows the target model via `src/services/fulfillment/outbox.ts` -> `resolveStoreConnector(..., 'shipment.confirm')` -> connector `confirmShipment`.
-- Main label creation still goes through `carrierConnectors.shipstation.createLabel(...)`, but older label/rate/carrier-list code and direct-carrier handlers still contain provider-specific branches and direct provider calls outside clean connector boundaries.
+The original findings below have been migrated. The current closeout state is:
+
+- `src/services/order-sync.ts` calls the store connector orchestrator, not `ssV1Request` directly. ShipStation order API access is owned by `src/connectors/store/shipstation.ts` and connector-owned helpers.
+- Walmart/eBay order API routes are compatibility wrappers around the store connector orchestrator. Provider API access and normalization live behind `src/connectors/store/walmart.ts` and `src/connectors/store/ebay.ts`.
+- `src/domain/fulfillment/types.ts` now uses the shared connector contract model from `src/connectors/types.ts`, avoiding incompatible runtime `StoreConnector` definitions.
+- Marketplace confirmation still flows through `src/services/fulfillment/outbox.ts` -> `resolveStoreConnector(..., 'shipment.confirm')` -> `connector.confirmShipment(...)`.
+- Label, rate, tracking, and carrier-account flows use CarrierConnector orchestration. API routes remain allowed as thin auth/account/order-context wrappers, but provider API calls must stay inside connector-owned modules or approved low-level provider libraries.
+- The PS-032 static guards now enforce the boundary and report zero unclassified transitional debt at closeout.
+
+### Original Findings / Context
+
+- Main order sync called ShipStation directly from `src/services/order-sync.ts` via `ssV1Request('/orders?...')` and wrote `sourceProvider: 'shipstation'` through `buildShipStationOrderSource`.
+- Walmart/eBay order pulls lived in direct endpoint files (`api/carriers/walmart/orders.ts`, `api/carriers/ebay/orders.ts`) and wrote `store_orders` plus mirrored `orders` without routing through `storeConnectors.walmart.importOrders()` / `storeConnectors.ebay.importOrders()`.
+- `src/domain/fulfillment/types.ts` had a narrow `StoreConnector` only for shipment confirmation while `src/connectors/types.ts` had a richer `StoreConnector` with `importOrders`, `syncOrderStatuses`, `normalizeOrder`, and `confirmShipment`.
+- Shipment confirmation already mostly followed the target model via `src/services/fulfillment/outbox.ts` -> `resolveStoreConnector(..., 'shipment.confirm')` -> connector `confirmShipment`.
+- Main label creation still went through `carrierConnectors.shipstation.createLabel(...)`, while older label/rate/carrier-list code and direct-carrier handlers contained provider-specific branches outside clean connector boundaries.
 
 ### Target Model
 
@@ -144,7 +155,7 @@ Include a short "new Walmart user" walkthrough: add Walmart credentials -> store
 ### Verification Commands
 
 - `npm run typecheck`
-- `npm run build`
+- `npm run build:web`
 - `npm run test:connector-architecture` or the updated equivalent guard command
 - `npm run test:connector-registry` or the updated equivalent guard command
 - `npm run test:ps-032-connector-boundary`

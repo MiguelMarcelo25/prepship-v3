@@ -2,7 +2,9 @@
 
 Date: 2026-05-27
 
-Status: Phase 0 baseline for PS-032. This document inventories direct provider API usage that exists before the connector-boundary refactor. It does not change runtime behavior.
+Closeout updated: 2026-05-28
+
+Status: Closeout boundary inventory for PS-032. The provider API call inventory now reflects the connector-first implementation: direct provider calls are allowed only in connector-owned implementations or approved low-level provider wrappers, and the PS-032 guard reports zero unclassified transitional debt.
 
 Safety note: this audit is documentation and static guard coverage only. No real labels, postage, provider mutations, marketplace notifications, shipped/cancelled order edits, or production data updates were performed.
 
@@ -16,13 +18,13 @@ Allowed long-term provider call locations:
 - CarrierConnector implementations and connector-owned helpers for rates, labels, tracking, and voids.
 - Low-level provider client wrappers only when called by connector-owned code.
 
-Everything else in this document is transitional PS-032 migration debt.
+Anything outside these approved locations is forbidden core/provider coupling and should fail the PS-032 boundary guard.
 
 Test fixtures may contain provider-shaped URLs or provider names when they mock connector behavior without performing network calls. For example, `scripts/ebay-confirmation-mocked-guard.ts` asserts mocked eBay confirmation payload shape and does not call the live eBay API.
 
 ## Connector-Owned Or Approved Low-Level Files
 
-These files currently contain direct provider call markers and are allowed as connector-owned implementations or low-level provider wrappers. As PS-032 progresses, provider wrappers in `src/lib/*` should remain callable only from connector-owned code.
+These files currently contain direct provider call markers and are allowed as connector-owned implementations or low-level provider wrappers. Provider wrappers in `src/lib/*` must remain callable only from connector-owned code.
 
 | File | Provider Area | Reason |
 | --- | --- | --- |
@@ -49,7 +51,7 @@ These files currently contain direct provider call markers and are allowed as co
 
 ## Transitional Direct Provider Call Debt
 
-These files currently contain direct provider calls or provider-client usage outside the target boundary. They are documented so the guard can prevent new unclassified direct provider calls while PS-032 moves existing behavior behind connectors.
+No unclassified transitional direct-provider debt remains at closeout. Compatibility API routes and services may still exist, but they must be thin auth/account/order-context wrappers over StoreConnector or CarrierConnector orchestration.
 
 | File | Provider Area | Target Owner | Migration Phase |
 | --- | --- | --- | --- |
@@ -124,68 +126,68 @@ Phase 4 UPS rate slice added on 2026-05-27:
 
 - `api/carriers/rates.ts` now routes UPS rate quotes through `quoteCarrierRates('ups', ...)`.
 - `src/connectors/carrier/ups.ts` owns UPS OAuth and Rating API calls.
-- `api/carriers/rates.ts` remains transitional debt until the remaining direct rate providers are moved.
+- `api/carriers/rates.ts` is a compatibility wrapper for auth, account selection, order context, and response shaping; provider API calls remain connector-owned.
 
 Phase 4 EasyPost rate slice added on 2026-05-27:
 
 - `api/carriers/rates.ts` now routes EasyPost rate quotes through `quoteCarrierRates('easypost', ...)`.
 - `src/connectors/carrier/easypost.ts` owns EasyPost shipment/rate API calls.
-- `api/carriers/rates.ts` still owns order-context lookup and remains transitional debt until all remaining rate providers are moved.
+- `api/carriers/rates.ts` still owns order-context lookup and response shaping, but provider API calls remain connector-owned.
 
 Phase 4 Shipp rate slice added on 2026-05-27:
 
 - `api/carriers/rates.ts` now routes Shipp rate quotes through `quoteCarrierRates('shipp', ...)`.
 - `src/connectors/carrier/shipp.ts` owns Shipp login, ZIP enrichment, quote API calls, and rate normalization.
-- `api/carriers/rates.ts` still owns order-context lookup and remains transitional debt until all remaining rate providers are moved.
+- `api/carriers/rates.ts` still owns order-context lookup and response shaping, but provider API calls remain connector-owned.
 
 Phase 4 Walmart Shipping rate slice added on 2026-05-27:
 
 - `api/carriers/rates.ts` now routes Walmart Shipping rate quotes through `quoteCarrierRates('walmart_shipping', ...)`.
 - `src/connectors/carrier/walmart-shipping.ts` owns Walmart Shipping token, shipping-estimates API calls, request shaping, and rate normalization.
 - `src/connectors/store/walmart.ts` owns the Walmart customer-order lookup helper used to resolve purchaseOrderId for ShipStation-ingested Walmart orders.
-- `api/carriers/rates.ts` still owns database order-context lookup and remains transitional debt until the remaining rate providers are moved.
+- `api/carriers/rates.ts` still owns database order-context lookup and response shaping, but provider API calls remain connector-owned.
 
 Phase 4 FedEx rate slice added on 2026-05-27:
 
 - `api/carriers/rates.ts` now routes FedEx rate quotes through `quoteCarrierRates('fedex', ...)`.
 - `src/connectors/carrier/fedex.ts` owns FedEx OAuth, rate API calls, request shaping, and rate normalization.
-- `api/carriers/rates.ts` remains transitional debt until all remaining rate providers are moved.
+- `api/carriers/rates.ts` is a compatibility wrapper for auth, account selection, order context, and response shaping; provider API calls remain connector-owned.
 
 Phase 4 USPS rate slice added on 2026-05-27:
 
 - `api/carriers/rates.ts` now routes USPS rate quotes through `quoteCarrierRates('usps', ...)`.
 - `src/connectors/carrier/usps.ts` owns USPS OAuth, price API calls, request shaping, and rate normalization.
-- `api/carriers/rates.ts` remains transitional debt until all remaining rate providers are moved.
+- `api/carriers/rates.ts` is a compatibility wrapper for auth, account selection, order context, and response shaping; provider API calls remain connector-owned.
 
 Phase 4 ShipEngine rate slice added on 2026-05-27:
 
 - `api/carriers/rates.ts` now routes ShipEngine rate quotes through `quoteCarrierRates('shipengine', ...)`.
 - `src/connectors/carrier/shipengine.ts` owns ShipEngine carrier lookup, rate API calls, request shaping, and rate normalization.
-- `api/carriers/rates.ts` remains transitional debt until all remaining rate providers are moved.
+- `api/carriers/rates.ts` is a compatibility wrapper for auth, account selection, order context, and response shaping; provider API calls remain connector-owned.
 
 Phase 4 eBay Shipping rate slice added on 2026-05-28:
 
 - `api/carriers/rates.ts` now routes eBay Shipping rate quotes through `quoteCarrierRates('ebay_shipping', ...)`.
 - `src/connectors/carrier/ebay-shipping.ts` owns eBay Logistics OAuth, shipping quote API calls, request shaping, and rate normalization.
-- `api/carriers/rates.ts` still owns local eBay raw-order lookup and remains transitional debt until all remaining rate providers are moved.
+- `api/carriers/rates.ts` still owns local eBay raw-order lookup and response shaping, but provider API calls remain connector-owned.
 
 Phase 4 Amazon Shipping rate slice added on 2026-05-28:
 
 - `api/carriers/rates.ts` now routes Amazon Shipping rate quotes through `quoteCarrierRates('amazon_shipping', ...)`.
 - `src/connectors/carrier/amazon-shipping.ts` owns Amazon LWA auth, SP-API shipping rate calls, request shaping, and rate normalization.
-- `api/carriers/rates.ts` still owns local Amazon raw-order lookup and remains transitional debt until all remaining rate providers are moved.
+- `api/carriers/rates.ts` still owns local Amazon raw-order lookup and response shaping, but provider API calls remain connector-owned.
 
 Phase 4 ShipStation carrier-list slice added on 2026-05-28:
 
 - `src/routes/rates.ts` now routes `/rates/carriers` through `listCarrierAccounts('shipstation', ...)`.
 - `src/connectors/carrier/shipstation.ts` owns the ShipStation `/v2/carriers` API call for carrier account listing.
-- ShipStation rate estimation in `src/services/rates.ts` remains transitional debt until the cached rate engine is moved behind the carrier connector.
+- ShipStation cached-rate estimation now routes provider calls through CarrierConnector orchestration; `src/services/rates.ts` owns cache, filtering, diagnostics, and markup behavior.
 
 Phase 4 ShipStation rate-service carrier-discovery slice added on 2026-05-28:
 
 - `src/services/rates.ts` now routes cached-rate carrier discovery through `listCarrierAccounts('shipstation', ...)`.
 - `src/connectors/carrier/shipstation.ts` remains the owner of ShipStation `/v2/carriers` calls.
-- ShipStation `/v2/rates/estimate` calls in `src/services/rates.ts` remain transitional debt for the next cached-rate engine slice.
+- ShipStation `/v2/rates/estimate` calls are owned by the ShipStation CarrierConnector; `src/services/rates.ts` owns cached-rate orchestration behavior.
 
 Phase 4 ShipStation cached-rate estimate slice added on 2026-05-28:
 
@@ -209,7 +211,7 @@ Phase 4 ShipStation label carrier-nickname slice added on 2026-05-28:
 
 - `src/services/labels.ts` now routes carrier nickname ShipStation carrier-list lookup through `listCarrierAccounts('shipstation', ...)`.
 - `src/connectors/carrier/shipstation.ts` owns the ShipStation `/v2/carriers` call used for nickname resolution.
-- ShipStation label creation and label-from-rate calls in `src/services/labels.ts` remain transitional debt until the label purchase slice moves fully through CarrierConnector orchestration.
+- ShipStation label creation and label-from-rate provider calls are now owned by the ShipStation CarrierConnector; `src/services/labels.ts` owns PrepShip label workflow behavior.
 
 Phase 4 ShipStation legacy label-purchase slice added on 2026-05-28:
 
@@ -287,12 +289,12 @@ Phase 4 carrier credential-verification slice added on 2026-05-28:
 
 Phase 5: Tighten guards.
 
-- Remove files from the transitional debt list as they are migrated.
-- Make `scripts/ps-032-connector-boundary-guard.mjs` fail on any remaining direct provider call outside connector-owned files.
-- Add targeted tests proving routes/services/schedulers use StoreConnector/CarrierConnector orchestration.
+- Keep the transitional debt list empty unless a documented, time-boxed compatibility exception is approved.
+- Keep `scripts/ps-032-connector-boundary-guard.mjs` failing on any direct provider call outside connector-owned files or approved low-level wrappers.
+- Keep targeted tests proving routes/services/schedulers use StoreConnector/CarrierConnector orchestration.
 
 ## Guard Purpose
 
-`scripts/ps-032-connector-boundary-guard.mjs` intentionally does not claim PS-032 is complete. It freezes the Phase 0 direct-provider-call inventory so new provider calls cannot quietly appear in core routes/services while the migration is underway.
+`scripts/ps-032-connector-boundary-guard.mjs` is the closeout regression guard for direct provider calls. It allows connector-owned implementations and approved low-level wrappers, and it fails if provider API markers appear in core routes, services, schedulers, UI-facing workflow code, or any unapproved file.
 
-When a transitional file is migrated behind connectors, remove it from both this document's transitional table and the guard's `transitionalDebt` set.
+The guard's `transitionalDebt` set should remain empty at closeout. Any future temporary exception must be documented here with owner, reason, and removal condition.

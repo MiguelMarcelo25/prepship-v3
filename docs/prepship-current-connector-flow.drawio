@@ -1,0 +1,137 @@
+<mxfile host="app.diagrams.net" modified="2026-05-28T00:00:00.000Z" agent="Codex" version="24.7.17">
+  <diagram id="prepship-current-connector-flow" name="Current PrepShip Connector Flow">
+    <mxGraphModel dx="1600" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1800" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" value="PrepShip V4 - Real Current Connector Flow" style="text;html=1;strokeColor=none;fillColor=none;fontSize=28;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="410" y="20" width="920" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" value="Truth: order import now routes through StoreConnector, but ShipStation remains the main practical order source because most stores are connected there." style="text;html=1;strokeColor=none;fillColor=none;fontSize=14;align=center;verticalAlign=middle;fontColor=#4b5563;" vertex="1" parent="1">
+          <mxGeometry x="300" y="70" width="1140" height="40" as="geometry" />
+        </mxCell>
+
+        <mxCell id="lane-orders" value="ORDER IMPORT / STATUS SYNC" style="swimlane;html=1;rounded=0;startSize=34;fontStyle=1;fontSize=15;horizontal=1;fillColor=#eaf2ff;strokeColor=#5b8def;" vertex="1" parent="1">
+          <mxGeometry x="60" y="130" width="1680" height="300" as="geometry" />
+        </mxCell>
+        <mxCell id="lane-rates-labels" value="RATES / LABELS / TRACKING" style="swimlane;html=1;rounded=0;startSize=34;fontStyle=1;fontSize=15;horizontal=1;fillColor=#ecfdf3;strokeColor=#34a853;" vertex="1" parent="1">
+          <mxGeometry x="60" y="470" width="1680" height="250" as="geometry" />
+        </mxCell>
+        <mxCell id="lane-confirm" value="MARKETPLACE CONFIRMATION AFTER LABEL" style="swimlane;html=1;rounded=0;startSize=34;fontStyle=1;fontSize=15;horizontal=1;fillColor=#fff7e6;strokeColor=#f59f00;" vertex="1" parent="1">
+          <mxGeometry x="60" y="760" width="1680" height="240" as="geometry" />
+        </mxCell>
+
+        <mxCell id="scheduler" value="Cron / Sync Button / Admin Sync&#xa;src/routes/cron.ts&#xa;src/routes/sync.ts&#xa;src/routes/orders.ts" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#2563eb;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="100" y="190" width="190" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="order-sync" value="Core Order Sync&#xa;src/services/order-sync.ts&#xa;&#xa;No direct ssV1Request here now" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#2563eb;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="340" y="190" width="210" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="store-orch" value="StoreConnector Orchestrator&#xa;importStoreOrders(provider, input)&#xa;src/services/store-connector-orchestrator.ts" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#bfdbfe;strokeColor=#2563eb;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="600" y="190" width="240" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="store-connectors" value="StoreConnectors&#xa;&#xa;shipstation.importOrders&#xa;walmart.importOrders&#xa;ebay.importOrders" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#93c5fd;strokeColor=#1d4ed8;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="900" y="175" width="220" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="providers" value="Provider Store APIs&#xa;&#xa;ShipStation V1 Orders API&#xa;Walmart Marketplace API&#xa;eBay Sell Fulfillment API" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#1d4ed8;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1180" y="175" width="230" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="persist" value="Normalized Persistence&#xa;&#xa;store_orders table&#xa;orders table&#xa;source_provider/source_order_id fields" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#2563eb;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1480" y="175" width="220" height="120" as="geometry" />
+        </mxCell>
+
+        <mxCell id="truth-shipstation" value="REALITY NOTE&#xa;Most production orders still arrive via ShipStation because most stores are connected inside ShipStation. Architecturally this is now ShipStation StoreConnector, not core direct ShipStation code." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff1f2;strokeColor=#e11d48;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="410" y="320" width="520" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="marketplace-routes" value="Manual / API marketplace pulls&#xa;api/carriers/walmart/orders.ts&#xa;api/carriers/ebay/orders.ts&#xa;&#xa;Thin wrappers that call importStoreOrders(...)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#2563eb;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1010" y="320" width="330" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="rate-browser" value="Rate Browser / Rate Shop UI&#xa;web/src/components/RateBrowserModal.tsx&#xa;web/src/components/Views/RatesView.tsx" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#16a34a;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="100" y="540" width="230" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="rates-core" value="Core Rate/Label Services + Vercel Routes&#xa;src/services/rates.ts&#xa;src/services/labels.ts&#xa;api/carriers/rates.ts&#xa;api/carriers/labels.ts" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dcfce7;strokeColor=#16a34a;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="400" y="535" width="260" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="carrier-orch" value="CarrierConnector Boundary&#xa;quoteCarrierRates(provider, input)&#xa;createLabel(provider, input)&#xa;resolveCarrierConnector(...)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#bbf7d0;strokeColor=#16a34a;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="730" y="535" width="250" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="carrier-connectors" value="CarrierConnectors&#xa;&#xa;shipstation&#xa;ups&#xa;easypost&#xa;shipp&#xa;walmart_shipping&#xa;fedex/usps/shipengine/etc." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#86efac;strokeColor=#15803d;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1050" y="520" width="230" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="carrier-apis" value="Provider Carrier APIs&#xa;&#xa;ShipStation Label/Rate API&#xa;UPS API&#xa;EasyPost API&#xa;Shipp API&#xa;Walmart Shipping API" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#15803d;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1370" y="520" width="240" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="truth-rates" value="REALITY NOTE&#xa;Rates/labels are connectorized, but some Vercel routes remain thin compatibility wrappers. They should call connector-owned functions, not provider APIs directly." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f0fdf4;strokeColor=#16a34a;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="500" y="660" width="610" height="45" as="geometry" />
+        </mxCell>
+
+        <mxCell id="label-success" value="Label Created / Tracking Saved&#xa;shipments / orders / print queue" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#f59f00;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="100" y="840" width="220" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="outbox" value="Fulfillment Outbox&#xa;src/services/fulfillment/outbox.ts&#xa;&#xa;retry-safe queue" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fef3c7;strokeColor=#f59f00;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="420" y="840" width="230" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="confirm-orch" value="StoreConnector.confirmShipment&#xa;resolveStoreConnector(provider, 'shipment.confirm')" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fde68a;strokeColor=#d97706;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="760" y="840" width="270" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="confirm-connectors" value="Store confirmation connectors&#xa;&#xa;walmart.confirmShipment&#xa;ebay.confirmShipment&#xa;shipstation.confirmShipment" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fcd34d;strokeColor=#d97706;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1140" y="830" width="250" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="marketplaces" value="Marketplace confirmation APIs&#xa;&#xa;Walmart Ship Order Lines&#xa;eBay Fulfillment Tracking&#xa;ShipStation mark-as-shipped" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d97706;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1480" y="830" width="230" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="future-note" value="WHAT IS NOT TRUE YET&#xa;There is no separate OrderConnector. StoreConnector is the order/store/marketplace abstraction. Future stores like Shopify/Amazon/TikTok still need full live import implementations before they can replace ShipStation as sources." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8fafc;strokeColor=#64748b;fontSize=12;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="320" y="1030" width="1160" height="70" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e1" edge="1" parent="1" source="scheduler" target="order-sync" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#2563eb;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" edge="1" parent="1" source="order-sync" target="store-orch" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#2563eb;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" edge="1" parent="1" source="store-orch" target="store-connectors" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#2563eb;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" edge="1" parent="1" source="store-connectors" target="providers" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#2563eb;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" edge="1" parent="1" source="providers" target="persist" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#2563eb;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" edge="1" parent="1" source="marketplace-routes" target="store-orch" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#2563eb;dashed=1;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e7" edge="1" parent="1" source="rate-browser" target="rates-core" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#16a34a;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e8" edge="1" parent="1" source="rates-core" target="carrier-orch" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#16a34a;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e9" edge="1" parent="1" source="carrier-orch" target="carrier-connectors" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#16a34a;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" edge="1" parent="1" source="carrier-connectors" target="carrier-apis" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#16a34a;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e11" edge="1" parent="1" source="label-success" target="outbox" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#d97706;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" edge="1" parent="1" source="outbox" target="confirm-orch" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#d97706;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e13" edge="1" parent="1" source="confirm-orch" target="confirm-connectors" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#d97706;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e14" edge="1" parent="1" source="confirm-connectors" target="marketplaces" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;strokeColor=#d97706;">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
