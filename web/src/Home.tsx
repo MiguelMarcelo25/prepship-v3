@@ -823,6 +823,43 @@ export default function Home() {
             )}
           </AnimatePresence>
 
+          {displayView === 'orders' ? (
+            <button
+              id="pq-toggle-btn"
+              type="button"
+              aria-label={queueOpen ? 'Close print queue panel' : 'Open print queue panel'}
+              className="absolute left-1/2 top-1/2 z-10 hidden -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 h-8 px-3 rounded-lg ring-1 ring-line bg-surface text-ink-2 hover:text-ink hover:ring-line-2 hover:bg-surface-2 active:scale-95 transition-all duration-150 text-[12px] font-semibold shadow-sm md:inline-flex"
+              onClick={() => setQueueToggleRequestId((value) => value + 1)}
+            >
+              {queueOpen ? (
+                <>
+                  <XIcon size={13} strokeWidth={2.5} />
+                  <span>Close Queue</span>
+                </>
+              ) : (
+                <>
+                  <Printer size={13} strokeWidth={2.25} />
+                  <span>Queue</span>
+                </>
+              )}
+              <AnimatePresence>
+                {queueBadgeCount > 0 ? (
+                  <motion.span
+                    key="pq-badge-centered"
+                    id="pq-badge"
+                    initial={{ scale: 0, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    exit={{ scale: 0, opacity: 0 }}
+                    transition={{ type: 'spring', stiffness: 500, damping: 22 }}
+                    className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-amber-400 text-black text-[9px] font-bold font-mono tabular-nums shadow-sm ring-2 ring-surface"
+                  >
+                    {queueBadgeCount}
+                  </motion.span>
+                ) : null}
+              </AnimatePresence>
+            </button>
+          ) : null}
+
           {/* Spacer pushes the right cluster to the edge */}
           <div className="flex-1 min-w-0" />
 
@@ -940,10 +977,10 @@ export default function Home() {
                     Labels topbar button was a redundant entry point. */}
 
                 <button
-                  id="pq-toggle-btn"
+                  id="pq-toggle-btn-mobile"
                   type="button"
                   aria-label={queueOpen ? 'Close print queue panel' : 'Open print queue panel'}
-                  className="relative inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg ring-1 ring-line bg-surface text-ink-2 hover:text-ink hover:ring-line-2 hover:bg-surface-2 active:scale-95 transition-all duration-150 text-[12px] font-semibold"
+                  className="relative inline-flex items-center gap-1.5 h-8 px-2.5 rounded-lg ring-1 ring-line bg-surface text-ink-2 hover:text-ink hover:ring-line-2 hover:bg-surface-2 active:scale-95 transition-all duration-150 text-[12px] font-semibold md:hidden"
                   onClick={() => setQueueToggleRequestId((value) => value + 1)}
                 >
                   {queueOpen ? (
@@ -960,8 +997,8 @@ export default function Home() {
                   <AnimatePresence>
                     {queueBadgeCount > 0 ? (
                       <motion.span
-                        key="pq-badge"
-                        id="pq-badge"
+                        key="pq-badge-mobile"
+                        id="pq-badge-mobile"
                         initial={{ scale: 0, opacity: 0 }}
                         animate={{ scale: 1, opacity: 1 }}
                         exit={{ scale: 0, opacity: 0 }}
