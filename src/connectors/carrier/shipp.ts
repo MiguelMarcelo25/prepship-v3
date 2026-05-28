@@ -62,6 +62,15 @@ function shippFirstString(...values: unknown[]): string {
 }
 
 const shippZipCache = new Map<string, { city?: string; state?: string }>();
+const SHIPP_QUOTE_MAX_ATTEMPTS = 2;
+
+function shippShouldRetryQuoteStatus(status: number): boolean {
+  return status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+}
+
+function shippSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 async function shippLookupUsZip(zip: unknown): Promise<{ city?: string; state?: string }> {
   const five = String(zip ?? '').replace(/\D/g, '').slice(0, 5);
@@ -355,32 +364,56 @@ async function quoteShippRatesRaw(input: Record<string, unknown>): Promise<{
     ],
   };
 
-  const res = await timedFetch('shipp.rates', 'https://shipp.to/api/shipping/quote', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-      'x-api-key': session.apiKey,
-      Cookie: session.cookieHeader,
-    },
-    body: JSON.stringify(body),
-  });
-  const text = await res.text().catch(() => '');
-  let data: any = null;
-  try { data = text ? JSON.parse(text) : null; } catch { /* keep text fallback */ }
-  if (!res.ok) {
-    throw new Error(`Shipp quote ${res.status}: ${text.slice(0, 800) || res.statusText}`);
+  let lastQuoteError: Error | null = null;
+  for (let attempt = 1; attempt <= SHIPP_QUOTE_MAX_ATTEMPTS; attempt += 1) {
+    let res: Response;
+    try {
+      res = await timedFetch(attempt > 1 ? 'shipp.rates.retry' : 'shipp.rates', 'https://shipp.to/api/shipping/quote', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'x-api-key': session.apiKey,
+          Cookie: session.cookieHeader,
+        },
+        body: JSON.stringify(body),
+      }, { attempt });
+    } catch (err) {
+      lastQuoteError = err instanceof Error ? err : new Error(String(err));
+      if (attempt < SHIPP_QUOTE_MAX_ATTEMPTS) {
+        await shippSleep(500);
+        continue;
+      }
+      throw new Error(`Shipp quote failed after retry: ${lastQuoteError.message}`);
+    }
+
+    const text = await res.text().catch(() => '');
+    let data: any = null;
+    try { data = text ? JSON.parse(text) : null; } catch { /* keep text fallback */ }
+    if (!res.ok) {
+      lastQuoteError = new Error(`Shipp quote ${res.status}: ${text.slice(0, 800) || res.statusText}`);
+      if (attempt < SHIPP_QUOTE_MAX_ATTEMPTS && shippShouldRetryQuoteStatus(res.status)) {
+        await shippSleep(500);
+        continue;
+      }
+      if (attempt > 1 && shippShouldRetryQuoteStatus(res.status)) {
+        throw new Error(`Shipp quote failed after retry: ${lastQuoteError.message}`);
+      }
+      throw lastQuoteError;
+    }
+
+    const rateList: any[] = Array.isArray(data?.rates) ? data.rates : [];
+    if (rateList.length === 0) {
+      const errors = Array.isArray(data?.errors) && data.errors.length
+        ? ` Carrier errors: ${JSON.stringify(data.errors).slice(0, 500)}`
+        : '';
+      throw new Error(`Shipp returned 0 rates for this shipment.${errors}`);
+    }
+
+    return { session, rates: rateList };
   }
 
-  const rateList: any[] = Array.isArray(data?.rates) ? data.rates : [];
-  if (rateList.length === 0) {
-    const errors = Array.isArray(data?.errors) && data.errors.length
-      ? ` Carrier errors: ${JSON.stringify(data.errors).slice(0, 500)}`
-      : '';
-    throw new Error(`Shipp returned 0 rates for this shipment.${errors}`);
-  }
-
-  return { session, rates: rateList };
+  throw lastQuoteError ?? new Error('Shipp quote failed after retry.');
 }
 
 async function ratesFromShipp(input: Record<string, unknown>): Promise<Array<{ service: string; cost: number; days: number; currency: string }>> {
