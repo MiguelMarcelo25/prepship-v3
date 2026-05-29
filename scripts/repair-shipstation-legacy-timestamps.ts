@@ -43,8 +43,9 @@ function legacyStampedDate(raw: string | null): Date | null {
 
 const apply = hasFlag('apply');
 const approved = hasFlag('approved');
-const limit = Math.max(1, Math.min(10_000, Number(argValue('limit') ?? 500)));
+const limit = Math.max(1, Math.min(50_000, Number(argValue('limit') ?? 500)));
 const storeId = argValue('store-id');
+const status = argValue('status');
 const orderNumbers = (argValue('order-numbers') ?? '')
   .split(',')
   .map((value) => value.trim())
@@ -58,6 +59,7 @@ const filters = [
   eq(orders.sourceProvider, 'shipstation'),
   sql`${orders.raw}->>'orderDate' is not null`,
   storeId ? eq(orders.storeId, Number(storeId)) : undefined,
+  status ? eq(orders.orderStatus, status) : undefined,
   orderNumbers.length ? inArray(orders.orderNumber, orderNumbers) : undefined,
 ].filter((value): value is NonNullable<typeof value> => Boolean(value));
 
@@ -80,15 +82,27 @@ for (const row of rows) {
   if (!sameSecond(row.orderDate, rawLegacy) || !corrected || sameSecond(row.orderDate, corrected)) {
     continue;
   }
-  const [{ count }] = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(inventoryLedger)
-    .where(and(eq(inventoryLedger.orderId, row.id), eq(inventoryLedger.type, 'ship')));
   candidates.push({
     ...row,
     correctedOrderDate: corrected,
-    ledgerRows: Number(count ?? 0),
+    ledgerRows: 0,
   });
+}
+
+const candidateIds = candidates.map((candidate) => candidate.id);
+if (candidateIds.length) {
+  const ledgerCounts = await db
+    .select({
+      orderId: inventoryLedger.orderId,
+      count: sql<number>`count(*)::int`,
+    })
+    .from(inventoryLedger)
+    .where(and(inArray(inventoryLedger.orderId, candidateIds), eq(inventoryLedger.type, 'ship')))
+    .groupBy(inventoryLedger.orderId);
+  const countsByOrder = new Map(ledgerCounts.map((row) => [row.orderId, Number(row.count ?? 0)]));
+  for (const candidate of candidates) {
+    candidate.ledgerRows = countsByOrder.get(candidate.id) ?? 0;
+  }
 }
 
 let updatedOrders = 0;
