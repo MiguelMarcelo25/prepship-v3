@@ -73,6 +73,7 @@
     "test:inventory-default-view": "node scripts/inventory-default-view-guard.mjs",
     "test:inventory-auto-deduct": "node scripts/inventory-auto-deduct-guard.mjs",
     "test:inventory-source-of-truth": "node scripts/inventory-source-of-truth-guard.mjs",
+    "test:inventory-history-dedupe": "node scripts/inventory-history-dedupe-guard.mjs",
     "test:inventory-ledger-balance": "tsx scripts/inventory-ledger-balance-guard.ts",
     "test:inventory-reconciliation-dry-run": "node scripts/inventory-reconciliation-dry-run-guard.mjs",
     "test:inventory-repair-plan": "node scripts/inventory-repair-plan-guard.mjs",
