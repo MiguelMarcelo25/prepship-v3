@@ -527,25 +527,22 @@ app.get('/ledger', zValidator('query', ledgerQuery), async (c) => {
       where existing_ledger.type = 'ship'
         and existing_ledger.order_id is not null
     ),
-    derived_ship_rows as (
+    derived_ship_lines as (
       select
-        (-1 * row_number() over (order by ${orders.id}, ${inventory.id}))::int as id,
         ${inventory.id} as inventory_id,
         ${inventory.sku} as sku,
         coalesce(${inventory.name}, item->>'name') as name,
         coalesce(${inventory.clientId}, ${orders.clientId}) as client_id,
-        'ship'::text as type,
-        -1 * greatest(
+        greatest(
           1,
           case
             when coalesce(item->>'quantity', '') ~ '^[0-9]+(\\.[0-9]+)?$'
               then round((item->>'quantity')::numeric)::int
             else 1
           end
-        ) as qty,
+        ) as line_qty,
         ${orders.id} as order_id,
         concat('Order ', coalesce(${orders.orderNumber}, ${orders.id}::text)) as note,
-        'order_history'::text as created_by,
         ${orders.orderDate} as created_at
       from ${orders}
       cross join lateral jsonb_array_elements(${orders.items}) item
@@ -588,6 +585,27 @@ app.get('/ledger', zValidator('query', ledgerQuery), async (c) => {
               or existing_ledger.inventory_client_id is null
             )
         )
+    ),
+    derived_ship_rows as (
+      -- Aggregate duplicate same-SKU line items within one order into a single
+      -- movement, mirroring deductInventoryForOrder()/buildDeductionLines()
+      -- which sums quantity per lowercased SKU. Without this, an order whose
+      -- items array repeats a SKU would show N split fallback rows where the
+      -- real ledger writes one combined row.
+      select
+        (-1 * row_number() over (order by order_id, inventory_id))::int as id,
+        inventory_id,
+        sku,
+        name,
+        client_id,
+        'ship'::text as type,
+        (-1 * sum(line_qty))::int as qty,
+        order_id,
+        note,
+        'order_history'::text as created_by,
+        created_at
+      from derived_ship_lines
+      group by order_id, inventory_id, sku, name, client_id, note, created_at
     ),
     combined_rows as (
       select * from ledger_rows
