@@ -42,6 +42,7 @@
     "shipstation:awaiting:reconcile:apply": "tsx scripts/reconcile-shipstation-awaiting.ts --apply",
     "shipstation:recover:dry-run": "tsx scripts/recover-missing-shipments.ts",
     "shipstation:recover:apply": "tsx scripts/recover-missing-shipments.ts --apply",
+    "shipstation:recover:diagnose": "tsx scripts/diagnose-missing-shipments.ts",
     "inventory:reconcile:dry-run": "tsx scripts/reconcile-inventory-stock.ts",
     "best-rate:dims:dry-run": "tsx scripts/clear-invalid-best-rates.ts",
     "best-rate:dims:apply": "tsx scripts/clear-invalid-best-rates.ts --apply",
