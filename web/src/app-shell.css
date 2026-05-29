@@ -446,6 +446,24 @@ aside[aria-label="Primary navigation"] button[aria-label="Show Test Orders"][ari
 /* Multi-SKU: red border wrapping only item name + SKU cells as a connected box */
 .orders-table tbody tr.multi-sku-row td[data-col="itemname"]{border-top:2px solid var(--red)!important;border-bottom:2px solid var(--red)!important;border-left:2px solid var(--red)!important;}
 .orders-table tbody tr.multi-sku-row td[data-col="sku"]{border-top:2px solid var(--red)!important;border-bottom:2px solid var(--red)!important;border-right:2px solid var(--red)!important;}
+/* PS-038 — Expedited shipping: red full-row tint + Order Date badge for BOTH
+   awaiting and shipped rows. Background lives on <td> (row-state backgrounds
+   do too), so these use !important + are ordered after selection/striping so
+   the red treatment STAYS visible when the row is selected, panel-open, or
+   hovered. A red rail (inset box-shadow) marks the row without fighting the
+   inline per-client left border. Theme-safe: var(--red)/var(--red-bg). */
+.orders-table tbody tr.row-expedited td:not([data-col="select"]){background:var(--red-bg)!important;}
+.orders-table tbody tr.row-expedited td:first-child{box-shadow:inset 3px 0 0 var(--red);}
+.orders-table tbody tr.row-expedited:hover td:not([data-col="select"]),
+.orders-table tbody tr.row-expedited.row-selected td:not([data-col="select"]),
+.orders-table tbody tr.row-expedited.row-panel-open td:not([data-col="select"]),
+.orders-table tbody tr.row-expedited.row-selected:hover td:not([data-col="select"]){background:#fbd5d5!important;}
+.orders-table tbody tr.row-expedited.row-selected td[data-col="select"]{background:rgba(220,38,38,.16);box-shadow:inset 3px 0 0 var(--red);}
+.expedited-badge{display:inline-block;align-self:flex-start;margin-bottom:3px;padding:2px 5px;border-radius:4px;font-size:9.5px;font-weight:800;line-height:1;letter-spacing:.02em;text-transform:uppercase;color:#fff;background:var(--red);border:1px solid #b91c1c;}
+.expedited-badge--overnight{background:#991b1b;border-color:#7f1d1d;}
+.expedited-badge--one_day{background:#dc2626;border-color:#b91c1c;}
+.expedited-badge--two_day{background:#ea580c;border-color:#c2410c;}
+.expedited-badge--expedited{background:#dc2626;border-color:#b91c1c;}
 .order-num{font-weight:700;color:var(--ss-blue);font-size:12.5px;}
 .customer-name{font-weight:600;}
 .customer-email{font-size:10.5px;color:var(--text3);}

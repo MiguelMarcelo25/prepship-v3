@@ -99,6 +99,7 @@ import {
   getPanelWarehouseId,
   getProductDefaultPackageId,
 } from './orders-panel-state'
+import { detectExpeditedShipping, type ExpeditedTier } from '../../lib/expedited'
 
 type OrderStatus = 'awaiting_shipment' | 'shipped' | 'cancelled'
 type SortDirection = 'asc' | 'desc'
@@ -1690,11 +1691,29 @@ function getIsException(order: OrderSummaryDto) {
   return ageHours(order.orderDate) > 48 || !(order.weight?.value && order.weight.value > 0)
 }
 
-function getExpeditedBadge(order: OrderSummaryDto, detail: OrderFullDto | null) {
-  const code = getRequestedService(order, detail)
-  if (!code) return null
-  if (/1[\s-]?day/i.test(code)) return { label: '🔴 1-day', color: '#dc2626' }
-  if (/2[\s-]?day/i.test(code)) return { label: '🟠 2-day', color: '#d97706' }
+// PS-038 — Expedited badge resolver. Prefers the server-computed
+// `order.expedited` object from the Orders list API (detected on the buyer's
+// REQUESTED service for both awaiting + shipped buckets); falls back to the
+// frontend mirror detector on the requested service when an older payload
+// lacks the field. Returns the tier (for styling) + human-readable label.
+function getExpeditedBadge(
+  order: OrderSummaryDto,
+  detail: OrderFullDto | null,
+): { tier: ExpeditedTier; label: string } | null {
+  const fromApi = order?.expedited
+  if (
+    fromApi &&
+    typeof fromApi === 'object' &&
+    fromApi.isExpedited &&
+    fromApi.tier &&
+    fromApi.label
+  ) {
+    return { tier: fromApi.tier as ExpeditedTier, label: String(fromApi.label) }
+  }
+  const detected = detectExpeditedShipping(getRequestedService(order, detail))
+  if (detected.isExpedited && detected.tier && detected.label) {
+    return { tier: detected.tier, label: detected.label }
+  }
   return null
 }
 
@@ -6489,7 +6508,15 @@ export default function OrdersView({
       case 'date':
         return (
           <div style={{ display: 'flex', flexDirection: 'column' }}>
-            {expedited ? <div style={{ fontSize: 9.5, fontWeight: 700, color: expedited.color, marginBottom: 2 }}>{expedited.label}</div> : null}
+            {expedited ? (
+              <span
+                className={`expedited-badge expedited-badge--${expedited.tier}`}
+                data-expedited-tier={expedited.tier}
+                title={`Expedited shipping requested: ${expedited.label}`}
+              >
+                {expedited.label}
+              </span>
+            ) : null}
             <div style={{ fontSize: 11.5, color: 'var(--text2)', whiteSpace: 'nowrap' }}>{formatDateTime(order.orderDate)}</div>
           </div>
         )
@@ -9044,8 +9071,9 @@ export default function OrdersView({
                           <tr
                             key={order.orderId}
                             id={`row-${order.orderId}`}
-                            className={rowClasses}
-                            style={{ borderLeft: `3px solid ${clientColor}`, background: expedited ? 'rgba(34,197,94,.08)' : undefined }}
+                            className={expedited ? `${rowClasses} row-expedited row-expedited--${expedited.tier}` : rowClasses}
+                            data-expedited={expedited ? expedited.tier : undefined}
+                            style={{ borderLeft: `3px solid ${clientColor}` }}
                             onClick={() => openOrderDetails(order.orderId)}
                             onDoubleClick={() => openShipStationOrder(order.orderId)}
                             onMouseEnter={() => setKbRowId(order.orderId)}
@@ -9088,8 +9116,9 @@ export default function OrdersView({
                         <tr
                           key={order.orderId}
                           id={`row-${order.orderId}`}
-                          className={rowClasses}
-                          style={{ borderLeft: `3px solid ${clientColor}`, background: expedited ? 'rgba(34,197,94,.08)' : undefined }}
+                          className={expedited ? `${rowClasses} row-expedited row-expedited--${expedited.tier}` : rowClasses}
+                          data-expedited={expedited ? expedited.tier : undefined}
+                          style={{ borderLeft: `3px solid ${clientColor}` }}
                           onClick={() => openOrderDetails(order.orderId)}
                           onDoubleClick={() => openShipStationOrder(order.orderId)}
                           onMouseEnter={() => setKbRowId(order.orderId)}

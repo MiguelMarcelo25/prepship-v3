@@ -24,6 +24,7 @@ import {
 import { EXCLUDED_STORE_IDS, EXCLUDED_STORE_IDS_SQL, isExcludedStoreId } from '../config/prepship';
 import { isAdminEmail } from '../lib/admin-emails';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
+import { detectExpeditedShipping } from '../lib/shipping/expedited';
 import { californiaDayEnd, californiaDayStart } from '../lib/time/california';
 import {
   computeFulfillmentShiftWindow,
@@ -1774,9 +1775,22 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       legacyClientId,
       shipping,
     );
+    // PS-038 — expedited indicator for BOTH awaiting and shipped rows. Detected
+    // from the BUYER'S REQUESTED service (the original customer expectation),
+    // never the purchased label: raw.requestedShippingService → raw.serviceCode
+    // → orders.serviceCode, with carrierCode as a final hint. This is a
+    // display/normalization-only derived field — no shipped/cancelled mutation.
+    const rawForExpedited = recordOrNull(r.order.raw);
+    const expedited = detectExpeditedShipping(
+      stringOrNull(rawForExpedited?.requestedShippingService),
+      stringOrNull(rawForExpedited?.serviceCode),
+      stringOrNull(r.order.serviceCode),
+      stringOrNull(r.order.carrierCode),
+    );
     return {
       ...r.order,
       orderStatus: effectiveOrderStatus,
+      expedited,
       legacyClientId,
       overrides: r.overrides,
       label: label
