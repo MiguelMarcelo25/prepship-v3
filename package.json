@@ -80,6 +80,8 @@
     "test:billing-client-scope": "node scripts/billing-client-store-scope-guard.mjs",
     "test:billing-formula": "tsx scripts/billing-formula-guard.ts",
     "test:billing-detail-ps040": "tsx scripts/billing-detail-ps040-guard.ts",
+    "test:billing-best-rate-ui:guard": "node scripts/billing-best-rate-ui-guard.mjs",
+    "test:billing-best-rate-ui": "playwright test web/e2e/billing-best-rate-ui.spec.js --reporter=line",
     "billing:repair-shipment-linkage": "tsx scripts/repair-billing-shipment-linkage.ts",
     "test:print-queue-client-scope": "node scripts/print-queue-client-store-scope-guard.mjs",
     "test:orders-manifests-scope": "node scripts/orders-manifests-client-store-scope-guard.mjs",

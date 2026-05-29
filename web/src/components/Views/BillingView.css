@@ -78,8 +78,7 @@
 }
 
 .billing-detail-rate-hit{
-  border:2px solid var(--ss-blue);
-  border-radius:4px;
+  font-weight:800;
 }
 
 .billing-detail-ss-row{

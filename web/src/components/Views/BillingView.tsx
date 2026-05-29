@@ -1708,7 +1708,11 @@ export default function BillingView() {
                           return <span style={{ fontSize: 10.5, color: 'var(--text2)' }}>{row.packageName || '—'}</span>
                         case 'bestRate':
                           return (
-                            <span style={{ fontSize: 11 }} className={metrics.chargedRate === 'bestRate' ? 'billing-detail-rate-hit' : undefined}>
+                            <span
+                              data-billing-rate="bestRate"
+                              style={{ fontSize: 11 }}
+                              className={metrics.chargedRate === 'bestRate' ? 'billing-detail-rate-hit' : undefined}
+                            >
                               {formatBillingMoney(row.actualLabelCost, { dashIfZero: true })}
                             </span>
                           )
