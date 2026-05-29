@@ -1510,6 +1510,30 @@ function renderExtLabelBadge() {
   )
 }
 
+// PS-036: a shipped order with no local shipment data is NOT the same as an
+// externally-fulfilled order. Surfacing it as "Missing shipment sync" keeps the
+// grid honest — it tells the operator the row needs a ShipStation re-sync rather
+// than implying the label lives in a marketplace.
+function renderMissingShipmentSyncBadge() {
+  return (
+    <span
+      style={{
+        display: 'inline-block',
+        background: '#fef3c7',
+        color: '#92400e',
+        padding: '2px 6px',
+        borderRadius: 3,
+        fontSize: 11,
+        fontWeight: 600,
+        cursor: 'help',
+      }}
+      title="Shipped in ShipStation, but local shipment data (carrier/account/rate) hasn't synced yet. Re-run ShipStation sync to backfill."
+    >
+      Missing shipment sync
+    </span>
+  )
+}
+
 function hasAuthoritativeProviderId(order: OrderSummaryDto) {
   const providerId = getShippingProviderAccountId(order) ?? toProviderAccountId(order.label?.shippingProviderId)
   if (providerId == null) return false
@@ -1522,11 +1546,52 @@ function hasV2SelectedRatePayload(order: OrderSummaryDto) {
   return getCanonicalSourceVersion(order, 'shipping.selectedRate') === 'v2'
 }
 
+// PS-036: read the EXPLICIT external-fulfillment signal from where the API
+// actually emits it. The order summary nests these under `flags`
+// (orders.ts -> flags.externallyShipped / flags.externallyFulfilled); the older
+// top-level `order.externalShipped` is kept only as a defensive fallback.
+// `externallyShipped` is the operator's mark-as-shipped override; `externallyFulfilled`
+// is ShipStation's own marketplace/Amazon fulfillment flag. Either one is a real
+// external signal — the ABSENCE of local data is NOT.
+function hasExplicitExternalFlag(order: OrderSummaryDto): boolean {
+  const flags = (order.flags ?? null) as { externallyShipped?: unknown; externallyFulfilled?: unknown } | null
+  return (
+    flags?.externallyShipped === true ||
+    flags?.externallyFulfilled === true ||
+    order.externalShipped === true
+  )
+}
+
+// True when the local DB actually carries shipment metadata for the row.
+function hasLocalShipmentData(order: OrderSummaryDto): boolean {
+  return Boolean(
+    order.label?.cost ||
+    order.label?.trackingNumber ||
+    hasAuthoritativeProviderId(order) ||
+    hasV2SelectedRatePayload(order),
+  )
+}
+
+type ShippedDataState = 'external' | 'local' | 'missing'
+
+// PS-036: classify a shipped row into one of three honest states instead of
+// conflating "no local data" with "externally fulfilled".
+function getShippedDataState(order: OrderSummaryDto): ShippedDataState {
+  if (hasExplicitExternalFlag(order)) return 'external'
+  if (hasLocalShipmentData(order)) return 'local'
+  return 'missing'
+}
+
 function getIsExternallyFulfilled(order: OrderSummaryDto) {
-  if (order.externalShipped) return true
   if (order.orderStatus === 'awaiting_shipment') return false
-  const hasRealSelectedRate = hasV2SelectedRatePayload(order)
-  return !order.label?.cost && !order.label?.trackingNumber && !hasAuthoritativeProviderId(order) && !hasRealSelectedRate
+  return getShippedDataState(order) === 'external'
+}
+
+// PS-036: shipped, not flagged external, and missing local shipment data ->
+// the row needs a ShipStation re-sync, not an "Ext. Label" badge.
+function getIsMissingShipmentSync(order: OrderSummaryDto) {
+  if (order.orderStatus === 'awaiting_shipment') return false
+  return getShippedDataState(order) === 'missing'
 }
 
 function getShippedDisplayCarrierCode(order: OrderSummaryDto) {
@@ -1614,7 +1679,9 @@ function getCancelledDisplayAccountNickname(order: OrderSummaryDto) {
 }
 
 function shouldShowCarrierExtLabel(order: OrderSummaryDto) {
-  if (order.externalShipped) return true
+  // getIsExternallyFulfilled already honors the explicit external flags
+  // (flags.externallyShipped / flags.externallyFulfilled). PS-036: a shipped row
+  // with merely-missing local data is no longer treated as external here.
   return order.orderStatus === 'shipped' && getIsExternallyFulfilled(order)
 }
 
@@ -6010,6 +6077,9 @@ export default function OrdersView({
       if (getIsExternallyFulfilled(displayOrder)) {
         return renderExtLabelBadge()
       }
+      if (getIsMissingShipmentSync(displayOrder)) {
+        return renderMissingShipmentSyncBadge()
+      }
 
       const selectedRateBase = getSelectedRateBaseCost(displayOrder)
       const labelCost = getSelectedRateFinalCost(displayOrder)
@@ -6154,6 +6224,9 @@ export default function OrdersView({
       if (shouldShowCarrierExtLabel(displayOrder)) {
         return renderExtLabelBadge()
       }
+      if (getIsMissingShipmentSync(displayOrder)) {
+        return renderMissingShipmentSyncBadge()
+      }
 
       const carrierCode = getShippedDisplayCarrierCode(displayOrder)
       if (!carrierCode) {
@@ -6206,6 +6279,9 @@ export default function OrdersView({
     if (shipped) {
       if (getIsExternallyFulfilled(displayOrder)) {
         return renderExtLabelBadge()
+      }
+      if (getIsMissingShipmentSync(displayOrder)) {
+        return renderMissingShipmentSyncBadge()
       }
 
       const accountDisplay = getShipAccountDisplay(displayOrder, shippingAccounts)
@@ -7146,15 +7222,17 @@ export default function OrdersView({
       : `${TEST_SHIPPING_ACCOUNT_LABEL} · PrepShip Test Standard`
     const shipped = panelOrder.orderStatus !== 'awaiting_shipment'
     const trackingNumber = toStringValue(panelOrder.label?.trackingNumber)
-    const shippedHasPrepShipLabel = shipped && !getIsExternallyFulfilled(panelOrder)
+    const shippedHasPrepShipLabel = shipped && !getIsExternallyFulfilled(panelOrder) && !getIsMissingShipmentSync(panelOrder)
     // Per user override unlock shipped data on 2026-05-23: keep shipped queue recovery non-destructive, but disable corrupt saved label URLs.
     const shippedQueueableLabelUrl = getQueueableLabelUrl(panelOrder.label?.labelUrl)
     const canQueueShippedLabel = Boolean(shippedQueueableLabelUrl && panelOrder.clientId != null)
     const shippedLabelUnavailableCopy = getIsExternallyFulfilled(panelOrder)
       ? 'External label - reprint in marketplace or carrier'
-      : shippedQueueableLabelUrl
-        ? 'No client selected for print queue'
-        : 'No saved queueable PrepShip label URL yet'
+      : getIsMissingShipmentSync(panelOrder)
+        ? 'Missing shipment sync — re-run ShipStation sync to backfill label data'
+        : shippedQueueableLabelUrl
+          ? 'No client selected for print queue'
+          : 'No saved queueable PrepShip label URL yet'
     const deliveryLine = panelOrder.label?.shipDate
       ? `Shipped: ${formatDateOnly(panelOrder.label.shipDate, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}`
       : 'Delivery: —'
@@ -7811,6 +7889,8 @@ export default function OrdersView({
                   ) : shipped ? (
                     getIsExternallyFulfilled(panelOrder) ? (
                       <span className="text-[12.5px] text-ink-3 italic leading-snug">External label — purchased externally</span>
+                    ) : getIsMissingShipmentSync(panelOrder) ? (
+                      <span className="text-[12.5px] text-amber-700 italic leading-snug">Missing shipment sync — re-run ShipStation sync</span>
                     ) : (
                       <>
                         <span className="text-[18px] font-bold tabular-nums leading-none text-ink font-display">

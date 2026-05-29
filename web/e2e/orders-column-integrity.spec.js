@@ -1,0 +1,374 @@
+import { test, expect } from 'playwright/test'
+import { mkdir } from 'node:fs/promises'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+// PS-036 — PERMANENT Orders column-integrity certification.
+//
+// Why this suite exists / why the prior E2E missed the bug:
+//   orders-ux.spec.js only ever asserted the selection toolbar + lockdown
+//   behaviour. It NEVER inspected the rendered content of any grid cell, so a
+//   shipped row that silently rendered "Ext. Label" (or blanked Carrier /
+//   Shipping Account / Selected Rate) passed certification. This suite closes
+//   that gap by asserting EVERY required column for each order status against
+//   the source-of-truth values the fixture was built from — not merely that a
+//   cell is non-empty.
+//
+// It also pins the three honest shipped data-states introduced by PS-036:
+//   - external  -> explicit flag (operator override OR marketplace) -> Ext. Label
+//   - local     -> real local shipment data                          -> carrier/acct/rate
+//   - missing   -> shipped, no flag, no local data                   -> "Missing shipment sync"
+//
+// No live ShipStation calls, labels, postage, or marketplace notifications are
+// made: every network response is mocked via page.route.
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const screenshotDir = path.resolve(__dirname, '../../reports/orders-column-integrity')
+const baseUrl = 'http://127.0.0.1:5177'
+const apiOrigin = 'http://127.0.0.1:3000'
+const supabaseProjectRef = 'fdkseckgfuvdczzqmnac'
+
+test.beforeAll(async () => {
+  await mkdir(screenshotDir, { recursive: true })
+})
+
+const clients = [
+  { id: 1, name: 'KF Goods', active: true, isTest: false, storeId: 101 },
+  { id: 2, name: 'eBay - DJC', active: true, isTest: false, storeId: 102 },
+]
+
+// Canonical rate payload — base cost 9.86, no markup rules are mocked so the
+// grid renders the base amount verbatim.
+const rate = {
+  carrierCode: 'ups',
+  serviceCode: 'ups_ground_saver',
+  serviceName: 'UPS Ground Saver (1 lb+)',
+  carrierNickname: 'ROCEL C81F70',
+  providerAccountNickname: 'ROCEL C81F70',
+  shippingProviderId: 7381,
+  amount: 9.86,
+  cost: 9.86,
+  shipmentCost: 9.86,
+  otherCost: 0,
+}
+
+const storeIdByClientId = { 1: 101, 2: 102 }
+
+// Build a raw `/orders` list row (the shape the API actually returns). The
+// useOrders normalizer (transformOrderRowV4toV2) turns this into the DTO the
+// grid consumes — exactly the production path.
+function baseRow(id, status, clientId, overrides = {}) {
+  return {
+    id,
+    orderId: id,
+    orderNumber: `ORD-${id}`,
+    orderStatus: status,
+    orderDate: '2026-05-14T18:11:00.000Z',
+    externalOrderId: `external-${id}`,
+    clientId,
+    storeId: storeIdByClientId[clientId] ?? clientId,
+    customerEmail: `operator-${id}@example.com`,
+    shipToName: 'Ella Johnson',
+    shipToCity: 'El Reno',
+    shipToState: 'OK',
+    shipToPostalCode: '73036',
+    orderTotal: 16.99,
+    shippingAmount: 7.3,
+    weightOz: 60,
+    items: [{ name: 'KF GOODIES Korean Ramen Snack Box', sku: 'B0D43C5FGF', quantity: 1, unitPrice: 16.99, imageUrl: '' }],
+    raw: {
+      shipTo: { name: 'Ella Johnson', street1: '1318 S Reno Ave', city: 'El Reno', state: 'OK', postalCode: '73036', country: 'US' },
+      dimensions: { length: 11, width: 8, height: 6 },
+    },
+    // bestRateDims is the dims-provenance label production stores next to the
+    // cached rate (order_overrides.best_rate_dims). The grid only displays a
+    // saved best rate when this label matches the order's CURRENT dims — that
+    // is the staleness guard (hasValidBestRateForCurrentDims). A fixture that
+    // omits it is less faithful than production and would render a spinner.
+    overrides: { rateWeightOz: 60, rateDimsL: 11, rateDimsW: 8, rateDimsH: 6, bestRateDims: '11x8x6', bestRateJson: rate },
+    bestRate: rate,
+    selectedRate: null,
+    label: null,
+    shipping: null,
+    externallyShipped: false,
+    ...overrides,
+  }
+}
+
+// --- The six certified row classes -----------------------------------------
+
+// 1) Awaiting, fully rated.
+const awaitingValid = baseRow(970001, 'awaiting_shipment', 1)
+
+// 2) Awaiting, missing dims + no rate -> carrier/account/best-rate must say "— add dims".
+const awaitingMissingDims = baseRow(970002, 'awaiting_shipment', 1, {
+  orderNumber: 'ORD-970002',
+  raw: { shipTo: { name: 'Ella Johnson', city: 'El Reno', state: 'OK', postalCode: '73036', country: 'US' } },
+  overrides: { rateWeightOz: 60 },
+  bestRate: null,
+})
+
+// 6) Awaiting multi-item: SKU column lists every SKU, Qty column sums to 5.
+const awaitingMultiItem = baseRow(970003, 'awaiting_shipment', 1, {
+  orderNumber: 'ORD-970003',
+  items: [
+    { name: 'Item Alpha', sku: 'SKU-ALPHA', quantity: 2, unitPrice: 5, imageUrl: '' },
+    { name: 'Item Bravo', sku: 'SKU-BRAVO', quantity: 3, unitPrice: 4, imageUrl: '' },
+  ],
+})
+
+// 3) Shipped, real local shipment data persisted.
+const shippedPersisted = baseRow(980001, 'shipped', 1, {
+  orderNumber: 'SHIPPED-980001',
+  selectedRate: rate,
+  label: {
+    trackingNumber: '1Z999AA1010980001',
+    carrierCode: 'ups',
+    serviceCode: 'ups_ground_saver',
+    shippingProviderId: 7381,
+    cost: 9.86,
+    createdAt: '2026-05-15T17:02:00.000Z',
+    labelUrl: 'https://example.com/label.pdf',
+  },
+  shipping: {
+    carrierCode: 'ups',
+    serviceCode: 'ups_ground_saver',
+    trackingNumber: '1Z999AA1010980001',
+    providerAccountId: 7381,
+    accountNickname: 'ROCEL C81F70',
+    labelCost: 9.86,
+    labelCreatedAt: '2026-05-15T17:02:00.000Z',
+    selectedRate: rate,
+    bestRate: rate,
+  },
+})
+
+// 4) Shipped, EXPLICIT external flag, no local data -> must render "Ext. Label".
+const shippedExternal = baseRow(980002, 'shipped', 2, {
+  orderNumber: 'SHIPPED-980002',
+  shipToName: 'Tony McMasters',
+  raw: { shipTo: { name: 'Tony McMasters', city: 'Austin', state: 'TX', postalCode: '78701', country: 'US' }, dimensions: { length: 11, width: 8, height: 6 } },
+  shipToCity: 'Austin',
+  shipToState: 'TX',
+  shipToPostalCode: '78701',
+  selectedRate: null,
+  label: null,
+  shipping: null,
+  externallyShipped: true,
+})
+
+// 5) Shipped, NO flag and NO local data -> must render "Missing shipment sync"
+//    (the exact bug PS-036 fixes — previously this rendered "Ext. Label").
+const shippedMissingSync = baseRow(980003, 'shipped', 1, {
+  orderNumber: 'SHIPPED-980003',
+  selectedRate: null,
+  label: null,
+  shipping: null,
+  externallyShipped: false,
+})
+
+const ordersByStatus = {
+  awaiting_shipment: [awaitingValid, awaitingMissingDims, awaitingMultiItem],
+  shipped: [shippedPersisted, shippedExternal, shippedMissingSync],
+  cancelled: [],
+}
+
+const countRows = [
+  { orderStatus: 'awaiting_shipment', cnt: ordersByStatus.awaiting_shipment.length },
+  { orderStatus: 'shipped', cnt: ordersByStatus.shipped.length },
+  { orderStatus: 'cancelled', cnt: 0 },
+]
+
+function json(body) {
+  return { status: 200, contentType: 'application/json', body: JSON.stringify(body) }
+}
+
+function responseFor(url) {
+  if (url.hostname.endsWith('supabase.co')) return json({ user: null })
+
+  const isApiRequest = url.origin === apiOrigin || url.origin !== baseUrl || url.pathname.startsWith('/api/')
+  if (!isApiRequest) return null
+
+  if (url.pathname === '/clients') return json(clients)
+  if (url.pathname === '/users') return json({ users: [{ id: 'u1', email: 'operator@example.com', isAdmin: true }] })
+  if (url.pathname === '/markups') return json({ data: [] })
+  if (url.pathname === '/locations') {
+    return json([{ id: 1, name: 'GWH Fulfillment Center', company: 'PrepShip', street1: '123 Warehouse Way', city: 'Gardena', state: 'CA', postalCode: '90248', country: 'US', phone: null, isDefault: true, active: true }])
+  }
+  if (url.pathname === '/packages') return json([{ id: 1, name: '11x8x6', length: 11, width: 8, height: 6, unitCost: '0.62', source: 'custom' }])
+  if (url.pathname === '/rates/multi') return json({ carriers: [] })
+  if (url.pathname === '/api/carrier-accounts') return json({ data: [] })
+  if (url.pathname === '/settings/orders.columnPrefs') return json({ value: null })
+  if (url.pathname === '/orders/sync/status') return json({ status: 'idle', lastSyncAt: '2026-05-15T00:00:00.000Z' })
+  if (url.pathname === '/shipments/status') return json({ status: 'idle' })
+  if (url.pathname === '/init/stores') {
+    return json({ data: clients.map((client) => ({ id: client.storeId, storeId: client.storeId, name: client.name, storeName: client.name, clientName: client.name, clientId: client.id, active: client.active, isTest: client.isTest })) })
+  }
+  if (url.pathname === '/init/counts') return json({ byStatus: countRows, byStatusStore: [] })
+  if (url.pathname === '/clients/order-stats') {
+    return json({ data: clients.map((client) => ({ clientId: client.id, awaiting_shipment: 1, shipped: 1, cancelled: 0 })) })
+  }
+  if (url.pathname === '/orders/distinct-skus') return json({ skus: ['B0D43C5FGF', 'SKU-ALPHA', 'SKU-BRAVO'] })
+  if (url.pathname === '/orders') {
+    const status = url.searchParams.get('status') || 'awaiting_shipment'
+    const data = ordersByStatus[status] ?? []
+    return json({ data, pagination: { page: 1, pageSize: 50, total: data.length, totalPages: 1 } })
+  }
+  const orderFull = url.pathname.match(/^\/orders\/(\d+)\/full$/)
+  if (orderFull) {
+    const id = Number(orderFull[1])
+    const order = Object.values(ordersByStatus).flat().find((candidate) => candidate.id === id)
+    return json(order ?? baseRow(id, 'awaiting_shipment', 1))
+  }
+
+  return json({})
+}
+
+async function setup(page) {
+  await page.addInitScript((projectRef) => {
+    const expiresAt = Math.floor(Date.now() / 1000) + 60 * 60
+    window.localStorage.setItem(
+      `sb-${projectRef}-auth-token`,
+      JSON.stringify({
+        access_token: 'mock-access-token',
+        refresh_token: 'mock-refresh-token',
+        expires_at: expiresAt,
+        expires_in: 3600,
+        token_type: 'bearer',
+        user: { id: '00000000-0000-4000-8000-000000000001', aud: 'authenticated', role: 'authenticated', email: 'operator@example.com' },
+      }),
+    )
+  }, supabaseProjectRef)
+
+  await page.route('**/*', async (route) => {
+    const url = new URL(route.request().url())
+    const mocked = responseFor(url)
+    if (mocked) {
+      await route.fulfill(mocked)
+      return
+    }
+    await route.continue()
+  })
+}
+
+// Reusable per-column source-of-truth assertion. `columns` maps a data-col key
+// to either { contains } (substring), { equals } (trimmed exact), { matches }
+// (regex), or { notContains } (must NOT contain). Every entry is validated
+// against the actual rendered cell text — never just "is non-empty".
+async function assertColumns(page, rowId, columns) {
+  const row = page.locator(`#row-${rowId}`)
+  await expect(row, `row ${rowId} should be rendered`).toHaveCount(1)
+  for (const [col, rule] of Object.entries(columns)) {
+    const cell = row.locator(`td[data-col="${col}"]`)
+    await expect(cell, `row ${rowId} must have a [data-col="${col}"] cell`).toHaveCount(1)
+    const text = ((await cell.textContent()) ?? '').trim()
+    if (rule.equals !== undefined) {
+      expect(text, `row ${rowId} col ${col} text`).toBe(rule.equals)
+    }
+    if (rule.contains !== undefined) {
+      const needles = Array.isArray(rule.contains) ? rule.contains : [rule.contains]
+      for (const needle of needles) {
+        expect(text, `row ${rowId} col ${col} should contain "${needle}"`).toContain(needle)
+      }
+    }
+    if (rule.matches !== undefined) {
+      expect(text, `row ${rowId} col ${col} should match ${rule.matches}`).toMatch(rule.matches)
+    }
+    if (rule.notContains !== undefined) {
+      const needles = Array.isArray(rule.notContains) ? rule.notContains : [rule.notContains]
+      for (const needle of needles) {
+        expect(text, `row ${rowId} col ${col} must NOT contain "${needle}"`).not.toContain(needle)
+      }
+    }
+  }
+}
+
+test('Awaiting grid columns render every required field from source of truth', async ({ page }) => {
+  await page.setViewportSize({ width: 1680, height: 950 })
+  await setup(page)
+  await page.goto(`${baseUrl}/orders/awaiting_shipment`)
+  await page.waitForSelector('#ordersTable tbody tr.order-row', { state: 'visible' })
+  await page.screenshot({ path: path.join(screenshotDir, 'awaiting.png'), fullPage: true })
+
+  // Valid awaiting row — every required column populated from the fixture.
+  await assertColumns(page, awaitingValid.orderId, {
+    date: { matches: /\d/ },
+    client: { equals: 'KF Goods' },
+    orderNum: { contains: 'ORD-970001' },
+    customer: { contains: 'Ella Johnson' },
+    itemname: { contains: 'KF GOODIES Korean Ramen Snack Box' },
+    sku: { equals: 'B0D43C5FGF' },
+    qty: { equals: '1' },
+    weight: { matches: /\d/ },
+    shipto: { contains: ['El Reno', 'OK', '73036'] },
+    total: { contains: '16.99' },
+    carrier: { notContains: ['Ext. Label', 'Missing shipment sync', '— add dims'] },
+    custcarrier: { contains: 'ROCEL C81F70' },
+    bestrate: { contains: '9.86', notContains: ['Ext. Label', 'Missing shipment sync'] },
+    test_bestRate: { contains: ['ups', '9.86'] },
+  })
+
+  // Missing-dims awaiting row — rate-dependent columns MUST surface the
+  // actionable "— add dims" prompt, not a blank/spinner masquerading as data.
+  await assertColumns(page, awaitingMissingDims.orderId, {
+    client: { equals: 'KF Goods' },
+    orderNum: { contains: 'ORD-970002' },
+    sku: { equals: 'B0D43C5FGF' },
+    qty: { equals: '1' },
+    total: { contains: '16.99' },
+    carrier: { contains: '— add dims' },
+    custcarrier: { contains: '— add dims' },
+    bestrate: { contains: '— add dims' },
+  })
+
+  // Multi-item row — SKU column lists every SKU, Qty sums across line items.
+  await assertColumns(page, awaitingMultiItem.orderId, {
+    orderNum: { contains: 'ORD-970003' },
+    itemname: { contains: ['Item Alpha', 'Item Bravo'] },
+    sku: { contains: ['SKU-ALPHA', 'SKU-BRAVO'] },
+    qty: { equals: '5' },
+  })
+})
+
+test('Shipped grid columns are correctly classified (persisted vs external vs missing-sync)', async ({ page }) => {
+  await page.setViewportSize({ width: 1680, height: 950 })
+  await setup(page)
+  await page.goto(`${baseUrl}/orders/shipped`)
+  await page.waitForSelector('#ordersTable tbody tr.order-row', { state: 'visible' })
+  await page.screenshot({ path: path.join(screenshotDir, 'shipped.png'), fullPage: true })
+
+  // Persisted shipped row — real carrier / account / selected-rate / tracking.
+  await assertColumns(page, shippedPersisted.orderId, {
+    client: { equals: 'KF Goods' },
+    orderNum: { contains: 'SHIPPED-980001' },
+    customer: { contains: 'Ella Johnson' },
+    weight: { matches: /\d/ },
+    shipto: { contains: ['El Reno', 'OK', '73036'] },
+    carrier: { notContains: ['Ext. Label', 'Missing shipment sync'] },
+    custcarrier: { contains: 'ROCEL C81F70', notContains: ['Ext. Label', 'Missing shipment sync'] },
+    bestrate: { contains: '9.86', notContains: ['Ext. Label', 'Missing shipment sync'] },
+    tracking: { contains: '1Z999AA1010980001' },
+    labelcreated: { matches: /\d/ },
+  })
+
+  // Explicit external row — operator/marketplace flag drives "Ext. Label" and
+  // it must NEVER be confused with a missing-sync row.
+  await assertColumns(page, shippedExternal.orderId, {
+    client: { equals: 'eBay - DJC' },
+    orderNum: { contains: 'SHIPPED-980002' },
+    customer: { contains: 'Tony McMasters' },
+    carrier: { contains: 'Ext. Label', notContains: 'Missing shipment sync' },
+    custcarrier: { contains: 'Ext. Label', notContains: 'Missing shipment sync' },
+    bestrate: { contains: 'Ext. Label', notContains: 'Missing shipment sync' },
+  })
+
+  // Missing-sync row — shipped, no explicit flag, no local data. THE PS-036
+  // regression guard: this must render "Missing shipment sync", NOT "Ext. Label".
+  await assertColumns(page, shippedMissingSync.orderId, {
+    client: { equals: 'KF Goods' },
+    orderNum: { contains: 'SHIPPED-980003' },
+    carrier: { contains: 'Missing shipment sync', notContains: 'Ext. Label' },
+    custcarrier: { contains: 'Missing shipment sync', notContains: 'Ext. Label' },
+    bestrate: { contains: 'Missing shipment sync', notContains: 'Ext. Label' },
+  })
+})

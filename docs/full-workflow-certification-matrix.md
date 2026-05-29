@@ -15,7 +15,7 @@ Created 2026-05-29 from a full audit of every `test:*` / `guard:*` script and
 
 | Command | What it proves | Needs a server? | Use |
 |---|---|---|---|
-| `npm run test:full-site-certification` | typecheck + web build + site-action guard + API contracts + label-URL/print-queue guards + **5 Playwright browser specs** (workflow/orders/inventory/maintenance) + frontend failure states | **Yes** (dev server for Playwright) | The pre-existing site smoke. Unchanged. |
+| `npm run test:full-site-certification` | typecheck + web build + site-action guard + API contracts + label-URL/print-queue guards + **ShipStation v1 sync-window timezone guard** + **6 Playwright browser specs** (workflow/orders/**orders-column-integrity**/inventory/maintenance) + frontend failure states | **Yes** (dev server for Playwright) | The site smoke. PS-036 added the sync-window guard + mandatory orders column-integrity spec. |
 | `npm run test:full-workflow-certification` | **superset** — runs `test:full-site-certification`, then `test:workflow-suites` | Yes (inherits full-site) | The complete gate before claiming workflow-ready. |
 | `npm run test:workflow-suites` | the **offline behavioral core** — 69 guards across checkpoints A–P, **no server, no live providers, no real DB** | **No** | Runnable in plain CI; the meaningful offline certification. |
 
@@ -53,6 +53,7 @@ live (DJ-supervised only, excluded).
 | J | Inventory / WMS side effects | ✅ | `test:inventory-auto-deduct`, `-source-of-truth`, `-ledger-balance`, `-history-dedupe`, `-reconciliation-dry-run`, `-client-scope` | in-transaction idempotency skip exercised only via the ledger-balance model | PS-035-F3 (minor) |
 | K | Billing / cost capture | 🟡 | `test:billing-formula`, `test:billing-detail-ps040`, `test:billing-client-scope`, `test:billing-best-rate-ui:guard` | server `generateLineItems` money math (billingMode/markup/package/addl-unit) only indirectly covered | PS-035-F7 |
 | L | Order table post-shipment behavior | 🟡 | `test:orders-ux`, `test:orders-query-round2`, `test:order-editable-lockdown` (**new**); browser: `orders-ux.spec.js` shipped/cancelled toolbar | UI `isReadOnly=false` by override → safety rests on backend `assertOrderEditable` (now guarded by the new lockdown guard) | — |
+| L+ | **Orders column integrity (PS-036)** | ✅ | browser: **`orders-column-integrity.spec.js`** — asserts every required Awaiting + Shipped column against source-of-truth fixtures (not just non-empty); pins the three shipped data-states **external→`Ext. Label`** / **local→carrier+acct+rate** / **missing→`Missing shipment sync`** | covers the cell **content** gap `orders-ux.spec.js` left open (it only checked the selection toolbar / lockdown, never rendered cell values) | — |
 | M | Error/recovery states for critical buttons | ✅ | `test:frontend-failure-states`, `test:raw-error-response-audit`, `test:node-handler-response`; browser: label/queue/rate/orders failure variants in `site-actions.spec.js` | queue MERGE/PDF failure variant not driven in browser | PS-035-F9 |
 | N | Auth / RBAC / client-store scope | ✅ | `test:rbac-permissions`, `test:auth-coverage`, `test:client-store-scope`, `test:field-level-rbac(-extended)`, `test:jwt-session-policy`, `test:auth-logout`, `test:frontend-auth-cache`, per-view scope guards, `test:client-redaction` | runtime scoped-JWT 403/redaction is fixture-asserted, not executed against the real predicate | PS-035-F8 |
 | P | Production / deploy health smoke | 🟡 | `test:health-deep-readiness`, `test:production-watchdog`, `test:production-signoff`, `test:status:carriers`, `test:maintenance-page` | live deploy smoke (Vercel/Render `/health*`) is network-only; no `/version` endpoint exists | PS-035-F10 |
@@ -63,8 +64,9 @@ live (DJ-supervised only, excluded).
 
 - **Browser/server-required** (run via `test:full-site-certification`):
   `test:workflow-certification:browser`, `test:site-actions:browser`,
-  `test:orders-ux:browser`, `test:inventory-ux:browser`,
-  `test:maintenance-gate:browser`, `test:billing-best-rate-ui`.
+  `test:orders-ux:browser`, `test:orders-column-integrity:browser`,
+  `test:inventory-ux:browser`, `test:maintenance-gate:browser`,
+  `test:billing-best-rate-ui`.
 - **Live / DJ-supervised only** (real postage / providers / live DB): `smoke:shipping:preflight`,
   `smoke:shipping:test-label`, `smoke:shipping:real-label`, `smoke:marketplace-confirm`,
   `marketplace:reconcile:apply`, `shipstation:awaiting:reconcile:apply`,

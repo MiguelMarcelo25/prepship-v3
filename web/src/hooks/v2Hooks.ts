@@ -418,6 +418,30 @@ function transformOrderRowV4toV2(
     selectedRate,
     label,
     shipping,
+    // PS-036: lift the explicit external-fulfillment flags to the top level so
+    // OrdersView reads `order.flags` consistently. The list API nests these
+    // under canonicalOrder.flags and also exposes the raw row columns
+    // (externallyShipped, raw.externallyFulfilled); the /full detail DTO emits
+    // a top-level `flags`. Reconcile all three here so a shipped row with no
+    // local shipment data is correctly classed as "external" vs "missing sync".
+    flags: (() => {
+      const canonicalFlags = toRecordValue(canonicalOrder?.flags)
+      const rowFlags = toRecordValue(row.flags)
+      return {
+        externallyShipped:
+          canonicalFlags?.externallyShipped === true ||
+          rowFlags?.externallyShipped === true ||
+          row.externallyShipped === true,
+        externallyFulfilled:
+          canonicalFlags?.externallyFulfilled === true ||
+          rowFlags?.externallyFulfilled === true ||
+          rawAny.externallyFulfilled === true,
+        externallyFulfilledVerified:
+          canonicalFlags?.externallyFulfilledVerified === true ||
+          rowFlags?.externallyFulfilledVerified === true ||
+          row.externallyFulfilledVerified === true,
+      }
+    })(),
   };
 }
 
