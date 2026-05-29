@@ -1073,9 +1073,19 @@ app.post('/reconcile-inventory-stock', async (c) => {
       group by l.inventory_id
     ),
     ledger_balance as (
-      select l.inventory_id as id, coalesce(sum(l.qty), 0)::int as effective_stock
-      from ${inventoryLedger} l
-      group by l.inventory_id
+      select stock_rows.inventory_id as id, coalesce(sum(stock_rows.qty), 0)::int as effective_stock
+      from (
+        select l.inventory_id, l.qty
+        from ${inventoryLedger} l
+        where l.type <> 'ship' or l.order_id is null
+        union all
+        select l.inventory_id, min(l.qty)::int as qty
+        from ${inventoryLedger} l
+        where l.type = 'ship'
+          and l.order_id is not null
+        group by l.inventory_id, l.order_id
+      ) stock_rows
+      group by stock_rows.inventory_id
     ),
     sells as (
       select i.id as id,

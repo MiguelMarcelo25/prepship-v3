@@ -11,20 +11,55 @@ function assert(condition: unknown, message: string): void {
 }
 
 const hugrabLikeBalance = inventoryLedgerBalance([
-  { qty: 2520 },
-  { qty: 2520 },
-  { qty: -2520 },
-  { qty: -34 },
+  { type: 'receive', qty: 2520 },
+  { type: 'receive', qty: 2520 },
+  { type: 'adjust', qty: -2520 },
+  { type: 'ship', orderId: 1046, qty: -4 },
+  { type: 'ship', orderId: 1046, qty: -4 },
+  { type: 'ship', orderId: 1045, qty: -4 },
+  { type: 'ship', orderId: 1042, qty: -2 },
+  { type: 'ship', orderId: 1042, qty: -2 },
+  { type: 'ship', orderId: 1036, qty: -1 },
+  { type: 'ship', orderId: 1036, qty: -1 },
+  { type: 'ship', orderId: 1034, qty: -1 },
+  { type: 'ship', orderId: 1033, qty: -2 },
+  { type: 'ship', orderId: 1033, qty: -2 },
+  { type: 'ship', orderId: 1030, qty: -1 },
+  { type: 'ship', orderId: 1030, qty: -1 },
+  { type: 'ship', orderId: 1028, qty: -2 },
+  { type: 'ship', orderId: 1028, qty: -2 },
+  { type: 'ship', orderId: 1026, qty: -1 },
+  { type: 'ship', orderId: 1026, qty: -1 },
+  { type: 'ship', orderId: 1023, qty: -1 },
+  { type: 'ship', orderId: 1023, qty: -1 },
+  { type: 'ship', orderId: 1022, qty: -2 },
+  { type: 'ship', orderId: 1019, qty: -1 },
+  { type: 'ship', orderId: 1018, qty: -2 },
+  { type: 'ship', orderId: 1018, qty: -2 },
+  { type: 'ship', orderId: 1017, qty: -1 },
+  { type: 'ship', orderId: 1017, qty: -1 },
+  { type: 'ship', orderId: 1016, qty: -2 },
+  { type: 'ship', orderId: 1016, qty: -2 },
+  { type: 'ship', orderId: 1012, qty: -2 },
+  { type: 'ship', orderId: 1012, qty: -2 },
+  { type: 'ship', orderId: 1010, qty: -2 },
+  { type: 'ship', orderId: 1010, qty: -2 },
+  { type: 'ship', orderId: 1006, qty: -1 },
+  { type: 'ship', orderId: 1006, qty: -1 },
+  { type: 'ship', orderId: 1005, qty: -1 },
+  { type: 'ship', orderId: 1005, qty: -1 },
+  { type: 'ship', orderId: 1004, qty: -1 },
+  { type: 'ship', orderId: 1004, qty: -1 },
 ]);
 
 assert(
   hugrabLikeBalance === 2486,
-  'ledger balance includes receive, manual remove/adjust, and ship rows',
+  'ledger balance includes receive, manual remove/adjust, and one ship deduction per order/SKU',
 );
 
 assert(
   hugrabLikeBalance !== 5006,
-  'stock display is not receive-only minus shipped when manual removals exist',
+  'stock display is not receive-only minus shipped or duplicate sync rows when manual removals exist',
 );
 
 const reportingMetrics = readFileSync('src/services/reporting-metrics.ts', 'utf8');

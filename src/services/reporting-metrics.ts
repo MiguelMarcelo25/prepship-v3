@@ -380,11 +380,22 @@ async function refreshInventoryRiskMetrics(limit: number): Promise<number> {
       ),
       ledger_balance as (
         select
-          l.inventory_id,
-          coalesce(sum(l.qty), 0)::int as effective_stock
-        from inventory_ledger l
-        join inventory_scope i on i.id = l.inventory_id
-        group by l.inventory_id
+          stock_rows.inventory_id,
+          coalesce(sum(stock_rows.qty), 0)::int as effective_stock
+        from (
+          select l.inventory_id, l.qty
+          from inventory_ledger l
+          join inventory_scope i on i.id = l.inventory_id
+          where l.type <> 'ship' or l.order_id is null
+          union all
+          select l.inventory_id, min(l.qty)::int as qty
+          from inventory_ledger l
+          join inventory_scope i on i.id = l.inventory_id
+          where l.type = 'ship'
+            and l.order_id is not null
+          group by l.inventory_id, l.order_id
+        ) stock_rows
+        group by stock_rows.inventory_id
       ),
       sold as (
         select

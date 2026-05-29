@@ -305,16 +305,38 @@ async function loadRows(sql: postgres.Sql, args: Args): Promise<DbRow[]> {
         ${clientFilter}
         ${skuFilter}
     ),
+    ledger_rows as (
+      select l.inventory_id, l.qty
+      from inventory_ledger l
+      where l.inventory_id in (select id from scoped_inventory)
+        and (l.type <> 'ship' or l.order_id is null)
+      union all
+      select l.inventory_id, min(l.qty)::int as qty
+      from inventory_ledger l
+      where l.inventory_id in (select id from scoped_inventory)
+        and l.type = 'ship'
+        and l.order_id is not null
+      group by l.inventory_id, l.order_id
+    ),
+    ledger_summary as (
+      select
+        ledger_rows.inventory_id,
+        coalesce(sum(ledger_rows.qty), 0)::int as ledger_stock,
+        count(*)::int as deduped_ledger_entries
+      from ledger_rows
+      group by ledger_rows.inventory_id
+    ),
     ledger as (
       select
         l.inventory_id,
-        coalesce(sum(l.qty), 0)::int as ledger_stock,
+        coalesce(ledger_summary.ledger_stock, 0)::int as ledger_stock,
         coalesce(sum(l.qty) filter (where l.type = 'receive'), 0)::int as total_received,
         count(*)::int as ledger_entries,
         max(l.created_at)::text as last_ledger_at
       from inventory_ledger l
+      left join ledger_summary on ledger_summary.inventory_id = l.inventory_id
       where l.inventory_id in (select id from scoped_inventory)
-      group by l.inventory_id
+      group by l.inventory_id, ledger_summary.ledger_stock
     ),
     sold as (
       select
