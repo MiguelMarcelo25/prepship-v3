@@ -77,6 +77,74 @@ function fmt(timeZone: string, opts: Intl.DateTimeFormatOptions): Intl.DateTimeF
   return f;
 }
 
+function caParts(date: Date): Record<string, string> {
+  return Object.fromEntries(
+    fmt(CA_TZ, {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).formatToParts(date).map((part) => [part.type, part.value]),
+  );
+}
+
+function wallClockUtcMs(parts: Record<string, string>): number {
+  return Date.UTC(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    Number(parts.hour),
+    Number(parts.minute),
+    Number(parts.second),
+  );
+}
+
+function caWallClockToUtc(year: number, month: number, day: number, hour: number, minute: number, second: number, ms = 0): Date {
+  const targetWallMs = Date.UTC(year, month - 1, day, hour, minute, second, 0);
+  let candidateMs = targetWallMs;
+  for (let i = 0; i < 2; i += 1) {
+    candidateMs += targetWallMs - wallClockUtcMs(caParts(new Date(candidateMs)));
+  }
+  return new Date(candidateMs + ms);
+}
+
+export function californiaDateInputValue(value: DateInput = new Date()): string {
+  const d = toDate(value) ?? new Date();
+  const parts = caParts(d);
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+export function californiaDayStartIso(day: string): string {
+  return caWallClockToUtc(
+    Number(day.slice(0, 4)),
+    Number(day.slice(5, 7)),
+    Number(day.slice(8, 10)),
+    0,
+    0,
+    0,
+    0,
+  ).toISOString();
+}
+
+export function californiaDayEndIso(day: string): string {
+  return caWallClockToUtc(
+    Number(day.slice(0, 4)),
+    Number(day.slice(5, 7)),
+    Number(day.slice(8, 10)),
+    23,
+    59,
+    59,
+    999,
+  ).toISOString();
+}
+
+export function californiaDayEpochMs(day: string, endOfDay = false): number {
+  return Date.parse(endOfDay ? californiaDayEndIso(day) : californiaDayStartIso(day));
+}
+
 // ──────────────────────────────────────────────────────────────
 // CA-time helpers (input is true UTC — createdAt, updatedAt, etc.)
 // ──────────────────────────────────────────────────────────────

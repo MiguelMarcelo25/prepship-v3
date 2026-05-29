@@ -7,6 +7,12 @@ import { Input } from '../components/ui/Input';
 import { Select } from '../components/ui/Select';
 import { api, qs } from '../lib/api';
 import {
+  californiaDateInputValue,
+  californiaDayEndIso,
+  californiaDayStartIso,
+  formatCaDateLong,
+} from '../lib/ca-time';
+import {
   SortableHeader,
   nextSortState,
   sortRows,
@@ -50,19 +56,24 @@ function fmtMoney(s: string | number) {
 }
 
 function startOfMonthIso(d = new Date()) {
-  return new Date(d.getFullYear(), d.getMonth(), 1).toISOString();
+  const today = californiaDateInputValue(d);
+  return californiaDayStartIso(`${today.slice(0, 8)}01`);
 }
 function endOfMonthIso(d = new Date()) {
-  return new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59).toISOString();
+  const today = californiaDateInputValue(d);
+  const year = Number(today.slice(0, 4));
+  const month = Number(today.slice(5, 7));
+  const last = new Date(Date.UTC(year, month, 0)).toISOString().slice(0, 10);
+  return californiaDayEndIso(last);
 }
 function toDateInput(iso: string) {
   return iso.slice(0, 10);
 }
 function fromDateInputStart(ymd: string) {
-  return new Date(ymd + 'T00:00:00').toISOString();
+  return californiaDayStartIso(ymd);
 }
 function fromDateInputEnd(ymd: string) {
-  return new Date(ymd + 'T23:59:59').toISOString();
+  return californiaDayEndIso(ymd);
 }
 
 export default function Invoice() {
@@ -223,7 +234,7 @@ export default function Invoice() {
                 <div className="text-right">
                   <div className="text-[24px] font-extrabold text-ink">INVOICE</div>
                   <div className="text-tiny text-ink-3 mt-1">
-                    Issued {issuedAt.toLocaleDateString()}
+                    Issued {formatCaDateLong(issuedAt)}
                   </div>
                 </div>
               </div>
@@ -330,7 +341,7 @@ export default function Invoice() {
                     <tr key={l.id} className="border-b border-line">
                       <td className="py-1 text-ink-2 whitespace-nowrap">
                         {l.shipDate
-                          ? new Date(l.shipDate).toLocaleDateString()
+                          ? formatCaDateLong(l.shipDate)
                           : '—'}
                       </td>
                       <td className="py-1 font-mono text-brand">

@@ -301,10 +301,9 @@ export function formatBillingMoney(value: number | null | undefined, options: { 
   return `$${value.toFixed(2)}`
 }
 
-// CA-time delegation per boss directive 2026-05-07. Billing dates
-// are typically shipDate from shipments table — naive-PT-stamped-Z
-// (originated from ShipStation V1 sync).
-export { formatNaivePtDateTime as formatBillingDateTime } from '../../lib/ca-time'
+// Billing dates are true UTC instants and render in California time, not the
+// operator's browser timezone.
+export { formatCaDateTime as formatBillingDateTime } from '../../lib/ca-time'
 
 export function getBillingDetailColumnStorageKey() {
   return BILLING_DETAIL_COLS_KEY

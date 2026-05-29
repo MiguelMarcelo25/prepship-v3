@@ -1,4 +1,8 @@
 // @ts-nocheck
+import {
+  californiaDateInputValue,
+  californiaDayEpochMs,
+} from '../../lib/ca-time'
 import type {
   BulkUpdateInventoryDimensionsInput,
   InventoryItemDto,
@@ -61,7 +65,7 @@ export function getInventoryDateRangePreset(now: Date = new Date()) {
 }
 
 export function toDateInputValue(value: Date) {
-  return value.toISOString().slice(0, 10)
+  return californiaDateInputValue(value)
 }
 
 export function filterInventoryRows(rows: InventoryItemDto[], filters: InventoryStockFilters) {
@@ -181,8 +185,8 @@ export function buildInventoryLedgerQuery(filters: InventoryHistoryFilters): Lis
   if (filters.clientId) query.clientId = Number.parseInt(filters.clientId, 10)
   if (filters.sku?.trim()) query.sku = filters.sku.trim()
   if (filters.type) query.type = filters.type
-  if (filters.from) query.dateStart = new Date(`${filters.from}T00:00:00`).getTime()
-  if (filters.to) query.dateEnd = new Date(`${filters.to}T23:59:59`).getTime()
+  if (filters.from) query.dateStart = californiaDayEpochMs(filters.from)
+  if (filters.to) query.dateEnd = californiaDayEpochMs(filters.to, true)
   return query
 }
 

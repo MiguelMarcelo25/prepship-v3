@@ -48,6 +48,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Calendar, ChevronLeft, ChevronRight, X } from 'lucide-react'
+import { californiaDateInputValue } from '../lib/ca-time'
 
 // ----------------- public types -----------------
 
@@ -94,6 +95,10 @@ function fromIso(s: string): Date {
   const m = parts[1] ?? 1
   const d = parts[2] ?? 1
   return new Date(y, m - 1, d)
+}
+
+function californiaTodayDate(): Date {
+  return fromIso(californiaDateInputValue())
 }
 
 function addDays(d: Date, days: number): Date {
@@ -195,7 +200,7 @@ export function DateRangePicker({ value, onChange, label, className }: Props): J
   // Draft range edited inside the popover. Only committed on Apply.
   const [draft, setDraft] = useState<DateRange>(value)
   // Calendar view state — which month is visible, what view mode.
-  const [viewDate, setViewDate] = useState<Date>(() => fromIso(value.from || toIso(new Date())))
+  const [viewDate, setViewDate] = useState<Date>(() => fromIso(value.from || toIso(californiaTodayDate())))
   const [viewMode, setViewMode] = useState<'day' | 'month' | 'year'>('day')
   // After first click in day-mode, we're picking the 'to' endpoint.
   const [pickingTo, setPickingTo] = useState(false)
@@ -207,7 +212,7 @@ export function DateRangePicker({ value, onChange, label, className }: Props): J
   useEffect(() => {
     if (open) {
       setDraft(value)
-      setViewDate(fromIso(value.from || toIso(new Date())))
+      setViewDate(fromIso(value.from || toIso(californiaTodayDate())))
       setViewMode('day')
       setPickingTo(false)
     }
@@ -235,7 +240,7 @@ export function DateRangePicker({ value, onChange, label, className }: Props): J
 
   // ----- preset click → commit immediately (no extra Apply needed) -----
   const applyPreset = (id: DateRangePresetId) => {
-    const next = computePreset(id, new Date())
+    const next = computePreset(id, californiaTodayDate())
     onChange(next)
     setOpen(false)
   }
@@ -275,7 +280,7 @@ export function DateRangePicker({ value, onChange, label, className }: Props): J
 
   const fromD = draft.from ? fromIso(draft.from) : null
   const toD = draft.to ? fromIso(draft.to) : null
-  const todayD = new Date()
+  const todayD = californiaTodayDate()
 
   return (
     <div className={`relative inline-block ${className ?? ''}`}>
@@ -545,6 +550,6 @@ export function priorRange(current: DateRange): DateRange {
  * dashboard initial state.
  */
 export function defaultLast30(): DateRange {
-  const today = new Date()
+  const today = californiaTodayDate()
   return { from: toIso(addDays(today, -29)), to: toIso(today) }
 }

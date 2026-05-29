@@ -24,6 +24,7 @@ import {
 import { EXCLUDED_STORE_IDS, EXCLUDED_STORE_IDS_SQL, isExcludedStoreId } from '../config/prepship';
 import { isAdminEmail } from '../lib/admin-emails';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
+import { californiaDayEnd, californiaDayStart } from '../lib/time/california';
 import { hasAppPermission } from '../middleware/auth';
 import {
   WALMART_DIRECT_STORE_ID,
@@ -799,10 +800,10 @@ app.get('/daily-counts', zValidator('query', dailyCountsQuery), async (c) => {
     ? eq(orders.assignedToUserId, callerUserId)
     : undefined;
 
-  // Inclusive date range: to-date covers through 23:59:59.999 of that day so
-  // orders created at the very end of the window aren't dropped.
-  const fromDate = new Date(`${q.from}T00:00:00.000Z`);
-  const toDate = new Date(`${q.to}T23:59:59.999Z`);
+  // Inclusive California business-day range, independent of API/server/browser
+  // timezone. Operator date filters should match the ShipStation account day.
+  const fromDate = californiaDayStart(q.from);
+  const toDate = californiaDayEnd(q.to);
   const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
 
   const where = and(
@@ -830,15 +831,15 @@ app.get('/daily-counts', zValidator('query', dailyCountsQuery), async (c) => {
     total: number;
   }>(sql`
     select
-      to_char(date_trunc('day', ${orders.orderDate} at time zone 'UTC'), 'YYYY-MM-DD') as day,
+      to_char(date_trunc('day', ${orders.orderDate} at time zone 'America/Los_Angeles'), 'YYYY-MM-DD') as day,
       count(*) filter (where ${orders.orderStatus} = 'awaiting_shipment')::int as awaiting,
       count(*) filter (where ${orders.orderStatus} = 'shipped')::int as shipped,
       count(*) filter (where ${orders.orderStatus} = 'cancelled')::int as cancelled,
       count(*)::int as total
     from ${orders}
     where ${where}
-    group by date_trunc('day', ${orders.orderDate} at time zone 'UTC')
-    order by date_trunc('day', ${orders.orderDate} at time zone 'UTC') asc
+    group by date_trunc('day', ${orders.orderDate} at time zone 'America/Los_Angeles')
+    order by date_trunc('day', ${orders.orderDate} at time zone 'America/Los_Angeles') asc
   `);
 
   return c.json({ data: rows });
@@ -860,8 +861,8 @@ app.get('/dashboard-sales', zValidator('query', dashboardSalesQuery), async (c) 
     ? eq(orders.assignedToUserId, callerUserId)
     : undefined;
 
-  const fromDate = new Date(`${q.from}T00:00:00.000Z`);
-  const toDate = new Date(`${q.to}T23:59:59.999Z`);
+  const fromDate = californiaDayStart(q.from);
+  const toDate = californiaDayEnd(q.to);
   const includeInactiveClients = q.includeInactive === true || q.includeInactiveClients === true;
   const sevenFrom = q.sevenFrom ?? q.from;
 
@@ -913,7 +914,7 @@ app.get('/dashboard-sales', zValidator('query', dashboardSalesQuery), async (c) 
       select
         ${orders.id} as order_id,
         coalesce(${orders.orderTotal}, 0)::numeric as order_total,
-        to_char(date_trunc('day', ${orders.orderDate} at time zone 'UTC'), 'YYYY-MM-DD') as day,
+        to_char(date_trunc('day', ${orders.orderDate} at time zone 'America/Los_Angeles'), 'YYYY-MM-DD') as day,
         trim(coalesce(oi.sku, '')) as sku,
         greatest(0, coalesce(oi.quantity, 0))::numeric as qty
       from order_items oi

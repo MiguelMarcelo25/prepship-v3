@@ -33,6 +33,7 @@ import {
 } from '../SortableTable'
 import { DateRangePicker, defaultLast30, priorRange, type DateRange } from '../DateRangePicker'
 import { SyncStatusChip, type SyncStatusChipData } from '../SyncStatusChip'
+import { formatCaDateTime } from '../../lib/ca-time'
 import { FilterSelect } from '../FilterSelect'
 import { getAnalysisPresetRange } from './analysis-parity'
 
@@ -455,13 +456,7 @@ function formatDayLabel(day: string) {
 }
 
 function formatDataTimestamp() {
-  return new Date().toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  })
+  return `${formatCaDateTime(new Date())} CA`
 }
 
 function relativePct(current: number, prior: number) {

@@ -630,38 +630,20 @@ function formatWeight(ounces: number | null | undefined) {
   return `${pounds} lb ${remaining} oz`
 }
 
-// CA-time delegation per boss directive 2026-05-07. InventoryView
-// uses these for ledger entries (createdAt — true UTC) and order
-// dates (orderDate — naive-PT-stamped-Z). The ledger paths use UTC
-// helpers; order paths use naive-PT helpers.
+// CA-time delegation per boss directive. Operator-facing inventory dates are
+// rendered in California time, independent of the user's browser timezone.
 import {
-  formatNaivePtDateLong,
+  californiaDateInputValue,
+  formatCaDateLong,
+  formatCaDateTime,
 } from '../../lib/ca-time'
 
-const LOCAL_DATE_TIME_FORMATTER = new Intl.DateTimeFormat('en-US', {
-  month: '2-digit',
-  day: '2-digit',
-  year: '2-digit',
-  hour: 'numeric',
-  minute: '2-digit',
-  hour12: true,
-})
-
 function formatDateTime(value: number | string | null | undefined) {
-  if (value == null) return '—'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return '—'
-  const parts = Object.fromEntries(
-    LOCAL_DATE_TIME_FORMATTER.formatToParts(date)
-      .filter((part) => part.type !== 'literal')
-      .map((part) => [part.type, part.value]),
-  )
-  return `${parts.month}/${parts.day}/${parts.year} ${parts.hour}:${parts.minute} ${parts.dayPeriod}`
+  return formatCaDateTime(value)
 }
 
 function formatDateOnly(value: string | null | undefined) {
-  // Order dates from orders.raw / orders.orderDate are naive-PT-stamped-Z.
-  return formatNaivePtDateLong(value)
+  return formatCaDateLong(value)
 }
 
 function getClientRateSourceFormValue(client?: ClientDto | null) {
@@ -758,7 +740,7 @@ function drawSkuSalesChart(canvas: HTMLCanvasElement, dailySales: InventorySkuOr
   const totalBars = dailySales.length || 1
   const barWidth = Math.max(2, (chartWidth / totalBars) * 0.72)
   const gap = chartWidth / totalBars
-  const today = new Date().toISOString().slice(0, 10)
+  const today = californiaDateInputValue()
 
   context.fillStyle = colorBackground
   context.fillRect(0, 0, width, height)
@@ -1139,7 +1121,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
   const [bulkDrafts, setBulkDrafts] = useState<Record<number, { weightOz: string; productLength: string; productWidth: string; productHeight: string }>>({})
   const [receiveClientId, setReceiveClientId] = useState('')
   const [receiveNote, setReceiveNote] = useState('')
-  const [receiveDate, setReceiveDate] = useState(() => new Date().toISOString().slice(0, 10))
+  const [receiveDate, setReceiveDate] = useState(() => californiaDateInputValue())
   const [receiveRows, setReceiveRows] = useState<ReceiveDraftRow[]>([createReceiveDraftRow()])
   const [receiveSkuMap, setReceiveSkuMap] = useState<Record<string, ReceiveSkuLookup>>({})
   const [receiveResultMessage, setReceiveResultMessage] = useState('')
@@ -1660,7 +1642,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
               event.stopPropagation()
               setAdjustModal({
                 invSkuId: row.id, sku: row.sku, qty: '1', note: '',
-                date: new Date().toISOString().slice(0, 10), type: 'adjust', sign: 1,
+                date: californiaDateInputValue(), type: 'adjust', sign: 1,
               })
             }}
             title="Adjust stock — add or remove units"
@@ -2702,7 +2684,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
         throw new Error(result.error || 'No inventory rows were received')
       }
 
-      const dateLabel = new Date(receivedAt).toLocaleDateString()
+      const dateLabel = formatCaDateLong(receivedAt)
       const failureNote = result.failed ? ` (${result.failed} failed)` : ''
       setReceiveResultMessage(`✅ Received ${receivedRows.length} SKU(s) on ${dateLabel}${failureNote}: ${receivedRows.map((row) => `${row.sku} (${row.qty} units → ${row.newStock} total)`).join(', ')}`)
       setHistoryClientId(receiveClientId)
@@ -2711,7 +2693,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
       setHistoryTo(receiveDate)
       setReceiveRows([createReceiveDraftRow()])
       setReceiveNote('')
-      setReceiveDate(new Date().toISOString().slice(0, 10))
+      setReceiveDate(californiaDateInputValue())
       await refreshInventoryView()
       toastContext?.addToast('Inventory received', 'success')
     } catch (error) {
@@ -2936,7 +2918,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
         adjustedAt,
       })
       setAdjustModal(null)
-      toastContext?.addToast(`✅ ${adjustModal.type.charAt(0).toUpperCase()}${adjustModal.type.slice(1)} recorded on ${new Date(adjustedAt).toLocaleDateString()}. New total: ${result.newStock}`, 'success')
+      toastContext?.addToast(`✅ ${adjustModal.type.charAt(0).toUpperCase()}${adjustModal.type.slice(1)} recorded on ${formatCaDateLong(adjustedAt)}. New total: ${result.newStock}`, 'success')
       await refreshInventoryView()
     } catch (error) {
       toastContext?.addToast(error instanceof Error ? error.message : 'Adjust failed', 'error')
@@ -3813,7 +3795,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                                                 sku: row.sku,
                                                 qty: '1',
                                                 note: '',
-                                                date: new Date().toISOString().slice(0, 10),
+                                                date: californiaDateInputValue(),
                                                 type: 'adjust',
                                                 sign: 1,
                                               })
@@ -4980,7 +4962,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
               <span style={{ fontSize: 12, color: 'var(--text2)', whiteSpace: 'nowrap' }}>📅 Date:</span>
               <input type="date" value={adjustModal.date} onChange={(event) => setAdjustModal((current) => current ? { ...current, date: event.target.value } : current)} style={{ flex: 1, padding: '6px 8px', border: '1px solid var(--border2)', borderRadius: 6, background: 'var(--surface2)', color: 'var(--text)', fontSize: 12 }} />
-              <span style={{ fontSize: 11, color: 'var(--text3)', whiteSpace: 'nowrap' }}>{adjustModal.date === new Date().toISOString().slice(0, 10) ? '(today)' : ''}</span>
+              <span style={{ fontSize: 11, color: 'var(--text3)', whiteSpace: 'nowrap' }}>{adjustModal.date === californiaDateInputValue() ? '(today)' : ''}</span>
             </div>
 
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>

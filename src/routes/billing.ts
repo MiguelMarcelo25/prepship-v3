@@ -18,6 +18,7 @@ import {
   upsertBillingConfig,
 } from '../services/billing';
 import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
+import { coerceCaliforniaIsoDay } from '../lib/time/california';
 import { requirePermission } from '../middleware/auth';
 
 const app = new Hono();
@@ -193,14 +194,7 @@ app.put(
 // long names (dateFrom/dateTo, ISO datetime). Coerces YYYY-MM-DD to an
 // ISO datetime anchored at start/end-of-day.
 function coerceIsoDay(raw: string | undefined, endOfDay: boolean): string | undefined {
-  if (!raw) return undefined;
-  if (raw.includes('T')) return raw;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
-    return new Date(
-      `${raw}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}Z`
-    ).toISOString();
-  }
-  return raw;
+  return coerceCaliforniaIsoDay(raw, endOfDay);
 }
 
 const generateRawSchema = z.object({
@@ -403,7 +397,7 @@ function formatInvoiceDate(value: string | Date | null | undefined): string {
   if (Number.isNaN(date.getTime())) return String(value);
 
   return new Intl.DateTimeFormat('en-US', {
-    timeZone: 'UTC',
+    timeZone: 'America/Los_Angeles',
     month: 'long',
     day: '2-digit',
     year: 'numeric',
@@ -491,6 +485,7 @@ app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
   const fromDisplay = formatInvoiceDate(dateFrom);
   const toDisplay = formatInvoiceDate(dateTo);
   const generated = new Date().toLocaleDateString('en-US', {
+    timeZone: 'America/Los_Angeles',
     month: 'long',
     day: 'numeric',
     year: 'numeric',

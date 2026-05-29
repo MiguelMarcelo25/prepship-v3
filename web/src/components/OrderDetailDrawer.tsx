@@ -185,17 +185,15 @@ function LabelCostStack({ breakdown }: { breakdown: ReturnType<typeof getLabelCo
   );
 }
 
-// CA-time delegation per boss directive 2026-05-07. The OrderDetail
-// drawer shows orderDate / shipDate (naive-PT-stamped-Z from SS sync)
-// — use the naive-PT helper to preserve the original Pacific wall-clock.
-import { formatNaivePtDateLong, formatNaivePtTimeOnly } from '../lib/ca-time';
+// OrderDetail renders true UTC instants in California time. Historical
+// ShipStation legacy rows are corrected through the timestamp repair flow.
+import { formatCaDateLong, formatCaTimeOnly } from '../lib/ca-time';
 
 function fmtDate(iso: string | null | undefined): string {
   if (!iso) return '—';
-  // "Apr 6, 2026 2:30 PM" — naive-PT preserves the SS-side wall-clock.
-  const date = formatNaivePtDateLong(iso);
+  const date = formatCaDateLong(iso);
   if (date === '—') return '—';
-  return `${date} ${formatNaivePtTimeOnly(iso)}`;
+  return `${date} ${formatCaTimeOnly(iso)}`;
 }
 
 function fmtWeight(oz: number | null | undefined): string {

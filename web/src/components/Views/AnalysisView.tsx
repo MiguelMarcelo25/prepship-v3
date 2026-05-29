@@ -218,12 +218,14 @@ interface AnalysisDataState {
 // pulls from `orders.raw` JSON (paymentDate, shipByDate, etc) which
 // originate from ShipStation V1 — same naive-PT-stamped-Z convention
 // as orderDate. Normalize bare strings to Z (matching prior behavior)
-// then route to formatNaivePt* helpers in ca-time.ts.
-import { formatNaivePtDateLong, formatNaivePtDateTime } from '../../lib/ca-time'
+// Operator-facing dates render in California time. Historical ShipStation rows
+// that were stored with the legacy naive-PT convention must be repaired by the
+// timestamp recovery script instead of reintroducing browser-local display.
+import { formatCaDateLong, formatCaDateTime } from '../../lib/ca-time'
 
 function formatDateOnly(value: string | null | undefined) {
   if (!value) return '-'
-  const result = formatNaivePtDateLong(value)
+  const result = formatCaDateLong(value)
   return result === '—' ? '-' : result
 }
 
@@ -232,7 +234,7 @@ function formatDateTime(value: unknown) {
   const raw = String(value).trim()
   if (!raw) return '-'
   const normalized = /(?:z|[+-]\d{2}:?\d{2})$/i.test(raw) ? raw : `${raw}Z`
-  const result = formatNaivePtDateTime(normalized)
+  const result = formatCaDateTime(normalized)
   return result === '—' ? '-' : result
 }
 

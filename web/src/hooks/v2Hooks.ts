@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api, qs, type Paginated } from '../lib/api';
 import { getCachedAuthToken } from '../lib/auth-session-cache';
+import { californiaDayEndIso, californiaDayStartIso } from '../lib/ca-time';
 import { HIDDEN_CLIENT_IDS } from '../lib/v2-apiClient';
 
 /**
@@ -423,13 +424,13 @@ function transformOrderRowV4toV2(
 function toIsoStart(d: string | undefined): string | undefined {
   if (!d) return undefined;
   if (d.includes('T')) return d;
-  return new Date(`${d}T00:00:00.000Z`).toISOString();
+  return californiaDayStartIso(d);
 }
 
 function toIsoEnd(d: string | undefined): string | undefined {
   if (!d) return undefined;
   if (d.includes('T')) return d;
-  return new Date(`${d}T23:59:59.999Z`).toISOString();
+  return californiaDayEndIso(d);
 }
 
 export function useOrders(

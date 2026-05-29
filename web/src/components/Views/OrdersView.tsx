@@ -894,29 +894,24 @@ function truncate(value: string, maxLength: number) {
 // ───────────────────────────────────────────────────────────────────
 // Date/time formatters — DELEGATE to the canonical CA-time module.
 //
-// These exports preserve the legacy function signatures so the rest
-// of OrdersView doesn't have to change. Under the hood they use
-// formatNaivePt* helpers from web/src/lib/ca-time.ts because the
-// orderDate / shipDate / labelShipDate fields are "naive PT stamped
-// Z" (see ca-time.ts module docstring for the full backstory).
-//
-// Boss directive (2026-05-07): "I want all CA TIME, no PST". So
-// every operator-facing time renders in California time and labels
-// say "CA" where a TZ disambiguator is meaningful.
+// ShipStation v1 timestamps are now parsed as true UTC from the account-local
+// wall clock. Historical legacy rows must be repaired through the dry-run-first
+// timestamp repair script; UI should not guess based on the operator browser.
 // ───────────────────────────────────────────────────────────────────
 import {
-  formatNaivePtDateTime,
-  formatNaivePtLabelCreated,
-  formatNaivePtDateLong,
-  formatNaivePtWeekday,
+  formatCaDateTime,
+  formatCaShort,
+  formatCaDateLong,
+  formatCaWeekday,
+  CALIFORNIA_TZ,
 } from '../../lib/ca-time'
 
 function formatDateTime(value: string | null | undefined) {
-  return formatNaivePtDateTime(value)
+  return formatCaDateTime(value)
 }
 
 function formatLabelCreated(value: string | null | undefined) {
-  return formatNaivePtLabelCreated(value)
+  return formatCaShort(value)
 }
 
 function formatDateOnly(value: string | null | undefined, options?: Intl.DateTimeFormatOptions) {
@@ -925,15 +920,15 @@ function formatDateOnly(value: string | null | undefined, options?: Intl.DateTim
   // helpers; everything else falls back to a custom Intl call (still
   // forced to CA timezone for consistency).
   if (!options || (options.month === 'short' && options.day === 'numeric' && options.year === 'numeric' && !options.weekday)) {
-    return formatNaivePtDateLong(value)
+    return formatCaDateLong(value)
   }
   if (options.weekday === 'short') {
-    return formatNaivePtWeekday(value)
+    return formatCaWeekday(value)
   }
   const parsed = new Date(value)
   if (Number.isNaN(parsed.getTime())) return '—'
   // Caller provided custom Intl options; render in CA TZ regardless.
-  return parsed.toLocaleDateString('en-US', { ...options, timeZone: 'UTC' })
+  return parsed.toLocaleDateString('en-US', { ...options, timeZone: CALIFORNIA_TZ })
 }
 
 function formatMoney(amount: number | null | undefined) {
