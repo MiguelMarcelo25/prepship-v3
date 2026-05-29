@@ -78,4 +78,15 @@ assert(
   'Dashboard day grouping must use California dates, not UTC dates',
 );
 
+// PS-047: the daily-strip fulfillment window must resolve its noon boundary
+// through the DST-aware California primitive, not literal noon-UTC.
+assert(
+  read('src/lib/time/fulfillment-window.ts').includes('californiaWallClockToUtc'),
+  'Fulfillment window noon boundary must use californiaWallClockToUtc (true noon Pacific)',
+);
+assert(
+  !/Date\.UTC\(\s*year,\s*month\s*-\s*1,\s*day,\s*12\s*,\s*0\s*,\s*0\s*\)/.test(read('src/routes/orders.ts')),
+  'orders.ts must not bound the daily-stats window at literal noon-UTC',
+);
+
 console.log('PASS date/time standard guard');

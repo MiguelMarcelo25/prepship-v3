@@ -118,6 +118,8 @@
     "test:shipstation-carrier-account-identity": "tsx scripts/shipstation-carrier-account-identity-guard.ts",
     "test:shipstation-sync-window": "tsx scripts/shipstation-sync-window-guard.ts",
     "test:date-time-standard": "tsx scripts/date-time-standard-guard.ts",
+    "test:daily-stats-window": "tsx scripts/daily-stats-window-guard.ts",
+    "test:daily-strip-progress": "tsx scripts/daily-strip-progress-guard.ts",
     "shipstation:timestamps:repair": "tsx scripts/repair-shipstation-legacy-timestamps.ts",
     "test:testing-coverage-standard": "node scripts/testing-coverage-standard-guard.mjs",
     "test:health-deep-readiness": "node scripts/health-deep-readiness-guard.mjs",
