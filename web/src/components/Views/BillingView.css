@@ -369,3 +369,167 @@
     grid-template-columns:1fr !important;
   }
 }
+
+/* ══════════════════════════════════════════════════════════════════
+   BILLING UI MODERNIZATION (scoped to #view-billing only)
+   Visual-only layer. No markup/logic/RBAC changes. Every rule is
+   prefixed with #view-billing so the shared .markup-card / .btn /
+   table styling used elsewhere (e.g. SettingsView) is untouched.
+   !important is used only where BillingView.tsx sets the property
+   inline (titles, table th/td, card padding) and the cascade would
+   otherwise lose to the inline style.
+══════════════════════════════════════════════════════════════════ */
+
+/* Page canvas — soft neutral wash so cards lift off the background. */
+#view-billing{
+  background:
+    radial-gradient(1200px 480px at 12% -8%, color-mix(in srgb,var(--ss-blue) 5%,transparent), transparent 60%),
+    var(--surface2);
+}
+
+/* ── Cards ─────────────────────────────────────────────────────── */
+#view-billing .markup-card{
+  position:relative;
+  border-radius:14px;
+  padding:18px 18px 16px !important;
+  border:1px solid color-mix(in srgb,var(--border) 78%,transparent);
+  background:var(--surface);
+  box-shadow:0 1px 2px rgba(15,23,42,.04), 0 10px 26px -16px rgba(15,23,42,.18);
+  transition:box-shadow .18s ease, transform .18s ease, border-color .18s ease;
+  overflow:hidden;
+}
+#view-billing .markup-card::before{
+  content:'';
+  position:absolute; inset:0 0 auto 0; height:3px;
+  background:linear-gradient(90deg,var(--ss-blue),color-mix(in srgb,var(--ss-blue) 40%,transparent));
+  opacity:.0;
+  transition:opacity .18s ease;
+}
+#view-billing .markup-card:hover{
+  border-color:color-mix(in srgb,var(--ss-blue) 24%,var(--border));
+  box-shadow:0 2px 4px rgba(15,23,42,.05), 0 18px 40px -20px rgba(15,23,42,.28);
+}
+#view-billing .markup-card:hover::before{ opacity:.85; }
+
+/* ── Section titles — accent bar + clearer hierarchy ───────────── */
+#view-billing .markup-card > h3{
+  display:flex; align-items:center; gap:8px;
+  font-size:11.5px !important;
+  font-weight:800 !important;
+  letter-spacing:.5px !important;
+  color:var(--text2) !important;
+  margin-bottom:14px !important;
+}
+#view-billing .markup-card > h3::before{
+  content:'';
+  width:4px; height:13px; border-radius:999px;
+  background:linear-gradient(180deg,var(--ss-blue),color-mix(in srgb,var(--ss-blue) 45%,transparent));
+  flex:0 0 auto;
+}
+
+/* ── Tables — refined header + comfortable rows + zebra/hover ──── */
+#view-billing table thead tr{
+  background:color-mix(in srgb,var(--surface2) 70%,var(--surface)) !important;
+  border-bottom:1px solid var(--border) !important;
+}
+#view-billing table thead th{
+  padding:8px 10px !important;
+  font-size:9.5px !important;
+  font-weight:800 !important;
+  letter-spacing:.45px !important;
+  color:var(--text3) !important;
+  position:sticky; top:0; z-index:1;
+  background:inherit;
+  backdrop-filter:saturate(1.1);
+}
+#view-billing table tbody td{
+  padding:7px 10px !important;
+  border-bottom:1px solid color-mix(in srgb,var(--border) 55%,transparent) !important;
+}
+#view-billing table tbody tr{
+  transition:background .12s ease;
+}
+#view-billing table tbody tr:nth-child(even):not(.is-detail-selected):not(.billing-detail-ss-row){
+  background:color-mix(in srgb,var(--surface2) 45%,transparent);
+}
+#view-billing table tbody tr:not(.is-detail-selected):hover{
+  background:color-mix(in srgb,var(--ss-blue) 7%,var(--surface)) !important;
+}
+
+/* ── Inputs — consistent rounding + brand focus ring ───────────── */
+#view-billing .markup-input-lg,
+#view-billing .ship-select,
+#view-billing .filter-sel,
+#view-billing input[type="date"]{
+  border-radius:8px;
+  border:1px solid var(--border2);
+  transition:border-color .14s ease, box-shadow .14s ease, background .14s ease;
+}
+#view-billing .markup-input-lg:focus,
+#view-billing .ship-select:focus,
+#view-billing .filter-sel:focus,
+#view-billing input[type="date"]:focus{
+  border-color:var(--ss-blue);
+  box-shadow:0 0 0 3px color-mix(in srgb,var(--ss-blue) 16%,transparent);
+  outline:none;
+}
+
+/* ── Buttons — gentle elevation + tactile press ────────────────── */
+#view-billing .btn{
+  border-radius:8px;
+  transition:background .14s ease, box-shadow .14s ease, transform .06s ease, border-color .14s ease, color .14s ease;
+}
+#view-billing .btn-primary{
+  background:linear-gradient(180deg,var(--ss-blue),var(--ss-blue2));
+  box-shadow:0 1px 2px rgba(15,23,42,.12), 0 4px 12px -6px color-mix(in srgb,var(--ss-blue) 60%,transparent);
+}
+#view-billing .btn-primary:hover{ filter:brightness(1.03); }
+#view-billing .btn:active{ transform:translateY(1px); }
+#view-billing .btn-outline:hover{
+  border-color:color-mix(in srgb,var(--ss-blue) 40%,var(--border2));
+}
+
+/* ── Summary client cell — make the drill-in feel interactive ──── */
+#view-billing .billing-summary-row .btn-ghost:hover{
+  color:var(--ss-blue);
+}
+
+/* ── Detail client strip & filter — slightly richer surfaces ───── */
+#view-billing .billing-detail-toggle{
+  transition:background .14s ease, border-color .14s ease, color .14s ease, box-shadow .14s ease;
+}
+#view-billing .billing-detail-toggle:not(.active):hover{
+  border-color:color-mix(in srgb,var(--ss-blue) 40%,var(--border));
+  color:var(--text);
+}
+#view-billing .billing-detail-toggle.active{
+  box-shadow:0 2px 8px -2px color-mix(in srgb,var(--ss-blue) 55%,transparent);
+}
+#view-billing .billing-client-filter{
+  border-radius:12px;
+}
+#view-billing .billing-client-filter-option{
+  border-radius:10px;
+  transition:border-color .14s ease, box-shadow .14s ease, transform .1s ease;
+}
+#view-billing .billing-client-filter-option:hover{
+  border-color:color-mix(in srgb,var(--ss-blue) 35%,var(--border));
+}
+
+/* ── Edit modal — deeper elevation to match modern surfaces ────── */
+#view-billing ~ .billing-edit-backdrop .billing-edit-modal,
+.billing-edit-backdrop .billing-edit-modal{
+  border-radius:14px;
+  box-shadow:0 24px 70px -12px rgba(15,23,42,.45);
+}
+
+/* Honor reduced-motion preferences. */
+@media (prefers-reduced-motion: reduce){
+  #view-billing .markup-card,
+  #view-billing .btn,
+  #view-billing table tbody tr,
+  #view-billing .billing-detail-toggle,
+  #view-billing .billing-client-filter-option{
+    transition:none !important;
+  }
+}
