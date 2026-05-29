@@ -1212,6 +1212,8 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
   const [parentSkuOptions, setParentSkuOptions] = useState<Record<number, ParentSkuDto[]>>({})
   const [parentModal, setParentModal] = useState<CreateParentFormState | null>(null)
   const [adjustModal, setAdjustModal] = useState<AdjustModalState | null>(null)
+  const [ledgerDeleteModal, setLedgerDeleteModal] = useState<InventoryLedgerEntryDto | null>(null)
+  const [ledgerDeleteInFlight, setLedgerDeleteInFlight] = useState(false)
   const [skuDrawer, setSkuDrawer] = useState<InventorySkuOrdersDto | null>(null)
   const [skuDrawerTitle, setSkuDrawerTitle] = useState('Loading…')
   const [skuDrawerError, setSkuDrawerError] = useState<string | null>(null)
@@ -2075,13 +2077,22 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
       toastContext?.addToast('Order-linked ship history cannot be deleted here.', 'error')
       return
     }
-    const ok = window.confirm(
-      `Delete manual history row for ${entry.sku || 'this SKU'} (${entry.qty > 0 ? `+${entry.qty}` : entry.qty})? This reverses the stock impact.`
-    )
-    if (!ok) return
+    setLedgerDeleteModal(entry)
+  }
 
+  const confirmDeleteLedgerEntry = async () => {
+    const entry = ledgerDeleteModal
+    if (!entry) return
+    if (entry.type === 'ship' || entry.orderId != null) {
+      setLedgerDeleteModal(null)
+      toastContext?.addToast('Order-linked ship history cannot be deleted here.', 'error')
+      return
+    }
+
+    setLedgerDeleteInFlight(true)
     try {
       await apiClient.deleteInventoryLedgerEntry(entry.id)
+      setLedgerDeleteModal(null)
       toastContext?.addToast('History row deleted and stock adjusted', 'success')
       await Promise.all([
         loadHistory(),
@@ -2090,6 +2101,8 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
       ])
     } catch (error) {
       toastContext?.addToast(error instanceof Error ? error.message : 'Delete failed', 'error')
+    } finally {
+      setLedgerDeleteInFlight(false)
     }
   }
 
@@ -4917,6 +4930,48 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               <button className="btn btn-outline btn-sm" type="button" onClick={() => setAdjustModal(null)}>Cancel</button>
               <button className="btn btn-primary btn-sm" type="button" onClick={handleAdjustSubmit}>Save</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {ledgerDeleteModal ? (
+        <div className="inventory-overlay" onClick={() => !ledgerDeleteInFlight && setLedgerDeleteModal(null)}>
+          <div className="inventory-modal" onClick={(event) => event.stopPropagation()} style={{ maxWidth: 460 }}>
+            <h3 style={{ marginTop: 0, marginBottom: 6 }}>Delete history row?</h3>
+            <div style={{ fontSize: 12, color: 'var(--text3)', marginBottom: 14 }}>
+              This will remove the manual inventory movement and reverse its stock impact.
+            </div>
+            <div style={{ border: '1px solid var(--border)', borderRadius: 8, background: 'var(--surface2)', padding: 12, marginBottom: 14 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '96px 1fr', rowGap: 8, columnGap: 10, fontSize: 12 }}>
+                <span style={{ color: 'var(--text3)', fontWeight: 700 }}>SKU</span>
+                <span style={{ fontFamily: 'monospace', color: 'var(--text)' }}>{ledgerDeleteModal.sku || '-'}</span>
+                <span style={{ color: 'var(--text3)', fontWeight: 700 }}>Type</span>
+                <span style={{ textTransform: 'capitalize', color: 'var(--text)' }}>{ledgerDeleteModal.type}</span>
+                <span style={{ color: 'var(--text3)', fontWeight: 700 }}>Qty</span>
+                <span style={{ fontWeight: 800, color: ledgerDeleteModal.qty > 0 ? 'var(--green)' : 'var(--red)' }}>
+                  {ledgerDeleteModal.qty > 0 ? `+${ledgerDeleteModal.qty}` : ledgerDeleteModal.qty}
+                </span>
+                <span style={{ color: 'var(--text3)', fontWeight: 700 }}>Note</span>
+                <span style={{ color: 'var(--text2)' }}>{ledgerDeleteModal.note || '-'}</span>
+                <span style={{ color: 'var(--text3)', fontWeight: 700 }}>Date</span>
+                <span style={{ color: 'var(--text2)' }}>{formatDateTime(ledgerDeleteModal.createdAt)}</span>
+              </div>
+            </div>
+            <div style={{ fontSize: 11.5, color: 'var(--red)', marginBottom: 16, fontWeight: 700 }}>
+              Ship/order-linked rows stay locked and cannot be deleted from History.
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button className="btn btn-outline btn-sm" type="button" disabled={ledgerDeleteInFlight} onClick={() => setLedgerDeleteModal(null)}>Cancel</button>
+              <button
+                className="btn btn-outline btn-sm"
+                type="button"
+                disabled={ledgerDeleteInFlight}
+                onClick={() => void confirmDeleteLedgerEntry()}
+                style={{ borderColor: 'var(--red)', color: 'var(--red)' }}
+              >
+                {ledgerDeleteInFlight ? 'Deleting...' : 'Delete row'}
+              </button>
             </div>
           </div>
         </div>

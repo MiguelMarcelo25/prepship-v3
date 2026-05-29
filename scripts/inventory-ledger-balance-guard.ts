@@ -59,6 +59,13 @@ assert(
 );
 
 assert(
+  inventoryView.includes('ledgerDeleteModal') &&
+    inventoryView.includes('confirmDeleteLedgerEntry') &&
+    inventoryView.includes('This will remove the manual inventory movement and reverse its stock impact.'),
+  'Inventory History delete uses an in-app confirmation modal before mutating stock',
+);
+
+assert(
   inventoryView.includes('<Table<InventoryLedgerEntryDto>') &&
     inventoryView.includes('storageKey="inventory-history-table"') &&
     inventoryView.includes('columns={historyColumns}'),
