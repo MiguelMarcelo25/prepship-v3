@@ -149,7 +149,11 @@
     "test:site-actions:browser": "playwright test web/e2e/site-actions.spec.js --reporter=line",
     "test:workflow-certification:browser": "playwright test web/e2e/site-actions.spec.js --reporter=line",
     "test:api-contracts": "node scripts/api-contracts-guard.mjs",
-    "test:full-site-certification": "npm run typecheck && npm run build:web && npm run guard:site-actions && npm run test:api-contracts && npm run test:shipstation-label-url && npm run test:print-queue-invalid-label && npm run test:workflow-certification:browser && npm run test:orders-ux:browser && npm run test:inventory-ux:browser && npm run test:maintenance-gate:browser && npm run test:frontend-failure-states"
+    "test:full-site-certification": "npm run typecheck && npm run build:web && npm run guard:site-actions && npm run test:api-contracts && npm run test:shipstation-label-url && npm run test:print-queue-invalid-label && npm run test:workflow-certification:browser && npm run test:orders-ux:browser && npm run test:inventory-ux:browser && npm run test:maintenance-gate:browser && npm run test:frontend-failure-states",
+    "test:order-editable-lockdown": "node scripts/order-editable-lockdown-guard.mjs",
+    "test:order-readiness-preflight": "node scripts/order-readiness-preflight-guard.mjs",
+    "test:workflow-suites": "node scripts/run-workflow-certification.mjs",
+    "test:full-workflow-certification": "npm run test:full-site-certification && npm run test:workflow-suites"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",

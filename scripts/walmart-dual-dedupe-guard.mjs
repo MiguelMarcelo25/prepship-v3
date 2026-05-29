@@ -22,12 +22,16 @@ assert(
   'Walmart dedupe helper must suppress direct duplicates by matching ShipStation order_number',
 );
 
+// /orders applies Walmart direct/ShipStation dedupe via the walmartDirectDuplicates
+// directRows step (building walmartDirectDuplicateByOrderNumber) and exposes the
+// per-row sourceLink + walmartDirectDuplicatesOnPage diagnostics. (Refactored
+// from the earlier inline shouldApplyWalmartDedupe predicate; the predicate
+// helper is still asserted against the connector + /init + /inventory paths.)
 assert(
-  ordersRoute.includes('walmartDirectDuplicateSuppressionPredicate') &&
-    ordersRoute.includes('const shouldApplyWalmartDedupe =') &&
-    ordersRoute.includes('shouldApplyWalmartDedupe ? walmartDirectDuplicateSuppressionPredicate') &&
+  ordersRoute.includes('walmartDirectDuplicates') &&
+    ordersRoute.includes('walmartDirectDuplicateByOrderNumber') &&
     ordersRoute.includes('sourceLink') &&
-    ordersRoute.includes('walmartDirectDuplicates'),
+    ordersRoute.includes('walmartDirectDuplicatesOnPage'),
   '/orders must apply Walmart direct duplicate suppression and expose source-link diagnostics',
 );
 
@@ -39,10 +43,17 @@ assert(
   'Walmart dedupe hot paths must have migration-owned order_number indexes',
 );
 
+// The Walmart *canonical* dedupe in /init/counts was intentionally reverted
+// (da0a6936 "Revert 'Show canonical Walmart orders in linked store view'");
+// direct Walmart orders are shown/counted separately by design, and
+// walmartCanonicalOrderPredicate no longer exists. What /init/counts MUST still
+// share with /orders is the awaiting visibility predicate so sidebar badges and
+// the list reflect the same conceptual awaiting set. (Sidebar-vs-list Walmart
+// count asymmetry is intentional per the revert — see the coverage matrix note
+// for the DJ confirmation follow-up.)
 assert(
-  initRoute.includes('walmartDirectDuplicateSuppressionPredicate') &&
-    initRoute.includes('walmartCanonicalOrderPredicate'),
-  '/init/counts must apply the same Walmart canonical dedupe rule as /orders',
+  initRoute.includes('visibleAwaitingOrdersPredicate'),
+  '/init/counts must share the awaiting visibility predicate used by /orders',
 );
 
 assert(

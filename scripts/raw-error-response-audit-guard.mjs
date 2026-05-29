@@ -66,9 +66,10 @@ for (const file of [
   'api/carriers/walmart/orders.ts',
   'api/carriers/ebay/orders.ts',
   'api/carriers/rates.ts',
-  'api/carriers/verify.ts',
+  // api/carriers/verify.ts and src/lib/imported-handlers/carriers-verify.ts are
+  // one-line re-export shims for the real handler below; assert the handler.
+  'src/connectors/carrier/credential-verification.ts',
   'src/lib/imported-handlers/carrier-accounts.ts',
-  'src/lib/imported-handlers/carriers-verify.ts',
   'api/migrate-from.ts',
   'api/admin/fix-marketplace-timestamps.ts',
 ]) {

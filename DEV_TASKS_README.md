@@ -107,6 +107,69 @@ Recommended order:
 2. PS-017 second - fixes/guards the eBay marketplace notification gap.
 3. PS-018 third - broadens coverage so broken buttons/workflows do not pass silently.
 
+## Official PS-035 Through PS-040 Certification, Orders, Shipping, Package, and Billing Track
+
+DJ added this task packet on 2026-05-29. The detailed implementation handoffs are tracked in `docs/ps-035-through-ps-040-task-packet.md`.
+
+| Task | Title | Priority | Root Problem | Completion Gate |
+|---|---|---|---|---|
+| PS-035 | Build Complete PrepShip Full-Workflow Certification Coverage Matrix | High | Passing full-site certification is not yet a complete operator workflow certification. | Coverage matrix plus stronger `test:full-workflow-certification` command with mocked/offline browser/API workflow coverage and documented remaining gaps. |
+| PS-036 | Fix ShipStation Sync + Make Orders Column Integrity Mandatory E2E | Critical | ShipStation v1 timezone/date formatting can skip shipment rows, causing false `Ext. Label` displays and revealing an Orders column-integrity certification gap. | Fixed ShipStation date formatting, dry-run missed-shipment recovery, honest missing-sync UI state, and permanent Awaiting/Shipped column-integrity E2E assertions. |
+| PS-037 | Save/Auto-Apply Package Defaults by Client SKU+Qty Combination | High | Mixed-SKU package defaults need exact client + SKU/qty combination matching instead of polluting SKU-level defaults. | New combo-default model/endpoints/UI behavior, Hugrab-style E2E coverage, and regression proof that multi-SKU saves do not overwrite individual SKU defaults. |
+| PS-038 | Flag Expedited Shipping Orders in Awaiting Shipment + Shipped Tables | High | Operators need visible SLA warning for requested expedited shipping before and after label creation. | Centralized expedited detection, Orders payload flag/label, Order Date badge, red row highlight, and API/UI/E2E certification coverage. |
+| PS-039 | Investigate + Backfill Order #1010 Shipment Metadata From ShipStation Shipment #289653129 | Critical | Order `1010` incorrectly shows `Ext. Label` even though DJ confirmed a real ShipStation shipment exists. | Sanitized read-only investigation, dry-run-first repair output for shipment `289653129`, targeted regression coverage, and no write-mode backfill without DJ approval. |
+| PS-040 | Fix Billing Detail Item Qty Display + Repair Missing Shipment/Box Linkage | Critical | Billing Detail drops per-line qty and stale billing rows can miss shipment/box/shipping data after shipment sync gaps. | Qty suffix display, dry-run-first billing shipment-linkage repair, recurrence tests, and proof Billing Detail shows carrier/box/shipping after approved repair/regeneration. |
+
+Safety for this track:
+
+- Do not run production write-mode backfills or billing repairs without DJ approval of dry-run output.
+- Do not buy postage, create/void labels, or send marketplace/customer notifications in tests.
+- Do not expose secrets, raw provider payloads, raw labels, customer PII, or cross-client data.
+- Keep shipped/cancelled lockdown protections intact; use the narrow shipped-data override rules only where explicitly allowed by `AGENTS.md`.
+
+### PS-035 Certification Commands (delivered 2026-05-29)
+
+The full coverage matrix for all workflow checkpoints (A–P) lives in
+[`docs/full-workflow-certification-matrix.md`](docs/full-workflow-certification-matrix.md).
+Two certification commands now exist:
+
+- `npm run test:full-site-certification` — unchanged pre-existing site smoke
+  (typecheck + web build + site-action/API guards + 5 Playwright browser specs
+  + frontend failure states). **Requires a running dev server** for Playwright.
+- `npm run test:full-workflow-certification` — **stronger superset**: runs
+  `test:full-site-certification`, then `test:workflow-suites`.
+- `npm run test:workflow-suites` — the **offline behavioral core**: 69 guards
+  across checkpoints A–P via [`scripts/run-workflow-certification.mjs`](scripts/run-workflow-certification.mjs),
+  with **no running server, no live providers, no real DB**. Runnable in plain
+  CI. 69/69 pass as of 2026-05-29.
+
+New PS-035 guards: `test:order-editable-lockdown` (backend shipped/cancelled
+mutation-rejection — checkpoint L) and `test:order-readiness-preflight`
+(label weight/ship-to/terminal/duplicate preflight — checkpoint D).
+
+To add a future checkpoint: add an offline `test:*` guard, register it in
+`scripts/run-workflow-certification.mjs`, and update the matrix. Browser-only or
+live/DJ-supervised suites stay OUT of the offline core (see the matrix's
+EXCLUDED section). Remaining behavioral gaps are tracked as PS-035-F1…F10
+follow-ups in the matrix; one item (Walmart sidebar count parity) needs DJ
+confirmation, not a code change.
+
+## Official PS-041 Through PS-042 ShipStation Sync + Billing UI Coverage Track
+
+DJ added this task packet on 2026-05-29. The detailed implementation handoffs are tracked in `docs/ps-041-through-ps-042-task-packet.md`.
+
+| Task | Title | Priority | Root Problem | Completion Gate |
+|---|---|---|---|---|
+| PS-041 | Fix ShipStation Timezone Sync Gap + Add Mandatory E2E/Live-Path Coverage Standard | Critical | ShipStation v1 timezone-less date windows can skip recent account-local/PT orders, as seen with HUGRAB/store `378060` orders `1042` through `1045`; future fixes also need appropriate workflow/live-path coverage. | Root-cause-confirmed ShipStation date-window fix, safe dry-run recovery path, focused timezone/query-window tests, live-path/dry-run reconciliation, and updated certification standard for applicable fixes. |
+| PS-042 | Fix Billing Summary Total Row Column Alignment + Add E2E Coverage | High | Billing summary Total row values are visually misaligned under their intended columns. | Root-cause-confirmed table/footer alignment fix with browser E2E proving Total cells align under the matching headers/body cells across supported table states. |
+
+Safety for this track:
+
+- Do not buy postage, create labels, void labels, or notify marketplaces in tests.
+- Do not mutate shipped/cancelled/terminal orders without DJ approval of the exact operation.
+- Do not expose secrets, raw provider payloads, raw labels, customer PII, or cross-client data.
+- Keep auth/RBAC, client/store scope, source-of-truth, financial redaction, secret redaction, and shipped/cancelled lockdown intact.
+
 ### PS-016 Copy/Paste Handoff
 
 ```md
