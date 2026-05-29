@@ -105,6 +105,14 @@ assert(
 );
 
 assert(
+  inventoryRoute.includes('real_ship_ledger_keys') &&
+    inventoryRoute.includes('order_history is a display fallback') &&
+    inventoryRoute.includes("existing_ledger.sku_key = lower(item->>'sku')") &&
+    inventoryRoute.includes('scoped_inventory.client_id ='),
+  'Inventory History suppresses synthetic order_history rows when a real ship ledger exists for the same order/SKU/client scope',
+);
+
+assert(
   apiClient.includes('deleteInventoryLedgerEntry') &&
     inventoryView.includes('handleDeleteLedgerEntry') &&
     inventoryView.includes('Delete manual history row'),

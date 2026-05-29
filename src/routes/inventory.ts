@@ -516,6 +516,17 @@ app.get('/ledger', zValidator('query', ledgerQuery), async (c) => {
         and ${activeInventoryClientPredicate}
         and ${inventoryScopePredicate(ledgerScope)}
     ),
+    real_ship_ledger_keys as (
+      select distinct
+        existing_ledger.order_id as order_id,
+        lower(existing_inventory.sku) as sku_key,
+        existing_inventory.client_id as inventory_client_id
+      from ${inventoryLedger} existing_ledger
+      inner join ${inventory} existing_inventory
+        on existing_inventory.id = existing_ledger.inventory_id
+      where existing_ledger.type = 'ship'
+        and existing_ledger.order_id is not null
+    ),
     derived_ship_rows as (
       select
         (-1 * row_number() over (order by ${orders.id}, ${inventory.id}))::int as id,
@@ -543,7 +554,16 @@ app.get('/ledger', zValidator('query', ledgerQuery), async (c) => {
         and ${inventory.active} = true
         and (
           (${orders.clientId} is not null and ${inventory.clientId} = ${orders.clientId})
-          or ${inventory.clientId} is null
+          or (
+            ${inventory.clientId} is null
+            and not exists (
+              select 1
+              from ${inventory} scoped_inventory
+              where scoped_inventory.active = true
+                and lower(scoped_inventory.sku) = lower(item->>'sku')
+                and scoped_inventory.client_id = ${orders.clientId}
+            )
+          )
         )
       where ${includeDerivedShipHistory}::boolean = true
         and ${orders.orderStatus} = 'shipped'
@@ -557,12 +577,16 @@ app.get('/ledger', zValidator('query', ledgerQuery), async (c) => {
         and (${dateEndIso}::timestamptz is null or ${orders.orderDate} <= ${dateEndIso}::timestamptz)
         and ${activeInventoryClientPredicate}
         and ${inventoryScopePredicate(ledgerScope)}
+        -- order_history is a display fallback; real ship ledger rows win for the same order/SKU/client scope.
         and not exists (
           select 1
-          from ${inventoryLedger} existing_ledger
+          from real_ship_ledger_keys existing_ledger
           where existing_ledger.order_id = ${orders.id}
-            and existing_ledger.inventory_id = ${inventory.id}
-            and existing_ledger.type = 'ship'
+            and existing_ledger.sku_key = lower(item->>'sku')
+            and (
+              existing_ledger.inventory_client_id = ${orders.clientId}
+              or existing_ledger.inventory_client_id is null
+            )
         )
     ),
     combined_rows as (
