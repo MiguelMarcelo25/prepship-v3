@@ -10,7 +10,7 @@ import {
 } from '../connectors/carrier/shipstation';
 import { deductInventoryForOrder } from './fulfillment-deductions';
 import { getSettingNumber, setSetting } from './settings';
-import { formatShipStationV1DateParam } from '../lib/shipstation/v1-date';
+import { formatShipStationV1DateParam, parseShipStationV1Date } from '../lib/shipstation/v1-date';
 
 const LAST_SYNC_KEY = 'shipment_sync.last_created_ms';
 const DEFAULT_LOOKBACK_MS = 1000 * 60 * 60 * 24 * 7; // 7 days on first run
@@ -87,8 +87,8 @@ function shipmentValues(
     carrierCode: s.carrierCode ?? null,
     serviceCode: s.serviceCode ?? null,
     trackingNumber: s.trackingNumber ?? null,
-    shipDate: s.shipDate ? new Date(s.shipDate) : null,
-    createDate: s.createDate ? new Date(s.createDate) : null,
+    shipDate: parseShipStationV1Date(s.shipDate),
+    createDate: parseShipStationV1Date(s.createDate),
     weightOz: toOunces(s.weight),
     dimsL: s.dimensions?.length ?? null,
     dimsW: s.dimensions?.width ?? null,
@@ -97,7 +97,7 @@ function shipmentValues(
     labelTracking: s.trackingNumber ?? null,
     labelCarrier: s.carrierCode ?? null,
     labelService: s.serviceCode ?? null,
-    labelShipDate: s.shipDate ? new Date(s.shipDate) : null,
+    labelShipDate: parseShipStationV1Date(s.shipDate),
     labelShipmentId: s.shipmentId,
     voided: Boolean(s.voided),
     source: 'shipstation',

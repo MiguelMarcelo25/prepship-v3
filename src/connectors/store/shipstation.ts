@@ -3,7 +3,7 @@ import {
   ssMarkOrderShippedV1,
 } from '../../lib/shipstation/labels';
 import { ssV1Request } from '../../lib/shipstation/v1-client';
-import { formatShipStationV1DateParam } from '../../lib/shipstation/v1-date';
+import { formatShipStationV1DateParam, parseShipStationV1Date } from '../../lib/shipstation/v1-date';
 import { buildShipStationOrderSource } from '../../services/normalized-order-persistence';
 import type {
   ConfirmationResult,
@@ -112,13 +112,7 @@ function toOunces(w?: SSOrder['weight']): number | null {
 }
 
 function parseShipStationDate(value?: string): Date | null {
-  if (!value) return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-
-  const hasZone = /(?:z|[+-]\d{2}:?\d{2})$/i.test(trimmed);
-  const parsed = new Date(hasZone ? trimmed : `${trimmed}Z`);
-  return Number.isNaN(parsed.getTime()) ? null : parsed;
+  return parseShipStationV1Date(value);
 }
 
 function toNumericString(n?: number | null): string {
