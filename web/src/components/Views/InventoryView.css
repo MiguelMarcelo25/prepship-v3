@@ -114,7 +114,10 @@
 
 .inventory-drawer-overlay{
   position:fixed;
-  inset:0;
+  top:0;
+  right:0;
+  bottom:0;
+  left:var(--sidebar-w, 240px);
   background:rgba(0,0,0,.35);
   z-index:4000;
   display:flex;
@@ -319,6 +322,10 @@
   .inventory-modal{
     width:min(95vw, 420px);
     padding:18px;
+  }
+
+  .inventory-drawer-overlay{
+    inset:0;
   }
 
   .inventory-drawer-panel{

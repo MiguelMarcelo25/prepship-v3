@@ -289,6 +289,15 @@ for (const viewport of [
     await page.locator('.ps-data-table-scroll tbody tr').first().click()
     await expect(page.locator('.inventory-drawer-panel')).toBeVisible()
     await expect(page.locator('.inventory-drawer-panel')).toContainText('Recent Orders')
+    const overlayBox = await page.locator('.inventory-drawer-overlay').boundingBox()
+    expect(overlayBox).toBeTruthy()
+    if (viewport.width > 768) {
+      const sidebarBox = await page.locator('aside[aria-label="Primary navigation"], .sidebar').first().boundingBox()
+      expect(sidebarBox).toBeTruthy()
+      expect(overlayBox.x).toBeGreaterThanOrEqual(sidebarBox.x + sidebarBox.width - 1)
+    } else {
+      expect(overlayBox.x).toBeLessThanOrEqual(1)
+    }
     await page.screenshot({ path: path.join(screenshotDir, `${viewport.name}-02-sku-drawer.png`), fullPage: true })
     await page.locator('.inventory-drawer-panel button').first().click()
 

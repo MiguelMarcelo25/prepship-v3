@@ -76,6 +76,7 @@
     "test:inventory-ledger-balance": "tsx scripts/inventory-ledger-balance-guard.ts",
     "test:inventory-reconciliation-dry-run": "node scripts/inventory-reconciliation-dry-run-guard.mjs",
     "test:inventory-repair-plan": "node scripts/inventory-repair-plan-guard.mjs",
+    "test:sidebar-cache-ux": "node scripts/sidebar-cache-ux-guard.mjs",
     "test:billing-client-scope": "node scripts/billing-client-store-scope-guard.mjs",
     "test:billing-formula": "tsx scripts/billing-formula-guard.ts",
     "test:billing-detail-ps040": "tsx scripts/billing-detail-ps040-guard.ts",

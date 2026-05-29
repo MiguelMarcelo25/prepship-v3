@@ -83,7 +83,7 @@
    *    strip on the right is barely a sliver — kills the "page peeks
    *    through next to the sidebar" overlap the operator complained
    *    about. All 6 variants (SidebarA–E + SidebarTemplated) render
-   *    a root <aside class="fixed ... z-40 ..."> at 252–260 px wide.
+   *    a root <aside class="fixed ... z-40 ..."> at 240 px wide.
    *    On a 393 px iPhone that leaves ~140 px of visible page strip;
    *    bumping to 88 vw (≤ 340 px) shrinks the strip to ~50 px AND
    *    keeps a tap-area for closing the drawer.

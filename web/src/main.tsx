@@ -7,6 +7,7 @@ import { AuthProvider } from './lib/auth';
 import { ToastProvider } from './contexts/ToastContext';
 import { MarkupsProvider } from './contexts/MarkupsContext';
 import { ThemeProvider } from './lib/ThemeProvider';
+import { runUiCacheVersionMigration } from './lib/ui-cache-version';
 // 2026-05-13: DesignPicker (floating "Design" widget bottom-right)
 // removed per operator decision to lock the app to one look:
 //   • Theme:   "Sky Blue" (DEFAULT_THEME_ID = 'indigo')
@@ -19,6 +20,8 @@ import './index.css';
 import './app-shell.css';
 import './App.css';
 import './mobile.css';
+
+runUiCacheVersionMigration();
 
 // 2026-05-15: Stale-bundle auto-recovery after a Vercel deploy.
 //
