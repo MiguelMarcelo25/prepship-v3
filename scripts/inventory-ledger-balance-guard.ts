@@ -59,6 +59,13 @@ assert(
 );
 
 assert(
+  inventoryView.includes('<Table<InventoryLedgerEntryDto>') &&
+    inventoryView.includes('storageKey="inventory-history-table"') &&
+    inventoryView.includes('columns={historyColumns}'),
+  'Inventory History uses the shared resizable/reorderable Table component',
+);
+
+assert(
   reconcileScript.includes('const effectiveStock = ledgerStock;'),
   'inventory reconciliation dry-run compares cache and effective stock against ledger balance',
 );

@@ -2093,6 +2093,114 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
     }
   }
 
+  const historyColumns = useMemo<TableColumn<InventoryLedgerEntryDto>[]>(() => [
+    {
+      key: 'date',
+      label: 'Date (Local)',
+      width: 150,
+      minWidth: 120,
+      sortable: true,
+      sortValue: (entry) => entry.createdAt ? new Date(entry.createdAt) : null,
+      render: (entry) => (
+        <span className="block truncate text-ink-3" title={formatDateTime(entry.createdAt)}>
+          {formatDateTime(entry.createdAt)}
+        </span>
+      ),
+    },
+    {
+      key: 'sku',
+      label: 'SKU',
+      width: 170,
+      minWidth: 110,
+      sortable: true,
+      sortValue: (entry) => entry.sku ?? '',
+      render: (entry) => (
+        <span className="block truncate font-mono text-[11.5px]" title={entry.sku || undefined}>
+          {entry.sku || '-'}
+        </span>
+      ),
+    },
+    {
+      key: 'type',
+      label: 'Type',
+      width: 96,
+      minWidth: 82,
+      sortable: true,
+      sortValue: (entry) => entry.type,
+      render: (entry) => {
+        const typeColor = entry.type === 'receive' ? 'var(--green)' : entry.type === 'adjust' ? 'var(--ss-blue)' : entry.type === 'ship' ? 'var(--red)' : entry.type === 'return' ? 'var(--yellow)' : entry.type === 'damage' ? 'var(--red)' : 'var(--text3)'
+        return <span style={{ fontWeight: 700, color: typeColor, textTransform: 'capitalize' }}>{entry.type}</span>
+      },
+    },
+    {
+      key: 'qty',
+      label: 'Qty',
+      width: 90,
+      minWidth: 74,
+      sortable: true,
+      align: 'right',
+      sortValue: (entry) => entry.qty,
+      render: (entry) => (
+        <span className="block text-right font-bold" style={{ color: entry.qty > 0 ? 'var(--green)' : 'var(--red)' }}>
+          {entry.qty > 0 ? `+${entry.qty}` : entry.qty}
+        </span>
+      ),
+    },
+    {
+      key: 'actions',
+      label: 'Actions',
+      width: 92,
+      minWidth: 78,
+      hideable: false,
+      render: (entry) => {
+        const canDelete = entry.type !== 'ship' && entry.orderId == null
+        return (
+          <div className="flex justify-end">
+            <button
+              type="button"
+              className="btn btn-ghost btn-xs"
+              onClick={(event) => {
+                event.stopPropagation()
+                void handleDeleteLedgerEntry(entry)
+              }}
+              disabled={!canDelete}
+              title={canDelete ? 'Delete manual history row' : 'Order-linked ship rows are locked'}
+              aria-label={canDelete ? `Delete history row ${entry.id}` : `History row ${entry.id} is locked`}
+            >
+              <Trash2 size={13} />
+            </button>
+          </div>
+        )
+      },
+    },
+    {
+      key: 'note',
+      label: 'Note',
+      width: 260,
+      minWidth: 140,
+      sortable: true,
+      sortValue: (entry) => entry.note ?? '',
+      render: (entry) => (
+        <span className="block truncate text-ink-2" title={entry.note || undefined}>
+          {entry.note || '-'}
+        </span>
+      ),
+    },
+    {
+      key: 'source',
+      label: 'Source',
+      width: 170,
+      minWidth: 120,
+      sortable: true,
+      sortValue: (entry) => entry.createdBy ?? '',
+      render: (entry) => (
+        <span className="block truncate text-ink-3" title={entry.createdBy || undefined}>
+          {entry.createdBy || '-'}
+        </span>
+      ),
+    },
+  ], [handleDeleteLedgerEntry])
+
   useEffect(() => {
     let active = true
 
@@ -4304,70 +4412,16 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
           ) : (
             <div id="inv-history-content">
               <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text)', marginBottom: 8 }}>Recent Movements</div>
-              {/* Tailwind-only History table — same sticky pattern as
-                  Stock Levels and Alerts above. NO overflow:hidden on the
-                  wrapper (would silently disable sticky on the th cells),
-                  table uses border-separate (border-collapse:collapse
-                  silently disables sticky on th in all major browsers). */}
-              <div className="bg-surface ring-1 ring-line rounded-lg">
-                <table
-                  className={[
-                    'w-full m-0 border-separate border-spacing-0 text-[11.5px]',
-                    // Sticky header cells
-                    '[&_thead_th]:sticky [&_thead_th]:top-[-1px] [&_thead_th]:z-10',
-                    '[&_thead_th]:bg-surface-2 [&_thead_th]:text-ink-3',
-                    '[&_thead_th]:text-[10px] [&_thead_th]:font-extrabold [&_thead_th]:uppercase [&_thead_th]:tracking-[0.4px]',
-                    '[&_thead_th]:text-left [&_thead_th]:px-2.5 [&_thead_th]:py-2',
-                    '[&_thead_th]:border-b-2 [&_thead_th]:border-line [&_thead_th]:whitespace-nowrap',
-                    '[&_thead_th]:shadow-[0_1px_0_var(--border)]',
-                    // Body cells
-                    '[&_tbody_td]:px-2.5 [&_tbody_td]:py-2',
-                    '[&_tbody_td]:border-b [&_tbody_td]:border-line [&_tbody_td]:align-middle',
-                    '[&_tbody_tr:last-child_td]:border-b-0',
-                    '[&_tbody_tr:hover_td]:bg-surface-2',
-                  ].join(' ')}
-                >
-                  <thead>
-                    <tr>
-                      <SortableHeader sortKey="date" sortState={historySort} onSort={handleHistorySort}>Date (Local)</SortableHeader>
-                      <SortableHeader sortKey="sku" sortState={historySort} onSort={handleHistorySort}>SKU</SortableHeader>
-                      <SortableHeader sortKey="type" sortState={historySort} onSort={handleHistorySort}>Type</SortableHeader>
-                      <SortableHeader sortKey="qty" sortState={historySort} onSort={handleHistorySort} align="right" style={{ textAlign: 'right' }}>Qty</SortableHeader>
-                      <th style={{ textAlign: 'right' }}>Actions</th>
-                      <SortableHeader sortKey="note" sortState={historySort} onSort={handleHistorySort}>Note</SortableHeader>
-                      <SortableHeader sortKey="source" sortState={historySort} onSort={handleHistorySort}>Source</SortableHeader>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sortedLedger.map((entry) => {
-                      const typeColor = entry.type === 'receive' ? 'var(--green)' : entry.type === 'adjust' ? 'var(--ss-blue)' : entry.type === 'ship' ? 'var(--red)' : entry.type === 'return' ? 'var(--yellow)' : entry.type === 'damage' ? 'var(--red)' : 'var(--text3)'
-                      const canDelete = entry.type !== 'ship' && entry.orderId == null
-                      return (
-                        <tr key={entry.id}>
-                          <td style={{ color: 'var(--text3)' }}>{formatDateTime(entry.createdAt)}</td>
-                          <td style={{ fontFamily: 'monospace' }}>{entry.sku || '—'}</td>
-                          <td><span style={{ fontWeight: 700, color: typeColor, textTransform: 'capitalize' }}>{entry.type}</span></td>
-                          <td style={{ textAlign: 'right', fontWeight: 700, color: entry.qty > 0 ? 'var(--green)' : 'var(--red)' }}>{entry.qty > 0 ? `+${entry.qty}` : entry.qty}</td>
-                          <td style={{ textAlign: 'right' }}>
-                            <button
-                              type="button"
-                              className="btn btn-ghost btn-xs"
-                              onClick={() => void handleDeleteLedgerEntry(entry)}
-                              disabled={!canDelete}
-                              title={canDelete ? 'Delete manual history row' : 'Order-linked ship rows are locked'}
-                              aria-label={canDelete ? `Delete history row ${entry.id}` : `History row ${entry.id} is locked`}
-                            >
-                              <Trash2 size={13} />
-                            </button>
-                          </td>
-                          <td style={{ color: 'var(--text2)' }}>{entry.note || '—'}</td>
-                          <td style={{ color: 'var(--text3)' }}>{entry.createdBy || '—'}</td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
+              <Table<InventoryLedgerEntryDto>
+                data={ledger}
+                columns={historyColumns}
+                rowKey={(entry) => entry.id}
+                storageKey="inventory-history-table"
+                defaultSort={{ key: 'date', direction: 'desc' }}
+                density="compact"
+                stickyHeader={false}
+                emptyMessage="No movements found"
+              />
             </div>
           )}
         </div>
