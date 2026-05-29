@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '../src/db/client';
 import { orders } from '../src/db/schema/orders';
 import { shipments } from '../src/db/schema/shipments';
@@ -149,6 +149,11 @@ type RecoveryReport = {
   ssShipmentsFound: number;
   localRowsPresent: number;
   missingRows: number;
+  // SS shipments the apply path will NOT insert because syncShipments enforces
+  // gates this report previously ignored: the order already has a non-voided
+  // PrepShip-sourced label (v2-parity guard) or belongs to a test client.
+  skippedHasPrepshipLabel: number;
+  skippedTestClient: number;
   ordersWouldGainEnrichment: number;
   unmatchedOrphans: number;
   sampleMissing: Array<{
@@ -167,12 +172,51 @@ async function buildReport(ssShipments: SSShipment[]): Promise<RecoveryReport> {
 
   const orderRows = externalIds.length
     ? await db
-        .select({ id: orders.id, externalOrderId: orders.externalOrderId })
+        .select({
+          id: orders.id,
+          externalOrderId: orders.externalOrderId,
+          clientId: orders.clientId,
+        })
         .from(orders)
         .where(inArray(orders.externalOrderId, externalIds))
     : [];
-  const orderByExt = new Map<string, number>();
-  for (const o of orderRows) if (o.externalOrderId) orderByExt.set(o.externalOrderId, o.id);
+  const orderByExt = new Map<string, { id: number; clientId: number | null }>();
+  for (const o of orderRows) {
+    if (o.externalOrderId) orderByExt.set(o.externalOrderId, { id: o.id, clientId: o.clientId });
+  }
+
+  // Replicate the two gates upsertShipmentsBatch enforces so this report
+  // predicts what --apply actually inserts (PS-036 #2). Without these, the
+  // report counts rows the apply path will silently skip.
+  //   Gate 1 — test-client skip (shipment-sync.ts:234)
+  //   Gate 2 — v2-parity PrepShip guard (shipment-sync.ts:241): order already
+  //            has a non-voided PrepShip-sourced label, so the SS row is a dup.
+  const clientIds = [
+    ...new Set(orderRows.map((o) => o.clientId).filter((id): id is number => id !== null)),
+  ];
+  const testClientSet = new Set<number>();
+  if (clientIds.length) {
+    const cliRows = await db
+      .select({ id: clients.id, isTest: clients.isTest })
+      .from(clients)
+      .where(inArray(clients.id, clientIds));
+    for (const c of cliRows) if (c.isTest) testClientSet.add(c.id);
+  }
+  const orderIdsForCheck = orderRows.map((o) => o.id);
+  const prepshipOrderIds = new Set<number>();
+  if (orderIdsForCheck.length) {
+    const prepshipRows = await db
+      .select({ orderId: shipments.orderId })
+      .from(shipments)
+      .where(
+        and(
+          inArray(shipments.orderId, orderIdsForCheck),
+          eq(shipments.voided, false),
+          inArray(shipments.source, ['prepship', 'prepship_v2', 'test_offline']),
+        ),
+      );
+    for (const r of prepshipRows) if (r.orderId !== null) prepshipOrderIds.add(r.orderId);
+  }
 
   const existingRows = labelIds.length
     ? await db
@@ -203,6 +247,8 @@ async function buildReport(ssShipments: SSShipment[]): Promise<RecoveryReport> {
     ssShipmentsFound: ssShipments.length,
     localRowsPresent: 0,
     missingRows: 0,
+    skippedHasPrepshipLabel: 0,
+    skippedTestClient: 0,
     ordersWouldGainEnrichment: 0,
     unmatchedOrphans: 0,
     sampleMissing: [],
@@ -211,7 +257,7 @@ async function buildReport(ssShipments: SSShipment[]): Promise<RecoveryReport> {
   const ordersGaining = new Set<number>();
 
   for (const s of ssShipments) {
-    const matchedOrderId = orderByExt.get(String(s.orderId));
+    const matchedOrder = orderByExt.get(String(s.orderId));
     const existing = existingByLabel.get(s.shipmentId);
 
     if (existing) {
@@ -221,23 +267,11 @@ async function buildReport(ssShipments: SSShipment[]): Promise<RecoveryReport> {
         (!existing.carrierCode && Boolean(s.carrierCode)) ||
         (!existing.serviceCode && Boolean(s.serviceCode)) ||
         existing.providerAccountId == null;
-      if (matchedOrderId != null && wouldEnrich) ordersGaining.add(matchedOrderId);
+      if (matchedOrder != null && wouldEnrich) ordersGaining.add(matchedOrder.id);
       continue;
     }
 
-    if (matchedOrderId != null) {
-      report.missingRows += 1;
-      ordersGaining.add(matchedOrderId);
-      if (report.sampleMissing.length < 25) {
-        report.sampleMissing.push({
-          shipmentId: s.shipmentId,
-          orderId: s.orderId,
-          orderNumber: s.orderNumber ?? null,
-          carrierCode: s.carrierCode ?? null,
-          serviceCode: s.serviceCode ?? null,
-        });
-      }
-    } else {
+    if (matchedOrder == null) {
       report.unmatchedOrphans += 1;
       if (report.sampleOrphans.length < 25) {
         report.sampleOrphans.push({
@@ -246,6 +280,30 @@ async function buildReport(ssShipments: SSShipment[]): Promise<RecoveryReport> {
           orderNumber: s.orderNumber ?? null,
         });
       }
+      continue;
+    }
+
+    // Matched order, no local row for this labelShipmentId. Apply the apply-path
+    // gates before calling it "missing" — otherwise we over-promise inserts.
+    if (matchedOrder.clientId != null && testClientSet.has(matchedOrder.clientId)) {
+      report.skippedTestClient += 1;
+      continue;
+    }
+    if (prepshipOrderIds.has(matchedOrder.id)) {
+      report.skippedHasPrepshipLabel += 1;
+      continue;
+    }
+
+    report.missingRows += 1;
+    ordersGaining.add(matchedOrder.id);
+    if (report.sampleMissing.length < 25) {
+      report.sampleMissing.push({
+        shipmentId: s.shipmentId,
+        orderId: s.orderId,
+        orderNumber: s.orderNumber ?? null,
+        carrierCode: s.carrierCode ?? null,
+        serviceCode: s.serviceCode ?? null,
+      });
     }
   }
 
@@ -313,10 +371,20 @@ async function main(): Promise<void> {
       ssShipmentsFound: report.ssShipmentsFound,
       localRowsPresent: report.localRowsPresent,
       missingRows: report.missingRows,
+      skippedHasPrepshipLabel: report.skippedHasPrepshipLabel,
+      skippedTestClient: report.skippedTestClient,
       ordersWouldGainEnrichment: report.ordersWouldGainEnrichment,
       unmatchedOrphans: report.unmatchedOrphans,
     },
   ]);
+
+  if (report.skippedHasPrepshipLabel || report.skippedTestClient) {
+    console.log(
+      `\nSkipped (apply inserts nothing): ${report.skippedHasPrepshipLabel} already have an ` +
+        `authoritative PrepShip label, ${report.skippedTestClient} belong to a test client. ` +
+        `These are NOT missing — syncShipments() correctly leaves them alone.`,
+    );
+  }
 
   if (report.sampleMissing.length) {
     console.log('\nMissing shipment rows (sample, would be inserted on --apply):');

@@ -94,4 +94,27 @@ assert.match(
   'package.json must expose the ShipStation sync-window guard',
 );
 
+// PS-036 #2 — the recovery dry-run must predict what --apply actually inserts.
+// upsertShipmentsBatch skips SS rows for orders that already have a non-voided
+// PrepShip-sourced label (v2-parity guard) or belong to a test client. If
+// buildReport drops those gates it over-reports "missing" rows that --apply
+// will never insert (confirmed: 6 PrepShip-guard skips reported as missing).
+const recovery = readFileSync('scripts/recover-missing-shipments.ts', 'utf8');
+assert.match(
+  recovery,
+  /inArray\(shipments\.source, \['prepship', 'prepship_v2', 'test_offline'\]\)/,
+  'recovery dry-run must replicate the v2-parity PrepShip-source guard so missingRows excludes orders that already carry an authoritative PrepShip label',
+);
+assert.match(
+  recovery,
+  /skippedHasPrepshipLabel/,
+  'recovery report must surface a skippedHasPrepshipLabel bucket instead of counting PrepShip-protected orders as missing',
+);
+assert.match(
+  recovery,
+  /testClientSet\.has\(matchedOrder\.clientId\)/,
+  'recovery dry-run must replicate the test-client skip so test orders are not reported as insertable missing rows',
+);
+
 console.log('PASS ShipStation v1 sync-window timezone guard');
+console.log('PASS recovery dry-run report mirrors apply-path PrepShip + test-client gates (PS-036 #2)');
