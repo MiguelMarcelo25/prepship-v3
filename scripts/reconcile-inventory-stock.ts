@@ -249,7 +249,7 @@ function toReportRow(row: DbRow): ReconciliationRow {
   const ledgerStock = Number(row.ledger_stock) || 0;
   const totalReceived = Number(row.total_received) || 0;
   const totalSold = Number(row.total_sold) || 0;
-  const effectiveStock = totalReceived - totalSold;
+  const effectiveStock = ledgerStock;
   const base = {
     inventoryId: row.inventory_id,
     clientId: row.client_id,

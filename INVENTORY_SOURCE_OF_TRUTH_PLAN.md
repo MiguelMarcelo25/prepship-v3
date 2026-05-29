@@ -9,7 +9,7 @@ Canonical rule:
 - `inventory_ledger` is the source of truth for inventory movement history.
 - `inventory.stockQty` is a materialized/cache balance used for fast reads and legacy compatibility.
 - The Inventory page should display the operator-facing stock value from `effectiveStock` when available.
-- `effectiveStock` is currently computed as `total_received - total_sold_shipped_all_time`.
+- `effectiveStock` is computed from the full inventory ledger balance so receives, ships, removes, returns, damage, and manual adjustments all affect Stock Levels.
 - Reporting/read models should own velocity fields such as sold 7d, sold 30d, days supply, and restock recommendations.
 
 ## Critical Blockers

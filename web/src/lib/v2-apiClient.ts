@@ -2950,6 +2950,10 @@ export const apiClient = {
     });
   },
 
+  deleteInventoryLedgerEntry(ledgerId: number): Promise<any> {
+    return api.delete<any>(`/inventory/ledger/${ledgerId}`);
+  },
+
   fetchInventorySkuOrders(
     invSkuId: number,
     options?: number | { days?: number; from?: string; to?: string; dateFrom?: string; dateTo?: string }

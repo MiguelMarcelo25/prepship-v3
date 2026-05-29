@@ -1072,6 +1072,11 @@ app.post('/reconcile-inventory-stock', async (c) => {
       where l.type = 'receive'
       group by l.inventory_id
     ),
+    ledger_balance as (
+      select l.inventory_id as id, coalesce(sum(l.qty), 0)::int as effective_stock
+      from ${inventoryLedger} l
+      group by l.inventory_id
+    ),
     sells as (
       select i.id as id,
         coalesce(sum(oi.quantity), 0)::int as total_sold
@@ -1096,9 +1101,10 @@ app.post('/reconcile-inventory-stock', async (c) => {
       i.stock_qty as current_stock_qty,
       coalesce(receives.total_received, 0)::int as total_received,
       coalesce(sells.total_sold, 0)::int as total_sold,
-      (coalesce(receives.total_received, 0) - coalesce(sells.total_sold, 0))::int as effective_stock
+      coalesce(ledger_balance.effective_stock, i.stock_qty, 0)::int as effective_stock
     from ${inventory} i
     left join receives on receives.id = i.id
+    left join ledger_balance on ledger_balance.id = i.id
     left join sells on sells.id = i.id
     where i.active = true
       ${

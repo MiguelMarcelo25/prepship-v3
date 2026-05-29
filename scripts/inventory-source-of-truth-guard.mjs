@@ -43,7 +43,7 @@ const requiredPolicyText = [
   'inventory.stockQty',
   'materialized/cache',
   'effectiveStock',
-  'total_received - total_sold_shipped_all_time',
+  'ledger balance',
   'sold 7d',
   'sold 30d',
   'days supply',
@@ -65,9 +65,9 @@ assert(
 );
 
 assert(
-  inventoryRoute.includes('effective_stock = total_received') &&
+  inventoryRoute.includes('ledger_balance') &&
     inventoryRoute.includes('POST /admin/reconcile-inventory-stock'),
-  'inventory route documents effective stock and existing reconciliation repair path',
+  'inventory route uses ledger balance for effective stock and keeps existing reconciliation repair path',
 );
 
 assert(

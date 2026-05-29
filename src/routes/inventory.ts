@@ -306,12 +306,13 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   //
   // Allowed under the shipped-data lockdown: this is a READ-only
   // analytics computation. No locked rows are mutated.
-  const effectiveRows = rows.length && !hasFreshMetrics && shouldRunLiveMetrics
+  const effectiveRows = rows.length && shouldRunLiveMetrics
     ? await timedInventoryStep(timings, 'effectiveStock', () =>
         db.execute<{
           inventory_id: number
           total_received: number
           total_sold: number
+          effective_stock: number
         }>(sql`
         with ids as (
           select unnest(array[${sql.join(rows.map((r) => sql`${r.id}`), sql`, `)}]::int[]) as id
@@ -321,6 +322,12 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           from ${inventoryLedger} l
           where l.inventory_id in (select id from ids)
             and l.type = 'receive'
+          group by l.inventory_id
+        ),
+        ledger_balance as (
+          select l.inventory_id as id, coalesce(sum(l.qty), 0)::int as effective_stock
+          from ${inventoryLedger} l
+          where l.inventory_id in (select id from ids)
           group by l.inventory_id
         ),
         sells as (
@@ -352,9 +359,12 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         select
           ids.id as inventory_id,
           coalesce(receives.total_received, 0)::int as total_received,
-          coalesce(sells.total_sold, 0)::int as total_sold
+          coalesce(sells.total_sold, 0)::int as total_sold,
+          coalesce(ledger_balance.effective_stock, ${inventory.stockQty}, 0)::int as effective_stock
         from ids
+        left join ${inventory} on ${inventory.id} = ids.id
         left join receives on receives.id = ids.id
+        left join ledger_balance on ledger_balance.id = ids.id
         left join sells on sells.id = ids.id
       `)
       )
@@ -365,7 +375,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       {
         totalReceived: Number(row.total_received) || 0,
         totalSold: Number(row.total_sold) || 0,
-        effectiveStock: (Number(row.total_received) || 0) - (Number(row.total_sold) || 0),
+        effectiveStock: Number(row.effective_stock) || 0,
       },
     ])
   );
@@ -374,6 +384,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     rows.map((row) => {
       const metric = metricByInventoryId.get(row.id);
       if (metric) {
+        const liveEff = effectiveByInventoryId.get(row.id);
         return {
           ...row,
           soldLast7Days: metric.soldLast7Days,
@@ -381,9 +392,9 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           velocityPerDay: metric.velocityPerDay,
           daysSupply: metric.daysSupply,
           restockQty: metric.restockQty,
-          totalReceived: metric.totalReceived,
-          totalSoldAllTime: metric.totalSoldAllTime,
-          effectiveStock: metric.effectiveStock,
+          totalReceived: liveEff?.totalReceived ?? metric.totalReceived,
+          totalSoldAllTime: liveEff?.totalSold ?? metric.totalSoldAllTime,
+          effectiveStock: liveEff?.effectiveStock ?? metric.effectiveStock,
         };
       }
       const stockQty = Number(row.stockQty ?? 0) || 0;
@@ -573,6 +584,74 @@ app.get('/ledger', zValidator('query', ledgerQuery), async (c) => {
   });
 
   return c.json(paginated(rows, totalCount, q));
+});
+
+app.delete('/ledger/:ledgerId{[0-9]+}', async (c) => {
+  const ledgerId = Number(c.req.param('ledgerId'));
+  const scope = inventoryScopeFromContext(c);
+  const email = c.get('email' as never) as string | undefined;
+
+  const result = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .select({
+        id: inventoryLedger.id,
+        inventoryId: inventoryLedger.inventoryId,
+        type: inventoryLedger.type,
+        qty: inventoryLedger.qty,
+        orderId: inventoryLedger.orderId,
+        sku: inventory.sku,
+        stockQty: inventory.stockQty,
+      })
+      .from(inventoryLedger)
+      .innerJoin(inventory, eq(inventory.id, inventoryLedger.inventoryId))
+      .where(and(eq(inventoryLedger.id, ledgerId), inventoryScopePredicate(scope)))
+      .limit(1);
+
+    if (!row) return { status: 404 as const };
+    if (row.orderId != null || row.type === 'ship') {
+      return { status: 409 as const, row };
+    }
+
+    const [updated] = await tx
+      .update(inventory)
+      .set({
+        stockQty: sql`${inventory.stockQty} - ${row.qty}`,
+        updatedAt: new Date(),
+      })
+      .where(eq(inventory.id, row.inventoryId))
+      .returning({ id: inventory.id, sku: inventory.sku, stockQty: inventory.stockQty });
+
+    await tx.delete(inventoryLedger).where(eq(inventoryLedger.id, ledgerId));
+
+    return { status: 200 as const, row, inventory: updated };
+  });
+
+  if (result.status === 404) {
+    return c.json({ error: 'Inventory history row not found' }, 404);
+  }
+  if (result.status === 409) {
+    return c.json({
+      error: 'Order-linked ship history cannot be deleted from Inventory History.',
+      ledgerId,
+      type: result.row.type,
+      orderId: result.row.orderId,
+    }, 409);
+  }
+
+  console.info('[inventory:ledger-delete] manual ledger row deleted', {
+    ledgerId,
+    inventoryId: result.row.inventoryId,
+    sku: result.row.sku,
+    type: result.row.type,
+    qty: result.row.qty,
+    deletedBy: email ?? 'unknown',
+  });
+
+  return c.json({
+    ok: true,
+    deleted: result.row,
+    inventory: result.inventory,
+  });
 });
 
 app.get('/stats', async (c) => {

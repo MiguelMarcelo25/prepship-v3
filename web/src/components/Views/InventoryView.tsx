@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { lazy, Suspense, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { lazy, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -2040,36 +2040,58 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
     )
   }
 
+  const loadHistory = useCallback(async (options?: { signal?: { active: boolean } }) => {
+    setHistoryLoading(true)
+    try {
+      const nextLedger = await apiClient.fetchInventoryLedger(buildInventoryLedgerQuery({
+        clientId: historyClientId,
+        type: historyType,
+        from: historyFrom,
+        to: historyTo,
+      }))
+      if (options?.signal && !options.signal.active) return
+      setLedger(nextLedger)
+    } catch (error) {
+      if (options?.signal && !options.signal.active) return
+      setBootError(error instanceof Error ? error.message : 'Failed to load history')
+    } finally {
+      if (!options?.signal || options.signal.active) setHistoryLoading(false)
+    }
+  }, [historyClientId, historyFrom, historyTo, historyType])
+
   useEffect(() => {
     if (activeTab !== 'history') return
 
-    let active = true
-
-    const loadHistory = async () => {
-      setHistoryLoading(true)
-      try {
-        const nextLedger = await apiClient.fetchInventoryLedger(buildInventoryLedgerQuery({
-          clientId: historyClientId,
-          type: historyType,
-          from: historyFrom,
-          to: historyTo,
-        }))
-        if (!active) return
-        setLedger(nextLedger)
-      } catch (error) {
-        if (!active) return
-        setBootError(error instanceof Error ? error.message : 'Failed to load history')
-      } finally {
-        if (active) setHistoryLoading(false)
-      }
-    }
-
-    void loadHistory()
+    const signal = { active: true }
+    void loadHistory({ signal })
 
     return () => {
-      active = false
+      signal.active = false
     }
-  }, [activeTab, historyClientId, historyFrom, historyTo, historyType])
+  }, [activeTab, loadHistory])
+
+  const handleDeleteLedgerEntry = async (entry: InventoryLedgerEntryDto) => {
+    if (entry.type === 'ship' || entry.orderId != null) {
+      toastContext?.addToast('Order-linked ship history cannot be deleted here.', 'error')
+      return
+    }
+    const ok = window.confirm(
+      `Delete manual history row for ${entry.sku || 'this SKU'} (${entry.qty > 0 ? `+${entry.qty}` : entry.qty})? This reverses the stock impact.`
+    )
+    if (!ok) return
+
+    try {
+      await apiClient.deleteInventoryLedgerEntry(entry.id)
+      toastContext?.addToast('History row deleted and stock adjusted', 'success')
+      await Promise.all([
+        loadHistory(),
+        inventoryQuery.refetch(),
+        queryClient.invalidateQueries({ queryKey: ['inventory', 'alerts'] }),
+      ])
+    } catch (error) {
+      toastContext?.addToast(error instanceof Error ? error.message : 'Delete failed', 'error')
+    }
+  }
 
   useEffect(() => {
     let active = true
@@ -4311,6 +4333,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                       <SortableHeader sortKey="sku" sortState={historySort} onSort={handleHistorySort}>SKU</SortableHeader>
                       <SortableHeader sortKey="type" sortState={historySort} onSort={handleHistorySort}>Type</SortableHeader>
                       <SortableHeader sortKey="qty" sortState={historySort} onSort={handleHistorySort} align="right" style={{ textAlign: 'right' }}>Qty</SortableHeader>
+                      <th style={{ textAlign: 'right' }}>Actions</th>
                       <SortableHeader sortKey="note" sortState={historySort} onSort={handleHistorySort}>Note</SortableHeader>
                       <SortableHeader sortKey="source" sortState={historySort} onSort={handleHistorySort}>Source</SortableHeader>
                     </tr>
@@ -4318,12 +4341,25 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                   <tbody>
                     {sortedLedger.map((entry) => {
                       const typeColor = entry.type === 'receive' ? 'var(--green)' : entry.type === 'adjust' ? 'var(--ss-blue)' : entry.type === 'ship' ? 'var(--red)' : entry.type === 'return' ? 'var(--yellow)' : entry.type === 'damage' ? 'var(--red)' : 'var(--text3)'
+                      const canDelete = entry.type !== 'ship' && entry.orderId == null
                       return (
                         <tr key={entry.id}>
                           <td style={{ color: 'var(--text3)' }}>{formatDateTime(entry.createdAt)}</td>
                           <td style={{ fontFamily: 'monospace' }}>{entry.sku || '—'}</td>
                           <td><span style={{ fontWeight: 700, color: typeColor, textTransform: 'capitalize' }}>{entry.type}</span></td>
                           <td style={{ textAlign: 'right', fontWeight: 700, color: entry.qty > 0 ? 'var(--green)' : 'var(--red)' }}>{entry.qty > 0 ? `+${entry.qty}` : entry.qty}</td>
+                          <td style={{ textAlign: 'right' }}>
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-xs"
+                              onClick={() => void handleDeleteLedgerEntry(entry)}
+                              disabled={!canDelete}
+                              title={canDelete ? 'Delete manual history row' : 'Order-linked ship rows are locked'}
+                              aria-label={canDelete ? `Delete history row ${entry.id}` : `History row ${entry.id} is locked`}
+                            >
+                              <Trash2 size={13} />
+                            </button>
+                          </td>
                           <td style={{ color: 'var(--text2)' }}>{entry.note || '—'}</td>
                           <td style={{ color: 'var(--text3)' }}>{entry.createdBy || '—'}</td>
                         </tr>

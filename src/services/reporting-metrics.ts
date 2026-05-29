@@ -378,6 +378,14 @@ async function refreshInventoryRiskMetrics(limit: number): Promise<number> {
         where l.type = 'receive'
         group by l.inventory_id
       ),
+      ledger_balance as (
+        select
+          l.inventory_id,
+          coalesce(sum(l.qty), 0)::int as effective_stock
+        from inventory_ledger l
+        join inventory_scope i on i.id = l.inventory_id
+        group by l.inventory_id
+      ),
       sold as (
         select
           i.id as inventory_id,
@@ -416,9 +424,10 @@ async function refreshInventoryRiskMetrics(limit: number): Promise<number> {
           (coalesce(s.sold_30d, 0) / 30.0)::numeric(12, 4) as velocity_per_day,
           coalesce(r.total_received, 0)::int as total_received,
           coalesce(s.total_sold_all_time, 0)::int as total_sold_all_time,
-          (coalesce(r.total_received, 0) - coalesce(s.total_sold_all_time, 0))::int as effective_stock
+          coalesce(lb.effective_stock, i.stock_qty, 0)::int as effective_stock
         from inventory_scope i
         left join receives r on r.inventory_id = i.id
+        left join ledger_balance lb on lb.inventory_id = i.id
         left join sold s on s.inventory_id = i.id
       )
       select
