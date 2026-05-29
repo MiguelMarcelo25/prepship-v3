@@ -306,7 +306,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   //
   // Allowed under the shipped-data lockdown: this is a READ-only
   // analytics computation. No locked rows are mutated.
-  const effectiveRows = rows.length && shouldRunLiveMetrics
+  const effectiveRows = rows.length
     ? await timedInventoryStep(timings, 'effectiveStock', () =>
         db.execute<{
           inventory_id: number

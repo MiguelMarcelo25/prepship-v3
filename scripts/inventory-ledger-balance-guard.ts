@@ -47,8 +47,9 @@ assert(
 
 assert(
   inventoryRoute.includes('ledger_balance') &&
+    inventoryRoute.includes('const effectiveRows = rows.length') &&
     inventoryRoute.includes('Number(row.effective_stock) || 0'),
-  'inventory list live fallback computes effective stock from full ledger balance',
+  'inventory list always computes visible-row effective stock from full ledger balance',
 );
 
 assert(
