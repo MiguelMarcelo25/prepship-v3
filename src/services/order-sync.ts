@@ -1,7 +1,8 @@
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orders } from '../db/schema/orders';
 import { clients } from '../db/schema/clients';
+import { shipments } from '../db/schema/shipments';
 import { getSettingNumber, setSetting } from './settings';
 import { isExcludedStoreId } from '../config/prepship';
 import {
@@ -209,6 +210,15 @@ async function upsertMissingShippedOrdersBatch(
 
   for (const row of insertedRows) {
     if (row.orderStatus !== 'shipped') continue;
+    await db
+      .update(shipments)
+      .set({ orderId: row.id, clientId: row.clientId, updatedAt: new Date() })
+      .where(
+        and(
+          isNull(shipments.orderId),
+          eq(shipments.orderNumber, row.orderNumber)
+        )
+      );
     try {
       await deductInventoryForOrder(row, { source: 'order_sync_status' });
     } catch (err) {

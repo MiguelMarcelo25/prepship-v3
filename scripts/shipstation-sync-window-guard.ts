@@ -82,6 +82,11 @@ assert.match(
   /insert-only for missing shipped rows/,
   'Recovered shipped-order import must document that shipped/cancelled protections remain in force',
 );
+assert.match(
+  orderSync,
+  /isNull\(shipments\.orderId\)[\s\S]+eq\(shipments\.orderNumber, row\.orderNumber\)/,
+  'Recovered shipped-order import must link existing orphan shipment rows by order number',
+);
 
 assert.match(
   readFileSync('package.json', 'utf8'),
