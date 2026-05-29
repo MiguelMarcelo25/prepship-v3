@@ -44,6 +44,7 @@ export interface ReceiveDraftRow {
 
 export interface InventoryHistoryFilters {
   clientId: string
+  sku?: string
   type: string
   from: string
   to: string
@@ -178,6 +179,7 @@ export function buildReceiveItems(rows: ReceiveDraftRow[], lookups: Record<strin
 export function buildInventoryLedgerQuery(filters: InventoryHistoryFilters): ListInventoryLedgerQuery {
   const query: ListInventoryLedgerQuery = { limit: 200 }
   if (filters.clientId) query.clientId = Number.parseInt(filters.clientId, 10)
+  if (filters.sku?.trim()) query.sku = filters.sku.trim()
   if (filters.type) query.type = filters.type
   if (filters.from) query.dateStart = new Date(`${filters.from}T00:00:00`).getTime()
   if (filters.to) query.dateEnd = new Date(`${filters.to}T23:59:59`).getTime()

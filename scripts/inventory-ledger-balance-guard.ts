@@ -78,6 +78,7 @@ assert(
 const reportingMetrics = readFileSync('src/services/reporting-metrics.ts', 'utf8');
 const inventoryRoute = readFileSync('src/routes/inventory.ts', 'utf8');
 const inventoryView = readFileSync('web/src/components/Views/InventoryView.tsx', 'utf8');
+const inventoryParity = readFileSync('web/src/components/Views/inventory-parity.ts', 'utf8');
 const apiClient = readFileSync('web/src/lib/v2-apiClient.ts', 'utf8');
 const reconcileScript = readFileSync('scripts/reconcile-inventory-stock.ts', 'utf8');
 
@@ -131,6 +132,17 @@ assert(
     inventoryView.includes('storageKey="inventory-history-table"') &&
     inventoryView.includes('columns={historyColumns}'),
   'Inventory History uses the shared resizable/reorderable Table component',
+);
+
+assert(
+  inventoryView.includes('const [historySku, setHistorySku]') &&
+    inventoryView.includes("queryKey: ['inventory', 'history-sku-options', historyClientId]") &&
+    inventoryView.includes('historySkuOptions') &&
+    inventoryView.includes('ariaLabel="Filter inventory history by SKU"') &&
+    inventoryView.includes('sku: historySku') &&
+    inventoryParity.includes('if (filters.sku?.trim()) query.sku = filters.sku.trim()') &&
+    inventoryRoute.includes('const skuFilter = q.sku?.trim() || null'),
+  'Inventory History exposes SKU autosuggest and sends the backend ledger sku filter',
 );
 
 assert(

@@ -1195,9 +1195,42 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
     }
   }, [receiveRows, receiveSkuMap])
   const [historyClientId, setHistoryClientId] = useState('')
+  const [historySku, setHistorySku] = useState('')
   const [historyType, setHistoryType] = useState('')
   const [historyFrom, setHistoryFrom] = useState(historyDefaults.from)
   const [historyTo, setHistoryTo] = useState(historyDefaults.to)
+  const historySkuRowsQuery = useQuery({
+    queryKey: ['inventory', 'history-sku-options', historyClientId],
+    queryFn: () =>
+      apiClient.fetchInventory(
+        historyClientId ? { clientId: Number.parseInt(historyClientId, 10) } : undefined,
+      ),
+    enabled: activeTab === 'history',
+    staleTime: 5 * 60_000,
+    gcTime: 30 * 60_000,
+    refetchOnWindowFocus: false,
+  })
+  const historySkuOptions = useMemo<AutosuggestOption[]>(() => {
+    const selectedClientId = historyClientId ? Number.parseInt(historyClientId, 10) : null
+    const bySku = new Map<string, AutosuggestOption>()
+    const optionRows = Array.isArray(historySkuRowsQuery.data) ? historySkuRowsQuery.data : itemsState
+
+    for (const row of optionRows) {
+      const sku = String(row.sku ?? '').trim()
+      if (!sku) continue
+      if (selectedClientId != null && Number(row.clientId) !== selectedClientId) continue
+      const key = sku.toLowerCase()
+      if (bySku.has(key)) continue
+      bySku.set(key, {
+        value: sku,
+        label: row.name ?? '',
+        hint: row.clientName ?? '',
+        imageUrl: row.imageUrl ?? null,
+      })
+    }
+
+    return Array.from(bySku.values()).sort((left, right) => left.value.localeCompare(right.value))
+  }, [historyClientId, historySkuRowsQuery.data, itemsState])
   const [clientFormOpen, setClientFormOpen] = useState(false)
   const [clientForm, setClientForm] = useState<ClientFormState>(createClientFormState())
   const [clientSyncStatus, setClientSyncStatus] = useState('')
@@ -2047,6 +2080,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
     try {
       const nextLedger = await apiClient.fetchInventoryLedger(buildInventoryLedgerQuery({
         clientId: historyClientId,
+        sku: historySku,
         type: historyType,
         from: historyFrom,
         to: historyTo,
@@ -2059,7 +2093,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
     } finally {
       if (!options?.signal || options.signal.active) setHistoryLoading(false)
     }
-  }, [historyClientId, historyFrom, historyTo, historyType])
+  }, [historyClientId, historyFrom, historySku, historyTo, historyType])
 
   useEffect(() => {
     if (activeTab !== 'history') return
@@ -2358,6 +2392,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
       if (activeTab === 'history') {
         const nextLedger = await apiClient.fetchInventoryLedger(buildInventoryLedgerQuery({
           clientId: historyClientId,
+          sku: historySku,
           type: historyType,
           from: historyFrom,
           to: historyTo,
@@ -4399,6 +4434,26 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                 <option key={client.clientId} value={client.clientId}>{client.name}</option>
               ))}
             </select>
+            <div style={{ width: 220, maxWidth: '100%' }}>
+              <Autosuggest
+                value={historySku}
+                options={historySkuOptions}
+                placeholder="Filter SKU or name..."
+                ariaLabel="Filter inventory history by SKU"
+                inputClassName="filter-sel"
+                inputStyle={{ width: '100%', fontSize: 11.5, padding: '4px 8px' }}
+                popoverClassName="right-auto max-w-[calc(100vw-2rem)]"
+                renderInPortal
+                maxResults={Math.min(historySkuOptions.length || 50, 50)}
+                emptyMessage={
+                  historySku.trim()
+                    ? `No SKU matches "${historySku.trim()}"`
+                    : 'Type to filter by SKU or product name'
+                }
+                onChange={setHistorySku}
+                onSelect={(option) => setHistorySku(option.value)}
+              />
+            </div>
             <select className="filter-sel" value={historyType} onChange={(event) => setHistoryType(event.target.value)}>
               <option value="">All Types</option>
               <option value="receive">Receive</option>
@@ -4411,9 +4466,10 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
             <span style={{ color: 'var(--text3)', fontSize: 11 }}>–</span>
             <input type="date" className="filter-sel" style={{ fontSize: 11.5, padding: '4px 6px', width: 'auto' }} value={historyTo} onChange={(event) => setHistoryTo(event.target.value)} title="To date" />
             <button className="btn btn-ghost btn-sm" type="button" onClick={() => {
+              setHistorySku('')
               setHistoryFrom('')
               setHistoryTo('')
-            }} title="Clear dates">
+            }} title="Clear SKU and dates">
               ✕ Clear
             </button>
           </div>
