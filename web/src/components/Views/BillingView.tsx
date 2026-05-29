@@ -40,7 +40,7 @@ import {
   type BillingPresetId,
 } from './billing-parity'
 import { AnalysisPagination } from './AnalysisPagination'
-import { SortableHeader, nextSortState, sortRows } from '../SortableTable'
+import { nextSortState, sortRows } from '../SortableTable'
 import { Table, type TableColumn } from '../ui/Table'
 import './BillingView.css'
 
@@ -262,8 +262,6 @@ export default function BillingView() {
   const [summaryRows, setSummaryRows] = useState<BillingSummaryDto[]>([])
   const [clientFilterOpen, setClientFilterOpen] = useState(false)
   const [selectedBillingClientIds, setSelectedBillingClientIds] = useState<number[]>(readBillingClientFilterIds)
-  const [configSort, setConfigSort] = useState(null)
-  const [packagePricingSort, setPackagePricingSort] = useState(null)
   const [summarySort, setSummarySort] = useState(null)
   const [detailSort, setDetailSort] = useState(null)
   const [summaryPage, setSummaryPage] = useState(1)
@@ -335,60 +333,6 @@ export default function BillingView() {
     () => buildBillingPackagePriceRows(packages, savedPackagePrices, packagePriceDrafts),
     [packages, savedPackagePrices, packagePriceDrafts],
   )
-  const sortedConfigs = useMemo(() => sortRows(
-    configs,
-    configSort,
-    (config, key) => {
-      const draft = configDrafts[config.clientId]
-
-      switch (key) {
-        case 'client':
-          return config.clientName
-        case 'pickPack':
-          return Number(draft?.pickPackFee ?? config.pickPackFee ?? 0)
-        case 'additional':
-          return Number(draft?.additionalUnitFee ?? config.additionalUnitFee ?? 0)
-        case 'packageMarkup':
-          return Number(draft?.packageCostMarkup ?? config.packageCostMarkup ?? 0)
-        case 'shipPct':
-          return Number(draft?.shippingMarkupPct ?? config.shippingMarkupPct ?? 0)
-        case 'shipFlat':
-          return Number(draft?.shippingMarkupFlat ?? config.shippingMarkupFlat ?? 0)
-        case 'storage':
-          return Number(draft?.storageFeePerCuFt ?? config.storageFeePerCuFt ?? 0)
-        case 'maxUnits':
-          return Number(draft?.pickPackMaxUnits ?? config.pickPackMaxUnits ?? 0)
-        case 'mode':
-          return draft?.billingMode ?? config.billingMode ?? ''
-        case 'active':
-          return draft?.active ?? config.active ?? true
-        default:
-          return ''
-      }
-    },
-    (config) => config.clientName,
-  ), [configDrafts, configSort, configs])
-  const sortedPackagePricingRows = useMemo(() => sortRows(
-    packagePricingRows,
-    packagePricingSort,
-    (row, key) => {
-      switch (key) {
-        case 'box':
-          return row.name
-        case 'dims':
-          return row.dimsText
-        case 'cost':
-          return row.ourCost
-        case 'charge':
-          return Number(packagePriceDrafts[row.packageId] ?? row.charge ?? 0)
-        case 'margin':
-          return row.marginPct
-        default:
-          return ''
-      }
-    },
-    (row) => row.name,
-  ), [packagePriceDrafts, packagePricingRows, packagePricingSort])
   const availableBillingClients = useMemo(() => configs.map((config) => ({
     clientId: Number(config.clientId),
     clientName: config.clientName,
@@ -593,14 +537,6 @@ export default function BillingView() {
     setDetailPage(1)
   }, [detailSort])
 
-  function handleConfigSort(key: string) {
-    setConfigSort((current) => nextSortState(current, key))
-  }
-
-  function handlePackagePricingSort(key: string) {
-    setPackagePricingSort((current) => nextSortState(current, key))
-  }
-
   function handleSummarySort(key: string) {
     setSummaryPage(1)
     setSummarySort((current) => nextSortState(current, key))
@@ -609,6 +545,36 @@ export default function BillingView() {
   function handleDetailSort(key: BillingDetailColumnId) {
     setDetailPage(1)
     setDetailSort((current) => nextSortState(current, key))
+  }
+
+  // Editable numeric cell for the Client Billing Config <Table>. The input
+  // fills the cell (width:100%) and right-aligns its own text; the column's
+  // `align:'right'` only drives the header label, so the numeric look comes
+  // from this inline style (Table hardcodes cell text-align to left).
+  function renderConfigNumberCell(
+    config: BillingConfigDto,
+    field: keyof BillingConfigDraft,
+    fallback: string,
+    step: string,
+    min: string,
+    title?: string,
+  ) {
+    const draft = configDrafts[config.clientId]
+    return (
+      <input
+        type="number"
+        step={step}
+        min={min}
+        className="markup-input-lg billing-config-input"
+        style={{ width: '100%', textAlign: 'right', fontSize: 11.5 }}
+        title={title}
+        value={draft?.[field] ?? fallback}
+        onChange={(event) => setConfigDrafts((current) => ({
+          ...current,
+          [config.clientId]: { ...current[config.clientId], [field]: event.target.value },
+        }))}
+      />
+    )
   }
 
   function setBillingClientFilter(nextIds: number[]) {
@@ -1113,175 +1079,169 @@ export default function BillingView() {
       <div className="billing-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18, marginBottom: 18 }}>
         <div className="markup-card">
           <h3 style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px', marginBottom: 10 }}>Client Billing Config</h3>
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-              <thead>
-                <tr style={{ background: 'var(--surface2)', borderBottom: '2px solid var(--border)' }}>
-                  <SortableHeader sortKey="client" sortState={configSort} onSort={handleConfigSort} style={{ padding: '5px 8px', textAlign: 'left', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Client</SortableHeader>
-                  <SortableHeader sortKey="pickPack" sortState={configSort} onSort={handleConfigSort} align="right" style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Pick&amp;Pack</SortableHeader>
-                  <SortableHeader sortKey="additional" sortState={configSort} onSort={handleConfigSort} align="right" style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Addl Unit</SortableHeader>
-                  <SortableHeader sortKey="packageMarkup" sortState={configSort} onSort={handleConfigSort} align="right" style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }} title="Markup applied to package cost line items (percent on top of the base package price)">Pkg %</SortableHeader>
-                  <SortableHeader sortKey="shipPct" sortState={configSort} onSort={handleConfigSort} align="right" style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Ship %</SortableHeader>
-                  <SortableHeader sortKey="shipFlat" sortState={configSort} onSort={handleConfigSort} align="right" style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Ship $</SortableHeader>
-                  <SortableHeader sortKey="storage" sortState={configSort} onSort={handleConfigSort} align="right" style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }} title="Storage fee in dollars per cubic-foot per month (applied to on-hand inventory)">Storage $/cuft</SortableHeader>
-                  <SortableHeader sortKey="maxUnits" sortState={configSort} onSort={handleConfigSort} align="right" style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }} title="Max units included in the Pick & Pack base fee — orders at or below this count pay only pickPackFee; excess units are billed at additionalUnitFee">Max Units</SortableHeader>
-                  <SortableHeader sortKey="mode" sortState={configSort} onSort={handleConfigSort} align="center" style={{ padding: '5px 8px', textAlign: 'center', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }}>Mode</SortableHeader>
-                  <SortableHeader sortKey="active" sortState={configSort} onSort={handleConfigSort} align="center" style={{ padding: '5px 8px', textAlign: 'center', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px' }} title="Disable billing for this client (line items won't be generated)">Active</SortableHeader>
-                  <th style={{ padding: '5px 4px', textAlign: 'center', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)' }} />
-                </tr>
-              </thead>
-              <tbody>
-                {configsLoading ? (
-                  <tr><td colSpan={11} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>Loading…</td></tr>
-                ) : sortedConfigs.length === 0 ? (
-                  <tr><td colSpan={11} style={{ padding: 24, textAlign: 'center', color: 'var(--text3)' }}>No clients found.</td></tr>
-                ) : sortedConfigs.map((config) => {
-                  const draft = configDrafts[config.clientId]
-
-                  return (
-                    <tr key={config.clientId}>
-                      <td style={{ padding: '4px 8px', fontWeight: 600, fontSize: 11.5 }}>{config.clientName}</td>
-                      <td style={{ padding: '4px 8px', textAlign: 'right' }}>
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          className="markup-input-lg"
-                          style={{ width: 60, textAlign: 'right', fontSize: 11.5 }}
-                          value={draft?.pickPackFee ?? '0.00'}
-                          onChange={(event) => setConfigDrafts((current) => ({
-                            ...current,
-                            [config.clientId]: { ...current[config.clientId], pickPackFee: event.target.value },
-                          }))}
-                        />
-                      </td>
-                      <td style={{ padding: '4px 8px', textAlign: 'right' }}>
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          className="markup-input-lg"
-                          style={{ width: 60, textAlign: 'right', fontSize: 11.5 }}
-                          value={draft?.additionalUnitFee ?? '0.00'}
-                          onChange={(event) => setConfigDrafts((current) => ({
-                            ...current,
-                            [config.clientId]: { ...current[config.clientId], additionalUnitFee: event.target.value },
-                          }))}
-                        />
-                      </td>
-                      <td style={{ padding: '4px 8px', textAlign: 'right' }}>
-                        <input
-                          type="number"
-                          step="0.1"
-                          min="0"
-                          className="markup-input-lg"
-                          style={{ width: 55, textAlign: 'right', fontSize: 11.5 }}
-                          title="Markup applied to package cost lines (percent)"
-                          value={draft?.packageCostMarkup ?? '0.0'}
-                          onChange={(event) => setConfigDrafts((current) => ({
-                            ...current,
-                            [config.clientId]: { ...current[config.clientId], packageCostMarkup: event.target.value },
-                          }))}
-                        />
-                      </td>
-                      <td style={{ padding: '4px 8px', textAlign: 'right' }}>
-                        <input
-                          type="number"
-                          step="0.1"
-                          min="0"
-                          className="markup-input-lg"
-                          style={{ width: 55, textAlign: 'right', fontSize: 11.5 }}
-                          value={draft?.shippingMarkupPct ?? '0.0'}
-                          onChange={(event) => setConfigDrafts((current) => ({
-                            ...current,
-                            [config.clientId]: { ...current[config.clientId], shippingMarkupPct: event.target.value },
-                          }))}
-                        />
-                      </td>
-                      <td style={{ padding: '4px 8px', textAlign: 'right' }}>
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          className="markup-input-lg"
-                          style={{ width: 60, textAlign: 'right', fontSize: 11.5 }}
-                          value={draft?.shippingMarkupFlat ?? '0.00'}
-                          onChange={(event) => setConfigDrafts((current) => ({
-                            ...current,
-                            [config.clientId]: { ...current[config.clientId], shippingMarkupFlat: event.target.value },
-                          }))}
-                        />
-                      </td>
-                      <td style={{ padding: '4px 8px', textAlign: 'right' }}>
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          className="markup-input-lg"
-                          style={{ width: 60, textAlign: 'right', fontSize: 11.5 }}
-                          title="$/cuft/month storage fee applied to inventory on hand"
-                          value={draft?.storageFeePerCuFt ?? '0.00'}
-                          onChange={(event) => setConfigDrafts((current) => ({
-                            ...current,
-                            [config.clientId]: { ...current[config.clientId], storageFeePerCuFt: event.target.value },
-                          }))}
-                        />
-                      </td>
-                      <td style={{ padding: '4px 8px', textAlign: 'right' }}>
-                        <input
-                          type="number"
-                          step="1"
-                          min="1"
-                          className="markup-input-lg"
-                          style={{ width: 54, textAlign: 'right', fontSize: 11.5 }}
-                          title="Orders with total units ≤ this value pay only the base Pick & Pack fee; excess units are billed at the Addl Unit rate"
-                          value={draft?.pickPackMaxUnits ?? '1'}
-                          onChange={(event) => setConfigDrafts((current) => ({
-                            ...current,
-                            [config.clientId]: { ...current[config.clientId], pickPackMaxUnits: event.target.value },
-                          }))}
-                        />
-                      </td>
-                      <td style={{ padding: '4px 8px', textAlign: 'center' }}>
-                        <select
-                          className="ship-select"
-                          style={{ fontSize: 10, padding: '2px 4px', borderRadius: 4, border: '1px solid var(--border)' }}
-                          value={draft?.billingMode ?? 'per_shipment'}
-                          onChange={(event) => setConfigDrafts((current) => ({
-                            ...current,
-                            [config.clientId]: { ...current[config.clientId], billingMode: event.target.value },
-                          }))}
-                        >
-                          <option value="label_cost">Label Cost</option>
-                          <option value="ss_ref_rate">SS Ref Rate ★</option>
-                          <option value="per_shipment">Per Shipment</option>
-                          <option value="monthly">Monthly</option>
-                        </select>
-                      </td>
-                      <td style={{ padding: '4px 8px', textAlign: 'center' }}>
-                        <input
-                          type="checkbox"
-                          checked={draft?.active !== false}
-                          title="Disable to skip billing-line generation for this client"
-                          onChange={(event) => setConfigDrafts((current) => ({
-                            ...current,
-                            [config.clientId]: { ...current[config.clientId], active: event.target.checked },
-                          }))}
-                        />
-                      </td>
-                      <td style={{ padding: '4px 4px', textAlign: 'center' }}>
-                        <button className="btn btn-outline btn-xs" type="button" onClick={() => void handleSaveConfig(config.clientId)}>Save</button>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+          <div className="billing-config-table-wrap">
+            <Table<BillingConfigDto>
+              data={configs}
+              rowKey={(row) => row.clientId}
+              storageKey="billing-config-table"
+              density="compact"
+              stickyHeader={false}
+              showColumnControls={false}
+              loading={configsLoading}
+              emptyMessage="No clients found."
+              defaultSort={{ key: 'client', direction: 'asc' }}
+              columns={[
+                {
+                  key: 'client',
+                  label: 'Client',
+                  width: 150,
+                  minWidth: 120,
+                  pinned: true,
+                  hideable: false,
+                  sortable: true,
+                  sortValue: (row) => row.clientName ?? '',
+                  render: (row) => <span style={{ fontWeight: 600, fontSize: 11.5 }}>{row.clientName}</span>,
+                },
+                {
+                  key: 'pickPack',
+                  label: 'Pick & Pack',
+                  width: 84,
+                  minWidth: 70,
+                  align: 'right',
+                  sortable: true,
+                  sortValue: (row) => Number(configDrafts[row.clientId]?.pickPackFee ?? row.pickPackFee ?? 0),
+                  render: (row) => renderConfigNumberCell(row, 'pickPackFee', '0.00', '0.01', '0'),
+                },
+                {
+                  key: 'additional',
+                  label: 'Addl Unit',
+                  width: 84,
+                  minWidth: 70,
+                  align: 'right',
+                  sortable: true,
+                  sortValue: (row) => Number(configDrafts[row.clientId]?.additionalUnitFee ?? row.additionalUnitFee ?? 0),
+                  render: (row) => renderConfigNumberCell(row, 'additionalUnitFee', '0.00', '0.01', '0'),
+                },
+                {
+                  key: 'packageMarkup',
+                  label: 'Pkg %',
+                  width: 76,
+                  minWidth: 64,
+                  align: 'right',
+                  sortable: true,
+                  sortValue: (row) => Number(configDrafts[row.clientId]?.packageCostMarkup ?? row.packageCostMarkup ?? 0),
+                  render: (row) => renderConfigNumberCell(row, 'packageCostMarkup', '0.0', '0.1', '0', 'Markup applied to package cost lines (percent)'),
+                },
+                {
+                  key: 'shipPct',
+                  label: 'Ship %',
+                  width: 76,
+                  minWidth: 64,
+                  align: 'right',
+                  sortable: true,
+                  sortValue: (row) => Number(configDrafts[row.clientId]?.shippingMarkupPct ?? row.shippingMarkupPct ?? 0),
+                  render: (row) => renderConfigNumberCell(row, 'shippingMarkupPct', '0.0', '0.1', '0'),
+                },
+                {
+                  key: 'shipFlat',
+                  label: 'Ship $',
+                  width: 84,
+                  minWidth: 70,
+                  align: 'right',
+                  sortable: true,
+                  sortValue: (row) => Number(configDrafts[row.clientId]?.shippingMarkupFlat ?? row.shippingMarkupFlat ?? 0),
+                  render: (row) => renderConfigNumberCell(row, 'shippingMarkupFlat', '0.00', '0.01', '0'),
+                },
+                {
+                  key: 'storage',
+                  label: 'Storage $/cuft',
+                  width: 96,
+                  minWidth: 80,
+                  align: 'right',
+                  sortable: true,
+                  sortValue: (row) => Number(configDrafts[row.clientId]?.storageFeePerCuFt ?? row.storageFeePerCuFt ?? 0),
+                  render: (row) => renderConfigNumberCell(row, 'storageFeePerCuFt', '0.00', '0.01', '0', '$/cuft/month storage fee applied to inventory on hand'),
+                },
+                {
+                  key: 'maxUnits',
+                  label: 'Max Units',
+                  width: 84,
+                  minWidth: 70,
+                  align: 'right',
+                  sortable: true,
+                  sortValue: (row) => Number(configDrafts[row.clientId]?.pickPackMaxUnits ?? row.pickPackMaxUnits ?? 0),
+                  render: (row) => renderConfigNumberCell(row, 'pickPackMaxUnits', '1', '1', '1', 'Orders with total units ≤ this value pay only the base Pick & Pack fee; excess units are billed at the Addl Unit rate'),
+                },
+                {
+                  key: 'mode',
+                  label: 'Mode',
+                  width: 118,
+                  minWidth: 100,
+                  align: 'center',
+                  sortable: true,
+                  sortValue: (row) => configDrafts[row.clientId]?.billingMode ?? row.billingMode ?? '',
+                  render: (row) => {
+                    const draft = configDrafts[row.clientId]
+                    return (
+                      <select
+                        className="ship-select billing-config-select"
+                        style={{ width: '100%', fontSize: 10, padding: '2px 4px', borderRadius: 4, border: '1px solid var(--border)' }}
+                        value={draft?.billingMode ?? 'per_shipment'}
+                        onChange={(event) => setConfigDrafts((current) => ({
+                          ...current,
+                          [row.clientId]: { ...current[row.clientId], billingMode: event.target.value },
+                        }))}
+                      >
+                        <option value="label_cost">Label Cost</option>
+                        <option value="ss_ref_rate">SS Ref Rate ★</option>
+                        <option value="per_shipment">Per Shipment</option>
+                        <option value="monthly">Monthly</option>
+                      </select>
+                    )
+                  },
+                },
+                {
+                  key: 'active',
+                  label: 'Active',
+                  width: 64,
+                  minWidth: 52,
+                  align: 'center',
+                  sortable: true,
+                  sortValue: (row) => (configDrafts[row.clientId]?.active ?? row.active ?? true) ? 1 : 0,
+                  render: (row) => {
+                    const draft = configDrafts[row.clientId]
+                    return (
+                      <input
+                        type="checkbox"
+                        checked={draft?.active !== false}
+                        title="Disable to skip billing-line generation for this client"
+                        onChange={(event) => setConfigDrafts((current) => ({
+                          ...current,
+                          [row.clientId]: { ...current[row.clientId], active: event.target.checked },
+                        }))}
+                      />
+                    )
+                  },
+                },
+                {
+                  key: 'actions',
+                  label: '',
+                  width: 70,
+                  minWidth: 60,
+                  align: 'center',
+                  sortable: false,
+                  hideable: false,
+                  render: (row) => (
+                    <button className="btn btn-outline btn-xs" type="button" onClick={() => void handleSaveConfig(row.clientId)}>Save</button>
+                  ),
+                },
+              ]}
+            />
           </div>
         </div>
 
         <div className="markup-card">
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 8, flexWrap: 'wrap' }}>
+          <div className="billing-package-card-head" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 8, flexWrap: 'wrap' }}>
             <h3 style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.4px', margin: 0 }}>Package Pricing by Client</h3>
             <div style={{ display: 'flex', gap: 7, alignItems: 'center' }}>
               <select className="filter-sel" style={{ fontSize: 12 }} value={selectedPkgClientId} onChange={(event) => setSelectedPkgClientId(event.target.value)}>
@@ -1293,62 +1253,104 @@ export default function BillingView() {
               <button className="btn btn-primary btn-sm" type="button" onClick={() => void handleSavePackagePrices()}>Save</button>
             </div>
           </div>
-          <div style={{ overflowY: 'auto', maxHeight: 320 }}>
+          <div className="billing-package-table-wrap">
             {!selectedPkgClientId ? (
               <div style={{ padding: 24, textAlign: 'center', color: 'var(--text3)', fontSize: 12 }}>Select a client to view pricing</div>
-            ) : packagePricingLoading ? (
-              <div style={{ padding: 16, textAlign: 'center', color: 'var(--text3)', fontSize: 12 }}>Loading…</div>
             ) : packagePricingError ? (
               <div style={{ padding: 16, textAlign: 'center', color: 'var(--red)', fontSize: 12 }}>{packagePricingError}</div>
-            ) : sortedPackagePricingRows.length === 0 ? (
-              <div style={{ padding: 24, textAlign: 'center', color: 'var(--text3)', fontSize: 12 }}>No custom packages found</div>
             ) : (
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                <thead>
-                  <tr style={{ background: 'var(--surface2)', borderBottom: '2px solid var(--border)' }}>
-                    <SortableHeader sortKey="box" sortState={packagePricingSort} onSort={handlePackagePricingSort} style={{ padding: '5px 8px', textAlign: 'left', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px', whiteSpace: 'nowrap' }}>Box</SortableHeader>
-                    <SortableHeader sortKey="dims" sortState={packagePricingSort} onSort={handlePackagePricingSort} align="center" style={{ padding: '5px 8px', textAlign: 'center', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px', whiteSpace: 'nowrap' }}>Dims</SortableHeader>
-                    <SortableHeader sortKey="cost" sortState={packagePricingSort} onSort={handlePackagePricingSort} align="right" style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px', whiteSpace: 'nowrap' }}>Our Cost</SortableHeader>
-                    <SortableHeader sortKey="charge" sortState={packagePricingSort} onSort={handlePackagePricingSort} align="right" style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px', whiteSpace: 'nowrap' }}>Charge</SortableHeader>
-                    <SortableHeader sortKey="margin" sortState={packagePricingSort} onSort={handlePackagePricingSort} align="right" style={{ padding: '5px 8px', textAlign: 'right', fontSize: 9.5, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '.3px', whiteSpace: 'nowrap' }}>Margin</SortableHeader>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sortedPackagePricingRows.map((row) => (
-                    <tr key={row.packageId} style={{ borderBottom: '1px solid var(--border)' }}>
-                      <td style={{ padding: '5px 8px', fontWeight: 600, fontSize: 12 }}>
+              <Table
+                data={packagePricingRows}
+                rowKey={(row) => row.packageId}
+                storageKey="billing-package-pricing-table"
+                density="compact"
+                stickyHeader={false}
+                showColumnControls={false}
+                loading={packagePricingLoading}
+                emptyMessage="No custom packages found"
+                defaultSort={{ key: 'box', direction: 'asc' }}
+                columns={[
+                  {
+                    key: 'box',
+                    label: 'Box',
+                    width: 150,
+                    minWidth: 110,
+                    pinned: true,
+                    hideable: false,
+                    sortable: true,
+                    sortValue: (row) => row.name ?? '',
+                    render: (row) => (
+                      <span style={{ fontWeight: 600, fontSize: 12 }}>
                         {row.name}
                         {row.isCustom ? (
                           <span title="Custom override — won't be changed by Set Default" style={{ fontSize: 9, color: 'var(--ss-blue)', marginLeft: 4, fontWeight: 600, letterSpacing: '.3px' }}>CUSTOM</span>
                         ) : null}
-                      </td>
-                      <td style={{ padding: '5px 8px', textAlign: 'center', fontSize: 11, color: 'var(--text3)' }}>{row.dimsText}</td>
-                      <td style={{ padding: '5px 8px', textAlign: 'right', fontSize: 11.5 }}>
+                      </span>
+                    ),
+                  },
+                  {
+                    key: 'dims',
+                    label: 'Dims',
+                    width: 120,
+                    minWidth: 90,
+                    align: 'center',
+                    sortable: true,
+                    sortValue: (row) => row.dimsText ?? '',
+                    render: (row) => <span style={{ fontSize: 11, color: 'var(--text3)' }}>{row.dimsText}</span>,
+                  },
+                  {
+                    key: 'cost',
+                    label: 'Our Cost',
+                    width: 92,
+                    minWidth: 76,
+                    align: 'right',
+                    sortable: true,
+                    sortValue: (row) => row.ourCost,
+                    render: (row) => (
+                      <span style={{ textAlign: 'right', display: 'block', fontSize: 11.5 }}>
                         {row.ourCost == null ? (
                           <span style={{ color: 'var(--text4)', fontSize: 10.5 }}>not set</span>
                         ) : (
                           <span style={{ color: 'var(--text2)' }}>${row.ourCost.toFixed(3)}</span>
                         )}
-                      </td>
-                      <td style={{ padding: '5px 4px', textAlign: 'right' }}>
-                        <input
-                          type="number"
-                          step="0.01"
-                          min="0"
-                          className="markup-input-lg"
-                          style={{ width: 62, textAlign: 'right', fontSize: 12 }}
-                          value={packagePriceDrafts[row.packageId] ?? (Number(row.charge) || 0).toFixed(2)}
-                          onChange={(event) => setPackagePriceDrafts((current) => ({
-                            ...current,
-                            [row.packageId]: event.target.value,
-                          }))}
-                        />
-                      </td>
-                      <td style={{ padding: '5px 8px', textAlign: 'right' }}>{getPackageMarginMarkup(row)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                      </span>
+                    ),
+                  },
+                  {
+                    key: 'charge',
+                    label: 'Charge',
+                    width: 92,
+                    minWidth: 76,
+                    align: 'right',
+                    sortable: true,
+                    sortValue: (row) => Number(packagePriceDrafts[row.packageId] ?? row.charge ?? 0),
+                    render: (row) => (
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        className="markup-input-lg billing-config-input"
+                        style={{ width: '100%', textAlign: 'right', fontSize: 12 }}
+                        value={packagePriceDrafts[row.packageId] ?? (Number(row.charge) || 0).toFixed(2)}
+                        onChange={(event) => setPackagePriceDrafts((current) => ({
+                          ...current,
+                          [row.packageId]: event.target.value,
+                        }))}
+                      />
+                    ),
+                  },
+                  {
+                    key: 'margin',
+                    label: 'Margin',
+                    width: 84,
+                    minWidth: 64,
+                    align: 'right',
+                    sortable: true,
+                    sortValue: (row) => row.marginPct,
+                    render: (row) => <span style={{ display: 'block', textAlign: 'right' }}>{getPackageMarginMarkup(row)}</span>,
+                  },
+                ]}
+              />
             )}
           </div>
         </div>

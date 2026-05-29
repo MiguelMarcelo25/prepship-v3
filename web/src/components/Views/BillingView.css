@@ -523,6 +523,70 @@
   box-shadow:0 24px 70px -12px rgba(15,23,42,.45);
 }
 
+/* ── Config + Package editable <Table> wrappers ────────────────────
+   Both now render the shared <Table> (stickyHeader=false → the table
+   keeps its own horizontal scroll inside the card). The package wrap
+   adds a vertical cap so a long custom-package list scrolls instead
+   of stretching the card. Editable inputs fill their column so the
+   grid reads cleanly and stays aligned with the right-aligned header. */
+#view-billing .billing-config-table-wrap,
+#view-billing .billing-package-table-wrap{
+  width:100%;
+}
+#view-billing .billing-package-table-wrap{
+  max-height:340px;
+  overflow-y:auto;
+}
+#view-billing .billing-config-input{
+  min-width:0;            /* allow the input to shrink with its column */
+  box-sizing:border-box;
+}
+#view-billing .billing-config-select{
+  box-sizing:border-box;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   MOBILE RESPONSIVE (≤640px) — scoped to #view-billing only.
+   The two-up config/pricing grid already stacks at ≤1100px; this
+   tier tightens padding, lets the generate/date controls go full
+   width, and keeps the card headers + client picker from overflowing
+   on a phone. No logic/markup changes — layout only.
+══════════════════════════════════════════════════════════════════ */
+@media (max-width: 640px){
+  #view-billing .markup-card{
+    padding:14px 12px 12px !important;
+    border-radius:12px;
+  }
+
+  /* Stack the package-pricing card header (title + client picker +
+     Save) so the picker isn't squeezed into a sliver on narrow screens. */
+  #view-billing .billing-package-card-head{
+    flex-direction:column;
+    align-items:stretch;
+  }
+  #view-billing .billing-package-card-head .filter-sel{
+    flex:1 1 auto;
+    min-width:0;
+  }
+
+  /* Date-range row: let From/To inputs flex to the row width. */
+  #view-billing input[type="date"].ship-select{
+    width:auto !important;
+    flex:1 1 120px;
+    min-width:0;
+  }
+
+  /* Preset buttons wrap comfortably and stay tappable. */
+  #view-billing .analysis-preset{
+    flex:1 1 auto;
+  }
+
+  /* Slightly cap the package list height so the page stays scrollable. */
+  #view-billing .billing-package-table-wrap{
+    max-height:280px;
+  }
+}
+
 /* Honor reduced-motion preferences. */
 @media (prefers-reduced-motion: reduce){
   #view-billing .markup-card,
