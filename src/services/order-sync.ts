@@ -208,9 +208,12 @@ async function upsertMissingShippedOrdersBatch(
     .from(orders)
     .where(inArray(orders.externalOrderId, insertedExternalIds));
 
+  let shipmentsLinked = 0;
+  let shippedHydrated = 0;
   for (const row of insertedRows) {
     if (row.orderStatus !== 'shipped') continue;
-    await db
+    shippedHydrated += 1;
+    const linked = await db
       .update(shipments)
       .set({ orderId: row.id, clientId: row.clientId, updatedAt: new Date() })
       .where(
@@ -218,12 +221,24 @@ async function upsertMissingShippedOrdersBatch(
           isNull(shipments.orderId),
           eq(shipments.orderNumber, row.orderNumber)
         )
-      );
+      )
+      .returning({ id: shipments.id });
+    shipmentsLinked += linked.length;
     try {
       await deductInventoryForOrder(row, { source: 'order_sync_status' });
     } catch (err) {
       console.warn('[order-sync] inventory deduction failed for imported shipped order:', err);
     }
+  }
+
+  // Observability (PS-046): redacted counts only — no order numbers, no PII,
+  // no raw provider payloads. Lets the operator/runbook confirm the
+  // never-imported-while-awaiting recovery path is actually healing orphans.
+  if (insertedRows.length) {
+    console.log(
+      `[order-sync] hydrated ${insertedRows.length} missing order(s) ` +
+        `(${shippedHydrated} shipped), linked ${shipmentsLinked} orphan shipment(s)`,
+    );
   }
 
   return insertedRows.length;
