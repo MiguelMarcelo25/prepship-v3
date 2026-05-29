@@ -230,28 +230,23 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     : new Map();
   const hasFreshMetrics = rows.length > 0 && metricByInventoryId.size === rows.length;
 
-  const soldRows = rows.length && !hasFreshMetrics && shouldRunLiveMetrics
+  const soldRows = rows.length && shouldRunLiveMetrics
     ? await timedInventoryStep(timings, 'soldLast30Days', () =>
         db.execute<{ inventory_id: number; sold_last_30_days: number }>(sql`
+        with ship_rows as (
+          select l.inventory_id, l.order_id, min(l.qty)::int as qty
+          from ${inventoryLedger} l
+          where l.inventory_id in (${sql.join(rows.map((row) => sql`${row.id}`), sql`, `)})
+            and l.type = 'ship'
+            and l.order_id is not null
+            and l.created_at >= now() - interval '30 days'
+          group by l.inventory_id, l.order_id
+        )
         select
-          i.id as inventory_id,
-          coalesce(sum(oi.quantity), 0)::int as sold_last_30_days
-        from ${inventory} i
-        join ${orderItems} oi
-          on lower(oi.sku) = lower(i.sku)
-        join ${orders} o
-          on (
-            o.id = oi.order_id
-            and (
-            (i.client_id is null and o.client_id is null)
-            or i.client_id = o.client_id
-            )
-          )
-        where i.id in (${sql.join(rows.map((row) => sql`${row.id}`), sql`, `)})
-          and oi.quantity > 0
-          and o.order_date >= now() - interval '30 days'
-          and coalesce(o.order_status, '') <> 'cancelled'
-        group by i.id
+          ship_rows.inventory_id,
+          abs(coalesce(sum(ship_rows.qty), 0))::int as sold_last_30_days
+        from ship_rows
+        group by ship_rows.inventory_id
       `)
       )
     : [];
@@ -341,6 +336,18 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           ) stock_rows
           group by stock_rows.inventory_id
         ),
+        ledger_sells as (
+          select ship_rows.inventory_id as id, abs(coalesce(sum(ship_rows.qty), 0))::int as total_sold
+          from (
+            select l.inventory_id, l.order_id, min(l.qty)::int as qty
+            from ${inventoryLedger} l
+            where l.inventory_id in (select id from ids)
+              and l.type = 'ship'
+              and l.order_id is not null
+            group by l.inventory_id, l.order_id
+          ) ship_rows
+          group by ship_rows.inventory_id
+        ),
         sells as (
           select i.id as id, coalesce(sum(oi.quantity), 0)::int as total_sold
           from ${inventory} i
@@ -370,12 +377,13 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         select
           ids.id as inventory_id,
           coalesce(receives.total_received, 0)::int as total_received,
-          coalesce(sells.total_sold, 0)::int as total_sold,
+          coalesce(ledger_sells.total_sold, sells.total_sold, 0)::int as total_sold,
           coalesce(ledger_balance.effective_stock, ${inventory.stockQty}, 0)::int as effective_stock
         from ids
         left join ${inventory} on ${inventory.id} = ids.id
         left join receives on receives.id = ids.id
         left join ledger_balance on ledger_balance.id = ids.id
+        left join ledger_sells on ledger_sells.id = ids.id
         left join sells on sells.id = ids.id
       `)
       )
@@ -399,7 +407,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
         return {
           ...row,
           soldLast7Days: metric.soldLast7Days,
-          soldLast30Days: metric.soldLast30Days,
+          soldLast30Days: soldByInventoryId.get(row.id) ?? metric.soldLast30Days,
           velocityPerDay: metric.velocityPerDay,
           daysSupply: metric.daysSupply,
           restockQty: metric.restockQty,

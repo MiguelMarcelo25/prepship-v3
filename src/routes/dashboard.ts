@@ -557,25 +557,20 @@ app.get('/inventory-risk', zValidator('query', dashboardInventoryRiskQuery), asy
   const shouldRunLiveMetrics = q.liveMetrics === true;
   const soldRows = ids.length && shouldRunLiveMetrics
     ? await db.execute<{ inventory_id: number; sold_last_30_days: number }>(sql`
+        with ship_rows as (
+          select l.inventory_id, l.order_id, min(l.qty)::int as qty
+          from ${inventoryLedger} l
+          where l.inventory_id in (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
+            and l.type = 'ship'
+            and l.order_id is not null
+            and l.created_at >= now() - interval '30 days'
+          group by l.inventory_id, l.order_id
+        )
         select
-          i.id as inventory_id,
-          coalesce(sum(oi.quantity), 0)::int as sold_last_30_days
-        from ${inventory} i
-        join ${orderItems} oi
-          on lower(oi.sku) = lower(i.sku)
-        join ${orders} o
-          on (
-            o.id = oi.order_id
-            and (
-              (i.client_id is null and o.client_id is null)
-              or i.client_id = o.client_id
-            )
-          )
-        where i.id in (${sql.join(ids.map((id) => sql`${id}`), sql`, `)})
-          and oi.quantity > 0
-          and o.order_date >= now() - interval '30 days'
-          and coalesce(o.order_status, '') <> 'cancelled'
-        group by i.id
+          ship_rows.inventory_id,
+          abs(coalesce(sum(ship_rows.qty), 0))::int as sold_last_30_days
+        from ship_rows
+        group by ship_rows.inventory_id
       `)
     : [];
   const soldByInventoryId = new Map(
@@ -598,6 +593,18 @@ app.get('/inventory-risk', zValidator('query', dashboardInventoryRiskQuery), asy
             and l.type = 'receive'
           group by l.inventory_id
         ),
+        ledger_sells as (
+          select ship_rows.inventory_id as id, abs(coalesce(sum(ship_rows.qty), 0))::int as total_sold
+          from (
+            select l.inventory_id, l.order_id, min(l.qty)::int as qty
+            from ${inventoryLedger} l
+            where l.inventory_id in (select id from ids)
+              and l.type = 'ship'
+              and l.order_id is not null
+            group by l.inventory_id, l.order_id
+          ) ship_rows
+          group by ship_rows.inventory_id
+        ),
         sells as (
           select i.id as id, coalesce(sum(oi.quantity), 0)::int as total_sold
           from ${inventory} i
@@ -619,9 +626,10 @@ app.get('/inventory-risk', zValidator('query', dashboardInventoryRiskQuery), asy
         select
           ids.id as inventory_id,
           coalesce(receives.total_received, 0)::int as total_received,
-          coalesce(sells.total_sold, 0)::int as total_sold
+          coalesce(ledger_sells.total_sold, sells.total_sold, 0)::int as total_sold
         from ids
         left join receives on receives.id = ids.id
+        left join ledger_sells on ledger_sells.id = ids.id
         left join sells on sells.id = ids.id
       `)
     : [];

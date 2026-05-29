@@ -397,6 +397,30 @@ async function refreshInventoryRiskMetrics(limit: number): Promise<number> {
         ) stock_rows
         group by stock_rows.inventory_id
       ),
+      ledger_sold as (
+        select
+          ship_rows.inventory_id,
+          abs(coalesce(sum(ship_rows.qty) filter (
+            where ship_rows.created_at >= now() - interval '7 days'
+          ), 0))::int as sold_7d,
+          abs(coalesce(sum(ship_rows.qty) filter (
+            where ship_rows.created_at >= now() - interval '30 days'
+          ), 0))::int as sold_30d,
+          abs(coalesce(sum(ship_rows.qty), 0))::int as total_sold_all_time
+        from (
+          select
+            l.inventory_id,
+            l.order_id,
+            min(l.qty)::int as qty,
+            min(l.created_at) as created_at
+          from inventory_ledger l
+          join inventory_scope i on i.id = l.inventory_id
+          where l.type = 'ship'
+            and l.order_id is not null
+          group by l.inventory_id, l.order_id
+        ) ship_rows
+        group by ship_rows.inventory_id
+      ),
       sold as (
         select
           i.id as inventory_id,
@@ -430,15 +454,16 @@ async function refreshInventoryRiskMetrics(limit: number): Promise<number> {
           i.client_id,
           coalesce(i.stock_qty, 0)::int as stock_qty,
           coalesce(i.reorder_level, 0)::int as reorder_level,
-          coalesce(s.sold_7d, 0)::int as sold_7d,
-          coalesce(s.sold_30d, 0)::int as sold_30d,
-          (coalesce(s.sold_30d, 0) / 30.0)::numeric(12, 4) as velocity_per_day,
+          coalesce(ls.sold_7d, s.sold_7d, 0)::int as sold_7d,
+          coalesce(ls.sold_30d, s.sold_30d, 0)::int as sold_30d,
+          (coalesce(ls.sold_30d, s.sold_30d, 0) / 30.0)::numeric(12, 4) as velocity_per_day,
           coalesce(r.total_received, 0)::int as total_received,
-          coalesce(s.total_sold_all_time, 0)::int as total_sold_all_time,
+          coalesce(ls.total_sold_all_time, s.total_sold_all_time, 0)::int as total_sold_all_time,
           coalesce(lb.effective_stock, i.stock_qty, 0)::int as effective_stock
         from inventory_scope i
         left join receives r on r.inventory_id = i.id
         left join ledger_balance lb on lb.inventory_id = i.id
+        left join ledger_sold ls on ls.inventory_id = i.id
         left join sold s on s.inventory_id = i.id
       )
       select

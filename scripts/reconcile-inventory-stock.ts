@@ -338,6 +338,20 @@ async function loadRows(sql: postgres.Sql, args: Args): Promise<DbRow[]> {
       where l.inventory_id in (select id from scoped_inventory)
       group by l.inventory_id, ledger_summary.ledger_stock
     ),
+    ledger_sold as (
+      select
+        ship_rows.inventory_id,
+        abs(coalesce(sum(ship_rows.qty), 0))::int as total_sold
+      from (
+        select l.inventory_id, l.order_id, min(l.qty)::int as qty
+        from inventory_ledger l
+        where l.inventory_id in (select id from scoped_inventory)
+          and l.type = 'ship'
+          and l.order_id is not null
+        group by l.inventory_id, l.order_id
+      ) ship_rows
+      group by ship_rows.inventory_id
+    ),
     sold as (
       select
         i.id as inventory_id,
@@ -373,12 +387,13 @@ async function loadRows(sql: postgres.Sql, args: Args): Promise<DbRow[]> {
       i.stock_qty,
       coalesce(ledger.ledger_stock, 0)::int as ledger_stock,
       coalesce(ledger.total_received, 0)::int as total_received,
-      coalesce(sold.total_sold, 0)::int as total_sold,
+      coalesce(ledger_sold.total_sold, sold.total_sold, 0)::int as total_sold,
       coalesce(ledger.ledger_entries, 0)::int as ledger_entries,
       coalesce(sku_scope.sku_client_count, 0)::int as sku_client_count,
       ledger.last_ledger_at
     from scoped_inventory i
     left join ledger on ledger.inventory_id = i.id
+    left join ledger_sold on ledger_sold.inventory_id = i.id
     left join sold on sold.inventory_id = i.id
     left join sku_scope on sku_scope.normalized_sku = lower(i.sku)
   `;
