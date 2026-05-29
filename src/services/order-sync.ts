@@ -121,16 +121,14 @@ function toShipStationNormalizedStoreOrder(
   };
 }
 
-async function upsertOrdersBatch(
+function buildNormalizedStoreOrders(
   ordersIn: NormalizedOrder[],
   storeToClient: {
     byStore: Map<number, number>;
     newPairs?: Array<{ storeId: number; clientId: number }>;
   },
   fallbackClientId: number | null = null
-): Promise<number> {
-  if (!ordersIn.length) return 0;
-
+): NormalizedStoreOrder[] {
   const normalizedOrders: NormalizedStoreOrder[] = [];
   for (const o of ordersIn) {
     const storeId = normalizedStoreId(o);
@@ -146,9 +144,79 @@ async function upsertOrdersBatch(
     }
     normalizedOrders.push(toShipStationNormalizedStoreOrder(o, { clientId, storeId }));
   }
+  return normalizedOrders;
+}
 
+async function upsertOrdersBatch(
+  ordersIn: NormalizedOrder[],
+  storeToClient: {
+    byStore: Map<number, number>;
+    newPairs?: Array<{ storeId: number; clientId: number }>;
+  },
+  fallbackClientId: number | null = null
+): Promise<number> {
+  if (!ordersIn.length) return 0;
+  const normalizedOrders = buildNormalizedStoreOrders(ordersIn, storeToClient, fallbackClientId);
   return upsertNormalizedStoreOrders(normalizedOrders);
 
+}
+
+async function upsertMissingShippedOrdersBatch(
+  ordersIn: NormalizedOrder[],
+  storeToClient: {
+    byStore: Map<number, number>;
+    newPairs?: Array<{ storeId: number; clientId: number }>;
+  },
+  fallbackClientId: number | null = null,
+): Promise<number> {
+  const externalIds = Array.from(
+    new Set(
+      ordersIn
+        .map((o) => o.sourceOrderId || null)
+        .filter((v): v is string => Boolean(v))
+    )
+  );
+  if (!externalIds.length) return 0;
+
+  const existingRows = await db
+    .select({ externalOrderId: orders.externalOrderId })
+    .from(orders)
+    .where(inArray(orders.externalOrderId, externalIds));
+  const existing = new Set(existingRows.map((row) => row.externalOrderId).filter(Boolean));
+
+  const missingOrders = ordersIn.filter(
+    (order) => order.sourceOrderId && !existing.has(order.sourceOrderId)
+  );
+  if (!missingOrders.length) return 0;
+
+  const normalizedOrders = buildNormalizedStoreOrders(missingOrders, storeToClient, fallbackClientId);
+  if (!normalizedOrders.length) return 0;
+
+  // Per user override `unlock shipped data` on 2026-05-29: shipped ShipStation
+  // orders that were created and shipped before PrepShip saw the awaiting row
+  // must be imported so Inventory History can deduct from real order items.
+  // This is insert-only for missing shipped rows; existing shipped/cancelled
+  // protections and the inventory auto-deduct kill switch remain in force.
+  await upsertNormalizedStoreOrders(normalizedOrders);
+
+  const insertedExternalIds = normalizedOrders
+    .map((order) => order.externalOrderId ?? null)
+    .filter((id): id is string => Boolean(id));
+  const insertedRows = await db
+    .select()
+    .from(orders)
+    .where(inArray(orders.externalOrderId, insertedExternalIds));
+
+  for (const row of insertedRows) {
+    if (row.orderStatus !== 'shipped') continue;
+    try {
+      await deductInventoryForOrder(row, { source: 'order_sync_status' });
+    } catch (err) {
+      console.warn('[order-sync] inventory deduction failed for imported shipped order:', err);
+    }
+  }
+
+  return insertedRows.length;
 }
 
 async function updateExistingOrderStatusesBatch(
@@ -311,16 +379,25 @@ async function fetchOrdersPage(
     // Per user override unlock shipped data on 2026-05-27: this keeps the
     // existing forward-only shipped/cancelled catch-up behavior while routing
     // ShipStation order import through StoreConnector normalized output.
-    total += args.statusOnly
-      ? await updateExistingOrderStatusesBatch(
-          res.orders,
-          args.orderStatus === 'cancelled' ? 'cancelled' : 'shipped'
-        )
-      : await upsertOrdersBatch(
+    if (args.statusOnly) {
+      total += await updateExistingOrderStatusesBatch(
+        res.orders,
+        args.orderStatus === 'cancelled' ? 'cancelled' : 'shipped',
+      );
+      if (args.orderStatus === 'shipped') {
+        total += await upsertMissingShippedOrdersBatch(
           res.orders,
           storeToClient,
           account.ownerClientId,
         );
+      }
+    } else {
+      total += await upsertOrdersBatch(
+        res.orders,
+        storeToClient,
+        account.ownerClientId,
+      );
+    }
 
     if (!res.orders.length || page >= pages) break;
     page += 1;

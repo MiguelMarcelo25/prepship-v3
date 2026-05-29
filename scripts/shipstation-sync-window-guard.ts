@@ -46,6 +46,22 @@ assert.doesNotMatch(
 );
 
 assert.match(
+  orderSync,
+  /upsertMissingShippedOrdersBatch/,
+  'ShipStation shipped status pass must recover shipped orders that were never imported while awaiting',
+);
+assert.match(
+  orderSync,
+  /await deductInventoryForOrder\(row, \{ source: 'order_sync_status' \}\)/,
+  'Recovered shipped orders must use the shared inventory deduction path',
+);
+assert.match(
+  orderSync,
+  /insert-only for missing shipped rows/,
+  'Recovered shipped-order import must document that shipped/cancelled protections remain in force',
+);
+
+assert.match(
   readFileSync('package.json', 'utf8'),
   /test:shipstation-sync-window/,
   'package.json must expose the ShipStation sync-window guard',
