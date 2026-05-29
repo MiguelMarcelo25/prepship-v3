@@ -16,6 +16,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Loader2 } from 'lucide-react';
 import { apiClient } from '../lib/v2-apiClient';
+import { CALIFORNIA_TZ } from '../lib/ca-time';
 import { useMarkups, type Markup } from '../contexts/MarkupsContext';
 // Shared carrier badge — official UPS/USPS SVG logos with fallback
 // pills for FedEx/etc. Replaces the local carrier-class switch below.
@@ -398,11 +399,13 @@ function formatEta(r: RateRow): string {
         weekday: 'short',
         month: 'numeric',
         day: 'numeric',
+        timeZone: CALIFORNIA_TZ,
       });
       const timeStr = d.toLocaleTimeString('en-US', {
         hour: 'numeric',
         minute: '2-digit',
         hour12: true,
+        timeZone: CALIFORNIA_TZ,
       });
       return `${dayStr} By ${timeStr}`;
     }

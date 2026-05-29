@@ -54,6 +54,7 @@ import {
 import LocationsView from './LocationsView'
 import { apiClient } from '../../api/client'
 import { api } from '../../lib/api'
+import { formatCaDateTimeLabeled } from '../../lib/ca-time'
 import { useShippingAccounts, useClients } from '../../hooks'
 import { ToastContext } from '../../contexts/ToastContext'
 import { useMarkups } from '../../contexts/MarkupsContext'
@@ -1220,7 +1221,7 @@ export default function SettingsView() {
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="text-[12px] text-ink-3">
                       {systemStatus?.generatedAt
-                        ? `Updated ${new Date(systemStatus.generatedAt).toLocaleString()}`
+                        ? `Updated ${formatCaDateTimeLabeled(systemStatus.generatedAt)}`
                         : 'Status loads when this panel opens.'}
                     </div>
                     <motion.button

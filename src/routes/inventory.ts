@@ -841,7 +841,7 @@ app.get(
     const dailyRows = since || until
       ? await db.execute<{ day: string; units: number }>(sql`
           select
-            to_char(date_trunc('day', o.order_date), 'YYYY-MM-DD') as day,
+            to_char(date_trunc('day', o.order_date at time zone 'America/Los_Angeles'), 'YYYY-MM-DD') as day,
             sum(oi.quantity)::int                                  as units
           from order_items oi
           join orders o on o.id = oi.order_id
@@ -851,26 +851,40 @@ app.get(
             and oi.quantity > 0
             ${activeClientOrderFilter}
             and ${walmartCanonicalOrderFilter}
-          group by date_trunc('day', o.order_date)
-          order by date_trunc('day', o.order_date) asc
+          group by date_trunc('day', o.order_date at time zone 'America/Los_Angeles')
+          order by date_trunc('day', o.order_date at time zone 'America/Los_Angeles') asc
         `)
       : [];
     const salesMap = new Map(dailyRows.map((r) => [r.day, Number(r.units ?? 0)]));
     const dailySales: { day: string; units: number }[] = [];
     const safeDays = Math.max(1, Math.min(3650, days ?? 30));
-    const startDay = since ? new Date(since) : new Date(Date.now() - (safeDays - 1) * 24 * 60 * 60 * 1000);
-    startDay.setUTCHours(0, 0, 0, 0);
-    const endDay = until ? new Date(until) : new Date();
-    endDay.setUTCHours(0, 0, 0, 0);
-    const bucketDays = Math.max(
-      1,
-      Math.min(3650, Math.round((endDay.getTime() - startDay.getTime()) / 86_400_000) + 1)
-    );
-    for (let i = 0; i < bucketDays; i += 1) {
-      const d = new Date(startDay);
-      d.setUTCDate(d.getUTCDate() + i);
-      const day = d.toISOString().slice(0, 10);
+    // Day buckets are California calendar days so the contiguous axis lines up
+    // with the CA-grouped SQL above (date_trunc(... at time zone
+    // 'America/Los_Angeles')). Generating UTC days here would misalign the
+    // boundary days by the UTC/PT offset and drop their sales counts.
+    const laDayParts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Los_Angeles',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    const laDayString = (d: Date): string => {
+      const p = Object.fromEntries(laDayParts.formatToParts(d).map((x) => [x.type, x.value]));
+      return `${p.year}-${p.month}-${p.day}`;
+    };
+    const startInstant = since ? new Date(since) : new Date(Date.now() - (safeDays - 1) * 24 * 60 * 60 * 1000);
+    const endInstant = until ? new Date(until) : new Date();
+    // Treat each CA day string as a pure calendar token: parse as UTC midnight,
+    // step by whole UTC days, format back. The endpoints are CA days, so every
+    // produced label is a CA day that matches the SQL keys.
+    const cursor = new Date(`${laDayString(startInstant)}T00:00:00Z`);
+    const endCursor = new Date(`${laDayString(endInstant)}T00:00:00Z`);
+    let bucketGuard = 0;
+    while (cursor.getTime() <= endCursor.getTime() && bucketGuard < 3651) {
+      const day = cursor.toISOString().slice(0, 10);
       dailySales.push({ day, units: salesMap.get(day) ?? 0 });
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+      bucketGuard += 1;
     }
 
     const [shippingSummary] = await db.execute<{

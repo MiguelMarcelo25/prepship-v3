@@ -89,4 +89,55 @@ assert(
   'orders.ts must not bound the daily-stats window at literal noon-UTC',
 );
 
+// App-wide Pacific standardization (UI + analytics): files that render true
+// timestamps as a user-facing date/time must do so via the shared ca-time
+// helpers (which force America/Los_Angeles), not the browser-local default.
+const caTimeConsumers = [
+  'web/src/utils/orders.ts',
+  'web/src/components/RateBrowserModal.tsx',
+  'web/src/pages/PromptLibrary.tsx',
+  'web/src/pages/Picklist.tsx',
+  'web/src/components/Views/packages-parity.ts',
+  'web/src/components/Views/SettingsView.tsx',
+];
+for (const file of caTimeConsumers) {
+  assert(
+    read(file).includes('ca-time'),
+    `${file} must render dates via the shared ca-time helpers (Pacific), not browser-local`,
+  );
+}
+
+// Analytics SQL must bucket/format order & ship dates in California, never UTC.
+const analysis = read('src/routes/analysis.ts');
+assert(
+  !analysis.includes("at time zone 'UTC'"),
+  'analysis.ts must group order/ship dates in California time, not UTC',
+);
+assert(
+  !/date_trunc\('(?:day|week|month)',\s*now\(\)\)/.test(analysis),
+  "analysis.ts KPI windows must truncate in California (now() at time zone 'America/Los_Angeles'), not bare UTC now()",
+);
+assert(
+  analysis.includes('America/Los_Angeles'),
+  'analysis.ts date grouping must use America/Los_Angeles',
+);
+
+// Inventory history daily-sales buckets must be California days on both the
+// SQL grouping and the JS contiguous axis (otherwise boundary days misalign).
+const inventory = read('src/routes/inventory.ts');
+assert(
+  !/date_trunc\('day',\s*o\.order_date\)/.test(inventory),
+  'inventory.ts history must group by California day, not bare UTC',
+);
+assert(
+  inventory.includes('America/Los_Angeles'),
+  'inventory.ts history grouping/buckets must use America/Los_Angeles',
+);
+
+// Billing invoice line ship-date display must render the California calendar day.
+assert(
+  !/to_char\(b\.ship_date,/.test(read('src/routes/billing.ts')),
+  'billing.ts invoice ship_date must render as a California day (at time zone America/Los_Angeles)',
+);
+
 console.log('PASS date/time standard guard');

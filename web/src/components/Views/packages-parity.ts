@@ -5,6 +5,7 @@ import type {
   SavePackageInput,
   SetDefaultBillingPackagePriceResult,
 } from '../../types/api'
+import { formatCaDateLong } from '../../lib/ca-time'
 
 export interface PackageFormState {
   packageId: string
@@ -125,7 +126,7 @@ export function getPackageStockColor(pkg: PackageDto) {
 }
 
 export function formatPackageLedgerDate(createdAt: number) {
-  return new Date(createdAt).toLocaleDateString()
+  return formatCaDateLong(createdAt)
 }
 
 export function buildSetDefaultPackagePriceToast(result: SetDefaultBillingPackagePriceResult) {

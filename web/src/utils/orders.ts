@@ -5,6 +5,7 @@
  */
 
 import type { OrderDTO, OrderDimensions } from '../types/orders';
+import { CALIFORNIA_TZ } from '../lib/ca-time';
 
 export function ageHours(createdAt: string): number {
   const now = Date.now();
@@ -114,7 +115,8 @@ export function fmtDate(isoString: string): string {
     return date.toLocaleDateString('en-US', {
       month: 'short',
       day: '2-digit',
-      year: '2-digit'
+      year: '2-digit',
+      timeZone: CALIFORNIA_TZ
     });
   } catch {
     return '-';

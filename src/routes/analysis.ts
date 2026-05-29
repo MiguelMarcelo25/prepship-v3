@@ -49,27 +49,27 @@ app.get('/overview', async (c) => {
   }>(sql`
     select
       (select count(*)::int from orders o
-         where order_date >= date_trunc('day',  now())
+         where order_date >= date_trunc('day', now() at time zone 'America/Los_Angeles') at time zone 'America/Los_Angeles'
            and ${analysisOrderScopePredicate(scope)}
            and not exists (select 1 from clients c where c.id = o.client_id and (c.is_test = true or coalesce(c.active, true) = false))) as orders_today,
       (select count(*)::int from orders o
-         where order_date >= date_trunc('week', now())
+         where order_date >= date_trunc('week', now() at time zone 'America/Los_Angeles') at time zone 'America/Los_Angeles'
            and ${analysisOrderScopePredicate(scope)}
            and not exists (select 1 from clients c where c.id = o.client_id and (c.is_test = true or coalesce(c.active, true) = false))) as orders_week,
       (select count(*)::int from orders o
-         where order_date >= date_trunc('month',now())
+         where order_date >= date_trunc('month', now() at time zone 'America/Los_Angeles') at time zone 'America/Los_Angeles'
            and ${analysisOrderScopePredicate(scope)}
            and not exists (select 1 from clients c where c.id = o.client_id and (c.is_test = true or coalesce(c.active, true) = false))) as orders_month,
       (select count(*)::int from shipments s
-         where s.voided = false and s.ship_date >= date_trunc('day',  now())
+         where s.voided = false and s.ship_date >= date_trunc('day', now() at time zone 'America/Los_Angeles') at time zone 'America/Los_Angeles'
            and ${analysisShipmentScopePredicate(scope)}
            and not exists (select 1 from clients c where c.id = s.client_id and (c.is_test = true or coalesce(c.active, true) = false))) as shipped_today,
       (select count(*)::int from shipments s
-         where s.voided = false and s.ship_date >= date_trunc('week', now())
+         where s.voided = false and s.ship_date >= date_trunc('week', now() at time zone 'America/Los_Angeles') at time zone 'America/Los_Angeles'
            and ${analysisShipmentScopePredicate(scope)}
            and not exists (select 1 from clients c where c.id = s.client_id and (c.is_test = true or coalesce(c.active, true) = false))) as shipped_week,
       (select count(*)::int from shipments s
-         where s.voided = false and s.ship_date >= date_trunc('month',now())
+         where s.voided = false and s.ship_date >= date_trunc('month', now() at time zone 'America/Los_Angeles') at time zone 'America/Los_Angeles'
            and ${analysisShipmentScopePredicate(scope)}
            and not exists (select 1 from clients c where c.id = s.client_id and (c.is_test = true or coalesce(c.active, true) = false))) as shipped_month,
       (select coalesce(sum(marked_cost),0)::text
@@ -96,7 +96,7 @@ app.get('/overview', async (c) => {
                  else null::jsonb
                end as markup
            ) cost_model
-           where s.voided = false and s.ship_date >= date_trunc('month',now())
+           where s.voided = false and s.ship_date >= date_trunc('month', now() at time zone 'America/Los_Angeles') at time zone 'America/Los_Angeles'
              and ${analysisShipmentScopePredicate(scope)}
              and not exists (select 1 from clients c where c.id = s.client_id and (c.is_test = true or coalesce(c.active, true) = false))
          ) shipping_costs) as shipping_cost_month
@@ -138,7 +138,7 @@ app.get('/daily-shipments', zValidator('query', rangeQuery), async (c) => {
     total_cost: string;
   }>(sql`
     select
-      to_char(date_trunc('day', s.ship_date), 'YYYY-MM-DD') as day,
+      to_char(date_trunc('day', s.ship_date at time zone 'America/Los_Angeles'), 'YYYY-MM-DD') as day,
       count(*)::int as count,
       coalesce(sum(
         case
@@ -171,8 +171,8 @@ app.get('/daily-shipments', zValidator('query', rangeQuery), async (c) => {
       -- (operator disabled them in Settings → Clients) so the timeseries
       -- chart stops including their historical shipments.
       and not exists (select 1 from clients c where c.id = s.client_id and (c.is_test = true or coalesce(c.active, true) = false))
-    group by date_trunc('day', s.ship_date)
-    order by date_trunc('day', s.ship_date) desc
+    group by date_trunc('day', s.ship_date at time zone 'America/Los_Angeles')
+    order by date_trunc('day', s.ship_date at time zone 'America/Los_Angeles') desc
   `);
   return c.json({
     data: canViewFinancials
@@ -384,7 +384,7 @@ export async function getSkuDailyFromOrderItems(q: SkuDailyQuery) {
 
   const daily = await db.execute<{ day: string; sku: string; qty: number }>(sql`
     select
-      to_char(o.order_date at time zone 'UTC', 'YYYY-MM-DD') as day,
+      to_char(o.order_date at time zone 'America/Los_Angeles', 'YYYY-MM-DD') as day,
       oi.sku as sku,
       sum(greatest(0, coalesce(oi.quantity, 0)))::int as qty
     from order_items oi
@@ -406,8 +406,8 @@ export async function getSkuDailyFromOrderItems(q: SkuDailyQuery) {
         )
       )
       and oi.sku in (${skuList})
-    group by to_char(o.order_date at time zone 'UTC', 'YYYY-MM-DD'), sku
-    order by to_char(o.order_date at time zone 'UTC', 'YYYY-MM-DD') asc
+    group by to_char(o.order_date at time zone 'America/Los_Angeles', 'YYYY-MM-DD'), sku
+    order by to_char(o.order_date at time zone 'America/Los_Angeles', 'YYYY-MM-DD') asc
   `);
 
   const byDay = new Map<string, Record<string, number | string>>();
@@ -649,10 +649,10 @@ export async function getSkuBreakdownFromOrderItems(q: SkuBreakdownQuery) {
     sku_day_agg as (
       select
         a.sku_key,
-        to_char(a.order_date at time zone 'UTC', 'YYYY-MM-DD') as day,
+        to_char(a.order_date at time zone 'America/Los_Angeles', 'YYYY-MM-DD') as day,
         sum(a.qty)::int as qty
       from allocated a
-      group by a.sku_key, to_char(a.order_date at time zone 'UTC', 'YYYY-MM-DD')
+      group by a.sku_key, to_char(a.order_date at time zone 'America/Los_Angeles', 'YYYY-MM-DD')
     ),
     sku_daily_json as (
       select sku_key, jsonb_object_agg(day, qty) as daily_qty_map

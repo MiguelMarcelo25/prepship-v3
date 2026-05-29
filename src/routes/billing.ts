@@ -459,7 +459,7 @@ app.get('/invoice', zValidator('query', invoiceQuery), async (c) => {
     select
       b.order_id,
       b.order_number,
-      to_char(b.ship_date, 'YYYY-MM-DD') as ship_date,
+      to_char(b.ship_date at time zone 'America/Los_Angeles', 'YYYY-MM-DD') as ship_date,
       coalesce(sum(case when b.line_type in ('pick_pack', 'pickpack') then b.qty else 0 end), 0)::text as base_qty,
       coalesce(sum(case when b.line_type in ('additional_unit', 'additional') then b.qty else 0 end), 0)::text as addl_qty,
       coalesce(sum(case when b.line_type in ('pick_pack', 'pickpack') then b.total_cost else 0 end), 0)::text as pickpack_amt,

@@ -5,6 +5,7 @@ import { ArrowLeft, Package as PackageIcon, Printer } from 'lucide-react';
 import { Button } from '../components/ui/Button';
 import { Select } from '../components/ui/Select';
 import { api, qs } from '../lib/api';
+import { formatCaDateTimeLabeled } from '../lib/ca-time';
 import {
   SortableHeader,
   nextSortState,
@@ -157,7 +158,7 @@ export default function Picklist() {
                 {clientId &&
                   clients.data &&
                   ` · ${clients.data.find((c) => c.id === clientId)?.name ?? `Client #${clientId}`}`}{' '}
-                · {printedAt.toLocaleString()}
+                · {formatCaDateTimeLabeled(printedAt)}
               </div>
             </div>
             {data && (

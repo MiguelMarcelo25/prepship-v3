@@ -903,6 +903,7 @@ import {
   formatCaShort,
   formatCaDateLong,
   formatCaWeekday,
+  californiaDateInputValue,
   CALIFORNIA_TZ,
 } from '../../lib/ca-time'
 
@@ -5144,7 +5145,7 @@ export default function OrdersView({
         ? `${dateRange.start}${dateRange.end ? ` – ${dateRange.end}` : ''}`
         : dateFilter || 'all dates'
       const html = buildPicklistPrintHtml(data.skus, {
-        generatedAt: new Date().toLocaleString(),
+        generatedAt: new Date().toLocaleString('en-US', { timeZone: CALIFORNIA_TZ }),
         dateLabel,
         statusLabel: currentStatus.replace(/_/g, ' '),
       })
@@ -8465,7 +8466,7 @@ export default function OrdersView({
                 const url = URL.createObjectURL(blob)
                 const a = document.createElement('a')
                 a.href = url
-                a.download = filename || `orders-${currentStatus}-${new Date().toISOString().slice(0, 10)}.csv`
+                a.download = filename || `orders-${currentStatus}-${californiaDateInputValue()}.csv`
                 document.body.appendChild(a)
                 a.click()
                 document.body.removeChild(a)
@@ -9372,7 +9373,7 @@ export default function OrdersView({
                           Qty {entry.order_qty ?? 1}
                         </span>
                         <span className="pq-order-time text-[10.5px] text-ink-3 tabular-nums">
-                          {new Date(entry.queued_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          {new Date(entry.queued_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', timeZone: CALIFORNIA_TZ })}
                         </span>
                         <button
                           className="pq-remove-btn inline-flex items-center justify-center w-6 h-6 rounded-md text-ink-3 hover:text-rose-600 hover:bg-rose-50 ring-1 ring-transparent hover:ring-rose-200 transition opacity-60 group-hover/row:opacity-100"
@@ -9425,7 +9426,7 @@ export default function OrdersView({
                         </span>
                         <span className="pq-order-time inline-flex items-center gap-1 text-[10.5px] text-ink-3 tabular-nums">
                           <span className="text-emerald-600">✓</span>
-                          {entry.last_printed_at ? new Date(entry.last_printed_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
+                          {entry.last_printed_at ? new Date(entry.last_printed_at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: CALIFORNIA_TZ }) : '—'}
                         </span>
                       </div>
                     )

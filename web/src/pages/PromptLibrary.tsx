@@ -16,6 +16,7 @@ import {
   Tags,
   WandSparkles,
 } from 'lucide-react';
+import { formatCaDateLong } from '../lib/ca-time';
 import './PromptLibrary.css';
 
 type PromptItem = {
@@ -245,7 +246,7 @@ function relativeTime(value: string | null) {
 
 function formatDate(value: string | null) {
   if (!value) return 'Never';
-  return new Date(value).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  return formatCaDateLong(value);
 }
 
 function splitTags(value: string) {
