@@ -45,6 +45,7 @@
     "shipstation:recover:diagnose": "tsx scripts/diagnose-missing-shipments.ts",
     "shipstation:orphans:dry-run": "tsx scripts/reconcile-orphan-shipstation-shipments.ts",
     "shipstation:orphans:apply": "tsx scripts/reconcile-orphan-shipstation-shipments.ts --apply",
+    "shipstation:orphans:link-only": "tsx scripts/reconcile-orphan-shipstation-shipments.ts --apply --link-only",
     "inventory:reconcile:dry-run": "tsx scripts/reconcile-inventory-stock.ts",
     "best-rate:dims:dry-run": "tsx scripts/clear-invalid-best-rates.ts",
     "best-rate:dims:apply": "tsx scripts/clear-invalid-best-rates.ts --apply",

@@ -122,6 +122,16 @@ assert.match(
 );
 assert.match(
   script,
+  /const linkOnly = hasFlag\('link-only'\)/,
+  'reconcile script must support --link-only (fast pure-DB linkage, skipping slow upstream lookups)',
+);
+assert.match(
+  script,
+  /if \(linkOnly && localCandidates\.length === 0\)/,
+  'link-only mode must skip the upstream ShipStation lookup for orphans with no local order',
+);
+assert.match(
+  script,
   /deductInventoryForOrder\(row, \{ source: 'order_sync_status' \}\)/,
   'hydrated shipped orders must reuse the shared AI-locked inventory deduction path, not a bespoke one',
 );

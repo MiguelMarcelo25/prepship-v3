@@ -289,6 +289,9 @@ type ReconcileReport = {
   manual: number;
   ambiguous: number;
   lookupFailed: number;
+  // --link-only mode: orphans with no local order whose upstream lookup was
+  // skipped (deferred to a later hydrate pass). 0 in normal mode.
+  deferred: number;
   // Apply-mode outcomes (0 in dry-run)
   ordersHydrated: number;
   shipmentsLinked: number;
@@ -310,12 +313,16 @@ Usage:
   npm run shipstation:orphans:dry-run -- --order-numbers 1039,1040,1041
   npm run shipstation:orphans:dry-run -- --limit 2000
   npm run shipstation:orphans:apply -- --order-numbers 1039,1040,1041   # DJ-approved only
+  npm run shipstation:orphans:link-only                                 # fast: link existing-order matches only
 
 Options:
   --order-numbers a,b,c   Restrict to specific orphan order numbers.
   --limit <n>             Max orphan shipment rows to scan. Default: all.
   --page-size <n>         ShipStation order-lookup page size. Default: ${PAGE_SIZE_DEFAULT}.
   --apply                 Hydrate missing orders + link orphan shipments. OFF by default.
+  --link-only             Skip the slow ShipStation hydrate lookups; only link
+                          orphans whose order already exists locally (pure DB,
+                          seconds). No-local-order orphans are deferred.
 
 Safety:
   Dry run only unless --apply is present. Apply hydrates via the canonical
@@ -336,10 +343,15 @@ async function main(): Promise<void> {
   }
 
   const apply = hasFlag('apply');
+  // --link-only: skip the (slow, ~10s each) ShipStation upstream lookups and
+  // only act on orphans whose order ALREADY exists locally (pure DB linkage,
+  // seconds not hours). Orphans with no local order are deferred to a later
+  // full hydrate pass. The fast, high-value subset of the backfill.
+  const linkOnly = hasFlag('link-only');
   const orderNumbersFilter = parseOrderNumbers();
   const limit = argValue('limit') ? parsePositiveInteger('limit', 0) : null;
 
-  console.log(`\n[orphan-reconcile] ${apply ? 'APPLY' : 'DRY RUN'}`);
+  console.log(`\n[orphan-reconcile] ${apply ? 'APPLY' : 'DRY RUN'}${linkOnly ? ' (link-only)' : ''}`);
   console.log(
     `filter=${orderNumbersFilter ? orderNumbersFilter.join(',') : '(all non-voided orphans)'} limit=${limit ?? 'none'}`,
   );
@@ -410,6 +422,7 @@ async function main(): Promise<void> {
     manual: 0,
     ambiguous: 0,
     lookupFailed: 0,
+    deferred: 0,
     ordersHydrated: 0,
     shipmentsLinked: 0,
     inventoryDeducted: 0,
@@ -419,6 +432,23 @@ async function main(): Promise<void> {
   // 4. Classify + (optionally) apply, per distinct order number.
   for (const [orderNumber, orphanGroup] of orphansByNumber) {
     const localCandidates = localByNumber.get(orderNumber) ?? [];
+    const rowCount = orphanGroup.length;
+
+    // --link-only fast path: an orphan with no local order would need a ~10s
+    // ShipStation lookup to decide hydrate vs manual. Skip it entirely and
+    // defer to a later full pass — this mode only links existing-order matches.
+    if (linkOnly && localCandidates.length === 0) {
+      report.deferred += rowCount;
+      if (report.samples.length < 50) {
+        report.samples.push({
+          orderNumber,
+          classification: 'manual', // placeholder; truly "deferred" — see report.deferred
+          localCandidates: 0,
+          orphanShipmentIds: orphanGroup.map((o) => o.id),
+        });
+      }
+      continue;
+    }
 
     // Only consult ShipStation when there is no local candidate (keeps the
     // network footprint proportional to the genuinely-missing set).
@@ -439,7 +469,6 @@ async function main(): Promise<void> {
     // Count shipment ROWS per bucket (not distinct order numbers) so the
     // buckets sum to orphanShipmentsScanned and read as "how many shipment
     // rows are in each state".
-    const rowCount = orphanGroup.length;
     switch (classification) {
       case 'link_local':
         report.linkLocal += rowCount;
@@ -540,8 +569,15 @@ async function main(): Promise<void> {
       manual: report.manual,
       ambiguous: report.ambiguous,
       lookup_failed: report.lookupFailed,
+      deferred: report.deferred,
     },
   ]);
+  if (linkOnly && report.deferred) {
+    console.log(
+      `\nlink-only mode: ${report.deferred} orphan(s) with no local order were deferred ` +
+        `(skipped the slow ShipStation hydrate lookup). Run a full pass (no --link-only) to hydrate those.`,
+    );
+  }
   if (apply) {
     console.log(
       `\n[orphan-reconcile] applied: ordersHydrated=${report.ordersHydrated} ` +
