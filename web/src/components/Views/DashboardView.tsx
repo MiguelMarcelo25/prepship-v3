@@ -2290,16 +2290,23 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   // PS — per-panel sizing. Desktop (xl): masonry span + fixed drag-resized
   // pixel height. Below xl (stacked single column): no fixed height/gridRow —
   // a min-height keeps charts renderable while letting panels flow naturally.
+  // Mobile/stacked: each panel gets a DEFINITE height sized to ITS content —
+  // charts need a definite parent (ResponsiveContainer height="100%"), and a
+  // one-size cap was wrong (the SKU table's filters + pagination ate the cap so
+  // the table itself rendered with ~0 height). These ignore the desktop
+  // drag-resized values (which can reach 1400px and would wreck a phone).
+  const MOBILE_PANEL_HEIGHTS: Record<SectionKey, number> = {
+    trend: 360,    // header + toolbar + ~240px chart
+    topSkus: 420,  // ranked list, internal scroll
+    heatmap: 440,  // all 10 SKU rows; days scroll horizontally
+    table: 580,    // filters + several table rows + pagination, all visible
+  }
   const panelLayoutStyle = (key: SectionKey): React.CSSProperties => {
     const px = sectionMinHeightPx(sectionHeights[key])
     const base: React.CSSProperties = { order: panelOrder.indexOf(key), marginBottom: 12 }
-    // Mobile/stacked: a DEFINITE, capped height — charts (ResponsiveContainer
-    // height="100%") need a definite parent height to size against, and the
-    // desktop heights (up to 520px) overextend on a phone. Cap at 360 so panels
-    // stay compact; wide panels (heatmap/table) scroll internally.
     return isDesktopLayout
       ? { ...base, gridRow: `span ${px + 12}`, height: px }
-      : { ...base, height: Math.min(px, 360) }
+      : { ...base, height: MOBILE_PANEL_HEIGHTS[key] }
   }
   // The container is masonry ONLY at xl; below that, normal grid flow (else a
   // panel with no gridRow span would collapse into a 1px micro-row).
@@ -2953,7 +2960,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             }
             return (
               <div className="min-w-[720px] space-y-1.5 sm:min-w-[900px]">
-                <div className="grid grid-cols-[120px_repeat(15,minmax(28px,1fr))] gap-1 text-2xs font-semibold text-ink-3 sm:grid-cols-[150px_repeat(15,minmax(34px,1fr))]">
+                <div className="grid grid-cols-[96px_repeat(15,minmax(26px,1fr))] gap-1 text-2xs font-semibold text-ink-3 sm:grid-cols-[150px_repeat(15,minmax(34px,1fr))]">
                   <div />
                   {heatmap[0]?.cells.map((cell) => (
                     <div key={cell.day} className="text-center">{formatDayLabel(cell.day).replace(' ', ' ')}</div>
@@ -2969,7 +2976,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                     : sectionSizes.heatmap === 'wide' ? 'h-7'
                     : 'h-4'
                   return heatmap.map((row) => (
-                    <div key={row.label} className="grid grid-cols-[120px_repeat(15,minmax(28px,1fr))] items-center gap-1 sm:grid-cols-[150px_repeat(15,minmax(34px,1fr))]">
+                    <div key={row.label} className="grid grid-cols-[96px_repeat(15,minmax(26px,1fr))] items-center gap-1 sm:grid-cols-[150px_repeat(15,minmax(34px,1fr))]">
                       <div className="truncate pr-2 text-xs font-semibold text-ink-2" title={row.label}>{row.label}</div>
                       {row.cells.map((cell) => (
                         <button
