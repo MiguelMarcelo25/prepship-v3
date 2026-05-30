@@ -3490,19 +3490,19 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         </div>
         )}
 
-        <div className="flex flex-col gap-3 border-t border-line px-3 py-3 text-tiny text-ink-3 sm:flex-row sm:items-center sm:justify-between sm:px-4">
-          <div>
+        <div className="flex flex-col items-center gap-2 border-t border-line px-3 py-3 text-2xs text-ink-3 sm:flex-row sm:items-center sm:justify-between sm:px-4 sm:text-tiny">
+          <div className="text-center sm:text-left">
             Showing {sortedSkuRows.length === 0 ? 0 : (page - 1) * pageSize + 1} to {Math.min(page * pageSize, sortedSkuRows.length)} of {formatInt(sortedSkuRows.length)} SKUs
           </div>
-          <div className="flex flex-wrap items-center gap-1.5">
+          <div className="flex flex-wrap items-center justify-center gap-1 sm:justify-end sm:gap-1.5">
             <button
               type="button"
               onClick={() => setPage((current) => Math.max(1, current - 1))}
               disabled={page <= 1}
-              className="grid h-8 w-8 place-items-center rounded-card border border-line bg-surface font-semibold text-ink-2 hover:bg-surface-2 disabled:opacity-40"
+              className="grid h-7 w-7 place-items-center rounded-card border border-line bg-surface font-semibold text-ink-2 hover:bg-surface-2 disabled:opacity-40 sm:h-8 sm:w-8"
               aria-label="Previous page"
             >
-              <ChevronLeft size={14} strokeWidth={2.25} />
+              <ChevronLeft size={13} strokeWidth={2.25} />
             </button>
             {paginationItems.map((item, index) =>
               item === 'ellipsis' ? (
@@ -3512,7 +3512,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                   key={item}
                   type="button"
                   onClick={() => setPage(item)}
-                  className={`grid h-8 min-w-8 place-items-center rounded-card border px-2 font-bold ${
+                  className={`grid h-7 min-w-7 place-items-center rounded-card border px-1.5 font-bold sm:h-8 sm:min-w-8 sm:px-2 ${
                     item === page
                       ? 'border-brand bg-brand-bg text-brand ring-1 ring-brand/30'
                       : 'border-line bg-surface text-ink-2 hover:bg-surface-2'
@@ -3526,15 +3526,15 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               type="button"
               onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
               disabled={page >= totalPages}
-              className="grid h-8 w-8 place-items-center rounded-card border border-line bg-surface font-semibold text-ink-2 hover:bg-surface-2 disabled:opacity-40"
+              className="grid h-7 w-7 place-items-center rounded-card border border-line bg-surface font-semibold text-ink-2 hover:bg-surface-2 disabled:opacity-40 sm:h-8 sm:w-8"
               aria-label="Next page"
             >
-              <ChevronRight size={14} strokeWidth={2.25} />
+              <ChevronRight size={13} strokeWidth={2.25} />
             </button>
             <select
               value={pageSize}
               onChange={(event) => setPageSize(Number(event.target.value))}
-              className="h-8 rounded-card border border-line bg-surface px-3 font-semibold text-ink-2 outline-none hover:bg-surface-2 sm:ml-2"
+              className="h-7 rounded-card border border-line bg-surface px-2 font-semibold text-ink-2 outline-none hover:bg-surface-2 sm:ml-2 sm:h-8 sm:px-3"
               aria-label="Rows per page"
             >
               <option value={10}>10 / page</option>
