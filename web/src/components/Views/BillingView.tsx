@@ -1559,17 +1559,23 @@ export default function BillingView() {
             // stay aligned after the operator reorders or hides
             // columns via the picker.
             footerRow={(cols) => cols.map((c) => {
-              const tdStyle: React.CSSProperties = { padding: '8px 10px', textAlign: c.align === 'right' ? 'right' : c.align === 'center' ? 'center' : 'left', fontWeight: 700 }
+              const align = c.align === 'right' ? 'right' : c.align === 'center' ? 'center' : 'left'
+              const tdStyle: React.CSSProperties = { padding: '8px 10px', textAlign: align, fontWeight: 700 }
+              // PS-042: tag each footer cell with its column key/align so it can
+              // be matched to the matching header/body cell (E2E + so alignment
+              // can't silently drift from them). Width/position come from the
+              // shared <colgroup>, so cells stay aligned under reorder/hide/resize.
+              const common = { 'data-col-key': c.key, 'data-col-align': align, 'data-col-footer': true }
               switch (c.key) {
-                case 'client': return <td key={c.key} style={tdStyle}>Total</td>
-                case 'orders': return <td key={c.key} style={tdStyle}>{summaryTotals.orders}</td>
-                case 'pickPack': return <td key={c.key} style={tdStyle}>{formatBillingMoney(summaryTotals.pickPackFee)}</td>
-                case 'additional': return <td key={c.key} style={tdStyle}>{formatBillingMoney(summaryTotals.additional)}</td>
-                case 'package': return <td key={c.key} style={tdStyle}>{formatBillingMoney(summaryTotals.package, { dashIfZero: true })}</td>
-                case 'storage': return <td key={c.key} style={tdStyle}>{formatBillingMoney(summaryTotals.storage, { dashIfZero: true })}</td>
-                case 'shipping': return <td key={c.key} style={tdStyle}>{formatBillingMoney(summaryTotals.shipping)}</td>
-                case 'total': return <td key={c.key} style={{ ...tdStyle, fontWeight: 800, color: 'var(--green)', fontSize: 13 }}>{formatBillingMoney(summaryTotals.fulfillmentFee)}</td>
-                default: return <td key={c.key} style={tdStyle} />
+                case 'client': return <td key={c.key} {...common} style={tdStyle}>Total</td>
+                case 'orders': return <td key={c.key} {...common} style={tdStyle}>{summaryTotals.orders}</td>
+                case 'pickPack': return <td key={c.key} {...common} style={tdStyle}>{formatBillingMoney(summaryTotals.pickPackFee)}</td>
+                case 'additional': return <td key={c.key} {...common} style={tdStyle}>{formatBillingMoney(summaryTotals.additional)}</td>
+                case 'package': return <td key={c.key} {...common} style={tdStyle}>{formatBillingMoney(summaryTotals.package, { dashIfZero: true })}</td>
+                case 'storage': return <td key={c.key} {...common} style={tdStyle}>{formatBillingMoney(summaryTotals.storage, { dashIfZero: true })}</td>
+                case 'shipping': return <td key={c.key} {...common} style={tdStyle}>{formatBillingMoney(summaryTotals.shipping)}</td>
+                case 'total': return <td key={c.key} {...common} style={{ ...tdStyle, fontWeight: 800, color: 'var(--green)', fontSize: 13 }}>{formatBillingMoney(summaryTotals.fulfillmentFee)}</td>
+                default: return <td key={c.key} {...common} style={tdStyle} />
               }
             })}
           />

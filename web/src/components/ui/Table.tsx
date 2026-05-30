@@ -993,8 +993,13 @@ export function Table<Row>({
               {orderedColumns.map((col, columnIndex) => {
                 const isActive = sort?.key === col.key
                 const align = col.align ?? 'left'
-                const alignCls = 'text-left'
-                const justify = 'justify-start'
+                // PS-042: honor col.align so the header label, body cells, and
+                // the caller-driven footer/total row all sit on the same side of
+                // the column. Previously `align` was captured but ignored here
+                // (hardcoded left), while the footer DID honor it — so total-row
+                // values drifted out from under their left-aligned body values.
+                const alignCls = align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left'
+                const justify = align === 'right' ? 'justify-end' : align === 'center' ? 'justify-center' : 'justify-start'
                 const isDragging = draggingKey === col.key
                 const isDragTarget = dragOverKey === col.key && draggingKey !== null && draggingKey !== col.key
                 const reorderable = !col.pinned
@@ -1140,7 +1145,10 @@ export function Table<Row>({
                 >
                   {orderedColumns.map((col) => {
                     const align = col.align ?? 'left'
-                    const alignCls = 'text-left'
+                    // PS-042: honor col.align (see header note) so body values
+                    // align with the footer/total row and the header within
+                    // each column.
+                    const alignCls = align === 'right' ? 'text-right' : align === 'center' ? 'text-center' : 'text-left'
                     const content = col.render
                       ? col.render(row)
                       : ((row as Record<string, unknown>)[col.key] as ReactNode) ?? ''
