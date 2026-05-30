@@ -124,20 +124,26 @@ async function checkUpstream(
   let hasFulfillment = false;
   let failed = false;
   try {
-    const sh = await listShipStationShipments<{ shipments?: unknown[] }>(
+    const sh = await listShipStationShipments<{ shipments?: Array<{ voided?: boolean | null }> }>(
       new URLSearchParams({ orderNumber, pageSize: '5', page: '1' }),
       { apiKey: account.apiKey, apiSecret: account.apiSecret, dedupeKey: `extship:sh:${account.label}:${orderNumber}` },
     );
-    hasShipment = Array.isArray(sh.shipments) && sh.shipments.length > 0;
+    // Only a NON-VOIDED shipment is recoverable — a voided label is dead.
+    hasShipment = Array.isArray(sh.shipments) && sh.shipments.some((s) => s?.voided !== true);
   } catch {
     failed = true;
   }
   try {
-    const fu = await ssV1Request<{ fulfillments?: unknown[] }>(
+    const fu = await ssV1Request<{ fulfillments?: Array<{ voided?: boolean | null; trackingNumber?: string | null }> }>(
       `/fulfillments?orderNumber=${encodeURIComponent(orderNumber)}&pageSize=5&page=1`,
       { apiKey: account.apiKey, apiSecret: account.apiSecret, dedupeKey: `extship:fu:${account.label}:${orderNumber}` },
     );
-    hasFulfillment = Array.isArray(fu.fulfillments) && fu.fulfillments.length > 0;
+    // Only a NON-VOIDED fulfillment WITH a tracking number is recoverable
+    // (mirrors the PS-039 fulfillment backfill's "active" definition). A
+    // voided or untracked fulfillment has nothing to link → treat as external.
+    hasFulfillment =
+      Array.isArray(fu.fulfillments) &&
+      fu.fulfillments.some((f) => f?.voided !== true && typeof f?.trackingNumber === 'string' && f.trackingNumber.trim() !== '');
   } catch {
     failed = failed && true; // only fully failed if BOTH calls threw
     if (!hasShipment) failed = true;
