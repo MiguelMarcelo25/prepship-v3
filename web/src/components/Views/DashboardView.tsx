@@ -1117,7 +1117,30 @@ function TopNDropdown({
   )
 }
 
+// PS — true at the multi-column (xl, >=1280px) desktop layout. Below xl the
+// panel grid is single-column, so the desktop masonry (gridAutoRows:1px +
+// per-panel gridRow span) and the drag-resized FIXED pixel heights must NOT
+// apply — on a phone those inline styles (which beat Tailwind) pin panels to a
+// desktop size and break the layout. Below xl we let panels flow with a
+// min-height so charts still render but nothing is locked to a desktop size.
+function useDashboardDesktopLayout(): boolean {
+  const query = '(min-width: 1280px)'
+  const [isDesktop, setIsDesktop] = useState(() =>
+    typeof window === 'undefined' ? true : window.matchMedia(query).matches,
+  )
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const mq = window.matchMedia(query)
+    const onChange = () => setIsDesktop(mq.matches)
+    onChange()
+    mq.addEventListener?.('change', onChange)
+    return () => mq.removeEventListener?.('change', onChange)
+  }, [])
+  return isDesktop
+}
+
 export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
+  const isDesktopLayout = useDashboardDesktopLayout()
   const [clients, setClients] = useState<Client[]>([])
   const [selectedClientId, setSelectedClientId] = useState<number | null>(null)
   // Operator-selected date range that drives every API call below.
@@ -2261,8 +2284,33 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   const tableLoading = panelLoading.table || panelLoading.inventory || panelLoading.metrics
   const tableError = panelErrors.table || panelErrors.inventory || panelErrors.metrics
 
+  // PS — per-panel sizing. Desktop (xl): masonry span + fixed drag-resized
+  // pixel height. Below xl (stacked single column): no fixed height/gridRow —
+  // a min-height keeps charts renderable while letting panels flow naturally.
+  const panelLayoutStyle = (key: SectionKey): React.CSSProperties => {
+    const px = sectionMinHeightPx(sectionHeights[key])
+    const base: React.CSSProperties = { order: panelOrder.indexOf(key), marginBottom: 12 }
+    return isDesktopLayout
+      ? { ...base, gridRow: `span ${px + 12}`, height: px }
+      : { ...base, minHeight: px }
+  }
+  // The container is masonry ONLY at xl; below that, normal grid flow (else a
+  // panel with no gridRow span would collapse into a 1px micro-row).
+  const gridContainerStyle: React.CSSProperties = {
+    columnGap: '12px',
+    rowGap: 0,
+    ...(isDesktopLayout ? { gridAutoRows: '1px', gridAutoFlow: 'row dense' } : {}),
+    ...(editMode ? {
+      backgroundImage:
+        'linear-gradient(to right, rgba(99,102,241,0.10) 1px, transparent 1px), ' +
+        'linear-gradient(to bottom, rgba(99,102,241,0.10) 1px, transparent 1px)',
+      backgroundSize: '24px 24px',
+      backgroundPosition: '-1px -1px',
+    } : {}),
+  }
+
   return (
-    <div id="view-dashboard" className="view-content !overflow-y-auto !bg-page !p-3 sm:!p-5">
+    <div id="view-dashboard" className="view-content !overflow-x-hidden !overflow-y-auto !bg-page !p-3 sm:!p-5">
       <div className="mb-4 grid grid-cols-1 items-start gap-3 sm:gap-4 xl:grid-cols-[minmax(0,1fr)_auto]">
         <div className="contents">
           <div className="min-w-0">
@@ -2455,7 +2503,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
       {metricsError ? (
         <PanelError message={metricsError} className="mb-3 min-h-[112px]" />
       ) : (
-        <div className="mb-3 grid grid-cols-1 gap-2.5 sm:grid-cols-2 sm:gap-3 lg:grid-cols-3 xl:grid-cols-6">
+        <div className="mb-3 grid grid-cols-2 gap-2.5 sm:grid-cols-2 sm:gap-3 lg:grid-cols-3 xl:grid-cols-6">
           {metricsLoading ? (
             Array.from({ length: 6 }).map((_, index) => (
               <div key={index} className="h-28 animate-pulse rounded-card border border-line bg-surface" />
@@ -2525,47 +2573,18 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             ? 'rounded-card border border-dashed border-brand/30 bg-brand-bg/30 p-2 sm:p-3'
             : ''
         }`}
-        style={{
-          // MASONRY-STYLE LAYOUT — the breakthrough that decouples panel
-          // heights. Each panel gets `grid-row: span N` where N = its
-          // pixel height. Combined with `grid-auto-rows: 1px` micro-row
-          // tracks, every panel literally occupies a different count of
-          // row tracks than its neighbours, so growing one panel can't
-          // grow another. `grid-auto-flow: row dense` packs shorter
-          // panels into gaps left by taller ones (Pinterest-style).
-          gridAutoRows: '1px',
-          gridAutoFlow: 'row dense',
-          columnGap: '12px',
-          rowGap: 0,
-          ...(editMode ? {
-            // Subtle 24px grid pattern in edit mode — visually telegraphs
-            // "this is a layout editor" without overpowering content.
-            backgroundImage:
-              'linear-gradient(to right, rgba(99,102,241,0.10) 1px, transparent 1px), ' +
-              'linear-gradient(to bottom, rgba(99,102,241,0.10) 1px, transparent 1px)',
-            backgroundSize: '24px 24px',
-            backgroundPosition: '-1px -1px',
-          } : {}),
-        }}
+        style={gridContainerStyle}
       >
         {!hiddenPanels.has('trend') || editMode ? (
         <section
-          style={{
-            order: panelOrder.indexOf('trend'),
-            // Span exactly (height + 12) micro-row-tracks. The +12 makes
-            // room for the marginBottom that creates visual gap, since
-            // rowGap is 0 on the masonry grid.
-            gridRow: `span ${sectionMinHeightPx(sectionHeights.trend) + 12}`,
-            height: sectionMinHeightPx(sectionHeights.trend),
-            marginBottom: 12,
-          }}
+          style={panelLayoutStyle('trend')}
           draggable={editMode}
           onDragStart={handlePanelDragStart('trend')}
           onDragOver={handlePanelDragOver('trend')}
           onDragLeave={handlePanelDragLeave('trend')}
           onDrop={handlePanelDrop('trend')}
           onDragEnd={handlePanelDragEnd}
-          className={`relative flex flex-col rounded-card border bg-surface p-3 shadow-sm transition-[border-color,box-shadow] duration-150 sm:p-4 ${sectionColSpanClass(sectionSizes.trend)} ${
+          className={`relative flex min-w-0 flex-col rounded-card border bg-surface p-3 shadow-sm transition-[border-color,box-shadow] duration-150 sm:p-4 ${sectionColSpanClass(sectionSizes.trend)} ${
             editMode ? 'border-dashed border-brand/60' : 'border-line'
           } ${draggingPanel === 'trend' ? 'opacity-40' : ''} ${
             dragOverPanel === 'trend' ? 'ring-2 ring-brand ring-offset-2 ring-offset-bg' : ''
@@ -2684,19 +2703,14 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
 
         {!hiddenPanels.has('topSkus') || editMode ? (
         <section
-          style={{
-            order: panelOrder.indexOf('topSkus'),
-            gridRow: `span ${sectionMinHeightPx(sectionHeights.topSkus) + 12}`,
-            height: sectionMinHeightPx(sectionHeights.topSkus),
-            marginBottom: 12,
-          }}
+          style={panelLayoutStyle('topSkus')}
           draggable={editMode}
           onDragStart={handlePanelDragStart('topSkus')}
           onDragOver={handlePanelDragOver('topSkus')}
           onDragLeave={handlePanelDragLeave('topSkus')}
           onDrop={handlePanelDrop('topSkus')}
           onDragEnd={handlePanelDragEnd}
-          className={`relative flex flex-col rounded-card border bg-surface p-3 shadow-sm transition-[border-color,box-shadow] duration-150 sm:p-4 ${sectionColSpanClass(sectionSizes.topSkus)} ${
+          className={`relative flex min-w-0 flex-col rounded-card border bg-surface p-3 shadow-sm transition-[border-color,box-shadow] duration-150 sm:p-4 ${sectionColSpanClass(sectionSizes.topSkus)} ${
             editMode ? 'border-dashed border-brand/60' : 'border-line'
           } ${draggingPanel === 'topSkus' ? 'opacity-40' : ''} ${
             dragOverPanel === 'topSkus' ? 'ring-2 ring-brand ring-offset-2 ring-offset-bg' : ''
@@ -2835,19 +2849,14 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
 
         {!hiddenPanels.has('heatmap') || editMode ? (
         <section
-          style={{
-            order: panelOrder.indexOf('heatmap'),
-            gridRow: `span ${sectionMinHeightPx(sectionHeights.heatmap) + 12}`,
-            height: sectionMinHeightPx(sectionHeights.heatmap),
-            marginBottom: 12,
-          }}
+          style={panelLayoutStyle('heatmap')}
           draggable={editMode}
           onDragStart={handlePanelDragStart('heatmap')}
           onDragOver={handlePanelDragOver('heatmap')}
           onDragLeave={handlePanelDragLeave('heatmap')}
           onDrop={handlePanelDrop('heatmap')}
           onDragEnd={handlePanelDragEnd}
-          className={`relative flex flex-col rounded-card border bg-surface p-3 shadow-sm transition-[border-color,box-shadow] duration-150 sm:p-4 ${sectionColSpanClass(sectionSizes.heatmap)} ${
+          className={`relative flex min-w-0 flex-col rounded-card border bg-surface p-3 shadow-sm transition-[border-color,box-shadow] duration-150 sm:p-4 ${sectionColSpanClass(sectionSizes.heatmap)} ${
             editMode ? 'border-dashed border-brand/60' : 'border-line'
           } ${draggingPanel === 'heatmap' ? 'opacity-40' : ''} ${
             dragOverPanel === 'heatmap' ? 'ring-2 ring-brand ring-offset-2 ring-offset-bg' : ''
@@ -2907,7 +2916,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         ) : panelErrors.heatmap ? (
           <PanelError message={panelErrors.heatmap} className="flex-1 min-h-0" />
         ) : (
-        <div className="flex-1 min-h-0 overflow-auto">
+        <div className="flex-1 min-h-0 min-w-0 overflow-auto">
           {/* Refined diverging palette (2026-05-13): muted ColorBrewer
               RdYlGn-style green → cream → red. The previous Tailwind
               ok/warn/danger tokens are high-saturation alert colors
@@ -3001,19 +3010,14 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
 
         {!hiddenPanels.has('table') || editMode ? (
         <section
-          style={{
-            order: panelOrder.indexOf('table'),
-            gridRow: `span ${sectionMinHeightPx(sectionHeights.table) + 12}`,
-            height: sectionMinHeightPx(sectionHeights.table),
-            marginBottom: 12,
-          }}
+          style={panelLayoutStyle('table')}
           draggable={editMode}
           onDragStart={handlePanelDragStart('table')}
           onDragOver={handlePanelDragOver('table')}
           onDragLeave={handlePanelDragLeave('table')}
           onDrop={handlePanelDrop('table')}
           onDragEnd={handlePanelDragEnd}
-          className={`relative flex flex-col overflow-hidden rounded-card border bg-surface shadow-sm transition-[border-color,box-shadow] duration-150 ${sectionColSpanClass(sectionSizes.table)} ${
+          className={`relative flex min-w-0 flex-col overflow-hidden rounded-card border bg-surface shadow-sm transition-[border-color,box-shadow] duration-150 ${sectionColSpanClass(sectionSizes.table)} ${
             editMode ? 'border-dashed border-brand/60' : 'border-line'
           } ${draggingPanel === 'table' ? 'opacity-40' : ''} ${
             dragOverPanel === 'table' ? 'ring-2 ring-brand ring-offset-2 ring-offset-bg' : ''
@@ -3166,7 +3170,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         ) : tableError ? (
           <PanelError message={tableError} className="mx-3 my-3 flex-1 min-h-0 sm:mx-4" />
         ) : (
-        <div className="flex-1 min-h-0 overflow-auto">
+        <div className="flex-1 min-h-0 min-w-0 overflow-auto">
           {/* table-fixed + <colgroup> is the duo that makes column
               widths actually obey our colWidths state. Without
               table-fixed the browser uses content-derived auto-widths
