@@ -44,7 +44,14 @@ expect(
 expect(
   { orderStatus: 'awaiting_shipment', alreadyExternal: false, hasNonVoidedLocalShipment: false, upstream: { lookupFailed: false, hasShipment: false, hasFulfillment: false } },
   'skip_not_shipped',
-  'only shipped orders are considered',
+  'awaiting orders are never considered (they do not surface the badge)',
+);
+// Cancelled orders ARE eligible (opt-in via --include-cancelled at the query
+// level); a cancelled marketplace order with nothing upstream is external too.
+expect(
+  { orderStatus: 'cancelled', alreadyExternal: false, hasNonVoidedLocalShipment: false, upstream: { lookupFailed: false, hasShipment: false, hasFulfillment: false } },
+  'external',
+  'a cancelled order with no upstream shipment/fulfillment is also external',
 );
 expect(
   { ...base, alreadyExternal: true, upstream: { lookupFailed: false, hasShipment: false, hasFulfillment: false } },
@@ -68,6 +75,8 @@ assert.doesNotMatch(script, /db\.delete\(/, 'must never delete rows');
 assert.doesNotMatch(script, /\.update\(shipments\)/, 'must never mutate shipment history');
 assert.doesNotMatch(script, /buyLabel|purchaseLabel|createLabel|voidLabel|notifyMarketplace|notifySalesChannel/i, 'must never create/void labels or notify marketplaces');
 assert.match(script, /coalesce\(s\.voided, false\) = false/, 'candidates must require NO non-voided local shipment');
+assert.match(script, /const includeCancelled = hasFlag\('include-cancelled'\)/, 'cancelled orders must be opt-in via --include-cancelled (lockdown-safe default: shipped only)');
+assert.match(script, /inArray\(orders\.orderStatus, statuses\)/, 'candidate query must scope by the resolved status set');
 assert.match(script, /invokedDirectly/, 'main() must be guarded so the classifier can be imported without DB/network');
 
 console.log('PASS external-shipped script is dry-run-default, reversible-flag-only, non-destructive');

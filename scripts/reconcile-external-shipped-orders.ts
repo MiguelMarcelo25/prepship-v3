@@ -59,7 +59,10 @@ export interface ExternalShippedInput {
 }
 
 export function classifyExternalShipped(input: ExternalShippedInput): ExternalShippedClass {
-  if (input.orderStatus !== 'shipped') return 'skip_not_shipped';
+  // Shipped and cancelled both surface the external/local/missing badge in the
+  // UI; awaiting orders never do. (Cancelled is opt-in at the candidate-query
+  // level via --include-cancelled.)
+  if (input.orderStatus !== 'shipped' && input.orderStatus !== 'cancelled') return 'skip_not_shipped';
   if (input.alreadyExternal) return 'skip_already_external';
   if (input.hasNonVoidedLocalShipment) return 'skip_has_local_shipment';
   if (input.upstream.lookupFailed) return 'lookup_failed';
@@ -168,11 +171,13 @@ async function main(): Promise<void> {
   if (hasFlag('help') || hasFlag('h')) return printUsage();
 
   const apply = hasFlag('apply');
+  const includeCancelled = hasFlag('include-cancelled');
   const days = parsePositiveInt('days', DEFAULT_DAYS);
   const limit = parsePositiveInt('limit', 200);
   const orderNumbersFilter = parseOrderNumbers();
+  const statuses = includeCancelled ? ['shipped', 'cancelled'] : ['shipped'];
 
-  console.log(`\n[external-shipped] ${apply ? 'APPLY' : 'DRY RUN'} — days=${days} limit=${limit}${orderNumbersFilter ? ` orderNumbers=${orderNumbersFilter.join(',')}` : ''}`);
+  console.log(`\n[external-shipped] ${apply ? 'APPLY' : 'DRY RUN'} — statuses=${statuses.join(',')} days=${days} limit=${limit}${orderNumbersFilter ? ` orderNumbers=${orderNumbersFilter.join(',')}` : ''}`);
 
   // Candidates: shipped, not already external, with NO non-voided local shipment.
   const noLocalShipment = sql`not exists (
@@ -182,14 +187,14 @@ async function main(): Promise<void> {
   )`;
   const where = orderNumbersFilter
     ? and(
-        eq(orders.orderStatus, 'shipped'),
+        inArray(orders.orderStatus, statuses),
         eq(orders.externallyShipped, false),
         eq(orders.externallyFulfilledVerified, false),
         noLocalShipment,
         inArray(orders.orderNumber, orderNumbersFilter),
       )
     : and(
-        eq(orders.orderStatus, 'shipped'),
+        inArray(orders.orderStatus, statuses),
         eq(orders.externallyShipped, false),
         eq(orders.externallyFulfilledVerified, false),
         noLocalShipment,
