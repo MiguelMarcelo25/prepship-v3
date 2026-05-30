@@ -2290,9 +2290,13 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
   const panelLayoutStyle = (key: SectionKey): React.CSSProperties => {
     const px = sectionMinHeightPx(sectionHeights[key])
     const base: React.CSSProperties = { order: panelOrder.indexOf(key), marginBottom: 12 }
+    // Mobile/stacked: a DEFINITE, capped height — charts (ResponsiveContainer
+    // height="100%") need a definite parent height to size against, and the
+    // desktop heights (up to 520px) overextend on a phone. Cap at 360 so panels
+    // stay compact; wide panels (heatmap/table) scroll internally.
     return isDesktopLayout
       ? { ...base, gridRow: `span ${px + 12}`, height: px }
-      : { ...base, minHeight: px }
+      : { ...base, height: Math.min(px, 360) }
   }
   // The container is masonry ONLY at xl; below that, normal grid flow (else a
   // panel with no gridRow span would collapse into a 1px micro-row).
@@ -2317,10 +2321,10 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             <h1 className="text-[22px] font-extrabold leading-tight tracking-[-0.02em] text-ink sm:text-[24px]">
               Inventory & Stockout Prevention
             </h1>
-            <p className="mt-0.5 text-xs text-ink-3">
+            <p className="mt-0.5 hidden text-xs text-ink-3 sm:block">
               Monitor inventory health, days of supply, and take action to prevent stockouts
             </p>
-            <p className="mt-1 inline-flex flex-wrap items-center gap-1.5 text-2xs font-semibold text-ink-3">
+            <p className="mt-1 hidden flex-wrap items-center gap-1.5 text-2xs font-semibold text-ink-3 sm:inline-flex">
               <span className="inline-block h-1.5 w-1.5 rounded-full bg-brand" />
               KPIs · all orders (awaiting + shipped + cancelled). Daily orders · all orders. SKU charts · fulfilled orders only.
             </p>
