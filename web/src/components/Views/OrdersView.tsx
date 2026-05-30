@@ -1634,11 +1634,18 @@ function getShippedDisplayProviderId(order: OrderSummaryDto) {
 
 function getShippedDisplayAccountNickname(order: OrderSummaryDto) {
   if (getIsExternallyFulfilled(order)) return null
-  if (hasV2SelectedRatePayload(order)) {
-    const selectedNickname = toStringValue(order.selectedRate?.providerAccountNickname)
-    if (selectedNickname) return selectedNickname
-  }
-  return toStringValue(order.label?.carrierCode)
+  // PS — Acct Nickname must come from the account-nickname source chain, NOT
+  // carrier code. The prior `return order.label.carrierCode` fallback (commit
+  // 03df3d8) surfaced "ups" under Acct Nickname. Mirror the awaiting helper;
+  // when no nickname exists, show blank (honest) rather than a carrier code.
+  return (
+    getShippingString(order, 'accountNickname') ??
+    toStringValue(order.selectedRate?.providerAccountNickname) ??
+    toStringValue(order.selectedRate?.carrierNickname) ??
+    normalizeShippingAccountName(getBestRateCarrierNickname(order)) ??
+    getV2CarrierAccountForOrder(order)?.nickname ??
+    null
+  )
 }
 
 function getCancelledDisplayCarrierCode(order: OrderSummaryDto) {
@@ -6124,14 +6131,9 @@ export default function OrdersView({
         selectedMarkedAmount != null
           ? selectedMarkedAmount
           : labelCost ?? selectedRateBase
-      return (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          {selectedRateCarrierCode ? (
-            <CarrierBadge code={selectedRateCarrierCode} size="sm" />
-          ) : null}
-          {renderRateAmountWithMarkup(selectedRateBase, displayMarked)}
-        </div>
-      )
+      // PS — Selected Rate shows only the amount. The carrier badge lives
+      // solely in the dedicated Carrier column; duplicating it here was noisy.
+      return renderRateAmountWithMarkup(selectedRateBase, displayMarked)
     }
 
     const dims = getDimensions(displayOrder, null)

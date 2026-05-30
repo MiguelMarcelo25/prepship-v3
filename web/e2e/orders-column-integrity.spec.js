@@ -167,9 +167,22 @@ const shippedMissingSync = baseRow(980003, 'shipped', 1, {
   externallyShipped: false,
 })
 
+// 5b) Shipped with a REAL carrier label (carrierCode 'ups') but NO account
+//     nickname anywhere (no shipping.accountNickname, no selectedRate/bestRate
+//     nickname). The diagnostic "Acct Nickname" column must NOT fall back to
+//     the carrier code "ups" — regression guard for commit 03df3d8 (DJ's
+//     `Acct Nickname = ups` bug). Blank/honest-missing is correct here.
+const shippedNoNickname = baseRow(980004, 'shipped', 1, {
+  orderNumber: 'SHIPPED-980004',
+  bestRate: null,
+  selectedRate: { carrierCode: 'ups', serviceCode: 'ups_ground_saver', serviceName: 'UPS Ground Saver', amount: 9.86, cost: 9.86, shipmentCost: 9.86, otherCost: 0 },
+  label: { trackingNumber: '1Z999AA1010980004', carrierCode: 'ups', serviceCode: 'ups_ground_saver', shippingProviderId: 7381, cost: 9.86, createdAt: '2026-05-15T17:02:00.000Z', labelUrl: 'https://example.com/label.pdf' },
+  shipping: { carrierCode: 'ups', serviceCode: 'ups_ground_saver', trackingNumber: '1Z999AA1010980004', providerAccountId: 7381, labelCost: 9.86, labelCreatedAt: '2026-05-15T17:02:00.000Z' },
+})
+
 const ordersByStatus = {
   awaiting_shipment: [awaitingValid, awaitingMissingDims, awaitingMultiItem],
-  shipped: [shippedPersisted, shippedExternal, shippedMissingSync],
+  shipped: [shippedPersisted, shippedExternal, shippedMissingSync, shippedNoNickname],
   cancelled: [],
 }
 
@@ -370,5 +383,14 @@ test('Shipped grid columns are correctly classified (persisted vs external vs mi
     carrier: { contains: 'Missing shipment sync', notContains: 'Ext. Label' },
     custcarrier: { contains: 'Missing shipment sync', notContains: 'Ext. Label' },
     bestrate: { contains: 'Missing shipment sync', notContains: 'Ext. Label' },
+  })
+
+  // Real carrier label, NO nickname source -> diagnostic "Acct Nickname"
+  // (test_shippingAccount) must NOT fall back to the carrier code "ups".
+  // Regression guard for commit 03df3d8 (getShippedDisplayAccountNickname).
+  await assertColumns(page, shippedNoNickname.orderId, {
+    orderNum: { contains: 'SHIPPED-980004' },
+    test_carrierCode: { contains: 'ups' },        // carrier-code column legitimately shows ups
+    test_shippingAccount: { notContains: 'ups' }, // Acct Nickname must NEVER be the carrier code
   })
 })
