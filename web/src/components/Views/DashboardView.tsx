@@ -2395,7 +2395,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             Filters
           </button>
           {showFilters ? (
-            <div className="absolute left-0 top-12 z-20 w-full rounded-card border border-line bg-surface p-3 shadow-lg sm:w-[min(18rem,calc(100vw-2rem))]">
+            <div className="absolute left-0 top-12 z-20 w-[min(20rem,calc(100vw-1.5rem))] rounded-card border border-line bg-surface p-3 shadow-lg sm:w-[min(18rem,calc(100vw-2rem))]">
               <div className="mb-2 text-xs font-extrabold text-ink">Dashboard Filters</div>
               <label className="mb-2 block">
                 <span className="mb-1 block text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">Client</span>

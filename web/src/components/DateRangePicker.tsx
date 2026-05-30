@@ -492,9 +492,12 @@ export function DateRangePicker({ value, onChange, label, className }: Props): J
               </div>
             )}
 
-            {/* Footer — from/to inputs + Apply/Cancel */}
-            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-3">
-              <div className="flex flex-wrap items-center gap-1.5 text-2xs">
+            {/* Footer — from/to inputs + Apply/Cancel. The manual
+                from/to inputs are hidden on mobile (operator request:
+                redundant with the calendar on a phone, and they crowd
+                the modal) and shown at sm+ for keyboard-driven entry. */}
+            <div className="mt-3 flex flex-wrap items-center justify-center gap-2 border-t border-line pt-3 sm:justify-between">
+              <div className="hidden flex-wrap items-center gap-1.5 text-2xs sm:flex">
                 <span className="font-semibold uppercase tracking-wider text-ink-3">From</span>
                 <input
                   type="date"
