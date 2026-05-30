@@ -413,7 +413,7 @@ export default function Clients() {
       {/* Page header — title + actions. Matches the visual treatment
           of other top-level views (Inventory, Packages) so the
           header height + spacing stay consistent across pages. */}
-      <header className="flex-shrink-0 flex items-center justify-between gap-3 px-6 py-4 bg-surface border-b border-line">
+      <header className="flex-shrink-0 flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-4 py-3 bg-surface border-b border-line sm:px-6 sm:py-4">
         <div className="flex items-center gap-3 min-w-0">
           <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-brand to-brand-dark flex items-center justify-center shadow-sm ring-1 ring-brand/30 flex-shrink-0">
             <HiUsers size={17} className="text-white" />
@@ -447,7 +447,7 @@ export default function Clients() {
           ORDER (drag headers to reorder), and column visibility
           (Columns ▾ button on the right of the toolbar). All persist
           per-browser via the `clients-table:*` localStorage keys. */}
-      <div className="flex-1 min-h-0 overflow-auto px-6 py-5">
+      <div className="flex-1 min-h-0 overflow-auto px-4 py-4 sm:px-6 sm:py-5">
         <Table<Row>
           data={filteredRows}
           columns={columns}

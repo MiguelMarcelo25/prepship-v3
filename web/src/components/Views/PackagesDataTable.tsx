@@ -231,7 +231,12 @@ function PackageLedger({
         ) : ledger.rows.length === 0 ? (
           <div className="px-3 py-3 text-xs2 font-medium text-ink-3">No history yet</div>
         ) : (
-          <>
+          /* Mobile: the fixed-width (≈640px) ledger grid was clipped by the
+             parent's overflow-hidden, hiding the Reason/Order columns. Wrap in
+             a horizontal scroller with a min-width so all columns stay
+             reachable on small screens; desktop is unchanged. */
+          <div className="overflow-x-auto">
+            <div className="min-w-[640px]">
             <div className="grid grid-cols-[140px_90px_120px_minmax(180px,1fr)_110px] border-b border-line bg-surface-2 px-3 py-2 text-2xs font-bold uppercase tracking-[0.04em] text-ink-3">
               <div>Date</div>
               <div className="text-center">Change</div>
@@ -263,7 +268,8 @@ function PackageLedger({
                 </div>
               </div>
             ))}
-          </>
+            </div>
+          </div>
         )}
       </div>
     </div>
