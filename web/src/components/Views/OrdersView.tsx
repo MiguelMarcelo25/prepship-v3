@@ -89,6 +89,7 @@ import {
   type PrintQueueGroup,
 } from './orders-parity'
 import {
+  getComboDefaultPackageId,
   getInitialPanelServiceCode,
   getInitialPanelShipAccountId,
   getMatchedPackageIdByDimensions,
@@ -2920,6 +2921,7 @@ export default function OrdersView({
           height: Number.parseFloat(current.height) || 0,
         }
         const nextPackageId = getPanelPackageId(panelOrder, panelDetail, packages)
+          || getComboDefaultPackageId(panelDetail, packages)
           || getMatchedPackageIdByDimensions(hasCompleteDims(currentDims) ? currentDims : dimensions, packages)
         if (!nextPackageId) return current
         const next = { ...current, packageId: nextPackageId }
@@ -2940,7 +2942,7 @@ export default function OrdersView({
       length: dimensions?.length ? String(dimensions.length) : '',
       width: dimensions?.width ? String(dimensions.width) : '',
       height: dimensions?.height ? String(dimensions.height) : '',
-      packageId: getPanelPackageId(panelOrder, panelDetail, packages) || matchedPackageId,
+      packageId: getPanelPackageId(panelOrder, panelDetail, packages) || getComboDefaultPackageId(panelDetail, packages) || matchedPackageId,
       confirmation: getPanelConfirmation(panelOrder, panelDetail),
       insurance: insurance.type,
       insuranceValue: insurance.value != null ? String(insurance.value) : '',
@@ -3569,37 +3571,30 @@ export default function OrdersView({
     )
     const target = getSingleSkuDefaultTarget(sourceOrder, sourceDetail)
     if (!target) {
-      // Multi-SKU fallback: weight/dims can't be allocated across lines, but
-      // the chosen package IS the right default for every SKU on the order.
-      // Stamp inventory.package_id for each line so future orders containing
-      // any of these SKUs default to the same box. Silent on failure — this
-      // runs from the auto-detect debouncer and shouldn't block the user.
-      if (packageId) {
+      // PS-037: Multi-SKU orders default by the EXACT client + SKU+qty
+      // combination, NOT per individual SKU. Save the chosen package as the
+      // combo default (the backend derives the combo key from this order's
+      // items). We deliberately do NOT stamp per-SKU inventory package defaults
+      // here — that pollutes single-SKU defaults for mixed-SKU clients (Hugrab:
+      // e.g. "Booster x1 + Leeds x1" must not change the box for a lone Booster
+      // order). Only persisted on an explicit operator save (not the silent
+      // auto-detect debouncer) so a dims-matched guess never becomes a default.
+      if (packageId && !options.silent) {
         try {
-          const items = getActiveItems(sourceOrder, sourceDetail)
-          const skus = Array.from(
-            new Set(
-              items
-                .map((item) => (typeof item.sku === 'string' ? item.sku.trim() : ''))
-                .filter((sku) => sku.length > 0)
-            )
-          )
-          const pid = Number.parseInt(packageId, 10)
-          const fallbackClientId = typeof sourceOrder.clientId === 'number' && sourceOrder.clientId > 0
-            ? sourceOrder.clientId
-            : null
-          if (skus.length > 0 && Number.isFinite(pid) && pid > 0) {
-            await apiClient.bulkSetInventoryPackageDefault({
-              clientId: fallbackClientId,
-              packageId: pid,
-              skus,
-            })
-          }
+          const dims = hasCompleteDims(options.dims) ? options.dims! : getPanelSkuDefaultDims(packageId)
+          const weightOz = options.weightOz ?? getPanelWeightOz()
+          await apiClient.saveComboPackageDefault(sourceOrder.orderId, {
+            packageId,
+            length: hasCompleteDims(dims) ? dims.length : null,
+            width: hasCompleteDims(dims) ? dims.width : null,
+            height: hasCompleteDims(dims) ? dims.height : null,
+            weightOz: weightOz > 0 ? weightOz : null,
+          })
+          showToast('Saved package default for this SKU + quantity combination', 'success')
         } catch (err) {
-          console.warn('[orders] multi-SKU package default save failed:', err)
+          console.warn('[orders] multi-SKU combo package default save failed:', err)
         }
       }
-      if (!options.silent) showToast("Multi-SKU order - edit each product's defaults in the Products tab", 'error')
       return null
     }
 

@@ -12,6 +12,10 @@ import { getSyncStatus, syncOrders } from '../services/order-sync';
 import { getActiveBackfillJob, getLatestBackfillJob, startBackfillBestRates } from '../services/rates-backfill';
 import { deductInventoryForOrder } from '../services/fulfillment-deductions';
 import { replaceOrderItemsForOrders } from '../services/order-items';
+import {
+  getComboPackageDefaultForOrder,
+  saveComboPackageDefault,
+} from '../services/combo-package-defaults';
 import { analyticsCacheKey, getAnalyticsCache, setAnalyticsCache } from '../services/analytics-cache';
 import { ssMarkOrderShippedV1, asSSUpstreamOrderId } from '../lib/shipstation/labels';
 import { loadClientCredentials } from '../lib/shipstation/credentials';
@@ -2280,7 +2284,14 @@ app.get('/:id{[0-9]+}', async (c) => {
       .orderBy(desc(shipments.id)),
   ]);
 
-  return c.json(buildOrderDetailPayload(order as Record<string, unknown>, overrides, shipmentRows));
+  // PS-037: resolve the per-client SKU+qty combination package default (if any)
+  // so the side panel can auto-select it. Derived server-side from order items.
+  const comboPackageDefault = await getComboPackageDefaultForOrder(id);
+
+  return c.json({
+    ...buildOrderDetailPayload(order as Record<string, unknown>, overrides, shipmentRows),
+    comboPackageDefault,
+  });
 });
 
 // Alias of GET /orders/:id — old API exposed both shapes. Same payload.
@@ -2307,7 +2318,14 @@ app.get('/:id{[0-9]+}/full', async (c) => {
       .orderBy(desc(shipments.id)),
   ]);
 
-  return c.json(buildOrderDetailPayload(order as Record<string, unknown>, overrides, shipmentRows));
+  // PS-037: resolve the per-client SKU+qty combination package default (if any)
+  // so the side panel can auto-select it. Derived server-side from order items.
+  const comboPackageDefault = await getComboPackageDefaultForOrder(id);
+
+  return c.json({
+    ...buildOrderDetailPayload(order as Record<string, unknown>, overrides, shipmentRows),
+    comboPackageDefault,
+  });
 });
 
 const manualOrderNumberPart = z.union([z.string(), z.number()]).optional();
@@ -2730,6 +2748,47 @@ app.post(
     const row = await applyOverridesPatch(id, { selectedPackageId });
     if (!row) return c.json({ error: 'Order not found' }, 404);
     return c.json({ data: row });
+  }
+);
+
+// PS-037: save the chosen package as the reusable default for this order's
+// EXACT client + SKU+qty combination (not per-SKU). The combo key is derived
+// server-side from the order's items — the client only supplies the package +
+// optional dims/weight snapshot. Guarded by assertOrderEditable so shipped/
+// cancelled lockdown + client scope are enforced.
+app.post(
+  '/:id{[0-9]+}/save-combo-package-default',
+  zValidator(
+    'json',
+    z.object({
+      packageId: z.union([z.string(), z.number()]).nullable().optional(),
+      packageCode: z.string().nullable().optional(),
+      length: z.number().nullable().optional(),
+      width: z.number().nullable().optional(),
+      height: z.number().nullable().optional(),
+      weightOz: z.number().nullable().optional(),
+    })
+  ),
+  async (c) => {
+    const id = Number(c.req.param('id'));
+    const guard = await assertOrderEditable(c, id);
+    if (!guard.ok) return guard.response;
+    const body = c.req.valid('json');
+    const packageIdNum =
+      body.packageId == null || body.packageId === ''
+        ? null
+        : Number.isFinite(Number(body.packageId))
+          ? Math.trunc(Number(body.packageId))
+          : null;
+    const result = await saveComboPackageDefault(id, {
+      packageId: packageIdNum,
+      packageCode: body.packageCode ?? null,
+      length: body.length ?? null,
+      width: body.width ?? null,
+      height: body.height ?? null,
+      weightOz: body.weightOz ?? null,
+    });
+    return c.json({ data: result });
   }
 );
 

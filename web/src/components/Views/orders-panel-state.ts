@@ -135,6 +135,17 @@ export function getMatchedPackageIdByDimensions(
   return match ? getPackageIdentifier(match) : ''
 }
 
+// PS-037: per-client SKU+qty combination default, resolved server-side and
+// attached to the order detail payload as `comboPackageDefault`. Returns the
+// package identifier when the saved package still exists, else ''.
+export function getComboDefaultPackageId(detail: OrderFullDto | null, packages: PackageDto[]) {
+  const combo = toRecord((detail as Record<string, unknown> | null)?.comboPackageDefault)
+  if (!combo) return ''
+  const packageCode = toPackageCode(combo.packageId) || toPackageCode(combo.packageCode)
+  if (!packageCode) return ''
+  return packageExists(packages, packageCode) ? packageCode : ''
+}
+
 export function getProductDefaultPackageId(product: ProductDefaultsDto | null, packages: PackageDto[]) {
   const packageCode = toPackageCode(product?.defaultPackageCode) || toPackageCode(product?.packageId)
   if (!packageCode) return ''

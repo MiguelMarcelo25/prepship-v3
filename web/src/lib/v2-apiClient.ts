@@ -2092,6 +2092,35 @@ export const apiClient = {
     );
   },
 
+  // PS-037: persist the chosen package as the reusable default for this order's
+  // exact client + SKU+qty combination. Backend derives the combo key from the
+  // order's items (the client only supplies package + optional dims snapshot).
+  saveComboPackageDefault(
+    orderId: number,
+    input: {
+      packageId?: string | number | null
+      length?: number | null
+      width?: number | null
+      height?: number | null
+      weightOz?: number | null
+    }
+  ): Promise<any> {
+    return safe(
+      'saveComboPackageDefault',
+      () =>
+        api
+          .post<{ data: any }>(`/orders/${orderId}/save-combo-package-default`, {
+            packageId: input.packageId ?? null,
+            length: input.length ?? null,
+            width: input.width ?? null,
+            height: input.height ?? null,
+            weightOz: input.weightOz ?? null,
+          })
+          .then((r) => r.data),
+      { saved: false }
+    );
+  },
+
   saveOrderBestRate(
     orderId: number,
     rate: unknown,
