@@ -2959,9 +2959,9 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               crash:'#d56b6b',
             }
             return (
-              <div className="min-w-[720px] space-y-1.5 sm:min-w-[900px]">
+              <div className="min-w-[480px] space-y-1.5 sm:min-w-[900px]">
                 <div className="grid grid-cols-[96px_repeat(15,minmax(26px,1fr))] gap-1 text-2xs font-semibold text-ink-3 sm:grid-cols-[150px_repeat(15,minmax(34px,1fr))]">
-                  <div />
+                  <div className="sticky left-0 z-[1] bg-surface" />
                   {heatmap[0]?.cells.map((cell) => (
                     <div key={cell.day} className="text-center">{formatDayLabel(cell.day).replace(' ', ' ')}</div>
                   ))}
@@ -2977,7 +2977,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
                     : 'h-4'
                   return heatmap.map((row) => (
                     <div key={row.label} className="grid grid-cols-[96px_repeat(15,minmax(26px,1fr))] items-center gap-1 sm:grid-cols-[150px_repeat(15,minmax(34px,1fr))]">
-                      <div className="truncate pr-2 text-xs font-semibold text-ink-2" title={row.label}>{row.label}</div>
+                      <div className="sticky left-0 z-[1] truncate bg-surface pr-2 text-xs font-semibold text-ink-2 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.12)] sm:shadow-none" title={row.label}>{row.label}</div>
                       {row.cells.map((cell) => (
                         <button
                           key={`${row.label}-${cell.day}`}
@@ -3095,7 +3095,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               options={categories}
               placeholder="All Categories"
               ariaLabel="Filter SKU table by category"
-              className="w-full sm:w-auto"
+              className="min-w-0 flex-1 sm:w-auto sm:flex-none"
             />
             <FilterSelect
               value={brandFilter}
@@ -3103,7 +3103,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               options={brands}
               placeholder="All Brands"
               ariaLabel="Filter SKU table by brand"
-              className="w-full sm:w-auto"
+              className="min-w-0 flex-1 sm:w-auto sm:flex-none"
             />
             {/* Wrapper ref tracks "inside" for the click-outside
                 handler — covers BOTH the trigger and the panel so
@@ -3119,7 +3119,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             <button
               type="button"
               onClick={() => setShowColumns((open) => !open)}
-              className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-card border border-line bg-surface px-3 text-tiny font-semibold text-ink-2 hover:bg-surface-2 sm:w-auto"
+              className="inline-flex h-9 w-full min-w-0 items-center justify-center gap-2 rounded-card border border-line bg-surface px-3 text-tiny font-semibold text-ink-2 hover:bg-surface-2 sm:w-auto"
               aria-expanded={showColumns}
             >
               <Columns3 size={14} strokeWidth={2.25} />
