@@ -302,11 +302,20 @@ export function DateRangePicker({ value, onChange, label, className }: Props): J
       </button>
 
       {open ? (
+        <>
+        {/* Mobile-only backdrop — dims the page and taps to close so the
+            centered dialog reads as a real modal. Hidden at sm+ where the
+            popover anchors to the trigger button instead. */}
+        <div
+          className="fixed inset-0 z-30 bg-black/40 sm:hidden"
+          aria-hidden="true"
+          onClick={() => setOpen(false)}
+        />
         <div
           ref={popoverRef}
           role="dialog"
           aria-label="Select date range"
-          className="fixed inset-x-3 top-20 z-40 flex max-h-[calc(100vh-6rem)] flex-col overflow-y-auto rounded-card border border-line bg-surface shadow-2xl sm:absolute sm:inset-x-auto sm:right-0 sm:top-12 sm:w-[640px] sm:max-w-[calc(100vw-2rem)] sm:flex-row sm:overflow-hidden"
+          className="fixed left-1/2 top-1/2 z-40 flex max-h-[calc(100vh-4rem)] w-[calc(100vw-1.5rem)] max-w-[420px] -translate-x-1/2 -translate-y-1/2 flex-col overflow-y-auto rounded-card border border-line bg-surface shadow-2xl sm:absolute sm:left-auto sm:right-0 sm:top-12 sm:w-[640px] sm:max-w-[calc(100vw-2rem)] sm:translate-x-0 sm:translate-y-0 sm:flex-row sm:overflow-hidden"
         >
           {/* Presets column */}
           <div className="border-b border-line bg-surface-2/40 p-2 sm:w-44 sm:border-b-0 sm:border-r">
@@ -521,6 +530,7 @@ export function DateRangePicker({ value, onChange, label, className }: Props): J
             </div>
           </div>
         </div>
+        </>
       ) : null}
     </div>
   )
