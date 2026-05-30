@@ -2521,7 +2521,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
       {metricsError ? (
         <PanelError message={metricsError} className="mb-3 min-h-[112px]" />
       ) : (
-        <div className="mb-3 grid grid-cols-2 gap-2.5 sm:grid-cols-2 sm:gap-3 lg:grid-cols-3 xl:grid-cols-6">
+        <div className="mb-3 grid grid-cols-1 gap-2.5 sm:grid-cols-2 sm:gap-3 lg:grid-cols-3 xl:grid-cols-6">
           {metricsLoading ? (
             Array.from({ length: 6 }).map((_, index) => (
               <div key={index} className="h-28 animate-pulse rounded-card border border-line bg-surface" />
