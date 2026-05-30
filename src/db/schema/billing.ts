@@ -12,6 +12,7 @@ import {
 import { clients } from './clients';
 import { orders } from './orders';
 import { shipments } from './shipments';
+import { packages } from './packages';
 
 // Source-of-truth note: billing_config owns mutable billing rules. Generated
 // billing_line_items should be treated as frozen billable records.
@@ -56,6 +57,11 @@ export const billingLineItems = pgTable(
     qty: numeric({ precision: 10, scale: 2 }).default('1').notNull(),
     unitCost: numeric({ precision: 10, scale: 2 }).notNull(),
     totalCost: numeric({ precision: 10, scale: 2 }).notNull(),
+    // PS — billing-line-only Box Size override. When set, the Edit Billing
+    // Detail modal changed this row's box; billingDetails uses this package for
+    // the box name/dims instead of the shipment-derived package. Never mutates
+    // the shipment's selectedPackageId.
+    packageId: integer().references(() => packages.id),
     invoiced: boolean().default(false).notNull(),
     createdAt: timestamp({ withTimezone: true }).defaultNow().notNull(),
   },

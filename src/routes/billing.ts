@@ -232,6 +232,10 @@ const detailPatchSchema = z.object({
   additional: z.coerce.number().nonnegative().optional(),
   packageCost: z.coerce.number().nonnegative().optional(),
   shipping: z.coerce.number().nonnegative().optional(),
+  // PS — billing-line-only box override. When provided, stamp this package id
+  // on the order's billing lines so the box name/dims reflect the chosen box
+  // (never touches the shipment's selectedPackageId). null clears the override.
+  packageId: z.coerce.number().int().positive().nullable().optional(),
 });
 
 const EDITABLE_BILLING_LINES = [
@@ -371,6 +375,23 @@ app.patch('/details/:orderId{[0-9]+}', zValidator('json', detailPatchSchema), as
       });
       inserted += 1;
     }
+  }
+
+  // PS — billing-line-only Box Size override. Stamp the chosen package id on
+  // every billing line for this order so billingDetails renders the new box
+  // name/dims. Does NOT touch shipments.selectedPackageId (source of truth).
+  if (body.packageId !== undefined) {
+    const pkgRows = await db
+      .update(billingLineItems)
+      .set({ packageId: body.packageId })
+      .where(
+        and(
+          eq(billingLineItems.clientId, body.clientId),
+          eq(billingLineItems.orderId, orderId)
+        )
+      )
+      .returning({ id: billingLineItems.id });
+    updated += pkgRows.length;
   }
 
   return c.json({ ok: true, orderId, clientId: body.clientId, updated, inserted });

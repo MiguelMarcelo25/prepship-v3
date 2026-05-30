@@ -60,6 +60,9 @@ type BillingEditDraft = {
   additional: string
   packageCost: string
   shipping: string
+  // PS — selected Box Size package id (billing-line-only override). '' = keep
+  // the shipment-derived box.
+  packageId: string
 }
 
 type BillingEditModalState = {
@@ -151,6 +154,7 @@ function createBillingEditDraft(row: BillingDetailDto): BillingEditDraft {
     additional: metrics.additional.toFixed(2),
     packageCost: metrics.packageCost.toFixed(2),
     shipping: metrics.shipping.toFixed(2),
+    packageId: (row as Record<string, unknown>).packageId != null ? String((row as Record<string, unknown>).packageId) : '',
   }
 }
 
@@ -285,6 +289,9 @@ export default function BillingView() {
   const [detailPageSize, setDetailPageSize] = useState(50)
   const [orderDetailModalId, setOrderDetailModalId] = useState<number | null>(null)
   const [billingEditModal, setBillingEditModal] = useState<BillingEditModalState>(null)
+  // PS — client package prices (packageId -> charge) for the open detail
+  // client, used to auto-fill Box Cost when the operator changes the Box Size.
+  const [billingEditPackagePrices, setBillingEditPackagePrices] = useState<Record<number, number>>({})
   const [detailColumnIds, setDetailColumnIds] = useState<BillingDetailColumnId[]>(() => {
     if (typeof window === 'undefined') return readBillingDetailColumnIds()
     return readBillingDetailColumnIds(window.localStorage)
@@ -895,6 +902,39 @@ export default function BillingView() {
       saving: false,
       error: null,
     })
+    // Load the client's saved package prices so changing the Box Size can
+    // auto-fill Box Cost from the same source billing uses.
+    const clientId = Number(detailState.clientId)
+    void apiClient.fetchBillingPackagePrices(clientId)
+      .then((prices) => {
+        const map: Record<number, number> = {}
+        for (const p of prices ?? []) {
+          const pid = Number(p.packageId ?? p.package_id)
+          const price = Number(p.price ?? p.charge)
+          if (Number.isFinite(pid) && Number.isFinite(price)) map[pid] = price
+        }
+        setBillingEditPackagePrices(map)
+      })
+      .catch(() => setBillingEditPackagePrices({}))
+  }
+
+  // PS — operator changed the Box Size: set the package + auto-fill Box Cost
+  // from the client's saved price for that box (still manually overridable).
+  function handleBillingEditPackageChange(value: string) {
+    setBillingEditModal((current) => {
+      if (!current) return current
+      const pid = Number(value)
+      const price = Number.isFinite(pid) ? billingEditPackagePrices[pid] : undefined
+      return {
+        ...current,
+        draft: {
+          ...current.draft,
+          packageId: value,
+          packageCost: price != null ? price.toFixed(2) : current.draft.packageCost,
+        },
+        error: null,
+      }
+    })
   }
 
   function handleBillingEditDraftChange(field: keyof BillingEditDraft, value: string) {
@@ -920,6 +960,8 @@ export default function BillingView() {
         additional: parseMoneyDraft(billingEditModal.draft.additional),
         packageCost: parseMoneyDraft(billingEditModal.draft.packageCost),
         shipping: parseMoneyDraft(billingEditModal.draft.shipping),
+        // billing-line-only Box Size override (null = keep shipment box)
+        packageId: billingEditModal.draft.packageId ? Number(billingEditModal.draft.packageId) : null,
       })
 
       const [rows] = await Promise.all([
@@ -1809,7 +1851,22 @@ export default function BillingView() {
               <div><span>Qty</span><strong>{billingEditModal.row.totalQty || billingEditModal.row.qty || 0}</strong></div>
               <div><span>Item Name</span><strong>{billingEditModal.row.itemNames || billingEditModal.row.description || '—'}</strong></div>
               <div><span>SKU</span><strong>{billingEditModal.row.itemSkus || '—'}</strong></div>
-              <div><span>Box Size</span><strong>{billingEditModal.row.packageName || '—'}</strong></div>
+              <div>
+                <span>Box Size</span>
+                <select
+                  className="ship-select billing-edit-box-select"
+                  style={{ width: '100%', fontSize: 12, fontWeight: 600 }}
+                  value={billingEditModal.draft.packageId}
+                  disabled={billingEditModal.saving}
+                  onChange={(event) => handleBillingEditPackageChange(event.target.value)}
+                >
+                  <option value="">{billingEditModal.row.packageName ? `${billingEditModal.row.packageName} (shipment box)` : '— (shipment box)'}</option>
+                  {packages.map((pkg) => {
+                    const id = String(pkg.packageId ?? pkg.id)
+                    return <option key={id} value={id}>{pkg.name || id}</option>
+                  })}
+                </select>
+              </div>
               <div><span>Best Rate</span><strong>{formatBillingMoney(billingEditModal.row.actualLabelCost, { dashIfZero: true })}</strong></div>
               <div><span>UPS SS</span><strong>{formatBillingMoney(billingEditModal.row.ref_ups_rate, { dashIfZero: true })}</strong></div>
               <div><span>USPS SS</span><strong>{formatBillingMoney(billingEditModal.row.ref_usps_rate, { dashIfZero: true })}</strong></div>

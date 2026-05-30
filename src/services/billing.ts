@@ -1159,6 +1159,7 @@ export async function billingDetails(input: GenerateInput & { limit?: number }) 
       qty: billingLineItems.qty,
       unitCost: billingLineItems.unitCost,
       totalCost: billingLineItems.totalCost,
+      overridePackageId: billingLineItems.packageId,
       invoiced: billingLineItems.invoiced,
       createdAt: billingLineItems.createdAt,
       carrierCode: shipments.carrierCode,
@@ -1351,7 +1352,12 @@ export async function billingDetails(input: GenerateInput & { limit?: number }) 
       const dimsW = row.dimsW ?? fallbackShipment?.dimsW ?? null;
       const dimsH = row.dimsH ?? fallbackShipment?.dimsH ?? null;
       const selectedPackageNumericId = providerAccountIdOrNull(selectedPackageId);
+      // PS — a billing-line package override (set via the Edit Billing Detail
+      // modal) wins over the shipment-derived package for the box name/dims.
+      const overridePackage =
+        row.overridePackageId != null ? packagesById.get(row.overridePackageId) : undefined;
       const selectedPackage =
+        overridePackage ??
         (selectedPid != null ? packagesById.get(selectedPid) : undefined) ??
         (selectedPackageNumericId != null ? packagesById.get(selectedPackageNumericId) : undefined) ??
         (selectedPackageId ? packagesByCode.get(selectedPackageId) : undefined) ??
@@ -1377,11 +1383,15 @@ export async function billingDetails(input: GenerateInput & { limit?: number }) 
         dimsH: _dimsH,
         refUspsRate: _refUspsRate,
         refUpsRate: _refUpsRate,
+        overridePackageId: _overridePackageId,
         ...rest
       } = row;
       return {
         ...rest,
         shipmentId: row.shipmentId ?? fallbackShipment?.id ?? null,
+        // PS — the package backing this row's box (override if set, else the
+        // shipment-derived package). Lets the Edit modal preselect the box.
+        packageId: row.overridePackageId ?? selectedPackage?.id ?? null,
         carrierCode,
         providerAccountId,
         providerAccountNickname: carrierNickname,
