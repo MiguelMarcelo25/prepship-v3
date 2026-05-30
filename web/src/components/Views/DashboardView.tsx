@@ -1052,7 +1052,10 @@ function SectionSizeToggle({
   ]
   return (
     <div
-      className="inline-flex items-center gap-0.5 rounded-md ring-1 ring-line p-0.5 bg-surface"
+      // PS mobile: the ⅓/⅔/Full control only changes the xl column span, which
+      // has no effect on the single-column phone/tablet layout — hide it below
+      // xl so panel headers aren't cluttered with a no-op control.
+      className="hidden items-center gap-0.5 rounded-md ring-1 ring-line p-0.5 bg-surface xl:inline-flex"
       role="group"
       aria-label="Resize this panel"
     >
@@ -2364,13 +2367,17 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             <SyncStatusChip data={syncChipData} />
           </div>
 
-          <div className="relative grid w-full grid-cols-1 gap-2 sm:flex sm:w-auto sm:flex-wrap sm:items-center sm:justify-end sm:gap-3">
+          {/* PS mobile: flex-wrap (not a 1-col grid) so the controls share
+              rows instead of stacking full-width — date range takes its own
+              row, then Filters + Edit + Refresh sit together on one compact
+              row. */}
+          <div className="relative flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end sm:gap-3">
             {/* Group 2 — operator-controlled date range. Drives every
                 API call on the dashboard. */}
             <DateRangePicker value={dateRange} onChange={setDateRange} className="w-full sm:w-auto" />
 
             {/* Group 3 — Filters popover (category + brand secondary cuts). */}
-            <div ref={filtersPopoverRef} className="relative inline-flex w-full sm:w-auto">
+            <div ref={filtersPopoverRef} className="relative inline-flex min-w-0 flex-1 sm:w-auto sm:flex-none">
           <button
             type="button"
             onClick={() => setShowFilters((open) => !open)}
@@ -2452,7 +2459,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             <button
               type="button"
               onClick={() => setEditMode((on) => !on)}
-              className={`inline-flex h-10 w-full items-center justify-center gap-2 rounded-card border px-4 text-sm2 font-semibold shadow-sm transition sm:w-auto ${
+              className={`inline-flex h-10 min-w-0 flex-1 items-center justify-center gap-2 rounded-card border px-4 text-sm2 font-semibold shadow-sm transition sm:w-auto sm:flex-none ${
                 editMode
                   ? 'border-brand bg-brand text-white hover:bg-brand-dark'
                   : 'border-line bg-surface text-ink hover:bg-surface-2'
@@ -2476,7 +2483,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               <button
                 type="button"
                 onClick={resetDashboardLayout}
-                className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-card border border-line bg-surface px-3 text-sm2 font-semibold text-ink-2 hover:bg-surface-2 shadow-sm sm:w-auto"
+                className="inline-flex h-10 min-w-0 flex-1 items-center justify-center gap-2 rounded-card border border-line bg-surface px-3 text-sm2 font-semibold text-ink-2 hover:bg-surface-2 shadow-sm sm:w-auto sm:flex-none"
                 title="Restore default panel order, sizes, and visibility"
               >
                 <RotateCcw size={14} strokeWidth={2.25} />
@@ -2488,7 +2495,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             <button
               type="button"
               onClick={() => loadDashboard('refresh')}
-              className="grid h-10 w-full place-items-center rounded-card border border-line bg-surface text-ink-2 shadow-sm hover:bg-surface-2 hover:text-brand sm:w-10"
+              className="grid h-10 w-12 shrink-0 place-items-center rounded-card border border-line bg-surface text-ink-2 shadow-sm hover:bg-surface-2 hover:text-brand sm:w-10"
               aria-label="Refresh dashboard"
               title="Refresh dashboard"
             >
