@@ -652,8 +652,19 @@
 
   #view-analysis .analysis-sticky-panel input,
   #view-analysis .analysis-sticky-panel select,
-  #view-analysis .analysis-sticky-panel button {
+  /* Full-width the primary filter controls on phones, but NOT the small
+     range-preset pills (30d/90d/180d/1yr/All) — they belong in a compact
+     wrapping row. The old blanket `button` rule stretched each pill to
+     100%, stacking them into 5 tall full-width rows. Exclude the preset
+     pills so they stay inline. */
+  #view-analysis .analysis-sticky-panel button:not(.analysis-preset) {
     width: 100% !important;
+  }
+
+  /* Keep the range-preset pills compact and let them share rows. */
+  #view-analysis .analysis-sticky-panel .analysis-preset {
+    flex: 0 0 auto;
+    width: auto !important;
   }
 
   #view-billing .billing-grid {

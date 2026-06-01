@@ -546,6 +546,19 @@ function heatmapTone(deviation: number): HeatmapCell['tone'] {
   return 'low'
 }
 
+// Diverging heatmap palette (muted ColorBrewer RdYlGn-style). Hoisted
+// to module scope so BOTH the scrollable cell grid and the (separately
+// positioned, non-scrolling) legend below it reference one source of
+// truth — see the Sales Performance Heatmap panel where the legend was
+// pulled out of the horizontal-scroll region so it wraps to phone width.
+const HEATMAP_TONE_HEX: Record<string, string> = {
+  high: '#4daa57',
+  mid:  '#a8d8a3',
+  flat: '#fbe89c',
+  dip:  '#f0a767',
+  crash:'#d56b6b',
+}
+
 function productFamily(name: string, sku: string) {
   const text = `${name} ${sku}`.toLowerCase()
   if (/ramen|noodle|chapagetti|shin|buldak/.test(text)) return 'Ramen Noodles'
@@ -2325,23 +2338,36 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
 
   return (
     <div id="view-dashboard" className="view-content !overflow-x-hidden !overflow-y-auto !bg-page !p-3 sm:!p-5">
-      <div className="mb-4 grid grid-cols-1 items-start gap-3 sm:gap-4 xl:grid-cols-[minmax(0,1fr)_auto]">
-        <div className="contents">
-          <div className="min-w-0">
-            <h1 className="text-[22px] font-extrabold leading-tight tracking-[-0.02em] text-ink sm:text-[24px]">
-              Inventory & Stockout Prevention
-            </h1>
-            <p className="mt-0.5 hidden text-xs text-ink-3 sm:block">
-              Monitor inventory health, days of supply, and take action to prevent stockouts
-            </p>
-            <p className="mt-1 hidden flex-wrap items-center gap-1.5 text-2xs font-semibold text-ink-3 sm:inline-flex">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-brand" />
-              KPIs · all orders (awaiting + shipped + cancelled). Daily orders · all orders. SKU charts · fulfilled orders only.
-            </p>
-          </div>
+      {/* PS web/desktop: was a 2-row grid (xl:grid-cols-[1fr_auto]) where the
+          Client selector lived in its own full-width row-2 (xl:col-span-2),
+          centered via mx-auto. Because the left heading column is much taller
+          than the right toolbar, that left a large empty void on the right and
+          a lone Client dropdown floating in the middle of the header. Switched
+          to a simple title-left / controls-right flex: the Client filter is now
+          grouped WITH the toolbar in a right-aligned vertical stack, so there's
+          no centered float and no gap. Mobile keeps its approved stacking
+          (heading → Client → controls) via order utilities. */}
+      <div className="mb-4 flex flex-col gap-3 sm:gap-4 xl:flex-row xl:items-start xl:justify-between">
+        {/* LEFT — page title + scope captions */}
+        <div className="min-w-0">
+          <h1 className="text-[22px] font-extrabold leading-tight tracking-[-0.02em] text-ink sm:text-[24px]">
+            Inventory & Stockout Prevention
+          </h1>
+          <p className="mt-0.5 hidden text-xs text-ink-3 sm:block">
+            Monitor inventory health, days of supply, and take action to prevent stockouts
+          </p>
+          <p className="mt-1 hidden flex-wrap items-center gap-1.5 text-2xs font-semibold text-ink-3 sm:inline-flex">
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-brand" />
+            KPIs · all orders (awaiting + shipped + cancelled). Daily orders · all orders. SKU charts · fulfilled orders only.
+          </p>
+        </div>
 
-          {/* Keep client context centered beneath the heading/action row. */}
-          <div className="mx-auto flex w-full items-center justify-center gap-2 sm:w-auto xl:col-span-2 xl:row-start-2">
+        {/* RIGHT — controls group: toolbar on top, Client filter beneath.
+            order-1/order-2 flip the Client/toolbar order between mobile
+            (Client first, centered) and desktop (toolbar first). */}
+        <div className="flex w-full flex-col gap-2 sm:gap-3 xl:w-auto xl:flex-none xl:items-end">
+          {/* Client scope filter */}
+          <div className="order-1 mx-auto flex w-full items-center justify-center gap-2 sm:w-auto xl:order-2 xl:mx-0 xl:w-auto xl:justify-end">
             <span className="text-2xs font-bold uppercase tracking-[0.06em] text-ink-3">Client</span>
             <div className="relative">
               <select
@@ -2364,20 +2390,25 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               />
             </div>
           </div>
-        </div>
 
-        {/* Header action bar - aligned with the heading and ending with refresh on the right. */}
-        <div className="relative flex w-full flex-col items-stretch gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end sm:gap-3 xl:col-start-2 xl:row-start-1">
+          {/* Header action bar — freshness chip, date range, Filters,
+              (desktop-only) Edit, and Refresh. order-2 (below Client) on
+              phones, xl:order-1 (above Client) on desktop. */}
+          <div className="order-2 relative flex w-full flex-col items-stretch gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end sm:gap-3 xl:order-1">
           {/* Group 1 — data freshness (display, no action) */}
           <div className="flex flex-wrap items-center justify-center gap-2 sm:justify-start">
-            <div className="text-xs font-medium text-ink-3">Data as of {formatDataTimestamp()}</div>
+            {/* PS mobile: the verbose "Data as of <timestamp> CA" line is
+                redundant with the SyncStatusChip (which already shows the
+                last-synced time + cadence) and eats a whole row on a phone
+                — hide it below sm and let the chip carry freshness. */}
+            <div className="hidden text-xs font-medium text-ink-3 sm:block">Data as of {formatDataTimestamp()}</div>
             <SyncStatusChip data={syncChipData} />
           </div>
 
           {/* PS mobile: flex-wrap (not a 1-col grid) so the controls share
               rows instead of stacking full-width — date range takes its own
-              row, then Filters + Edit + Refresh sit together on one compact
-              row. */}
+              row, then Filters + Refresh sit together on one compact row
+              (Edit Dashboard is hidden below xl since it's mouse-only). */}
           <div className="relative flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end sm:gap-3">
             {/* Group 2 — operator-controlled date range. Drives every
                 API call on the dashboard. */}
@@ -2463,10 +2494,18 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             {/* Group 4 — Edit Dashboard toggle + Reset (only in edit
                 mode). When active, panels become draggable, show
                 visibility eyes, and resize handles. */}
+            {/* PS mobile: the whole Edit Dashboard system (drag-reorder,
+                drag-resize handles, ⅓/⅔/Full SectionSizeToggle) is
+                mouse-only — resize uses onMouseDown with no touch
+                fallback, and the panel grid is single-column below xl so
+                reordering/resizing is a no-op there anyway. Hide the
+                trigger (and the Reset that only appears in edit mode)
+                below xl so the mobile header isn't cluttered with a
+                control that can't be used by touch. */}
             <button
               type="button"
               onClick={() => setEditMode((on) => !on)}
-              className={`inline-flex h-10 min-w-0 flex-1 items-center justify-center gap-2 rounded-card border px-4 text-sm2 font-semibold shadow-sm transition sm:w-auto sm:flex-none ${
+              className={`hidden h-10 min-w-0 flex-1 items-center justify-center gap-2 rounded-card border px-4 text-sm2 font-semibold shadow-sm transition xl:inline-flex xl:w-auto xl:flex-none ${
                 editMode
                   ? 'border-brand bg-brand text-white hover:bg-brand-dark'
                   : 'border-line bg-surface text-ink hover:bg-surface-2'
@@ -2490,7 +2529,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
               <button
                 type="button"
                 onClick={resetDashboardLayout}
-                className="inline-flex h-10 min-w-0 flex-1 items-center justify-center gap-2 rounded-card border border-line bg-surface px-3 text-sm2 font-semibold text-ink-2 hover:bg-surface-2 shadow-sm sm:w-auto sm:flex-none"
+                className="hidden h-10 min-w-0 flex-1 items-center justify-center gap-2 rounded-card border border-line bg-surface px-3 text-sm2 font-semibold text-ink-2 hover:bg-surface-2 shadow-sm xl:inline-flex xl:w-auto xl:flex-none"
                 title="Restore default panel order, sizes, and visibility"
               >
                 <RotateCcw size={14} strokeWidth={2.25} />
@@ -2508,6 +2547,7 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             >
               <RefreshCw size={16} strokeWidth={2.25} className={refreshing ? 'animate-spin' : ''} />
             </button>
+          </div>
           </div>
         </div>
       </div>
@@ -2748,7 +2788,10 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <h3 className="text-sm font-extrabold text-ink">Top {topSkuLimit} SKUs (30d)</h3>
-              <p className="text-tiny text-ink-3">By total units sold · stretch to see more</p>
+              {/* PS mobile: "· stretch to see more" refers to drag-resizing
+                  the panel taller, which only works on desktop (xl). Drop
+                  the hint below xl so the subtitle stays short on phones. */}
+              <p className="text-tiny text-ink-3">By total units sold<span className="hidden xl:inline"> · stretch to see more</span></p>
             </div>
             <div className="flex w-full flex-wrap items-center justify-between gap-2 sm:w-auto sm:justify-end">
               <TopNDropdown
@@ -2934,93 +2977,90 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
         ) : panelErrors.heatmap ? (
           <PanelError message={panelErrors.heatmap} className="flex-1 min-h-0" />
         ) : (
-        <div className="flex-1 min-h-0 min-w-0 overflow-auto">
-          {/* Refined diverging palette (2026-05-13): muted ColorBrewer
-              RdYlGn-style green → cream → red. The previous Tailwind
-              ok/warn/danger tokens are high-saturation alert colors
-              that read as "look NOW" — wrong tone for a heatmap where
-              every cell should fade into a pattern. Subtle saturation
-              with clear directional steps lets operators scan rows of
-              top SKUs and spot the negative-tone blocks without
-              the chart screaming for attention.
-
-              Cell tones map to a ~5-step diverging scale:
-                high  → deep green   (above +20%)
-                mid   → light green  (+10% to +20%)
-                flat  → soft cream   (-10% to +10%)
-                dip   → soft orange  (-10% to -20%)
-                crash → muted red    (≤ -20%) */}
-          {(() => {
-            const HEATMAP_TONE_HEX: Record<string, string> = {
-              high: '#4daa57',
-              mid:  '#a8d8a3',
-              flat: '#fbe89c',
-              dip:  '#f0a767',
-              crash:'#d56b6b',
-            }
-            return (
-              <div className="min-w-[480px] space-y-1.5 sm:min-w-[900px]">
-                <div className="grid grid-cols-[96px_repeat(15,minmax(26px,1fr))] gap-1 text-2xs font-semibold text-ink-3 sm:grid-cols-[150px_repeat(15,minmax(34px,1fr))]">
-                  <div className="sticky left-0 z-[1] bg-surface" />
-                  {heatmap[0]?.cells.map((cell) => (
-                    <div key={cell.day} className="text-center">{formatDayLabel(cell.day).replace(' ', ' ')}</div>
-                  ))}
-                </div>
-                {/* Cell height responds to the heatmap size toggle:
-                    compact stays tight for at-a-glance scanning;
-                    wide grows the bars so deviations are easier to
-                    distinguish at the cost of more vertical space. */}
-                {(() => {
-                  const cellHeightClass =
-                    sectionSizes.heatmap === 'compact' ? 'h-3'
-                    : sectionSizes.heatmap === 'wide' ? 'h-7'
-                    : 'h-4'
-                  return heatmap.map((row) => (
-                    <div key={row.label} className="grid grid-cols-[96px_repeat(15,minmax(26px,1fr))] items-center gap-1 sm:grid-cols-[150px_repeat(15,minmax(34px,1fr))]">
-                      <div className="sticky left-0 z-[1] truncate bg-surface pr-2 text-xs font-semibold text-ink-2 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.12)] sm:shadow-none" title={row.label}>{row.label}</div>
-                      {row.cells.map((cell) => (
-                        <button
-                          key={`${row.label}-${cell.day}`}
-                          type="button"
-                          onClick={() => setSelectedHeatmapCell({ label: row.label, cell })}
-                          title={`Click to see why this cell is this color`}
-                          aria-label={`${row.label} on ${formatDayLabel(cell.day)} — ${formatInt(cell.qty)} units. Click for details.`}
-                          className={`${cellHeightClass} cursor-pointer rounded-[3px] ring-1 ring-line/40 transition hover:scale-110 hover:ring-2 hover:ring-brand/60 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand`}
-                          style={{ backgroundColor: HEATMAP_TONE_HEX[cell.tone] ?? HEATMAP_TONE_HEX.flat }}
-                        />
-                      ))}
-                    </div>
-                  ))
-                })()}
-                {heatmap.length === 0 ? (
-                  <div className="grid h-32 place-items-center text-tiny text-ink-3">No heatmap data available.</div>
-                ) : null}
-                <div className="flex flex-wrap items-center justify-center gap-5 pt-2 text-2xs text-ink-3">
-                  <span className="mr-1">Performance vs prior 30 days</span>
-                  <span className="inline-flex items-center gap-1">
-                    <span className="h-2.5 w-2.5 rounded-sm ring-1 ring-line/40" style={{ backgroundColor: HEATMAP_TONE_HEX.high }} />
-                    &ge; +20%
-                  </span>
-                  <span className="inline-flex items-center gap-1">
-                    <span className="h-2.5 w-2.5 rounded-sm ring-1 ring-line/40" style={{ backgroundColor: HEATMAP_TONE_HEX.mid }} />
-                    +10% to +20%
-                  </span>
-                  <span className="inline-flex items-center gap-1">
-                    <span className="h-2.5 w-2.5 rounded-sm ring-1 ring-line/40" style={{ backgroundColor: HEATMAP_TONE_HEX.flat }} />
-                    -10% to +10%
-                  </span>
-                  <span className="inline-flex items-center gap-1">
-                    <span className="h-2.5 w-2.5 rounded-sm ring-1 ring-line/40" style={{ backgroundColor: HEATMAP_TONE_HEX.dip }} />
-                    -10% to -20%
-                  </span>
-                  <span className="inline-flex items-center gap-1">
-                    <span className="h-2.5 w-2.5 rounded-sm ring-1 ring-line/40" style={{ backgroundColor: HEATMAP_TONE_HEX.crash }} />
-                    &le; -20%
-                  </span>
-                </div>
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          {/* PS mobile: the dated cell grid is min-w-480px, so on a ~380px
+              phone the most recent days sit off the right edge. A one-line
+              swipe hint (phones only) tells operators it scrolls sideways. */}
+          {heatmap.length > 0 ? (
+            <div className="mb-2 flex items-center gap-1 text-2xs font-semibold text-ink-3 sm:hidden">
+              <ChevronRight size={12} strokeWidth={2.5} className="-ml-0.5 shrink-0" />
+              Swipe the grid sideways to see all days
+            </div>
+          ) : null}
+          {/* Scroll region — ONLY the dated cell grid scrolls
+              horizontally. The legend below is deliberately a sibling
+              OUTSIDE this box so it wraps to the phone's width instead of
+              being pushed off the right edge (the old layout nested the
+              legend inside the min-w-480 block, forcing a sideways scroll
+              just to read the color key). Cell colors come from the
+              module-level HEATMAP_TONE_HEX diverging palette. */}
+          <div className="min-h-0 min-w-0 flex-1 overflow-auto">
+            <div className="min-w-[480px] space-y-1.5 sm:min-w-[900px]">
+              <div className="grid grid-cols-[96px_repeat(15,minmax(26px,1fr))] gap-1 text-2xs font-semibold text-ink-3 sm:grid-cols-[150px_repeat(15,minmax(34px,1fr))]">
+                <div className="sticky left-0 z-[1] bg-surface" />
+                {heatmap[0]?.cells.map((cell) => (
+                  <div key={cell.day} className="text-center">{formatDayLabel(cell.day).replace(' ', ' ')}</div>
+                ))}
               </div>
-            )
-          })()}
+              {/* Cell height responds to the heatmap size toggle:
+                  compact stays tight for at-a-glance scanning;
+                  wide grows the bars so deviations are easier to
+                  distinguish at the cost of more vertical space. */}
+              {(() => {
+                const cellHeightClass =
+                  sectionSizes.heatmap === 'compact' ? 'h-3'
+                  : sectionSizes.heatmap === 'wide' ? 'h-7'
+                  : 'h-4'
+                return heatmap.map((row) => (
+                  <div key={row.label} className="grid grid-cols-[96px_repeat(15,minmax(26px,1fr))] items-center gap-1 sm:grid-cols-[150px_repeat(15,minmax(34px,1fr))]">
+                    <div className="sticky left-0 z-[1] truncate bg-surface pr-2 text-xs font-semibold text-ink-2 shadow-[2px_0_4px_-2px_rgba(0,0,0,0.12)] sm:shadow-none" title={row.label}>{row.label}</div>
+                    {row.cells.map((cell) => (
+                      <button
+                        key={`${row.label}-${cell.day}`}
+                        type="button"
+                        onClick={() => setSelectedHeatmapCell({ label: row.label, cell })}
+                        title={`Click to see why this cell is this color`}
+                        aria-label={`${row.label} on ${formatDayLabel(cell.day)} — ${formatInt(cell.qty)} units. Click for details.`}
+                        className={`${cellHeightClass} cursor-pointer rounded-[3px] ring-1 ring-line/40 transition hover:scale-110 hover:ring-2 hover:ring-brand/60 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-brand`}
+                        style={{ backgroundColor: HEATMAP_TONE_HEX[cell.tone] ?? HEATMAP_TONE_HEX.flat }}
+                      />
+                    ))}
+                  </div>
+                ))
+              })()}
+              {heatmap.length === 0 ? (
+                <div className="grid h-32 place-items-center text-tiny text-ink-3">No heatmap data available.</div>
+              ) : null}
+            </div>
+          </div>
+          {/* Legend — pulled OUT of the scroll region (see comment above)
+              so it wraps cleanly to phone width. Hidden when there's no
+              data so the empty state stands alone. */}
+          {heatmap.length > 0 ? (
+            <div className="mt-2 flex flex-wrap items-center justify-center gap-x-4 gap-y-1.5 pt-1 text-2xs text-ink-3">
+              <span className="mr-1 w-full text-center sm:w-auto">Performance vs prior 30 days</span>
+              <span className="inline-flex items-center gap-1">
+                <span className="h-2.5 w-2.5 rounded-sm ring-1 ring-line/40" style={{ backgroundColor: HEATMAP_TONE_HEX.high }} />
+                &ge; +20%
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="h-2.5 w-2.5 rounded-sm ring-1 ring-line/40" style={{ backgroundColor: HEATMAP_TONE_HEX.mid }} />
+                +10% to +20%
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="h-2.5 w-2.5 rounded-sm ring-1 ring-line/40" style={{ backgroundColor: HEATMAP_TONE_HEX.flat }} />
+                -10% to +10%
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="h-2.5 w-2.5 rounded-sm ring-1 ring-line/40" style={{ backgroundColor: HEATMAP_TONE_HEX.dip }} />
+                -10% to -20%
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="h-2.5 w-2.5 rounded-sm ring-1 ring-line/40" style={{ backgroundColor: HEATMAP_TONE_HEX.crash }} />
+                &le; -20%
+              </span>
+            </div>
+          ) : null}
         </div>
         )}
         </section>
