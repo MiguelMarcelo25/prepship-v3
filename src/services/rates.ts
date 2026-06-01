@@ -128,6 +128,18 @@ export const RATE_FETCH_CONCURRENCY = Math.max(
   1,
   Math.min(8, Number.parseInt(process.env.RATE_FETCH_CONCURRENCY ?? '4', 10) || 4)
 );
+export const SHIPSTATION_RATE_LIMIT_PER_MINUTE = Math.max(
+  1,
+  Number.parseInt(process.env.SHIPSTATION_RATE_LIMIT_PER_MINUTE ?? '160', 10) || 160
+);
+export const SHIPSTATION_RATE_LIMIT_BURST = Math.max(
+  1,
+  Math.min(
+    SHIPSTATION_RATE_LIMIT_PER_MINUTE,
+    Number.parseInt(process.env.SHIPSTATION_RATE_LIMIT_BURST ?? '20', 10) || 20
+  )
+);
+const SHIPSTATION_RATE_LIMIT_WINDOW_MS = 60_000;
 const RATE_NEGATIVE_CACHE_TTL_MS = Math.max(
   60_000,
   Number.parseInt(process.env.RATE_NEGATIVE_CACHE_TTL_MS ?? '600000', 10) || 600_000
@@ -156,6 +168,43 @@ const RATEABLE_CARRIER_CODES = new Set([
 
 let globalRateFetchActive = 0;
 const globalRateFetchWaiters: Array<() => void> = [];
+const shipStationRateLimitTimestamps: number[] = [];
+
+function trimShipStationRateLimitTimestamps(now = Date.now()) {
+  while (
+    shipStationRateLimitTimestamps.length > 0 &&
+    now - shipStationRateLimitTimestamps[0]! >= SHIPSTATION_RATE_LIMIT_WINDOW_MS
+  ) {
+    shipStationRateLimitTimestamps.shift();
+  }
+}
+
+function nextShipStationRateBudgetDelayMs(now = Date.now()) {
+  trimShipStationRateLimitTimestamps(now);
+  const burstWindowMs = Math.ceil(
+    (SHIPSTATION_RATE_LIMIT_WINDOW_MS * SHIPSTATION_RATE_LIMIT_BURST) /
+      SHIPSTATION_RATE_LIMIT_PER_MINUTE
+  );
+  const recentBurst = shipStationRateLimitTimestamps.filter((timestamp) => now - timestamp < burstWindowMs);
+  if (recentBurst.length >= SHIPSTATION_RATE_LIMIT_BURST) {
+    return Math.max(0, burstWindowMs - (now - recentBurst[0]!));
+  }
+  if (shipStationRateLimitTimestamps.length < SHIPSTATION_RATE_LIMIT_PER_MINUTE) return 0;
+  return Math.max(0, SHIPSTATION_RATE_LIMIT_WINDOW_MS - (now - shipStationRateLimitTimestamps[0]!));
+}
+
+async function acquireShipStationRateBudget(): Promise<void> {
+  for (;;) {
+    const delayMs = nextShipStationRateBudgetDelayMs();
+    if (delayMs <= 0) {
+      shipStationRateLimitTimestamps.push(Date.now());
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, delayMs);
+    });
+  }
+}
 
 async function acquireGlobalRateFetchPermit(): Promise<void> {
   if (globalRateFetchActive < RATE_FETCH_CONCURRENCY) {
@@ -173,6 +222,7 @@ function releaseGlobalRateFetchPermit() {
 }
 
 async function runWithGlobalRateLimiter<T>(operation: () => Promise<T>): Promise<T> {
+  await acquireShipStationRateBudget();
   await acquireGlobalRateFetchPermit();
   try {
     return await operation();
