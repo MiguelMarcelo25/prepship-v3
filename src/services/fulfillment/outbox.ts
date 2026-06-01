@@ -35,6 +35,68 @@ const DEFAULT_MISSING_CONFIRMATION_LOOKBACK_HOURS = 72;
 
 let schemaEnsured: Promise<void> | null = null;
 
+export type ShipmentConfirmationLifecycleStatus =
+  | 'not_required'
+  | 'not_supported'
+  | 'pending'
+  | 'processing'
+  | 'succeeded'
+  | 'failed';
+
+export type ShipmentConfirmationLifecycleCandidate = {
+  orderId: number;
+  orderNumber: string | null;
+  sourceProvider?: string | null;
+  externalOrderId?: string | null;
+  sourceOrderId?: string | null;
+  clientId?: number | null;
+  shipmentId: number | null;
+  trackingNumber?: string | null;
+  carrierCode?: string | null;
+  shipDate?: string | Date | null;
+  labelShipDate?: string | Date | null;
+  labelShipmentId?: number | null;
+  providerAccountId?: number | null;
+  labelProvider?: number | null;
+  confirmationStatus?: string | null;
+  outboxExists?: boolean;
+  outboxSucceeded?: boolean;
+};
+
+export type ShipmentConfirmationLifecyclePlan = {
+  orderId: number;
+  orderNumber: string | null;
+  shipmentId: number | null;
+  provider: string | null;
+  upstreamOrderId: string | null;
+  confirmationStatus: string | null;
+  outboxExists: boolean;
+  safeToBuyLabel: false;
+  notifyMarketplace: boolean;
+  plannedAction:
+    | 'order_not_found'
+    | 'no_active_shipment'
+    | 'already_succeeded'
+    | 'already_pending'
+    | 'create_outbox_pending'
+    | 'mark_not_supported'
+    | 'mark_not_required'
+    | 'mark_not_required_no_tracking';
+  reason: string;
+};
+
+function textOrNull(value: unknown): string | null {
+  const text = String(value ?? '').trim();
+  return text || null;
+}
+
+function positiveIntegerText(value: unknown): string | null {
+  const text = textOrNull(value);
+  if (!text) return null;
+  const n = Number(text);
+  return Number.isInteger(n) && n > 0 ? String(n) : null;
+}
+
 export function inferStoreProvider(externalOrderId: string | null | undefined): string {
   if (!externalOrderId) return 'shipstation';
   const match = externalOrderId.match(/^([a-z_]+)-(.+)$/i);
@@ -63,6 +125,81 @@ function confirmationProviderForOrder(order: OrderForConfirmation): string | nul
   if (sourceProvider) return sourceProvider;
   if (!order.externalOrderId) return null;
   return inferStoreProvider(order.externalOrderId);
+}
+
+export function resolveShipmentConfirmationProvider(
+  candidate: Pick<ShipmentConfirmationLifecycleCandidate, 'sourceProvider' | 'externalOrderId'>,
+): string | null {
+  const sourceProvider = normalizeSourceProvider(candidate.sourceProvider);
+  if (isNoMarketplaceProvider(sourceProvider)) return null;
+  if (sourceProvider && sourceProvider !== 'unknown') return sourceProvider;
+  if (!candidate.externalOrderId) return null;
+  return inferStoreProvider(candidate.externalOrderId);
+}
+
+function resolveShipmentConfirmationUpstreamOrderId(
+  candidate: Pick<ShipmentConfirmationLifecycleCandidate, 'sourceProvider' | 'externalOrderId' | 'sourceOrderId'>,
+  provider: string | null,
+): string | null {
+  if (provider === 'shipstation') {
+    return positiveIntegerText(candidate.sourceOrderId) ?? positiveIntegerText(candidate.externalOrderId);
+  }
+  return textOrNull(candidate.sourceOrderId) ?? textOrNull(candidate.externalOrderId);
+}
+
+export function buildShipmentConfirmationLifecyclePlan(
+  candidate: ShipmentConfirmationLifecycleCandidate,
+): ShipmentConfirmationLifecyclePlan {
+  const provider = resolveShipmentConfirmationProvider(candidate);
+  const upstreamOrderId = resolveShipmentConfirmationUpstreamOrderId(candidate, provider);
+  const confirmationStatus = textOrNull(candidate.confirmationStatus);
+  const outboxExists = candidate.outboxExists === true;
+  const base = {
+    orderId: candidate.orderId,
+    orderNumber: candidate.orderNumber,
+    shipmentId: candidate.shipmentId,
+    provider,
+    upstreamOrderId,
+    confirmationStatus,
+    outboxExists,
+    safeToBuyLabel: false as const,
+    notifyMarketplace: provider != null && provider !== 'none',
+  };
+
+  if (!candidate.shipmentId) {
+    return { ...base, plannedAction: 'no_active_shipment', reason: 'No active local label shipment exists to confirm.' };
+  }
+  if (confirmationStatus === 'succeeded' || candidate.outboxSucceeded === true) {
+    return { ...base, plannedAction: 'already_succeeded', reason: 'Shipment confirmation already succeeded.' };
+  }
+  if (['pending', 'processing'].includes(confirmationStatus ?? '') || outboxExists) {
+    return { ...base, plannedAction: 'already_pending', reason: 'Shipment confirmation lifecycle already exists.' };
+  }
+  if (!textOrNull(candidate.trackingNumber)) {
+    return { ...base, plannedAction: 'mark_not_required_no_tracking', reason: 'Active local label has no tracking number to confirm.' };
+  }
+  if (!provider) {
+    return { ...base, plannedAction: 'mark_not_required', reason: 'No marketplace/source confirmation is required for this shipment.' };
+  }
+  const resolvedStoreConnector = resolveStoreConnector(provider, 'shipment.confirm');
+  if (!resolvedStoreConnector || resolvedStoreConnector.implementation.status !== 'live') {
+    const reason = !resolvedStoreConnector
+      ? `No shipment confirmation connector registered for ${provider}.`
+      : `${provider} shipment confirmation connector is ${resolvedStoreConnector.implementation.status}.`;
+    return { ...base, plannedAction: 'mark_not_supported', reason };
+  }
+  if (provider === 'shipstation' && !upstreamOrderId) {
+    return {
+      ...base,
+      plannedAction: 'mark_not_supported',
+      reason: 'ShipStation source order is missing a valid upstream ShipStation order id.',
+    };
+  }
+  return {
+    ...base,
+    plannedAction: 'create_outbox_pending',
+    reason: `Create fulfillment_outbox provider=${provider} and set shipment confirmation_status=pending.`,
+  };
 }
 
 function sourceOrderId(externalOrderId: string | null | undefined): string | null {
@@ -360,6 +497,228 @@ export async function enqueueMissingShipmentConfirmations(options: {
   }
 
   return { scanned: rows.length, enqueued, failed };
+}
+
+type ShipmentConfirmationLifecycleRow = {
+  order_id: number;
+  order_number: string | null;
+  external_order_id: string | null;
+  source_order_id: string | null;
+  source_provider: string | null;
+  client_id: number | null;
+  shipment_id: number | null;
+  tracking_number: string | null;
+  carrier_code: string | null;
+  ship_date: string | Date | null;
+  label_ship_date: string | Date | null;
+  label_shipment_id: number | null;
+  provider_account_id: number | null;
+  label_provider: number | null;
+  confirmation_status: string | null;
+  outbox_exists: boolean;
+  outbox_succeeded: boolean;
+};
+
+export type EnsureShipmentConfirmationLifecycleResult = {
+  ok: boolean;
+  mode: 'dry_run' | 'apply';
+  plan: ShipmentConfirmationLifecyclePlan;
+  queued: boolean;
+  outboxId?: number;
+  processed?: { processed: number; succeeded: number; failed: number };
+};
+
+function rowToLifecycleCandidate(row: ShipmentConfirmationLifecycleRow): ShipmentConfirmationLifecycleCandidate {
+  return {
+    orderId: row.order_id,
+    orderNumber: row.order_number,
+    sourceProvider: row.source_provider,
+    externalOrderId: row.external_order_id,
+    sourceOrderId: row.source_order_id,
+    clientId: row.client_id,
+    shipmentId: row.shipment_id,
+    trackingNumber: row.tracking_number,
+    carrierCode: row.carrier_code,
+    shipDate: row.ship_date,
+    labelShipDate: row.label_ship_date,
+    labelShipmentId: row.label_shipment_id,
+    providerAccountId: row.provider_account_id,
+    labelProvider: row.label_provider,
+    confirmationStatus: row.confirmation_status,
+    outboxExists: row.outbox_exists,
+    outboxSucceeded: row.outbox_succeeded,
+  };
+}
+
+async function loadShipmentConfirmationLifecycleRow(options: {
+  orderId?: number;
+  orderNumber?: string;
+  shipmentId?: number;
+}): Promise<ShipmentConfirmationLifecycleRow | null> {
+  const orderNumber = textOrNull(options.orderNumber);
+  const rows = await pg`
+    SELECT
+      o.id AS order_id,
+      o.order_number,
+      o.external_order_id,
+      o.source_order_id,
+      o.source_provider,
+      o.client_id,
+      s.id AS shipment_id,
+      s.tracking_number,
+      s.carrier_code,
+      s.ship_date,
+      s.label_ship_date,
+      s.label_shipment_id,
+      s.provider_account_id,
+      s.label_provider,
+      s.confirmation_status,
+      EXISTS (
+        SELECT 1
+        FROM fulfillment_outbox fo
+        WHERE fo.event_type = 'shipment_confirmation_requested'
+          AND (
+            fo.shipment_id = s.id
+            OR (fo.order_id = o.id AND fo.status IN ('pending', 'processing', 'succeeded'))
+          )
+      ) AS outbox_exists,
+      EXISTS (
+        SELECT 1
+        FROM fulfillment_outbox fo
+        WHERE fo.event_type = 'shipment_confirmation_requested'
+          AND fo.status = 'succeeded'
+          AND (
+            fo.shipment_id = s.id
+            OR fo.order_id = o.id
+          )
+      ) AS outbox_succeeded
+    FROM orders o
+    LEFT JOIN LATERAL (
+      SELECT *
+      FROM shipments s
+      WHERE s.order_id = o.id
+        AND coalesce(s.voided, false) = false
+        AND coalesce(s.is_return, false) = false
+        AND s.label_url IS NOT NULL
+        ${options.shipmentId ? pg`AND s.id = ${options.shipmentId}` : pg``}
+      ORDER BY s.id DESC
+      LIMIT 1
+    ) s ON TRUE
+    WHERE
+      ${options.orderId ? pg`o.id = ${options.orderId}` : pg`FALSE`}
+      ${orderNumber ? pg`OR o.order_number = ${orderNumber}` : pg``}
+    ORDER BY o.id DESC
+    LIMIT 1
+  ` as ShipmentConfirmationLifecycleRow[];
+  return rows[0] ?? null;
+}
+
+export async function ensureShipmentConfirmationLifecycle(options: {
+  orderId?: number;
+  orderNumber?: string;
+  shipmentId?: number;
+  dryRun?: boolean;
+  processNow?: boolean;
+}): Promise<EnsureShipmentConfirmationLifecycleResult> {
+  await ensureFulfillmentSchema();
+  const row = await loadShipmentConfirmationLifecycleRow(options);
+  if (!row) {
+    const plan: ShipmentConfirmationLifecyclePlan = {
+      orderId: options.orderId ?? 0,
+      orderNumber: options.orderNumber ?? null,
+      shipmentId: options.shipmentId ?? null,
+      provider: null,
+      upstreamOrderId: null,
+      confirmationStatus: null,
+      outboxExists: false,
+      safeToBuyLabel: false,
+      notifyMarketplace: false,
+      plannedAction: 'order_not_found',
+      reason: 'Order was not found.',
+    };
+    return { ok: false, mode: options.dryRun === false ? 'apply' : 'dry_run', plan, queued: false };
+  }
+
+  const candidate = rowToLifecycleCandidate(row);
+  const plan = buildShipmentConfirmationLifecyclePlan(candidate);
+  const mode = options.dryRun === false ? 'apply' : 'dry_run';
+  if (mode === 'dry_run') {
+    return { ok: plan.plannedAction !== 'order_not_found', mode, plan, queued: false };
+  }
+
+  if (!row.shipment_id) {
+    return { ok: false, mode, plan, queued: false };
+  }
+
+  // Per user override unlock shipped data on 2026-06-01: PS-064 repair writes
+  // only shipment confirmation/outbox metadata for an existing active label.
+  // It never creates labels, buys postage, voids labels, or rewrites shipment history.
+  if (plan.plannedAction === 'mark_not_required' || plan.plannedAction === 'mark_not_required_no_tracking') {
+    await markShipmentConfirmationState({
+      shipmentId: row.shipment_id,
+      carrierProvider: String(row.label_provider ?? 'unknown'),
+      carrierAccountId: row.provider_account_id ?? row.label_provider ?? null,
+      confirmationProvider: 'none',
+      status: 'not_required',
+      lastError: plan.reason,
+    });
+    return { ok: true, mode, plan, queued: false };
+  }
+
+  if (plan.plannedAction === 'mark_not_supported') {
+    await markShipmentConfirmationState({
+      shipmentId: row.shipment_id,
+      carrierProvider: String(row.label_provider ?? plan.provider ?? 'unknown'),
+      carrierAccountId: row.provider_account_id ?? row.label_provider ?? null,
+      confirmationProvider: plan.provider ?? 'unknown',
+      status: 'not_supported',
+      lastError: plan.reason,
+    });
+    return { ok: true, mode, plan, queued: false };
+  }
+
+  if (plan.plannedAction !== 'create_outbox_pending') {
+    return { ok: true, mode, plan, queued: false };
+  }
+
+  const enqueueResult = await enqueueShipmentConfirmation({
+    order: {
+      id: row.order_id,
+      externalOrderId: plan.provider === 'shipstation' ? plan.upstreamOrderId : row.external_order_id,
+      sourceProvider: row.source_provider,
+      clientId: row.client_id,
+      orderNumber: row.order_number,
+    },
+    shipmentId: row.shipment_id,
+    trackingNumber: row.tracking_number,
+    carrierCode: row.carrier_code,
+    shipDate: dateOnly(row.ship_date ?? row.label_ship_date),
+    confirmationProvider: plan.provider,
+    payload: {
+      carrierProvider: row.label_provider ?? plan.provider,
+      carrierAccountId: row.provider_account_id ?? row.label_provider ?? null,
+      shipStationShipmentId: row.label_shipment_id,
+      sourceOrderId: row.source_order_id,
+      upstreamOrderId: plan.upstreamOrderId,
+      notifyCustomer: false,
+      notifyMarketplace: true,
+      ps064ConfirmationLifecycleRepair: true,
+    },
+  });
+
+  let processed: EnsureShipmentConfirmationLifecycleResult['processed'];
+  if (options.processNow === true) {
+    processed = await processFulfillmentOutboxOnce({ orderId: row.order_id, limit: 5 });
+  }
+
+  return {
+    ok: true,
+    mode,
+    plan,
+    queued: enqueueResult.queued,
+    outboxId: enqueueResult.outboxId,
+    processed,
+  };
 }
 
 async function loadStoreCredentials(provider: string, payload: Record<string, unknown>, clientId: number | null): Promise<Record<string, string | null | undefined>> {

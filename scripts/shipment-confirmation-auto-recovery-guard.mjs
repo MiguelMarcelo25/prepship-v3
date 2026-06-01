@@ -40,12 +40,11 @@ assert(
   'missing confirmation recovery must terminate manual/internal labels as not_required instead of leaving NULL',
 );
 assert(
-  printQueue.includes('enqueueMissingShipmentConfirmations') &&
-    printQueue.includes('processFulfillmentOutboxOnce') &&
+  printQueue.includes('ensureShipmentConfirmationLifecycle') &&
     printQueue.includes('repairMissingConfirmationForQueuedLabel') &&
     printQueue.includes('await repairMissingConfirmationForQueuedLabel(order.orderId)') &&
-    printQueue.includes('result.enqueued > 0') &&
-    printQueue.includes('processFulfillmentOutboxOnce({ orderId: parsedOrderId, limit: 5 })'),
+    printQueue.includes('dryRun: false') &&
+    printQueue.includes('processNow: true'),
   'print queue existing-label path must repair and immediately process missing confirmation lifecycle without buying postage',
 );
 assert(

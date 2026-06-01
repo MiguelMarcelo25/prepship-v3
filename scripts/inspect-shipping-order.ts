@@ -240,6 +240,15 @@ async function main() {
 
   const activeShipment = shipments.find((row) => row.voided !== true && row.is_return !== true);
   const provider = providerFromOrder(order);
+  const support = confirmationSupport(provider);
+  const confirmationLifecycleMissing = Boolean(
+    activeShipment &&
+      support === 'supported' &&
+      activeShipment.label_url &&
+      activeShipment.tracking_number &&
+      activeShipment.confirmation_status == null &&
+      outbox.length === 0,
+  );
   const hasShipTo = Boolean(order.ship_to_name && order.ship_to_city && order.ship_to_state && order.ship_to_postal_code);
   const weightOz = Number(order.weight_oz ?? 0);
   const retrySafe = order.order_status === 'awaiting_shipment' && !activeShipment;
@@ -253,7 +262,7 @@ async function main() {
       orderStatus: order.order_status,
       canonicalStatus: order.canonical_status ?? null,
       provider,
-      confirmationSupport: confirmationSupport(provider),
+      confirmationSupport: support,
       externalOrderId: order.external_order_id ?? null,
       sourceOrderId: order.source_order_id ?? null,
       clientId: order.client_id ?? null,
@@ -316,9 +325,10 @@ async function main() {
     })),
     warnings: [
       activeShipment ? 'duplicate active label risk: do not create another label until reviewed' : null,
+      confirmationLifecycleMissing ? 'confirmation lifecycle missing: active local label has no fulfillment_outbox row and no shipment confirmation_status' : null,
       !hasShipTo ? 'ship-to fields are incomplete' : null,
       weightOz <= 0 ? 'weight is missing or zero' : null,
-      confirmationSupport(provider) !== 'supported' ? `marketplace confirmation support is ${confirmationSupport(provider)}` : null,
+      support !== 'supported' ? `marketplace confirmation support is ${support}` : null,
     ].filter(Boolean),
   }, null, 2));
 }
