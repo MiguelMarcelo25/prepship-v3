@@ -982,6 +982,7 @@ export async function billingSummary(
     clientId: input.clientId,
     scopeClientIds: input.scopeClientIds,
     scopeStoreIds: input.scopeStoreIds,
+    scopeIsGlobal: input.scopeIsGlobal,
     scopeRestricted: input.scopeRestricted,
     maxAgeMinutes: 45,
   }).catch((err) => {
@@ -1008,6 +1009,7 @@ export async function billingSummary(
           clientId: input.clientId,
           scopeClientIds: input.scopeClientIds,
           scopeStoreIds: input.scopeStoreIds,
+          scopeIsGlobal: input.scopeIsGlobal,
           scopeRestricted: input.scopeRestricted,
           maxAgeMinutes: 45,
         });

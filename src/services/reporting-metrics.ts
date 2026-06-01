@@ -872,6 +872,7 @@ export async function getFreshBillingSummaryMetrics(options: {
   clientId?: number;
   scopeClientIds?: number[];
   scopeStoreIds?: number[];
+  scopeIsGlobal?: boolean;
   scopeRestricted?: boolean;
   maxAgeMinutes?: number;
 }): Promise<{ clients: BillingSummaryMetricRow[]; grandTotal: number } | null> {
@@ -879,6 +880,8 @@ export async function getFreshBillingSummaryMetrics(options: {
   const fromDay = isoDate(new Date(options.dateFrom));
   const toDay = isoDate(new Date(options.dateTo));
   const billingMetricsScopePredicate = (() => {
+    if (options.scopeIsGlobal === true) return sql`true`;
+
     const clientIds = normalizeScopeIds(options.scopeClientIds);
     const storeIds = normalizeScopeIds(options.scopeStoreIds);
     const predicates: SQL[] = [];

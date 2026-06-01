@@ -44,8 +44,9 @@ assert(
 );
 assert(
   routeSource.includes('if (scope.isGlobal) return sql`true`;') &&
-    serviceSource.includes('if (input.scopeIsGlobal === true) return sql`true`;'),
-  'billing predicates ignore client/store ids for global/admin users',
+    serviceSource.includes('if (input.scopeIsGlobal === true) return sql`true`;') &&
+    reportingSource.includes('if (options.scopeIsGlobal === true) return sql`true`;'),
+  'billing predicates and read model ignore client/store ids for global/admin users',
 );
 assert(
   routeSource.includes('const configScope = billingScopeFromContext(c)') &&
@@ -82,6 +83,7 @@ assert(
   serviceSource.includes('scopeClientIds?: number[]') &&
     serviceSource.includes('scopeStoreIds?: number[]') &&
     serviceSource.includes('scopeIsGlobal?: boolean') &&
+    reportingSource.includes('scopeIsGlobal?: boolean') &&
     serviceSource.includes('scopeRestricted?: boolean'),
   'billing service accepts client/store scope input',
 );
