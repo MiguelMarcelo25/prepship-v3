@@ -2338,18 +2338,15 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
 
   return (
     <div id="view-dashboard" className="view-content !overflow-x-hidden !overflow-y-auto !bg-page !p-3 sm:!p-5">
-      {/* PS web/desktop: was a 2-row grid (xl:grid-cols-[1fr_auto]) where the
-          Client selector lived in its own full-width row-2 (xl:col-span-2),
-          centered via mx-auto. Because the left heading column is much taller
-          than the right toolbar, that left a large empty void on the right and
-          a lone Client dropdown floating in the middle of the header. Switched
-          to a simple title-left / controls-right flex: the Client filter is now
-          grouped WITH the toolbar in a right-aligned vertical stack, so there's
-          no centered float and no gap. Mobile keeps its approved stacking
-          (heading → Client → controls) via order utilities. */}
-      <div className="mb-4 flex flex-col gap-3 sm:gap-4 xl:flex-row xl:items-start xl:justify-between">
-        {/* LEFT — page title + scope captions */}
-        <div className="min-w-0">
+      {/* PS web/desktop: 3-zone header grid — title (top-left), toolbar
+          (top-right), and the Client filter CENTERED in its own row beneath
+          both (operator preference 2026-06-01). On phones the grid collapses
+          to a single column and the order utilities keep the approved stack:
+          heading → Client → controls. Explicit grid placement on desktop
+          (xl:col-* / xl:row-*) overrides the mobile order utilities. */}
+      <div className="mb-4 grid grid-cols-1 items-start gap-3 sm:gap-4 xl:grid-cols-[minmax(0,1fr)_auto]">
+        {/* TITLE — top-left */}
+        <div className="min-w-0 xl:col-start-1 xl:row-start-1">
           <h1 className="text-[22px] font-extrabold leading-tight tracking-[-0.02em] text-ink sm:text-[24px]">
             Inventory & Stockout Prevention
           </h1>
@@ -2362,12 +2359,10 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           </p>
         </div>
 
-        {/* RIGHT — controls group: toolbar on top, Client filter beneath.
-            order-1/order-2 flip the Client/toolbar order between mobile
-            (Client first, centered) and desktop (toolbar first). */}
-        <div className="flex w-full flex-col gap-2 sm:gap-3 xl:w-auto xl:flex-none xl:items-end">
-          {/* Client scope filter */}
-          <div className="order-1 mx-auto flex w-full items-center justify-center gap-2 sm:w-auto xl:order-2 xl:mx-0 xl:w-auto xl:justify-end">
+        {/* CLIENT scope filter — desktop: centered in its own full-width row
+            beneath the title/toolbar (xl:col-span-2 xl:row-start-2 + mx-auto).
+            Mobile: 2nd item in the stack (order-2), centered. */}
+        <div className="order-2 mx-auto flex w-full items-center justify-center gap-2 sm:w-auto xl:order-none xl:col-span-2 xl:row-start-2">
             <span className="text-2xs font-bold uppercase tracking-[0.06em] text-ink-3">Client</span>
             <div className="relative">
               <select
@@ -2392,9 +2387,9 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
           </div>
 
           {/* Header action bar — freshness chip, date range, Filters,
-              (desktop-only) Edit, and Refresh. order-2 (below Client) on
-              phones, xl:order-1 (above Client) on desktop. */}
-          <div className="order-2 relative flex w-full flex-col items-stretch gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end sm:gap-3 xl:order-1">
+              (desktop-only) Edit, and Refresh. order-3 (below Client) on
+              phones; desktop: top-right cell (xl:col-start-2 xl:row-start-1). */}
+          <div className="order-3 relative flex w-full flex-col items-stretch gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end sm:gap-3 xl:order-none xl:col-start-2 xl:row-start-1">
           {/* Group 1 — data freshness (display, no action) */}
           <div className="flex flex-wrap items-center justify-center gap-2 sm:justify-start">
             {/* PS mobile: the verbose "Data as of <timestamp> CA" line is
@@ -2547,7 +2542,6 @@ export default function DashboardView({ onOpenSku }: DashboardViewProps = {}) {
             >
               <RefreshCw size={16} strokeWidth={2.25} className={refreshing ? 'animate-spin' : ''} />
             </button>
-          </div>
           </div>
         </div>
       </div>
