@@ -3996,7 +3996,10 @@ export default function OrdersView({
       const selectedRate = order.selectedRate
       const shippingProviderId = toNumberValue(bestRate?.shippingProviderId) ?? selectedRate?.shippingProviderId ?? order.label?.shippingProviderId ?? null
       const serviceCode = getShippingString(order, 'serviceCode') ?? toStringValue(bestRate?.serviceCode) ?? selectedRate?.serviceCode
+      const serviceName = toStringValue(bestRate?.serviceName) ?? toStringValue((bestRate as any)?.service_type) ?? selectedRate?.serviceName ?? selectedRate?.serviceType
+      const serviceType = toStringValue((bestRate as any)?.serviceType) ?? toStringValue((bestRate as any)?.service_type) ?? selectedRate?.serviceType ?? selectedRate?.serviceName
       const carrierCode = getShippingString(order, 'carrierCode') ?? toStringValue(bestRate?.carrierCode) ?? selectedRate?.carrierCode
+      const carrierName = toStringValue(bestRate?.carrierName) ?? toStringValue((bestRate as any)?.carrier_name) ?? selectedRate?.carrierName
       const orderDetail = orderDetailsById.get(order.orderId) ?? null
       const dims = getDimensions(order, orderDetail)
       const weightOz = getOrderWeightOz(order, orderDetail)
@@ -4009,6 +4012,9 @@ export default function OrdersView({
       payload.label = options.labelPayloadOverrides?.get(order.orderId) ?? {
         serviceCode: effectiveServiceCode,
         carrierCode: effectiveCarrierCode,
+        carrierName: carrierName ?? undefined,
+        serviceName: serviceName ?? undefined,
+        serviceType: serviceType ?? undefined,
         packageCode: 'package',
         shippingProviderId: shippingProviderId ?? undefined,
         weightOz: effectiveWeightOz > 0 ? effectiveWeightOz : undefined,
@@ -4314,6 +4320,12 @@ export default function OrdersView({
       orderNumber: order.orderNumber ?? undefined,
       carrierCode: isTest ? testCarrierCode : account.code,
       serviceCode: isTest ? testServiceCode : panelForm.serviceCode,
+      serviceName: isTest
+        ? toStringValue(testSelectedRate?.serviceName) ?? testServiceCode
+        : toStringValue(panelRatePreview[0]?.serviceName) ?? order.bestRate?.serviceName ?? panelForm.serviceCode,
+      serviceType: isTest
+        ? toStringValue((testSelectedRate as any)?.serviceType) ?? toStringValue((testSelectedRate as any)?.service_type) ?? testServiceCode
+        : toStringValue((panelRatePreview[0] as any)?.serviceType) ?? toStringValue((panelRatePreview[0] as any)?.service_type) ?? order.bestRate?.serviceType ?? order.bestRate?.serviceName ?? panelForm.serviceCode,
       shippingProviderId: isTest ? null : shippingProviderId,
       packageCode: 'package',
       customPackageId: selectedPackage && selectedPackage.source !== 'ss_carrier' ? selectedPackage.packageId : null,

@@ -51,6 +51,7 @@ export type QueueSendOrderInput = {
   itemDescription?: string | null;
   orderQty?: number;
   multiSkuData?: { sku: string; qty: number }[] | null;
+  scope?: PrintQueueListScope;
 };
 
 export type QueueSendJobResult = {
@@ -155,6 +156,20 @@ export class PrintQueueLabelUrlError extends Error {
 
 export function isPrintQueueLabelUrlError(err: unknown): err is PrintQueueLabelUrlError {
   return err instanceof PrintQueueLabelUrlError;
+}
+
+export class PrintQueueAccessError extends Error {
+  status = 403 as const;
+  code = 'PRINT_QUEUE_FORBIDDEN' as const;
+
+  constructor(message = 'One or more print queue clients are not authorized') {
+    super(message);
+    this.name = 'PrintQueueAccessError';
+  }
+}
+
+export function isPrintQueueAccessError(err: unknown): err is PrintQueueAccessError {
+  return err instanceof PrintQueueAccessError;
 }
 
 // Per user override unlock shipped data on 2026-05-23: shipped-label queue
@@ -476,7 +491,7 @@ export async function assertPrintQueueClientsVisible(
     .where(and(inArray(clients.id, ids), printQueueClientScopePredicate(scope)));
 
   if (rows.length !== ids.length) {
-    throw new Error('One or more print queue clients are not authorized');
+    throw new PrintQueueAccessError();
   }
 }
 
@@ -531,7 +546,8 @@ async function repairMissingConfirmationForQueuedLabel(orderId: number | string)
 }
 
 async function processQueueSendOrder(
-  order: QueueSendOrderInput
+  order: QueueSendOrderInput,
+  scope: PrintQueueListScope = {}
 ): Promise<QueueSendJobResult> {
   let labelUrl: unknown = order.labelUrl ?? null;
   let trackingNumber: string | null = null;
@@ -576,6 +592,7 @@ async function processQueueSendOrder(
     itemDescription: order.itemDescription ?? null,
     orderQty: order.orderQty ?? 1,
     multiSkuData: order.multiSkuData ?? null,
+    scope,
   });
 
   return {
@@ -682,6 +699,7 @@ export async function addToQueue(
 export function startQueueSendJob(input: {
   orders: QueueSendOrderInput[];
   concurrency?: number;
+  scope?: PrintQueueListScope;
 }): { jobId: string; total: number } {
   if (!input.orders.length) throw new Error('orders must be non-empty');
 
@@ -708,7 +726,7 @@ export function startQueueSendJob(input: {
   queueSendJobs.set(jobId, job);
 
   void persistQueueSendJobSnapshot(job);
-  void runQueueSendJob(jobId, input.orders, input.concurrency);
+  void runQueueSendJob(jobId, input.orders, input.concurrency, input.scope);
   return { jobId, total: input.orders.length };
 }
 
@@ -720,7 +738,8 @@ export function getQueueSendJobStatus(jobId: string): QueueSendJob | null {
 async function runQueueSendJob(
   jobId: string,
   orders: QueueSendOrderInput[],
-  requestedConcurrency = 5
+  requestedConcurrency = 5,
+  scope: PrintQueueListScope = {}
 ) {
   const job = queueSendJobs.get(jobId);
   if (!job) return;
@@ -736,7 +755,7 @@ async function runQueueSendJob(
       async (order) => {
         try {
           const result = await Promise.race([
-            processQueueSendOrder(order),
+            processQueueSendOrder(order, order.scope ?? scope),
             timeoutAfter(
               QUEUE_SEND_ORDER_TIMEOUT_MS,
               `Timed out while sending order ${order.orderNumber ?? order.orderId} to queue`

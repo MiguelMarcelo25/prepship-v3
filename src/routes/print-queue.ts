@@ -11,6 +11,7 @@ import {
   getLatestMergeJobSnapshot,
   getLatestQueueSendJobSnapshot,
   getQueueSendJobStatus,
+  isPrintQueueAccessError,
   isPrintQueueLabelUrlError,
   getMergeJobStatus,
   listQueue,
@@ -44,6 +45,16 @@ function printQueueScopeFromContext(c: Context): PrintQueueListScope {
 function printQueueLabelUrlErrorResponse(c: Context, err: unknown) {
   if (!isPrintQueueLabelUrlError(err)) throw err;
   return c.json({ error: err.message, code: err.code }, err.status);
+}
+
+function printQueueSafeClientErrorResponse(c: Context, err: unknown) {
+  if (isPrintQueueLabelUrlError(err)) {
+    return c.json({ error: err.message, code: err.code }, err.status);
+  }
+  if (isPrintQueueAccessError(err)) {
+    return c.json({ error: err.message, code: err.code }, err.status);
+  }
+  throw err;
 }
 
 async function withDurableStatusTimeout<T>(read: () => Promise<T>): Promise<T | null> {
@@ -142,6 +153,9 @@ app.post('/add', zValidator('json', addBody), async (c) => {
 const queueSendLabelBody = z.object({
   serviceCode: z.string().optional(),
   carrierCode: z.string().optional(),
+  carrierName: z.string().optional(),
+  serviceName: z.string().optional(),
+  serviceType: z.string().optional(),
   packageCode: z.string().optional(),
   customPackageId: z.number().int().positive().nullable().optional(),
   shippingProviderId: z.number().int().positive().nullable().optional(),
@@ -181,42 +195,52 @@ const queueSendBody = z.object({
 
 app.post('/batch-send', zValidator('json', queueSendBody), async (c) => {
   const b = c.req.valid('json');
-  await assertPrintQueueClientsVisible(
-    b.orders.map((order) => order.client_id),
-    printQueueScopeFromContext(c)
-  );
-  const result = startQueueSendJob({
-    concurrency: b.concurrency,
-    orders: b.orders.map((order) => ({
-      orderId: order.order_id,
-      clientId: order.client_id,
-      orderNumber: order.order_number ?? null,
-      labelUrl: order.label_url ?? null,
-      label: order.label
-        ? {
-            serviceCode: order.label.serviceCode ?? '',
-            carrierCode: order.label.carrierCode,
-            packageCode: order.label.packageCode,
-            customPackageId: order.label.customPackageId,
-            shippingProviderId: order.label.shippingProviderId,
-            weightOz: order.label.weightOz,
-            length: order.label.length,
-            width: order.label.width,
-            height: order.label.height,
-            confirmation: order.label.confirmation,
-            insuranceProvider: order.label.insuranceProvider ?? undefined,
-            insuredValue: order.label.insuredValue ?? undefined,
-            testLabel: order.label.testLabel,
-          }
-        : undefined,
-      skuGroupId: order.sku_group_id,
-      primarySku: order.primary_sku ?? null,
-      itemDescription: order.item_description ?? null,
-      orderQty: order.order_qty ?? 1,
-      multiSkuData: order.multi_sku_data ?? null,
-    })),
-  });
-  return c.json({ job_id: result.jobId, total: result.total });
+  const scope = printQueueScopeFromContext(c);
+  try {
+    await assertPrintQueueClientsVisible(
+      b.orders.map((order) => order.client_id),
+      scope
+    );
+    const result = startQueueSendJob({
+      concurrency: b.concurrency,
+      scope,
+      orders: b.orders.map((order) => ({
+        orderId: order.order_id,
+        clientId: order.client_id,
+        orderNumber: order.order_number ?? null,
+        labelUrl: order.label_url ?? null,
+        label: order.label
+          ? {
+              serviceCode: order.label.serviceCode ?? '',
+              carrierCode: order.label.carrierCode,
+              carrierName: order.label.carrierName,
+              serviceName: order.label.serviceName,
+              serviceType: order.label.serviceType,
+              packageCode: order.label.packageCode,
+              customPackageId: order.label.customPackageId,
+              shippingProviderId: order.label.shippingProviderId,
+              weightOz: order.label.weightOz,
+              length: order.label.length,
+              width: order.label.width,
+              height: order.label.height,
+              confirmation: order.label.confirmation,
+              insuranceProvider: order.label.insuranceProvider ?? undefined,
+              insuredValue: order.label.insuredValue ?? undefined,
+              testLabel: order.label.testLabel,
+            }
+          : undefined,
+        skuGroupId: order.sku_group_id,
+        primarySku: order.primary_sku ?? null,
+        itemDescription: order.item_description ?? null,
+        orderQty: order.order_qty ?? 1,
+        multiSkuData: order.multi_sku_data ?? null,
+        scope,
+      })),
+    });
+    return c.json({ job_id: result.jobId, total: result.total });
+  } catch (err) {
+    return printQueueSafeClientErrorResponse(c, err);
+  }
 });
 
 app.get('/batch-send/status/:jobId', async (c) => {

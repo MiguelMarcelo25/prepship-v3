@@ -38,8 +38,17 @@ assert(
 );
 assert(
   routeSource.includes('assertPrintQueueClientsVisible(') &&
-    routeSource.includes('b.orders.map((order) => order.client_id)'),
+    routeSource.includes('b.orders.map((order) => order.client_id)') &&
+    routeSource.includes('scope,') &&
+    routeSource.includes('scope,'),
   'print-queue batch-send validates requested client ids before work starts',
+);
+assert(
+  serviceSource.includes('scope?: PrintQueueListScope') &&
+    serviceSource.includes('processQueueSendOrder(order, order.scope ?? scope)') &&
+    serviceSource.includes('scope,') &&
+    serviceSource.includes('addToQueue({'),
+  'print-queue batch-send carries request scope into background queue insert',
 );
 assert(
   routeSource.includes('const scope = printQueueScopeFromContext(c)') &&
