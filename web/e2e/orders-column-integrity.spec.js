@@ -14,10 +14,12 @@ import { fileURLToPath } from 'node:url'
 //   the source-of-truth values the fixture was built from — not merely that a
 //   cell is non-empty.
 //
-// It also pins the three honest shipped data-states introduced by PS-036:
-//   - external  -> explicit flag (operator override OR marketplace) -> Ext. Label
-//   - local     -> real local shipment data                          -> carrier/acct/rate
-//   - missing   -> shipped, no flag, no local data                   -> "Missing shipment sync"
+// It also pins the three honest shipped data-states introduced by PS-036 and
+// made immutable by PS-056:
+//   - LOCAL -> real local shipment data -> carrier/acct/rate
+//   - RECOVERABLE_MISSING_SYNC -> upstream shipment/fulfillment may still be
+//     backfilled; no explicit external flag -> "Missing shipment sync"
+//   - EXTERNAL -> explicit operator/marketplace flag -> Ext. Label
 //
 // No live ShipStation calls, labels, postage, or marketplace notifications are
 // made: every network response is mocked via page.route.

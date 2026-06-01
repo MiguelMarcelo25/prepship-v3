@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, or, sql } from 'drizzle-orm';
 import { fileURLToPath } from 'node:url';
 import { db } from '../src/db/client';
 import { orders, orderOverrides } from '../src/db/schema/orders';
@@ -183,7 +183,7 @@ async function main(): Promise<void> {
   const orderNumbersFilter = parseOrderNumbers();
   const statuses = includeCancelled ? ['shipped', 'cancelled'] : ['shipped'];
 
-  console.log(`\n[external-shipped] ${apply ? 'APPLY' : 'DRY RUN'} — statuses=${statuses.join(',')} days=${days} limit=${limit}${orderNumbersFilter ? ` orderNumbers=${orderNumbersFilter.join(',')}` : ''}`);
+  console.log(`\n[external-shipped] PS-056 ${apply ? 'APPLY' : 'DRY RUN'} — statuses=${statuses.join(',')} days=${days} limit=${limit}${orderNumbersFilter ? ` orderNumbers=${orderNumbersFilter.join(',')}` : ''}`);
 
   // Candidates: shipped, not already external, with NO non-voided local shipment.
   const noLocalShipment = sql`not exists (
@@ -191,32 +191,49 @@ async function main(): Promise<void> {
     where (s.order_id = ${orders.id} or s.order_number = ${orders.orderNumber})
       and coalesce(s.voided, false) = false
   )`;
-  const where = orderNumbersFilter
+  const scopedMissingLocal = orderNumbersFilter
     ? and(
         inArray(orders.orderStatus, statuses),
-        eq(orders.externallyShipped, false),
-        eq(orders.externallyFulfilledVerified, false),
         noLocalShipment,
         inArray(orders.orderNumber, orderNumbersFilter),
       )
     : and(
         inArray(orders.orderStatus, statuses),
-        eq(orders.externallyShipped, false),
-        eq(orders.externallyFulfilledVerified, false),
         noLocalShipment,
         sql`${orders.orderDate} >= now() - interval '${sql.raw(String(days))} days'`,
       );
+  const unflaggedMissingLocalWhere = and(
+    scopedMissingLocal,
+    eq(orders.externallyShipped, false),
+    eq(orders.externallyFulfilledVerified, false),
+  );
+  const alreadyFlaggedExternalWhere = and(
+    scopedMissingLocal,
+    or(eq(orders.externallyShipped, true), eq(orders.externallyFulfilledVerified, true)),
+  );
+
+  const [missingLocalUnflaggedRow, alreadyFlaggedExternalRow] = await Promise.all([
+    db.select({ count: sql<number>`count(*)::int` }).from(orders).where(unflaggedMissingLocalWhere),
+    db.select({ count: sql<number>`count(*)::int` }).from(orders).where(alreadyFlaggedExternalWhere),
+  ]);
 
   const candidates = await db
     .select({ id: orders.id, orderNumber: orders.orderNumber, clientId: orders.clientId, storeId: orders.storeId, orderStatus: orders.orderStatus })
     .from(orders)
-    .where(where)
+    .where(unflaggedMissingLocalWhere)
     .orderBy(desc(orders.orderDate))
     .limit(limit);
 
   const { main, byClient } = await loadAccountByClient();
 
-  const report = { scanned: candidates.length, external: 0, recoverable: 0, lookupFailed: 0, flagged: 0,
+  const report = {
+    missingLocalUnflagged: missingLocalUnflaggedRow[0]?.count ?? 0,
+    alreadyFlaggedExternal: alreadyFlaggedExternalRow[0]?.count ?? 0,
+    scanned: candidates.length,
+    classifiedExternal: 0,
+    classifiedRecoverable: 0,
+    lookupFailures: 0,
+    flagged: 0,
     samples: [] as Array<{ orderNumber: string | null; clientId: number | null; storeId: number | null; classification: ExternalShippedClass }> };
 
   for (const o of candidates) {
@@ -232,9 +249,9 @@ async function main(): Promise<void> {
       upstream,
     });
 
-    if (classification === 'external') report.external += 1;
-    else if (classification === 'recoverable') report.recoverable += 1;
-    else if (classification === 'lookup_failed') report.lookupFailed += 1;
+    if (classification === 'external') report.classifiedExternal += 1;
+    else if (classification === 'recoverable') report.classifiedRecoverable += 1;
+    else if (classification === 'lookup_failed') report.lookupFailures += 1;
 
     if (report.samples.length < 50) {
       report.samples.push({ orderNumber: o.orderNumber, clientId: o.clientId, storeId: o.storeId, classification });
@@ -251,7 +268,15 @@ async function main(): Promise<void> {
   }
 
   console.log('\n[external-shipped] summary');
-  console.table([{ scanned: report.scanned, external: report.external, recoverable: report.recoverable, lookup_failed: report.lookupFailed, flagged: report.flagged }]);
+  console.table([{
+    missing_local_unflagged: report.missingLocalUnflagged,
+    already_flagged_external: report.alreadyFlaggedExternal,
+    scanned: report.scanned,
+    classified_external: report.classifiedExternal,
+    classified_recoverable: report.classifiedRecoverable,
+    lookup_failures: report.lookupFailures,
+    flagged: report.flagged,
+  }]);
   if (report.samples.length) {
     console.log('\nSamples:');
     console.table(report.samples);

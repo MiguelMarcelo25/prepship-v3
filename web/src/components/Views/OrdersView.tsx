@@ -1602,6 +1602,10 @@ type ShippedDataState = 'external' | 'local' | 'missing'
 
 // PS-036: classify a shipped row into one of three honest states instead of
 // conflating "no local data" with "externally fulfilled".
+// Per user override unlock shipped data on 2026-06-01: PS-056 keeps this
+// shipped-row display classification explicit so marketplace-fulfilled rows
+// show Ext. Label only after persisted external classification, while
+// recoverable ShipStation shipment/fulfillment gaps stay Missing shipment sync.
 function getShippedDataState(order: OrderSummaryDto): ShippedDataState {
   if (hasExplicitExternalFlag(order)) return 'external'
   if (hasLocalShipmentData(order)) return 'local'

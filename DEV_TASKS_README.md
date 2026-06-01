@@ -1896,6 +1896,18 @@ DJ provided PS-053 on 2026-06-01 as the official task for the Print to Queue par
 
 See [docs/ps-053-print-to-queue-atomic-recovery.md](docs/ps-053-print-to-queue-atomic-recovery.md) for the full task prompt, safety invariant, implementation requirements, regression coverage, verification commands, definition of done, and return format.
 
+## Official PS-056 Marketplace-Fulfilled Ext. Label Classification Task
+
+DJ provided PS-056 on 2026-06-01 as a standalone Shipped Orders classification task. This must fix marketplace/external shipped rows that are genuinely external but still show `Missing shipment sync`, without regressing PS-036/PS-039 missing-sync recovery safety.
+
+| ID | Title | Risk | Why It Matters | Scope | Completion Evidence |
+| --- | --- | --- | --- | --- | --- |
+| PS-056 | Permanently Classify Marketplace-Fulfilled Shipped Orders as Ext. Label | Critical shipped-order source-of-truth correctness | Operators need the Shipped table to distinguish honest external marketplace fulfillment from recoverable missing ShipStation sync. Incorrect `Missing shipment sync` badges create noise; incorrect `Ext. Label` badges can hide recoverable labels/fulfillments. | Verify root cause with read-only classification evidence; persist explicit external flags only for approved orders with no local shipment and no upstream ShipStation shipment/fulfillment; preserve recoverable missing-sync behavior; add immutable guards/browser coverage/certification proving LOCAL, RECOVERABLE_MISSING_SYNC, and EXTERNAL render distinctly. | Typecheck, web build, external-shipped reconcile guard, ShipStation fulfillment backfill guard, shipping certification guard, Orders column-integrity browser spec, and new PS-056 immutable certification pass. Dry-run counts reported. No labels, postage, marketplace notifications, shipment-history rewrites, secrets, PII exposure, or shipped/cancelled protection weakening. |
+
+### PS-056 Copy/Paste Handoff
+
+See [docs/ps-056-marketplace-fulfilled-ext-label.md](docs/ps-056-marketplace-fulfilled-ext-label.md) for the full task prompt, classifier invariant, apply-mode rules, PS-036/PS-039 safety requirements, tests, certification requirements, definition of done, and return format.
+
 ## Recommended Next Order
 
 1. Finish production verification after this batch deploys.
