@@ -638,7 +638,6 @@ async function processQueueSendOrder(
 
   if (!labelUrl) throw new Error('Label was created without a queueable URL');
   const queueableLabelUrl = normalizePrintQueueLabelUrl(labelUrl);
-  await repairMissingConfirmationForQueuedLabel(order.orderId);
 
   const { entry, alreadyQueued } = await addToQueue({
     clientId: order.clientId,
@@ -750,6 +749,8 @@ export async function addToQueue(
       },
     })
     .returning();
+
+  await repairMissingConfirmationForQueuedLabel(input.orderId);
 
   return { entry: entry!, alreadyQueued };
 }

@@ -72,6 +72,16 @@ assert.match(
 
 const printQueue = readFileSync('src/services/print-queue.ts', 'utf8');
 assert.match(printQueue, /ensureShipmentConfirmationLifecycle/, 'print queue existing-label path must call lifecycle repair helper');
+assert.match(
+  printQueue,
+  /export async function addToQueue[\s\S]*await repairMissingConfirmationForQueuedLabel\(input\.orderId\)/,
+  'central addToQueue must repair/process confirmation so direct /print-queue/add cannot bypass ShipStation mark-as-shipped',
+);
+assert.doesNotMatch(
+  printQueue,
+  /const queueableLabelUrl = normalizePrintQueueLabelUrl\(labelUrl\);\s*await repairMissingConfirmationForQueuedLabel\(order\.orderId\);/,
+  'confirmation repair must not live only in processQueueSendOrder; direct addToQueue callers must be covered',
+);
 
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
 assert.equal(

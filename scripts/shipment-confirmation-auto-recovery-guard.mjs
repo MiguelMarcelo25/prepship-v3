@@ -42,7 +42,7 @@ assert(
 assert(
   printQueue.includes('ensureShipmentConfirmationLifecycle') &&
     printQueue.includes('repairMissingConfirmationForQueuedLabel') &&
-    printQueue.includes('await repairMissingConfirmationForQueuedLabel(order.orderId)') &&
+    printQueue.includes('await repairMissingConfirmationForQueuedLabel(input.orderId)') &&
     printQueue.includes('dryRun: false') &&
     printQueue.includes('processNow: true'),
   'print queue existing-label path must repair and immediately process missing confirmation lifecycle without buying postage',
