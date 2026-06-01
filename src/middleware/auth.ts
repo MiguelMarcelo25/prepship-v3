@@ -35,6 +35,7 @@ export const APP_PERMISSIONS = [
   'credentials:read',
   'credentials:write',
   'financials:read',
+  'print_queue:write',
   'scope:global',
 ] as const;
 
@@ -50,8 +51,9 @@ const ROLE_PERMISSIONS: Record<AppRole, readonly AppPermission[]> = {
     'credentials:read',
     'credentials:write',
     'financials:read',
+    'print_queue:write',
   ],
-  warehouse: ['settings:read', 'credentials:read'],
+  warehouse: ['settings:read', 'credentials:read', 'print_queue:write'],
   client_user: ['settings:read'],
   read_only_support: ['settings:read', 'credentials:read'],
 };
@@ -143,6 +145,20 @@ export function hasAppPermission(
   return ROLE_PERMISSIONS[auth.role].includes(permission);
 }
 
+export type AuthDomain = 'internal' | 'portal';
+
+export function getAuthDomain(
+  auth: Pick<AuthVars, 'role'>
+): AuthDomain {
+  return auth.role === 'client_user' || auth.role === 'read_only_support'
+    ? 'portal'
+    : 'internal';
+}
+
+export function isPortalSession(auth: Pick<AuthVars, 'role'>): boolean {
+  return getAuthDomain(auth) === 'portal';
+}
+
 export const requireAuth = createMiddleware<{ Variables: AuthVars }>(
   async (c, next) => {
     const authStartedAt = nowMs();
@@ -209,6 +225,28 @@ export function requirePermission(permission: AppPermission) {
         permission
       )
     ) {
+      await next();
+      return;
+    }
+
+    return c.json({ error: 'Permission required' }, 403);
+  });
+}
+
+export function requireInternalPermission(permission: AppPermission) {
+  return createMiddleware<{ Variables: AuthVars }>(async (c, next) => {
+    const auth = {
+      email: c.get('email'),
+      role: c.get('role'),
+      permissions: c.get('permissions'),
+    };
+    const authDomain = getAuthDomain(auth);
+
+    if (authDomain === 'portal' || isPortalSession(auth)) {
+      return c.json({ error: 'Internal access required' }, 403);
+    }
+
+    if (hasAppPermission(auth, permission)) {
       await next();
       return;
     }

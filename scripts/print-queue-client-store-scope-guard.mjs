@@ -26,14 +26,14 @@ const serviceSource = read('src/services/print-queue.ts');
 const packageJson = JSON.parse(read('package.json'));
 
 assert(
-  routeSource.includes('getClientStoreScope') && routeSource.includes('type ClientStoreScope'),
-  'print-queue route imports client/store scope helpers',
+  routeSource.includes('getInternalOpsClientStoreScope') && routeSource.includes('type ClientStoreScope'),
+  'print-queue route imports internal ops client/store scope helpers',
 );
 assert(
   routeSource.includes('printQueueScopeFromContext') &&
     routeSource.includes("c.get('clientIds'") &&
     routeSource.includes("c.get('storeIds'"),
-  'print-queue route builds scope from auth context',
+  'print-queue route builds internal ops scope from auth context',
 );
 assert(
   routeSource.includes('listQueue(q.clientId, q.includePrinted, printQueueScopeFromContext(c))'),

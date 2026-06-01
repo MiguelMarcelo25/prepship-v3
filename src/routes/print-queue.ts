@@ -24,13 +24,19 @@ import {
   type PrintQueueListScope,
   type QueueSendJobSnapshot,
 } from '../services/print-queue';
-import { getClientStoreScope, type ClientStoreScope } from '../lib/client-store-scope';
+import { getAuthDomain, requireInternalPermission } from '../middleware/auth';
+import {
+  getInternalOpsClientStoreScope,
+  type ClientStoreScope,
+} from '../lib/client-store-scope';
 
 const app = new Hono();
 const DURABLE_STATUS_TIMEOUT_MS = 1500;
 
+app.use('*', requireInternalPermission('print_queue:write'));
+
 function printQueueScopeFromContext(c: Context): PrintQueueListScope {
-  const scope: ClientStoreScope = getClientStoreScope({
+  const scope: ClientStoreScope = getInternalOpsClientStoreScope({
     email: c.get('email' as never) as string | undefined,
     role: c.get('role' as never) as string | undefined,
     permissions: c.get('permissions' as never) as string[] | undefined,
@@ -44,16 +50,85 @@ function printQueueScopeFromContext(c: Context): PrintQueueListScope {
   };
 }
 
+type PrintQueueAuthDiagnostics = {
+  action: string;
+  requestedOrderIds?: number[];
+  requestedClientIds?: number[];
+};
+
 function printQueueLabelUrlErrorResponse(c: Context, err: unknown) {
   if (!isPrintQueueLabelUrlError(err)) throw err;
   return c.json({ error: err.message, code: err.code }, err.status);
 }
 
-function printQueueSafeClientErrorResponse(c: Context, err: unknown) {
+function uniquePositiveInts(values: Array<number | undefined>): number[] {
+  return Array.from(
+    new Set(
+      values
+        .map((value) => Number(value))
+        .filter((value) => Number.isInteger(value) && value > 0)
+    )
+  );
+}
+
+function redactEmailForLog(email: string | undefined): string | null {
+  if (!email) return null;
+  const [local = '', domain = ''] = email.split('@');
+  const visible = local.slice(0, Math.min(2, local.length));
+  return domain ? `${visible}***@${domain}` : `${visible}***`;
+}
+
+function printQueueAuthVarsFromContext(c: Context) {
+  return {
+    userId: c.get('userId' as never) as string | undefined,
+    email: c.get('email' as never) as string | undefined,
+    role: c.get('role' as never) as string | undefined,
+    permissions: c.get('permissions' as never) as string[] | undefined,
+  };
+}
+
+function logPrintQueueAuthDenied(
+  c: Context,
+  err: unknown,
+  diagnostics?: PrintQueueAuthDiagnostics
+) {
+  if (!isPrintQueueAccessError(err)) return;
+
+  const auth = printQueueAuthVarsFromContext(c);
+  const scope = printQueueScopeFromContext(c);
+
+  console.warn('[print-queue:auth-denied]', {
+    requestId:
+      c.req.header('x-request-id') ??
+      c.req.header('x-correlation-id') ??
+      null,
+    method: c.req.method,
+    route: c.req.path,
+    action: diagnostics?.action ?? 'unknown',
+    userId: auth.userId ?? null,
+    email: redactEmailForLog(auth.email),
+    role: auth.role ?? null,
+    permissions: Array.isArray(auth.permissions) ? [...auth.permissions].sort() : [],
+    authDomain: getAuthDomain({ role: auth.role }),
+    requestedOrderIds: uniquePositiveInts(diagnostics?.requestedOrderIds ?? []),
+    requestedClientIds: uniquePositiveInts(diagnostics?.requestedClientIds ?? []),
+    allowedClientIds: scope.scopeClientIds ?? [],
+    allowedStoreIds: scope.scopeStoreIds ?? [],
+    scopeRestricted: scope.scopeRestricted === true,
+    code: err.code,
+  });
+}
+
+function printQueueSafeClientErrorResponse(
+  c: Context,
+  err: unknown,
+  diagnostics?: PrintQueueAuthDiagnostics
+) {
   if (isPrintQueueLabelUrlError(err)) {
     return c.json({ error: err.message, code: err.code }, err.status);
   }
   if (isPrintQueueAccessError(err)) {
+    logPrintQueueAuthDenied(c, err, diagnostics);
     return c.json({ error: err.message, code: err.code }, err.status);
   }
   if (isPrintQueueDurableStatusError(err)) {
@@ -151,7 +226,10 @@ app.post('/add', zValidator('json', addBody), async (c) => {
       already_queued: alreadyQueued,
     });
   } catch (err) {
-    return printQueueLabelUrlErrorResponse(c, err);
+    return printQueueSafeClientErrorResponse(c, err, {
+      action: 'add',
+      requestedClientIds: [b.client_id],
+    });
   }
 });
 
@@ -244,7 +322,11 @@ app.post('/batch-send', zValidator('json', queueSendBody), async (c) => {
     });
     return c.json({ job_id: result.jobId, total: result.total });
   } catch (err) {
-    return printQueueSafeClientErrorResponse(c, err);
+    return printQueueSafeClientErrorResponse(c, err, {
+      action: 'batch-send',
+      requestedOrderIds: b.orders.map((order) => order.order_id),
+      requestedClientIds: b.orders.map((order) => order.client_id),
+    });
   }
 });
 
@@ -357,7 +439,10 @@ app.post(
       });
       return c.json({ job_id: result.jobId, total: result.total });
     } catch (err) {
-      return printQueueLabelUrlErrorResponse(c, err);
+      return printQueueSafeClientErrorResponse(c, err, {
+        action: 'print',
+        requestedClientIds: b.client_id ? [b.client_id] : undefined,
+      });
     }
   }
 );

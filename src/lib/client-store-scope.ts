@@ -59,6 +59,27 @@ export function getClientStoreScope(auth: ScopeAuth): ClientStoreScope {
   };
 }
 
+export function getInternalOpsClientStoreScope(auth: ScopeAuth): ClientStoreScope {
+  const isInternalOps =
+    isAdminEmail(auth.email) ||
+    auth.role === 'admin' ||
+    auth.role === 'operator' ||
+    auth.role === 'warehouse' ||
+    Boolean(auth.permissions?.includes('scope:global')) ||
+    Boolean(auth.permissions?.includes('print_queue:write'));
+
+  if (isInternalOps) {
+    return {
+      clientIds: [],
+      storeIds: [],
+      isGlobal: true,
+      isRestricted: false,
+    };
+  }
+
+  return getClientStoreScope(auth);
+}
+
 export function isClientVisibleToScope(
   client: ClientLike,
   scope: ClientStoreScope

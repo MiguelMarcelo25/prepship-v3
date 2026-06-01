@@ -35,10 +35,17 @@ assert(authSource.includes('storeIds') && authSource.includes('store_ids'), 'aut
 assert(authSource.includes("c.set('clientIds'") && authSource.includes("c.set('storeIds'"), 'auth stores scope vars on context');
 
 assert(scopeSource.includes('getClientStoreScope'), 'client/store scope helper exposes getClientStoreScope');
+assert(scopeSource.includes('getInternalOpsClientStoreScope'), 'client/store scope helper exposes internal ops scope helper');
 assert(scopeSource.includes('filterClientsForScope'), 'client/store scope helper filters client rows');
 assert(scopeSource.includes('isClientVisibleToScope'), 'client/store scope helper checks single client visibility');
 assert(scopeSource.includes('client_user') && scopeSource.includes('read_only_support'), 'client/store scope helper handles externally scoped roles');
 assert(scopeSource.includes('scope:global'), 'client/store scope helper supports explicit global scope permission');
+assert(
+  scopeSource.includes("auth.role === 'operator'") &&
+    scopeSource.includes("auth.role === 'warehouse'") &&
+    scopeSource.includes("'print_queue:write'"),
+  'internal ops scope helper does not let portal tenant claims constrain internal operators',
+);
 assert(
   scopeSource.includes('if (explicitGlobal)') &&
     scopeSource.includes('clientIds: []') &&

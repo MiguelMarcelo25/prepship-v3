@@ -114,6 +114,7 @@
     "test:billing-best-rate-ui": "playwright test web/e2e/billing-best-rate-ui.spec.js --reporter=line",
     "test:billing-summary-total-alignment": "playwright test web/e2e/billing-summary-total-alignment.spec.js --reporter=line",
     "billing:repair-shipment-linkage": "tsx scripts/repair-billing-shipment-linkage.ts",
+    "test:portal-internal-auth-boundary": "node scripts/portal-internal-auth-boundary-guard.mjs",
     "test:print-queue-client-scope": "node scripts/print-queue-client-store-scope-guard.mjs",
     "test:orders-manifests-scope": "node scripts/orders-manifests-client-store-scope-guard.mjs",
     "test:field-level-rbac": "node scripts/field-level-rbac-guard.mjs",

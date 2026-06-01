@@ -39,11 +39,13 @@ for (const permission of [
   'settings:write',
   'credentials:read',
   'credentials:write',
+  'print_queue:write',
 ]) {
   assert(authSource.includes(`'${permission}'`), `auth middleware includes ${permission} permission`);
 }
 
 assert(authSource.includes('requirePermission'), 'auth middleware exports requirePermission');
+assert(authSource.includes('requireInternalPermission'), 'auth middleware exports internal permission guard');
 assert(
   authSource.includes('app_metadata') && authSource.includes('permissions'),
   'auth middleware reads app_metadata permissions from Supabase JWT',
