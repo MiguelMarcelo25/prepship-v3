@@ -6,7 +6,10 @@ import { printQueue, type PrintQueueEntry } from '../db/schema/print-queue';
 import { settings } from '../db/schema/settings';
 import { shipments } from '../db/schema/shipments';
 import { extractShipstationLabelUrl } from '../lib/shipstation/labels';
-import { enqueueMissingShipmentConfirmations } from './fulfillment/outbox';
+import {
+  enqueueMissingShipmentConfirmations,
+  processFulfillmentOutboxOnce,
+} from './fulfillment/outbox';
 import { createLabelV2, type CreateLabelInputDto } from './labels';
 
 export type AddToQueueInput = {
@@ -578,12 +581,21 @@ async function repairMissingConfirmationForQueuedLabel(orderId: number | string)
   try {
     // Per user override unlock shipped data on 2026-06-01: queueing an
     // existing shipped label may repair only the missing confirmation lifecycle;
-    // it never creates labels, buys postage, marks printed, or notifies a marketplace directly.
-    await enqueueMissingShipmentConfirmations({
+    // it never creates labels, buys postage, or marks printed. Any marketplace
+    // confirmation is performed by the normal fulfillment outbox connector.
+    const result = await enqueueMissingShipmentConfirmations({
       orderId: parsedOrderId,
       limit: 5,
       maxAgeHours: 24 * 14,
     });
+    if (result.enqueued > 0) {
+      void processFulfillmentOutboxOnce({ orderId: parsedOrderId, limit: 5 }).catch((err) => {
+        console.warn(
+          `[print-queue] repaired confirmation processing failed orderId=${parsedOrderId}:`,
+          err instanceof Error ? err.message : err,
+        );
+      });
+    }
   } catch (err) {
     console.warn(
       `[print-queue] missing confirmation repair failed orderId=${parsedOrderId}:`,

@@ -41,9 +41,12 @@ assert(
 );
 assert(
   printQueue.includes('enqueueMissingShipmentConfirmations') &&
+    printQueue.includes('processFulfillmentOutboxOnce') &&
     printQueue.includes('repairMissingConfirmationForQueuedLabel') &&
-    printQueue.includes('await repairMissingConfirmationForQueuedLabel(order.orderId)'),
-  'print queue existing-label path must repair missing confirmation lifecycle without buying postage',
+    printQueue.includes('await repairMissingConfirmationForQueuedLabel(order.orderId)') &&
+    printQueue.includes('result.enqueued > 0') &&
+    printQueue.includes('processFulfillmentOutboxOnce({ orderId: parsedOrderId, limit: 5 })'),
+  'print queue existing-label path must repair and immediately process missing confirmation lifecycle without buying postage',
 );
 assert(
   outbox.includes('never creates/voids labels or rewrites shipment history'),
