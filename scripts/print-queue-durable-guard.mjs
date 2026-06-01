@@ -39,6 +39,12 @@ assert(
   serviceSource.includes('persistQueueSendJobSnapshot'),
   'print queue persists batch-send job snapshots',
 );
+assert(
+  serviceSource.includes("PRINT_QUEUE_SEND_JOB_STATUS_PREFIX = 'print_queue.batch_send.job.'") &&
+    serviceSource.includes('queueSendJobStatusKey(jobId)') &&
+    serviceSource.includes('getQueueSendJobSnapshot'),
+  'print queue persists readable per-job batch-send snapshots',
+);
 
 assert(
   serviceSource.includes('persistMergeJobSnapshot'),
@@ -58,6 +64,12 @@ assert(
 assert(
   routeSource.includes('getLatestQueueSendJobSnapshot'),
   'print queue route imports durable batch-send snapshot reader',
+);
+assert(
+  routeSource.includes('getQueueSendJobSnapshot') &&
+    routeSource.includes('await startQueueSendJob') &&
+    routeSource.includes('getQueueSendJobSnapshot(jobId)'),
+  'print queue route awaits job snapshot before polling and reads status by job id',
 );
 
 assert(

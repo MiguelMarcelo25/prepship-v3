@@ -10,6 +10,7 @@ import {
   confirmPrintedQueueEntries,
   getLatestMergeJobSnapshot,
   getLatestQueueSendJobSnapshot,
+  getQueueSendJobSnapshot,
   getQueueSendJobStatus,
   isPrintQueueAccessError,
   isPrintQueueLabelUrlError,
@@ -201,7 +202,7 @@ app.post('/batch-send', zValidator('json', queueSendBody), async (c) => {
       b.orders.map((order) => order.client_id),
       scope
     );
-    const result = startQueueSendJob({
+    const result = await startQueueSendJob({
       concurrency: b.concurrency,
       scope,
       orders: b.orders.map((order) => ({
@@ -247,7 +248,9 @@ app.get('/batch-send/status/:jobId', async (c) => {
   const jobId = c.req.param('jobId');
   const scope = printQueueScopeFromContext(c);
   const job = getQueueSendJobStatus(jobId);
-  const durableJob = await withDurableStatusTimeout(getLatestQueueSendJobSnapshot);
+  const durableJob =
+    await withDurableStatusTimeout(() => getQueueSendJobSnapshot(jobId)) ??
+    await withDurableStatusTimeout(getLatestQueueSendJobSnapshot);
   if (!job) {
     if (durableJob?.jobId === jobId && await canViewQueueSendSnapshot(durableJob, scope)) {
       return c.json({

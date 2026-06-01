@@ -84,6 +84,7 @@ export type QueueSendJob = {
 
 export const PRINT_QUEUE_SEND_STATUS_KEY = 'print_queue.batch_send.last_run';
 export const PRINT_QUEUE_MERGE_STATUS_KEY = 'print_queue.pdf_merge.last_run';
+const PRINT_QUEUE_SEND_JOB_STATUS_PREFIX = 'print_queue.batch_send.job.';
 
 type QueueSendResultSnapshot = {
   orderId: number;
@@ -139,6 +140,10 @@ export type PrintQueueListScope = {
   scopeStoreIds?: number[];
   scopeRestricted?: boolean;
 };
+
+function queueSendJobStatusKey(jobId: string): string {
+  return `${PRINT_QUEUE_SEND_JOB_STATUS_PREFIX}${jobId}`;
+}
 
 const mergeJobs = new Map<string, MergeJob>();
 const queueSendJobs = new Map<string, QueueSendJob>();
@@ -267,9 +272,13 @@ function toMergeSnapshot(job: MergeJob): MergeJobSnapshot {
 export async function persistQueueSendJobSnapshot(job: QueueSendJob): Promise<void> {
   try {
     const value = JSON.stringify(toQueueSendSnapshot(job));
+    const jobKey = queueSendJobStatusKey(job.jobId);
     await db
       .insert(settings)
-      .values({ key: PRINT_QUEUE_SEND_STATUS_KEY, value })
+      .values([
+        { key: PRINT_QUEUE_SEND_STATUS_KEY, value },
+        { key: jobKey, value },
+      ])
       .onConflictDoUpdate({
         target: settings.key,
         set: { value },
@@ -279,6 +288,24 @@ export async function persistQueueSendJobSnapshot(job: QueueSendJob): Promise<vo
       '[print-queue] failed to persist batch-send status:',
       err instanceof Error ? err.message : err
     );
+  }
+}
+
+export async function getQueueSendJobSnapshot(jobId: string): Promise<QueueSendJobSnapshot | null> {
+  try {
+    const [row] = await db
+      .select({ value: settings.value })
+      .from(settings)
+      .where(eq(settings.key, queueSendJobStatusKey(jobId)))
+      .limit(1);
+    if (!row?.value) return null;
+    return JSON.parse(row.value) as QueueSendJobSnapshot;
+  } catch (err) {
+    console.warn(
+      '[print-queue] failed to read batch-send job status:',
+      err instanceof Error ? err.message : err
+    );
+    return null;
   }
 }
 
@@ -696,11 +723,11 @@ export async function addToQueue(
   return { entry: entry!, alreadyQueued };
 }
 
-export function startQueueSendJob(input: {
+export async function startQueueSendJob(input: {
   orders: QueueSendOrderInput[];
   concurrency?: number;
   scope?: PrintQueueListScope;
-}): { jobId: string; total: number } {
+}): Promise<{ jobId: string; total: number }> {
   if (!input.orders.length) throw new Error('orders must be non-empty');
 
   cleanOldJobs();
@@ -725,7 +752,7 @@ export function startQueueSendJob(input: {
   };
   queueSendJobs.set(jobId, job);
 
-  void persistQueueSendJobSnapshot(job);
+  await persistQueueSendJobSnapshot(job);
   void runQueueSendJob(jobId, input.orders, input.concurrency, input.scope);
   return { jobId, total: input.orders.length };
 }
