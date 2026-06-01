@@ -4558,8 +4558,17 @@ export default function OrdersView({
     return parts.join('|')
   }
 
-  function savedRateIsFreshAndComplete(rate: Record<string, unknown>, requestFingerprint: string) {
-    if (toStringValue(rate.eligibilityVersion) !== SHIPPING_SERVICE_ELIGIBILITY_VERSION) return false
+  function savedRateIsFreshAndComplete(
+    rate: Record<string, unknown>,
+    requestFingerprint: string,
+    options: { requireEligibilityVersion?: boolean } = {},
+  ) {
+    if (
+      options.requireEligibilityVersion !== false &&
+      toStringValue(rate.eligibilityVersion) !== SHIPPING_SERVICE_ELIGIBILITY_VERSION
+    ) {
+      return false
+    }
     const fingerprint = toStringValue(rate.requestFingerprint) ?? toStringValue(rate.cacheKey)
     if (!fingerprint || fingerprint !== requestFingerprint) return false
     if (rate.isComplete !== true) return false
@@ -4634,9 +4643,10 @@ export default function OrdersView({
       : null
   }
 
-  function hasValidSavedBestRateForRequest(
+  function hasSavedBestRateForRequest(
     order: OrderSummaryDto,
     request: NonNullable<ReturnType<typeof getAutoBestRateRequest>>,
+    options: { requireEligibilityVersion?: boolean } = {},
   ) {
     const savedRate =
       toRecord(order.bestRate) ??
@@ -4644,7 +4654,14 @@ export default function OrdersView({
       toRecord(toRecord(order.overrides)?.bestRateJson)
     if (!savedRate) return false
     if (getRateBaseAmount(savedRate) <= 0) return false
-    return savedRateIsFreshAndComplete(savedRate, request.fingerprint)
+    return savedRateIsFreshAndComplete(savedRate, request.fingerprint, options)
+  }
+
+  function hasValidSavedBestRateForRequest(
+    order: OrderSummaryDto,
+    request: NonNullable<ReturnType<typeof getAutoBestRateRequest>>,
+  ) {
+    return hasSavedBestRateForRequest(order, request)
   }
 
   function getSavedBestRateDimsLabel(order: OrderSummaryDto) {
@@ -4667,7 +4684,7 @@ export default function OrdersView({
     if (!request) return false
     const entry = autoBestRateEntries[order.orderId]
     if (entry?.key === request.key && entry.rate) return true
-    return hasValidSavedBestRateForRequest(order, request)
+    return hasSavedBestRateForRequest(order, request, { requireEligibilityVersion: false })
   }
 
   function getRateBaseAmount(rate: Record<string, unknown>) {
@@ -4747,7 +4764,11 @@ export default function OrdersView({
     if (autoRequest && autoEntry?.key === autoRequest.key && autoEntry?.rate) {
       return withBestRateOverride(order, autoEntry.rate)
     }
-    if (autoRequest && order.orderStatus === 'awaiting_shipment' && !hasValidSavedBestRateForRequest(order, autoRequest)) {
+    if (
+      autoRequest &&
+      order.orderStatus === 'awaiting_shipment' &&
+      !hasSavedBestRateForRequest(order, autoRequest, { requireEligibilityVersion: false })
+    ) {
       return withoutStaleBestRate(order)
     }
     return order
