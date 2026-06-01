@@ -55,6 +55,8 @@ function billingScopeFromContext(c: Context): ClientStoreScope {
 }
 
 function billingClientScopePredicate(scope: ClientStoreScope): SQL {
+  if (scope.isGlobal) return sql`true`;
+
   const predicates: SQL[] = [];
   const clientIds = normalizeScopeIds(scope.clientIds);
   const storeIds = normalizeScopeIds(scope.storeIds);
@@ -75,6 +77,7 @@ function billingClientScopePredicate(scope: ClientStoreScope): SQL {
 function withBillingScope<T extends object>(c: Context, q: T): T & {
   scopeClientIds: number[];
   scopeStoreIds: number[];
+  scopeIsGlobal: boolean;
   scopeRestricted: boolean;
 } {
   const scope = billingScopeFromContext(c);
@@ -82,6 +85,7 @@ function withBillingScope<T extends object>(c: Context, q: T): T & {
     ...q,
     scopeClientIds: scope.clientIds,
     scopeStoreIds: scope.storeIds,
+    scopeIsGlobal: scope.isGlobal,
     scopeRestricted: scope.isRestricted,
   };
 }
@@ -251,11 +255,11 @@ function money(value: number): string {
 
 app.post('/generate', zValidator('json', generateSchema), async (c) => {
   const body = c.req.valid('json');
-  const result = await generateLineItems({
+  const result = await generateLineItems(withBillingScope(c, {
     clientId: body.clientId,
     dateFrom: body.dateFrom!,
     dateTo: body.dateTo!,
-  });
+  }));
   return c.json(result);
 });
 

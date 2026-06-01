@@ -24,6 +24,7 @@ export type GenerateInput = {
   dateTo: string; // ISO
   scopeClientIds?: number[];
   scopeStoreIds?: number[];
+  scopeIsGlobal?: boolean;
   scopeRestricted?: boolean;
 };
 
@@ -82,6 +83,8 @@ function intArraySql(values: number[]): SQL {
 }
 
 function billingClientScopePredicate(input: GenerateInput): SQL {
+  if (input.scopeIsGlobal === true) return sql`true`;
+
   const predicates: SQL[] = [];
   const clientIds = normalizeScopeIds(input.scopeClientIds);
   const storeIds = normalizeScopeIds(input.scopeStoreIds);
@@ -100,6 +103,8 @@ function billingClientScopePredicate(input: GenerateInput): SQL {
 }
 
 function billingLineItemScopePredicate(input: GenerateInput): SQL {
+  if (input.scopeIsGlobal === true) return sql`true`;
+
   const predicates: SQL[] = [];
   const clientIds = normalizeScopeIds(input.scopeClientIds);
   const storeIds = normalizeScopeIds(input.scopeStoreIds);
@@ -343,6 +348,7 @@ export async function generateLineItems(input: GenerateInput) {
       and c.name not in ('Manual Orders', 'Rate Browser', 'Api Shipments')
       and coalesce(b.active, true) = true
       ${input.clientId !== undefined ? sql`and c.id = ${input.clientId}` : sql``}
+      and ${billingClientScopePredicate(input)}
     order by c.name asc
   `);
   if (!configs.length) {
@@ -503,7 +509,8 @@ export async function generateLineItems(input: GenerateInput) {
       sql`${billingLineItems.shipDate} <= ${toIso}::timestamptz`,
       input.clientId !== undefined
         ? eq(billingLineItems.clientId, input.clientId)
-        : undefined
+        : undefined,
+      billingLineItemScopePredicate(input)
     )
   );
 
