@@ -1848,6 +1848,18 @@ Targeted guard: `npm run test:ps-032-connector-boundary`
 
 Phase 1 orchestrator guard: `npm run test:ps-032-connector-orchestrators`
 
+## Official PS-048 Orders Diagnostic Account Nickname Task
+
+DJ requested PS-048 on 2026-06-01 to track the Orders diagnostic `Acct Nickname` column regression where persisted shipped rows can show carrier code text such as `ups` instead of the real shipping/account nickname.
+
+| ID | Title | Risk | Why It Matters | Scope | Completion Evidence |
+| --- | --- | --- | --- | --- | --- |
+| PS-048 | Fix Orders Acct Nickname Diagnostic Column Showing Carrier Code | High operator UI correctness | Diagnostic columns are used to validate shipped-row carrier/account linkage. Showing `ups` in `Acct Nickname` hides the actual provider account nickname and can mislead production debugging. | Surgical display-only fix in Orders shipped-row account-nickname resolution, with account-nickname sources preferred and carrier-code/provider-ID fields forbidden as nickname fallbacks. Add browser E2E coverage proving Carrier Code, Provider ID, and Acct Nickname stay separated. | Typecheck, web build, source-of-truth guard, focused `web/e2e/orders-column-integrity.spec.js`, and Orders UX browser suite pass. No live labels, postage, marketplace notifications, production mutations, or shipped/cancelled protection weakening. |
+
+### PS-048 Copy/Paste Handoff
+
+See [docs/ps-048-orders-acct-nickname-diagnostic-column.md](docs/ps-048-orders-acct-nickname-diagnostic-column.md) for the full task prompt, source priority, guardrails, verification commands, definition of done, and return format.
+
 ## Recommended Next Order
 
 1. Finish production verification after this batch deploys.

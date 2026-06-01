@@ -1634,10 +1634,8 @@ function getShippedDisplayProviderId(order: OrderSummaryDto) {
 
 function getShippedDisplayAccountNickname(order: OrderSummaryDto) {
   if (getIsExternallyFulfilled(order)) return null
-  // PS — Acct Nickname must come from the account-nickname source chain, NOT
-  // carrier code. The prior `return order.label.carrierCode` fallback (commit
-  // 03df3d8) surfaced "ups" under Acct Nickname. Mirror the awaiting helper;
-  // when no nickname exists, show blank (honest) rather than a carrier code.
+  // Per user override unlock shipped data on 2026-06-01: PS-048 keeps this
+  // shipped-row diagnostic display-only and forbids carrier-code nickname fallbacks.
   return (
     getShippingString(order, 'accountNickname') ??
     toStringValue(order.selectedRate?.providerAccountNickname) ??

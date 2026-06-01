@@ -120,7 +120,11 @@ const awaitingMultiItem = baseRow(970003, 'awaiting_shipment', 1, {
 // 3) Shipped, real local shipment data persisted.
 const shippedPersisted = baseRow(980001, 'shipped', 1, {
   orderNumber: 'SHIPPED-980001',
-  selectedRate: rate,
+  // Persisted local shipment/account data can exist even when the row no
+  // longer has a v2 selected-rate payload. PS-048 pins that Acct Nickname still
+  // comes from shipping.accountNickname instead of falling through to
+  // label.carrierCode ("ups").
+  selectedRate: null,
   label: {
     trackingNumber: '1Z999AA1010980001',
     carrierCode: 'ups',
@@ -138,7 +142,6 @@ const shippedPersisted = baseRow(980001, 'shipped', 1, {
     accountNickname: 'ROCEL C81F70',
     labelCost: 9.86,
     labelCreatedAt: '2026-05-15T17:02:00.000Z',
-    selectedRate: rate,
     bestRate: rate,
   },
 })
@@ -362,6 +365,12 @@ test('Shipped grid columns are correctly classified (persisted vs external vs mi
     bestrate: { contains: '9.86', notContains: ['Ext. Label', 'Missing shipment sync'] },
     tracking: { contains: '1Z999AA1010980001' },
     labelcreated: { matches: /\d/ },
+    test_carrierCode: { contains: 'ups' },
+    test_shippingProviderID: { contains: '7381' },
+    test_shippingAccount: {
+      contains: 'ROCEL C81F70',
+      notContains: ['ups', 'Ext. Label', 'Missing shipment sync'],
+    },
   })
 
   // Explicit external row — operator/marketplace flag drives "Ext. Label" and
