@@ -3846,7 +3846,17 @@ export const apiClient = {
                   : Array.isArray(res?.rates)
                     ? res.rates
                     : [];
-                return rawRates.map(translateRateToV2Shape);
+                const translatedRates = rawRates.map(translateRateToV2Shape);
+                const responseBestRate = !Array.isArray(res) && res?.bestRate
+                  ? translateRateToV2Shape(res.bestRate)
+                  : null;
+                if (responseBestRate) {
+                  Object.defineProperty(translatedRates, 'bestRate', {
+                    value: responseBestRate,
+                    enumerable: false,
+                  });
+                }
+                return translatedRates;
               })
             : Promise.resolve([]),
           directCarrierIds.length
@@ -3873,6 +3883,13 @@ export const apiClient = {
           value: directRates.metas,
           enumerable: false,
         });
+        const responseBestRate = (shipStationRates as any).bestRate;
+        if (responseBestRate) {
+          Object.defineProperty(combined, 'bestRate', {
+            value: responseBestRate,
+            enumerable: false,
+          });
+        }
         return combined;
       })();
   },

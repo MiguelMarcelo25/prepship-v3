@@ -3,7 +3,7 @@ import { and, desc, eq, isNull, lt, notInArray, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orders, orderOverrides } from '../db/schema/orders';
 import { settings } from '../db/schema/settings';
-import { CACHE_TTL_MS, getRates } from './rates';
+import { CACHE_TTL_MS, RATE_FETCH_CONCURRENCY, getRates } from './rates';
 import type { Rate } from '../lib/shipstation';
 import { EXCLUDED_STORE_IDS } from '../config/prepship';
 
@@ -303,7 +303,7 @@ async function runBackfill(
     job.message = `Found ${rows.length} orders; fetching rates…`;
     await persistBackfillJobSnapshot(job, opts);
 
-    const CONCURRENCY = 4;
+    const CONCURRENCY = Math.max(1, Math.min(4, RATE_FETCH_CONCURRENCY));
     const processOne = async (row: (typeof rows)[number]) => {
       if (jobs.get(jobId)?.status !== 'running') return;
 

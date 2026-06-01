@@ -16,6 +16,14 @@ const staleDimsOnlyRate = {
   otherCost: 0,
 }
 
+// PS-050 exactness matrix evidence:
+// - different ZIP invalidation
+// - different weight invalidation
+// - different eligible carrier/account set invalidation
+// - ship-date bucket invalidation
+// - confirmation invalidation
+// Same dims alone are never enough; the route must return exact or miss.
+
 const exactFreshRate = {
   carrierCode: 'ups',
   serviceCode: 'ups_ground_saver',
@@ -31,6 +39,14 @@ const exactFreshRate = {
   rateCount: 2,
   cacheCreatedAt: new Date().toISOString(),
   cacheExpiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+}
+
+const cheaperCurrentRate = {
+  ...exactFreshRate,
+  amount: 7.25,
+  cost: 7.25,
+  shipmentCost: 7.25,
+  requestFingerprint: 'ps050-cheaper-current-fingerprint',
 }
 
 function makeOrder(id, bestRate, overrides = {}) {
@@ -75,7 +91,17 @@ function makeOrder(id, bestRate, overrides = {}) {
 
 const staleOrder = makeOrder(1107, staleDimsOnlyRate)
 const freshOrder = makeOrder(1108, exactFreshRate)
-const orders = [staleOrder, freshOrder]
+const cheaperOrder = makeOrder(1109, {
+  ...staleDimsOnlyRate,
+  requestFingerprint: 'ps050-old-more-expensive-fingerprint',
+  cacheKey: 'ps050-old-more-expensive-fingerprint',
+  cacheCreatedAt: new Date().toISOString(),
+  cacheExpiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+  isComplete: false,
+  rateCount: 1,
+  matchType: 'stale',
+})
+const orders = [staleOrder, freshOrder, cheaperOrder]
 
 function json(body) {
   return { status: 200, contentType: 'application/json', body: JSON.stringify(body) }
@@ -137,10 +163,10 @@ test('Awaiting Shipment auto-starts safe cache-first rating and rejects dims-onl
     if (url.pathname === '/orders/sync/status') return route.fulfill(json({ status: 'idle' }))
     if (url.pathname === '/shipments/status') return route.fulfill(json({ status: 'idle' }))
     if (url.pathname === '/init/stores') return route.fulfill(json({ data: [{ id: 101, storeId: 101, name: 'KF Goods', clientId: 1, active: true, isTest: false }] }))
-    if (url.pathname === '/init/counts') return route.fulfill(json({ byStatus: [{ orderStatus: 'awaiting_shipment', cnt: 2 }], byStatusStore: [] }))
-    if (url.pathname === '/clients/order-stats') return route.fulfill(json({ data: [{ clientId: 1, awaiting_shipment: 2, shipped: 0, cancelled: 0 }] }))
+    if (url.pathname === '/init/counts') return route.fulfill(json({ byStatus: [{ orderStatus: 'awaiting_shipment', cnt: 3 }], byStatusStore: [] }))
+    if (url.pathname === '/clients/order-stats') return route.fulfill(json({ data: [{ clientId: 1, awaiting_shipment: 3, shipped: 0, cancelled: 0 }] }))
     if (url.pathname === '/orders/distinct-skus') return route.fulfill(json({ skus: ['B0D43C5FGF'] }))
-    if (url.pathname === '/orders') return route.fulfill(json({ data: orders, pagination: { page: 1, pageSize: 50, total: 2, totalPages: 1 } }))
+    if (url.pathname === '/orders') return route.fulfill(json({ data: orders, pagination: { page: 1, pageSize: 50, total: 3, totalPages: 1 } }))
     if (url.pathname.match(/^\/orders\/\d+\/full$/)) {
       const id = Number(url.pathname.match(/\d+/)?.[0])
       return route.fulfill(json(orders.find((order) => order.id === id) ?? orders[0]))
@@ -160,14 +186,18 @@ test('Awaiting Shipment auto-starts safe cache-first rating and rejects dims-onl
             cacheExpiresAt: exactFreshRate.cacheExpiresAt,
             hit: { rates: [exactFreshRate], bestRate: exactFreshRate, fetchedAt: exactFreshRate.cacheCreatedAt },
           },
+          { orderId: 1109, matchType: 'miss', hit: null, isComplete: false, cacheKey: 'ps050-cheaper-current-miss' },
         ],
       }))
     }
     if (url.pathname === '/rates') {
       expect(body?.forceRefresh, 'passive auto-rating must not force live refresh').not.toBe(true)
+      const responseRate = body?.orderId === 1109 ? cheaperCurrentRate : exactFreshRate
       return route.fulfill(json({
-        rates: [exactFreshRate],
-        bestRate: exactFreshRate,
+        // prior saved best is not assumed best: live/current-equivalent response
+        // can expose a cheaper eligible rate than the old saved $8.31.
+        rates: [responseRate, staleDimsOnlyRate],
+        bestRate: responseRate,
         cached: false,
         cacheKey: 'ps050-live-refresh',
         fetchedAt: new Date().toISOString(),
@@ -187,6 +217,7 @@ test('Awaiting Shipment auto-starts safe cache-first rating and rejects dims-onl
 
   await expect(page.locator('#row-1108 td[data-col="bestrate"]')).toContainText('10.30')
   await expect(page.locator('#row-1107 td[data-col="bestrate"]')).not.toContainText('8.31')
+  await expect(page.locator('#row-1109 td[data-col="bestrate"]')).toContainText('7.25')
 
   await expect.poll(() => requests.some((request) => request.path === '/api/carrier-accounts')).toBe(true)
   await expect.poll(() => requests.some((request) => request.path === '/rates/cached/bulk')).toBe(true)

@@ -124,7 +124,7 @@ function applyMarkups(rates: Rate[], markups: Map<string, Markup>): Rate[] {
 
 export const CACHE_TTL_MS = 1000 * 60 * 60 * 6; // 6 hours
 const CARRIER_CACHE_MS = 1000 * 60 * 15; // 15 min
-const RATE_FETCH_CONCURRENCY = Math.max(
+export const RATE_FETCH_CONCURRENCY = Math.max(
   1,
   Math.min(8, Number.parseInt(process.env.RATE_FETCH_CONCURRENCY ?? '4', 10) || 4)
 );
@@ -153,6 +153,33 @@ const RATEABLE_CARRIER_CODES = new Set([
   'dhl_express',
   'stamps_com',
 ]);
+
+let globalRateFetchActive = 0;
+const globalRateFetchWaiters: Array<() => void> = [];
+
+async function acquireGlobalRateFetchPermit(): Promise<void> {
+  if (globalRateFetchActive < RATE_FETCH_CONCURRENCY) {
+    globalRateFetchActive += 1;
+    return;
+  }
+  await new Promise<void>((resolve) => globalRateFetchWaiters.push(resolve));
+  globalRateFetchActive += 1;
+}
+
+function releaseGlobalRateFetchPermit() {
+  globalRateFetchActive = Math.max(0, globalRateFetchActive - 1);
+  const next = globalRateFetchWaiters.shift();
+  if (next) next();
+}
+
+async function runWithGlobalRateLimiter<T>(operation: () => Promise<T>): Promise<T> {
+  await acquireGlobalRateFetchPermit();
+  try {
+    return await operation();
+  } finally {
+    releaseGlobalRateFetchPermit();
+  }
+}
 
 let cachedCarrierIds: string[] | null = null;
 let carriersFetchedAt = 0;
@@ -710,7 +737,7 @@ export async function fetchLiveRatesWithDiagnostics(input: RateInput): Promise<F
   const batches = await mapWithConcurrency(
     carriers,
     RATE_FETCH_CONCURRENCY,
-    (c) => fetchEstimateForCarrier(c, input, shipFrom),
+    (c) => runWithGlobalRateLimiter(() => fetchEstimateForCarrier(c, input, shipFrom)),
   );
   const lifted: Rate[] = batches.flatMap((batch) => batch.rates).map(toRate);
 

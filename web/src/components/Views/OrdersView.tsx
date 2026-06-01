@@ -1068,6 +1068,12 @@ function getOrderWeightOz(order: OrderSummaryDto, detail: OrderFullDto | null) {
   const savedWeightOz = order.weight?.value ?? 0
   if (savedWeightOz > 0) return savedWeightOz
 
+  const directWeightOz = toNumberValue(order.weightOz)
+  if (directWeightOz != null && directWeightOz > 0) return directWeightOz
+
+  const overrideWeightOz = toNumberValue(toRecord(order.overrides)?.rateWeightOz)
+  if (overrideWeightOz != null && overrideWeightOz > 0) return overrideWeightOz
+
   if (isTestOrder(order, detail) && hasTestPackItem(order, detail)) {
     return getActiveItems(order, detail).reduce((sum, item) => {
       const sku = (item.sku ?? '').trim().toUpperCase()
@@ -4519,7 +4525,7 @@ export default function OrdersView({
     if (order.orderStatus !== 'awaiting_shipment') return null
     const detail = orderDetailsById.get(order.orderId) ?? null
     const dims = getDimensions(order, detail)
-    const weightOz = order.weight?.value ?? 0
+    const weightOz = getOrderWeightOz(order, detail)
     if (!dims || !hasCompleteDims(dims) || weightOz <= 0) return null
 
     const shipTo = getShipTo(order, detail)
@@ -4632,12 +4638,44 @@ export default function OrdersView({
     }
   }
 
+  function withoutStaleBestRate(order: OrderSummaryDto) {
+    const shippingModel = toRecord(getShippingModel(order)) ?? {}
+    const canonicalOrder = toRecord(order.canonicalOrder)
+    const canonicalShipping = toRecord(canonicalOrder?.shipping) ?? {}
+    const shipping = {
+      ...shippingModel,
+      ...canonicalShipping,
+      bestRate: null,
+      bestRateAmount: null,
+      accountNickname: null,
+      providerAccountId: null,
+      serviceCode: null,
+      carrierCode: null,
+    }
+
+    return {
+      ...order,
+      bestRate: null,
+      shipping,
+      canonicalOrder: canonicalOrder
+        ? {
+            ...canonicalOrder,
+            shipping,
+          }
+        : order.canonicalOrder,
+    }
+  }
+
   function getOrderWithAutoBestRate(order: OrderSummaryDto) {
     const autoRequest = getAutoBestRateRequest(order)
     const autoEntry = autoRequest ? autoBestRateEntries[order.orderId] : null
-    return autoRequest && autoEntry?.key === autoRequest.key && autoEntry?.rate
-      ? withBestRateOverride(order, autoEntry.rate)
-      : order
+    if (autoRequest && autoEntry?.key === autoRequest.key && autoEntry?.rate) {
+      return withBestRateOverride(order, autoEntry.rate)
+    }
+    if (autoRequest && order.orderStatus === 'awaiting_shipment' && !hasValidSavedBestRateForRequest(order, autoRequest)) {
+      return withoutStaleBestRate(order)
+    }
+    return order
   }
 
   function getAppliedRateDims(rate: Record<string, unknown>) {
@@ -4767,7 +4805,8 @@ export default function OrdersView({
           forceRefresh: false,
         }) as Array<Record<string, unknown>>
 
-        const bestRate = pickBestPanelRate(rates)
+        const responseBestRate = toRecord((rates as Array<Record<string, unknown>> & { bestRate?: unknown }).bestRate)
+        const bestRate = responseBestRate ?? pickBestPanelRate(rates)
         if (bestRate) {
           const bestRateWithMetadata = withRateRequestMetadata(bestRate, request, {
             isComplete: true,
