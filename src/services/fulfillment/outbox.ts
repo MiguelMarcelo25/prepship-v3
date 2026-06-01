@@ -30,6 +30,7 @@ type OutboxRow = {
 };
 
 const MAX_ATTEMPTS = 6;
+const DEFAULT_MISSING_CONFIRMATION_LOOKBACK_HOURS = 72;
 
 let schemaEnsured: Promise<void> | null = null;
 
@@ -185,6 +186,122 @@ export async function enqueueShipmentConfirmation(
   `;
 
   return { queued: true, provider, outboxId: rows[0]?.id };
+}
+
+type MissingShipmentConfirmationRow = {
+  order_id: number;
+  external_order_id: string | null;
+  client_id: number | null;
+  order_number: string | null;
+  shipment_id: number;
+  tracking_number: string | null;
+  carrier_code: string | null;
+  ship_date: string | Date | null;
+  label_ship_date: string | Date | null;
+  label_shipment_id: number | null;
+  provider_account_id: number | null;
+  label_provider: number | null;
+};
+
+function dateOnly(value: string | Date | null | undefined): string {
+  if (!value) return new Date().toISOString().slice(0, 10);
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return new Date().toISOString().slice(0, 10);
+  return date.toISOString().slice(0, 10);
+}
+
+export async function enqueueMissingShipmentConfirmations(options: {
+  limit?: number;
+  maxAgeHours?: number;
+  orderId?: number;
+  shipmentId?: number;
+} = {}): Promise<{ scanned: number; enqueued: number; failed: number }> {
+  await ensureFulfillmentSchema();
+  const limit = Math.max(1, Math.min(100, Math.trunc(options.limit ?? 25)));
+  const maxAgeHours = Math.max(
+    1,
+    Math.min(24 * 14, Math.trunc(options.maxAgeHours ?? DEFAULT_MISSING_CONFIRMATION_LOOKBACK_HOURS)),
+  );
+
+  // Per user override unlock shipped data on 2026-05-23: automatically recover
+  // shipped PrepShip labels that missed the confirmation enqueue step. This
+  // creates only fulfillment_outbox work for existing non-voided labels; it
+  // never creates/voids labels or rewrites shipment history.
+  const rows = await pg`
+    SELECT
+      o.id AS order_id,
+      o.external_order_id,
+      o.client_id,
+      o.order_number,
+      s.id AS shipment_id,
+      s.tracking_number,
+      s.carrier_code,
+      s.ship_date,
+      s.label_ship_date,
+      s.label_shipment_id,
+      s.provider_account_id,
+      s.label_provider
+    FROM shipments s
+    INNER JOIN orders o ON o.id = s.order_id
+    WHERE o.order_status = 'shipped'
+      AND o.external_order_id ~ '^[0-9]+$'
+      AND coalesce(s.voided, false) = false
+      AND coalesce(s.is_return, false) = false
+      AND s.label_url IS NOT NULL
+      AND nullif(trim(coalesce(s.tracking_number, '')), '') IS NOT NULL
+      AND s.confirmation_status IS NULL
+      AND s.created_at >= NOW() - (${maxAgeHours} || ' hours')::interval
+      ${options.orderId ? pg`AND o.id = ${options.orderId}` : pg``}
+      ${options.shipmentId ? pg`AND s.id = ${options.shipmentId}` : pg``}
+      AND NOT EXISTS (
+        SELECT 1
+        FROM fulfillment_outbox fo
+        WHERE fo.event_type = 'shipment_confirmation_requested'
+          AND (
+            fo.shipment_id = s.id
+            OR (fo.order_id = o.id AND fo.status IN ('pending', 'processing', 'succeeded'))
+          )
+      )
+    ORDER BY s.created_at ASC
+    LIMIT ${limit}
+  ` as MissingShipmentConfirmationRow[];
+
+  let enqueued = 0;
+  let failed = 0;
+  for (const row of rows) {
+    try {
+      const result = await enqueueShipmentConfirmation({
+        order: {
+          id: row.order_id,
+          externalOrderId: row.external_order_id,
+          clientId: row.client_id,
+          orderNumber: row.order_number,
+        },
+        shipmentId: row.shipment_id,
+        trackingNumber: row.tracking_number,
+        carrierCode: row.carrier_code,
+        shipDate: dateOnly(row.ship_date ?? row.label_ship_date),
+        confirmationProvider: 'shipstation',
+        payload: {
+          carrierProvider: 'shipstation',
+          carrierAccountId: row.provider_account_id ?? row.label_provider ?? null,
+          shipStationShipmentId: row.label_shipment_id,
+          notifyCustomer: false,
+          notifyMarketplace: true,
+          autoRecoveredMissingConfirmation: true,
+        },
+      });
+      if (result.queued) enqueued += 1;
+    } catch (err) {
+      failed += 1;
+      console.warn(
+        `[fulfillment-outbox] auto-enqueue missing confirmation failed orderId=${row.order_id} shipmentId=${row.shipment_id}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  return { scanned: rows.length, enqueued, failed };
 }
 
 async function loadStoreCredentials(provider: string, payload: Record<string, unknown>, clientId: number | null): Promise<Record<string, string | null | undefined>> {

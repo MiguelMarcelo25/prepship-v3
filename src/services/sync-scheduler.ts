@@ -7,7 +7,10 @@ import {
   importSkusFromOrders,
   syncShipStationProducts,
 } from './inventory-enrichment';
-import { processFulfillmentOutboxOnce } from './fulfillment/outbox';
+import {
+  enqueueMissingShipmentConfirmations,
+  processFulfillmentOutboxOnce,
+} from './fulfillment/outbox';
 import {
   recordWorkerHeartbeat,
   recordWorkerJobFailure,
@@ -258,18 +261,21 @@ export async function runFulfillmentOutboxTick(): Promise<void> {
       const startedAt = Date.now();
       await recordWorkerJobStart('fulfillment outbox');
       try {
+        const recoveryResult = await enqueueMissingShipmentConfirmations({ limit: 25 });
         const outboxResult = await processFulfillmentOutboxOnce({ limit: 25 });
-        await recordWorkerJobSuccess('fulfillment outbox', startedAt, outboxResult);
-        return outboxResult;
+        const combinedResult = { ...outboxResult, autoRecovered: recoveryResult };
+        await recordWorkerJobSuccess('fulfillment outbox', startedAt, combinedResult);
+        return combinedResult;
       } catch (err) {
         await recordWorkerJobFailure('fulfillment outbox', startedAt, err);
         throw err;
       }
     });
     if (!result) return;
-    if (result.processed > 0) {
+    if (result.autoRecovered.enqueued > 0 || result.processed > 0) {
       console.log(
-        `[scheduler] fulfillment outbox: ${result.succeeded} succeeded, ${result.failed} failed, ${result.processed} processed`
+        `[scheduler] fulfillment outbox: ${result.succeeded} succeeded, ${result.failed} failed, ` +
+        `${result.processed} processed, ${result.autoRecovered.enqueued} auto-recovered`
       );
     }
   } catch (err) {

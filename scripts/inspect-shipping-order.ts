@@ -118,12 +118,13 @@ async function main() {
     SELECT provider, external_order_id, customer_order_id, carrier_account_id,
            source_status, shipment_status, tracking_number, raw, updated_at
     FROM store_orders
-    WHERE provider = 'walmart'
-      AND (
+    WHERE (
         external_order_id = ${lookup}
         OR customer_order_id = ${lookup}
         OR raw->>'purchaseOrderId' = ${lookup}
         OR raw->>'customerOrderId' = ${lookup}
+        OR raw->>'legacyOrderId' = ${lookup}
+        OR raw->>'orderId' = ${lookup}
       )
     ORDER BY updated_at DESC
     LIMIT 10
@@ -195,12 +196,13 @@ async function main() {
     SELECT provider, external_order_id, customer_order_id, carrier_account_id,
            source_status, shipment_status, tracking_number, raw, updated_at
     FROM store_orders
-    WHERE provider = 'walmart'
-      AND (
+    WHERE (
         external_order_id IN (${lookupA}, ${lookupB}, ${lookupC}, ${lookupD})
         OR customer_order_id IN (${lookupA}, ${lookupB}, ${lookupC}, ${lookupD})
         OR raw->>'purchaseOrderId' IN (${lookupA}, ${lookupB}, ${lookupC}, ${lookupD})
         OR raw->>'customerOrderId' IN (${lookupA}, ${lookupB}, ${lookupC}, ${lookupD})
+        OR raw->>'legacyOrderId' IN (${lookupA}, ${lookupB}, ${lookupC}, ${lookupD})
+        OR raw->>'orderId' IN (${lookupA}, ${lookupB}, ${lookupC}, ${lookupD})
       )
     ORDER BY updated_at DESC
     LIMIT 10
@@ -222,6 +224,17 @@ async function main() {
     FROM fulfillment_outbox
     WHERE order_id = ${orderId}
     ORDER BY id DESC
+    LIMIT 10
+  `.catch(() => []) as Array<Record<string, unknown>>;
+
+  const printQueue = await sql`
+    SELECT id, client_id, order_id, order_number, status, print_count,
+           label_url IS NOT NULL AS has_label_url, queued_at, created_at, last_printed_at
+    FROM print_queue_orders
+    WHERE order_id = ${String(orderId)}
+       OR order_id = ${lookupA}
+       OR order_number = ${lookupA}
+    ORDER BY created_at DESC
     LIMIT 10
   `.catch(() => []) as Array<Record<string, unknown>>;
 
@@ -261,6 +274,18 @@ async function main() {
       },
     },
     storeOrders: summarizeStoreOrders(storeOrders),
+    printQueue: printQueue.map((row) => ({
+      id: typeof row.id === 'string' ? `${row.id.slice(0, 12)}...` : row.id,
+      clientId: row.client_id,
+      orderId: row.order_id,
+      orderNumber: row.order_number,
+      status: row.status,
+      printCount: row.print_count,
+      hasLabelUrl: row.has_label_url,
+      queuedAt: row.queued_at,
+      createdAt: row.created_at,
+      lastPrintedAt: row.last_printed_at,
+    })),
     duplicateActiveLabelRisk: Boolean(activeShipment),
     retryingLabelCreationAppearsSafe: retrySafe,
     shipments: shipments.map((row) => ({
