@@ -1,4 +1,4 @@
-# PS-050 - Make Awaiting Shipment Rates Accurate and Auto-Start Background Rating
+# PS-050 - Make Awaiting Shipment Rates Accurate, Cache-First, and Rate-Limit Safe
 
 Created from DJ handoff on 2026-06-01.
 
@@ -25,6 +25,9 @@ Observed evidence:
 - Backend cache TTL exists, but persisted order best rates are not automatically expired by that TTL.
 - `OrdersView.tsx` gates `useShippingAccounts({ enabled })` behind support UI states, and auto-rate skips normal orders when `carrierIds.length === 0`.
 - Current passive auto-rating is serial: `workerCount = Math.min(1, queue.length)`.
+- A fresh 50-order Awaiting Shipment page can fan out to about 400 ShipStation `/v2/rates/estimate` calls when 8 carrier accounts are active.
+- ShipStation's default allowance is 200 requests/minute; PrepShip's safe target is at most 160 ShipStation requests/minute.
+- The old v2 client limiter `TokenBucket(40, 40 / 1500)` allowed about 1600 requests/minute, roughly 8x higher than ShipStation's default allowance.
 
 ## Inspect First
 

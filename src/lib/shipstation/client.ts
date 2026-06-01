@@ -1,13 +1,63 @@
 import { env } from '../env.js';
 import { timedFetch } from '../http/timing.js';
-import { TokenBucket } from './rate-limiter.js';
 import { CircuitBreaker } from './circuit-breaker.js';
 
 const BASE_URL = 'https://api.shipstation.com';
 
-const bucket = new TokenBucket(40, 40 / 1500);
 const breaker = new CircuitBreaker(5, 30_000);
 const inflight = new Map<string, Promise<unknown>>();
+
+export const SHIPSTATION_RATE_LIMIT_PER_MINUTE = Math.max(
+  1,
+  Number.parseInt(process.env.SHIPSTATION_RATE_LIMIT_PER_MINUTE ?? '160', 10) || 160
+);
+export const SHIPSTATION_RATE_LIMIT_BURST = Math.max(
+  1,
+  Math.min(
+    SHIPSTATION_RATE_LIMIT_PER_MINUTE,
+    Number.parseInt(process.env.SHIPSTATION_RATE_LIMIT_BURST ?? '20', 10) || 20
+  )
+);
+const SHIPSTATION_RATE_LIMIT_WINDOW_MS = 60_000;
+const shipStationV2RateLimitTimestamps: number[] = [];
+
+function trimShipStationV2RateLimitTimestamps(now = Date.now()) {
+  while (
+    shipStationV2RateLimitTimestamps.length > 0 &&
+    now - shipStationV2RateLimitTimestamps[0]! >= SHIPSTATION_RATE_LIMIT_WINDOW_MS
+  ) {
+    shipStationV2RateLimitTimestamps.shift();
+  }
+}
+
+function nextShipStationV2BudgetDelayMs(now = Date.now()) {
+  trimShipStationV2RateLimitTimestamps(now);
+  const burstWindowMs = Math.ceil(
+    (SHIPSTATION_RATE_LIMIT_WINDOW_MS * SHIPSTATION_RATE_LIMIT_BURST) /
+      SHIPSTATION_RATE_LIMIT_PER_MINUTE
+  );
+  const recentBurst = shipStationV2RateLimitTimestamps.filter((timestamp) => now - timestamp < burstWindowMs);
+  const burstDelay =
+    recentBurst.length >= SHIPSTATION_RATE_LIMIT_BURST
+      ? Math.max(0, burstWindowMs - (now - recentBurst[0]!))
+      : 0;
+  const minuteDelay =
+    shipStationV2RateLimitTimestamps.length >= SHIPSTATION_RATE_LIMIT_PER_MINUTE
+      ? Math.max(0, SHIPSTATION_RATE_LIMIT_WINDOW_MS - (now - shipStationV2RateLimitTimestamps[0]!))
+      : 0;
+  return Math.max(burstDelay, minuteDelay);
+}
+
+async function acquireShipStationV2Budget(): Promise<void> {
+  for (;;) {
+    const delayMs = nextShipStationV2BudgetDelayMs();
+    if (delayMs <= 0) {
+      shipStationV2RateLimitTimestamps.push(Date.now());
+      return;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+  }
+}
 
 export class ShipStationError extends Error {
   constructor(
@@ -48,7 +98,7 @@ export async function ssRequest<T>(path: string, opts: RequestOpts = {}): Promis
       let attempt = 0;
       while (true) {
         attempt += 1;
-        await bucket.acquire();
+        await acquireShipStationV2Budget();
         const timeoutSignal = AbortSignal.timeout(opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
         const signal = opts.signal
           ? AbortSignal.any([opts.signal, timeoutSignal])

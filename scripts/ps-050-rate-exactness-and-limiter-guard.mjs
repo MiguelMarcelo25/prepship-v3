@@ -12,13 +12,43 @@ function assert(condition, message) {
   if (!condition) process.exitCode = 1
 }
 
-const [ratesService, ratesRoute, ratesBackfill, browserSpec, packageJson, v2ApiClient] = await Promise.all([
+function shipStationScheduleWithinBudget({ requestCount, perMinute, burst }) {
+  const windowMs = 60_000
+  const burstWindowMs = Math.ceil((windowMs * burst) / perMinute)
+  const schedule = []
+  const activeWindow = []
+  let now = 0
+
+  for (let i = 0; i < requestCount; i += 1) {
+    for (;;) {
+      while (activeWindow.length && now - activeWindow[0] >= windowMs) activeWindow.shift()
+      const recentBurst = activeWindow.filter((timestamp) => now - timestamp < burstWindowMs)
+      const burstDelay = recentBurst.length >= burst ? burstWindowMs - (now - recentBurst[0]) : 0
+      const minuteDelay = activeWindow.length >= perMinute ? windowMs - (now - activeWindow[0]) : 0
+      const delay = Math.max(0, burstDelay, minuteDelay)
+      if (delay <= 0) break
+      now += delay
+    }
+    activeWindow.push(now)
+    schedule.push(now)
+  }
+
+  for (const timestamp of schedule) {
+    const minuteCount = schedule.filter((candidate) => candidate >= timestamp && candidate < timestamp + windowMs).length
+    const burstCount = schedule.filter((candidate) => candidate >= timestamp && candidate < timestamp + burstWindowMs).length
+    if (minuteCount > perMinute || burstCount > burst) return false
+  }
+  return true
+}
+
+const [ratesService, ratesRoute, ratesBackfill, browserSpec, packageJson, v2ApiClient, shipStationClient] = await Promise.all([
   read('src/services/rates.ts'),
   read('src/routes/rates.ts'),
   read('src/services/rates-backfill.ts'),
   read('web/e2e/orders-rate-accuracy-and-autostart.spec.js'),
   read('package.json'),
   read('web/src/lib/v2-apiClient.ts'),
+  read('src/lib/shipstation/client.ts'),
 ])
 
 assert(
@@ -42,6 +72,21 @@ assert(
     ratesService.includes('await acquireShipStationRateBudget()') &&
     !ratesService.includes('40 / 1500'),
   'ShipStation live rate calls enforce env-driven 160/minute budget with burst control, not the old too-fast limiter',
+)
+
+assert(
+  shipStationClient.includes('SHIPSTATION_RATE_LIMIT_PER_MINUTE') &&
+    shipStationClient.includes('SHIPSTATION_RATE_LIMIT_BURST') &&
+    shipStationClient.includes('acquireShipStationV2Budget') &&
+    shipStationClient.includes('shipStationV2RateLimitTimestamps') &&
+    !shipStationClient.includes('TokenBucket(40, 40 / 1500)') &&
+    !shipStationClient.includes("from './rate-limiter.js'"),
+  'ShipStation v2 client shares the env-driven limiter for rates, carrier discovery, labels, and other v2 calls',
+)
+
+assert(
+  shipStationScheduleWithinBudget({ requestCount: 400, perMinute: 160, burst: 20 }),
+  'ShipStation limiter has deterministic evidence for 50 fresh orders x 8 carrier accounts without exceeding 160/minute',
 )
 
 assert(
