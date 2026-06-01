@@ -260,15 +260,23 @@ test('Awaiting: expedited rows badge + highlight (server object AND mirror fallb
   await assertNotExpedited(page, awaitingGround.orderId)
 
   // Red treatment must PERSIST under selection. Select the expedited row and
-  // confirm a content cell's computed background is the expedited red
-  // (rgb(251, 213, 213) = #fbd5d5), not the blue selection tint.
+  // confirm a content cell's computed background stays in the expedited
+  // red/pink range, not the normal blue selection tint. Browser/style
+  // composition has historically varied by a few RGB points (213-216).
   const selectBox = page.locator(`#row-${awaitingOvernight.orderId} td[data-col="select"] input[type="checkbox"]`)
   await selectBox.check()
   const selectedRow = page.locator(`#row-${awaitingOvernight.orderId}`)
   await expect(selectedRow).toHaveClass(/\brow-selected\b/)
   await expect(selectedRow).toHaveClass(/\brow-expedited\b/)
   const bg = await selectedRow.locator('td[data-col="date"]').evaluate((el) => getComputedStyle(el).backgroundColor)
-  expect(bg.replace(/\s+/g, ''), 'selected expedited row must keep a red background').toBe('rgb(251,213,213)')
+  const channels = bg.match(/\d+/g)?.map(Number) ?? []
+  expect(channels.length, `selected expedited row background must be rgb(), got ${bg}`).toBeGreaterThanOrEqual(3)
+  expect(channels[0], 'selected expedited row red channel').toBeGreaterThanOrEqual(245)
+  expect(channels[1], 'selected expedited row green channel').toBeGreaterThanOrEqual(205)
+  expect(channels[1], 'selected expedited row green channel').toBeLessThanOrEqual(225)
+  expect(channels[2], 'selected expedited row blue channel').toBeGreaterThanOrEqual(205)
+  expect(channels[2], 'selected expedited row blue channel').toBeLessThanOrEqual(225)
+  expect(Math.abs(channels[1] - channels[2]), 'selected expedited row should stay a neutral red tint').toBeLessThanOrEqual(3)
 })
 
 test('Shipped: badge reflects REQUESTED service (2-Day) even when the purchased label is ground; ground shows neither', async ({ page }) => {

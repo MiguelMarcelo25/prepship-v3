@@ -1,0 +1,50 @@
+name: Shipping Roundtrip Certification
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '22 10 * * *'
+  pull_request:
+    paths:
+      - 'api/**'
+      - 'src/**'
+      - 'scripts/**'
+      - 'web/**'
+      - 'docs/shipping-certification-harness.md'
+      - 'docs/full-workflow-certification-matrix.md'
+      - 'package.json'
+      - '.github/workflows/shipping-roundtrip-certification.yml'
+  push:
+    branches:
+      - prepshipv4-stable
+    paths:
+      - 'api/**'
+      - 'src/**'
+      - 'scripts/**'
+      - 'web/**'
+      - 'docs/shipping-certification-harness.md'
+      - 'docs/full-workflow-certification-matrix.md'
+      - 'package.json'
+      - '.github/workflows/shipping-roundtrip-certification.yml'
+
+jobs:
+  shipping-roundtrip-certification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      PREPSHIP_CERTIFICATION_WEBHOOK_URL: ${{ secrets.PREPSHIP_CERTIFICATION_WEBHOOK_URL }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run shipping roundtrip certification
+        run: npm run test:shipping-roundtrip-certification

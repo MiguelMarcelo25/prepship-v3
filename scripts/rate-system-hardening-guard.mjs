@@ -67,12 +67,12 @@ assert(
 );
 
 assert(
-  route.includes('rateCacheKey') &&
+    route.includes('rateCacheKey') &&
     route.includes('cacheKey: z.string().min(1).optional()') &&
-    route.includes("matchQuality: 'exact' as const") &&
-    route.includes("matchQuality: 'rough' as const") &&
+    route.includes("matchQuality: matchQuality === 'exact' ? 'exact' as const : 'rough' as const") &&
+    route.includes("'rough' as const") &&
     route.includes('approximate: false') &&
-    route.includes('approximate: true'),
+    route.includes("approximate: matchQuality === 'rough' ? true : false"),
   '/rates/cached/bulk supports exact cache keys and marks rough matches approximate',
 );
 

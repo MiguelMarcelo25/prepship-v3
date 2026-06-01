@@ -8,8 +8,10 @@ const requiredFiles = [
   'scripts/smoke-shipping-test-label.ts',
   'scripts/smoke-shipping-real-label.ts',
   'scripts/smoke-marketplace-confirm.ts',
+  'scripts/shipping-roundtrip-certification.mjs',
   'scripts/retry-marketplace-confirmation.ts',
   'scripts/walmart-confirmation-payload-guard.ts',
+  '.github/workflows/shipping-roundtrip-certification.yml',
 ];
 
 const packageJson = JSON.parse(readFileSync('package.json', 'utf8'));
@@ -32,6 +34,7 @@ for (const name of [
   'smoke:shipping:test-label',
   'smoke:shipping:real-label',
   'smoke:marketplace-confirm',
+  'test:shipping-roundtrip-certification',
   'marketplace:confirm:retry',
   'test:walmart-confirmation:payload',
   'guard:shipping-certification',
@@ -60,6 +63,12 @@ const retryConfirm = existsSync('scripts/retry-marketplace-confirmation.ts')
 const docs = existsSync('docs/shipping-certification-harness.md')
   ? readFileSync('docs/shipping-certification-harness.md', 'utf8')
   : '';
+const roundtrip = existsSync('scripts/shipping-roundtrip-certification.mjs')
+  ? readFileSync('scripts/shipping-roundtrip-certification.mjs', 'utf8')
+  : '';
+const workflow = existsSync('.github/workflows/shipping-roundtrip-certification.yml')
+  ? readFileSync('.github/workflows/shipping-roundtrip-certification.yml', 'utf8')
+  : '';
 
 assert(inspector.includes('READ_ONLY_INSPECTOR'), 'inspector must declare read-only mode');
 assert(preflight.includes('READ_ONLY_PREFLIGHT'), 'preflight must declare read-only mode');
@@ -79,9 +88,18 @@ assert(retryConfirm.includes("provider !== 'walmart'"), 'live marketplace confir
 assert(retryConfirm.includes('dryRun'), 'live marketplace confirmation retry must support dry-run inspection');
 assert(/No automated test may create real labels/i.test(docs), 'docs must state no real labels');
 assert(/smoke:shipping:real-label/i.test(docs), 'docs must document the real-label certification command');
+assert(/test:shipping-roundtrip-certification/i.test(docs), 'docs must document the official roundtrip certification command');
 assert(/static guards are not enough/i.test(docs), 'docs must explain static guards are not enough');
 assert(/duplicate active/i.test(inspector + preflight + docs), 'harness must mention duplicate active label protection');
 assert(/shipped|cancelled/i.test(preflight + testLabel), 'harness must check shipped/cancelled protection');
+assert(roundtrip.includes('guard:shipping-certification'), 'roundtrip runner must include shipping certification guard');
+assert(roundtrip.includes('smoke:shipping:test-label') && roundtrip.includes('--fixture'), 'roundtrip runner must include fixture label smoke');
+assert(roundtrip.includes('smoke:marketplace-confirm') && roundtrip.includes('--mock-process-once'), 'roundtrip runner must include mock marketplace confirm');
+assert(roundtrip.includes('test:workflow-suites'), 'roundtrip runner must include offline workflow suites');
+assert(roundtrip.includes('--notify-dry-run'), 'roundtrip runner must expose notify dry-run mode');
+assert(roundtrip.includes('PREPSHIP_CERTIFICATION_WEBHOOK_URL'), 'roundtrip runner must use only the certification webhook env var for notifications');
+assert(workflow.includes('PREPSHIP_CERTIFICATION_WEBHOOK_URL'), 'workflow must wire the failure notification webhook secret without printing it');
+assert(workflow.includes('npm run test:shipping-roundtrip-certification'), 'workflow must run the official roundtrip certification command');
 
 if (process.exitCode) {
   process.exit(process.exitCode);

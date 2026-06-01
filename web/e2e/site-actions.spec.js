@@ -527,7 +527,7 @@ test('shipping workflow certification records requests, payloads, queue, print, 
   await expect(page.getByText(/Queue updated|queued|MOCK-EBAY-101|Print Queue/i).first()).toBeVisible({ timeout: 15000 })
 
   expectRequest(/labels|carriers\/labels/, { method: 'POST', payloadIncludes: ['101'] })
-  await waitForRequest('/print-queue', { method: 'POST', payloadIncludes: ['MOCK-EBAY-101', 'mock://labels/9001.pdf'] })
+  await waitForRequest('/print-queue', { method: 'POST', payloadIncludes: ['MOCK-EBAY-101', 'prepship_test_standard'] })
   assertNoObjectObjectPayloads()
   expectNoForbiddenExternalRequests()
 })
@@ -548,9 +548,9 @@ test('invalid label URL failure does not enqueue [object Object]', async ({ page
   // No real postage, no live provider calls, mocked only.
   labelCreateShouldReturnInvalidUrl = true
   await openAwaitingOrderPanel(page)
-  const queueAction = page.getByRole('button', { name: /^Print to Queue$/ }).first()
-  await expect(queueAction).toBeVisible({ timeout: 15000 })
-  await queueAction.click()
+  const printAction = page.getByRole('button', { name: /Print Label|Create.*Print Label/i }).first()
+  await expect(printAction).toBeVisible({ timeout: 15000 })
+  await printAction.click()
   await waitForRequest(/labels|carriers\/labels/, { method: 'POST', payloadIncludes: ['101'] })
   await expect(page.getByText(/MOCK-EBAY-101|Awaiting/i).first()).toBeVisible({ timeout: 15000 })
   expect(

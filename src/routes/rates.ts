@@ -250,10 +250,11 @@ function orderedCarrierIds(carrierIds: string[] | undefined, preferredCarrierId?
   return [preferredCarrierId, ...unique.filter((carrierId) => carrierId !== preferredCarrierId)];
 }
 
-function cacheMetadata(row: typeof rateCachePublicColumns | any, matchType: 'exact' | 'miss') {
-  if (!row || matchType === 'miss') {
+function cacheMetadata(row: typeof rateCachePublicColumns | any, matchQuality: 'exact' | 'rough' | 'miss') {
+  if (!row || matchQuality === 'miss') {
     return {
       matchType: 'miss' as const,
+      matchQuality: 'miss' as const,
       approximate: false,
       isComplete: false,
       rateCount: 0,
@@ -271,8 +272,9 @@ function cacheMetadata(row: typeof rateCachePublicColumns | any, matchType: 'exa
     diagnostic?.status === 'ok' || diagnostic?.status === 'cached' || diagnostic?.status === 'empty'
   ));
   return {
-    matchType: 'exact' as const,
-    approximate: false,
+    matchType: matchQuality,
+    matchQuality: matchQuality === 'exact' ? 'exact' as const : 'rough' as const,
+    approximate: matchQuality === 'rough' ? true : false,
     isComplete,
     rateCount: rates.length,
     cacheCreatedAt: fetchedAt.toISOString(),
@@ -497,6 +499,16 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
   for (const row of exactRows) {
     if (!exactRowsByKey.has(row.cacheKey)) exactRowsByKey.set(row.cacheKey, row);
   }
+  const roughLookupItems = itemsWithKeys.filter(({ item: it }) => (
+    it.weightOz !== undefined && it.toZip !== undefined
+  ));
+  const roughRowsByWeightZip = new Map<string, RateCachePublicRow | null>();
+  await Promise.all(roughLookupItems.map(async ({ item: it }) => {
+    const key = `${it.weightOz}|${it.toZip!.toUpperCase()}`;
+    if (roughRowsByWeightZip.has(key)) return;
+    const rows = await selectRateCachePublicRowsByWeightZip(it.weightOz!, it.toZip!);
+    roughRowsByWeightZip.set(key, rows[0] ?? null);
+  }));
   const results = itemsWithKeys.map(({ item: it, computedCacheKey }) => {
     const exactHit = computedCacheKey ? exactRowsByKey.get(computedCacheKey) : null;
     if (exactHit) {
@@ -512,6 +524,30 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
       return {
         orderId: it.orderId,
         cacheKey: computedCacheKey,
+        weightOz: it.weightOz,
+        toZip: it.toZip,
+        hit: publicRateCacheRow(eligibleHit, canViewFinancials),
+        ...meta,
+      };
+    }
+    const roughKey = it.weightOz !== undefined && it.toZip !== undefined
+      ? `${it.weightOz}|${it.toZip.toUpperCase()}`
+      : null;
+    const roughHit = roughKey ? roughRowsByWeightZip.get(roughKey) : null;
+    if (roughHit) {
+      const eligibleHit = sanitizeRateCacheRowForEligibility(roughHit, {
+        clientId: it.clientId ?? null,
+        storeId: it.storeId ?? null,
+      }, {
+        confirmation: 'delivery',
+        insuranceProvider: it.insuranceProvider && it.insuredValue ? it.insuranceProvider as any : 'none',
+        insuredValue: typeof it.insuranceValue === 'string' ? Number(it.insuranceValue) : it.insuredValue ?? it.insuranceValue ?? null,
+      });
+      const meta = cacheMetadata(eligibleHit, 'rough');
+      return {
+        orderId: it.orderId,
+        cacheKey: computedCacheKey,
+        fallbackCacheKey: roughHit.cacheKey,
         weightOz: it.weightOz,
         toZip: it.toZip,
         hit: publicRateCacheRow(eligibleHit, canViewFinancials),

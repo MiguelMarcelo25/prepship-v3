@@ -45,9 +45,11 @@ assert(
 assert(
   ratesRoute.includes("matchType: 'miss'") &&
     ratesRoute.includes("isComplete: false") &&
-    ratesRoute.includes("matchType: 'exact'") &&
-    !ratesRoute.includes("matchQuality: 'rough' as const"),
-  'Bulk cached rates expose exact/fresh/complete metadata and do not auto-apply rough hits',
+    ratesRoute.includes('matchType: matchQuality') &&
+    ratesRoute.includes("'rough' as const") &&
+    ratesRoute.includes('approximate: matchQuality ===') &&
+    ordersView.includes("result?.matchType === 'exact'"),
+  'Bulk cached rates expose exact/fresh/complete metadata and mark rough hits approximate so they are not auto-applied',
 )
 
 assert(

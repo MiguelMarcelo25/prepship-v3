@@ -1385,7 +1385,11 @@ function getShipAccountDisplay(order: OrderSummaryDto, accounts: CarrierAccountD
     if (accountLabel) return accountLabel
   }
   if (order.bestRate) {
-    const nickname = normalizeShippingAccountName(order.bestRate.carrierNickname)
+    const bestRateRecord = toRecord(order.bestRate)
+    const nickname =
+      normalizeShippingAccountName(order.bestRate.carrierNickname) ??
+      normalizeShippingAccountName(toStringValue(bestRateRecord?.providerAccountNickname)) ??
+      normalizeShippingAccountName(toStringValue(bestRateRecord?.accountNickname))
     if (nickname) return nickname
   }
   return formatCarrierCode(order.selectedRate?.carrierCode ?? order.bestRate?.carrierCode)
@@ -1423,7 +1427,11 @@ function getBestRateServiceCode(order: OrderSummaryDto) {
 }
 
 function getBestRateCarrierNickname(order: OrderSummaryDto) {
-  return getShippingString(order, 'accountNickname') ?? (order.bestRate ? toStringValue(order.bestRate.carrierNickname) : null)
+  const bestRateRecord = toRecord(order.bestRate)
+  return getShippingString(order, 'accountNickname') ??
+    (order.bestRate ? toStringValue(order.bestRate.carrierNickname) : null) ??
+    toStringValue(bestRateRecord?.providerAccountNickname) ??
+    toStringValue(bestRateRecord?.accountNickname)
 }
 
 function getSelectedRateBaseCost(order: OrderSummaryDto) {

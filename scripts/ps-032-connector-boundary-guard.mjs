@@ -45,7 +45,26 @@ const approvedConnectorOwned = new Set([
 ]);
 
 const transitionalDebt = new Set([
+  'scripts/backfill-shipstation-fulfillments.ts',
+  'scripts/reconcile-external-shipped-orders.ts',
 ]);
+
+const transitionalSafetyRequirements = {
+  'scripts/backfill-shipstation-fulfillments.ts': [
+    /Dry-run unless `--apply`/,
+    /INSERT-ONLY/,
+    /never creates labels\/postage/,
+    /never\s+notifies marketplaces/,
+    /only runs when invoked directly/,
+  ],
+  'scripts/reconcile-external-shipped-orders.ts': [
+    /dry-run by default/,
+    /never creates\/voids labels/,
+    /never buys postage/,
+    /never notifies marketplaces/,
+    /runs only when invoked directly/,
+  ],
+};
 
 const ignoredFiles = new Set([
   'scripts/api-contracts-guard.mjs',
@@ -80,11 +99,15 @@ assert(existsSync(AUDIT_DOC), `missing ${AUDIT_DOC}`);
 const audit = readFileSync(AUDIT_DOC, 'utf8');
 
 for (const file of transitionalDebt) {
+  const source = existsSync(file) ? readFileSync(file, 'utf8') : '';
   assert(audit.includes(file), `PS-032 audit must document transitional provider call file: ${file}`);
   assert(
-    existsSync(file) && hasProviderCall(readFileSync(file, 'utf8')),
+    existsSync(file) && hasProviderCall(source),
     `PS-032 transitional debt file no longer has direct provider calls and should be removed: ${file}`,
   );
+  for (const requirement of transitionalSafetyRequirements[file] ?? []) {
+    assert(requirement.test(source), `PS-032 transitional debt file is missing required safety marker ${requirement}: ${file}`);
+  }
 }
 for (const file of approvedConnectorOwned) {
   assert(audit.includes(file), `PS-032 audit must document connector-owned provider call file: ${file}`);

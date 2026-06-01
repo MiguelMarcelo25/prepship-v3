@@ -10,6 +10,20 @@ Default modes are read-only, mocked, offline, fixture-based, or sandbox-only.
 
 ## Commands
 
+`npm run test:shipping-roundtrip-certification`
+
+- Official PS-061 safe certification gate.
+- Runs `guard:shipping-certification`, `smoke:shipping:test-label -- --fixture`, `smoke:marketplace-confirm -- --mock-process-once`, and `test:workflow-suites`.
+- Prints a pass/fail table plus a sanitized client/store matrix for HUGRAB, Walmart - DJC, Tran Agency, and KF Goods.
+- Exits non-zero when any certification layer fails.
+- Sends a sanitized failure notification only when `PREPSHIP_CERTIFICATION_WEBHOOK_URL` is set. The webhook URL is never printed.
+
+`npm run test:shipping-roundtrip-certification -- --notify-dry-run`
+
+- Runs the same safe certification gate.
+- Prints the sanitized notification payload that would be sent.
+- Does not send any webhook request.
+
 `npm run inspect:shipping-order -- --order-id <id>`
 
 - Read-only.
@@ -49,3 +63,9 @@ Default modes are read-only, mocked, offline, fixture-based, or sandbox-only.
 - API/DB timeout: UI may remain on "Creating label PDF..." until the request fails or recovers.
 - UI hung on creating: check API health, shipment row, active label, and outbox before clicking Print Label again.
 - Duplicate active shipment: do not retry label creation unless a human confirms the previous label is voided or invalid.
+
+## Failure Notifications
+
+The GitHub workflow `.github/workflows/shipping-roundtrip-certification.yml` runs the official safe gate on manual dispatch, daily schedule, and shipping-critical code changes. On failure, the runner sends only a sanitized JSON payload to `PREPSHIP_CERTIFICATION_WEBHOOK_URL` when that secret is configured.
+
+Payload fields are limited to status, branch, short commit, run URL, failed suite names/status/tail output, and the sanitized client/store matrix. It must not include provider secrets, raw labels, customer PII, full marketplace payloads, or webhook URLs.

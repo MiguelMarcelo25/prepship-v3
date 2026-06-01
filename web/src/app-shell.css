@@ -457,7 +457,7 @@ aside[aria-label="Primary navigation"] button[aria-label="Show Test Orders"][ari
 .orders-table tbody tr.row-expedited:hover td:not([data-col="select"]),
 .orders-table tbody tr.row-expedited.row-selected td:not([data-col="select"]),
 .orders-table tbody tr.row-expedited.row-panel-open td:not([data-col="select"]),
-.orders-table tbody tr.row-expedited.row-selected:hover td:not([data-col="select"]){background:#fbd5d5!important;}
+.orders-table tbody tr.row-expedited.row-selected:hover td:not([data-col="select"]){background:#fbd5d5!important;filter:none!important;}
 .orders-table tbody tr.row-expedited.row-selected td[data-col="select"]{background:rgba(220,38,38,.16);box-shadow:inset 3px 0 0 var(--red);}
 .expedited-badge{display:inline-block;align-self:flex-start;margin-bottom:3px;padding:2px 5px;border-radius:4px;font-size:9.5px;font-weight:800;line-height:1;letter-spacing:.02em;text-transform:uppercase;color:#fff;background:var(--red);border:1px solid #b91c1c;}
 .expedited-badge--overnight{background:#991b1b;border-color:#7f1d1d;}

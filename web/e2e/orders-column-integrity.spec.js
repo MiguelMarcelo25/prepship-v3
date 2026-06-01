@@ -39,11 +39,13 @@ const clients = [
   { id: 2, name: 'eBay - DJC', active: true, isTest: false, storeId: 102 },
 ]
 
+const SHIPPING_SERVICE_ELIGIBILITY_VERSION = 'ps-057-hugrab-ground-saver-v1'
+
 // Canonical rate payload — base cost 9.86, no markup rules are mocked so the
 // grid renders the base amount verbatim.
 function ps050Fingerprint({ weightOz, zip, country = 'US', state, city, dims, clientId, carrierIds = [], confirmation = 'delivery' }) {
   const parts = [
-    'v=ground-saver-v2',
+    `v=ground-saver-v2|eligibility=${SHIPPING_SERVICE_ELIGIBILITY_VERSION}`,
     `d=${new Date().toISOString().slice(0, 10)}`,
     `w=${Math.round(weightOz * 10)}`,
     `z=${String(zip).replace(/\D/g, '').slice(0, 5)}`,
@@ -89,6 +91,7 @@ const rate = {
   isComplete: true,
   rateCount: 1,
   matchType: 'exact',
+  eligibilityVersion: SHIPPING_SERVICE_ELIGIBILITY_VERSION,
 }
 
 const storeIdByClientId = { 1: 101, 2: 102 }
@@ -325,6 +328,18 @@ async function assertColumns(page, rowId, columns) {
   for (const [col, rule] of Object.entries(columns)) {
     const cell = row.locator(`td[data-col="${col}"]`)
     await expect(cell, `row ${rowId} must have a [data-col="${col}"] cell`).toHaveCount(1)
+    if (rule.equals !== undefined) {
+      await expect(cell, `row ${rowId} col ${col} text`).toHaveText(rule.equals, { timeout: 15000 })
+    }
+    if (rule.matches !== undefined) {
+      await expect(cell, `row ${rowId} col ${col} should match ${rule.matches}`).toContainText(rule.matches, { timeout: 15000 })
+    }
+    if (rule.contains !== undefined) {
+      const needles = Array.isArray(rule.contains) ? rule.contains : [rule.contains]
+      for (const needle of needles) {
+        await expect(cell, `row ${rowId} col ${col} should contain "${needle}"`).toContainText(needle, { timeout: 15000 })
+      }
+    }
     const text = ((await cell.textContent()) ?? '').trim()
     if (rule.equals !== undefined) {
       expect(text, `row ${rowId} col ${col} text`).toBe(rule.equals)
@@ -335,9 +350,6 @@ async function assertColumns(page, rowId, columns) {
         expect(text, `row ${rowId} col ${col} should contain "${needle}"`).toContain(needle)
       }
     }
-    if (rule.matches !== undefined) {
-      expect(text, `row ${rowId} col ${col} should match ${rule.matches}`).toMatch(rule.matches)
-    }
     if (rule.notContains !== undefined) {
       const needles = Array.isArray(rule.notContains) ? rule.notContains : [rule.notContains]
       for (const needle of needles) {
@@ -345,6 +357,12 @@ async function assertColumns(page, rowId, columns) {
       }
     }
   }
+}
+
+async function scrollOrdersTableRight(page) {
+  await page.locator('.orders-wrap').evaluate((el) => {
+    el.scrollLeft = el.scrollWidth
+  })
 }
 
 test('Awaiting grid columns render every required field from source of truth', async ({ page }) => {
@@ -366,6 +384,9 @@ test('Awaiting grid columns render every required field from source of truth', a
     weight: { matches: /\d/ },
     shipto: { contains: ['El Reno', 'OK', '73036'] },
     total: { contains: '16.99' },
+  })
+  await scrollOrdersTableRight(page)
+  await assertColumns(page, awaitingValid.orderId, {
     carrier: { notContains: ['Ext. Label', 'Missing shipment sync', '— add dims'] },
     custcarrier: { contains: 'ROCEL C81F70' },
     bestrate: { contains: '9.86', notContains: ['Ext. Label', 'Missing shipment sync'] },

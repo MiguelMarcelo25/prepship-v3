@@ -92,8 +92,9 @@ assert(
 assert(
   ratesRoute.includes('resolveRateInput') &&
     ratesRoute.includes('rateCacheKey(resolved)') &&
-    !ratesRoute.includes("matchQuality: 'rough'"),
-  'cached bulk exactness uses resolved credential/source context and never exposes rough auto-apply hits',
+    ratesRoute.includes("'rough' as const") &&
+    browserSpec.includes('prior saved best is not assumed best'),
+  'cached bulk exactness uses resolved credential/source context and marks rough hits approximate instead of auto-applying them',
 )
 
 const fingerprintInputs = [
