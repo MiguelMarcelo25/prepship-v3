@@ -125,7 +125,7 @@ const addBody = z.object({
   item_description: z.string().nullable().optional(),
   order_qty: z.number().int().positive().optional(),
   multi_sku_data: z
-    .array(z.object({ sku: z.string(), qty: z.number() }))
+    .array(z.object({ sku: z.string(), description: z.string().optional(), qty: z.number() }))
     .nullable()
     .optional(),
 });
@@ -189,7 +189,7 @@ const queueSendBody = z.object({
         item_description: z.string().nullable().optional(),
         order_qty: z.number().int().positive().optional(),
         multi_sku_data: z
-          .array(z.object({ sku: z.string(), qty: z.number() }))
+          .array(z.object({ sku: z.string(), description: z.string().optional(), qty: z.number() }))
           .nullable()
           .optional(),
       })

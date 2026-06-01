@@ -18,7 +18,7 @@ export type AddToQueueInput = {
   primarySku?: string | null;
   itemDescription?: string | null;
   orderQty?: number;
-  multiSkuData?: { sku: string; qty: number }[] | null;
+  multiSkuData?: { sku: string; description?: string; qty: number }[] | null;
   scope?: PrintQueueListScope;
 };
 
@@ -50,7 +50,7 @@ export type QueueSendOrderInput = {
   primarySku?: string | null;
   itemDescription?: string | null;
   orderQty?: number;
-  multiSkuData?: { sku: string; qty: number }[] | null;
+  multiSkuData?: { sku: string; description?: string; qty: number }[] | null;
   scope?: PrintQueueListScope;
 };
 
@@ -1192,6 +1192,41 @@ function safePdfText(value: unknown): string {
     .replace(/[^\x20-\x7E]/g, '');
 }
 
+function normalizeQueueSkuKey(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function collapseQueueSkuLines(entry: Pick<PrintQueueEntry, 'multiSkuData' | 'primarySku' | 'itemDescription' | 'orderQty'>): Array<{ sku: string; description: string; qty: number }> {
+  const collapsed = new Map<string, { sku: string; description: string; qty: number }>();
+  const rawLines = Array.isArray(entry.multiSkuData) ? entry.multiSkuData : [];
+  for (const rawLine of rawLines) {
+    const line = rawLine && typeof rawLine === 'object' ? rawLine as Record<string, unknown> : {};
+    const sku = String(line.sku ?? '').trim();
+    if (!sku) continue;
+    const key = normalizeQueueSkuKey(sku);
+    const qtyValue = Number(line.qty ?? line.quantity ?? 1);
+    const qty = Number.isFinite(qtyValue) && qtyValue > 0 ? Math.trunc(qtyValue) : 1;
+    const description = String(line.description ?? line.name ?? '').trim();
+    const existing = collapsed.get(key);
+    if (existing) {
+      existing.qty += qty;
+      if (!existing.description && description) existing.description = description;
+    } else {
+      collapsed.set(key, { sku, description, qty });
+    }
+  }
+  const lines = [...collapsed.values()].sort((left, right) => normalizeQueueSkuKey(left.sku).localeCompare(normalizeQueueSkuKey(right.sku)));
+  if (lines.length > 0) return lines;
+  const primarySku = String(entry.primarySku ?? '').trim();
+  return primarySku
+    ? [{
+        sku: primarySku,
+        description: String(entry.itemDescription ?? '').trim(),
+        qty: Number.isFinite(Number(entry.orderQty)) && Number(entry.orderQty) > 0 ? Math.trunc(Number(entry.orderQty)) : 1,
+      }]
+    : [];
+}
+
 function drawMockFallbackLabel(
   page: ReturnType<import('pdf-lib').PDFDocument['addPage']>,
   entry: PrintQueueEntry,
@@ -1371,12 +1406,14 @@ function drawHeader(
   // description + QTY, or MULTI-SKU + items + QTY). Mirrors the
   // sizes/gaps used in the draw block below, so changes to one must
   // be mirrored in the other.
+  const skuLines = collapseQueueSkuLines(entry);
+  const isMultiSkuHeader = skuLines.length > 1;
   let contentHeight: number;
-  if (entry.multiSkuData && entry.multiSkuData.length > 0) {
+  if (isMultiSkuHeader) {
     contentHeight =
       26 + 6 + // MULTI-SKU title
       8 +      // gap
-      entry.multiSkuData.length * (15 + 6) + // each item line
+      skuLines.length * (24 + 6) + // each bordered SKU chip
       6 +      // gap
       22 + 6;  // QTY line
   } else {
@@ -1408,14 +1445,33 @@ function drawHeader(
   const verticalPadding = Math.min(maxPadding, naturalPadding + 50);
   let y = topSectionTop - verticalPadding;
 
-  if (entry.multiSkuData && entry.multiSkuData.length > 0) {
+  if (isMultiSkuHeader) {
     y = drawWrapped('MULTI-SKU', y, 26, font, rgb(0.1, 0.1, 0.1));
     y -= 8;
-    for (const item of entry.multiSkuData) {
-      y = drawWrapped(`${item.sku}  x${item.qty}`, y, 15, fontReg, rgb(0.3, 0.3, 0.3));
+    for (const item of skuLines) {
+      const chipText = safePdfText(`${item.sku}  x${item.qty}`);
+      const chipWidth = Math.min(width - pad * 2, fontReg.widthOfTextAtSize(chipText, 15) + 24);
+      const chipHeight = 24;
+      page.drawRectangle({
+        x: cx - chipWidth / 2,
+        y: y - chipHeight + 5,
+        width: chipWidth,
+        height: chipHeight,
+        borderColor: rgb(0.08, 0.5, 0.75),
+        borderWidth: 1.25,
+        color: rgb(0.94, 0.98, 1),
+      });
+      page.drawText(chipText, {
+        x: cx - fontReg.widthOfTextAtSize(chipText, 15) / 2,
+        y: y - 13,
+        size: 15,
+        font: fontReg,
+        color: rgb(0.18, 0.18, 0.18),
+      });
+      y -= chipHeight + 6;
     }
     y -= 6;
-    const totalQty = entry.multiSkuData.reduce((s, i) => s + i.qty, 0);
+    const totalQty = skuLines.reduce((s, i) => s + i.qty, 0);
     y = drawWrapped(`QTY: ${totalQty} per order`, y, 22, font, rgb(0.1, 0.1, 0.1));
   } else {
     const sku = entry.primarySku ?? 'UNKNOWN SKU';

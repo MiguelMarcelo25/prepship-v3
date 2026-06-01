@@ -1932,6 +1932,18 @@ DJ provided PS-058 on 2026-06-01 as a standalone Orders selection correctness ta
 
 See [docs/ps-058-select-current-page-vs-all-matching-orders.md](docs/ps-058-select-current-page-vs-all-matching-orders.md) for the full task prompt, selection-scope invariant, implementation requirements, testing requirements, definition of done, and return format.
 
+## Official PS-063 Print Queue Multi-SKU Grouping Task
+
+DJ provided PS-063 replacement v2 on 2026-06-01 as a Print Queue warehouse accuracy task. This supersedes the earlier PS-063 draft and must be treated as the source of truth.
+
+| ID | Title | Risk | Why It Matters | Scope | Completion Evidence |
+| --- | --- | --- | --- | --- | --- |
+| PS-063 | Fix Print Queue Multi-SKU Grouping, SKU Qty Lines, and Batch Header Borders | Critical warehouse pick/pack correctness | Order `#1149` showed `Booster-gel-001 x1 + HU-10 x1` in a way that could read like `Booster-gel-001 x2`, risking wrong items being picked. | Group multi-SKU queue entries by the full normalized SKU+qty combo; render each SKU and qty on its own visible line; collapse duplicate SKUs before key/display/header; make multi-SKU Batch Headers show one bordered SKU+qty chip per unique SKU; search across all SKUs; preserve Print Group, Print All, Confirm Printed, queue scope, and persistence behavior. | New `test:print-queue-sku-grouping` or equivalent focused guard, typecheck, web build, existing print-queue durable/persistence/ownership/client-scope/invalid-label/diagnostics tests, and UI/render evidence that multi-SKU headers show one bordered block per SKU+qty while single-SKU headers do not get unnecessary per-SKU borders. |
+
+### PS-063 Copy/Paste Handoff
+
+See [docs/ps-063-print-queue-multi-sku-grouping.md](docs/ps-063-print-queue-multi-sku-grouping.md) for the full replacement v2 task prompt, grouping/display/header invariants, stale queue entry recovery requirement, search requirement, guardrails, test matrix, definition of done, and return format.
+
 ## Official PS-064 Print Queue Confirmation Outbox Task
 
 DJ provided PS-064 on 2026-06-01 as a new official shipping-critical task after order `#1149` showed a locally-created shipped label with tracking and print queue state, but no ShipStation/source confirmation lifecycle.

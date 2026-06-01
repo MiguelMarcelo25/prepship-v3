@@ -135,12 +135,21 @@ export interface PrintQueueEntryDto {
   queued_at: string
 }
 
+export interface PrintQueueSkuLine {
+  sku: string
+  description: string
+  qty: number
+}
+
 export interface PrintQueueGroup {
   groupId: string
   label: string
   description: string
   perOrderQty: number
   totalQty: number
+  skuLines: PrintQueueSkuLine[]
+  isMultiSku: boolean
+  searchText: string
   orders: PrintQueueEntryDto[]
 }
 
@@ -156,6 +165,79 @@ export interface DailyStripProgress {
 function getQueueEntryQty(entry: PrintQueueEntryDto): number {
   const qty = Number(entry.order_qty ?? 1)
   return Number.isFinite(qty) && qty > 0 ? qty : 1
+}
+
+function normalizeSkuText(value: unknown): string | null {
+  const text = typeof value === 'string' ? value.trim() : ''
+  return text || null
+}
+
+function normalizeSkuKey(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function getSkuLineQty(value: unknown): number {
+  const qty = Number(value ?? 1)
+  return Number.isFinite(qty) && qty > 0 ? Math.trunc(qty) : 1
+}
+
+export function getPrintQueueSkuLines(entry: Pick<PrintQueueEntryDto, 'multi_sku_data' | 'primary_sku' | 'item_description' | 'order_qty' | 'sku_group_id'>): PrintQueueSkuLine[] {
+  const rawLines = Array.isArray(entry.multi_sku_data) ? entry.multi_sku_data : []
+  const collapsed = new Map<string, PrintQueueSkuLine>()
+
+  for (const rawLine of rawLines) {
+    const line = rawLine && typeof rawLine === 'object' ? rawLine as Record<string, unknown> : {}
+    const sku = normalizeSkuText(line.sku)
+    if (!sku) continue
+    const key = normalizeSkuKey(sku)
+    const existing = collapsed.get(key)
+    const description = normalizeSkuText(line.description) ?? normalizeSkuText(line.name) ?? ''
+    if (existing) {
+      existing.qty += getSkuLineQty(line.qty ?? line.quantity)
+      if (!existing.description && description) existing.description = description
+    } else {
+      collapsed.set(key, {
+        sku,
+        description,
+        qty: getSkuLineQty(line.qty ?? line.quantity),
+      })
+    }
+  }
+
+  const lines = [...collapsed.values()].sort((left, right) =>
+    normalizeSkuKey(left.sku).localeCompare(normalizeSkuKey(right.sku)),
+  )
+  if (lines.length > 0) return lines
+
+  const primarySku = normalizeSkuText(entry.primary_sku) ??
+    (String(entry.sku_group_id ?? '').startsWith('SKU:') ? normalizeSkuText(String(entry.sku_group_id).slice(4)) : null)
+  return primarySku
+    ? [{
+        sku: primarySku,
+        description: normalizeSkuText(entry.item_description) ?? '',
+        qty: getQueueEntryQty(entry as PrintQueueEntryDto),
+      }]
+    : []
+}
+
+export function buildPrintQueueSkuComboKey(lines: PrintQueueSkuLine[]): string {
+  return lines
+    .map((line) => `${normalizeSkuKey(line.sku)}:${getSkuLineQty(line.qty)}`)
+    .join('|')
+}
+
+function buildPrintQueueSearchText(lines: PrintQueueSkuLine[], entry: PrintQueueEntryDto): string {
+  return [
+    entry.order_number,
+    entry.order_id,
+    entry.primary_sku,
+    entry.sku_group_id,
+    entry.item_description,
+    ...lines.flatMap((line) => [line.sku, line.description, String(line.qty)]),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
 }
 
 export function resolveColumnPrefs(
@@ -277,20 +359,31 @@ export function groupPrintQueueEntries(entries: PrintQueueEntryDto[]): PrintQueu
     if (entry.status !== 'queued') continue
 
     const qty = getQueueEntryQty(entry)
-    const groupKey = `${entry.sku_group_id}|qty:${qty}`
+    const skuLines = getPrintQueueSkuLines(entry)
+    const comboKey = buildPrintQueueSkuComboKey(skuLines)
+    const isMultiSku = skuLines.length > 1
+    const groupIdentity = comboKey
+      ? `${isMultiSku ? 'COMBO' : 'SKU'}:${comboKey}`
+      : entry.sku_group_id
+    const groupKey = `${groupIdentity}|qty:${qty}`
     const existing = groups.get(groupKey)
     if (existing) {
       existing.orders.push(entry)
       existing.totalQty += qty
+      existing.searchText = `${existing.searchText} ${buildPrintQueueSearchText(skuLines, entry)}`.trim()
       continue
     }
 
+    const primaryLine = skuLines[0]
     groups.set(groupKey, {
       groupId: groupKey,
-      label: entry.primary_sku || entry.sku_group_id,
-      description: entry.item_description || '',
+      label: isMultiSku ? 'MULTI-SKU' : (primaryLine?.sku || entry.primary_sku || entry.sku_group_id),
+      description: isMultiSku ? skuLines.map((line) => `${line.sku} x${line.qty}`).join(' + ') : (primaryLine?.description || entry.item_description || ''),
       perOrderQty: qty,
       totalQty: qty,
+      skuLines,
+      isMultiSku,
+      searchText: buildPrintQueueSearchText(skuLines, entry),
       orders: [entry],
     })
   }
@@ -307,23 +400,41 @@ export function groupPrintQueueEntries(entries: PrintQueueEntryDto[]): PrintQueu
 export function buildQueueAddPayload(order: OrderSummaryDto, labelUrl: string) {
   const items = Array.isArray(order.items) ? order.items as Array<Record<string, unknown>> : []
   const activeItems = items.filter((item) => !item.adjustment)
-  const orderQty = activeItems.reduce((sum, item) => sum + toNumber(item.quantity, 1), 0)
-  const primarySku = activeItems.length === 1 ? toStringValue(activeItems[0]?.sku) : toStringValue(activeItems[0]?.sku)
-  const itemDescription = activeItems.length === 1 ? toStringValue(activeItems[0]?.name) : toStringValue(activeItems[0]?.name)
-  const multiSkuData = activeItems.length > 1
-    ? activeItems.map((item) => ({
-        sku: toStringValue(item.sku),
-        description: toStringValue(item.name),
-        qty: toNumber(item.quantity, 1),
-      }))
-    : null
+  const collapsed = new Map<string, PrintQueueSkuLine>()
+  for (const item of activeItems) {
+    const sku = normalizeSkuText(item.sku)
+    if (!sku) continue
+    const key = normalizeSkuKey(sku)
+    const description = normalizeSkuText(item.name) ?? ''
+    const existing = collapsed.get(key)
+    if (existing) {
+      existing.qty += getSkuLineQty(item.quantity)
+      if (!existing.description && description) existing.description = description
+    } else {
+      collapsed.set(key, {
+        sku,
+        description,
+        qty: getSkuLineQty(item.quantity),
+      })
+    }
+  }
+  const skuLines = [...collapsed.values()].sort((left, right) =>
+    normalizeSkuKey(left.sku).localeCompare(normalizeSkuKey(right.sku)),
+  )
+  const orderQty = skuLines.reduce((sum, item) => sum + item.qty, 0)
+  const primarySku = skuLines[0]?.sku ?? toStringValue(activeItems[0]?.sku)
+  const itemDescription = skuLines[0]?.description ?? toStringValue(activeItems[0]?.name)
+  const comboKey = buildPrintQueueSkuComboKey(skuLines)
+  const multiSkuData = skuLines.length > 1 ? skuLines : null
 
   return {
     order_id: String(order.orderId),
     order_number: order.orderNumber,
     client_id: order.clientId,
     label_url: labelUrl,
-    sku_group_id: primarySku ? `SKU:${primarySku}` : `ORDER:${order.orderId}`,
+    sku_group_id: comboKey
+      ? skuLines.length > 1 ? `COMBO:${comboKey}` : `SKU:${comboKey}`
+      : `ORDER:${order.orderId}`,
     primary_sku: primarySku,
     item_description: itemDescription,
     order_qty: orderQty || 1,

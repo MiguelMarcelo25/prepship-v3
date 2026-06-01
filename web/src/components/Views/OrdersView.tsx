@@ -6309,7 +6309,10 @@ export default function OrdersView({
         skuGroup.includes(pqSearchLower) ||
         itemDescription.includes(pqSearchLower)
     })
-    return label.includes(pqSearchLower) || description.includes(pqSearchLower) || searchableOrders
+    return label.includes(pqSearchLower) ||
+      description.includes(pqSearchLower) ||
+      group.searchText.includes(pqSearchLower) ||
+      searchableOrders
   }
   const visibleQueueGroups = useMemo<PrintQueueGroup[]>(() => {
     if (!pqSearchLower) return queueGroups
@@ -9682,7 +9685,7 @@ export default function OrdersView({
                 id="pq-search"
                 value={pqSearch}
                 onChange={(event) => setPqSearch(event.target.value)}
-                placeholder="Search order # or ID…"
+                placeholder="Search order #, ID, SKU…"
                 aria-label="Search Print Queue"
                 className="
                   w-full h-8 pl-8 pr-7 rounded-lg
@@ -9760,6 +9763,20 @@ export default function OrdersView({
                   <span className="pq-group-label flex-1 min-w-0 truncate font-semibold text-ink text-[12.5px]">
                     {group.label}{group.description ? ` — ${group.description}` : ''}
                   </span>
+                  {group.isMultiSku ? (
+                    <span className="flex flex-1 flex-wrap gap-1.5">
+                      {group.skuLines.map((line) => (
+                        <span
+                          key={`${line.sku}:${line.qty}`}
+                          className="inline-flex max-w-full items-center gap-1 rounded-md border border-brand/35 bg-brand/5 px-2 py-1 font-mono text-[11px] font-semibold text-ink"
+                          title={line.description || undefined}
+                        >
+                          <span className="truncate">{line.sku}</span>
+                          <span className="shrink-0 font-bold text-brand">x{line.qty}</span>
+                        </span>
+                      ))}
+                    </span>
+                  ) : null}
                   <span className="pq-group-meta hidden sm:inline-flex items-center gap-1 text-[10.5px] font-medium text-ink-3 uppercase tracking-wide">
                     {group.orders.length} order{group.orders.length === 1 ? '' : 's'} · Qty {group.perOrderQty} ea
                   </span>
@@ -9782,7 +9799,7 @@ export default function OrdersView({
                       >
                         <button
                           type="button"
-                          className="pq-order-num flex-1 min-w-0 text-left font-mono text-[12px] text-brand truncate disabled:cursor-default disabled:no-underline hover:underline underline-offset-2"
+                          className="pq-order-num flex-1 min-w-0 text-left font-mono text-[12px] text-brand disabled:cursor-default disabled:no-underline hover:underline underline-offset-2"
                           disabled={!orderClickable}
                           title={orderClickable ? 'View order details' : undefined}
                           onClick={(event) => {
@@ -9790,7 +9807,17 @@ export default function OrdersView({
                             if (orderClickable) openDetailDrawer(numericOrderId, true)
                           }}
                         >
-                          Order #{entry.order_number || entry.order_id}
+                          <span className="block">Order #{entry.order_number || entry.order_id}</span>
+                          {group.isMultiSku ? (
+                            <span className="mt-1 flex flex-col gap-0.5 font-sans text-[10.5px] text-ink-2 no-underline">
+                              {group.skuLines.map((line) => (
+                                <span key={`${entry.queue_entry_id}:${line.sku}:${line.qty}`} className="block">
+                                  <span className="font-mono font-semibold text-ink">{line.sku} x{line.qty}</span>
+                                  {line.description ? <span className="text-ink-3"> - {line.description}</span> : null}
+                                </span>
+                              ))}
+                            </span>
+                          ) : null}
                           {entry.print_count > 0 ? (
                             <span className="ml-1.5 inline-flex items-center px-1.5 py-px rounded-sm bg-amber-100 text-amber-800 text-[9.5px] font-semibold uppercase tracking-wide">
                               Reprint #{entry.print_count}

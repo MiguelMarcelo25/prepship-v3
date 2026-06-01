@@ -69,6 +69,7 @@
     "test:ps-056-external-label-certification": "node scripts/ps-056-external-label-certification-guard.mjs",
     "test:ps-056-auto-external-shipped": "node scripts/ps-056-auto-external-shipped-scheduler-guard.mjs",
     "test:ps-057-hugrab-ground-saver": "tsx scripts/ps-057-hugrab-ground-saver-guard.ts",
+    "test:print-queue-sku-grouping": "tsx scripts/print-queue-sku-grouping-guard.ts",
     "test:ups-direct-accessorial": "node scripts/ups-direct-accessorial-guard.mjs",
     "test:shipp-rate-retry": "node scripts/shipp-rate-retry-guard.mjs",
     "test:best-rate-dims": "node scripts/best-rate-dims-guard.mjs",
