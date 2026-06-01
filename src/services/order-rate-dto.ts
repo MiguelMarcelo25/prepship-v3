@@ -32,6 +32,7 @@ export interface OrderBestRateDto {
   cacheKey: string | null;
   cacheCreatedAt: string | null;
   cacheExpiresAt: string | null;
+  eligibilityVersion: string | null;
   isComplete: boolean | null;
   rateCount: number | null;
   matchType: string | null;
@@ -205,6 +206,7 @@ export function normalizeOrderBestRateDto(value: unknown, path = 'bestRate'): Or
     cacheKey: readNullableString(record.cacheKey ?? null, `${path}.cacheKey`),
     cacheCreatedAt: readNullableString(record.cacheCreatedAt ?? null, `${path}.cacheCreatedAt`),
     cacheExpiresAt: readNullableString(record.cacheExpiresAt ?? null, `${path}.cacheExpiresAt`),
+    eligibilityVersion: readNullableString(record.eligibilityVersion ?? null, `${path}.eligibilityVersion`),
     isComplete: record.isComplete == null ? null : readBoolean(record.isComplete, `${path}.isComplete`),
     rateCount: readNullableNumber(record.rateCount ?? null, `${path}.rateCount`),
     matchType: readNullableString(record.matchType ?? null, `${path}.matchType`),

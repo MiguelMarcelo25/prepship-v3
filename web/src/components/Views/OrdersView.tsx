@@ -101,6 +101,7 @@ import {
   getProductDefaultPackageId,
 } from './orders-panel-state'
 import { detectExpeditedShipping, type ExpeditedTier } from '../../lib/expedited'
+import { SHIPPING_SERVICE_ELIGIBILITY_VERSION } from '../../../../src/lib/shipping-service-eligibility'
 
 type OrderStatus = 'awaiting_shipment' | 'shipped' | 'cancelled'
 type SortDirection = 'asc' | 'desc'
@@ -4534,7 +4535,7 @@ export default function OrdersView({
     insuredValue?: number | null
   }) {
     const parts = [
-      'v=ground-saver-v2',
+      `v=ground-saver-v2|eligibility=${SHIPPING_SERVICE_ELIGIBILITY_VERSION}`,
       `d=${rateShipDateBucket()}`,
       `w=${Math.round(input.weightOz * 10)}`,
       `z=${normalizeRateZip(input.shipTo.postalCode)}`,
@@ -4558,6 +4559,7 @@ export default function OrdersView({
   }
 
   function savedRateIsFreshAndComplete(rate: Record<string, unknown>, requestFingerprint: string) {
+    if (toStringValue(rate.eligibilityVersion) !== SHIPPING_SERVICE_ELIGIBILITY_VERSION) return false
     const fingerprint = toStringValue(rate.requestFingerprint) ?? toStringValue(rate.cacheKey)
     if (!fingerprint || fingerprint !== requestFingerprint) return false
     if (rate.isComplete !== true) return false
@@ -4585,6 +4587,7 @@ export default function OrdersView({
       confirmation: request.confirmation,
       insuranceProvider: toStringValue(metadata.insuranceProvider) ?? 'none',
       insuredValue: toNumberValue(metadata.insuredValue) ?? null,
+      eligibilityVersion: SHIPPING_SERVICE_ELIGIBILITY_VERSION,
       isComplete: metadata.isComplete === true,
       rateCount: toNumberValue(metadata.rateCount) ?? 1,
       matchType: toStringValue(metadata.matchType) ?? 'live',

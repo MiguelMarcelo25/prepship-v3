@@ -147,7 +147,15 @@ const sourceChecks: Array<[string, string[]]> = [
     [
       'savedBestRateNeedsEligibilityRefresh',
       'ineligibleSavedRatePredicate',
+      'SHIPPING_SERVICE_ELIGIBILITY_VERSION',
       'ground saver',
+    ],
+  ],
+  [
+    'src/services/order-rate-dto.ts',
+    [
+      'eligibilityVersion',
+      'cacheExpiresAt',
     ],
   ],
   [
@@ -195,6 +203,14 @@ const sourceChecks: Array<[string, string[]]> = [
       'isEligiblePanelService',
       'getInitialPanelServiceCode',
       'evaluateShippingServiceEligibility',
+    ],
+  ],
+  [
+    'web/src/components/Views/OrdersView.tsx',
+    [
+      'SHIPPING_SERVICE_ELIGIBILITY_VERSION',
+      'eligibilityVersion',
+      'savedRateIsFreshAndComplete',
     ],
   ],
   [

@@ -7,6 +7,7 @@ import { CACHE_TTL_MS, RATE_FETCH_CONCURRENCY, getRates } from './rates';
 import type { Rate } from '../lib/shipstation';
 import { EXCLUDED_STORE_IDS } from '../config/prepship';
 import {
+  SHIPPING_SERVICE_ELIGIBILITY_VERSION,
   describeShippingService,
   evaluateShippingServiceEligibility,
 } from '../lib/shipping-service-eligibility';
@@ -393,6 +394,7 @@ async function runBackfill(
             cacheKey: result.cacheKey,
             cacheCreatedAt: result.fetchedAt,
             cacheExpiresAt: new Date(new Date(result.fetchedAt).getTime() + CACHE_TTL_MS).toISOString(),
+            eligibilityVersion: SHIPPING_SERVICE_ELIGIBILITY_VERSION,
             isComplete: result.carrierDiagnostics.every((diagnostic) => diagnostic.status !== 'failed' && diagnostic.status !== 'loading'),
             rateCount: result.rates.length,
             matchType: result.cached ? 'exact' : 'live',
