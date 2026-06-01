@@ -2666,15 +2666,49 @@ export const apiClient = {
     );
   },
 
-  // Convenience wrapper: download the merged PDF and return a blob: URL the
-  // caller can pass to window.open(). The blob URL is auto-revoked after
-  // 30s — long enough for the user to grab the print dialog.
+  fetchQueuePrintJobSignedUrl(
+    jobId: string,
+    disposition: 'inline' | 'attachment' = 'inline'
+  ): Promise<{
+    url: string;
+    filename: string;
+    expires_at: string;
+    disposition: 'inline' | 'attachment';
+  }> {
+    return api.get<any>(
+      `/print-queue/print/signed-url/${encodeURIComponent(jobId)}${qs({ disposition })}`
+    );
+  },
+
+  async openQueuePrintJobPdf(
+    jobId: string,
+    options?: { popup?: Window | null; disposition?: 'inline' | 'attachment' }
+  ): Promise<boolean> {
+    try {
+      const signed = await this.fetchQueuePrintJobSignedUrl(
+        jobId,
+        options?.disposition ?? 'inline'
+      );
+      if (!signed?.url) throw new Error('PDF link was not returned');
+      const popup = options?.popup ?? null;
+      if (popup && !popup.closed) {
+        popup.location.href = signed.url;
+        return true;
+      }
+      return Boolean(window.open(signed.url, '_blank', 'noopener,noreferrer'));
+    } catch (err) {
+      console.error('[print-queue] signed PDF link failed:', err);
+      return false;
+    }
+  },
+
+  // Back-compat wrapper: return a stable signed inline URL instead of a
+  // short-lived blob: URL, so Chrome's native PDF viewer can save/download
+  // after the tab has been open longer than the old revoke window.
   async fetchQueuePrintJobPdfUrl(jobId: string): Promise<string | null> {
     try {
-      const { blob } = await this.downloadQueuePrintJob(jobId);
-      const url = URL.createObjectURL(blob);
-      setTimeout(() => URL.revokeObjectURL(url), 30_000);
-      return url;
+      const signed = await this.fetchQueuePrintJobSignedUrl(jobId, 'inline');
+      return signed.url;
     } catch {
       return null;
     }

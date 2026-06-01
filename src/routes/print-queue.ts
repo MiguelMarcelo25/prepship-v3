@@ -1,6 +1,7 @@
 import { Hono, type Context } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import {
   addToQueue,
   assertPrintQueueClientsVisible,
@@ -29,9 +30,138 @@ import {
   getInternalOpsClientStoreScope,
   type ClientStoreScope,
 } from '../lib/client-store-scope';
+import { env } from '../lib/env';
 
 const app = new Hono();
 const DURABLE_STATUS_TIMEOUT_MS = 1500;
+const SIGNED_PDF_TTL_MS = 5 * 60 * 1000;
+const SIGNED_PDF_CACHE_SECONDS = 300;
+
+type SignedPdfTokenPayload = {
+  jobId: string;
+  exp: number;
+  purpose: 'print_queue_pdf';
+};
+
+function base64Url(value: Buffer | string): string {
+  return Buffer.from(value).toString('base64url');
+}
+
+function signPrintQueuePdfToken(jobId: string, now = Date.now()): { token: string; expiresAt: number } {
+  const expiresAt = now + SIGNED_PDF_TTL_MS;
+  const payload: SignedPdfTokenPayload = {
+    jobId,
+    exp: expiresAt,
+    purpose: 'print_queue_pdf',
+  };
+  const encodedPayload = base64Url(JSON.stringify(payload));
+  const signature = createHmac('sha256', env.SUPABASE_JWT_SECRET)
+    .update(encodedPayload)
+    .digest('base64url');
+  return { token: `${encodedPayload}.${signature}`, expiresAt };
+}
+
+function verifyPrintQueuePdfToken(token: string | undefined, jobId: string): {
+  ok: true;
+  payload: SignedPdfTokenPayload;
+} | {
+  ok: false;
+  code: 'PDF_LINK_MISSING' | 'PDF_LINK_INVALID' | 'PDF_LINK_EXPIRED';
+  status: 401 | 403 | 410;
+} {
+  if (!token) return { ok: false, code: 'PDF_LINK_MISSING', status: 401 };
+  const [encodedPayload, signature, extra] = token.split('.');
+  if (!encodedPayload || !signature || extra) {
+    return { ok: false, code: 'PDF_LINK_INVALID', status: 403 };
+  }
+
+  const expected = createHmac('sha256', env.SUPABASE_JWT_SECRET)
+    .update(encodedPayload)
+    .digest('base64url');
+  const signatureBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expected);
+  if (
+    signatureBuffer.length !== expectedBuffer.length ||
+    !timingSafeEqual(signatureBuffer, expectedBuffer)
+  ) {
+    return { ok: false, code: 'PDF_LINK_INVALID', status: 403 };
+  }
+
+  let payload: SignedPdfTokenPayload;
+  try {
+    payload = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8'));
+  } catch {
+    return { ok: false, code: 'PDF_LINK_INVALID', status: 403 };
+  }
+
+  if (
+    payload.purpose !== 'print_queue_pdf' ||
+    payload.jobId !== jobId ||
+    typeof payload.exp !== 'number'
+  ) {
+    return { ok: false, code: 'PDF_LINK_INVALID', status: 403 };
+  }
+  if (Date.now() > payload.exp) {
+    return { ok: false, code: 'PDF_LINK_EXPIRED', status: 410 };
+  }
+
+  return { ok: true, payload };
+}
+
+function isUuidOnlyFilename(filename: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?:\.pdf)?$/i.test(filename.trim());
+}
+
+function sanitizePdfFilename(filename: string | null | undefined, fallback: string): string {
+  const raw = (filename ?? '').trim() || fallback;
+  const sanitized = raw
+    .replace(/[\\/:*?"<>|]/g, '-')
+    .replace(/[\x00-\x1f\x7f]/g, '')
+    .replace(/\s+/g, '_')
+    .slice(0, 140);
+  const candidate = sanitized || fallback;
+  const withExtension = candidate.toLowerCase().endsWith('.pdf') ? candidate : `${candidate}.pdf`;
+  return isUuidOnlyFilename(withExtension) ? fallback : withExtension;
+}
+
+function pdfDispositionHeader(disposition: 'inline' | 'attachment', filename: string): string {
+  return `${disposition}; filename="${filename.replace(/"/g, '')}"`;
+}
+
+function serveMergedPdf(c: Context, jobId: string, disposition: 'inline' | 'attachment') {
+  const job = getMergeJobStatus(jobId);
+  if (
+    !job ||
+    job.status !== 'done' ||
+    !job.mergedPdfBase64
+  ) {
+    return c.json({ error: 'PDF not found or not ready' }, 404);
+  }
+
+  const bytes = Buffer.from(job.mergedPdfBase64, 'base64');
+  const fileName = sanitizePdfFilename(job.fileName, `prepship-batch-print-${jobId}.pdf`);
+  return new Response(bytes, {
+    status: 200,
+    headers: {
+      'content-type': 'application/pdf',
+      'content-disposition': pdfDispositionHeader(disposition, fileName),
+      'content-length': String(bytes.byteLength),
+      'cache-control': `private, max-age=${SIGNED_PDF_CACHE_SECONDS}`,
+      'x-content-type-options': 'nosniff',
+    },
+  });
+}
+
+app.get('/print/view/:jobId', async (c) => {
+  const jobId = c.req.param('jobId');
+  const verification = verifyPrintQueuePdfToken(c.req.query('token'), jobId);
+  if (!verification.ok) {
+    return c.json({ error: verification.code, code: verification.code }, verification.status);
+  }
+  const disposition =
+    c.req.query('disposition') === 'attachment' ? 'attachment' : 'inline';
+  return serveMergedPdf(c, jobId, disposition);
+});
 
 app.use('*', requireInternalPermission('print_queue:write'));
 
@@ -486,26 +616,47 @@ app.get('/print/status/:jobId', async (c) => {
   });
 });
 
-app.get('/print/download/:jobId', async (c) => {
-  const job = getMergeJobStatus(c.req.param('jobId'));
+const signedPdfQuery = z.object({
+  disposition: z.enum(['inline', 'attachment']).optional(),
+});
+
+app.get('/print/signed-url/:jobId', zValidator('query', signedPdfQuery), async (c) => {
+  const jobId = c.req.param('jobId');
+  const q = c.req.valid('query');
+  const scope = printQueueScopeFromContext(c);
+  const job = getMergeJobStatus(jobId);
   if (
     !job ||
-    !(await canViewMergeJob(job, printQueueScopeFromContext(c))) ||
+    !(await canViewMergeJob(job, scope)) ||
     job.status !== 'done' ||
-    !job.mergedPdfBase64 ||
-    !job.fileName
+    !job.mergedPdfBase64
   ) {
+    return c.json({ error: 'PDF not found or not ready' }, 404);
+  }
+
+  const { token, expiresAt } = signPrintQueuePdfToken(jobId);
+  const disposition = q.disposition ?? 'inline';
+  const url = new URL(c.req.url);
+  url.pathname = `/print-queue/print/view/${encodeURIComponent(jobId)}`;
+  url.search = new URLSearchParams({ token, disposition }).toString();
+  const fileName = sanitizePdfFilename(job.fileName, `prepship-batch-print-${jobId}.pdf`);
+
+  return c.json({
+    url: url.toString(),
+    expires_at: new Date(expiresAt).toISOString(),
+    expires_in_seconds: Math.floor(SIGNED_PDF_TTL_MS / 1000),
+    filename: fileName,
+    disposition,
+  });
+});
+
+app.get('/print/download/:jobId', async (c) => {
+  const jobId = c.req.param('jobId');
+  const job = getMergeJobStatus(jobId);
+  if (!job || !(await canViewMergeJob(job, printQueueScopeFromContext(c)))) {
     return c.json({ error: 'Job not found or not ready' }, 404);
   }
-  const bytes = Buffer.from(job.mergedPdfBase64, 'base64');
-  return new Response(bytes, {
-    status: 200,
-    headers: {
-      'content-type': 'application/pdf',
-      'content-disposition': `inline; filename="${job.fileName}"`,
-      'content-length': String(bytes.byteLength),
-    },
-  });
+  return serveMergedPdf(c, jobId, 'attachment');
 });
 
 // DELETE /print-queue/:entryId — removes a single queue entry by id.

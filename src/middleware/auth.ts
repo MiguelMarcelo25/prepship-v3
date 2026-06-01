@@ -62,7 +62,12 @@ const ROLE_PERMISSIONS: Record<AppRole, readonly AppPermission[]> = {
 // prefix. Mock test labels live at /labels/mock/:id — the browser loads them
 // via window.open which can't attach a bearer token, and they're fake data
 // anyway. The shipmentId is effectively unguessable (random 8-digit int).
-const AUTH_BYPASS_PREFIXES = ['/labels/mock/'];
+const AUTH_BYPASS_PREFIXES = [
+  '/labels/mock/',
+  // Signed Print Queue PDF view links carry a short-lived HMAC token because
+  // Chrome's native PDF viewer cannot attach the Supabase Bearer token.
+  '/print-queue/print/view/',
+];
 
 function payloadToAuthVars(payload: JWTPayload): AuthVars | null {
   if (typeof payload.sub !== 'string' || !payload.sub) return null;

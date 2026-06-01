@@ -5827,31 +5827,24 @@ export default function OrdersView({
         setQueuePrintProgress(typeof status.progress === 'number' ? status.progress : null)
 
         if (status.status === 'done') {
-          // The download endpoint requires a Bearer token, so a plain
-          // window.open won't work — fetch the PDF as a blob with auth and
-          // open the resulting object URL. Path is /print-queue/print/...
-          // (matches PrintQueueDrawer.downloadAuthedPdf — the legacy
-          // /api/queue/print/... path that some early builds used was
-          // never wired up on the API).
+          // The signed PDF URL is short-lived but stable enough for Chrome's
+          // native PDF viewer save/download controls; do not use a blob URL
+          // here because the old 30s revoke window made viewer downloads fail.
           try {
-            const blobUrl = await apiClient.fetchQueuePrintJobPdfUrl(job.job_id)
-            if (blobUrl) {
-              if (printWindow && !printWindow.closed) {
-                printWindow.location.href = blobUrl
-                pdfOpened = true
-              } else {
-                const opened = window.open(blobUrl, '_blank', 'noopener,noreferrer')
-                pdfOpened = Boolean(opened)
-                if (!opened) {
-                  const link = document.createElement('a')
-                  link.href = blobUrl
-                  link.download = `prepship-labels-${job.job_id}.pdf`
-                  document.body.appendChild(link)
-                  link.click()
-                  document.body.removeChild(link)
-                  pdfOpened = true
-                }
-              }
+            const opened = await apiClient.openQueuePrintJobPdf(job.job_id, {
+              popup: printWindow,
+              disposition: 'inline',
+            })
+            pdfOpened = opened
+            if (!opened) {
+              const signed = await apiClient.fetchQueuePrintJobSignedUrl(job.job_id, 'attachment')
+              const link = document.createElement('a')
+              link.href = signed.url
+              link.download = signed.filename || `prepship-labels-${job.job_id}.pdf`
+              document.body.appendChild(link)
+              link.click()
+              document.body.removeChild(link)
+              pdfOpened = true
             }
           } catch (err) {
             console.error('[print-queue] download failed', err)
