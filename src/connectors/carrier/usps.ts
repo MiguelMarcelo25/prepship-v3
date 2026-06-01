@@ -1,5 +1,6 @@
 import type { CarrierConnector } from '../../domain/fulfillment/types';
 import { timedFetch } from '../../lib/http/timing.js';
+import { assertUnsupportedShippingOptions } from './shipping-option-support.js';
 
 const USPS_MAIL_CLASSES = [
   { class: 'USPS_GROUND_ADVANTAGE', label: 'USPS Ground Advantage' },
@@ -116,6 +117,7 @@ export async function validateUspsAddress(
 }
 
 async function ratesFromUsps(input: Record<string, unknown>): Promise<Array<{ service: string; cost: number; days: number; currency: string }>> {
+  assertUnsupportedShippingOptions('USPS', input, { confirmation: ['delivery', 'none'], insurance: false });
   const creds = input.credentials && typeof input.credentials === 'object'
     ? input.credentials as Record<string, unknown>
     : {};

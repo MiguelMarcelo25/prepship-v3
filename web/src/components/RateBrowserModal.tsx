@@ -85,6 +85,8 @@ export type RbAppliedRate = {
   otherCost: number;
   carrierNickname?: string;
   confirmation?: RateConfirmation;
+  insuranceProvider?: string;
+  insuredValue?: number | null;
   weight?: { lb: number; oz: number };
   dims?: { length: number; width: number; height: number };
 };
@@ -118,6 +120,8 @@ export type RateBrowserModalProps = {
   initialDims?: { length?: number; width?: number; height?: number };
   initialWeight?: { lb?: number; oz?: number };
   initialConfirmation?: string;
+  initialInsurance?: string;
+  initialInsuranceValue?: string | number | null;
   testMode?: boolean;
   onClose: () => void;
   onApplyRate: (rate: RbAppliedRate) => void;
@@ -774,6 +778,8 @@ export default function RateBrowserModal({
   initialDims,
   initialWeight,
   initialConfirmation,
+  initialInsurance,
+  initialInsuranceValue,
   testMode = false,
   onClose,
   onApplyRate,
@@ -791,6 +797,8 @@ export default function RateBrowserModal({
   const [widStr, setWid] = useState('0');
   const [hgtStr, setHgt] = useState('0');
   const [confirmation, setConfirmation] = useState<RateConfirmation>('delivery');
+  const [insuranceProvider, setInsuranceProvider] = useState('none');
+  const [insuredValue, setInsuredValue] = useState('');
   const [svcClass, setSvcClass] = useState<'' | 'ground' | 'express'>('');
 
   // ── Rates state ────────────────────────────────────────────────────────────
@@ -894,6 +902,8 @@ export default function RateBrowserModal({
     setLocationId(defaultLoc ? String(defaultLoc.locationId) : '');
     setPackageId('');
     setConfirmation(normalizeConfirmationForRates(initialConfirmation));
+    setInsuranceProvider(initialInsurance ?? 'none');
+    setInsuredValue(initialInsuranceValue != null ? String(initialInsuranceValue) : '');
     setSvcClass('');
     setViewMode('all');
     const initialTotalOz =
@@ -1037,6 +1047,12 @@ export default function RateBrowserModal({
     browseSequenceRef.current = requestSeq;
     const totalOz = lbNum * 16 + ozNum;
     const rateConfirmation = normalizeConfirmationForRates(confirmationOverride ?? confirmation);
+    const normalizedInsuranceProvider = insuranceProvider !== 'none' && Number(insuredValue) > 0
+      ? insuranceProvider
+      : 'none';
+    const normalizedInsuredValue = normalizedInsuranceProvider !== 'none'
+      ? Math.round(Number(insuredValue) * 100) / 100
+      : null;
     setBrowsing(true);
     const seededTestRates = testMode
       ? buildTestMockRateSeeds(rateShippingAccounts, {
@@ -1137,6 +1153,8 @@ export default function RateBrowserModal({
         storeId: toFiniteNumber(order?.storeId) ?? undefined,
         clientId: toFiniteNumber(order?.clientId) ?? undefined,
         confirmation: rateConfirmation,
+        insuranceProvider: normalizedInsuranceProvider,
+        insuredValue: normalizedInsuredValue,
         orderId: toFiniteNumber(order?.orderId ?? (order as Record<string, unknown> | null)?.id) ?? undefined,
         orderNumber:
           toOptionalString(order?.orderNumber) ??
@@ -1408,6 +1426,8 @@ export default function RateBrowserModal({
       otherCost: r.otherCost,
       carrierNickname: r.carrierNickname ?? undefined,
       confirmation: normalizeConfirmationForRates(confirmation),
+      insuranceProvider,
+      insuredValue: Number(insuredValue) > 0 ? Number(insuredValue) : null,
       weight: { lb: lbNum, oz: ozNum },
       dims: { length: lenNum, width: widNum, height: hgtNum },
     });
@@ -1429,6 +1449,8 @@ export default function RateBrowserModal({
       otherCost: r.otherCost,
       carrierNickname: r.carrierNickname ?? undefined,
       confirmation: normalizeConfirmationForRates(confirmation),
+      insuranceProvider,
+      insuredValue: Number(insuredValue) > 0 ? Number(insuredValue) : null,
       weight: { lb: lbNum, oz: ozNum },
       dims: { length: lenNum, width: widNum, height: hgtNum },
     };
@@ -2225,6 +2247,38 @@ export default function RateBrowserModal({
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
+
+                <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 3 }}>
+                  Insurance
+                </div>
+                <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+                  <select
+                    value={insuranceProvider}
+                    onChange={(e) => {
+                      setInsuranceProvider(e.target.value);
+                      if (anyFetched && !browsing) void browseRates(confirmation, { forceLive: true });
+                    }}
+                    className="ship-select"
+                    style={{ flex: 1 }}
+                  >
+                    <option value="none">None</option>
+                    <option value="carrier">Carrier</option>
+                    <option value="shipsurance">Shipsurance</option>
+                  </select>
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.01}
+                    value={insuredValue}
+                    onChange={(e) => {
+                      setInsuredValue(e.target.value);
+                      if (anyFetched && !browsing) void browseRates(confirmation, { forceLive: true });
+                    }}
+                    className="ship-input"
+                    placeholder="$0"
+                    style={{ width: 70, display: insuranceProvider !== 'none' ? 'block' : 'none' }}
+                  />
+                </div>
 
                 <div style={{ fontSize: 11, color: 'var(--text3)', marginBottom: 3 }}>
                   Service Class

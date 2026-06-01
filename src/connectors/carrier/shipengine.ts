@@ -1,5 +1,6 @@
 import type { CarrierConnector } from '../../domain/fulfillment/types';
 import { timedFetch } from '../../lib/http/timing.js';
+import { normalizeShippingOptions } from '../../lib/shipping-options.js';
 
 async function shipEngineCarrierIds(creds: Record<string, unknown>): Promise<string[]> {
   const explicit = String(creds?.carrierIds ?? creds?.carrier_ids ?? '').trim();
@@ -140,6 +141,7 @@ async function ratesFromShipEngine(input: Record<string, unknown>): Promise<Arra
   if (!carrierIds.length) {
     throw new Error('ShipEngine has no connected carrier IDs available for rates.');
   }
+  const options = normalizeShippingOptions(input.shippingOptions as Record<string, unknown> | undefined ?? input);
 
   const body = {
     rate_options: {
@@ -161,8 +163,17 @@ async function ratesFromShipEngine(input: Record<string, unknown>): Promise<Arra
             width: dimsW,
             height: dimsH,
           },
+          ...(options.insuranceProvider !== 'none' && options.insuredValue != null
+            ? {
+                insured_value: {
+                  amount: options.insuredValue,
+                  currency: 'usd',
+                },
+              }
+            : {}),
         },
       ],
+      ...(options.confirmation !== 'none' ? { confirmation: options.confirmation } : {}),
     },
   };
 

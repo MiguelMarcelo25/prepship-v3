@@ -1,5 +1,6 @@
 import type { CarrierConnector } from '../../domain/fulfillment/types';
 import { timedFetch } from '../../lib/http/timing.js';
+import { normalizeShippingOptions } from '../../lib/shipping-options.js';
 
 type EasyPostRate = { service: string; cost: number; days: number; currency: string };
 
@@ -9,6 +10,25 @@ function firstString(...values: unknown[]): string {
     if (text) return text;
   }
   return '';
+}
+
+function easyPostOptions(input: Record<string, unknown>) {
+  const options = normalizeShippingOptions(input.shippingOptions as Record<string, unknown> | undefined ?? input);
+  const deliveryConfirmation =
+    options.confirmation === 'adult_signature'
+      ? 'ADULT_SIGNATURE'
+      : options.confirmation === 'signature' || options.confirmation === 'direct_signature'
+        ? 'SIGNATURE'
+        : null;
+  return {
+    options,
+    shipmentOptions: {
+      ...(deliveryConfirmation ? { delivery_confirmation: deliveryConfirmation } : {}),
+    },
+    insurance: options.insuranceProvider !== 'none' && options.insuredValue != null
+      ? options.insuredValue.toFixed(2)
+      : undefined,
+  };
 }
 
 async function ratesFromEasyPost(input: Record<string, unknown>): Promise<EasyPostRate[]> {
@@ -22,6 +42,7 @@ async function ratesFromEasyPost(input: Record<string, unknown>): Promise<EasyPo
   const dimsL = Number(input.dimsL ?? 0);
   const dimsW = Number(input.dimsW ?? 0);
   const dimsH = Number(input.dimsH ?? 0);
+  const normalizedOptions = easyPostOptions(input);
   if (!dimsL || !dimsW || !dimsH) {
     throw new Error('EasyPost rate quotes require box dimensions (length, width, height).');
   }
@@ -76,6 +97,8 @@ async function ratesFromEasyPost(input: Record<string, unknown>): Promise<EasyPo
         height: dimsH,
         weight: Number(input.weightOz ?? 16),
       },
+      options: normalizedOptions.shipmentOptions,
+      ...(normalizedOptions.insurance ? { insurance: normalizedOptions.insurance } : {}),
     },
   };
 
@@ -127,6 +150,7 @@ async function createLabelEasyPost(input: Record<string, unknown>): Promise<{
   };
   const shipFrom = input.shipFrom as Record<string, unknown>;
   const shipTo = input.shipTo as Record<string, unknown>;
+  const normalizedOptions = easyPostOptions(input);
 
   const shipBody = {
     shipment: {
@@ -155,6 +179,8 @@ async function createLabelEasyPost(input: Record<string, unknown>): Promise<{
         height: Number(input.dimsH ?? 0),
         weight: Number(input.weightOz ?? 16),
       },
+      options: normalizedOptions.shipmentOptions,
+      ...(normalizedOptions.insurance ? { insurance: normalizedOptions.insurance } : {}),
     },
   };
   const createRes = await timedFetch('easypost.labels', 'https://api.easypost.com/v2/shipments', {

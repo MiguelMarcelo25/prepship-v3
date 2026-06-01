@@ -1,5 +1,6 @@
 import type { CarrierConnector } from '../../domain/fulfillment/types';
 import { timedFetch } from '../../lib/http/timing.js';
+import { assertUnsupportedShippingOptions } from './shipping-option-support.js';
 import { PDFDocument } from 'pdf-lib';
 
 function shippSplitSetCookie(header: string): string[] {
@@ -298,6 +299,7 @@ async function quoteShippRatesRaw(input: Record<string, unknown>): Promise<{
   session: { apiKey: string; cookieHeader: string };
   rates: any[];
 }> {
+  assertUnsupportedShippingOptions('Shipp', input, { confirmation: ['delivery', 'none'], insurance: false });
   const creds = input.credentials && typeof input.credentials === 'object'
     ? input.credentials as Record<string, unknown>
     : {};

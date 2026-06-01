@@ -33,6 +33,7 @@ import {
   processFulfillmentOutboxOnce,
 } from './fulfillment/outbox';
 import { addMockLabelSignature } from '../lib/mock-label-access';
+import { normalizeShippingOptions } from '../lib/shipping-options';
 
 // Batch-label callers don't carry a panel-selected package, so customPackageId
 // is often null. When dims are present, fall back to the same ±0.1" tolerance
@@ -267,6 +268,10 @@ export type CreateLabelInputDto = {
   width?: number;
   height?: number;
   confirmation?: string;
+  insuranceProvider?: string;
+  insurance?: string;
+  insuredValue?: number | null;
+  insuranceValue?: number | string | null;
   testLabel?: boolean;
   shipTo?: AddressInputDto;
   shipFrom?: AddressInputDto;
@@ -333,6 +338,10 @@ export type CreateBatchLabelInputDto = {
   serviceCode: string;
   packageCode?: string;
   confirmation?: string;
+  insuranceProvider?: string;
+  insurance?: string;
+  insuredValue?: number | null;
+  insuranceValue?: number | string | null;
   testLabel?: boolean;
   shippingProviderId: number;
 };
@@ -1010,6 +1019,7 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
   if (!body.shippingProviderId) {
     throw new Error('shippingProviderId required for v2 label creation');
   }
+  const options = normalizeShippingOptions(body);
 
   const created = await timer.task('ShipStation createLabel connector', async () => {
     const label = await createCarrierLabel('shipstation', {
@@ -1023,7 +1033,9 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
       height,
       shipTo,
       shipFrom,
-      confirmation: body.confirmation ?? null,
+      confirmation: options.confirmation,
+      insuranceProvider: options.insuranceProvider,
+      insuredValue: options.insuredValue,
       ssOrderId: order.id,
       orderNumber: order.orderNumber ?? null,
       testLabel: false,
@@ -1100,6 +1112,8 @@ export async function createBatchV2(body: CreateBatchLabelInputDto): Promise<Cre
           carrierCode: body.carrierCode,
           packageCode: body.packageCode,
           confirmation: body.confirmation,
+          insuranceProvider: body.insuranceProvider ?? body.insurance,
+          insuredValue: typeof body.insuranceValue === 'string' ? Number(body.insuranceValue) : body.insuredValue ?? body.insuranceValue,
           testLabel: body.testLabel,
           shippingProviderId: body.shippingProviderId,
         });

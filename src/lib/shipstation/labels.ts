@@ -1,5 +1,6 @@
 import { ssRequest } from './client.js';
 import { ssV1Request } from './v1-client.js';
+import { normalizeShippingOptions } from '../shipping-options.js';
 import type { Address } from './types.js';
 
 export type ShipstationAddressInput = {
@@ -26,6 +27,8 @@ export type CreateExternalLabelInput = {
   shipTo: ShipstationAddressInput;
   shipFrom: ShipstationAddressInput;
   confirmation?: string | null;
+  insuranceProvider?: string | null;
+  insuredValue?: number | null;
   ssOrderId: number | null;
   orderNumber: string | null;
   testLabel?: boolean;
@@ -153,6 +156,7 @@ export function extractShipstationLabelUrl(labelDownload: unknown): string | nul
 }
 
 export async function ssCreateLabel(input: CreateExternalLabelInput): Promise<CreatedExternalLabel> {
+  const options = normalizeShippingOptions(input);
   const pkg: Record<string, unknown> = {
     weight: { value: Number(input.weightOz.toFixed(2)), unit: 'ounce' },
     package_code: input.packageCode || 'package',
@@ -174,7 +178,16 @@ export async function ssCreateLabel(input: CreateExternalLabelInput): Promise<Cr
       ship_from: toAddress(input.shipFrom),
       ship_to: toAddress(input.shipTo),
       packages: [pkg],
-      confirmation: input.confirmation || 'none',
+      confirmation: options.confirmation,
+      ...(options.insuranceProvider !== 'none' && options.insuredValue != null
+        ? {
+            insurance_provider: options.insuranceProvider,
+            insured_value: {
+              amount: options.insuredValue,
+              currency: 'usd',
+            },
+          }
+        : {}),
       external_order_id: input.orderNumber ?? undefined,
     },
     is_return_label: false,

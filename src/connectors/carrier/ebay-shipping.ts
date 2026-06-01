@@ -1,5 +1,6 @@
 import type { CarrierConnector } from '../../domain/fulfillment/types';
 import { timedFetch } from '../../lib/http/timing.js';
+import { assertUnsupportedShippingOptions } from './shipping-option-support.js';
 
 async function getEbayLogisticsAccessToken(creds: Record<string, unknown>): Promise<string> {
   const appId = String(creds?.appId ?? '').trim();
@@ -89,6 +90,7 @@ function ebayShipToContact(rawOrder: any) {
 }
 
 async function ratesFromEbayShipping(input: Record<string, unknown>): Promise<Array<{ service: string; cost: number; days: number; currency: string }>> {
+  assertUnsupportedShippingOptions('eBay Shipping', input, { confirmation: ['delivery', 'none'], insurance: false });
   const creds = input.credentials && typeof input.credentials === 'object'
     ? input.credentials as Record<string, unknown>
     : {};

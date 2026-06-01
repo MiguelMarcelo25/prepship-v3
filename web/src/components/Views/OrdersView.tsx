@@ -314,6 +314,18 @@ function normalizeConfirmationForRates(value: string | null | undefined) {
   return normalized && normalized !== 'none' ? normalized : 'delivery'
 }
 
+function normalizeInsuranceForRates(provider: string | null | undefined, value: string | number | null | undefined) {
+  const insuranceProvider = (provider ?? 'none').trim().toLowerCase()
+  const insuredValue = typeof value === 'number' ? value : Number.parseFloat(String(value ?? ''))
+  if (!Number.isFinite(insuredValue) || insuredValue <= 0 || insuranceProvider === 'none') {
+    return { insuranceProvider: 'none', insuredValue: null as number | null }
+  }
+  return {
+    insuranceProvider: insuranceProvider === 'shipsurance' ? 'shipsurance' : 'carrier',
+    insuredValue: Math.round(insuredValue * 100) / 100,
+  }
+}
+
 type ShipmentDims = { length: number; width: number; height: number }
 
 interface OrdersViewProps {
@@ -3426,6 +3438,30 @@ export default function OrdersView({
     return getPanelWeightOzFromForm(panelForm)
   }
 
+  function buildPanelShippingOptionsPayload() {
+    const insurance = normalizeInsuranceForRates(panelForm.insurance, panelForm.insuranceValue)
+    return {
+      confirmation: normalizeConfirmationForRates(panelForm.confirmation),
+      insuranceProvider: insurance.insuranceProvider,
+      insuredValue: insurance.insuredValue,
+    }
+  }
+
+  function buildOrderShippingOptionsPayload(order: OrderSummaryDto) {
+    const rate = toRecord(order.selectedRate) ?? toRecord(order.bestRate) ?? toRecord(getShippingModel(order)?.bestRate)
+    const insurance = normalizeInsuranceForRates(
+      toStringValue(rate?.insuranceProvider) ?? toStringValue(getShippingModel(order)?.insuranceProvider) ?? 'none',
+      toNumberValue(rate?.insuredValue) ?? toNumberValue(getShippingModel(order)?.insuredValue) ?? null,
+    )
+    return {
+      confirmation: normalizeConfirmationForRates(
+        toStringValue(rate?.confirmation) ?? toStringValue(getShippingModel(order)?.confirmation) ?? 'delivery',
+      ),
+      insuranceProvider: insurance.insuranceProvider,
+      insuredValue: insurance.insuredValue,
+    }
+  }
+
   function getPanelDims() {
     return getPanelDimsFromForm(panelForm)
   }
@@ -3954,6 +3990,7 @@ export default function OrdersView({
       const effectiveServiceCode = serviceCode ?? (orderIsTest ? TEST_SERVICE_CODE : undefined)
       const effectiveCarrierCode = carrierCode ?? (orderIsTest ? TEST_CARRIER_CODE : undefined)
       const effectiveWeightOz = weightOz > 0 ? weightOz : orderIsTest ? 1 : 0
+      const shippingOptions = buildOrderShippingOptionsPayload(order)
 
       payload.label = {
         serviceCode: effectiveServiceCode,
@@ -3964,7 +4001,9 @@ export default function OrdersView({
         length: dims?.length,
         width: dims?.width,
         height: dims?.height,
-        confirmation: 'delivery',
+        confirmation: shippingOptions.confirmation,
+        insuranceProvider: shippingOptions.insuranceProvider,
+        insuredValue: shippingOptions.insuredValue,
         testLabel: Boolean(options.batchTestMode) || orderIsTest,
       }
     }
@@ -4253,6 +4292,7 @@ export default function OrdersView({
     const testSelectedRate = isTest ? (panelRatePreview[0] ?? order.bestRate ?? null) : null
     const testCarrierCode = toStringValue(testSelectedRate?.carrierCode) ?? TEST_CARRIER_CODE
     const testServiceCode = panelForm.serviceCode || toStringValue(testSelectedRate?.serviceCode) || TEST_SERVICE_CODE
+    const shippingOptions = buildPanelShippingOptionsPayload()
 
     const payload: CreateLabelRequestDto = {
       orderId: order.orderId,
@@ -4266,7 +4306,9 @@ export default function OrdersView({
       length,
       width,
       height,
-      confirmation: panelForm.confirmation === 'none' ? 'delivery' : panelForm.confirmation,
+      confirmation: shippingOptions.confirmation,
+      insuranceProvider: shippingOptions.insuranceProvider,
+      insuredValue: shippingOptions.insuredValue ?? undefined,
       testLabel: isTest || mode === 'test',
       shipTo: {
         name: shipTo.name ?? '',
@@ -4469,6 +4511,8 @@ export default function OrdersView({
     storeId?: number | null
     clientId?: number | null
     confirmation?: string | null
+    insuranceProvider?: string | null
+    insuredValue?: number | null
   }) {
     const parts = [
       'v=ground-saver-v2',
@@ -4486,6 +4530,10 @@ export default function OrdersView({
     parts.push(`dw=${Math.round(input.dims.width * 10)}`)
     parts.push(`h=${Math.round(input.dims.height * 10)}`)
     if (input.confirmation) parts.push(`cf=${input.confirmation}`)
+    if (input.insuranceProvider && input.insuranceProvider !== 'none' && input.insuredValue) {
+      parts.push(`ip=${input.insuranceProvider}`)
+      parts.push(`iv=${Math.round(input.insuredValue * 100)}`)
+    }
     if (input.carrierIds.length) parts.push(`c=${[...input.carrierIds].sort().join(',')}`)
     return parts.join('|')
   }
@@ -4515,6 +4563,9 @@ export default function OrdersView({
       cacheKey: toStringValue(metadata.cacheKey) ?? request.fingerprint,
       cacheCreatedAt: createdAt,
       cacheExpiresAt: expiresAt,
+      confirmation: request.confirmation,
+      insuranceProvider: toStringValue(metadata.insuranceProvider) ?? 'none',
+      insuredValue: toNumberValue(metadata.insuredValue) ?? null,
       isComplete: metadata.isComplete === true,
       rateCount: toNumberValue(metadata.rateCount) ?? 1,
       matchType: toStringValue(metadata.matchType) ?? 'live',
@@ -4547,6 +4598,8 @@ export default function OrdersView({
       storeId: order.storeId,
       clientId: order.clientId,
       confirmation,
+      insuranceProvider: 'none',
+      insuredValue: null,
     })
     const key = `${order.orderId}|${fingerprint}`
 
@@ -4921,6 +4974,7 @@ export default function OrdersView({
     const { order, dims, weightOz, confirmation, silent = false } = options
     if (!hasCompleteDims(dims) || weightOz <= 0) return null
     const orderDetail = orderDetailsById.get(order.orderId) ?? panelDetail
+    const shippingOptions = buildPanelShippingOptionsPayload()
 
     if (isTestOrder(order, orderDetail)) {
       const testRate = buildTestMockRate(buildBestTestRateForShipment(order.orderId, dims, weightOz) ?? undefined)
@@ -4967,7 +5021,9 @@ export default function OrdersView({
         carrierIds: carrierIds.length ? carrierIds : undefined,
         storeId: order.storeId,
         clientId: order.clientId,
-        confirmation: normalizeConfirmationForRates(confirmation ?? panelForm.confirmation),
+        confirmation: normalizeConfirmationForRates(confirmation ?? shippingOptions.confirmation),
+        insuranceProvider: shippingOptions.insuranceProvider,
+        insuredValue: shippingOptions.insuredValue,
         orderId: order.orderId,
         orderNumber: order.orderNumber ?? undefined,
         externalOrderId:
@@ -4984,6 +5040,9 @@ export default function OrdersView({
       const dimsLabel = `${dims.length || 0}x${dims.width || 0}x${dims.height || 0}`
 
       if (bestRate) {
+        bestRate.confirmation = shippingOptions.confirmation
+        bestRate.insuranceProvider = shippingOptions.insuranceProvider
+        bestRate.insuredValue = shippingOptions.insuredValue
         setPanelRatePreview([bestRate])
         const autoRequest = getAutoBestRateRequest(order)
         if (autoRequest) {
@@ -5681,6 +5740,7 @@ export default function OrdersView({
       }
 
       try {
+        const shippingOptions = buildOrderShippingOptionsPayload(order)
         const payload: Record<string, unknown> = {
           orderId: order.orderId,
           // v2-parity: pass orderNumber so ShipStation's external_order_id
@@ -5699,7 +5759,9 @@ export default function OrdersView({
           // v4 falls through to 'none' at src/lib/shipstation/labels.ts:152 →
           // no signature tracking and different carrier billing vs v2.
           // Single-order path at line ~1309 already does this conversion.
-          confirmation: 'delivery',
+          confirmation: shippingOptions.confirmation,
+          insuranceProvider: shippingOptions.insuranceProvider,
+          insuredValue: shippingOptions.insuredValue,
           testLabel: batchTestMode || orderIsTest,
         }
         if (shippingProviderId != null) {
@@ -6022,6 +6084,7 @@ export default function OrdersView({
       }
 
       try {
+        const shippingOptions = buildOrderShippingOptionsPayload(order)
         const payload: Record<string, unknown> = {
           orderId: order.orderId,
           orderNumber: order.orderNumber ?? undefined,
@@ -6032,7 +6095,9 @@ export default function OrdersView({
           length: dims?.length,
           width: dims?.width,
           height: dims?.height,
-          confirmation: 'delivery',
+          confirmation: shippingOptions.confirmation,
+          insuranceProvider: shippingOptions.insuranceProvider,
+          insuredValue: shippingOptions.insuredValue,
           testLabel: Boolean(job.batchTestMode) || orderIsTest,
         }
         if (shippingProviderId != null) {
@@ -8003,7 +8068,17 @@ export default function OrdersView({
               <div className="ship-field-row">
                 <span className="ship-field-label">Insurance</span>
                 <div className="ship-field-value" style={{ gap: 5, flexWrap: 'wrap' }}>
-                  <select className="ship-select" value={panelForm.insurance} style={{ flex: 1 }} disabled={shipped} onChange={(event) => setPanelForm((current) => ({ ...current, insurance: event.target.value }))}>
+                  <select className="ship-select" value={panelForm.insurance} style={{ flex: 1 }} disabled={shipped} onChange={(event) => {
+                    const insurance = event.target.value
+                    setPanelForm((current) => ({ ...current, insurance }))
+                    if (panelOrder?.orderStatus === 'awaiting_shipment') {
+                      const dims = getPanelDims()
+                      const weightOz = getPanelWeightOz()
+                      if (hasCompleteDims(dims) && weightOz > 0) {
+                        void refreshPanelBestRate({ order: panelOrder, dims, weightOz, silent: true })
+                      }
+                    }
+                  }}>
                     <option value="none">None</option>
                     <option value="carrier">Carrier (up to $100)</option>
                     <option value="shipsurance">Shipsurance</option>
@@ -8015,7 +8090,17 @@ export default function OrdersView({
                     placeholder="$0.00"
                     style={{ width: 68, display: panelForm.insurance !== 'none' ? 'block' : 'none' }}
                     readOnly={shipped}
-                    onChange={(event) => setPanelForm((current) => ({ ...current, insuranceValue: event.target.value }))}
+                    onChange={(event) => {
+                      const insuranceValue = event.target.value
+                      setPanelForm((current) => ({ ...current, insuranceValue }))
+                      if (panelOrder?.orderStatus === 'awaiting_shipment') {
+                        const dims = getPanelDims()
+                        const weightOz = getPanelWeightOz()
+                        if (hasCompleteDims(dims) && weightOz > 0) {
+                          void refreshPanelBestRate({ order: panelOrder, dims, weightOz, silent: true })
+                        }
+                      }
+                    }}
                   />
                 </div>
               </div>
@@ -9825,6 +9910,8 @@ export default function OrdersView({
               oz: Number.parseFloat(panelForm.weightOz) || 0,
             }}
             initialConfirmation={panelForm.confirmation}
+            initialInsurance={panelForm.insurance}
+            initialInsuranceValue={panelForm.insuranceValue}
             onClose={() => setRateBrowserOpen(false)}
             onBestRateResolved={(best) => {
               if (!panelOrderId) return
@@ -9870,6 +9957,8 @@ export default function OrdersView({
                   shipAccountId: String(shippingProviderId),
                   serviceCode,
                   confirmation: normalizeConfirmationForRates(best.confirmation ?? current.confirmation),
+                  insurance: toStringValue(best.insuranceProvider) ?? current.insurance,
+                  insuranceValue: best.insuredValue != null ? String(best.insuredValue) : current.insuranceValue,
                   weightLb: best.weight ? String(best.weight.lb ?? current.weightLb) : current.weightLb,
                   weightOz: best.weight ? String(best.weight.oz ?? current.weightOz) : current.weightOz,
                   length: best.dims ? String(best.dims.length ?? current.length) : current.length,
@@ -9895,6 +9984,8 @@ export default function OrdersView({
                 setPanelForm((current) => ({
                   ...current,
                   confirmation: normalizeConfirmationForRates(applied.confirmation ?? current.confirmation),
+                  insurance: toStringValue(applied.insuranceProvider) ?? current.insurance,
+                  insuranceValue: applied.insuredValue != null ? String(applied.insuredValue) : current.insuranceValue,
                   weightLb: String(applied.weight?.lb ?? current.weightLb),
                   weightOz: String(applied.weight?.oz ?? current.weightOz),
                 }))
@@ -9903,6 +9994,8 @@ export default function OrdersView({
                 setPanelForm((current) => ({
                   ...current,
                   confirmation: normalizeConfirmationForRates(applied.confirmation ?? current.confirmation),
+                  insurance: toStringValue(applied.insuranceProvider) ?? current.insurance,
+                  insuranceValue: applied.insuredValue != null ? String(applied.insuredValue) : current.insuranceValue,
                   length: String(applied.dims?.length ?? current.length),
                   width: String(applied.dims?.width ?? current.width),
                   height: String(applied.dims?.height ?? current.height),

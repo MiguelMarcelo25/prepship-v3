@@ -122,6 +122,10 @@ const rateBody = z.object({
   clientId: z.number().int().nullable().optional(),
   confirmation: z.string().nullable().optional(),
   signature: z.string().nullable().optional(),
+  insuranceProvider: z.string().nullable().optional(),
+  insurance: z.string().nullable().optional(),
+  insuredValue: z.number().nullable().optional(),
+  insuranceValue: z.union([z.number(), z.string()]).nullable().optional(),
   forceRefresh: z.boolean().optional(),
 });
 
@@ -143,11 +147,12 @@ const browseBody = rateBody.extend({
   cachedOnly: z.boolean().optional(),
 });
 
-function rateTotal(rate: { shipping_amount?: { amount?: number }; other_amount?: { amount?: number }; confirmation_amount?: { amount?: number } }): number {
+function rateTotal(rate: { shipping_amount?: { amount?: number }; other_amount?: { amount?: number }; confirmation_amount?: { amount?: number }; insurance_amount?: { amount?: number } }): number {
   return (
     Number(rate.shipping_amount?.amount ?? 0) +
     Number(rate.other_amount?.amount ?? 0) +
-    Number(rate.confirmation_amount?.amount ?? 0)
+    Number(rate.confirmation_amount?.amount ?? 0) +
+    Number(rate.insurance_amount?.amount ?? 0)
   );
 }
 
@@ -335,6 +340,10 @@ const bulkItemBody = z
     clientId: z.number().int().nullable().optional(),
     sourceClientId: z.number().int().nullable().optional(),
     confirmation: z.string().nullable().optional(),
+    insuranceProvider: z.string().nullable().optional(),
+    insurance: z.string().nullable().optional(),
+    insuredValue: z.number().nullable().optional(),
+    insuranceValue: z.union([z.number(), z.string()]).nullable().optional(),
   })
   .refine(
     (item) => Boolean(item.cacheKey) || (item.weightOz !== undefined && item.toZip !== undefined),
@@ -364,6 +373,10 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
       it.sourceClientId === undefined &&
       it.carrierIds === undefined &&
       it.confirmation === undefined &&
+      it.insuranceProvider === undefined &&
+      it.insurance === undefined &&
+      it.insuredValue === undefined &&
+      it.insuranceValue === undefined &&
       it.toCountry === undefined
     ) {
       return { item: it, computedCacheKey: null };
@@ -381,6 +394,8 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
       clientId: it.clientId,
       sourceClientId: it.sourceClientId,
       confirmation: it.confirmation,
+      insuranceProvider: it.insuranceProvider ?? it.insurance,
+      insuredValue: typeof it.insuranceValue === 'string' ? Number(it.insuranceValue) : it.insuredValue ?? it.insuranceValue,
     });
     return { item: it, computedCacheKey: rateCacheKey(resolved) };
   }));

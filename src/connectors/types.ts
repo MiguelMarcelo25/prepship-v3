@@ -1,3 +1,5 @@
+import type { NormalizedShippingOptions } from '../lib/shipping-options';
+
 export type ConnectorProvider =
   | 'shipstation'
   | 'walmart'
@@ -107,8 +109,8 @@ export type NormalizedStoreOrderStatusSyncResult = {
   diagnostics?: Record<string, unknown>;
 };
 
-export type CarrierRateInput = Record<string, unknown>;
-export type CarrierLabelInput = Record<string, unknown>;
+export type CarrierRateInput = Record<string, unknown> & { shippingOptions?: NormalizedShippingOptions };
+export type CarrierLabelInput = Record<string, unknown> & { shippingOptions?: NormalizedShippingOptions };
 export type CarrierAccountListInput = Record<string, unknown>;
 export type NormalizedCarrierAccountListResult = Record<string, unknown>;
 export type NormalizedRate = Record<string, unknown>;

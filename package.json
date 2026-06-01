@@ -59,6 +59,7 @@
     "test:rate-system-hardening": "node scripts/rate-system-hardening-guard.mjs",
     "test:ps-050-rate-accuracy": "node scripts/ps-050-rate-accuracy-guard.mjs",
     "test:ps-050-rate-exactness": "node scripts/ps-050-rate-exactness-and-limiter-guard.mjs",
+    "test:ps-051-shipping-options": "node scripts/ps-051-shipping-options-guard.mjs",
     "test:shipp-rate-retry": "node scripts/shipp-rate-retry-guard.mjs",
     "test:best-rate-dims": "node scripts/best-rate-dims-guard.mjs",
     "test:runtime-ddl": "node scripts/runtime-ddl-guard.mjs",

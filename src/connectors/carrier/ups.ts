@@ -1,5 +1,6 @@
 import type { CarrierConnector } from '../../domain/fulfillment/types';
 import { timedFetch } from '../../lib/http/timing.js';
+import { normalizeShippingOptions } from '../../lib/shipping-options.js';
 
 const UPS_SERVICE_NAMES: Record<string, string> = {
   '01': 'UPS Next Day Air',
@@ -17,6 +18,25 @@ const UPS_SERVICE_NAMES: Record<string, string> = {
   '92': 'UPS Ground Saver',
   '93': 'UPS SurePost 1 lb or Greater',
 };
+
+function upsPackageServiceOptions(input: Record<string, unknown>) {
+  const options = normalizeShippingOptions(input.shippingOptions as Record<string, unknown> | undefined ?? input);
+  const serviceOptions: Record<string, unknown> = {};
+  if (options.confirmation === 'signature' || options.confirmation === 'direct_signature') {
+    serviceOptions.DeliveryConfirmation = { DCISType: '2' };
+  } else if (options.confirmation === 'adult_signature') {
+    serviceOptions.DeliveryConfirmation = { DCISType: '3' };
+  } else if (options.confirmation !== 'none') {
+    serviceOptions.DeliveryConfirmation = { DCISType: '1' };
+  }
+  if (options.insuranceProvider !== 'none' && options.insuredValue != null) {
+    serviceOptions.DeclaredValue = {
+      CurrencyCode: 'USD',
+      MonetaryValue: options.insuredValue.toFixed(2),
+    };
+  }
+  return Object.keys(serviceOptions).length ? serviceOptions : null;
+}
 
 async function getUpsAccessToken(creds: Record<string, unknown>): Promise<string> {
   const clientId = String(creds?.clientId ?? '').trim();
@@ -108,6 +128,7 @@ async function ratesFromUps(input: Record<string, unknown>): Promise<Array<{ ser
   const dimsL = Number(input.dimsL ?? 0);
   const dimsW = Number(input.dimsW ?? 0);
   const dimsH = Number(input.dimsH ?? 0);
+  const packageServiceOptions = upsPackageServiceOptions(input);
 
   const dims = (dimsL > 0 && dimsW > 0 && dimsH > 0)
     ? {
@@ -142,6 +163,7 @@ async function ratesFromUps(input: Record<string, unknown>): Promise<Array<{ ser
             UnitOfMeasurement: { Code: 'LBS' },
             Weight: String(weightLb),
           },
+          ...(packageServiceOptions ? { PackageServiceOptions: packageServiceOptions } : {}),
         },
       },
     },
@@ -208,6 +230,7 @@ async function createLabelUps(input: Record<string, unknown>): Promise<{
   const serviceCode = String(input.serviceCode ?? '03');
   const shipFrom = input.shipFrom as Record<string, unknown>;
   const shipTo = input.shipTo as Record<string, unknown>;
+  const packageServiceOptions = upsPackageServiceOptions(input);
 
   const body = {
     ShipmentRequest: {
@@ -275,6 +298,7 @@ async function createLabelUps(input: Record<string, unknown>): Promise<{
             UnitOfMeasurement: { Code: 'LBS' },
             Weight: String(weightLb),
           },
+          ...(packageServiceOptions ? { PackageServiceOptions: packageServiceOptions } : {}),
         },
       },
       LabelSpecification: {

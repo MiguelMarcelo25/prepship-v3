@@ -33,6 +33,7 @@ import { assertFulfillmentSchemaReady } from '../../src/services/fulfillment/sch
 import { createCarrierLabel } from '../../src/services/carrier-connector-orchestrator.js';
 import { confirmStoreShipment } from '../../src/services/store-connector-orchestrator.js';
 import { lookupWalmartOrderByCustomerOrderId as lookupWalmartOrderByCustomerOrderIdForLabels } from '../../src/connectors/store/walmart.js';
+import { normalizeShippingOptions } from '../../src/lib/shipping-options.js';
 
 let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 function getJwks() {
@@ -846,6 +847,7 @@ export default async function handler(req: any, res: any): Promise<void> {
   try {
     const body = (await readBody(req)) as Record<string, any>;
     const carrierAccountId = Number(body?.carrierAccountId);
+    const shippingOptions = normalizeShippingOptions(body);
     if (!Number.isFinite(carrierAccountId)) {
       res.status(400).json({ error: 'carrierAccountId is required' });
       return;
@@ -966,6 +968,7 @@ export default async function handler(req: any, res: any): Promise<void> {
         rawOrder,
         externalOrderId,
         orderNumber,
+        shippingOptions,
       });
       const persisted = await persistShippShipment(sql, {
         body,
@@ -1100,6 +1103,7 @@ export default async function handler(req: any, res: any): Promise<void> {
         dimsL,
         dimsW,
         dimsH,
+        shippingOptions,
       });
       const persisted = await persistWalmartShipment(sql, {
         body,
@@ -1233,7 +1237,7 @@ export default async function handler(req: any, res: any): Promise<void> {
       directServiceCode = String(body?.serviceCode ?? '03');
       result = await createCarrierLabel('ups', {
         credentials: creds,
-        weightOz, dimsL, dimsW, dimsH, serviceCode: directServiceCode, shipFrom, shipTo,
+        weightOz, dimsL, dimsW, dimsH, serviceCode: directServiceCode, shipFrom, shipTo, shippingOptions,
       });
     } else if (providerKey === 'easypost') {
       if (!Number.isFinite(orderId) || orderId <= 0) {
@@ -1254,7 +1258,7 @@ export default async function handler(req: any, res: any): Promise<void> {
       directServiceCode = String(body?.serviceCode ?? 'USPS Priority');
       result = await createCarrierLabel('easypost', {
         credentials: creds,
-        weightOz, dimsL, dimsW, dimsH, serviceCode: directServiceCode, shipFrom, shipTo,
+        weightOz, dimsL, dimsW, dimsH, serviceCode: directServiceCode, shipFrom, shipTo, shippingOptions,
       });
     } else {
       res.status(400).json({

@@ -24,6 +24,7 @@ import {
 } from '../../src/lib/auth/verify-supabase-jwt.js';
 import { corsHeaders } from '../../src/lib/http/cors.js';
 import { sendInternalServerError } from '../_lib/safe-error.js';
+import { normalizeShippingOptions } from '../../src/lib/shipping-options.js';
 
 // Keep this endpoint self-contained for Vercel cold starts. Importing the
 // connector registry here pulls a wider src/ tree into the serverless bundle;
@@ -230,6 +231,7 @@ export default async function handler(req: any, res: any): Promise<void> {
     const dimsL = typeof body?.dimsL === 'number' && body.dimsL > 0 ? body.dimsL : undefined;
     const dimsW = typeof body?.dimsW === 'number' && body.dimsW > 0 ? body.dimsW : undefined;
     const dimsH = typeof body?.dimsH === 'number' && body.dimsH > 0 ? body.dimsH : undefined;
+    const shippingOptions = normalizeShippingOptions(body);
 
     if (provider === 'simulator') {
       const rates = simulatorRates({ weightOz, toZip });
@@ -254,6 +256,7 @@ export default async function handler(req: any, res: any): Promise<void> {
           dimsL,
           dimsW,
           dimsH,
+          shippingOptions,
         });
         const rates = quoted.rates;
         res.status(200).json({
@@ -284,6 +287,7 @@ export default async function handler(req: any, res: any): Promise<void> {
           dimsL,
           dimsW,
           dimsH,
+          shippingOptions,
         });
         const rates = quoted.rates;
         res.status(200).json({
@@ -314,6 +318,7 @@ export default async function handler(req: any, res: any): Promise<void> {
           dimsL,
           dimsW,
           dimsH,
+          shippingOptions,
         });
         const rates = quoted.rates;
         res.status(200).json({
@@ -380,6 +385,7 @@ export default async function handler(req: any, res: any): Promise<void> {
           dimsW,
           dimsH,
           shipFrom: body?.shipFrom,
+          shippingOptions,
           rawOrder,
         });
         const rates = quoted.rates;
@@ -572,6 +578,7 @@ export default async function handler(req: any, res: any): Promise<void> {
           dimsH,
           fromZip,
           shipFrom: shipFromForRates,
+          shippingOptions,
           rawOrder,
         });
         const rates = quoted.rates;
@@ -640,6 +647,7 @@ export default async function handler(req: any, res: any): Promise<void> {
         const quoted = await quoteCarrierRates(provider, {
           credentials: creds,
           weightOz, toZip, fromZip, dimsL, dimsW, dimsH,
+          shippingOptions,
           rawOrder,
           externalOrderId,
         });
@@ -708,6 +716,7 @@ export default async function handler(req: any, res: any): Promise<void> {
           dimsW,
           dimsH,
           shipFrom: body?.shipFrom,
+          shippingOptions,
           rawOrder,
         });
         const rates = quoted.rates;
@@ -761,7 +770,7 @@ export default async function handler(req: any, res: any): Promise<void> {
       try {
         const quoted = await quoteCarrierRates(provider, {
           credentials: creds,
-          weightOz, toZip, fromZip, dimsL, dimsW, dimsH, rawOrder,
+          weightOz, toZip, fromZip, dimsL, dimsW, dimsH, shippingOptions, rawOrder,
         });
         const rates = quoted.rates;
         res.status(200).json({
@@ -843,6 +852,7 @@ export default async function handler(req: any, res: any): Promise<void> {
           dimsW,
           dimsH,
           shipFrom: body?.shipFrom,
+          shippingOptions,
           rawOrder,
           externalOrderId,
           orderNumber,

@@ -12,6 +12,7 @@ import {
 import type { CarriersResponse } from '../lib/shipstation/types';
 import { loadClientCredentials } from '../lib/shipstation/credentials';
 import { getDefaultShipFrom } from '../lib/ship-from';
+import { normalizeConfirmation, normalizeShippingOptions } from '../lib/shipping-options';
 import { listCarrierAccounts, quoteCarrierRates } from './carrier-connector-orchestrator';
 
 type Markup = { type: 'amount' | 'percent'; value: number };
@@ -283,6 +284,8 @@ export type RateInput = {
   sourceClientId?: number | null;
   apiKeyV2?: string | null;
   confirmation?: string | null;
+  insuranceProvider?: string | null;
+  insuredValue?: number | null;
 };
 
 function normalizeZip(zip: string): string {
@@ -300,9 +303,8 @@ function apiKeyCacheKey(apiKeyV2?: string | null): string {
 }
 
 function normalizeRateConfirmation(value?: string | null): string | undefined {
-  if (!value) return undefined;
-  const normalized = value.trim().toLowerCase();
-  return RATE_CONFIRMATIONS.has(normalized) ? normalized : undefined;
+  const normalized = normalizeConfirmation(value, 'none');
+  return RATE_CONFIRMATIONS.has(normalized) && normalized !== 'none' ? normalized : undefined;
 }
 
 async function resolveClientIdForStoreId(storeId?: number | null): Promise<number | null> {
@@ -352,6 +354,11 @@ export function rateCacheKey(input: RateInput): string {
   if (input.dimsH) parts.push(`h=${Math.round(input.dimsH * 10)}`);
   const confirmation = normalizeRateConfirmation(input.confirmation);
   if (confirmation) parts.push(`cf=${confirmation}`);
+  const options = normalizeShippingOptions(input);
+  if (options.insuranceProvider !== 'none') {
+    parts.push(`ip=${options.insuranceProvider}`);
+    parts.push(`iv=${Math.round((options.insuredValue ?? 0) * 100)}`);
+  }
   if (input.carrierIds?.length) {
     parts.push(`c=${[...input.carrierIds].sort().join(',')}`);
   }
@@ -362,6 +369,7 @@ function rateTotal(rate: Rate): number {
   return (
     Number(rate.shipping_amount?.amount ?? 0) +
     Number(rate.confirmation_amount?.amount ?? 0) +
+    Number(rate.insurance_amount?.amount ?? 0) +
     Number(rate.other_amount?.amount ?? 0)
   );
 }
@@ -680,9 +688,15 @@ async function fetchEstimateForCarrier(
   }
   const confirmation = normalizeRateConfirmation(input.confirmation);
   if (confirmation) body.confirmation = confirmation;
+  const options = normalizeShippingOptions(input);
+  if (options.insuranceProvider !== 'none' && options.insuredValue != null) {
+    body.insurance_provider = options.insuranceProvider;
+    body.insured_value = options.insuredValue;
+  }
   try {
     const payload = await quoteCarrierRates('shipstation', {
       body,
+      shippingOptions: options,
       apiKeyV2: input.apiKeyV2 ?? undefined,
       dedupeKey: `rates-estimate:${carrier.carrier_id}:${rateCacheKey(input)}`,
     });

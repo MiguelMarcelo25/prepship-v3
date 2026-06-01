@@ -1,5 +1,6 @@
 import type { CarrierConnector } from '../../domain/fulfillment/types';
 import { timedFetch } from '../../lib/http/timing.js';
+import { assertUnsupportedShippingOptions } from './shipping-option-support.js';
 
 function firstString(...values: unknown[]): string {
   for (const value of values) {
@@ -780,6 +781,10 @@ async function ratesFromWalmartShipping(input: Record<string, unknown>): Promise
     countryCode: firstString(addr?.country, 'US'),
     phone: firstString(rawOrder?.shippingInfo?.phone, '0000000000'),
   };
+  const shippingOptions = assertUnsupportedShippingOptions('Walmart Shipping', input, {
+    confirmation: ['delivery', 'none', 'signature'],
+    insurance: false,
+  });
 
   const body = {
     purchaseOrderId,
@@ -798,7 +803,7 @@ async function ratesFromWalmartShipping(input: Record<string, unknown>): Promise
     deliverByDate: toWalmartIsoDate(rawOrder?.shippingInfo?.estimatedDeliveryDate, 5),
     includeServicesNotMeetingDeliveryPromise: true,
     boxItems,
-    addOns: false,
+    addOns: shippingOptions.confirmation === 'signature' ? ['SIGNATURE'] : false,
     hasBattery: false,
   };
 
@@ -932,7 +937,16 @@ async function createLabelWalmartShipping(input: Record<string, unknown>): Promi
     throw new Error('Walmart did not return the carrierName/carrierServiceType required to buy this label. Click Browse Rates again and choose another Walmart rate.');
   }
 
-  const addOns = /signature/i.test(String(body.confirmation ?? input.confirmation ?? '')) ? ['SIGNATURE'] : [];
+  const shippingOptions = assertUnsupportedShippingOptions('Walmart Shipping', {
+    shippingOptions: input.shippingOptions,
+    confirmation: body.confirmation ?? input.confirmation,
+    insuranceProvider: body.insuranceProvider ?? input.insuranceProvider,
+    insuredValue: body.insuredValue ?? input.insuredValue,
+  }, {
+    confirmation: ['delivery', 'none', 'signature'],
+    insurance: false,
+  });
+  const addOns = shippingOptions.confirmation === 'signature' ? ['SIGNATURE'] : [];
   const labelBody: Record<string, unknown> = {
     boxDimensions: {
       boxWeight: Math.max(1, Math.round(weightOz)),

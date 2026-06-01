@@ -605,13 +605,16 @@ function translateRatePayloadToV4(
 
   // string passthroughs (names match across v2/v4, plus a few direct-carrier
   // hints that the Vercel carrier quoter can use).
-  for (const k of ['toCountry', 'toState', 'toCity', 'toAddress', 'toName', 'externalOrderId', 'purchaseOrderId', 'orderNumber', 'confirmation', 'signature'] as const) {
+  for (const k of ['toCountry', 'toState', 'toCity', 'toAddress', 'toName', 'externalOrderId', 'purchaseOrderId', 'orderNumber', 'confirmation', 'signature', 'insuranceProvider', 'insurance'] as const) {
     const v = input[k];
     if (typeof v === 'string' && v.length > 0) {
       if (k === 'signature') out.confirmation ??= v;
       else out[k] = v;
     }
   }
+  const insuredValue = input.insuredValue ?? input.insuranceValue;
+  if (typeof insuredValue === 'number' && insuredValue > 0) out.insuredValue = insuredValue;
+  else if (typeof insuredValue === 'string' && Number(insuredValue) > 0) out.insuredValue = Number(insuredValue);
   const fromPostalCode = input.fromPostalCode ?? input.fromZip;
   if (typeof fromPostalCode === 'string' && fromPostalCode.trim()) {
     out.fromZip = fromPostalCode.trim();
@@ -1103,6 +1106,8 @@ async function fetchDirectCarrierRates(
           orderNumber: body.orderNumber,
           purchaseOrderId: body.purchaseOrderId,
           confirmation: body.confirmation,
+          insuranceProvider: body.insuranceProvider,
+          insuredValue: body.insuredValue,
           shipFrom: body.shipFrom,
         },
       });
@@ -2341,6 +2346,8 @@ export const apiClient = {
     carrierCode?: string;
     packageCode?: string;
     confirmation?: string;
+    insuranceProvider?: string;
+    insuredValue?: number;
     testLabel?: boolean;
   }): Promise<any> {
     return api.post<any>('/labels/create-batch', payload);
