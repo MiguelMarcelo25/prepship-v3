@@ -34,6 +34,10 @@ import {
 } from './fulfillment/outbox';
 import { addMockLabelSignature } from '../lib/mock-label-access';
 import { normalizeShippingOptions } from '../lib/shipping-options';
+import {
+  assertShippingServiceEligible,
+  type ShippingServiceDescriptor,
+} from '../lib/shipping-service-eligibility';
 
 // Batch-label callers don't carry a panel-selected package, so customPackageId
 // is often null. When dims are present, fall back to the same ±0.1" tolerance
@@ -458,6 +462,20 @@ export async function createLabelFromRate(input: CreateFromRateInput) {
   return persistLabelFromRate(label, input.orderId, input.clientId);
 }
 
+function assertLabelServiceEligibleForOrder(
+  order: Pick<typeof orders.$inferSelect, 'clientId' | 'storeId'>,
+  clientId: number | null | undefined,
+  service: ShippingServiceDescriptor,
+): void {
+  assertShippingServiceEligible(
+    {
+      clientId: clientId ?? order.clientId ?? null,
+      storeId: order.storeId ?? null,
+    },
+    service,
+  );
+}
+
 async function persistLabelFromRate(label: Label, orderId: number, clientId?: number) {
   const shipDate = label.ship_date ? new Date(label.ship_date) : null;
   const createdAt = label.created_at ? new Date(label.created_at) : new Date();
@@ -504,6 +522,15 @@ export type CreateFromShipmentInput = {
 };
 
 export async function createLabelFromShipment(input: CreateFromShipmentInput) {
+  assertShippingServiceEligible(
+    {
+      clientId: input.clientId ?? null,
+    },
+    {
+      serviceCode: input.serviceCode,
+      serviceName: input.serviceCode,
+    },
+  );
   const shipFrom = input.shipFrom ?? (await getDefaultShipFrom());
   const parcel: Parcel = { weight: { value: input.weightOz, unit: 'ounce' } };
   if (input.dimensions) {
@@ -527,7 +554,11 @@ export async function createLabelFromShipment(input: CreateFromShipmentInput) {
     packages: [parcel],
   };
 
-  const label = await createCarrierLabel('shipstation', { shipment }) as Label;
+  const label = await createCarrierLabel('shipstation', {
+    shipment,
+    clientId: input.clientId ?? null,
+    serviceCode: input.serviceCode,
+  }) as Label;
   return persistLabelFromRate(label, input.orderId, input.clientId);
 }
 
@@ -846,6 +877,11 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
       .limit(1);
     clientId = match?.id ?? null;
   }
+  assertLabelServiceEligibleForOrder(order, clientId, {
+    carrierCode: body.carrierCode ?? null,
+    serviceCode: body.serviceCode,
+    serviceName: body.serviceCode,
+  });
   // Hard guard: any order under an isTest client is forced into offline-mock
   // mode regardless of what the UI sent. Prevents a test row from ever
   // spending real postage.
@@ -1024,7 +1060,10 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
   const created = await timer.task('ShipStation createLabel connector', async () => {
     const label = await createCarrierLabel('shipstation', {
       apiKeyV2,
+      clientId,
+      storeId: order.storeId ?? null,
       carrierId: `se-${body.shippingProviderId}`,
+      carrierCode: body.carrierCode ?? null,
       serviceCode: body.serviceCode,
       packageCode: body.packageCode || serviceCodeFitsPackage(body.serviceCode),
       weightOz: effectiveWeightOz,
@@ -1319,6 +1358,10 @@ async function createLabelFromOrderId(args: {
   // the forced-testLabel guard in createLabelV2 so any entry point into
   // label creation is safe.
   const effectiveClientId = args.clientId ?? order.clientId ?? null;
+  assertLabelServiceEligibleForOrder(order, effectiveClientId, {
+    serviceCode: args.serviceCode,
+    serviceName: args.serviceCode,
+  });
   if (effectiveClientId) {
     const [cli] = await db
       .select({ isTest: clients.isTest })

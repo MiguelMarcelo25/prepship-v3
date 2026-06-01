@@ -4,7 +4,14 @@ import { z } from 'zod';
 import { and, eq, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { rateCache } from '../db/schema/rates';
-import { CACHE_TTL_MS, getCarrierAccountsForRateContext, getRates, rateCacheKey, resolveRateInput } from '../services/rates';
+import {
+  CACHE_TTL_MS,
+  getCarrierAccountsForRateContext,
+  getRates,
+  rateCacheKey,
+  resolveRateInput,
+  sanitizeRateCacheRowForEligibility,
+} from '../services/rates';
 import { listCarrierAccounts } from '../services/carrier-connector-orchestrator';
 import {
   getActiveBackfillJob,
@@ -418,13 +425,17 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
   const results = itemsWithKeys.map(({ item: it, computedCacheKey }) => {
     const exactHit = computedCacheKey ? exactRowsByKey.get(computedCacheKey) : null;
     if (exactHit) {
-      const meta = cacheMetadata(exactHit, 'exact');
+      const eligibleHit = sanitizeRateCacheRowForEligibility(exactHit, {
+        clientId: it.clientId ?? null,
+        storeId: it.storeId ?? null,
+      });
+      const meta = cacheMetadata(eligibleHit, 'exact');
       return {
         orderId: it.orderId,
         cacheKey: computedCacheKey,
         weightOz: it.weightOz,
         toZip: it.toZip,
-        hit: publicRateCacheRow(exactHit, canViewFinancials),
+        hit: publicRateCacheRow(eligibleHit, canViewFinancials),
         ...meta,
       };
     }

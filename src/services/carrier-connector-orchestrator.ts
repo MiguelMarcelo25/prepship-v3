@@ -1,4 +1,5 @@
 import { resolveCarrierConnector } from '../connectors/carrier-resolution';
+import { assertShippingServiceEligible } from '../lib/shipping-service-eligibility';
 import type {
   CarrierLabelInput,
   CarrierAccountListInput,
@@ -15,6 +16,37 @@ import type {
 
 function missingCarrierConnector(provider: string | null | undefined, capability: ConnectorCapability): Error {
   return new Error(`No carrier connector registered for ${provider ?? '(missing)'} with capability ${capability}`);
+}
+
+function labelInputRecord(input: CarrierLabelInput): Record<string, any> {
+  return input && typeof input === 'object' ? input as Record<string, any> : {};
+}
+
+function assertCarrierLabelServiceEligible(
+  provider: string | null | undefined,
+  input: CarrierLabelInput,
+): void {
+  const row = labelInputRecord(input);
+  const shipment = row.shipment && typeof row.shipment === 'object'
+    ? row.shipment as Record<string, any>
+    : {};
+  const serviceCode = row.serviceCode ?? row.service_code ?? shipment.service_code ?? shipment.serviceCode;
+  if (serviceCode == null || serviceCode === '') return;
+  assertShippingServiceEligible(
+    {
+      clientId: row.clientId ?? row.client_id ?? shipment.clientId ?? shipment.client_id ?? null,
+      clientName: row.clientName ?? row.client_name ?? shipment.clientName ?? shipment.client_name ?? null,
+      storeId: row.storeId ?? row.store_id ?? shipment.storeId ?? shipment.store_id ?? null,
+    },
+    {
+      provider: provider ?? row.provider ?? null,
+      carrierCode: row.carrierCode ?? row.carrier_code ?? shipment.carrier_code ?? shipment.carrierCode ?? null,
+      carrierName: row.carrierName ?? row.carrier_name ?? null,
+      serviceCode,
+      serviceName: row.serviceName ?? row.service_name ?? shipment.service_type ?? shipment.serviceName ?? null,
+      serviceType: row.serviceType ?? row.service_type ?? shipment.service_type ?? null,
+    },
+  );
 }
 
 export async function quoteCarrierRates(
@@ -37,6 +69,7 @@ export async function createCarrierLabel(
   provider: string | null | undefined,
   input: CarrierLabelInput,
 ): Promise<NormalizedCarrierLabelResult> {
+  assertCarrierLabelServiceEligible(provider, input);
   const resolved = resolveCarrierConnector(provider, 'labels.create');
   if (!resolved?.connector.createLabel) {
     throw missingCarrierConnector(provider, 'labels.create');

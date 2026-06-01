@@ -26,6 +26,7 @@ import {
   BLOCKED_PACKAGE_TYPES,
   MEDIA_MAIL_ALLOWED_STORES,
 } from '../src/services/rates';
+import { evaluateShippingServiceEligibility } from '../src/lib/shipping-service-eligibility';
 import {
   normalizeOrderBestRateDto,
   assertPersistedOrderBestRateDto,
@@ -103,18 +104,16 @@ function expect<T>(actual: T): {
 // ─── BLOCKED_SERVICE_CODES — exact v2 list ────────────────────────────────
 console.log('\n\x1b[1mBLOCKED_SERVICE_CODES\x1b[0m');
 
-test('includes all 7 v2 codes', () => {
+test('includes the global USPS service blocks only', () => {
   const expected = [
     'usps_media_mail',
     'usps_first_class_mail',
     'usps_library_mail',
     'usps_parcel_select',
     'usps_parcel_select_lightweight',
-    'ups_surepost_1_lb_or_greater',
-    'ups_surepost_less_than_1_lb', // the one previously missing in v4
   ];
   for (const code of expected) expect(BLOCKED_SERVICE_CODES).toContain(code);
-  expect(BLOCKED_SERVICE_CODES.size).toBe(7);
+  expect(BLOCKED_SERVICE_CODES.size).toBe(5);
 });
 
 test('does NOT include plain usps_priority_mail (v2 parity)', () => {
@@ -156,8 +155,20 @@ test('blocks usps_media_mail for a different store', () => {
   expect(isBlockedRate({ service_code: 'usps_media_mail' }, 1)).toBe(true);
 });
 
-test('blocks ups_surepost_less_than_1_lb (Batch 1 fix)', () => {
-  expect(isBlockedRate({ service_code: 'ups_surepost_less_than_1_lb' })).toBe(true);
+test('does NOT globally block UPS SurePost; PS-057 blocks it only for HUGRAB', () => {
+  expect(isBlockedRate({ service_code: 'ups_surepost_less_than_1_lb' })).toBe(false);
+  expect(
+    evaluateShippingServiceEligibility(
+      { clientId: 4, storeId: 378060 },
+      { carrierCode: 'ups', serviceCode: 'ups_surepost_less_than_1_lb', serviceName: 'UPS Ground Saver (<1 lb)' },
+    ).allowed,
+  ).toBe(false);
+  expect(
+    evaluateShippingServiceEligibility(
+      { clientId: 99, storeId: 1 },
+      { carrierCode: 'ups', serviceCode: 'ups_surepost_less_than_1_lb', serviceName: 'UPS Ground Saver (<1 lb)' },
+    ).allowed,
+  ).toBe(true);
 });
 
 test('blocks flat_rate_envelope by package_type', () => {

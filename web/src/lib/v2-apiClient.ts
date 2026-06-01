@@ -605,7 +605,7 @@ function translateRatePayloadToV4(
 
   // string passthroughs (names match across v2/v4, plus a few direct-carrier
   // hints that the Vercel carrier quoter can use).
-  for (const k of ['toCountry', 'toState', 'toCity', 'toAddress', 'toName', 'externalOrderId', 'purchaseOrderId', 'orderNumber', 'confirmation', 'signature', 'insuranceProvider', 'insurance'] as const) {
+  for (const k of ['toCountry', 'toState', 'toCity', 'toAddress', 'toName', 'externalOrderId', 'purchaseOrderId', 'orderNumber', 'clientName', 'confirmation', 'signature', 'insuranceProvider', 'insurance'] as const) {
     const v = input[k];
     if (typeof v === 'string' && v.length > 0) {
       if (k === 'signature') out.confirmation ??= v;
@@ -1102,6 +1102,9 @@ async function fetchDirectCarrierRates(
           dimsW: body.dimsW,
           dimsH: body.dimsH,
           orderId: body.orderId,
+          clientId: body.clientId,
+          clientName: body.clientName,
+          storeId: body.storeId,
           externalOrderId: body.externalOrderId ?? body.orderNumber,
           orderNumber: body.orderNumber,
           purchaseOrderId: body.purchaseOrderId,

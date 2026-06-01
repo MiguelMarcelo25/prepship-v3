@@ -34,6 +34,7 @@ import { createCarrierLabel } from '../../src/services/carrier-connector-orchest
 import { confirmStoreShipment } from '../../src/services/store-connector-orchestrator.js';
 import { lookupWalmartOrderByCustomerOrderId as lookupWalmartOrderByCustomerOrderIdForLabels } from '../../src/connectors/store/walmart.js';
 import { normalizeShippingOptions } from '../../src/lib/shipping-options.js';
+import { assertShippingServiceEligible } from '../../src/lib/shipping-service-eligibility.js';
 
 let cachedJwks: ReturnType<typeof createRemoteJWKSet> | null = null;
 function getJwks() {
@@ -69,6 +70,28 @@ function sourceOrderIdFromExternalId(externalOrderId: string | null | undefined)
   if (!externalOrderId) return null;
   const match = externalOrderId.match(/^[a-z_]+-(.+)$/i);
   return match?.[1] ?? externalOrderId;
+}
+
+function assertDirectCarrierServiceEligible(args: {
+  body: Record<string, any>;
+  orderRow: any;
+  providerKey: string;
+  serviceCode: string | number | null | undefined;
+  serviceName?: string | null;
+}) {
+  assertShippingServiceEligible(
+    {
+      clientId: args.body?.clientId ?? args.orderRow?.client_id ?? null,
+      clientName: args.body?.clientName ?? args.orderRow?.client_name ?? null,
+      storeId: args.body?.storeId ?? args.orderRow?.store_id ?? null,
+    },
+    {
+      provider: args.providerKey,
+      carrierCode: args.providerKey,
+      serviceCode: args.serviceCode,
+      serviceName: args.serviceName ?? String(args.serviceCode ?? ''),
+    },
+  );
 }
 
 async function ensureFulfillmentOutboxSql(sql: any): Promise<void> {
@@ -892,14 +915,17 @@ export default async function handler(req: any, res: any): Promise<void> {
         const rows = await sql<Array<{
           id: number;
           client_id: number | null;
+          store_id: number | null;
+          client_name: string | null;
           order_number: string | null;
           external_order_id: string | null;
           order_status: string | null;
           raw: any;
         }>>`
-          SELECT id, client_id, order_number, external_order_id, order_status, raw
-          FROM orders
-          WHERE id = ${Math.trunc(orderId)}
+          SELECT o.id, o.client_id, o.store_id, c.name as client_name, o.order_number, o.external_order_id, o.order_status, o.raw
+          FROM orders o
+          LEFT JOIN clients c ON c.id = o.client_id
+          WHERE o.id = ${Math.trunc(orderId)}
           LIMIT 1
         `;
         orderRow = rows[0] ?? null;
@@ -952,12 +978,15 @@ export default async function handler(req: any, res: any): Promise<void> {
         res.status(400).json({ ok: false, error: 'serviceCode is required for Shipp label creation' });
         return;
       }
+      assertDirectCarrierServiceEligible({ body, orderRow, providerKey, serviceCode, serviceName: serviceCode });
 
       const syntheticProviderId = Number.isFinite(Number(body?.shippingProviderId))
         ? Number(body.shippingProviderId)
         : SHIPP_PROVIDER_ID_OFFSET + carrierAccountId;
       const result = await createCarrierLabel('shipp', {
         credentials: creds,
+        clientId: orderRow?.client_id ?? body?.clientId ?? null,
+        storeId: orderRow?.store_id ?? body?.storeId ?? null,
         serviceCode,
         weightOz,
         dimsL,
@@ -1094,8 +1123,18 @@ export default async function handler(req: any, res: any): Promise<void> {
         ? Number(body.shippingProviderId)
         : SHIPP_PROVIDER_ID_OFFSET + carrierAccountId;
       const context = await resolveWalmartLabelContext(sql, creds, body, orderRow, rawOrder);
+      assertDirectCarrierServiceEligible({
+        body,
+        orderRow,
+        providerKey,
+        serviceCode: body?.serviceCode ?? context?.selectedServiceCode ?? null,
+        serviceName: body?.serviceName ?? null,
+      });
       const result = await createCarrierLabel('walmart_shipping', {
         credentials: creds,
+        clientId: orderRow?.client_id ?? body?.clientId ?? null,
+        storeId: orderRow?.store_id ?? body?.storeId ?? null,
+        serviceCode: body?.serviceCode ?? null,
         body,
         context,
         rawOrder: context.rawOrder,
@@ -1235,8 +1274,11 @@ export default async function handler(req: any, res: any): Promise<void> {
       // UPS service code default: "03" = Ground. Caller can pass
       // serviceCode like "01" (Next Day Air), "02" (2nd Day Air), etc.
       directServiceCode = String(body?.serviceCode ?? '03');
+      assertDirectCarrierServiceEligible({ body, orderRow, providerKey, serviceCode: directServiceCode, serviceName: directServiceCode });
       result = await createCarrierLabel('ups', {
         credentials: creds,
+        clientId: orderRow?.client_id ?? body?.clientId ?? null,
+        storeId: orderRow?.store_id ?? body?.storeId ?? null,
         weightOz, dimsL, dimsW, dimsH, serviceCode: directServiceCode, shipFrom, shipTo, shippingOptions,
       });
     } else if (providerKey === 'easypost') {
@@ -1256,8 +1298,11 @@ export default async function handler(req: any, res: any): Promise<void> {
         return;
       }
       directServiceCode = String(body?.serviceCode ?? 'USPS Priority');
+      assertDirectCarrierServiceEligible({ body, orderRow, providerKey, serviceCode: directServiceCode, serviceName: directServiceCode });
       result = await createCarrierLabel('easypost', {
         credentials: creds,
+        clientId: orderRow?.client_id ?? body?.clientId ?? null,
+        storeId: orderRow?.store_id ?? body?.storeId ?? null,
         weightOz, dimsL, dimsW, dimsH, serviceCode: directServiceCode, shipFrom, shipTo, shippingOptions,
       });
     } else {
@@ -1354,6 +1399,10 @@ export default async function handler(req: any, res: any): Promise<void> {
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    if ((err as any)?.code === 'SHIPPING_SERVICE_NOT_ELIGIBLE') {
+      res.status(400).json({ ok: false, error: msg });
+      return;
+    }
     console.error('[carriers/labels]', msg);
     res.status(500).json({ ok: false, error: msg });
   } finally {

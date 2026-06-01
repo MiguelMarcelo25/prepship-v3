@@ -18,6 +18,11 @@ import { Loader2 } from 'lucide-react';
 import { apiClient } from '../lib/v2-apiClient';
 import { CALIFORNIA_TZ } from '../lib/ca-time';
 import { useMarkups, type Markup } from '../contexts/MarkupsContext';
+import {
+  HUGRAB_GROUND_SAVER_BLOCK_REASON,
+  evaluateShippingServiceEligibility,
+  isHugrabShippingContext,
+} from '../../../src/lib/shipping-service-eligibility';
 // Shared carrier badge — official UPS/USPS SVG logos with fallback
 // pills for FedEx/etc. Replaces the local carrier-class switch below.
 import CarrierBadge from './CarrierBadge';
@@ -68,6 +73,7 @@ export type RbOrderSummaryDto = {
   external_order_id?: string | null;
   storeId?: number | null;
   clientId?: number | null;
+  clientName?: string | null;
   bestRate?: Record<string, unknown> | null;
   weight?: { value?: number } | null;
   rateDims?: { length?: number | null; width?: number | null; height?: number | null } | null;
@@ -765,8 +771,28 @@ function priceDisplay(
 // v2's isBlockedRate uses a per-store service-unblock list the server
 // maintains. Stubbed to never-blocked per task spec — safe default until the
 // per-client block list ports.
-function isBlockedRate(_rate: RateRow): boolean {
-  return false;
+function rateBlockedReason(rate: RateRow, order: RbOrderSummaryDto | null): string | null {
+  const raw = rate.raw && typeof rate.raw === 'object' ? rate.raw as Record<string, unknown> : {};
+  const eligibility = evaluateShippingServiceEligibility(
+    {
+      clientId: order?.clientId ?? null,
+      clientName: order?.clientName ?? null,
+      storeId: order?.storeId ?? null,
+    },
+    {
+      provider: typeof raw.provider === 'string' ? raw.provider : null,
+      carrierCode: rate.carrierCode ?? (typeof raw.carrier_code === 'string' ? raw.carrier_code : null),
+      carrierName: typeof raw.carrier_name === 'string' ? raw.carrier_name : null,
+      serviceCode: rate.serviceCode ?? (typeof raw.service_code === 'string' ? raw.service_code : null),
+      serviceName: rate.serviceName ?? (typeof raw.service_type === 'string' ? raw.service_type : null),
+      serviceType: typeof raw.service_type === 'string' ? raw.service_type : null,
+    },
+  );
+  return eligibility.allowed ? null : eligibility.reason ?? HUGRAB_GROUND_SAVER_BLOCK_REASON;
+}
+
+function isBlockedRate(rate: RateRow, order: RbOrderSummaryDto | null): boolean {
+  return rateBlockedReason(rate, order) != null;
 }
 
 export default function RateBrowserModal({
@@ -826,6 +852,15 @@ export default function RateBrowserModal({
     [testMode, shippingAccounts, scopedShippingAccounts]
   );
   const rateAccountsReady = testMode || rateShippingAccounts.length > 0;
+  const hugrabGroundSaverBlocked = useMemo(
+    () =>
+      isHugrabShippingContext({
+        clientId: order?.clientId ?? null,
+        clientName: order?.clientName ?? null,
+        storeId: order?.storeId ?? null,
+      }),
+    [order?.clientId, order?.clientName, order?.storeId],
+  );
 
   useEffect(() => {
     if (!open) {
@@ -1152,6 +1187,7 @@ export default function RateBrowserModal({
         preferredCarrierId: preferredAccount?.carrierId ?? undefined,
         storeId: toFiniteNumber(order?.storeId) ?? undefined,
         clientId: toFiniteNumber(order?.clientId) ?? undefined,
+        clientName: toOptionalString(order?.clientName) ?? undefined,
         confirmation: rateConfirmation,
         insuranceProvider: normalizedInsuranceProvider,
         insuredValue: normalizedInsuredValue,
@@ -1300,7 +1336,7 @@ export default function RateBrowserModal({
       // If ShipStation returns no live rates, fall back to the table's
       // already-saved best rate so the modal stays consistent with the row.
       const ratesToRank = liveFetchedRates.length ? liveFetchedRates : [seededBestRate!];
-      const available = filterBySvcClass(ratesToRank).filter((r) => !isBlockedRate(r));
+      const available = filterBySvcClass(ratesToRank).filter((r) => !isBlockedRate(r, order));
       const best = available.sort((a, b) => rateDisplayTotal(a, markups) - rateDisplayTotal(b, markups))[0];
       const applied = best ? toAppliedRate(best) : null;
       if (applied) {
@@ -1461,7 +1497,8 @@ export default function RateBrowserModal({
   // ── Sub-renderers ──────────────────────────────────────────────────────────
 
   function renderRateRow(r: RateRow, index: number, showCarrier: boolean, isRecommended: boolean): ReactNode {
-    const blocked = isBlockedRate(r);
+    const blockedReason = rateBlockedReason(r, order);
+    const blocked = blockedReason != null;
     const base = rateBaseTotal(r);
     const pid =
       typeof r.shippingProviderId === 'number'
@@ -1491,7 +1528,7 @@ export default function RateBrowserModal({
       <div
         key={`${pid}-${r.serviceCode}-${index}`}
         onClick={blocked ? undefined : () => handleRateClick(r)}
-        title={blocked ? 'Not available for current clients' : undefined}
+        title={blocked ? blockedReason ?? 'Not available for current client' : undefined}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -1556,6 +1593,11 @@ export default function RateBrowserModal({
               {secondaryText}
             </div>
           )}
+          {blockedReason ? (
+            <div style={{ fontSize: 10.5, color: 'var(--red)', lineHeight: 1.4, marginTop: 2 }}>
+              {blockedReason}
+            </div>
+          ) : null}
           <div style={{ fontSize: 10.5, color: 'var(--text3)', lineHeight: 1.4 }}>
             Rate Source: {sourceText}
           </div>
@@ -1694,7 +1736,7 @@ export default function RateBrowserModal({
 
   function renderAllRatesView(): ReactNode {
     const displayed = hideUnavail
-      ? combinedAll.filter((r) => !isBlockedRate(r))
+      ? combinedAll.filter((r) => !isBlockedRate(r, order))
       : combinedAll;
     const allCount = combinedAll.length;
     const hiddenCount = allCount - displayed.length;
@@ -1718,7 +1760,7 @@ export default function RateBrowserModal({
       );
     }
 
-    const firstOk = displayed.findIndex((r) => !isBlockedRate(r));
+    const firstOk = displayed.findIndex((r) => !isBlockedRate(r, order));
     return (
       <>
         <div
@@ -1793,7 +1835,7 @@ export default function RateBrowserModal({
     const all = ratesByPid[String(selectedPid)] ?? [];
     const filtered = filterBySvcClass(all);
     const displayed = hideUnavail
-      ? filtered.filter((r) => !isBlockedRate(r))
+      ? filtered.filter((r) => !isBlockedRate(r, order))
       : filtered;
     const hiddenCount = filtered.length - displayed.length;
     const countLabel =
@@ -1844,7 +1886,7 @@ export default function RateBrowserModal({
       );
     }
 
-    const firstOk = displayed.findIndex((r) => !isBlockedRate(r));
+    const firstOk = displayed.findIndex((r) => !isBlockedRate(r, order));
     return (
       <>
         <div
@@ -1954,6 +1996,22 @@ export default function RateBrowserModal({
             ×
           </button>
         </div>
+
+        {hugrabGroundSaverBlocked ? (
+          <div
+            style={{
+              padding: '8px 18px',
+              borderBottom: '1px solid var(--border)',
+              background: 'var(--surface)',
+              color: 'var(--red)',
+              fontSize: 11.5,
+              fontWeight: 700,
+              lineHeight: 1.4,
+            }}
+          >
+            {HUGRAB_GROUND_SAVER_BLOCK_REASON}
+          </div>
+        ) : null}
 
         {/* Body: 3 columns */}
         <div style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' }}>
@@ -2368,7 +2426,7 @@ export default function RateBrowserModal({
               const count =
                 rates != null
                   ? hideUnavail
-                    ? rates.filter((r) => !isBlockedRate(r)).length
+                    ? rates.filter((r) => !isBlockedRate(r, order)).length
                     : rates.length
                   : null;
               const pending = pendingPids.has(c.shippingProviderId);

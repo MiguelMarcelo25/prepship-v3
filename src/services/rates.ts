@@ -13,6 +13,13 @@ import type { CarriersResponse } from '../lib/shipstation/types';
 import { loadClientCredentials } from '../lib/shipstation/credentials';
 import { getDefaultShipFrom } from '../lib/ship-from';
 import { normalizeConfirmation, normalizeShippingOptions } from '../lib/shipping-options';
+import {
+  SHIPPING_SERVICE_ELIGIBILITY_VERSION,
+  evaluateShippingServiceEligibility,
+  filterEligibleShippingServices,
+  type ShippingServiceEligibilityContext,
+  type ShippingServiceDescriptor,
+} from '../lib/shipping-service-eligibility';
 import { listCarrierAccounts, quoteCarrierRates } from './carrier-connector-orchestrator';
 
 type Markup = { type: 'amount' | 'percent'; value: number };
@@ -145,7 +152,7 @@ const RATE_NEGATIVE_CACHE_TTL_MS = Math.max(
   60_000,
   Number.parseInt(process.env.RATE_NEGATIVE_CACHE_TTL_MS ?? '600000', 10) || 600_000
 );
-const RATE_CACHE_VERSION = 'ground-saver-v2';
+const RATE_CACHE_VERSION = `ground-saver-v2|eligibility=${SHIPPING_SERVICE_ELIGIBILITY_VERSION}`;
 const RATE_CONFIRMATIONS = new Set([
   'none',
   'delivery',
@@ -422,6 +429,71 @@ function dedupeRates(rates: Rate[], source: string): Rate[] {
 function pickBestRate(rates: Rate[]): Rate | null {
   if (!rates.length) return null;
   return [...rates].sort((a, b) => rateTotal(a) - rateTotal(b))[0]!;
+}
+
+function rateEligibilityContext(input: Pick<RateInput, 'clientId' | 'storeId'>): ShippingServiceEligibilityContext {
+  return {
+    clientId: input.clientId ?? null,
+    storeId: input.storeId ?? null,
+  };
+}
+
+function genericRateTotal(rate: unknown): number {
+  if (!rate || typeof rate !== 'object') return Number.POSITIVE_INFINITY;
+  const row = rate as Record<string, any>;
+  return (
+    Number(row.shipping_amount?.amount ?? row.shipmentCost ?? row.amount ?? row.cost ?? 0) +
+    Number(row.other_amount?.amount ?? row.otherCost ?? 0) +
+    Number(row.confirmation_amount?.amount ?? row.confirmationCost ?? 0) +
+    Number(row.insurance_amount?.amount ?? row.insuranceCost ?? 0)
+  );
+}
+
+export function rateToShippingServiceDescriptor(rate: unknown): ShippingServiceDescriptor {
+  const row = (rate && typeof rate === 'object' ? rate : {}) as Record<string, any>;
+  const raw = row.raw && typeof row.raw === 'object' ? row.raw as Record<string, any> : {};
+  return {
+    carrierCode: row.carrier_code ?? row.carrierCode ?? raw.carrier_code ?? raw.carrierCode ?? null,
+    carrierName: row.carrier_name ?? row.carrierName ?? raw.carrier_name ?? raw.carrierName ?? null,
+    provider: row.provider ?? raw.provider ?? null,
+    serviceCode: row.service_code ?? row.serviceCode ?? raw.service_code ?? raw.serviceCode ?? null,
+    serviceName: row.service_name ?? row.serviceName ?? row.service_type ?? raw.service_name ?? raw.serviceName ?? raw.service_type ?? null,
+    serviceType: row.service_type ?? row.serviceType ?? raw.service_type ?? raw.serviceType ?? null,
+  };
+}
+
+export function eligibilityReason(
+  context: ShippingServiceEligibilityContext,
+  rate: unknown,
+): string | null {
+  const eligibility = evaluateShippingServiceEligibility(context, rateToShippingServiceDescriptor(rate));
+  return eligibility.allowed ? null : eligibility.reason ?? 'Shipping service is not eligible';
+}
+
+export function filterRatesForShippingServiceEligibility<T>(
+  rates: T[],
+  context: ShippingServiceEligibilityContext,
+): T[] {
+  return filterEligibleShippingServices(rates, context, rateToShippingServiceDescriptor);
+}
+
+export function sanitizeRateCacheRowForEligibility<T extends { rates?: unknown; bestRate?: unknown }>(
+  row: T,
+  context: ShippingServiceEligibilityContext,
+): T {
+  const rawRates = Array.isArray(row.rates) ? row.rates : [];
+  const rates = filterRatesForShippingServiceEligibility(rawRates, context);
+  const bestRateAllowed =
+    row.bestRate != null &&
+    evaluateShippingServiceEligibility(context, rateToShippingServiceDescriptor(row.bestRate)).allowed;
+  const bestRate = bestRateAllowed
+    ? row.bestRate
+    : [...rates].sort((a, b) => genericRateTotal(a) - genericRateTotal(b))[0] ?? null;
+  return {
+    ...row,
+    rates,
+    bestRate,
+  };
 }
 
 function buildShipTo(input: RateInput): Address {
@@ -808,8 +880,12 @@ export async function fetchLiveRatesWithDiagnostics(input: RateInput): Promise<F
   // v2-parity: filter blocked service codes + package types + names.
   // Sort cheapest first (v2 sorts by shipmentCost + otherCost; v4 sort
   // uses shipping_amount only since markups apply at read-time later).
+  const eligibilityContext = rateEligibilityContext(input);
   const filtered = dedupeRates(
-    lifted.filter((r) => !isBlockedRate(r, input.storeId ?? null)),
+    filterRatesForShippingServiceEligibility(
+      lifted.filter((r) => !isBlockedRate(r, input.storeId ?? null)),
+      eligibilityContext,
+    ),
     'live'
   );
   filtered.sort((a, b) => rateTotal(a) - rateTotal(b));
@@ -1052,7 +1128,10 @@ export async function getRates(
   if (!opts.forceRefresh) {
     const cached = await selectRateCacheByKey(key);
     if (cached) {
-      const cachedRaw = dedupeRates(cached.rates as Rate[], 'cached');
+      const cachedRaw = filterRatesForShippingServiceEligibility(
+        dedupeRates(cached.rates as Rate[], 'cached'),
+        rateEligibilityContext(resolvedInput),
+      );
       const cacheAgeMs = Date.now() - cached.fetchedAt.getTime();
       const cacheTtlMs = cachedRaw.length ? CACHE_TTL_MS : RATE_NEGATIVE_CACHE_TTL_MS;
       if (cacheAgeMs >= cacheTtlMs) {

@@ -25,6 +25,7 @@ import {
 import { corsHeaders } from '../../src/lib/http/cors.js';
 import { sendInternalServerError } from '../_lib/safe-error.js';
 import { normalizeShippingOptions } from '../../src/lib/shipping-options.js';
+import { filterEligibleShippingServices } from '../../src/lib/shipping-service-eligibility.js';
 
 // Keep this endpoint self-contained for Vercel cold starts. Importing the
 // connector registry here pulls a wider src/ tree into the serverless bundle;
@@ -70,6 +71,34 @@ const DIRECT_RATE_PROVIDER_ALIASES: Record<string, string> = {
 function normalizeDirectRateProvider(provider: string | null | undefined): string | null {
   const key = String(provider ?? '').trim().toLowerCase();
   return DIRECT_RATE_PROVIDER_ALIASES[key] ?? null;
+}
+
+function directRateServiceDescriptor(rate: Record<string, unknown>, provider: string) {
+  return {
+    provider,
+    carrierCode: rate.carrierCode ?? rate.carrierType ?? rate.carrierName ?? provider,
+    carrierName: rate.carrierName ?? rate.carrierType ?? null,
+    serviceCode: rate.serviceCode ?? rate.service_code ?? rate.service,
+    serviceName: rate.serviceName ?? rate.service_type ?? rate.service,
+    serviceType: rate.service_type ?? rate.service,
+  };
+}
+
+function filterDirectCarrierRatesForEligibility(
+  rates: Array<Record<string, unknown>>,
+  provider: string,
+  context: Record<string, unknown> | null,
+  body: Record<string, unknown>,
+) {
+  return filterEligibleShippingServices(
+    rates,
+    {
+      clientId: body.clientId ?? context?.client_id ?? null,
+      clientName: body.clientName ?? context?.client_name ?? null,
+      storeId: body.storeId ?? context?.store_id ?? null,
+    },
+    (rate) => directRateServiceDescriptor(rate, provider),
+  );
 }
 
 async function quoteCarrierRates(provider: string | null | undefined, input: Record<string, unknown>) {
@@ -195,6 +224,18 @@ export default async function handler(req: any, res: any): Promise<void> {
   try {
     const useStoreTable = hasStoreAccountId;
     const lookupId = useStoreTable ? storeAccountId! : carrierAccountId!;
+    let orderContext: Record<string, unknown> | null = null;
+    const orderId = Number(body?.orderId);
+    if (Number.isFinite(orderId) && orderId > 0) {
+      const orderRows = await sql<Array<{ client_id: number | null; store_id: number | null; client_name: string | null }>>`
+        SELECT o.client_id, o.store_id, c.name as client_name
+        FROM orders o
+        LEFT JOIN clients c ON c.id = o.client_id
+        WHERE o.id = ${Math.trunc(orderId)}
+        LIMIT 1
+      `;
+      orderContext = orderRows[0] ?? null;
+    }
     const rows = useStoreTable
       ? await sql<Array<{ provider: string; credentials: unknown }>>`
           SELECT provider, credentials FROM store_accounts WHERE id = ${lookupId} LIMIT 1
@@ -258,7 +299,7 @@ export default async function handler(req: any, res: any): Promise<void> {
           dimsH,
           shippingOptions,
         });
-        const rates = quoted.rates;
+        const rates = filterDirectCarrierRatesForEligibility(quoted.rates, provider, orderContext, body);
         res.status(200).json({
           ok: true,
           provider,
@@ -289,7 +330,7 @@ export default async function handler(req: any, res: any): Promise<void> {
           dimsH,
           shippingOptions,
         });
-        const rates = quoted.rates;
+        const rates = filterDirectCarrierRatesForEligibility(quoted.rates, provider, orderContext, body);
         res.status(200).json({
           ok: true,
           provider,
@@ -320,7 +361,7 @@ export default async function handler(req: any, res: any): Promise<void> {
           dimsH,
           shippingOptions,
         });
-        const rates = quoted.rates;
+        const rates = filterDirectCarrierRatesForEligibility(quoted.rates, provider, orderContext, body);
         res.status(200).json({
           ok: true,
           provider,
@@ -388,7 +429,7 @@ export default async function handler(req: any, res: any): Promise<void> {
           shippingOptions,
           rawOrder,
         });
-        const rates = quoted.rates;
+        const rates = filterDirectCarrierRatesForEligibility(quoted.rates, provider, orderContext, body);
         res.status(200).json({
           ok: true,
           provider,
@@ -581,7 +622,7 @@ export default async function handler(req: any, res: any): Promise<void> {
           shippingOptions,
           rawOrder,
         });
-        const rates = quoted.rates;
+        const rates = filterDirectCarrierRatesForEligibility(quoted.rates, provider, orderContext, body);
         // Fix 2 (2026-05-12): Walmart sometimes returns 200 OK with an
         // empty rate array — e.g. the order isn't eligible for Walmart
         // Shipping, the dims/weight fall outside any sponsored carrier's
@@ -651,7 +692,7 @@ export default async function handler(req: any, res: any): Promise<void> {
           rawOrder,
           externalOrderId,
         });
-        const rates = quoted.rates;
+        const rates = filterDirectCarrierRatesForEligibility(quoted.rates, provider, orderContext, body);
         res.status(200).json({
           ok: true, provider, simulated: false, rates,
           fetchedAt: new Date().toISOString(),
@@ -719,7 +760,7 @@ export default async function handler(req: any, res: any): Promise<void> {
           shippingOptions,
           rawOrder,
         });
-        const rates = quoted.rates;
+        const rates = filterDirectCarrierRatesForEligibility(quoted.rates, provider, orderContext, body);
         res.status(200).json({
           ok: true,
           provider,
@@ -772,7 +813,7 @@ export default async function handler(req: any, res: any): Promise<void> {
           credentials: creds,
           weightOz, toZip, fromZip, dimsL, dimsW, dimsH, shippingOptions, rawOrder,
         });
-        const rates = quoted.rates;
+        const rates = filterDirectCarrierRatesForEligibility(quoted.rates, provider, orderContext, body);
         res.status(200).json({
           ok: true, provider, simulated: false, rates,
           fetchedAt: new Date().toISOString(),
@@ -862,7 +903,7 @@ export default async function handler(req: any, res: any): Promise<void> {
           toName: typeof body?.toName === 'string' ? body.toName : undefined,
           toCountry: typeof body?.toCountry === 'string' ? body.toCountry : undefined,
         });
-        const rates = quoted.rates;
+        const rates = filterDirectCarrierRatesForEligibility(quoted.rates, provider, orderContext, body);
         res.status(200).json({
           ok: true,
           provider,

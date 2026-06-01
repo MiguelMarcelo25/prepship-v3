@@ -65,6 +65,7 @@
     "test:ps-053-print-queue-atomic": "node scripts/ps-053-print-queue-atomic-recovery-guard.mjs",
     "test:ps-056-external-label-certification": "node scripts/ps-056-external-label-certification-guard.mjs",
     "test:ps-056-auto-external-shipped": "node scripts/ps-056-auto-external-shipped-scheduler-guard.mjs",
+    "test:ps-057-hugrab-ground-saver": "tsx scripts/ps-057-hugrab-ground-saver-guard.ts",
     "test:shipp-rate-retry": "node scripts/shipp-rate-retry-guard.mjs",
     "test:best-rate-dims": "node scripts/best-rate-dims-guard.mjs",
     "test:runtime-ddl": "node scripts/runtime-ddl-guard.mjs",

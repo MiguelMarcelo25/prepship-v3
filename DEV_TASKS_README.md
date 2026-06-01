@@ -1908,6 +1908,18 @@ DJ provided PS-056 on 2026-06-01 as a standalone Shipped Orders classification t
 
 See [docs/ps-056-marketplace-fulfilled-ext-label.md](docs/ps-056-marketplace-fulfilled-ext-label.md) for the full task prompt, classifier invariant, apply-mode rules, PS-036/PS-039 safety requirements, tests, certification requirements, definition of done, and return format.
 
+## Official PS-057 HUGRAB Ground Saver/SurePost Service Ban Task
+
+DJ provided PS-057 on 2026-06-01 as a standalone client-scoped shipping service eligibility task. This must disable UPS Ground Saver/SurePost for HUGRAB orders only, without globally removing those services for other clients.
+
+| ID | Title | Risk | Why It Matters | Scope | Completion Evidence |
+| --- | --- | --- | --- | --- | --- |
+| PS-057 | Disable UPS Ground Saver/SurePost for HUGRAB Orders | Critical client-specific rate and label eligibility correctness | HUGRAB orders must never auto-select, display as selectable, queue, batch, or buy UPS Ground Saver/SurePost. A frontend-only block or stale cached rate could still buy the wrong service. | Add one shared client-scoped service eligibility rule; block Ground Saver/SurePost across passive rates, Rate Browser selection, saved/cached best-rate reuse, label purchase, queue, batch, ShipStation, and direct carrier paths; preserve non-HUGRAB Ground Saver behavior. | Typecheck, web build, shipping certification guard, focused HUGRAB eligibility tests, rate-path tests, label-path tests, and relevant Orders/Rate Browser browser coverage pass. No live postage, real labels, marketplace notifications, shipped/cancelled mutations, history rewrites, secrets, or PII exposure. |
+
+### PS-057 Copy/Paste Handoff
+
+See [docs/ps-057-disable-ups-ground-saver-hugrab.md](docs/ps-057-disable-ups-ground-saver-hugrab.md) for the full task prompt, client-scoped invariant, blocked service identifiers, implementation requirements, testing requirements, definition of done, and return format.
+
 ## Recommended Next Order
 
 1. Finish production verification after this batch deploys.

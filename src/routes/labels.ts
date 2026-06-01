@@ -73,7 +73,7 @@ const returnBody = z
   .optional()
   .default({});
 
-type CreateErr = Error & { details?: Record<string, unknown>; rateLimited?: boolean; retryAfterMs?: number };
+type CreateErr = Error & { code?: string; details?: Record<string, unknown>; rateLimited?: boolean; retryAfterMs?: number };
 
 function handleCreateError(c: Context, err: unknown): Response {
   const e = err as CreateErr;
@@ -93,7 +93,8 @@ function handleCreateError(c: Context, err: unknown): Response {
     'Order weight required to create label',
   ];
   const status =
-    invalid.includes(message) ? 400
+    e.code === 'SHIPPING_SERVICE_NOT_ELIGIBLE' ? 400
+    : invalid.includes(message) ? 400
     : message === 'Order not found' ? 404
     : message === 'Label already exists for this order' ? 400
     : message.startsWith('Cannot create label for') ? 400
