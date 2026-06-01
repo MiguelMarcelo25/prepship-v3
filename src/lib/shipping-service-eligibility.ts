@@ -101,6 +101,26 @@ export function evaluateShippingServiceEligibility(
   };
 }
 
+export function describeShippingService(service: unknown): ShippingServiceDescriptor {
+  const row = (service && typeof service === 'object' ? service : {}) as Record<string, any>;
+  const raw = row.raw && typeof row.raw === 'object' ? row.raw as Record<string, any> : {};
+  return {
+    carrierCode: row.carrier_code ?? row.carrierCode ?? raw.carrier_code ?? raw.carrierCode ?? null,
+    carrierName: row.carrier_name ?? row.carrierName ?? raw.carrier_name ?? raw.carrierName ?? null,
+    provider: row.provider ?? raw.provider ?? row.providerAccountNickname ?? row.carrierNickname ?? null,
+    serviceCode: row.service_code ?? row.serviceCode ?? raw.service_code ?? raw.serviceCode ?? null,
+    serviceName:
+      row.service_name ??
+      row.serviceName ??
+      row.service_type ??
+      raw.service_name ??
+      raw.serviceName ??
+      raw.service_type ??
+      null,
+    serviceType: row.service_type ?? row.serviceType ?? raw.service_type ?? raw.serviceType ?? null,
+  };
+}
+
 export function assertShippingServiceEligible(
   context: ShippingServiceEligibilityContext | null | undefined,
   service: ShippingServiceDescriptor | null | undefined,

@@ -15,6 +15,7 @@ import { getDefaultShipFrom } from '../lib/ship-from';
 import { normalizeConfirmation, normalizeShippingOptions } from '../lib/shipping-options';
 import {
   SHIPPING_SERVICE_ELIGIBILITY_VERSION,
+  describeShippingService,
   evaluateShippingServiceEligibility,
   filterEligibleShippingServices,
   type ShippingServiceEligibilityContext,
@@ -450,16 +451,7 @@ function genericRateTotal(rate: unknown): number {
 }
 
 export function rateToShippingServiceDescriptor(rate: unknown): ShippingServiceDescriptor {
-  const row = (rate && typeof rate === 'object' ? rate : {}) as Record<string, any>;
-  const raw = row.raw && typeof row.raw === 'object' ? row.raw as Record<string, any> : {};
-  return {
-    carrierCode: row.carrier_code ?? row.carrierCode ?? raw.carrier_code ?? raw.carrierCode ?? null,
-    carrierName: row.carrier_name ?? row.carrierName ?? raw.carrier_name ?? raw.carrierName ?? null,
-    provider: row.provider ?? raw.provider ?? null,
-    serviceCode: row.service_code ?? row.serviceCode ?? raw.service_code ?? raw.serviceCode ?? null,
-    serviceName: row.service_name ?? row.serviceName ?? row.service_type ?? raw.service_name ?? raw.serviceName ?? raw.service_type ?? null,
-    serviceType: row.service_type ?? row.serviceType ?? raw.service_type ?? raw.serviceType ?? null,
-  };
+  return describeShippingService(rate);
 }
 
 export function eligibilityReason(

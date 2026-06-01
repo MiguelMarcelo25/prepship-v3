@@ -40,6 +40,11 @@ import {
   WALMART_SHIPSTATION_STORE_ID,
   walmartDirectStoreDebugInfo,
 } from '../lib/walmart-order-dedupe';
+import {
+  describeShippingService,
+  evaluateShippingServiceEligibility,
+  type ShippingServiceEligibilityContext,
+} from '../lib/shipping-service-eligibility';
 
 const app = new Hono();
 
@@ -439,6 +444,46 @@ function normalizeListBestRate(value: unknown) {
   } catch {
     return null;
   }
+}
+
+function orderShippingEligibilityContext(row: {
+  clientId?: number | string | null;
+  storeId?: number | string | null;
+  clientName?: string | null;
+}): ShippingServiceEligibilityContext {
+  return {
+    clientId: row.clientId ?? null,
+    storeId: row.storeId ?? null,
+    clientName: row.clientName ?? null,
+  };
+}
+
+function shippingRateEligibilityReason(
+  context: ShippingServiceEligibilityContext,
+  rate: unknown,
+): string | null {
+  const eligibility = evaluateShippingServiceEligibility(context, describeShippingService(rate));
+  return eligibility.allowed ? null : eligibility.reason ?? 'Shipping service is not eligible for this order';
+}
+
+function sanitizeAwaitingOverridesForShippingEligibility(
+  order: { clientId?: number | string | null; storeId?: number | string | null; orderStatus?: string | null },
+  overrides: typeof orderOverrides.$inferSelect | null,
+): typeof orderOverrides.$inferSelect | null {
+  if (!overrides?.bestRateJson || order.orderStatus === 'shipped' || order.orderStatus === 'cancelled') {
+    return overrides;
+  }
+  const reason = shippingRateEligibilityReason(
+    orderShippingEligibilityContext(order),
+    overrides.bestRateJson,
+  );
+  if (!reason) return overrides;
+  return {
+    ...overrides,
+    bestRateJson: null,
+    bestRateAt: null,
+    bestRateDims: null,
+  };
 }
 
 function recordOrNull(value: unknown): Record<string, unknown> | null {
@@ -1425,6 +1470,14 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   }
 
   const rows = joined.map((r) => {
+    const safeOverrides = sanitizeAwaitingOverridesForShippingEligibility(
+      {
+        clientId: r.order.clientId,
+        storeId: r.order.storeId,
+        orderStatus: r.order.orderStatus,
+      },
+      r.overrides,
+    );
     const ship =
       latestShipByOrderId.get(r.order.id) ??
       latestShipByOrderNumber.get(r.order.orderNumber);
@@ -1538,12 +1591,12 @@ app.get('/', zValidator('query', listQuery), async (c) => {
           }
         : null;
     const overrideBestRate =
-      !isShippedBucket && r.overrides?.bestRateJson && typeof r.overrides.bestRateJson === 'object'
+      !isShippedBucket && safeOverrides?.bestRateJson && typeof safeOverrides.bestRateJson === 'object'
         ? {
             ...selectedRateBestRateCandidate,
-            ...(r.overrides.bestRateJson as Record<string, unknown>),
+            ...(safeOverrides.bestRateJson as Record<string, unknown>),
             carrierNickname:
-              (r.overrides.bestRateJson as Record<string, unknown>).carrierNickname ??
+              (safeOverrides.bestRateJson as Record<string, unknown>).carrierNickname ??
               selectedRateBestRateCandidate?.carrierNickname ??
               providerAccountNickname,
           }
@@ -1785,7 +1838,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
     };
     const canonicalOrder = buildCanonicalOrderModel(
       orderForCanonical,
-      r.overrides as Record<string, unknown> | null,
+      safeOverrides as Record<string, unknown> | null,
       legacyClientId,
       shipping,
     );
@@ -1806,7 +1859,7 @@ app.get('/', zValidator('query', listQuery), async (c) => {
       orderStatus: effectiveOrderStatus,
       expedited,
       legacyClientId,
-      overrides: r.overrides,
+      overrides: safeOverrides,
       label: label
         ? {
             ...label,
@@ -1889,13 +1942,21 @@ function buildOrderDetailPayload(
   overrides: Record<string, unknown> | null,
   shipmentRows: unknown[],
 ) {
+  const safeOverrides = sanitizeAwaitingOverridesForShippingEligibility(
+    {
+      clientId: finiteNumberOrNull(order.clientId),
+      storeId: finiteNumberOrNull(order.storeId),
+      orderStatus: stringOrNull(order.orderStatus),
+    },
+    overrides as typeof orderOverrides.$inferSelect | null,
+  ) as Record<string, unknown> | null;
   const legacyClientId = resolveLegacyClientId(
     finiteNumberOrNull(order.clientId),
     finiteNumberOrNull(order.storeId),
   );
   const canonicalOrder = buildCanonicalOrderModel(
     order,
-    overrides,
+    safeOverrides,
     legacyClientId,
     {},
   );
@@ -1905,7 +1966,7 @@ function buildOrderDetailPayload(
     legacyClientId,
     client: canonicalOrder.client,
     canonicalOrder,
-    overrides,
+    overrides: safeOverrides,
     shipments: shipmentRows,
   };
 }
@@ -2612,7 +2673,7 @@ app.patch('/:id{[0-9]+}', zValidator('json', patchBody), async (c) => {
   if (!guard.ok) return guard.response;
 
   const [existing] = await db
-    .select({ id: orders.id })
+    .select({ id: orders.id, clientId: orders.clientId, storeId: orders.storeId })
     .from(orders)
     .where(eq(orders.id, id))
     .limit(1);
@@ -2642,6 +2703,13 @@ app.patch('/:id{[0-9]+}', zValidator('json', patchBody), async (c) => {
       );
     } catch (err) {
       return c.json({ error: (err as Error).message }, 400);
+    }
+    const eligibilityReason = shippingRateEligibilityReason(
+      orderShippingEligibilityContext(existing),
+      overridesBody.bestRateJson,
+    );
+    if (eligibilityReason) {
+      return c.json({ error: eligibilityReason, code: 'SHIPPING_SERVICE_NOT_ELIGIBLE' }, 400);
     }
   }
 
@@ -2846,6 +2914,20 @@ app.post(
         return c.json({ error: err.message }, 400);
       }
       return c.json({ error: (err as Error).message }, 400);
+    }
+
+    const [existing] = await db
+      .select({ id: orders.id, clientId: orders.clientId, storeId: orders.storeId })
+      .from(orders)
+      .where(eq(orders.id, id))
+      .limit(1);
+    if (!existing) return c.json({ error: 'Order not found' }, 404);
+    const eligibilityReason = shippingRateEligibilityReason(
+      orderShippingEligibilityContext(existing),
+      canonical,
+    );
+    if (eligibilityReason) {
+      return c.json({ error: eligibilityReason, code: 'SHIPPING_SERVICE_NOT_ELIGIBLE' }, 400);
     }
 
     const row = await applyOverridesPatch(id, {

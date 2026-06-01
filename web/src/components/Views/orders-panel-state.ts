@@ -5,6 +5,10 @@ import type {
   PackageDto,
   ProductDefaultsDto,
 } from '../../types/api'
+import {
+  describeShippingService,
+  evaluateShippingServiceEligibility,
+} from '../../../../src/lib/shipping-service-eligibility'
 
 function toRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
@@ -47,6 +51,26 @@ function packageExists(packages: PackageDto[], packageCode: unknown) {
 
 function getRawOrder(order: OrderSummaryDto, detail: OrderFullDto | null) {
   return toRecord(detail?.raw) ?? toRecord(order.raw)
+}
+
+function orderShippingContext(order: OrderSummaryDto) {
+  return {
+    clientId: order.clientId ?? null,
+    clientName: order.clientName ?? null,
+    storeId: order.storeId ?? null,
+  }
+}
+
+function isEligiblePanelService(order: OrderSummaryDto, serviceCode: string | null, source?: unknown) {
+  if (!serviceCode) return false
+  return evaluateShippingServiceEligibility(
+    orderShippingContext(order),
+    describeShippingService({
+      ...(toRecord(source) ?? {}),
+      serviceCode,
+      serviceName: toRecord(source)?.serviceName ?? toRecord(source)?.service_type ?? serviceCode,
+    }),
+  ).allowed
 }
 
 function getAdvancedOptions(order: OrderSummaryDto, detail: OrderFullDto | null) {
@@ -174,12 +198,14 @@ export function getInitialPanelServiceCode(order: OrderSummaryDto, detail: Order
   const rawServiceCode = toStringValue(rawOrder?.serviceCode)
 
   if (order.orderStatus === 'awaiting_shipment') {
-    return toStringValue(bestRate?.serviceCode)
-      ?? rawServiceCode
-      ?? order.serviceCode
-      ?? order.selectedRate?.serviceCode
-      ?? order.label?.serviceCode
-      ?? ''
+    const candidates: Array<[string | null, unknown]> = [
+      [toStringValue(bestRate?.serviceCode), bestRate],
+      [rawServiceCode, rawOrder],
+      [order.serviceCode ?? null, order],
+      [order.selectedRate?.serviceCode ?? null, order.selectedRate],
+      [order.label?.serviceCode ?? null, order.label],
+    ]
+    return candidates.find(([serviceCode, source]) => isEligiblePanelService(order, serviceCode, source))?.[0] ?? ''
   }
 
   return order.label?.serviceCode

@@ -6,6 +6,10 @@ import { settings } from '../db/schema/settings';
 import { CACHE_TTL_MS, RATE_FETCH_CONCURRENCY, getRates } from './rates';
 import type { Rate } from '../lib/shipstation';
 import { EXCLUDED_STORE_IDS } from '../config/prepship';
+import {
+  describeShippingService,
+  evaluateShippingServiceEligibility,
+} from '../lib/shipping-service-eligibility';
 
 type ServiceTier = 'overnight' | 'two_day' | 'standard';
 
@@ -62,6 +66,18 @@ function getBackfillOrderDims(row: {
   const height = toPositiveNumber(row.rateDimsH) ?? toPositiveNumber(rawDims.height);
   if (length == null || width == null || height == null) return null;
   return { length, width, height };
+}
+
+function savedBestRateNeedsEligibilityRefresh(row: {
+  clientId: number | null;
+  storeId: number | null;
+  bestRateJson: unknown;
+}): boolean {
+  if (!row.bestRateJson) return false;
+  return !evaluateShippingServiceEligibility(
+    { clientId: row.clientId, storeId: row.storeId },
+    describeShippingService(row.bestRateJson),
+  ).allowed;
 }
 
 export type BackfillJob = {
@@ -262,6 +278,15 @@ async function runBackfill(
     const needsRatePredicate = staleCutoff
       ? or(isNull(orderOverrides.bestRateAt), lt(orderOverrides.bestRateAt, staleCutoff))
       : isNull(orderOverrides.bestRateAt);
+    const ineligibleSavedRatePredicate = and(
+      or(eq(orders.clientId, 4), eq(orders.storeId, 378060)),
+      sql`${orderOverrides.bestRateJson} is not null`,
+      sql`(
+        ${orderOverrides.bestRateJson}::text ilike '%surepost%'
+        or ${orderOverrides.bestRateJson}::text ilike '%ground saver%'
+        or ${orderOverrides.bestRateJson}::text ilike '%ground_saver%'
+      )`,
+    );
 
     const rows = await db
       .select({
@@ -275,6 +300,7 @@ async function runBackfill(
         shipToCity: orders.shipToCity,
         serviceCode: orders.serviceCode,
         raw: orders.raw,
+        bestRateJson: orderOverrides.bestRateJson,
         rateDimsL: orderOverrides.rateDimsL,
         rateDimsW: orderOverrides.rateDimsW,
         rateDimsH: orderOverrides.rateDimsH,
@@ -291,7 +317,7 @@ async function runBackfill(
           notInArray(orders.storeId, [...EXCLUDED_STORE_IDS]),
           sql`${orders.weightOz} is not null and ${orders.weightOz} > 0`,
           sql`${orders.shipToPostalCode} is not null and ${orders.shipToPostalCode} <> ''`,
-          needsRatePredicate,
+          or(needsRatePredicate, ineligibleSavedRatePredicate),
           // Skip test-client orders — no real ShipStation rate calls for sandbox data.
           sql`not exists (select 1 from clients c where c.id = ${orders.clientId} and c.is_test = true)`
         )
@@ -313,11 +339,12 @@ async function runBackfill(
       };
       const toCountry = raw.shipTo?.country ?? 'US';
       const dims = getBackfillOrderDims(row);
+      const eligibilityRefresh = savedBestRateNeedsEligibilityRefresh(row);
       if (!dims) {
         job.skipped++;
         if (job.failureSamples.length < 5) {
           job.failureSamples.push(
-            `order ${row.id} (${row.orderNumber}, w=${row.weightOz}, ${row.shipToCity}, ${row.shipToState} ${row.shipToPostalCode}): missing real dimensions`
+            `order ${row.id} (${row.orderNumber}, w=${row.weightOz}, ${row.shipToCity}, ${row.shipToState} ${row.shipToPostalCode}): missing real dimensions${eligibilityRefresh ? ' for PS-057 saved-rate refresh' : ''}`
           );
         }
         job.processed++;

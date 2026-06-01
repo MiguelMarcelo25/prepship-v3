@@ -6,6 +6,7 @@ import {
   HUGRAB_GROUND_SAVER_BLOCK_REASON,
   SHIPPING_SERVICE_ELIGIBILITY_VERSION,
   assertShippingServiceEligible,
+  describeShippingService,
   evaluateShippingServiceEligibility,
   filterEligibleShippingServices,
   isHugrabShippingContext,
@@ -53,6 +54,19 @@ assert.equal(
   }),
   true,
   'provider-specific names containing SurePost must be detected',
+);
+assert.equal(
+  evaluateShippingServiceEligibility(
+    hugrabByClientId,
+    describeShippingService({
+      carrierCode: 'ups',
+      serviceCode: 'easypost ups upsdap upsgroundsavergreaterthan1lb',
+      serviceName: 'UPS Ground Saver (1 lb or greater)',
+      raw: { service_type: 'SurePost' },
+    }),
+  ).allowed,
+  false,
+  'persisted camelCase/raw saved-rate JSON must be detected and invalidated',
 );
 assert.equal(
   evaluateShippingServiceEligibility(hugrabByClientId, {
@@ -121,6 +135,22 @@ const sourceChecks: Array<[string, string[]]> = [
     ],
   ],
   [
+    'src/routes/orders.ts',
+    [
+      'sanitizeAwaitingOverridesForShippingEligibility',
+      'SHIPPING_SERVICE_NOT_ELIGIBLE',
+      'order_overrides.best_rate_json',
+    ],
+  ],
+  [
+    'src/services/rates-backfill.ts',
+    [
+      'savedBestRateNeedsEligibilityRefresh',
+      'ineligibleSavedRatePredicate',
+      'ground saver',
+    ],
+  ],
+  [
     'src/services/labels.ts',
     [
       'assertShippingServiceEligible',
@@ -157,6 +187,14 @@ const sourceChecks: Array<[string, string[]]> = [
       'evaluateShippingServiceEligibility',
       'HUGRAB_GROUND_SAVER_BLOCK_REASON',
       'rateBlockedReason',
+    ],
+  ],
+  [
+    'web/src/components/Views/orders-panel-state.ts',
+    [
+      'isEligiblePanelService',
+      'getInitialPanelServiceCode',
+      'evaluateShippingServiceEligibility',
     ],
   ],
   [
