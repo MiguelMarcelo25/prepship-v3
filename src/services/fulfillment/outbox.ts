@@ -188,7 +188,7 @@ export async function enqueueShipmentConfirmation(
     )
     VALUES (
       ${input.order.id}, ${input.shipmentId}, 'shipment_confirmation_requested',
-      ${provider}, ${dedupeKey}, ${pg.json(payload)}, 'pending', 0, NOW(), NOW()
+      ${provider}, ${dedupeKey}, ${JSON.stringify(payload)}::jsonb, 'pending', 0, NOW(), NOW()
     )
     ON CONFLICT (dedupe_key) DO UPDATE SET
       payload = EXCLUDED.payload,
