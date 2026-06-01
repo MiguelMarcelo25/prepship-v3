@@ -978,7 +978,7 @@ export default async function handler(req: any, res: any): Promise<void> {
         res.status(400).json({ ok: false, error: 'serviceCode is required for Shipp label creation' });
         return;
       }
-      assertDirectCarrierServiceEligible({ body, orderRow, providerKey, serviceCode, serviceName: serviceCode });
+      assertDirectCarrierServiceEligible({ body, orderRow, providerKey, serviceCode, serviceName: body?.serviceName ?? serviceCode });
 
       const syntheticProviderId = Number.isFinite(Number(body?.shippingProviderId))
         ? Number(body.shippingProviderId)
@@ -1274,12 +1274,12 @@ export default async function handler(req: any, res: any): Promise<void> {
       // UPS service code default: "03" = Ground. Caller can pass
       // serviceCode like "01" (Next Day Air), "02" (2nd Day Air), etc.
       directServiceCode = String(body?.serviceCode ?? '03');
-      assertDirectCarrierServiceEligible({ body, orderRow, providerKey, serviceCode: directServiceCode, serviceName: directServiceCode });
+      assertDirectCarrierServiceEligible({ body, orderRow, providerKey, serviceCode: directServiceCode, serviceName: body?.serviceName ?? directServiceCode });
       result = await createCarrierLabel('ups', {
         credentials: creds,
         clientId: orderRow?.client_id ?? body?.clientId ?? null,
         storeId: orderRow?.store_id ?? body?.storeId ?? null,
-        weightOz, dimsL, dimsW, dimsH, serviceCode: directServiceCode, shipFrom, shipTo, shippingOptions,
+        weightOz, dimsL, dimsW, dimsH, serviceCode: directServiceCode, serviceName: body?.serviceName ?? directServiceCode, shipFrom, shipTo, shippingOptions,
       });
     } else if (providerKey === 'easypost') {
       if (!Number.isFinite(orderId) || orderId <= 0) {
@@ -1298,12 +1298,12 @@ export default async function handler(req: any, res: any): Promise<void> {
         return;
       }
       directServiceCode = String(body?.serviceCode ?? 'USPS Priority');
-      assertDirectCarrierServiceEligible({ body, orderRow, providerKey, serviceCode: directServiceCode, serviceName: directServiceCode });
+      assertDirectCarrierServiceEligible({ body, orderRow, providerKey, serviceCode: directServiceCode, serviceName: body?.serviceName ?? directServiceCode });
       result = await createCarrierLabel('easypost', {
         credentials: creds,
         clientId: orderRow?.client_id ?? body?.clientId ?? null,
         storeId: orderRow?.store_id ?? body?.storeId ?? null,
-        weightOz, dimsL, dimsW, dimsH, serviceCode: directServiceCode, shipFrom, shipTo, shippingOptions,
+        weightOz, dimsL, dimsW, dimsH, serviceCode: directServiceCode, serviceName: body?.serviceName ?? directServiceCode, shipFrom, shipTo, shippingOptions,
       });
     } else {
       res.status(400).json({
@@ -1315,7 +1315,7 @@ export default async function handler(req: any, res: any): Promise<void> {
     const selectedRateJson = {
       carrierCode: providerKey,
       serviceCode: directServiceCode,
-      serviceName: directServiceCode,
+      serviceName: body?.serviceName ?? directServiceCode,
       carrierNickname: label ?? providerKey,
       providerAccountNickname: label ?? providerKey,
       providerAccountId: carrierAccountId,

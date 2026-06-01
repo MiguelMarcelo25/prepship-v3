@@ -13,6 +13,7 @@ const HUGRAB_BLOCKED_SERVICE_CODES = new Set([
   'ups_surepost',
   'ups_surepost_1_lb_or_greater',
   'ups_surepost_less_than_1_lb',
+  'easypost_ups_upsdap_upsgroundsavergreaterthan1lb',
   '92',
   '93',
 ]);
@@ -54,8 +55,8 @@ function normalizeServiceKey(value: string | number | null | undefined): string 
   return String(value ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
 }
 
-function normalizedText(value: string | number | null | undefined): string {
-  return String(value ?? '').trim().toLowerCase();
+function normalizeServiceIdentity(value: string | number | null | undefined): string {
+  return String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
 }
 
 export function isHugrabShippingContext(context: ShippingServiceEligibilityContext | null | undefined): boolean {
@@ -73,14 +74,15 @@ export function isUpsGroundSaverOrSurePostService(
   if (!service) return false;
   const serviceCode = normalizeServiceKey(service.serviceCode);
   if (HUGRAB_BLOCKED_SERVICE_CODES.has(serviceCode)) return true;
-  const names = [
+  const identities = [
+    service.serviceCode,
     service.serviceName,
     service.serviceType,
     service.carrierName,
     service.carrierCode,
     service.provider,
-  ].map(normalizedText);
-  return names.some((value) => value.includes('ground saver') || value.includes('surepost'));
+  ].map(normalizeServiceIdentity);
+  return identities.some((value) => value.includes('groundsaver') || value.includes('surepost'));
 }
 
 export function evaluateShippingServiceEligibility(

@@ -34,6 +34,7 @@ for (const serviceCode of [
   'ups_surepost',
   'ups_surepost_1_lb_or_greater',
   'ups_surepost_less_than_1_lb',
+  'easypost_ups_upsdap_upsgroundsavergreaterthan1lb',
   '92',
   '93',
 ]) {
@@ -54,6 +55,33 @@ assert.equal(
   }),
   true,
   'provider-specific names containing SurePost must be detected',
+);
+assert.equal(
+  isUpsGroundSaverOrSurePostService({
+    carrierCode: 'ups',
+    serviceCode: 'provider_specific_eco',
+    serviceName: 'UPSDAP UPSGroundsaverGreaterThan1lb',
+  }),
+  true,
+  'provider service names containing normalized no-space GroundSaver must be detected',
+);
+assert.equal(
+  isUpsGroundSaverOrSurePostService({
+    carrierCode: 'ups',
+    serviceCode: 'provider_specific_eco',
+    serviceType: 'UPSGroundsaverGreaterThan1lb',
+  }),
+  true,
+  'provider service type containing normalized no-space GroundSaver must be detected',
+);
+assert.equal(
+  isUpsGroundSaverOrSurePostService({
+    carrierCode: 'ups',
+    serviceCode: 'easypost_ups_upsdap_upsgroundsavergreaterthan1lb',
+    serviceName: 'UPSDAP UPSGroundsaverGreaterThan1lb',
+  }),
+  true,
+  'EasyPost UPSDAP normalized GroundSaver code must be detected',
 );
 assert.equal(
   evaluateShippingServiceEligibility(
@@ -171,6 +199,7 @@ const sourceChecks: Array<[string, string[]]> = [
     [
       'assertShippingServiceEligible',
       'serviceCode: body.serviceCode',
+      'serviceName: body.serviceName ?? body.serviceCode',
       'serviceCode: input.serviceCode',
     ],
   ],
@@ -195,6 +224,7 @@ const sourceChecks: Array<[string, string[]]> = [
       'assertShippingServiceEligible',
       'store_id',
       'serviceCode',
+      'serviceName: body?.serviceName ?? directServiceCode',
     ],
   ],
   [

@@ -263,7 +263,10 @@ export type CreateLabelInputDto = {
   orderId: number;
   orderNumber?: string;
   carrierCode?: string;
+  carrierName?: string;
   serviceCode: string;
+  serviceName?: string;
+  serviceType?: string;
   packageCode?: string;
   customPackageId?: number | null;
   shippingProviderId?: number | null;
@@ -900,8 +903,10 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
   }
   assertLabelServiceEligibleForOrder(order, clientId, {
     carrierCode: body.carrierCode ?? null,
+    carrierName: body.carrierName ?? null,
     serviceCode: body.serviceCode,
-    serviceName: body.serviceCode,
+    serviceName: body.serviceName ?? body.serviceCode,
+    serviceType: body.serviceType ?? null,
   });
   // Hard guard: any order under an isTest client is forced into offline-mock
   // mode regardless of what the UI sent. Prevents a test row from ever
