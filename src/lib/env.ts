@@ -44,6 +44,8 @@ const schema = z.object({
   RUN_SYNC_SCHEDULER: booleanFlag(true),
   WORKER_PLACEHOLDER: booleanFlag(false),
   RUN_ORDERS_PERFORMANCE_MAINTENANCE: optionalBooleanFlag,
+  ENABLE_EXTERNAL_SHIPPED_CLASSIFIER_SCHEDULER: booleanFlag(false),
+  ENABLE_EXTERNAL_SHIPPED_AUTO_APPLY: booleanFlag(false),
   USE_PG_BOSS_SCHEDULER: booleanFlag(true),
   PG_BOSS_SCHEMA: z.string().min(1).default('pgboss'),
   PG_BOSS_POOL_MAX: z.coerce.number().int().positive().max(5).default(1),

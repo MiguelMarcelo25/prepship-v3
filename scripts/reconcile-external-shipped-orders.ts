@@ -173,14 +173,30 @@ shipment or order history, never creates/voids labels, never notifies marketplac
 `);
 }
 
-async function main(): Promise<void> {
-  if (hasFlag('help') || hasFlag('h')) return printUsage();
+export interface ExternalShippedReconcileOptions {
+  apply?: boolean;
+  includeCancelled?: boolean;
+  days?: number;
+  limit?: number;
+  orderNumbers?: string[] | null;
+}
 
-  const apply = hasFlag('apply');
-  const includeCancelled = hasFlag('include-cancelled');
-  const days = parsePositiveInt('days', DEFAULT_DAYS);
-  const limit = parsePositiveInt('limit', 200);
-  const orderNumbersFilter = parseOrderNumbers();
+export async function runExternalShippedReconcile(
+  options: ExternalShippedReconcileOptions = {},
+): Promise<{
+  missingLocalUnflagged: number;
+  alreadyFlaggedExternal: number;
+  scanned: number;
+  classifiedExternal: number;
+  classifiedRecoverable: number;
+  lookupFailures: number;
+  flagged: number;
+}> {
+  const apply = options.apply === true;
+  const includeCancelled = options.includeCancelled === true;
+  const days = options.days ?? DEFAULT_DAYS;
+  const limit = options.limit ?? 200;
+  const orderNumbersFilter = options.orderNumbers ?? null;
   const statuses = includeCancelled ? ['shipped', 'cancelled'] : ['shipped'];
 
   console.log(`\n[external-shipped] PS-056 ${apply ? 'APPLY' : 'DRY RUN'} — statuses=${statuses.join(',')} days=${days} limit=${limit}${orderNumbersFilter ? ` orderNumbers=${orderNumbersFilter.join(',')}` : ''}`);
@@ -286,6 +302,28 @@ async function main(): Promise<void> {
       ? `\n[external-shipped] applied: flagged ${report.flagged} order(s) externally_shipped=true (marketplace_fulfilled).`
       : '\nDry run only. Re-run with --apply (DJ-approved) after review.',
   );
+
+  return {
+    missingLocalUnflagged: report.missingLocalUnflagged,
+    alreadyFlaggedExternal: report.alreadyFlaggedExternal,
+    scanned: report.scanned,
+    classifiedExternal: report.classifiedExternal,
+    classifiedRecoverable: report.classifiedRecoverable,
+    lookupFailures: report.lookupFailures,
+    flagged: report.flagged,
+  };
+}
+
+async function main(): Promise<void> {
+  if (hasFlag('help') || hasFlag('h')) return printUsage();
+
+  await runExternalShippedReconcile({
+    apply: hasFlag('apply'),
+    includeCancelled: hasFlag('include-cancelled'),
+    days: parsePositiveInt('days', DEFAULT_DAYS),
+    limit: parsePositiveInt('limit', 200),
+    orderNumbers: parseOrderNumbers(),
+  });
 }
 
 const invokedDirectly = process.argv[1] != null && fileURLToPath(import.meta.url) === process.argv[1];

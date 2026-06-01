@@ -184,6 +184,27 @@ Run at minimum and report exact output:
 - If write/apply mode is used, it is explicit, audited, reversible-flag-only, and scoped to DJ-approved candidates.
 - No labels/postage/marketplace notifications were created.
 
+## Scheduler Automation
+
+PS-056 can run automatically from the existing worker/API scheduler. The scheduled classifier always scans both shipped and cancelled rows with no local shipment data using the same rule as the manual command:
+
+`no local non-voided shipment + no upstream ShipStation shipment/fulfillment => external`
+
+Render env controls:
+
+- `ENABLE_EXTERNAL_SHIPPED_CLASSIFIER_SCHEDULER=true`
+  - Enables the 30-minute automatic PS-056 classifier/certification tick.
+  - The tick includes cancelled rows, equivalent to manual `--include-cancelled`.
+- `ENABLE_EXTERNAL_SHIPPED_AUTO_APPLY=true`
+  - Allows the scheduled tick to apply the reversible `externally_shipped=true` flag to rows classified external.
+  - If omitted/false, the scheduled tick is dry-run/report-only.
+
+Safety:
+
+- Automatic apply only sets the reversible external flag and audit source.
+- It does not create labels, buy postage, void labels, rewrite shipment history, or notify marketplaces.
+- Recoverable rows with upstream shipment/fulfillment evidence are never flagged external; they remain for shipment/fulfillment backfill.
+
 ## Return Format
 
 Reply with:

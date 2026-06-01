@@ -68,14 +68,16 @@ console.log('PASS external-shipped classifier: external vs recoverable vs lookup
 
 // Static safety asserts.
 const script = readFileSync('scripts/reconcile-external-shipped-orders.ts', 'utf8');
-assert.match(script, /const apply = hasFlag\('apply'\)/, 'must be dry-run by default (explicit --apply)');
+assert.match(script, /const apply = options\.apply === true/, 'runner must be dry-run by default unless apply=true is passed');
+assert.match(script, /apply: hasFlag\('apply'\)/, 'CLI must require explicit --apply for writes');
 assert.match(script, /externallyShipped: true/, 'apply must set the reversible externally_shipped flag');
 assert.match(script, /marketplace_fulfilled/, 'apply must record the marketplace_fulfilled audit source');
 assert.doesNotMatch(script, /db\.delete\(/, 'must never delete rows');
 assert.doesNotMatch(script, /\.update\(shipments\)/, 'must never mutate shipment history');
 assert.doesNotMatch(script, /buyLabel|purchaseLabel|createLabel|voidLabel|notifyMarketplace|notifySalesChannel/i, 'must never create/void labels or notify marketplaces');
 assert.match(script, /coalesce\(s\.voided, false\) = false/, 'candidates must require NO non-voided local shipment');
-assert.match(script, /const includeCancelled = hasFlag\('include-cancelled'\)/, 'cancelled orders must be opt-in via --include-cancelled (lockdown-safe default: shipped only)');
+assert.match(script, /const includeCancelled = options\.includeCancelled === true/, 'runner must keep cancelled opt-in by default');
+assert.match(script, /includeCancelled: hasFlag\('include-cancelled'\)/, 'CLI cancelled scope must require explicit --include-cancelled');
 assert.match(script, /inArray\(orders\.orderStatus, statuses\)/, 'candidate query must scope by the resolved status set');
 assert.match(script, /invokedDirectly/, 'main() must be guarded so the classifier can be imported without DB/network');
 

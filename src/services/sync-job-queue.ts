@@ -3,6 +3,7 @@ import { env } from '../lib/env';
 import {
   runBackfillTick,
   runFulfillmentOutboxTick,
+  runExternalShippedClassifierTick,
   runInventoryImportFromOrders,
   runOrderSync,
   runReportingRefreshTick,
@@ -25,6 +26,7 @@ const INVENTORY_IMPORT_FROM_ORDERS_INTERVAL_MS = 30 * 60 * 1000;
 const INVENTORY_SYNC_PRODUCTS_INTERVAL_MS = 60 * 60 * 1000;
 const FULFILLMENT_OUTBOX_INTERVAL_MS = 60 * 1000;
 const REPORTING_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
+const EXTERNAL_SHIPPED_CLASSIFIER_INTERVAL_MS = 30 * 60 * 1000;
 const STARTUP_DELAY_MS = 15 * 1000;
 
 const JOBS = {
@@ -35,6 +37,7 @@ const JOBS = {
   syncProducts: 'prepship.sync.products',
   fulfillmentOutbox: 'prepship.sync.fulfillment-outbox',
   reportingRefresh: 'prepship.reporting.refresh',
+  externalShippedClassifier: 'prepship.shipping.external-shipped-classifier',
 } as const;
 
 type JobName = (typeof JOBS)[keyof typeof JOBS];
@@ -193,6 +196,7 @@ export async function startQueuedSyncScheduler(): Promise<void> {
   await registerWorker(JOBS.syncProducts, runSyncProductsTick);
   await registerWorker(JOBS.fulfillmentOutbox, runFulfillmentOutboxTick);
   await registerWorker(JOBS.reportingRefresh, runReportingRefreshTick);
+  await registerWorker(JOBS.externalShippedClassifier, runExternalShippedClassifierTick);
   await registerWorker(JOBS.rateBackfill, async () => runBackfillTick());
 
   heartbeatTimer = setInterval(() => {
@@ -210,6 +214,18 @@ export async function startQueuedSyncScheduler(): Promise<void> {
     STARTUP_DELAY_MS + 4 * 60 * 1000,
     REPORTING_REFRESH_INTERVAL_MS
   );
+
+  if (env.ENABLE_EXTERNAL_SHIPPED_CLASSIFIER_SCHEDULER) {
+    scheduleEnqueue(
+      JOBS.externalShippedClassifier,
+      STARTUP_DELAY_MS + 6 * 60 * 1000,
+      EXTERNAL_SHIPPED_CLASSIFIER_INTERVAL_MS
+    );
+  } else {
+    console.log(
+      '[job-queue] external-shipped classifier disabled; set ENABLE_EXTERNAL_SHIPPED_CLASSIFIER_SCHEDULER=true to automate PS-056 dry-run/apply'
+    );
+  }
 
   if (!env.SHIPSTATION_API_KEY || !env.SHIPSTATION_API_SECRET) {
     console.log(

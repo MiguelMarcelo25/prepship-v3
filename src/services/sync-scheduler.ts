@@ -17,6 +17,7 @@ import {
   setWorkerMode,
 } from './worker-status';
 import { refreshReportingMetrics } from './reporting-metrics';
+import { runExternalShippedReconcile } from '../../scripts/reconcile-external-shipped-orders';
 
 // v2 ran an in-process worker every 3 minutes for orders + shipments. GitHub
 // Actions cron drifts 30–60 min under load, which means users in v4 see stale
@@ -42,6 +43,7 @@ const INVENTORY_IMPORT_FROM_ORDERS_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const INVENTORY_SYNC_PRODUCTS_INTERVAL_MS = 60 * 60 * 1000; // 60 minutes
 const FULFILLMENT_OUTBOX_INTERVAL_MS = 60 * 1000; // 1 minute
 const REPORTING_REFRESH_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+const EXTERNAL_SHIPPED_CLASSIFIER_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
 const STARTUP_DELAY_MS = 15 * 1000; // 15s after boot so we don't fight cold-start
 
 // Serialize runs so overlapping intervals don't pile up ShipStation calls.
@@ -51,6 +53,7 @@ let inventoryImportRunning = false;
 let syncProductsRunning = false;
 let fulfillmentOutboxRunning = false;
 let reportingRefreshRunning = false;
+let externalShippedClassifierRunning = false;
 let heavySchedulerJobRunning: string | null = null;
 let orderTimer: NodeJS.Timeout | null = null;
 let shipmentTimer: NodeJS.Timeout | null = null;
@@ -59,6 +62,7 @@ let inventoryImportTimer: NodeJS.Timeout | null = null;
 let syncProductsTimer: NodeJS.Timeout | null = null;
 let fulfillmentOutboxTimer: NodeJS.Timeout | null = null;
 let reportingRefreshTimer: NodeJS.Timeout | null = null;
+let externalShippedClassifierTimer: NodeJS.Timeout | null = null;
 let heartbeatTimer: NodeJS.Timeout | null = null;
 
 async function withSchedulerAdvisoryLock<T>(
@@ -302,6 +306,39 @@ export async function runReportingRefreshTick(): Promise<void> {
   }
 }
 
+export async function runExternalShippedClassifierTick(): Promise<void> {
+  if (externalShippedClassifierRunning) {
+    console.log('[scheduler] external-shipped classifier already running - skipping tick');
+    return;
+  }
+  externalShippedClassifierRunning = true;
+  try {
+    const result = await runHeavySchedulerJob('external-shipped classifier', () =>
+      runExternalShippedReconcile({
+        days: 7,
+        limit: 50,
+        includeCancelled: true,
+        // Per user override unlock shipped data on 2026-06-01: PS-056 scheduled
+        // apply is reversible-flag-only and requires this explicit Render env.
+        apply: env.ENABLE_EXTERNAL_SHIPPED_AUTO_APPLY === true,
+      })
+    );
+    if (!result) return;
+    console.log(
+      `[scheduler] external-shipped classifier: missingLocalUnflagged=${result.missingLocalUnflagged}, ` +
+      `alreadyFlaggedExternal=${result.alreadyFlaggedExternal}, external=${result.classifiedExternal}, ` +
+      `recoverable=${result.classifiedRecoverable}, lookupFailures=${result.lookupFailures}, flagged=${result.flagged}`
+    );
+  } catch (err) {
+    console.error(
+      '[scheduler] external-shipped classifier failed:',
+      err instanceof Error ? err.message : err
+    );
+  } finally {
+    externalShippedClassifierRunning = false;
+  }
+}
+
 export function startSyncScheduler(
   options: { mode?: 'api-scheduler' | 'worker-scheduler' } = {}
 ): void {
@@ -337,6 +374,26 @@ export function startSyncScheduler(
         REPORTING_REFRESH_INTERVAL_MS
       );
     }, STARTUP_DELAY_MS + 4 * 60 * 1000);
+  }
+
+  if (!externalShippedClassifierTimer) {
+    if (env.ENABLE_EXTERNAL_SHIPPED_CLASSIFIER_SCHEDULER) {
+      console.log(
+        `[scheduler] external-shipped classifier enabled - every ${EXTERNAL_SHIPPED_CLASSIFIER_INTERVAL_MS / 60000}m; ` +
+        `autoApply=${env.ENABLE_EXTERNAL_SHIPPED_AUTO_APPLY === true}`
+      );
+      setTimeout(() => {
+        void runExternalShippedClassifierTick();
+        externalShippedClassifierTimer = setInterval(
+          () => void runExternalShippedClassifierTick(),
+          EXTERNAL_SHIPPED_CLASSIFIER_INTERVAL_MS
+        );
+      }, STARTUP_DELAY_MS + 6 * 60 * 1000);
+    } else {
+      console.log(
+        '[scheduler] external-shipped classifier disabled; set ENABLE_EXTERNAL_SHIPPED_CLASSIFIER_SCHEDULER=true to automate PS-056 dry-run/apply'
+      );
+    }
   }
 
   // Only run in-process sync when ShipStation credentials are present.
@@ -460,6 +517,10 @@ export function stopSyncScheduler(): void {
   if (reportingRefreshTimer) {
     clearInterval(reportingRefreshTimer);
     reportingRefreshTimer = null;
+  }
+  if (externalShippedClassifierTimer) {
+    clearInterval(externalShippedClassifierTimer);
+    externalShippedClassifierTimer = null;
   }
   if (heartbeatTimer) {
     clearInterval(heartbeatTimer);
