@@ -26,8 +26,6 @@ function upsPackageServiceOptions(input: Record<string, unknown>) {
     serviceOptions.DeliveryConfirmation = { DCISType: '2' };
   } else if (options.confirmation === 'adult_signature') {
     serviceOptions.DeliveryConfirmation = { DCISType: '3' };
-  } else if (options.confirmation !== 'none') {
-    serviceOptions.DeliveryConfirmation = { DCISType: '1' };
   }
   if (options.insuranceProvider !== 'none' && options.insuredValue != null) {
     serviceOptions.DeclaredValue = {
