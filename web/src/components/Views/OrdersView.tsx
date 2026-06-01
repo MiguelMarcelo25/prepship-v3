@@ -6680,6 +6680,17 @@ export default function OrdersView({
       ? items.find((item) => (item.sku ?? '').trim().toLowerCase() === skuNeedleForRow)
       : items[0]) ?? items[0] ?? null
     const multiSku = new Set(items.map((item) => item.sku).filter(Boolean)).size > 1
+    const renderSkuQuantityBadge = (quantity: number) => (
+      quantity > 1 ? (
+        <span
+          style={{ background: 'var(--ss-blue-bg)', color: 'var(--ss-blue)', fontSize: 9.5, fontWeight: 700, padding: '0 4px', borderRadius: 3, flexShrink: 0 }}
+          title={`Quantity ${quantity}`}
+          aria-label={`quantity ${quantity}`}
+        >
+          ×{quantity}
+        </span>
+      ) : null
+    )
     const expedited = getExpeditedBadge(order, detail)
     const shipTo = getShipTo(order, detail)
     const clientName = order.clientName ?? 'Untagged'
@@ -6844,14 +6855,26 @@ export default function OrdersView({
             <div style={{ display: 'flex', flexDirection: 'column', gap: 3, padding: '3px 0' }}>
               {visibleItems.map((item) => (
                 <div key={`${item.sku ?? 'unknown'}-${item.name ?? 'item'}`} style={{ display: 'flex', alignItems: 'center', height: 22, gap: 3, minWidth: 0 }}>
-                  {item.sku ? <span className="sku-link" style={{ fontSize: 11 }} title={item.sku}>{item.sku}</span> : <span style={{ color: 'var(--text4)', fontSize: 11 }}>—</span>}
+                  {item.sku ? (
+                    <span style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0, overflow: 'hidden' }} title={`${item.sku}${item.quantity > 1 ? ` quantity ${item.quantity}` : ''}`}>
+                      <span className="sku-link" style={{ fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }} title={item.sku}>{item.sku}</span>
+                      {renderSkuQuantityBadge(item.quantity)}
+                    </span>
+                  ) : <span style={{ color: 'var(--text4)', fontSize: 11 }}>—</span>}
                 </div>
               ))}
               {overflow > 0 ? <div style={{ height: 14 }} /> : null}
             </div>
           )
         }
-        return primaryItem?.sku ? <span className="sku-link" title={primaryItem.sku}>{primaryItem.sku}</span> : '—'
+        if (!primaryItem?.sku) return '—'
+        const totalQuantity = getTotalQuantity(order, detail)
+        return (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, maxWidth: column.width + 60, minWidth: 0, overflow: 'hidden' }} title={`${primaryItem.sku}${totalQuantity > 1 ? ` quantity ${totalQuantity}` : ''}`}>
+            <span className="sku-link" title={primaryItem.sku} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{primaryItem.sku}</span>
+            {renderSkuQuantityBadge(totalQuantity)}
+          </span>
+        )
       case 'qty': {
         const totalQuantity = getTotalQuantity(order, detail)
         return (

@@ -145,12 +145,21 @@ const awaitingMissingDims = baseRow(970002, 'awaiting_shipment', 1, {
   bestRate: null,
 })
 
-// 6) Awaiting multi-item: SKU column lists every SKU, Qty column sums to 5.
+// 6) Awaiting multi-item: SKU column lists every SKU with matching quantity
+// badges where needed, Qty column sums to 3.
 const awaitingMultiItem = baseRow(970003, 'awaiting_shipment', 1, {
   orderNumber: 'ORD-970003',
   items: [
-    { name: 'Item Alpha', sku: 'SKU-ALPHA', quantity: 2, unitPrice: 5, imageUrl: '' },
-    { name: 'Item Bravo', sku: 'SKU-BRAVO', quantity: 3, unitPrice: 4, imageUrl: '' },
+    { name: 'Booster Gel', sku: 'Booster-gel-001', quantity: 2, unitPrice: 5, imageUrl: '' },
+    { name: 'Leeds Line V2', sku: 'HU-10', quantity: 1, unitPrice: 4, imageUrl: '' },
+  ],
+})
+
+// 7) Awaiting single-SKU quantity > 1: SKU column still carries quantity context.
+const awaitingSingleQuantity = baseRow(970004, 'awaiting_shipment', 1, {
+  orderNumber: 'ORD-970004',
+  items: [
+    { name: 'Single Pack Refill', sku: 'REFILL-4PK', quantity: 4, unitPrice: 3, imageUrl: '' },
   ],
 })
 
@@ -221,7 +230,7 @@ const shippedNoNickname = baseRow(980004, 'shipped', 1, {
 })
 
 const ordersByStatus = {
-  awaiting_shipment: [awaitingValid, awaitingMissingDims, awaitingMultiItem],
+  awaiting_shipment: [awaitingValid, awaitingMissingDims, awaitingMultiItem, awaitingSingleQuantity],
   shipped: [shippedPersisted, shippedExternal, shippedMissingSync, shippedNoNickname],
   cancelled: [],
 }
@@ -261,7 +270,7 @@ function responseFor(url) {
   if (url.pathname === '/clients/order-stats') {
     return json({ data: clients.map((client) => ({ clientId: client.id, awaiting_shipment: 1, shipped: 1, cancelled: 0 })) })
   }
-  if (url.pathname === '/orders/distinct-skus') return json({ skus: ['B0D43C5FGF', 'SKU-ALPHA', 'SKU-BRAVO'] })
+  if (url.pathname === '/orders/distinct-skus') return json({ skus: ['B0D43C5FGF', 'Booster-gel-001', 'HU-10', 'REFILL-4PK'] })
   if (url.pathname === '/orders') {
     const status = url.searchParams.get('status') || 'awaiting_shipment'
     const data = ordersByStatus[status] ?? []
@@ -374,12 +383,22 @@ test('Awaiting grid columns render every required field from source of truth', a
     bestrate: { contains: '— add dims' },
   })
 
-  // Multi-item row — SKU column lists every SKU, Qty sums across line items.
+  // Multi-item row — Item Name and SKU columns both carry per-line quantity
+  // context. HU-10 quantity is 1 and must not render a noisy ×1 badge.
   await assertColumns(page, awaitingMultiItem.orderId, {
     orderNum: { contains: 'ORD-970003' },
-    itemname: { contains: ['Item Alpha', 'Item Bravo'] },
-    sku: { contains: ['SKU-ALPHA', 'SKU-BRAVO'] },
-    qty: { equals: '5' },
+    itemname: { contains: ['Booster Gel', '×2', 'Leeds Line V2'] },
+    sku: { contains: ['Booster-gel-001', '×2', 'HU-10'], notContains: '×1' },
+    qty: { equals: '3' },
+  })
+
+  // Single-SKU quantity > 1 — SKU column should not lose quantity context
+  // just because there is only one SKU line.
+  await assertColumns(page, awaitingSingleQuantity.orderId, {
+    orderNum: { contains: 'ORD-970004' },
+    itemname: { contains: 'Single Pack Refill' },
+    sku: { contains: ['REFILL-4PK', '×4'] },
+    qty: { equals: '4' },
   })
 })
 
