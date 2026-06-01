@@ -1896,6 +1896,18 @@ DJ provided PS-053 on 2026-06-01 as the official task for the Print to Queue par
 
 See [docs/ps-053-print-to-queue-atomic-recovery.md](docs/ps-053-print-to-queue-atomic-recovery.md) for the full task prompt, safety invariant, implementation requirements, regression coverage, verification commands, definition of done, and return format.
 
+## Official PS-054 Walmart PO Lookup Safety Certification Task
+
+DJ provided PS-054 on 2026-06-02 as a Walmart safety and dry-run certification task after the Walmart label, Print Queue, and marketplace confirmation reliability work.
+
+| ID | Title | Risk | Why It Matters | Scope | Completion Evidence |
+| --- | --- | --- | --- | --- | --- |
+| PS-054 | Fix Walmart PO Lookup Safety and Certify Walmart Label to Print Queue to Marketplace Confirmation Dry-Run | Critical Walmart label and marketplace confirmation correctness | Walmart `customerOrderId` lookup must never fall back to the first returned order when no exact match exists. A wrong PO mapping can buy postage and confirm shipment against the wrong Walmart order. | Require exact live Walmart `customerOrderId` match before label purchase; fail safely and sanitized when no match exists; certify mocked Walmart token/order lookup, label response extraction, queueable label validation, existing-label recovery, and marketplace confirmation/outbox payload shape. | New `test:ps-054-walmart-workflow`, Walmart confirmation payload guard, direct-carrier label guard, mocked marketplace confirmation smoke, shipping certification guard, typecheck, web build, and source-of-truth guard. No live postage, labels, Walmart notification, production data mutation, secrets, PII, raw provider payloads, or shipped/cancelled protection weakening. |
+
+### PS-054 Copy/Paste Handoff
+
+See [docs/ps-054-walmart-po-lookup-safety-certification.md](docs/ps-054-walmart-po-lookup-safety-certification.md) for the full task prompt, guardrails, verification commands, definition of done, and return format.
+
 ## Official PS-056 Marketplace-Fulfilled Ext. Label Classification Task
 
 DJ provided PS-056 on 2026-06-01 as a standalone Shipped Orders classification task. This must fix marketplace/external shipped rows that are genuinely external but still show `Missing shipment sync`, without regressing PS-036/PS-039 missing-sync recovery safety.

@@ -16,6 +16,13 @@ function firstString(...values: unknown[]): string {
   return '';
 }
 
+function maskWalmartId(value: unknown): string {
+  const text = firstString(value);
+  if (!text) return '';
+  if (text.length <= 6) return '*'.repeat(text.length);
+  return `${text.slice(0, 3)}...${text.slice(-3)}`;
+}
+
 async function readWalmartError(res: Response): Promise<string> {
   const text = await res.text().catch(() => '');
   if (!text) return res.statusText;
@@ -136,7 +143,14 @@ export async function lookupWalmartOrderByCustomerOrderId(
       : elementsRaw
         ? [elementsRaw]
         : [];
-    const match = elements.find((order) => firstString((order as any)?.customerOrderId) === trimmed) ?? elements[0];
+    const match = elements.find((order) => firstString((order as any)?.customerOrderId) === trimmed);
+    if (!match) {
+      console.warn('[walmart connector] order lookup exact customerOrderId match not found', {
+        requestedCustomerOrderId: maskWalmartId(trimmed),
+        returnedCount: elements.length,
+      });
+      return null;
+    }
     const purchaseOrderId = firstString((match as any)?.purchaseOrderId);
     if (!purchaseOrderId) return null;
     return { purchaseOrderId, rawOrder: match };
