@@ -1872,6 +1872,18 @@ DJ provided PS-050 on 2026-06-01 as an updated replacement task. This supersedes
 
 See [docs/ps-050-awaiting-shipment-rate-accuracy-autostart.md](docs/ps-050-awaiting-shipment-rate-accuracy-autostart.md) for the full replacement task prompt, safety clarification, implementation requirements, test plan, verification commands, definition of done, and return format.
 
+## Official PS-052 Orders SKU Sort Exact Composition Task
+
+DJ provided PS-052 on 2026-06-01 as a standalone Orders SKU Sort/grouping correctness task. This is related to Orders SKU Sort/grouping, not label/rate work.
+
+| ID | Title | Risk | Why It Matters | Scope | Completion Evidence |
+| --- | --- | --- | --- | --- | --- |
+| PS-052 | Fix SKU Sort Grouping to Require Exact SKU + Quantity Composition | High operator workflow correctness | Orders SKU Sort can group unrelated orders together when it relies on primary SKU, total quantity, or "contains SKU" behavior instead of the exact per-SKU quantity composition. Misleading groups can cause operators to batch the wrong orders. | Build a deterministic exact composition key from active line-item SKUs and per-SKU quantities; group rows only when the full composition key matches; make headers show single-SKU and mixed-SKU composition clearly; preserve existing SKU filtering/default ordering and move sort/group support server-side if needed for global pagination correctness. | Typecheck, web build, source-of-truth guard, focused composition-key tests, Orders grouping/UI coverage with Booster/HU-10 fixture cases, Orders UX/browser coverage, and Orders column-integrity E2E pass. No live orders/items, labels, postage, marketplace notifications, PII exposure, or shipped/cancelled lockdown changes. |
+
+### PS-052 Copy/Paste Handoff
+
+See [docs/ps-052-orders-sku-sort-exact-composition.md](docs/ps-052-orders-sku-sort-exact-composition.md) for the full task prompt, implementation requirements, pagination/global-sort considerations, test plan, definition of done, and return format.
+
 ## Official PS-053 Print To Queue Atomic Recovery Task
 
 DJ provided PS-053 on 2026-06-01 as the official task for the Print to Queue partial-success failure where label/postage creation can succeed, the order can move shipped, but no print queue row is created.

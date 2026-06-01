@@ -112,26 +112,48 @@ function makeOrder(id, status, clientId = 1) {
   }
 }
 
+function makeSkuOrder(id, items, clientId = 1) {
+  const order = makeOrder(id, 'awaiting_shipment', clientId)
+  return {
+    ...order,
+    items,
+    raw: {
+      ...order.raw,
+      items,
+    },
+  }
+}
+
 const ordersByStatus = {
   awaiting_shipment: [
-    makeOrder(964542, 'awaiting_shipment'),
-    makeOrder(964543, 'awaiting_shipment', 2),
-    makeOrder(964544, 'awaiting_shipment', 3),
+    makeSkuOrder(970001, [{ name: 'Booster Gel', sku: 'Booster-gel-001', quantity: 2, unitPrice: 16.99, imageUrl: '' }]),
+    makeSkuOrder(970002, [{ name: 'Leeds Line V2', sku: 'HU-10', quantity: 2, unitPrice: 16.99, imageUrl: '' }], 2),
+    makeSkuOrder(970003, [
+      { name: 'Booster Gel', sku: 'Booster-gel-001', quantity: 1, unitPrice: 16.99, imageUrl: '' },
+      { name: 'Leeds Line V2', sku: 'HU-10', quantity: 1, unitPrice: 16.99, imageUrl: '' },
+    ]),
+    makeSkuOrder(970004, [
+      { name: 'Leeds Line V2', sku: 'HU-10', quantity: 1, unitPrice: 16.99, imageUrl: '' },
+      { name: 'Booster Gel', sku: 'Booster-gel-001', quantity: 2, unitPrice: 16.99, imageUrl: '' },
+    ], 2),
+    makeSkuOrder(970005, [
+      { name: 'Booster Gel', sku: 'Booster-gel-001', quantity: 1, unitPrice: 16.99, imageUrl: '' },
+      { name: 'Booster Gel', sku: 'Booster-gel-001', quantity: 1, unitPrice: 16.99, imageUrl: '' },
+    ]),
   ],
   shipped: [makeOrder(864542, 'shipped'), makeOrder(864543, 'shipped', 2)],
   cancelled: [makeOrder(764542, 'cancelled'), makeOrder(764543, 'cancelled', 2)],
 }
 
 const countRows = [
-  { orderStatus: 'awaiting_shipment', cnt: 3 },
+  { orderStatus: 'awaiting_shipment', cnt: 5 },
   { orderStatus: 'shipped', cnt: 2 },
   { orderStatus: 'cancelled', cnt: 2 },
 ]
 
 const countStoreRows = [
-  { orderStatus: 'awaiting_shipment', storeId: 101, cnt: 1 },
-  { orderStatus: 'awaiting_shipment', storeId: 102, cnt: 1 },
-  { orderStatus: 'awaiting_shipment', storeId: 103, cnt: 1 },
+  { orderStatus: 'awaiting_shipment', storeId: 101, cnt: 3 },
+  { orderStatus: 'awaiting_shipment', storeId: 102, cnt: 2 },
   { orderStatus: 'shipped', storeId: 101, cnt: 1 },
   { orderStatus: 'shipped', storeId: 102, cnt: 1 },
   { orderStatus: 'cancelled', storeId: 101, cnt: 1 },
@@ -201,7 +223,7 @@ function responseFor(url) {
   if (url.pathname === '/clients/order-stats') {
     return json({ data: clients.map((client) => ({ clientId: client.id, awaiting_shipment: 1, shipped: 1, cancelled: 1 })) })
   }
-  if (url.pathname === '/orders/distinct-skus') return json({ skus: ['B0D43C5FGF', 'VALENTINA-2PK'] })
+  if (url.pathname === '/orders/distinct-skus') return json({ skus: ['Booster-gel-001', 'HU-10'] })
   if (url.pathname === '/orders') {
     const status = url.searchParams.get('status') || 'awaiting_shipment'
     const data = ordersByStatus[status] ?? []
@@ -248,6 +270,60 @@ async function setup(page) {
     await route.continue()
   })
 }
+
+test('SKU Sort groups orders by exact SKU and quantity composition', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await setup(page)
+  await page.goto(`${baseUrl}/orders/awaiting_shipment`)
+  await page.waitForSelector('#ordersTable tbody tr.order-row', { state: 'visible' })
+
+  await page.getByRole('button', { name: /SKU Sort/ }).click()
+  await page.waitForSelector('#ordersTable tbody tr.sku-group-header', { state: 'visible' })
+
+  const headers = page.locator('#ordersTable tbody tr.sku-group-header')
+  const headerTexts = await headers.allTextContents()
+  expect(headerTexts.some((text) =>
+    text.includes('Booster-gel-001 x2') &&
+    text.includes('Qty 2') &&
+    text.includes('2 orders') &&
+    !text.includes('HU-10')
+  )).toBe(true)
+  expect(headerTexts.some((text) =>
+    text.includes('HU-10 x2') &&
+    text.includes('Qty 2') &&
+    text.includes('1 order') &&
+    !text.includes('Booster-gel-001')
+  )).toBe(true)
+  expect(headerTexts.some((text) =>
+    text.includes('Booster-gel-001 x1 + HU-10 x1') &&
+    text.includes('1 order')
+  )).toBe(true)
+  expect(headerTexts.some((text) =>
+    text.includes('Booster-gel-001 x2 + HU-10 x1') &&
+    text.includes('1 order')
+  )).toBe(true)
+
+  const boosterGroupText = await page.locator('#ordersBody').evaluate(() => {
+    const rows = Array.from(document.querySelectorAll('#ordersBody tr'))
+    const headerIndex = rows.findIndex((row) =>
+      row.classList.contains('sku-group-header') &&
+      Boolean(row.textContent?.includes('Booster-gel-001 x2')) &&
+      !row.textContent?.includes('HU-10')
+    )
+    if (headerIndex < 0) return ''
+    const parts = []
+    for (const row of rows.slice(headerIndex + 1)) {
+      if (row.classList.contains('sku-group-header')) break
+      parts.push(row.textContent ?? '')
+    }
+    return parts.join('\n')
+  })
+
+  expect(boosterGroupText).toContain('Booster-gel-001')
+  expect(boosterGroupText).not.toContain('HU-10')
+
+  await page.screenshot({ path: path.join(screenshotDir, 'desktop-ps-052-sku-exact-groups.png'), fullPage: true })
+})
 
 for (const viewport of [
   { name: 'desktop', width: 1440, height: 900 },

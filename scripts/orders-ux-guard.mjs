@@ -63,13 +63,14 @@ const checks = [
       orderDetailDrawer.indexOf('payload?.orderStatus') < orderDetailDrawer.indexOf('raw.orderStatus'),
   },
   {
-    name: 'SKU Sort is server-side before pagination, not page-local only',
+    name: 'SKU Sort is exact-composition server-side before pagination, not page-local only',
     pass:
       v2Hooks.includes('sort: sortBy') &&
       ordersView.includes("sortBy: skuSortActive ? 'sku' : undefined") &&
       ordersRoute.includes("sort: z.enum(['sku']).optional()") &&
-      ordersRoute.includes('primary_sku_for_sort') &&
-      ordersRoute.indexOf('primary_sku_for_sort') < ordersRoute.indexOf('.limit(q.pageSize)'),
+      ordersRoute.includes('sku_composition_for_sort') &&
+      ordersRoute.includes('string_agg(sku_qty.sku_key') &&
+      ordersRoute.indexOf('sku_composition_for_sort') < ordersRoute.indexOf('.limit(q.pageSize)'),
   },
   {
     name: 'print queue badge hydrates on page load before the drawer opens',

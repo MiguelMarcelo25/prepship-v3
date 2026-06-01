@@ -1248,17 +1248,27 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   // are legitimately distinct (different store / orderId) — v2 never collapses
   // by order_number and neither should we.
   const offset = offsetOf(q);
-  const primary_sku_for_sort = sql<string>`(
-    select lower(trim(oi.sku))
-    from order_items oi
-    where oi.order_id = ${orders.id}
-      and oi.quantity > 0
-      and trim(coalesce(oi.sku, '')) <> ''
-    order by lower(trim(oi.sku)) asc
-    limit 1
-  )`;
+  const sku_composition_for_sort = sql<string>`coalesce((
+    select string_agg(sku_qty.sku_key || ':' || sku_qty.qty_text, '|' order by sku_qty.sku_key)
+    from (
+      select
+        case
+          when trim(coalesce(oi.sku, '')) = '' then '__missing_sku__'
+          else lower(trim(oi.sku))
+        end as sku_key,
+        trim(to_char(sum(oi.quantity), 'FM999999999990.###')) as qty_text
+      from order_items oi
+      where oi.order_id = ${orders.id}
+        and oi.quantity > 0
+      group by
+        case
+          when trim(coalesce(oi.sku, '')) = '' then '__missing_sku__'
+          else lower(trim(oi.sku))
+        end
+    ) sku_qty
+  ), '__missing_sku__:1')`;
   const orderByClauses = q.sort === 'sku'
-    ? [sql`${primary_sku_for_sort} asc nulls last`, desc(orders.orderDate), desc(orders.id)]
+    ? [sql`${sku_composition_for_sort} asc`, desc(orders.orderDate), desc(orders.id)]
     : [desc(orders.orderDate), desc(orders.id)];
   const joined = await timedOrdersStep(timings, 'ordersPage', () =>
     db

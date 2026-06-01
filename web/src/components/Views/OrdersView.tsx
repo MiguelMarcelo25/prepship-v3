@@ -75,7 +75,7 @@ import type {
   PrintQueueEntryDto,
 } from '../../types/api'
 import { getOrdersDateRange, type OrdersDateFilter } from './orders-view-filters'
-import { groupOrdersBySku } from './orders-grouping'
+import { buildSkuCompositionKey, groupOrdersBySku } from './orders-grouping'
 import { formatQueuedOrderToast, formatQueuedOrdersToast } from './orders-queue'
 import {
   buildDailyStripProgress,
@@ -1053,6 +1053,12 @@ function getMergedItems(order: OrderSummaryDto, detail: OrderFullDto | null) {
 
 function getTotalQuantity(order: OrderSummaryDto, detail: OrderFullDto | null) {
   return getActiveItems(order, detail).reduce((sum, item) => sum + (item.quantity || 1), 0)
+}
+
+function getOrderSortTimeMs(order: OrderSummaryDto) {
+  const value = order.orderDate ?? order.date ?? order.createdAt ?? null
+  const time = value ? new Date(value).getTime() : 0
+  return Number.isFinite(time) ? time : 0
 }
 
 function hasTestPackItem(order: OrderSummaryDto, detail: OrderFullDto | null) {
@@ -2480,11 +2486,13 @@ export default function OrdersView({
       next.sort((left, right) => {
         const leftDetail = orderDetailsById.get(left.orderId) ?? null
         const rightDetail = orderDetailsById.get(right.orderId) ?? null
-        const leftSku = getPrimarySku(left, leftDetail)
-        const rightSku = getPrimarySku(right, rightDetail)
-        if (leftSku < rightSku) return -1
-        if (leftSku > rightSku) return 1
-        return getTotalQuantity(left, leftDetail) - getTotalQuantity(right, rightDetail)
+        const leftKey = buildSkuCompositionKey(getActiveItems(left, leftDetail)).key
+        const rightKey = buildSkuCompositionKey(getActiveItems(right, rightDetail)).key
+        if (leftKey < rightKey) return -1
+        if (leftKey > rightKey) return 1
+        const dateDelta = getOrderSortTimeMs(right) - getOrderSortTimeMs(left)
+        if (dateDelta !== 0) return dateDelta
+        return (right.orderId ?? 0) - (left.orderId ?? 0)
       })
       return next
     }
@@ -2517,6 +2525,7 @@ export default function OrdersView({
             orderedFilteredOrders,
             (order) => getPrimarySkuLabel(order, orderDetailsById.get(order.orderId) ?? null),
             (order) => getTotalQuantity(order, orderDetailsById.get(order.orderId) ?? null),
+            (order) => getActiveItems(order, orderDetailsById.get(order.orderId) ?? null),
           )
         : []
     ),
@@ -9284,7 +9293,7 @@ export default function OrdersView({
                               <input
                                 type="checkbox"
                                 checked={allGroupSelected}
-                                aria-label={`Select all ${group.count} orders for ${group.sku} quantity ${group.quantity ?? 'unknown'}`}
+                                aria-label={`Select all ${group.count} orders for ${group.label}`}
                                 ref={(node) => {
                                   if (node) node.indeterminate = someGroupSelected
                                 }}
@@ -9297,10 +9306,12 @@ export default function OrdersView({
                               />
                               )}
                               <span style={{ fontSize: 13 }}>📦</span>
-                              <span className="sku-link" style={{ fontSize: 11.5 }} title={group.sku}>{group.sku}</span>
-                              <span style={{ fontWeight: 700, color: 'var(--text)' }}>
-                                Qty {group.quantity ?? '-'}
-                              </span>
+                              <span className="sku-link" style={{ fontSize: 11.5 }} title={group.label}>{group.label}</span>
+                              {group.quantity != null ? (
+                                <span style={{ fontWeight: 700, color: 'var(--text)' }}>
+                                  Qty {group.quantity}
+                                </span>
+                              ) : null}
                               <span style={{ fontWeight: 400, color: 'var(--text2)' }}>
                                 {group.count.toLocaleString()} order{group.count === 1 ? '' : 's'}
                               </span>
