@@ -1116,6 +1116,8 @@ const listQuery = paginationSchema.extend({
   search: z.string().optional(),
   sort: z.enum(['sku']).optional(),
   includeTotal: z.coerce.boolean().optional(),
+  idsOnly: z.coerce.boolean().optional(),
+  selectionLimit: z.coerce.number().int().positive().max(5000).optional(),
   // Filter to orders containing at least one items[] entry whose
   // sku exactly matches. The FE used to apply this client-side over
   // the in-memory page, which silently broke pagination — picking
@@ -1315,6 +1317,50 @@ app.get('/', zValidator('query', listQuery), async (c) => {
   const orderByClauses = q.sort === 'sku'
     ? [sql`${sku_composition_for_sort} asc`, desc(orders.orderDate), desc(orders.id)]
     : [desc(orders.orderDate), desc(orders.id)];
+
+  if (q.idsOnly) {
+    const selectionLimit = q.selectionLimit ?? 5000;
+    const [idRows, countRows] = await Promise.all([
+      timedOrdersStep(timings, 'ordersIdsOnlyPage', () =>
+        db
+          .select({ id: orders.id })
+          .from(orders)
+          .where(where)
+          .orderBy(...orderByClauses)
+          .limit(selectionLimit)
+      ),
+      timedOrdersStep(timings, 'ordersIdsOnlyCount', () =>
+        db
+          .select({ count: sql<number>`count(*)::int` })
+          .from(orders)
+          .where(where)
+      ),
+    ]);
+    const ids = idRows.map((row) => row.id).filter((id): id is number => id != null);
+    const total = countRows[0]?.count ?? ids.length;
+    logSlowOrdersList(q, requestIdFromContext(c), timings, msSince(routeStartedAt), {
+      rows: ids.length,
+      total,
+      totalApproximate: false,
+      countWasSkipped: false,
+      idsOnly: true,
+      truncated: total > ids.length,
+    });
+    return c.json({
+      data: ids,
+      ids,
+      total,
+      selectionLimit,
+      truncated: total > ids.length,
+      pagination: {
+        page: 1,
+        pageSize: ids.length,
+        total,
+        totalPages: 1,
+      },
+    });
+  }
+
   const joined = await timedOrdersStep(timings, 'ordersPage', () =>
     db
       .select({ order: orderListSelect, overrides: orderOverrides })

@@ -1929,6 +1929,10 @@ export const apiClient = {
           if (iso) q.dateTo = iso;
           delete q.dateEnd;
         }
+        if (q.sortBy === 'sku') {
+          q.sort = 'sku';
+          delete q.sortBy;
+        }
         normalizeSyntheticTestStoreQuery(q);
         const res = await api.get<{
           data: Array<Record<string, any>>;
@@ -1951,6 +1955,61 @@ export const apiClient = {
 
   listOrders(query: Record<string, unknown>): Promise<any> {
     return apiClient.fetchOrders(query);
+  },
+
+  async fetchMatchingOrderIds(query: Record<string, unknown>): Promise<{
+    ids: number[];
+    total: number;
+    truncated: boolean;
+    selectionLimit: number;
+  }> {
+    const q: Record<string, unknown> = { ...query, idsOnly: true };
+    if (q.orderStatus !== undefined) {
+      q.status = q.orderStatus;
+      delete q.orderStatus;
+    }
+    if (q.dateStart !== undefined) {
+      const iso = toIsoDayStart(q.dateStart as string | undefined | null);
+      if (iso) q.dateFrom = iso;
+      delete q.dateStart;
+    }
+    if (q.dateEnd !== undefined) {
+      const iso = toIsoDayEnd(q.dateEnd as string | undefined | null);
+      if (iso) q.dateTo = iso;
+      delete q.dateEnd;
+    }
+    if (q.sortBy === 'sku') {
+      q.sort = 'sku';
+      delete q.sortBy;
+    }
+    normalizeSyntheticTestStoreQuery(q);
+    const res = await api.get<{
+      data?: number[];
+      ids?: number[];
+      total?: number;
+      truncated?: boolean;
+      selectionLimit?: number;
+    }>(`/orders${qs(q as any)}`);
+    const rawIds = Array.isArray(res?.ids) ? res.ids : Array.isArray(res?.data) ? res.data : [];
+    const ids = rawIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0);
+    return {
+      ids,
+      total: Number(res?.total ?? ids.length) || ids.length,
+      truncated: res?.truncated === true,
+      selectionLimit: Number(res?.selectionLimit ?? q.selectionLimit ?? 5000) || 5000,
+    };
+  },
+
+  async fetchMatchingOrdersForSelection(query: Record<string, unknown>): Promise<any[]> {
+    const baseQuery = { ...query };
+    const first = await apiClient.fetchOrders({ ...baseQuery, page: 1, pageSize: 200 });
+    const orders = Array.isArray(first?.orders) ? [...first.orders] : [];
+    const totalPages = Math.max(1, Number(first?.pages ?? 1) || 1);
+    for (let page = 2; page <= totalPages; page += 1) {
+      const next = await apiClient.fetchOrders({ ...baseQuery, page, pageSize: 200 });
+      if (Array.isArray(next?.orders)) orders.push(...next.orders);
+    }
+    return orders;
   },
 
   fetchOrderFull(orderId: number): Promise<any> {

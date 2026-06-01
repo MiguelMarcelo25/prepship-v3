@@ -118,6 +118,15 @@ interface QueueActionProgress {
   tick: number
 }
 
+interface AllMatchingSelectionState {
+  active: boolean
+  scopeKey: string
+  ids: number[]
+  total: number
+  truncated: boolean
+  selectionLimit: number
+}
+
 type PersistentQueueJobKind = 'existing-labels' | 'batch-queue'
 
 interface PersistentQueueJob {
@@ -1911,6 +1920,9 @@ export default function OrdersView({
   const [assignableUsers, setAssignableUsers] = useState<AssignableUser[]>([])
   const [assignTo, setAssignTo] = useState<string>('')  // userId or '' (none) or 'unassign'
   const [assignBusy, setAssignBusy] = useState(false)
+  const [allMatchingSelection, setAllMatchingSelection] = useState<AllMatchingSelectionState | null>(null)
+  const [selectingAllMatching, setSelectingAllMatching] = useState(false)
+  const [selectedOrderSnapshots, setSelectedOrderSnapshots] = useState<Map<number, OrderSummaryDto>>(() => new Map())
   useEffect(() => {
     if (!callerIsAdmin) return
     let cancelled = false
@@ -2289,6 +2301,45 @@ export default function OrdersView({
     // the current paginated page and missed matches on later pages.
     sku: skuFilter,
   })
+  const matchingSelectionQuery = useMemo(() => {
+    const trimmedSearch = debouncedSearchQuery.trim()
+    const trimmedSku = skuFilter.trim()
+    const isGlobalSearch = trimmedSearch.length > 0
+    return {
+      ...(isGlobalSearch
+        ? {}
+        : {
+            orderStatus: currentStatus,
+            storeId: activeStore ?? undefined,
+          }),
+      dateStart: dateRange.start,
+      dateEnd: dateRange.end,
+      hideTestOrders: hideTestOrdersInAllAwaiting,
+      includeInactiveClients,
+      ...(trimmedSearch ? { search: trimmedSearch } : {}),
+      ...(trimmedSku ? { sku: trimmedSku } : {}),
+      ...(skuSortActive ? { sortBy: 'sku' as const } : {}),
+    }
+  }, [
+    activeStore,
+    currentStatus,
+    dateRange.end,
+    dateRange.start,
+    debouncedSearchQuery,
+    hideTestOrdersInAllAwaiting,
+    includeInactiveClients,
+    skuFilter,
+    skuSortActive,
+  ])
+  const selectionScopeKey = useMemo(
+    () => JSON.stringify({
+      ...matchingSelectionQuery,
+      pageSize,
+      skuSortActive,
+    }),
+    [matchingSelectionQuery, pageSize, skuSortActive],
+  )
+  const lastSelectionScopeKeyRef = useRef(selectionScopeKey)
   const refetchOrdersRef = useRef(refetchOrders)
   useEffect(() => {
     refetchOrdersRef.current = refetchOrders
@@ -2330,10 +2381,6 @@ export default function OrdersView({
   ), [activeOrderId, activeOrderDetail])
 
   const selectedIdSet = useMemo(() => new Set(selectedOrderIds), [selectedOrderIds])
-  const selectedOrdersForActions = useMemo(
-    () => orders.filter((order) => selectedIdSet.has(order.orderId)),
-    [orders, selectedIdSet]
-  )
   const resolvedColumnPrefs = useMemo(
     () => resolveColumnPrefs(TABLE_COLUMNS.map((column) => ({ key: column.key, label: column.label, width: column.width })), currentStatus, columnPrefs),
     [currentStatus, columnPrefs],
@@ -2599,15 +2646,52 @@ export default function OrdersView({
   }, [currentStatus, activeStore, dateFilter, customDateFrom, customDateTo, skuFilter, debouncedSearchQuery])
 
   useEffect(() => {
-    const visibleIds = new Set(orders.map((order) => order.orderId))
-    const nextSelected = selectedOrderIds.filter((id) => visibleIds.has(id))
-    if (nextSelected.length !== selectedOrderIds.length) {
-      onSelectedOrderIdsChange?.(nextSelected)
-    }
-    if (activeOrderId != null && !visibleIds.has(activeOrderId)) {
+    setSelectedOrderSnapshots((current) => {
+      const next = new Map(current)
+      const keepIds = new Set(selectedOrderIds)
+      for (const order of orders) {
+        if (keepIds.has(order.orderId)) next.set(order.orderId, order)
+      }
+      for (const id of next.keys()) {
+        if (!keepIds.has(id)) next.delete(id)
+      }
+      return next
+    })
+  }, [orders, selectedOrderIds])
+
+  useEffect(() => {
+    if (lastSelectionScopeKeyRef.current === selectionScopeKey) return
+    lastSelectionScopeKeyRef.current = selectionScopeKey
+    if (selectedOrderIds.length > 0) {
+      setAllMatchingSelection(null)
+      setSelectedOrderSnapshots(new Map())
+      onSelectedOrderIdsChange?.([])
       onActiveOrderIdChange?.(null)
     }
-  }, [orders, selectedOrderIds, activeOrderId, onSelectedOrderIdsChange, onActiveOrderIdChange])
+  }, [onActiveOrderIdChange, onSelectedOrderIdsChange, selectedOrderIds.length, selectionScopeKey])
+
+  useEffect(() => {
+    if (allMatchingSelection && allMatchingSelection.scopeKey !== selectionScopeKey) {
+      setAllMatchingSelection(null)
+      setSelectedOrderSnapshots(new Map())
+      onSelectedOrderIdsChange?.([])
+      onActiveOrderIdChange?.(null)
+      return
+    }
+
+    const visibleIds = new Set(orders.map((order) => order.orderId))
+    if (activeOrderId != null && !visibleIds.has(activeOrderId) && !selectedIdSet.has(activeOrderId)) {
+      onActiveOrderIdChange?.(null)
+    }
+  }, [
+    activeOrderId,
+    allMatchingSelection,
+    onActiveOrderIdChange,
+    onSelectedOrderIdsChange,
+    orders,
+    selectedIdSet,
+    selectionScopeKey,
+  ])
 
   useEffect(() => {
     if (!selectAllCheckboxRef.current) return
@@ -3239,6 +3323,7 @@ export default function OrdersView({
   }
 
   const toggleSkuGroupSelection = (orderIds: number[], checked?: boolean) => {
+    setAllMatchingSelection(null)
     const orderIdSet = new Set(orderIds)
     const allSelected = orderIds.length > 0 && orderIds.every((orderId) => selectedIdSet.has(orderId))
     const shouldSelect = checked ?? !allSelected
@@ -3251,6 +3336,7 @@ export default function OrdersView({
   }
 
   const toggleVisibleSelection = (checked?: boolean) => {
+    setAllMatchingSelection(null)
     const visibleOrderIdSet = new Set(visibleOrderIds)
     const shouldSelect = checked ?? !allVisibleSelected
     if (shouldSelect) {
@@ -3261,7 +3347,76 @@ export default function OrdersView({
     updateSelection(selectedOrderIds.filter((id) => !visibleOrderIdSet.has(id)))
   }
 
+  const selectAllMatchingOrders = async () => {
+    if (isReadOnly || selectingAllMatching) return
+    setSelectingAllMatching(true)
+    try {
+      const result = await apiClient.fetchMatchingOrderIds({
+        ...matchingSelectionQuery,
+        selectionLimit: 5000,
+      })
+      if (result.ids.length === 0) {
+        setAllMatchingSelection(null)
+        updateSelection([])
+        showToast('No matching orders to select', 'info')
+        return
+      }
+      setAllMatchingSelection({
+        active: true,
+        scopeKey: selectionScopeKey,
+        ids: result.ids,
+        total: result.total,
+        truncated: result.truncated,
+        selectionLimit: result.selectionLimit,
+      })
+      updateSelection(result.ids)
+      showToast(
+        result.truncated
+          ? `Selected first ${result.ids.length.toLocaleString()} matching orders (limit ${result.selectionLimit.toLocaleString()})`
+          : `Selected ${result.ids.length.toLocaleString()} matching orders`,
+        result.truncated ? 'error' : 'success',
+      )
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Failed to select matching orders', 'error')
+    } finally {
+      setSelectingAllMatching(false)
+    }
+  }
+
+  const hydrateSelectedOrdersForActions = async (): Promise<OrderSummaryDto[]> => {
+    if (selectedOrderIds.length === 0) return []
+    const snapshotById = new Map(selectedOrderSnapshots)
+    for (const order of orders) {
+      if (selectedIdSet.has(order.orderId)) snapshotById.set(order.orderId, order)
+    }
+
+    const missingIds = selectedOrderIds.filter((orderId) => !snapshotById.has(orderId))
+    if (missingIds.length > 0) {
+      const matchingOrders = await apiClient.fetchMatchingOrdersForSelection(matchingSelectionQuery)
+      for (const order of matchingOrders) {
+        if (selectedIdSet.has(order.orderId)) snapshotById.set(order.orderId, order)
+      }
+    }
+
+    const hydrated = selectedOrderIds
+      .map((orderId) => snapshotById.get(orderId))
+      .filter((order): order is OrderSummaryDto => Boolean(order))
+
+    if (hydrated.length !== selectedOrderIds.length) {
+      throw new Error(`Only ${hydrated.length}/${selectedOrderIds.length} selected orders could be loaded. Clear selection and try again.`)
+    }
+
+    setSelectedOrderSnapshots((current) => {
+      const next = new Map(current)
+      for (const order of hydrated) next.set(order.orderId, order)
+      return next
+    })
+    return hydrated
+  }
+
   const clearSelection = () => {
+    setAllMatchingSelection(null)
+    setSelectedOrderSnapshots(new Map())
     onSelectedOrderIdsChange?.([])
     onActiveOrderIdChange?.(null)
   }
@@ -3285,14 +3440,22 @@ export default function OrdersView({
   }
 
   const renderSelectionToolbar = () => {
-    if (selectedOrdersForActions.length === 0) return null
+    if (selectedOrderIds.length === 0) return null
 
-    const selectedCount = selectedOrdersForActions.length
+    const selectedCount = selectedOrderIds.length
+    const selectionIsAllMatching =
+      allMatchingSelection?.active === true &&
+      allMatchingSelection.scopeKey === selectionScopeKey &&
+      allMatchingSelection.ids.length === selectedOrderIds.length
 
     // Per user override (`unlock shipped data`): keep the locked cancelled
     // selection surface explicit that it is review/copy only, not editable.
     const helperText =
-      currentStatus === 'awaiting_shipment'
+      selectionIsAllMatching
+        ? allMatchingSelection.truncated
+          ? `First ${selectedCount.toLocaleString()} matching orders selected across pages.`
+          : `${selectedCount.toLocaleString()} matching orders selected across pages.`
+        : currentStatus === 'awaiting_shipment'
         ? selectedCount === 1
           ? 'Order panel active.'
           : 'Batch Actions panel active.'
@@ -5726,7 +5889,13 @@ export default function OrdersView({
   }
 
   async function handleBatchAction(mode: 'print' | 'queue') {
-    const batchOrders = orders.filter((order) => selectedIdSet.has(order.orderId))
+    let batchOrders: OrderSummaryDto[] = []
+    try {
+      batchOrders = await hydrateSelectedOrdersForActions()
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Failed to load selected orders', 'error')
+      return
+    }
     if (batchOrders.length === 0) {
       showToast('No orders selected', 'error')
       return
@@ -5949,7 +6118,13 @@ export default function OrdersView({
   //   Detecting result?.ok === false is the only reliable way to count
   //   failures correctly.
   async function handleBatchMarkAsShipped(source: string) {
-    const batchOrders = orders.filter((order) => selectedIdSet.has(order.orderId))
+    let batchOrders: OrderSummaryDto[] = []
+    try {
+      batchOrders = await hydrateSelectedOrdersForActions()
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : 'Failed to load selected orders', 'error')
+      return
+    }
     if (batchOrders.length === 0) {
       showToast('No orders selected', 'error')
       return
@@ -8808,46 +8983,69 @@ export default function OrdersView({
               checkboxes, but Select All operates on visibleOrderIds
               regardless of cell visibility). */}
           {isReadOnly ? null : (
-          <label
-            id="btnSelectAll"
-            title={
-              visibleOrderIds.length === 0
-                ? 'No visible orders to select'
-                : allVisibleSelected
-                  ? 'Clear all visible selected orders'
-                  : 'Select all visible orders'
-            }
-            className={`
-              inline-flex items-center gap-1.5
-              h-8 px-2.5 rounded-lg ring-1 select-none
-              text-[12px] font-medium
-              transition-all duration-150
-              ${visibleOrderIds.length > 0 ? 'cursor-pointer' : 'cursor-default opacity-50'}
-              ${allVisibleSelected || someVisibleSelected
-                ? 'bg-brand-bg ring-brand text-brand'
-                : 'bg-surface ring-line text-ink-2 hover:text-ink hover:ring-line-2'}
-            `}
-          >
-            <input
-              ref={selectAllCheckboxRef}
-              type="checkbox"
-              checked={allVisibleSelected}
-              disabled={visibleOrderIds.length === 0}
-              onClick={(event) => event.stopPropagation()}
-              onChange={(event) => {
-                event.stopPropagation()
-                toggleVisibleSelection(event.target.checked)
-              }}
-              style={{ accentColor: 'var(--ss-blue)' }}
-              className="w-3.5 h-3.5 cursor-pointer"
-              aria-label="Select all visible orders"
-            />
-            <span className="font-mono tabular-nums">
-              {visibleSelectedCount > 0
-                ? `${visibleSelectedCount}/${visibleOrderIds.length}`
-                : 'Select All'}
-            </span>
-          </label>
+          <div className="inline-flex items-center gap-1.5" aria-label="Order selection scope">
+            <label
+              id="btnSelectAll"
+              title={
+                visibleOrderIds.length === 0
+                  ? 'No visible orders to select'
+                  : allVisibleSelected
+                    ? 'Clear current page selected orders'
+                    : 'Select current page orders'
+              }
+              className={`
+                inline-flex items-center gap-1.5
+                h-8 px-2.5 rounded-lg ring-1 select-none
+                text-[12px] font-medium
+                transition-all duration-150
+                ${visibleOrderIds.length > 0 ? 'cursor-pointer' : 'cursor-default opacity-50'}
+                ${allVisibleSelected || someVisibleSelected
+                  ? 'bg-brand-bg ring-brand text-brand'
+                  : 'bg-surface ring-line text-ink-2 hover:text-ink hover:ring-line-2'}
+              `}
+            >
+              <input
+                ref={selectAllCheckboxRef}
+                type="checkbox"
+                checked={allVisibleSelected}
+                disabled={visibleOrderIds.length === 0}
+                onClick={(event) => event.stopPropagation()}
+                onChange={(event) => {
+                  event.stopPropagation()
+                  toggleVisibleSelection(event.target.checked)
+                }}
+                style={{ accentColor: 'var(--ss-blue)' }}
+                className="w-3.5 h-3.5 cursor-pointer"
+                aria-label="Select current page orders"
+              />
+              <span className="font-mono tabular-nums">
+                {visibleSelectedCount > 0
+                  ? `${visibleSelectedCount}/${visibleOrderIds.length}`
+                  : `Select page ${visibleOrderIds.length || ''}`.trim()}
+              </span>
+            </label>
+            <button
+              id="btnSelectAllMatching"
+              type="button"
+              title={total > 0 ? `Select all ${total.toLocaleString()} matching orders across pages` : 'No matching orders to select'}
+              disabled={total === 0 || selectingAllMatching}
+              onClick={() => void selectAllMatchingOrders()}
+              className={`
+                inline-flex items-center gap-1.5
+                h-8 px-2.5 rounded-lg ring-1
+                text-[12px] font-medium
+                transition-all duration-150
+                ${allMatchingSelection?.active && allMatchingSelection.scopeKey === selectionScopeKey
+                  ? 'bg-brand-bg ring-brand text-brand'
+                  : 'bg-surface ring-line text-ink-2 hover:text-ink hover:ring-line-2'}
+                ${total === 0 || selectingAllMatching ? 'opacity-60 cursor-not-allowed' : ''}
+              `}
+              aria-label={`Select all ${total.toLocaleString()} matching orders across pages`}
+            >
+              {selectingAllMatching ? <Loader2 size={12.5} className="animate-spin" aria-hidden /> : <CheckSquare size={12.5} strokeWidth={2.25} aria-hidden />}
+              <span className="font-mono tabular-nums">Select all {total.toLocaleString()} matching</span>
+            </button>
+          </div>
           )}
 
           <button
@@ -9342,7 +9540,7 @@ export default function OrdersView({
                               <input
                                 type="checkbox"
                                 checked={allGroupSelected}
-                                aria-label={`Select all ${group.count} orders for ${group.label}`}
+                                aria-label={`Select current page SKU group ${group.label}`}
                                 ref={(node) => {
                                   if (node) node.indeterminate = someGroupSelected
                                 }}
@@ -9362,7 +9560,7 @@ export default function OrdersView({
                                 </span>
                               ) : null}
                               <span style={{ fontWeight: 400, color: 'var(--text2)' }}>
-                                {group.count.toLocaleString()} order{group.count === 1 ? '' : 's'}
+                                SKU group current page · {group.count.toLocaleString()} order{group.count === 1 ? '' : 's'}
                               </span>
                             </div>
                           </td>
