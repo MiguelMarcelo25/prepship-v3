@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 
 const outbox = readFileSync('src/services/fulfillment/outbox.ts', 'utf8');
+const printQueue = readFileSync('src/services/print-queue.ts', 'utf8');
 const scheduler = readFileSync('src/services/sync-scheduler.ts', 'utf8');
 const recoveryScript = readFileSync('scripts/recover-missing-shipment-confirmations.ts', 'utf8');
 const inspector = readFileSync('scripts/inspect-shipping-order.ts', 'utf8');
@@ -13,11 +14,12 @@ assert(
 );
 assert(
   outbox.includes("o.order_status = 'shipped'") &&
-    outbox.includes("o.external_order_id ~ '^[0-9]+$'") &&
+    outbox.includes('o.source_provider') &&
+    !outbox.includes("o.external_order_id ~ '^[0-9]+$'") &&
     outbox.includes('s.confirmation_status IS NULL') &&
     outbox.includes('s.label_url IS NOT NULL') &&
     outbox.includes('s.tracking_number'),
-  'auto recovery must target shipped ShipStation-backed labels missing confirmation state',
+  'auto recovery must target all shipped source/store labels missing confirmation state',
 );
 assert(
   outbox.includes('NOT EXISTS') &&
@@ -26,9 +28,22 @@ assert(
   'auto recovery must not duplicate existing fulfillment_outbox confirmation work',
 );
 assert(
-  outbox.includes("confirmationProvider: 'shipstation'") &&
+  outbox.includes('const confirmationProvider = confirmationProviderForMissingShipment(row)') &&
+    outbox.includes('confirmationProvider,') &&
     outbox.includes('autoRecoveredMissingConfirmation'),
-  'auto recovery must enqueue ShipStation marketplace notification for existing labels',
+  'auto recovery must enqueue provider-resolved marketplace notification for existing labels',
+);
+assert(
+  outbox.includes("status: 'not_required'") &&
+    outbox.includes('without a marketplace/source connector must receive an explicit terminal') &&
+    outbox.includes('manual/internal shipped labels as not_required'),
+  'missing confirmation recovery must terminate manual/internal labels as not_required instead of leaving NULL',
+);
+assert(
+  printQueue.includes('enqueueMissingShipmentConfirmations') &&
+    printQueue.includes('repairMissingConfirmationForQueuedLabel') &&
+    printQueue.includes('await repairMissingConfirmationForQueuedLabel(order.orderId)'),
+  'print queue existing-label path must repair missing confirmation lifecycle without buying postage',
 );
 assert(
   outbox.includes('never creates/voids labels or rewrites shipment history'),
@@ -54,6 +69,12 @@ assert(
   recoveryScript.includes("if (args.apply && (!args.orderId || !args.shipmentId))") &&
     recoveryScript.includes("throw new Error('--apply requires exact --order-id and --shipment-id')"),
   'apply recovery must require exact order and shipment ids',
+);
+assert(
+  recoveryScript.includes('o.source_provider') &&
+    !recoveryScript.includes("o.external_order_id ~ '^[0-9]+$'") &&
+    recoveryScript.includes('plannedProviderPath: confirmationProviderForCandidate(row)'),
+  'dry-run recovery diagnostics must cover all source/store providers, not only numeric ShipStation ids',
 );
 assert(
   recoveryScript.includes('createsLabels: false') &&

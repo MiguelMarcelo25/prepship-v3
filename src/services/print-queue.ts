@@ -6,6 +6,7 @@ import { printQueue, type PrintQueueEntry } from '../db/schema/print-queue';
 import { settings } from '../db/schema/settings';
 import { shipments } from '../db/schema/shipments';
 import { extractShipstationLabelUrl } from '../lib/shipstation/labels';
+import { enqueueMissingShipmentConfirmations } from './fulfillment/outbox';
 import { createLabelV2, type CreateLabelInputDto } from './labels';
 
 export type AddToQueueInput = {
@@ -509,6 +510,26 @@ function timeoutAfter(ms: number, message: string): Promise<never> {
   });
 }
 
+async function repairMissingConfirmationForQueuedLabel(orderId: number | string): Promise<void> {
+  const parsedOrderId = Number(orderId);
+  if (!Number.isInteger(parsedOrderId) || parsedOrderId <= 0) return;
+  try {
+    // Per user override unlock shipped data on 2026-06-01: queueing an
+    // existing shipped label may repair only the missing confirmation lifecycle;
+    // it never creates labels, buys postage, marks printed, or notifies a marketplace directly.
+    await enqueueMissingShipmentConfirmations({
+      orderId: parsedOrderId,
+      limit: 5,
+      maxAgeHours: 24 * 14,
+    });
+  } catch (err) {
+    console.warn(
+      `[print-queue] missing confirmation repair failed orderId=${parsedOrderId}:`,
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
 async function processQueueSendOrder(
   order: QueueSendOrderInput
 ): Promise<QueueSendJobResult> {
@@ -543,6 +564,7 @@ async function processQueueSendOrder(
 
   if (!labelUrl) throw new Error('Label was created without a queueable URL');
   const queueableLabelUrl = normalizePrintQueueLabelUrl(labelUrl);
+  await repairMissingConfirmationForQueuedLabel(order.orderId);
 
   const { entry, alreadyQueued } = await addToQueue({
     clientId: order.clientId,

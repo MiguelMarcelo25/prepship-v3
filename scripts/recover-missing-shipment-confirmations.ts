@@ -65,6 +65,16 @@ function maskTracking(value: unknown): string | null {
   return `****${text.slice(-4)}`;
 }
 
+function confirmationProviderForCandidate(row: Record<string, unknown>): string {
+  const sourceProvider = String(row.source_provider ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (['manual', 'manual_orders', 'internal', 'none', 'no_marketplace'].includes(sourceProvider)) return 'not_required';
+  if (sourceProvider && sourceProvider !== 'unknown') return sourceProvider;
+  const externalOrderId = String(row.external_order_id ?? '').trim();
+  if (!externalOrderId) return 'not_required';
+  const match = externalOrderId.match(/^([a-z_]+)-(.+)$/i);
+  return (match?.[1] ?? 'shipstation').toLowerCase();
+}
+
 async function listCandidates(args: Args) {
   return sql`
     SELECT
@@ -90,7 +100,6 @@ async function listCandidates(args: Args) {
       AND pq.client_id = o.client_id
       AND pq.status = 'queued'
     WHERE o.order_status = 'shipped'
-      AND o.external_order_id ~ '^[0-9]+$'
       AND coalesce(s.voided, false) = false
       AND coalesce(s.is_return, false) = false
       AND s.label_url IS NOT NULL
@@ -149,7 +158,7 @@ async function main(): Promise<void> {
       confirmationStatus: row.confirmation_status,
       confirmationAttempts: row.confirmation_attempts,
       marketplaceConfirmedAt: row.marketplace_confirmed_at,
-      plannedProviderPath: 'shipstation',
+      plannedProviderPath: confirmationProviderForCandidate(row),
       plannedAction: 'enqueue fulfillment_outbox shipment_confirmation_requested',
     })),
   }, null, 2));

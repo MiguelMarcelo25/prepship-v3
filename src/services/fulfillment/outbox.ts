@@ -6,6 +6,7 @@ import { assertFulfillmentSchemaReady } from './schema-readiness';
 type OrderForConfirmation = {
   id: number;
   externalOrderId: string | null;
+  sourceProvider?: string | null;
   clientId: number | null;
   orderNumber: string | null;
 };
@@ -46,6 +47,24 @@ export function inferStoreProvider(externalOrderId: string | null | undefined): 
   return provider;
 }
 
+function normalizeSourceProvider(value: string | null | undefined): string | null {
+  const provider = String(value ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (!provider || provider === 'unknown') return null;
+  return provider;
+}
+
+function isNoMarketplaceProvider(provider: string | null): boolean {
+  return provider != null && ['manual', 'manual_orders', 'internal', 'none', 'no_marketplace'].includes(provider);
+}
+
+function confirmationProviderForOrder(order: OrderForConfirmation): string | null {
+  const sourceProvider = normalizeSourceProvider(order.sourceProvider);
+  if (isNoMarketplaceProvider(sourceProvider)) return null;
+  if (sourceProvider) return sourceProvider;
+  if (!order.externalOrderId) return null;
+  return inferStoreProvider(order.externalOrderId);
+}
+
 function sourceOrderId(externalOrderId: string | null | undefined): string | null {
   if (!externalOrderId) return null;
   const match = externalOrderId.match(/^[a-z_]+-(.+)$/i);
@@ -64,7 +83,7 @@ export async function ensureFulfillmentSchema(): Promise<void> {
 
 export async function recordOrderSourceIfNeeded(order: OrderForConfirmation): Promise<void> {
   await ensureFulfillmentSchema();
-  const provider = inferStoreProvider(order.externalOrderId);
+  const provider = confirmationProviderForOrder(order) ?? 'none';
   await pg`
     UPDATE orders
     SET
@@ -119,7 +138,21 @@ export async function enqueueShipmentConfirmation(
     return { queued: false, provider: 'none' };
   }
 
-  const provider = input.confirmationProvider ?? inferStoreProvider(input.order.externalOrderId);
+  const provider = input.confirmationProvider ?? confirmationProviderForOrder(input.order);
+  if (!provider) {
+    // Per user override unlock shipped data on 2026-06-01: shipped labels
+    // without a marketplace/source connector must receive an explicit terminal
+    // confirmation state, not stay NULL.
+    await markShipmentConfirmationState({
+      shipmentId: input.shipmentId,
+      carrierProvider: String(input.payload?.carrierProvider ?? 'unknown'),
+      carrierAccountId: input.payload?.carrierAccountId as string | number | null | undefined,
+      confirmationProvider: 'none',
+      status: 'not_required',
+      lastError: 'No marketplace/source confirmation required for this shipment',
+    });
+    return { queued: false, provider: 'none' };
+  }
   const resolvedStoreConnector = resolveStoreConnector(provider, 'shipment.confirm');
   if (!resolvedStoreConnector || resolvedStoreConnector.implementation.status !== 'live') {
     const reason = !resolvedStoreConnector
@@ -191,6 +224,7 @@ export async function enqueueShipmentConfirmation(
 type MissingShipmentConfirmationRow = {
   order_id: number;
   external_order_id: string | null;
+  source_provider: string | null;
   client_id: number | null;
   order_number: string | null;
   shipment_id: number;
@@ -208,6 +242,14 @@ function dateOnly(value: string | Date | null | undefined): string {
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return new Date().toISOString().slice(0, 10);
   return date.toISOString().slice(0, 10);
+}
+
+function confirmationProviderForMissingShipment(row: MissingShipmentConfirmationRow): string | null {
+  const sourceProvider = normalizeSourceProvider(row.source_provider);
+  if (isNoMarketplaceProvider(sourceProvider)) return null;
+  if (sourceProvider && sourceProvider !== 'unknown') return sourceProvider;
+  if (!row.external_order_id) return null;
+  return inferStoreProvider(row.external_order_id);
 }
 
 export async function enqueueMissingShipmentConfirmations(options: {
@@ -231,6 +273,7 @@ export async function enqueueMissingShipmentConfirmations(options: {
     SELECT
       o.id AS order_id,
       o.external_order_id,
+      o.source_provider,
       o.client_id,
       o.order_number,
       s.id AS shipment_id,
@@ -244,7 +287,6 @@ export async function enqueueMissingShipmentConfirmations(options: {
     FROM shipments s
     INNER JOIN orders o ON o.id = s.order_id
     WHERE o.order_status = 'shipped'
-      AND o.external_order_id ~ '^[0-9]+$'
       AND coalesce(s.voided, false) = false
       AND coalesce(s.is_return, false) = false
       AND s.label_url IS NOT NULL
@@ -270,10 +312,26 @@ export async function enqueueMissingShipmentConfirmations(options: {
   let failed = 0;
   for (const row of rows) {
     try {
+      const confirmationProvider = confirmationProviderForMissingShipment(row);
+      if (!confirmationProvider) {
+        // Per user override unlock shipped data on 2026-06-01: recovery marks
+        // manual/internal shipped labels as not_required instead of mutating
+        // label, postage, print, or marketplace state.
+        await markShipmentConfirmationState({
+          shipmentId: row.shipment_id,
+          carrierProvider: String(row.label_provider ?? 'unknown'),
+          carrierAccountId: row.provider_account_id ?? row.label_provider ?? null,
+          confirmationProvider: 'none',
+          status: 'not_required',
+          lastError: 'No marketplace/source confirmation required for manual/internal shipment',
+        });
+        continue;
+      }
       const result = await enqueueShipmentConfirmation({
         order: {
           id: row.order_id,
           externalOrderId: row.external_order_id,
+          sourceProvider: row.source_provider,
           clientId: row.client_id,
           orderNumber: row.order_number,
         },
@@ -281,9 +339,9 @@ export async function enqueueMissingShipmentConfirmations(options: {
         trackingNumber: row.tracking_number,
         carrierCode: row.carrier_code,
         shipDate: dateOnly(row.ship_date ?? row.label_ship_date),
-        confirmationProvider: 'shipstation',
+        confirmationProvider,
         payload: {
-          carrierProvider: 'shipstation',
+          carrierProvider: row.label_provider ?? confirmationProvider,
           carrierAccountId: row.provider_account_id ?? row.label_provider ?? null,
           shipStationShipmentId: row.label_shipment_id,
           notifyCustomer: false,

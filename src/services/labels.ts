@@ -617,14 +617,24 @@ function normalizeConfirmationProvider(value: unknown): MarketplaceConfirmationP
   return null;
 }
 
+function isNoMarketplaceSource(value: unknown): boolean {
+  const text = firstText(value).toLowerCase().replace(/[\s-]+/g, '_');
+  return ['manual', 'manual_orders', 'internal', 'none', 'no_marketplace'].includes(text);
+}
+
 function stripProviderPrefix(externalOrderId: string | null | undefined, provider: string): string {
   const text = firstText(externalOrderId);
   const prefix = `${provider}-`;
   return text.toLowerCase().startsWith(prefix) ? text.slice(prefix.length) : '';
 }
 
-function confirmationProviderForOrder(order: typeof orders.$inferSelect): MarketplaceConfirmationProvider {
+function confirmationProviderForOrder(order: typeof orders.$inferSelect): MarketplaceConfirmationProvider | null {
+  if (isNoMarketplaceSource(order.sourceProvider)) return null;
+  const fromSourceProvider = normalizeConfirmationProvider(order.sourceProvider);
+  if (fromSourceProvider) return fromSourceProvider;
+
   const raw = order.raw ?? {};
+  if (isNoMarketplaceSource(raw.source_provider ?? raw.sourceProvider ?? raw.source ?? raw.provider)) return null;
   const fromRaw = normalizeConfirmationProvider(
     raw.source_provider ??
     raw.sourceProvider ??
@@ -635,8 +645,19 @@ function confirmationProviderForOrder(order: typeof orders.$inferSelect): Market
   );
   if (fromRaw) return fromRaw;
 
+  if (!firstText(order.externalOrderId)) return null;
   const fromExternalId = normalizeConfirmationProvider(inferStoreProvider(order.externalOrderId));
   return fromExternalId ?? 'shipstation';
+}
+
+function baseConfirmationPayload(created: CreatedExternalLabel): Record<string, unknown> {
+  return {
+    carrierProvider: 'shipstation',
+    carrierAccountId: created.providerAccountId,
+    shipStationShipmentId: created.shipmentId,
+    notifyCustomer: false,
+    notifyMarketplace: false,
+  };
 }
 
 function carrierNameForMarketplace(carrierCode: string | null | undefined): string {
@@ -1106,13 +1127,17 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
   // Queue marketplace confirmation separately from label purchase. The label
   // response stays fast, while fulfillment_outbox owns retries and failure state.
   const confirmationProvider = confirmationProviderForOrder(order);
+  const confirmationPayload = confirmationProvider
+    ? marketplaceConfirmationPayload(order, created, confirmationProvider)
+    : baseConfirmationPayload(created);
   try {
-    // Per user override unlock shipped data on 2026-05-23: marketplace
+    // Per user override unlock shipped data on 2026-06-01: marketplace
     // confirmation enqueue failures must not block shipped-label queue recovery.
     await timer.task('enqueue marketplace confirmation', () => enqueueShipmentConfirmation({
       order: {
         id: order.id,
         externalOrderId: order.externalOrderId,
+        sourceProvider: order.sourceProvider,
         clientId,
         orderNumber: order.orderNumber ?? null,
       },
@@ -1121,7 +1146,7 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
       carrierCode: created.carrierCode,
       shipDate: created.shipDate,
       confirmationProvider,
-      payload: marketplaceConfirmationPayload(order, created, confirmationProvider),
+      payload: confirmationPayload,
     }));
   } catch (err) {
     console.warn('[labels] marketplace confirmation enqueue failed:', err instanceof Error ? err.message : err);
