@@ -1067,20 +1067,26 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
   // Queue marketplace confirmation separately from label purchase. The label
   // response stays fast, while fulfillment_outbox owns retries and failure state.
   const confirmationProvider = confirmationProviderForOrder(order);
-  await timer.task('enqueue marketplace confirmation', () => enqueueShipmentConfirmation({
-    order: {
-      id: order.id,
-      externalOrderId: order.externalOrderId,
-      clientId,
-      orderNumber: order.orderNumber ?? null,
-    },
-    shipmentId: localShipmentId,
-    trackingNumber: created.trackingNumber,
-    carrierCode: created.carrierCode,
-    shipDate: created.shipDate,
-    confirmationProvider,
-    payload: marketplaceConfirmationPayload(order, created, confirmationProvider),
-  }));
+  try {
+    // Per user override unlock shipped data on 2026-05-23: marketplace
+    // confirmation enqueue failures must not block shipped-label queue recovery.
+    await timer.task('enqueue marketplace confirmation', () => enqueueShipmentConfirmation({
+      order: {
+        id: order.id,
+        externalOrderId: order.externalOrderId,
+        clientId,
+        orderNumber: order.orderNumber ?? null,
+      },
+      shipmentId: localShipmentId,
+      trackingNumber: created.trackingNumber,
+      carrierCode: created.carrierCode,
+      shipDate: created.shipDate,
+      confirmationProvider,
+      payload: marketplaceConfirmationPayload(order, created, confirmationProvider),
+    }));
+  } catch (err) {
+    console.warn('[labels] marketplace confirmation enqueue failed:', err instanceof Error ? err.message : err);
+  }
 
   timer.background('marketplace confirmation outbox', () =>
     processFulfillmentOutboxOnce({ orderId: order.id, limit: 5 }).then(() => undefined)

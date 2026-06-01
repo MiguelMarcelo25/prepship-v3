@@ -150,6 +150,8 @@ const queueSendLabelBody = z.object({
   width: z.number().nonnegative().optional(),
   height: z.number().nonnegative().optional(),
   confirmation: z.string().optional(),
+  insuranceProvider: z.string().nullable().optional(),
+  insuredValue: z.number().nullable().optional(),
   testLabel: z.boolean().optional(),
 });
 
@@ -202,6 +204,8 @@ app.post('/batch-send', zValidator('json', queueSendBody), async (c) => {
             width: order.label.width,
             height: order.label.height,
             confirmation: order.label.confirmation,
+            insuranceProvider: order.label.insuranceProvider ?? undefined,
+            insuredValue: order.label.insuredValue ?? undefined,
             testLabel: order.label.testLabel,
           }
         : undefined,

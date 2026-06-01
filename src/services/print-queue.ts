@@ -532,8 +532,11 @@ async function processQueueSendOrder(
         trackingNumber = created.trackingNumber;
       } catch (err) {
         existingLabelUrl = getExistingLabelUrl(err);
-        if (!existingLabelUrl) throw err;
-        labelUrl = existingLabelUrl;
+        // Per user override unlock shipped data on 2026-05-23: recover labels
+        // that were persisted before a later post-label queue step failed.
+        const recoverCreatedLabelUrl = existingLabelUrl ?? await findExistingQueueableLabelForOrder(order.orderId);
+        if (!recoverCreatedLabelUrl) throw err;
+        labelUrl = recoverCreatedLabelUrl;
       }
     }
   }

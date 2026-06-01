@@ -3945,7 +3945,7 @@ export default function OrdersView({
     }
   }
 
-  function buildQueueSendOrderPayload(order: OrderSummaryDto, options: { existingLabelOnly?: boolean; batchTestMode?: boolean } = {}) {
+  function buildQueueSendOrderPayload(order: OrderSummaryDto, options: { existingLabelOnly?: boolean; batchTestMode?: boolean; labelPayloadOverrides?: Map<number, Record<string, unknown>> } = {}) {
     if (order.clientId == null) {
       return { payload: null, items: [], error: 'Missing client id', order }
     }
@@ -3992,7 +3992,7 @@ export default function OrdersView({
       const effectiveWeightOz = weightOz > 0 ? weightOz : orderIsTest ? 1 : 0
       const shippingOptions = buildOrderShippingOptionsPayload(order)
 
-      payload.label = {
+      payload.label = options.labelPayloadOverrides?.get(order.orderId) ?? {
         serviceCode: effectiveServiceCode,
         carrierCode: effectiveCarrierCode,
         packageCode: 'package',
@@ -4073,6 +4073,7 @@ export default function OrdersView({
       label?: string
       batchTestMode?: boolean
       existingLabelOnly?: boolean
+      labelPayloadOverrides?: Map<number, Record<string, unknown>>
     },
   ) {
     const queueJobId = beginPersistentQueueJob(options.kind, jobOrders, {
@@ -4367,29 +4368,34 @@ export default function OrdersView({
     singleActionBusyRef.current = true
     setSingleActionBusy(true)
     try {
+      if (mode === 'queue') {
+        // Per user override unlock shipped data on 2026-05-23: route Print to
+        // Queue through the backend create/recover-and-queue path so a label
+        // cannot be bought and shipped without queue recovery.
+        const result = await sendOrdersToQueueBackend([order], {
+          kind: 'existing-labels',
+          label: 'Sending to queue',
+          labelPayloadOverrides: new Map([[order.orderId, payload as unknown as Record<string, unknown>]]),
+        })
+        if (result.queued > 0) {
+          showToast(
+            formatQueuedOrderToast(
+              order.orderNumber ?? order.orderId,
+              getActiveItems(order, orderDetailsById.get(order.orderId) ?? null),
+            ),
+            'success',
+          )
+        } else {
+          showToast(result.skippedErrors[0] ?? 'Label was not added to the print queue', 'error')
+        }
+        return schedulePostLabelFollowups({ orderStatus: 'shipped' })
+      }
+
       const labelRequestStarted = performance.now()
       const response = await apiClient.createLabel(payload)
       console.info(`[label-create] frontend apiClient.createLabel ${Math.round(performance.now() - labelRequestStarted)}ms`)
       const queueableLabelUrl = getQueueableLabelUrl(response.labelUrl)
-      if (mode === 'queue') {
-        if (!queueableLabelUrl) {
-          showToast('Label URL is not queueable - the label may have been created, but it was not added to the print queue. Refresh Orders and retry reprint/queue.', 'error')
-          return schedulePostLabelFollowups(response)
-        }
-        if (order.clientId == null) {
-          showToast('Missing client id - label was not added to the print queue', 'error')
-          return schedulePostLabelFollowups(response)
-        }
-        await apiClient.addToQueue(buildQueueAddPayload(order, queueableLabelUrl))
-        await hydrateQueue(true)
-        showToast(
-          formatQueuedOrderToast(
-            order.orderNumber ?? order.orderId,
-            getActiveItems(order, orderDetailsById.get(order.orderId) ?? null),
-          ),
-          'success',
-        )
-      } else if (queueableLabelUrl) {
+      if (queueableLabelUrl) {
         openLabelPdfUrl(queueableLabelUrl, labelPopup)
         if (response?.meta?.walmartShipmentConfirmed === false) {
           const confirmError = toStringValue(response.meta.walmartShipmentConfirmError)

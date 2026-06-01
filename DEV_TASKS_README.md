@@ -1872,6 +1872,18 @@ DJ provided PS-050 on 2026-06-01 as an updated replacement task. This supersedes
 
 See [docs/ps-050-awaiting-shipment-rate-accuracy-autostart.md](docs/ps-050-awaiting-shipment-rate-accuracy-autostart.md) for the full replacement task prompt, safety clarification, implementation requirements, test plan, verification commands, definition of done, and return format.
 
+## Official PS-053 Print To Queue Atomic Recovery Task
+
+DJ provided PS-053 on 2026-06-01 as the official task for the Print to Queue partial-success failure where label/postage creation can succeed, the order can move shipped, but no print queue row is created.
+
+| ID | Title | Risk | Why It Matters | Scope | Completion Evidence |
+| --- | --- | --- | --- | --- | --- |
+| PS-053 | Make Print to Queue Atomic and Recover Label-Created/Not-Queued Partial Success | Critical shipping workflow atomicity | Operators can buy postage and move an order to shipped while the label never appears in Print Queue, creating a paid-label/no-queue recovery gap and confusing red errors such as Buffer/Object type failures. | Make queue-mode label creation/recovery idempotent and atomic from the operator perspective; normalize object-shaped label URL/PDF payloads; recover active labels into queue after post-label errors; decouple marketplace confirmation failures from queue success; prevent duplicate postage and duplicate active queue rows. | Typecheck, web build, source-of-truth guard, Orders UX browser suite, Orders column-integrity E2E, and new focused PS-053 backend/workflow tests covering queue success, post-label partial success recovery, existing-label queueing, object-shaped label payloads, queue idempotency, and marketplace outbox failure behavior. No live postage, labels, marketplace notifications, shipped/cancelled production mutations, secrets, or PII exposure. |
+
+### PS-053 Copy/Paste Handoff
+
+See [docs/ps-053-print-to-queue-atomic-recovery.md](docs/ps-053-print-to-queue-atomic-recovery.md) for the full task prompt, safety invariant, implementation requirements, regression coverage, verification commands, definition of done, and return format.
+
 ## Recommended Next Order
 
 1. Finish production verification after this batch deploys.
