@@ -42,11 +42,20 @@ export function getClientStoreScope(auth: ScopeAuth): ClientStoreScope {
   const requiresExplicitScope =
     auth.role === 'client_user' || auth.role === 'read_only_support';
 
+  if (explicitGlobal) {
+    return {
+      clientIds: [],
+      storeIds: [],
+      isGlobal: true,
+      isRestricted: false,
+    };
+  }
+
   return {
     clientIds,
     storeIds,
-    isGlobal: explicitGlobal,
-    isRestricted: !explicitGlobal && (hasExplicitScope || requiresExplicitScope),
+    isGlobal: false,
+    isRestricted: hasExplicitScope || requiresExplicitScope,
   };
 }
 

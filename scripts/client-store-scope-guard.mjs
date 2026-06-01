@@ -39,6 +39,13 @@ assert(scopeSource.includes('filterClientsForScope'), 'client/store scope helper
 assert(scopeSource.includes('isClientVisibleToScope'), 'client/store scope helper checks single client visibility');
 assert(scopeSource.includes('client_user') && scopeSource.includes('read_only_support'), 'client/store scope helper handles externally scoped roles');
 assert(scopeSource.includes('scope:global'), 'client/store scope helper supports explicit global scope permission');
+assert(
+  scopeSource.includes('if (explicitGlobal)') &&
+    scopeSource.includes('clientIds: []') &&
+    scopeSource.includes('storeIds: []') &&
+    scopeSource.includes('isRestricted: false'),
+  'global admins ignore assigned client/store claims and keep unrestricted scope',
+);
 
 assert(
   clientsSource.includes('filterClientsForScope') &&
