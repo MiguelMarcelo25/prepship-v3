@@ -1920,6 +1920,30 @@ DJ provided PS-057 on 2026-06-01 as a standalone client-scoped shipping service 
 
 See [docs/ps-057-disable-ups-ground-saver-hugrab.md](docs/ps-057-disable-ups-ground-saver-hugrab.md) for the full task prompt, client-scoped invariant, blocked service identifiers, implementation requirements, testing requirements, definition of done, and return format.
 
+## Official PS-058 Select Current Page vs All Matching Orders Task
+
+DJ provided PS-058 on 2026-06-01 as a standalone Orders selection correctness task. This must make Select All scope explicit so operators can choose the current loaded page or the complete filtered result set across pagination.
+
+| ID | Title | Risk | Why It Matters | Scope | Completion Evidence |
+| --- | --- | --- | --- | --- | --- |
+| PS-058 | Add Select Current Page vs Select All Matching Orders Across Pages | Critical batch workflow correctness | Awaiting Shipment can show 70 matching HUGRAB orders with page size 50, but the current Select All only selects visible rows. Operators need unambiguous page-only versus all-matching selection before queue/create-print/export workflows run. | Add explicit Select page vs Select all matching UX; retrieve all matching IDs using the exact active filters and auth scope; prevent stale hidden selections on filter changes; ensure batch actions process off-page selected IDs or block clearly; label SKU Sort/group selection as page-local unless cross-page group selection is implemented. | Typecheck, web build, Orders UX browser coverage, Orders column-integrity coverage, new API/contract tests for matching-ID retrieval/scope, new browser tests for 70-total/page-size-50 selection, and batch dry-run/mock tests proving all 70 selected IDs are passed without live labels, postage, marketplace notifications, or unsafe order mutations. |
+
+### PS-058 Copy/Paste Handoff
+
+See [docs/ps-058-select-current-page-vs-all-matching-orders.md](docs/ps-058-select-current-page-vs-all-matching-orders.md) for the full task prompt, selection-scope invariant, implementation requirements, testing requirements, definition of done, and return format.
+
+## Official PS-064 Print Queue Confirmation Outbox Task
+
+DJ provided PS-064 on 2026-06-01 as a new official shipping-critical task after order `#1149` showed a locally-created shipped label with tracking and print queue state, but no ShipStation/source confirmation lifecycle.
+
+| ID | Title | Risk | Why It Matters | Scope | Completion Evidence |
+| --- | --- | --- | --- | --- | --- |
+| PS-064 | Fix Print Queue Label Creation Missing ShipStation/Marketplace Confirmation Outbox | Critical source confirmation and marketplace sync correctness | A real HUGRAB/Shopify-through-ShipStation order (`#1149`) had a local shipped label and tracking, but `fulfillment_outbox` was empty and shipment confirmation fields were null. Local shipped state must not be mistaken for ShipStation/marketplace confirmation. | Prove the root cause in Print Queue/batch-send label creation or existing-label recovery; ensure every locally-created shipped label records an explicit confirmation lifecycle; repair missing outbox/status idempotently without duplicate postage; use ShipStation upstream order ids for ShipStation-sourced orders; add dry-run-first diagnostics/recovery for `#1149`-style cases. | Typecheck plus print-queue invalid-label/durable/persistence/ownership/client-scope diagnostics, marketplace confirmation guards, mocked smoke confirmation, new PS-064 confirmation-outbox/repair tests, and read-only diagnostics for order `#1149`. No duplicate label/postage, live marketplace/source notification, or unsafe shipped/cancelled mutation without DJ approval. |
+
+### PS-064 Copy/Paste Handoff
+
+See [docs/ps-064-print-queue-confirmation-outbox.md](docs/ps-064-print-queue-confirmation-outbox.md) for the full task prompt, root-cause investigation requirements, Print Queue/outbox invariants, safe recovery command requirements, test matrix, definition of done, and return format.
+
 ## Recommended Next Order
 
 1. Finish production verification after this batch deploys.
