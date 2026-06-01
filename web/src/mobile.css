@@ -536,12 +536,55 @@
     max-height: 70vh;
   }
 
-  #view-inventory .ps-data-table-scroll,
+  /* Inventory (per request 2026-06-01): keep a REAL, horizontally
+     scrollable table on phones instead of the stacked-card transform used
+     for Packages below. Inventory is intentionally excluded from the
+     card-ization rules and instead uses the generic .ps-data-table-scroll
+     behavior — overflow-x:auto with a sticky first (SKU) column — so the
+     full column set is preserved and the operator swipes sideways to read
+     more, exactly like the desktop table. */
+  #view-inventory .ps-data-table-scroll {
+    overflow-x: auto !important;
+    overflow-y: visible !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* The desktop table is `table-fixed`, which on a phone collapses all ~15
+     columns to an equal ~60px each. At 60px the Actions cell stacks its 4
+     buttons vertically, blowing each row up to ~216px tall. Switch to
+     table-auto + nowrap so every column sizes to its own content (Actions
+     fits its buttons on one row) and the operator swipes horizontally. */
+  #view-inventory .ps-data-table-scroll > table {
+    table-layout: auto !important;
+    width: max-content !important;
+    min-width: 100% !important;
+  }
+
+  #view-inventory .ps-data-table-scroll th,
+  #view-inventory .ps-data-table-scroll td {
+    white-space: nowrap !important;
+  }
+
+  /* The product name is the one genuinely long field — let it wrap and clamp
+     so it doesn't stretch the whole table to a single huge column. */
+  #view-inventory .ps-data-table-scroll th[data-col-key='name'],
+  #view-inventory .ps-data-table-scroll td[data-col-key='name'] {
+    white-space: normal !important;
+    max-width: 220px;
+    min-width: 160px;
+  }
+
+  /* Keep the row action buttons on one line (they default to a wrapping
+     flex row, which is what stacked them in the narrow fixed column). */
+  #view-inventory .ps-data-table-scroll td[data-col-key='actions'] > * {
+    flex-wrap: nowrap !important;
+  }
+
+  /* Packages keeps the stacked-card layout. */
   #view-packages .ps-data-table-scroll {
     overflow: visible !important;
   }
 
-  #view-inventory .ps-data-table-scroll > table,
   #view-packages .ps-data-table-scroll > table {
     display: block !important;
     min-width: 0 !important;
@@ -549,21 +592,17 @@
     table-layout: auto !important;
   }
 
-  #view-inventory .ps-data-table-scroll colgroup,
-  #view-inventory .ps-data-table-scroll thead,
   #view-packages .ps-data-table-scroll colgroup,
   #view-packages .ps-data-table-scroll thead {
     display: none !important;
   }
 
-  #view-inventory .ps-data-table-scroll tbody,
   #view-packages .ps-data-table-scroll tbody {
     display: grid;
     gap: 10px;
     width: 100%;
   }
 
-  #view-inventory .ps-data-table-scroll tbody tr,
   #view-packages .ps-data-table-scroll tbody tr {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -577,12 +616,10 @@
     box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
   }
 
-  #view-inventory .ps-data-table-scroll tbody tr:hover,
   #view-packages .ps-data-table-scroll tbody tr:hover {
     background: var(--surface) !important;
   }
 
-  #view-inventory .ps-data-table-scroll td,
   #view-packages .ps-data-table-scroll td {
     position: static !important;
     left: auto !important;
@@ -598,7 +635,6 @@
     background: transparent !important;
   }
 
-  #view-inventory .ps-data-table-scroll td[data-col-key],
   #view-packages .ps-data-table-scroll td[data-col-key] {
     display: flex;
     flex-direction: column;
@@ -606,7 +642,6 @@
     min-height: 0;
   }
 
-  #view-inventory .ps-data-table-scroll td[data-col-label]::before,
   #view-packages .ps-data-table-scroll td[data-col-label]::before {
     content: attr(data-col-label);
     color: var(--text3);
@@ -617,30 +652,23 @@
     text-transform: uppercase;
   }
 
-  #view-inventory .ps-data-table-scroll td[colspan],
   #view-packages .ps-data-table-scroll td[colspan],
-  #view-inventory .ps-data-table-scroll td[data-col-key='sku'],
-  #view-inventory .ps-data-table-scroll td[data-col-key='name'],
-  #view-inventory .ps-data-table-scroll td[data-col-key='actions'],
   #view-packages .ps-data-table-scroll td[data-col-key='package'],
   #view-packages .ps-data-table-scroll td[data-col-key='actions'] {
     grid-column: 1 / -1;
   }
 
-  #view-inventory .ps-data-table-scroll td[data-col-key='sku'],
   #view-packages .ps-data-table-scroll td[data-col-key='package'] {
     padding-bottom: 4px !important;
     border-bottom: 1px solid var(--border) !important;
   }
 
-  #view-inventory .ps-data-table-scroll td[data-col-key='stock'],
   #view-packages .ps-data-table-scroll td[data-col-key='stock'],
   #view-packages .ps-data-table-scroll td[data-col-key='stockQty'] {
     font-size: 16px;
     font-weight: 800;
   }
 
-  #view-inventory .ps-data-table-scroll td[data-col-key='actions'] > *,
   #view-packages .ps-data-table-scroll td[data-col-key='actions'] > * {
     justify-content: flex-start;
     flex-wrap: wrap;
