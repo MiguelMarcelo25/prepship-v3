@@ -3951,7 +3951,10 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
             </div>
             <div className="overflow-x-auto">
               <div className="min-w-0 md:min-w-[900px]">
-                <div className="grid grid-cols-[32px_minmax(0,1fr)_42px] items-center border-b border-line bg-surface-2 px-4 py-2 text-[10px] font-extrabold uppercase tracking-[0.04em] text-ink-3 md:grid-cols-[44px_minmax(420px,1fr)_minmax(220px,0.8fr)_96px_150px_48px]">
+                {/* Desktop column header. Hidden on phones — there each row
+                    is a self-labeling card (see below), so a shared header
+                    row would just be noise. */}
+                <div className="grid grid-cols-[32px_minmax(0,1fr)_42px] items-center border-b border-line bg-surface-2 px-4 py-2 text-[10px] font-extrabold uppercase tracking-[0.04em] text-ink-3 max-md:hidden md:grid-cols-[44px_minmax(420px,1fr)_minmax(220px,0.8fr)_96px_150px_48px]">
                   <div>#</div>
                   <div>SKU or product</div>
                   <div className="hidden md:block">Details</div>
@@ -3959,7 +3962,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                   <div className="hidden text-right md:block">Units</div>
                   <div />
                 </div>
-            <div id="inv-recv-rows" className="divide-y divide-line">
+            <div id="inv-recv-rows" className="divide-y divide-line max-md:divide-y-0 max-md:space-y-3 max-md:p-3">
               {receiveRows.map((row, index) => {
                 const rawSku = row.sku.trim()
                 const lookup =
@@ -3972,10 +3975,14 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                 const packQty = Number.parseInt(row.qty, 10) || 0
                 const unitsPerPack = Math.max(1, Number.parseInt(String(lookup?.unitsPerPack ?? 1), 10) || 1)
                 const rowTotalUnits = packQty > 0 ? packQty * unitsPerPack : 0
+                // PS mobile: below md each row becomes a 2-col card - row# +
+                // delete on top, full-width SKU search and product name, then
+                // labeled Qty + Units side by side. Desktop keeps the flat
+                // 6-col table grid (md: classes).
                 return (
-                  <div key={row.id} className="grid grid-cols-[32px_minmax(0,1fr)_42px] items-start gap-3 px-4 py-3 transition-colors hover:bg-surface-2/70 md:grid-cols-[44px_minmax(420px,1fr)_minmax(220px,0.8fr)_96px_150px_48px]">
+                  <div key={row.id} className="grid items-start gap-3 px-4 py-3 transition-colors hover:bg-surface-2/70 max-md:grid-cols-2 max-md:gap-x-3 max-md:gap-y-2.5 max-md:rounded-xl max-md:border max-md:border-line max-md:bg-surface max-md:shadow-sm md:grid-cols-[44px_minmax(420px,1fr)_minmax(220px,0.8fr)_96px_150px_48px]">
                     <div className="contents">
-                      <div className="pt-2 text-[11px] font-bold tabular-nums text-ink-3">{index + 1}</div>
+                      <div className="pt-2 text-[11px] font-bold tabular-nums text-ink-3 max-md:col-start-1 max-md:row-start-1 max-md:self-center max-md:pt-0 max-md:text-[12px] max-md:uppercase max-md:tracking-wide"><span className="hidden max-md:inline">Row </span>{index + 1}</div>
                       {/* 2026-05-15: Was a native <input list=
                           "react-recv-sku-datalist">. Chrome rendered
                           that as an unstyleable, unfilterable 300+
@@ -3987,7 +3994,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                           component (web/src/components/Autosuggest.tsx)
                           ready for parent-SKU picker, bulk-edit,
                           new-order modal next. */}
-                      <div className="min-w-0 max-md:col-span-2">
+                      <div className="min-w-0 max-md:col-span-2 max-md:col-start-1 max-md:row-start-2">
                         <Autosuggest
                           value={row.sku}
                           options={receiveSkuOptions}
@@ -4029,7 +4036,7 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                           ) : null}
                         </div>
                       </div>
-                      <div className="min-w-0 pt-1 max-md:col-span-2 max-md:col-start-2 md:block">
+                      <div className="min-w-0 pt-1 max-md:col-span-2 max-md:col-start-1 max-md:row-start-3 max-md:pt-0 md:block">
                         {row.name ? (
                           <div className="truncate text-[11.5px] font-semibold text-ink" title={row.name}>
                             {row.name}
@@ -4038,7 +4045,8 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                           <div className="text-[11.5px] text-ink-3">Select a SKU to fill details</div>
                         )}
                       </div>
-                      <div className="max-md:col-start-2 max-md:w-28">
+                      <div className="max-md:col-start-1 max-md:row-start-4">
+                        <span className="mb-1 hidden text-[10px] font-bold uppercase tracking-[0.04em] text-ink-3 max-md:block">Qty (packs)</span>
                         <input
                           type="number"
                           className={`${RECEIVE_INPUT_CLASS} h-9 text-right tabular-nums`}
@@ -4048,11 +4056,12 @@ export default function InventoryView({ onOpenOrder, initialTab, activeTab: cont
                           onChange={(event) => setReceiveRows((current) => current.map((entry) => entry.id === row.id ? { ...entry, qty: event.target.value } : entry))}
                         />
                       </div>
-                      <div className="pt-1.5 text-right max-md:col-start-2 max-md:text-left">
-                        <div className="text-[13px] font-extrabold tabular-nums text-ink">{rowTotalUnits || '-'}</div>
+                      <div className="pt-1.5 text-right max-md:col-start-2 max-md:row-start-4 max-md:pt-0">
+                        <span className="mb-1 hidden text-[10px] font-bold uppercase tracking-[0.04em] text-ink-3 max-md:block">Units</span>
+                        <div className="text-[13px] font-extrabold tabular-nums text-ink max-md:text-[15px]">{rowTotalUnits || '-'}</div>
                         <div className="mt-0.5 min-h-[14px] text-[10px] font-bold text-brand">{hints.totalHint ?? ''}</div>
                       </div>
-                      <button className="mt-1 inline-flex h-8 w-8 items-center justify-center rounded-md text-ink-3 transition hover:bg-danger-bg hover:text-danger focus:outline-none focus:ring-2 focus:ring-danger/20 max-md:col-start-3 max-md:row-start-1" type="button" onClick={() => setReceiveRows((current) => current.length === 1 ? [createReceiveDraftRow()] : current.filter((entry) => entry.id !== row.id))} title="Remove row" aria-label={`Remove receive row ${index + 1}`}>
+                      <button className="mt-1 inline-flex h-8 w-8 items-center justify-center rounded-md text-ink-3 transition hover:bg-danger-bg hover:text-danger focus:outline-none focus:ring-2 focus:ring-danger/20 max-md:col-start-2 max-md:row-start-1 max-md:mt-0 max-md:justify-self-end max-md:self-center" type="button" onClick={() => setReceiveRows((current) => current.length === 1 ? [createReceiveDraftRow()] : current.filter((entry) => entry.id !== row.id))} title="Remove row" aria-label={`Remove receive row ${index + 1}`}>
                         <Trash2 size={15} strokeWidth={2} />
                       </button>
                     </div>
