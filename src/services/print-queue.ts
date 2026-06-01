@@ -177,6 +177,20 @@ export function isPrintQueueAccessError(err: unknown): err is PrintQueueAccessEr
   return err instanceof PrintQueueAccessError;
 }
 
+export class PrintQueueDurableStatusError extends Error {
+  status = 503 as const;
+  code = 'PRINT_QUEUE_STATUS_UNAVAILABLE' as const;
+
+  constructor(message = 'Print queue status could not be saved. Please retry in a moment.') {
+    super(message);
+    this.name = 'PrintQueueDurableStatusError';
+  }
+}
+
+export function isPrintQueueDurableStatusError(err: unknown): err is PrintQueueDurableStatusError {
+  return err instanceof PrintQueueDurableStatusError;
+}
+
 // Per user override unlock shipped data on 2026-05-23: shipped-label queue
 // handling unwraps known provider label URL objects while still rejecting empty/corrupt values.
 function normalizePrintQueueLabelUrl(labelUrl: unknown): string {
@@ -269,7 +283,10 @@ function toMergeSnapshot(job: MergeJob): MergeJobSnapshot {
   };
 }
 
-export async function persistQueueSendJobSnapshot(job: QueueSendJob): Promise<void> {
+export async function persistQueueSendJobSnapshot(
+  job: QueueSendJob,
+  options: { required?: boolean } = {},
+): Promise<void> {
   try {
     const value = JSON.stringify(toQueueSendSnapshot(job));
     const jobKey = queueSendJobStatusKey(job.jobId);
@@ -288,6 +305,9 @@ export async function persistQueueSendJobSnapshot(job: QueueSendJob): Promise<vo
       '[print-queue] failed to persist batch-send status:',
       err instanceof Error ? err.message : err
     );
+    if (options.required) {
+      throw new PrintQueueDurableStatusError();
+    }
   }
 }
 
@@ -752,7 +772,7 @@ export async function startQueueSendJob(input: {
   };
   queueSendJobs.set(jobId, job);
 
-  await persistQueueSendJobSnapshot(job);
+  await persistQueueSendJobSnapshot(job, { required: true });
   void runQueueSendJob(jobId, input.orders, input.concurrency, input.scope);
   return { jobId, total: input.orders.length };
 }

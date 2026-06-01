@@ -13,6 +13,7 @@ import {
   getQueueSendJobSnapshot,
   getQueueSendJobStatus,
   isPrintQueueAccessError,
+  isPrintQueueDurableStatusError,
   isPrintQueueLabelUrlError,
   getMergeJobStatus,
   listQueue,
@@ -53,6 +54,9 @@ function printQueueSafeClientErrorResponse(c: Context, err: unknown) {
     return c.json({ error: err.message, code: err.code }, err.status);
   }
   if (isPrintQueueAccessError(err)) {
+    return c.json({ error: err.message, code: err.code }, err.status);
+  }
+  if (isPrintQueueDurableStatusError(err)) {
     return c.json({ error: err.message, code: err.code }, err.status);
   }
   throw err;

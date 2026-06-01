@@ -45,6 +45,12 @@ assert(
     serviceSource.includes('getQueueSendJobSnapshot'),
   'print queue persists readable per-job batch-send snapshots',
 );
+assert(
+  serviceSource.includes('PrintQueueDurableStatusError') &&
+    serviceSource.includes('options: { required?: boolean }') &&
+    serviceSource.includes('persistQueueSendJobSnapshot(job, { required: true })'),
+  'print queue requires the initial durable batch-send snapshot before returning a job id',
+);
 
 assert(
   serviceSource.includes('persistMergeJobSnapshot'),
@@ -70,6 +76,11 @@ assert(
     routeSource.includes('await startQueueSendJob') &&
     routeSource.includes('getQueueSendJobSnapshot(jobId)'),
   'print queue route awaits job snapshot before polling and reads status by job id',
+);
+assert(
+  routeSource.includes('isPrintQueueDurableStatusError') &&
+    serviceSource.includes('PRINT_QUEUE_STATUS_UNAVAILABLE'),
+  'print queue route returns readable status-unavailable errors',
 );
 
 assert(
