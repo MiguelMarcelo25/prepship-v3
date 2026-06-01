@@ -3777,6 +3777,80 @@ export default function OrdersView({
     }
   }
 
+  async function savePanelComboDefaults(
+    packageId: string | null,
+    options: {
+      silent?: boolean
+      order?: OrderSummaryDto | null
+      detail?: OrderFullDto | null
+      weightOz?: number
+      dims?: ShipmentDims | null
+    } = {},
+  ) {
+    const sourceOrder = options.order ?? panelOrder
+    if (!sourceOrder) return false
+
+    const sourceDetail = options.detail ?? (
+      sourceOrder.orderId === panelOrder?.orderId
+        ? panelDetail
+        : orderDetailsById.get(sourceOrder.orderId) ?? null
+    )
+    const hasAnySku = getActiveItems(sourceOrder, sourceDetail).some((item) => item.sku)
+    if (!hasAnySku) {
+      if (!options.silent) showToast('No products found on this order', 'error')
+      return false
+    }
+
+    const dims = hasCompleteDims(options.dims) ? options.dims! : getPanelSkuDefaultDims(packageId)
+    const weightOz = options.weightOz ?? getPanelWeightOz()
+    if (!packageId || !hasCompleteDims(dims)) {
+      if (!options.silent) {
+        showToast('Package/dims are incomplete for this SKU combination. Select a package or enter complete L x W x H first.', 'error')
+      }
+      return false
+    }
+
+    const result = await apiClient.saveComboPackageDefault(sourceOrder.orderId, {
+      packageId,
+      length: dims.length,
+      width: dims.width,
+      height: dims.height,
+      weightOz: weightOz > 0 ? weightOz : null,
+    })
+    if (!result?.saved) {
+      throw new Error(result?.reason || 'Combo package default was not saved')
+    }
+
+    if (sourceOrder.orderId === panelOrder?.orderId) {
+      await apiClient.setOrderSelectedPackageId(sourceOrder.orderId, Number.parseInt(packageId, 10))
+      const payload: Record<string, number> = {
+        length: dims.length,
+        width: dims.width,
+        height: dims.height,
+      }
+      if (weightOz > 0) payload.weightOz = weightOz
+      await apiClient.saveOrderDims(sourceOrder.orderId, payload)
+      setPanelForm((current) => (
+        current.packageId === packageId
+          ? current
+          : {
+              ...current,
+              packageId,
+              length: String(dims.length),
+              width: String(dims.width),
+              height: String(dims.height),
+            }
+      ))
+      if (weightOz > 0) {
+        await refreshPanelBestRate({ order: sourceOrder, dims, weightOz, silent: true })
+      }
+      await refetchOrders()
+    }
+
+    if (!options.silent) showToast('Saved package defaults for this SKU combination', 'success')
+    return true
+  }
+
   async function savePanelSkuDefaults(
     packageId: string | null,
     options: {
@@ -3805,22 +3879,8 @@ export default function OrdersView({
       // e.g. "Booster x1 + Leeds x1" must not change the box for a lone Booster
       // order). Only persisted on an explicit operator save (not the silent
       // auto-detect debouncer) so a dims-matched guess never becomes a default.
-      if (packageId && !options.silent) {
-        try {
-          const dims = hasCompleteDims(options.dims) ? options.dims! : getPanelSkuDefaultDims(packageId)
-          const weightOz = options.weightOz ?? getPanelWeightOz()
-          await apiClient.saveComboPackageDefault(sourceOrder.orderId, {
-            packageId,
-            length: hasCompleteDims(dims) ? dims.length : null,
-            width: hasCompleteDims(dims) ? dims.width : null,
-            height: hasCompleteDims(dims) ? dims.height : null,
-            weightOz: weightOz > 0 ? weightOz : null,
-          })
-          showToast('Saved package default for this SKU + quantity combination', 'success')
-        } catch (err) {
-          console.warn('[orders] multi-SKU combo package default save failed:', err)
-        }
-      }
+      if (options.silent) return null
+      await savePanelComboDefaults(packageId, options)
       return null
     }
 
@@ -4624,13 +4684,16 @@ export default function OrdersView({
 
     const target = getSingleSkuDefaultTarget(panelOrder, panelDetail)
     if (!target) {
-      const hasAnySku = getActiveItems(panelOrder, panelDetail).some((item) => item.sku)
-      showToast(
-        hasAnySku
-          ? "Multi-SKU order - edit each product's defaults in the Products tab"
-          : 'No products found on this order',
-        'error',
-      )
+      const dims = getPanelDims()
+      const ensuredPackageId = hasCompleteDims(dims)
+        ? await ensurePanelPackageForDims({ saveSku: false, silent: false })
+        : panelForm.packageId
+      await savePanelComboDefaults(ensuredPackageId || panelForm.packageId || null, {
+        order: panelOrder,
+        detail: panelDetail,
+        weightOz: getPanelWeightOz(),
+        dims: hasCompleteDims(dims) ? dims : null,
+      })
       return
     }
 

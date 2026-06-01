@@ -41,6 +41,16 @@ const orderDefs = {
   9103: { items: boosterLeeds(2, 1), combo: 3 },
   // Single-SKU order with NO combo default -> must NOT auto-pick the combo box
   9104: { items: [{ name: 'Booster Gel', sku: 'Booster-gel-001', quantity: 1, unitPrice: 21.9, imageUrl: '' }], combo: null },
+  // Duplicate Booster lines collapse to Booster x3 + Leeds x1. Used by PS-060
+  // to prove manual save persists the exact combo default instead of blocking.
+  9105: {
+    items: [
+      { name: 'Booster Gel', sku: 'Booster-gel-001', quantity: 2, unitPrice: 21.9, imageUrl: '' },
+      { name: 'Booster Gel', sku: 'Booster-gel-001', quantity: 1, unitPrice: 21.9, imageUrl: '' },
+      { name: 'Leeds Line V2', sku: 'HU-10', quantity: 1, unitPrice: 109.9, imageUrl: '' },
+    ],
+    combo: null,
+  },
 }
 
 function makeOrder(id) {
@@ -73,7 +83,7 @@ function json(body) {
   return { status: 200, contentType: 'application/json', body: JSON.stringify(body) }
 }
 
-function responseFor(url) {
+function responseFor(url, state = {}) {
   if (url.hostname.endsWith('supabase.co')) return json({ user: null })
   const isApi = url.origin === apiOrigin || url.origin !== baseUrl || url.pathname.startsWith('/api/')
   if (!isApi) return null
@@ -100,6 +110,18 @@ function responseFor(url) {
     const data = status === 'awaiting_shipment' ? awaitingOrders : []
     return json({ data, pagination: { page: 1, pageSize: 50, total: data.length, totalPages: 1 } })
   }
+  const comboSave = url.pathname.match(/^\/orders\/(\d+)\/save-combo-package-default$/)
+  if (comboSave) {
+    return async (route) => {
+      const payload = route.request().postDataJSON()
+      state.comboSaves?.push({ orderId: Number(comboSave[1]), payload })
+      await route.fulfill(json({ data: { saved: true, clientId: 4, comboKey: 'booster-gel-001:3|hu-10:1' } }))
+    }
+  }
+  const selectedPackage = url.pathname.match(/^\/orders\/(\d+)$/)
+  if (selectedPackage && ['PATCH', 'POST'].includes(state.lastMethod ?? '')) return json({ data: {} })
+  const saveDims = url.pathname.match(/^\/orders\/(\d+)\/save-dims$/)
+  if (saveDims) return json({ data: {} })
   const full = url.pathname.match(/^\/orders\/(\d+)(?:\/full)?$/)
   if (full) {
     const id = Number(full[1])
@@ -118,7 +140,7 @@ function responseFor(url) {
   return json({})
 }
 
-async function setup(page) {
+async function setup(page, state = {}) {
   await page.addInitScript((projectRef) => {
     const expiresAt = Math.floor(Date.now() / 1000) + 60 * 60
     window.localStorage.setItem(
@@ -135,7 +157,10 @@ async function setup(page) {
   }, supabaseProjectRef)
 
   await page.route('**/*', async (route) => {
-    const mocked = responseFor(new URL(route.request().url()))
+    const url = new URL(route.request().url())
+    state.lastMethod = route.request().method()
+    const mocked = responseFor(url, state)
+    if (typeof mocked === 'function') { await mocked(route); return }
     if (mocked) { await route.fulfill(mocked); return }
     await route.continue()
   })
@@ -180,5 +205,29 @@ test.describe('PS-037 combo package auto-selection', () => {
     await openOrder(page, 'HUG-9104')
     await expect(packageSelect(page)).not.toHaveValue('2')
     await expect(packageSelect(page)).not.toHaveValue('3')
+  })
+
+  test('manual save on duplicate-line multi-SKU order saves combo default instead of showing blocker', async ({ page }) => {
+    const state = { comboSaves: [] }
+    await page.setViewportSize({ width: 1440, height: 900 })
+    await setup(page, state)
+    await openOrder(page, 'HUG-9105')
+
+    await packageSelect(page).selectOption('2')
+    await page.getByRole('button', { name: /Save weights & dims as SKU defaults/i }).click()
+
+    await expect(page.getByText("Multi-SKU order - edit each product's defaults in the Products tab")).toHaveCount(0)
+    await expect(page.getByText('Saved package defaults for this SKU combination')).toBeVisible()
+    expect(state.comboSaves).toHaveLength(1)
+    expect(state.comboSaves[0]).toMatchObject({
+      orderId: 9105,
+      payload: {
+        packageId: '2',
+        length: 12,
+        width: 10,
+        height: 3,
+        weightOz: 31,
+      },
+    })
   })
 })
