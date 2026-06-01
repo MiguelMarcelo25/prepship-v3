@@ -3452,10 +3452,10 @@ export default function OrdersView({
     return getPanelWeightOzFromForm(panelForm)
   }
 
-  function buildPanelShippingOptionsPayload() {
-    const insurance = normalizeInsuranceForRates(panelForm.insurance, panelForm.insuranceValue)
+  function buildPanelShippingOptionsPayload(form: PanelFormState = panelForm) {
+    const insurance = normalizeInsuranceForRates(form.insurance, form.insuranceValue)
     return {
-      confirmation: normalizeConfirmationForRates(panelForm.confirmation),
+      confirmation: normalizeConfirmationForRates(form.confirmation),
       insuranceProvider: insurance.insuranceProvider,
       insuredValue: insurance.insuredValue,
     }
@@ -5024,12 +5024,14 @@ export default function OrdersView({
     dims: { length: number; width: number; height: number }
     weightOz: number
     confirmation?: string
+    panelForm?: PanelFormState
     silent?: boolean
   }) {
     const { order, dims, weightOz, confirmation, silent = false } = options
     if (!hasCompleteDims(dims) || weightOz <= 0) return null
     const orderDetail = orderDetailsById.get(order.orderId) ?? panelDetail
-    const shippingOptions = buildPanelShippingOptionsPayload()
+    const effectivePanelForm = options.panelForm ?? panelForm
+    const shippingOptions = buildPanelShippingOptionsPayload(effectivePanelForm)
 
     if (isTestOrder(order, orderDetail)) {
       const testRate = buildTestMockRate(buildBestTestRateForShipment(order.orderId, dims, weightOz) ?? undefined)
@@ -8123,7 +8125,8 @@ export default function OrdersView({
                     disabled={shipped}
                     onChange={(event) => {
                       const confirmation = event.target.value
-                      setPanelForm((current) => ({ ...current, confirmation }))
+                      const nextForm = { ...panelForm, confirmation }
+                      setPanelForm(nextForm)
                       if (panelOrder?.orderStatus === 'awaiting_shipment') {
                         const dims = getPanelDims()
                         const weightOz = getPanelWeightOz()
@@ -8133,6 +8136,7 @@ export default function OrdersView({
                             dims,
                             weightOz,
                             confirmation,
+                            panelForm: nextForm,
                             silent: true,
                           })
                         }
@@ -8151,12 +8155,13 @@ export default function OrdersView({
                 <div className="ship-field-value" style={{ gap: 5, flexWrap: 'wrap' }}>
                   <select className="ship-select" value={panelForm.insurance} style={{ flex: 1 }} disabled={shipped} onChange={(event) => {
                     const insurance = event.target.value
-                    setPanelForm((current) => ({ ...current, insurance }))
+                    const nextForm = { ...panelForm, insurance }
+                    setPanelForm(nextForm)
                     if (panelOrder?.orderStatus === 'awaiting_shipment') {
                       const dims = getPanelDims()
                       const weightOz = getPanelWeightOz()
                       if (hasCompleteDims(dims) && weightOz > 0) {
-                        void refreshPanelBestRate({ order: panelOrder, dims, weightOz, silent: true })
+                        void refreshPanelBestRate({ order: panelOrder, dims, weightOz, panelForm: nextForm, silent: true })
                       }
                     }
                   }}>
@@ -8173,12 +8178,13 @@ export default function OrdersView({
                     readOnly={shipped}
                     onChange={(event) => {
                       const insuranceValue = event.target.value
-                      setPanelForm((current) => ({ ...current, insuranceValue }))
+                      const nextForm = { ...panelForm, insuranceValue }
+                      setPanelForm(nextForm)
                       if (panelOrder?.orderStatus === 'awaiting_shipment') {
                         const dims = getPanelDims()
                         const weightOz = getPanelWeightOz()
                         if (hasCompleteDims(dims) && weightOz > 0) {
-                          void refreshPanelBestRate({ order: panelOrder, dims, weightOz, silent: true })
+                          void refreshPanelBestRate({ order: panelOrder, dims, weightOz, panelForm: nextForm, silent: true })
                         }
                       }
                     }}

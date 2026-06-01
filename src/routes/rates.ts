@@ -503,6 +503,10 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
       const eligibleHit = sanitizeRateCacheRowForEligibility(exactHit, {
         clientId: it.clientId ?? null,
         storeId: it.storeId ?? null,
+      }, {
+        confirmation: 'delivery',
+        insuranceProvider: it.insuranceProvider && it.insuredValue ? it.insuranceProvider as any : 'none',
+        insuredValue: typeof it.insuranceValue === 'string' ? Number(it.insuranceValue) : it.insuredValue ?? it.insuranceValue ?? null,
       });
       const meta = cacheMetadata(eligibleHit, 'exact');
       return {

@@ -64,6 +64,7 @@
     "test:ps-050-rate-accuracy": "node scripts/ps-050-rate-accuracy-guard.mjs",
     "test:ps-050-rate-exactness": "node scripts/ps-050-rate-exactness-and-limiter-guard.mjs",
     "test:ps-051-shipping-options": "node scripts/ps-051-shipping-options-guard.mjs",
+    "test:ps-051-shipping-options-rework": "tsx scripts/ps-051-shipping-options-rework-guard.ts",
     "test:ps-052-sku-composition": "tsx scripts/ps-052-sku-composition-guard.ts",
     "test:ps-053-print-queue-atomic": "node scripts/ps-053-print-queue-atomic-recovery-guard.mjs",
     "test:ps-054-walmart-workflow": "tsx scripts/ps-054-walmart-po-and-workflow-guard.ts",

@@ -98,6 +98,7 @@ function filterDirectCarrierRatesForEligibility(
       storeId: body.storeId ?? context?.store_id ?? null,
     },
     (rate) => directRateServiceDescriptor(rate, provider),
+    normalizeShippingOptions(body),
   );
 }
 

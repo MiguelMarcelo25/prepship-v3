@@ -3,6 +3,9 @@ export const SHIPPING_SERVICE_ELIGIBILITY_VERSION = 'ps-057-hugrab-ground-saver-
 export const HUGRAB_GROUND_SAVER_BLOCK_REASON =
   'UPS Ground Saver is disabled for HUGRAB orders. Choose UPS Ground or another service.';
 
+export const UPS_GROUND_SAVER_INSURANCE_BLOCK_REASON =
+  'Insurance is not available for UPS Ground Saver/SurePost. Choose UPS Ground or higher.';
+
 const HUGRAB_CLIENT_IDS = new Set([4]);
 const HUGRAB_STORE_IDS = new Set([378060]);
 const HUGRAB_NORMALIZED_NAMES = new Set(['hugrab']);
@@ -22,6 +25,11 @@ export type ShippingServiceEligibilityContext = {
   clientId?: number | string | null;
   clientName?: string | null;
   storeId?: number | string | null;
+};
+
+export type ShippingServiceOptionEligibilityContext = {
+  insuranceProvider?: string | null;
+  insuredValue?: number | string | null;
 };
 
 export type ShippingServiceDescriptor = {
@@ -88,6 +96,7 @@ export function isUpsGroundSaverOrSurePostService(
 export function evaluateShippingServiceEligibility(
   context: ShippingServiceEligibilityContext | null | undefined,
   service: ShippingServiceDescriptor | null | undefined,
+  shippingOptions?: ShippingServiceOptionEligibilityContext | null,
 ): ShippingServiceEligibilityResult {
   if (isHugrabShippingContext(context) && isUpsGroundSaverOrSurePostService(service)) {
     return {
@@ -95,6 +104,23 @@ export function evaluateShippingServiceEligibility(
       version: SHIPPING_SERVICE_ELIGIBILITY_VERSION,
       ruleId: HUGRAB_GROUND_SAVER_RULE_ID,
       reason: HUGRAB_GROUND_SAVER_BLOCK_REASON,
+    };
+  }
+  const insuranceProvider = String(shippingOptions?.insuranceProvider ?? 'none').trim().toLowerCase();
+  const insuredValue = typeof shippingOptions?.insuredValue === 'number'
+    ? shippingOptions.insuredValue
+    : Number(shippingOptions?.insuredValue ?? 0);
+  if (
+    isUpsGroundSaverOrSurePostService(service) &&
+    insuranceProvider !== 'none' &&
+    Number.isFinite(insuredValue) &&
+    insuredValue > 0
+  ) {
+    return {
+      allowed: false,
+      version: SHIPPING_SERVICE_ELIGIBILITY_VERSION,
+      ruleId: 'ups-ground-saver-insurance',
+      reason: UPS_GROUND_SAVER_INSURANCE_BLOCK_REASON,
     };
   }
   return {
@@ -126,8 +152,9 @@ export function describeShippingService(service: unknown): ShippingServiceDescri
 export function assertShippingServiceEligible(
   context: ShippingServiceEligibilityContext | null | undefined,
   service: ShippingServiceDescriptor | null | undefined,
+  shippingOptions?: ShippingServiceOptionEligibilityContext | null,
 ): void {
-  const eligibility = evaluateShippingServiceEligibility(context, service);
+  const eligibility = evaluateShippingServiceEligibility(context, service, shippingOptions);
   if (!eligibility.allowed) {
     const error = new Error(eligibility.reason ?? 'Shipping service is not eligible') as Error & {
       code?: string;
@@ -145,6 +172,7 @@ export function filterEligibleShippingServices<T>(
   services: T[],
   context: ShippingServiceEligibilityContext | null | undefined,
   describe: (service: T) => ShippingServiceDescriptor,
+  shippingOptions?: ShippingServiceOptionEligibilityContext | null,
 ): T[] {
-  return services.filter((service) => evaluateShippingServiceEligibility(context, describe(service)).allowed);
+  return services.filter((service) => evaluateShippingServiceEligibility(context, describe(service), shippingOptions).allowed);
 }

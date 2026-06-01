@@ -469,6 +469,7 @@ function assertLabelServiceEligibleForOrder(
   order: Pick<typeof orders.$inferSelect, 'clientId' | 'storeId'>,
   clientId: number | null | undefined,
   service: ShippingServiceDescriptor,
+  shippingOptions?: ReturnType<typeof normalizeShippingOptions>,
 ): void {
   assertShippingServiceEligible(
     {
@@ -476,6 +477,7 @@ function assertLabelServiceEligibleForOrder(
       storeId: order.storeId ?? null,
     },
     service,
+    shippingOptions,
   );
 }
 
@@ -901,13 +903,14 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
       .limit(1);
     clientId = match?.id ?? null;
   }
+  const options = normalizeShippingOptions(body);
   assertLabelServiceEligibleForOrder(order, clientId, {
     carrierCode: body.carrierCode ?? null,
     carrierName: body.carrierName ?? null,
     serviceCode: body.serviceCode,
     serviceName: body.serviceName ?? body.serviceCode,
     serviceType: body.serviceType ?? null,
-  });
+  }, options);
   // Hard guard: any order under an isTest client is forced into offline-mock
   // mode regardless of what the UI sent. Prevents a test row from ever
   // spending real postage.
@@ -1081,8 +1084,6 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
   if (!body.shippingProviderId) {
     throw new Error('shippingProviderId required for v2 label creation');
   }
-  const options = normalizeShippingOptions(body);
-
   const created = await timer.task('ShipStation createLabel connector', async () => {
     const label = await createCarrierLabel('shipstation', {
       apiKeyV2,

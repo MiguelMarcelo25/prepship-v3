@@ -91,6 +91,7 @@ function assertDirectCarrierServiceEligible(args: {
       serviceCode: args.serviceCode,
       serviceName: args.serviceName ?? String(args.serviceCode ?? ''),
     },
+    normalizeShippingOptions(args.body),
   );
 }
 

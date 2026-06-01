@@ -1,5 +1,6 @@
 import { resolveCarrierConnector } from '../connectors/carrier-resolution';
 import { assertShippingServiceEligible } from '../lib/shipping-service-eligibility';
+import { normalizeShippingOptions } from '../lib/shipping-options';
 import type {
   CarrierLabelInput,
   CarrierAccountListInput,
@@ -46,6 +47,7 @@ function assertCarrierLabelServiceEligible(
       serviceName: row.serviceName ?? row.service_name ?? shipment.service_type ?? shipment.serviceName ?? null,
       serviceType: row.serviceType ?? row.service_type ?? shipment.service_type ?? null,
     },
+    normalizeShippingOptions(row.shippingOptions ?? row),
   );
 }
 

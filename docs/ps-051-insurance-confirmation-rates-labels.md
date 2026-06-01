@@ -1,8 +1,8 @@
-# PS-051 - Wire Insurance and Confirmation Into Rates + Labels Across ShipStation and Direct Carrier Connectors
+# PS-051 - Fix Shipping Option Price Refresh, Insurance Eligibility, and Rate/Label Parity
 
 Created from DJ handoff on 2026-06-01.
 
-Status: New standalone task. This is separate from PS-050; PS-050 owns rate performance, freshness, and autostart. PS-051 owns shipping-option correctness and parity.
+Status: Full replacement task. The original PS-051 implementation wired many confirmation/insurance fields, but the replacement task reopens the ticket for operator-visible correctness: stale React state could refresh rates with old insurance/confirmation values, and UPS Ground Saver/SurePost still needed explicit insurance-ineligible handling.
 
 Repo: `https://github.com/drprepperusa-org/prepship-v4.git`
 
@@ -11,6 +11,15 @@ Branch: `prepshipv4-stable`
 Assignee: `<@714064895963955211>`
 
 ## Context
+
+Replacement update from DJ on 2026-06-02:
+
+- Insurance provider/value changes must refresh or invalidate displayed rates using the new values, not stale `panelForm`.
+- Confirmation changes must refresh or invalidate displayed rates using the new value.
+- Displayed/selectable rates must be priced with the same confirmation + insurance options used to buy labels.
+- UPS Ground Saver/SurePost must be treated as insurance-ineligible with the user-facing message: `Insurance is not available for UPS Ground Saver/SurePost. Choose UPS Ground or higher.`
+- Ground Saver/SurePost with no insurance remains allowed when otherwise supported, except where PS-057 blocks HUGRAB entirely.
+- New focused rework guard: `npm run test:ps-051-shipping-options-rework`.
 
 DJ asked whether the Insurance controls in the Orders side panel affect label cost, and whether changing Confirmation from the default Delivery to Signature or Adult Signature affects the displayed rate and final label purchase.
 
