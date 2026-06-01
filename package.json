@@ -57,6 +57,7 @@
     "test:client-redaction": "node scripts/client-redaction-guard.mjs",
     "test:credential-accounts": "node scripts/credential-accounts-guard.mjs",
     "test:rate-system-hardening": "node scripts/rate-system-hardening-guard.mjs",
+    "test:ps-050-rate-accuracy": "node scripts/ps-050-rate-accuracy-guard.mjs",
     "test:shipp-rate-retry": "node scripts/shipp-rate-retry-guard.mjs",
     "test:best-rate-dims": "node scripts/best-rate-dims-guard.mjs",
     "test:runtime-ddl": "node scripts/runtime-ddl-guard.mjs",

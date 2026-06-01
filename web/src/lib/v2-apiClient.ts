@@ -3877,6 +3877,32 @@ export const apiClient = {
       })();
   },
 
+  fetchCachedRatesBulk(items: Record<string, unknown>[]): Promise<any[]> {
+    return safe(
+      'fetchCachedRatesBulk',
+      async () => {
+        const res = await api.post<any>('/rates/cached/bulk', {
+          items: items.map((item) => translateRatePayloadToV4(item)),
+        });
+        return Array.isArray(res?.data)
+          ? res.data.map((item: any) => ({
+              ...item,
+              hit: item?.hit
+                ? {
+                    ...item.hit,
+                    rates: Array.isArray(item.hit.rates)
+                      ? item.hit.rates.map(translateRateToV2Shape)
+                      : [],
+                    bestRate: item.hit.bestRate ? translateRateToV2Shape(item.hit.bestRate) : null,
+                  }
+                : null,
+            }))
+          : [];
+      },
+      []
+    );
+  },
+
   // v2 parity: thin wrapper around POST /rates/browse. Backend already
   // returns `{rates, bestRate, ...}` — we passthrough verbatim (no
   // translation) since the rate-browser UI consumes the v4 shape directly.

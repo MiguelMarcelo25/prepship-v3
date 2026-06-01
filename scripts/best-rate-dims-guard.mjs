@@ -21,9 +21,10 @@ const [ordersView, ordersRoute, ratesBackfill, cleanupScript, packageJson] = awa
 ])
 
 assert(
-  ordersView.includes('function hasValidBestRateForCurrentDims') &&
-    ordersView.includes('return Boolean(savedDims && currentDims && savedDims === currentDims)'),
-  'Orders UI validates bestRateDims against current complete dimensions',
+  ordersView.includes('function hasDisplayableBestRateForCurrentRequest') &&
+    ordersView.includes('hasValidSavedBestRateForRequest') &&
+    ordersView.includes('savedRateIsFreshAndComplete'),
+  'Orders UI validates saved rates against current complete request fingerprint/freshness/completeness',
 )
 
 assert(

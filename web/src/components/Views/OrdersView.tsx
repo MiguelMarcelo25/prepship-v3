@@ -2281,13 +2281,15 @@ export default function OrdersView({
   const { order: activeOrderDetail, isLoading: activeOrderLoading, error: activeOrderError } = useOrderDetail(
     activeOrderId != null ? String(activeOrderId) : '',
   )
+  const passiveRatingAccountsEnabled = currentStatus === 'awaiting_shipment' && orders.length > 0
   const ordersSupportDataEnabled =
     activeOrderId != null ||
     selectedOrderIds.length > 0 ||
     rateBrowserOpen ||
     newOrderOpen ||
     queueOpen ||
-    sortState.key === 'custcarrier'
+    sortState.key === 'custcarrier' ||
+    passiveRatingAccountsEnabled
   const { locations } = useLocations({ enabled: ordersSupportDataEnabled })
   const { accounts: shippingAccounts } = useShippingAccounts({ enabled: ordersSupportDataEnabled })
   const { markups } = useMarkups()
@@ -4442,6 +4444,77 @@ export default function OrdersView({
     )]
   }
 
+  function normalizeRateZip(value: unknown) {
+    const raw = toStringValue(value) ?? ''
+    const digits = raw.replace(/\D/g, '').slice(0, 5)
+    return digits || raw.trim().toUpperCase()
+  }
+
+  function rateShipDateBucket(date = new Date()) {
+    return date.toISOString().slice(0, 10)
+  }
+
+  function buildRateRequestFingerprint(input: {
+    weightOz: number
+    dims: { length: number; width: number; height: number }
+    shipTo: ReturnType<typeof getShipTo>
+    residential: boolean
+    carrierIds: string[]
+    storeId?: number | null
+    clientId?: number | null
+    confirmation?: string | null
+  }) {
+    const parts = [
+      'v=ground-saver-v2',
+      `d=${rateShipDateBucket()}`,
+      `w=${Math.round(input.weightOz * 10)}`,
+      `z=${normalizeRateZip(input.shipTo.postalCode)}`,
+      `co=${(input.shipTo.country ?? 'US').toUpperCase()}`,
+    ]
+    if (input.shipTo.state) parts.push(`st=${input.shipTo.state.trim().toUpperCase()}`)
+    if (input.shipTo.city) parts.push(`ci=${input.shipTo.city.trim().toLowerCase().replace(/\s+/g, '-')}`)
+    parts.push(input.residential ? 'r=1' : 'r=0')
+    if (input.clientId != null) parts.push(`cl=${input.clientId}`)
+    else if (input.storeId != null) parts.push(`st=${input.storeId}`)
+    parts.push(`l=${Math.round(input.dims.length * 10)}`)
+    parts.push(`dw=${Math.round(input.dims.width * 10)}`)
+    parts.push(`h=${Math.round(input.dims.height * 10)}`)
+    if (input.confirmation) parts.push(`cf=${input.confirmation}`)
+    if (input.carrierIds.length) parts.push(`c=${[...input.carrierIds].sort().join(',')}`)
+    return parts.join('|')
+  }
+
+  function savedRateIsFreshAndComplete(rate: Record<string, unknown>, requestFingerprint: string) {
+    const fingerprint = toStringValue(rate.requestFingerprint) ?? toStringValue(rate.cacheKey)
+    if (!fingerprint || fingerprint !== requestFingerprint) return false
+    if (rate.isComplete !== true) return false
+    const expiresAt = toStringValue(rate.cacheExpiresAt)
+    if (!expiresAt) return false
+    const expiresMs = Date.parse(expiresAt)
+    return Number.isFinite(expiresMs) && expiresMs > Date.now()
+  }
+
+  function withRateRequestMetadata(
+    rate: Record<string, unknown>,
+    request: NonNullable<ReturnType<typeof getAutoBestRateRequest>>,
+    metadata: Record<string, unknown> = {},
+  ) {
+    const createdAt = toStringValue(metadata.cacheCreatedAt) ?? new Date().toISOString()
+    const expiresAt =
+      toStringValue(metadata.cacheExpiresAt) ??
+      new Date(Date.now() + 6 * 60 * 60 * 1000).toISOString()
+    return {
+      ...rate,
+      requestFingerprint: toStringValue(metadata.requestFingerprint) ?? request.fingerprint,
+      cacheKey: toStringValue(metadata.cacheKey) ?? request.fingerprint,
+      cacheCreatedAt: createdAt,
+      cacheExpiresAt: expiresAt,
+      isComplete: metadata.isComplete === true,
+      rateCount: toNumberValue(metadata.rateCount) ?? 1,
+      matchType: toStringValue(metadata.matchType) ?? 'live',
+    }
+  }
+
   function getAutoBestRateRequest(order: OrderSummaryDto) {
     if (order.orderStatus !== 'awaiting_shipment') return null
     const detail = orderDetailsById.get(order.orderId) ?? null
@@ -4457,25 +4530,21 @@ export default function OrdersView({
       toStringValue(getShippingModel(order)?.confirmation) ??
       'delivery'
     )
-    const carrierKey = getRateCarrierIdsForAccounts().join(',')
+    const carrierIds = getRateCarrierIdsForAccounts()
     const dimsLabel = `${dims.length || 0}x${dims.width || 0}x${dims.height || 0}`
-    const key = [
-      order.orderId,
+    const fingerprint = buildRateRequestFingerprint({
       weightOz,
-      dims.length,
-      dims.width,
-      dims.height,
-      shipTo.postalCode,
-      shipTo.country ?? 'US',
-      shipTo.state ?? '',
-      shipTo.city ?? '',
-      order.storeId ?? '',
-      order.clientId ?? '',
+      dims,
+      shipTo,
+      residential: true,
+      carrierIds,
+      storeId: order.storeId,
+      clientId: order.clientId,
       confirmation,
-      carrierKey,
-    ].join('|')
+    })
+    const key = `${order.orderId}|${fingerprint}`
 
-    return { detail, dims, dimsLabel, weightOz, shipTo, confirmation, key }
+    return { detail, dims, dimsLabel, weightOz, shipTo, confirmation, carrierIds, fingerprint, key }
   }
 
   function normalizeDimsLabel(value: unknown) {
@@ -4484,7 +4553,7 @@ export default function OrdersView({
       : null
   }
 
-  function hasSavedBestRateForRequest(
+  function hasValidSavedBestRateForRequest(
     order: OrderSummaryDto,
     request: NonNullable<ReturnType<typeof getAutoBestRateRequest>>,
   ) {
@@ -4494,15 +4563,7 @@ export default function OrdersView({
       toRecord(toRecord(order.overrides)?.bestRateJson)
     if (!savedRate) return false
     if (getRateBaseAmount(savedRate) <= 0) return false
-
-    const savedDims = normalizeDimsLabel(
-      toRecord(order.overrides)?.bestRateDims ??
-      order.bestRateDims ??
-      getShippingModel(order)?.bestRateDims,
-    )
-    const requestDims = normalizeDimsLabel(request.dimsLabel)
-
-    return Boolean(savedDims && savedDims === requestDims)
+    return savedRateIsFreshAndComplete(savedRate, request.fingerprint)
   }
 
   function getSavedBestRateDimsLabel(order: OrderSummaryDto) {
@@ -4520,17 +4581,12 @@ export default function OrdersView({
     return normalizeDimsLabel(`${dims.length}x${dims.width}x${dims.height}`)
   }
 
-  function hasValidBestRateForCurrentDims(order: OrderSummaryDto) {
-    const savedRate =
-      toRecord(order.bestRate) ??
-      toRecord(getShippingModel(order)?.bestRate) ??
-      toRecord(toRecord(order.overrides)?.bestRateJson)
-    if (!savedRate) return false
-    if (getRateBaseAmount(savedRate) <= 0) return false
-
-    const savedDims = getSavedBestRateDimsLabel(order)
-    const currentDims = getCurrentBestRateDimsLabel(order)
-    return Boolean(savedDims && currentDims && savedDims === currentDims)
+  function hasDisplayableBestRateForCurrentRequest(order: OrderSummaryDto) {
+    const request = getAutoBestRateRequest(order)
+    if (!request) return false
+    const entry = autoBestRateEntries[order.orderId]
+    if (entry?.key === request.key && entry.rate) return true
+    return hasValidSavedBestRateForRequest(order, request)
   }
 
   function getRateBaseAmount(rate: Record<string, unknown>) {
@@ -4607,6 +4663,8 @@ export default function OrdersView({
       fallbackDims?: { length: number; width: number; height: number } | null
       fallbackWeightOz?: number | null
       refetch?: boolean
+      request?: NonNullable<ReturnType<typeof getAutoBestRateRequest>>
+      metadata?: Record<string, unknown>
     } = {},
   ) {
     const dims = getAppliedRateDims(rate) ?? options.fallbackDims ?? null
@@ -4628,7 +4686,10 @@ export default function OrdersView({
       tasks.push(apiClient.setOrderSelectedPid(orderId, shippingProviderId))
     }
 
-    tasks.push(apiClient.saveOrderBestRate(orderId, rate, dimsLabel))
+    const rateToPersist = options.request
+      ? withRateRequestMetadata(rate, options.request, options.metadata)
+      : rate
+    tasks.push(apiClient.saveOrderBestRate(orderId, rateToPersist, dimsLabel))
     await Promise.all(tasks)
     if (options.refetch) await refetchOrders()
   }
@@ -4643,7 +4704,7 @@ export default function OrdersView({
         const request = getAutoBestRateRequest(order)
         if (!request) return null
         if (!isTestOrder(order, request.detail) && carrierIds.length === 0) return null
-        if (hasSavedBestRateForRequest(order, request)) return null
+        if (hasValidSavedBestRateForRequest(order, request)) return null
         const entry = autoBestRateEntries[order.orderId]
         if (entry?.key === request.key) return null
         if (autoBestRateRequestedRef.current.has(request.key)) return null
@@ -4654,7 +4715,7 @@ export default function OrdersView({
     if (candidates.length === 0) return
 
     const queue = [...candidates]
-    const workerCount = Math.min(1, queue.length)
+    const workerCount = Math.min(2, queue.length)
 
     async function refreshVisibleBestRate(order: OrderSummaryDto, request: NonNullable<ReturnType<typeof getAutoBestRateRequest>>) {
       autoBestRateRequestedRef.current.add(request.key)
@@ -4662,14 +4723,21 @@ export default function OrdersView({
       try {
         if (isTestOrder(order, request.detail)) {
           const testRate = buildTestMockRate(buildBestTestRateForShipment(order.orderId, request.dims, request.weightOz) ?? undefined)
-          await persistAppliedRateForOrder(order.orderId, testRate, {
+          const testRateWithMetadata = withRateRequestMetadata(testRate, request, {
+            isComplete: true,
+            rateCount: 1,
+            matchType: 'test',
+          })
+          await persistAppliedRateForOrder(order.orderId, testRateWithMetadata, {
             fallbackDims: request.dims,
             fallbackWeightOz: request.weightOz,
+            request,
+            metadata: { isComplete: true, rateCount: 1, matchType: 'test' },
           })
           if (!cancelled) {
             setAutoBestRateEntries((current) => ({
               ...current,
-              [order.orderId]: { key: request.key, rate: testRate },
+              [order.orderId]: { key: request.key, rate: testRateWithMetadata },
             }))
           }
           return
@@ -4696,14 +4764,21 @@ export default function OrdersView({
             order.external_order_id ??
             order.orderNumber ??
             undefined,
-          forceRefresh: true,
+          forceRefresh: false,
         }) as Array<Record<string, unknown>>
 
         const bestRate = pickBestPanelRate(rates)
         if (bestRate) {
-          await persistAppliedRateForOrder(order.orderId, bestRate, {
+          const bestRateWithMetadata = withRateRequestMetadata(bestRate, request, {
+            isComplete: true,
+            rateCount: rates.length,
+            matchType: 'live',
+          })
+          await persistAppliedRateForOrder(order.orderId, bestRateWithMetadata, {
             fallbackDims: request.dims,
             fallbackWeightOz: request.weightOz,
+            request,
+            metadata: bestRateWithMetadata,
           })
         } else {
           await apiClient.saveOrderBestRate(order.orderId, null, request.dimsLabel)
@@ -4712,7 +4787,7 @@ export default function OrdersView({
         if (!cancelled) {
           setAutoBestRateEntries((current) => ({
             ...current,
-            [order.orderId]: { key: request.key, rate: bestRate },
+            [order.orderId]: { key: request.key, rate: bestRate ? withRateRequestMetadata(bestRate, request, { isComplete: true, rateCount: rates.length, matchType: 'live' }) : null },
           }))
 
           if (panelOrderId === order.orderId) {
@@ -4737,15 +4812,60 @@ export default function OrdersView({
       }
     }
 
-    const workers = Array.from({ length: workerCount }, async () => {
+    async function runPassiveAutoRating() {
+      const cachedResults = await apiClient.fetchCachedRatesBulk(queue.map(({ order, request }) => ({
+        orderId: order.orderId,
+        weightOz: request.weightOz,
+        toZip: request.shipTo.postalCode,
+        toCountry: request.shipTo.country ?? 'US',
+        toState: request.shipTo.state ?? undefined,
+        toCity: request.shipTo.city ?? undefined,
+        dimsL: request.dims.length,
+        dimsW: request.dims.width,
+        dimsH: request.dims.height,
+        residential: true,
+        carrierIds: request.carrierIds.length ? request.carrierIds : undefined,
+        storeId: order.storeId,
+        clientId: order.clientId,
+        confirmation: request.confirmation,
+      })))
+      const exactByOrderId = new Map(
+        cachedResults
+          .filter((result) => result?.matchType === 'exact' && result?.isComplete === true && result?.hit?.bestRate)
+          .map((result) => [Number(result.orderId), result])
+      )
+      for (let index = queue.length - 1; index >= 0; index -= 1) {
+        const item = queue[index]
+        const exact = exactByOrderId.get(item.order.orderId)
+        if (!exact) continue
+        const cachedRate = withRateRequestMetadata(exact.hit.bestRate, item.request, exact)
+        await persistAppliedRateForOrder(item.order.orderId, cachedRate, {
+          fallbackDims: item.request.dims,
+          fallbackWeightOz: item.request.weightOz,
+          request: item.request,
+          metadata: exact,
+        })
+        if (!cancelled) {
+          setAutoBestRateEntries((current) => ({
+            ...current,
+            [item.order.orderId]: { key: item.request.key, rate: cachedRate },
+          }))
+        }
+        autoBestRateRequestedRef.current.add(item.request.key)
+        queue.splice(index, 1)
+      }
+
+      const workers = Array.from({ length: workerCount }, async () => {
       while (!cancelled && queue.length > 0) {
         const next = queue.shift()
         if (!next) continue
         await refreshVisibleBestRate(next.order, next.request)
       }
-    })
+      })
+      await Promise.all(workers)
+    }
 
-    void Promise.all(workers)
+    void runPassiveAutoRating()
 
     return () => {
       cancelled = true
@@ -6137,7 +6257,7 @@ export default function OrdersView({
     const dims = getDimensions(displayOrder, null)
     const hasDims = hasCompleteDims(dims)
     const hasWeight = Boolean(displayOrder.weight?.value && displayOrder.weight.value > 0)
-    const hasDisplayableBestRate = hasValidBestRateForCurrentDims(displayOrder)
+    const hasDisplayableBestRate = hasDisplayableBestRateForCurrentRequest(displayOrder)
     if (!hasDisplayableBestRate && (!hasWeight || !hasDims)) {
       return <span style={{ fontSize: 10.5, color: 'var(--text3)' }}>— add dims</span>
     }
@@ -6257,7 +6377,7 @@ export default function OrdersView({
     const dims = getDimensions(displayOrder, null)
     const hasDims = hasCompleteDims(dims)
     const hasWeight = Boolean(displayOrder.weight?.value && displayOrder.weight.value > 0)
-    const hasDisplayableBestRate = hasValidBestRateForCurrentDims(displayOrder)
+    const hasDisplayableBestRate = hasDisplayableBestRateForCurrentRequest(displayOrder)
     if (!hasDisplayableBestRate && (!hasWeight || !hasDims)) {
       return <span style={{ fontSize: 10.5, color: 'var(--text3)' }}>— add dims</span>
     }
@@ -6316,7 +6436,7 @@ export default function OrdersView({
     const dims = getDimensions(displayOrder, null)
     const hasDims = hasCompleteDims(dims)
     const hasWeight = Boolean(displayOrder.weight?.value && displayOrder.weight.value > 0)
-    const hasDisplayableBestRate = hasValidBestRateForCurrentDims(displayOrder)
+    const hasDisplayableBestRate = hasDisplayableBestRateForCurrentRequest(displayOrder)
     if (!hasDisplayableBestRate && (!hasWeight || !hasDims)) {
       return <span style={{ fontSize: 10.5, color: 'var(--text3)' }}>— add dims</span>
     }

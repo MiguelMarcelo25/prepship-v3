@@ -39,6 +39,36 @@ const clients = [
 
 // Canonical rate payload — base cost 9.86, no markup rules are mocked so the
 // grid renders the base amount verbatim.
+function ps050Fingerprint({ weightOz, zip, country = 'US', state, city, dims, clientId, carrierIds = [], confirmation = 'delivery' }) {
+  const parts = [
+    'v=ground-saver-v2',
+    `d=${new Date().toISOString().slice(0, 10)}`,
+    `w=${Math.round(weightOz * 10)}`,
+    `z=${String(zip).replace(/\D/g, '').slice(0, 5)}`,
+    `co=${country}`,
+  ]
+  if (state) parts.push(`st=${state.toUpperCase()}`)
+  if (city) parts.push(`ci=${city.toLowerCase().replace(/\s+/g, '-')}`)
+  parts.push('r=1')
+  if (clientId != null) parts.push(`cl=${clientId}`)
+  parts.push(`l=${Math.round(dims.length * 10)}`)
+  parts.push(`dw=${Math.round(dims.width * 10)}`)
+  parts.push(`h=${Math.round(dims.height * 10)}`)
+  parts.push(`cf=${confirmation}`)
+  if (carrierIds.length) parts.push(`c=${[...carrierIds].sort().join(',')}`)
+  return parts.join('|')
+}
+
+const ps050RateFingerprint = ps050Fingerprint({
+  weightOz: 60,
+  zip: '73036',
+  state: 'OK',
+  city: 'El Reno',
+  dims: { length: 11, width: 8, height: 6 },
+  clientId: 1,
+  carrierIds: ['se-7381'],
+})
+
 const rate = {
   carrierCode: 'ups',
   serviceCode: 'ups_ground_saver',
@@ -50,6 +80,13 @@ const rate = {
   cost: 9.86,
   shipmentCost: 9.86,
   otherCost: 0,
+  requestFingerprint: ps050RateFingerprint,
+  cacheKey: ps050RateFingerprint,
+  cacheCreatedAt: new Date().toISOString(),
+  cacheExpiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+  isComplete: true,
+  rateCount: 1,
+  matchType: 'exact',
 }
 
 const storeIdByClientId = { 1: 101, 2: 102 }
@@ -212,7 +249,7 @@ function responseFor(url) {
     return json([{ id: 1, name: 'GWH Fulfillment Center', company: 'PrepShip', street1: '123 Warehouse Way', city: 'Gardena', state: 'CA', postalCode: '90248', country: 'US', phone: null, isDefault: true, active: true }])
   }
   if (url.pathname === '/packages') return json([{ id: 1, name: '11x8x6', length: 11, width: 8, height: 6, unitCost: '0.62', source: 'custom' }])
-  if (url.pathname === '/rates/multi') return json({ carriers: [] })
+  if (url.pathname === '/rates/multi') return json({ carriers: [{ carrier_id: 'se-7381', carrier_code: 'ups', nickname: 'ROCEL C81F70', friendly_name: 'ROCEL C81F70' }] })
   if (url.pathname === '/api/carrier-accounts') return json({ data: [] })
   if (url.pathname === '/settings/orders.columnPrefs') return json({ value: null })
   if (url.pathname === '/orders/sync/status') return json({ status: 'idle', lastSyncAt: '2026-05-15T00:00:00.000Z' })

@@ -3,7 +3,7 @@ import { and, desc, eq, isNull, lt, notInArray, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { orders, orderOverrides } from '../db/schema/orders';
 import { settings } from '../db/schema/settings';
-import { getRates } from './rates';
+import { CACHE_TTL_MS, getRates } from './rates';
 import type { Rate } from '../lib/shipstation';
 import { EXCLUDED_STORE_IDS } from '../config/prepship';
 
@@ -349,9 +349,9 @@ async function runBackfill(
           `getRates(order=${row.id})`
         );
 
-        const best = result.bestRate;
+          const best = result.bestRate;
 
-        if (!best) {
+          if (!best) {
           job.skipped++;
           if (job.failureSamples.length < 5) {
             job.failureSamples.push(
@@ -360,11 +360,21 @@ async function runBackfill(
           }
         } else {
           const now = new Date();
+          const bestWithMetadata = {
+            ...best,
+            requestFingerprint: result.cacheKey,
+            cacheKey: result.cacheKey,
+            cacheCreatedAt: result.fetchedAt,
+            cacheExpiresAt: new Date(new Date(result.fetchedAt).getTime() + CACHE_TTL_MS).toISOString(),
+            isComplete: result.carrierDiagnostics.every((diagnostic) => diagnostic.status !== 'failed' && diagnostic.status !== 'loading'),
+            rateCount: result.rates.length,
+            matchType: result.cached ? 'exact' : 'live',
+          };
           await db
             .insert(orderOverrides)
             .values({
               orderId: row.id,
-              bestRateJson: best as unknown,
+              bestRateJson: bestWithMetadata as unknown,
               bestRateDims: dimsLabel,
               bestRateAt: now,
               updatedAt: now,
@@ -372,7 +382,7 @@ async function runBackfill(
             .onConflictDoUpdate({
               target: orderOverrides.orderId,
               set: {
-                bestRateJson: best as unknown,
+                bestRateJson: bestWithMetadata as unknown,
                 bestRateDims: dimsLabel,
                 bestRateAt: now,
                 updatedAt: now,

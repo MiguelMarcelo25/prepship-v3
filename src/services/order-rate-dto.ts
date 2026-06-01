@@ -28,6 +28,13 @@ export interface OrderBestRateDto {
   sourceClientId: number | null;
   deliveryDays: number | null;
   estimatedDelivery: string | null;
+  requestFingerprint: string | null;
+  cacheKey: string | null;
+  cacheCreatedAt: string | null;
+  cacheExpiresAt: string | null;
+  isComplete: boolean | null;
+  rateCount: number | null;
+  matchType: string | null;
 }
 
 export interface OrderSelectedRateDto {
@@ -194,6 +201,13 @@ export function normalizeOrderBestRateDto(value: unknown, path = 'bestRate'): Or
       record.estimatedDelivery ?? record.estimated_delivery_date ?? null,
       `${path}.estimatedDelivery`,
     ),
+    requestFingerprint: readNullableString(record.requestFingerprint ?? null, `${path}.requestFingerprint`),
+    cacheKey: readNullableString(record.cacheKey ?? null, `${path}.cacheKey`),
+    cacheCreatedAt: readNullableString(record.cacheCreatedAt ?? null, `${path}.cacheCreatedAt`),
+    cacheExpiresAt: readNullableString(record.cacheExpiresAt ?? null, `${path}.cacheExpiresAt`),
+    isComplete: record.isComplete == null ? null : readBoolean(record.isComplete, `${path}.isComplete`),
+    rateCount: readNullableNumber(record.rateCount ?? null, `${path}.rateCount`),
+    matchType: readNullableString(record.matchType ?? null, `${path}.matchType`),
   };
 
   return hasAnyMeaningfulRateField(rate) ? rate : null;

@@ -122,7 +122,7 @@ function applyMarkups(rates: Rate[], markups: Map<string, Markup>): Rate[] {
   });
 }
 
-const CACHE_TTL_MS = 1000 * 60 * 60 * 6; // 6 hours
+export const CACHE_TTL_MS = 1000 * 60 * 60 * 6; // 6 hours
 const CARRIER_CACHE_MS = 1000 * 60 * 15; // 15 min
 const RATE_FETCH_CONCURRENCY = Math.max(
   1,
@@ -132,7 +132,7 @@ const RATE_NEGATIVE_CACHE_TTL_MS = Math.max(
   60_000,
   Number.parseInt(process.env.RATE_NEGATIVE_CACHE_TTL_MS ?? '600000', 10) || 600_000
 );
-const RATE_CACHE_VERSION = 'ground-saver-v1';
+const RATE_CACHE_VERSION = 'ground-saver-v2';
 const RATE_CONFIRMATIONS = new Set([
   'none',
   'delivery',
@@ -213,6 +213,10 @@ function normalizeZip(zip: string): string {
   return digits || String(zip ?? '').trim().toUpperCase();
 }
 
+export function shipDateBucket(date: Date = new Date()): string {
+  return date.toISOString().slice(0, 10);
+}
+
 function apiKeyCacheKey(apiKeyV2?: string | null): string {
   if (!apiKeyV2) return 'env';
   return createHash('sha256').update(apiKeyV2).digest('hex').slice(0, 16);
@@ -234,7 +238,7 @@ async function resolveClientIdForStoreId(storeId?: number | null): Promise<numbe
   return row?.id ?? null;
 }
 
-async function resolveRateInput(input: RateInput): Promise<RateInput> {
+export async function resolveRateInput(input: RateInput): Promise<RateInput> {
   const context = await resolveRateCredentialContext(input);
   return {
     ...input,
@@ -253,10 +257,13 @@ async function resolveRateInput(input: RateInput): Promise<RateInput> {
 export function rateCacheKey(input: RateInput): string {
   const parts: string[] = [
     `v=${RATE_CACHE_VERSION}`,
+    `d=${shipDateBucket()}`,
     `w=${Math.round(input.weightOz * 10)}`,
     `z=${normalizeZip(input.toZip)}`,
     `co=${(input.toCountry ?? 'US').toUpperCase()}`,
   ];
+  if (input.toState) parts.push(`st=${input.toState.trim().toUpperCase()}`);
+  if (input.toCity) parts.push(`ci=${input.toCity.trim().toLowerCase().replace(/\s+/g, '-')}`);
   if (input.residential === true) parts.push('r=1');
   else if (input.residential === false) parts.push('r=0');
   if (input.clientId != null) parts.push(`cl=${input.clientId}`);

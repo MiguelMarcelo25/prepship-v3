@@ -1860,6 +1860,18 @@ DJ requested PS-048 on 2026-06-01 to track the Orders diagnostic `Acct Nickname`
 
 See [docs/ps-048-orders-acct-nickname-diagnostic-column.md](docs/ps-048-orders-acct-nickname-diagnostic-column.md) for the full task prompt, source priority, guardrails, verification commands, definition of done, and return format.
 
+## Official PS-050 Awaiting Shipment Rate Accuracy + Auto-Start Rating Task
+
+DJ provided PS-050 on 2026-06-01 as an updated replacement task. This supersedes PS-049 and any earlier PS-050 draft; use the PS-050 packet below as the source of truth.
+
+| ID | Title | Risk | Why It Matters | Scope | Completion Evidence |
+| --- | --- | --- | --- | --- | --- |
+| PS-050 | Make Awaiting Shipment Rates Accurate and Auto-Start Background Rating | Critical rate correctness and operator workflow | Awaiting Shipment rates can spin for minutes, saved table rates can differ from later live Rate Browser results, and current saved-rate validation is unsafe because dims-only matching can show stale or mismatched rates as current. | Add a full saved-rate validity model using request fingerprint, freshness, and completeness; make cache/backfill reuse exact-match only; auto-start passive Awaiting Shipment rating on plain page load; keep passive flow cache-first with bounded refresh/concurrency; preserve manual Rate Browser force-live behavior. | Typecheck, web build, source-of-truth guard, new browser E2E for rate accuracy/auto-start, existing Orders column-integrity E2E, lower-level fingerprint/freshness/completeness tests, cache/backfill exactness tests, and concurrency/rate-limit tests pass. No labels, postage, marketplace notifications, shipped/cancelled mutations, secrets, or PII exposure. |
+
+### PS-050 Copy/Paste Handoff
+
+See [docs/ps-050-awaiting-shipment-rate-accuracy-autostart.md](docs/ps-050-awaiting-shipment-rate-accuracy-autostart.md) for the full replacement task prompt, safety clarification, implementation requirements, test plan, verification commands, definition of done, and return format.
+
 ## Recommended Next Order
 
 1. Finish production verification after this batch deploys.

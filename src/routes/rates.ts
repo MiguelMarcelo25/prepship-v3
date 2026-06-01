@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { and, eq, or, sql } from 'drizzle-orm';
 import { db } from '../db/client';
 import { rateCache } from '../db/schema/rates';
-import { getCarrierAccountsForRateContext, getRates, rateCacheKey } from '../services/rates';
+import { CACHE_TTL_MS, getCarrierAccountsForRateContext, getRates, rateCacheKey, resolveRateInput } from '../services/rates';
 import { listCarrierAccounts } from '../services/carrier-connector-orchestrator';
 import {
   getActiveBackfillJob,
@@ -27,6 +27,7 @@ const rateCachePublicColumns = {
   toZip: rateCache.toZip,
   rates: rateCache.rates,
   bestRate: rateCache.bestRate,
+  diagnostics: rateCache.diagnostics,
   weightVersion: rateCache.weightVersion,
   fetchedAt: rateCache.fetchedAt,
 };
@@ -154,6 +155,37 @@ function orderedCarrierIds(carrierIds: string[] | undefined, preferredCarrierId?
   const unique = [...new Set((carrierIds ?? []).filter(Boolean))];
   if (!preferredCarrierId || !unique.includes(preferredCarrierId)) return unique.length ? unique : undefined;
   return [preferredCarrierId, ...unique.filter((carrierId) => carrierId !== preferredCarrierId)];
+}
+
+function cacheMetadata(row: typeof rateCachePublicColumns | any, matchType: 'exact' | 'miss') {
+  if (!row || matchType === 'miss') {
+    return {
+      matchType: 'miss' as const,
+      approximate: false,
+      isComplete: false,
+      rateCount: 0,
+      cacheCreatedAt: null,
+      cacheExpiresAt: null,
+      requestFingerprint: null,
+    };
+  }
+  const rates = Array.isArray(row.rates) ? row.rates : [];
+  const diagnostics = Array.isArray(row.diagnostics) ? row.diagnostics : [];
+  const fetchedAt = row.fetchedAt instanceof Date ? row.fetchedAt : new Date(row.fetchedAt);
+  const cacheExpiresAt = new Date(fetchedAt.getTime() + CACHE_TTL_MS);
+  const fresh = cacheExpiresAt.getTime() > Date.now();
+  const isComplete = fresh && rates.length > 0 && diagnostics.every((diagnostic: any) => (
+    diagnostic?.status === 'ok' || diagnostic?.status === 'cached' || diagnostic?.status === 'empty'
+  ));
+  return {
+    matchType: 'exact' as const,
+    approximate: false,
+    isComplete,
+    rateCount: rates.length,
+    cacheCreatedAt: fetchedAt.toISOString(),
+    cacheExpiresAt: cacheExpiresAt.toISOString(),
+    requestFingerprint: row.cacheKey,
+  };
 }
 
 app.post('/browse', zValidator('json', browseBody), async (c) => {
@@ -298,6 +330,7 @@ const bulkItemBody = z
     dimsW: z.number().positive().optional(),
     dimsH: z.number().positive().optional(),
     carrierIds: z.array(z.string()).optional(),
+    orderId: z.number().int().optional(),
     storeId: z.number().int().nullable().optional(),
     clientId: z.number().int().nullable().optional(),
     sourceClientId: z.number().int().nullable().optional(),
@@ -318,51 +351,44 @@ const bulkBody = z.object({
 app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
   const { items } = c.req.valid('json');
   const canViewFinancials = canViewRateFinancials(c);
+  const itemsWithKeys = await Promise.all(items.map(async (it) => {
+    if (it.cacheKey) return { item: it, computedCacheKey: it.cacheKey };
+    if (it.weightOz === undefined || it.toZip === undefined) return { item: it, computedCacheKey: null };
+    if (
+      it.dimsL === undefined &&
+      it.dimsW === undefined &&
+      it.dimsH === undefined &&
+      it.residential === undefined &&
+      it.storeId === undefined &&
+      it.clientId === undefined &&
+      it.sourceClientId === undefined &&
+      it.carrierIds === undefined &&
+      it.confirmation === undefined &&
+      it.toCountry === undefined
+    ) {
+      return { item: it, computedCacheKey: null };
+    }
+    const resolved = await resolveRateInput({
+      weightOz: it.weightOz,
+      toZip: it.toZip,
+      toCountry: it.toCountry,
+      residential: it.residential,
+      dimsL: it.dimsL,
+      dimsW: it.dimsW,
+      dimsH: it.dimsH,
+      carrierIds: it.carrierIds,
+      storeId: it.storeId,
+      clientId: it.clientId,
+      sourceClientId: it.sourceClientId,
+      confirmation: it.confirmation,
+    });
+    return { item: it, computedCacheKey: rateCacheKey(resolved) };
+  }));
   const exactKeys = [
     ...new Set(
-      items
-        .map((it) => {
-          if (it.cacheKey) return it.cacheKey;
-          if (it.weightOz === undefined || it.toZip === undefined) return null;
-          if (
-            it.dimsL === undefined &&
-            it.dimsW === undefined &&
-            it.dimsH === undefined &&
-            it.residential === undefined &&
-            it.storeId === undefined &&
-            it.clientId === undefined &&
-            it.sourceClientId === undefined &&
-            it.carrierIds === undefined &&
-            it.confirmation === undefined &&
-            it.toCountry === undefined
-          ) {
-            return null;
-          }
-          return rateCacheKey({
-            weightOz: it.weightOz,
-            toZip: it.toZip,
-            toCountry: it.toCountry,
-            residential: it.residential,
-            dimsL: it.dimsL,
-            dimsW: it.dimsW,
-            dimsH: it.dimsH,
-            carrierIds: it.carrierIds,
-            storeId: it.storeId,
-            clientId: it.clientId,
-            sourceClientId: it.sourceClientId,
-            confirmation: it.confirmation,
-          });
-        })
-        .filter((key): key is string => Boolean(key)),
+      itemsWithKeys.map(({ computedCacheKey }) => computedCacheKey).filter((key): key is string => Boolean(key)),
     ),
   ];
-  const pairs = items
-    .filter((it) => it.weightOz !== undefined && it.toZip !== undefined)
-    .map((it) => ({
-      weightOz: it.weightOz!,
-      toZip: it.toZip!.toUpperCase(),
-    }));
-
   const exactRows = exactKeys.length
     ? await db
         .select(rateCachePublicColumns)
@@ -370,72 +396,31 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
         .where(or(...exactKeys.map((key) => eq(rateCache.cacheKey, key))))
         .orderBy(sql`${rateCache.fetchedAt} desc`)
     : [];
-  const roughRows = pairs.length
-    ? await db
-        .select(rateCachePublicColumns)
-        .from(rateCache)
-        .where(
-          or(
-            ...pairs.map((pair) =>
-              and(
-                eq(rateCache.weightOz, pair.weightOz),
-                eq(rateCache.toZip, pair.toZip)
-              )
-            )
-          )
-        )
-        .orderBy(sql`${rateCache.fetchedAt} desc`)
-    : [];
   const exactRowsByKey = new Map<string, typeof exactRows[number]>();
   for (const row of exactRows) {
     if (!exactRowsByKey.has(row.cacheKey)) exactRowsByKey.set(row.cacheKey, row);
   }
-  const rowsByPair = new Map<string, typeof roughRows[number]>();
-  for (const row of roughRows) {
-    const key = `${row.weightOz}|${row.toZip}`;
-    if (!rowsByPair.has(key)) rowsByPair.set(key, row);
-  }
-  const results = items.map((it) => {
-    const computedCacheKey =
-      it.cacheKey ??
-      (it.weightOz !== undefined && it.toZip !== undefined
-        ? rateCacheKey({
-            weightOz: it.weightOz,
-            toZip: it.toZip,
-            toCountry: it.toCountry,
-            residential: it.residential,
-            dimsL: it.dimsL,
-            dimsW: it.dimsW,
-            dimsH: it.dimsH,
-            carrierIds: it.carrierIds,
-            storeId: it.storeId,
-            clientId: it.clientId,
-            sourceClientId: it.sourceClientId,
-            confirmation: it.confirmation,
-          })
-        : null);
+  const results = itemsWithKeys.map(({ item: it, computedCacheKey }) => {
     const exactHit = computedCacheKey ? exactRowsByKey.get(computedCacheKey) : null;
     if (exactHit) {
+      const meta = cacheMetadata(exactHit, 'exact');
       return {
+        orderId: it.orderId,
         cacheKey: computedCacheKey,
         weightOz: it.weightOz,
         toZip: it.toZip,
         hit: publicRateCacheRow(exactHit, canViewFinancials),
-        matchQuality: 'exact' as const,
-        approximate: false,
+        ...meta,
       };
     }
-    const toZip = it.toZip?.toUpperCase();
+    const meta = cacheMetadata(null, 'miss');
     return {
+      orderId: it.orderId,
       weightOz: it.weightOz,
       toZip: it.toZip,
       cacheKey: computedCacheKey,
-      hit:
-        it.weightOz !== undefined && toZip
-          ? publicRateCacheRow(rowsByPair.get(`${it.weightOz}|${toZip}`) ?? null, canViewFinancials)
-          : null,
-      matchQuality: 'rough' as const,
-      approximate: true,
+      hit: null,
+      ...meta,
     };
   });
   return c.json({ data: results });
