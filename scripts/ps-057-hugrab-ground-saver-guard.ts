@@ -135,6 +135,14 @@ const sourceChecks: Array<[string, string[]]> = [
     ],
   ],
   [
+    'src/routes/rates.ts',
+    [
+      'selectRateCachePublicRowsByKeys',
+      'isMissingRateCacheDiagnosticsColumnError',
+      'rate_cache.diagnostics column missing',
+    ],
+  ],
+  [
     'src/routes/orders.ts',
     [
       'sanitizeAwaitingOverridesForShippingEligibility',

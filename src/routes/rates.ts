@@ -39,6 +39,87 @@ const rateCachePublicColumns = {
   fetchedAt: rateCache.fetchedAt,
 };
 
+const legacyRateCachePublicColumns = {
+  cacheKey: rateCache.cacheKey,
+  weightOz: rateCache.weightOz,
+  toZip: rateCache.toZip,
+  rates: rateCache.rates,
+  bestRate: rateCache.bestRate,
+  weightVersion: rateCache.weightVersion,
+  fetchedAt: rateCache.fetchedAt,
+};
+
+type RateCachePublicRow = {
+  cacheKey: string;
+  weightOz: number | null;
+  toZip: string | null;
+  rates: unknown[];
+  bestRate: unknown;
+  diagnostics: unknown[] | null;
+  weightVersion: number | null;
+  fetchedAt: Date;
+};
+
+function isMissingRateCacheDiagnosticsColumnError(err: unknown): boolean {
+  const row = err as { code?: string; message?: string };
+  const message = String(row?.message ?? '');
+  return row?.code === '42703' && /diagnostics/i.test(message);
+}
+
+async function selectRateCachePublicRowsByKeys(cacheKeys: string[]): Promise<RateCachePublicRow[]> {
+  if (!cacheKeys.length) return [];
+  const predicate = or(...cacheKeys.map((key) => eq(rateCache.cacheKey, key)));
+  try {
+    return await db
+      .select(rateCachePublicColumns)
+      .from(rateCache)
+      .where(predicate)
+      .orderBy(sql`${rateCache.fetchedAt} desc`);
+  } catch (err) {
+    if (!isMissingRateCacheDiagnosticsColumnError(err)) throw err;
+    console.warn(
+      '[rates] rate_cache.diagnostics column missing; reading cached/bulk rows without diagnostics'
+    );
+    const rows = await db
+      .select(legacyRateCachePublicColumns)
+      .from(rateCache)
+      .where(predicate)
+      .orderBy(sql`${rateCache.fetchedAt} desc`);
+    return rows.map((row) => ({ ...row, diagnostics: null }));
+  }
+}
+
+async function selectRateCachePublicRowsByWeightZip(weightOz: number, toZip: string): Promise<RateCachePublicRow[]> {
+  try {
+    return await db
+      .select(rateCachePublicColumns)
+      .from(rateCache)
+      .where(
+        and(
+          eq(rateCache.weightOz, weightOz),
+          eq(rateCache.toZip, toZip.toUpperCase())
+        )
+      )
+      .limit(25);
+  } catch (err) {
+    if (!isMissingRateCacheDiagnosticsColumnError(err)) throw err;
+    console.warn(
+      '[rates] rate_cache.diagnostics column missing; reading cached rows without diagnostics'
+    );
+    const rows = await db
+      .select(legacyRateCachePublicColumns)
+      .from(rateCache)
+      .where(
+        and(
+          eq(rateCache.weightOz, weightOz),
+          eq(rateCache.toZip, toZip.toUpperCase())
+        )
+      )
+      .limit(25);
+    return rows.map((row) => ({ ...row, diagnostics: null }));
+  }
+}
+
 const RATE_MONEY_FIELD_KEYS = [
   'shipping_amount',
   'other_amount',
@@ -411,13 +492,7 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
       itemsWithKeys.map(({ computedCacheKey }) => computedCacheKey).filter((key): key is string => Boolean(key)),
     ),
   ];
-  const exactRows = exactKeys.length
-    ? await db
-        .select(rateCachePublicColumns)
-        .from(rateCache)
-        .where(or(...exactKeys.map((key) => eq(rateCache.cacheKey, key))))
-        .orderBy(sql`${rateCache.fetchedAt} desc`)
-    : [];
+  const exactRows = await selectRateCachePublicRowsByKeys(exactKeys);
   const exactRowsByKey = new Map<string, typeof exactRows[number]>();
   for (const row of exactRows) {
     if (!exactRowsByKey.has(row.cacheKey)) exactRowsByKey.set(row.cacheKey, row);
@@ -457,16 +532,7 @@ app.get('/cached', zValidator('query', cachedQuery), async (c) => {
   const canViewFinancials = canViewRateFinancials(c);
   // weightOz + toZip are required by the schema, so the non-null
   // assertion is safe.
-  const rows = await db
-    .select(rateCachePublicColumns)
-    .from(rateCache)
-    .where(
-      and(
-        eq(rateCache.weightOz, q.weightOz!),
-        eq(rateCache.toZip, q.toZip!.toUpperCase())
-      )
-    )
-    .limit(25);
+  const rows = await selectRateCachePublicRowsByWeightZip(q.weightOz!, q.toZip!);
   return c.json({ data: rows.map((row) => publicRateCacheRow(row, canViewFinancials)) });
 });
 
