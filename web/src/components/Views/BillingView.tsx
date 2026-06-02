@@ -133,7 +133,7 @@ function detailSortValueOf(row: BillingDetailDto, key: BillingDetailColumnId): s
     case 'itemNames': return row.itemNames || row.description
     case 'itemSkus': return row.itemSkus
     case 'totalQty': return row.totalQty || row.qty
-    case 'pickpack': return metrics.pickPackFee
+    case 'pickpack': return metrics.pickPack
     case 'additional': return metrics.additional
     case 'packageCost': return metrics.packageCost
     case 'packageName': return row.packageName
@@ -434,7 +434,7 @@ export default function BillingView() {
         case 'totalQty':
           return row.totalQty || row.qty
         case 'pickpack':
-          return metrics.pickPackFee
+          return metrics.pickPack
         case 'additional':
           return metrics.additional
         case 'packageCost':
@@ -481,7 +481,10 @@ export default function BillingView() {
     return mergedDetailRows.reduce((acc, row) => {
       const metrics = computeBillingDetailMetrics(row)
       return {
-        pickPack: acc.pickPack + metrics.pickPackFee,
+        // PS — the "Pick & Pack" column shows the flat first-unit fee only;
+        // extra-unit charges live in the "Addl Units" column. Use metrics.pickPack
+        // (base), not pickPackFee (base + additional), so the two don't overlap.
+        pickPack: acc.pickPack + metrics.pickPack,
         additional: acc.additional + metrics.additional,
         packageCost: acc.packageCost + metrics.packageCost,
         shipping: acc.shipping + metrics.shipping,
@@ -1571,7 +1574,7 @@ export default function BillingView() {
                 ),
               },
               { key: 'orders', label: 'Orders', width: 90, minWidth: 70, align: 'right', sortable: true, sortValue: (row) => Number(row.orderCount ?? 0), render: (row) => row.orderCount || 0 },
-              { key: 'pickPack', label: 'Pick & Pack', width: 110, minWidth: 90, align: 'right', sortable: true, sortValue: (row) => Number(row.pickPackFeeTotal ?? ((row.pickPackTotal ?? 0) + (row.additionalTotal ?? 0))), render: (row) => formatBillingMoney(row.pickPackFeeTotal ?? ((row.pickPackTotal ?? 0) + (row.additionalTotal ?? 0))) },
+              { key: 'pickPack', label: 'Pick & Pack', width: 110, minWidth: 90, align: 'right', sortable: true, sortValue: (row) => Number(row.pickPackTotal ?? 0), render: (row) => formatBillingMoney(row.pickPackTotal ?? 0) },
               { key: 'additional', label: 'Addl Units', width: 110, minWidth: 90, align: 'right', sortable: true, sortValue: (row) => Number(row.additionalTotal ?? 0), render: (row) => formatBillingMoney(row.additionalTotal || 0) },
               { key: 'package', label: 'Box Cost', width: 110, minWidth: 90, align: 'right', sortable: true, sortValue: (row) => Number(row.packageTotal ?? 0), render: (row) => formatBillingMoney(row.packageTotal || 0, { dashIfZero: true }) },
               { key: 'storage', label: 'Storage', width: 110, minWidth: 90, align: 'right', sortable: true, sortValue: (row) => Number(row.storageTotal ?? 0), render: (row) => formatBillingMoney(row.storageTotal || 0, { dashIfZero: true }) },
@@ -1619,7 +1622,7 @@ export default function BillingView() {
               switch (c.key) {
                 case 'client': return <td key={c.key} {...common} style={tdStyle}>Total</td>
                 case 'orders': return <td key={c.key} {...common} style={tdStyle}>{summaryTotals.orders}</td>
-                case 'pickPack': return <td key={c.key} {...common} style={tdStyle}>{formatBillingMoney(summaryTotals.pickPackFee)}</td>
+                case 'pickPack': return <td key={c.key} {...common} style={tdStyle}>{formatBillingMoney(summaryTotals.pickPack)}</td>
                 case 'additional': return <td key={c.key} {...common} style={tdStyle}>{formatBillingMoney(summaryTotals.additional)}</td>
                 case 'package': return <td key={c.key} {...common} style={tdStyle}>{formatBillingMoney(summaryTotals.package, { dashIfZero: true })}</td>
                 case 'storage': return <td key={c.key} {...common} style={tdStyle}>{formatBillingMoney(summaryTotals.storage, { dashIfZero: true })}</td>
@@ -1757,7 +1760,9 @@ export default function BillingView() {
                         case 'totalQty':
                           return <span>{row.totalQty || row.qty || 0}</span>
                         case 'pickpack':
-                          return formatBillingMoney(metrics.pickPackFee)
+                          // PS — flat first-unit Pick & Pack fee only; extra units
+                          // are shown in the Addl Units column (not folded in here).
+                          return formatBillingMoney(metrics.pickPack)
                         case 'additional':
                           return formatBillingMoney(metrics.additional, { dashIfZero: true })
                         case 'packageCost':
