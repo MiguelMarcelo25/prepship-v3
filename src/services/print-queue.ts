@@ -9,6 +9,13 @@ import { shipments } from '../db/schema/shipments';
 import { extractShipstationLabelUrl } from '../lib/shipstation/labels';
 import { ensureShipmentConfirmationLifecycle } from './fulfillment/outbox';
 import { createLabelV2, type CreateLabelInputDto } from './labels';
+import {
+  collapseIdentityLines,
+  resolveQueueLineIdentity,
+  NO_SKU_PICK_NOTE,
+  UNRESOLVED_QUEUE_ITEM_LABEL,
+  type CollapsedQueueLine,
+} from './print-queue-identity';
 
 export type AddToQueueInput = {
   clientId: number;
@@ -1231,39 +1238,23 @@ function safePdfText(value: unknown): string {
     .replace(/[^\x20-\x7E]/g, '');
 }
 
-function normalizeQueueSkuKey(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, ' ');
-}
+// PS-070 — resolve the pickable lines for a queue entry. Blank-SKU eBay lines
+// are NO LONGER dropped: collapseIdentityLines keeps them keyed by title/id so
+// multi-SKU combos stay complete and a no-SKU order still has a real identity.
+// When there's no multi_sku_data, synthesize a single line from the primary
+// sku / item description and run it through the same resolver, so a no-SKU
+// order falls back to its title (or an explicit UNRESOLVED) — never the old
+// "UNKNOWN SKU".
+function collapseQueueSkuLines(
+  entry: Pick<PrintQueueEntry, 'multiSkuData' | 'primarySku' | 'itemDescription' | 'orderQty'>,
+): CollapsedQueueLine[] {
+  const fromMulti = collapseIdentityLines(entry.multiSkuData);
+  if (fromMulti.length > 0) return fromMulti;
 
-function collapseQueueSkuLines(entry: Pick<PrintQueueEntry, 'multiSkuData' | 'primarySku' | 'itemDescription' | 'orderQty'>): Array<{ sku: string; description: string; qty: number }> {
-  const collapsed = new Map<string, { sku: string; description: string; qty: number }>();
-  const rawLines = Array.isArray(entry.multiSkuData) ? entry.multiSkuData : [];
-  for (const rawLine of rawLines) {
-    const line = rawLine && typeof rawLine === 'object' ? rawLine as Record<string, unknown> : {};
-    const sku = String(line.sku ?? '').trim();
-    if (!sku) continue;
-    const key = normalizeQueueSkuKey(sku);
-    const qtyValue = Number(line.qty ?? line.quantity ?? 1);
-    const qty = Number.isFinite(qtyValue) && qtyValue > 0 ? Math.trunc(qtyValue) : 1;
-    const description = String(line.description ?? line.name ?? '').trim();
-    const existing = collapsed.get(key);
-    if (existing) {
-      existing.qty += qty;
-      if (!existing.description && description) existing.description = description;
-    } else {
-      collapsed.set(key, { sku, description, qty });
-    }
-  }
-  const lines = [...collapsed.values()].sort((left, right) => normalizeQueueSkuKey(left.sku).localeCompare(normalizeQueueSkuKey(right.sku)));
-  if (lines.length > 0) return lines;
-  const primarySku = String(entry.primarySku ?? '').trim();
-  return primarySku
-    ? [{
-        sku: primarySku,
-        description: String(entry.itemDescription ?? '').trim(),
-        qty: Number.isFinite(Number(entry.orderQty)) && Number(entry.orderQty) > 0 ? Math.trunc(Number(entry.orderQty)) : 1,
-      }]
-    : [];
+  const sku = String(entry.primarySku ?? '').trim();
+  const description = String(entry.itemDescription ?? '').trim();
+  if (!sku && !description) return [];
+  return collapseIdentityLines([{ sku, description, qty: entry.orderQty }]);
 }
 
 // ───────────────────────────────────────────────────────────────────
@@ -1434,7 +1425,10 @@ function drawMockFallbackLabel(
 
   page.drawText('PrepShip Test Label', { x: pad, y: height - 62, size: 16, font, color: black });
   page.drawText(safePdfText(`Order: ${entry.orderNumber ?? entry.orderId}`), { x: pad, y: height - 84, size: 10, font: fontReg, color: black });
-  page.drawText(safePdfText(`SKU: ${entry.primarySku ?? 'Unknown SKU'}`), { x: pad, y: height - 104, size: 10, font: fontReg, color: black });
+  // PS-070 — never print a confident "SKU: Unknown SKU"; show the real sku or a
+  // safe no-SKU/unresolved note (the title is drawn just below).
+  const fallbackIdentity = resolveQueueLineIdentity({ sku: entry.primarySku, description: entry.itemDescription });
+  page.drawText(safePdfText(fallbackIdentity.sku ? `SKU: ${fallbackIdentity.sku}` : fallbackIdentity.skuLineText), { x: pad, y: height - 104, size: 10, font: fontReg, color: black });
   page.drawText(safePdfText(`Qty: ${entry.orderQty ?? 1}`), { x: pad, y: height - 124, size: 10, font: fontReg, color: black });
   if (entry.itemDescription) {
     page.drawText(safePdfText(entry.itemDescription).slice(0, 48), { x: pad, y: height - 144, size: 8, font: fontReg, color: gray });
@@ -1528,14 +1522,20 @@ function drawHeader(
   // ── 1) Item/pick cards (top): product name left, xN right, sku below.
   // Every SKU in a multi-SKU combo gets its own outlined card; a single
   // SKU still renders as one card so the layout is consistent.
-  const cards = (() => {
+  const cards: CollapsedQueueLine[] = (() => {
     const lines = collapseQueueSkuLines(entry);
     if (lines.length > 0) return lines;
+    // PS-070 — no usable sku/title/id: flag UNRESOLVED, never a fake pickable SKU.
     const qtyValue = Number(entry.orderQty);
+    const id = resolveQueueLineIdentity({});
     return [{
-      sku: entry.primarySku ?? 'UNKNOWN SKU',
-      description: String(entry.itemDescription ?? '').trim(),
+      sku: id.sku,
+      description: id.title,
       qty: Number.isFinite(qtyValue) && qtyValue > 0 ? Math.trunc(qtyValue) : 1,
+      groupToken: id.groupToken,
+      kind: id.kind,
+      cardTitle: id.cardTitle,
+      skuLineText: id.skuLineText,
     }];
   })();
 
@@ -1572,12 +1572,15 @@ function drawHeader(
     const qtyText = `x${item.qty}`;
     const qtyW = font.widthOfTextAtSize(qtyText, qtySize);
     // Product NAME is the prominent card title; sku sits smaller below.
+    // PS-070 — cardTitle prefers the product title; skuLineText is either a real
+    // "sku: X" or a safe "no SKU — eBay item" / UNRESOLVED note, never a
+    // confident "sku: UNKNOWN SKU".
     const titleBaseline = y - Math.round(cardH * 0.46);
     const skuBaseline = y - cardH + Math.round(skuSize * 0.7) + 5;
-    const title = fitText(item.description || item.sku, titleSize, font, boxW - 24 - qtyW - 8);
+    const title = fitText(item.cardTitle || item.description || item.sku || UNRESOLVED_QUEUE_ITEM_LABEL, titleSize, font, boxW - 24 - qtyW - 8);
     page.drawText(title, { x: pad + 12, y: titleBaseline, size: titleSize, font, color: ink });
     page.drawText(qtyText, { x: pad + boxW - 12 - qtyW, y: titleBaseline, size: qtySize, font, color: ink });
-    page.drawText(fitText(`sku: ${item.sku}`, skuSize, fontReg, boxW - 24), {
+    page.drawText(fitText(item.skuLineText || (item.sku ? `sku: ${item.sku}` : NO_SKU_PICK_NOTE), skuSize, fontReg, boxW - 24), {
       x: pad + 12,
       y: skuBaseline,
       size: skuSize,
@@ -1888,11 +1891,21 @@ function addBatchManifestPages(
 // for the manifest header from the representative entry of a group.
 function buildComboSummaryLine(entry: PrintQueueEntry): { comboLine: string; totalUnits: number } {
   const lines = collapseQueueSkuLines(entry);
-  const cards = lines.length > 0
+  const id = resolveQueueLineIdentity({});
+  const cards: CollapsedQueueLine[] = lines.length > 0
     ? lines
-    : [{ sku: entry.primarySku ?? 'UNKNOWN SKU', description: String(entry.itemDescription ?? '').trim(), qty: Math.max(1, Math.trunc(Number(entry.orderQty) || 1)) }];
+    : [{
+        sku: id.sku,
+        description: id.title,
+        qty: Math.max(1, Math.trunc(Number(entry.orderQty) || 1)),
+        groupToken: id.groupToken,
+        kind: id.kind,
+        cardTitle: id.cardTitle,
+        skuLineText: id.skuLineText,
+      }];
   const comboLine = cards
-    .map((c) => `${c.description || c.sku} x${c.qty}`)
+    // PS-070 — show the title for no-SKU lines, never a bare "UNKNOWN SKU".
+    .map((c) => `${c.cardTitle || c.description || c.sku || UNRESOLVED_QUEUE_ITEM_LABEL} x${c.qty}`)
     .join(' + ');
   const totalUnits = cards.reduce((sum, c) => sum + c.qty, 0);
   return { comboLine, totalUnits };

@@ -139,6 +139,13 @@ export interface PrintQueueSkuLine {
   sku: string
   description: string
   qty: number
+  // PS-070 — identity metadata so no-SKU eBay lines group by title and render a
+  // safe pick label instead of "UNKNOWN SKU". Optional for back-compat with any
+  // caller that builds a bare {sku,description,qty}.
+  groupToken?: string
+  kind?: 'sku' | 'title' | 'unresolved'
+  cardTitle?: string
+  skuLineText?: string
 }
 
 export interface PrintQueueGroup {
@@ -181,48 +188,105 @@ function getSkuLineQty(value: unknown): number {
   return Number.isFinite(qty) && qty > 0 ? Math.trunc(qty) : 1
 }
 
-export function getPrintQueueSkuLines(entry: Pick<PrintQueueEntryDto, 'multi_sku_data' | 'primary_sku' | 'item_description' | 'order_qty' | 'sku_group_id'>): PrintQueueSkuLine[] {
-  const rawLines = Array.isArray(entry.multi_sku_data) ? entry.multi_sku_data : []
-  const collapsed = new Map<string, PrintQueueSkuLine>()
+// ── PS-070 — safe item identity (mirrors src/services/print-queue-identity.ts) ──
+// Blank-SKU eBay lines are kept (keyed by title/id) instead of dropped, so they
+// stay in multi-SKU combos, group by title, and render a pickable label rather
+// than "UNKNOWN SKU". scripts/ps-070-ebay-nosku-identity-guard.ts asserts this
+// matches the backend module token-for-token.
+export const UNRESOLVED_QUEUE_ITEM_LABEL = 'UNRESOLVED EBAY ITEM'
+export const NO_SKU_PICK_NOTE = 'no SKU — eBay item'
+export const UNRESOLVED_QUEUE_ITEM_PICK_NOTE = 'UNRESOLVED EBAY ITEM — review order details'
 
-  for (const rawLine of rawLines) {
-    const line = rawLine && typeof rawLine === 'object' ? rawLine as Record<string, unknown> : {}
-    const sku = normalizeSkuText(line.sku)
-    if (!sku) continue
-    const key = normalizeSkuKey(sku)
-    const existing = collapsed.get(key)
-    const description = normalizeSkuText(line.description) ?? normalizeSkuText(line.name) ?? ''
+function normalizeTitleKey(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+function firstStableId(line: Record<string, unknown>): string {
+  for (const key of ['itemId', 'variationId', 'lineItemId', 'legacyItemId', 'productId']) {
+    const raw = line[key]
+    const s = raw == null ? '' : String(raw).trim()
+    if (s) return `${key}:${s}`
+  }
+  return ''
+}
+
+export function resolveQueueLineIdentity(line: unknown): PrintQueueSkuLine & { groupToken: string; kind: 'sku' | 'title' | 'unresolved'; cardTitle: string; skuLineText: string } {
+  const obj = line && typeof line === 'object' ? line as Record<string, unknown> : {}
+  const sku = String(obj.sku ?? '').trim()
+  const title = String(obj.description ?? obj.name ?? obj.title ?? '').trim()
+  if (sku) {
+    return { sku, description: title, qty: 1, groupToken: `SKU:${normalizeSkuKey(sku)}`, kind: 'sku', cardTitle: title || sku, skuLineText: `sku: ${sku}` }
+  }
+  const id = firstStableId(obj)
+  if (title) {
+    const token = id ? `EBAY_ID:${id}|TITLE:${normalizeTitleKey(title)}` : `NOSKU:${normalizeTitleKey(title)}`
+    return { sku: '', description: title, qty: 1, groupToken: token, kind: 'title', cardTitle: title, skuLineText: NO_SKU_PICK_NOTE }
+  }
+  if (id) {
+    return { sku: '', description: '', qty: 1, groupToken: `EBAY_ID:${id}`, kind: 'title', cardTitle: `eBay item (${id})`, skuLineText: NO_SKU_PICK_NOTE }
+  }
+  return { sku: '', description: '', qty: 1, groupToken: 'UNRESOLVED', kind: 'unresolved', cardTitle: UNRESOLVED_QUEUE_ITEM_LABEL, skuLineText: UNRESOLVED_QUEUE_ITEM_PICK_NOTE }
+}
+
+export function collapseIdentityLines(lines: unknown): PrintQueueSkuLine[] {
+  const rawLines = Array.isArray(lines) ? lines : []
+  const collapsed = new Map<string, PrintQueueSkuLine>()
+  for (const raw of rawLines) {
+    const obj = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}
+    const identity = resolveQueueLineIdentity(obj)
+    const qty = getSkuLineQty(obj.qty ?? obj.quantity)
+    const existing = collapsed.get(identity.groupToken)
     if (existing) {
-      existing.qty += getSkuLineQty(line.qty ?? line.quantity)
-      if (!existing.description && description) existing.description = description
+      existing.qty += qty
+      if (!existing.description && identity.description) existing.description = identity.description
     } else {
-      collapsed.set(key, {
-        sku,
-        description,
-        qty: getSkuLineQty(line.qty ?? line.quantity),
+      collapsed.set(identity.groupToken, {
+        sku: identity.sku,
+        description: identity.description,
+        qty,
+        groupToken: identity.groupToken,
+        kind: identity.kind,
+        cardTitle: identity.cardTitle,
+        skuLineText: identity.skuLineText,
       })
     }
   }
+  return [...collapsed.values()].sort((left, right) => (left.groupToken ?? '').localeCompare(right.groupToken ?? ''))
+}
 
-  const lines = [...collapsed.values()].sort((left, right) =>
-    normalizeSkuKey(left.sku).localeCompare(normalizeSkuKey(right.sku)),
-  )
-  if (lines.length > 0) return lines
+export function getPrintQueueSkuLines(entry: Pick<PrintQueueEntryDto, 'multi_sku_data' | 'primary_sku' | 'item_description' | 'order_qty' | 'sku_group_id'>): PrintQueueSkuLine[] {
+  const fromMulti = collapseIdentityLines(entry.multi_sku_data)
+  if (fromMulti.length > 0) return fromMulti
 
-  const primarySku = normalizeSkuText(entry.primary_sku) ??
-    (String(entry.sku_group_id ?? '').startsWith('SKU:') ? normalizeSkuText(String(entry.sku_group_id).slice(4)) : null)
-  return primarySku
-    ? [{
-        sku: primarySku,
-        description: normalizeSkuText(entry.item_description) ?? '',
-        qty: getQueueEntryQty(entry as PrintQueueEntryDto),
-      }]
-    : []
+  // Prefer the explicit primary_sku / item_description (a no-SKU eBay order has
+  // primary_sku='' but item_description=<title>, which resolves to a NOSKU:title
+  // identity). Only fall back to the legacy `SKU:<sku>` group-id parse for old
+  // rows that have neither — and never treat a `SKU:NOSKU:...` combo wrapper as
+  // a real sku.
+  const primarySku = normalizeSkuText(entry.primary_sku)
+  const description = normalizeSkuText(entry.item_description)
+  if (primarySku || description) {
+    return collapseIdentityLines([{
+      sku: primarySku ?? '',
+      description: description ?? '',
+      qty: getQueueEntryQty(entry as PrintQueueEntryDto),
+    }])
+  }
+
+  const groupId = String(entry.sku_group_id ?? '')
+  const legacySku = groupId.startsWith('SKU:') && !groupId.startsWith('SKU:NOSKU:') && !groupId.startsWith('SKU:EBAY_ID:')
+    ? normalizeSkuText(groupId.slice(4))
+    : null
+  if (legacySku) {
+    return collapseIdentityLines([{ sku: legacySku, description: '', qty: getQueueEntryQty(entry as PrintQueueEntryDto) }])
+  }
+  return []
 }
 
 export function buildPrintQueueSkuComboKey(lines: PrintQueueSkuLine[]): string {
   return lines
-    .map((line) => `${normalizeSkuKey(line.sku)}:${getSkuLineQty(line.qty)}`)
+    .map((line) => `${line.groupToken ?? `SKU:${normalizeSkuKey(line.sku)}`}:${getSkuLineQty(line.qty)}`)
+    .sort((left, right) => left.localeCompare(right))
     .join('|')
 }
 
@@ -377,8 +441,11 @@ export function groupPrintQueueEntries(entries: PrintQueueEntryDto[]): PrintQueu
     const primaryLine = skuLines[0]
     groups.set(groupKey, {
       groupId: groupKey,
-      label: isMultiSku ? 'MULTI-SKU' : (primaryLine?.sku || entry.primary_sku || entry.sku_group_id),
-      description: isMultiSku ? skuLines.map((line) => `${line.sku} x${line.qty}`).join(' + ') : (primaryLine?.description || entry.item_description || ''),
+      // PS-070 — for no-SKU lines primaryLine.sku is '', so fall through to the
+      // product title (cardTitle/description) instead of showing the raw
+      // sku_group_id; SKU orders still label by their SKU as before.
+      label: isMultiSku ? 'MULTI-SKU' : (primaryLine?.sku || primaryLine?.cardTitle || primaryLine?.description || entry.primary_sku || entry.item_description || entry.sku_group_id),
+      description: isMultiSku ? skuLines.map((line) => `${line.sku || line.cardTitle || line.description} x${line.qty}`).join(' + ') : (primaryLine?.cardTitle || primaryLine?.description || entry.item_description || ''),
       perOrderQty: qty,
       totalQty: qty,
       skuLines,
@@ -400,32 +467,20 @@ export function groupPrintQueueEntries(entries: PrintQueueEntryDto[]): PrintQueu
 export function buildQueueAddPayload(order: OrderSummaryDto, labelUrl: string) {
   const items = Array.isArray(order.items) ? order.items as Array<Record<string, unknown>> : []
   const activeItems = items.filter((item) => !item.adjustment)
-  const collapsed = new Map<string, PrintQueueSkuLine>()
-  for (const item of activeItems) {
-    const sku = normalizeSkuText(item.sku)
-    if (!sku) continue
-    const key = normalizeSkuKey(sku)
-    const description = normalizeSkuText(item.name) ?? ''
-    const existing = collapsed.get(key)
-    if (existing) {
-      existing.qty += getSkuLineQty(item.quantity)
-      if (!existing.description && description) existing.description = description
-    } else {
-      collapsed.set(key, {
-        sku,
-        description,
-        qty: getSkuLineQty(item.quantity),
-      })
-    }
-  }
-  const skuLines = [...collapsed.values()].sort((left, right) =>
-    normalizeSkuKey(left.sku).localeCompare(normalizeSkuKey(right.sku)),
-  )
+  // PS-070 — collapseIdentityLines KEEPS no-SKU eBay lines (keyed by title/id)
+  // instead of dropping them, so multi-SKU combos stay complete and a no-SKU
+  // order still queues with a real pick identity + title.
+  const skuLines = collapseIdentityLines(activeItems)
   const orderQty = skuLines.reduce((sum, item) => sum + item.qty, 0)
-  const primarySku = skuLines[0]?.sku ?? toStringValue(activeItems[0]?.sku)
-  const itemDescription = skuLines[0]?.description ?? toStringValue(activeItems[0]?.name)
+  const primaryLine = skuLines[0]
+  const primarySku = primaryLine?.sku || toStringValue(activeItems[0]?.sku) || ''
+  const itemDescription = primaryLine?.cardTitle || primaryLine?.description || toStringValue(activeItems[0]?.name)
   const comboKey = buildPrintQueueSkuComboKey(skuLines)
-  const multiSkuData = skuLines.length > 1 ? skuLines : null
+  // Persist a stable, minimal {sku, description, qty} shape; the backend
+  // re-resolves identity from it. Keep no-SKU lines (sku may be '').
+  const multiSkuData = skuLines.length > 1
+    ? skuLines.map((line) => ({ sku: line.sku, description: line.description, qty: line.qty }))
+    : null
 
   return {
     order_id: String(order.orderId),
