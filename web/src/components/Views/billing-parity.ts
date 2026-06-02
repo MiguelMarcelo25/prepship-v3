@@ -181,7 +181,9 @@ export function calculateBillingFulfillmentFee(input: {
 
 export function getBillingInitialRange(now = new Date()): BillingDateRange {
   const from = new Date(now)
-  from.setDate(from.getDate() - 90)
+  // Default the billing summary to the last 30 days (was 90) so the
+  // initial fetch matches the 'last_30' preset selected on load.
+  from.setDate(from.getDate() - 30)
   return {
     from: formatDateInput(from),
     to: formatDateInput(now),

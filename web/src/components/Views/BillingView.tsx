@@ -260,7 +260,7 @@ export default function BillingView() {
   const [packagePriceDrafts, setPackagePriceDrafts] = useState<Record<number, string>>({})
   const [packagePricingLoading, setPackagePricingLoading] = useState(false)
   const [packagePricingError, setPackagePricingError] = useState<string | null>(null)
-  const [activePreset, setActivePreset] = useState<BillingPresetId>('last_90')
+  const [activePreset, setActivePreset] = useState<BillingPresetId>('last_30')
   const [from, setFrom] = useState(initialRange.from)
   const [to, setTo] = useState(initialRange.to)
   const [summaryRows, setSummaryRows] = useState<BillingSummaryDto[]>([])
