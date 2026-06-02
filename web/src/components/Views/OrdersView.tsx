@@ -4894,13 +4894,23 @@ export default function OrdersView({
     request: NonNullable<ReturnType<typeof getAutoBestRateRequest>>,
     options: { requireEligibilityVersion?: boolean } = {},
   ) {
-    const savedRate =
-      toRecord(order.bestRate) ??
-      toRecord(getShippingModel(order)?.bestRate) ??
-      toRecord(toRecord(order.overrides)?.bestRateJson)
+    const savedRate = getSavedBestRateRecord(order)
     if (!savedRate) return false
     if (getRateBaseAmount(savedRate) <= 0) return false
     return savedRateIsFreshAndComplete(savedRate, request.fingerprint, options)
+  }
+
+  function getSavedBestRateRecord(order: OrderSummaryDto) {
+    return (
+      toRecord(order.bestRate) ??
+      toRecord(getShippingModel(order)?.bestRate) ??
+      toRecord(toRecord(order.overrides)?.bestRateJson)
+    )
+  }
+
+  function hasAnySavedBestRateForDisplay(order: OrderSummaryDto) {
+    const savedRate = getSavedBestRateRecord(order)
+    return Boolean(savedRate && getRateBaseAmount(savedRate) > 0)
   }
 
   function hasValidSavedBestRateForRequest(
@@ -5016,6 +5026,19 @@ export default function OrdersView({
       !hasSavedBestRateForRequest(order, autoRequest, { requireEligibilityVersion: false })
     ) {
       return withoutStaleBestRate(order)
+    }
+    return order
+  }
+
+  function getOrderWithDisplayBestRate(order: OrderSummaryDto) {
+    const autoRequest = getAutoBestRateRequest(order)
+    const autoEntry = autoRequest ? autoBestRateEntries[order.orderId] : null
+    if (autoRequest && autoEntry?.key === autoRequest.key && autoEntry?.rate) {
+      return withBestRateOverride(order, autoEntry.rate)
+    }
+    const savedRate = getSavedBestRateRecord(order)
+    if (order.orderStatus === 'awaiting_shipment' && savedRate && !order.bestRate) {
+      return withBestRateOverride(order, savedRate)
     }
     return order
   }
@@ -6597,7 +6620,7 @@ export default function OrdersView({
     const autoRequest = getAutoBestRateRequest(order)
     const autoEntry = autoRequest ? autoBestRateEntries[order.orderId] : null
     const hasMatchingAutoEntry = Boolean(autoRequest && autoEntry?.key === autoRequest.key)
-    const displayOrder = getOrderWithAutoBestRate(order)
+    const displayOrder = getOrderWithDisplayBestRate(order)
 
 
     if (isTestOrder(displayOrder)) {
@@ -6661,13 +6684,14 @@ export default function OrdersView({
     const hasDims = hasCompleteDims(dims)
     const hasWeight = Boolean(displayOrder.weight?.value && displayOrder.weight.value > 0)
     const hasDisplayableBestRate = hasDisplayableBestRateForCurrentRequest(displayOrder)
+    const isRecalculatingSavedRate = !hasDisplayableBestRate && hasAnySavedBestRateForDisplay(displayOrder)
     if (!hasDisplayableBestRate && (!hasWeight || !hasDims)) {
       return <span style={{ fontSize: 10.5, color: 'var(--text3)' }}>— add dims</span>
     }
     if (hasMatchingAutoEntry && !autoEntry?.rate) {
       return <span style={{ color: 'var(--text3)', fontSize: 11 }}>--</span>
     }
-    if (!hasDisplayableBestRate) {
+    if (!hasDisplayableBestRate && !isRecalculatingSavedRate) {
       return <span style={{ color: 'var(--text3)', fontSize: 11 }}>--</span>
     }
     if (bestRateBaseCost == null) {
@@ -6694,7 +6718,11 @@ export default function OrdersView({
     // stays — the badge is still rendered by other cells (selected
     // rate, carrier column).
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div
+        data-rate-state={isRecalculatingSavedRate ? 'recalculating' : 'ready'}
+        style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+        title={isRecalculatingSavedRate ? 'Showing saved rate while PrepShip recalculates the current best rate.' : undefined}
+      >
         {renderRateAmountWithMarkup(bestRateBaseCost, markedAmount)}
       </div>
     )
@@ -6742,7 +6770,7 @@ export default function OrdersView({
   }
 
   const renderCarrierCell = (order: OrderSummaryDto) => {
-    const displayOrder = getOrderWithAutoBestRate(order)
+    const displayOrder = getOrderWithDisplayBestRate(order)
 
     if (isTestOrder(displayOrder)) {
       return (
@@ -6781,24 +6809,29 @@ export default function OrdersView({
     const hasDims = hasCompleteDims(dims)
     const hasWeight = Boolean(displayOrder.weight?.value && displayOrder.weight.value > 0)
     const hasDisplayableBestRate = hasDisplayableBestRateForCurrentRequest(displayOrder)
+    const isRecalculatingSavedRate = !hasDisplayableBestRate && hasAnySavedBestRateForDisplay(displayOrder)
     if (!hasDisplayableBestRate && (!hasWeight || !hasDims)) {
       return <span style={{ fontSize: 10.5, color: 'var(--text3)' }}>— add dims</span>
     }
-    if (!hasDisplayableBestRate) {
+    if (!hasDisplayableBestRate && !isRecalculatingSavedRate) {
       return <div className="spin-center"><span className="spin-sm" /></div>
     }
 
     // Keep carrier logos readable in the Orders table. Awaiting, shipped,
     // and cancelled rows all share this renderer.
     return (
-      <div style={{ display: 'flex', alignItems: 'center', lineHeight: 1.3 }}>
+      <div
+        data-rate-state={isRecalculatingSavedRate ? 'recalculating' : 'ready'}
+        style={{ display: 'flex', alignItems: 'center', lineHeight: 1.3 }}
+        title={isRecalculatingSavedRate ? 'Showing saved carrier while PrepShip recalculates the current best rate.' : undefined}
+      >
         <CarrierBadge code={getCarrierCodeForDisplay(displayOrder) ?? ''} size="sm" />
       </div>
     )
   }
 
   const renderShippingAccountCell = (order: OrderSummaryDto) => {
-    const displayOrder = getOrderWithAutoBestRate(order)
+    const displayOrder = getOrderWithDisplayBestRate(order)
 
     if (isTestOrder(displayOrder)) {
       const testAccount = normalizeShippingAccountName(displayOrder.bestRate?.carrierNickname) ?? TEST_SHIPPING_ACCOUNT_LABEL
@@ -6840,15 +6873,20 @@ export default function OrdersView({
     const hasDims = hasCompleteDims(dims)
     const hasWeight = Boolean(displayOrder.weight?.value && displayOrder.weight.value > 0)
     const hasDisplayableBestRate = hasDisplayableBestRateForCurrentRequest(displayOrder)
+    const isRecalculatingSavedRate = !hasDisplayableBestRate && hasAnySavedBestRateForDisplay(displayOrder)
     if (!hasDisplayableBestRate && (!hasWeight || !hasDims)) {
       return <span style={{ fontSize: 10.5, color: 'var(--text3)' }}>— add dims</span>
     }
-    if (!hasDisplayableBestRate) {
+    if (!hasDisplayableBestRate && !isRecalculatingSavedRate) {
       return <div className="spin-center"><span className="spin-sm" /></div>
     }
 
     return (
-        <div style={{ lineHeight: 1.4, whiteSpace: 'nowrap' }}>
+        <div
+          data-rate-state={isRecalculatingSavedRate ? 'recalculating' : 'ready'}
+          style={{ lineHeight: 1.4, whiteSpace: 'nowrap' }}
+          title={isRecalculatingSavedRate ? 'Showing saved account while PrepShip recalculates the current best rate.' : undefined}
+        >
           <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text2)' }}>{getShipAccountDisplay(displayOrder, shippingAccounts)}</div>
           <div style={{ fontSize: 10, color: 'var(--text3)' }} className="svc-label">
             {truncate(formatServiceCode(getBestRateServiceCode(displayOrder)), 22)}
