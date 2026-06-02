@@ -1,0 +1,149 @@
+import { eq } from 'drizzle-orm';
+import { createHash } from 'node:crypto';
+import { db } from '../db/client';
+import { settings } from '../db/schema/settings';
+import {
+  HUGRAB_GROUND_SAVER_BLOCK_REASON,
+  isHugrabShippingContext,
+  isUpsGroundSaverOrSurePostService,
+  type ShippingAutomationRule,
+  type ShippingServiceDescriptor,
+  type ShippingServiceEligibilityContext,
+} from '../lib/shipping-service-eligibility';
+
+export const SHIPPING_AUTOMATION_RULES_KEY = 'shipping_automation_rules';
+
+type RulePayload = {
+  version?: number;
+  rules?: ShippingAutomationRule[];
+};
+
+function normalizeRule(rule: unknown): ShippingAutomationRule | null {
+  if (!rule || typeof rule !== 'object') return null;
+  const row = rule as Record<string, unknown>;
+  const type = row.type === 'carrier' || row.type === 'service' ? row.type : null;
+  if (!type) return null;
+  const disabled = row.disabled === true;
+  return {
+    type,
+    clientId: row.clientId as number | string | null | undefined,
+    storeId: row.storeId as number | string | null | undefined,
+    carrierId: typeof row.carrierId === 'string' ? row.carrierId : null,
+    carrierCode: typeof row.carrierCode === 'string' ? row.carrierCode : null,
+    serviceCode: row.serviceCode as string | number | null | undefined,
+    serviceName: typeof row.serviceName === 'string' ? row.serviceName : null,
+    disabled,
+    reason: typeof row.reason === 'string' ? row.reason : null,
+    locked: row.locked === true,
+    source: typeof row.source === 'string' ? row.source : null,
+    updatedAt: typeof row.updatedAt === 'string' ? row.updatedAt : null,
+    updatedBy: typeof row.updatedBy === 'string' ? row.updatedBy : null,
+  };
+}
+
+function parseRules(value: string | null | undefined): ShippingAutomationRule[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as RulePayload | ShippingAutomationRule[];
+    const rules = Array.isArray(parsed) ? parsed : parsed.rules;
+    if (!Array.isArray(rules)) return [];
+    return rules.map(normalizeRule).filter((rule): rule is ShippingAutomationRule => Boolean(rule));
+  } catch {
+    return [];
+  }
+}
+
+function normalizeNullableNumber(value: number | string | null | undefined): number | null {
+  if (value == null || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function normalizeText(value: string | number | null | undefined): string {
+  return String(value ?? '').trim().toLowerCase();
+}
+
+function sameScope(a: ShippingAutomationRule, b: ShippingAutomationRule): boolean {
+  return (
+    normalizeNullableNumber(a.clientId) === normalizeNullableNumber(b.clientId) &&
+    normalizeNullableNumber(a.storeId) === normalizeNullableNumber(b.storeId)
+  );
+}
+
+function sameCarrierRule(a: ShippingAutomationRule, b: ShippingAutomationRule): boolean {
+  return (
+    sameScope(a, b) &&
+    normalizeText(a.carrierId) === normalizeText(b.carrierId) &&
+    normalizeText(a.carrierCode) === normalizeText(b.carrierCode)
+  );
+}
+
+function sameServiceRule(a: ShippingAutomationRule, b: ShippingAutomationRule): boolean {
+  return (
+    sameCarrierRule(a, b) &&
+    normalizeText(a.serviceCode) === normalizeText(b.serviceCode) &&
+    normalizeText(a.serviceName) === normalizeText(b.serviceName)
+  );
+}
+
+export async function loadShippingAutomationRules(): Promise<ShippingAutomationRule[]> {
+  const [row] = await db
+    .select({ value: settings.value })
+    .from(settings)
+    .where(eq(settings.key, SHIPPING_AUTOMATION_RULES_KEY))
+    .limit(1);
+  return parseRules(row?.value);
+}
+
+export async function saveShippingAutomationRules(rules: ShippingAutomationRule[]): Promise<void> {
+  const payload: RulePayload = {
+    version: 1,
+    rules,
+  };
+  await db
+    .insert(settings)
+    .values({
+      key: SHIPPING_AUTOMATION_RULES_KEY,
+      value: JSON.stringify(payload),
+    })
+    .onConflictDoUpdate({
+      target: settings.key,
+      set: { value: JSON.stringify(payload) },
+    });
+}
+
+export function shippingAutomationRulesFingerprint(rules: ShippingAutomationRule[]): string {
+  return createHash('sha256').update(JSON.stringify(rules)).digest('hex').slice(0, 12);
+}
+
+export async function upsertShippingAutomationRule(
+  nextRule: ShippingAutomationRule,
+): Promise<ShippingAutomationRule[]> {
+  const currentRules = await loadShippingAutomationRules();
+  const matcher = nextRule.type === 'carrier' ? sameCarrierRule : sameServiceRule;
+  const filtered = currentRules.filter((rule) => !matcher(rule, nextRule));
+  const nextRules = nextRule.disabled
+    ? [...filtered, nextRule]
+    : filtered;
+  await saveShippingAutomationRules(nextRules);
+  return nextRules;
+}
+
+export function buildHugrabLockedAutomationRule(
+  context: ShippingServiceEligibilityContext,
+  service: ShippingServiceDescriptor,
+): ShippingAutomationRule | null {
+  if (!isHugrabShippingContext(context) || !isUpsGroundSaverOrSurePostService(service)) return null;
+  return {
+    type: 'service',
+    clientId: context.clientId ?? null,
+    storeId: context.storeId ?? null,
+    carrierCode: service.carrierCode ?? null,
+    serviceCode: service.serviceCode ?? null,
+    serviceName: service.serviceName ?? service.serviceType ?? null,
+    disabled: true,
+    locked: true,
+    source: 'ps-057',
+    reason: HUGRAB_GROUND_SAVER_BLOCK_REASON,
+  };
+}

@@ -38,6 +38,7 @@ import {
   assertShippingServiceEligible,
   type ShippingServiceDescriptor,
 } from '../lib/shipping-service-eligibility';
+import { loadShippingAutomationRules } from './shipping-automation';
 
 // Batch-label callers don't carry a panel-selected package, so customPackageId
 // is often null. When dims are present, fall back to the same ±0.1" tolerance
@@ -465,12 +466,13 @@ export async function createLabelFromRate(input: CreateFromRateInput) {
   return persistLabelFromRate(label, input.orderId, input.clientId);
 }
 
-function assertLabelServiceEligibleForOrder(
+async function assertLabelServiceEligibleForOrder(
   order: Pick<typeof orders.$inferSelect, 'clientId' | 'storeId'>,
   clientId: number | null | undefined,
   service: ShippingServiceDescriptor,
   shippingOptions?: ReturnType<typeof normalizeShippingOptions>,
-): void {
+): Promise<void> {
+  const automationRules = await loadShippingAutomationRules();
   assertShippingServiceEligible(
     {
       clientId: clientId ?? order.clientId ?? null,
@@ -478,6 +480,7 @@ function assertLabelServiceEligibleForOrder(
     },
     service,
     shippingOptions,
+    automationRules,
   );
 }
 
@@ -527,6 +530,7 @@ export type CreateFromShipmentInput = {
 };
 
 export async function createLabelFromShipment(input: CreateFromShipmentInput) {
+  const automationRules = await loadShippingAutomationRules();
   assertShippingServiceEligible(
     {
       clientId: input.clientId ?? null,
@@ -535,6 +539,8 @@ export async function createLabelFromShipment(input: CreateFromShipmentInput) {
       serviceCode: input.serviceCode,
       serviceName: input.serviceCode,
     },
+    null,
+    automationRules,
   );
   const shipFrom = input.shipFrom ?? (await getDefaultShipFrom());
   const parcel: Parcel = { weight: { value: input.weightOz, unit: 'ounce' } };
@@ -904,7 +910,7 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
     clientId = match?.id ?? null;
   }
   const options = normalizeShippingOptions(body);
-  assertLabelServiceEligibleForOrder(order, clientId, {
+  await assertLabelServiceEligibleForOrder(order, clientId, {
     carrierCode: body.carrierCode ?? null,
     carrierName: body.carrierName ?? null,
     serviceCode: body.serviceCode,
@@ -1389,7 +1395,7 @@ async function createLabelFromOrderId(args: {
   // the forced-testLabel guard in createLabelV2 so any entry point into
   // label creation is safe.
   const effectiveClientId = args.clientId ?? order.clientId ?? null;
-  assertLabelServiceEligibleForOrder(order, effectiveClientId, {
+  await assertLabelServiceEligibleForOrder(order, effectiveClientId, {
     serviceCode: args.serviceCode,
     serviceName: args.serviceCode,
   });

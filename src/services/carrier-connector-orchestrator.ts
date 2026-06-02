@@ -1,6 +1,7 @@
 import { resolveCarrierConnector } from '../connectors/carrier-resolution';
 import { assertShippingServiceEligible } from '../lib/shipping-service-eligibility';
 import { normalizeShippingOptions } from '../lib/shipping-options';
+import { loadShippingAutomationRules } from './shipping-automation';
 import type {
   CarrierLabelInput,
   CarrierAccountListInput,
@@ -23,16 +24,17 @@ function labelInputRecord(input: CarrierLabelInput): Record<string, any> {
   return input && typeof input === 'object' ? input as Record<string, any> : {};
 }
 
-function assertCarrierLabelServiceEligible(
+async function assertCarrierLabelServiceEligible(
   provider: string | null | undefined,
   input: CarrierLabelInput,
-): void {
+): Promise<void> {
   const row = labelInputRecord(input);
   const shipment = row.shipment && typeof row.shipment === 'object'
     ? row.shipment as Record<string, any>
     : {};
   const serviceCode = row.serviceCode ?? row.service_code ?? shipment.service_code ?? shipment.serviceCode;
   if (serviceCode == null || serviceCode === '') return;
+  const automationRules = await loadShippingAutomationRules();
   assertShippingServiceEligible(
     {
       clientId: row.clientId ?? row.client_id ?? shipment.clientId ?? shipment.client_id ?? null,
@@ -48,6 +50,7 @@ function assertCarrierLabelServiceEligible(
       serviceType: row.serviceType ?? row.service_type ?? shipment.service_type ?? null,
     },
     normalizeShippingOptions(row.shippingOptions ?? row),
+    automationRules,
   );
 }
 
@@ -71,7 +74,7 @@ export async function createCarrierLabel(
   provider: string | null | undefined,
   input: CarrierLabelInput,
 ): Promise<NormalizedCarrierLabelResult> {
-  assertCarrierLabelServiceEligible(provider, input);
+  await assertCarrierLabelServiceEligible(provider, input);
   const resolved = resolveCarrierConnector(provider, 'labels.create');
   if (!resolved?.connector.createLabel) {
     throw missingCarrierConnector(provider, 'labels.create');

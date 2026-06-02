@@ -33,12 +33,29 @@ export type ShippingServiceOptionEligibilityContext = {
 };
 
 export type ShippingServiceDescriptor = {
+  carrierId?: string | null;
   carrierCode?: string | null;
   carrierName?: string | null;
   provider?: string | null;
   serviceCode?: string | number | null;
   serviceName?: string | null;
   serviceType?: string | null;
+};
+
+export type ShippingAutomationRule = {
+  type: 'carrier' | 'service';
+  clientId?: number | string | null;
+  storeId?: number | string | null;
+  carrierId?: string | null;
+  carrierCode?: string | null;
+  serviceCode?: string | number | null;
+  serviceName?: string | null;
+  disabled: boolean;
+  reason?: string | null;
+  locked?: boolean;
+  source?: string | null;
+  updatedAt?: string | null;
+  updatedBy?: string | null;
 };
 
 export type ShippingServiceEligibilityResult = {
@@ -65,6 +82,65 @@ function normalizeServiceKey(value: string | number | null | undefined): string 
 
 function normalizeServiceIdentity(value: string | number | null | undefined): string {
   return String(value ?? '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function matchesContext(
+  rule: Pick<ShippingAutomationRule, 'clientId' | 'storeId'>,
+  context: ShippingServiceEligibilityContext | null | undefined,
+): boolean {
+  const ruleClientId = finiteNumber(rule.clientId);
+  const contextClientId = finiteNumber(context?.clientId);
+  if (ruleClientId != null && ruleClientId !== contextClientId) return false;
+  const ruleStoreId = finiteNumber(rule.storeId);
+  const contextStoreId = finiteNumber(context?.storeId);
+  if (ruleStoreId != null && ruleStoreId !== contextStoreId) return false;
+  return ruleClientId != null || ruleStoreId != null;
+}
+
+function matchesCarrierRule(
+  rule: ShippingAutomationRule,
+  service: ShippingServiceDescriptor | null | undefined,
+): boolean {
+  if (!service) return false;
+  const ruleCarrierId = normalizeServiceIdentity(rule.carrierId);
+  if (ruleCarrierId && ruleCarrierId === normalizeServiceIdentity(service.carrierId)) return true;
+  const ruleCarrierCode = normalizeServiceIdentity(rule.carrierCode);
+  if (ruleCarrierCode && ruleCarrierCode === normalizeServiceIdentity(service.carrierCode)) return true;
+  if (!ruleCarrierId && !ruleCarrierCode) return false;
+  return false;
+}
+
+function matchesServiceRule(
+  rule: ShippingAutomationRule,
+  service: ShippingServiceDescriptor | null | undefined,
+): boolean {
+  if (!service) return false;
+  if (!matchesCarrierRule(rule, service) && (rule.carrierId || rule.carrierCode)) return false;
+  const ruleCode = normalizeServiceKey(rule.serviceCode);
+  if (ruleCode && ruleCode === normalizeServiceKey(service.serviceCode)) return true;
+  const ruleName = normalizeServiceIdentity(rule.serviceName);
+  if (ruleName) {
+    return [
+      service.serviceName,
+      service.serviceType,
+      service.serviceCode,
+    ].map(normalizeServiceIdentity).some((value) => value === ruleName);
+  }
+  return false;
+}
+
+function matchingDisabledAutomationRule(
+  rules: ShippingAutomationRule[] | null | undefined,
+  context: ShippingServiceEligibilityContext | null | undefined,
+  service: ShippingServiceDescriptor | null | undefined,
+): ShippingAutomationRule | null {
+  if (!rules?.length) return null;
+  return rules.find((rule) => (
+    rule.disabled === true &&
+    rule.type === 'service' &&
+    matchesContext(rule, context) &&
+    matchesServiceRule(rule, service)
+  )) ?? null;
 }
 
 export function isHugrabShippingContext(context: ShippingServiceEligibilityContext | null | undefined): boolean {
@@ -97,6 +173,7 @@ export function evaluateShippingServiceEligibility(
   context: ShippingServiceEligibilityContext | null | undefined,
   service: ShippingServiceDescriptor | null | undefined,
   shippingOptions?: ShippingServiceOptionEligibilityContext | null,
+  automationRules?: ShippingAutomationRule[] | null,
 ): ShippingServiceEligibilityResult {
   if (isHugrabShippingContext(context) && isUpsGroundSaverOrSurePostService(service)) {
     return {
@@ -104,6 +181,15 @@ export function evaluateShippingServiceEligibility(
       version: SHIPPING_SERVICE_ELIGIBILITY_VERSION,
       ruleId: HUGRAB_GROUND_SAVER_RULE_ID,
       reason: HUGRAB_GROUND_SAVER_BLOCK_REASON,
+    };
+  }
+  const automationRule = matchingDisabledAutomationRule(automationRules, context, service);
+  if (automationRule) {
+    return {
+      allowed: false,
+      version: SHIPPING_SERVICE_ELIGIBILITY_VERSION,
+      ruleId: 'automation-service-disabled',
+      reason: automationRule.reason ?? 'Shipping service is disabled by Automation settings.',
     };
   }
   const insuranceProvider = String(shippingOptions?.insuranceProvider ?? 'none').trim().toLowerCase();
@@ -134,6 +220,7 @@ export function describeShippingService(service: unknown): ShippingServiceDescri
   const raw = row.raw && typeof row.raw === 'object' ? row.raw as Record<string, any> : {};
   return {
     carrierCode: row.carrier_code ?? row.carrierCode ?? raw.carrier_code ?? raw.carrierCode ?? null,
+    carrierId: row.carrier_id ?? row.carrierId ?? raw.carrier_id ?? raw.carrierId ?? null,
     carrierName: row.carrier_name ?? row.carrierName ?? raw.carrier_name ?? raw.carrierName ?? null,
     provider: row.provider ?? raw.provider ?? row.providerAccountNickname ?? row.carrierNickname ?? null,
     serviceCode: row.service_code ?? row.serviceCode ?? raw.service_code ?? raw.serviceCode ?? null,
@@ -153,8 +240,9 @@ export function assertShippingServiceEligible(
   context: ShippingServiceEligibilityContext | null | undefined,
   service: ShippingServiceDescriptor | null | undefined,
   shippingOptions?: ShippingServiceOptionEligibilityContext | null,
+  automationRules?: ShippingAutomationRule[] | null,
 ): void {
-  const eligibility = evaluateShippingServiceEligibility(context, service, shippingOptions);
+  const eligibility = evaluateShippingServiceEligibility(context, service, shippingOptions, automationRules);
   if (!eligibility.allowed) {
     const error = new Error(eligibility.reason ?? 'Shipping service is not eligible') as Error & {
       code?: string;
@@ -173,6 +261,26 @@ export function filterEligibleShippingServices<T>(
   context: ShippingServiceEligibilityContext | null | undefined,
   describe: (service: T) => ShippingServiceDescriptor,
   shippingOptions?: ShippingServiceOptionEligibilityContext | null,
+  automationRules?: ShippingAutomationRule[] | null,
 ): T[] {
-  return services.filter((service) => evaluateShippingServiceEligibility(context, describe(service), shippingOptions).allowed);
+  return services.filter((service) => evaluateShippingServiceEligibility(context, describe(service), shippingOptions, automationRules).allowed);
+}
+
+export function filterCarrierAccountsForAutomation<T>(
+  carriers: T[],
+  context: ShippingServiceEligibilityContext | null | undefined,
+  automationRules: ShippingAutomationRule[] | null | undefined,
+  describe: (carrier: T) => ShippingServiceDescriptor,
+): T[] {
+  if (!automationRules?.length) return carriers;
+  return carriers.filter((carrier) => {
+    const descriptor = describe(carrier);
+    const disabledRule = automationRules.find((rule) => (
+      rule.disabled === true &&
+      rule.type === 'carrier' &&
+      matchesContext(rule, context) &&
+      matchesCarrierRule(rule, descriptor)
+    ));
+    return !disabledRule;
+  });
 }

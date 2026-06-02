@@ -17,11 +17,17 @@ import {
   SHIPPING_SERVICE_ELIGIBILITY_VERSION,
   describeShippingService,
   evaluateShippingServiceEligibility,
+  filterCarrierAccountsForAutomation,
   filterEligibleShippingServices,
+  type ShippingAutomationRule,
   type ShippingServiceEligibilityContext,
   type ShippingServiceDescriptor,
 } from '../lib/shipping-service-eligibility';
 import { listCarrierAccounts, quoteCarrierRates } from './carrier-connector-orchestrator';
+import {
+  loadShippingAutomationRules,
+  shippingAutomationRulesFingerprint,
+} from './shipping-automation';
 
 type Markup = { type: 'amount' | 'percent'; value: number };
 
@@ -294,6 +300,7 @@ export type RateInput = {
   confirmation?: string | null;
   insuranceProvider?: string | null;
   insuredValue?: number | null;
+  automationRulesVersion?: string | null;
 };
 
 function normalizeZip(zip: string): string {
@@ -327,6 +334,21 @@ async function resolveClientIdForStoreId(storeId?: number | null): Promise<numbe
 
 export async function resolveRateInput(input: RateInput): Promise<RateInput> {
   const context = await resolveRateCredentialContext(input);
+  const automationRules = await loadShippingAutomationRules();
+  const discoveredCarriers = await getAllCarriers(context.apiKeyV2);
+  const candidateCarriers = input.carrierIds?.length
+    ? discoveredCarriers.filter((carrier) => input.carrierIds!.includes(carrier.carrier_id))
+    : discoveredCarriers;
+  const allowedCarriers = filterCarrierAccountsForAutomation(
+    candidateCarriers,
+    { clientId: context.clientId, storeId: context.storeId },
+    automationRules,
+    (carrier) => ({
+      carrierId: carrier.carrier_id,
+      carrierCode: carrier.carrier_code,
+      carrierName: carrier.nickname,
+    }),
+  );
   return {
     ...input,
     toZip: normalizeZip(input.toZip),
@@ -335,9 +357,8 @@ export async function resolveRateInput(input: RateInput): Promise<RateInput> {
     clientId: context.clientId,
     apiKeyV2: context.apiKeyV2,
     sourceClientId: context.sourceClientId,
-    carrierIds: input.carrierIds?.length
-      ? input.carrierIds
-      : (await getAllCarriers(context.apiKeyV2)).map((carrier) => carrier.carrier_id).sort(),
+    automationRulesVersion: shippingAutomationRulesFingerprint(automationRules),
+    carrierIds: allowedCarriers.map((carrier) => carrier.carrier_id).sort(),
   };
 }
 
@@ -367,9 +388,10 @@ export function rateCacheKey(input: RateInput): string {
     parts.push(`ip=${options.insuranceProvider}`);
     parts.push(`iv=${Math.round((options.insuredValue ?? 0) * 100)}`);
   }
-  if (input.carrierIds?.length) {
+  if (Array.isArray(input.carrierIds)) {
     parts.push(`c=${[...input.carrierIds].sort().join(',')}`);
   }
+  if (input.automationRulesVersion) parts.push(`ar=${input.automationRulesVersion}`);
   return parts.join('|');
 }
 
@@ -462,8 +484,9 @@ export function eligibilityReason(
   context: ShippingServiceEligibilityContext,
   rate: unknown,
   shippingOptions?: ReturnType<typeof normalizeShippingOptions>,
+  automationRules?: ShippingAutomationRule[] | null,
 ): string | null {
-  const eligibility = evaluateShippingServiceEligibility(context, rateToShippingServiceDescriptor(rate), shippingOptions);
+  const eligibility = evaluateShippingServiceEligibility(context, rateToShippingServiceDescriptor(rate), shippingOptions, automationRules);
   return eligibility.allowed ? null : eligibility.reason ?? 'Shipping service is not eligible';
 }
 
@@ -471,20 +494,22 @@ export function filterRatesForShippingServiceEligibility<T>(
   rates: T[],
   context: ShippingServiceEligibilityContext,
   shippingOptions?: ReturnType<typeof normalizeShippingOptions>,
+  automationRules?: ShippingAutomationRule[] | null,
 ): T[] {
-  return filterEligibleShippingServices(rates, context, rateToShippingServiceDescriptor, shippingOptions);
+  return filterEligibleShippingServices(rates, context, rateToShippingServiceDescriptor, shippingOptions, automationRules);
 }
 
 export function sanitizeRateCacheRowForEligibility<T extends { rates?: unknown; bestRate?: unknown }>(
   row: T,
   context: ShippingServiceEligibilityContext,
   shippingOptions?: ReturnType<typeof normalizeShippingOptions>,
+  automationRules?: ShippingAutomationRule[] | null,
 ): T {
   const rawRates = Array.isArray(row.rates) ? row.rates : [];
-  const rates = filterRatesForShippingServiceEligibility(rawRates, context, shippingOptions);
+  const rates = filterRatesForShippingServiceEligibility(rawRates, context, shippingOptions, automationRules);
   const bestRateAllowed =
     row.bestRate != null &&
-    evaluateShippingServiceEligibility(context, rateToShippingServiceDescriptor(row.bestRate), shippingOptions).allowed;
+    evaluateShippingServiceEligibility(context, rateToShippingServiceDescriptor(row.bestRate), shippingOptions, automationRules).allowed;
   const bestRate = bestRateAllowed
     ? row.bestRate
     : [...rates].sort((a, b) => genericRateTotal(a) - genericRateTotal(b))[0] ?? null;
@@ -672,13 +697,27 @@ async function resolveRateCredentialContext(
 
 export async function getCarrierAccountsForRateContext(
   input: Pick<RateInput, 'storeId' | 'clientId'>,
+  options: { includeAutomationDisabled?: boolean } = {},
 ): Promise<RateCarrierAccount[]> {
   const context = await resolveRateCredentialContext({
     storeId: input.storeId ?? null,
     clientId: input.clientId ?? null,
   });
+  const automationRules = await loadShippingAutomationRules();
   const carriers = await getAllCarriers(context.apiKeyV2);
-  return carriers.map((carrier) => ({
+  const allowedCarriers = options.includeAutomationDisabled
+    ? carriers
+    : filterCarrierAccountsForAutomation(
+        carriers,
+        { clientId: context.clientId, storeId: context.storeId },
+        automationRules,
+        (carrier) => ({
+          carrierId: carrier.carrier_id,
+          carrierCode: carrier.carrier_code,
+          carrierName: carrier.nickname,
+        }),
+      );
+  return allowedCarriers.map((carrier) => ({
     ...carrier,
     friendly_name: carrier.nickname,
     source_client_id: context.sourceClientId,
@@ -853,7 +892,10 @@ export type FetchLiveRatesResult = {
   carrierDiagnostics: CarrierRateDiagnostic[];
 };
 
-export async function fetchLiveRatesWithDiagnostics(input: RateInput): Promise<FetchLiveRatesResult> {
+export async function fetchLiveRatesWithDiagnostics(
+  input: RateInput,
+  automationRules: ShippingAutomationRule[] = [],
+): Promise<FetchLiveRatesResult> {
   const shipFrom = input.shipFrom ?? (await getDefaultShipFrom());
 
   // v2-parity: /v2/rates/estimate takes ONE carrier_id per call. Issue N
@@ -863,7 +905,7 @@ export async function fetchLiveRatesWithDiagnostics(input: RateInput): Promise<F
   // If the caller restricted carriers via input.carrierIds, filter the
   // discovery list to that set. Otherwise use the full cached list.
   const allCarriers = await getAllCarriers(input.apiKeyV2);
-  const carriers = input.carrierIds?.length
+  const carriers = Array.isArray(input.carrierIds)
     ? allCarriers.filter((c) => input.carrierIds!.includes(c.carrier_id))
     : allCarriers;
 
@@ -886,6 +928,7 @@ export async function fetchLiveRatesWithDiagnostics(input: RateInput): Promise<F
       lifted.filter((r) => !isBlockedRate(r, input.storeId ?? null)),
       eligibilityContext,
       shippingOptionEligibility,
+      automationRules,
     ),
     'live'
   );
@@ -1121,6 +1164,7 @@ export async function getRates(
 ): Promise<GetRatesResult> {
   const resolvedInput = await resolveRateInput(input);
   const key = rateCacheKey(resolvedInput);
+  const automationRules = await loadShippingAutomationRules();
 
   // Markups apply at read time so config changes reflect instantly without
   // having to bust the rate cache.
@@ -1134,6 +1178,7 @@ export async function getRates(
         dedupeRates(cached.rates as Rate[], 'cached'),
         rateEligibilityContext(resolvedInput),
         shippingOptionEligibility,
+        automationRules,
       );
       const cacheAgeMs = Date.now() - cached.fetchedAt.getTime();
       const cacheTtlMs = cachedRaw.length ? CACHE_TTL_MS : RATE_NEGATIVE_CACHE_TTL_MS;
@@ -1180,7 +1225,7 @@ export async function getRates(
     };
   }
 
-  const liveResult = await fetchLiveRatesWithDiagnostics(resolvedInput);
+  const liveResult = await fetchLiveRatesWithDiagnostics(resolvedInput, automationRules);
   const rawRates = liveResult.rates;
   const now = new Date();
 

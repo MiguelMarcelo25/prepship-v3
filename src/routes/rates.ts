@@ -23,6 +23,7 @@ import {
 import multiCarrierHandler from '../lib/imported-handlers/rates-multi';
 import { runNodeHandler } from '../lib/node-handler';
 import { hasAppPermission } from '../middleware/auth';
+import { loadShippingAutomationRules } from '../services/shipping-automation';
 
 const app = new Hono();
 
@@ -450,6 +451,7 @@ const bulkBody = z.object({
 app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
   const { items } = c.req.valid('json');
   const canViewFinancials = canViewRateFinancials(c);
+  const automationRules = await loadShippingAutomationRules();
   const itemsWithKeys = await Promise.all(items.map(async (it) => {
     if (it.cacheKey) return { item: it, computedCacheKey: it.cacheKey };
     if (it.weightOz === undefined || it.toZip === undefined) return { item: it, computedCacheKey: null };
@@ -519,7 +521,7 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
         confirmation: 'delivery',
         insuranceProvider: it.insuranceProvider && it.insuredValue ? it.insuranceProvider as any : 'none',
         insuredValue: typeof it.insuranceValue === 'string' ? Number(it.insuranceValue) : it.insuredValue ?? it.insuranceValue ?? null,
-      });
+      }, automationRules);
       const meta = cacheMetadata(eligibleHit, 'exact');
       return {
         orderId: it.orderId,
@@ -542,7 +544,7 @@ app.post('/cached/bulk', zValidator('json', bulkBody), async (c) => {
         confirmation: 'delivery',
         insuranceProvider: it.insuranceProvider && it.insuredValue ? it.insuranceProvider as any : 'none',
         insuredValue: typeof it.insuranceValue === 'string' ? Number(it.insuranceValue) : it.insuredValue ?? it.insuranceValue ?? null,
-      });
+      }, automationRules);
       const meta = cacheMetadata(eligibleHit, 'rough');
       return {
         orderId: it.orderId,

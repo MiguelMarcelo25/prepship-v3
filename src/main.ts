@@ -34,6 +34,7 @@ import carriersRoute from './routes/carriers';
 import usersRoute from './routes/users';
 import workerRoute from './routes/worker';
 import observabilityRoute from './routes/observability';
+import automationRoute from './routes/automation';
 
 type AppVars = {
   requestId: string;
@@ -138,6 +139,7 @@ const protectedPrefixes = [
   '/users',
   '/worker',
   '/observability',
+  '/automation',
 ];
 
 for (const prefix of protectedPrefixes) {
@@ -174,6 +176,7 @@ app.route('/carriers', carriersRoute);
 app.route('/users', usersRoute);
 app.route('/worker', workerRoute);
 app.route('/observability', observabilityRoute);
+app.route('/automation', automationRoute);
 
 app.notFound((c) => c.json({ error: 'Not found' }, 404));
 

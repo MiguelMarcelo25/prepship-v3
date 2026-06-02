@@ -62,7 +62,6 @@ import { useMarkups } from '../../contexts/MarkupsContext'
 import type { MarkupType } from '../../types/markups'
 import {
   HUGRAB_GROUND_SAVER_BLOCK_REASON,
-  evaluateShippingServiceEligibility,
 } from '../../../../src/lib/shipping-service-eligibility'
 import {
   buildSettingsMarkupRows,
@@ -261,6 +260,9 @@ type AutomationCarrierRow = {
   friendlyName?: string | null
   sourceClientId?: number | null
   sourceClientName?: string | null
+  disabled?: boolean
+  disabledReason?: string | null
+  services?: AutomationServiceEligibilityRow[]
   carrier_id?: string | null
   carrier_code?: string | null
   friendly_name?: string | null
@@ -283,9 +285,13 @@ type AutomationCarrierCatalogRow = {
 }
 
 type AutomationServiceEligibilityRow = {
-  code: string
+  code?: string | null
+  serviceCode?: string | null
   name: string
   allowed: boolean
+  disabled?: boolean
+  locked?: boolean
+  ruleId?: string | null
   reason?: string
 }
 
@@ -356,36 +362,8 @@ function automationServicesForCarrier(
   return []
 }
 
-function automationServiceEligibility(
-  store: AutomationStoreRow,
-  carrier: AutomationCarrierRow,
-  services: AutomationCarrierService[],
-): AutomationServiceEligibilityRow[] {
-  return services.map((service) => {
-    const code = service.serviceCode ?? ''
-    const name = service.name ?? (code || 'Service')
-    const eligibility = evaluateShippingServiceEligibility(
-      {
-        clientId: store.clientId,
-        clientName: store.clientName,
-        storeId: store.storeId,
-      },
-      {
-        carrierCode: automationCarrierCode(carrier),
-        carrierName: automationCarrierLabel(carrier),
-        provider: automationCarrierLabel(carrier),
-        serviceCode: code,
-        serviceName: name,
-        serviceType: name,
-      },
-    )
-    return {
-      code,
-      name,
-      allowed: eligibility.allowed,
-      reason: eligibility.reason,
-    }
-  })
+function automationServiceCode(service: AutomationServiceEligibilityRow | AutomationCarrierService): string {
+  return String((service as AutomationServiceEligibilityRow).serviceCode ?? service.serviceCode ?? (service as AutomationServiceEligibilityRow).code ?? '').trim()
 }
 
 // ─── Status line ──────────────────────────────────────────────────
@@ -548,6 +526,7 @@ export default function SettingsView() {
   const [automationLoading, setAutomationLoading] = useState(false)
   const [automationError, setAutomationError] = useState<string | null>(null)
   const [automationUpdatedAt, setAutomationUpdatedAt] = useState<string | null>(null)
+  const [automationSavingKey, setAutomationSavingKey] = useState<string | null>(null)
 
   // Hide noisy bookkeeping clients from the Sandbox display. 'Manual
   // Orders' is a placeholder bucket the backend creates for legacy
@@ -597,79 +576,77 @@ export default function SettingsView() {
     setAutomationLoading(true)
     setAutomationError(null)
     try {
-      const [storesPayload, carriersPayload] = await Promise.all([
-        api.get<{ data: AutomationStoreRow[] }>('/init/stores', {
-          timeoutMs: 10_000,
-        }),
-        api.get<{ data: AutomationCarrierCatalogRow[] }>('/init/carriers', {
-          timeoutMs: 12_000,
-        }).catch(() => ({ data: [] as AutomationCarrierCatalogRow[] })),
-      ])
-      const catalog: Record<string, AutomationCarrierService[]> = {}
-      for (const carrier of carriersPayload.data ?? []) {
-        const services = carrier.services ?? []
-        for (const key of [carrier.carrierCode, carrier.carrierId].map(automationCatalogKey).filter(Boolean)) {
-          catalog[key] = services
-        }
-      }
-      setAutomationServiceCatalog(catalog)
-      const stores = (storesPayload.data ?? []).filter((store) => store.active !== false)
-      const initialRows = stores.map((store) => ({
-        store,
-        loading: true,
+      const payload = await api.get<{
+        data: Array<{
+          store: AutomationStoreRow
+          carriers: AutomationCarrierRow[]
+        }>
+        updatedAt?: string
+      }>('/automation/availability', { timeoutMs: 20_000 })
+      setAutomationServiceCatalog({})
+      setAutomationRows((payload.data ?? []).map((row) => ({
+        store: row.store,
+        loading: false,
         error: null,
-        carriers: [],
-      }))
-      setAutomationRows(initialRows)
-
-      const results: AutomationStoreAvailability[] = []
-      for (let index = 0; index < stores.length; index += AUTOMATION_CARRIER_FETCH_CONCURRENCY) {
-        const batch = stores.slice(index, index + AUTOMATION_CARRIER_FETCH_CONCURRENCY)
-        const batchResults = await Promise.all(
-          batch.map(async (store): Promise<AutomationStoreAvailability> => {
-            try {
-              const payload = await api.get<{
-                data?: AutomationCarrierRow[]
-                carriers?: AutomationCarrierRow[]
-              }>(
-                `/rates/carriers-for-store?storeId=${encodeURIComponent(store.storeId)}&clientId=${encodeURIComponent(store.clientId)}`,
-                { timeoutMs: 12_000 },
-              )
-              return {
-                store,
-                loading: false,
-                error: null,
-                carriers: payload.data ?? payload.carriers ?? [],
-              }
-            } catch (err) {
-              return {
-                store,
-                loading: false,
-                error: err instanceof Error ? err.message : 'Failed to load carriers',
-                carriers: [],
-              }
-            }
-          }),
-        )
-        results.push(...batchResults)
-        setAutomationRows((current) => {
-          const byStore = new Map(current.map((row) => [row.store.storeId, row]))
-          for (const result of results) byStore.set(result.store.storeId, result)
-          return stores.map((store) => byStore.get(store.storeId) ?? {
-            store,
-            loading: true,
-            error: null,
-            carriers: [],
-          })
-        })
-      }
-      setAutomationUpdatedAt(new Date().toISOString())
+        carriers: row.carriers ?? [],
+      })))
+      setAutomationUpdatedAt(payload.updatedAt ?? new Date().toISOString())
     } catch (err) {
       setAutomationError(err instanceof Error ? err.message : 'Failed to load automation carrier map')
     } finally {
       setAutomationLoading(false)
     }
   }, [])
+
+  async function toggleAutomationCarrier(row: AutomationStoreAvailability, carrier: AutomationCarrierRow, enabled: boolean) {
+    const carrierId = carrier.carrierId ?? carrier.carrier_id
+    if (!carrierId) return
+    const key = `carrier:${row.store.storeId}:${carrierId}`
+    setAutomationSavingKey(key)
+    try {
+      await api.patch('/automation/carrier', {
+        clientId: row.store.clientId,
+        storeId: row.store.storeId,
+        carrierId,
+        carrierCode: automationCarrierCode(carrier) || null,
+        disabled: !enabled,
+        reason: enabled ? null : 'Carrier disabled by Automation settings.',
+      })
+      toastContext?.addToast(enabled ? 'Carrier enabled' : 'Carrier disabled', 'success')
+      await refreshAutomationAvailability()
+    } catch (err) {
+      toastContext?.addToast(err instanceof Error ? err.message : 'Failed to save carrier automation', 'error')
+    } finally {
+      setAutomationSavingKey(null)
+    }
+  }
+
+  async function toggleAutomationService(row: AutomationStoreAvailability, carrier: AutomationCarrierRow, service: AutomationServiceEligibilityRow, enabled: boolean) {
+    if (service.locked) return
+    const code = automationServiceCode(service)
+    if (!code && !service.name) return
+    const carrierId = carrier.carrierId ?? carrier.carrier_id ?? null
+    const key = `service:${row.store.storeId}:${carrierId ?? automationCarrierCode(carrier)}:${code || service.name}`
+    setAutomationSavingKey(key)
+    try {
+      await api.patch('/automation/service', {
+        clientId: row.store.clientId,
+        storeId: row.store.storeId,
+        carrierId,
+        carrierCode: automationCarrierCode(carrier) || null,
+        serviceCode: code || null,
+        serviceName: service.name ?? null,
+        disabled: !enabled,
+        reason: enabled ? null : 'Service disabled by Automation settings.',
+      })
+      toastContext?.addToast(enabled ? 'Service enabled' : 'Service disabled', 'success')
+      await refreshAutomationAvailability()
+    } catch (err) {
+      toastContext?.addToast(err instanceof Error ? err.message : 'Failed to save service automation', 'error')
+    } finally {
+      setAutomationSavingKey(null)
+    }
+  }
 
   useEffect(() => {
     void refreshTestClients()
@@ -1478,20 +1455,43 @@ export default function SettingsView() {
                                         {row.carriers.map((carrier, index) => {
                                           const label = automationCarrierLabel(carrier)
                                           const code = automationCarrierCode(carrier)
+                                          const carrierId = carrier.carrierId ?? carrier.carrier_id ?? ''
                                           const sourceName =
                                             carrier.sourceClientName ??
                                             carrier.source_client_name ??
                                             null
-                                          const services = automationServicesForCarrier(carrier, automationServiceCatalog)
-                                          const serviceEligibility = automationServiceEligibility(row.store, carrier, services)
+                                          const services = carrier.services?.length
+                                            ? carrier.services
+                                            : automationServicesForCarrier(carrier, automationServiceCatalog).map((service) => ({
+                                                code: service.serviceCode ?? '',
+                                                serviceCode: service.serviceCode ?? '',
+                                                name: service.name ?? service.serviceCode ?? 'Service',
+                                                allowed: true,
+                                                disabled: false,
+                                              }))
+                                          const serviceEligibility = services
                                           const allowedServices = serviceEligibility.filter((service) => service.allowed)
                                           const disabledServices = serviceEligibility.filter((service) => !service.allowed)
+                                          const carrierEnabled = !carrier.disabled
+                                          const carrierSavingKey = `carrier:${row.store.storeId}:${carrierId}`
+                                          const isCarrierSaving = automationSavingKey === carrierSavingKey
                                           return (
                                             <div
                                               key={`${row.store.storeId}:${code}:${label}:${index}`}
-                                              className="rounded-lg bg-surface ring-1 ring-line px-3 py-2"
+                                              className={`rounded-lg bg-surface ring-1 px-3 py-2 ${carrierEnabled ? 'ring-line' : 'ring-rose-200 bg-rose-50/40'}`}
                                             >
                                               <div className="flex flex-wrap items-center gap-2">
+                                                <label className="inline-flex items-center gap-2 rounded-md bg-surface px-2 py-1 text-[11.5px] font-bold text-ink ring-1 ring-line">
+                                                  <input
+                                                    type="checkbox"
+                                                    checked={carrierEnabled}
+                                                    disabled={Boolean(isCarrierSaving || !carrierId)}
+                                                    onChange={(event) => void toggleAutomationCarrier(row, carrier, event.target.checked)}
+                                                    className="h-3.5 w-3.5 rounded border-line text-brand focus:ring-brand"
+                                                  />
+                                                  {isCarrierSaving ? <Loader2 size={11} className="animate-spin text-brand" /> : null}
+                                                  <span>{carrierEnabled ? 'Enabled' : 'Disabled'}</span>
+                                                </label>
                                                 <span
                                                   className="inline-flex max-w-full items-center gap-1 rounded-full bg-surface-2 px-2.5 py-1 text-[11.5px] font-bold text-ink ring-1 ring-line"
                                                   title={sourceName ? `${label} - ${sourceName}` : label}
@@ -1504,6 +1504,11 @@ export default function SettingsView() {
                                                   {allowedServices.length} available
                                                   {disabledServices.length > 0 ? ` - ${disabledServices.length} disabled` : ''}
                                                 </span>
+                                                {carrier.disabledReason ? (
+                                                  <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[10.5px] font-semibold text-rose-800 ring-1 ring-rose-200">
+                                                    {carrier.disabledReason}
+                                                  </span>
+                                                ) : null}
                                               </div>
 
                                               {services.length === 0 ? (
@@ -1517,14 +1522,27 @@ export default function SettingsView() {
                                                       Available services
                                                     </div>
                                                     <div className="flex flex-wrap gap-1">
-                                                      {allowedServices.slice(0, 8).map((service) => (
-                                                        <span
-                                                          key={`${code}:allowed:${service.code}:${service.name}`}
-                                                          className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10.5px] font-semibold text-emerald-800 ring-1 ring-emerald-200"
-                                                        >
-                                                          {service.name}
-                                                        </span>
-                                                      ))}
+                                                        {allowedServices.slice(0, 8).map((service) => {
+                                                          const serviceCode = automationServiceCode(service)
+                                                          const serviceSavingKey = `service:${row.store.storeId}:${carrierId || code}:${serviceCode || service.name}`
+                                                          const isSaving = automationSavingKey === serviceSavingKey
+                                                          return (
+                                                            <label
+                                                              key={`${code}:allowed:${serviceCode}:${service.name}`}
+                                                              className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2 py-0.5 text-[10.5px] font-semibold text-emerald-800 ring-1 ring-emerald-200"
+                                                            >
+                                                              <input
+                                                                type="checkbox"
+                                                                checked
+                                                                disabled={isSaving}
+                                                                onChange={(event) => void toggleAutomationService(row, carrier, service, event.target.checked)}
+                                                                className="h-3 w-3 rounded border-emerald-300 text-brand focus:ring-brand"
+                                                              />
+                                                              {isSaving ? <Loader2 size={10} className="animate-spin" /> : null}
+                                                              <span>{service.name}</span>
+                                                            </label>
+                                                          )
+                                                        })}
                                                       {allowedServices.length > 8 ? (
                                                         <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10.5px] font-semibold text-emerald-800 ring-1 ring-emerald-200">
                                                           +{allowedServices.length - 8} more
@@ -1540,15 +1558,30 @@ export default function SettingsView() {
                                                       <div className="text-[11.5px] text-ink-3">None</div>
                                                     ) : (
                                                       <div className="flex flex-wrap gap-1">
-                                                        {disabledServices.map((service) => (
-                                                          <span
-                                                            key={`${code}:disabled:${service.code}:${service.name}`}
-                                                            className="rounded-full bg-rose-50 px-2 py-0.5 text-[10.5px] font-semibold text-rose-800 ring-1 ring-rose-200"
-                                                            title={service.reason ?? HUGRAB_GROUND_SAVER_BLOCK_REASON}
-                                                          >
-                                                            {service.name}
-                                                          </span>
-                                                        ))}
+                                                        {disabledServices.map((service) => {
+                                                          const serviceCode = automationServiceCode(service)
+                                                          const serviceSavingKey = `service:${row.store.storeId}:${carrierId || code}:${serviceCode || service.name}`
+                                                          const isSaving = automationSavingKey === serviceSavingKey
+                                                          const locked = Boolean(service.locked)
+                                                          return (
+                                                            <label
+                                                              key={`${code}:disabled:${serviceCode}:${service.name}`}
+                                                              className="inline-flex items-center gap-1.5 rounded-full bg-rose-50 px-2 py-0.5 text-[10.5px] font-semibold text-rose-800 ring-1 ring-rose-200"
+                                                              title={locked ? `PS-057 locked - ${service.reason ?? HUGRAB_GROUND_SAVER_BLOCK_REASON}` : service.reason ?? 'Disabled by Automation settings'}
+                                                            >
+                                                              <input
+                                                                type="checkbox"
+                                                                checked={false}
+                                                                disabled={locked || isSaving}
+                                                                onChange={(event) => void toggleAutomationService(row, carrier, service, event.target.checked)}
+                                                                className="h-3 w-3 rounded border-rose-300 text-brand focus:ring-brand"
+                                                              />
+                                                              {isSaving ? <Loader2 size={10} className="animate-spin" /> : null}
+                                                              <span>{service.name}</span>
+                                                              {locked ? <span className="text-rose-700">(PS-057 locked)</span> : null}
+                                                            </label>
+                                                          )
+                                                        })}
                                                       </div>
                                                     )}
                                                   </div>
