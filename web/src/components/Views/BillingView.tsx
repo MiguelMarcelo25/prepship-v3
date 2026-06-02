@@ -1761,7 +1761,33 @@ export default function BillingView() {
                         case 'additional':
                           return formatBillingMoney(metrics.additional, { dashIfZero: true })
                         case 'packageCost':
-                          return formatBillingMoney(metrics.packageCost, { dashIfZero: true })
+                          // PS-068: badge box charges whose stored price predates the
+                          // client's latest package-price/config change, so operators can
+                          // see un-repriced rows before exporting (run Update Billing to fix).
+                          return row.stalePackagePrice ? (
+                            <span
+                              title="Box price changed since this was billed — run Update Billing to re-price this range"
+                              style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}
+                            >
+                              {formatBillingMoney(metrics.packageCost, { dashIfZero: true })}
+                              <span
+                                style={{
+                                  fontSize: 8.5,
+                                  fontWeight: 700,
+                                  color: '#b45309',
+                                  background: '#fef3c7',
+                                  border: '1px solid #fde68a',
+                                  borderRadius: 4,
+                                  padding: '0 3px',
+                                  lineHeight: 1.4,
+                                }}
+                              >
+                                STALE
+                              </span>
+                            </span>
+                          ) : (
+                            formatBillingMoney(metrics.packageCost, { dashIfZero: true })
+                          )
                         case 'packageName':
                           return <span style={{ fontSize: 10.5, color: 'var(--text2)' }}>{row.packageName || '—'}</span>
                         case 'bestRate':

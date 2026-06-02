@@ -437,6 +437,10 @@ export function aggregateBillingDetailRowsByOrder(rows: BillingDetailDto[]): Bil
         grand_total: metrics.total,
         totalCost: 0,
         total_cost: 0,
+        // PS-068: carry the box-line stale-price flag up to the order row so
+        // the Box Cost cell can badge "stale — regenerate". Only package_cost
+        // lines set this, so OR-ing across the order's lines is correct.
+        stalePackagePrice: (row as { stalePackagePrice?: unknown }).stalePackagePrice === true,
       } as BillingDetailDto & Record<string, unknown>)
       order.push(key)
       continue
@@ -453,6 +457,9 @@ export function aggregateBillingDetailRowsByOrder(rows: BillingDetailDto[]): Bil
     existing.shipping_total = existing.shippingTotal
     existing.grandTotal = num(existing.grandTotal) + metrics.total
     existing.grand_total = existing.grandTotal
+    existing.stalePackagePrice =
+      (existing as { stalePackagePrice?: unknown }).stalePackagePrice === true ||
+      (row as { stalePackagePrice?: unknown }).stalePackagePrice === true
 
     // First-wins for the non-monetary fields. The shipping row is
     // usually richer (carrier, ref rates, ship date, actual label
