@@ -172,6 +172,30 @@ function addUtcDays(value: Date, days: number): Date {
   return next;
 }
 
+/**
+ * True when package prices or billing config changed AFTER the billing line
+ * items in a range were generated — meaning the range must be rebuilt to
+ * re-price even though no new orders shipped.
+ *
+ * Background: the freshness check only compares shipment recency, so editing a
+ * box price (client_package_prices) never marked billing stale and "Update
+ * Billing" no-op'd, leaving the cached summary on the old price. This makes the
+ * status price-aware.
+ *
+ * Null-safe: a null generation time means "nothing billed yet for this range"
+ * (the source-vs-billing comparison handles that), so this returns false then.
+ */
+export function billingNeedsRepriceForPriceChange(
+  billingGeneratedAt: Date | string | null,
+  pricingChangedAt: Date | string | null,
+): boolean {
+  if (!billingGeneratedAt || !pricingChangedAt) return false;
+  const generated = new Date(billingGeneratedAt).getTime();
+  const changed = new Date(pricingChangedAt).getTime();
+  if (!Number.isFinite(generated) || !Number.isFinite(changed)) return false;
+  return changed > generated;
+}
+
 export async function billingGenerationStatus(
   input: GenerateInput
 ): Promise<BillingGenerationStatus> {
@@ -193,6 +217,38 @@ export async function billingGenerationStatus(
   const latestBilling = billingRow?.latest_billing_ship_date
     ? new Date(billingRow.latest_billing_ship_date)
     : null;
+
+  // Re-price detection: if package prices or billing config changed AFTER this
+  // range's billing line items were generated, the range is stale even when no
+  // new orders shipped. Without this, editing a box price never re-bills (the
+  // freshness comparison below only looks at shipment recency) and the cached
+  // summary keeps serving the old box total.
+  const [genRow] = await db.execute<{ billing_generated_at: string | null }>(sql`
+    select max(b.created_at)::text as billing_generated_at
+    from billing_line_items b
+    where b.ship_date >= ${fromIso}::timestamptz
+      and b.ship_date <= ${toIso}::timestamptz
+      ${input.clientId !== undefined ? sql`and b.client_id = ${input.clientId}` : sql``}
+      and ${billingLineItemScopePredicate(input)}
+  `);
+  const [pricingRow] = await db.execute<{ pricing_changed_at: string | null }>(sql`
+    with scoped_clients as (
+      select c.id
+      from clients c
+      where c.active = true
+        and c.name not in ('Manual Orders', 'Rate Browser', 'Api Shipments')
+        ${input.clientId !== undefined ? sql`and c.id = ${input.clientId}` : sql``}
+        and ${billingClientScopePredicate(input)}
+    )
+    select greatest(
+      (select max(updated_at) from client_package_prices where client_id in (select id from scoped_clients)),
+      (select max(updated_at) from billing_config        where client_id in (select id from scoped_clients))
+    )::text as pricing_changed_at
+  `);
+  const pricingStale = billingNeedsRepriceForPriceChange(
+    genRow?.billing_generated_at ?? null,
+    pricingRow?.pricing_changed_at ?? null,
+  );
 
   const sourceLowerBound = latestBilling?.toISOString() ?? fromIso;
   const [sourceRow] = await db.execute<{
@@ -312,7 +368,23 @@ export async function billingGenerationStatus(
     ? new Date(sourceRow.latest_source_ship_date)
     : null;
 
+  const from = new Date(fromIso);
+
   if (!latestSource) {
+    // No new shipments to bill. Still rebuild if prices changed after the
+    // existing lines were generated, so a box-price edit re-prices them.
+    if (pricingStale) {
+      return {
+        upToDate: false,
+        dateFrom: fromIso,
+        dateTo: toIso,
+        clientId: input.clientId,
+        latestBillingShipDate: billingRow?.latest_billing_ship_date ?? null,
+        latestSourceShipDate: billingRow?.latest_billing_ship_date ?? null,
+        missingFrom: isoDayStart(from),
+        missingTo: isoDayEnd(latestBilling ?? new Date(toIso)),
+      };
+    }
     return {
       upToDate: true,
       dateFrom: fromIso,
@@ -325,11 +397,12 @@ export async function billingGenerationStatus(
     };
   }
 
-  const from = new Date(fromIso);
   const latestBillingDay = latestBilling ? isoDayStart(latestBilling) : null;
   const latestSourceDay = isoDayStart(latestSource);
+  // A price/config change requires rebuilding the WHOLE range (to re-price the
+  // existing lines), not just the missing tail after the last billed day.
   const missingFrom =
-    !latestBilling
+    pricingStale || !latestBilling
       ? isoDayStart(from)
       : latestBillingDay === latestSourceDay
         ? latestBillingDay
@@ -559,7 +632,13 @@ export async function generateLineItems(input: GenerateInput) {
         orderId: row.orderId,
         orderNumber: row.orderNumber,
         clientId,
-        shipDate: row.billingShipDate,
+        // billingShipDate comes from a raw sql<> expression, which drizzle
+        // returns as a STRING at runtime (not a Date) even though it's typed
+        // Date|null. Inserting it directly makes drizzle call .toISOString() on
+        // a string -> "value.toISOString is not a function", which silently
+        // skipped every billing row and left clients (e.g. HUGRAB) un-billed.
+        // Coerce to a real Date here.
+        shipDate: row.billingShipDate ? new Date(row.billingShipDate) : null,
         labelCost: row.labelCost,
         cost: row.cost,
         otherCost: row.otherCost,
@@ -933,8 +1012,12 @@ export async function generateLineItems(input: GenerateInput) {
           ],
         });
       generated += chunk.length;
-    } catch {
+    } catch (chunkErr) {
       // Fall back to per-row to isolate which row poisoned the chunk.
+      console.warn(
+        '[billing] chunk insert failed, retrying per-row:',
+        chunkErr instanceof Error ? chunkErr.message : chunkErr
+      );
       for (const row of chunk) {
         try {
           await db
@@ -948,7 +1031,19 @@ export async function generateLineItems(input: GenerateInput) {
               ],
             });
           generated += 1;
-        } catch {
+        } catch (rowErr) {
+          // Never swallow billing insert failures silently — a swallowed error
+          // here once wiped a client's billing and rebuilt nothing.
+          console.error(
+            '[billing] line item insert skipped',
+            {
+              clientId: row.clientId,
+              orderId: row.orderId,
+              lineType: row.lineType,
+              description: row.description,
+            },
+            rowErr instanceof Error ? rowErr.message : rowErr
+          );
           skipped += 1;
         }
       }
