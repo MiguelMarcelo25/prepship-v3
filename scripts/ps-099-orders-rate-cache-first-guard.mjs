@@ -20,18 +20,19 @@ assert(
 );
 
 assert(
-  ordersView.includes('getOrderWithDisplayBestRate'),
-  'OrdersView can display saved carrier/account before exact passive recalculation finishes'
+  !ordersView.includes('getOrderWithDisplayBestRate'),
+  'OrdersView does not display stale saved carrier/account as final while exact passive recalculation is pending'
 );
 
 assert(
-  ordersView.includes('getOrderWithDisplayBestRate(order)'),
-  'awaiting carrier/account cells use cache-first display before showing a spinner'
+  ordersView.includes('const isCalculatingBestRate = !hasDisplayableBestRate && hasAnySavedBestRateForDisplay(displayOrder)'),
+  'awaiting rows detect stale saved rates as calculating until exact best rate is ready'
 );
 
 assert(
-  (ordersView.match(/data-rate-state=\{isRecalculatingSavedRate \? 'recalculating' : 'ready'\}/g) ?? []).length >= 3,
-  'stale saved rates are shown with a recalculating state instead of blank spinner lock'
+  (ordersView.match(/!hasDisplayableBestRate && !isCalculatingBestRate/g) ?? []).length >= 3 &&
+    (ordersView.match(/<div className="spin-center"><span className="spin-sm" \/><\/div>/g) ?? []).length >= 3,
+  'stale saved rates show loading/spinner until recalculation returns the exact current best rate'
 );
 
 assert(

@@ -5030,19 +5030,6 @@ export default function OrdersView({
     return order
   }
 
-  function getOrderWithDisplayBestRate(order: OrderSummaryDto) {
-    const autoRequest = getAutoBestRateRequest(order)
-    const autoEntry = autoRequest ? autoBestRateEntries[order.orderId] : null
-    if (autoRequest && autoEntry?.key === autoRequest.key && autoEntry?.rate) {
-      return withBestRateOverride(order, autoEntry.rate)
-    }
-    const savedRate = getSavedBestRateRecord(order)
-    if (order.orderStatus === 'awaiting_shipment' && savedRate && !order.bestRate) {
-      return withBestRateOverride(order, savedRate)
-    }
-    return order
-  }
-
   function getAppliedRateDims(rate: Record<string, unknown>) {
     const dims = toRecord(rate.dims)
     const length = toNumberValue(dims?.length) ?? toNumberValue(rate.length) ?? toNumberValue(rate.dimsL)
@@ -6620,7 +6607,7 @@ export default function OrdersView({
     const autoRequest = getAutoBestRateRequest(order)
     const autoEntry = autoRequest ? autoBestRateEntries[order.orderId] : null
     const hasMatchingAutoEntry = Boolean(autoRequest && autoEntry?.key === autoRequest.key)
-    const displayOrder = getOrderWithDisplayBestRate(order)
+    const displayOrder = getOrderWithAutoBestRate(order)
 
 
     if (isTestOrder(displayOrder)) {
@@ -6684,15 +6671,18 @@ export default function OrdersView({
     const hasDims = hasCompleteDims(dims)
     const hasWeight = Boolean(displayOrder.weight?.value && displayOrder.weight.value > 0)
     const hasDisplayableBestRate = hasDisplayableBestRateForCurrentRequest(displayOrder)
-    const isRecalculatingSavedRate = !hasDisplayableBestRate && hasAnySavedBestRateForDisplay(displayOrder)
+    const isCalculatingBestRate = !hasDisplayableBestRate && hasAnySavedBestRateForDisplay(displayOrder)
     if (!hasDisplayableBestRate && (!hasWeight || !hasDims)) {
       return <span style={{ fontSize: 10.5, color: 'var(--text3)' }}>— add dims</span>
     }
     if (hasMatchingAutoEntry && !autoEntry?.rate) {
       return <span style={{ color: 'var(--text3)', fontSize: 11 }}>--</span>
     }
-    if (!hasDisplayableBestRate && !isRecalculatingSavedRate) {
+    if (!hasDisplayableBestRate && !isCalculatingBestRate) {
       return <span style={{ color: 'var(--text3)', fontSize: 11 }}>--</span>
+    }
+    if (isCalculatingBestRate) {
+      return <div className="spin-center"><span className="spin-sm" /></div>
     }
     if (bestRateBaseCost == null) {
       return <span style={{ color: 'var(--text3)', fontSize: 11 }}>—</span>
@@ -6719,9 +6709,8 @@ export default function OrdersView({
     // rate, carrier column).
     return (
       <div
-        data-rate-state={isRecalculatingSavedRate ? 'recalculating' : 'ready'}
+        data-rate-state="ready"
         style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-        title={isRecalculatingSavedRate ? 'Showing saved rate while PrepShip recalculates the current best rate.' : undefined}
       >
         {renderRateAmountWithMarkup(bestRateBaseCost, markedAmount)}
       </div>
@@ -6770,7 +6759,7 @@ export default function OrdersView({
   }
 
   const renderCarrierCell = (order: OrderSummaryDto) => {
-    const displayOrder = getOrderWithDisplayBestRate(order)
+    const displayOrder = getOrderWithAutoBestRate(order)
 
     if (isTestOrder(displayOrder)) {
       return (
@@ -6809,11 +6798,14 @@ export default function OrdersView({
     const hasDims = hasCompleteDims(dims)
     const hasWeight = Boolean(displayOrder.weight?.value && displayOrder.weight.value > 0)
     const hasDisplayableBestRate = hasDisplayableBestRateForCurrentRequest(displayOrder)
-    const isRecalculatingSavedRate = !hasDisplayableBestRate && hasAnySavedBestRateForDisplay(displayOrder)
+    const isCalculatingBestRate = !hasDisplayableBestRate && hasAnySavedBestRateForDisplay(displayOrder)
     if (!hasDisplayableBestRate && (!hasWeight || !hasDims)) {
       return <span style={{ fontSize: 10.5, color: 'var(--text3)' }}>— add dims</span>
     }
-    if (!hasDisplayableBestRate && !isRecalculatingSavedRate) {
+    if (!hasDisplayableBestRate && !isCalculatingBestRate) {
+      return <div className="spin-center"><span className="spin-sm" /></div>
+    }
+    if (isCalculatingBestRate) {
       return <div className="spin-center"><span className="spin-sm" /></div>
     }
 
@@ -6821,9 +6813,8 @@ export default function OrdersView({
     // and cancelled rows all share this renderer.
     return (
       <div
-        data-rate-state={isRecalculatingSavedRate ? 'recalculating' : 'ready'}
+        data-rate-state="ready"
         style={{ display: 'flex', alignItems: 'center', lineHeight: 1.3 }}
-        title={isRecalculatingSavedRate ? 'Showing saved carrier while PrepShip recalculates the current best rate.' : undefined}
       >
         <CarrierBadge code={getCarrierCodeForDisplay(displayOrder) ?? ''} size="sm" />
       </div>
@@ -6831,7 +6822,7 @@ export default function OrdersView({
   }
 
   const renderShippingAccountCell = (order: OrderSummaryDto) => {
-    const displayOrder = getOrderWithDisplayBestRate(order)
+    const displayOrder = getOrderWithAutoBestRate(order)
 
     if (isTestOrder(displayOrder)) {
       const testAccount = normalizeShippingAccountName(displayOrder.bestRate?.carrierNickname) ?? TEST_SHIPPING_ACCOUNT_LABEL
@@ -6873,19 +6864,21 @@ export default function OrdersView({
     const hasDims = hasCompleteDims(dims)
     const hasWeight = Boolean(displayOrder.weight?.value && displayOrder.weight.value > 0)
     const hasDisplayableBestRate = hasDisplayableBestRateForCurrentRequest(displayOrder)
-    const isRecalculatingSavedRate = !hasDisplayableBestRate && hasAnySavedBestRateForDisplay(displayOrder)
+    const isCalculatingBestRate = !hasDisplayableBestRate && hasAnySavedBestRateForDisplay(displayOrder)
     if (!hasDisplayableBestRate && (!hasWeight || !hasDims)) {
       return <span style={{ fontSize: 10.5, color: 'var(--text3)' }}>— add dims</span>
     }
-    if (!hasDisplayableBestRate && !isRecalculatingSavedRate) {
+    if (!hasDisplayableBestRate && !isCalculatingBestRate) {
+      return <div className="spin-center"><span className="spin-sm" /></div>
+    }
+    if (isCalculatingBestRate) {
       return <div className="spin-center"><span className="spin-sm" /></div>
     }
 
     return (
         <div
-          data-rate-state={isRecalculatingSavedRate ? 'recalculating' : 'ready'}
+          data-rate-state="ready"
           style={{ lineHeight: 1.4, whiteSpace: 'nowrap' }}
-          title={isRecalculatingSavedRate ? 'Showing saved account while PrepShip recalculates the current best rate.' : undefined}
         >
           <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--text2)' }}>{getShipAccountDisplay(displayOrder, shippingAccounts)}</div>
           <div style={{ fontSize: 10, color: 'var(--text3)' }} className="svc-label">
