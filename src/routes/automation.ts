@@ -44,6 +44,13 @@ const carrierRuleBody = z.object({
   reason: z.string().max(240).nullable().optional(),
 });
 
+const storeCarriersRuleBody = z.object({
+  clientId: z.number().int().positive(),
+  storeId: z.number().int().positive(),
+  disabled: z.boolean(),
+  reason: z.string().max(240).nullable().optional(),
+});
+
 type AutomationStoreRow = {
   storeId: number;
   clientId: number;
@@ -245,6 +252,62 @@ app.patch(
       updatedBy: c.get('email') ?? null,
     });
     return c.json({ data: { rules } });
+  },
+);
+
+// Bulk per-store master toggle: enable/disable every carrier account a store can
+// use in one call. HUGRAB UPS carrier accounts are skipped on disable so PS-057's
+// "lock services, not whole carriers" rule is never violated by a bulk action.
+app.patch(
+  '/store-carriers',
+  requireInternalPermission('settings:write'),
+  zValidator('json', storeCarriersRuleBody),
+  async (c) => {
+    const body = c.req.valid('json');
+    const carriers = await getCarrierAccountsForRateContext(
+      { storeId: body.storeId, clientId: body.clientId },
+      { includeAutomationDisabled: true },
+    ).catch(() => []);
+
+    const context = { clientId: body.clientId, storeId: body.storeId };
+    const skipped: Array<{ carrierId: string | null; carrierCode: string | null; reason: string }> = [];
+    let rules: ShippingAutomationRule[] = await loadShippingAutomationRules();
+    let applied = 0;
+
+    for (const carrier of carriers) {
+      const carrierId = carrier.carrier_id ?? null;
+      const carrierCode = carrier.carrier_code ?? null;
+      if (!carrierId && !carrierCode) continue;
+      // Never mass-disable a HUGRAB-protected UPS carrier account.
+      if (
+        body.disabled &&
+        isHugrabCarrierDisableProtected(context, { carrierId, carrierCode })
+      ) {
+        skipped.push({
+          carrierId,
+          carrierCode,
+          reason: HUGRAB_CARRIER_DISABLE_PROTECTED_REASON,
+        });
+        continue;
+      }
+      rules = await upsertShippingAutomationRule({
+        type: 'carrier',
+        clientId: body.clientId,
+        storeId: body.storeId,
+        carrierId,
+        carrierCode,
+        disabled: body.disabled,
+        reason: body.disabled
+          ? body.reason ?? 'All carriers disabled by Automation settings.'
+          : null,
+        source: 'settings-automation',
+        updatedAt: new Date().toISOString(),
+        updatedBy: c.get('email') ?? null,
+      });
+      applied += 1;
+    }
+
+    return c.json({ data: { rules, applied, skipped } });
   },
 );
 

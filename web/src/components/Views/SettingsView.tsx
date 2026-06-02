@@ -46,6 +46,8 @@ import {
   MapPin,
   Activity,
   Bot,
+  Lock,
+  Search,
 } from 'lucide-react'
 // 2026-05-13: Ship-From Locations now lives as a Settings tab instead
 // of a top-level sidebar destination. Mounting <LocationsView embedded />
@@ -368,6 +370,84 @@ function automationServiceCode(service: AutomationServiceEligibilityRow | Automa
   return String((service as AutomationServiceEligibilityRow).serviceCode ?? service.serviceCode ?? (service as AutomationServiceEligibilityRow).code ?? '').trim()
 }
 
+// Reusable on/off switch for the Automation panel, modeled on the inventory
+// active-view toggle idiom (InventoryView.tsx). Variants: enabled (emerald),
+// disabled (slate), locked/protected (brand + lock, non-interactive), and a
+// "mixed" amber state for the per-store master toggle when only some carriers
+// are enabled.
+type AutomationSwitchProps = {
+  checked: boolean
+  onChange?: (next: boolean) => void
+  disabled?: boolean
+  saving?: boolean
+  locked?: boolean
+  indeterminate?: boolean
+  label?: string
+  title?: string
+  size?: 'sm' | 'md'
+  ariaLabel?: string
+}
+
+function AutomationSwitch({
+  checked,
+  onChange,
+  disabled = false,
+  saving = false,
+  locked = false,
+  indeterminate = false,
+  label,
+  title,
+  size = 'md',
+  ariaLabel,
+}: AutomationSwitchProps) {
+  const interactive = !disabled && !locked && !saving && typeof onChange === 'function'
+  const dims =
+    size === 'sm'
+      ? { track: 'w-7 h-3.5', thumb: 'w-2.5 h-2.5', on: 'translate-x-[14px]', off: 'translate-x-0.5' }
+      : { track: 'w-9 h-5', thumb: 'w-4 h-4', on: 'translate-x-[18px]', off: 'translate-x-0.5' }
+  const trackColor = locked
+    ? 'bg-brand'
+    : indeterminate
+      ? 'bg-amber-400'
+      : checked
+        ? 'bg-emerald-500'
+        : 'bg-slate-300'
+  const thumbShifted = checked || indeterminate || locked
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={indeterminate ? 'mixed' : checked}
+      aria-label={ariaLabel ?? label}
+      disabled={!interactive}
+      title={title}
+      onClick={interactive ? () => onChange?.(!checked) : undefined}
+      className={`inline-flex items-center gap-1.5 ${interactive ? 'cursor-pointer' : 'cursor-not-allowed'} ${
+        size === 'sm' ? 'text-[11px]' : 'text-[12px]'
+      } font-semibold ${locked ? 'text-brand' : checked ? 'text-ink' : 'text-ink-3'} transition-colors`}
+    >
+      <span
+        className={`relative inline-flex items-center ${dims.track} rounded-full transition-colors duration-150 ${trackColor} ${
+          interactive ? '' : 'opacity-90'
+        }`}
+        aria-hidden="true"
+      >
+        <span
+          className={`absolute top-0.5 ${dims.thumb} rounded-full bg-white shadow-sm transition-transform duration-150 ${
+            thumbShifted ? dims.on : dims.off
+          }`}
+        />
+      </span>
+      {saving ? (
+        <Loader2 size={size === 'sm' ? 11 : 13} className="animate-spin text-brand" />
+      ) : locked ? (
+        <Lock size={size === 'sm' ? 10 : 12} strokeWidth={2.5} className="text-brand" />
+      ) : null}
+      {label ? <span>{label}</span> : null}
+    </button>
+  )
+}
+
 // ─── Status line ──────────────────────────────────────────────────
 // Thin colored row under destructive actions that shows the last op
 // result. Matches OrdersView's success/error toast aesthetic so
@@ -529,6 +609,8 @@ export default function SettingsView() {
   const [automationError, setAutomationError] = useState<string | null>(null)
   const [automationUpdatedAt, setAutomationUpdatedAt] = useState<string | null>(null)
   const [automationSavingKey, setAutomationSavingKey] = useState<string | null>(null)
+  const [automationQuery, setAutomationQuery] = useState('')
+  const [automationStatusFilter, setAutomationStatusFilter] = useState<'all' | 'disabled' | 'enabled'>('all')
 
   // Hide noisy bookkeeping clients from the Sandbox display. 'Manual
   // Orders' is a placeholder bucket the backend creates for legacy
@@ -600,23 +682,52 @@ export default function SettingsView() {
     }
   }, [])
 
+  // Immutably patch carriers for a single store row. Used for optimistic
+  // updates so a single toggle never flips the whole panel into a loading
+  // state (the old code awaited a full refreshAutomationAvailability()).
+  const patchAutomationStore = useCallback(
+    (storeId: number, updateCarriers: (carriers: AutomationCarrierRow[]) => AutomationCarrierRow[]) => {
+      setAutomationRows((rows) =>
+        rows.map((row) =>
+          row.store.storeId === storeId ? { ...row, carriers: updateCarriers(row.carriers) } : row,
+        ),
+      )
+    },
+    [],
+  )
+
+  function carrierMatches(carrier: AutomationCarrierRow, carrierId: string | null, carrierCode: string): boolean {
+    const id = carrier.carrierId ?? carrier.carrier_id ?? null
+    if (carrierId && id && carrierId === id) return true
+    return Boolean(carrierCode) && automationCarrierCode(carrier).toLowerCase() === carrierCode.toLowerCase()
+  }
+
   async function toggleAutomationCarrier(row: AutomationStoreAvailability, carrier: AutomationCarrierRow, enabled: boolean) {
-    const carrierId = carrier.carrierId ?? carrier.carrier_id
-    if (!carrierId) return
-    const key = `carrier:${row.store.storeId}:${carrierId}`
+    const carrierId = carrier.carrierId ?? carrier.carrier_id ?? null
+    const carrierCode = automationCarrierCode(carrier)
+    if (!carrierId && !carrierCode) return
+    const key = `carrier:${row.store.storeId}:${carrierId ?? carrierCode}`
+    const prevDisabled = carrier.disabled
     setAutomationSavingKey(key)
+    // Optimistic: flip just this carrier.
+    patchAutomationStore(row.store.storeId, (carriers) =>
+      carriers.map((c) => (carrierMatches(c, carrierId, carrierCode) ? { ...c, disabled: !enabled } : c)),
+    )
     try {
       await api.patch('/automation/carrier', {
         clientId: row.store.clientId,
         storeId: row.store.storeId,
         carrierId,
-        carrierCode: automationCarrierCode(carrier) || null,
+        carrierCode: carrierCode || null,
         disabled: !enabled,
         reason: enabled ? null : 'Carrier disabled by Automation settings.',
       })
       toastContext?.addToast(enabled ? 'Carrier enabled' : 'Carrier disabled', 'success')
-      await refreshAutomationAvailability()
     } catch (err) {
+      // Revert on failure (e.g. 409 PS-057 carrier protection).
+      patchAutomationStore(row.store.storeId, (carriers) =>
+        carriers.map((c) => (carrierMatches(c, carrierId, carrierCode) ? { ...c, disabled: prevDisabled } : c)),
+      )
       toastContext?.addToast(err instanceof Error ? err.message : 'Failed to save carrier automation', 'error')
     } finally {
       setAutomationSavingKey(null)
@@ -628,23 +739,102 @@ export default function SettingsView() {
     const code = automationServiceCode(service)
     if (!code && !service.name) return
     const carrierId = carrier.carrierId ?? carrier.carrier_id ?? null
-    const key = `service:${row.store.storeId}:${carrierId ?? automationCarrierCode(carrier)}:${code || service.name}`
+    const carrierCode = automationCarrierCode(carrier)
+    const key = `service:${row.store.storeId}:${carrierId ?? carrierCode}:${code || service.name}`
+    const serviceMatches = (svc: AutomationServiceEligibilityRow) =>
+      (Boolean(code) && automationServiceCode(svc) === code) ||
+      (!code && svc.name === service.name)
     setAutomationSavingKey(key)
+    // Optimistic: flip this service's eligibility (moves it between the
+    // Available and Disabled columns).
+    patchAutomationStore(row.store.storeId, (carriers) =>
+      carriers.map((c) =>
+        carrierMatches(c, carrierId, carrierCode)
+          ? {
+              ...c,
+              services: (c.services ?? []).map((svc) =>
+                serviceMatches(svc) ? { ...svc, allowed: enabled, disabled: !enabled } : svc,
+              ),
+            }
+          : c,
+      ),
+    )
     try {
       await api.patch('/automation/service', {
         clientId: row.store.clientId,
         storeId: row.store.storeId,
         carrierId,
-        carrierCode: automationCarrierCode(carrier) || null,
+        carrierCode: carrierCode || null,
         serviceCode: code || null,
         serviceName: service.name ?? null,
         disabled: !enabled,
         reason: enabled ? null : 'Service disabled by Automation settings.',
       })
       toastContext?.addToast(enabled ? 'Service enabled' : 'Service disabled', 'success')
-      await refreshAutomationAvailability()
     } catch (err) {
+      // Revert on failure (e.g. 409 HUGRAB Ground Saver/SurePost lock).
+      patchAutomationStore(row.store.storeId, (carriers) =>
+        carriers.map((c) =>
+          carrierMatches(c, carrierId, carrierCode)
+            ? {
+                ...c,
+                services: (c.services ?? []).map((svc) =>
+                  serviceMatches(svc) ? { ...svc, allowed: !enabled, disabled: enabled } : svc,
+                ),
+              }
+            : c,
+        ),
+      )
       toastContext?.addToast(err instanceof Error ? err.message : 'Failed to save service automation', 'error')
+    } finally {
+      setAutomationSavingKey(null)
+    }
+  }
+
+  // Per-store master toggle: enable/disable every carrier account for a store
+  // in one call. HUGRAB-protected UPS carriers are skipped server-side and in
+  // the optimistic update so PS-057 is never violated.
+  async function toggleAutomationStoreCarriers(row: AutomationStoreAvailability, enabled: boolean) {
+    const key = `store:${row.store.storeId}`
+    const prevCarriers = row.carriers
+    const isProtected = (carrier: AutomationCarrierRow) =>
+      isHugrabCarrierDisableProtected(
+        { clientId: row.store.clientId, clientName: row.store.clientName, storeId: row.store.storeId },
+        {
+          carrierId: carrier.carrierId ?? carrier.carrier_id,
+          carrierCode: automationCarrierCode(carrier),
+          carrierName: automationCarrierLabel(carrier),
+        },
+      )
+    setAutomationSavingKey(key)
+    // Optimistic: flip every non-protected carrier.
+    patchAutomationStore(row.store.storeId, (carriers) =>
+      carriers.map((c) => (!enabled && isProtected(c) ? c : { ...c, disabled: !enabled })),
+    )
+    try {
+      const res = await api.patch<{ data?: { applied?: number; skipped?: unknown[] } }>(
+        '/automation/store-carriers',
+        {
+          clientId: row.store.clientId,
+          storeId: row.store.storeId,
+          disabled: !enabled,
+          reason: enabled ? null : 'All carriers disabled by Automation settings.',
+        },
+      )
+      const skipped = Array.isArray(res?.data?.skipped) ? res.data.skipped.length : 0
+      toastContext?.addToast(
+        enabled ? 'All carriers enabled' : 'All carriers disabled',
+        'success',
+      )
+      if (!enabled && skipped > 0) {
+        toastContext?.addToast(
+          `${skipped} protected carrier${skipped === 1 ? '' : 's'} kept enabled (PS-057)`,
+          'info',
+        )
+      }
+    } catch (err) {
+      patchAutomationStore(row.store.storeId, () => prevCarriers)
+      toastContext?.addToast(err instanceof Error ? err.message : 'Failed to update store carriers', 'error')
     } finally {
       setAutomationSavingKey(null)
     }
@@ -941,7 +1131,7 @@ export default function SettingsView() {
       label: 'Automation',
       short: 'Automation',
       description:
-        'Read-only carrier availability map by client and store. Use this to confirm which carrier accounts Orders and Rate Browser can use, including client-specific service rules like HUGRAB Ground Saver/SurePost blocking.',
+        'Enable or disable carrier accounts and individual services per client store. These rules gate which carriers Orders and the Rate Browser can use. Client-specific locks like HUGRAB Ground Saver/SurePost stay protected (PS-057).',
       icon: Bot,
       tone: 'emerald',
     },
@@ -1002,6 +1192,51 @@ export default function SettingsView() {
     }
     return [...groups.values()].sort((a, b) => a.clientName.localeCompare(b.clientName))
   }, [automationRows])
+
+  // Total count of disabled rules (carriers + services) across all stores —
+  // drives the "Disabled" stat card and gives an at-a-glance health number.
+  const automationDisabledCount = useMemo(
+    () =>
+      automationRows.reduce(
+        (sum, row) =>
+          sum +
+          row.carriers.reduce(
+            (acc, carrier) =>
+              acc +
+              (carrier.disabled ? 1 : 0) +
+              (carrier.services ?? []).filter((service) => service.allowed === false).length,
+            0,
+          ),
+        0,
+      ),
+    [automationRows],
+  )
+
+  // Apply the search query + status filter to the grouped rows.
+  const automationFilteredGroups = useMemo(() => {
+    const query = automationQuery.trim().toLowerCase()
+    const storeHasDisabled = (row: AutomationStoreAvailability) =>
+      row.carriers.some(
+        (carrier) => carrier.disabled || (carrier.services ?? []).some((service) => service.allowed === false),
+      )
+    return automationClientGroups
+      .map((group) => {
+        const stores = group.stores.filter((row) => {
+          if (
+            query &&
+            !group.clientName.toLowerCase().includes(query) &&
+            !String(row.store.storeId).includes(query)
+          ) {
+            return false
+          }
+          if (automationStatusFilter === 'disabled') return storeHasDisabled(row)
+          if (automationStatusFilter === 'enabled') return !storeHasDisabled(row)
+          return true
+        })
+        return { ...group, stores }
+      })
+      .filter((group) => group.stores.length > 0)
+  }, [automationClientGroups, automationQuery, automationStatusFilter])
 
   return (
     <div
@@ -1368,7 +1603,7 @@ export default function SettingsView() {
                     </motion.button>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <div className="rounded-xl bg-surface ring-1 ring-line px-4 py-3 shadow-sm">
                       <div className="text-[10.5px] uppercase tracking-wider font-bold text-ink-3">Clients</div>
                       <div className="mt-1 text-2xl font-extrabold text-ink tabular-nums">{automationClientGroups.length}</div>
@@ -1378,18 +1613,53 @@ export default function SettingsView() {
                       <div className="mt-1 text-2xl font-extrabold text-ink tabular-nums">{automationRows.length}</div>
                     </div>
                     <div className="rounded-xl bg-surface ring-1 ring-line px-4 py-3 shadow-sm">
-                      <div className="text-[10.5px] uppercase tracking-wider font-bold text-ink-3">Carrier Links</div>
+                      <div className="text-[10.5px] uppercase tracking-wider font-bold text-ink-3">Carrier Accounts</div>
                       <div className="mt-1 text-2xl font-extrabold text-ink tabular-nums">
                         {automationRows.reduce((sum, row) => sum + row.carriers.length, 0)}
                       </div>
                     </div>
                     <div className="rounded-xl bg-surface ring-1 ring-line px-4 py-3 shadow-sm">
-                      <div className="text-[10.5px] uppercase tracking-wider font-bold text-ink-3">Rule Flags</div>
-                      <div className="mt-1 text-2xl font-extrabold text-emerald-700 tabular-nums">
-                        {automationClientGroups.filter((group) => isHugrabClient(group.clientName)).length}
+                      <div className="text-[10.5px] uppercase tracking-wider font-bold text-ink-3">Disabled Rules</div>
+                      <div className={`mt-1 text-2xl font-extrabold tabular-nums ${automationDisabledCount > 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+                        {automationDisabledCount}
                       </div>
                     </div>
                   </div>
+
+                  {automationRows.length > 0 ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="relative flex-1 min-w-[200px]">
+                        <Search size={14} strokeWidth={2.25} className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-3" />
+                        <input
+                          type="text"
+                          value={automationQuery}
+                          onChange={(event) => setAutomationQuery(event.target.value)}
+                          placeholder="Search client name or store ID…"
+                          className="w-full h-9 pl-9 pr-3 rounded-lg text-[12.5px] text-ink bg-surface ring-1 ring-line focus:ring-2 focus:ring-brand focus:outline-none transition-shadow"
+                        />
+                      </div>
+                      <div className="inline-flex items-center rounded-lg bg-surface-2 ring-1 ring-line p-0.5">
+                        {([
+                          { id: 'all', label: 'All' },
+                          { id: 'disabled', label: 'Has disabled' },
+                          { id: 'enabled', label: 'Fully enabled' },
+                        ] as const).map((option) => (
+                          <button
+                            key={option.id}
+                            type="button"
+                            onClick={() => setAutomationStatusFilter(option.id)}
+                            className={`h-8 px-3 rounded-md text-[11.5px] font-semibold transition-colors ${
+                              automationStatusFilter === option.id
+                                ? 'bg-surface text-ink ring-1 ring-line shadow-sm'
+                                : 'text-ink-3 hover:text-ink'
+                            }`}
+                          >
+                            {option.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
 
                   {automationLoading && automationRows.length === 0 ? <SkeletonStack rows={6} /> : null}
                   {automationError ? <StatusLine kind="error" message={automationError} /> : null}
@@ -1400,11 +1670,23 @@ export default function SettingsView() {
                     </div>
                   ) : null}
 
+                  {!automationLoading && automationRows.length > 0 && automationFilteredGroups.length === 0 ? (
+                    <div className="rounded-xl bg-surface ring-1 ring-line px-4 py-5 text-center text-[13px] text-ink-3">
+                      No stores match your search or filter.
+                    </div>
+                  ) : null}
+
                   <div className="space-y-3">
-                    {automationClientGroups.map((group) => {
+                    {automationFilteredGroups.map((group, groupIndex) => {
                       const hasHugrabRule = isHugrabClient(group.clientName)
                       return (
-                        <div key={group.clientId} className="rounded-xl bg-surface ring-1 ring-line shadow-sm overflow-hidden">
+                        <motion.div
+                          key={group.clientId}
+                          initial={{ opacity: 0, y: 6 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ duration: 0.18, delay: Math.min(groupIndex * 0.03, 0.18) }}
+                          className="rounded-xl bg-surface ring-1 ring-line shadow-sm overflow-hidden"
+                        >
                           <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 bg-surface-2 border-b border-line">
                             <div className="min-w-0">
                               <div className="flex items-center gap-2">
@@ -1435,12 +1717,53 @@ export default function SettingsView() {
                           </div>
 
                           <div className="divide-y divide-line">
-                            {group.stores.map((row) => (
+                            {group.stores.map((row) => {
+                              // Master-toggle state: a store counts as "on" when every
+                              // toggleable (non-protected) carrier is enabled. Protected
+                              // HUGRAB UPS carriers are excluded from the calculation.
+                              const toggleableCarriers = row.carriers.filter(
+                                (carrier) =>
+                                  !isHugrabCarrierDisableProtected(
+                                    { clientId: row.store.clientId, clientName: row.store.clientName, storeId: row.store.storeId },
+                                    {
+                                      carrierId: carrier.carrierId ?? carrier.carrier_id,
+                                      carrierCode: automationCarrierCode(carrier),
+                                      carrierName: automationCarrierLabel(carrier),
+                                    },
+                                  ),
+                              )
+                              const enabledCount = toggleableCarriers.filter((carrier) => !carrier.disabled).length
+                              const protectedCount = row.carriers.length - toggleableCarriers.length
+                              const allEnabled = toggleableCarriers.length > 0 && enabledCount === toggleableCarriers.length
+                              const someEnabled = enabledCount > 0 && enabledCount < toggleableCarriers.length
+                              const storeSavingKey = `store:${row.store.storeId}`
+                              const isStoreSaving = automationSavingKey === storeSavingKey
+                              return (
                               <div key={row.store.storeId} className="px-4 py-3">
                                 <div className="flex flex-wrap items-start justify-between gap-3">
                                   <div className="min-w-[160px]">
                                     <div className="text-[12.5px] font-bold text-ink">Store {row.store.storeId}</div>
                                     <div className="text-[11px] text-ink-3 tabular-nums">Client ID {row.store.clientId}</div>
+                                    {!row.loading && !row.error && toggleableCarriers.length > 0 ? (
+                                      <div className="mt-2">
+                                        <AutomationSwitch
+                                          checked={allEnabled}
+                                          indeterminate={someEnabled}
+                                          saving={isStoreSaving}
+                                          size="sm"
+                                          label={allEnabled ? 'All carriers on' : someEnabled ? 'Some carriers on' : 'All carriers off'}
+                                          ariaLabel={`Toggle all carriers for store ${row.store.storeId}`}
+                                          title="Enable or disable every carrier account for this store"
+                                          onChange={(next) => void toggleAutomationStoreCarriers(row, next)}
+                                        />
+                                        {protectedCount > 0 ? (
+                                          <div className="mt-1 inline-flex items-center gap-1 text-[10px] font-semibold text-brand">
+                                            <Lock size={9} strokeWidth={2.5} />
+                                            {protectedCount} protected
+                                          </div>
+                                        ) : null}
+                                      </div>
+                                    ) : null}
                                   </div>
                                   <div className="flex-1 min-w-[240px]">
                                     {row.loading ? (
@@ -1475,7 +1798,7 @@ export default function SettingsView() {
                                           const allowedServices = serviceEligibility.filter((service) => service.allowed)
                                           const disabledServices = serviceEligibility.filter((service) => !service.allowed)
                                           const carrierEnabled = !carrier.disabled
-                                          const carrierSavingKey = `carrier:${row.store.storeId}:${carrierId}`
+                                          const carrierSavingKey = `carrier:${row.store.storeId}:${carrierId || code}`
                                           const isCarrierSaving = automationSavingKey === carrierSavingKey
                                           const carrierDisableProtected = isHugrabCarrierDisableProtected(
                                             {
@@ -1495,18 +1818,16 @@ export default function SettingsView() {
                                               className={`rounded-lg bg-surface ring-1 px-3 py-2 ${carrierEnabled ? 'ring-line' : 'ring-rose-200 bg-rose-50/40'}`}
                                             >
                                               <div className="flex flex-wrap items-center gap-2">
-                                                <label className="inline-flex items-center gap-2 rounded-md bg-surface px-2 py-1 text-[11.5px] font-bold text-ink ring-1 ring-line">
-                                                  <input
-                                                    type="checkbox"
-                                                    checked={carrierDisableProtected ? true : carrierEnabled}
-                                                    disabled={Boolean(isCarrierSaving || !carrierId || carrierDisableProtected)}
-                                                    onChange={(event) => void toggleAutomationCarrier(row, carrier, event.target.checked)}
-                                                    className="h-3.5 w-3.5 rounded border-line text-brand focus:ring-brand"
-                                                    title={carrierDisableProtected ? HUGRAB_CARRIER_DISABLE_PROTECTED_REASON : undefined}
-                                                  />
-                                                  {isCarrierSaving ? <Loader2 size={11} className="animate-spin text-brand" /> : null}
-                                                  <span>{carrierDisableProtected ? 'Protected' : carrierEnabled ? 'Enabled' : 'Disabled'}</span>
-                                                </label>
+                                                <AutomationSwitch
+                                                  checked={carrierDisableProtected ? true : carrierEnabled}
+                                                  locked={carrierDisableProtected}
+                                                  saving={isCarrierSaving}
+                                                  disabled={!carrierId && !code}
+                                                  label={carrierDisableProtected ? 'Protected' : carrierEnabled ? 'Enabled' : 'Disabled'}
+                                                  ariaLabel={`Toggle ${label} for store ${row.store.storeId}`}
+                                                  title={carrierDisableProtected ? HUGRAB_CARRIER_DISABLE_PROTECTED_REASON : `Enable or disable ${label}`}
+                                                  onChange={(next) => void toggleAutomationCarrier(row, carrier, next)}
+                                                />
                                                 <span
                                                   className="inline-flex max-w-full items-center gap-1 rounded-full bg-surface-2 px-2.5 py-1 text-[11.5px] font-bold text-ink ring-1 ring-line"
                                                   title={sourceName ? `${label} - ${sourceName}` : label}
@@ -1550,20 +1871,20 @@ export default function SettingsView() {
                                                           const serviceSavingKey = `service:${row.store.storeId}:${carrierId || code}:${serviceCode || service.name}`
                                                           const isSaving = automationSavingKey === serviceSavingKey
                                                           return (
-                                                            <label
+                                                            <span
                                                               key={`${code}:allowed:${serviceCode}:${service.name}`}
                                                               className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2 py-0.5 text-[10.5px] font-semibold text-emerald-800 ring-1 ring-emerald-200"
                                                             >
-                                                              <input
-                                                                type="checkbox"
+                                                              <AutomationSwitch
+                                                                size="sm"
                                                                 checked
-                                                                disabled={isSaving}
-                                                                onChange={(event) => void toggleAutomationService(row, carrier, service, event.target.checked)}
-                                                                className="h-3 w-3 rounded border-emerald-300 text-brand focus:ring-brand"
+                                                                saving={isSaving}
+                                                                ariaLabel={`Disable ${service.name}`}
+                                                                title={`Disable ${service.name}`}
+                                                                onChange={(next) => void toggleAutomationService(row, carrier, service, next)}
                                                               />
-                                                              {isSaving ? <Loader2 size={10} className="animate-spin" /> : null}
                                                               <span>{service.name}</span>
-                                                            </label>
+                                                            </span>
                                                           )
                                                         })}
                                                       {allowedServices.length > 8 ? (
@@ -1587,22 +1908,27 @@ export default function SettingsView() {
                                                           const isSaving = automationSavingKey === serviceSavingKey
                                                           const locked = Boolean(service.locked)
                                                           return (
-                                                            <label
+                                                            <span
                                                               key={`${code}:disabled:${serviceCode}:${service.name}`}
-                                                              className="inline-flex items-center gap-1.5 rounded-full bg-rose-50 px-2 py-0.5 text-[10.5px] font-semibold text-rose-800 ring-1 ring-rose-200"
+                                                              className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10.5px] font-semibold ring-1 ${
+                                                                locked
+                                                                  ? 'bg-brand-bg text-brand ring-brand/20'
+                                                                  : 'bg-rose-50 text-rose-800 ring-rose-200'
+                                                              }`}
                                                               title={locked ? `PS-057 locked - ${service.reason ?? HUGRAB_GROUND_SAVER_BLOCK_REASON}` : service.reason ?? 'Disabled by Automation settings'}
                                                             >
-                                                              <input
-                                                                type="checkbox"
+                                                              <AutomationSwitch
+                                                                size="sm"
                                                                 checked={false}
-                                                                disabled={locked || isSaving}
-                                                                onChange={(event) => void toggleAutomationService(row, carrier, service, event.target.checked)}
-                                                                className="h-3 w-3 rounded border-rose-300 text-brand focus:ring-brand"
+                                                                locked={locked}
+                                                                saving={isSaving}
+                                                                ariaLabel={`Enable ${service.name}`}
+                                                                title={locked ? `PS-057 locked - ${service.reason ?? HUGRAB_GROUND_SAVER_BLOCK_REASON}` : `Enable ${service.name}`}
+                                                                onChange={locked ? undefined : (next) => void toggleAutomationService(row, carrier, service, next)}
                                                               />
-                                                              {isSaving ? <Loader2 size={10} className="animate-spin" /> : null}
                                                               <span>{service.name}</span>
-                                                              {locked ? <span className="text-rose-700">(PS-057 locked)</span> : null}
-                                                            </label>
+                                                              {locked ? <span className="text-brand">(PS-057 locked)</span> : null}
+                                                            </span>
                                                           )
                                                         })}
                                                       </div>
@@ -1618,9 +1944,10 @@ export default function SettingsView() {
                                   </div>
                                 </div>
                               </div>
-                            ))}
+                              )
+                            })}
                           </div>
-                        </div>
+                        </motion.div>
                       )
                     })}
                   </div>
