@@ -13,7 +13,6 @@ import {
   Loader2,
   Search as SearchIcon,
   X as XIcon,
-  Filter,
   CheckSquare,
   ListOrdered,
   Download,
@@ -8950,35 +8949,31 @@ export default function OrdersView({
             </div>
           ) : null}
 
-          {/* SKU filter dropdown */}
-          <div className="relative inline-flex items-center w-full max-w-[280px] sm:w-[280px]">
-            <Filter size={11} strokeWidth={2.25} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-3 pointer-events-none" aria-hidden />
-            <select
-              id="skuFilter"
-              value={skuFilter}
-              onFocus={() => setSkuOptionsRequested(true)}
-              onMouseDown={() => setSkuOptionsRequested(true)}
-              onChange={(event) => setSkuFilter(event.target.value)}
-              aria-label="Filter by SKU"
-              className="
-                appearance-none cursor-pointer
-                w-full h-8 pl-7 pr-7
-                rounded-lg
-                bg-surface ring-1 ring-line
-                text-[12px] font-medium text-ink-2
-                hover:text-ink hover:ring-line-2
-                focus:bg-surface focus:ring-2 focus:ring-brand/40
-                focus:outline-none
-                transition-all duration-150
-              "
-            >
-              <option value="">All SKUs</option>
-              {skuOptions.map((sku) => (
-                <option key={sku} value={sku}>{sku}</option>
-              ))}
-            </select>
-            <span className="absolute right-2 top-1/2 -translate-y-1/2 text-ink-3 text-[8px] pointer-events-none" aria-hidden>▼</span>
-          </div>
+          {/* SKU filter dropdown removed per UX request — SKU filtering is
+              still reachable via global search (which sets skuFilter when a
+              SKU token is matched), so the underlying filter state is kept
+              and simply defaults to '' (= all SKUs) with no visible control. */}
+
+          {/* + New Order — primary action, relocated right after Search
+              per UX request. Brand-blue gradient fill telegraphs primary. */}
+          <button
+            id="newOrderBtn"
+            type="button"
+            title="Create a new manual order"
+            onClick={() => setNewOrderOpen(true)}
+            className="
+              inline-flex items-center gap-1.5
+              h-8 px-3 rounded-lg
+              text-[12px] font-bold text-white
+              bg-gradient-to-br from-brand to-indigo-600
+              shadow-md hover:shadow-lg active:scale-95
+              ring-1 ring-brand/30
+              transition-all duration-150
+            "
+          >
+            <Plus size={12.5} strokeWidth={2.75} />
+            <span className="hidden sm:inline">New Order</span>
+          </button>
 
           {/* Date filter dropdown */}
           <div className="relative inline-flex items-center">
@@ -9164,77 +9159,28 @@ export default function OrdersView({
             {skuSortActive ? <span className="text-brand">✓</span> : null}
           </button>
 
-          <button
-            id="exportBtn"
-            type="button"
-            title={csvExporting ? 'Preparing CSV export...' : 'Export visible orders as CSV'}
-            disabled={csvExporting}
-            aria-busy={csvExporting}
-            className={`
-              inline-flex items-center gap-1.5
-              h-8 px-2.5 rounded-lg ring-1 ring-line bg-surface
-              text-[12px] font-medium text-ink-2
-              ${csvExporting
-                ? 'cursor-wait opacity-75'
-                : 'hover:text-ink hover:ring-line-2 active:scale-95'}
-              transition-all duration-150
-            `}
-            onClick={async () => {
-              if (csvExporting) return
-              setCsvExporting(true)
-              try {
-                const { blob, filename } = await apiClient.downloadOrdersExport({
-                  orderStatus: currentStatus,
-                  pageSize: 5000,
-                  dateFrom: dateRange.start || undefined,
-                  dateTo: dateRange.end || undefined,
-                })
-                const url = URL.createObjectURL(blob)
-                const a = document.createElement('a')
-                a.href = url
-                a.download = filename || `orders-${currentStatus}-${californiaDateInputValue()}.csv`
-                document.body.appendChild(a)
-                a.click()
-                document.body.removeChild(a)
-                setTimeout(() => URL.revokeObjectURL(url), 1000)
-                showToast('CSV export downloaded', 'success')
-              } catch (err) {
-                console.error('[Export CSV] failed', err)
-                showToast('Export failed: ' + (err instanceof Error ? err.message : 'unknown error'), 'error')
-              } finally {
-                setCsvExporting(false)
-              }
-            }}
-          >
-            {csvExporting ? (
-              <Loader2 size={12.5} strokeWidth={2.25} className="animate-spin" />
-            ) : (
-              <Download size={12.5} strokeWidth={2.25} />
-            )}
-            <span className="hidden sm:inline">{csvExporting ? 'Exporting...' : 'Export CSV'}</span>
-          </button>
-
-          {/* + New Order — opens the manual-order modal. Lives right
-              after Export CSV per user request. Brand-blue gradient
-              fill (vs Export's outline) telegraphs primary action. */}
-          <button
-            id="newOrderBtn"
-            type="button"
-            title="Create a new manual order"
-            onClick={() => setNewOrderOpen(true)}
-            className="
-              inline-flex items-center gap-1.5
-              h-8 px-3 rounded-lg
-              text-[12px] font-bold text-white
-              bg-gradient-to-br from-brand to-indigo-600
-              shadow-md hover:shadow-lg active:scale-95
-              ring-1 ring-brand/30
-              transition-all duration-150
-            "
-          >
-            <Plus size={12.5} strokeWidth={2.75} />
-            <span className="hidden sm:inline">New Order</span>
-          </button>
+          {/* Picklist — relocated next to SKU Sort per UX request
+              (was pinned far-right with ml-auto, now flows inline). */}
+          {currentStatus === 'awaiting_shipment' ? (
+            <button
+              id="picklistBtn"
+              type="button"
+              onClick={() => void printPicklist()}
+              title="Print picklist for visible orders"
+              className="
+                inline-flex items-center gap-1.5
+                h-8 px-3 rounded-lg
+                ring-1 ring-line bg-surface
+                text-[12px] font-semibold text-ink-2
+                hover:text-ink hover:ring-line-2 hover:bg-surface-2
+                active:scale-95
+                transition-all duration-150
+              "
+            >
+              <PrinterIcon size={12.5} strokeWidth={2.25} />
+              Picklist
+            </button>
+          ) : null}
 
           {/* Density toggle — segmented control */}
           <div
@@ -9307,27 +9253,62 @@ export default function OrdersView({
               </div>
             </div>
           ) : null}
-          {currentStatus === 'awaiting_shipment' ? (
-            <button
-              id="picklistBtn"
-              type="button"
-              onClick={() => void printPicklist()}
-              title="Print picklist for visible orders"
-              className="
-                ml-auto
-                inline-flex items-center gap-1.5
-                h-8 px-3 rounded-lg
-                ring-1 ring-line bg-surface
-                text-[12px] font-semibold text-ink-2
-                hover:text-ink hover:ring-line-2 hover:bg-surface-2
-                active:scale-95
-                transition-all duration-150
-              "
-            >
-              <PrinterIcon size={12.5} strokeWidth={2.25} />
-              Picklist
-            </button>
-          ) : null}
+          {/* Forced flex-wrap break — pushes Export CSV onto its own
+              row beneath the toolbar (basis-full = full-width spacer). */}
+          <div className="basis-full h-0" aria-hidden />
+
+          {/* Export CSV — on its own row below the toolbar, pushed to the
+              right end via ml-auto, per UX request. */}
+          <button
+            id="exportBtn"
+            type="button"
+            title={csvExporting ? 'Preparing CSV export...' : 'Export visible orders as CSV'}
+            disabled={csvExporting}
+            aria-busy={csvExporting}
+            className={`
+              ml-auto
+              inline-flex items-center gap-1.5
+              h-8 px-2.5 rounded-lg ring-1 ring-line bg-surface
+              text-[12px] font-medium text-ink-2
+              ${csvExporting
+                ? 'cursor-wait opacity-75'
+                : 'hover:text-ink hover:ring-line-2 active:scale-95'}
+              transition-all duration-150
+            `}
+            onClick={async () => {
+              if (csvExporting) return
+              setCsvExporting(true)
+              try {
+                const { blob, filename } = await apiClient.downloadOrdersExport({
+                  orderStatus: currentStatus,
+                  pageSize: 5000,
+                  dateFrom: dateRange.start || undefined,
+                  dateTo: dateRange.end || undefined,
+                })
+                const url = URL.createObjectURL(blob)
+                const a = document.createElement('a')
+                a.href = url
+                a.download = filename || `orders-${currentStatus}-${californiaDateInputValue()}.csv`
+                document.body.appendChild(a)
+                a.click()
+                document.body.removeChild(a)
+                setTimeout(() => URL.revokeObjectURL(url), 1000)
+                showToast('CSV export downloaded', 'success')
+              } catch (err) {
+                console.error('[Export CSV] failed', err)
+                showToast('Export failed: ' + (err instanceof Error ? err.message : 'unknown error'), 'error')
+              } finally {
+                setCsvExporting(false)
+              }
+            }}
+          >
+            {csvExporting ? (
+              <Loader2 size={12.5} strokeWidth={2.25} className="animate-spin" />
+            ) : (
+              <Download size={12.5} strokeWidth={2.25} />
+            )}
+            <span className="hidden sm:inline">{csvExporting ? 'Exporting...' : 'Export CSV'}</span>
+          </button>
         </div>
 
         <AnimatePresence>

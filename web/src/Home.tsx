@@ -828,17 +828,17 @@ export default function Home() {
               id="pq-toggle-btn"
               type="button"
               aria-label={queueOpen ? 'Close print queue panel' : 'Open print queue panel'}
-              className="absolute left-1/2 top-1/2 z-10 hidden -translate-x-1/2 -translate-y-1/2 items-center gap-1.5 h-8 px-3 rounded-lg ring-1 ring-line bg-surface text-ink-2 hover:text-ink hover:ring-line-2 hover:bg-surface-2 active:scale-95 transition-all duration-150 text-[12px] font-semibold shadow-sm md:inline-flex"
+              className="absolute left-1/2 top-1/2 z-10 hidden -translate-x-1/2 -translate-y-1/2 items-center gap-2 h-10 px-6 rounded-xl text-white text-[14px] font-bold bg-gradient-to-br from-brand to-indigo-600 ring-1 ring-brand/30 shadow-md hover:shadow-lg active:scale-95 transition-all duration-150 md:inline-flex"
               onClick={() => setQueueToggleRequestId((value) => value + 1)}
             >
               {queueOpen ? (
                 <>
-                  <XIcon size={13} strokeWidth={2.5} />
+                  <XIcon size={16} strokeWidth={2.75} />
                   <span>Close Queue</span>
                 </>
               ) : (
                 <>
-                  <Printer size={13} strokeWidth={2.25} />
+                  <Printer size={16} strokeWidth={2.5} />
                   <span>Queue</span>
                 </>
               )}
@@ -851,7 +851,7 @@ export default function Home() {
                     animate={{ scale: 1, opacity: 1 }}
                     exit={{ scale: 0, opacity: 0 }}
                     transition={{ type: 'spring', stiffness: 500, damping: 22 }}
-                    className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-amber-400 text-black text-[9px] font-bold font-mono tabular-nums shadow-sm ring-2 ring-surface"
+                    className="inline-flex items-center justify-center min-w-[20px] h-[20px] px-1 rounded-full bg-amber-400 text-black text-[10px] font-bold font-mono tabular-nums shadow-sm ring-2 ring-white/90"
                   >
                     {queueBadgeCount}
                   </motion.span>
