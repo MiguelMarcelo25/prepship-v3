@@ -3987,9 +3987,10 @@ export const apiClient = {
           enumerable: false,
         });
         const responseBestRate = (shipStationRates as any).bestRate;
-        if (responseBestRate) {
+        const combinedBestRate = combined[0] ?? responseBestRate;
+        if (combinedBestRate) {
           Object.defineProperty(combined, 'bestRate', {
-            value: responseBestRate,
+            value: combinedBestRate,
             enumerable: false,
           });
         }
