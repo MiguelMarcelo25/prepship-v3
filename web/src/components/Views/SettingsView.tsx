@@ -45,6 +45,7 @@ import {
   Clock,
   MapPin,
   Activity,
+  Bot,
 } from 'lucide-react'
 // 2026-05-13: Ship-From Locations now lives as a Settings tab instead
 // of a top-level sidebar destination. Mounting <LocationsView embedded />
@@ -73,7 +74,7 @@ import { PendingClientIntegrationsCard } from '../Settings/PendingClientIntegrat
 
 // Drawer sections — each represents one icon on the rail and one
 // content panel. Order here = rendering order on the rail.
-type DrawerSectionId = 'markups' | 'locations' | 'stores' | 'carriers' | 'pending' | 'sandbox' | 'cache' | 'system'
+type DrawerSectionId = 'markups' | 'locations' | 'stores' | 'carriers' | 'pending' | 'sandbox' | 'cache' | 'system' | 'automation'
 
 const DRAWER_SECTION_KEY = 'settings:active-drawer-section'
 
@@ -242,6 +243,63 @@ function formatFlagValue(value: unknown): string {
   return String(value)
 }
 
+type AutomationStoreRow = {
+  storeId: number
+  clientId: number
+  clientName: string
+  active: boolean
+}
+
+type AutomationCarrierRow = {
+  carrierId?: string | null
+  carrierCode?: string | null
+  nickname?: string | null
+  friendlyName?: string | null
+  sourceClientId?: number | null
+  sourceClientName?: string | null
+  carrier_id?: string | null
+  carrier_code?: string | null
+  friendly_name?: string | null
+  source_client_id?: number | null
+  source_client_name?: string | null
+}
+
+type AutomationStoreAvailability = {
+  store: AutomationStoreRow
+  loading: boolean
+  error: string | null
+  carriers: AutomationCarrierRow[]
+}
+
+const AUTOMATION_CARRIER_FETCH_CONCURRENCY = 4
+
+function automationCarrierLabel(carrier: AutomationCarrierRow): string {
+  return (
+    carrier.friendlyName ??
+    carrier.friendly_name ??
+    carrier.nickname ??
+    carrier.carrierCode ??
+    carrier.carrier_code ??
+    carrier.carrierId ??
+    carrier.carrier_id ??
+    'Carrier account'
+  )
+}
+
+function automationCarrierCode(carrier: AutomationCarrierRow): string {
+  return (
+    carrier.carrierCode ??
+    carrier.carrier_code ??
+    carrier.carrierId ??
+    carrier.carrier_id ??
+    ''
+  )
+}
+
+function isHugrabClient(name: string): boolean {
+  return name.trim().toLowerCase() === 'hugrab'
+}
+
 // ─── Status line ──────────────────────────────────────────────────
 // Thin colored row under destructive actions that shows the last op
 // result. Matches OrdersView's success/error toast aesthetic so
@@ -397,6 +455,10 @@ export default function SettingsView() {
   const [systemStatus, setSystemStatus] = useState<ObservabilityStatus | null>(null)
   const [systemStatusLoading, setSystemStatusLoading] = useState(false)
   const [systemStatusError, setSystemStatusError] = useState<string | null>(null)
+  const [automationRows, setAutomationRows] = useState<AutomationStoreAvailability[]>([])
+  const [automationLoading, setAutomationLoading] = useState(false)
+  const [automationError, setAutomationError] = useState<string | null>(null)
+  const [automationUpdatedAt, setAutomationUpdatedAt] = useState<string | null>(null)
 
   // Hide noisy bookkeeping clients from the Sandbox display. 'Manual
   // Orders' is a placeholder bucket the backend creates for legacy
@@ -439,6 +501,71 @@ export default function SettingsView() {
       setSystemStatusError(err instanceof Error ? err.message : 'Failed to load system status')
     } finally {
       setSystemStatusLoading(false)
+    }
+  }, [])
+
+  const refreshAutomationAvailability = useCallback(async () => {
+    setAutomationLoading(true)
+    setAutomationError(null)
+    try {
+      const storesPayload = await api.get<{ data: AutomationStoreRow[] }>('/init/stores', {
+        timeoutMs: 10_000,
+      })
+      const stores = (storesPayload.data ?? []).filter((store) => store.active !== false)
+      const initialRows = stores.map((store) => ({
+        store,
+        loading: true,
+        error: null,
+        carriers: [],
+      }))
+      setAutomationRows(initialRows)
+
+      const results: AutomationStoreAvailability[] = []
+      for (let index = 0; index < stores.length; index += AUTOMATION_CARRIER_FETCH_CONCURRENCY) {
+        const batch = stores.slice(index, index + AUTOMATION_CARRIER_FETCH_CONCURRENCY)
+        const batchResults = await Promise.all(
+          batch.map(async (store): Promise<AutomationStoreAvailability> => {
+            try {
+              const payload = await api.get<{
+                data?: AutomationCarrierRow[]
+                carriers?: AutomationCarrierRow[]
+              }>(
+                `/rates/carriers-for-store?storeId=${encodeURIComponent(store.storeId)}&clientId=${encodeURIComponent(store.clientId)}`,
+                { timeoutMs: 12_000 },
+              )
+              return {
+                store,
+                loading: false,
+                error: null,
+                carriers: payload.data ?? payload.carriers ?? [],
+              }
+            } catch (err) {
+              return {
+                store,
+                loading: false,
+                error: err instanceof Error ? err.message : 'Failed to load carriers',
+                carriers: [],
+              }
+            }
+          }),
+        )
+        results.push(...batchResults)
+        setAutomationRows((current) => {
+          const byStore = new Map(current.map((row) => [row.store.storeId, row]))
+          for (const result of results) byStore.set(result.store.storeId, result)
+          return stores.map((store) => byStore.get(store.storeId) ?? {
+            store,
+            loading: true,
+            error: null,
+            carriers: [],
+          })
+        })
+      }
+      setAutomationUpdatedAt(new Date().toISOString())
+    } catch (err) {
+      setAutomationError(err instanceof Error ? err.message : 'Failed to load automation carrier map')
+    } finally {
+      setAutomationLoading(false)
     }
   }, [])
 
@@ -565,6 +692,7 @@ export default function SettingsView() {
       cache: 'cache',
       system: 'system',
       observability: 'system',
+      automation: 'automation',
     }
     return aliases[slug] ?? null
   }
@@ -582,6 +710,7 @@ export default function SettingsView() {
     sandbox: '/settings/sandbox',
     cache: '/settings/cache',
     system: '/settings/system',
+    automation: '/settings/automation',
   }
 
   // Active drawer section. Resolution order:
@@ -595,7 +724,7 @@ export default function SettingsView() {
     if (fromUrl) return fromUrl
     try {
       const stored = window.localStorage.getItem(DRAWER_SECTION_KEY) as DrawerSectionId | null
-      if (stored && ['markups', 'locations', 'stores', 'carriers', 'pending', 'sandbox', 'cache', 'system'].includes(stored)) {
+      if (stored && ['markups', 'locations', 'stores', 'carriers', 'pending', 'sandbox', 'cache', 'system', 'automation'].includes(stored)) {
         return stored
       }
     } catch {
@@ -656,6 +785,12 @@ export default function SettingsView() {
     if (activeSection !== 'system') return
     void refreshSystemStatus()
   }, [activeSection, refreshSystemStatus])
+
+  useEffect(() => {
+    if (activeSection !== 'automation') return
+    if (automationRows.length > 0) return
+    void refreshAutomationAvailability()
+  }, [activeSection, automationRows.length, refreshAutomationAvailability])
 
   const isRefetching = refetchState.kind === 'loading'
 
@@ -721,6 +856,15 @@ export default function SettingsView() {
       tone: 'amber',
     },
     {
+      id: 'automation',
+      label: 'Automation',
+      short: 'Automation',
+      description:
+        'Read-only carrier availability map by client and store. Use this to confirm which carrier accounts Orders and Rate Browser can use, including client-specific service rules like HUGRAB Ground Saver/SurePost blocking.',
+      icon: Bot,
+      tone: 'emerald',
+    },
+    {
       id: 'sandbox',
       label: 'Sandbox — Test Orders',
       short: 'Sandbox',
@@ -751,6 +895,32 @@ export default function SettingsView() {
 
   const activeMeta = DRAWER_SECTIONS.find((s) => s.id === activeSection) ?? DRAWER_SECTIONS[0]
   const ActiveIcon = activeMeta.icon
+  const automationClientGroups = useMemo(() => {
+    const groups = new Map<number, {
+      clientId: number
+      clientName: string
+      stores: AutomationStoreAvailability[]
+      carrierCount: number
+      loadingCount: number
+      errorCount: number
+    }>()
+    for (const row of automationRows) {
+      const current = groups.get(row.store.clientId) ?? {
+        clientId: row.store.clientId,
+        clientName: row.store.clientName,
+        stores: [],
+        carrierCount: 0,
+        loadingCount: 0,
+        errorCount: 0,
+      }
+      current.stores.push(row)
+      current.carrierCount += row.carriers.length
+      if (row.loading) current.loadingCount += 1
+      if (row.error) current.errorCount += 1
+      groups.set(row.store.clientId, current)
+    }
+    return [...groups.values()].sort((a, b) => a.clientName.localeCompare(b.clientName))
+  }, [automationRows])
 
   return (
     <div
@@ -1095,6 +1265,147 @@ export default function SettingsView() {
               ) : null}
 
               {/* ─── SANDBOX panel ─────────────────────────────── */}
+              {activeSection === 'automation' ? (
+                <div className="space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="text-[12px] text-ink-3">
+                      {automationUpdatedAt
+                        ? `Updated ${formatCaDateTimeLabeled(automationUpdatedAt)}`
+                        : 'Carrier map loads when this panel opens.'}
+                    </div>
+                    <motion.button
+                      type="button"
+                      onClick={() => void refreshAutomationAvailability()}
+                      disabled={automationLoading}
+                      whileHover={!automationLoading ? { y: -1 } : undefined}
+                      whileTap={!automationLoading ? { scale: 0.96 } : undefined}
+                      transition={{ type: 'spring', stiffness: 400, damping: 22 }}
+                      className="inline-flex items-center gap-1.5 h-8 px-3.5 rounded-lg text-[12px] font-semibold text-ink bg-surface hover:bg-surface-2 ring-1 ring-line disabled:opacity-60 disabled:cursor-not-allowed transition-colors duration-150"
+                    >
+                      {automationLoading ? <ButtonSpinner /> : <RefreshCcw size={13} strokeWidth={2.25} />}
+                      Refresh
+                    </motion.button>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                    <div className="rounded-xl bg-surface ring-1 ring-line px-4 py-3 shadow-sm">
+                      <div className="text-[10.5px] uppercase tracking-wider font-bold text-ink-3">Clients</div>
+                      <div className="mt-1 text-2xl font-extrabold text-ink tabular-nums">{automationClientGroups.length}</div>
+                    </div>
+                    <div className="rounded-xl bg-surface ring-1 ring-line px-4 py-3 shadow-sm">
+                      <div className="text-[10.5px] uppercase tracking-wider font-bold text-ink-3">Stores</div>
+                      <div className="mt-1 text-2xl font-extrabold text-ink tabular-nums">{automationRows.length}</div>
+                    </div>
+                    <div className="rounded-xl bg-surface ring-1 ring-line px-4 py-3 shadow-sm">
+                      <div className="text-[10.5px] uppercase tracking-wider font-bold text-ink-3">Carrier Links</div>
+                      <div className="mt-1 text-2xl font-extrabold text-ink tabular-nums">
+                        {automationRows.reduce((sum, row) => sum + row.carriers.length, 0)}
+                      </div>
+                    </div>
+                    <div className="rounded-xl bg-surface ring-1 ring-line px-4 py-3 shadow-sm">
+                      <div className="text-[10.5px] uppercase tracking-wider font-bold text-ink-3">Rule Flags</div>
+                      <div className="mt-1 text-2xl font-extrabold text-emerald-700 tabular-nums">
+                        {automationClientGroups.filter((group) => isHugrabClient(group.clientName)).length}
+                      </div>
+                    </div>
+                  </div>
+
+                  {automationLoading && automationRows.length === 0 ? <SkeletonStack rows={6} /> : null}
+                  {automationError ? <StatusLine kind="error" message={automationError} /> : null}
+
+                  {!automationLoading && !automationError && automationRows.length === 0 ? (
+                    <div className="rounded-xl bg-surface ring-1 ring-line px-4 py-5 text-center text-[13px] text-ink-3">
+                      No active stores found.
+                    </div>
+                  ) : null}
+
+                  <div className="space-y-3">
+                    {automationClientGroups.map((group) => {
+                      const hasHugrabRule = isHugrabClient(group.clientName)
+                      return (
+                        <div key={group.clientId} className="rounded-xl bg-surface ring-1 ring-line shadow-sm overflow-hidden">
+                          <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 bg-surface-2 border-b border-line">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="text-[13px] font-extrabold text-ink truncate">{group.clientName}</span>
+                                {hasHugrabRule ? (
+                                  <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[10.5px] font-bold text-emerald-700 ring-1 ring-emerald-200">
+                                    Ground Saver/SurePost blocked
+                                  </span>
+                                ) : null}
+                              </div>
+                              <div className="text-[11.5px] text-ink-3 mt-0.5">
+                                {group.stores.length} store{group.stores.length === 1 ? '' : 's'} - {group.carrierCount} carrier account{group.carrierCount === 1 ? '' : 's'}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 text-[11px] text-ink-3">
+                              {group.loadingCount > 0 ? (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-brand-bg px-2 py-1 font-semibold text-brand ring-1 ring-brand/20">
+                                  <Loader2 size={11} className="animate-spin" />
+                                  {group.loadingCount} loading
+                                </span>
+                              ) : null}
+                              {group.errorCount > 0 ? (
+                                <span className="rounded-full bg-rose-50 px-2 py-1 font-semibold text-rose-700 ring-1 ring-rose-200">
+                                  {group.errorCount} error{group.errorCount === 1 ? '' : 's'}
+                                </span>
+                              ) : null}
+                            </div>
+                          </div>
+
+                          <div className="divide-y divide-line">
+                            {group.stores.map((row) => (
+                              <div key={row.store.storeId} className="px-4 py-3">
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div className="min-w-[160px]">
+                                    <div className="text-[12.5px] font-bold text-ink">Store {row.store.storeId}</div>
+                                    <div className="text-[11px] text-ink-3 tabular-nums">Client ID {row.store.clientId}</div>
+                                  </div>
+                                  <div className="flex-1 min-w-[240px]">
+                                    {row.loading ? (
+                                      <div className="inline-flex items-center gap-2 text-[12px] font-semibold text-brand">
+                                        <Loader2 size={13} className="animate-spin" />
+                                        Loading carriers
+                                      </div>
+                                    ) : row.error ? (
+                                      <div className="text-[12px] font-semibold text-rose-700">{row.error}</div>
+                                    ) : row.carriers.length === 0 ? (
+                                      <div className="text-[12px] text-ink-3 italic">No carrier accounts available.</div>
+                                    ) : (
+                                      <div className="flex flex-wrap gap-1.5">
+                                        {row.carriers.map((carrier, index) => {
+                                          const label = automationCarrierLabel(carrier)
+                                          const code = automationCarrierCode(carrier)
+                                          const sourceName =
+                                            carrier.sourceClientName ??
+                                            carrier.source_client_name ??
+                                            null
+                                          return (
+                                            <span
+                                              key={`${row.store.storeId}:${code}:${label}:${index}`}
+                                              className="inline-flex max-w-full items-center gap-1 rounded-full bg-surface-2 px-2.5 py-1 text-[11.5px] font-semibold text-ink ring-1 ring-line"
+                                              title={sourceName ? `${label} - ${sourceName}` : label}
+                                            >
+                                              <Truck size={11} strokeWidth={2.25} className="text-ink-3 flex-shrink-0" />
+                                              <span className="truncate">{label}</span>
+                                              {code ? <span className="text-ink-3 uppercase">{code}</span> : null}
+                                            </span>
+                                          )
+                                        })}
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              ) : null}
+
               {activeSection === 'sandbox' ? (
                 <div>
                   {testClientsLoading ? (
