@@ -1012,6 +1012,14 @@ export default function BillingView() {
         height: packages.find((pkg) => pkg.packageId === row.packageId)?.height ?? null,
       })))
       toastContext?.addToast('Package prices saved ✓', 'success')
+      // PS-068: a price change makes already-generated billing for this client
+      // stale. "Update Billing" now detects price/config changes (price-aware
+      // freshness) and rebuilds the affected range at the new price. Surface the
+      // next step so the operator doesn't have to guess a regenerate is needed.
+      toastContext?.addToast(
+        'Existing billing for this client is now out of date — run "Update Billing" for the affected date range to apply the new prices.',
+        'info',
+      )
     } catch (error) {
       toastContext?.addToast(error instanceof Error ? error.message : 'Error saving prices', 'error')
     }

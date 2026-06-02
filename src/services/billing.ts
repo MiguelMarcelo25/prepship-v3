@@ -218,37 +218,40 @@ export async function billingGenerationStatus(
     ? new Date(billingRow.latest_billing_ship_date)
     : null;
 
-  // Re-price detection: if package prices or billing config changed AFTER this
-  // range's billing line items were generated, the range is stale even when no
-  // new orders shipped. Without this, editing a box price never re-bills (the
-  // freshness comparison below only looks at shipment recency) and the cached
-  // summary keeps serving the old box total.
-  const [genRow] = await db.execute<{ billing_generated_at: string | null }>(sql`
-    select max(b.created_at)::text as billing_generated_at
-    from billing_line_items b
-    where b.ship_date >= ${fromIso}::timestamptz
-      and b.ship_date <= ${toIso}::timestamptz
-      ${input.clientId !== undefined ? sql`and b.client_id = ${input.clientId}` : sql``}
-      and ${billingLineItemScopePredicate(input)}
-  `);
-  const [pricingRow] = await db.execute<{ pricing_changed_at: string | null }>(sql`
-    with scoped_clients as (
-      select c.id
+  // Re-price detection (PER CLIENT): a range is stale when ANY scoped client
+  // that already has billing in the range had a package-price or billing-config
+  // change AFTER that client's newest billing line was generated — even when no
+  // new orders shipped. Computed per-client (not by comparing two GLOBAL maxima)
+  // so the all-clients "Update Billing" path cannot mask one client's stale
+  // price behind another client's later (re)bill. The underlying rule is
+  // billingNeedsRepriceForPriceChange (unit-tested in
+  // scripts/ps-billing-reprice-staleness-guard.ts).
+  const [staleRow] = await db.execute<{ pricing_stale: boolean }>(sql`
+    select exists (
+      select 1
       from clients c
       where c.active = true
         and c.name not in ('Manual Orders', 'Rate Browser', 'Api Shipments')
         ${input.clientId !== undefined ? sql`and c.id = ${input.clientId}` : sql``}
         and ${billingClientScopePredicate(input)}
-    )
-    select greatest(
-      (select max(updated_at) from client_package_prices where client_id in (select id from scoped_clients)),
-      (select max(updated_at) from billing_config        where client_id in (select id from scoped_clients))
-    )::text as pricing_changed_at
+        and exists (
+          select 1 from billing_line_items b
+          where b.client_id = c.id
+            and b.ship_date >= ${fromIso}::timestamptz
+            and b.ship_date <= ${toIso}::timestamptz
+        )
+        and greatest(
+          coalesce((select max(updated_at) from client_package_prices where client_id = c.id), 'epoch'::timestamptz),
+          coalesce((select max(updated_at) from billing_config        where client_id = c.id), 'epoch'::timestamptz)
+        ) > (
+          select max(b.created_at) from billing_line_items b
+          where b.client_id = c.id
+            and b.ship_date >= ${fromIso}::timestamptz
+            and b.ship_date <= ${toIso}::timestamptz
+        )
+    ) as pricing_stale
   `);
-  const pricingStale = billingNeedsRepriceForPriceChange(
-    genRow?.billing_generated_at ?? null,
-    pricingRow?.pricing_changed_at ?? null,
-  );
+  const pricingStale = staleRow?.pricing_stale === true;
 
   const sourceLowerBound = latestBilling?.toISOString() ?? fromIso;
   const [sourceRow] = await db.execute<{
@@ -1501,6 +1504,28 @@ export async function billingDetails(input: GenerateInput & { limit?: number }) 
   );
   const nicknameCache = new Map<string, Promise<string | null>>();
 
+  // PS-068: per-client latest package-price / billing-config change time, used
+  // to flag package_cost detail rows whose stored cost predates the change (so
+  // the operator can see "this box price is stale — regenerate" before export).
+  const detailClientIds = Array.from(
+    new Set(rows.map((row) => row.clientId).filter((id): id is number => id != null))
+  );
+  const pricingChangedByClient = new Map<number, Date>();
+  if (detailClientIds.length) {
+    const priceChangeRows = await db.execute<{ client_id: number; changed_at: string | null }>(sql`
+      select c.id as client_id,
+        greatest(
+          coalesce((select max(updated_at) from client_package_prices where client_id = c.id), 'epoch'::timestamptz),
+          coalesce((select max(updated_at) from billing_config        where client_id = c.id), 'epoch'::timestamptz)
+        )::text as changed_at
+      from clients c
+      where c.id = any(${intArraySql(detailClientIds)})
+    `);
+    for (const row of priceChangeRows) {
+      if (row.changed_at) pricingChangedByClient.set(row.client_id, new Date(row.changed_at));
+    }
+  }
+
   return Promise.all(
     rows.map(async (row) => {
       const fallbackShipment =
@@ -1558,6 +1583,14 @@ export async function billingDetails(input: GenerateInput & { limit?: number }) 
       const lineType = row.lineType ?? '';
       const isShippingLine = lineType === 'shipping';
       const isMissingShippingLine = lineType === 'shipping_missing';
+      const stalePackagePrice =
+        lineType === 'package_cost' &&
+        row.createdAt != null &&
+        row.clientId != null &&
+        (() => {
+          const changedAt = pricingChangedByClient.get(row.clientId);
+          return changedAt ? new Date(row.createdAt) < changedAt : false;
+        })();
       const labelCost =
         toFiniteNumber(row.labelCost ?? fallbackShipment?.labelCost) ??
         (() => {
@@ -1629,6 +1662,11 @@ export async function billingDetails(input: GenerateInput & { limit?: number }) 
         ref_usps_rate: isShippingLine ? refUspsRate : null,
         refUpsRate: isShippingLine ? refUpsRate : null,
         ref_ups_rate: isShippingLine ? refUpsRate : null,
+        // PS-068: true when this box charge was generated BEFORE the client's
+        // latest package-price/config change — the stored cost may be stale and
+        // the range should be regenerated. Only meaningful for box lines.
+        stalePackagePrice,
+        stale_package_price: stalePackagePrice,
       };
     })
   );
