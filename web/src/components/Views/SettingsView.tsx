@@ -61,6 +61,10 @@ import { ToastContext } from '../../contexts/ToastContext'
 import { useMarkups } from '../../contexts/MarkupsContext'
 import type { MarkupType } from '../../types/markups'
 import {
+  HUGRAB_GROUND_SAVER_BLOCK_REASON,
+  evaluateShippingServiceEligibility,
+} from '../../../../src/lib/shipping-service-eligibility'
+import {
   buildSettingsMarkupRows,
   buildSettingsRefetchStatus,
   getSettingsMarkupEmptyMessage,
@@ -264,6 +268,27 @@ type AutomationCarrierRow = {
   source_client_name?: string | null
 }
 
+type AutomationCarrierService = {
+  serviceCode?: string | null
+  name?: string | null
+  domestic?: boolean | null
+  international?: boolean | null
+}
+
+type AutomationCarrierCatalogRow = {
+  carrierId?: string | null
+  carrierCode?: string | null
+  nickname?: string | null
+  services?: AutomationCarrierService[]
+}
+
+type AutomationServiceEligibilityRow = {
+  code: string
+  name: string
+  allowed: boolean
+  reason?: string
+}
+
 type AutomationStoreAvailability = {
   store: AutomationStoreRow
   loading: boolean
@@ -272,6 +297,14 @@ type AutomationStoreAvailability = {
 }
 
 const AUTOMATION_CARRIER_FETCH_CONCURRENCY = 4
+const AUTOMATION_UPS_FALLBACK_SERVICES: AutomationCarrierService[] = [
+  { serviceCode: 'ups_ground', name: 'UPS Ground' },
+  { serviceCode: 'ups_2nd_day_air', name: 'UPS 2nd Day Air' },
+  { serviceCode: 'ups_3_day_select', name: 'UPS 3 Day Select' },
+  { serviceCode: 'ups_ground_saver', name: 'UPS Ground Saver' },
+  { serviceCode: 'ups_surepost_1_lb_or_greater', name: 'UPS Ground Saver (1 lb+)' },
+  { serviceCode: 'ups_surepost_less_than_1_lb', name: 'UPS Ground Saver (<1 lb)' },
+]
 
 function automationCarrierLabel(carrier: AutomationCarrierRow): string {
   return (
@@ -298,6 +331,61 @@ function automationCarrierCode(carrier: AutomationCarrierRow): string {
 
 function isHugrabClient(name: string): boolean {
   return name.trim().toLowerCase() === 'hugrab'
+}
+
+function automationCatalogKey(value: string | null | undefined): string {
+  return String(value ?? '').trim().toLowerCase()
+}
+
+function automationServicesForCarrier(
+  carrier: AutomationCarrierRow,
+  catalog: Record<string, AutomationCarrierService[]>,
+): AutomationCarrierService[] {
+  const keys = [
+    carrier.carrierCode,
+    carrier.carrier_code,
+    carrier.carrierId,
+    carrier.carrier_id,
+  ].map(automationCatalogKey).filter(Boolean)
+  for (const key of keys) {
+    const services = catalog[key]
+    if (services?.length) return services
+  }
+  const identity = keys.join(' ')
+  if (identity.includes('ups')) return AUTOMATION_UPS_FALLBACK_SERVICES
+  return []
+}
+
+function automationServiceEligibility(
+  store: AutomationStoreRow,
+  carrier: AutomationCarrierRow,
+  services: AutomationCarrierService[],
+): AutomationServiceEligibilityRow[] {
+  return services.map((service) => {
+    const code = service.serviceCode ?? ''
+    const name = service.name ?? (code || 'Service')
+    const eligibility = evaluateShippingServiceEligibility(
+      {
+        clientId: store.clientId,
+        clientName: store.clientName,
+        storeId: store.storeId,
+      },
+      {
+        carrierCode: automationCarrierCode(carrier),
+        carrierName: automationCarrierLabel(carrier),
+        provider: automationCarrierLabel(carrier),
+        serviceCode: code,
+        serviceName: name,
+        serviceType: name,
+      },
+    )
+    return {
+      code,
+      name,
+      allowed: eligibility.allowed,
+      reason: eligibility.reason,
+    }
+  })
 }
 
 // ─── Status line ──────────────────────────────────────────────────
@@ -456,6 +544,7 @@ export default function SettingsView() {
   const [systemStatusLoading, setSystemStatusLoading] = useState(false)
   const [systemStatusError, setSystemStatusError] = useState<string | null>(null)
   const [automationRows, setAutomationRows] = useState<AutomationStoreAvailability[]>([])
+  const [automationServiceCatalog, setAutomationServiceCatalog] = useState<Record<string, AutomationCarrierService[]>>({})
   const [automationLoading, setAutomationLoading] = useState(false)
   const [automationError, setAutomationError] = useState<string | null>(null)
   const [automationUpdatedAt, setAutomationUpdatedAt] = useState<string | null>(null)
@@ -508,9 +597,22 @@ export default function SettingsView() {
     setAutomationLoading(true)
     setAutomationError(null)
     try {
-      const storesPayload = await api.get<{ data: AutomationStoreRow[] }>('/init/stores', {
-        timeoutMs: 10_000,
-      })
+      const [storesPayload, carriersPayload] = await Promise.all([
+        api.get<{ data: AutomationStoreRow[] }>('/init/stores', {
+          timeoutMs: 10_000,
+        }),
+        api.get<{ data: AutomationCarrierCatalogRow[] }>('/init/carriers', {
+          timeoutMs: 12_000,
+        }).catch(() => ({ data: [] as AutomationCarrierCatalogRow[] })),
+      ])
+      const catalog: Record<string, AutomationCarrierService[]> = {}
+      for (const carrier of carriersPayload.data ?? []) {
+        const services = carrier.services ?? []
+        for (const key of [carrier.carrierCode, carrier.carrierId].map(automationCatalogKey).filter(Boolean)) {
+          catalog[key] = services
+        }
+      }
+      setAutomationServiceCatalog(catalog)
       const stores = (storesPayload.data ?? []).filter((store) => store.active !== false)
       const initialRows = stores.map((store) => ({
         store,
@@ -1372,7 +1474,7 @@ export default function SettingsView() {
                                     ) : row.carriers.length === 0 ? (
                                       <div className="text-[12px] text-ink-3 italic">No carrier accounts available.</div>
                                     ) : (
-                                      <div className="flex flex-wrap gap-1.5">
+                                      <div className="space-y-2">
                                         {row.carriers.map((carrier, index) => {
                                           const label = automationCarrierLabel(carrier)
                                           const code = automationCarrierCode(carrier)
@@ -1380,16 +1482,79 @@ export default function SettingsView() {
                                             carrier.sourceClientName ??
                                             carrier.source_client_name ??
                                             null
+                                          const services = automationServicesForCarrier(carrier, automationServiceCatalog)
+                                          const serviceEligibility = automationServiceEligibility(row.store, carrier, services)
+                                          const allowedServices = serviceEligibility.filter((service) => service.allowed)
+                                          const disabledServices = serviceEligibility.filter((service) => !service.allowed)
                                           return (
-                                            <span
+                                            <div
                                               key={`${row.store.storeId}:${code}:${label}:${index}`}
-                                              className="inline-flex max-w-full items-center gap-1 rounded-full bg-surface-2 px-2.5 py-1 text-[11.5px] font-semibold text-ink ring-1 ring-line"
-                                              title={sourceName ? `${label} - ${sourceName}` : label}
+                                              className="rounded-lg bg-surface ring-1 ring-line px-3 py-2"
                                             >
-                                              <Truck size={11} strokeWidth={2.25} className="text-ink-3 flex-shrink-0" />
-                                              <span className="truncate">{label}</span>
-                                              {code ? <span className="text-ink-3 uppercase">{code}</span> : null}
-                                            </span>
+                                              <div className="flex flex-wrap items-center gap-2">
+                                                <span
+                                                  className="inline-flex max-w-full items-center gap-1 rounded-full bg-surface-2 px-2.5 py-1 text-[11.5px] font-bold text-ink ring-1 ring-line"
+                                                  title={sourceName ? `${label} - ${sourceName}` : label}
+                                                >
+                                                  <Truck size={11} strokeWidth={2.25} className="text-ink-3 flex-shrink-0" />
+                                                  <span className="truncate">{label}</span>
+                                                  {code ? <span className="text-ink-3 uppercase">{code}</span> : null}
+                                                </span>
+                                                <span className="text-[10.5px] text-ink-3">
+                                                  {allowedServices.length} available
+                                                  {disabledServices.length > 0 ? ` - ${disabledServices.length} disabled` : ''}
+                                                </span>
+                                              </div>
+
+                                              {services.length === 0 ? (
+                                                <div className="mt-2 text-[11.5px] text-ink-3 italic">
+                                                  Carrier account is available. Service catalog is not published by the connector yet.
+                                                </div>
+                                              ) : (
+                                                <div className="mt-2 grid gap-2 md:grid-cols-2">
+                                                  <div>
+                                                    <div className="mb-1 text-[10px] uppercase tracking-wider font-bold text-emerald-700">
+                                                      Available services
+                                                    </div>
+                                                    <div className="flex flex-wrap gap-1">
+                                                      {allowedServices.slice(0, 8).map((service) => (
+                                                        <span
+                                                          key={`${code}:allowed:${service.code}:${service.name}`}
+                                                          className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10.5px] font-semibold text-emerald-800 ring-1 ring-emerald-200"
+                                                        >
+                                                          {service.name}
+                                                        </span>
+                                                      ))}
+                                                      {allowedServices.length > 8 ? (
+                                                        <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10.5px] font-semibold text-emerald-800 ring-1 ring-emerald-200">
+                                                          +{allowedServices.length - 8} more
+                                                        </span>
+                                                      ) : null}
+                                                    </div>
+                                                  </div>
+                                                  <div>
+                                                    <div className="mb-1 text-[10px] uppercase tracking-wider font-bold text-rose-700">
+                                                      Disabled services
+                                                    </div>
+                                                    {disabledServices.length === 0 ? (
+                                                      <div className="text-[11.5px] text-ink-3">None</div>
+                                                    ) : (
+                                                      <div className="flex flex-wrap gap-1">
+                                                        {disabledServices.map((service) => (
+                                                          <span
+                                                            key={`${code}:disabled:${service.code}:${service.name}`}
+                                                            className="rounded-full bg-rose-50 px-2 py-0.5 text-[10.5px] font-semibold text-rose-800 ring-1 ring-rose-200"
+                                                            title={service.reason ?? HUGRAB_GROUND_SAVER_BLOCK_REASON}
+                                                          >
+                                                            {service.name}
+                                                          </span>
+                                                        ))}
+                                                      </div>
+                                                    )}
+                                                  </div>
+                                                </div>
+                                              )}
+                                            </div>
                                           )
                                         })}
                                       </div>
