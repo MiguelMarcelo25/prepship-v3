@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { and, desc, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import { db } from '../db/client';
 import { clients } from '../db/schema/clients';
+import { orders } from '../db/schema/orders';
 import { printQueue, type PrintQueueEntry } from '../db/schema/print-queue';
 import { settings } from '../db/schema/settings';
 import { shipments } from '../db/schema/shipments';
@@ -1001,10 +1002,19 @@ async function runMergeJob(
       (a.skuGroupId ?? '').localeCompare(b.skuGroupId ?? '')
     );
     const groupSizes = new Map<string, number>();
+    const entriesByGroup = new Map<string, PrintQueueEntry[]>();
     for (const e of sorted) {
       const g = e.skuGroupId ?? '__ungrouped__';
       groupSizes.set(g, (groupSizes.get(g) ?? 0) + 1);
+      const bucket = entriesByGroup.get(g);
+      if (bucket) bucket.push(e);
+      else entriesByGroup.set(g, [e]);
     }
+    // PS-073 (per user override unlock shipped data on 2026-06-02):
+    // resolve privacy-safe recipient names for each batch group via a
+    // single render-time join to orders.shipToName (client-scoped). Used
+    // only for the names reference / Batch Manifest; never mutates orders.
+    const recipientsByGroup = await loadBatchRecipientsByGroup(entriesByGroup);
     let lastGroup: string | null = null;
     const successfulEntryIds: string[] = [];
     const failedEntryIds = new Set<string>();
@@ -1032,8 +1042,37 @@ async function runMergeJob(
       const addGroupHeaderIfNeeded = () => {
         const groupId = e.skuGroupId ?? '__ungrouped__';
         if (mergeHeaders && groupId !== lastGroup) {
+          const groupRecipients = recipientsByGroup.get(groupId) ?? [];
           const headerPage = merged.addPage([288, 432]);
-          drawHeader(headerPage, e, groupSizes.get(groupId) ?? 1, font, fontReg, rgb, isMockLabel);
+          const { manifestNeeded } = drawHeader(
+            headerPage,
+            e,
+            groupSizes.get(groupId) ?? 1,
+            font,
+            fontReg,
+            rgb,
+            isMockLabel,
+            groupRecipients
+          );
+          // PS-073: large/overflow batches get a dedicated Batch Manifest
+          // page inserted immediately after the header (before this group's
+          // labels) instead of cramming names onto the 4x6 header.
+          if (manifestNeeded && groupRecipients.length > 0) {
+            const { comboLine, totalUnits } = buildComboSummaryLine(e);
+            addBatchManifestPages(
+              () => merged.addPage([288, 432]),
+              {
+                recipients: groupRecipients,
+                totalOrders: groupSizes.get(groupId) ?? groupRecipients.length,
+                totalUnits,
+                comboLine,
+                isTest: isMockLabel,
+              },
+              font,
+              fontReg,
+              rgb
+            );
+          }
           lastGroup = groupId;
         }
       };
@@ -1227,6 +1266,148 @@ function collapseQueueSkuLines(entry: Pick<PrintQueueEntry, 'multiSkuData' | 'pr
     : [];
 }
 
+// ───────────────────────────────────────────────────────────────────
+// PS-073 — Customer-name reference + Batch Manifest support.
+// Per user override unlock shipped data on 2026-06-02: the Print Queue
+// batch header/merge reads orders.shipToName (a shipped-data read path)
+// to print a privacy-safe recipient-name rescue surface. This block adds
+// ONLY read/derivation of recipient names + order numbers. It must never
+// surface addresses, emails, phones, tracking numbers, label URLs, raw
+// provider payloads, tokens, or secrets, and it does not mutate any
+// shipped/cancelled order, shipment, or label record.
+// ───────────────────────────────────────────────────────────────────
+
+// Batches at or below this many orders show recipient names directly on
+// the 4x6 batch header; larger batches get a dedicated Batch Manifest
+// page instead so the header stays legible (see planBatchNamesDisplay).
+export const BATCH_NAMES_HEADER_THRESHOLD = 30;
+
+// The ONLY recipient fields allowed past this boundary. Intentionally
+// minimal so address/email/phone/tracking can never ride along.
+export type BatchRecipient = { name: string; orderNumber: string };
+
+// Resolve a privacy-safe display name. Returns the recipient name when
+// present, otherwise a safe order-number fallback — never PII.
+export function resolveRecipientDisplayName(input: {
+  shipToName?: string | null;
+  orderNumber?: string | null;
+  orderId?: string | null;
+}): BatchRecipient {
+  const orderNumber = String(input.orderNumber ?? input.orderId ?? '').trim();
+  const name = String(input.shipToName ?? '').trim();
+  if (name) return { name, orderNumber };
+  return {
+    name: orderNumber ? `Order ${orderNumber}` : 'Unnamed recipient',
+    orderNumber,
+  };
+}
+
+// Resolve a recipient for a queued entry from an order row, gating the
+// ENTIRE row on client scope. Only when the order belongs to the same
+// client as the queued entry do we trust ANY of its fields (name AND
+// order number) — so a cross-client id collision can never surface either
+// the other client's name or their order number on this batch.
+export function resolveScopedRecipient(
+  entry: { clientId: number; orderId: string; orderNumber?: string | null },
+  row: { shipToName: string | null; orderNumber: string | null; clientId: number | null } | undefined
+): BatchRecipient {
+  const scopedRow = row && row.clientId === entry.clientId ? row : undefined;
+  return resolveRecipientDisplayName({
+    shipToName: scopedRow?.shipToName ?? null,
+    orderNumber: entry.orderNumber ?? scopedRow?.orderNumber ?? null,
+    orderId: entry.orderId,
+  });
+}
+
+// Deterministic, case-insensitive ordering so the printed list is stable
+// across renders (name, then order number to break ties).
+export function sortBatchRecipients(list: BatchRecipient[]): BatchRecipient[] {
+  return [...list].sort((a, b) => {
+    const byName = a.name.toLocaleLowerCase().localeCompare(b.name.toLocaleLowerCase());
+    return byName !== 0 ? byName : a.orderNumber.localeCompare(b.orderNumber);
+  });
+}
+
+// Flag duplicate recipient names so the manifest can disambiguate them
+// with their order number.
+export function annotateDuplicateNames(
+  list: BatchRecipient[]
+): Array<BatchRecipient & { duplicate: boolean }> {
+  const counts = new Map<string, number>();
+  for (const r of list) {
+    const key = r.name.toLocaleLowerCase();
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return list.map((r) => ({
+    ...r,
+    duplicate: (counts.get(r.name.toLocaleLowerCase()) ?? 0) > 1,
+  }));
+}
+
+// Decide whether names go on the header or spill to a manifest page.
+// Above the threshold the header shows a compact pointer only (no list)
+// so we never cram 40-60+ names onto a 4x6 slip.
+export function planBatchNamesDisplay(
+  count: number,
+  threshold = BATCH_NAMES_HEADER_THRESHOLD
+): { onHeader: boolean; needsManifest: boolean } {
+  if (count <= threshold) return { onHeader: true, needsManifest: false };
+  return { onHeader: false, needsManifest: true };
+}
+
+// Render-time join: resolve recipient names for every queued entry from
+// authoritative order data (orders.shipToName) keyed by orderId, scoped
+// to the entry's own clientId. No migration needed — already-queued rows
+// render names immediately. Cross-client names can never attach because
+// the shipToName is only trusted when orders.clientId === entry.clientId.
+async function loadBatchRecipientsByGroup(
+  entriesByGroup: Map<string, PrintQueueEntry[]>
+): Promise<Map<string, BatchRecipient[]>> {
+  const ids = new Set<number>();
+  for (const list of entriesByGroup.values()) {
+    for (const e of list) {
+      const idNum = Number(e.orderId);
+      if (Number.isFinite(idNum)) ids.add(idNum);
+    }
+  }
+
+  const orderById = new Map<
+    number,
+    { shipToName: string | null; orderNumber: string | null; clientId: number | null }
+  >();
+  if (ids.size > 0) {
+    const rows = await db
+      .select({
+        id: orders.id,
+        shipToName: orders.shipToName,
+        orderNumber: orders.orderNumber,
+        clientId: orders.clientId,
+      })
+      .from(orders)
+      .where(inArray(orders.id, [...ids]));
+    for (const row of rows) {
+      orderById.set(row.id, {
+        shipToName: row.shipToName,
+        orderNumber: row.orderNumber,
+        clientId: row.clientId,
+      });
+    }
+  }
+
+  const result = new Map<string, BatchRecipient[]>();
+  for (const [groupId, list] of entriesByGroup) {
+    const recipients = list.map((entry) => {
+      const idNum = Number(entry.orderId);
+      const row = Number.isFinite(idNum) ? orderById.get(idNum) : undefined;
+      // Whole-row client-scope gate (name AND order number). See
+      // resolveScopedRecipient — defense-in-depth vs orderId collision.
+      return resolveScopedRecipient(entry, row);
+    });
+    result.set(groupId, sortBatchRecipients(recipients));
+  }
+  return result;
+}
+
 function drawMockFallbackLabel(
   page: ReturnType<import('pdf-lib').PDFDocument['addPage']>,
   entry: PrintQueueEntry,
@@ -1288,8 +1469,15 @@ function drawHeader(
   // bar is identical between test and real — only the marker changes
   // — so what an operator sees in test prints faithfully predicts
   // what their boss will see in real prints.
-  isTest = false
-) {
+  isTest = false,
+  // PS-073 (per user override unlock shipped data on 2026-06-02):
+  // recipients holds the privacy-safe name list for THIS batch group
+  // (already client-scoped + sorted); threshold governs header-vs-
+  // manifest. Returns whether a Batch Manifest page is still required
+  // (i.e. names did not fit on the header).
+  recipients: BatchRecipient[] = [],
+  threshold = BATCH_NAMES_HEADER_THRESHOLD
+): { manifestNeeded: boolean } {
   const { width, height } = page.getSize();
   const cx = width / 2;
   const pad = 16;
@@ -1325,184 +1513,138 @@ function drawHeader(
     });
   }
 
-  // 2026-05-14: divider moved from 32% to 42% from the bottom of the
-  // page (i.e. raised ~43 px up) so the empty gap between the QTY
-  // line and the divider closes up. The previous 32% left ~130 px
-  // of dead white space below QTY on a 432-tall slip — the boss's
-  // reference image has the divider sitting around 60 % down from
-  // the top, which corresponds to ~40 % up from the bottom.
-  // Computed up here (before the top content) so we can vertically
-  // center the SKU/description/QTY block inside the available zone.
-  const dividerY = height * 0.42;
+  const ink = rgb(0.1, 0.1, 0.1);
+  const sub = rgb(0.45, 0.45, 0.45);
 
-  // Wrap-aware drawer. Returns the y value AFTER the last line.
-  const drawWrapped = (
-    text: string,
-    startY: number,
-    fontSize: number,
-    f: typeof font,
-    color: ReturnType<typeof rgb>,
-    lineGap = 6
-  ) => {
-    const words = safePdfText(text).split(' ').filter(Boolean);
-    let line = '';
-    let cy = startY;
-    for (const word of words) {
-      const test = line ? `${line} ${word}` : word;
-      if (f.widthOfTextAtSize(test, fontSize) > width - pad * 2 && line) {
-        page.drawText(line, {
-          x: cx - f.widthOfTextAtSize(line, fontSize) / 2,
-          y: cy,
-          size: fontSize,
-          font: f,
-          color,
-        });
-        cy -= fontSize + lineGap;
-        line = word;
-      } else {
-        line = test;
-      }
-    }
-    if (line) {
-      page.drawText(line, {
-        x: cx - f.widthOfTextAtSize(line, fontSize) / 2,
-        y: cy,
-        size: fontSize,
-        font: f,
-        color,
-      });
-      cy -= fontSize + lineGap;
-    }
-    return cy;
+  // Truncate text with an ellipsis so long names/SKUs never overrun
+  // their column or the page edge.
+  const fitText = (text: string, size: number, f: typeof font, maxW: number): string => {
+    let t = safePdfText(text);
+    if (f.widthOfTextAtSize(t, size) <= maxW) return t;
+    while (t.length > 1 && f.widthOfTextAtSize(`${t}...`, size) > maxW) t = t.slice(0, -1);
+    return `${t}...`;
   };
 
-  // Measurement-only twin of drawWrapped — counts how many lines the
-  // given text would consume at the given size+font without rendering
-  // anything. Used so we can compute total content height up-front
-  // and vertically center the block.
-  const countWrappedLines = (
-    text: string,
-    fontSize: number,
-    f: typeof font
-  ): number => {
-    const words = safePdfText(text).split(' ').filter(Boolean);
-    if (words.length === 0) return 0;
-    let line = '';
-    let lines = 0;
-    for (const word of words) {
-      const test = line ? `${line} ${word}` : word;
-      if (f.widthOfTextAtSize(test, fontSize) > width - pad * 2 && line) {
-        lines += 1;
-        line = word;
-      } else {
-        line = test;
-      }
-    }
-    if (line) lines += 1;
-    return lines;
-  };
+  // ── 1) Item/pick cards (top): product name left, xN right, sku below.
+  // Every SKU in a multi-SKU combo gets its own outlined card; a single
+  // SKU still renders as one card so the layout is consistent.
+  const cards = (() => {
+    const lines = collapseQueueSkuLines(entry);
+    if (lines.length > 0) return lines;
+    const qtyValue = Number(entry.orderQty);
+    return [{
+      sku: entry.primarySku ?? 'UNKNOWN SKU',
+      description: String(entry.itemDescription ?? '').trim(),
+      qty: Number.isFinite(qtyValue) && qtyValue > 0 ? Math.trunc(qtyValue) : 1,
+    }];
+  })();
 
-  // Compute the total height of the content block (SKU + optional
-  // description + QTY, or MULTI-SKU + items + QTY). Mirrors the
-  // sizes/gaps used in the draw block below, so changes to one must
-  // be mirrored in the other.
-  const skuLines = collapseQueueSkuLines(entry);
-  const isMultiSkuHeader = skuLines.length > 1;
-  let contentHeight: number;
-  if (isMultiSkuHeader) {
-    contentHeight =
-      26 + 6 + // MULTI-SKU title
-      8 +      // gap
-      skuLines.length * (24 + 6) + // each bordered SKU chip
-      6 +      // gap
-      22 + 6;  // QTY line
-  } else {
-    const skuText = entry.primarySku ?? 'UNKNOWN SKU';
-    const skuLines = countWrappedLines(skuText, 28, font);
-    const descLines = entry.itemDescription
-      ? countWrappedLines(entry.itemDescription, 15, fontReg)
-      : 0;
-    contentHeight =
-      skuLines * (28 + 5) + // SKU lines
-      12 +                  // gap
-      (descLines > 0 ? descLines * (15 + 4) + 8 : 0) + // description lines + gap
-      22 + 6;               // QTY line
+  // Cap how many cards render so a high-SKU combo can't push the order
+  // count into negative space (the count has a font-size floor). Hidden
+  // SKUs are summarised in a "+N more" line; the QTY total below still
+  // counts ALL SKUs, and the manifest combo line lists every SKU.
+  const MAX_HEADER_CARDS = 6;
+  const visibleCards = cards.slice(0, MAX_HEADER_CARDS);
+  const hiddenCardCount = cards.length - visibleCards.length;
+
+  let y = height - 40 - 12;
+  const cardH = cards.length >= 6 ? 28 : cards.length >= 4 ? 31 : 34;
+  const cardGap = cards.length >= 5 ? 5 : 6;
+  for (const item of visibleCards) {
+    const boxW = width - pad * 2;
+    page.drawRectangle({
+      x: pad,
+      y: y - cardH,
+      width: boxW,
+      height: cardH,
+      borderColor: rgb(0.55, 0.7, 0.9),
+      borderWidth: 1.25,
+      color: rgb(0.94, 0.98, 1),
+    });
+    const qtyText = `x${item.qty}`;
+    const qtySize = 16;
+    const qtyW = font.widthOfTextAtSize(qtyText, qtySize);
+    const titleSize = 14;
+    const title = fitText(item.description || item.sku, titleSize, font, boxW - 22 - qtyW - 8);
+    page.drawText(title, { x: pad + 11, y: y - 15, size: titleSize, font, color: ink });
+    page.drawText(qtyText, { x: pad + boxW - 11 - qtyW, y: y - 15, size: qtySize, font, color: ink });
+    page.drawText(fitText(`sku: ${item.sku}`, 9, fontReg, boxW - 22), {
+      x: pad + 11,
+      y: y - cardH + 6,
+      size: 9,
+      font: fontReg,
+      color: sub,
+    });
+    y -= cardH + cardGap;
+  }
+  if (hiddenCardCount > 0) {
+    page.drawText(safePdfText(`+${hiddenCardCount} more SKU${hiddenCardCount === 1 ? '' : 's'} (full combo on manifest)`), {
+      x: pad + 2,
+      y: y - 9,
+      size: 9,
+      font: fontReg,
+      color: sub,
+    });
+    y -= 15;
   }
 
-  // Top section spans from below the BATCH HEADER bar (height-40)
-  // down to the divider top (dividerY+2). Boss wants the content
-  // block to sit LOWER in that zone — closer to the divider — not
-  // dead-centered. We compute the naturally-centered padding then
-  // add a 50 pt nudge downward (= more padding above). A cap keeps
-  // the QTY line from kissing the divider on long descriptions:
-  // the block can shift down freely until only 8 pt of gap remains
-  // above the divider, then it stops.
-  const topSectionTop = height - 40;
-  const topSectionBottom = dividerY + 2;
-  const topSectionHeight = topSectionTop - topSectionBottom;
-  const naturalPadding = Math.max(10, (topSectionHeight - contentHeight) / 2);
-  const maxPadding = Math.max(10, topSectionHeight - contentHeight - 8);
-  const verticalPadding = Math.min(maxPadding, naturalPadding + 50);
-  let y = topSectionTop - verticalPadding;
-
-  if (isMultiSkuHeader) {
-    y = drawWrapped('MULTI-SKU', y, 26, font, rgb(0.1, 0.1, 0.1));
-    y -= 8;
-    for (const item of skuLines) {
-      const chipText = safePdfText(`${item.sku}  x${item.qty}`);
-      const chipWidth = Math.min(width - pad * 2, fontReg.widthOfTextAtSize(chipText, 15) + 24);
-      const chipHeight = 24;
-      page.drawRectangle({
-        x: cx - chipWidth / 2,
-        y: y - chipHeight + 5,
-        width: chipWidth,
-        height: chipHeight,
-        borderColor: rgb(0.08, 0.5, 0.75),
-        borderWidth: 1.25,
-        color: rgb(0.94, 0.98, 1),
-      });
-      page.drawText(chipText, {
-        x: cx - fontReg.widthOfTextAtSize(chipText, 15) / 2,
-        y: y - 13,
-        size: 15,
-        font: fontReg,
-        color: rgb(0.18, 0.18, 0.18),
-      });
-      y -= chipHeight + 6;
-    }
-    y -= 6;
-    const totalQty = skuLines.reduce((s, i) => s + i.qty, 0);
-    y = drawWrapped(`QTY: ${totalQty} per order`, y, 22, font, rgb(0.1, 0.1, 0.1));
-  } else {
-    const sku = entry.primarySku ?? 'UNKNOWN SKU';
-    // SKU 28 / description 15 / QTY 22 — hierarchy goes SKU > QTY > description.
-    y = drawWrapped(sku, y, 28, font, rgb(0.1, 0.1, 0.1), 5);
-    y -= 12;
-    if (entry.itemDescription) {
-      y = drawWrapped(entry.itemDescription, y, 15, fontReg, rgb(0.35, 0.35, 0.35), 4);
-      y -= 8;
-    }
-    y = drawWrapped(`QTY: ${entry.orderQty} per order`, y, 22, font, rgb(0.1, 0.1, 0.1));
-  }
-
-  page.drawLine({
-    start: { x: pad, y: dividerY + 2 },
-    end: { x: width - pad, y: dividerY + 2 },
-    thickness: 1,
-    color: rgb(0.85, 0.85, 0.85),
+  // ── 2) Total units per order ──
+  const totalUnits = cards.reduce((sum, item) => sum + item.qty, 0);
+  y -= 2;
+  page.drawText(`QTY: ${totalUnits} total unit${totalUnits === 1 ? '' : 's'} per order`, {
+    x: pad,
+    y: y - 13,
+    size: 13.5,
+    font,
+    color: ink,
   });
+  y -= 24;
 
-  const countFontSize = Math.min(height * 0.22, 90);
+  // ── Decide names placement (header list vs manifest pointer) ──
+  const regionTop = y;
+  const regionBottom = 12;
+  const plan = planBatchNamesDisplay(recipients.length, threshold);
+  const nameRowH = 11;
+  const namesTitleH = 18;
+  const listBoxPad = 8;
+  const cols = 2;
+
+  let renderNamesOnHeader = plan.onHeader && recipients.length > 0;
+  let namesZoneH = 0;
+  if (renderNamesOnHeader) {
+    const rows = Math.ceil(recipients.length / cols);
+    namesZoneH = namesTitleH + rows * nameRowH + listBoxPad;
+  }
+  let manifestPointer = plan.needsManifest;
+  const pointerH = 22;
+
+  // Fit check: keep the ORDERS count prominent. If names would crush it
+  // below a legible floor, spill the whole list to a Batch Manifest page
+  // and show a pointer instead — this honours "do not shrink primary
+  // picking/order-count text to make names fit".
+  const MIN_COUNT_REGION = 64;
+  let reservedBottom = (renderNamesOnHeader ? namesZoneH : 0) + (manifestPointer ? pointerH : 0);
+  let countRegionBottom = regionBottom + reservedBottom + (reservedBottom > 0 ? 6 : 0);
+  if (renderNamesOnHeader && regionTop - countRegionBottom < MIN_COUNT_REGION) {
+    renderNamesOnHeader = false;
+    manifestPointer = true;
+    namesZoneH = 0;
+    reservedBottom = pointerH;
+    countRegionBottom = regionBottom + pointerH + 6;
+  }
+  const manifestNeeded = manifestPointer;
+
+  // ── 3) Big ORDERS count, centered in the space above the names zone ──
   const labelSize = 15;
+  const countRegionH = regionTop - countRegionBottom;
+  const countFontSize = Math.max(40, Math.min(78, countRegionH - labelSize - 12));
   const countStr = String(totalOrders);
   const countW = font.widthOfTextAtSize(countStr, countFontSize);
-  const bottomSectionHeight = dividerY;
-  const countBlockHeight = countFontSize + labelSize + 10;
-  const countY = (bottomSectionHeight + countBlockHeight) / 2;
-
+  const countBlockH = countFontSize + 4 + labelSize;
+  const countBlockTop = countRegionBottom + (countRegionH + countBlockH) / 2;
   page.drawText(countStr, {
     x: cx - countW / 2,
-    y: countY - countFontSize,
+    y: countBlockTop - countFontSize,
     size: countFontSize,
     font,
     color: rgb(0.05, 0.05, 0.05),
@@ -1510,9 +1652,290 @@ function drawHeader(
   const labelStr = `ORDER${totalOrders === 1 ? '' : 'S'}`;
   page.drawText(labelStr, {
     x: cx - font.widthOfTextAtSize(labelStr, labelSize) / 2,
-    y: countY - countFontSize - labelSize - 4,
+    y: countBlockTop - countFontSize - labelSize - 4,
     size: labelSize,
     font,
     color: rgb(0.4, 0.4, 0.4),
   });
+
+  // ── 4) Names reference area (secondary; never overrides picking) ──
+  if (renderNamesOnHeader) {
+    const zoneTop = regionBottom + namesZoneH;
+    page.drawText(safePdfText(`Names in this batch (${recipients.length})`), {
+      x: pad,
+      y: zoneTop - 13,
+      size: 12,
+      font,
+      color: ink,
+    });
+    const listTop = zoneTop - namesTitleH;
+    const rows = Math.ceil(recipients.length / cols);
+    const listBoxH = rows * nameRowH + listBoxPad;
+    page.drawRectangle({
+      x: pad,
+      y: listTop - listBoxH,
+      width: width - pad * 2,
+      height: listBoxH,
+      borderColor: rgb(0.85, 0.85, 0.85),
+      borderWidth: 1,
+      color: rgb(0.99, 0.99, 0.99),
+    });
+    const colW = (width - pad * 2) / cols;
+    const nameSize = 8.5;
+    recipients.forEach((recipient, i) => {
+      const col = i % cols;
+      const rowIdx = Math.floor(i / cols);
+      const tx = pad + 9 + col * colW;
+      const ty = listTop - 11 - rowIdx * nameRowH;
+      page.drawText(fitText(recipient.name.toLocaleUpperCase(), nameSize, fontReg, colW - 16), {
+        x: tx,
+        y: ty,
+        size: nameSize,
+        font: fontReg,
+        color: rgb(0.2, 0.2, 0.2),
+      });
+    });
+  } else if (manifestPointer && recipients.length > 0) {
+    page.drawText(safePdfText(`Names: see Batch Manifest page (${recipients.length}) >`), {
+      x: pad,
+      y: regionBottom + 5,
+      size: 11,
+      font,
+      color: rgb(0.2, 0.2, 0.2),
+    });
+  }
+
+  return { manifestNeeded };
+}
+
+// Module-level ellipsis truncation (mirrors drawHeader's local fitText)
+// so the manifest can clip long names without overrunning columns.
+function ellipsizePdf(
+  text: string,
+  size: number,
+  f: import('pdf-lib').PDFFont,
+  maxW: number
+): string {
+  let t = safePdfText(text);
+  if (f.widthOfTextAtSize(t, size) <= maxW) return t;
+  while (t.length > 1 && f.widthOfTextAtSize(`${t}...`, size) > maxW) t = t.slice(0, -1);
+  return `${t}...`;
+}
+
+// PS-073: how many recipient names fit on a single Batch Manifest page
+// (3 columns x 24 rows). Drives pagination for very large batches.
+const MANIFEST_NAMES_PER_PAGE = 72;
+
+// PS-073 (per user override unlock shipped data on 2026-06-02):
+// Draw ONE Batch Manifest page. Lists recipient names for a batch group
+// with order numbers used ONLY to disambiguate duplicate/fallback names.
+// Never renders addresses, emails, phones, tracking, or label data.
+function drawManifestPage(
+  page: ReturnType<import('pdf-lib').PDFDocument['addPage']>,
+  opts: {
+    comboLine: string;
+    totalOrders: number;
+    totalUnits: number;
+    recipients: Array<BatchRecipient & { duplicate: boolean }>;
+    pageIndex: number;
+    pageCount: number;
+    isTest: boolean;
+    font: import('pdf-lib').PDFFont;
+    fontReg: import('pdf-lib').PDFFont;
+    rgb: typeof import('pdf-lib').rgb;
+  }
+) {
+  const { font, fontReg, rgb } = opts;
+  const { width, height } = page.getSize();
+  const cx = width / 2;
+  const pad = 16;
+  const ink = rgb(0.1, 0.1, 0.1);
+  const sub = rgb(0.45, 0.45, 0.45);
+
+  page.drawRectangle({ x: 0, y: 0, width, height, color: rgb(1, 1, 1) });
+  page.drawRectangle({ x: 0, y: height - 40, width, height: 40, color: rgb(0.1, 0.1, 0.1) });
+  const titleText = 'BATCH MANIFEST';
+  page.drawText(titleText, {
+    x: cx - font.widthOfTextAtSize(titleText, 13) / 2,
+    y: height - 27,
+    size: 13,
+    font,
+    color: rgb(1, 1, 1),
+  });
+  if (opts.isTest) {
+    const testLabel = 'TEST';
+    const testSize = 11;
+    page.drawText(testLabel, {
+      x: width - pad - font.widthOfTextAtSize(testLabel, testSize),
+      y: height - 26,
+      size: testSize,
+      font,
+      color: rgb(1, 0.45, 0.45),
+    });
+  }
+
+  let y = height - 40 - 18;
+  page.drawText(ellipsizePdf(opts.comboLine, 11, font, width - pad * 2), {
+    x: pad,
+    y,
+    size: 11,
+    font,
+    color: ink,
+  });
+  y -= 16;
+  page.drawText(
+    safePdfText(`${opts.totalOrders} order${opts.totalOrders === 1 ? '' : 's'} | QTY: ${opts.totalUnits} total unit${opts.totalUnits === 1 ? '' : 's'} per order`),
+    { x: pad, y, size: 10, font: fontReg, color: sub }
+  );
+  y -= 16;
+  if (opts.pageCount > 1) {
+    page.drawText(safePdfText(`Page ${opts.pageIndex + 1} of ${opts.pageCount}`), {
+      x: pad,
+      y,
+      size: 9,
+      font: fontReg,
+      color: sub,
+    });
+    y -= 12;
+  }
+  page.drawLine({
+    start: { x: pad, y: y - 2 },
+    end: { x: width - pad, y: y - 2 },
+    thickness: 1,
+    color: rgb(0.85, 0.85, 0.85),
+  });
+  y -= 16;
+
+  // 3-column name grid. Duplicate / fallback names get their order
+  // number appended so identical names stay distinguishable.
+  const cols = 3;
+  const colW = (width - pad * 2) / cols;
+  const rowH = 12;
+  const nameSize = 8.5;
+  const listTop = y;
+  opts.recipients.forEach((recipient, i) => {
+    const col = i % cols;
+    const rowIdx = Math.floor(i / cols);
+    const tx = pad + 4 + col * colW;
+    const ty = listTop - rowIdx * rowH;
+    const needsOrderNo = recipient.duplicate && recipient.orderNumber
+      && !recipient.name.startsWith('Order ');
+    // Reserve the disambiguating suffix width FIRST, then ellipsize only
+    // the name part — so the (#orderNumber) that distinguishes duplicate
+    // names is never the thing that gets truncated away.
+    const suffix = needsOrderNo ? safePdfText(` (#${recipient.orderNumber})`.toLocaleUpperCase()) : '';
+    const suffixW = suffix ? fontReg.widthOfTextAtSize(suffix, nameSize) : 0;
+    const namePart = ellipsizePdf(
+      recipient.name.toLocaleUpperCase(),
+      nameSize,
+      fontReg,
+      Math.max(12, colW - 8 - suffixW)
+    );
+    page.drawText(`${namePart}${suffix}`, {
+      x: tx,
+      y: ty,
+      size: nameSize,
+      font: fontReg,
+      color: rgb(0.2, 0.2, 0.2),
+    });
+  });
+}
+
+// Append all Batch Manifest pages for one group to the document, splitting
+// across pages when a group has more names than fit on a single page.
+function addBatchManifestPages(
+  addPage: () => ReturnType<import('pdf-lib').PDFDocument['addPage']>,
+  meta: {
+    recipients: BatchRecipient[];
+    totalOrders: number;
+    totalUnits: number;
+    comboLine: string;
+    isTest: boolean;
+  },
+  font: import('pdf-lib').PDFFont,
+  fontReg: import('pdf-lib').PDFFont,
+  rgb: typeof import('pdf-lib').rgb
+) {
+  const annotated = annotateDuplicateNames(meta.recipients);
+  const pageCount = Math.max(1, Math.ceil(annotated.length / MANIFEST_NAMES_PER_PAGE));
+  for (let p = 0; p < pageCount; p += 1) {
+    const slice = annotated.slice(p * MANIFEST_NAMES_PER_PAGE, (p + 1) * MANIFEST_NAMES_PER_PAGE);
+    drawManifestPage(addPage(), {
+      comboLine: meta.comboLine,
+      totalOrders: meta.totalOrders,
+      totalUnits: meta.totalUnits,
+      recipients: slice,
+      pageIndex: p,
+      pageCount,
+      isTest: meta.isTest,
+      font,
+      fontReg,
+      rgb,
+    });
+  }
+}
+
+// Build a short item-combo summary line (e.g. "Booster Gel x1 + HU-10 x2")
+// for the manifest header from the representative entry of a group.
+function buildComboSummaryLine(entry: PrintQueueEntry): { comboLine: string; totalUnits: number } {
+  const lines = collapseQueueSkuLines(entry);
+  const cards = lines.length > 0
+    ? lines
+    : [{ sku: entry.primarySku ?? 'UNKNOWN SKU', description: String(entry.itemDescription ?? '').trim(), qty: Math.max(1, Math.trunc(Number(entry.orderQty) || 1)) }];
+  const comboLine = cards
+    .map((c) => `${c.description || c.sku} x${c.qty}`)
+    .join(' + ');
+  const totalUnits = cards.reduce((sum, c) => sum + c.qty, 0);
+  return { comboLine, totalUnits };
+}
+
+// PS-073: test-only renderer. Builds the header (+ manifest pages when
+// needed) for a single batch group using IN-MEMORY fixture data so guards
+// can certify layout/behaviour WITHOUT fetching labels, buying postage,
+// touching the network, or reading the database. Fixtures must use fake
+// names only.
+export async function renderBatchHeaderPdfForTest(input: {
+  entry: PrintQueueEntry;
+  totalOrders: number;
+  recipients: BatchRecipient[];
+  isTest?: boolean;
+  threshold?: number;
+}): Promise<Uint8Array> {
+  const { PDFDocument, rgb, StandardFonts } = await import('pdf-lib');
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.HelveticaBold);
+  const fontReg = await doc.embedFont(StandardFonts.Helvetica);
+
+  const sortedRecipients = sortBatchRecipients(input.recipients);
+  const headerPage = doc.addPage([288, 432]);
+  const { manifestNeeded } = drawHeader(
+    headerPage,
+    input.entry,
+    input.totalOrders,
+    font,
+    fontReg,
+    rgb,
+    input.isTest ?? false,
+    sortedRecipients,
+    input.threshold ?? BATCH_NAMES_HEADER_THRESHOLD
+  );
+
+  if (manifestNeeded) {
+    const { comboLine, totalUnits } = buildComboSummaryLine(input.entry);
+    addBatchManifestPages(
+      () => doc.addPage([288, 432]),
+      {
+        recipients: sortedRecipients,
+        totalOrders: input.totalOrders,
+        totalUnits,
+        comboLine,
+        isTest: input.isTest ?? false,
+      },
+      font,
+      fontReg,
+      rgb
+    );
+  }
+
+  return doc.save();
 }

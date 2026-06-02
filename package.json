@@ -25,6 +25,7 @@
     "guard:source-of-truth": "node scripts/source-of-truth-guard.mjs",
     "guard:shipping-certification": "node scripts/shipping-certification-guard.mjs",
     "guard:site-actions": "node scripts/site-action-functionality-guard.mjs",
+    "guard:print-queue-batch-names": "node scripts/print-queue-batch-names-guard.mjs && tsx scripts/print-queue-batch-names-behavior.ts",
     "watchdog:production": "node scripts/production-watchdog.mjs",
     "diagnose:production-timing": "tsx scripts/capture-production-timing.ts",
     "test:web-bundle-budget": "npm run build:web && node scripts/web-bundle-budget-guard.mjs",
