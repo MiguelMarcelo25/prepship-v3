@@ -1547,9 +1547,17 @@ function drawHeader(
   const visibleCards = cards.slice(0, MAX_HEADER_CARDS);
   const hiddenCardCount = cards.length - visibleCards.length;
 
+  // Card/text sizes scale down as the SKU count grows so the mock's bold
+  // card look is preserved for the common 1-2 SKU case while many-SKU
+  // combos still fit. (Big, prominent product-name cards per the design.)
+  const n = cards.length;
+  const cardH = n <= 2 ? 42 : n === 3 ? 38 : n <= 5 ? 33 : 28;
+  const cardGap = n <= 3 ? 8 : n <= 5 ? 6 : 5;
+  const titleSize = n <= 2 ? 18 : n === 3 ? 16 : n <= 5 ? 14 : 12.5;
+  const skuSize = n <= 3 ? 10.5 : 9;
+  const qtySize = n <= 2 ? 19 : n <= 5 ? 16 : 15;
+
   let y = height - 40 - 12;
-  const cardH = cards.length >= 6 ? 28 : cards.length >= 4 ? 31 : 34;
-  const cardGap = cards.length >= 5 ? 5 : 6;
   for (const item of visibleCards) {
     const boxW = width - pad * 2;
     page.drawRectangle({
@@ -1562,16 +1570,17 @@ function drawHeader(
       color: rgb(0.94, 0.98, 1),
     });
     const qtyText = `x${item.qty}`;
-    const qtySize = 16;
     const qtyW = font.widthOfTextAtSize(qtyText, qtySize);
-    const titleSize = 14;
-    const title = fitText(item.description || item.sku, titleSize, font, boxW - 22 - qtyW - 8);
-    page.drawText(title, { x: pad + 11, y: y - 15, size: titleSize, font, color: ink });
-    page.drawText(qtyText, { x: pad + boxW - 11 - qtyW, y: y - 15, size: qtySize, font, color: ink });
-    page.drawText(fitText(`sku: ${item.sku}`, 9, fontReg, boxW - 22), {
-      x: pad + 11,
-      y: y - cardH + 6,
-      size: 9,
+    // Product NAME is the prominent card title; sku sits smaller below.
+    const titleBaseline = y - Math.round(cardH * 0.46);
+    const skuBaseline = y - cardH + Math.round(skuSize * 0.7) + 5;
+    const title = fitText(item.description || item.sku, titleSize, font, boxW - 24 - qtyW - 8);
+    page.drawText(title, { x: pad + 12, y: titleBaseline, size: titleSize, font, color: ink });
+    page.drawText(qtyText, { x: pad + boxW - 12 - qtyW, y: titleBaseline, size: qtySize, font, color: ink });
+    page.drawText(fitText(`sku: ${item.sku}`, skuSize, fontReg, boxW - 24), {
+      x: pad + 12,
+      y: skuBaseline,
+      size: skuSize,
       font: fontReg,
       color: sub,
     });
@@ -1604,7 +1613,7 @@ function drawHeader(
   const regionTop = y;
   const regionBottom = 12;
   const plan = planBatchNamesDisplay(recipients.length, threshold);
-  const nameRowH = 11;
+  const nameRowH = 11.5;
   const namesTitleH = 18;
   const listBoxPad = 8;
   const cols = 2;
@@ -1622,7 +1631,7 @@ function drawHeader(
   // below a legible floor, spill the whole list to a Batch Manifest page
   // and show a pointer instead — this honours "do not shrink primary
   // picking/order-count text to make names fit".
-  const MIN_COUNT_REGION = 64;
+  const MIN_COUNT_REGION = 56;
   let reservedBottom = (renderNamesOnHeader ? namesZoneH : 0) + (manifestPointer ? pointerH : 0);
   let countRegionBottom = regionBottom + reservedBottom + (reservedBottom > 0 ? 6 : 0);
   if (renderNamesOnHeader && regionTop - countRegionBottom < MIN_COUNT_REGION) {
@@ -1664,7 +1673,7 @@ function drawHeader(
     page.drawText(safePdfText(`Names in this batch (${recipients.length})`), {
       x: pad,
       y: zoneTop - 13,
-      size: 12,
+      size: 12.5,
       font,
       color: ink,
     });
@@ -1681,11 +1690,11 @@ function drawHeader(
       color: rgb(0.99, 0.99, 0.99),
     });
     const colW = (width - pad * 2) / cols;
-    const nameSize = 8.5;
+    const nameSize = 9;
     recipients.forEach((recipient, i) => {
       const col = i % cols;
       const rowIdx = Math.floor(i / cols);
-      const tx = pad + 9 + col * colW;
+      const tx = pad + 10 + col * colW;
       const ty = listTop - 11 - rowIdx * nameRowH;
       page.drawText(fitText(recipient.name.toLocaleUpperCase(), nameSize, fontReg, colW - 16), {
         x: tx,

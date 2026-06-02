@@ -194,6 +194,25 @@ async function main() {
   check('all-missing-name batch renders without error', docMissing.getPageCount() === 1);
   check('missing names use Order fallback', recipientsMissing.every((r) => r.name.startsWith('Order ')));
 
+  // Real-world small batch shape (single SKU, x3, 3 names) — mirrors the
+  // live TEST batches to certify the scaled-up card look on a tiny roster.
+  const pdfSmall = await renderBatchHeaderPdfForTest({
+    entry: fixtureEntry({
+      primarySku: 'TEST-PACK',
+      itemDescription: 'TEST Accessory Pack - Mockup Kit',
+      orderQty: 3,
+      multiSkuData: null,
+    }),
+    totalOrders: 3,
+    recipients: ['TEST USER 01', 'TESTING CUSTOMER A', 'TESTING BUYER'].map((name, i) =>
+      resolveRecipientDisplayName({ shipToName: name, orderNumber: `FAKE-${5000 + i}` })
+    ),
+    isTest: true,
+  });
+  const docSmall = await PDFDocument.load(pdfSmall);
+  check('single-SKU small batch renders one header page', docSmall.getPageCount() === 1);
+  fs.writeFileSync(path.join(outDir, 'header-small.pdf'), pdfSmall);
+
   // High-SKU combo (8 SKUs) -> cards are capped with a "+N more" line and
   // the ORDERS count must NOT be pushed off-page / overlap (M2 regression).
   const eightSkus = Array.from({ length: 8 }, (_u, i) => ({
