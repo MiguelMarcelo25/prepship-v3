@@ -13,7 +13,9 @@ PARITY_PLAN_ORDER_LIST.md
 
 # Working artifacts (logs, generated reports, ad-hoc analysis output)
 outputs/
-reports/
+reports/*
+!reports/security-readiness/
+!reports/security-readiness/latest.md
 
 # One-off research artifacts (raw API field tables, etc.)
 ShipStation_API_Field_Tables.xlsx
