@@ -2334,6 +2334,7 @@ export default function RateBrowserModal({
                   >
                     <option value="none">None</option>
                     <option value="carrier">Carrier</option>
+                    <option value="parcelguard">Parcel Guard</option>
                     <option value="shipsurance">Shipsurance</option>
                   </select>
                   <input

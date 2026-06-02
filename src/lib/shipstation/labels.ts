@@ -155,7 +155,13 @@ export function extractShipstationLabelUrl(labelDownload: unknown): string | nul
   return pick(labelDownload);
 }
 
-export async function ssCreateLabel(input: CreateExternalLabelInput): Promise<CreatedExternalLabel> {
+/**
+ * Build the ShipStation v2 POST /v2/labels request body. Pure (no network) so
+ * the payload SHAPE — especially PS-072's package-level insured_value vs
+ * shipment-level insurance_provider — is unit-testable offline without buying
+ * postage. ssCreateLabel uses this.
+ */
+export function buildSsLabelRequestBody(input: CreateExternalLabelInput) {
   const options = normalizeShippingOptions(input);
   const pkg: Record<string, unknown> = {
     weight: { value: Number(input.weightOz.toFixed(2)), unit: 'ounce' },
@@ -169,8 +175,15 @@ export async function ssCreateLabel(input: CreateExternalLabelInput): Promise<Cr
       unit: 'inch',
     };
   }
+  const hasInsurance = options.insuranceProvider !== 'none' && options.insuredValue != null;
+  if (hasInsurance) {
+    // PS-072: ShipStation v2 schema requires insured_value at the PACKAGE level
+    // (insurance_provider stays shipment-level). This was previously emitted as a
+    // shipment-level sibling, where v2 may ignore it — leaving labels uninsured.
+    pkg.insured_value = { amount: options.insuredValue, currency: 'usd' };
+  }
 
-  const body = {
+  return {
     shipment: {
       carrier_id: input.carrierId,
       service_code: input.serviceCode,
@@ -179,15 +192,7 @@ export async function ssCreateLabel(input: CreateExternalLabelInput): Promise<Cr
       ship_to: toAddress(input.shipTo),
       packages: [pkg],
       confirmation: options.confirmation,
-      ...(options.insuranceProvider !== 'none' && options.insuredValue != null
-        ? {
-            insurance_provider: options.insuranceProvider,
-            insured_value: {
-              amount: options.insuredValue,
-              currency: 'usd',
-            },
-          }
-        : {}),
+      ...(hasInsurance ? { insurance_provider: options.insuranceProvider } : {}),
       external_order_id: input.orderNumber ?? undefined,
     },
     is_return_label: false,
@@ -195,6 +200,10 @@ export async function ssCreateLabel(input: CreateExternalLabelInput): Promise<Cr
     label_format: 'pdf',
     label_download_type: 'url',
   };
+}
+
+export async function ssCreateLabel(input: CreateExternalLabelInput): Promise<CreatedExternalLabel> {
+  const body = buildSsLabelRequestBody(input);
 
   const payload = await ssRequest<Record<string, unknown>>('/v2/labels', {
     method: 'POST',

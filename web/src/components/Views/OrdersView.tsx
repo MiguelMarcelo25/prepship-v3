@@ -330,7 +330,15 @@ function normalizeInsuranceForRates(provider: string | null | undefined, value: 
     return { insuranceProvider: 'none', insuredValue: null as number | null }
   }
   return {
-    insuranceProvider: insuranceProvider === 'shipsurance' ? 'shipsurance' : 'carrier',
+    // PS-072: preserve 'parcelguard' (HUGRAB USPS Ground) and 'shipsurance';
+    // everything else maps to carrier insurance. Previously any non-shipsurance
+    // provider collapsed to 'carrier', silently destroying the parcelguard default.
+    insuranceProvider:
+      insuranceProvider === 'shipsurance'
+        ? 'shipsurance'
+        : insuranceProvider === 'parcelguard' || insuranceProvider === 'parcel_guard' || insuranceProvider === 'parcel guard'
+          ? 'parcelguard'
+          : 'carrier',
     insuredValue: Math.round(insuredValue * 100) / 100,
   }
 }
@@ -8436,6 +8444,7 @@ export default function OrdersView({
                   }}>
                     <option value="none">None</option>
                     <option value="carrier">Carrier (up to $100)</option>
+                    <option value="parcelguard">Parcel Guard</option>
                     <option value="shipsurance">Shipsurance</option>
                   </select>
                   <input

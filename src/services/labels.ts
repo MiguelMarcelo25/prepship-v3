@@ -36,6 +36,7 @@ import { addMockLabelSignature } from '../lib/mock-label-access';
 import { normalizeShippingOptions } from '../lib/shipping-options';
 import {
   assertShippingServiceEligible,
+  resolveEffectiveInsurance,
   type ShippingServiceDescriptor,
 } from '../lib/shipping-service-eligibility';
 import { loadShippingAutomationRules } from './shipping-automation';
@@ -909,14 +910,32 @@ export async function createLabelV2(body: CreateLabelInputDto): Promise<CreateLa
       .limit(1);
     clientId = match?.id ?? null;
   }
-  const options = normalizeShippingOptions(body);
-  await assertLabelServiceEligibleForOrder(order, clientId, {
+  const serviceDescriptor: ShippingServiceDescriptor = {
     carrierCode: body.carrierCode ?? null,
     carrierName: body.carrierName ?? null,
+    provider: body.carrierCode ?? null,
     serviceCode: body.serviceCode,
     serviceName: body.serviceName ?? body.serviceCode,
     serviceType: body.serviceType ?? null,
-  }, options);
+  };
+  // PS-072: backend source of truth for effective insurance. Applies the HUGRAB
+  // default (carrier/$100 for UPS Ground, parcelguard/$100 for USPS Ground),
+  // preserves an operator-selected higher value, and NEVER touches Ground
+  // Saver/SurePost (PS-057). The UI cannot bypass this — single, batch, and
+  // print-queue label creation all funnel through createLabelV2. Run BEFORE the
+  // eligibility assert so the assert sees the defaulted values.
+  const baseOptions = normalizeShippingOptions(body);
+  const effectiveInsurance = resolveEffectiveInsurance(
+    { clientId, storeId: order.storeId ?? null },
+    serviceDescriptor,
+    baseOptions,
+  );
+  const options = {
+    ...baseOptions,
+    insuranceProvider: effectiveInsurance.insuranceProvider,
+    insuredValue: effectiveInsurance.insuredValue,
+  };
+  await assertLabelServiceEligibleForOrder(order, clientId, serviceDescriptor, options);
   // Hard guard: any order under an isTest client is forced into offline-mock
   // mode regardless of what the UI sent. Prevents a test row from ever
   // spending real postage.

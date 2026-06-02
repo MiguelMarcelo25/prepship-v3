@@ -1,4 +1,9 @@
+import { normalizeInsurance, type NormalizedInsuranceProvider } from './shipping-options';
+
 export const SHIPPING_SERVICE_ELIGIBILITY_VERSION = 'ps-057-hugrab-ground-saver-v1';
+
+// PS-072: HUGRAB default insured value (USD) for supported ground services.
+export const HUGRAB_DEFAULT_INSURED_VALUE = 100;
 
 export const HUGRAB_GROUND_SAVER_BLOCK_REASON =
   'UPS Ground Saver is disabled for HUGRAB orders. Choose UPS Ground or another service.';
@@ -186,6 +191,97 @@ export function isHugrabCarrierDisableProtected(
   service: ShippingServiceDescriptor | null | undefined,
 ): boolean {
   return isHugrabShippingContext(context) && isUpsCarrierAccount(service);
+}
+
+// PS-072: detect UPS Ground (NOT Ground Saver / SurePost, which PS-057 blocks).
+export function isUpsGroundService(service: ShippingServiceDescriptor | null | undefined): boolean {
+  if (!service) return false;
+  if (isUpsGroundSaverOrSurePostService(service)) return false; // PS-057 — never default insurance here
+  const isUps = [service.carrierCode, service.carrierName, service.provider]
+    .map(normalizeServiceIdentity)
+    .some((value) => value === 'ups' || value.includes('ups'));
+  if (!isUps) return false;
+  const svc = [service.serviceCode, service.serviceName, service.serviceType]
+    .map(normalizeServiceIdentity)
+    .join(' ');
+  return svc.includes('upsground') || svc.includes('ground');
+}
+
+// PS-072: detect USPS Ground / Ground Advantage (NOT a UPS service).
+export function isUspsGroundService(service: ShippingServiceDescriptor | null | undefined): boolean {
+  if (!service) return false;
+  if (isUpsGroundSaverOrSurePostService(service)) return false;
+  const isUsps = [service.carrierCode, service.carrierName, service.provider]
+    .map(normalizeServiceIdentity)
+    .some((value) => value.includes('usps') || value.includes('stamps') || value === 'uspsdotcom');
+  if (!isUsps) return false;
+  const svc = [service.serviceCode, service.serviceName, service.serviceType]
+    .map(normalizeServiceIdentity)
+    .join(' ');
+  return svc.includes('groundadvantage') || svc.includes('ground') || svc.includes('parcelselect');
+}
+
+export type EffectiveInsurance = {
+  insuranceProvider: NormalizedInsuranceProvider;
+  insuredValue: number | null;
+  /** Where the effective value came from. */
+  source: 'none' | 'operator' | 'hugrab-default';
+  reason?: string;
+};
+
+/**
+ * PS-072 — single source of truth for the effective insurance on a shipment.
+ * Both rate quoting and label purchase MUST call this so the displayed price and
+ * the purchased label agree.
+ *
+ * Rules:
+ *  - Non-HUGRAB context: pass the operator's selection through untouched.
+ *  - HUGRAB + UPS Ground            -> carrier, $100 (or higher operator value).
+ *  - HUGRAB + USPS Ground/Advantage -> parcelguard, $100 (or higher operator value).
+ *  - HUGRAB + Ground Saver/SurePost -> NEVER defaulted (PS-057); operator value
+ *    passed through (evaluateShippingServiceEligibility blocks insurance there).
+ *  - HUGRAB + any other service     -> operator selection passed through.
+ *  - An operator-selected higher value (e.g. $250) is preserved via Math.max.
+ *  - An operator selecting "none" on a HUGRAB ground service is still forced to
+ *    the $100 default (HUGRAB policy).
+ */
+export function resolveEffectiveInsurance(
+  context: ShippingServiceEligibilityContext | null | undefined,
+  service: ShippingServiceDescriptor | null | undefined,
+  operatorSelection?: { insuranceProvider?: unknown; insuredValue?: unknown; insurance?: unknown; insuranceValue?: unknown } | null,
+): EffectiveInsurance {
+  const operator = normalizeInsurance({
+    insuranceProvider: operatorSelection?.insuranceProvider ?? operatorSelection?.insurance,
+    insuredValue: operatorSelection?.insuredValue ?? operatorSelection?.insuranceValue,
+  });
+  const passthrough: EffectiveInsurance = {
+    insuranceProvider: operator.insuranceProvider,
+    insuredValue: operator.insuredValue,
+    source: operator.insuranceProvider === 'none' ? 'none' : 'operator',
+  };
+
+  if (!isHugrabShippingContext(context)) return passthrough;
+  // PS-057: Ground Saver / SurePost are disabled for HUGRAB and cannot carry
+  // insurance — never apply the default to them.
+  if (isUpsGroundSaverOrSurePostService(service)) return passthrough;
+
+  const upsGround = isUpsGroundService(service);
+  const uspsGround = isUspsGroundService(service);
+  if (!upsGround && !uspsGround) return passthrough;
+
+  const provider: NormalizedInsuranceProvider = upsGround ? 'carrier' : 'parcelguard';
+  const operatorValue = operator.insuredValue ?? 0;
+  const insuredValue = Number(Math.max(HUGRAB_DEFAULT_INSURED_VALUE, operatorValue).toFixed(2));
+  const keptOperatorHigher = operatorValue > HUGRAB_DEFAULT_INSURED_VALUE;
+
+  return {
+    insuranceProvider: provider,
+    insuredValue,
+    source: keptOperatorHigher ? 'operator' : 'hugrab-default',
+    reason: `HUGRAB default $${HUGRAB_DEFAULT_INSURED_VALUE} insurance via ${
+      upsGround ? 'carrier (UPS Ground)' : 'Parcel Guard (USPS Ground)'
+    }`,
+  };
 }
 
 export function evaluateShippingServiceEligibility(

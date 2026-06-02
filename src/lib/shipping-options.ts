@@ -9,7 +9,7 @@ export type NormalizedConfirmation =
   | 'delivery_code'
   | 'age_verification_16_plus';
 
-export type NormalizedInsuranceProvider = 'none' | 'carrier' | 'shipsurance';
+export type NormalizedInsuranceProvider = 'none' | 'carrier' | 'shipsurance' | 'parcelguard';
 
 export type NormalizedShippingOptions = {
   confirmation: NormalizedConfirmation;
@@ -42,6 +42,12 @@ const INSURANCE_ALIASES = new Map<string, NormalizedInsuranceProvider>([
   ['provider', 'carrier'],
   ['shipstation', 'carrier'],
   ['shipsurance', 'shipsurance'],
+  // PS-072: ShipStation Parcel Guard (third-party). Must map to itself and
+  // survive re-normalization (normalizeShippingOptions runs twice on the label
+  // path), so it can never silently collapse to 'none' or 'carrier'.
+  ['parcelguard', 'parcelguard'],
+  ['parcel_guard', 'parcelguard'],
+  ['parcel guard', 'parcelguard'],
 ]);
 
 function normalizedKey(value: unknown) {

@@ -12,13 +12,15 @@ import {
 import type { CarriersResponse } from '../lib/shipstation/types';
 import { loadClientCredentials } from '../lib/shipstation/credentials';
 import { getDefaultShipFrom } from '../lib/ship-from';
-import { normalizeConfirmation, normalizeShippingOptions } from '../lib/shipping-options';
+import { normalizeConfirmation, normalizeInsurance, normalizeShippingOptions } from '../lib/shipping-options';
 import {
+  HUGRAB_DEFAULT_INSURED_VALUE,
   SHIPPING_SERVICE_ELIGIBILITY_VERSION,
   describeShippingService,
   evaluateShippingServiceEligibility,
   filterCarrierAccountsForAutomation,
   filterEligibleShippingServices,
+  isHugrabShippingContext,
   type ShippingAutomationRule,
   type ShippingServiceEligibilityContext,
   type ShippingServiceDescriptor,
@@ -349,6 +351,25 @@ export async function resolveRateInput(input: RateInput): Promise<RateInput> {
       carrierName: carrier.nickname,
     }),
   );
+  // PS-072: HUGRAB ground services carry a $100 default insurance. The rate
+  // estimate is multi-service (a single insurance provider per request), so we
+  // quote with carrier insurance at $100 when the operator selected none; the
+  // label path (createLabelV2 -> resolveEffectiveInsurance) refines the provider
+  // per service (carrier for UPS Ground, Parcel Guard for USPS Ground). This
+  // keeps the cache fingerprint + displayed rate insured so a stale no-insurance
+  // rate can never be reused for an order that will be insured at label time.
+  // An operator-selected value is preserved.
+  const operatorInsurance = normalizeInsurance(input);
+  let insuranceProvider = operatorInsurance.insuranceProvider as string;
+  let insuredValue = operatorInsurance.insuredValue;
+  if (
+    operatorInsurance.insuranceProvider === 'none' &&
+    isHugrabShippingContext({ clientId: context.clientId, storeId: context.storeId })
+  ) {
+    insuranceProvider = 'carrier';
+    insuredValue = HUGRAB_DEFAULT_INSURED_VALUE;
+  }
+
   return {
     ...input,
     toZip: normalizeZip(input.toZip),
@@ -357,6 +378,8 @@ export async function resolveRateInput(input: RateInput): Promise<RateInput> {
     clientId: context.clientId,
     apiKeyV2: context.apiKeyV2,
     sourceClientId: context.sourceClientId,
+    insuranceProvider,
+    insuredValue,
     automationRulesVersion: shippingAutomationRulesFingerprint(automationRules),
     carrierIds: allowedCarriers.map((carrier) => carrier.carrier_id).sort(),
   };
