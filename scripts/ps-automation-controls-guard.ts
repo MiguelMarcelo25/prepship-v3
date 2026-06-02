@@ -5,6 +5,7 @@ import {
   evaluateShippingServiceEligibility,
   filterCarrierAccountsForAutomation,
   filterEligibleShippingServices,
+  isHugrabCarrierDisableProtected,
   type ShippingAutomationRule,
 } from '../src/lib/shipping-service-eligibility';
 import { rateCacheKey } from '../src/services/rates';
@@ -44,6 +45,44 @@ assert.deepEqual(
   visibleCarriers.map((carrier) => carrier.carrier_id),
   ['se-enabled'],
   'Automation carrier rules must hide disabled carrier accounts from rate surfaces',
+);
+
+const hugrabVisibleCarriers = filterCarrierAccountsForAutomation(
+  [
+    { carrier_id: 'se-hugrab-ups', carrier_code: 'ups', nickname: 'HUGRAB UPS' },
+  ],
+  { clientId: 4, clientName: 'HUGRAB', storeId: 378060 },
+  [
+    {
+      type: 'carrier',
+      clientId: 4,
+      storeId: 378060,
+      carrierId: 'se-hugrab-ups',
+      carrierCode: 'ups',
+      disabled: true,
+      reason: 'Accidental carrier disable',
+    },
+  ],
+  (carrier) => ({
+    carrierId: carrier.carrier_id,
+    carrierCode: carrier.carrier_code,
+    carrierName: carrier.nickname,
+  }),
+);
+
+assert.deepEqual(
+  hugrabVisibleCarriers.map((carrier) => carrier.carrier_id),
+  ['se-hugrab-ups'],
+  'PS-057 must not allow Automation carrier-level disables to hide HUGRAB UPS Ground-capable accounts',
+);
+
+assert.equal(
+  isHugrabCarrierDisableProtected(
+    { clientId: 4, clientName: 'HUGRAB', storeId: 378060 },
+    { carrierCode: 'ups', carrierName: 'HUGRAB UPS' },
+  ),
+  true,
+  'HUGRAB UPS carriers must be protected from accidental carrier-level disable',
 );
 
 assert.match(
@@ -109,6 +148,7 @@ const routeSource = readFileSync('src/routes/automation.ts', 'utf8');
 assert.match(routeSource, /requireInternalPermission\('settings:read'\)/, 'Automation reads must require internal settings read');
 assert.match(routeSource, /requireInternalPermission\('settings:write'\)/, 'Automation writes must require internal settings write');
 assert.match(routeSource, /SHIPPING_AUTOMATION_RULES_KEY/, 'Automation route must expose the settings-backed rules key');
+assert.match(routeSource, /PS-057 locks services, not whole UPS carrier accounts/, 'Automation route must reject HUGRAB UPS carrier-level disable');
 
 const automationServiceSource = readFileSync('src/services/shipping-automation.ts', 'utf8');
 assert.match(automationServiceSource, /shipping_automation_rules/, 'Automation rules must persist in the settings table');

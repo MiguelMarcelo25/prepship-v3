@@ -61,7 +61,9 @@ import { ToastContext } from '../../contexts/ToastContext'
 import { useMarkups } from '../../contexts/MarkupsContext'
 import type { MarkupType } from '../../types/markups'
 import {
+  HUGRAB_CARRIER_DISABLE_PROTECTED_REASON,
   HUGRAB_GROUND_SAVER_BLOCK_REASON,
+  isHugrabCarrierDisableProtected,
 } from '../../../../src/lib/shipping-service-eligibility'
 import {
   buildSettingsMarkupRows,
@@ -1475,6 +1477,18 @@ export default function SettingsView() {
                                           const carrierEnabled = !carrier.disabled
                                           const carrierSavingKey = `carrier:${row.store.storeId}:${carrierId}`
                                           const isCarrierSaving = automationSavingKey === carrierSavingKey
+                                          const carrierDisableProtected = isHugrabCarrierDisableProtected(
+                                            {
+                                              clientId: row.store.clientId,
+                                              clientName: row.store.clientName,
+                                              storeId: row.store.storeId,
+                                            },
+                                            {
+                                              carrierId,
+                                              carrierCode: code,
+                                              carrierName: label,
+                                            },
+                                          )
                                           return (
                                             <div
                                               key={`${row.store.storeId}:${code}:${label}:${index}`}
@@ -1484,13 +1498,14 @@ export default function SettingsView() {
                                                 <label className="inline-flex items-center gap-2 rounded-md bg-surface px-2 py-1 text-[11.5px] font-bold text-ink ring-1 ring-line">
                                                   <input
                                                     type="checkbox"
-                                                    checked={carrierEnabled}
-                                                    disabled={Boolean(isCarrierSaving || !carrierId)}
+                                                    checked={carrierDisableProtected ? true : carrierEnabled}
+                                                    disabled={Boolean(isCarrierSaving || !carrierId || carrierDisableProtected)}
                                                     onChange={(event) => void toggleAutomationCarrier(row, carrier, event.target.checked)}
                                                     className="h-3.5 w-3.5 rounded border-line text-brand focus:ring-brand"
+                                                    title={carrierDisableProtected ? HUGRAB_CARRIER_DISABLE_PROTECTED_REASON : undefined}
                                                   />
                                                   {isCarrierSaving ? <Loader2 size={11} className="animate-spin text-brand" /> : null}
-                                                  <span>{carrierEnabled ? 'Enabled' : 'Disabled'}</span>
+                                                  <span>{carrierDisableProtected ? 'Protected' : carrierEnabled ? 'Enabled' : 'Disabled'}</span>
                                                 </label>
                                                 <span
                                                   className="inline-flex max-w-full items-center gap-1 rounded-full bg-surface-2 px-2.5 py-1 text-[11.5px] font-bold text-ink ring-1 ring-line"
@@ -1507,6 +1522,14 @@ export default function SettingsView() {
                                                 {carrier.disabledReason ? (
                                                   <span className="rounded-full bg-rose-50 px-2 py-0.5 text-[10.5px] font-semibold text-rose-800 ring-1 ring-rose-200">
                                                     {carrier.disabledReason}
+                                                  </span>
+                                                ) : null}
+                                                {carrierDisableProtected ? (
+                                                  <span
+                                                    className="rounded-full bg-brand-bg px-2 py-0.5 text-[10.5px] font-semibold text-brand ring-1 ring-brand/20"
+                                                    title={HUGRAB_CARRIER_DISABLE_PROTECTED_REASON}
+                                                  >
+                                                    PS-057 carrier protected
                                                   </span>
                                                 ) : null}
                                               </div>

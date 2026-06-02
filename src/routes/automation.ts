@@ -6,7 +6,9 @@ import { clients } from '../db/schema/clients';
 import { requireInternalPermission } from '../middleware/auth';
 import {
   HUGRAB_GROUND_SAVER_BLOCK_REASON,
+  HUGRAB_CARRIER_DISABLE_PROTECTED_REASON,
   evaluateShippingServiceEligibility,
+  isHugrabCarrierDisableProtected,
   isHugrabShippingContext,
   isUpsGroundSaverOrSurePostService,
   type ShippingAutomationRule,
@@ -122,6 +124,14 @@ function carrierDisabledReason(
   store: AutomationStoreRow,
   rules: ShippingAutomationRule[],
 ): string | null {
+  if (
+    isHugrabCarrierDisableProtected(
+      { clientId: store.clientId, clientName: store.clientName, storeId: store.storeId },
+      { carrierId: carrier.carrier_id, carrierCode: carrier.carrier_code },
+    )
+  ) {
+    return null;
+  }
   const matched = rules.find((rule) => (
     rule.type === 'carrier' &&
     rule.disabled &&
@@ -209,6 +219,19 @@ app.patch(
   zValidator('json', carrierRuleBody),
   async (c) => {
     const body = c.req.valid('json');
+    if (
+      body.disabled === true &&
+      isHugrabCarrierDisableProtected(
+        { clientId: body.clientId, storeId: body.storeId ?? null },
+        { carrierId: body.carrierId, carrierCode: body.carrierCode ?? null },
+      )
+    ) {
+      return c.json({
+        error: HUGRAB_CARRIER_DISABLE_PROTECTED_REASON,
+        locked: true,
+        reason: 'PS-057 locks services, not whole UPS carrier accounts',
+      }, 409);
+    }
     const rules = await upsertShippingAutomationRule({
       type: 'carrier',
       clientId: body.clientId,

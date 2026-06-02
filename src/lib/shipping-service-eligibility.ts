@@ -6,6 +6,9 @@ export const HUGRAB_GROUND_SAVER_BLOCK_REASON =
 export const UPS_GROUND_SAVER_INSURANCE_BLOCK_REASON =
   'Insurance is not available for UPS Ground Saver/SurePost. Choose UPS Ground or higher.';
 
+export const HUGRAB_CARRIER_DISABLE_PROTECTED_REASON =
+  'PS-057 locks services, not whole UPS carrier accounts. Leave the carrier enabled and keep Ground Saver/SurePost disabled.';
+
 const HUGRAB_CLIENT_IDS = new Set([4]);
 const HUGRAB_STORE_IDS = new Set([378060]);
 const HUGRAB_NORMALIZED_NAMES = new Set(['hugrab']);
@@ -169,6 +172,22 @@ export function isUpsGroundSaverOrSurePostService(
   return identities.some((value) => value.includes('groundsaver') || value.includes('surepost'));
 }
 
+export function isUpsCarrierAccount(service: ShippingServiceDescriptor | null | undefined): boolean {
+  if (!service) return false;
+  return [
+    service.carrierCode,
+    service.carrierName,
+    service.provider,
+  ].map(normalizeServiceIdentity).some((value) => value === 'ups' || value.includes('upswalleted'));
+}
+
+export function isHugrabCarrierDisableProtected(
+  context: ShippingServiceEligibilityContext | null | undefined,
+  service: ShippingServiceDescriptor | null | undefined,
+): boolean {
+  return isHugrabShippingContext(context) && isUpsCarrierAccount(service);
+}
+
 export function evaluateShippingServiceEligibility(
   context: ShippingServiceEligibilityContext | null | undefined,
   service: ShippingServiceDescriptor | null | undefined,
@@ -279,7 +298,8 @@ export function filterCarrierAccountsForAutomation<T>(
       rule.disabled === true &&
       rule.type === 'carrier' &&
       matchesContext(rule, context) &&
-      matchesCarrierRule(rule, descriptor)
+      matchesCarrierRule(rule, descriptor) &&
+      !isHugrabCarrierDisableProtected(context, descriptor)
     ));
     return !disabledRule;
   });
