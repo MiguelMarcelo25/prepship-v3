@@ -3809,18 +3809,20 @@ export const apiClient = {
   fetchBillingDetails(from: string, to: string, clientId: number): Promise<any[]> {
     const dateFrom = toIsoDayStart(from);
     const dateTo = toIsoDayEnd(to);
-    return safe(
-      'fetchBillingDetails',
-      async () => {
-        const res = await api.get<any>(
-          `/billing/details${qs({ dateFrom, dateTo, clientId, limit: 2000 })}`
-        );
-        if (Array.isArray(res)) return res;
-        if (Array.isArray(res?.data)) return res.data;
-        return [];
-      },
-      []
-    );
+    // PS-069: do NOT wrap this in safe(...,[]). A real /billing/details failure
+    // (500/403/timeout) must REJECT so BillingView's catch can show "details
+    // failed to load" instead of a false "No line items found" empty state. A
+    // genuine 200 with an empty or `{data:[]}` body still resolves to [] (a
+    // legitimate empty range). fetchBillingSummary already throws on error
+    // (throwOnError:true) — this brings details to the same honesty.
+    return (async () => {
+      const res = await api.get<any>(
+        `/billing/details${qs({ dateFrom, dateTo, clientId, limit: 2000 })}`
+      );
+      if (Array.isArray(res)) return res;
+      if (Array.isArray(res?.data)) return res.data;
+      return [];
+    })();
   },
 
   updateBillingDetail(orderId: number, clientId: number, data: Record<string, unknown>): Promise<any> {

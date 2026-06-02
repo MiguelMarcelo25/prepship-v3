@@ -652,3 +652,35 @@ export function getBillingInvoiceUrl(clientId: number, from: string, to: string)
   })
   return `/api/billing/invoice?${params.toString()}`
 }
+
+// PS-069 — decide what the Line Items panel should render, so a Summary row that
+// claims billed orders can never silently show the normal "No line items found"
+// empty state. Pure + unit-tested in scripts/ps-069-billing-detail-consistency-guard.ts.
+//
+//   loading  → spinner
+//   error    → a real /billing/details failure (must win even if Summary claims
+//              orders — never hide an API error as empty)
+//   rows     → details returned line rows
+//   mismatch → details returned ZERO rows but Summary claims orders/totals for
+//              this client/range (stale summary cache or mid-regenerate race) —
+//              show a warning + an operator next step (Update Billing/Regenerate)
+//   empty    → details empty AND Summary also zero — legitimate empty state
+export type BillingDetailPanelState = 'loading' | 'error' | 'rows' | 'mismatch' | 'empty'
+
+export function classifyBillingDetailPanel(input: {
+  loading: boolean
+  hasError: boolean
+  rowCount: number
+  summaryOrders: number
+  summaryTotal: number
+}): BillingDetailPanelState {
+  if (input.loading) return 'loading'
+  // An API error must surface even when Summary claims orders — the whole PS-069
+  // bug is that a failed details fetch was being shown as a normal empty table.
+  if (input.hasError) return 'error'
+  if (input.rowCount > 0) return 'rows'
+  // rowCount === 0 below: distinguish a real empty range from a stale/racey
+  // Summary that still claims this client has billed orders.
+  if ((input.summaryOrders ?? 0) > 0 || (input.summaryTotal ?? 0) > 0) return 'mismatch'
+  return 'empty'
+}

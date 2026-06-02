@@ -22,6 +22,7 @@ import {
   buildFetchRefRatesProgressText,
   buildFetchRefRatesStartText,
   buildGenerateBillingStatus,
+  classifyBillingDetailPanel,
   computeBillingDetailMetrics,
   createBillingConfigDraftMap,
   formatBillingDateTime,
@@ -402,6 +403,21 @@ export default function BillingView() {
     if (!detailState.clientId) return null
     return filteredSummaryRows.find((row) => Number(row.clientId) === Number(detailState.clientId)) ?? null
   }, [detailState.clientId, filteredSummaryRows])
+
+  // PS-069 — what the open client's Summary row claims, so a nonzero summary
+  // with zero detail rows renders a mismatch warning instead of a silent
+  // "No line items found".
+  const selectedSummaryOrders = Number(selectedDetailSummary?.orderCount ?? 0)
+  const selectedSummaryTotal = Number(
+    selectedDetailSummary?.fulfillmentFeeTotal ?? selectedDetailSummary?.grandTotal ?? selectedDetailSummary?.total ?? 0,
+  )
+  const detailPanelState = classifyBillingDetailPanel({
+    loading: detailState.loading,
+    hasError: Boolean(detailState.error),
+    rowCount: detailState.rows.length,
+    summaryOrders: selectedSummaryOrders,
+    summaryTotal: selectedSummaryTotal,
+  })
 
   const summaryTotals = useMemo(() => buildBillingSummaryTotals(filteredSummaryRows), [filteredSummaryRows])
   const visibleDetailColumns = useMemo(() => getVisibleBillingDetailColumns(detailColumnIds), [detailColumnIds])
@@ -1675,7 +1691,45 @@ export default function BillingView() {
                 (top-right of the table toolbar). Totals row goes
                 through Table's footerRow API. */}
             {detailState.error ? (
-              <div style={{ padding: 20, textAlign: 'center', color: 'var(--red)' }}>{detailState.error}</div>
+              <div
+                role="alert"
+                style={{
+                  padding: 14,
+                  border: '1px solid var(--red)',
+                  borderRadius: 8,
+                  background: 'rgba(239, 68, 68, 0.10)',
+                  color: 'var(--text)',
+                }}
+              >
+                <div style={{ fontWeight: 700, color: 'var(--red)' }}>Billing details failed to load.</div>
+                <div style={{ marginTop: 4, fontSize: 12 }}>{detailState.error}</div>
+                <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-muted)' }}>
+                  The Summary above may be cached. Try <strong>Update Billing</strong>, then reopen Line Items. If it
+                  persists, the details API is erroring — check server logs.
+                </div>
+              </div>
+            ) : detailPanelState === 'mismatch' ? (
+              <div
+                role="alert"
+                style={{
+                  padding: 14,
+                  border: '1px solid #f59e0b',
+                  borderRadius: 8,
+                  background: 'rgba(245, 158, 11, 0.10)',
+                  color: 'var(--text)',
+                }}
+              >
+                <div style={{ fontWeight: 700, color: '#b45309' }}>Summary / line-item mismatch</div>
+                <div style={{ marginTop: 4, fontSize: 12 }}>
+                  Summary shows {selectedSummaryOrders} order{selectedSummaryOrders === 1 ? '' : 's'}
+                  {selectedSummaryTotal > 0 ? ` (${formatBillingMoney(selectedSummaryTotal)})` : ''} for{' '}
+                  {detailState.clientName}, but no line items loaded for this date range.
+                </div>
+                <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-muted)' }}>
+                  The summary is likely stale, or billing was mid-regenerate. Click <strong>Update Billing</strong>{' '}
+                  (or <strong>Regenerate Range</strong>) to rebuild, then reopen Line Items.
+                </div>
+              </div>
             ) : (
               <Table<BillingDetailDto>
                 data={sortedDetailRows}
