@@ -152,11 +152,39 @@ Two independent bugs combined to make billing both **wrong** and
   and render a small "stale — regenerate" badge on the Box Cost cell in
   `BillingView`. Lower value now that price-save prompts the operator and
   Update Billing correctly re-prices.
-- **Summary cache windowing** — `billing_summary_metrics` stores
-  overlapping period windows; refreshing one window leaves others stale,
-  and old windows are never garbage-collected. The window the app reads
-  for a given date range is correct, but a sweep to prune stale windows
-  would tidy the cache. Pre-existing, separate from PS-068.
+- **Summary cache windowing — RESOLVED.** `billing_summary_metrics`
+  stores overlapping period windows keyed `(client_id, period_from,
+  period_to)`. The read path (`getFreshBillingSummaryMetrics`) already
+  matches one **exact** window + a 45-min TTL, so the app never sums
+  across windows — the window it serves for a given range is correct, and
+  a window older than the TTL is ignored and rebuilt on read.
+  - **GC is now wired** (commit `e061499b`):
+    `pruneBillingSummaryMetrics` removes orphaned (no active/non-system
+    client) and stale (`updated_at` older than retention, default 45 d)
+    windows. It runs periodically via `runReportingRefreshTick`
+    → `refreshReportingMetrics`, and on demand via
+    `scripts/prune-billing-summary-metrics.ts [--apply] [--days N]`.
+    So old/overlapping windows no longer accumulate unbounded.
+  - **Diagnostic corrected.** `ps-068-billing-pricing-diagnostic.ts`
+    previously compared the SUM of `package_total` across **all** windows
+    against the live detail SUM — a structurally guaranteed "MISMATCH"
+    because overlapping windows double-count. It now checks **per
+    window** (each cached `package_total` vs the live `package_cost` SUM
+    over that window's day range) and reports only **fresh-window**
+    mismatches as actionable; stale windows are labelled "rebuilds on
+    read". Verified on HUGRAB: all fresh served windows OK.
+  - The pure per-window invariant and the override exclusion (below) are
+    locked in `scripts/ps-068-billing-pricing-guard.ts`.
+
+- **Diagnostic no longer mistakes manual box overrides for stale prices.**
+  A `package_cost` row carrying a manual `billing_line_items.package_id`
+  override (set via the Edit Billing Detail modal) holds a deliberate
+  operator cost, not a generated price. The diagnostic now **excludes**
+  these from the "rows at old price" count and reports them separately,
+  so an intentional edit is never flagged as stale (real case: HUGRAB
+  order 1144598 overridden to pkg 212 "14x10x8" at $1.47). A blind
+  regenerate would *discard* such an override, so it is intentionally
+  left out of the staleness/regenerate path.
 - **Deactivated-client / price-row-deletion edge cases** — staleness
   detection filters `clients.active = true` (deactivated clients aren't
   regenerated anyway) and keys on `updated_at`, so *deleting* a custom

@@ -93,33 +93,56 @@ async function main(): Promise<void> {
   // ── 2. Distinct unit_cost values on existing package_cost rows for this box ─
   // Matched by client + the generated "Box (<pkgName>)" description, which is
   // how generateLineItems labels every package_cost row for this package.
+  // Rows carrying a manual billing-line box override (package_id is not null,
+  // set via the Edit Billing Detail modal) hold a DELIBERATE operator cost, not
+  // a stale generated price — they are reported separately and excluded from
+  // the staleness count below (see PS-068 override row: HUGRAB order 1144598
+  // overridden to pkg 212 "14x10x8" at $1.47).
   const desc = `Box (${pkgName})`;
-  const distinctRows = await sql<{ unit_cost: string; row_count: string }[]>`
-    select unit_cost, count(*) as row_count
+  const distinctRows = await sql<
+    { unit_cost: string; is_override: boolean; row_count: string }[]
+  >`
+    select unit_cost, (package_id is not null) as is_override, count(*) as row_count
     from billing_line_items
     where client_id = ${clientId}
       and line_type = 'package_cost'
       and description = ${desc}
-    group by unit_cost
+    group by unit_cost, (package_id is not null)
     order by unit_cost
   `;
 
-  console.log(`Existing package_cost rows for "${desc}":`);
-  if (distinctRows.length === 0) {
+  const generatedRows = distinctRows.filter((r) => !r.is_override);
+  const overrideRows = distinctRows.filter((r) => r.is_override);
+  const overrideCount = overrideRows.reduce((acc, r) => acc + n(r.row_count), 0);
+
+  console.log(`Existing GENERATED package_cost rows for "${desc}":`);
+  if (generatedRows.length === 0) {
     console.log('  (none generated)');
   } else {
     console.log('  unit_cost    rows');
-    for (const r of distinctRows) {
+    for (const r of generatedRows) {
       console.log(`  ${money(n(r.unit_cost)).padEnd(11)} ${r.row_count}`);
+    }
+  }
+  if (overrideCount > 0) {
+    console.log(
+      `  + ${overrideCount} manual box-override row(s) excluded from staleness` +
+        ` (deliberate Edit Billing Detail edits; unit_cost is operator-set):`
+    );
+    for (const r of overrideRows) {
+      console.log(`      override unit_cost ${money(n(r.unit_cost))} × ${r.row_count}`);
     }
   }
   line();
 
   // ── 3. Rows at OLD vs NEW/current effective price + regenerate delta ──────
+  // Only GENERATED rows (no manual override) are subject to price staleness; a
+  // regenerate re-prices these to the current effective price. Override rows are
+  // excluded — regenerating would DISCARD the operator's deliberate box edit.
   let atCurrent = 0;
   let atOld = 0;
   let oldSumDelta = 0; // sum over stale rows of (effective - existing)
-  for (const r of distinctRows) {
+  for (const r of generatedRows) {
     const uc = n(r.unit_cost);
     const cnt = n(r.row_count);
     if (effectivePrice !== null && Math.abs(uc - effectivePrice) <= EPS) {
@@ -133,50 +156,94 @@ async function main(): Promise<void> {
   console.log(
     `Rows at CURRENT effective price ${effectivePrice === null ? '(n/a)' : money(effectivePrice)}: ${atCurrent}`
   );
-  console.log(`Rows at a DIFFERENT (old) price                 : ${atOld}`);
+  console.log(`Generated rows at a DIFFERENT (old) price        : ${atOld}` +
+    `${overrideCount > 0 ? `  (+${overrideCount} manual override(s) excluded)` : ''}`);
   console.log(
     `Expected box-cost delta if regenerated          : ${money(oldSumDelta)}` +
-      ` (over ${atOld} stale row${atOld === 1 ? '' : 's'})`
+      ` (over ${atOld} stale generated row${atOld === 1 ? '' : 's'})`
   );
   if (atOld > 0 && effectivePrice !== null) {
     console.log(
-      `  -> regenerating re-prices ${atOld} row(s) to ${money(effectivePrice)} each.`
+      `  -> regenerating re-prices ${atOld} generated row(s) to ${money(effectivePrice)} each.`
     );
   }
   line();
 
-  // ── 4. Summary cache vs live detail consistency ──────────────────────────
-  // billing_summary_metrics.package_total is a cached SUM(total_cost where
-  // line_type='package_cost') per (client, period). The cache is windowed by
-  // ship_date per period, so we compare the cached total across ALL periods
-  // for this client against the live SUM of all package_cost detail rows for
-  // this client (both line_type-scoped). A mismatch flags a stale cache.
-  const sumRows = await sql<
-    { summary_package_total: string | null; detail_package_total: string | null }[]
+  // ── 4. Summary cache vs live detail consistency — PER WINDOW ──────────────
+  // billing_summary_metrics is keyed (client_id, period_from, period_to) and the
+  // app reads exactly ONE window at a time (getFreshBillingSummaryMetrics matches
+  // period_from/period_to + a 45-min read TTL). Consistency must therefore be
+  // checked PER WINDOW: each cached package_total vs the live SUM(total_cost) of
+  // package_cost rows whose ship_date falls in that window's day range. Summing
+  // package_total across windows is meaningless — windows overlap, so the sum
+  // always "mismatches" (this was the old diagnostic's false alarm).
+  //
+  // The cache stores period_from/period_to at day granularity, so we reconstruct
+  // the window as [period_from 00:00, period_to+1day) — exact for day-aligned
+  // ranges (the norm). Override rows are included on BOTH sides (the cache sums
+  // every package_cost row, override or not), so they never create a delta here.
+  const windowRows = await sql<
+    {
+      period_from: string;
+      period_to: string;
+      cached: string;
+      live: string;
+      age_min: string;
+    }[]
   >`
     select
-      (select coalesce(sum(package_total), 0)
-         from billing_summary_metrics
-        where client_id = ${clientId}) as summary_package_total,
-      (select coalesce(sum(total_cost), 0)
-         from billing_line_items
-        where client_id = ${clientId}
-          and line_type = 'package_cost') as detail_package_total
+      m.period_from::text as period_from,
+      m.period_to::text   as period_to,
+      m.package_total::text as cached,
+      coalesce((
+        select sum(b.total_cost)
+        from billing_line_items b
+        where b.client_id = ${clientId}
+          and b.line_type = 'package_cost'
+          and b.ship_date >= m.period_from::timestamptz
+          and b.ship_date <  ((m.period_to::date + 1))::timestamptz
+      ), 0)::text as live,
+      (extract(epoch from (now() - m.updated_at)) / 60.0)::numeric(12,1)::text as age_min
+    from billing_summary_metrics m
+    where m.client_id = ${clientId}
+    order by m.period_from, m.period_to
   `;
-  const summaryTotal = n(sumRows[0]?.summary_package_total);
-  const detailTotal = n(sumRows[0]?.detail_package_total);
-  const mismatch = Math.abs(summaryTotal - detailTotal) > EPS;
-  console.log(`Summary cache package_total (all periods): ${money(summaryTotal)}`);
-  console.log(`Live detail package_cost SUM (all rows)  : ${money(detailTotal)}`);
-  console.log(
-    `Consistency                              : ${mismatch ? `MISMATCH (delta ${money(detailTotal - summaryTotal)})` : 'OK (match)'}`
-  );
-  if (mismatch) {
+
+  if (windowRows.length === 0) {
+    console.log('Summary cache: no cached windows for this client (rebuilds on next view).');
+  } else {
+    console.log(`Summary cache windows for client ${clientId} (cached vs live detail, per window):`);
+    console.log('  period_from  period_to    cached       live         age(min)  status');
+    let freshMismatch = false;
+    let anyFresh = false;
+    for (const w of windowRows) {
+      const cached = n(w.cached);
+      const live = n(w.live);
+      const ageMin = n(w.age_min);
+      const fresh = ageMin <= 45; // only fresh windows are actually served on read
+      if (fresh) anyFresh = true;
+      const mism = Math.abs(cached - live) > EPS;
+      if (mism && fresh) freshMismatch = true;
+      const status = !mism ? 'OK' : fresh ? 'MISMATCH (served!)' : 'stale (rebuilds on read)';
+      console.log(
+        `  ${w.period_from.padEnd(12)} ${w.period_to.padEnd(12)} ` +
+          `${money(cached).padEnd(12)} ${money(live).padEnd(12)} ${String(ageMin).padEnd(9)} ${status}`
+      );
+    }
     console.log(
-      '  NOTE: summary is a windowed cache (per period_from/period_to); a delta'
+      `Per-window consistency                   : ${
+        freshMismatch
+          ? 'FRESH-WINDOW MISMATCH — investigate'
+          : anyFresh
+            ? 'all fresh (served) windows OK'
+            : 'no fresh windows — all rebuild on read'
+      }`
     );
     console.log(
-      '  can mean a stale 45-min cache or detail rows outside any cached window.'
+      '  NOTE: day-range reconstruction assumes day-aligned windows; a window whose'
+    );
+    console.log(
+      '  original range ended mid-day can show a benign near-boundary delta.'
     );
   }
   line();

@@ -116,6 +116,61 @@ check(
   '0.00',
 );
 
+// ─── 5) Manual box-override rows are excluded from price-staleness ───────────
+// A package_cost row carrying a manual billing-line box override
+// (billing_line_items.package_id != null, set via the Edit Billing Detail
+// modal) holds a DELIBERATE operator cost — it is NOT a stale generated price.
+// The diagnostic's "rows at old price" count must exclude these, else it
+// false-positives on intentional edits (the real PS-068 case: HUGRAB order
+// 1144598 overridden to pkg 212 "14x10x8" at $1.47, flagged as "stale" only
+// because $1.47 != the 12x10x3 effective $1.17).
+type BoxRow = { unitCost: number; isOverride: boolean };
+function countStaleGeneratedRows(rows: BoxRow[], effective: number, eps = 0.005): number {
+  return rows
+    .filter((r) => !r.isOverride) // overrides are deliberate, never "stale"
+    .filter((r) => Math.abs(r.unitCost - effective) > eps).length;
+}
+const boxRows: BoxRow[] = [
+  { unitCost: 1.17, isOverride: false }, // current effective price -> not stale
+  { unitCost: 1.12, isOverride: false }, // genuinely old generated price -> stale
+  { unitCost: 1.47, isOverride: true }, // manual override (pkg 212) -> excluded
+];
+check('only the genuinely-old generated row is stale', countStaleGeneratedRows(boxRows, 1.17), 1);
+check(
+  'override row never counted, even when unit_cost != effective',
+  countStaleGeneratedRows([{ unitCost: 1.47, isOverride: true }], 1.17),
+  0,
+);
+
+// ─── 6) Cache consistency is PER WINDOW, never summed across windows ─────────
+// billing_summary_metrics is keyed (client_id, period_from, period_to) and the
+// app reads ONE exact window at a time. Consistency is therefore per-window:
+// each cached package_total must equal the live SUM of package_cost rows whose
+// ship_date falls in that window's [from, to] day range. Summing package_total
+// across OVERLAPPING windows is meaningless and was the source of the old
+// diagnostic's false "MISMATCH".
+type WDetail = { shipDay: string; lineType: string; totalCost: number };
+function livePackageTotalForWindow(rows: WDetail[], from: string, to: string): number {
+  const sum = rows
+    .filter((r) => r.lineType === 'package_cost' && r.shipDay >= from && r.shipDay <= to)
+    .reduce((acc, r) => acc + r.totalCost, 0);
+  return Number(sum.toFixed(2));
+}
+const wdetail: WDetail[] = [
+  { shipDay: '2026-05-15', lineType: 'package_cost', totalCost: 1.17 },
+  { shipDay: '2026-05-29', lineType: 'package_cost', totalCost: 1.47 }, // override row IS in the cache total
+  { shipDay: '2026-06-03', lineType: 'package_cost', totalCost: 1.17 },
+  { shipDay: '2026-05-15', lineType: 'shipping', totalCost: 9.99 }, // excluded from package_total
+];
+const winA = livePackageTotalForWindow(wdetail, '2026-05-01', '2026-05-31'); // 1.17 + 1.47
+const winB = livePackageTotalForWindow(wdetail, '2026-05-01', '2026-06-03'); // + 1.17
+check('per-window total A ([May1,May31])', winA, 2.64);
+check('per-window total B ([May1,Jun3]) includes override row', winB, 3.81);
+// Proof the OLD cross-window sum was wrong: A+B overstates the true union total
+// (3.81) by double-counting the overlapping May rows.
+const trueUnionTotal = livePackageTotalForWindow(wdetail, '2026-05-01', '2026-06-03');
+check('cross-window sum overstates the true union (anti-pattern)', winA + winB > trueUnionTotal, true);
+
 if (failures > 0) {
   console.error(`\nFAIL PS-068 billing pricing guard (${failures} failing)`);
   process.exit(1);
