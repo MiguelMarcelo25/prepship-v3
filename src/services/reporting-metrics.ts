@@ -582,6 +582,72 @@ export async function refreshBillingSummaryMetrics(from: Date, to: Date): Promis
   });
 }
 
+export type PruneBillingSummaryMetricsResult = {
+  orphaned: number;
+  stale: number;
+  /** Distinct rows matching orphaned OR stale (no double-count). */
+  candidates: number;
+  /** Rows actually deleted (0 when dryRun). */
+  deleted: number;
+  dryRun: boolean;
+  retentionDays: number;
+};
+
+/**
+ * Garbage-collect the billing_summary_metrics cache. The cache is keyed by
+ * (client_id, period_from, period_to); refreshBillingSummaryMetrics only ever
+ * touches the one window it's given, so old/overlapping windows accumulate and
+ * are never reclaimed. This prunes:
+ *   - ORPHANED rows — no matching active, non-system client (can never be
+ *     repopulated, since the refresh insert filters those clients out), and
+ *   - STALE rows — not refreshed within `retentionDays`.
+ *
+ * Safe by construction: billingSummary recomputes any range on demand
+ * (refresh-on-read with a 45-min TTL), so a pruned window simply rebuilds the
+ * next time someone views that exact range. Never touches billing_line_items
+ * (the source of truth) — only the derived cache.
+ *
+ * dryRun reports the counts without deleting.
+ */
+export async function pruneBillingSummaryMetrics(
+  options: { retentionDays?: number; dryRun?: boolean } = {}
+): Promise<PruneBillingSummaryMetricsResult> {
+  await ensureReportingMetricsTables();
+  const retentionDays = Math.max(1, Math.floor(options.retentionDays ?? 45));
+  const dryRun = options.dryRun === true;
+
+  const orphanPredicate = sql`
+    not exists (
+      select 1 from clients c
+      where c.id = m.client_id
+        and c.active = true
+        and c.name not in ('Manual Orders', 'Rate Browser', 'Api Shipments')
+    )
+  `;
+  const stalePredicate = sql`m.updated_at < now() - (${retentionDays}::text || ' days')::interval`;
+
+  const [counts] = await db.execute<{ orphaned: string; stale: string; total: string }>(sql`
+    select
+      count(*) filter (where ${orphanPredicate})::text as orphaned,
+      count(*) filter (where ${stalePredicate})::text as stale,
+      count(*) filter (where ${orphanPredicate} or ${stalePredicate})::text as total
+    from billing_summary_metrics m
+  `);
+  const orphaned = num(counts?.orphaned);
+  const stale = num(counts?.stale);
+  const total = num(counts?.total);
+
+  if (dryRun) {
+    return { orphaned, stale, candidates: total, deleted: 0, dryRun: true, retentionDays };
+  }
+
+  await db.execute(sql`
+    delete from billing_summary_metrics m
+    where ${orphanPredicate} or ${stalePredicate}
+  `);
+  return { orphaned, stale, candidates: total, deleted: total, dryRun: false, retentionDays };
+}
+
 export async function refreshReportingMetrics(
   options: {
     days?: number;
@@ -604,6 +670,20 @@ export async function refreshReportingMetrics(
     options.inventoryLimit ?? DEFAULT_INVENTORY_LIMIT
   );
   const billingRows = await refreshBillingSummaryMetrics(billingFrom, billingTo);
+
+  // Garbage-collect orphaned/stale billing_summary_metrics windows so the cache
+  // doesn't grow unbounded — refreshBillingSummaryMetrics only ever touches the
+  // single window it's given. Safe: pruned ranges rebuild on demand.
+  const pruned = await pruneBillingSummaryMetrics().catch((err) => {
+    console.warn(
+      '[reporting] billing summary prune skipped:',
+      err instanceof Error ? err.message : err
+    );
+    return null;
+  });
+  if (pruned?.deleted) {
+    console.log(`[reporting] pruned ${pruned.deleted} orphaned/stale billing_summary_metrics rows`);
+  }
 
   await withRefreshRun('all', async () => ({
     result: null,
