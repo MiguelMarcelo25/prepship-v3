@@ -82,6 +82,26 @@ function intArraySql(values: number[]): SQL {
   return sql`array[${sql.join(values.map((value) => sql`${value}`), sql`, `)}]::int[]`;
 }
 
+const billingShipDateSql = sql<Date | null>`coalesce(
+  ${shipments.shipDate},
+  case
+    when coalesce(${orders.raw}->>'fulfilledAt', '') ~ '^\\d{4}-\\d{2}-\\d{2}'
+      then (${orders.raw}->>'fulfilledAt')::timestamptz
+    else null
+  end,
+  case
+    when coalesce(${orders.raw}->>'shipDate', '') ~ '^\\d{4}-\\d{2}-\\d{2}'
+      then (${orders.raw}->>'shipDate')::timestamptz
+    else null
+  end,
+  case
+    when coalesce(${orders.raw}->>'shippedAt', '') ~ '^\\d{4}-\\d{2}-\\d{2}'
+      then (${orders.raw}->>'shippedAt')::timestamptz
+    else null
+  end,
+  ${orders.orderDate}
+)`;
+
 function billingClientScopePredicate(input: GenerateInput): SQL {
   if (input.scopeIsGlobal === true) return sql`true`;
 
@@ -186,16 +206,86 @@ export async function billingGenerationStatus(
         ${input.clientId !== undefined ? sql`and c.id = ${input.clientId}` : sql``}
         and ${billingClientScopePredicate(input)}
     )
-    select max(coalesce(s.ship_date, o.order_date))::text as latest_source_ship_date
+    select max(coalesce(
+      s.ship_date,
+      case
+        when coalesce(o.raw->>'fulfilledAt', '') ~ '^\\d{4}-\\d{2}-\\d{2}'
+          then (o.raw->>'fulfilledAt')::timestamptz
+        else null
+      end,
+      case
+        when coalesce(o.raw->>'shipDate', '') ~ '^\\d{4}-\\d{2}-\\d{2}'
+          then (o.raw->>'shipDate')::timestamptz
+        else null
+      end,
+      case
+        when coalesce(o.raw->>'shippedAt', '') ~ '^\\d{4}-\\d{2}-\\d{2}'
+          then (o.raw->>'shippedAt')::timestamptz
+        else null
+      end,
+      o.order_date
+    ))::text as latest_source_ship_date
     from orders o
     left join shipments s on s.order_id = o.id and s.voided = false
     where o.order_status = 'shipped'
-      and o.externally_shipped = false
-      and coalesce(o.raw->>'externallyFulfilled', 'false') <> 'true'
-      and coalesce(s.ship_date, o.order_date) <= ${toIso}::timestamptz
+      and coalesce(
+        s.ship_date,
+        case
+          when coalesce(o.raw->>'fulfilledAt', '') ~ '^\\d{4}-\\d{2}-\\d{2}'
+            then (o.raw->>'fulfilledAt')::timestamptz
+          else null
+        end,
+        case
+          when coalesce(o.raw->>'shipDate', '') ~ '^\\d{4}-\\d{2}-\\d{2}'
+            then (o.raw->>'shipDate')::timestamptz
+          else null
+        end,
+        case
+          when coalesce(o.raw->>'shippedAt', '') ~ '^\\d{4}-\\d{2}-\\d{2}'
+            then (o.raw->>'shippedAt')::timestamptz
+          else null
+        end,
+        o.order_date
+      ) <= ${toIso}::timestamptz
       ${latestBilling
-        ? sql`and coalesce(s.ship_date, o.order_date) > ${sourceLowerBound}::timestamptz`
-        : sql`and coalesce(s.ship_date, o.order_date) >= ${sourceLowerBound}::timestamptz`}
+        ? sql`and coalesce(
+            s.ship_date,
+            case
+              when coalesce(o.raw->>'fulfilledAt', '') ~ '^\\d{4}-\\d{2}-\\d{2}'
+                then (o.raw->>'fulfilledAt')::timestamptz
+              else null
+            end,
+            case
+              when coalesce(o.raw->>'shipDate', '') ~ '^\\d{4}-\\d{2}-\\d{2}'
+                then (o.raw->>'shipDate')::timestamptz
+              else null
+            end,
+            case
+              when coalesce(o.raw->>'shippedAt', '') ~ '^\\d{4}-\\d{2}-\\d{2}'
+                then (o.raw->>'shippedAt')::timestamptz
+              else null
+            end,
+            o.order_date
+          ) > ${sourceLowerBound}::timestamptz`
+        : sql`and coalesce(
+            s.ship_date,
+            case
+              when coalesce(o.raw->>'fulfilledAt', '') ~ '^\\d{4}-\\d{2}-\\d{2}'
+                then (o.raw->>'fulfilledAt')::timestamptz
+              else null
+            end,
+            case
+              when coalesce(o.raw->>'shipDate', '') ~ '^\\d{4}-\\d{2}-\\d{2}'
+                then (o.raw->>'shipDate')::timestamptz
+              else null
+            end,
+            case
+              when coalesce(o.raw->>'shippedAt', '') ~ '^\\d{4}-\\d{2}-\\d{2}'
+                then (o.raw->>'shippedAt')::timestamptz
+              else null
+            end,
+            o.order_date
+          ) >= ${sourceLowerBound}::timestamptz`}
       and exists (
         select 1
         from scoped_clients sc
@@ -396,9 +486,12 @@ export async function generateLineItems(input: GenerateInput) {
       orderNumber: orders.orderNumber,
       orderClientId: orders.clientId,
       orderDate: orders.orderDate,
+      billingShipDate: billingShipDateSql,
       orderStoreId: orders.storeId,
       orderItems: orders.items,
       orderRaw: orders.raw,
+      externallyShipped: orders.externallyShipped,
+      externallyFulfilled: sql<boolean>`coalesce(${orders.raw}->>'externallyFulfilled', 'false') = 'true'`,
     })
     .from(orders)
     .leftJoin(
@@ -409,10 +502,8 @@ export async function generateLineItems(input: GenerateInput) {
     .where(
       and(
         eq(orders.orderStatus, 'shipped'),
-        eq(orders.externallyShipped, false),
-        sql`coalesce(${orders.raw}->>'externallyFulfilled', 'false') <> 'true'`,
-        sql`coalesce(${shipments.shipDate}, ${orders.orderDate}) >= ${fromIso}::timestamptz`,
-        sql`coalesce(${shipments.shipDate}, ${orders.orderDate}) <= ${toIso}::timestamptz`
+        sql`${billingShipDateSql} >= ${fromIso}::timestamptz`,
+        sql`${billingShipDateSql} <= ${toIso}::timestamptz`
       )
     );
 
@@ -451,6 +542,8 @@ export async function generateLineItems(input: GenerateInput) {
     refUspsRate: string | null;
     refUpsRate: string | null;
     items: unknown[];
+    externallyShipped: boolean;
+    externallyFulfilled: boolean;
   };
 
   const billableRows: BillableRow[] = orderShipmentRows
@@ -466,7 +559,7 @@ export async function generateLineItems(input: GenerateInput) {
         orderId: row.orderId,
         orderNumber: row.orderNumber,
         clientId,
-        shipDate: row.shipDate ?? row.orderDate,
+        shipDate: row.billingShipDate,
         labelCost: row.labelCost,
         cost: row.cost,
         otherCost: row.otherCost,
@@ -482,6 +575,8 @@ export async function generateLineItems(input: GenerateInput) {
         rateDimsW: row.rateDimsW,
         rateDimsH: row.rateDimsH,
         items: Array.isArray(row.orderItems) ? row.orderItems : [],
+        externallyShipped: row.externallyShipped === true,
+        externallyFulfilled: row.externallyFulfilled === true,
       };
     })
     .filter(
@@ -769,6 +864,19 @@ export async function generateLineItems(input: GenerateInput) {
         unitCost: shipCost.toFixed(2),
         totalCost: shipCost.toFixed(2),
       });
+    } else if (s.externallyShipped || s.externallyFulfilled || s.id === null) {
+      rows.push({
+        clientId,
+        orderId: s.orderId,
+        orderNumber: s.orderNumber,
+        shipmentId: s.id,
+        shipDate: s.shipDate,
+        lineType: 'shipping_missing',
+        description: `Missing shipping cost - reconcile ShipStation/source rate for order ${s.orderNumber ?? s.orderId}`,
+        qty: '1',
+        unitCost: '0.00',
+        totalCost: '0.00',
+      });
     }
 
     // ─── Package cost (gap B2) ──────────────────────────────────────────────
@@ -940,6 +1048,7 @@ export type BillingSummaryRow = {
   pickPackFeeTotal: number;
   packageTotal: number;
   shippingTotal: number;
+  missingShippingCostCount?: number;
   storageTotal: number;
   fulfillmentFeeTotal: number;
   orderCount: number;
@@ -1050,6 +1159,7 @@ export async function billingSummary(
         pickPackFeeTotal: 0,
         packageTotal: 0,
         shippingTotal: 0,
+        missingShippingCostCount: 0,
         storageTotal: 0,
         fulfillmentFeeTotal: 0,
         orderCount: 0,
@@ -1061,6 +1171,7 @@ export async function billingSummary(
           additional_unit: 0,
           package_cost: 0,
           shipping: 0,
+          shipping_missing: 0,
           storage: 0,
         },
       })),
@@ -1086,6 +1197,7 @@ export async function billingSummary(
     package_total: string;
     shipping_total: string;
     storage_total: string;
+    missing_shipping_cost_count: number;
     order_count: number;
     grand_total: string;
   }>(sql`
@@ -1096,6 +1208,7 @@ export async function billingSummary(
       coalesce(sum(case when b.line_type = 'additional_unit' then b.total_cost else 0 end), 0)::text as additional_total,
       coalesce(sum(case when b.line_type = 'package_cost' then b.total_cost else 0 end), 0)::text as package_total,
       coalesce(sum(case when b.line_type = 'shipping' then b.total_cost else 0 end), 0)::text as shipping_total,
+      sum(case when b.line_type = 'shipping_missing' then 1 else 0 end)::int as missing_shipping_cost_count,
       coalesce(sum(case when b.line_type = 'storage' then b.total_cost else 0 end), 0)::text as storage_total,
       count(distinct b.order_id)::int as order_count,
       coalesce(sum(b.total_cost), 0)::text as grand_total
@@ -1117,6 +1230,7 @@ export async function billingSummary(
     const additionalTotal = toNum(r.additional_total);
     const packageTotal = toNum(r.package_total);
     const shippingTotal = toNum(r.shipping_total);
+    const missingShippingCostCount = Number(r.missing_shipping_cost_count ?? 0);
     const storageTotal = toNum(r.storage_total);
     const grandTotal = toNum(r.grand_total);
     const pickPackFeeTotal = pickPackTotal + additionalTotal;
@@ -1130,6 +1244,7 @@ export async function billingSummary(
       pickPackFeeTotal,
       packageTotal,
       shippingTotal,
+      missingShippingCostCount,
       storageTotal,
       fulfillmentFeeTotal,
       orderCount: Number(r.order_count ?? 0),
@@ -1141,6 +1256,7 @@ export async function billingSummary(
         additional_unit: additionalTotal,
         package_cost: packageTotal,
         shipping: shippingTotal,
+        shipping_missing: missingShippingCostCount,
         storage: storageTotal,
       },
     };
@@ -1346,6 +1462,7 @@ export async function billingDetails(input: GenerateInput & { limit?: number }) 
       const items = itemSummary(row.orderItems);
       const lineType = row.lineType ?? '';
       const isShippingLine = lineType === 'shipping';
+      const isMissingShippingLine = lineType === 'shipping_missing';
       const labelCost =
         toFiniteNumber(row.labelCost ?? fallbackShipment?.labelCost) ??
         (() => {
@@ -1411,6 +1528,8 @@ export async function billingDetails(input: GenerateInput & { limit?: number }) 
         packageName,
         actualLabelCost: isShippingLine ? labelCost : null,
         actual_label_cost: isShippingLine ? labelCost : null,
+        shippingCostMissing: isMissingShippingLine,
+        shipping_cost_missing: isMissingShippingLine,
         refUspsRate: isShippingLine ? refUspsRate : null,
         ref_usps_rate: isShippingLine ? refUspsRate : null,
         refUpsRate: isShippingLine ? refUpsRate : null,
