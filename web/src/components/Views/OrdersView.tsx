@@ -9253,11 +9253,7 @@ export default function OrdersView({
               </div>
             </div>
           ) : null}
-          {/* Forced flex-wrap break — pushes Export CSV onto its own
-              row beneath the toolbar (basis-full = full-width spacer). */}
-          <div className="basis-full h-0" aria-hidden />
-
-          {/* Export CSV — on its own row below the toolbar, pushed to the
+          {/* Export CSV — stays on the toolbar row, pushed to the far
               right end via ml-auto, per UX request. */}
           <button
             id="exportBtn"
