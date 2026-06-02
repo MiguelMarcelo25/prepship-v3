@@ -100,7 +100,7 @@ import {
   getProductDefaultPackageId,
 } from './orders-panel-state'
 import { detectExpeditedShipping, type ExpeditedTier } from '../../lib/expedited'
-import { SHIPPING_SERVICE_ELIGIBILITY_VERSION, isHugrabShippingContext, HUGRAB_DEFAULT_INSURED_VALUE } from '../../../../src/lib/shipping-service-eligibility'
+import { SHIPPING_SERVICE_ELIGIBILITY_VERSION, isHugrabShippingContext, HUGRAB_DEFAULT_INSURED_VALUE, resolveEffectiveInsurance } from '../../../../src/lib/shipping-service-eligibility'
 
 type OrderStatus = 'awaiting_shipment' | 'shipped' | 'cancelled'
 type SortDirection = 'asc' | 'desc'
@@ -321,6 +321,15 @@ const CONFIRMATION_OPTIONS = [
 function normalizeConfirmationForRates(value: string | null | undefined) {
   const normalized = (value ?? '').trim().toLowerCase()
   return normalized && normalized !== 'none' ? normalized : 'delivery'
+}
+
+// PS-072: infer carrier from a service code so resolveEffectiveInsurance can tell
+// UPS Ground (carrier) from USPS Ground/Ground Advantage (parcelguard).
+function inferCarrierFromServiceCode(serviceCode: string | null | undefined): string {
+  const s = String(serviceCode ?? '').toLowerCase()
+  if (s.includes('usps') || s.includes('stamps') || s.includes('ground_advantage') || s.includes('groundadvantage') || s.includes('parcel_select')) return 'usps'
+  if (s.includes('ups')) return 'ups'
+  return ''
 }
 
 function normalizeInsuranceForRates(provider: string | null | undefined, value: string | number | null | undefined) {
@@ -3071,10 +3080,31 @@ export default function OrdersView({
 
     panelFormInitKeyRef.current = initKey
     bestRateRefreshSeqRef.current += 1
+    const initialServiceCode = panelIsTestOrder ? TEST_SERVICE_CODE : getInitialPanelServiceCode(panelOrder, panelDetail)
+    // PS-072: default the panel Insurance to the HUGRAB ground policy (Carrier $100
+    // for UPS Ground, Parcel Guard $100 for USPS Ground/Ground Advantage) when the
+    // operator has not explicitly chosen insurance — so the UI visibly shows what
+    // the backend will charge. resolveEffectiveInsurance never touches Ground
+    // Saver/SurePost (PS-057) or non-HUGRAB orders.
+    const seededInsurance =
+      insurance.type && insurance.type !== 'none'
+        ? { type: insurance.type, value: insurance.value }
+        : (() => {
+            const effective = resolveEffectiveInsurance(
+              { clientId: panelOrder.clientId, storeId: panelOrder.storeId },
+              {
+                carrierCode: inferCarrierFromServiceCode(initialServiceCode),
+                serviceCode: initialServiceCode,
+                serviceName: initialServiceCode,
+              },
+              { insuranceProvider: insurance.type, insuredValue: insurance.value },
+            )
+            return { type: effective.insuranceProvider, value: effective.insuredValue }
+          })()
     const initialPanelForm: PanelFormState = {
       locationId: locationId != null ? String(locationId) : '',
       shipAccountId: panelIsTestOrder ? TEST_CARRIER_CODE : selectedAccountValue != null ? String(selectedAccountValue) : '',
-      serviceCode: panelIsTestOrder ? TEST_SERVICE_CODE : getInitialPanelServiceCode(panelOrder, panelDetail),
+      serviceCode: initialServiceCode,
       weightLb: currentWeight ? String(Math.floor(currentWeight / 16)) : '',
       weightOz: currentWeight ? String(Math.round(currentWeight % 16)) : '',
       length: dimensions?.length ? String(dimensions.length) : '',
@@ -3082,8 +3112,8 @@ export default function OrdersView({
       height: dimensions?.height ? String(dimensions.height) : '',
       packageId: getPanelPackageId(panelOrder, panelDetail, packages) || getComboDefaultPackageId(panelDetail, packages) || matchedPackageId,
       confirmation: getPanelConfirmation(panelOrder, panelDetail),
-      insurance: insurance.type,
-      insuranceValue: insurance.value != null ? String(insurance.value) : '',
+      insurance: seededInsurance.type,
+      insuranceValue: seededInsurance.value != null ? String(seededInsurance.value) : '',
     }
     shipmentLastSavedKeyRef.current = getShipmentDetailsKey(panelOrder.orderId, initialPanelForm)
     setPanelForm(initialPanelForm)
