@@ -100,7 +100,7 @@ import {
   getProductDefaultPackageId,
 } from './orders-panel-state'
 import { detectExpeditedShipping, type ExpeditedTier } from '../../lib/expedited'
-import { SHIPPING_SERVICE_ELIGIBILITY_VERSION } from '../../../../src/lib/shipping-service-eligibility'
+import { SHIPPING_SERVICE_ELIGIBILITY_VERSION, isHugrabShippingContext, HUGRAB_DEFAULT_INSURED_VALUE } from '../../../../src/lib/shipping-service-eligibility'
 
 type OrderStatus = 'awaiting_shipment' | 'shipped' | 'cancelled'
 type SortDirection = 'asc' | 'desc'
@@ -4847,8 +4847,11 @@ export default function OrdersView({
       cacheCreatedAt: createdAt,
       cacheExpiresAt: expiresAt,
       confirmation: request.confirmation,
-      insuranceProvider: toStringValue(metadata.insuranceProvider) ?? 'none',
-      insuredValue: toNumberValue(metadata.insuredValue) ?? null,
+      // PS-072: fall back to the request's resolved insurance (HUGRAB ground
+      // default) so the saved best-rate records the insurance it was quoted with
+      // and any label built from this saved rate inherits it.
+      insuranceProvider: toStringValue(metadata.insuranceProvider) ?? request.insuranceProvider ?? 'none',
+      insuredValue: toNumberValue(metadata.insuredValue) ?? request.insuredValue ?? null,
       eligibilityVersion: SHIPPING_SERVICE_ELIGIBILITY_VERSION,
       isComplete: metadata.isComplete === true,
       rateCount: toNumberValue(metadata.rateCount) ?? 1,
@@ -4873,6 +4876,14 @@ export default function OrdersView({
     )
     const carrierIds = getRateCarrierIdsForAccounts()
     const dimsLabel = `${dims.length || 0}x${dims.width || 0}x${dims.height || 0}`
+    // PS-072: HUGRAB ground orders default to $100 insurance. The auto best-rate
+    // shop is multi-service, so we quote with carrier/$100 (the backend refines
+    // USPS Ground to Parcel Guard at label time and enforces the default
+    // regardless). Including it in the fingerprint + request keeps the UI in sync
+    // with the insured backend rate so a stale no-insurance rate is not reused.
+    const hugrab = isHugrabShippingContext({ clientId: order.clientId, storeId: order.storeId })
+    const insuranceProvider = hugrab ? 'carrier' : 'none'
+    const insuredValue = hugrab ? HUGRAB_DEFAULT_INSURED_VALUE : null
     const fingerprint = buildRateRequestFingerprint({
       weightOz,
       dims,
@@ -4882,12 +4893,12 @@ export default function OrdersView({
       storeId: order.storeId,
       clientId: order.clientId,
       confirmation,
-      insuranceProvider: 'none',
-      insuredValue: null,
+      insuranceProvider,
+      insuredValue,
     })
     const key = `${order.orderId}|${fingerprint}`
 
-    return { detail, dims, dimsLabel, weightOz, shipTo, confirmation, carrierIds, fingerprint, key }
+    return { detail, dims, dimsLabel, weightOz, shipTo, confirmation, carrierIds, insuranceProvider, insuredValue, fingerprint, key }
   }
 
   function normalizeDimsLabel(value: unknown) {
@@ -5154,6 +5165,8 @@ export default function OrdersView({
           storeId: order.storeId,
           clientId: order.clientId,
           confirmation: request.confirmation,
+          insuranceProvider: request.insuranceProvider,
+          insuredValue: request.insuredValue,
           orderId: order.orderId,
           orderNumber: order.orderNumber ?? undefined,
           externalOrderId:
@@ -5226,6 +5239,8 @@ export default function OrdersView({
         storeId: order.storeId,
         clientId: order.clientId,
         confirmation: request.confirmation,
+        insuranceProvider: request.insuranceProvider,
+        insuredValue: request.insuredValue,
       })))
       const exactByOrderId = new Map(
         cachedResults

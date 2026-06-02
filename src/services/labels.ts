@@ -530,6 +530,13 @@ export type CreateFromShipmentInput = {
   residential?: boolean;
 };
 
+// PS-072 / dead-code note: this is a legacy batch helper with NO active server
+// callers (adjudicated in parity/_v4-only.md — all live single/batch/print-queue
+// label creation funnels through createLabelV2, which applies the HUGRAB default
+// insurance via resolveEffectiveInsurance). This path does NOT apply PS-072
+// insurance. If it is ever revived for real label creation, route it through
+// createLabelV2 (or call resolveEffectiveInsurance here) or HUGRAB ground labels
+// would ship uninsured.
 export async function createLabelFromShipment(input: CreateFromShipmentInput) {
   const automationRules = await loadShippingAutomationRules();
   assertShippingServiceEligible(
