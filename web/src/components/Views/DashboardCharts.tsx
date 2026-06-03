@@ -91,6 +91,11 @@ function MultiClientChart({
       dataKey: s.key,
       type: 'plainline' as const,
       color: dimmed ? MUTED_STROKE : CLIENT_PALETTE[index % CLIENT_PALETTE.length],
+      // recharts' plainline legend icon reads `entry.payload.strokeDasharray`.
+      // A custom `payload` array MUST include this nested `payload` object or
+      // recharts throws "Cannot read properties of undefined (reading
+      // 'strokeDasharray')" and the whole chart (and dashboard) fails to render.
+      payload: { strokeDasharray: '0', value: s.name },
     }
   })
   return (
