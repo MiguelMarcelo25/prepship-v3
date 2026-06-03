@@ -130,6 +130,18 @@ check('direct-carrier labels function defines an in-request confirmation process
 check('all 3 direct return paths (shipp / walmart_shipping / ups+easypost) fire confirmation processing',
   (labelsSrc.match(/await processOrderConfirmationNow\(orderId\)/g) ?? []).length >= 3);
 
+// ── (7) Self-healing backstop: the 1-minute outbox worker must stay wired ────
+// The direct-carrier label fires confirmation in-request, but the proven safety
+// net (delivers + auto-recovers any missed confirmation without manual action)
+// is the scheduler tick. Lock it so it can't be silently removed.
+const scheduler = readFileSync('src/services/sync-scheduler.ts', 'utf8');
+check('scheduler runs the fulfillment outbox on a 1-minute interval',
+  /FULFILLMENT_OUTBOX_INTERVAL_MS\s*=\s*60\s*\*\s*1000/.test(scheduler) &&
+  /setInterval\([\s\S]{0,80}?runFulfillmentOutboxTick[\s\S]{0,40}?FULFILLMENT_OUTBOX_INTERVAL_MS/.test(scheduler));
+check('outbox tick both auto-recovers missing confirmations AND processes the outbox',
+  /enqueueMissingShipmentConfirmations\(\{ limit: 25 \}\)/.test(scheduler) &&
+  /processFulfillmentOutboxOnce\(\{ limit: 25 \}\)/.test(scheduler));
+
 // ── Print the certification table ──────────────────────────────────────────
 const rows = buildCompatibilityMatrix();
 const pad = (s: string, n: number) => (s + ' '.repeat(n)).slice(0, n);
