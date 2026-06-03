@@ -15,6 +15,7 @@ import { api, qs } from './api';
 import { API_BASE } from './api-base';
 import { getCachedAuthToken } from './auth-session-cache';
 import { callVercelFunction } from './vercelFunction';
+import { buildManifestCsv, manifestRowsFromResponse } from '../components/Views/manifests-parity';
 
 async function authHeaders(): Promise<Record<string, string>> {
   const accessToken = await getCachedAuthToken();
@@ -4661,24 +4662,25 @@ export const apiClient = {
   },
 
   // ─── Manifests ─────────────────────────────────────────────────────────────
-  downloadManifest(data: {
+  async downloadManifest(data: {
     startDate?: string;
     endDate?: string;
     [k: string]: unknown;
   }): Promise<{ blob: Blob; filename: string }> {
-    // v4 exposes GET /manifests/generate with query params. Flatten v2's body
-    // to query string. Throws on failure so ManifestsView's try/catch surfaces
-    // the server error in a toast instead of silently downloading a 0-byte
-    // file.
+    // GET /manifests/generate returns JSON ({ data: [...] }). Previously this
+    // saved that JSON straight into a .csv file, so Excel dumped the whole blob
+    // into one cell. Fetch the JSON and build a real column-laid-out CSV here.
+    // api.get throws on a non-2xx so ManifestsView's try/catch surfaces the
+    // server error in a toast instead of downloading a broken file.
     const path = `/manifests/generate${qs(data as any)}`;
+    const res = await api.get<any>(path);
+    const csv = buildManifestCsv(manifestRowsFromResponse(res));
+    // Prepend a UTF-8 BOM so Excel opens the CSV with the correct encoding and
+    // splits it into columns instead of one cell.
+    const blob = new Blob([String.fromCharCode(0xFEFF) + csv], { type: 'text/csv;charset=utf-8' });
     const start = data.startDate ?? 'unknown';
     const end = data.endDate ?? 'unknown';
-    return fetchBlob(
-      'downloadManifest',
-      path,
-      `manifest_${start}_${end}.csv`,
-      { throwOnError: true }
-    );
+    return { blob, filename: `manifest_${start}_${end}.csv` };
   },
 };
 
