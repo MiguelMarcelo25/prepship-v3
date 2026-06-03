@@ -1390,7 +1390,11 @@ function parseDailyStatsSummary(value: unknown): DailyStatsSummary {
     throw new Error('invalid daily stats response');
   }
 
-  const dto = value as Record<string, unknown>;
+  const rootDto = value as Record<string, unknown>;
+  const summary = rootDto.summary;
+  const dto = summary != null && typeof summary === 'object' && !Array.isArray(summary)
+    ? summary as Record<string, unknown>
+    : rootDto;
   const window = dto.window;
   if (window == null || typeof window !== 'object' || Array.isArray(window)) {
     throw new Error('invalid daily stats window');
@@ -2214,7 +2218,7 @@ export const apiClient = {
     status?: string;
     dateFrom?: string;
     dateTo?: string;
-  }): Promise<DailyStatsSummary | null> {
+  }): Promise<DailyStatsSummary> {
     // Coerce UI date strings (YYYY-MM-DD) to the ISO datetimes expected by
     // /orders/daily-stats. With no dates, the server applies its default
     // shift window.
@@ -2222,19 +2226,57 @@ export const apiClient = {
       dateFrom: toIsoDayStart(query?.dateFrom),
       dateTo: toIsoDayEnd(query?.dateTo),
     });
-    return cachedSafe(
-      'fetchDailyStats',
-      `fetchDailyStats:${queryString}`,
-      5 * 60_000,
-      30 * 60_000,
-      async () => {
+    const cacheKey = `fetchDailyStats:${queryString}`;
+    const now = Date.now();
+    const existing = cachedReads.get(cacheKey) as CachedRead<DailyStatsSummary> | undefined;
+    if (existing?.hasValue && existing.expiresAt > now) {
+      return Promise.resolve(existing.value as DailyStatsSummary);
+    }
+    if (existing?.inFlight) return existing.inFlight;
+
+    const inFlight = (async () => {
+      try {
         // V2 parity: the daily stats endpoint applies only the configured
         // excluded store IDs server-side.
         const res = await api.get<unknown>(`/orders/daily-stats${queryString}`, { timeoutMs: 8_000 });
-        return parseDailyStatsSummary(res);
-      },
-      null
-    );
+        const parsed = parseDailyStatsSummary(res);
+        const settledAt = Date.now();
+        cachedReads.set(cacheKey, {
+          hasValue: true,
+          value: parsed,
+          expiresAt: settledAt + 5 * 60_000,
+          staleUntil: settledAt + 30 * 60_000,
+        });
+        return parsed;
+      } catch (err) {
+        const current = cachedReads.get(cacheKey) as CachedRead<DailyStatsSummary> | undefined;
+        if (current?.hasValue && current.staleUntil > Date.now()) {
+          warnThrottled(
+            'cached-stale:fetchDailyStats',
+            '[v2-apiClient] fetchDailyStats failed; using cached value:',
+            err instanceof Error ? err.message : err
+          );
+          return current.value as DailyStatsSummary;
+        }
+        warnThrottled(
+          'cached:fetchDailyStats',
+          '[v2-apiClient] fetchDailyStats failed:',
+          err instanceof Error ? err.message : err
+        );
+        throw err;
+      } finally {
+        const current = cachedReads.get(cacheKey) as CachedRead<DailyStatsSummary> | undefined;
+        if (current?.inFlight) {
+          delete current.inFlight;
+        }
+      }
+    })();
+
+    cachedReads.set(cacheKey, {
+      ...(existing ?? { hasValue: false, expiresAt: 0, staleUntil: 0 }),
+      inFlight,
+    });
+    return inFlight;
   },
 
   fetchPicklist(query: {

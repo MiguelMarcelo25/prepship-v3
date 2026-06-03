@@ -70,6 +70,10 @@ const MUTED = 'var(--text3)';
 
 const ordersView = readFileSync('web/src/components/Views/OrdersView.tsx', 'utf8');
 const apiClient = readFileSync('web/src/lib/v2-apiClient.ts', 'utf8');
+const dailyStatsClientBlock = apiClient.slice(
+  apiClient.indexOf('fetchDailyStats('),
+  apiClient.indexOf('fetchPicklist('),
+);
 
 assert.match(
   apiClient,
@@ -83,13 +87,43 @@ assert.match(
 );
 assert.match(
   ordersView,
-  /buildDailyStripProgress\(dailyStats\)/,
+  /buildDailyStripProgress\(dailyStatsForStrip\)/,
   'OrdersView must derive progress via buildDailyStripProgress',
 );
 assert.match(
   ordersView,
-  /\{dailyStripProgress\?\.shipped\} of \{dailyStats\.totalOrders\} shipped/,
+  /dailyStatsStatus/,
+  'OrdersView must model daily stats as explicit loading/success/error state',
+);
+assert.doesNotMatch(
+  ordersView,
+  /\{dailyStats \? \(/,
+  'OrdersView must not hide the entire daily strip when dailyStats is null',
+);
+assert.match(
+  ordersView,
+  /Daily stats unavailable/,
+  'OrdersView must render a retryable daily-stats failure state instead of disappearing',
+);
+assert.match(
+  ordersView,
+  /visibilitychange/,
+  'OrdersView must retry daily stats immediately when a hidden tab becomes visible',
+);
+assert.match(
+  ordersView,
+  /\{dailyStripProgress\?\.shipped\} of \{dailyStatsForStrip\.totalOrders\} shipped/,
   'OrdersView must render the "{shipped} of {totalOrders} shipped" summary',
+);
+assert.match(
+  apiClient,
+  /rootDto\.summary/,
+  'apiClient daily-stats parser must tolerate summary-wrapped deploy-skew responses',
+);
+assert.doesNotMatch(
+  dailyStatsClientBlock,
+  /cachedSafe[\s\S]*?null/,
+  'apiClient.fetchDailyStats must not cache null as a successful daily-stats fallback',
 );
 assert.match(
   ordersView,

@@ -109,6 +109,7 @@ type SortDirection = 'asc' | 'desc'
 type SortKey = 'date' | 'age' | 'orderNum' | 'client' | 'customer' | 'itemname' | 'sku' | 'qty' | 'weight' | 'shipto' | 'carrier' | 'custcarrier' | 'total'
 type TableColumnKey = 'select' | 'date' | 'client' | 'orderNum' | 'customer' | 'itemname' | 'sku' | 'qty' | 'weight' | 'shipto' | 'carrier' | 'custcarrier' | 'total' | 'bestrate' | 'margin' | 'tracking' | 'labelcreated' | 'age' | 'test_carrierCode' | 'test_shippingProviderID' | 'test_clientID' | 'test_serviceCode' | 'test_bestRate' | 'test_orderLocal' | 'test_shippingAccount'
 type PanelSectionKey = 'shipping' | 'items' | 'recipient'
+type DailyStatsStatus = 'idle' | 'loading' | 'success' | 'error'
 
 interface QueueActionProgress {
   label: string
@@ -2019,6 +2020,10 @@ export default function OrdersView({
   const [packages, setPackages] = useState<PackageDto[]>([])
   const [packagesLoaded, setPackagesLoaded] = useState(false)
   const [dailyStats, setDailyStats] = useState<OrdersDailyStatsDto | null>(null)
+  // Per user override unlock shipped data on 2026-05-23: extended by DJ's current 2026-06-03 override; keep the read-only Shipped daily strip mounted through daily-stats loading/failure without changing shipped/cancelled edit protections.
+  const [dailyStatsStatus, setDailyStatsStatus] = useState<DailyStatsStatus>('idle')
+  const [dailyStatsError, setDailyStatsError] = useState<string | null>(null)
+  const dailyStatsEnabledRef = useRef(false)
   const [columnPrefs, setColumnPrefs] = useState<ColumnPrefs | null>(null)
   const [columnMenuOpen, setColumnMenuOpen] = useState(false)
   // New manual-order modal — opens via the +New Order button beside
@@ -2677,17 +2682,22 @@ export default function OrdersView({
   const panelOrder = orderedFilteredOrders.find((order) => order.orderId === panelOrderId)
     ?? orders.find((order) => order.orderId === panelOrderId)
     ?? null
-  const dailyStripProgress = dailyStats ? buildDailyStripProgress(dailyStats) : null
+  const shouldShowDailyStrip = currentStatus === 'awaiting_shipment' || currentStatus === 'shipped'
+  const dailyStatsForStrip = dailyStats
+  const dailyStripProgress = dailyStatsForStrip ? buildDailyStripProgress(dailyStatsForStrip) : null
+  const dailyStatsLoadingWithoutData = dailyStatsStatus !== 'error' && !dailyStatsForStrip
+  const dailyStatsErroredWithoutData = dailyStatsStatus === 'error' && !dailyStatsForStrip
+  const dailyStatsRefreshFailedWithData = dailyStatsStatus === 'error' && Boolean(dailyStatsForStrip)
   // Replace any "PT" / "PST" / "PDT" suffix in the server-formatted
   // labels with "CA" so the daily strip's date range matches the rest
   // of the app's labeling convention (boss directive 2026-05-07).
   const normalizeTzLabel = (s: string) =>
     s.replace(/\b(?:PST|PDT|PT)\b/g, 'CA')
   const dailyStatsFromLabel = normalizeTzLabel(
-    dailyStats?.window.fromLabel || dailyStats?.window.from || ''
+    dailyStatsForStrip?.window?.fromLabel || dailyStatsForStrip?.window?.from || ''
   )
   const dailyStatsToLabel = normalizeTzLabel(
-    dailyStats?.window.toLabel || dailyStats?.window.to || ''
+    dailyStatsForStrip?.window?.toLabel || dailyStatsForStrip?.window?.to || ''
   )
   const panelDetail = panelOrderId != null ? orderDetailsById.get(panelOrderId) ?? null : null
   const activeStoreClientId = useMemo(() => {
@@ -2835,48 +2845,72 @@ export default function OrdersView({
     }
   }, [])
 
-  useEffect(() => {
-    if (currentStatus !== 'awaiting_shipment' && currentStatus !== 'shipped') {
-      setDailyStats(null)
+  const loadDailyStats = useCallback(async (options: { skipHidden?: boolean } = {}) => {
+    if (!dailyStatsEnabledRef.current) return
+    if (options.skipHidden && document.visibilityState !== 'visible') {
+      setDailyStatsStatus((status) => (status === 'idle' ? 'loading' : status))
       return
     }
 
-    let cancelled = false
-    let rolloverTimer: number | null = null
-
-    const loadDailyStats = async () => {
-      try {
-        const payload = await apiClient.fetchDailyStats()
-        if (!cancelled) setDailyStats(payload)
-      } catch {
-        if (!cancelled) setDailyStats(null)
-      }
+    setDailyStatsStatus('loading')
+    setDailyStatsError(null)
+    try {
+      const payload = await apiClient.fetchDailyStats()
+      if (!dailyStatsEnabledRef.current) return
+      setDailyStats(payload)
+      setDailyStatsStatus('success')
+      setDailyStatsError(null)
+    } catch (err) {
+      if (!dailyStatsEnabledRef.current) return
+      setDailyStatsStatus('error')
+      setDailyStatsError(err instanceof Error ? err.message : 'Daily stats failed')
     }
+  }, [])
+
+  useEffect(() => {
+    dailyStatsEnabledRef.current = currentStatus === 'awaiting_shipment' || currentStatus === 'shipped'
+    if (!dailyStatsEnabledRef.current) {
+      setDailyStats(null)
+      setDailyStatsStatus('idle')
+      setDailyStatsError(null)
+      return
+    }
+
+    setDailyStatsStatus((status) => (status === 'idle' ? 'loading' : status))
+
+    let rolloverTimer: number | null = null
 
     const scheduleRolloverRefresh = () => {
       if (rolloverTimer !== null) window.clearTimeout(rolloverTimer)
       rolloverTimer = window.setTimeout(() => {
-        void loadDailyStats()
+        void loadDailyStats({ skipHidden: true })
         scheduleRolloverRefresh()
       }, getMsUntilNextDailyStatsRollover())
+    }
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void loadDailyStats()
+      }
     }
 
     const cancelInitialLoad = scheduleNonCriticalOrdersWork(() => {
       void loadDailyStats()
     }, 3000)
     scheduleRolloverRefresh()
+    document.addEventListener('visibilitychange', onVisibilityChange)
     const timer = window.setInterval(() => {
-      if (document.visibilityState !== 'visible') return
-      void loadDailyStats()
+      void loadDailyStats({ skipHidden: true })
     }, 10 * 60 * 1000)
 
     return () => {
-      cancelled = true
+      dailyStatsEnabledRef.current = false
       cancelInitialLoad()
+      document.removeEventListener('visibilitychange', onVisibilityChange)
       window.clearInterval(timer)
       if (rolloverTimer !== null) window.clearTimeout(rolloverTimer)
     }
-  }, [currentStatus])
+  }, [currentStatus, loadDailyStats])
 
   useEffect(() => {
     if (refreshVersion === 0) return
@@ -9536,7 +9570,7 @@ export default function OrdersView({
         </div>
 
         <AnimatePresence>
-          {dailyStats ? (
+          {shouldShowDailyStrip ? (
             // ─────────────────────────────────────────────────────────
             // V2-STYLE COMPACT DAILY STRIP
             //
@@ -9561,6 +9595,7 @@ export default function OrdersView({
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -8 }}
               transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
+              aria-busy={dailyStatsLoadingWithoutData}
               className="bg-surface border-b border-line px-3 sm:px-5 py-2.5 font-sans"
             >
               {/* Daily strip — desktop keeps the original boss-approved
@@ -9571,6 +9606,8 @@ export default function OrdersView({
                   Achieved with `flex-wrap` + per-section `w-full sm:w-auto`
                   so the same DOM serves both viewports — no JS branching. */}
               <div className="flex flex-wrap min-h-[50px] items-center gap-y-2 gap-x-4 sm:gap-x-8 text-[12px]">
+                {dailyStatsForStrip ? (
+                  <>
                 {/* Date range — full width on mobile so stats can spread below */}
                 <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 text-[11.5px] sm:text-[12px] w-full sm:w-auto min-w-0">
                   <span className="text-[14px] sm:text-[15px] leading-none" aria-hidden="true">📅</span>
@@ -9591,12 +9628,12 @@ export default function OrdersView({
                     <span className="text-[17px] sm:text-[19px] leading-none" aria-hidden="true">📦</span>
                     <div className="flex flex-col items-start leading-none">
                       <motion.span
-                        key={dailyStats.totalOrders}
+                        key={dailyStatsForStrip.totalOrders}
                         initial={{ opacity: 0, y: 3 }}
                         animate={{ opacity: 1, y: 0 }}
                         className="font-bold text-ink tabular-nums text-[22px] sm:text-[26px] leading-[20px] sm:leading-[22px] font-mono"
                       >
-                        {dailyStats.totalOrders}
+                        {dailyStatsForStrip.totalOrders}
                       </motion.span>
                       <span className="text-[10px] leading-[11px] text-ink-3 font-medium whitespace-nowrap">Total Orders</span>
                     </div>
@@ -9607,13 +9644,13 @@ export default function OrdersView({
                     <span className="text-[17px] sm:text-[19px] leading-none" aria-hidden="true">🚚</span>
                     <div className="flex flex-col items-start leading-none">
                       <motion.span
-                        key={dailyStats.needToShip}
+                        key={dailyStatsForStrip.needToShip}
                         initial={{ opacity: 0, y: 3 }}
                         animate={{ opacity: 1, y: 0 }}
                         className="font-bold tabular-nums text-[22px] sm:text-[26px] leading-[20px] sm:leading-[22px] font-mono"
                         style={{ color: dailyStripProgress?.needToShipColor }}
                       >
-                        {dailyStats.needToShip}
+                        {dailyStatsForStrip.needToShip}
                       </motion.span>
                       <span className="text-[10px] leading-[11px] text-ink-3 font-medium whitespace-nowrap">Need to Ship</span>
                     </div>
@@ -9624,13 +9661,13 @@ export default function OrdersView({
                     <span className="text-[17px] sm:text-[19px] leading-none" aria-hidden="true">🔔</span>
                     <div className="flex flex-col items-start leading-none">
                       <motion.span
-                        key={dailyStats.upcomingOrders}
+                        key={dailyStatsForStrip.upcomingOrders}
                         initial={{ opacity: 0, y: 3 }}
                         animate={{ opacity: 1, y: 0 }}
                         className="font-bold tabular-nums text-[22px] sm:text-[26px] leading-[20px] sm:leading-[22px] font-mono"
                         style={{ color: dailyStripProgress?.upcomingColor }}
                       >
-                        {dailyStats.upcomingOrders}
+                        {dailyStatsForStrip.upcomingOrders}
                       </motion.span>
                       <span className="text-[10px] leading-[11px] text-ink-3 font-medium whitespace-nowrap">Upcoming</span>
                     </div>
@@ -9644,7 +9681,7 @@ export default function OrdersView({
                     on the bottom row. */}
                 <div className="flex flex-col w-full sm:w-auto sm:shrink-0 sm:min-w-[285px]">
                   <span className="text-ink-3 text-[12px] sm:text-[13px] tabular-nums font-medium">
-                    {dailyStripProgress?.shipped} of {dailyStats.totalOrders} shipped
+                    {dailyStripProgress?.shipped} of {dailyStatsForStrip.totalOrders} shipped
                   </span>
                   <div className="flex items-center gap-2.5">
                     <div className="flex-1 sm:flex-none sm:w-[210px] h-[9px] bg-line/70 rounded-sm overflow-hidden">
@@ -9670,7 +9707,68 @@ export default function OrdersView({
                       {dailyStripProgress?.pct}%
                     </motion.span>
                   </div>
+                  {dailyStatsRefreshFailedWithData ? (
+                    <button
+                      type="button"
+                      onClick={() => void loadDailyStats()}
+                      title={dailyStatsError || 'Daily stats unavailable'}
+                      className="mt-1 inline-flex w-fit items-center gap-1 rounded-sm border border-amber-300 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700 hover:bg-amber-100"
+                    >
+                      <RefreshCcw size={10} strokeWidth={2.4} aria-hidden />
+                      Refresh failed - retry
+                    </button>
+                  ) : null}
                 </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex items-center gap-2 shrink-0 text-[11.5px] sm:text-[12px] w-full sm:w-auto min-w-0">
+                      <Calendar size={15} strokeWidth={2.25} className="text-ink-3 shrink-0" aria-hidden />
+                      {dailyStatsErroredWithoutData ? (
+                        <button
+                          type="button"
+                          onClick={() => void loadDailyStats()}
+                          title={dailyStatsError || 'Daily stats unavailable'}
+                          className="inline-flex items-center gap-1.5 rounded-sm border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-semibold text-amber-700 hover:bg-amber-100"
+                        >
+                          <RefreshCcw size={11} strokeWidth={2.4} aria-hidden />
+                          Daily stats unavailable - retry
+                        </button>
+                      ) : (
+                        <>
+                          <span className="h-3 w-28 rounded-sm bg-line/70 animate-pulse" />
+                          <span className="h-3 w-4 rounded-sm bg-line/50 animate-pulse" />
+                          <span className="h-3 w-28 rounded-sm bg-line/70 animate-pulse" />
+                          <span className="hidden sm:inline h-3 w-24 rounded-sm bg-line/50 animate-pulse" />
+                        </>
+                      )}
+                    </div>
+
+                    <div className="hidden sm:block h-7 w-px shrink-0 bg-line" aria-hidden="true" />
+
+                    <div className="flex items-center justify-around sm:justify-start gap-3 sm:gap-8 w-full sm:w-auto">
+                      {[Package, Truck, Bell].map((Icon, idx) => (
+                        <div key={idx} className="flex items-center gap-1.5 sm:gap-2 shrink-0 min-w-0">
+                          <Icon size={18} strokeWidth={2.25} className="text-ink-3 shrink-0" aria-hidden />
+                          <div className="flex flex-col items-start gap-1">
+                            <span className="h-5 w-10 rounded-sm bg-line/70 animate-pulse" />
+                            <span className="h-2.5 w-16 rounded-sm bg-line/50 animate-pulse" />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="flex flex-col w-full sm:w-auto sm:shrink-0 sm:min-w-[285px] gap-1">
+                      <span className="h-3 w-32 rounded-sm bg-line/60 animate-pulse" />
+                      <div className="flex items-center gap-2.5">
+                        <div className="flex-1 sm:flex-none sm:w-[210px] h-[9px] bg-line/70 rounded-sm overflow-hidden">
+                          <div className="h-full w-1/3 rounded-sm bg-line animate-pulse" />
+                        </div>
+                        <span className="h-3 w-8 rounded-sm bg-line/60 animate-pulse" />
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             </motion.div>
           ) : null}
